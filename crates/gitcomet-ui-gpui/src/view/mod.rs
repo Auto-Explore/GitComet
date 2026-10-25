@@ -1,12 +1,12 @@
 use crate::app::{
     CloseWindow, DecreaseUiScale, IncreaseUiScale, NewWindow, OpenRepository, ResetUiScale,
 };
-use crate::kit::{Scrollbar, ScrollbarAxis};
 use crate::theme::AppTheme;
 use crate::ui_scale;
 use gitcomet_core::diff::AnnotatedDiffLine;
 #[cfg(test)]
 use gitcomet_core::diff::annotate_unified;
+use gitcomet_core::diff_engine::{DiffEngine, DiffEngineStatus};
 #[cfg(test)]
 use gitcomet_core::domain::RepoStatus;
 use gitcomet_core::domain::{
@@ -19,10 +19,10 @@ use gitcomet_core::process::current_git_runtime;
 use gitcomet_core::remote_url::{RemoteProtocol, RemoteUrlPolicy};
 use gitcomet_core::services::{CheckoutRemoteBranchMode, PullMode, RemoteUrlKind, ResetMode};
 use gitcomet_state::model::{
-    AppNotificationKind, AppState, AuthPromptKind, BranchExistsPromptOperation,
+    AppNotificationKind, AppState, AuthPromptKind, AuthPromptStatus, BranchExistsPromptOperation,
     BranchExistsPromptState, CloneOpState, CloneOpStatus, DefaultTagType, DiagnosticKind,
     FileBrowserSettings, GitHookOperation, GitHookOperationStatus, GitHookRunStatus, Loadable,
-    RemoteSettings, RepoId, RepoState, SubmoduleTrustPromptOperation,
+    MaintenanceSettings, RemoteSettings, RepoId, RepoState, SubmoduleTrustPromptOperation,
 };
 use gitcomet_state::msg::{BranchExistsChoice, Msg, StoreEvent};
 use gitcomet_state::session;
@@ -32,10 +32,10 @@ use gpui::{
     Anchor, Animation, AnimationExt, AnyElement, AnyView, App, Bounds, ClickEvent, CursorStyle,
     Decorations, DispatchPhase, Element, ElementId, Entity, FocusHandle, FontWeight,
     GlobalElementId, InspectorElementId, IsZero, LayoutId, MouseButton, MouseDownEvent,
-    MouseMoveEvent, MouseUpEvent, Pixels, Point, Render, ResizeEdge, ScrollHandle,
+    MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels, Point, Render, ResizeEdge, ScrollHandle,
     ScrollWheelEvent, ShapedLine, SharedString, Size, Style, StyleRefinement, Styled, TextRun,
-    Tiling, UniformListScrollHandle, WeakEntity, Window, WindowControlArea, actions, anchored, div,
-    fill, point, px, relative, size, uniform_list,
+    UniformListScrollHandle, WeakEntity, Window, WindowControlArea, actions, anchored, div, point,
+    px, relative, size, uniform_list,
 };
 use rustc_hash::{FxHashMap, FxHashSet};
 #[cfg(test)]
@@ -57,6 +57,7 @@ pub(in crate::view) struct PopoverRequest {
     invoker: Option<SharedString>,
     focus_return: Option<FocusHandle>,
     new_source: bool,
+    markdown_image_approval: Option<markdown_interaction::MarkdownInteraction>,
 }
 
 impl From<PopoverKind> for PopoverRequest {
@@ -66,6 +67,7 @@ impl From<PopoverKind> for PopoverRequest {
             invoker: None,
             focus_return: None,
             new_source: false,
+            markdown_image_approval: None,
         }
     }
 }
@@ -84,6 +86,7 @@ impl PopoverKind {
             invoker: Some(invoker),
             focus_return: None,
             new_source: true,
+            markdown_image_approval: None,
         }
     }
 }
@@ -107,6 +110,8 @@ actions!(
         DiffNextFile,
         DiffPrevSearchMatchOrChange,
         DiffNextSearchMatchOrChange,
+        DiffPrevChange,
+        DiffNextChange,
         TextInputCommitSubmit,
         TextInputDiffPrevFile,
         TextInputDiffNextFile,
@@ -115,6 +120,7 @@ actions!(
         TextInputDiffPrevChange,
         TextInputDiffNextChange,
         OpenActiveViewSearch,
+        HistoryFindPrevious,
         PopoverPromptDismiss,
         PopoverPromptTabNext,
         PopoverPromptTabPrev,
@@ -133,8 +139,40 @@ actions!(
     ]
 );
 
+/// A plain key that moves the open diff through its file list.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum DiffFileStep {
+    Prev,
+    Next,
+    PageUp,
+    PageDown,
+    First,
+    Last,
+}
+
+impl DiffFileStep {
+    pub(crate) fn from_keystroke(keystroke: &gpui::Keystroke) -> Option<Self> {
+        let mods = keystroke.modifiers;
+        if mods.control || mods.alt || mods.platform || mods.function || mods.shift {
+            return None;
+        }
+        Some(match keystroke.key.as_str() {
+            "up" => Self::Prev,
+            "down" => Self::Next,
+            "pageup" => Self::PageUp,
+            "pagedown" => Self::PageDown,
+            "home" => Self::First,
+            "end" => Self::Last,
+            _ => return None,
+        })
+    }
+}
+
 /// Chords owned by a focused status section, including empty sections.
 pub(crate) fn is_status_section_shortcut(keystroke: &gpui::Keystroke) -> bool {
+    if DiffFileStep::from_keystroke(keystroke).is_some() {
+        return true;
+    }
     let mods = keystroke.modifiers;
     if mods.alt || mods.shift || mods.function {
         return false;
@@ -206,77 +244,153 @@ fn repo_activation_msg(
     Some(Msg::RepoActivated { repo_id })
 }
 
+/// Opening a repository already schedules a full refresh. Count that load
+/// toward the focus throttle too: the compositor's initial activation can
+/// arrive after RepoOpened and otherwise queues the same work a second time.
+fn note_opened_repos_for_activation(
+    previous: &AppState,
+    next: &AppState,
+    last_activation_dispatch: &mut FxHashMap<RepoId, Instant>,
+    now: Instant,
+) {
+    if previous.repos.len() == next.repos.len()
+        && previous.repos.iter().zip(&next.repos).all(|(old, new)| {
+            old.id == new.id
+                && matches!(old.open, Loadable::Ready(_)) == matches!(new.open, Loadable::Ready(_))
+        })
+    {
+        return;
+    }
+    last_activation_dispatch.retain(|id, _| next.repos.iter().any(|repo| repo.id == *id));
+    for repo in &next.repos {
+        if matches!(repo.open, Loadable::Ready(_))
+            && !previous
+                .repos
+                .iter()
+                .any(|old| old.id == repo.id && matches!(old.open, Loadable::Ready(_)))
+        {
+            last_activation_dispatch.insert(repo.id, now);
+        }
+    }
+}
+
 mod app_model;
+mod bottom_panel_providers;
 mod branch_sidebar;
 mod caches;
+mod changed_file_list;
 pub(crate) mod chrome;
 pub(crate) mod clone_progress;
+mod close_guards;
 mod color;
 mod command_palette;
+mod commands;
 mod commit_message_hover;
 mod commit_message_text;
 mod commit_signature;
 pub(crate) mod components;
 mod conflict_markers;
-pub(crate) mod conflict_resolver;
-mod date_time;
+pub(crate) use gitcomet_conflict_resolver as conflict_resolver;
+mod conflict_style_cache;
+#[cfg(feature = "benchmarks")]
+pub use diagram_preview::benchmarks::MermaidPreviewFixture;
+use gitcomet_text::{date_time, path_display};
+use gitcomet_ui_media::rendered_preview::{
+    RenderedPreviewKind, RenderedPreviewMode, RenderedPreviewModes,
+};
+use gitcomet_ui_media::{diagram_preview, image_preview, rendered_preview};
+#[cfg(feature = "benchmarks")]
+pub use image_preview::benchmarks::ImageInspectionFixture;
+mod diff_commands;
 pub(crate) mod diff_navigation;
 mod diff_preview;
 mod diff_text_model;
 mod diff_text_selection;
 mod diff_utils;
+pub(crate) mod documents;
+pub(crate) mod error_notices;
+pub(crate) mod extension_host;
+mod extension_panels;
 mod external_drag;
+mod fetch_ref;
 mod file_diff_display;
-mod file_icons;
+mod file_list_controller;
+mod file_operations;
 mod fingerprint;
+mod git_version_notice;
 mod history_graph;
 pub(crate) mod history_mode;
 mod history_refs_hover;
-mod icons;
+mod home;
+pub(crate) mod hosted;
+mod large_file_card;
 #[cfg(any(test, target_os = "linux", target_os = "freebsd"))]
 mod linux_desktop_integration;
-mod markdown_preview;
+use gitcomet_markdown as markdown_preview;
+mod markdown_disclosures;
+mod markdown_interaction;
+mod markdown_scrollbar;
+mod menu_presentation;
 mod mod_helpers;
+mod native_transfers;
 mod open_source_licenses_data;
+mod operation_progress;
+mod pane_store;
 mod panels;
 mod panes;
 mod patch_split;
-mod path_display;
+mod path_prompt;
+mod pending_commit;
 mod perf;
 mod permalink;
 pub(super) mod platform_open;
 mod poller;
+mod pop_out;
+mod preference_change;
 mod preference_sync;
 mod preferences;
 mod reflog_panel;
 mod repo_open;
+mod repository_views;
 mod reveal_commit;
 pub(crate) mod rows;
-mod settings_window;
+pub(crate) mod scenario_driver;
+pub(crate) mod settings_window;
+mod shell_policy;
 pub(crate) mod shortcut_labels;
 mod sidebar_presentation;
+mod sidebar_search;
+mod sidebar_sticky;
 mod splash;
 mod state_apply;
-mod terminal_alacritty;
+mod status_actions;
+mod status_position_cache;
+mod text_geometry;
+pub(in crate::view) use gitcomet_text::tab_width;
 mod terminal_panel;
 mod terminal_preferences;
 #[cfg(test)]
 pub(crate) mod test_support;
 mod toast_host;
-mod tooltip;
-mod tooltip_host;
+mod ui_persistence;
+pub(crate) mod window_bootstrap;
+mod window_gates;
+use gitcomet_ui_kit::zoom_wheel;
+pub(crate) use gitcomet_ui_kit::{file_icons, icons, tooltip, tooltip_host};
 mod update_check;
-pub(crate) use update_check::update_checks_disabled_by_environment;
+mod workspace_picker;
+pub(crate) use update_check::{update_checks_available, update_checks_disabled_by_environment};
 mod user_survey;
-mod word_diff;
+use gitcomet_core::word_diff;
 
 use app_model::AppUiModel;
 use branch_sidebar::{BranchMenuTarget, BranchSection, BranchSidebarRow};
 use caches::{
-    HistoryBaseCache, HistoryBaseCacheRequest, HistoryBaseRowVm, HistoryBranchChipKind,
-    HistoryBranchChipVm, HistoryCache, HistoryCacheBuildRequest, HistoryDecorationCache,
-    HistoryDecorationCacheRequest, HistoryDecorationRowVm, HistoryDisplayKey, HistoryRefListItem,
-    HistoryRefListItemKind, HistoryStashIdsCache, HistoryTextVm, HistoryWorktreeSummaryCache,
+    HistoryAuthorVm, HistoryBaseCache, HistoryBaseCacheRequest, HistoryBaseRowVm,
+    HistoryBranchChipKind, HistoryBranchChipVm, HistoryCache, HistoryCacheBuildRequest,
+    HistoryDecorationCache, HistoryDecorationCacheRequest, HistoryDecorationRowVm,
+    HistoryDisplayKey, HistoryRefListItem, HistoryRefListItemKind, HistoryStashIdsCache,
+    HistoryTextVm, HistoryWorktreeSummaryCache,
 };
 use chrome::TitleBarView;
 use conflict_resolver::{ConflictPickSide, ConflictResolverViewMode};
@@ -288,18 +402,19 @@ use date_time::{DateTimeFormat, Timezone, format_datetime_into};
 use diff_preview::build_new_file_preview_from_diff;
 use patch_split::build_patch_split_rows;
 use poller::Poller;
+pub(in crate::view) use preferences::FileListDefaults;
 use preferences::{HistoryBranchNamesMode, RemoteMarkdownImagePolicy, UiPreferences};
 pub(in crate::view) use terminal_preferences::{
-    ActionBarTerminalTarget, ExternalTerminalLaunchContext, ExternalTerminalMode,
-    TerminalPreferences, parse_terminal_args_multiline, resolve_embedded_shell_program,
+    ExternalTerminalLaunchContext, ExternalTerminalMode, TerminalButtonTarget, TerminalPreferences,
+    parse_terminal_args_multiline, resolve_embedded_shell_program,
     resolve_external_terminal_launch_spec,
 };
 use word_diff::{capped_word_diff_ranges, capped_word_diff_ranges_for_file_diff_texts};
 
 use commit_message_hover::{CommitMessageHoverHost, CommitMessageHoverState};
+use diff_text_model::CachedDiffStyledText;
 #[cfg(test)]
 use diff_text_model::CachedDiffTextSegment;
-use diff_text_model::{CachedDiffStyledText, SyntaxTokenKind};
 use diff_text_selection::{
     ConflictRowSelectionTracker, DiffTextEmptySpaceDecoration, DiffTextSelectionOverlay,
     DiffTextSelectionTracker, empty_diff_text_document, flowing_diff_text_empty_space,
@@ -307,46 +422,52 @@ use diff_text_selection::{
 use diff_utils::{
     build_unified_patch_for_hunks, build_unified_patch_for_selected_lines_across_hunks,
     build_unified_patch_for_selected_lines_across_hunks_for_reverse_apply,
-    compute_diff_file_for_src_ix, compute_diff_file_stats,
-    context_menu_selection_range_from_diff_text, diff_content_text, image_format_for_path,
-    parse_unified_hunk_header_for_display, scrollbar_markers_from_flags,
+    compute_diff_file_for_src_ix, compute_diff_file_stats, diff_content_text,
+    image_format_for_path, parse_unified_hunk_header_for_display, scrollbar_markers_from_flags,
     scrollbar_markers_from_visible_ranges,
 };
+use error_notices::{ErrorAction, ErrorNotice, ErrorReport};
 use file_diff_display::{
     LARGE_DIFF_TEXT_MIN_BYTES, append_diff_display_text_slice, append_file_diff_display_text_slice,
     file_diff_display_len, file_diff_display_text, should_truncate_file_diff_display,
 };
+use gitcomet_text::SyntaxTokenKind;
 use history_refs_hover::{HISTORY_REFS_HOVER_MENU_INVOKER_PREFIX, HistoryRefsHoverHost};
 pub(crate) use mod_helpers::TerminalPanelResizeState;
 use mod_helpers::*;
 pub use mod_helpers::{
     FocusedMergetoolLabels, FocusedMergetoolViewConfig, GitCometView, GitCometViewConfig,
-    GitCometViewMode, InitialRepositoryLaunchMode, StartupCrashReport,
+    GitCometViewMode, InitialRepositoryLaunchMode, StartupCrashReport, WorkspaceBootstrap,
 };
 use panels::{
     ActionBarView, BottomStatusBarView, PopoverHost, PopoverHostInit, RepoTabsBarView,
-    action_bar_density, action_bar_height,
+    action_bar_density, action_bar_height, bottom_status_bar_height,
 };
-pub(crate) use panes::MainPaneView;
+pub(crate) use panes::DiffRenderer;
 use panes::{
-    CollapsedSidebarSection, DetailsPaneInit, DetailsPaneView, HistoryPrimarySelection,
-    HistoryView, MainPaneInit, ReflogPaneInit, ReflogPaneView, SidebarPaneView,
-    history_primary_selection,
+    CollapsedSidebarSection, DetailsPaneInit, DetailsPaneView, DiffRendererInit,
+    HistoryPrimarySelection, HistoryView, MainPaneView, ReflogPaneInit, ReflogPaneView,
+    SidebarPaneView, history_primary_selection,
 };
-pub(crate) use settings_window::{SettingsWindowView, open_settings_window};
+pub(crate) use settings_window::{
+    SettingsWindowView, open_settings_window, open_settings_window_to_workspace,
+};
 use toast_host::ToastHost;
 pub(crate) use tooltip::GitCometTooltipExt;
 use tooltip_host::TooltipHost;
 
 #[cfg(test)]
-pub(crate) use chrome::window_frame;
+pub(crate) use crate::kit::window_chrome::window_frame;
 use color::{composite_over, with_alpha};
 pub(crate) use icons::svg_icon;
 use icons::svg_spinner;
 
 const HISTORY_COL_BRANCH_PX: f32 = 130.0;
-const HISTORY_COL_GRAPH_PX: f32 = 80.0;
-const HISTORY_COL_GRAPH_MAX_PX: f32 = 240.0;
+const HISTORY_COL_GRAPH_PX: f32 = 104.0;
+const HISTORY_GRAPH_FULL_WIDTH_LANES: usize = 14;
+const HISTORY_COL_GRAPH_MAX_PX: f32 = HISTORY_GRAPH_MARGIN_X_PX
+    + HISTORY_GRAPH_COL_GAP_PX * (HISTORY_GRAPH_FULL_WIDTH_LANES - 1) as f32
+    + HISTORY_GRAPH_MARGIN_RIGHT_PX;
 const HISTORY_COL_AUTHOR_PX: f32 = 140.0;
 const HISTORY_COL_DATE_PX: f32 = 160.0;
 const HISTORY_COL_SHA_PX: f32 = 88.0;
@@ -364,30 +485,19 @@ const HISTORY_COL_DATE_MAX_PX: f32 = 240.0;
 const HISTORY_COL_SHA_MIN_PX: f32 = 60.0;
 const HISTORY_COL_SHA_MAX_PX: f32 = 160.0;
 const HISTORY_COL_MESSAGE_MIN_PX: f32 = 220.0;
-const ERROR_BANNER_OVERFLOW_HINT_MIN_LINES: usize = 8;
-const ERROR_BANNER_OVERFLOW_HINT_MIN_CHARS: usize = 240;
 
-const HISTORY_GRAPH_COL_GAP_PX: f32 = 16.0;
-/// Inset from the graph cell's left edge to column 0: 10px for a lane plus 2px
-/// padding.
-const HISTORY_GRAPH_MARGIN_X_PX: f32 = 12.0;
-/// Inset from the graph cell's right edge to the right-most lane, wider than the
-/// left one so a 16px node keeps 8px clear of the message border.
-const HISTORY_GRAPH_MARGIN_RIGHT_PX: f32 = 16.0;
-/// Corner radius where a graph line turns between columns. Against a 16px column
-/// pitch and a 14px half-row this leaves roughly a 10px straight horizontal run
-/// per column crossed and 8px of straight vertical below the corner, so the turn
-/// reads as a corner rather than as a diagonal.
+const HISTORY_GRAPH_COL_GAP_PX: f32 = 28.0;
+/// The 26px Spacious author node fits inside either inset, with room for its glow.
+const HISTORY_GRAPH_MARGIN_X_PX: f32 = 16.0;
+/// Keep author nodes clear of the message border, even on the pinned edge lane.
+const HISTORY_GRAPH_MARGIN_RIGHT_PX: f32 = 18.0;
+/// Rounded turns retain a straight run between the wider author-node columns.
 const HISTORY_GRAPH_ELBOW_RADIUS_PX: f32 = 6.0;
 
 /// Width of the lane-coloured wash at the right edge of the graph column. It
 /// fades from transparent into the border on the message cell, tying a commit's
 /// dot to its message.
 const HISTORY_GRAPH_FADE_WIDTH_PX: f32 = 44.0;
-/// Alpha the fade reaches where it meets the message border. Deliberately faint:
-/// it runs behind the lane strokes on every row, so anything stronger reads as a
-/// selection highlight.
-const HISTORY_GRAPH_FADE_ALPHA: f32 = 0.10;
 /// Below this much ref-column width the hover branch badge is dropped rather
 /// than truncated to an unreadable stub.
 const HISTORY_BRANCH_BADGE_MIN_W_PX: f32 = 34.0;
@@ -433,15 +543,42 @@ const TOAST_FADE_OUT_MS: u64 = 220;
 const TOAST_SLIDE_PX: f32 = 12.0;
 const TERMINAL_PANEL_DEFAULT_HEIGHT_PX: f32 = 220.0;
 const TERMINAL_PANEL_RESIZE_HANDLE_PX: f32 = 6.0;
-pub(crate) const WEBSITE_URL: &str = "https://gitcomet.dev";
-pub(crate) const EDITIONS_URL: &str = "https://gitcomet.dev/#editions";
-pub(crate) const RELEASES_URL: &str = "https://github.com/Auto-Explore/GitComet/releases";
-pub(crate) const DISCORD_URL: &str = "https://discord.com/invite/2ufDGP8RnA";
 
-pub(in crate::view) fn restrict_scroll_to_vertical_axis<E: Styled>(mut element: E) -> E {
-    element.style().restrict_scroll_to_axis = Some(true);
-    element
+/// Product links from the installed identity; `None` hides the entry point.
+pub(crate) fn website_url() -> Option<&'static str> {
+    gitcomet_core::identity::current()
+        .links()
+        .website
+        .as_deref()
 }
+
+pub(crate) fn editions_url() -> Option<&'static str> {
+    gitcomet_core::identity::current()
+        .links()
+        .editions
+        .as_deref()
+}
+
+pub(crate) fn releases_url() -> Option<&'static str> {
+    gitcomet_core::identity::current()
+        .links()
+        .releases
+        .as_deref()
+}
+
+pub(crate) fn community_url() -> Option<&'static str> {
+    gitcomet_core::identity::current()
+        .links()
+        .community
+        .as_deref()
+}
+
+/// The product name in window titles, menus, and messages.
+pub(crate) fn product_name() -> &'static str {
+    gitcomet_core::identity::current().display_name()
+}
+
+pub(in crate::view) use gitcomet_ui_kit::restrict_scroll_to_vertical_axis;
 
 // A cached view reuses its previous frame's layout and paint whenever the frame
 // was requested through `notify` on some other view (spinner ticks, store
@@ -510,12 +647,24 @@ fn stable_cached_fixed_height_view<V: Render>(view: Entity<V>, height: Pixels) -
 }
 
 fn stable_overlay_view<V: Render>(view: Entity<V>) -> impl IntoElement {
-    // Keep overlay hosts uncached. Their paint ranges are recorded after focused
-    // TextInput views register platform input handlers, and Wayland text-input
-    // replace_text_in_range can trigger a redraw while that handler is
-    // temporarily unavailable. Reusing the cached overlay paint range then
-    // replays a stale input-handler index and panics inside GPUI reuse_paint.
+    // Uncached: anchored popovers and hover cards would need their own
+    // invalidation checked before they could reuse a frame. The input-handler
+    // panic that once kept every host uncached is fixed in gpui (zed #50665);
+    // see `stable_cached_overlay_view`.
     div().absolute().top_0().left_0().size_full().child(view)
+}
+
+/// An overlay host behind a stable cache boundary. Overlays paint after the
+/// panes and their focused input, and replaying such a paint range panicked in
+/// gpui's `reuse_paint` until it stopped popping the frame's input handler
+/// (zed #50665, in gpui-ce since June 2026).
+fn stable_cached_overlay_view<V: Render>(view: Entity<V>) -> impl IntoElement {
+    div()
+        .absolute()
+        .top_0()
+        .left_0()
+        .size_full()
+        .child(stable_cached_fill_view(view))
 }
 
 struct UiScaleScrollCapture {
@@ -582,12 +731,7 @@ impl Element for UiScaleScrollCapture {
 
         let view = self.view.clone();
         window.on_mouse_event(move |event: &ScrollWheelEvent, phase, window, cx| {
-            let zoom_modifier = event.modifiers.secondary() || event.modifiers.control;
-            if phase != DispatchPhase::Capture
-                || !zoom_modifier
-                || event.modifiers.alt
-                || event.modifiers.function
-            {
+            if phase != DispatchPhase::Capture || !zoom_wheel::is_zoom_wheel(&event.modifiers) {
                 return;
             }
 
@@ -595,25 +739,28 @@ impl Element for UiScaleScrollCapture {
                 return;
             }
 
-            let delta_y = event.delta.pixel_delta(window.line_height()).y;
-            if delta_y.is_zero() {
+            // A gesture's start can carry no distance; the accumulator still sees it.
+            let step = view.update(cx, |view, _| view.zoom_wheel.step(event));
+            // Horizontal-only Ctrl/Cmd+scroll falls through to the content.
+            if event.delta.pixel_delta(window.line_height()).y.is_zero() {
                 return;
             }
-
-            let current = crate::ui_scale::current(cx).percent;
-            let next = if delta_y > px(0.0) {
-                crate::ui_scale::step_up(current)
-            } else {
-                crate::ui_scale::step_down(current)
-            };
-
             cx.stop_propagation();
+            let Some(step) = step else {
+                return;
+            };
+            let current = crate::ui_scale::current(cx).percent;
+            let next = match step {
+                zoom_wheel::ZoomStep::In => crate::ui_scale::step_up(current),
+                zoom_wheel::ZoomStep::Out => crate::ui_scale::step_down(current),
+            };
             if next == current {
                 return;
             }
 
+            let window_id = window.window_handle().window_id();
             cx.defer(move |cx| {
-                crate::app::set_app_ui_scale_percent(cx, next);
+                crate::app::set_window_ui_scale_percent(cx, window_id, Some(next));
             });
         });
     }
@@ -627,7 +774,7 @@ fn active_diff_target(state: &AppState) -> Option<(RepoId, DiffTarget)> {
 
 fn active_merge_view_target(state: &AppState) -> Option<(RepoId, DiffTarget)> {
     let (repo_id, target) = active_diff_target(state)?;
-    let DiffTarget::WorkingTree { path, area } = &target else {
+    let DiffTarget::WorkingTree { path, area, .. } = &target else {
         return None;
     };
     if *area != DiffArea::Unstaged {
@@ -658,8 +805,8 @@ pub(in crate::view) fn pane_resize_drag_width_bounds(
         other_width,
         other_collapsed,
         total_w,
-        sidebar_collapsed,
-        details_collapsed,
+        px(MAIN_MIN_PX),
+        px(PANE_COLLAPSED_PX),
     )
 }
 
@@ -669,12 +816,9 @@ pub(in crate::view) fn pane_resize_drag_width_bounds_for_other_pane(
     other_width: Pixels,
     other_collapsed: bool,
     total_w: Pixels,
-    _sidebar_collapsed: bool,
-    _details_collapsed: bool,
+    main_min: Pixels,
+    collapsed_w: Pixels,
 ) -> (Pixels, Pixels) {
-    let main_min = px(MAIN_MIN_PX);
-    let collapsed_w = px(PANE_COLLAPSED_PX);
-    // Both pane resize handles overlay their boundaries and consume no layout width.
     let available_w = total_w - main_min;
     let other_width = if other_collapsed {
         collapsed_w
@@ -757,10 +901,13 @@ pub(in crate::view) fn diff_split_column_widths(
     diff_split_column_widths_from_available(available, min_col_w, ratio)
 }
 
-pub(crate) const UI_MONOSPACE_FONT_FAMILY: &str = crate::bundled_fonts::LILEX_FONT_FAMILY;
+pub(crate) use crate::bundled_fonts::UI_MONOSPACE_FONT_FAMILY;
 
 mod gitcomet_view;
+mod gitcomet_view_commands;
 mod gitcomet_view_render;
+mod gitcomet_view_requests;
+mod large_file_tools_probe;
 mod runtime_probe;
 
 #[cfg(test)]

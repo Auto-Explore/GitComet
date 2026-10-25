@@ -66,51 +66,11 @@ impl<'a> CursorGate<'a> {
     }
 }
 
-pub(crate) fn reflog_lines_rev(
-    platform: &mut gix::refs::file::log::iter::Platform<'_, '_>,
-    context: &str,
-    limit: Option<usize>,
-) -> Result<Vec<gix::refs::log::Line>> {
-    if limit == Some(0) {
-        return Ok(Vec::new());
-    }
-
-    let Some(iter) = platform
-        .rev()
-        .map_err(|e| Error::new(ErrorKind::Backend(format!("gix reflog {context}: {e}"))))?
-    else {
-        return Ok(Vec::new());
-    };
-
-    let mut lines = Vec::with_capacity(limit.unwrap_or(0).min(REFLOG_RESERVE_MAX));
-    for line in iter {
-        let line =
-            line.map_err(|e| Error::new(ErrorKind::Backend(format!("gix reflog {context}: {e}"))))?;
-        lines.push(line);
-        if let Some(limit) = limit
-            && lines.len() >= limit
-        {
-            break;
-        }
-    }
-    Ok(lines)
-}
-
 pub(crate) fn stash_reflog_lines(
     repo: &gix::Repository,
     limit: Option<usize>,
 ) -> Result<Vec<gix::refs::log::Line>> {
-    let Some(reference) = repo.try_find_reference("refs/stash").map_err(|e| {
-        Error::new(ErrorKind::Backend(format!(
-            "gix try_find_reference refs/stash: {e}"
-        )))
-    })?
-    else {
-        return Ok(Vec::new());
-    };
-
-    let mut platform = reference.log_iter();
-    reflog_lines_rev(&mut platform, "refs/stash", limit)
+    crate::refs::view(repo)?.reflog("refs/stash", limit)
 }
 
 pub(crate) fn stash_reflog_entries(repo: &gix::Repository) -> Result<Vec<StashEntry>> {

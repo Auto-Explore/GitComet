@@ -39,7 +39,7 @@ fn stage_gutter_repo(
 ) -> gitcomet_state::model::RepoState {
     let path = match &target {
         DiffTarget::WorkingTree { path, .. } => path.clone(),
-        DiffTarget::Commit { path, .. } => path.clone().unwrap_or_default(),
+        DiffTarget::Commit { path, .. } => path.clone(),
         DiffTarget::CommitRange { path, .. } => path.clone().unwrap_or_default(),
     };
     let unified = stage_gutter_unified(&path.to_string_lossy());
@@ -78,10 +78,7 @@ fn worktree_target(area: DiffArea) -> DiffTarget {
 }
 
 fn worktree_target_at(path: &str, area: DiffArea) -> DiffTarget {
-    DiffTarget::WorkingTree {
-        path: std::path::PathBuf::from(path),
-        area,
-    }
+    DiffTarget::working_tree(std::path::PathBuf::from(path), area)
 }
 
 /// Open a window showing the fixture diff in the default (whole-file) view and
@@ -106,8 +103,8 @@ fn open_stage_gutter_view(
     let repo = stage_gutter_repo(RepoId(70910), &workdir, target);
     apply_state(cx, &view, app_state_with_active_repo(repo));
     cx.update(|_window, app| {
-        let main_pane = view.read(app).main_pane.clone();
-        main_pane.update(app, |pane, cx| {
+        let diff_renderer = view.read(app).diff_renderer.clone();
+        diff_renderer.update(app, |pane, cx| {
             pane.diff_view = diff_view;
             cx.notify();
         });
@@ -129,7 +126,7 @@ fn open_stage_gutter_view(
 }
 
 /// Source index of the patch line with this exact unified text.
-fn src_ix_for_text(pane: &MainPaneView, text: &str) -> usize {
+fn src_ix_for_text(pane: &DiffRenderer, text: &str) -> usize {
     (0..pane.patch_diff_row_len())
         .find(|src_ix| {
             pane.patch_diff_row(*src_ix)
@@ -140,7 +137,7 @@ fn src_ix_for_text(pane: &MainPaneView, text: &str) -> usize {
 
 /// Visible row rendering the patch line with this text, as the gutter button's
 /// click handler sees it.
-fn visible_ix_for_text(pane: &MainPaneView, text: &str) -> usize {
+fn visible_ix_for_text(pane: &DiffRenderer, text: &str) -> usize {
     let src_ix = src_ix_for_text(pane, text);
     (0..pane.diff_visible_len())
         .find(|visible_ix| {
@@ -157,9 +154,10 @@ fn stage_gutter_patch(
     kind: DiffLineKind,
 ) -> Option<String> {
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
-        let visible_ix = visible_ix_for_text(&pane, text);
+        let pane = view.read(app).diff_renderer.read(app);
+        let visible_ix = visible_ix_for_text(pane, text);
         pane.diff_stage_gutter_patch(visible_ix, kind)
+            .map(|patch| String::from_utf8(patch.as_bytes().to_vec()).expect("UTF-8 patch"))
     })
 }
 
@@ -170,8 +168,8 @@ fn stage_gutter_cell(
     slot: DiffStageSlot,
 ) -> (usize, gpui::Bounds<Pixels>) {
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
-        let visible_ix = visible_ix_for_text(&pane, text);
+        let pane = view.read(app).diff_renderer.read(app);
+        let visible_ix = visible_ix_for_text(pane, text);
         let cell = *pane
             .diff_stage_gutter_cells
             .get(&(visible_ix, slot))
@@ -224,7 +222,7 @@ fn stage_gutter_patch_works_for_a_path_containing_spaces(cx: &mut gpui::TestAppC
     let path = STAGE_GUTTER_SPACED_PATH;
     assert_eq!(
         cx.update(|_window, app| {
-            let pane = view.read(app).main_pane.read(app);
+            let pane = view.read(app).diff_renderer.read(app);
             pane.diff_file_for_src_ix
                 .iter()
                 .filter_map(|file| file.as_deref().map(str::to_string))
@@ -316,7 +314,11 @@ fn stage_gutter_builds_a_reverse_appliable_patch_for_a_staged_diff(cx: &mut gpui
         open_stage_gutter_view(cx, worktree_target(DiffArea::Staged), DiffViewMode::Inline);
 
     assert_eq!(
-        cx.update(|_window, app| view.read(app).main_pane.read(app).diff_stage_gutter_area()),
+        cx.update(|_window, app| view
+            .read(app)
+            .diff_renderer
+            .read(app)
+            .diff_stage_gutter_area()),
         Some(DiffArea::Staged)
     );
 
@@ -346,15 +348,15 @@ fn stage_gutter_builds_a_reverse_appliable_patch_for_a_staged_diff(cx: &mut gpui
 fn stage_gutter_is_disabled_for_commit_diffs(cx: &mut gpui::TestAppContext) {
     let (view, cx) = open_stage_gutter_view(
         cx,
-        DiffTarget::Commit {
-            commit_id: CommitId("abcdef00112233bb".into()),
-            path: Some(std::path::PathBuf::from("src/lib.rs")),
-        },
+        DiffTarget::commit(
+            CommitId("abcdef00112233bb".into()),
+            std::path::PathBuf::from("src/lib.rs"),
+        ),
         DiffViewMode::Inline,
     );
 
     let (area, cells) = cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         (
             pane.diff_stage_gutter_area(),
             pane.diff_stage_gutter_cells.len(),
@@ -388,8 +390,8 @@ fn stage_gutter_is_painted_whether_or_not_line_numbers_are_shown(cx: &mut gpui::
     );
 
     cx.update(|_window, app| {
-        let main_pane = view.read(app).main_pane.clone();
-        main_pane.update(app, |pane, cx| {
+        let diff_renderer = view.read(app).diff_renderer.clone();
+        diff_renderer.update(app, |pane, cx| {
             pane.diff_show_line_numbers = false;
             cx.notify();
         });
@@ -411,7 +413,7 @@ fn diff_row_text_left(
 ) -> Option<Pixels> {
     cx.update(|_window, app| {
         view.read(app)
-            .main_pane
+            .diff_renderer
             .read(app)
             .diff_text_hitboxes
             .iter()
@@ -433,7 +435,11 @@ fn stage_gutter_button_hover_follows_the_pointer(cx: &mut gpui::TestAppContext) 
     cx.simulate_mouse_move(cell.center(), None, Modifiers::default());
     draw_and_drain_test_window(cx);
     assert_eq!(
-        cx.update(|_window, app| view.read(app).main_pane.read(app).diff_stage_gutter_hover),
+        cx.update(|_window, app| view
+            .read(app)
+            .diff_renderer
+            .read(app)
+            .diff_stage_gutter_hover),
         Some(DiffStageHover {
             visible_ix,
             slot: DiffStageSlot::Inline,
@@ -444,7 +450,7 @@ fn stage_gutter_button_hover_follows_the_pointer(cx: &mut gpui::TestAppContext) 
 
     // Anywhere else in the same row still shows the button, just not lit up.
     let text_position = cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         pane.diff_text_hitboxes
             .get(&(visible_ix, DiffTextRegion::Inline))
             .expect("expected an inline text hitbox for the added line")
@@ -454,7 +460,11 @@ fn stage_gutter_button_hover_follows_the_pointer(cx: &mut gpui::TestAppContext) 
     cx.simulate_mouse_move(text_position, None, Modifiers::default());
     draw_and_drain_test_window(cx);
     assert_eq!(
-        cx.update(|_window, app| view.read(app).main_pane.read(app).diff_stage_gutter_hover),
+        cx.update(|_window, app| view
+            .read(app)
+            .diff_renderer
+            .read(app)
+            .diff_stage_gutter_hover),
         Some(DiffStageHover {
             visible_ix,
             slot: DiffStageSlot::Inline,
@@ -465,8 +475,8 @@ fn stage_gutter_button_hover_follows_the_pointer(cx: &mut gpui::TestAppContext) 
 
     // A context row has no button, so leaving the change row hides it again.
     let context_position = cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
-        let context_ix = visible_ix_for_text(&pane, " context one");
+        let pane = view.read(app).diff_renderer.read(app);
+        let context_ix = visible_ix_for_text(pane, " context one");
         pane.diff_text_hitboxes
             .get(&(context_ix, DiffTextRegion::Inline))
             .expect("expected an inline text hitbox for the context line")
@@ -476,7 +486,11 @@ fn stage_gutter_button_hover_follows_the_pointer(cx: &mut gpui::TestAppContext) 
     cx.simulate_mouse_move(context_position, None, Modifiers::default());
     draw_and_drain_test_window(cx);
     assert_eq!(
-        cx.update(|_window, app| view.read(app).main_pane.read(app).diff_stage_gutter_hover),
+        cx.update(|_window, app| view
+            .read(app)
+            .diff_renderer
+            .read(app)
+            .diff_stage_gutter_hover),
         None,
         "moving to a line that cannot be staged should hide the button"
     );
@@ -493,8 +507,8 @@ fn clicking_stage_gutter_button_stages_without_moving_the_row_selection(
     );
 
     let selection = cx.update(|_window, app| {
-        let main_pane = view.read(app).main_pane.clone();
-        main_pane.update(app, |pane, cx| {
+        let diff_renderer = view.read(app).diff_renderer.clone();
+        diff_renderer.update(app, |pane, cx| {
             let anchor = visible_ix_for_text(pane, "-old one");
             pane.diff_selection_anchor = Some(anchor);
             pane.diff_selection_range = Some((anchor, anchor));
@@ -510,7 +524,7 @@ fn clicking_stage_gutter_button_stages_without_moving_the_row_selection(
     draw_and_drain_test_window(cx);
 
     assert_eq!(
-        cx.update(|_window, app| view.read(app).main_pane.read(app).diff_selection_range),
+        cx.update(|_window, app| view.read(app).diff_renderer.read(app).diff_selection_range),
         Some(selection),
         "clicking the gutter button must not move the diff row selection"
     );
@@ -538,7 +552,7 @@ fn stage_gutter_hover_clears_when_its_button_stops_being_painted(cx: &mut gpui::
     assert_eq!(
         cx.update(|_window, app| view
             .read(app)
-            .main_pane
+            .diff_renderer
             .read(app)
             .diff_stage_gutter_hover
             .map(|hover| hover.visible_ix)),
@@ -548,15 +562,19 @@ fn stage_gutter_hover_clears_when_its_button_stops_being_painted(cx: &mut gpui::
     // Scrolling under a still pointer delivers no mouse move, so the hovered row
     // never gets to clear itself; here the row simply stops painting a button.
     cx.update(|_window, app| {
-        let main_pane = view.read(app).main_pane.clone();
-        main_pane.update(app, |pane, _cx| {
+        let diff_renderer = view.read(app).diff_renderer.clone();
+        diff_renderer.update(app, |pane, _cx| {
             pane.diff_stage_gutter_cells.clear();
         });
     });
     draw_and_drain_test_window(cx);
 
     assert_eq!(
-        cx.update(|_window, app| view.read(app).main_pane.read(app).diff_stage_gutter_hover),
+        cx.update(|_window, app| view
+            .read(app)
+            .diff_renderer
+            .read(app)
+            .diff_stage_gutter_hover),
         None,
         "a hover whose button is no longer painted must not stay pinned"
     );
@@ -589,8 +607,8 @@ fn releasing_a_stage_gutter_press_does_not_click_the_row(cx: &mut gpui::TestAppC
     // Park a sentinel selection and disarm the reload autoscroll, so the only
     // thing that can move the selection from here is a row click.
     let sentinel = cx.update(|_window, app| {
-        let main_pane = view.read(app).main_pane.clone();
-        main_pane.update(app, |pane, cx| {
+        let diff_renderer = view.read(app).diff_renderer.clone();
+        diff_renderer.update(app, |pane, cx| {
             let sentinel = (0, 0);
             pane.diff_selection_anchor = Some(sentinel.0);
             pane.diff_selection_range = Some(sentinel);
@@ -604,7 +622,7 @@ fn releasing_a_stage_gutter_press_does_not_click_the_row(cx: &mut gpui::TestAppC
     // handlers know nothing about the press. Releasing over the row's text
     // stands in for that: unguarded, it would select the row.
     let text_position = cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         pane.diff_text_hitboxes
             .get(&(visible_ix, DiffTextRegion::Inline))
             .expect("expected an inline text hitbox for the added line")
@@ -620,7 +638,7 @@ fn releasing_a_stage_gutter_press_does_not_click_the_row(cx: &mut gpui::TestAppC
     draw_and_drain_test_window(cx);
 
     assert_eq!(
-        cx.update(|_window, app| view.read(app).main_pane.read(app).diff_selection_range),
+        cx.update(|_window, app| view.read(app).diff_renderer.read(app).diff_selection_range),
         Some(sentinel),
         "a release that belongs to the gutter button must not select a row"
     );
@@ -628,7 +646,6 @@ fn releasing_a_stage_gutter_press_does_not_click_the_row(cx: &mut gpui::TestAppC
 
 #[gpui::test]
 fn stage_gutter_cancels_presses_released_on_another_button(cx: &mut gpui::TestAppContext) {
-    let _guard = crate::test_support::lock_visual_test();
     for area in [DiffArea::Unstaged, DiffArea::Staged] {
         for mode in [DiffViewMode::Inline, DiffViewMode::Split] {
             let (view, cx) = open_stage_gutter_view(cx, worktree_target(area), mode);
@@ -675,4 +692,388 @@ fn stage_gutter_cancels_presses_released_on_another_button(cx: &mut gpui::TestAp
             );
         }
     }
+}
+
+/// A window showing a generated `src/big.rs` diff of `lines` lines, every
+/// fifth one changed, drawn in `mode`.
+fn open_generated_diff_view(
+    cx: &mut gpui::TestAppContext,
+    repo_id: RepoId,
+    lines: usize,
+    mode: DiffViewMode,
+) -> (
+    gpui::Entity<super::super::GitCometView>,
+    &mut gpui::VisualTestContext,
+    std::path::PathBuf,
+) {
+    open_generated_diff_view_with_status(cx, repo_id, lines, mode, 0)
+}
+
+/// [`open_generated_diff_view`] with `extra_unstaged` more modified files in
+/// the unstaged section around the diffed one.
+fn open_generated_diff_view_with_status(
+    cx: &mut gpui::TestAppContext,
+    repo_id: RepoId,
+    lines: usize,
+    mode: DiffViewMode,
+    extra_unstaged: usize,
+) -> (
+    gpui::Entity<super::super::GitCometView>,
+    &mut gpui::VisualTestContext,
+    std::path::PathBuf,
+) {
+    use std::fmt::Write as _;
+
+    let (mut old_text, mut new_text, mut body) = (String::new(), String::new(), String::new());
+    for ix in 0..lines {
+        let line = format!("let value_{ix} = compute(\"the quick brown fox\", {ix}, &state);");
+        let _ = writeln!(old_text, "{line}");
+        if ix % 5 == 0 {
+            let changed = format!("let value_{ix} = compute(\"the lazy dog\", {ix} + 1, &state);");
+            let _ = writeln!(new_text, "{changed}");
+            let _ = writeln!(body, "-{line}\n+{changed}");
+        } else {
+            let _ = writeln!(new_text, "{line}");
+            let _ = writeln!(body, " {line}");
+        }
+    }
+    let path = std::path::PathBuf::from("src/big.rs");
+    let target = worktree_target_at("src/big.rs", DiffArea::Unstaged);
+    let unified = format!(
+        "diff --git a/src/big.rs b/src/big.rs\n--- a/src/big.rs\n+++ b/src/big.rs\n\
+         @@ -1,{lines} +1,{lines} @@\n{body}"
+    );
+
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    cx.simulate_resize(gpui::size(px(1600.0), px(1000.0)));
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_generated_diff_{}",
+        std::process::id(),
+        repo_id.0
+    ));
+    let _ = std::fs::create_dir_all(&workdir);
+    let mut repo = opening_repo_state(repo_id, &workdir);
+    repo.open = Loadable::Ready(());
+    repo.head_branch = Loadable::Ready("main".into());
+    set_test_file_status(
+        &mut repo,
+        path.clone(),
+        gitcomet_core::domain::FileStatusKind::Modified,
+        DiffArea::Unstaged,
+    );
+    if extra_unstaged > 0 {
+        let mut unstaged: Vec<_> = (0..extra_unstaged)
+            .map(|ix| gitcomet_core::domain::FileStatus {
+                path: format!("src/gen/file_{ix:06}.rs").into(),
+                kind: gitcomet_core::domain::FileStatusKind::Modified,
+                conflict: None,
+            })
+            .collect();
+        unstaged.push(gitcomet_core::domain::FileStatus {
+            path: path.clone(),
+            kind: gitcomet_core::domain::FileStatusKind::Modified,
+            conflict: None,
+        });
+        unstaged.sort_by(|a, b| a.path.cmp(&b.path));
+        repo.status = Loadable::Ready(
+            gitcomet_core::domain::RepoStatus {
+                staged: Arc::new(Vec::new()),
+                unstaged: Arc::new(unstaged),
+            }
+            .into(),
+        );
+        repo.status_rev = repo.status_rev.wrapping_add(1);
+    }
+    repo.diff_state.diff_target = Some(target.clone());
+    repo.diff_state.diff_state_rev = 1;
+    repo.diff_state.diff_rev = 1;
+    repo.diff_state.diff = Loadable::Ready(Arc::new(gitcomet_core::domain::Diff::from_unified(
+        target, &unified,
+    )));
+    repo.diff_state.diff_file_rev = 1;
+    repo.diff_state.diff_file = Loadable::Ready(Some(Arc::new(
+        gitcomet_core::domain::FileDiffText::new(path, Some(old_text), Some(new_text)),
+    )));
+    apply_state(cx, &view, app_state_with_active_repo(repo));
+    cx.update(|_window, app| {
+        let diff_renderer = view.read(app).diff_renderer.clone();
+        diff_renderer.update(app, |pane, cx| {
+            pane.diff_view = mode;
+            cx.notify();
+        });
+    });
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "the file diff view to render its rows",
+        |pane| pane.is_file_diff_view_active() && pane.diff_visible_len() > 0,
+        |pane| pane.diff_visible_len(),
+    );
+    (view, cx, workdir)
+}
+
+/// Frame cost of a large text diff. Ignored: a measurement, not a check.
+///
+/// `GITCOMET_BENCH_DIFF_LINES` (3000) lines, every fifth one changed;
+/// `GITCOMET_BENCH_DIFF_SPLIT` set draws the split view. Run with
+/// `--ignored --nocapture` and one test thread for clean allocation counts.
+#[gpui::test]
+#[ignore]
+fn diff_view_real_frame_benchmark(cx: &mut gpui::TestAppContext) {
+    use std::time::Instant;
+
+    let lines: usize = std::env::var("GITCOMET_BENCH_DIFF_LINES")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(3000);
+    let mode = if std::env::var_os("GITCOMET_BENCH_DIFF_SPLIT").is_some_and(|v| !v.is_empty()) {
+        DiffViewMode::Split
+    } else {
+        DiffViewMode::Inline
+    };
+    let (view, cx, workdir) = open_generated_diff_view(cx, RepoId(70930), lines, mode);
+    let _cached_views = std::env::var_os("GITCOMET_BENCH_CACHED_VIEWS")
+        .map(|_| crate::view::enable_stable_cached_views_for_test());
+    for _ in 0..3 {
+        cx.update(|window, app| {
+            window.refresh();
+            let _ = window.draw(app);
+        });
+    }
+    let row = cx
+        .update(|_window, app| {
+            view.read(app)
+                .diff_renderer
+                .read(app)
+                .diff_text_hitbox_bounds_for_tests(
+                    10,
+                    if mode == DiffViewMode::Split {
+                        DiffTextRegion::SplitLeft
+                    } else {
+                        DiffTextRegion::Inline
+                    },
+                )
+        })
+        .expect("row 10 is drawn");
+
+    const FRAMES: usize = 40;
+    let percentile = |samples: &mut Vec<f64>, p: usize| {
+        samples.sort_by(f64::total_cmp);
+        samples[(samples.len() - 1) * p / 100]
+    };
+    let mut rebuild_ms = Vec::new();
+    let mut rebuild_allocs = crate::perf_alloc::PerfAllocMetrics::default();
+    for _ in 0..FRAMES {
+        let started = Instant::now();
+        let (_, allocations) = crate::perf_alloc::measure_allocations(|| {
+            cx.update(|window, app| {
+                window.refresh();
+                let _ = window.draw(app);
+            })
+        });
+        rebuild_ms.push(started.elapsed().as_secs_f64() * 1000.0);
+        rebuild_allocs = rebuild_allocs.saturating_add(allocations);
+    }
+    let mut move_us = Vec::new();
+    for step in 0..FRAMES {
+        let x = row.left() + px(4.0 + (step % 8) as f32);
+        let started = Instant::now();
+        cx.simulate_mouse_move(point(x, row.center().y), None, gpui::Modifiers::none());
+        move_us.push(started.elapsed().as_secs_f64() * 1e6);
+    }
+    eprintln!(
+        "diff view lines={lines} mode={mode:?} profile={} rebuild_ms_p50={:.2} \
+         rebuild_ms_p95={:.2} allocs_per_rebuild={:.0} mouse_move_us_p50={:.1} \
+         mouse_move_us_p95={:.1}",
+        if cfg!(debug_assertions) {
+            "test"
+        } else {
+            "release"
+        },
+        percentile(&mut rebuild_ms, 50),
+        percentile(&mut rebuild_ms, 95),
+        rebuild_allocs.alloc_ops as f64 / FRAMES as f64,
+        percentile(&mut move_us, 50),
+        percentile(&mut move_us, 95),
+    );
+    let _ = std::fs::remove_dir_all(&workdir);
+}
+
+/// Main-pane frame cost with a long unstaged list, as each diff scroll step
+/// pays it: the pane's own notify with the other panes cached. Ignored: a
+/// measurement, not a check.
+#[gpui::test]
+#[ignore = "timing probe"]
+fn timing_main_pane_frame_with_large_status(cx: &mut gpui::TestAppContext) {
+    use std::time::Instant;
+
+    let _cached_views = crate::view::enable_stable_cached_views_for_test();
+    let extra: usize = std::env::var("GITCOMET_PROBE_STATUS_ENTRIES")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(20_000);
+    let (view, cx, workdir) =
+        open_generated_diff_view_with_status(cx, RepoId(70932), 400, DiffViewMode::Inline, extra);
+    let notify_and_draw = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|window, app| {
+            let diff_renderer = view.read(app).diff_renderer.clone();
+            diff_renderer.update(app, |_pane, cx| cx.notify());
+            let _ = window.draw(app);
+        });
+    };
+    for _ in 0..5 {
+        notify_and_draw(cx);
+    }
+    // More frames give a profiler enough samples of the steady state.
+    let frames: usize = std::env::var("GITCOMET_PROBE_FRAMES")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(60);
+    let mut frame_ms = Vec::with_capacity(frames);
+    for _ in 0..frames {
+        let started = Instant::now();
+        notify_and_draw(cx);
+        frame_ms.push(started.elapsed().as_secs_f64() * 1000.0);
+    }
+    frame_ms.sort_by(f64::total_cmp);
+    println!(
+        "timing main_pane_frame_with_large_status entries={extra} p50={:.3}ms p90={:.3}ms",
+        frame_ms[frames / 2],
+        frame_ms[frames * 9 / 10],
+    );
+    // The details pane lists the same entries; it re-renders on every status
+    // publication and every notify of the commit box (keystrokes, caret blink).
+    let mut details_ms = Vec::with_capacity(frames);
+    for _ in 0..frames {
+        let started = Instant::now();
+        cx.update(|window, app| {
+            let details = view.read(app).details_pane.clone();
+            details.update(app, |_pane, cx| cx.notify());
+            let _ = window.draw(app);
+        });
+        details_ms.push(started.elapsed().as_secs_f64() * 1000.0);
+    }
+    details_ms.sort_by(f64::total_cmp);
+    println!(
+        "timing details_pane_frame_with_large_status entries={extra} p50={:.3}ms p90={:.3}ms",
+        details_ms[frames / 2],
+        details_ms[frames * 9 / 10],
+    );
+    let _ = std::fs::remove_dir_all(&workdir);
+}
+
+/// A diff scroll step's frame while a toast is open: the main pane's own
+/// notify, which also re-renders the root, with the other panes cached.
+/// Ignored: a measurement.
+#[gpui::test]
+#[ignore = "timing probe"]
+fn timing_main_pane_frame_with_open_toast(cx: &mut gpui::TestAppContext) {
+    use std::time::Instant;
+
+    let _cached_views = crate::view::enable_stable_cached_views_for_test();
+    let (view, cx, workdir) =
+        open_generated_diff_view(cx, RepoId(70935), 400, DiffViewMode::Inline);
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.toast_host.update(cx, |host, cx| {
+                host.push_toast(
+                    components::ToastKind::Warning,
+                    "a toast stays open while scrolling".into(),
+                    cx,
+                )
+            });
+        });
+    });
+    let notify_and_draw = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|window, app| {
+            let diff_renderer = view.read(app).diff_renderer.clone();
+            diff_renderer.update(app, |_pane, cx| cx.notify());
+            let _ = window.draw(app);
+        });
+    };
+    // Past the toast's fade-in.
+    for _ in 0..10 {
+        cx.executor()
+            .advance_clock(std::time::Duration::from_millis(100));
+        notify_and_draw(cx);
+    }
+    const FRAMES: usize = 200;
+    let mut frame_ms = Vec::with_capacity(FRAMES);
+    for _ in 0..FRAMES {
+        let started = Instant::now();
+        notify_and_draw(cx);
+        frame_ms.push(started.elapsed().as_secs_f64() * 1000.0);
+    }
+    frame_ms.sort_by(f64::total_cmp);
+    println!(
+        "timing main_pane_frame_with_open_toast p50={:.3}ms p90={:.3}ms",
+        frame_ms[FRAMES / 2],
+        frame_ms[FRAMES * 9 / 10],
+    );
+    let _ = std::fs::remove_dir_all(&workdir);
+}
+
+/// What the main pane's state application spends on its diff caches when
+/// the open diff did not change (a status or line-stats publication after a
+/// save): both checks confirm the cache per call. Ignored: a measurement.
+#[gpui::test]
+#[ignore = "timing probe"]
+fn timing_diff_cache_checks_on_unchanged_diff(cx: &mut gpui::TestAppContext) {
+    use std::time::Instant;
+
+    let lines: usize = std::env::var("GITCOMET_PROBE_DIFF_LINES")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(100_000);
+    let (view, cx, workdir) =
+        open_generated_diff_view(cx, RepoId(70933), lines, DiffViewMode::Inline);
+    let mut best = f64::MAX;
+    for _ in 0..20 {
+        let started = Instant::now();
+        cx.update(|_window, app| {
+            let diff_renderer = view.read(app).diff_renderer.clone();
+            diff_renderer.update(app, |pane, cx| {
+                pane.ensure_file_diff_cache(cx);
+                pane.ensure_rendered_patch_diff_cache(cx);
+            });
+        });
+        best = best.min(started.elapsed().as_secs_f64() * 1000.0);
+    }
+    println!("timing diff_cache_checks_on_unchanged_diff lines={lines} best={best:.3}ms");
+    let _ = std::fs::remove_dir_all(&workdir);
+}
+
+#[gpui::test]
+fn a_frame_of_a_text_diff_resolves_what_the_pane_shows_a_bounded_number_of_times(
+    cx: &mut gpui::TestAppContext,
+) {
+    // Whether a preview covers the diff was asked per painted row, and each
+    // answer stats the file; a frame answers it once.
+    let (view, cx, workdir) =
+        open_generated_diff_view(cx, RepoId(70931), 400, DiffViewMode::Inline);
+    for _ in 0..2 {
+        cx.update(|window, app| {
+            window.refresh();
+            let _ = window.draw(app);
+        });
+    }
+
+    crate::view::panes::diff::take_file_preview_active_checks_for_tests();
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.diff_renderer.update(cx, |_pane, cx| cx.notify());
+        });
+        window.refresh();
+        let _ = window.draw(app);
+    });
+    let checks = crate::view::panes::diff::take_file_preview_active_checks_for_tests();
+    assert!(
+        checks <= 2,
+        "a frame of a text diff checks the preview surface {checks} times"
+    );
+
+    let _ = std::fs::remove_dir_all(&workdir);
 }

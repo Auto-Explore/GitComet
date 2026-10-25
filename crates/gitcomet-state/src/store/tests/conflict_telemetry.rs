@@ -1,9 +1,10 @@
 use super::*;
 use crate::msg::{ConflictAutosolveMode, ConflictAutosolveStats};
+use crate::store::repository_runtime::RepositoryRuntimes;
 
 #[test]
 fn record_conflict_autosolve_telemetry_logs_mode_and_unresolved_deltas() {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
 
@@ -18,6 +19,7 @@ fn record_conflict_autosolve_telemetry_logs_mode_and_unresolved_deltas() {
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::RepoOpenedOk {
+            preferences: None,
             repo_id: RepoId(1),
             spec: RepoSpec {
                 workdir: PathBuf::from("/tmp/repo"),

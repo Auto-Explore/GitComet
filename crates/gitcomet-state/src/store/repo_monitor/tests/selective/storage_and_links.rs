@@ -32,10 +32,13 @@ fn custom_lfs_status_stays_quiet(absolute: bool) {
         .watch(&cache.join("tmp"), notify::RecursiveMode::NonRecursive)
         .unwrap();
     for _ in 0..3 {
-        let status = repo.status().unwrap();
+        let status = repo
+            .status(&gitcomet_core::services::CancellationToken::new())
+            .unwrap();
         assert!(status.staged.is_empty() && status.unstaged.is_empty());
-        monitor.quiet();
     }
+    // One window covers all three: an earlier status's refresh would stay queued.
+    monitor.quiet();
     assert!(raw_rx.try_iter().any(|event| event.is_ok_and(|event| {
         !should_ignore_event_kind(&event)
             && event
@@ -46,7 +49,13 @@ fn custom_lfs_status_stays_quiet(absolute: bool) {
     assert_eq!(fs::read(root.join(".git/index")).unwrap(), index_before);
     fs::write(root.join("asset.lfsbin"), vec![b'y'; 1024 * 1024]).unwrap();
     monitor.refresh();
-    assert!(!repo.status().unwrap().unstaged.is_empty());
+    assert!(
+        !repo
+            .status(&gitcomet_core::services::CancellationToken::new())
+            .unwrap()
+            .unstaged
+            .is_empty()
+    );
     monitor.quiet();
 }
 
@@ -111,7 +120,12 @@ fn custom_lfs_storage_covers_submodules_and_linked_worktrees() {
             .is_none()
         );
     }
-    assert!(plan.dirs.contains(&root.join(".git/refs/heads")));
+    let ref_dir = if root.join(".git/reftable").is_dir() {
+        ".git/reftable"
+    } else {
+        ".git/refs/heads"
+    };
+    assert!(plan.dirs.contains(&root.join(ref_dir)));
     assert!(
         !plan
             .policy
@@ -189,11 +203,27 @@ fn custom_lfs_storage_sharing_repository_directories_preserves_source_and_git_st
     }
 }
 
-fn link_file(target: &Path, link: &Path) {
-    #[cfg(unix)]
-    std::os::unix::fs::symlink(target, link).unwrap();
-    #[cfg(windows)]
-    std::os::windows::fs::symlink_file(target, link).unwrap();
+fn link_file(target: &Path, link: &Path) -> bool {
+    gitcomet_core::test_support::symlink::file(target, link)
+}
+
+/// External inputs sit outside every native root, so Revalidate alone reloads
+/// them, synchronously; a drain replaces the quiet window. Only a policy
+/// reload sets `verification_context`, so late worktree residue cannot pass.
+fn expect_policy_reload(monitor: &RunningMonitor) {
+    monitor.revalidate();
+    monitor.drain_delivered();
+    let messages: Vec<_> = monitor.rx.try_iter().collect();
+    assert!(
+        messages
+            .iter()
+            .all(|message| matches!(message, Msg::RepoExternallyChanged { .. }))
+            && messages.iter().any(|message| matches!(
+                message,
+                Msg::RepoExternallyChanged { change, .. } if change.verification_context
+            )),
+        "revalidation did not reload the policy: {messages:?}"
+    );
 }
 
 #[test]
@@ -207,42 +237,54 @@ fn symlinked_ignore_input_observes_target_edits_and_link_replacement() {
     let link = normalized(&external.path().canonicalize().unwrap()).join("ignore-link");
     fs::write(&target, "generated/\n").unwrap();
     fs::write(&replacement, "generated/\n").unwrap();
-    link_file(&target, &link);
+    if !link_file(&target, &link) {
+        return;
+    }
     run_git(
         &root,
         &["config", "core.excludesFile", link.to_str().unwrap()],
     );
     fs::create_dir_all(root.join("generated/source")).unwrap();
-    fs::write(root.join("generated/source/file.txt"), "before").unwrap();
+    // Only awaited edits touch `file`; the quiet check edits its own file.
+    let file = root.join("generated/source/file.txt");
+    let ignored = root.join("generated/source/ignored.txt");
+    fs::write(&file, "before").unwrap();
+    fs::write(&ignored, "before").unwrap();
     let mut rules = load_gitignore_rules(&root);
     assert!(rules.is_ignored_rel(Path::new("generated"), Some(true)));
     let monitor = RunningMonitor::start(&root);
     monitor.quiet();
     fs::write(&target, "").unwrap();
-    monitor.revalidate();
-    monitor.refresh();
-    fs::write(root.join("generated/source/file.txt"), "newly eligible").unwrap();
-    monitor.revalidate();
-    monitor.refresh();
+    expect_policy_reload(&monitor);
+    assert!(
+        monitor
+            .expect_change(&file, || {
+                fs::write(&file, "newly eligible").unwrap();
+                monitor.revalidate();
+            })
+            .worktree
+    );
     fs::remove_file(&link).unwrap();
-    link_file(&replacement, &link);
-    monitor.revalidate();
-    monitor.refresh();
-    fs::write(root.join("generated/source/file.txt"), "ignored again").unwrap();
+    if !link_file(&replacement, &link) {
+        return;
+    }
+    expect_policy_reload(&monitor);
+    monitor.settle();
+    fs::write(&ignored, "ignored again").unwrap();
     monitor.quiet();
     // Atomic replacement at the new target must reload the same policy too.
     let save = target_dir.join("atomic-save");
     fs::write(&save, "").unwrap();
     fs::rename(save, replacement).unwrap();
-    monitor.revalidate();
-    monitor.refresh();
-    fs::write(
-        root.join("generated/source/file.txt"),
-        "eligible after target save",
-    )
-    .unwrap();
-    monitor.revalidate();
-    monitor.refresh();
+    expect_policy_reload(&monitor);
+    assert!(
+        monitor
+            .expect_change(&file, || {
+                fs::write(&file, "eligible after target save").unwrap();
+                monitor.revalidate();
+            })
+            .worktree
+    );
 }
 
 #[test]
@@ -257,8 +299,12 @@ fn symlinked_ignore_input_observes_missing_target_and_intermediate_link() {
     fs::write(&replacement, "").unwrap();
     let intermediate = normalized(&middle.path().canonicalize().unwrap()).join("intermediate");
     let link = normalized(&external.path().canonicalize().unwrap()).join("ignore-link");
-    link_file(&missing, &intermediate);
-    link_file(&intermediate, &link);
+    if !link_file(&missing, &intermediate) {
+        return;
+    }
+    if !link_file(&intermediate, &link) {
+        return;
+    }
     run_git(
         &root,
         &["config", "core.excludesFile", link.to_str().unwrap()],
@@ -266,15 +312,14 @@ fn symlinked_ignore_input_observes_missing_target_and_intermediate_link() {
     let monitor = RunningMonitor::start(&root);
     monitor.quiet();
     fs::write(&missing, "generated/\n").unwrap();
-    monitor.revalidate();
-    monitor.refresh();
+    expect_policy_reload(&monitor);
     fs::remove_file(&intermediate).unwrap();
-    link_file(&replacement, &intermediate);
-    monitor.revalidate();
-    monitor.refresh();
+    if !link_file(&replacement, &intermediate) {
+        return;
+    }
+    expect_policy_reload(&monitor);
     fs::write(&replacement, "generated/\n").unwrap();
-    monitor.revalidate();
-    monitor.refresh();
+    expect_policy_reload(&monitor);
 }
 
 #[test]
@@ -285,11 +330,12 @@ fn symlinked_ignore_directory_and_relative_target_keep_healthy_coverage() {
     let target_dir = normalized(&targets.path().canonicalize().unwrap());
     let link = normalized(&external.path().canonicalize().unwrap()).join("linked-directory");
     fs::write(target_dir.join("policy"), "generated/\n").unwrap();
-    link_file(Path::new("policy"), &target_dir.join("ignore"));
-    #[cfg(unix)]
-    std::os::unix::fs::symlink(&target_dir, &link).unwrap();
-    #[cfg(windows)]
-    std::os::windows::fs::symlink_dir(&target_dir, &link).unwrap();
+    if !link_file(Path::new("policy"), &target_dir.join("ignore")) {
+        return;
+    }
+    if !gitcomet_core::test_support::symlink::directory(&target_dir, &link) {
+        return;
+    }
     run_git(
         &root,
         &[

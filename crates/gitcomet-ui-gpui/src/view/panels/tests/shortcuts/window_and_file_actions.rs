@@ -1,65 +1,7 @@
 use super::*;
 
 #[gpui::test]
-fn ui_scale_picker_selection_updates_zoom(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
-    let (view, cx) = cx.add_window_view(|window, cx| {
-        super::super::GitCometView::new(store, events, None, window, cx)
-    });
-
-    let repo_id = RepoId(707);
-    let commit_id = CommitId("1122334455667788".into());
-    let workdir = std::env::temp_dir().join(format!(
-        "gitcomet_ui_test_{}_ui_scale_picker",
-        std::process::id()
-    ));
-    let repo = shortcut_fixture_repo(repo_id, &workdir, &commit_id);
-
-    apply_state(cx, &view, app_state_with_active_repo(repo));
-    cx.update(|window, app| {
-        view.update(app, |this, cx| {
-            this.popover_host.update(cx, |host, cx| {
-                host.open_popover_at(
-                    PopoverKind::UiScalePicker,
-                    point(px(72.0), px(72.0)),
-                    window,
-                    cx,
-                );
-            });
-        });
-    });
-    draw_and_drain_test_window(cx);
-
-    assert!(
-        popover_is_open(cx, &view),
-        "expected opening the UI scale picker to show a popover"
-    );
-    assert!(
-        cx.debug_bounds("context_menu_125").is_some(),
-        "expected the UI scale picker to expose a 125% menu item"
-    );
-
-    let zoom_125_bounds = cx
-        .debug_bounds("context_menu_125")
-        .expect("expected the 125% zoom entry to be rendered");
-    cx.simulate_click(zoom_125_bounds.center(), Modifiers::default());
-    draw_and_drain_test_window(cx);
-
-    let zoom_percent = cx.update(|_window, app| view.read(app).ui_scale_percent);
-    assert_eq!(
-        zoom_percent, 125,
-        "expected selecting 125% from the zoom picker to update the UI scale"
-    );
-    assert!(
-        !popover_is_open(cx, &view),
-        "expected the UI scale picker to close after selecting a zoom level"
-    );
-}
-
-#[gpui::test]
-fn bottom_status_bar_zoom_button_keeps_icon_at_default_scale_and_opens_picker(
-    cx: &mut gpui::TestAppContext,
-) {
+fn bottom_status_bar_zoom_button_zooms_this_window(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
@@ -76,54 +18,142 @@ fn bottom_status_bar_zoom_button_keeps_icon_at_default_scale_and_opens_picker(
     apply_state(cx, &view, app_state_with_active_repo(repo));
     draw_and_drain_test_window(cx);
 
-    assert!(
-        cx.debug_bounds("bottom_status_bar_zoom_icon").is_some(),
-        "expected the bottom status bar zoom icon to be visible at the default scale"
-    );
-
+    // At the default scale the button is just its icon.
+    assert!(cx.debug_bounds("bottom_status_bar_zoom_icon").is_some());
     let default_button_width = debug_width(cx, "bottom_status_bar_zoom");
     assert!(
         default_button_width < 40.0,
-        "expected the default zoom button to stay icon-only (width={default_button_width})"
+        "expected an icon-only zoom button at the default scale (width={default_button_width})"
     );
 
-    let zoom_button_bounds = cx
-        .debug_bounds("bottom_status_bar_zoom")
-        .expect("expected bottom status bar zoom button bounds");
-    cx.simulate_click(zoom_button_bounds.center(), Modifiers::default());
-    draw_and_drain_test_window(cx);
+    let open_zoom_menu = |cx: &mut gpui::VisualTestContext| {
+        let bounds = cx
+            .debug_bounds("bottom_status_bar_zoom")
+            .expect("zoom button bounds");
+        cx.simulate_click(bounds.center(), Modifiers::default());
+        draw_and_drain_test_window(cx);
+        assert!(popover_is_open(cx, &view), "expected the zoom menu to open");
+    };
+    let click = |cx: &mut gpui::VisualTestContext, selector: &'static str| {
+        let bounds = cx
+            .debug_bounds(selector)
+            .unwrap_or_else(|| panic!("expected {selector} to be rendered"));
+        cx.simulate_click(bounds.center(), Modifiers::default());
+        draw_and_drain_test_window(cx);
+    };
 
-    assert!(
-        popover_is_open(cx, &view),
-        "expected clicking the bottom status bar zoom button to open the UI scale picker"
-    );
+    open_zoom_menu(cx);
     assert_context_menu_entry_fills_popover_width(cx, "context_menu_125");
+    click(cx, "context_menu_125");
 
-    let zoom_125_bounds = cx
-        .debug_bounds("context_menu_125")
-        .expect("expected the 125% zoom entry to be rendered");
-    cx.simulate_click(zoom_125_bounds.center(), Modifiers::default());
-    draw_and_drain_test_window(cx);
-
-    let zoom_percent = cx.update(|_window, app| view.read(app).ui_scale_percent);
-    assert_eq!(
-        zoom_percent, 125,
-        "expected selecting 125% from the zoom button picker to update the UI scale"
-    );
+    let (percent, own_zoom, default) = cx.update(|window, app| {
+        (
+            view.read(app).ui_scale_percent,
+            crate::ui_scale::window_override(app, window.window_handle().window_id()),
+            crate::ui_scale::default_percent(app),
+        )
+    });
+    assert_eq!(percent, 125, "the window takes the chosen zoom");
+    assert_eq!(own_zoom, Some(125), "as its own zoom");
+    assert_eq!(default, 100, "the default UI scale is untouched");
     assert!(
         !popover_is_open(cx, &view),
-        "expected the UI scale picker to close after selecting a zoom level from the bottom bar"
+        "the menu closes after a choice"
     );
-    assert!(
-        cx.debug_bounds("bottom_status_bar_zoom_icon").is_some(),
-        "expected the bottom status bar zoom icon to remain visible after changing zoom"
-    );
-
     let zoomed_button_width = debug_width(cx, "bottom_status_bar_zoom");
     assert!(
         zoomed_button_width > default_button_width + 10.0,
-        "expected the non-default zoom button to grow to include its percent label (default={default_button_width}, zoomed={zoomed_button_width})"
+        "a zoomed window shows its percent (default={default_button_width}, zoomed={zoomed_button_width})"
     );
+
+    open_zoom_menu(cx);
+    click(cx, "context_menu_use_default_100");
+    let (percent, own_zoom) = cx.update(|window, app| {
+        (
+            view.read(app).ui_scale_percent,
+            crate::ui_scale::window_override(app, window.window_handle().window_id()),
+        )
+    });
+    assert_eq!((percent, own_zoom), (100, None), "back on the default");
+}
+
+/// The cached footer shows whether its window has its own zoom, which can
+/// change while the percent does not.
+#[gpui::test]
+fn clearing_a_zoom_equal_to_the_default_rerenders_the_cached_footer(cx: &mut gpui::TestAppContext) {
+    let _cache_guard = crate::view::enable_stable_cached_views_for_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    let repo_id = RepoId(711);
+    let commit_id = CommitId("1199228833774466".into());
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_cached_footer_zoom",
+        std::process::id()
+    ));
+    apply_state(
+        cx,
+        &view,
+        app_state_with_active_repo(shortcut_fixture_repo(repo_id, &workdir, &commit_id)),
+    );
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+    let window_id = cx.update(|window, _| window.window_handle().window_id());
+    let renders = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|_window, app| view.read(app).bottom_status_bar.read(app).render_count)
+    };
+    let set_zoom = |cx: &mut gpui::VisualTestContext, percent: Option<u32>| {
+        gpui::TestAppContext::update(cx, |app| {
+            crate::app::set_window_ui_scale_percent(app, window_id, percent);
+        });
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+    };
+
+    set_zoom(cx, Some(125));
+    // The default catches up with the window's zoom; the window keeps its own.
+    gpui::TestAppContext::update(cx, |app| {
+        crate::ui_scale::set_default(app, 125);
+        crate::app::apply_ui_scale_to_windows(app);
+    });
+    let before = renders(cx);
+    set_zoom(cx, None);
+    assert!(
+        renders(cx) > before,
+        "the footer must drop its percent label ({before} renders before)"
+    );
+    gpui::TestAppContext::update(cx, |app| {
+        crate::ui_scale::set_default(app, crate::ui_scale::DEFAULT_UI_SCALE_PERCENT);
+    });
+}
+
+#[gpui::test]
+fn ui_scale_commands_zoom_the_window_that_runs_them(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    cx.update(|window, app| {
+        crate::app::install_app_shortcuts_for_test(app, Arc::new(TestBackend));
+        let _ = window.draw(app);
+    });
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.execute_command("increase-ui-scale", Some(window), cx);
+        });
+    });
+    cx.run_until_parked();
+
+    let own_zoom = cx.update(|window, app| {
+        crate::ui_scale::window_override(app, window.window_handle().window_id())
+    });
+    assert_eq!(own_zoom, Some(110));
+    cx.update(|window, app| {
+        crate::ui_scale::set_window_percent(app, window.window_handle().window_id(), None);
+    });
 }
 
 /// The bottom bar only exists in full chrome, so every branding test needs an
@@ -171,7 +201,10 @@ fn bottom_status_bar_free_badge_opens_editions_page_and_updates_tooltip_on_hover
     cx.simulate_click(badge_center, Modifiers::default());
     draw_and_drain_test_window(cx);
 
-    assert_eq!(cx.opened_url(), Some(crate::view::EDITIONS_URL.to_string()));
+    assert_eq!(
+        cx.opened_url(),
+        Some(crate::view::editions_url().unwrap().to_string())
+    );
     assert!(
         !popover_is_open(cx, &view),
         "expected the free badge click to leave popovers closed"
@@ -199,7 +232,10 @@ fn bottom_status_bar_pro_link_renders_and_opens_editions_page(cx: &mut gpui::Tes
 
     cx.simulate_click(link_bounds.center(), Modifiers::default());
     draw_and_drain_test_window(cx);
-    assert_eq!(cx.opened_url(), Some(crate::view::EDITIONS_URL.to_string()));
+    assert_eq!(
+        cx.opened_url(),
+        Some(crate::view::editions_url().unwrap().to_string())
+    );
 }
 
 #[gpui::test]
@@ -239,14 +275,20 @@ fn bottom_status_bar_branding_opens_discord_and_release_notes(cx: &mut gpui::Tes
         .expect("expected bottom status bar discord badge bounds");
     cx.simulate_click(discord_bounds.center(), Modifiers::default());
     draw_and_drain_test_window(cx);
-    assert_eq!(cx.opened_url(), Some(crate::view::DISCORD_URL.to_string()));
+    assert_eq!(
+        cx.opened_url(),
+        Some(crate::view::community_url().unwrap().to_string())
+    );
 
     let version_bounds = cx
         .debug_bounds("bottom_status_bar_version")
         .expect("expected bottom status bar version bounds");
     cx.simulate_click(version_bounds.center(), Modifiers::default());
     draw_and_drain_test_window(cx);
-    assert_eq!(cx.opened_url(), Some(crate::view::RELEASES_URL.to_string()));
+    assert_eq!(
+        cx.opened_url(),
+        Some(crate::view::releases_url().unwrap().to_string())
+    );
 
     let brand_bounds = cx
         .debug_bounds("bottom_status_bar_brand")
@@ -281,7 +323,10 @@ fn bottom_status_bar_brand_opens_the_website_and_shows_a_tooltip(cx: &mut gpui::
     cx.simulate_click(brand_center, Modifiers::default());
     draw_and_drain_test_window(cx);
 
-    assert_eq!(cx.opened_url(), Some(crate::view::WEBSITE_URL.to_string()));
+    assert_eq!(
+        cx.opened_url(),
+        Some(crate::view::website_url().unwrap().to_string())
+    );
     assert!(
         !popover_is_open(cx, &view),
         "expected the wordmark click to leave popovers closed"
@@ -559,6 +604,44 @@ fn ui_scale_ctrl_scroll_wheel_changes_zoom(cx: &mut gpui::TestAppContext) {
     );
 }
 
+/// A trackpad sends Ctrl/Cmd+scroll as many small pixel deltas; stepping on
+/// each one ran a single gesture through every zoom preset.
+#[gpui::test]
+fn ui_scale_smooth_ctrl_scroll_steps_once_per_40_px(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    draw_and_drain_test_window(cx);
+
+    let position = point(px(320.0), px(240.0));
+    let wheel = |cx: &mut gpui::VisualTestContext, dy: f32, touch_phase| {
+        cx.simulate_event(ScrollWheelEvent {
+            position,
+            delta: ScrollDelta::Pixels(point(px(0.0), px(dy))),
+            modifiers: Modifiers {
+                control: true,
+                ..Default::default()
+            },
+            touch_phase,
+        });
+        draw_and_drain_test_window(cx);
+    };
+    let zoom =
+        |cx: &mut gpui::VisualTestContext| cx.update(|_, app| view.read(app).ui_scale_percent);
+    wheel(cx, 15.0, gpui::TouchPhase::Moved);
+    wheel(cx, 15.0, gpui::TouchPhase::Moved);
+    assert_eq!(zoom(cx), 100, "30 px is short of a step");
+    wheel(cx, 15.0, gpui::TouchPhase::Moved);
+    assert_eq!(zoom(cx), 110);
+    // macOS starts a gesture with fingers down and no distance yet; the
+    // previous gesture's leftover must not carry into the new one.
+    wheel(cx, 30.0, gpui::TouchPhase::Moved);
+    wheel(cx, 0.0, gpui::TouchPhase::Started);
+    wheel(cx, 15.0, gpui::TouchPhase::Moved);
+    assert_eq!(zoom(cx), 110, "a new gesture starts from nothing");
+}
+
 #[gpui::test]
 fn ctrl_s_stages_current_file_and_advances_diff(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
@@ -653,8 +736,6 @@ fn ctrl_s_stages_last_file_and_clears_diff(cx: &mut gpui::TestAppContext) {
 
 #[gpui::test]
 fn ctrl_shift_c_copies_current_file_path(cx: &mut gpui::TestAppContext) {
-    let _clipboard_guard = crate::test_support::lock_clipboard_test();
-
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
@@ -734,7 +815,7 @@ fn ctrl_d_opens_discard_confirm_popover(cx: &mut gpui::TestAppContext) {
 }
 
 #[gpui::test]
-fn ctrl_h_opens_file_history_popover(cx: &mut gpui::TestAppContext) {
+fn ctrl_h_opens_file_history_tab(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
@@ -762,17 +843,21 @@ fn ctrl_h_opens_file_history_popover(cx: &mut gpui::TestAppContext) {
     cx.simulate_keystrokes("ctrl-h");
     draw_and_drain_test_window(cx);
 
-    let is_file_history = cx.update(|_window, app| {
-        let host = view.read(app).popover_host.read(app);
-        matches!(
-            host.popover_kind_for_tests(),
-            Some(PopoverKind::FileHistory { .. })
+    let (selected, target) = cx.update(|_window, app| {
+        let view = view.read(app);
+        (
+            view.sidebar_pane.read(app).file_history_selected,
+            view.file_history_pane.read(app).target.clone(),
         )
     });
-    assert!(
-        is_file_history,
-        "expected Ctrl+H to open the FileHistory popover"
-    );
+    assert!(selected, "expected Ctrl+H to select the History tab");
+    assert_eq!(target, Some((repo_id, path.clone())));
+    let focus = cx.update(|_w, app| {
+        let pane = view.read(app).file_history_pane.clone();
+        let input = pane.read(app).filter_input();
+        input.read(app).focus_handle()
+    });
+    cx.update(|window, _| assert!(focus.is_focused(window), "the filter takes the keys"));
 }
 
 #[gpui::test]
@@ -797,10 +882,7 @@ fn ctrl_h_opens_file_history_for_a_file_at_a_commit(cx: &mut gpui::TestAppContex
         &path,
     );
 
-    repo.diff_state.diff_target = Some(DiffTarget::Commit {
-        commit_id: commit_id.clone(),
-        path: Some(path.clone()),
-    });
+    repo.diff_state.diff_target = Some(DiffTarget::commit(commit_id.clone(), path.clone()));
     apply_state(cx, &view, app_state_with_active_repo(repo));
     bind_app_keys_and_global_diff_fallback_for_test(cx);
     focus_diff_panel(cx, &view);
@@ -808,23 +890,240 @@ fn ctrl_h_opens_file_history_for_a_file_at_a_commit(cx: &mut gpui::TestAppContex
     cx.simulate_keystrokes("ctrl-h");
     draw_and_drain_test_window(cx);
 
-    let is_file_history = cx.update(|_window, app| {
-        let host = view.read(app).popover_host.read(app);
-        matches!(
-            host.popover_kind_for_tests(),
-            Some(PopoverKind::FileHistory { .. })
+    let (selected, target) = cx.update(|_window, app| {
+        let view = view.read(app);
+        (
+            view.sidebar_pane.read(app).file_history_selected,
+            view.file_history_pane.read(app).target.clone(),
         )
     });
-    assert!(
-        is_file_history,
-        "expected Ctrl+H to open the FileHistory popover"
+    assert!(selected, "expected Ctrl+H to select the History tab");
+    assert_eq!(target, Some((repo_id, path.clone())));
+}
+
+fn file_history_picker_view<'a>(
+    cx: &'a mut gpui::TestAppContext,
+    id: u64,
+    open_file: Option<&str>,
+    tweak: impl FnOnce(&mut RepoState),
+) -> (
+    gpui::Entity<super::super::GitCometView>,
+    &'a mut gpui::VisualTestContext,
+    RepoId,
+) {
+    use gitcomet_core::domain::{FileEntry, FileEntryKind, FileStatus, FileStatusKind};
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    let repo_id = RepoId(id);
+    let commit_id = CommitId("abcdef00112233ff".into());
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_palette_history_{id}",
+        std::process::id()
+    ));
+    let p = |s: &str| std::path::PathBuf::from(s);
+    let mut repo = simple_worktree_repo(
+        repo_id,
+        &workdir,
+        &commit_id,
+        &[p("src/lib.rs")],
+        &p("src/lib.rs"),
+    );
+    let entry = |path: &str, kind| FileEntry {
+        name: path.rsplit('/').next().unwrap().to_string(),
+        path: Arc::new(p(path)),
+        kind,
+        depth: 0,
+        ignored: false,
+    };
+    repo.file_browser.entries = Loadable::Ready(Arc::new(vec![
+        entry("src", FileEntryKind::Directory),
+        entry("README.md", FileEntryKind::File),
+        entry("src/lib.rs", FileEntryKind::File),
+        entry("src/main.rs", FileEntryKind::File),
+        entry("new.txt", FileEntryKind::File),
+    ]));
+    repo.status = Loadable::Ready(
+        gitcomet_core::domain::RepoStatus {
+            staged: Arc::new(vec![]),
+            unstaged: Arc::new(vec![FileStatus {
+                path: p("new.txt"),
+                kind: FileStatusKind::Untracked,
+                conflict: None,
+            }]),
+        }
+        .into(),
+    );
+    repo.diff_state.diff_target = open_file.map(|f| DiffTarget::commit(commit_id, p(f)));
+    tweak(&mut repo);
+    apply_state(cx, &view, app_state_with_active_repo(repo));
+    (view, cx, repo_id)
+}
+
+fn picker_rows(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+    query: &str,
+) -> Vec<String> {
+    cx.update(|_window, app| {
+        let host = view.read(app).popover_host.clone();
+        host.read(app)
+            .file_history_picker_rows_for_tests(query)
+            .iter()
+            .map(|p| p.display().to_string())
+            .collect()
+    })
+}
+
+fn open_file_picker(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+    repo_id: RepoId,
+) {
+    cx.update(|_window, app| crate::app::bind_text_input_keys_for_test(app));
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.execute_command("file-history", Some(window), cx);
+        });
+    });
+    draw_and_drain_test_window(cx);
+    cx.update(|_window, app| {
+        let host = view.read(app).popover_host.clone();
+        assert!(matches!(
+            host.read(app).popover_kind_for_tests(),
+            Some(PopoverKind::FileHistoryFilePicker { repo_id: id }) if id == repo_id
+        ));
+    });
+}
+
+fn picked_history_target(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+) -> Option<(RepoId, std::path::PathBuf)> {
+    cx.update(|_window, app| view.read(app).file_history_pane.read(app).target.clone())
+}
+
+fn type_in_picker(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+    text: &str,
+) {
+    cx.update(|_window, app| {
+        let host = view.read(app).popover_host.clone();
+        let input = host
+            .read(app)
+            .file_history_picker_input_for_tests()
+            .expect("input");
+        input.update(app, |input, cx| input.set_text(text, cx));
+    });
+}
+
+fn picker_selected(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+) -> Option<usize> {
+    cx.update(|_window, app| {
+        let host = view.read(app).popover_host.clone();
+        host.read(app).file_history_picker_selected_for_tests()
+    })
+}
+
+#[gpui::test]
+fn palette_file_history_picker_lists_open_file_first_without_untracked_or_dirs(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (view, cx, repo_id) = file_history_picker_view(cx, 70604, Some("src/main.rs"), |_| {});
+    open_file_picker(cx, &view, repo_id);
+    assert_eq!(
+        picker_rows(cx, &view, ""),
+        ["src/main.rs", "README.md", "src/lib.rs"]
+    );
+    assert_eq!(picker_rows(cx, &view, "lib"), ["src/lib.rs"]);
+    assert_eq!(picker_selected(cx, &view), Some(0));
+
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    draw_and_drain_test_window(cx);
+    assert_eq!(
+        picked_history_target(cx, &view),
+        Some((repo_id, "src/main.rs".into()))
+    );
+    let selected = cx.update(|_w, app| view.read(app).sidebar_pane.read(app).file_history_selected);
+    assert!(selected);
+}
+
+#[gpui::test]
+fn palette_file_history_picker_opens_without_open_file_and_picks_filtered_row(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (view, cx, repo_id) = file_history_picker_view(cx, 70606, None, |_| {});
+    open_file_picker(cx, &view, repo_id);
+    assert_eq!(picker_rows(cx, &view, "").len(), 3);
+    type_in_picker(cx, &view, "main");
+    cx.run_until_parked();
+    draw_and_drain_test_window(cx);
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    draw_and_drain_test_window(cx);
+    assert_eq!(
+        picked_history_target(cx, &view),
+        Some((repo_id, "src/main.rs".into()))
     );
 }
 
 #[gpui::test]
-fn ctrl_shortcuts_do_not_crash_without_diff_target(cx: &mut gpui::TestAppContext) {
-    let _clipboard_guard = crate::test_support::lock_clipboard_test();
+fn palette_file_history_picker_typing_marks_the_first_match(cx: &mut gpui::TestAppContext) {
+    let (view, cx, repo_id) = file_history_picker_view(cx, 70607, None, |_| {});
+    open_file_picker(cx, &view, repo_id);
+    cx.simulate_keystrokes("down");
+    cx.run_until_parked();
+    draw_and_drain_test_window(cx);
+    assert_eq!(picker_selected(cx, &view), Some(1));
+    type_in_picker(cx, &view, "src");
+    cx.run_until_parked();
+    draw_and_drain_test_window(cx);
+    assert_eq!(picker_selected(cx, &view), Some(0));
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    draw_and_drain_test_window(cx);
+    assert_eq!(
+        picked_history_target(cx, &view),
+        Some((repo_id, "src/lib.rs".into()))
+    );
+}
 
+fn file_browser_loads_after_opening(
+    cx: &mut gpui::TestAppContext,
+    id: u64,
+    tweak: impl FnOnce(&mut RepoState),
+) -> usize {
+    let (view, cx, repo_id) = file_history_picker_view(cx, id, None, tweak);
+    open_file_picker(cx, &view, repo_id);
+    cx.update(|_w, app| {
+        view.read(app)
+            .popover_host
+            .read(app)
+            .file_browser_loads_for_tests()
+    })
+}
+
+#[gpui::test]
+fn palette_file_history_picker_loads_files_when_needed(cx: &mut gpui::TestAppContext) {
+    let not_loaded = file_browser_loads_after_opening(cx, 70608, |repo| {
+        repo.file_browser.entries = Loadable::NotLoaded;
+    });
+    assert_eq!(not_loaded, 1);
+    let stale = file_browser_loads_after_opening(cx, 70609, |repo| {
+        repo.file_browser.stale = true;
+    });
+    assert_eq!(stale, 1);
+    let fresh = file_browser_loads_after_opening(cx, 70610, |_| {});
+    assert_eq!(fresh, 0);
+}
+
+#[gpui::test]
+fn ctrl_shortcuts_do_not_crash_without_diff_target(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
@@ -989,10 +1288,7 @@ fn ctrl_u_unstages_current_file_and_advances_diff(cx: &mut gpui::TestAppContext)
         }
         .into(),
     );
-    let target = DiffTarget::WorkingTree {
-        path: first.clone(),
-        area: DiffArea::Staged,
-    };
+    let target = DiffTarget::working_tree(first.clone(), DiffArea::Staged);
     repo.diff_state.diff_target = Some(target.clone());
     repo.diff_state.diff = Loadable::Ready(simple_hunk_diff(target).into());
     repo.diff_state.diff_rev = 1;
@@ -1012,4 +1308,75 @@ fn ctrl_u_unstages_current_file_and_advances_diff(cx: &mut gpui::TestAppContext)
         Some(second),
         "expected Ctrl+U to unstage the active file and advance the diff target"
     );
+}
+
+#[gpui::test]
+fn file_history_context_menu_action_opens_the_tab(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = RepoId(70605);
+    let commit_id = CommitId("abcdef00112233ff".into());
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_menu_history",
+        std::process::id()
+    ));
+    let path = std::path::PathBuf::from("src/lib.rs");
+    let repo = simple_worktree_repo(
+        repo_id,
+        &workdir,
+        &commit_id,
+        std::slice::from_ref(&path),
+        &path,
+    );
+    apply_state(cx, &view, app_state_with_active_repo(repo));
+    focus_diff_panel(cx, &view);
+
+    let action_path = path.clone();
+    let host = cx.update(|_window, app| view.read(app).popover_host.clone());
+    cx.update(|window, app| {
+        host.update(app, |host, cx| {
+            // A real menu records the diff as its invoker.
+            host.open_popover_at(
+                PopoverKind::StatusFileMenu {
+                    repo_id,
+                    area: DiffArea::Unstaged,
+                    path: action_path.clone(),
+                },
+                point(px(10.0), px(10.0)),
+                window,
+                cx,
+            );
+            host.context_menu_activate_action(
+                ContextMenuAction::OpenFileHistory {
+                    repo_id,
+                    path: action_path,
+                },
+                window,
+                cx,
+            );
+        });
+    });
+    draw_and_drain_test_window(cx);
+
+    let (selected, target) = cx.update(|_window, app| {
+        let view = view.read(app);
+        (
+            view.sidebar_pane.read(app).file_history_selected,
+            view.file_history_pane.read(app).target.clone(),
+        )
+    });
+    assert!(
+        selected,
+        "expected the menu action to select the History tab"
+    );
+    assert_eq!(target, Some((repo_id, path)));
+    let focus = cx.update(|_w, app| {
+        let pane = view.read(app).file_history_pane.clone();
+        let input = pane.read(app).filter_input();
+        input.read(app).focus_handle()
+    });
+    cx.update(|window, _| assert!(focus.is_focused(window), "the filter keeps the keys"));
 }

@@ -105,6 +105,23 @@ pub fn suggestions_for_paths(paths: &[std::path::PathBuf]) -> Option<GitignoreSu
     })
 }
 
+/// Explorer directories generate directory rules; indexed contents stay tracked.
+pub fn suggestions_for_entries(
+    entries: &[(std::path::PathBuf, bool)],
+) -> Option<GitignoreSuggestions> {
+    let mut suggestions =
+        suggestions_for_paths(&entries.iter().map(|(p, _)| p.clone()).collect::<Vec<_>>())?;
+    for (pattern, (_, directory)) in suggestions.files.iter_mut().zip(entries) {
+        if *directory {
+            pattern.push('/');
+        }
+    }
+    if entries.iter().any(|(_, directory)| *directory) {
+        suggestions.extension = None;
+    }
+    Some(suggestions)
+}
+
 /// `Some(value)` when every item is the same `Some(value)`, else `None`.
 fn all_equal(mut items: impl Iterator<Item = Option<String>>) -> Option<String> {
     let first = items.next()??;

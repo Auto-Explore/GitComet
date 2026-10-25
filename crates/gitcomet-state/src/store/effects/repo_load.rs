@@ -1,30 +1,29 @@
-use crate::model::{AppState, ConflictFileLoadMode};
-use crate::msg::Msg;
-use gitcomet_core::conflict_session::{ConflictPayload, ConflictSession, ConflictStageParts};
+use crate::model::{AppState, RepoLifetime, WorktreeDirtyScope};
+use crate::msg::{Msg, WorktreeListRead};
+use crate::store::repository_runtime::RepositoryRuntimes;
 use gitcomet_core::domain::{
-    DiffArea, DiffPreviewTextSide, DiffTarget, LogCursor, LogScope, RepoStatus, Worktree,
+    DiffPreviewTextSide, DiffTarget, LogCursor, LogScope, RepoStatus, Worktree,
     WorktreeDirtySummary, count_file_statuses,
 };
 use gitcomet_core::error::{Error, ErrorKind};
-use gitcomet_core::mergetool_trace::{
-    self, MergetoolTraceEvent, MergetoolTraceSideStats, MergetoolTraceStage,
-};
 use gitcomet_core::path_utils::canonicalize_or_original;
-use gitcomet_core::services::{CancellationToken, ConflictFileStages, GitBackend, GitRepository};
-use rustc_hash::FxHashMap;
+use gitcomet_core::services::{CancellationToken, GitBackend, GitRepository};
+use rustc_hash::{FxHashMap, FxHashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
-use std::time::Instant;
 
 use super::super::{
     RepoId, executor::TaskExecutor, repo_load_trace, worker_channel::StoreWorkerSender,
 };
 use super::util::{
-    RepoMap, missing_repo_error, send_or_log, spawn_detached_with_repo_or_else, spawn_with_repo,
+    missing_repo_error, send_or_log, spawn_detached_with_repo_or_else, spawn_with_repo,
     spawn_with_repo_or_else,
 };
+use super::worktree_list::WorktreeListPublisher;
 
 pub(super) struct SelectedDiffLoadOptions {
+    /// Read the file's `.gitattributes` and text config.
+    pub(super) load_text_attributes: bool,
     pub(super) load_patch_diff: bool,
     pub(super) load_file_text: bool,
     pub(super) preview_text_side: Option<DiffPreviewTextSide>,
@@ -74,13 +73,13 @@ fn spawn_with_selected_diff_guard(
     executor: &TaskExecutor,
     slot: &super::super::executor::LatestTaskSlot,
     task_name: &'static str,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     repo_id: RepoId,
     msg_tx: StoreWorkerSender,
     guard: SelectedDiffLoadGuard,
     task: impl FnOnce(Arc<dyn GitRepository>, StoreWorkerSender, SelectedDiffLoadGuard) + Send + 'static,
 ) -> bool {
-    let Some(repo) = repos.get(&repo_id).cloned() else {
+    let Some(repo) = repos.repository(&repo_id).cloned() else {
         repo_load_trace::trace!("repo_task_missing_handle repo_id={repo_id:?} task={task_name}");
         return false;
     };
@@ -110,550 +109,12 @@ fn spawn_with_selected_diff_guard(
 }
 
 #[cfg(test)]
-mod selected_diff_guard_tests {
-    use super::*;
-    use crate::model::RepoState;
-    use gitcomet_core::domain::RepoSpec;
-
-    fn target(path: &str) -> DiffTarget {
-        DiffTarget::WorkingTree {
-            path: PathBuf::from(path),
-            area: DiffArea::Unstaged,
-        }
-    }
-
-    fn thread_state_with_target(
-        repo_id: RepoId,
-        selected: DiffTarget,
-        target_rev: u64,
-    ) -> Arc<RwLock<Arc<AppState>>> {
-        let mut repo = RepoState::new_opening(
-            repo_id,
-            RepoSpec {
-                workdir: PathBuf::from("/tmp/selected-diff-guard-test"),
-            },
-        );
-        repo.diff_state.diff_target = Some(selected);
-        repo.diff_state.diff_target_rev = target_rev;
-
-        let mut state = AppState::default();
-        state.repos.push(repo);
-        Arc::new(RwLock::new(Arc::new(state)))
-    }
-
-    #[test]
-    fn selected_diff_guard_accepts_current_target_and_revision() {
-        let repo_id = RepoId(1);
-        let selected = target("src/lib.rs");
-        let guard = SelectedDiffLoadGuard::new(
-            thread_state_with_target(repo_id, selected.clone(), 7),
-            repo_id,
-            selected,
-            7,
-        );
-
-        assert!(guard.is_current());
-    }
-
-    #[test]
-    fn selected_diff_guard_rejects_stale_target_or_revision() {
-        let repo_id = RepoId(1);
-        let selected = target("src/lib.rs");
-        let thread_state = thread_state_with_target(repo_id, selected.clone(), 7);
-
-        let stale_revision =
-            SelectedDiffLoadGuard::new(Arc::clone(&thread_state), repo_id, selected.clone(), 6);
-        assert!(!stale_revision.is_current());
-
-        let stale_target =
-            SelectedDiffLoadGuard::new(thread_state, repo_id, target("src/main.rs"), 7);
-        assert!(!stale_target.is_current());
-    }
-
-    /// The repo-load trace explains slow or stuck loads, so selected-diff work
-    /// must record when it is queued, replaced, skipped, started and finished.
-    /// The trace target is read from the environment once per process, so the
-    /// scenario runs in a child test process with tracing enabled.
-    #[test]
-    fn selected_diff_loads_are_repo_load_traced() {
-        const CHILD: &str = "GITCOMET_TEST_SELECTED_DIFF_TRACE";
-        if std::env::var_os(CHILD).is_none() {
-            let dir = tempfile::tempdir().unwrap();
-            let trace_path = dir.path().join("repo-load.log");
-            let name = concat!(module_path!(), "::selected_diff_loads_are_repo_load_traced");
-            let output = std::process::Command::new(std::env::current_exe().unwrap())
-                .args(["--exact", name.split_once("::").unwrap().1, "--nocapture"])
-                .env(CHILD, "1")
-                .env("GITCOMET_REPO_LOAD_TRACE", &trace_path)
-                .output()
-                .unwrap();
-            assert!(
-                output.status.success(),
-                "{}\n{}",
-                String::from_utf8_lossy(&output.stdout),
-                String::from_utf8_lossy(&output.stderr)
-            );
-            assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed"));
-            let trace = std::fs::read_to_string(&trace_path).unwrap_or_default();
-            let events: Vec<&str> = trace
-                .lines()
-                .filter_map(|line| line.split_once("] ").map(|(_, event)| event))
-                .filter(|event| event.contains("task=selected_diff_"))
-                .collect();
-            assert_eq!(
-                events,
-                [
-                    "queue_repo_task repo_id=RepoId(1) task=selected_diff_patch",
-                    "queue_repo_task repo_id=RepoId(1) task=selected_diff_file_text",
-                    "queue_repo_task repo_id=RepoId(1) task=selected_diff_patch",
-                    "replace_queued_repo_task repo_id=RepoId(1) task=selected_diff_patch",
-                    "queue_repo_task repo_id=RepoId(1) task=selected_diff_submodule_summary",
-                    "repo_task_missing_handle repo_id=RepoId(2) task=selected_diff_file_image",
-                    "start_repo_task repo_id=RepoId(1) task=selected_diff_patch",
-                    "finish_repo_task repo_id=RepoId(1) task=selected_diff_patch",
-                    "skip_repo_task_stale_selection repo_id=RepoId(1) task=selected_diff_file_text",
-                    "skip_repo_task_cancelled_before_start repo_id=RepoId(1) task=selected_diff_submodule_summary",
-                ],
-                "full trace:\n{trace}"
-            );
-            return;
-        }
-
-        let repo_id = RepoId(1);
-        let selected = target("src/lib.rs");
-        let thread_state = thread_state_with_target(repo_id, selected.clone(), 1);
-        let executor = TaskExecutor::new(1);
-        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
-        executor.spawn(move || {
-            let _ = release_rx.recv();
-        });
-        let slots = super::super::super::executor::SelectedDiffSlots::default();
-        let mut repos: RepoMap = FxHashMap::default();
-        repos.insert(
-            repo_id,
-            Arc::new(crate::store::tests::DummyRepo::new(
-                "/tmp/selected-diff-trace-test",
-            )),
-        );
-        let (tx, rx) = std::sync::mpsc::channel();
-        let msg_tx = StoreWorkerSender::for_test_msg_sender(tx);
-        let load = |patch, text, summary, image| SelectedDiffLoadOptions {
-            load_patch_diff: patch,
-            load_file_text: text,
-            preview_text_side: None,
-            load_submodule_summary: summary,
-            load_file_image: image,
-        };
-        let schedule = |repo_id, msg_tx: &StoreWorkerSender, rev, options| {
-            schedule_load_selected_diff(
-                &executor,
-                &slots,
-                &repos,
-                Arc::clone(&thread_state),
-                msg_tx.clone(),
-                repo_id,
-                (selected.clone(), rev),
-                CancellationToken::new(),
-                options,
-            );
-        };
-
-        schedule(repo_id, &msg_tx, 1, load(true, true, false, false));
-        // A refresh while the worker is busy replaces the queued patch load and
-        // leaves the queued file-text load stale.
-        {
-            let mut state = thread_state.write().unwrap();
-            Arc::make_mut(&mut state).repos[0]
-                .diff_state
-                .diff_target_rev = 2;
-        }
-        schedule(repo_id, &msg_tx, 2, load(true, false, false, false));
-        let cancelled = CancellationToken::new();
-        let cancelled_tx = msg_tx.with_repo_load_guard(repo_id, 0, cancelled.clone());
-        schedule(repo_id, &cancelled_tx, 2, load(false, false, true, false));
-        cancelled.cancel();
-        schedule(RepoId(2), &msg_tx, 2, load(false, false, false, true));
-
-        release_tx.send(()).unwrap();
-        let (done_tx, done_rx) = std::sync::mpsc::channel();
-        executor.spawn(move || done_tx.send(()).unwrap());
-        done_rx
-            .recv_timeout(std::time::Duration::from_secs(10))
-            .expect("queued loads finish");
-        assert!(matches!(
-            rx.try_recv(),
-            Ok(Msg::Internal(crate::msg::InternalMsg::DiffLoaded { .. }))
-        ));
-        assert!(rx.try_recv().is_err(), "skipped loads send nothing");
-    }
-}
-
-fn trace_side_stats(bytes: Option<&[u8]>, text: Option<&str>) -> MergetoolTraceSideStats {
-    MergetoolTraceSideStats::from_bytes_and_text(bytes, text)
-}
-
-fn trace_payload_stats(payload: Option<&ConflictPayload>) -> MergetoolTraceSideStats {
-    MergetoolTraceSideStats::from_bytes_and_text(
-        payload.and_then(ConflictPayload::as_bytes),
-        payload.and_then(ConflictPayload::as_text),
-    )
-}
-
-fn conflict_file_stages_from_session(
-    path: PathBuf,
-    session: &ConflictSession,
-) -> ConflictFileStages {
-    let (base_bytes, base) = session.base.clone().into_stage_parts();
-    let (ours_bytes, ours) = session.ours.clone().into_stage_parts();
-    let (theirs_bytes, theirs) = session.theirs.clone().into_stage_parts();
-
-    ConflictFileStages {
-        path,
-        base_bytes,
-        ours_bytes,
-        theirs_bytes,
-        base,
-        ours,
-        theirs,
-    }
-}
-
-fn empty_conflict_file_stages(path: PathBuf) -> ConflictFileStages {
-    ConflictFileStages {
-        path,
-        base_bytes: None,
-        ours_bytes: None,
-        theirs_bytes: None,
-        base: None,
-        ours: None,
-        theirs: None,
-    }
-}
-
-fn conflict_file_current_from_session(session: &ConflictSession) -> Option<ConflictStageParts> {
-    session
-        .current
-        .as_ref()
-        .map(|p| p.clone().into_stage_parts())
-}
-
-pub(super) fn schedule_load_branches(
-    executor: &TaskExecutor,
-    repos: &RepoMap,
-    msg_tx: StoreWorkerSender,
-    repo_id: RepoId,
-    cancellation: CancellationToken,
-) {
-    spawn_detached_with_repo_or_else(
-        executor,
-        "load-branches",
-        repos,
-        repo_id,
-        msg_tx,
-        move |repo, msg_tx| {
-            send_or_log(
-                &msg_tx,
-                Msg::Internal(crate::msg::InternalMsg::BranchesLoaded {
-                    repo_id,
-                    result: repo.list_branches_cancellable(&cancellation),
-                }),
-            );
-        },
-        move |msg_tx| {
-            send_or_log(
-                &msg_tx,
-                Msg::Internal(crate::msg::InternalMsg::BranchesLoaded {
-                    repo_id,
-                    result: Err(missing_repo_error(repo_id)),
-                }),
-            );
-        },
-    );
-}
-
-pub(super) fn schedule_load_remotes(
-    executor: &TaskExecutor,
-    repos: &RepoMap,
-    msg_tx: StoreWorkerSender,
-    repo_id: RepoId,
-    cancellation: CancellationToken,
-) {
-    spawn_detached_with_repo_or_else(
-        executor,
-        "load-remotes",
-        repos,
-        repo_id,
-        msg_tx,
-        move |repo, msg_tx| {
-            send_or_log(
-                &msg_tx,
-                Msg::Internal(crate::msg::InternalMsg::RemotesLoaded {
-                    repo_id,
-                    result: repo.list_remotes_cancellable(&cancellation),
-                }),
-            );
-        },
-        move |msg_tx| {
-            send_or_log(
-                &msg_tx,
-                Msg::Internal(crate::msg::InternalMsg::RemotesLoaded {
-                    repo_id,
-                    result: Err(missing_repo_error(repo_id)),
-                }),
-            );
-        },
-    );
-}
-
-pub(super) fn schedule_load_remote_branches(
-    executor: &TaskExecutor,
-    repos: &RepoMap,
-    msg_tx: StoreWorkerSender,
-    repo_id: RepoId,
-    cancellation: CancellationToken,
-) {
-    spawn_detached_with_repo_or_else(
-        executor,
-        "load-remote-branches",
-        repos,
-        repo_id,
-        msg_tx,
-        move |repo, msg_tx| {
-            send_or_log(
-                &msg_tx,
-                Msg::Internal(crate::msg::InternalMsg::RemoteBranchesLoaded {
-                    repo_id,
-                    result: repo.list_remote_branches_cancellable(&cancellation),
-                }),
-            );
-        },
-        move |msg_tx| {
-            send_or_log(
-                &msg_tx,
-                Msg::Internal(crate::msg::InternalMsg::RemoteBranchesLoaded {
-                    repo_id,
-                    result: Err(missing_repo_error(repo_id)),
-                }),
-            );
-        },
-    );
-}
-
-pub(super) fn schedule_load_status(
-    executor: &TaskExecutor,
-    repos: &RepoMap,
-    msg_tx: StoreWorkerSender,
-    repo_id: RepoId,
-    cancellation: CancellationToken,
-) {
-    spawn_detached_with_repo_or_else(
-        executor,
-        "load-status",
-        repos,
-        repo_id,
-        msg_tx,
-        move |repo, msg_tx| {
-            send_or_log(
-                &msg_tx,
-                Msg::Internal(crate::msg::InternalMsg::StatusLoaded {
-                    repo_id,
-                    result: repo.status_cancellable(&cancellation),
-                }),
-            );
-        },
-        move |msg_tx| {
-            send_or_log(
-                &msg_tx,
-                Msg::Internal(crate::msg::InternalMsg::StatusLoaded {
-                    repo_id,
-                    result: Err(missing_repo_error(repo_id)),
-                }),
-            );
-        },
-    );
-}
-
-pub(super) fn schedule_load_worktree_status(
-    executor: &TaskExecutor,
-    repos: &RepoMap,
-    msg_tx: StoreWorkerSender,
-    repo_id: RepoId,
-    cancellation: CancellationToken,
-) {
-    spawn_detached_with_repo_or_else(
-        executor,
-        "load-worktree-status",
-        repos,
-        repo_id,
-        msg_tx,
-        move |repo, msg_tx| {
-            send_or_log(
-                &msg_tx,
-                Msg::Internal(crate::msg::InternalMsg::WorktreeStatusLoaded {
-                    repo_id,
-                    result: repo.worktree_status_cancellable(&cancellation),
-                }),
-            );
-        },
-        move |msg_tx| {
-            send_or_log(
-                &msg_tx,
-                Msg::Internal(crate::msg::InternalMsg::WorktreeStatusLoaded {
-                    repo_id,
-                    result: Err(missing_repo_error(repo_id)),
-                }),
-            );
-        },
-    );
-}
-
-pub(super) fn schedule_load_uncommitted_line_stats(
-    executor: &TaskExecutor,
-    repos: &RepoMap,
-    msg_tx: StoreWorkerSender,
-    repo_id: RepoId,
-    generation: crate::model::LineStatsGeneration,
-    status: std::sync::Arc<gitcomet_core::domain::RepoStatus>,
-    cancellation: CancellationToken,
-) {
-    spawn_detached_with_repo_or_else(
-        executor,
-        "load-uncommitted-line-stats",
-        repos,
-        repo_id,
-        msg_tx,
-        move |repo, msg_tx| {
-            send_or_log(
-                &msg_tx,
-                Msg::Internal(crate::msg::InternalMsg::UncommittedLineStatsLoaded {
-                    repo_id,
-                    generation,
-                    // Cancellable: this reads every changed file, so a
-                    // superseded scan must not hold the repo-load worker.
-                    result: repo
-                        .uncommitted_line_stats_for_status_cancellable(&status, &cancellation),
-                }),
-            );
-        },
-        move |msg_tx| {
-            send_or_log(
-                &msg_tx,
-                Msg::Internal(crate::msg::InternalMsg::UncommittedLineStatsLoaded {
-                    repo_id,
-                    generation,
-                    result: Err(missing_repo_error(repo_id)),
-                }),
-            );
-        },
-    );
-}
-
-pub(super) fn schedule_load_staged_status(
-    executor: &TaskExecutor,
-    repos: &RepoMap,
-    msg_tx: StoreWorkerSender,
-    repo_id: RepoId,
-    cancellation: CancellationToken,
-) {
-    spawn_detached_with_repo_or_else(
-        executor,
-        "load-staged-status",
-        repos,
-        repo_id,
-        msg_tx,
-        move |repo, msg_tx| {
-            send_or_log(
-                &msg_tx,
-                Msg::Internal(crate::msg::InternalMsg::StagedStatusLoaded {
-                    repo_id,
-                    result: repo.staged_status_cancellable(&cancellation),
-                }),
-            );
-        },
-        move |msg_tx| {
-            send_or_log(
-                &msg_tx,
-                Msg::Internal(crate::msg::InternalMsg::StagedStatusLoaded {
-                    repo_id,
-                    result: Err(missing_repo_error(repo_id)),
-                }),
-            );
-        },
-    );
-}
-
-pub(super) fn schedule_load_head_branch(
-    executor: &TaskExecutor,
-    repos: &RepoMap,
-    msg_tx: StoreWorkerSender,
-    repo_id: RepoId,
-    cancellation: CancellationToken,
-) {
-    spawn_detached_with_repo_or_else(
-        executor,
-        "load-head-branch",
-        repos,
-        repo_id,
-        msg_tx,
-        move |repo, msg_tx| {
-            send_or_log(
-                &msg_tx,
-                Msg::Internal(crate::msg::InternalMsg::HeadBranchLoaded {
-                    repo_id,
-                    result: repo.current_branch_cancellable(&cancellation),
-                }),
-            );
-        },
-        move |msg_tx| {
-            send_or_log(
-                &msg_tx,
-                Msg::Internal(crate::msg::InternalMsg::HeadBranchLoaded {
-                    repo_id,
-                    result: Err(missing_repo_error(repo_id)),
-                }),
-            );
-        },
-    );
-}
-
-pub(super) fn schedule_load_upstream_divergence(
-    executor: &TaskExecutor,
-    repos: &RepoMap,
-    msg_tx: StoreWorkerSender,
-    repo_id: RepoId,
-    cancellation: CancellationToken,
-) {
-    spawn_detached_with_repo_or_else(
-        executor,
-        "load-upstream-divergence",
-        repos,
-        repo_id,
-        msg_tx,
-        move |repo, msg_tx| {
-            send_or_log(
-                &msg_tx,
-                Msg::Internal(crate::msg::InternalMsg::UpstreamDivergenceLoaded {
-                    repo_id,
-                    result: repo.upstream_divergence_cancellable(&cancellation),
-                }),
-            );
-        },
-        move |msg_tx| {
-            send_or_log(
-                &msg_tx,
-                Msg::Internal(crate::msg::InternalMsg::UpstreamDivergenceLoaded {
-                    repo_id,
-                    result: Err(missing_repo_error(repo_id)),
-                }),
-            );
-        },
-    );
-}
+mod selected_diff_guard_tests;
 
 #[allow(clippy::too_many_arguments)]
 pub(super) fn schedule_load_log(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     seq: crate::model::LogLoadSeq,
@@ -717,75 +178,9 @@ pub(super) fn schedule_load_log(
     );
 }
 
-pub(super) fn schedule_load_tags(
-    executor: &TaskExecutor,
-    repos: &RepoMap,
-    msg_tx: StoreWorkerSender,
-    repo_id: RepoId,
-    cancellation: CancellationToken,
-) {
-    spawn_with_repo_or_else(
-        executor,
-        repos,
-        repo_id,
-        msg_tx,
-        move |repo, msg_tx| {
-            send_or_log(
-                &msg_tx,
-                Msg::Internal(crate::msg::InternalMsg::TagsLoaded {
-                    repo_id,
-                    result: repo.list_tags_cancellable(&cancellation),
-                }),
-            );
-        },
-        move |msg_tx| {
-            send_or_log(
-                &msg_tx,
-                Msg::Internal(crate::msg::InternalMsg::TagsLoaded {
-                    repo_id,
-                    result: Err(missing_repo_error(repo_id)),
-                }),
-            );
-        },
-    );
-}
-
-pub(super) fn schedule_load_remote_tags(
-    executor: &TaskExecutor,
-    repos: &RepoMap,
-    msg_tx: StoreWorkerSender,
-    repo_id: RepoId,
-    cancellation: CancellationToken,
-) {
-    spawn_with_repo_or_else(
-        executor,
-        repos,
-        repo_id,
-        msg_tx,
-        move |repo, msg_tx| {
-            send_or_log(
-                &msg_tx,
-                Msg::Internal(crate::msg::InternalMsg::RemoteTagsLoaded {
-                    repo_id,
-                    result: repo.list_remote_tags_cancellable(&cancellation),
-                }),
-            );
-        },
-        move |msg_tx| {
-            send_or_log(
-                &msg_tx,
-                Msg::Internal(crate::msg::InternalMsg::RemoteTagsLoaded {
-                    repo_id,
-                    result: Err(missing_repo_error(repo_id)),
-                }),
-            );
-        },
-    );
-}
-
 pub(super) fn schedule_load_stashes(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     limit: usize,
@@ -798,7 +193,7 @@ pub(super) fn schedule_load_stashes(
         repo_id,
         msg_tx,
         move |repo, msg_tx| {
-            let mut entries = repo.stash_list_cancellable(&cancellation);
+            let mut entries = repo.stash_list(&cancellation);
             if let Ok(v) = &mut entries {
                 v.truncate(limit);
             }
@@ -822,174 +217,9 @@ pub(super) fn schedule_load_stashes(
     );
 }
 
-pub(super) fn schedule_load_conflict_file(
-    executor: &TaskExecutor,
-    repos: &RepoMap,
-    msg_tx: StoreWorkerSender,
-    repo_id: RepoId,
-    path: PathBuf,
-    mode: ConflictFileLoadMode,
-) {
-    spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
-        let trace_path = path.clone();
-        let load_full = matches!(mode, ConflictFileLoadMode::Full);
-
-        let conflict_session_started = Instant::now();
-        let conflict_session = load_full
-            .then(|| repo.conflict_session(&path).ok().flatten())
-            .flatten();
-        let session_ref = conflict_session.as_ref();
-        mergetool_trace::record_with(|| {
-            MergetoolTraceEvent::new(
-                MergetoolTraceStage::LoadConflictSession,
-                Some(trace_path.clone()),
-                conflict_session_started.elapsed(),
-            )
-            .with_base(trace_payload_stats(
-                session_ref.map(|session| &session.base),
-            ))
-            .with_ours(trace_payload_stats(
-                session_ref.map(|session| &session.ours),
-            ))
-            .with_theirs(trace_payload_stats(
-                session_ref.map(|session| &session.theirs),
-            ))
-            .with_conflict_block_count(session_ref.map(|session| session.regions.len()))
-        });
-
-        let stages_started = Instant::now();
-        let stages = if !load_full {
-            Ok(Some(empty_conflict_file_stages(path.clone())))
-        } else if let Some(session) = session_ref {
-            Ok(Some(conflict_file_stages_from_session(
-                path.clone(),
-                session,
-            )))
-        } else {
-            match repo.conflict_file_stages(&path) {
-                Ok(v) => Ok(v),
-                Err(e) if matches!(e.kind(), ErrorKind::Unsupported(_)) => repo
-                    .diff_file_text(&DiffTarget::WorkingTree {
-                        path: path.clone(),
-                        area: DiffArea::Unstaged,
-                    })
-                    .map(|opt| {
-                        opt.map(|d| {
-                            let ours_bytes = d
-                                .old
-                                .as_ref()
-                                .map(|text| Arc::<[u8]>::from(text.as_bytes()));
-                            let theirs_bytes = d
-                                .new
-                                .as_ref()
-                                .map(|text| Arc::<[u8]>::from(text.as_bytes()));
-                            ConflictFileStages {
-                                path: d.path,
-                                base_bytes: None,
-                                ours_bytes,
-                                theirs_bytes,
-                                base: None,
-                                ours: d.old,
-                                theirs: d.new,
-                            }
-                        })
-                    }),
-                Err(e) => Err(e),
-            }
-        };
-        let stage_ref = stages.as_ref().ok().and_then(|opt| opt.as_ref());
-        mergetool_trace::record_with(|| {
-            MergetoolTraceEvent::new(
-                MergetoolTraceStage::LoadConflictFileStages,
-                Some(trace_path.clone()),
-                stages_started.elapsed(),
-            )
-            .with_base(trace_side_stats(
-                stage_ref.and_then(|stage| stage.base_bytes.as_deref()),
-                stage_ref.and_then(|stage| stage.base.as_deref()),
-            ))
-            .with_ours(trace_side_stats(
-                stage_ref.and_then(|stage| stage.ours_bytes.as_deref()),
-                stage_ref.and_then(|stage| stage.ours.as_deref()),
-            ))
-            .with_theirs(trace_side_stats(
-                stage_ref.and_then(|stage| stage.theirs_bytes.as_deref()),
-                stage_ref.and_then(|stage| stage.theirs.as_deref()),
-            ))
-        });
-
-        let current_started = Instant::now();
-        let (current_trace_stage, current_bytes, current) = if let Some((current_bytes, current)) =
-            session_ref.and_then(conflict_file_current_from_session)
-        {
-            (
-                MergetoolTraceStage::LoadCurrentReuse,
-                current_bytes,
-                current,
-            )
-        } else {
-            let current_bytes = std::fs::read(repo.spec().workdir.join(&path))
-                .ok()
-                .map(Arc::<[u8]>::from);
-            (MergetoolTraceStage::LoadCurrentRead, current_bytes, None)
-        };
-        let current_text = current.as_deref().or_else(|| {
-            current_bytes
-                .as_deref()
-                .and_then(|bytes| std::str::from_utf8(bytes).ok())
-        });
-        mergetool_trace::record_with(|| {
-            MergetoolTraceEvent::new(
-                current_trace_stage,
-                Some(trace_path),
-                current_started.elapsed(),
-            )
-            .with_current(trace_side_stats(current_bytes.as_deref(), current_text))
-        });
-        let result = if let Some(session) = session_ref {
-            stages.map(|opt| {
-                opt.map(|_| {
-                    crate::model::ConflictFile::from_shared_conflict_session(path.clone(), session)
-                })
-            })
-        } else {
-            stages.map(|opt| {
-                opt.map(|d| {
-                    let gitcomet_core::services::ConflictFileStages {
-                        path,
-                        base_bytes,
-                        ours_bytes,
-                        theirs_bytes,
-                        base,
-                        ours,
-                        theirs,
-                    } = d;
-                    crate::model::ConflictFile::from_loaded_stage_parts(
-                        path,
-                        (base_bytes, base),
-                        (ours_bytes, ours),
-                        (theirs_bytes, theirs),
-                        (current_bytes, current),
-                    )
-                })
-            })
-        };
-
-        send_or_log(
-            &msg_tx,
-            Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
-                repo_id,
-                path,
-                result: Box::new(result),
-                conflict_session,
-            }),
-        );
-    });
-}
-
 pub(super) fn schedule_load_reflog(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     limit: usize,
@@ -1020,43 +250,29 @@ pub(super) fn schedule_load_reflog(
     );
 }
 
-pub(super) fn schedule_load_file_history(
-    executor: &TaskExecutor,
-    repos: &RepoMap,
-    msg_tx: StoreWorkerSender,
-    repo_id: RepoId,
-    path: PathBuf,
-    limit: usize,
-    cursor: Option<LogCursor>,
-) {
-    spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
-        let result = repo.log_file_page(&path, limit, cursor.as_ref());
-        send_or_log(
-            &msg_tx,
-            Msg::Internal(crate::msg::InternalMsg::FileHistoryLoaded {
-                repo_id,
-                path,
-                cursor,
-                result,
-            }),
-        );
-    });
+/// Blame for `path` at `source`: History's and diff sessions' shared reader.
+pub(super) fn load_blame(
+    repo: &dyn GitRepository,
+    path: &Path,
+    source: &gitcomet_core::domain::BlameSource,
+) -> gitcomet_core::services::Result<Vec<gitcomet_core::services::BlameLine>> {
+    use gitcomet_core::domain::BlameSource;
+    match source {
+        BlameSource::Revision(rev) => repo.blame_file(path, rev.as_deref()),
+        BlameSource::WorkingTree(area) => repo.blame_worktree_file(path, *area),
+    }
 }
 
 pub(super) fn schedule_load_blame(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     path: PathBuf,
     source: gitcomet_core::domain::BlameSource,
 ) {
-    use gitcomet_core::domain::BlameSource;
     spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
-        let result = match &source {
-            BlameSource::Revision(rev) => repo.blame_file(&path, rev.as_deref()),
-            BlameSource::WorkingTree(area) => repo.blame_worktree_file(&path, *area),
-        };
+        let result = load_blame(repo.as_ref(), &path, &source);
         send_or_log(
             &msg_tx,
             Msg::Internal(crate::msg::InternalMsg::BlameLoaded {
@@ -1071,10 +287,11 @@ pub(super) fn schedule_load_blame(
 
 pub(super) fn schedule_load_worktrees(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     cancellation: CancellationToken,
+    publisher: WorktreeListPublisher,
 ) {
     spawn_detached_with_repo_or_else(
         executor,
@@ -1083,19 +300,16 @@ pub(super) fn schedule_load_worktrees(
         repo_id,
         msg_tx,
         move |repo, msg_tx| {
-            send_or_log(
-                &msg_tx,
-                Msg::Internal(crate::msg::InternalMsg::WorktreesLoaded {
-                    repo_id,
-                    result: repo.list_worktrees_cancellable(&cancellation),
-                }),
-            );
+            let read = WorktreeListRead::explicit();
+            let result = repo.list_worktrees(&cancellation).map(Arc::new);
+            publisher.publish(&msg_tx, repo_id, read, result);
         },
         move |msg_tx| {
             send_or_log(
                 &msg_tx,
                 Msg::Internal(crate::msg::InternalMsg::WorktreesLoaded {
                     repo_id,
+                    read: WorktreeListRead::explicit(),
                     result: Err(missing_repo_error(repo_id)),
                 }),
             );
@@ -1103,26 +317,32 @@ pub(super) fn schedule_load_worktrees(
     );
 }
 
-/// Scans every *other* linked worktree for uncommitted changes.
+/// Scans all other linked worktrees, or just the requested checkouts.
 ///
 /// The worktree list is re-read inside the task rather than passed in from
 /// state: this way the scan can never disagree with the paths it walks, and it
-/// has no ordering dependency on `LoadWorktrees` having landed first. One `git
-/// worktree list` is negligible next to the per-worktree status scans that
-/// follow.
+/// has no ordering dependency on `LoadWorktrees` having landed first. Full scans
+/// publish changed listings before status work, keeping the sidebar current
+/// even when checkouts are inaccessible. Targeted scans avoid another state
+/// publication on every file edit; git-state changes already request full scans.
 ///
 /// A worktree that cannot be opened or stat'd is skipped rather than failing the
 /// whole scan — removed directories and unmounted volumes are routine.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn schedule_load_worktree_dirty(
     executor: &TaskExecutor,
     backend: Arc<dyn GitBackend>,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
+    cache_lease: super::WorktreeCacheLease,
     own_workdir: PathBuf,
+    scope: WorktreeDirtyScope,
     files_for: Option<PathBuf>,
     cancellation: CancellationToken,
+    publisher: WorktreeListPublisher,
 ) {
+    let missing_scope = scope.clone();
     spawn_detached_with_repo_or_else(
         executor,
         "load-worktree-dirty",
@@ -1130,110 +350,144 @@ pub(super) fn schedule_load_worktree_dirty(
         repo_id,
         msg_tx,
         move |repo, msg_tx| {
+            let lifetime = cache_lease.lifetime();
             let own_workdir = canonicalize_or_original(own_workdir);
-            let result = repo
-                .list_worktrees_cancellable(&cancellation)
-                .inspect_err(|_| {
-                    // The listing is what names the live worktrees, so a failed
-                    // one leaves nothing to prune against -- and its causes (a
-                    // concurrent `git worktree prune`, a permissions blip, an
-                    // unmounted volume) are exactly when stale handles pile up.
-                    // Drop this repo's cache outright: it is only a cache, and
-                    // the next scan reopens whatever it still needs. A cancelled
-                    // listing is not evidence of anything, so it keeps its
-                    // handles.
-                    if !cancellation.is_cancelled() {
-                        retain_worktree_scan_handles(worktree_scan_handles(), repo_id, &[]);
-                    }
-                })
-                .and_then(|worktrees| {
-                    let mut summaries = Vec::new();
-                    let mut scanned = Vec::with_capacity(worktrees.len());
-                    for worktree in worktrees {
-                        // A scan that stops here has seen only a prefix of the
-                        // list, and the reducer commits an `Ok` as the complete
-                        // set of dirty worktrees: it would blank the rows for
-                        // everything unscanned and -- through
-                        // `selected_worktree_is_gone` -- drop the selection and
-                        // close the diff the user is reading. Cancellation is
-                        // the absence of an answer, so it surfaces as one.
-                        if cancellation.is_cancelled() {
-                            return Err(Error::new(ErrorKind::Cancelled));
+            let read = WorktreeListRead::from_dirty_scan();
+            // gix can panic if a checkout is removed between classifying its
+            // root as a repository and reading that now-empty directory. The
+            // executor catches unwinds, but only this task can finish the load
+            // and let the reducer replay a refresh queued during the scan.
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                repo.list_worktrees(&cancellation)
+                    .inspect_err(|_| {
+                        // The listing is what names the live worktrees, so a failed
+                        // one leaves nothing to prune against -- and its causes (a
+                        // concurrent `git worktree prune`, a permissions blip, an
+                        // unmounted volume) are exactly when stale handles pile up.
+                        // Drop this repo's cache outright: it is only a cache, and
+                        // the next scan reopens whatever it still needs. A cancelled
+                        // listing is not evidence of anything, so it keeps its
+                        // handles.
+                        if !cancellation.is_cancelled() {
+                            retain_worktree_scan_handles(worktree_scan_handles(), lifetime, &[]);
                         }
-                        if is_own_worktree(&worktree.path, &own_workdir) {
-                            continue;
+                    })
+                    .and_then(|worktrees| {
+                        let worktrees = Arc::new(worktrees);
+                        if matches!(scope, WorktreeDirtyScope::All) {
+                            // Background failures must not change the explicit list's
+                            // state or produce a diagnostic on every focus/flush.
+                            publisher.publish(&msg_tx, repo_id, read, Ok(worktrees.clone()));
                         }
-                        scanned.push(worktree.path.clone());
-                        let Some(handle) = worktree_scan_handle(
-                            worktree_scan_handles(),
-                            &*backend,
-                            repo_id,
-                            &worktree.path,
-                        ) else {
-                            continue;
-                        };
-                        let status = match handle.status_cancellable(&cancellation) {
-                            Ok(status) => status,
-                            // Cancellation surfaces as an `Err` here like any
-                            // other failure, and it says nothing about the
-                            // handle. `CancelRepoLoads` fires on every tab
-                            // switch, reload and completed action, so treating
-                            // it as a broken handle would discard healthy ones
-                            // routinely and pay full discovery to reopen them.
-                            Err(_) if cancellation.is_cancelled() => {
+                        let mut summaries = Vec::new();
+                        let mut scanned = Vec::with_capacity(worktrees.len());
+                        for worktree in worktrees.iter() {
+                            // A scan that stops here has seen only a prefix of the
+                            // list, and the reducer commits an `Ok` as the complete
+                            // set of dirty worktrees: it would blank the rows for
+                            // everything unscanned and -- through
+                            // `selected_worktree_is_gone` -- drop the selection and
+                            // close the diff the user is reading. Cancellation is
+                            // the absence of an answer, so it surfaces as one.
+                            if cancellation.is_cancelled() {
                                 return Err(Error::new(ErrorKind::Cancelled));
                             }
-                            Err(_) => {
-                                // A handle that cannot report status is not
-                                // worth keeping: the worktree may have been
-                                // removed or replaced underneath it.
-                                forget_worktree_scan_handle(
-                                    worktree_scan_handles(),
-                                    repo_id,
-                                    &worktree.path,
-                                );
+                            if is_own_worktree(&worktree.path, &own_workdir) {
                                 continue;
                             }
-                        };
-                        // Only the selected worktree's files are carried back;
-                        // see `WorktreeDirtySummary`.
-                        let keep_files = files_for.as_deref() == Some(worktree.path.as_path());
-                        // Like the file lists, only the selected worktree pays.
-                        let line_stats = if keep_files {
-                            match handle.uncommitted_line_stats_for_status_cancellable(
-                                &status,
-                                &cancellation,
-                            ) {
-                                Ok(stats) => stats,
-                                // Like the status read above: a cancelled scan
-                                // stops the walk rather than reporting a
-                                // worktree whose counts silently went missing.
+                            scanned.push(worktree.path.clone());
+                            if !scope.includes(&worktree.path) {
+                                continue;
+                            }
+                            let Some(handle) = worktree_scan_handle(
+                                worktree_scan_handles(),
+                                &*backend,
+                                &cache_lease,
+                                &worktree.path,
+                            ) else {
+                                continue;
+                            };
+                            let status = match handle.status(&cancellation) {
+                                Ok(status) => status,
+                                // Cancellation surfaces as an `Err` here like any
+                                // other failure, and it says nothing about the
+                                // handle. `CancelRepoLoads` fires on every tab
+                                // switch, reload and completed action, so treating
+                                // it as a broken handle would discard healthy ones
+                                // routinely and pay full discovery to reopen them.
                                 Err(_) if cancellation.is_cancelled() => {
                                     return Err(Error::new(ErrorKind::Cancelled));
                                 }
-                                // Counts are decoration; a worktree that cannot
-                                // produce them still belongs in the list.
-                                Err(_) => Default::default(),
+                                Err(_) => {
+                                    // A handle that cannot report status is not
+                                    // worth keeping: the worktree may have been
+                                    // removed or replaced underneath it.
+                                    forget_worktree_scan_handle(
+                                        worktree_scan_handles(),
+                                        &worktree.path,
+                                    );
+                                    continue;
+                                }
+                            };
+                            if status.staged.is_empty() && status.unstaged.is_empty() {
+                                continue;
                             }
-                        } else {
-                            Default::default()
-                        };
-                        let summary =
-                            worktree_dirty_summary(worktree, status, keep_files, line_stats);
-                        if summary.is_dirty() {
-                            summaries.push(summary);
+                            // Only the selected worktree's files are carried back;
+                            // see `WorktreeDirtySummary`.
+                            let keep_files = files_for.as_deref() == Some(worktree.path.as_path());
+                            // Like the file lists, only the selected worktree pays.
+                            let line_stats = if keep_files {
+                                match handle
+                                    .uncommitted_line_stats_for_status(&status, &cancellation)
+                                {
+                                    Ok(stats) => stats,
+                                    // Like the status read above: a cancelled scan
+                                    // stops the walk rather than reporting a
+                                    // worktree whose counts silently went missing.
+                                    Err(_) if cancellation.is_cancelled() => {
+                                        return Err(Error::new(ErrorKind::Cancelled));
+                                    }
+                                    // Counts are decoration; a worktree that cannot
+                                    // produce them still belongs in the list.
+                                    Err(_) => Default::default(),
+                                }
+                            } else {
+                                Default::default()
+                            };
+                            let summary = worktree_dirty_summary(
+                                worktree.clone(),
+                                status,
+                                keep_files,
+                                line_stats,
+                            );
+                            if summary.is_dirty() {
+                                summaries.push(summary);
+                            }
                         }
-                    }
-                    // Reaching here means the whole list was walked, so `scanned`
-                    // is complete and safe to prune against -- a cancellation
-                    // part-way returned above rather than falling through with a
-                    // partial set.
-                    retain_worktree_scan_handles(worktree_scan_handles(), repo_id, &scanned);
-                    Ok(summaries)
-                });
+                        // Reaching here means the whole list was walked, so `scanned`
+                        // is complete and safe to prune against -- a cancellation
+                        // part-way returned above rather than falling through with a
+                        // partial set.
+                        retain_worktree_scan_handles(worktree_scan_handles(), lifetime, &scanned);
+                        Ok(summaries)
+                    })
+            }))
+            .unwrap_or_else(|payload| {
+                // The scan did not reach its normal pruning step. Reopen this
+                // repo's checkouts next time instead of retaining stale handles.
+                release_worktree_scan_handles(lifetime);
+                Err(Error::new(ErrorKind::Backend(format!(
+                    "Worktree scan panicked: {}",
+                    gitcomet_core::panic::payload_message(payload.as_ref()),
+                ))))
+            });
             send_or_log(
                 &msg_tx,
-                Msg::Internal(crate::msg::InternalMsg::WorktreeDirtyLoaded { repo_id, result }),
+                Msg::Internal(crate::msg::InternalMsg::WorktreeDirtyLoaded {
+                    repo_id,
+                    scope,
+                    result,
+                }),
             );
         },
         move |msg_tx| {
@@ -1241,6 +495,7 @@ pub(super) fn schedule_load_worktree_dirty(
                 &msg_tx,
                 Msg::Internal(crate::msg::InternalMsg::WorktreeDirtyLoaded {
                     repo_id,
+                    scope: missing_scope,
                     result: Err(missing_repo_error(repo_id)),
                 }),
             );
@@ -1256,26 +511,26 @@ pub(super) fn schedule_load_worktree_dirty(
 /// the index and the worktree, so a reused handle reports fresh results; a handle
 /// that fails is dropped ([`forget_worktree_scan_handle`]) and reopened next time.
 ///
-/// Keyed by repo as well as path: entries are pruned against the worktree list of
-/// the scan that owns them ([`retain_worktree_scan_handles`]), dropped outright
-/// when the repo's tab closes ([`release_worktree_scan_handles`]), and one repo's
-/// scan must not evict another's.
+/// Keyed by canonical checkout path so linked tabs share warm status caches.
+/// Owners are tracked separately: pruning or closing one tab releases only its
+/// ownership, and a handle is dropped when no tabs still need it.
 static WORKTREE_SCAN_HANDLES: OnceLock<Mutex<WorktreeScanHandles>> = OnceLock::new();
 
 /// Handles held open across scans. Each one keeps file descriptors and mapped
 /// index data alive, so the total is capped rather than left to grow with every
 /// worktree the session has ever looked at.
-const WORKTREE_SCAN_HANDLE_LIMIT: usize = 16;
+const WORKTREE_SCAN_HANDLE_LIMIT: usize = 64;
 
 #[derive(Default)]
 struct WorktreeScanHandles {
-    entries: FxHashMap<(RepoId, PathBuf), WorktreeScanHandle>,
+    entries: FxHashMap<PathBuf, WorktreeScanHandle>,
     /// Ticks once per lookup; the entry holding the highest tick is the hottest.
     clock: u64,
 }
 
 struct WorktreeScanHandle {
     handle: Arc<dyn GitRepository>,
+    owners: FxHashSet<RepoLifetime>,
     last_used: u64,
 }
 
@@ -1285,17 +540,12 @@ impl WorktreeScanHandles {
         self.clock
     }
 
-    /// Frees a slot for a new entry belonging to `repo_id`.
+    /// Frees a slot for a new entry belonging to `owner`.
     ///
-    /// The slot comes out of whichever repo holds the most, with the requester
-    /// winning ties. That first step is what keeps repos from starving each
-    /// other: the map is process-wide, and a rule that always spent the
-    /// requester's own budget froze whatever split the tabs happened to open in.
-    /// Two repos of ten worktrees each, the first to scan taking ten slots and
-    /// the second the remaining six, left the second pinned at six forever --
-    /// every scan re-paying discovery and config parsing for the tail of its
-    /// list, which is the cost this cache exists to avoid. Taking from the
-    /// largest holder walks that split down to an even one and then holds there.
+    /// Take from the largest owner, with the requester winning ties, so a new
+    /// repository can earn a fair share rather than staying pinned to whatever
+    /// slots were free when it opened. Shared checkouts occupy one slot but
+    /// count toward each owner's share.
     ///
     /// Within the requester's own entries the *most* recently used goes, not the
     /// coldest. A scan walks `list_worktrees` in order and every scan walks the
@@ -1310,10 +560,12 @@ impl WorktreeScanHandles {
     /// because another repo's oldest handle really is the least likely to be
     /// wanted next, and nothing about this repo's cycle says which of theirs to
     /// keep.
-    fn evict_one_for(&mut self, repo_id: RepoId) -> bool {
-        let mut held: FxHashMap<RepoId, usize> = FxHashMap::default();
-        for (entry_repo, _) in self.entries.keys() {
-            *held.entry(*entry_repo).or_default() += 1;
+    fn evict_one_for(&mut self, owner: RepoLifetime) -> bool {
+        let mut held: FxHashMap<RepoLifetime, usize> = FxHashMap::default();
+        for entry in self.entries.values() {
+            for owner in &entry.owners {
+                *held.entry(*owner).or_default() += 1;
+            }
         }
         let Some(largest) = held
             .into_iter()
@@ -1321,7 +573,7 @@ impl WorktreeScanHandles {
             // cyclic behaviour below and an even split stays put. `entry_repo`
             // breaks the rest, only so the map's iteration order cannot make this
             // vary between runs.
-            .max_by_key(|&(entry_repo, count)| (count, entry_repo == repo_id, entry_repo.0))
+            .max_by_key(|&(entry_repo, count)| (count, entry_repo == owner, entry_repo))
             .map(|(entry_repo, _)| entry_repo)
         else {
             return false;
@@ -1330,8 +582,8 @@ impl WorktreeScanHandles {
         let of_largest = self
             .entries
             .iter()
-            .filter(|((entry_repo, _), _)| *entry_repo == largest);
-        let victim = if largest == repo_id {
+            .filter(|(_, entry)| entry.owners.contains(&largest));
+        let victim = if largest == owner {
             of_largest.max_by_key(|(_, entry)| entry.last_used)
         } else {
             of_largest.min_by_key(|(_, entry)| entry.last_used)
@@ -1366,15 +618,20 @@ fn lock_worktree_scan_handles(
 fn worktree_scan_handle(
     handles: &Mutex<WorktreeScanHandles>,
     backend: &dyn GitBackend,
-    repo_id: RepoId,
+    lease: &super::WorktreeCacheLease,
     path: &Path,
 ) -> Option<Arc<dyn GitRepository>> {
-    let key = (repo_id, path.to_path_buf());
+    let key = canonicalize_or_original(path.to_path_buf());
+    let owner = lease.lifetime();
     {
         let mut handles = lock_worktree_scan_handles(handles);
+        if !lease.is_open() {
+            return None;
+        }
         let now = handles.tick();
         if let Some(entry) = handles.entries.get_mut(&key) {
             entry.last_used = now;
+            entry.owners.insert(owner);
             return Some(Arc::clone(&entry.handle));
         }
     }
@@ -1384,16 +641,63 @@ fn worktree_scan_handle(
     // stall every other repo's scan behind it.
     let handle = backend.open(path).ok()?;
     let mut handles = lock_worktree_scan_handles(handles);
-    while handles.entries.len() >= WORKTREE_SCAN_HANDLE_LIMIT && handles.evict_one_for(repo_id) {}
+    // Closing can revoke the lease while discovery runs. Check under the same
+    // lock used for ownership release so a late open cannot restore that owner.
+    if !lease.is_open() {
+        return None;
+    }
+    // A diff load and the scanner can open the same checkout concurrently.
+    let now = handles.tick();
+    if let Some(entry) = handles.entries.get_mut(&key) {
+        entry.last_used = now;
+        entry.owners.insert(owner);
+        return Some(Arc::clone(&entry.handle));
+    }
+    while handles.entries.len() >= WORKTREE_SCAN_HANDLE_LIMIT && handles.evict_one_for(owner) {}
     let last_used = handles.tick();
     handles.entries.insert(
         key,
         WorktreeScanHandle {
             handle: Arc::clone(&handle),
+            owners: FxHashSet::from_iter([owner]),
             last_used,
         },
     );
     Some(handle)
+}
+
+/// A handle on `repo`'s linked worktree at `path`, from the scan's cache.
+/// Errors when `path` is not one of `repo`'s linked worktrees.
+pub(super) fn linked_worktree_handle(
+    backend: &dyn GitBackend,
+    lease: &super::WorktreeCacheLease,
+    repo: &dyn GitRepository,
+    path: &Path,
+) -> Result<Arc<dyn GitRepository>, Error> {
+    let path = gitcomet_core::domain::normalize_worktree_path(path);
+    let canonical = canonicalize_or_original(path.clone());
+    // Git lists canonical paths; a caller may hold another spelling.
+    let names_path = |candidate: &Path| {
+        gitcomet_core::domain::normalize_worktree_path(candidate) == path
+            || canonicalize_or_original(candidate.to_path_buf()) == canonical
+    };
+    let linked = !names_path(&repo.spec().workdir)
+        && repo
+            .list_worktrees(&gitcomet_core::services::CancellationToken::new())?
+            .iter()
+            .any(|worktree| names_path(&worktree.path));
+    if !linked {
+        return Err(Error::new(ErrorKind::Backend(format!(
+            "{} is not a linked worktree of this repository",
+            path.display()
+        ))));
+    }
+    worktree_scan_handle(worktree_scan_handles(), backend, lease, &path).ok_or_else(|| {
+        Error::new(ErrorKind::Backend(format!(
+            "Could not open the worktree at {}",
+            path.display()
+        )))
+    })
 }
 
 /// Drops this repo's handles for worktrees the current scan did not walk — ones
@@ -1402,30 +706,38 @@ fn worktree_scan_handle(
 /// worktrees that no longer exist.
 fn retain_worktree_scan_handles(
     handles: &Mutex<WorktreeScanHandles>,
-    repo_id: RepoId,
+    owner: RepoLifetime,
     seen: &[PathBuf],
 ) {
+    let seen: FxHashSet<_> = seen
+        .iter()
+        .map(|path| canonicalize_or_original(path.clone()))
+        .collect();
     lock_worktree_scan_handles(handles)
         .entries
-        .retain(|(entry_repo, path), _| *entry_repo != repo_id || seen.contains(path));
+        .retain(|path, entry| {
+            if !seen.contains(path) {
+                entry.owners.remove(&owner);
+            }
+            !entry.owners.is_empty()
+        });
 }
 
-fn forget_worktree_scan_handle(handles: &Mutex<WorktreeScanHandles>, repo_id: RepoId, path: &Path) {
+fn forget_worktree_scan_handle(handles: &Mutex<WorktreeScanHandles>, path: &Path) {
     lock_worktree_scan_handles(handles)
         .entries
-        .remove(&(repo_id, path.to_path_buf()));
+        .remove(&canonicalize_or_original(path.to_path_buf()));
 }
 
-/// Drops every handle a repo holds, for when the repo itself goes away.
-///
-/// Nothing else can: the per-scan prune only runs from that repo's own scan, so a
-/// closed tab's handles -- file descriptors and mapped index data, one set per
-/// linked worktree -- would otherwise sit there for the life of the process,
-/// released only if unrelated repos happened to push the map to its limit.
-pub(in crate::store) fn release_worktree_scan_handles(repo_id: RepoId) {
+/// Drops every scan handle, e.g. after a fetch, so none keeps old packs mapped.
+pub(in crate::store) fn release_all_worktree_scan_handles() {
     lock_worktree_scan_handles(worktree_scan_handles())
         .entries
-        .retain(|(entry_repo, _), _| *entry_repo != repo_id);
+        .clear();
+}
+
+pub(in crate::store) fn release_worktree_scan_handles(owner: RepoLifetime) {
+    retain_worktree_scan_handles(worktree_scan_handles(), owner, &[]);
 }
 
 /// Whether `worktree_path` is the worktree this tab already has open — those
@@ -1476,43 +788,9 @@ fn worktree_dirty_summary(
     }
 }
 
-pub(super) fn schedule_load_ref_metadata(
-    executor: &TaskExecutor,
-    repos: &RepoMap,
-    msg_tx: StoreWorkerSender,
-    repo_id: RepoId,
-    cancellation: CancellationToken,
-) {
-    spawn_detached_with_repo_or_else(
-        executor,
-        "load-ref-metadata",
-        repos,
-        repo_id,
-        msg_tx,
-        move |repo, msg_tx| {
-            send_or_log(
-                &msg_tx,
-                Msg::Internal(crate::msg::InternalMsg::RefMetadataLoaded {
-                    repo_id,
-                    result: repo.list_ref_metadata_cancellable(&cancellation),
-                }),
-            );
-        },
-        move |msg_tx| {
-            send_or_log(
-                &msg_tx,
-                Msg::Internal(crate::msg::InternalMsg::RefMetadataLoaded {
-                    repo_id,
-                    result: Err(missing_repo_error(repo_id)),
-                }),
-            );
-        },
-    );
-}
-
 pub(super) fn schedule_load_submodules(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     cancellation: CancellationToken,
@@ -1527,7 +805,7 @@ pub(super) fn schedule_load_submodules(
                 &msg_tx,
                 Msg::Internal(crate::msg::InternalMsg::SubmodulesLoaded {
                     repo_id,
-                    result: repo.list_submodules_cancellable(&cancellation),
+                    result: repo.list_submodules(&cancellation),
                 }),
             );
         },
@@ -1536,6 +814,143 @@ pub(super) fn schedule_load_submodules(
                 &msg_tx,
                 Msg::Internal(crate::msg::InternalMsg::SubmodulesLoaded {
                     repo_id,
+                    result: Err(missing_repo_error(repo_id)),
+                }),
+            );
+        },
+    );
+}
+
+pub(in crate::store::effects) mod explorer_listing;
+
+pub(super) fn schedule_load_large_file_support(
+    executor: &TaskExecutor,
+    repos: &RepositoryRuntimes,
+    msg_tx: StoreWorkerSender,
+    repo_id: RepoId,
+    cancellation: CancellationToken,
+) {
+    spawn_with_repo_or_else(
+        executor,
+        repos,
+        repo_id,
+        msg_tx,
+        move |repo, msg_tx| {
+            send_or_log(
+                &msg_tx,
+                Msg::Internal(crate::msg::InternalMsg::LargeFileSupportLoaded {
+                    repo_id,
+                    result: repo.large_file_support(&cancellation),
+                }),
+            );
+        },
+        move |msg_tx| {
+            send_or_log(
+                &msg_tx,
+                Msg::Internal(crate::msg::InternalMsg::LargeFileSupportLoaded {
+                    repo_id,
+                    result: Err(missing_repo_error(repo_id)),
+                }),
+            );
+        },
+    );
+}
+
+pub(super) fn schedule_load_lfs_locks(
+    executor: &TaskExecutor,
+    repos: &RepositoryRuntimes,
+    msg_tx: StoreWorkerSender,
+    repo_id: RepoId,
+    cancellation: CancellationToken,
+) {
+    spawn_with_repo_or_else(
+        executor,
+        repos,
+        repo_id,
+        msg_tx,
+        move |repo, msg_tx| {
+            send_or_log(
+                &msg_tx,
+                Msg::Internal(crate::msg::InternalMsg::LfsLocksLoaded {
+                    repo_id,
+                    result: repo.lfs_locks(&cancellation),
+                }),
+            );
+        },
+        move |msg_tx| {
+            send_or_log(
+                &msg_tx,
+                Msg::Internal(crate::msg::InternalMsg::LfsLocksLoaded {
+                    repo_id,
+                    result: Err(missing_repo_error(repo_id)),
+                }),
+            );
+        },
+    );
+}
+
+pub(super) fn schedule_load_annex_unused(
+    executor: &TaskExecutor,
+    repos: &RepositoryRuntimes,
+    msg_tx: StoreWorkerSender,
+    repo_id: RepoId,
+    cancellation: CancellationToken,
+) {
+    spawn_with_repo_or_else(
+        executor,
+        repos,
+        repo_id,
+        msg_tx,
+        move |repo, msg_tx| {
+            let result = repo.annex_unused(&cancellation);
+            send_or_log(
+                &msg_tx,
+                Msg::Internal(crate::msg::InternalMsg::AnnexUnusedLoaded { repo_id, result }),
+            );
+        },
+        move |msg_tx| {
+            send_or_log(
+                &msg_tx,
+                Msg::Internal(crate::msg::InternalMsg::AnnexUnusedLoaded {
+                    repo_id,
+                    result: Err(missing_repo_error(repo_id)),
+                }),
+            );
+        },
+    );
+}
+
+pub(super) fn schedule_load_annex_whereis(
+    executor: &TaskExecutor,
+    repos: &RepositoryRuntimes,
+    msg_tx: StoreWorkerSender,
+    repo_id: RepoId,
+    key: String,
+    cancellation: CancellationToken,
+) {
+    let missing_key = key.clone();
+    spawn_with_repo_or_else(
+        executor,
+        repos,
+        repo_id,
+        msg_tx,
+        move |repo, msg_tx| {
+            let result = repo.annex_whereis(&key, &cancellation);
+            send_or_log(
+                &msg_tx,
+                Msg::Internal(crate::msg::InternalMsg::AnnexWhereisLoaded {
+                    repo_id,
+                    key,
+                    result,
+                }),
+            );
+        },
+        move |msg_tx| {
+            send_or_log(
+                &msg_tx,
+                Msg::Internal(crate::msg::InternalMsg::AnnexWhereisLoaded {
+                    repo_id,
+                    key: missing_key,
                     result: Err(missing_repo_error(repo_id)),
                 }),
             );
@@ -1545,13 +960,15 @@ pub(super) fn schedule_load_submodules(
 
 pub(super) fn schedule_load_file_browser(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     source: gitcomet_core::domain::FileSource,
-    _cancellation: CancellationToken,
+    cancellation: CancellationToken,
+    options: explorer_listing::Options,
 ) {
     let source_for_err = source.clone();
+    let cancellation_for_err = cancellation.clone();
     spawn_with_repo_or_else(
         executor,
         repos,
@@ -1559,7 +976,16 @@ pub(super) fn schedule_load_file_browser(
         msg_tx,
         move |repo, msg_tx| {
             let result = match &source {
-                gitcomet_core::domain::FileSource::WorkingDirectory => repo.list_worktree_files(),
+                gitcomet_core::domain::FileSource::WorkingDirectory => {
+                    repo.list_worktree_files().and_then(|entries| {
+                        explorer_listing::augment(
+                            &repo.spec().workdir,
+                            entries,
+                            options,
+                            &cancellation,
+                        )
+                    })
+                }
                 gitcomet_core::domain::FileSource::Commit(commit_id) => {
                     repo.list_tree_files_at_commit(commit_id)
                 }
@@ -1572,6 +998,7 @@ pub(super) fn schedule_load_file_browser(
             send_or_log(
                 &msg_tx,
                 Msg::Internal(crate::msg::InternalMsg::FileBrowserLoaded {
+                    cancellation: Some(cancellation),
                     repo_id,
                     source,
                     result,
@@ -1582,6 +1009,7 @@ pub(super) fn schedule_load_file_browser(
             send_or_log(
                 &msg_tx,
                 Msg::Internal(crate::msg::InternalMsg::FileBrowserLoaded {
+                    cancellation: Some(cancellation_for_err),
                     repo_id,
                     source: source_for_err,
                     result: Err(missing_repo_error(repo_id)),
@@ -1593,7 +1021,7 @@ pub(super) fn schedule_load_file_browser(
 
 pub(super) fn schedule_load_rebase_state(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     cancellation: CancellationToken,
@@ -1609,7 +1037,7 @@ pub(super) fn schedule_load_rebase_state(
                 &msg_tx,
                 Msg::Internal(crate::msg::InternalMsg::RebaseStateLoaded {
                     repo_id,
-                    result: repo.sequencer_state_cancellable(&cancellation),
+                    result: repo.sequencer_state(&cancellation),
                 }),
             );
         },
@@ -1627,7 +1055,7 @@ pub(super) fn schedule_load_rebase_state(
 
 pub(super) fn schedule_load_rebase_and_merge_state(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     cancellation: CancellationToken,
@@ -1643,14 +1071,14 @@ pub(super) fn schedule_load_rebase_and_merge_state(
                 &msg_tx,
                 Msg::Internal(crate::msg::InternalMsg::RebaseStateLoaded {
                     repo_id,
-                    result: repo.sequencer_state_cancellable(&cancellation),
+                    result: repo.sequencer_state(&cancellation),
                 }),
             );
             send_or_log(
                 &msg_tx,
                 Msg::Internal(crate::msg::InternalMsg::MergeCommitMessageLoaded {
                     repo_id,
-                    result: repo.merge_commit_message_cancellable(&cancellation),
+                    result: repo.merge_commit_message(&cancellation),
                 }),
             );
         },
@@ -1675,7 +1103,7 @@ pub(super) fn schedule_load_rebase_and_merge_state(
 
 pub(super) fn schedule_load_merge_commit_message(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     cancellation: CancellationToken,
@@ -1691,7 +1119,7 @@ pub(super) fn schedule_load_merge_commit_message(
                 &msg_tx,
                 Msg::Internal(crate::msg::InternalMsg::MergeCommitMessageLoaded {
                     repo_id,
-                    result: repo.merge_commit_message_cancellable(&cancellation),
+                    result: repo.merge_commit_message(&cancellation),
                 }),
             );
         },
@@ -1709,7 +1137,7 @@ pub(super) fn schedule_load_merge_commit_message(
 
 pub(super) fn schedule_load_hover_commit_message(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     commit_id: gitcomet_core::domain::CommitId,
@@ -1758,28 +1186,9 @@ pub(super) fn schedule_load_hover_commit_message(
     );
 }
 
-pub(super) fn schedule_load_commit_details(
-    executor: &TaskExecutor,
-    repos: &RepoMap,
-    msg_tx: StoreWorkerSender,
-    repo_id: RepoId,
-    commit_id: gitcomet_core::domain::CommitId,
-) {
-    spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
-        send_or_log(
-            &msg_tx,
-            Msg::Internal(crate::msg::InternalMsg::CommitDetailsLoaded {
-                repo_id,
-                commit_id: commit_id.clone(),
-                result: repo.commit_details(&commit_id),
-            }),
-        );
-    });
-}
-
 pub(super) fn schedule_verify_commit_signatures(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     epoch: u64,
@@ -1795,11 +1204,7 @@ pub(super) fn schedule_verify_commit_signatures(
                 repo_id,
                 epoch,
                 batch,
-                result: repo.verify_commit_signatures_cancellable(
-                    &commit_ids,
-                    formats,
-                    &cancellation,
-                ),
+                result: repo.verify_commit_signatures(&commit_ids, formats, &cancellation),
             }),
         );
     });
@@ -1812,7 +1217,7 @@ pub(super) fn schedule_verify_commit_signatures(
 /// details pane needs anyway.
 pub(super) fn schedule_resolve_commit_for_reveal(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     reference: gitcomet_core::domain::CommitId,
@@ -1835,7 +1240,7 @@ pub(super) fn schedule_resolve_commit_for_reveal(
 /// this runs while the user is still typing.
 pub(super) fn schedule_resolve_commit_lookup(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     reference: gitcomet_core::domain::CommitId,
@@ -1856,17 +1261,20 @@ pub(super) fn schedule_resolve_commit_lookup(
     });
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn schedule_load_range_files(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     from: gitcomet_core::domain::CommitId,
     to: Option<gitcomet_core::domain::CommitId>,
+    options: gitcomet_core::services::ComparisonOptions,
     request: u64,
 ) {
     spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
-        let result = repo.diff_range_files(&from, to.as_ref());
+        // History and hosted views share this comparison service.
+        let result = repo.compare_files(&from, to.as_ref(), &options, &CancellationToken::new());
         send_or_log(
             &msg_tx,
             Msg::Internal(crate::msg::InternalMsg::RangeFilesLoaded {
@@ -1882,7 +1290,7 @@ pub(super) fn schedule_load_range_files(
 
 pub(super) fn schedule_load_squash_message_preview(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     oldest: gitcomet_core::domain::CommitId,
@@ -1915,7 +1323,7 @@ pub(super) struct SquashRebaseSetupRequest {
 
 pub(super) fn schedule_load_squash_rebase_setup(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     request: SquashRebaseSetupRequest,
@@ -1949,7 +1357,7 @@ pub(super) fn schedule_load_squash_rebase_setup(
 
 pub(super) fn schedule_open_file_at_commit(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     commit_id: gitcomet_core::domain::CommitId,
@@ -1974,10 +1382,7 @@ pub(super) fn schedule_open_file_at_commit(
         } else {
             Msg::SelectDiff {
                 repo_id,
-                target: gitcomet_core::domain::DiffTarget::Commit {
-                    commit_id,
-                    path: Some(resolved),
-                },
+                target: gitcomet_core::domain::DiffTarget::commit(commit_id, resolved),
             }
         };
         send_or_log(&msg_tx, message);
@@ -1986,7 +1391,7 @@ pub(super) fn schedule_open_file_at_commit(
 
 pub(super) fn schedule_open_file_at_commit_parent(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     commit_id: gitcomet_core::domain::CommitId,
@@ -2022,7 +1427,7 @@ pub(super) fn schedule_open_file_at_commit_parent(
                 // instead of silently doing nothing.
                 send_or_log(
                     &msg_tx,
-                    Msg::ShowBannerError {
+                    Msg::ReportError {
                         repo_id: Some(repo_id),
                         message: format!("Could not open file at parent commit: {e}"),
                     },
@@ -2034,7 +1439,7 @@ pub(super) fn schedule_open_file_at_commit_parent(
 
 pub(super) fn schedule_load_recent_commit_messages(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     limit: usize,
@@ -2052,16 +1457,33 @@ pub(super) fn schedule_load_recent_commit_messages(
     });
 }
 
+/// The user's encoding choice for `path`, when it is the open file.
+pub(super) fn file_encoding_override(
+    thread_state: &RwLock<Arc<AppState>>,
+    repo_id: RepoId,
+    path: &Path,
+) -> Option<gitcomet_core::text_format::TextEncoding> {
+    let state = thread_state.read().unwrap_or_else(|e| e.into_inner());
+    state
+        .repos
+        .iter()
+        .find(|repo| repo.id == repo_id)?
+        .diff_state
+        .text_override_for(path)?
+        .encoding
+}
+
 pub(super) fn schedule_load_diff(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     target: DiffTarget,
+    encoding: Option<gitcomet_core::text_format::TextEncoding>,
 ) {
     spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
         // UI consumes this parsed diff through paged/lazy row adapters.
-        let result = repo.diff_parsed(&target);
+        let result = repo.diff_parsed(&target, encoding, &CancellationToken::new());
         send_or_log(
             &msg_tx,
             Msg::Internal(crate::msg::InternalMsg::DiffLoaded {
@@ -2075,13 +1497,14 @@ pub(super) fn schedule_load_diff(
 
 pub(super) fn schedule_load_diff_file(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     target: DiffTarget,
+    encoding: Option<gitcomet_core::text_format::TextEncoding>,
 ) {
     spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
-        let result = repo.diff_file_text(&target);
+        let result = repo.diff_file_text(&target, encoding, &CancellationToken::new());
         send_or_log(
             &msg_tx,
             Msg::Internal(crate::msg::InternalMsg::DiffFileLoaded {
@@ -2095,14 +1518,18 @@ pub(super) fn schedule_load_diff_file(
 
 pub(super) fn schedule_load_diff_preview_text_file(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     target: DiffTarget,
     side: DiffPreviewTextSide,
 ) {
     spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
-        let result = repo.diff_preview_text_file(&target, side);
+        let result = repo.diff_preview_text_file(
+            &target,
+            side,
+            &gitcomet_core::services::CancellationToken::new(),
+        );
         send_or_log(
             &msg_tx,
             Msg::Internal(crate::msg::InternalMsg::DiffPreviewTextFileLoaded {
@@ -2117,13 +1544,14 @@ pub(super) fn schedule_load_diff_preview_text_file(
 
 pub(super) fn schedule_load_submodule_summary(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     target: DiffTarget,
 ) {
     spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
-        let result = repo.submodule_diff_summary(&target);
+        let result = repo
+            .submodule_diff_summary(&target, &gitcomet_core::services::CancellationToken::new());
         send_or_log(
             &msg_tx,
             Msg::Internal(crate::msg::InternalMsg::SubmoduleSummaryLoaded {
@@ -2151,9 +1579,13 @@ pub(super) fn schedule_load_inline_submodule_selected_diff(
     }
 
     executor.spawn(move || {
-        let result = backend
-            .open(&submodule_repo_path)
-            .and_then(|repo| repo.diff_parsed(&target));
+        let result = backend.open(&submodule_repo_path).and_then(|repo| {
+            repo.diff_parsed(
+                &target,
+                None,
+                &gitcomet_core::services::CancellationToken::new(),
+            )
+        });
         send_or_log(
             &msg_tx,
             Msg::Internal(crate::msg::InternalMsg::InlineSubmoduleDiffLoaded {
@@ -2182,9 +1614,13 @@ pub(super) fn schedule_load_inline_submodule_selected_diff_file(
     }
 
     executor.spawn(move || {
-        let result = backend
-            .open(&submodule_repo_path)
-            .and_then(|repo| repo.diff_file_text(&target));
+        let result = backend.open(&submodule_repo_path).and_then(|repo| {
+            repo.diff_file_text(
+                &target,
+                None,
+                &gitcomet_core::services::CancellationToken::new(),
+            )
+        });
         send_or_log(
             &msg_tx,
             Msg::Internal(crate::msg::InternalMsg::InlineSubmoduleDiffFileLoaded {
@@ -2213,9 +1649,9 @@ pub(super) fn schedule_load_inline_submodule_selected_diff_file_image(
     }
 
     executor.spawn(move || {
-        let result = backend
-            .open(&submodule_repo_path)
-            .and_then(|repo| repo.diff_file_image(&target));
+        let result = backend.open(&submodule_repo_path).and_then(|repo| {
+            repo.diff_file_image(&target, &gitcomet_core::services::CancellationToken::new())
+        });
         send_or_log(
             &msg_tx,
             Msg::Internal(
@@ -2232,13 +1668,14 @@ pub(super) fn schedule_load_inline_submodule_selected_diff_file_image(
 
 pub(super) fn schedule_load_diff_file_image(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     target: DiffTarget,
 ) {
     spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
-        let result = repo.diff_file_image(&target);
+        let result =
+            repo.diff_file_image(&target, &gitcomet_core::services::CancellationToken::new());
         send_or_log(
             &msg_tx,
             Msg::Internal(crate::msg::InternalMsg::DiffFileImageLoaded {
@@ -2253,7 +1690,7 @@ pub(super) fn schedule_load_diff_file_image(
 pub(super) fn schedule_load_selected_diff(
     executor: &TaskExecutor,
     slots: &super::super::executor::SelectedDiffSlots,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     thread_state: Arc<RwLock<Arc<AppState>>>,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
@@ -2262,7 +1699,38 @@ pub(super) fn schedule_load_selected_diff(
     options: SelectedDiffLoadOptions,
 ) {
     let (target, target_rev) = selection;
+    let encoding = target
+        .file_path()
+        .and_then(|path| file_encoding_override(&thread_state, repo_id, path));
     let guard = SelectedDiffLoadGuard::new(thread_state, repo_id, target.clone(), target_rev);
+    if options.load_text_attributes
+        && let Some(path) = target.file_path().map(Path::to_path_buf)
+    {
+        let target = target.clone();
+        spawn_with_selected_diff_guard(
+            executor,
+            &slots.text_attributes,
+            "selected_diff_text_attributes",
+            repos,
+            repo_id,
+            msg_tx.clone(),
+            guard.clone(),
+            move |repo, msg_tx, guard| {
+                let result = repo.text_attributes(&path);
+                if !guard.is_current() {
+                    return;
+                }
+                send_or_log(
+                    &msg_tx,
+                    Msg::Internal(crate::msg::InternalMsg::TextAttributesLoaded {
+                        repo_id,
+                        target,
+                        result,
+                    }),
+                );
+            },
+        );
+    }
     if options.load_patch_diff {
         let target = target.clone();
         let msg_tx = msg_tx.clone();
@@ -2278,7 +1746,7 @@ pub(super) fn schedule_load_selected_diff(
             guard,
             move |repo, msg_tx, guard| {
                 // UI consumes this parsed diff through paged/lazy row adapters.
-                let result = repo.diff_parsed_cancellable(&target, &cancellation);
+                let result = repo.diff_parsed(&target, encoding, &cancellation);
                 if !guard.is_current() {
                     return;
                 }
@@ -2305,7 +1773,7 @@ pub(super) fn schedule_load_selected_diff(
             msg_tx.clone(),
             guard.clone(),
             move |repo, msg_tx, guard| {
-                let result = repo.diff_file_text_cancellable(&target, &cancellation);
+                let result = repo.diff_file_text(&target, encoding, &cancellation);
                 if !guard.is_current() {
                     return;
                 }
@@ -2332,7 +1800,7 @@ pub(super) fn schedule_load_selected_diff(
             msg_tx.clone(),
             guard.clone(),
             move |repo, msg_tx, guard| {
-                let result = repo.submodule_diff_summary_cancellable(&target, &cancellation);
+                let result = repo.submodule_diff_summary(&target, &cancellation);
                 if !guard.is_current() {
                     return;
                 }
@@ -2359,7 +1827,7 @@ pub(super) fn schedule_load_selected_diff(
             msg_tx.clone(),
             guard.clone(),
             move |repo, msg_tx, guard| {
-                let result = repo.diff_file_image_cancellable(&target, &cancellation);
+                let result = repo.diff_file_image(&target, &cancellation);
                 if !guard.is_current() {
                     return;
                 }
@@ -2386,7 +1854,7 @@ pub(super) fn schedule_load_selected_diff(
             msg_tx.clone(),
             guard.clone(),
             move |repo, msg_tx, guard| {
-                let result = repo.diff_preview_text_file_cancellable(&target, side, &cancellation);
+                let result = repo.diff_preview_text_file(&target, side, &cancellation);
                 if !guard.is_current() {
                     return;
                 }
@@ -2409,7 +1877,7 @@ pub(super) fn schedule_load_selected_diff(
 /// subject-only seed would make saving the dialog destructive.
 pub(super) fn schedule_load_interactive_cherry_pick_messages(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     ids: Vec<String>,
@@ -2468,7 +1936,7 @@ pub(super) fn schedule_load_interactive_cherry_pick_messages(
 
 pub(super) fn schedule_load_interactive_rebase_setup(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     base: String,
@@ -2506,425 +1974,10 @@ pub(super) fn schedule_load_interactive_rebase_setup(
 }
 
 #[cfg(test)]
-mod worktree_dirty_tests {
-    use super::*;
-    use gitcomet_core::domain::{CommitId, FileStatus, FileStatusKind};
-
-    fn status(path: &str, kind: FileStatusKind) -> FileStatus {
-        FileStatus {
-            path: PathBuf::from(path),
-            kind,
-            conflict: None,
-        }
-    }
-
-    fn worktree() -> Worktree {
-        Worktree {
-            path: PathBuf::from("/wt/side"),
-            head: Some(CommitId("abc123".into())),
-            branch: Some("side".into()),
-            detached: false,
-        }
-    }
-
-    #[test]
-    fn a_summary_sums_staged_and_unstaged_into_the_three_buckets() {
-        let repo_status = RepoStatus {
-            staged: std::sync::Arc::new(vec![status("gone.txt", FileStatusKind::Deleted)]),
-            unstaged: std::sync::Arc::new(vec![
-                status("edited.txt", FileStatusKind::Modified),
-                status("new.txt", FileStatusKind::Untracked),
-            ]),
-        };
-
-        let summary = worktree_dirty_summary(worktree(), repo_status, true, Default::default());
-        assert_eq!(
-            (summary.added, summary.modified, summary.deleted),
-            (1, 1, 1)
-        );
-        assert!(summary.is_dirty());
-        // The rows list these files, so the scan has to hand them over rather
-        // than reducing them to counts and dropping them.
-        assert_eq!(summary.unstaged.len(), 2);
-        assert_eq!(summary.staged.len(), 1);
-        assert_eq!(summary.staged[0].path, PathBuf::from("gone.txt"));
-    }
-
-    /// The row is anchored by HEAD and labelled by branch, so the scan has to
-    /// carry both through; the repo's own worktree list is loaded lazily and
-    /// cannot be relied on.
-    #[test]
-    fn a_summary_carries_the_worktrees_identity() {
-        let summary =
-            worktree_dirty_summary(worktree(), RepoStatus::default(), true, Default::default());
-        assert_eq!(summary.path, PathBuf::from("/wt/side"));
-        assert_eq!(summary.head.as_ref().map(|id| id.as_ref()), Some("abc123"));
-        assert_eq!(summary.branch.as_deref(), Some("side"));
-        assert!(!summary.detached);
-        assert!(!summary.is_dirty(), "a clean tree must not be reported");
-    }
-
-    /// The scan's own workdir arrives canonicalized while git reports the path it
-    /// recorded, so the two spell the same directory differently whenever the repo
-    /// root is reached through a symlink. Missing that match scans this tab's own
-    /// worktree and renders its changes twice.
-    #[cfg(unix)]
-    #[test]
-    fn a_symlinked_repo_root_is_still_recognised_as_our_own_worktree() {
-        let dir = tempfile::tempdir().expect("temp dir");
-        let real = dir.path().join("real");
-        std::fs::create_dir(&real).expect("create real worktree dir");
-        let linked = dir.path().join("linked");
-        std::os::unix::fs::symlink(&real, &linked).expect("symlink");
-
-        let own_workdir = canonicalize_or_original(linked.clone());
-        assert_ne!(
-            own_workdir, linked,
-            "fixture must actually produce two spellings of one directory"
-        );
-
-        assert!(
-            is_own_worktree(&linked, &own_workdir),
-            "the path git reports must still match our canonicalized workdir"
-        );
-        assert!(
-            is_own_worktree(&real, &own_workdir),
-            "and so must the resolved one"
-        );
-        assert!(
-            !is_own_worktree(&dir.path().join("other"), &own_workdir),
-            "a genuinely different worktree is still scanned"
-        );
-    }
-}
+mod worktree_dirty_tests;
 
 #[cfg(test)]
-mod worktree_scan_handle_tests {
-    use super::*;
-
-    use crate::store::tests::DummyRepo;
-
-    /// Counts opens so the tests can tell a cache hit from a reopen.
-    struct CountingBackend {
-        opens: std::sync::atomic::AtomicUsize,
-    }
-
-    impl GitBackend for CountingBackend {
-        fn open(&self, workdir: &Path) -> gitcomet_core::services::Result<Arc<dyn GitRepository>> {
-            self.opens
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            Ok(Arc::new(DummyRepo::new(workdir)))
-        }
-    }
-
-    impl CountingBackend {
-        fn new() -> Self {
-            Self {
-                opens: std::sync::atomic::AtomicUsize::new(0),
-            }
-        }
-
-        fn opens(&self) -> usize {
-            self.opens.load(std::sync::atomic::Ordering::Relaxed)
-        }
-    }
-
-    /// A map of this test's own. These used to share the process-wide static, and
-    /// the over-the-limit test below evicts sixteen entries as it runs — under
-    /// cargo's parallel harness it was evicting the *other* tests' entries, and
-    /// they failed on an open count one higher than they asked for.
-    fn handles() -> Mutex<WorktreeScanHandles> {
-        Mutex::new(WorktreeScanHandles::default())
-    }
-
-    /// Opening a repository is discovery plus config parsing, and the scan runs on
-    /// every git-state flush. A repo with more worktrees than the cache holds must
-    /// still keep its hottest ones: clearing the map wholesale at the limit made
-    /// exactly that case reopen nearly everything every scan.
-    #[test]
-    fn a_repo_over_the_handle_limit_keeps_its_hottest_worktrees() {
-        let handles = handles();
-        let backend = CountingBackend::new();
-        let repo_id = RepoId(4_001);
-        let hot = PathBuf::from("/wt/hot-4001");
-        let paths: Vec<PathBuf> = (0..WORKTREE_SCAN_HANDLE_LIMIT + 4)
-            .map(|ix| PathBuf::from(format!("/wt/cold-4001-{ix}")))
-            .collect();
-
-        // The hot worktree is touched before and after every cold one. Eviction
-        // takes the entry the scan has just finished with, which is always the
-        // cold one -- touching `hot` again immediately afterwards makes it the
-        // most recent, but by then the slot has already been taken.
-        worktree_scan_handle(&handles, &backend, repo_id, &hot).expect("stub backend opens");
-        for path in &paths {
-            worktree_scan_handle(&handles, &backend, repo_id, path).expect("stub backend opens");
-            worktree_scan_handle(&handles, &backend, repo_id, &hot).expect("stub backend opens");
-        }
-
-        let opens_before = backend.opens();
-        worktree_scan_handle(&handles, &backend, repo_id, &hot).expect("stub backend opens");
-        assert_eq!(
-            backend.opens(),
-            opens_before,
-            "the repeatedly used worktree must still be cached"
-        );
-    }
-
-    /// The access pattern this cache actually sees: every scan walks
-    /// `list_worktrees` in the same order, so a repo with more worktrees than the
-    /// limit revisits them cyclically. That is LRU's worst case — it evicts
-    /// precisely the entry the next scan reaches first, and every handle is
-    /// reopened on every pass, which is the behaviour the cache exists to prevent.
-    #[test]
-    fn repeated_scans_of_an_oversized_repo_do_not_reopen_everything() {
-        let handles = handles();
-        let backend = CountingBackend::new();
-        let repo_id = RepoId(4_005);
-        let worktrees: Vec<PathBuf> = (0..WORKTREE_SCAN_HANDLE_LIMIT + 4)
-            .map(|ix| PathBuf::from(format!("/wt/seq-4005-{ix}")))
-            .collect();
-
-        let scan = || {
-            let before = backend.opens();
-            for path in &worktrees {
-                worktree_scan_handle(&handles, &backend, repo_id, path)
-                    .expect("stub backend opens");
-            }
-            backend.opens() - before
-        };
-
-        assert_eq!(
-            scan(),
-            worktrees.len(),
-            "the first scan has nothing cached and opens every worktree"
-        );
-
-        let second = scan();
-        let third = scan();
-        // Under LRU both of these were `worktrees.len()` -- a complete miss on
-        // every worktree, on every scan, forever.
-        assert!(
-            second < worktrees.len() && third < worktrees.len(),
-            "a cyclic rescan must keep hitting the cache, got {second} then {third} \
-             reopens of {} worktrees",
-            worktrees.len()
-        );
-        assert!(
-            third <= worktrees.len() - WORKTREE_SCAN_HANDLE_LIMIT + 1,
-            "all but the tail past the limit should stay cached, got {third} reopens"
-        );
-    }
-
-    /// Handles are pruned against the worktree list the scan actually walked, so a
-    /// removed worktree does not keep a repository open for the process lifetime.
-    #[test]
-    fn a_scan_drops_handles_for_worktrees_it_no_longer_lists() {
-        let handles = handles();
-        let backend = CountingBackend::new();
-        let repo_id = RepoId(4_002);
-        let kept = PathBuf::from("/wt/kept-4002");
-        let removed = PathBuf::from("/wt/removed-4002");
-
-        worktree_scan_handle(&handles, &backend, repo_id, &kept).expect("stub backend opens");
-        worktree_scan_handle(&handles, &backend, repo_id, &removed).expect("stub backend opens");
-        assert_eq!(backend.opens(), 2);
-
-        retain_worktree_scan_handles(&handles, repo_id, std::slice::from_ref(&kept));
-
-        worktree_scan_handle(&handles, &backend, repo_id, &kept).expect("stub backend opens");
-        assert_eq!(
-            backend.opens(),
-            2,
-            "the worktree still in the list keeps its handle"
-        );
-        worktree_scan_handle(&handles, &backend, repo_id, &removed).expect("stub backend opens");
-        assert_eq!(
-            backend.opens(),
-            3,
-            "the worktree dropped from the list must have been released"
-        );
-    }
-
-    /// One repo's scan must not evict another's handles: the map is process-wide.
-    #[test]
-    fn pruning_one_repos_handles_leaves_another_repos_alone() {
-        let handles = handles();
-        let backend = CountingBackend::new();
-        let mine = RepoId(4_003);
-        let theirs = RepoId(4_004);
-        let path = PathBuf::from("/wt/shared-4003");
-
-        worktree_scan_handle(&handles, &backend, mine, &path).expect("stub backend opens");
-        worktree_scan_handle(&handles, &backend, theirs, &path).expect("stub backend opens");
-        assert_eq!(backend.opens(), 2);
-
-        retain_worktree_scan_handles(&handles, mine, &[]);
-
-        worktree_scan_handle(&handles, &backend, theirs, &path).expect("stub backend opens");
-        assert_eq!(
-            backend.opens(),
-            2,
-            "the other repo's handle must survive this repo's prune"
-        );
-    }
-
-    /// The map is process-wide, and a rule that always spends the requester's own
-    /// budget freezes whatever split the tabs happened to open in: the repo that
-    /// scanned second is pinned to the leftovers forever and re-pays discovery
-    /// for the tail of its list on every flush.
-    #[test]
-    fn a_second_repo_takes_slots_from_the_larger_holder_rather_than_starving() {
-        let handles = handles();
-        let backend = CountingBackend::new();
-        let first = RepoId(4_008);
-        let second = RepoId(4_009);
-        let paths = |repo: RepoId| -> Vec<PathBuf> {
-            (0..WORKTREE_SCAN_HANDLE_LIMIT)
-                .map(|ix| PathBuf::from(format!("/wt/share-{}-{ix}", repo.0)))
-                .collect()
-        };
-        let first_paths = paths(first);
-        let second_paths = paths(second);
-
-        // The first repo fills two thirds of the map, then the second arrives.
-        let first_share = WORKTREE_SCAN_HANDLE_LIMIT * 2 / 3;
-        for path in &first_paths[..first_share] {
-            worktree_scan_handle(&handles, &backend, first, path).expect("stub backend opens");
-        }
-
-        let held = |repo_id: RepoId| {
-            lock_worktree_scan_handles(&handles)
-                .entries
-                .keys()
-                .filter(|(entry_repo, _)| *entry_repo == repo_id)
-                .count()
-        };
-
-        // Several full scans by the second repo: under the old rule it evicted
-        // the entry it had just used and never grew past the leftovers.
-        for _ in 0..3 {
-            for path in &second_paths {
-                worktree_scan_handle(&handles, &backend, second, path).expect("stub backend opens");
-            }
-        }
-
-        let second_held = held(second);
-        assert!(
-            second_held > WORKTREE_SCAN_HANDLE_LIMIT - first_share,
-            "the second repo must grow past the leftovers, got {second_held} of \
-             {WORKTREE_SCAN_HANDLE_LIMIT}"
-        );
-        assert!(
-            held(first) > 0,
-            "and must not have cleared the first repo out either"
-        );
-    }
-
-    /// Closing a repo is the only thing that can release its handles: the per-scan
-    /// prune runs from that repo's own scan, and a closed repo never scans again.
-    /// Without this the handles sat there for the life of the process.
-    #[test]
-    fn closing_a_repo_releases_every_handle_it_held() {
-        let backend = CountingBackend::new();
-        let closed = RepoId(4_006);
-        let other = RepoId(4_007);
-        let paths = [
-            PathBuf::from("/wt/closing-4006-a"),
-            PathBuf::from("/wt/closing-4006-b"),
-        ];
-
-        // The release hook reaches the static directly -- it is called from the
-        // reducer, which has no map to hand it -- so this one test uses it, and
-        // cleans up after itself by releasing both repos.
-        let shared = worktree_scan_handles();
-        for path in &paths {
-            worktree_scan_handle(shared, &backend, closed, path).expect("stub backend opens");
-        }
-        worktree_scan_handle(shared, &backend, other, &paths[0]).expect("stub backend opens");
-
-        release_worktree_scan_handles(closed);
-
-        let held = |repo_id: RepoId| {
-            lock_worktree_scan_handles(shared)
-                .entries
-                .keys()
-                .filter(|(entry_repo, _)| *entry_repo == repo_id)
-                .count()
-        };
-        assert_eq!(held(closed), 0, "the closed repo must hold nothing");
-        assert_eq!(held(other), 1, "and must not have taken anyone else's");
-
-        release_worktree_scan_handles(other);
-    }
-}
+mod worktree_scan_handle_tests;
 
 #[cfg(test)]
-mod worktree_dirty_files_tests {
-    use super::*;
-    use gitcomet_core::domain::{CommitId, FileStatus, FileStatusKind};
-
-    fn status(paths: &[&str]) -> RepoStatus {
-        RepoStatus {
-            staged: std::sync::Arc::new(Vec::new()),
-            unstaged: std::sync::Arc::new(
-                paths
-                    .iter()
-                    .map(|path| FileStatus {
-                        path: PathBuf::from(path),
-                        kind: FileStatusKind::Modified,
-                        conflict: None,
-                    })
-                    .collect(),
-            ),
-        }
-    }
-
-    fn worktree() -> Worktree {
-        Worktree {
-            path: PathBuf::from("/wt/side"),
-            head: Some(CommitId("abc123".into())),
-            branch: Some("side".into()),
-            detached: false,
-        }
-    }
-
-    /// The file lists are the expensive part of a summary -- an un-ignored build
-    /// directory puts tens of thousands of paths in them -- and only the selected
-    /// worktree's are ever rendered. The counts have to survive either way, since
-    /// every row shows them.
-    #[test]
-    fn only_the_selected_worktree_carries_its_files() {
-        let kept = worktree_dirty_summary(
-            worktree(),
-            status(&["a.rs", "b.rs"]),
-            true,
-            Default::default(),
-        );
-        assert_eq!((kept.added, kept.modified, kept.deleted), (0, 2, 0));
-        assert_eq!(
-            kept.unstaged.len(),
-            2,
-            "the selected worktree keeps its files"
-        );
-
-        let counted = worktree_dirty_summary(
-            worktree(),
-            status(&["a.rs", "b.rs"]),
-            false,
-            Default::default(),
-        );
-        assert_eq!(
-            (counted.added, counted.modified, counted.deleted),
-            (0, 2, 0),
-            "counts are derived before the lists are dropped"
-        );
-        assert!(
-            counted.unstaged.is_empty() && counted.staged.is_empty(),
-            "an unselected worktree carries counts alone"
-        );
-        assert!(
-            counted.is_dirty(),
-            "and still reports as dirty, or its row would disappear"
-        );
-    }
-}
+mod worktree_dirty_files_tests;

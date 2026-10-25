@@ -1,7 +1,7 @@
 use super::*;
 
 #[gpui::test]
-fn patch_view_applies_syntax_highlighting_to_context_lines(cx: &mut gpui::TestAppContext) {
+fn whole_patch_target_has_no_diff_rows_in_the_main_pane(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
@@ -13,10 +13,11 @@ fn patch_view_applies_syntax_highlighting_to_context_lines(cx: &mut gpui::TestAp
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            let target = gitcomet_core::domain::DiffTarget::Commit {
-                commit_id: gitcomet_core::domain::CommitId("deadbeef".into()),
-                path: None,
-            };
+            let target = gitcomet_core::domain::DiffTarget::commit_range(
+                gitcomet_core::domain::CommitId("parent".into()),
+                Some(gitcomet_core::domain::CommitId("deadbeef".into())),
+                None,
+            );
 
             let diff = gitcomet_core::domain::Diff {
                 target: target.clone(),
@@ -62,43 +63,30 @@ fn patch_view_applies_syntax_highlighting_to_context_lines(cx: &mut gpui::TestAp
         });
     });
 
-    cx.update(|window, app| {
-        let _ = window.draw(app);
-    });
-
-    cx.update(|_window, app| {
-        let main_pane = view.read(app).main_pane.clone();
-        let pane = main_pane.read(app);
-        let styled = pane
-            .diff_text_segments_cache
-            .get(2)
-            .and_then(|v| v.as_ref().map(|entry| &entry.styled))
-            .expect("expected context line to be syntax-highlighted and cached");
-        assert!(
-            !styled.highlights.is_empty(),
-            "expected syntax highlighting highlights for context line"
-        );
-
-        assert_eq!(
-            pane.diff_language_for_src_ix.get(5).copied().flatten(),
-            Some(rows::DiffSyntaxLanguage::Jinja),
-            "the patch should use the same path-based language detection as file content"
-        );
-        let jinja_styled = pane
-            .diff_text_segments_cache
-            .get(5)
-            .and_then(|v| v.as_ref().map(|entry| &entry.styled))
-            .expect("expected Nunjucks context line to be styled and cached");
-        assert!(
-            !jinja_styled.highlights.is_empty(),
-            "the patch should apply Jinja's injected HTML highlighting"
-        );
-    });
+    for diff_view in [DiffViewMode::Inline, DiffViewMode::Split] {
+        cx.update(|_window, app| {
+            view.read(app)
+                .diff_renderer
+                .clone()
+                .update(app, |pane, cx| {
+                    pane.diff_view = diff_view;
+                    cx.notify();
+                });
+        });
+        draw_and_drain_test_window(cx);
+        cx.update(|_window, app| {
+            let pane = view.read(app).diff_renderer.read(app);
+            assert!(
+                pane.diff_text_hitboxes.is_empty(),
+                "a range without a selected file must not render a whole-patch panel"
+            );
+            assert!(pane.diff_text_segments_cache.iter().all(Option::is_none));
+        });
+    }
 }
 
 #[gpui::test]
 fn patch_diff_text_multi_clicks_match_editor_selection_behavior(cx: &mut gpui::TestAppContext) {
-    let _clipboard_guard = lock_clipboard_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
@@ -115,8 +103,8 @@ fn patch_diff_text_multi_clicks_match_editor_selection_behavior(cx: &mut gpui::T
 
     seed_file_diff_state(cx, &view, repo_id, &workdir, &path, old_text, new_text);
     cx.update(|_window, app| {
-        let main_pane = view.read(app).main_pane.clone();
-        main_pane.update(app, |pane, cx| {
+        let diff_renderer = view.read(app).diff_renderer.clone();
+        diff_renderer.update(app, |pane, cx| {
             pane.diff_view = DiffViewMode::Inline;
             cx.notify();
         });
@@ -151,7 +139,7 @@ fn patch_diff_text_multi_clicks_match_editor_selection_behavior(cx: &mut gpui::T
     );
 
     let (visible_ix, expected_line) = cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         let visible_ix = (0..pane.diff_visible_len())
             .find(|&visible_ix| {
                 let Some(inline_ix) = pane.diff_mapped_ix_for_visible_ix(visible_ix) else {
@@ -175,7 +163,7 @@ fn patch_diff_text_multi_clicks_match_editor_selection_behavior(cx: &mut gpui::T
         "file diff multi-click target row hitbox",
     );
     let expected_word = cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         let offset = pane
             .diff_text_offset_for_position(visible_ix, DiffTextRegion::Inline, click)
             .expect("expected diff text offset for click");
@@ -186,8 +174,8 @@ fn patch_diff_text_multi_clicks_match_editor_selection_behavior(cx: &mut gpui::T
     simulate_counted_click(cx, click, 2);
 
     cx.update(|_window, app| {
-        let main_pane = view.read(app).main_pane.clone();
-        main_pane.update(app, |pane, cx| {
+        let diff_renderer = view.read(app).diff_renderer.clone();
+        diff_renderer.update(app, |pane, cx| {
             pane.copy_selected_diff_text_to_clipboard(cx)
         });
     });
@@ -197,7 +185,7 @@ fn patch_diff_text_multi_clicks_match_editor_selection_behavior(cx: &mut gpui::T
     );
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert_eq!(
             pane.diff_selection_anchor,
             Some(visible_ix),
@@ -212,8 +200,8 @@ fn patch_diff_text_multi_clicks_match_editor_selection_behavior(cx: &mut gpui::T
     simulate_counted_click(cx, click, 3);
 
     cx.update(|_window, app| {
-        let main_pane = view.read(app).main_pane.clone();
-        main_pane.update(app, |pane, cx| {
+        let diff_renderer = view.read(app).diff_renderer.clone();
+        diff_renderer.update(app, |pane, cx| {
             pane.copy_selected_diff_text_to_clipboard(cx)
         });
     });
@@ -225,7 +213,7 @@ fn patch_diff_text_multi_clicks_match_editor_selection_behavior(cx: &mut gpui::T
     simulate_counted_click(cx, click, 1);
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert!(
             !pane.diff_text_has_selection(),
             "single click should clear the text selection"
@@ -245,7 +233,7 @@ fn yaml_commit_file_diff_keeps_consistent_highlighting_for_added_paths_and_keys(
     use gitcomet_core::file_diff::FileDiffRowKind;
 
     fn split_right_row_by_new_line(
-        pane: &MainPaneView,
+        pane: &DiffRenderer,
         new_line: u32,
     ) -> Option<&gitcomet_core::file_diff::FileDiffRow> {
         pane.file_diff_cache_rows
@@ -254,7 +242,7 @@ fn yaml_commit_file_diff_keeps_consistent_highlighting_for_added_paths_and_keys(
     }
 
     fn split_right_cached_styled_by_new_line(
-        pane: &MainPaneView,
+        pane: &DiffRenderer,
         new_line: u32,
     ) -> Option<(&str, &super::CachedDiffStyledText)> {
         let row_ix = pane
@@ -268,14 +256,14 @@ fn yaml_commit_file_diff_keeps_consistent_highlighting_for_added_paths_and_keys(
         Some((text, styled))
     }
 
-    fn inline_row_by_new_line(pane: &MainPaneView, new_line: u32) -> Option<&AnnotatedDiffLine> {
+    fn inline_row_by_new_line(pane: &DiffRenderer, new_line: u32) -> Option<&AnnotatedDiffLine> {
         pane.file_diff_inline_cache
             .iter()
             .find(|line| line.new_line == Some(new_line))
     }
 
     fn inline_cached_styled_by_new_line(
-        pane: &MainPaneView,
+        pane: &DiffRenderer,
         new_line: u32,
     ) -> Option<(&str, &super::CachedDiffStyledText)> {
         let inline_ix = pane
@@ -288,7 +276,7 @@ fn yaml_commit_file_diff_keeps_consistent_highlighting_for_added_paths_and_keys(
         Some((styled.text.as_ref(), styled))
     }
 
-    fn split_visible_ix_by_new_line(pane: &MainPaneView, new_line: u32) -> Option<usize> {
+    fn split_visible_ix_by_new_line(pane: &DiffRenderer, new_line: u32) -> Option<usize> {
         (0..pane.diff_visible_len()).find(|&visible_ix| {
             let Some(row_ix) = pane.diff_mapped_ix_for_visible_ix(visible_ix) else {
                 return false;
@@ -298,7 +286,7 @@ fn yaml_commit_file_diff_keeps_consistent_highlighting_for_added_paths_and_keys(
         })
     }
 
-    fn inline_visible_ix_by_new_line(pane: &MainPaneView, new_line: u32) -> Option<usize> {
+    fn inline_visible_ix_by_new_line(pane: &DiffRenderer, new_line: u32) -> Option<usize> {
         (0..pane.diff_visible_len()).find(|&visible_ix| {
             let Some(inline_ix) = pane.diff_mapped_ix_for_visible_ix(visible_ix) else {
                 return false;
@@ -316,7 +304,7 @@ fn yaml_commit_file_diff_keeps_consistent_highlighting_for_added_paths_and_keys(
         for &visible_ix in visible_indices {
             cx.update(|_window, app| {
                 view.update(app, |this, cx| {
-                    this.main_pane.update(cx, |pane, cx| {
+                    this.diff_renderer.update(cx, |pane, cx| {
                         pane.scroll_diff_to_item_strict(visible_ix, gpui::ScrollStrategy::Top);
                         cx.notify();
                     });
@@ -359,7 +347,7 @@ fn yaml_commit_file_diff_keeps_consistent_highlighting_for_added_paths_and_keys(
     }
 
     fn split_debug(
-        pane: &MainPaneView,
+        pane: &DiffRenderer,
         lines: &[u32],
     ) -> Vec<(
         u32,
@@ -399,7 +387,7 @@ fn yaml_commit_file_diff_keeps_consistent_highlighting_for_added_paths_and_keys(
     }
 
     fn inline_debug(
-        pane: &MainPaneView,
+        pane: &DiffRenderer,
         lines: &[u32],
     ) -> Vec<(
         u32,
@@ -454,10 +442,7 @@ fn yaml_commit_file_diff_keeps_consistent_highlighting_for_added_paths_and_keys(
     let new_text = DEPLOYMENT_CI.new_text.to_owned();
     let unified = DEPLOYMENT_CI.unified_diff().to_owned();
 
-    let target = gitcomet_core::domain::DiffTarget::Commit {
-        commit_id: commit_id.clone(),
-        path: Some(path.clone()),
-    };
+    let target = gitcomet_core::domain::DiffTarget::commit(commit_id.clone(), path.clone());
     let diff = gitcomet_core::domain::Diff::from_unified(target.clone(), &unified);
 
     let baseline_path_line = 17u32;
@@ -471,7 +456,7 @@ fn yaml_commit_file_diff_keeps_consistent_highlighting_for_added_paths_and_keys(
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, _cx| {
+            this.diff_renderer.update(cx, |pane, _cx| {
                 pane.set_full_document_syntax_budget_override_for_tests(rows::DiffSyntaxBudget {
                     foreground_parse: std::time::Duration::from_millis(50),
                 });
@@ -504,7 +489,7 @@ fn yaml_commit_file_diff_keeps_consistent_highlighting_for_added_paths_and_keys(
         "YAML commit file-diff cache and prepared syntax documents",
         |pane| {
             pane.file_diff_cache_inflight.is_none()
-                && pane.file_diff_cache_repo_id == Some(repo_id)
+                && pane.file_diff_cache_repo_id == Some(repo_id.into())
                 && pane.file_diff_cache_rev == 1
                 && pane.file_diff_cache_target == Some(target.clone())
                 && pane.file_diff_cache_path == Some(workdir.join(&path))
@@ -542,7 +527,7 @@ fn yaml_commit_file_diff_keeps_consistent_highlighting_for_added_paths_and_keys(
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.diff_view = DiffViewMode::Split;
                 pane.scroll_diff_to_item_strict(0, gpui::ScrollStrategy::Top);
                 pane.clear_diff_text_style_caches();
@@ -651,7 +636,7 @@ fn yaml_commit_file_diff_keeps_consistent_highlighting_for_added_paths_and_keys(
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.diff_view = DiffViewMode::Inline;
                 pane.clear_diff_text_style_caches();
                 cx.notify();
@@ -756,1713 +741,11 @@ fn yaml_commit_file_diff_keeps_consistent_highlighting_for_added_paths_and_keys(
 }
 
 #[gpui::test]
-fn yaml_commit_patch_diff_keeps_consistent_highlighting_for_added_paths_and_keys(
-    cx: &mut gpui::TestAppContext,
-) {
-    use gitcomet_core::domain::DiffLineKind;
-    use gitcomet_core::file_diff::FileDiffRowKind;
-
-    fn split_right_cached_styled_by_new_line(
-        pane: &MainPaneView,
-        new_line: u32,
-    ) -> Option<(
-        FileDiffRowKind,
-        usize,
-        String,
-        Option<rows::DiffSyntaxLanguage>,
-        &super::CachedDiffStyledText,
-    )> {
-        for row_ix in 0..pane.patch_diff_split_row_len() {
-            let PatchSplitRow::Aligned {
-                row, new_src_ix, ..
-            } = pane.patch_diff_split_row(row_ix)?
-            else {
-                continue;
-            };
-            if row.new_line != Some(new_line) {
-                continue;
-            }
-            let src_ix = new_src_ix?;
-            let styled = pane.diff_text_segments_cache_get(src_ix, 0)?;
-            let language = pane.diff_language_for_src_ix.get(src_ix).copied().flatten();
-            return Some((
-                row.kind,
-                src_ix,
-                row.new.as_deref()?.to_string(),
-                language,
-                styled,
-            ));
-        }
-        None
-    }
-
-    fn inline_cached_styled_by_new_line(
-        pane: &MainPaneView,
-        new_line: u32,
-    ) -> Option<(
-        DiffLineKind,
-        usize,
-        String,
-        Option<rows::DiffSyntaxLanguage>,
-        &super::CachedDiffStyledText,
-    )> {
-        for src_ix in 0..pane.patch_diff_row_len() {
-            let line = pane.patch_diff_row(src_ix)?;
-            if line.new_line != Some(new_line) {
-                continue;
-            }
-            let styled = pane.diff_text_segments_cache_get(src_ix, 0)?;
-            let language = pane.diff_language_for_src_ix.get(src_ix).copied().flatten();
-            return Some((
-                line.kind,
-                src_ix,
-                diff_content_text(&line).to_string(),
-                language,
-                styled,
-            ));
-        }
-        None
-    }
-
-    fn quoted_scalar_color(styled: &super::CachedDiffStyledText, text: &str) -> Option<gpui::Hsla> {
-        let quote_start = text.find('"')?;
-        styled.highlights.iter().find_map(|(range, style)| {
-            let color = style.color?;
-            (range.start == quote_start && range.end == text.len()).then_some(color)
-        })
-    }
-
-    fn list_item_dash_color(
-        styled: &super::CachedDiffStyledText,
-        text: &str,
-    ) -> Option<gpui::Hsla> {
-        let dash_ix = text.find('-')?;
-        styled.highlights.iter().find_map(|(range, style)| {
-            let color = style.color?;
-            (range.start <= dash_ix && range.end >= dash_ix.saturating_add(1)).then_some(color)
-        })
-    }
-
-    fn mapping_key_color(styled: &super::CachedDiffStyledText, text: &str) -> Option<gpui::Hsla> {
-        let key_start = text.find(|ch: char| !ch.is_ascii_whitespace())?;
-        let key_end = text[key_start..].find(':')?.saturating_add(key_start);
-        styled.highlights.iter().find_map(|(range, style)| {
-            let color = style.color?;
-            (style.background_color.is_none() && range.start <= key_start && range.end >= key_end)
-                .then_some(color)
-        })
-    }
-
-    fn split_debug(
-        pane: &MainPaneView,
-        lines: &[u32],
-    ) -> Vec<(
-        u32,
-        Option<(
-            FileDiffRowKind,
-            Option<rows::DiffSyntaxLanguage>,
-            String,
-            Vec<(
-                std::ops::Range<usize>,
-                Option<gpui::Hsla>,
-                Option<gpui::Hsla>,
-            )>,
-        )>,
-    )> {
-        lines
-            .iter()
-            .copied()
-            .map(|line_no| {
-                let payload = split_right_cached_styled_by_new_line(pane, line_no).map(
-                    |(kind, _src_ix, text, language, styled)| {
-                        (
-                            kind,
-                            language,
-                            text,
-                            styled
-                                .highlights
-                                .iter()
-                                .map(|(range, style)| {
-                                    (range.clone(), style.color, style.background_color)
-                                })
-                                .collect(),
-                        )
-                    },
-                );
-                (line_no, payload)
-            })
-            .collect()
-    }
-
-    fn inline_debug(
-        pane: &MainPaneView,
-        lines: &[u32],
-    ) -> Vec<(
-        u32,
-        Option<(
-            DiffLineKind,
-            Option<rows::DiffSyntaxLanguage>,
-            String,
-            Vec<(
-                std::ops::Range<usize>,
-                Option<gpui::Hsla>,
-                Option<gpui::Hsla>,
-            )>,
-        )>,
-    )> {
-        lines
-            .iter()
-            .copied()
-            .map(|line_no| {
-                let payload = inline_cached_styled_by_new_line(pane, line_no).map(
-                    |(kind, _src_ix, text, language, styled)| {
-                        (
-                            kind,
-                            language,
-                            text,
-                            styled
-                                .highlights
-                                .iter()
-                                .map(|(range, style)| {
-                                    (range.clone(), style.color, style.background_color)
-                                })
-                                .collect(),
-                        )
-                    },
-                );
-                (line_no, payload)
-            })
-            .collect()
-    }
-
-    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
-    let (view, cx) = cx.add_window_view(|window, cx| {
-        super::super::GitCometView::new(store, events, None, window, cx)
-    });
-
-    let repo_id = gitcomet_state::model::RepoId(82);
-    let workdir = std::env::temp_dir().join(format!(
-        "gitcomet_ui_test_{}_yaml_commit_patch_diff",
-        std::process::id()
-    ));
-    let commit_id =
-        gitcomet_core::domain::CommitId("bd8b4a04b4d7a04caf97392d6a66cbeebd665606".into());
-    let unified = DEPLOYMENT_CI.unified_diff().to_owned();
-
-    let target = gitcomet_core::domain::DiffTarget::Commit {
-        commit_id: commit_id.clone(),
-        path: None,
-    };
-    let diff = gitcomet_core::domain::Diff::from_unified(target.clone(), &unified);
-
-    let baseline_path_line = 17u32;
-    let affected_path_lines = [18u32, 30, 31, 32, 33];
-    let baseline_key_line = 19u32;
-    let affected_key_lines = [21u32, 34u32, 36u32];
-    let affected_add_lines = [18u32, 33u32];
-    let affected_context_lines = [21u32, 30, 31, 32, 34, 36];
-
-    cx.update(|_window, app| {
-        view.update(app, |this, cx| {
-            let mut repo = opening_repo_state(repo_id, &workdir);
-            repo.status = gitcomet_state::model::Loadable::Ready(
-                gitcomet_core::domain::RepoStatus::default().into(),
-            );
-            repo.diff_state.diff_target = Some(target.clone());
-            repo.diff_state.diff_rev = 1;
-            repo.diff_state.diff = gitcomet_state::model::Loadable::Ready(Arc::new(diff));
-
-            let next_state = app_state_with_repo(repo, repo_id);
-            push_test_state(this, next_state, cx);
-        });
-    });
-
-    wait_for_main_pane_condition(
-        cx,
-        &view,
-        "YAML commit patch-diff cache and language assignment",
-        |pane| {
-            pane.patch_diff_row_len() > 0
-                && pane.patch_diff_split_row_len() > 0
-                && pane.diff_language_for_src_ix.len() == pane.patch_diff_row_len()
-                && (0..pane.patch_diff_row_len()).any(|src_ix| {
-                    pane.patch_diff_row(src_ix)
-                        .is_some_and(|line| line.new_line == Some(36))
-                })
-        },
-        |pane| {
-            format!(
-                "diff_view={:?} rows={} split_rows={} visible_len={} languages={:?}",
-                pane.diff_view,
-                pane.patch_diff_row_len(),
-                pane.patch_diff_split_row_len(),
-                pane.diff_visible_len(),
-                (0..pane.patch_diff_row_len())
-                    .filter_map(|src_ix| {
-                        pane.patch_diff_row(src_ix).map(|line| {
-                            (
-                                src_ix,
-                                line.kind,
-                                line.new_line,
-                                pane.diff_language_for_src_ix.get(src_ix).copied().flatten(),
-                            )
-                        })
-                    })
-                    .collect::<Vec<_>>(),
-            )
-        },
-    );
-
-    cx.update(|_window, app| {
-        view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
-                pane.diff_view = DiffViewMode::Split;
-                pane.scroll_diff_to_item_strict(0, gpui::ScrollStrategy::Top);
-                pane.clear_diff_text_style_caches();
-                cx.notify();
-            });
-        });
-    });
-
-    wait_for_main_pane_condition(
-        cx,
-        &view,
-        "YAML commit patch split syntax stays consistent for added paths and keys",
-        |pane| {
-            let Some((
-                baseline_kind,
-                _baseline_src_ix,
-                baseline_text,
-                baseline_language,
-                baseline_styled,
-            )) = split_right_cached_styled_by_new_line(pane, baseline_path_line)
-            else {
-                return false;
-            };
-            if baseline_kind != FileDiffRowKind::Context
-                || baseline_language != Some(rows::DiffSyntaxLanguage::Yaml)
-            {
-                return false;
-            }
-            let Some(baseline_dash_color) = list_item_dash_color(baseline_styled, &baseline_text)
-            else {
-                return false;
-            };
-            let Some(baseline_path_color) = quoted_scalar_color(baseline_styled, &baseline_text)
-            else {
-                return false;
-            };
-
-            if affected_add_lines.iter().copied().any(|line_no| {
-                !split_right_cached_styled_by_new_line(pane, line_no).is_some_and(
-                    |(kind, _src_ix, _text, language, _styled)| {
-                        kind == FileDiffRowKind::Add
-                            && language == Some(rows::DiffSyntaxLanguage::Yaml)
-                    },
-                )
-            }) {
-                return false;
-            }
-            if affected_context_lines.iter().copied().any(|line_no| {
-                !split_right_cached_styled_by_new_line(pane, line_no).is_some_and(
-                    |(kind, _src_ix, _text, language, _styled)| {
-                        kind == FileDiffRowKind::Context
-                            && language == Some(rows::DiffSyntaxLanguage::Yaml)
-                    },
-                )
-            }) {
-                return false;
-            }
-            if affected_path_lines.iter().copied().any(|line_no| {
-                let Some((_kind, _src_ix, text, _language, styled)) =
-                    split_right_cached_styled_by_new_line(pane, line_no)
-                else {
-                    return true;
-                };
-                list_item_dash_color(styled, &text) != Some(baseline_dash_color)
-                    || quoted_scalar_color(styled, &text) != Some(baseline_path_color)
-            }) {
-                return false;
-            }
-
-            let Some((
-                baseline_key_kind,
-                _baseline_key_src_ix,
-                baseline_key_text,
-                baseline_key_language,
-                baseline_key_styled,
-            )) = split_right_cached_styled_by_new_line(pane, baseline_key_line)
-            else {
-                return false;
-            };
-            if baseline_key_kind != FileDiffRowKind::Context
-                || baseline_key_language != Some(rows::DiffSyntaxLanguage::Yaml)
-            {
-                return false;
-            }
-            let Some(baseline_key_color) =
-                mapping_key_color(baseline_key_styled, &baseline_key_text)
-            else {
-                return false;
-            };
-            !affected_key_lines.iter().copied().any(|line_no| {
-                let Some((_kind, _src_ix, text, _language, styled)) =
-                    split_right_cached_styled_by_new_line(pane, line_no)
-                else {
-                    return true;
-                };
-                mapping_key_color(styled, &text) != Some(baseline_key_color)
-            })
-        },
-        |pane| {
-            let mut lines = Vec::new();
-            lines.push(baseline_path_line);
-            lines.extend(affected_path_lines);
-            lines.push(baseline_key_line);
-            lines.extend(affected_key_lines);
-            format!(
-                "diff_view={:?} split_debug={:?}",
-                pane.diff_view,
-                split_debug(pane, &lines),
-            )
-        },
-    );
-
-    cx.update(|_window, app| {
-        view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
-                pane.diff_view = DiffViewMode::Inline;
-                pane.clear_diff_text_style_caches();
-                cx.notify();
-            });
-        });
-    });
-
-    wait_for_main_pane_condition(
-        cx,
-        &view,
-        "YAML commit patch inline syntax stays consistent for added paths and keys",
-        |pane| {
-            let Some((
-                baseline_kind,
-                _baseline_src_ix,
-                baseline_text,
-                baseline_language,
-                baseline_styled,
-            )) = inline_cached_styled_by_new_line(pane, baseline_path_line)
-            else {
-                return false;
-            };
-            if baseline_kind != DiffLineKind::Context
-                || baseline_language != Some(rows::DiffSyntaxLanguage::Yaml)
-            {
-                return false;
-            }
-            let Some(baseline_dash_color) = list_item_dash_color(baseline_styled, &baseline_text)
-            else {
-                return false;
-            };
-            let Some(baseline_path_color) = quoted_scalar_color(baseline_styled, &baseline_text)
-            else {
-                return false;
-            };
-
-            if affected_add_lines.iter().copied().any(|line_no| {
-                !inline_cached_styled_by_new_line(pane, line_no).is_some_and(
-                    |(kind, _src_ix, _text, language, _styled)| {
-                        kind == DiffLineKind::Add
-                            && language == Some(rows::DiffSyntaxLanguage::Yaml)
-                    },
-                )
-            }) {
-                return false;
-            }
-            if affected_context_lines.iter().copied().any(|line_no| {
-                !inline_cached_styled_by_new_line(pane, line_no).is_some_and(
-                    |(kind, _src_ix, _text, language, _styled)| {
-                        kind == DiffLineKind::Context
-                            && language == Some(rows::DiffSyntaxLanguage::Yaml)
-                    },
-                )
-            }) {
-                return false;
-            }
-            if affected_path_lines.iter().copied().any(|line_no| {
-                let Some((_kind, _src_ix, text, _language, styled)) =
-                    inline_cached_styled_by_new_line(pane, line_no)
-                else {
-                    return true;
-                };
-                list_item_dash_color(styled, &text) != Some(baseline_dash_color)
-                    || quoted_scalar_color(styled, &text) != Some(baseline_path_color)
-            }) {
-                return false;
-            }
-
-            let Some((
-                baseline_key_kind,
-                _baseline_key_src_ix,
-                baseline_key_text,
-                baseline_key_language,
-                baseline_key_styled,
-            )) = inline_cached_styled_by_new_line(pane, baseline_key_line)
-            else {
-                return false;
-            };
-            if baseline_key_kind != DiffLineKind::Context
-                || baseline_key_language != Some(rows::DiffSyntaxLanguage::Yaml)
-            {
-                return false;
-            }
-            let Some(baseline_key_color) =
-                mapping_key_color(baseline_key_styled, &baseline_key_text)
-            else {
-                return false;
-            };
-            !affected_key_lines.iter().copied().any(|line_no| {
-                let Some((_kind, _src_ix, text, _language, styled)) =
-                    inline_cached_styled_by_new_line(pane, line_no)
-                else {
-                    return true;
-                };
-                mapping_key_color(styled, &text) != Some(baseline_key_color)
-            })
-        },
-        |pane| {
-            let mut lines = Vec::new();
-            lines.push(baseline_path_line);
-            lines.extend(affected_path_lines);
-            lines.push(baseline_key_line);
-            lines.extend(affected_key_lines);
-            format!(
-                "diff_view={:?} inline_debug={:?}",
-                pane.diff_view,
-                inline_debug(pane, &lines),
-            )
-        },
-    );
-}
-
-#[gpui::test]
-fn yaml_commit_patch_diff_full_fixture_keeps_consistent_highlighting_across_files(
-    cx: &mut gpui::TestAppContext,
-) {
-    use gitcomet_core::domain::DiffLineKind;
-    use gitcomet_core::file_diff::FileDiffRowKind;
-
-    fn split_right_cached_styled_by_file_and_new_line<'a>(
-        pane: &'a MainPaneView,
-        file_path: &str,
-        new_line: u32,
-    ) -> Option<(
-        FileDiffRowKind,
-        usize,
-        String,
-        Option<rows::DiffSyntaxLanguage>,
-        &'a super::CachedDiffStyledText,
-    )> {
-        for row_ix in 0..pane.patch_diff_split_row_len() {
-            let PatchSplitRow::Aligned {
-                row, new_src_ix, ..
-            } = pane.patch_diff_split_row(row_ix)?
-            else {
-                continue;
-            };
-            if row.new_line != Some(new_line) {
-                continue;
-            }
-            let src_ix = new_src_ix?;
-            if pane
-                .diff_file_for_src_ix
-                .get(src_ix)
-                .and_then(|path| path.as_deref())
-                != Some(file_path)
-            {
-                continue;
-            }
-            let styled = pane.diff_text_segments_cache_get(src_ix, 0)?;
-            let language = pane.diff_language_for_src_ix.get(src_ix).copied().flatten();
-            return Some((
-                row.kind,
-                src_ix,
-                row.new.as_deref()?.to_string(),
-                language,
-                styled,
-            ));
-        }
-        None
-    }
-
-    fn inline_cached_styled_by_file_and_new_line<'a>(
-        pane: &'a MainPaneView,
-        file_path: &str,
-        new_line: u32,
-    ) -> Option<(
-        DiffLineKind,
-        usize,
-        String,
-        Option<rows::DiffSyntaxLanguage>,
-        &'a super::CachedDiffStyledText,
-    )> {
-        for src_ix in 0..pane.patch_diff_row_len() {
-            let line = pane.patch_diff_row(src_ix)?;
-            if line.new_line != Some(new_line) {
-                continue;
-            }
-            if pane
-                .diff_file_for_src_ix
-                .get(src_ix)
-                .and_then(|path| path.as_deref())
-                != Some(file_path)
-            {
-                continue;
-            }
-            let styled = pane.diff_text_segments_cache_get(src_ix, 0)?;
-            let language = pane.diff_language_for_src_ix.get(src_ix).copied().flatten();
-            return Some((
-                line.kind,
-                src_ix,
-                diff_content_text(&line).to_string(),
-                language,
-                styled,
-            ));
-        }
-        None
-    }
-
-    fn quoted_scalar_color(styled: &super::CachedDiffStyledText, text: &str) -> Option<gpui::Hsla> {
-        let quote_start = text.find('"')?;
-        styled.highlights.iter().find_map(|(range, style)| {
-            let color = style.color?;
-            (range.start == quote_start && range.end == text.len()).then_some(color)
-        })
-    }
-
-    fn list_item_dash_color(
-        styled: &super::CachedDiffStyledText,
-        text: &str,
-    ) -> Option<gpui::Hsla> {
-        let dash_ix = text.find('-')?;
-        styled.highlights.iter().find_map(|(range, style)| {
-            let color = style.color?;
-            (range.start <= dash_ix && range.end >= dash_ix.saturating_add(1)).then_some(color)
-        })
-    }
-
-    fn mapping_key_color(styled: &super::CachedDiffStyledText, text: &str) -> Option<gpui::Hsla> {
-        let key_start = text.find(|ch: char| !ch.is_ascii_whitespace())?;
-        let key_end = text[key_start..].find(':')?.saturating_add(key_start);
-        styled.highlights.iter().find_map(|(range, style)| {
-            let color = style.color?;
-            (range.start <= key_start && range.end >= key_end).then_some(color)
-        })
-    }
-
-    fn scalar_color_after_colon(
-        styled: &super::CachedDiffStyledText,
-        text: &str,
-    ) -> Option<gpui::Hsla> {
-        let value_start = text.find(':')?.checked_add(1).and_then(|start| {
-            text[start..]
-                .find(|ch: char| !ch.is_ascii_whitespace())
-                .map(|offset| start.saturating_add(offset))
-        })?;
-        styled.highlights.iter().find_map(|(range, style)| {
-            let color = style.color?;
-            (range.start <= value_start && range.end > value_start).then_some(color)
-        })
-    }
-
-    fn split_debug(
-        pane: &MainPaneView,
-        file_path: &str,
-        lines: &[u32],
-    ) -> Vec<(
-        u32,
-        Option<(
-            FileDiffRowKind,
-            Option<rows::DiffSyntaxLanguage>,
-            String,
-            Vec<(
-                std::ops::Range<usize>,
-                Option<gpui::Hsla>,
-                Option<gpui::Hsla>,
-            )>,
-        )>,
-    )> {
-        lines
-            .iter()
-            .copied()
-            .map(|line_no| {
-                let payload = split_right_cached_styled_by_file_and_new_line(
-                    pane, file_path, line_no,
-                )
-                .map(|(kind, _src_ix, text, language, styled)| {
-                    (
-                        kind,
-                        language,
-                        text,
-                        styled
-                            .highlights
-                            .iter()
-                            .map(|(range, style)| {
-                                (range.clone(), style.color, style.background_color)
-                            })
-                            .collect(),
-                    )
-                });
-                (line_no, payload)
-            })
-            .collect()
-    }
-
-    fn inline_debug(
-        pane: &MainPaneView,
-        file_path: &str,
-        lines: &[u32],
-    ) -> Vec<(
-        u32,
-        Option<(
-            DiffLineKind,
-            Option<rows::DiffSyntaxLanguage>,
-            String,
-            Vec<(
-                std::ops::Range<usize>,
-                Option<gpui::Hsla>,
-                Option<gpui::Hsla>,
-            )>,
-        )>,
-    )> {
-        lines
-            .iter()
-            .copied()
-            .map(|line_no| {
-                let payload = inline_cached_styled_by_file_and_new_line(pane, file_path, line_no)
-                    .map(|(kind, _src_ix, text, language, styled)| {
-                        (
-                            kind,
-                            language,
-                            text,
-                            styled
-                                .highlights
-                                .iter()
-                                .map(|(range, style)| {
-                                    (range.clone(), style.color, style.background_color)
-                                })
-                                .collect(),
-                        )
-                    });
-                (line_no, payload)
-            })
-            .collect()
-    }
-
-    fn split_visible_ix_by_file_and_new_line(
-        pane: &MainPaneView,
-        file_path: &str,
-        new_line: u32,
-    ) -> Option<usize> {
-        (0..pane.diff_visible_len()).find(|&visible_ix| {
-            let Some(row_ix) = pane.diff_mapped_ix_for_visible_ix(visible_ix) else {
-                return false;
-            };
-            let Some(PatchSplitRow::Aligned {
-                row, new_src_ix, ..
-            }) = pane.patch_diff_split_row(row_ix)
-            else {
-                return false;
-            };
-            let Some(src_ix) = new_src_ix else {
-                return false;
-            };
-            row.new_line == Some(new_line)
-                && pane
-                    .diff_file_for_src_ix
-                    .get(src_ix)
-                    .and_then(|path| path.as_deref())
-                    == Some(file_path)
-        })
-    }
-
-    fn inline_visible_ix_by_file_and_new_line(
-        pane: &MainPaneView,
-        file_path: &str,
-        new_line: u32,
-    ) -> Option<usize> {
-        (0..pane.diff_visible_len()).find(|&visible_ix| {
-            let Some(src_ix) = pane.diff_mapped_ix_for_visible_ix(visible_ix) else {
-                return false;
-            };
-            let Some(line) = pane.patch_diff_row(src_ix) else {
-                return false;
-            };
-            line.new_line == Some(new_line)
-                && pane
-                    .diff_file_for_src_ix
-                    .get(src_ix)
-                    .and_then(|path| path.as_deref())
-                    == Some(file_path)
-        })
-    }
-
-    fn highlight_snapshot(
-        highlights: &[(std::ops::Range<usize>, gpui::HighlightStyle)],
-    ) -> Vec<(
-        std::ops::Range<usize>,
-        Option<gpui::Hsla>,
-        Option<gpui::Hsla>,
-    )> {
-        highlights
-            .iter()
-            .map(|(range, style)| (range.clone(), style.color, style.background_color))
-            .collect()
-    }
-
-    #[derive(Clone, Copy, Debug)]
-    struct ExpectedPaintRow {
-        line_no: u32,
-        visible_ix: usize,
-        expects_add_bg: bool,
-    }
-
-    fn split_draw_rows_for_lines(
-        pane: &MainPaneView,
-        file_path: &str,
-        lines: &[u32],
-    ) -> Vec<ExpectedPaintRow> {
-        lines
-            .iter()
-            .copied()
-            .map(|line_no| {
-                let visible_ix = split_visible_ix_by_file_and_new_line(pane, file_path, line_no)
-                    .unwrap_or_else(|| {
-                        panic!("expected split visible row for {file_path} line {line_no}")
-                    });
-                let row_ix = pane
-                    .diff_mapped_ix_for_visible_ix(visible_ix)
-                    .unwrap_or_else(|| {
-                        panic!("expected split mapped row for {file_path} line {line_no}")
-                    });
-                let PatchSplitRow::Aligned { row, .. } =
-                    pane.patch_diff_split_row(row_ix).unwrap_or_else(|| {
-                        panic!("expected aligned split row for {file_path} line {line_no}")
-                    })
-                else {
-                    panic!("expected aligned split row for {file_path} line {line_no}");
-                };
-                ExpectedPaintRow {
-                    line_no,
-                    visible_ix,
-                    expects_add_bg: row.kind == FileDiffRowKind::Add,
-                }
-            })
-            .collect()
-    }
-
-    fn inline_draw_rows_for_lines(
-        pane: &MainPaneView,
-        file_path: &str,
-        lines: &[u32],
-    ) -> Vec<ExpectedPaintRow> {
-        lines
-            .iter()
-            .copied()
-            .map(|line_no| {
-                let visible_ix = inline_visible_ix_by_file_and_new_line(pane, file_path, line_no)
-                    .unwrap_or_else(|| {
-                        panic!("expected inline visible row for {file_path} line {line_no}")
-                    });
-                let src_ix = pane
-                    .diff_mapped_ix_for_visible_ix(visible_ix)
-                    .unwrap_or_else(|| {
-                        panic!("expected inline mapped row for {file_path} line {line_no}")
-                    });
-                let kind = pane
-                    .patch_diff_row(src_ix)
-                    .unwrap_or_else(|| {
-                        panic!("expected inline diff row for {file_path} line {line_no}")
-                    })
-                    .kind;
-                ExpectedPaintRow {
-                    line_no,
-                    visible_ix,
-                    expects_add_bg: kind == DiffLineKind::Add,
-                }
-            })
-            .collect()
-    }
-
-    fn draw_paint_record_for_visible_ix(
-        cx: &mut gpui::VisualTestContext,
-        view: &gpui::Entity<super::super::GitCometView>,
-        visible_ix: usize,
-        region: DiffTextRegion,
-    ) -> rows::DiffPaintRecord {
-        cx.update(|_window, app| {
-            view.update(app, |this, cx| {
-                this.main_pane.update(cx, |pane, cx| {
-                    pane.diff_selection_anchor = None;
-                    pane.diff_selection_range = None;
-                    pane.diff_autoscroll_pending = false;
-                    pane.clear_diff_text_selection();
-                    pane.scroll_diff_to_item_strict(visible_ix, gpui::ScrollStrategy::Top);
-                    cx.notify();
-                });
-            });
-        });
-        cx.run_until_parked();
-
-        cx.update(|window, app| {
-            rows::clear_diff_paint_log_for_tests();
-            let _ = window.draw(app);
-            rows::diff_paint_log_for_tests()
-                .into_iter()
-                .find(|record| record.visible_ix == visible_ix && record.region == region)
-                .unwrap_or_else(|| {
-                    panic!("expected paint record for visible_ix={visible_ix} region={region:?}")
-                })
-        })
-    }
-
-    fn assert_split_rows_match_render_cache(
-        cx: &mut gpui::VisualTestContext,
-        view: &gpui::Entity<super::super::GitCometView>,
-        label: &str,
-        file_path: &str,
-        expected_rows: Vec<ExpectedPaintRow>,
-    ) {
-        let mut add_bg = None;
-        let mut context_bg = None;
-
-        for expected in expected_rows {
-            let record = draw_paint_record_for_visible_ix(
-                cx,
-                view,
-                expected.visible_ix,
-                DiffTextRegion::SplitRight,
-            );
-            let (text, highlights) = cx.update(|_window, app| {
-                let pane = view.read(app).main_pane.read(app);
-                let Some((_kind, _src_ix, text, _language, styled)) =
-                    split_right_cached_styled_by_file_and_new_line(
-                        pane,
-                        file_path,
-                        expected.line_no,
-                    )
-                else {
-                    panic!(
-                        "expected cached split-right styled text for {file_path} line {}",
-                        expected.line_no
-                    );
-                };
-                (text, highlight_snapshot(styled.highlights.as_ref()))
-            });
-            assert_eq!(
-                record.text.as_ref(),
-                text.as_str(),
-                "{label} render text mismatch for line {}",
-                expected.line_no,
-            );
-            assert_eq!(
-                record.highlights, highlights,
-                "{label} render highlights mismatch for line {}",
-                expected.line_no,
-            );
-
-            if expected.expects_add_bg {
-                match add_bg {
-                    Some(bg) => assert_eq!(
-                        record.row_bg,
-                        Some(bg),
-                        "{label} add-row background mismatch for line {}",
-                        expected.line_no,
-                    ),
-                    None => add_bg = record.row_bg,
-                }
-            } else {
-                match context_bg {
-                    Some(bg) => assert_eq!(
-                        record.row_bg,
-                        Some(bg),
-                        "{label} context-row background mismatch for line {}",
-                        expected.line_no,
-                    ),
-                    None => context_bg = record.row_bg,
-                }
-            }
-        }
-
-        if let (Some(add_bg), Some(context_bg)) = (add_bg, context_bg) {
-            assert_ne!(
-                add_bg, context_bg,
-                "{label} should paint add rows with a different background than context rows",
-            );
-        }
-    }
-
-    fn assert_inline_rows_match_render_cache(
-        cx: &mut gpui::VisualTestContext,
-        view: &gpui::Entity<super::super::GitCometView>,
-        label: &str,
-        file_path: &str,
-        expected_rows: Vec<ExpectedPaintRow>,
-    ) {
-        let mut add_bg = None;
-        let mut context_bg = None;
-
-        for expected in expected_rows {
-            let record = draw_paint_record_for_visible_ix(
-                cx,
-                view,
-                expected.visible_ix,
-                DiffTextRegion::Inline,
-            );
-            let (text, highlights) = cx.update(|_window, app| {
-                let pane = view.read(app).main_pane.read(app);
-                let Some((_kind, _src_ix, text, _language, styled)) =
-                    inline_cached_styled_by_file_and_new_line(pane, file_path, expected.line_no)
-                else {
-                    panic!(
-                        "expected cached inline styled text for {file_path} line {}",
-                        expected.line_no
-                    );
-                };
-                (text, highlight_snapshot(styled.highlights.as_ref()))
-            });
-            assert_eq!(
-                record.text.as_ref(),
-                text.as_str(),
-                "{label} render text mismatch for line {}",
-                expected.line_no,
-            );
-            assert_eq!(
-                record.highlights, highlights,
-                "{label} render highlights mismatch for line {}",
-                expected.line_no,
-            );
-
-            if expected.expects_add_bg {
-                match add_bg {
-                    Some(bg) => assert_eq!(
-                        record.row_bg,
-                        Some(bg),
-                        "{label} add-row background mismatch for line {}",
-                        expected.line_no,
-                    ),
-                    None => add_bg = record.row_bg,
-                }
-            } else {
-                match context_bg {
-                    Some(bg) => assert_eq!(
-                        record.row_bg,
-                        Some(bg),
-                        "{label} context-row background mismatch for line {}",
-                        expected.line_no,
-                    ),
-                    None => context_bg = record.row_bg,
-                }
-            }
-        }
-
-        if let (Some(add_bg), Some(context_bg)) = (add_bg, context_bg) {
-            assert_ne!(
-                add_bg, context_bg,
-                "{label} should paint add rows with a different background than context rows",
-            );
-        }
-    }
-
-    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
-    let (view, cx) = cx.add_window_view(|window, cx| {
-        super::super::GitCometView::new(store, events, None, window, cx)
-    });
-
-    let repo_id = gitcomet_state::model::RepoId(85);
-    let workdir = std::env::temp_dir().join(format!(
-        "gitcomet_ui_test_{}_yaml_commit_patch_full_fixture",
-        std::process::id()
-    ));
-    let commit_id =
-        gitcomet_core::domain::CommitId("bd8b4a04b4d7a04caf97392d6a66cbeebd665606".into());
-    let unified = COMMIT_PATCH.to_owned();
-    let target = gitcomet_core::domain::DiffTarget::Commit {
-        commit_id: commit_id.clone(),
-        path: None,
-    };
-    let diff = gitcomet_core::domain::Diff::from_unified(target.clone(), &unified);
-
-    let build_release_file = ".github/workflows/build-release-artifacts.yml";
-    let build_release_baseline_secret_key_line = 20u32;
-    let build_release_affected_secret_key_lines = [22u32, 24u32];
-    let build_release_baseline_required_line = 21u32;
-    let build_release_affected_required_lines = [23u32];
-    let build_release_add_lines = [20u32, 21u32];
-    let build_release_context_lines = [22u32, 23u32, 24u32];
-    let build_release_draw_lines = [20u32, 21, 22, 23, 24];
-
-    let deployment_file = ".github/workflows/deployment-ci.yml";
-    let deployment_baseline_path_line = 17u32;
-    let deployment_affected_path_lines = [18u32, 30u32, 31u32, 32u32, 33u32];
-    let deployment_baseline_key_line = 19u32;
-    let deployment_affected_key_lines = [21u32, 34u32, 36u32];
-    let deployment_add_lines = [18u32, 33u32];
-    let deployment_context_lines = [21u32, 30u32, 31u32, 32u32, 34u32, 36u32];
-    let deployment_draw_lines = [17u32, 18, 19, 21, 30, 31, 32, 33, 34, 36];
-
-    cx.update(|_window, app| {
-        view.update(app, |this, cx| {
-            let mut repo = opening_repo_state(repo_id, &workdir);
-            repo.status = gitcomet_state::model::Loadable::Ready(
-                gitcomet_core::domain::RepoStatus::default().into(),
-            );
-            repo.diff_state.diff_target = Some(target.clone());
-            repo.diff_state.diff_rev = 1;
-            repo.diff_state.diff = gitcomet_state::model::Loadable::Ready(Arc::new(diff));
-
-            let next_state = app_state_with_repo(repo, repo_id);
-            push_test_state(this, next_state, cx);
-        });
-    });
-
-    wait_for_main_pane_condition(
-        cx,
-        &view,
-        "multi-file YAML commit patch-diff cache and language assignment",
-        |pane| {
-            pane.patch_diff_row_len() > 0
-                && pane.patch_diff_split_row_len() > 0
-                && pane.diff_language_for_src_ix.len() == pane.patch_diff_row_len()
-                && (0..pane.patch_diff_row_len()).any(|src_ix| {
-                    pane.patch_diff_row(src_ix).is_some_and(|line| {
-                        line.new_line == Some(36)
-                            && pane
-                                .diff_file_for_src_ix
-                                .get(src_ix)
-                                .and_then(|path| path.as_deref())
-                                == Some(deployment_file)
-                    })
-                })
-                && (0..pane.patch_diff_row_len()).any(|src_ix| {
-                    pane.patch_diff_row(src_ix).is_some_and(|line| {
-                        line.new_line == Some(24)
-                            && pane
-                                .diff_file_for_src_ix
-                                .get(src_ix)
-                                .and_then(|path| path.as_deref())
-                                == Some(build_release_file)
-                    })
-                })
-        },
-        |pane| {
-            format!(
-                "diff_view={:?} rows={} split_rows={} visible_len={} files={:?}",
-                pane.diff_view,
-                pane.patch_diff_row_len(),
-                pane.patch_diff_split_row_len(),
-                pane.diff_visible_len(),
-                (0..pane.patch_diff_row_len())
-                    .filter_map(|src_ix| {
-                        pane.patch_diff_row(src_ix).map(|line| {
-                            (
-                                src_ix,
-                                pane.diff_file_for_src_ix
-                                    .get(src_ix)
-                                    .and_then(|path| path.as_deref())
-                                    .map(str::to_owned),
-                                line.kind,
-                                line.new_line,
-                                pane.diff_language_for_src_ix.get(src_ix).copied().flatten(),
-                            )
-                        })
-                    })
-                    .collect::<Vec<_>>(),
-            )
-        },
-    );
-
-    cx.update(|_window, app| {
-        view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
-                pane.diff_view = DiffViewMode::Split;
-                pane.scroll_diff_to_item_strict(0, gpui::ScrollStrategy::Top);
-                pane.clear_diff_text_style_caches();
-                cx.notify();
-            });
-        });
-    });
-
-    wait_for_main_pane_condition(
-        cx,
-        &view,
-        "multi-file YAML commit patch split syntax stays consistent for build-release top hunk",
-        |pane| {
-            let Some((
-                build_release_baseline_kind,
-                _build_release_baseline_src_ix,
-                build_release_baseline_text,
-                build_release_baseline_language,
-                build_release_baseline_styled,
-            )) = split_right_cached_styled_by_file_and_new_line(
-                pane,
-                build_release_file,
-                build_release_baseline_secret_key_line,
-            )
-            else {
-                return false;
-            };
-            if build_release_baseline_kind != FileDiffRowKind::Add
-                || build_release_baseline_language != Some(rows::DiffSyntaxLanguage::Yaml)
-            {
-                return false;
-            }
-            let Some(build_release_baseline_key_color) =
-                mapping_key_color(build_release_baseline_styled, &build_release_baseline_text)
-            else {
-                return false;
-            };
-            if build_release_add_lines.iter().copied().any(|line_no| {
-                !split_right_cached_styled_by_file_and_new_line(pane, build_release_file, line_no)
-                    .is_some_and(|(kind, _src_ix, _text, language, _styled)| {
-                        kind == FileDiffRowKind::Add
-                            && language == Some(rows::DiffSyntaxLanguage::Yaml)
-                    })
-            }) {
-                return false;
-            }
-            if build_release_context_lines.iter().copied().any(|line_no| {
-                !split_right_cached_styled_by_file_and_new_line(pane, build_release_file, line_no)
-                    .is_some_and(|(kind, _src_ix, _text, language, _styled)| {
-                        kind == FileDiffRowKind::Context
-                            && language == Some(rows::DiffSyntaxLanguage::Yaml)
-                    })
-            }) {
-                return false;
-            }
-            if build_release_affected_secret_key_lines
-                .iter()
-                .copied()
-                .any(|line_no| {
-                    let Some((_kind, _src_ix, text, _language, styled)) =
-                        split_right_cached_styled_by_file_and_new_line(
-                            pane,
-                            build_release_file,
-                            line_no,
-                        )
-                    else {
-                        return true;
-                    };
-                    mapping_key_color(styled, &text) != Some(build_release_baseline_key_color)
-                })
-            {
-                return false;
-            }
-
-            let Some((
-                _build_release_required_kind,
-                _build_release_required_src_ix,
-                build_release_required_text,
-                _build_release_required_language,
-                build_release_required_styled,
-            )) = split_right_cached_styled_by_file_and_new_line(
-                pane,
-                build_release_file,
-                build_release_baseline_required_line,
-            )
-            else {
-                return false;
-            };
-            let Some(build_release_required_color) = scalar_color_after_colon(
-                build_release_required_styled,
-                &build_release_required_text,
-            ) else {
-                return false;
-            };
-            !build_release_affected_required_lines
-                .iter()
-                .copied()
-                .any(|line_no| {
-                    let Some((_kind, _src_ix, text, _language, styled)) =
-                        split_right_cached_styled_by_file_and_new_line(
-                            pane,
-                            build_release_file,
-                            line_no,
-                        )
-                    else {
-                        return true;
-                    };
-                    scalar_color_after_colon(styled, &text) != Some(build_release_required_color)
-                })
-        },
-        |pane| {
-            format!(
-                "diff_view={:?} build_release_split_debug={:?}",
-                pane.diff_view,
-                split_debug(pane, build_release_file, &build_release_draw_lines),
-            )
-        },
-    );
-
-    let build_release_split_expected = cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
-        split_draw_rows_for_lines(pane, build_release_file, &build_release_draw_lines)
-    });
-    assert_split_rows_match_render_cache(
-        cx,
-        &view,
-        "build-release split",
-        build_release_file,
-        build_release_split_expected,
-    );
-
-    cx.update(|_window, app| {
-        view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
-                pane.ensure_diff_visible_indices();
-                let target_visible_ix = split_visible_ix_by_file_and_new_line(
-                    pane,
-                    deployment_file,
-                    deployment_baseline_path_line,
-                )
-                .expect("deployment workflow should have a visible split row in the full fixture");
-                pane.scroll_diff_to_item_strict(target_visible_ix, gpui::ScrollStrategy::Top);
-                pane.clear_diff_text_style_caches();
-                cx.notify();
-            });
-        });
-    });
-
-    wait_for_main_pane_condition(
-        cx,
-        &view,
-        "multi-file YAML commit patch split syntax stays consistent for deployment workflow rows",
-        |pane| {
-            let Some((
-                deployment_baseline_kind,
-                _deployment_baseline_src_ix,
-                deployment_baseline_text,
-                deployment_baseline_language,
-                deployment_baseline_styled,
-            )) = split_right_cached_styled_by_file_and_new_line(
-                pane,
-                deployment_file,
-                deployment_baseline_path_line,
-            )
-            else {
-                return false;
-            };
-            if deployment_baseline_kind != FileDiffRowKind::Context
-                || deployment_baseline_language != Some(rows::DiffSyntaxLanguage::Yaml)
-            {
-                return false;
-            }
-            let Some(deployment_baseline_dash_color) =
-                list_item_dash_color(deployment_baseline_styled, &deployment_baseline_text)
-            else {
-                return false;
-            };
-            let Some(deployment_baseline_path_color) =
-                quoted_scalar_color(deployment_baseline_styled, &deployment_baseline_text)
-            else {
-                return false;
-            };
-            if deployment_add_lines.iter().copied().any(|line_no| {
-                !split_right_cached_styled_by_file_and_new_line(pane, deployment_file, line_no)
-                    .is_some_and(|(kind, _src_ix, _text, language, _styled)| {
-                        kind == FileDiffRowKind::Add
-                            && language == Some(rows::DiffSyntaxLanguage::Yaml)
-                    })
-            }) {
-                return false;
-            }
-            if deployment_context_lines.iter().copied().any(|line_no| {
-                !split_right_cached_styled_by_file_and_new_line(pane, deployment_file, line_no)
-                    .is_some_and(|(kind, _src_ix, _text, language, _styled)| {
-                        kind == FileDiffRowKind::Context
-                            && language == Some(rows::DiffSyntaxLanguage::Yaml)
-                    })
-            }) {
-                return false;
-            }
-            if deployment_affected_path_lines
-                .iter()
-                .copied()
-                .any(|line_no| {
-                    let Some((_kind, _src_ix, text, _language, styled)) =
-                        split_right_cached_styled_by_file_and_new_line(
-                            pane,
-                            deployment_file,
-                            line_no,
-                        )
-                    else {
-                        return true;
-                    };
-                    list_item_dash_color(styled, &text) != Some(deployment_baseline_dash_color)
-                        || quoted_scalar_color(styled, &text)
-                            != Some(deployment_baseline_path_color)
-                })
-            {
-                return false;
-            }
-
-            let Some((
-                _deployment_key_kind,
-                _deployment_key_src_ix,
-                deployment_key_text,
-                _deployment_key_language,
-                deployment_key_styled,
-            )) = split_right_cached_styled_by_file_and_new_line(
-                pane,
-                deployment_file,
-                deployment_baseline_key_line,
-            )
-            else {
-                return false;
-            };
-            let Some(deployment_key_color) =
-                mapping_key_color(deployment_key_styled, &deployment_key_text)
-            else {
-                return false;
-            };
-            !deployment_affected_key_lines
-                .iter()
-                .copied()
-                .any(|line_no| {
-                    let Some((_kind, _src_ix, text, _language, styled)) =
-                        split_right_cached_styled_by_file_and_new_line(
-                            pane,
-                            deployment_file,
-                            line_no,
-                        )
-                    else {
-                        return true;
-                    };
-                    mapping_key_color(styled, &text) != Some(deployment_key_color)
-                })
-        },
-        |pane| {
-            format!(
-                "diff_view={:?} deployment_split_debug={:?}",
-                pane.diff_view,
-                split_debug(pane, deployment_file, &deployment_draw_lines),
-            )
-        },
-    );
-
-    let deployment_split_expected = cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
-        split_draw_rows_for_lines(pane, deployment_file, &deployment_draw_lines)
-    });
-    assert_split_rows_match_render_cache(
-        cx,
-        &view,
-        "deployment split",
-        deployment_file,
-        deployment_split_expected,
-    );
-
-    cx.update(|_window, app| {
-        view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
-                pane.diff_view = DiffViewMode::Inline;
-                pane.clear_diff_text_style_caches();
-                cx.notify();
-            });
-        });
-    });
-
-    cx.update(|_window, app| {
-        view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
-                pane.ensure_diff_visible_indices();
-                let target_visible_ix = inline_visible_ix_by_file_and_new_line(
-                    pane,
-                    build_release_file,
-                    build_release_baseline_secret_key_line,
-                )
-                .expect(
-                    "build-release workflow should have a visible inline row in the full fixture",
-                );
-                pane.scroll_diff_to_item_strict(target_visible_ix, gpui::ScrollStrategy::Top);
-                pane.clear_diff_text_style_caches();
-                cx.notify();
-            });
-        });
-    });
-
-    wait_for_main_pane_condition(
-        cx,
-        &view,
-        "multi-file YAML commit patch inline syntax stays consistent for build-release top hunk",
-        |pane| {
-            let Some((
-                build_release_baseline_kind,
-                _build_release_baseline_src_ix,
-                build_release_baseline_text,
-                build_release_baseline_language,
-                build_release_baseline_styled,
-            )) = inline_cached_styled_by_file_and_new_line(
-                pane,
-                build_release_file,
-                build_release_baseline_secret_key_line,
-            )
-            else {
-                return false;
-            };
-            if build_release_baseline_kind != DiffLineKind::Add
-                || build_release_baseline_language != Some(rows::DiffSyntaxLanguage::Yaml)
-            {
-                return false;
-            }
-            let Some(build_release_baseline_key_color) =
-                mapping_key_color(build_release_baseline_styled, &build_release_baseline_text)
-            else {
-                return false;
-            };
-            if build_release_add_lines.iter().copied().any(|line_no| {
-                !inline_cached_styled_by_file_and_new_line(pane, build_release_file, line_no)
-                    .is_some_and(|(kind, _src_ix, _text, language, _styled)| {
-                        kind == DiffLineKind::Add
-                            && language == Some(rows::DiffSyntaxLanguage::Yaml)
-                    })
-            }) {
-                return false;
-            }
-            if build_release_context_lines.iter().copied().any(|line_no| {
-                !inline_cached_styled_by_file_and_new_line(pane, build_release_file, line_no)
-                    .is_some_and(|(kind, _src_ix, _text, language, _styled)| {
-                        kind == DiffLineKind::Context
-                            && language == Some(rows::DiffSyntaxLanguage::Yaml)
-                    })
-            }) {
-                return false;
-            }
-            if build_release_affected_secret_key_lines
-                .iter()
-                .copied()
-                .any(|line_no| {
-                    let Some((_kind, _src_ix, text, _language, styled)) =
-                        inline_cached_styled_by_file_and_new_line(
-                            pane,
-                            build_release_file,
-                            line_no,
-                        )
-                    else {
-                        return true;
-                    };
-                    mapping_key_color(styled, &text) != Some(build_release_baseline_key_color)
-                })
-            {
-                return false;
-            }
-
-            let Some((
-                _build_release_required_kind,
-                _build_release_required_src_ix,
-                build_release_required_text,
-                _build_release_required_language,
-                build_release_required_styled,
-            )) = inline_cached_styled_by_file_and_new_line(
-                pane,
-                build_release_file,
-                build_release_baseline_required_line,
-            )
-            else {
-                return false;
-            };
-            let Some(build_release_required_color) = scalar_color_after_colon(
-                build_release_required_styled,
-                &build_release_required_text,
-            ) else {
-                return false;
-            };
-            !build_release_affected_required_lines
-                .iter()
-                .copied()
-                .any(|line_no| {
-                    let Some((_kind, _src_ix, text, _language, styled)) =
-                        inline_cached_styled_by_file_and_new_line(
-                            pane,
-                            build_release_file,
-                            line_no,
-                        )
-                    else {
-                        return true;
-                    };
-                    scalar_color_after_colon(styled, &text) != Some(build_release_required_color)
-                })
-        },
-        |pane| {
-            format!(
-                "diff_view={:?} build_release_inline_debug={:?}",
-                pane.diff_view,
-                inline_debug(pane, build_release_file, &build_release_draw_lines),
-            )
-        },
-    );
-
-    let build_release_inline_expected = cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
-        inline_draw_rows_for_lines(pane, build_release_file, &build_release_draw_lines)
-    });
-    assert_inline_rows_match_render_cache(
-        cx,
-        &view,
-        "build-release inline",
-        build_release_file,
-        build_release_inline_expected,
-    );
-
-    cx.update(|_window, app| {
-        view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
-                pane.ensure_diff_visible_indices();
-                let target_visible_ix = inline_visible_ix_by_file_and_new_line(
-                    pane,
-                    deployment_file,
-                    deployment_baseline_path_line,
-                )
-                .expect("deployment workflow should have a visible inline row in the full fixture");
-                pane.scroll_diff_to_item_strict(target_visible_ix, gpui::ScrollStrategy::Top);
-                pane.clear_diff_text_style_caches();
-                cx.notify();
-            });
-        });
-    });
-
-    wait_for_main_pane_condition(
-        cx,
-        &view,
-        "multi-file YAML commit patch inline syntax stays consistent for deployment workflow rows",
-        |pane| {
-            let Some((
-                deployment_baseline_kind,
-                _deployment_baseline_src_ix,
-                deployment_baseline_text,
-                deployment_baseline_language,
-                deployment_baseline_styled,
-            )) = inline_cached_styled_by_file_and_new_line(
-                pane,
-                deployment_file,
-                deployment_baseline_path_line,
-            )
-            else {
-                return false;
-            };
-            if deployment_baseline_kind != DiffLineKind::Context
-                || deployment_baseline_language != Some(rows::DiffSyntaxLanguage::Yaml)
-            {
-                return false;
-            }
-            let Some(deployment_baseline_dash_color) =
-                list_item_dash_color(deployment_baseline_styled, &deployment_baseline_text)
-            else {
-                return false;
-            };
-            let Some(deployment_baseline_path_color) =
-                quoted_scalar_color(deployment_baseline_styled, &deployment_baseline_text)
-            else {
-                return false;
-            };
-            if deployment_add_lines.iter().copied().any(|line_no| {
-                !inline_cached_styled_by_file_and_new_line(pane, deployment_file, line_no)
-                    .is_some_and(|(kind, _src_ix, _text, language, _styled)| {
-                        kind == DiffLineKind::Add
-                            && language == Some(rows::DiffSyntaxLanguage::Yaml)
-                    })
-            }) {
-                return false;
-            }
-            if deployment_context_lines.iter().copied().any(|line_no| {
-                !inline_cached_styled_by_file_and_new_line(pane, deployment_file, line_no)
-                    .is_some_and(|(kind, _src_ix, _text, language, _styled)| {
-                        kind == DiffLineKind::Context
-                            && language == Some(rows::DiffSyntaxLanguage::Yaml)
-                    })
-            }) {
-                return false;
-            }
-            if deployment_affected_path_lines
-                .iter()
-                .copied()
-                .any(|line_no| {
-                    let Some((_kind, _src_ix, text, _language, styled)) =
-                        inline_cached_styled_by_file_and_new_line(pane, deployment_file, line_no)
-                    else {
-                        return true;
-                    };
-                    list_item_dash_color(styled, &text) != Some(deployment_baseline_dash_color)
-                        || quoted_scalar_color(styled, &text)
-                            != Some(deployment_baseline_path_color)
-                })
-            {
-                return false;
-            }
-
-            let Some((
-                _deployment_key_kind,
-                _deployment_key_src_ix,
-                deployment_key_text,
-                _deployment_key_language,
-                deployment_key_styled,
-            )) = inline_cached_styled_by_file_and_new_line(
-                pane,
-                deployment_file,
-                deployment_baseline_key_line,
-            )
-            else {
-                return false;
-            };
-            let Some(deployment_key_color) =
-                mapping_key_color(deployment_key_styled, &deployment_key_text)
-            else {
-                return false;
-            };
-            !deployment_affected_key_lines
-                .iter()
-                .copied()
-                .any(|line_no| {
-                    let Some((_kind, _src_ix, text, _language, styled)) =
-                        inline_cached_styled_by_file_and_new_line(pane, deployment_file, line_no)
-                    else {
-                        return true;
-                    };
-                    mapping_key_color(styled, &text) != Some(deployment_key_color)
-                })
-        },
-        |pane| {
-            format!(
-                "diff_view={:?} deployment_inline_debug={:?}",
-                pane.diff_view,
-                inline_debug(pane, deployment_file, &deployment_draw_lines),
-            )
-        },
-    );
-
-    let deployment_inline_expected = cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
-        inline_draw_rows_for_lines(pane, deployment_file, &deployment_draw_lines)
-    });
-    assert_inline_rows_match_render_cache(
-        cx,
-        &view,
-        "deployment inline",
-        deployment_file,
-        deployment_inline_expected,
-    );
-}
-
-#[gpui::test]
 fn yaml_commit_patch_diff_matches_commit_file_diff_for_build_release_artifacts(
     cx: &mut gpui::TestAppContext,
 ) {
     use gitcomet_core::domain::DiffLineKind;
     use std::collections::{BTreeMap, BTreeSet};
-
-    #[derive(Clone, Debug, PartialEq)]
-    struct LineSyntaxSnapshot {
-        text: String,
-        syntax: Vec<(std::ops::Range<usize>, Option<gpui::Hsla>)>,
-    }
 
     fn parse_hunk_start(text: &str) -> Option<(u32, u32)> {
         let text = text.strip_prefix("@@")?.trim_start();
@@ -2523,88 +806,8 @@ fn yaml_commit_patch_diff_matches_commit_file_diff_for_build_release_artifacts(
         (old_lines, new_lines)
     }
 
-    fn one_based_line_byte_range(
-        text: &str,
-        line_starts: &[usize],
-        line_no: u32,
-    ) -> Option<std::ops::Range<usize>> {
-        let line_ix = usize::try_from(line_no).ok()?.checked_sub(1)?;
-        let start = (*line_starts.get(line_ix)?).min(text.len());
-        let mut end = line_starts
-            .get(line_ix.saturating_add(1))
-            .copied()
-            .unwrap_or(text.len())
-            .min(text.len());
-        if end > start && text.as_bytes().get(end.saturating_sub(1)) == Some(&b'\n') {
-            end = end.saturating_sub(1);
-        }
-        Some(start..end)
-    }
-
-    fn shared_text_and_line_starts(text: &str) -> (gpui::SharedString, Arc<[usize]>) {
-        let mut line_starts = Vec::with_capacity(text.len().saturating_div(64).saturating_add(1));
-        line_starts.push(0usize);
-        for (ix, byte) in text.as_bytes().iter().enumerate() {
-            if *byte == b'\n' {
-                line_starts.push(ix.saturating_add(1));
-            }
-        }
-        (text.to_string().into(), Arc::from(line_starts))
-    }
-
-    fn prepared_document_snapshot_for_line(
-        theme: AppTheme,
-        text: &str,
-        line_starts: &[usize],
-        document: rows::PreparedDiffSyntaxDocument,
-        language: rows::DiffSyntaxLanguage,
-        line_no: u32,
-    ) -> Option<LineSyntaxSnapshot> {
-        let byte_range = one_based_line_byte_range(text, line_starts, line_no)?;
-        let line_text = text.get(byte_range.clone())?.to_string();
-        let started = std::time::Instant::now();
-
-        loop {
-            let highlights = rows::request_syntax_highlights_for_prepared_document_byte_range(
-                theme,
-                text,
-                line_starts,
-                document,
-                language,
-                byte_range.clone(),
-            )?;
-
-            if !highlights.pending {
-                return Some(LineSyntaxSnapshot {
-                    text: line_text.clone(),
-                    syntax: highlights
-                        .highlights
-                        .into_iter()
-                        .filter(|(_, style)| style.background_color.is_none())
-                        .map(|(range, style)| {
-                            (
-                                range.start.saturating_sub(byte_range.start)
-                                    ..range.end.saturating_sub(byte_range.start),
-                                style.color,
-                            )
-                        })
-                        .collect(),
-                });
-            }
-
-            let completed =
-                rows::drain_completed_prepared_diff_syntax_chunk_builds_for_document(document);
-            if completed == 0 && started.elapsed() >= std::time::Duration::from_secs(2) {
-                return None;
-            }
-            if completed == 0 {
-                std::thread::sleep(std::time::Duration::from_millis(5));
-            }
-        }
-    }
-
     fn yaml_patch_snapshot_for_src_ix(
-        pane: &MainPaneView,
+        pane: &DiffRenderer,
         theme: AppTheme,
         string_color: gpui::Hsla,
         src_ix: usize,
@@ -2642,7 +845,7 @@ fn yaml_commit_patch_diff_matches_commit_file_diff_for_build_release_artifacts(
     }
 
     fn patch_split_snapshot_by_line(
-        pane: &MainPaneView,
+        pane: &DiffRenderer,
         region: DiffTextRegion,
         theme: AppTheme,
         string_color: gpui::Hsla,
@@ -2686,7 +889,7 @@ fn yaml_commit_patch_diff_matches_commit_file_diff_for_build_release_artifacts(
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
-    let theme = cx.update(|_window, app| view.read(app).main_pane.read(app).theme);
+    let theme = cx.update(|_window, app| view.read(app).diff_renderer.read(app).theme);
     let yaml_string_color = rows::syntax_highlights_for_line(
         theme,
         "\"yaml-string\"",
@@ -2709,15 +912,13 @@ fn yaml_commit_patch_diff_matches_commit_file_diff_for_build_release_artifacts(
     let old_text = BUILD_RELEASE_ARTIFACTS.old_text.to_owned();
     let new_text = BUILD_RELEASE_ARTIFACTS.new_text.to_owned();
 
-    let file_target = gitcomet_core::domain::DiffTarget::Commit {
-        commit_id: commit_id.clone(),
-        path: Some(path.clone()),
-    };
+    let file_target = gitcomet_core::domain::DiffTarget::commit(commit_id.clone(), path.clone());
     let file_diff = gitcomet_core::domain::Diff::from_unified(file_target.clone(), &unified);
-    let patch_target = gitcomet_core::domain::DiffTarget::Commit {
-        commit_id: commit_id.clone(),
-        path: None,
-    };
+    let patch_target = gitcomet_core::domain::DiffTarget::commit_range(
+        gitcomet_core::domain::CommitId("parent".into()),
+        Some(commit_id.clone()),
+        None,
+    );
     let patch_diff = gitcomet_core::domain::Diff::from_unified(patch_target.clone(), &unified);
     let (visible_old_lines, visible_new_lines) = patch_visible_line_numbers(&patch_diff);
     let (old_shared_text, old_line_starts) = shared_text_and_line_starts(old_text.as_str());
@@ -2785,7 +986,7 @@ fn yaml_commit_patch_diff_matches_commit_file_diff_for_build_release_artifacts(
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, _cx| {
+            this.diff_renderer.update(cx, |pane, _cx| {
                 pane.set_full_document_syntax_budget_override_for_tests(rows::DiffSyntaxBudget {
                     foreground_parse: std::time::Duration::from_millis(50),
                 });
@@ -2814,7 +1015,7 @@ fn yaml_commit_patch_diff_matches_commit_file_diff_for_build_release_artifacts(
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.diff_view = DiffViewMode::Split;
                 pane.clear_diff_text_style_caches();
                 cx.notify();
@@ -2833,7 +1034,7 @@ fn yaml_commit_patch_diff_matches_commit_file_diff_for_build_release_artifacts(
 
             pane.file_diff_cache_inflight.is_none()
                 && pane.is_file_diff_view_active()
-                && pane.file_diff_cache_repo_id == Some(repo_id)
+                && pane.file_diff_cache_repo_id == Some(repo_id.into())
                 && pane.file_diff_cache_rev == 1
                 && pane.file_diff_cache_target == Some(file_target.clone())
                 && pane.file_diff_cache_path == Some(workdir.join(&path))
@@ -2878,7 +1079,7 @@ fn yaml_commit_patch_diff_matches_commit_file_diff_for_build_release_artifacts(
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.diff_view = DiffViewMode::Split;
                 pane.clear_diff_text_style_caches();
                 cx.notify();
@@ -2956,7 +1157,7 @@ fn yaml_commit_patch_diff_matches_commit_file_diff_for_build_release_artifacts(
     );
 
     let split_mismatches = cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         let mut mismatches = Vec::new();
 
         for (&line_no, expected) in &baseline_old_by_line {
@@ -2994,7 +1195,7 @@ fn yaml_commit_patch_diff_matches_commit_file_diff_for_build_release_artifacts(
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.diff_view = DiffViewMode::Inline;
                 pane.clear_diff_text_style_caches();
                 cx.notify();
@@ -3023,7 +1224,7 @@ fn yaml_commit_patch_diff_matches_commit_file_diff_for_build_release_artifacts(
     );
 
     let inline_mismatches = cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         let mut mismatches = Vec::new();
 
         for src_ix in 0..pane.patch_diff_row_len() {
@@ -3120,10 +1321,10 @@ fn smoke_tests_diff_draw_stabilizes_without_notify_churn(cx: &mut gpui::TestAppC
     });
 
     let main_notifies = Arc::new(AtomicUsize::new(0));
-    let main_pane = cx.update(|_window, app| view.read(app).main_pane.clone());
+    let diff_renderer = cx.update(|_window, app| view.read(app).diff_renderer.clone());
     let _main_notify_sub = cx.update(|_window, app| {
         let main_notifies = Arc::clone(&main_notifies);
-        main_pane.update(app, |_pane, cx| {
+        diff_renderer.update(app, |_pane, cx| {
             cx.observe_self(move |_pane, _cx| {
                 main_notifies.fetch_add(1, Ordering::Relaxed);
             })

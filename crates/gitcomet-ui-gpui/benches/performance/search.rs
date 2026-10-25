@@ -113,7 +113,8 @@ pub(crate) fn bench_search(c: &mut Criterion) {
         measure_sidecar_allocations(|| diff_fixture.run_search_with_metrics(&diff_query));
     emit_in_diff_text_search_sidecar("in_diff_text_search_100k_lines", &diff_metrics);
     let (_, refinement_metrics) = measure_sidecar_allocations(|| {
-        diff_fixture.run_refinement_with_metrics(&diff_query, &diff_refined_query)
+        diff_fixture
+            .run_refinement_from_matches_with_metrics(&diff_refined_query, &diff_refinement_matches)
     });
     emit_in_diff_text_search_sidecar(
         "in_diff_text_search_incremental_refinement",

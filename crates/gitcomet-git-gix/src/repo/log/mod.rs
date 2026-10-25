@@ -1,18 +1,20 @@
-use super::history::gix_head_id_or_none;
-use super::{
-    GixRepo, LOG_FILE_FOLLOW_CACHE_LIMIT, LOG_PAGE_CACHE_LIMIT, LOG_PAGED_TOPO_WALK_CACHE_LIMIT,
-    LOG_PAGED_WALK_CACHE_LIMIT, LogFileFollowCacheEntry, LogFileFollowCacheKey, LogPageCacheEntry,
-    LogPageCacheKey, LogPageSeed, LogPagedWalk, LogPagedWalkCacheEntry, LogPagedWalkFilter,
-    LogPagedWalkState, ShallowSnapshot, bstr_to_arc_str, oid_to_arc_str, submodules,
+use self::cache::{
+    AllBranchesTipsCacheEntry, LOG_FILE_FOLLOW_CACHE_LIMIT, LOG_PAGE_CACHE_LIMIT,
+    LOG_PAGE_CACHE_ROW_LIMIT, LOG_PAGED_TOPO_WALK_CACHE_LIMIT, LOG_PAGED_WALK_CACHE_LIMIT,
+    LogFileFollowCacheEntry, LogFileFollowCacheKey, LogPageCacheEntry, LogPageCacheKey,
+    LogPageSeed, LogPagedWalk, LogPagedWalkCacheEntry, LogPagedWalkFilter, LogPagedWalkState,
 };
+use super::history::gix_head_id_or_none;
+use super::{GixRepo, ShallowSnapshot, bstr_to_arc_str, object_id_from_commit_id, oid_to_arc_str};
 use crate::util::{
     bytes_to_text_preserving_utf8, parse_git_log_pretty_records_from_reader,
     path_buf_from_git_bytes, run_git_capture, run_git_parsed_stdout, unix_seconds_to_system_time,
     unix_seconds_to_system_time_or_epoch,
 };
 use gitcomet_core::domain::{
-    Commit, CommitDetails, CommitFileChange, CommitId, CommitParentIds, EMPTY_TREE_ID, HistoryMode,
-    HistorySolo, HistorySoloSet, LogCursor, LogPage, RecentCommitMessage, ReflogEntry, StashEntry,
+    Commit, CommitDetails, CommitFileChange, CommitId, CommitParentIds, HistoryMode, HistorySolo,
+    HistorySoloSet, LogCursor, LogPage, RecentCommitMessage, ReflogEntry, StashEntry,
+    is_empty_tree_id,
 };
 use gitcomet_core::error::{Error, ErrorKind, GitFailure, GitFailureId};
 use gitcomet_core::services::{CancellationToken, LogChunk, Result};
@@ -24,18 +26,21 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 mod authors;
+pub(in crate::repo) mod cache;
 mod commit_stats;
 mod decode;
 mod index;
 mod reflog;
 mod repo_impl;
 mod snapshot;
+mod topology;
 mod walk;
 
-pub(super) use authors::HistoryAuthorsCache;
 pub(super) use commit_stats::*;
 pub(super) use decode::*;
+pub(super) use index::HistoryQuery;
 pub(super) use reflog::*;
+pub(super) use topology::TopologyCache;
 pub(super) use walk::*;
 
 #[cfg(test)]

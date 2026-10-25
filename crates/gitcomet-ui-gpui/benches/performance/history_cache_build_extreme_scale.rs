@@ -9,16 +9,14 @@ pub(crate) fn bench_history_cache_build_extreme_scale(c: &mut Criterion) {
     group.bench_function(
         BenchmarkId::from_parameter("50k_commits_2k_refs_200_stashes"),
         |b| {
-            b.iter_custom(|iters| {
-                let start = Instant::now();
-                for _ in 0..iters {
-                    let _ = extreme_scale.run();
-                }
-                let (_, metrics) = measure_sidecar_allocations(|| extreme_scale.run());
-                emit_history_cache_build_sidecar("50k_commits_2k_refs_200_stashes", &metrics);
-                start.elapsed()
-            });
+            b.iter(|| extreme_scale.run().0);
         },
     );
+    if let Some((_, metrics)) = measure_sidecar_allocations_if_selected(
+        "history_cache_build/50k_commits_2k_refs_200_stashes",
+        || extreme_scale.run(),
+    ) {
+        emit_history_cache_build_sidecar("50k_commits_2k_refs_200_stashes", &metrics);
+    }
     group.finish();
 }

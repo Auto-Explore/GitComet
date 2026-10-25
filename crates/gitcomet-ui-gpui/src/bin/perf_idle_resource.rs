@@ -1,11 +1,11 @@
 #[cfg(feature = "benchmarks")]
 mod harness {
+    use gitcomet_perf::sidecar::{PerfSidecarReport, write_criterion_sidecar};
     use gitcomet_ui_gpui::benchmarks::{
         IdleResourceConfig, IdleResourceFixture, IdleResourceMetrics, IdleResourceScenario,
     };
     use gitcomet_ui_gpui::perf_alloc::{TRACKING_MIMALLOC, measure_allocations};
     use gitcomet_ui_gpui::perf_ram_guard::install_benchmark_process_ram_guard;
-    use gitcomet_ui_gpui::perf_sidecar::{PerfSidecarReport, write_criterion_sidecar};
     use serde_json::{Map, Value, json};
     use std::env;
     use std::time::Duration;
@@ -28,6 +28,7 @@ mod harness {
 
     pub fn run() -> Result<(), String> {
         install_benchmark_process_ram_guard();
+        gitcomet_ui_gpui::benchmarks::install_live_runtime();
         let args = parse_cli_args(env::args().skip(1))?;
         let scenario = scenario_from_bench(&args.bench)?;
         let fixture = IdleResourceFixture::with_config(scenario, config_for_scenario(scenario));

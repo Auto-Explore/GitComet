@@ -1,11 +1,34 @@
 use super::GixRepo;
-use crate::util::{run_git_capture, run_git_with_output};
+use crate::util::{run_git_capture_bytes, run_git_with_output};
 use gitcomet_core::domain::CommitId;
-use gitcomet_core::error::{Error, ErrorKind};
+use gitcomet_core::error::Error;
 use gitcomet_core::services::{CommandOutput, Result};
 use std::io::Write;
 use std::path::Path;
 use tempfile::NamedTempFile;
+
+/// `patch` in a temp file for `git apply`, which reads it by path.
+pub(super) fn write_patch_file(patch: &[u8]) -> Result<NamedTempFile> {
+    let mut file = NamedTempFile::new()
+        .map_err(|error| Error::from(error).with_context("create temporary Git input", None))?;
+    file.write_all(patch).map_err(|error| {
+        Error::from(error).with_context("write temporary Git input", Some(file.path()))
+    })?;
+    Ok(file)
+}
+
+/// NUL-terminated paths for `--pathspec-from-file` with `--pathspec-file-nul`;
+/// a long path list would overflow a Windows command line.
+pub(super) fn write_pathspec_file<'a>(
+    paths: impl IntoIterator<Item = &'a [u8]>,
+) -> Result<NamedTempFile> {
+    let mut bytes = Vec::new();
+    for path in paths {
+        bytes.extend_from_slice(path);
+        bytes.push(0);
+    }
+    write_patch_file(&bytes)
+}
 
 impl GixRepo {
     pub(super) fn export_patch_with_output_impl(
@@ -20,8 +43,11 @@ impl GixRepo {
             .arg(sha)
             .arg("--stdout")
             .arg("--binary");
-        let patch = run_git_capture(cmd, &format!("git format-patch -1 {sha} --stdout"))?;
-        std::fs::write(dest, patch.as_bytes()).map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
+        // The bytes as git wrote them: file content in any encoding must reach
+        // the patch file unchanged, or `git am` cannot apply it.
+        let patch = run_git_capture_bytes(cmd, &format!("git format-patch -1 {sha} --stdout"))?;
+        std::fs::write(dest, patch)
+            .map_err(|error| Error::from(error).with_context("export patch", Some(dest)))?;
         Ok(CommandOutput {
             command: format!("Export patch {sha}"),
             stdout: format!("Saved patch to {}", dest.display()),
@@ -38,13 +64,10 @@ impl GixRepo {
 
     pub(super) fn apply_unified_patch_to_index_with_output_impl(
         &self,
-        patch: &str,
+        patch: &[u8],
         reverse: bool,
     ) -> Result<CommandOutput> {
-        let mut tmp_file = NamedTempFile::new().map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
-        tmp_file
-            .write_all(patch.as_bytes())
-            .map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
+        let tmp_file = write_patch_file(patch)?;
         let tmp_path = tmp_file.path();
 
         let mut cmd = self.git_workdir_cmd();
@@ -68,13 +91,10 @@ impl GixRepo {
 
     pub(super) fn apply_unified_patch_to_worktree_with_output_impl(
         &self,
-        patch: &str,
+        patch: &[u8],
         reverse: bool,
     ) -> Result<CommandOutput> {
-        let mut tmp_file = NamedTempFile::new().map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
-        tmp_file
-            .write_all(patch.as_bytes())
-            .map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
+        let tmp_file = write_patch_file(patch)?;
         let tmp_path = tmp_file.path();
 
         let mut cmd = self.git_workdir_cmd();

@@ -6,7 +6,6 @@ use super::*;
 use notify::EventKind;
 use notify::event::{AccessKind, AccessMode, CreateKind, DataChange, ModifyKind, RemoveKind};
 use std::fs;
-use std::process::Command;
 use std::sync::{OnceLock, atomic::AtomicBool, mpsc};
 
 struct IsolatedGitConfigEnv {
@@ -47,7 +46,7 @@ fn run_git(repo: &Path, args: &[&str]) {
         args.first().copied().unwrap_or("git"),
     );
     let env = isolated_git_config_env();
-    let output = Command::new("git")
+    let output = gitcomet_core::test_support::git_fixture::git_command()
         .env("GIT_CONFIG_NOSYSTEM", "1")
         .env("GIT_CONFIG_GLOBAL", &env.global_config)
         .env("HOME", &env.home_dir)
@@ -218,6 +217,14 @@ fn cache_key(rel: impl Into<PathBuf>, is_dir_hint: Option<bool>) -> IgnoreCacheK
 
 /// Test helper: classify an event and return just the coalesced change (dropping the
 /// `gitignore_changed` signal), matching the pre-`ClassifiedEvent` return shape these tests use.
+/// A worktree change the watcher attributes to exactly `paths`.
+fn worktree_change(paths: &[&str]) -> RepoExternalChange {
+    RepoExternalChange {
+        paths: crate::msg::ChangedPaths::known(paths.iter().map(PathBuf::from).collect()),
+        ..RepoExternalChange::worktree()
+    }
+}
+
 fn classify_change(
     workdir: &Path,
     git_dir: Option<&Path>,
@@ -234,6 +241,39 @@ fn resolve_git_dir_handles_dot_git_directory() {
     let _ = fs::create_dir_all(workdir.join(".git"));
 
     assert_eq!(resolve_git_dir(&workdir), Some(workdir.join(".git")));
+}
+
+#[test]
+fn watcher_marks_attribute_inputs_without_marking_ordinary_file_edits() {
+    let dir = unique_temp_dir("gitcomet-attribute-watch");
+    let workdir = dir.path();
+    fs::create_dir_all(workdir.join(".git/info")).unwrap();
+    for (path, expected) in [
+        ("a.txt", false),
+        (".git/index", false),
+        (".git/HEAD", false),
+        (".gitattributes", true),
+        ("nested/.gitattributes", true),
+        (".git/info/attributes", true),
+    ] {
+        let event = notify::Event {
+            kind: EventKind::Any,
+            paths: vec![workdir.join(path)],
+            attrs: Default::default(),
+        };
+        let change = classify_change(
+            workdir,
+            Some(&workdir.join(".git")),
+            &mut TestRules::default(),
+            &event,
+        )
+        .unwrap();
+        assert_eq!(change.text_attributes, expected, "{path}: {change:?}");
+        assert_eq!(
+            merge_change(change, RepoExternalChange::Worktree).text_attributes,
+            expected
+        );
+    }
 }
 
 #[test]
@@ -263,6 +303,9 @@ fn merge_change_coalesces_to_both() {
             git_state: true,
             tags: false,
             verification_context: false,
+            large_file_support: false,
+            text_attributes: false,
+            paths: crate::msg::ChangedPaths::Unknown,
         }
     );
     assert_eq!(
@@ -273,6 +316,9 @@ fn merge_change_coalesces_to_both() {
             git_state: true,
             tags: false,
             verification_context: false,
+            large_file_support: false,
+            text_attributes: false,
+            paths: crate::msg::ChangedPaths::Unknown,
         }
     );
     assert_eq!(
@@ -318,7 +364,7 @@ fn classify_repo_change_distinguishes_gitdir_from_worktree() {
             &mut TestRules::default(),
             &event
         ),
-        Some(RepoExternalChange::Worktree)
+        Some(worktree_change(&["file.txt"]))
     );
 
     let event = notify::Event {
@@ -339,6 +385,9 @@ fn classify_repo_change_distinguishes_gitdir_from_worktree() {
             git_state: true,
             tags: false,
             verification_context: false,
+            large_file_support: false,
+            text_attributes: false,
+            paths: crate::msg::ChangedPaths::known(vec!["file.txt".into()]),
         })
     );
 }
@@ -401,7 +450,7 @@ fn classify_repo_change_ignoring_index_lock_does_not_drop_real_worktree_events()
     };
     assert_eq!(
         classify_change(&workdir, Some(&workdir.join(".git")), &mut rules, &event),
-        Some(RepoExternalChange::Worktree),
+        Some(worktree_change(&["file.txt"])),
         "ignoring index.lock should still classify real worktree changes"
     );
 }
@@ -494,7 +543,7 @@ fn access_events_do_not_trigger_refresh_loops() {
             &mut TestRules::default(),
             &event
         ),
-        Some(RepoExternalChange::Worktree)
+        Some(worktree_change(&["file.txt"]))
     );
 }
 
@@ -582,7 +631,7 @@ fn tracked_paths_are_not_treated_as_ignored() {
     };
     assert_eq!(
         classify_change(&workdir, git_dir.as_deref(), &mut rules, &tracked_event),
-        Some(RepoExternalChange::Worktree)
+        Some(worktree_change(&["tracked.tracked-ignore"]))
     );
 
     let ignored_event = notify::Event {
@@ -850,15 +899,6 @@ fn gitignore_lookup_stats_track_cache_hits_misses_and_matcher_failures() {
 }
 
 #[test]
-fn panic_payload_to_string_handles_string_and_unknown_payloads() {
-    assert_eq!(
-        panic_payload_to_string(&"panic message".to_string()),
-        "panic message"
-    );
-    assert_eq!(panic_payload_to_string(&123usize), "unknown panic payload");
-}
-
-#[test]
 fn debouncer_covers_no_pending_due_check_and_max_delay_selection() {
     let base = Instant::now();
     let mut d = DebouncedChange::new(Duration::from_millis(500), Duration::from_millis(100));
@@ -1065,7 +1105,7 @@ fn tag_file_changes_refresh_tags() {
         "tag ref file should produce tags: true"
     );
 
-    // packed-refs → tags: true
+    // packed-refs may also change whether a git-annex bookkeeping ref exists.
     let packed_event = notify::Event {
         kind: EventKind::Modify(ModifyKind::Data(DataChange::Any)),
         paths: vec![git_dir.join("packed-refs")],
@@ -1077,10 +1117,27 @@ fn tag_file_changes_refresh_tags() {
         Some(RepoExternalChange {
             git_state: true,
             tags: true,
+            large_file_support: true,
             ..Default::default()
         }),
         "packed-refs should produce tags: true"
     );
+
+    for file in ["reftable/tables.list", "reftable/0x0001-0x0002-example.ref"] {
+        let event = notify::Event {
+            kind: EventKind::Modify(ModifyKind::Data(DataChange::Any)),
+            paths: vec![git_dir.join(file)],
+            attrs: Default::default(),
+        };
+        assert_eq!(
+            classify_change(&workdir, Some(&git_dir), &mut rules, &event),
+            Some(RepoExternalChange {
+                git_state: true,
+                tags: true,
+                ..Default::default()
+            })
+        );
+    }
 
     // Branch ref file → tags: false
     let branch_event = notify::Event {
@@ -1098,4 +1155,254 @@ fn tag_file_changes_refresh_tags() {
         }),
         "branch ref file should produce tags: false"
     );
+}
+
+/// git-annex writes its keys database while GitComet reads status-related
+/// data, and every command touches locks, temp files and per-key location
+/// logs (paths seen under strace). Treating those writes as Git state changes
+/// re-ran the same reads forever.
+#[test]
+fn annex_bookkeeping_writes_cannot_schedule_another_refresh() {
+    let dir = unique_temp_dir("gitcomet-annex-policy");
+    let workdir = &normalized(&dir.path().canonicalize().unwrap());
+    init_repo_for_ignore_tests(workdir);
+    let git_dir = workdir.join(".git");
+    let mut rules = load_gitignore_rules(workdir);
+    for path in [
+        "annex/keysdb/db-wal",
+        "annex/keysdb.lck",
+        "annex/keysdb.tmp/db",
+        "annex/index",
+        "annex/index.lck",
+        "annex/index.lck2569681-4.tmp",
+        "annex/objects/Xk/Wq/KEY/KEY",
+        "annex/journal.lck",
+        "annex/journal/3cb_894_SHA256E-s1000--db02.bin.log",
+        "annex/journal-private/3cb_894_SHA256E-s1000--db02.bin.log",
+        "annex/journal-private.lck",
+        "annex/mergedrefs",
+        "annex/mergedrefs2569681-0.tmp",
+        "annex/ignoredrefs",
+        "annex/gitqueue.lck",
+        "annex/othertmp.lck",
+        "annex/misctmp/x",
+        "annex/reposize/db/db-wal",
+        "annex/unused",
+        "annex/badunused",
+        "annex/tmpunused",
+        "annex/daemon.log",
+        "annex/daemon.status",
+        "annex/smudge.log",
+        "annex/ssh/socket",
+    ] {
+        for kind in [
+            EventKind::Create(CreateKind::File),
+            EventKind::Modify(ModifyKind::Data(DataChange::Any)),
+            EventKind::Remove(RemoveKind::File),
+        ] {
+            let event = notify::Event::new(kind).add_path(git_dir.join(path));
+            assert_eq!(
+                classify_change(workdir, Some(&git_dir), &mut rules, &event),
+                None,
+                "{path}"
+            );
+        }
+    }
+}
+
+#[test]
+fn annex_support_metadata_changes_schedule_a_refresh() {
+    let dir = unique_temp_dir("gitcomet-annex-metadata-policy");
+    let workdir = &normalized(&dir.path().canonicalize().unwrap());
+    init_repo_for_ignore_tests(workdir);
+    let git_dir = workdir.join(".git");
+    let mut rules = load_gitignore_rules(workdir);
+    for path in [
+        "annex/restage.log",
+        "annex/journal/uuid.log",
+        "annex/journal/numcopies.log",
+        "annex/journal/trust.log",
+        "annex/journal/remote.log",
+        "annex/journal-private/uuid.log",
+        "annex/daemon.pid",
+    ] {
+        for kind in [
+            EventKind::Create(CreateKind::File),
+            EventKind::Modify(ModifyKind::Data(DataChange::Any)),
+            EventKind::Remove(RemoveKind::File),
+        ] {
+            let event = notify::Event::new(kind).add_path(git_dir.join(path));
+            let change = classify_change(workdir, Some(&git_dir), &mut rules, &event).expect(path);
+            assert!(change.large_file_support, "{path}");
+            assert!(
+                !change.git_state && !change.index && !change.worktree,
+                "metadata must not reload file contents: {path}"
+            );
+        }
+    }
+}
+
+/// Non-recursive backends see only registered directories: the journals must
+/// be walked, git-annex's bulky and churning directories must not.
+#[test]
+fn watch_plan_walks_annex_journals_but_not_its_bookkeeping() {
+    let dir = unique_temp_dir("gitcomet-annex-plan");
+    let root = normalized(&dir.path().canonicalize().unwrap());
+    init_repo_for_ignore_tests(&root);
+    let private = [
+        "objects/Xk/Wq",
+        "keysdb",
+        "keysdb.tmp",
+        "transfer/upload",
+        "tmp",
+        "othertmp",
+        "misctmp",
+        "reposize/db",
+        "ssh",
+    ];
+    for path in private.iter().chain(&["journal", "journal-private"]) {
+        fs::create_dir_all(root.join(".git/annex").join(path)).unwrap();
+    }
+    let mut rules = load_gitignore_rules(&root);
+    let plan = TestPlan::build(&root, Some(&root.join(".git")), &mut rules);
+    for path in ["annex", "annex/journal", "annex/journal-private"] {
+        assert!(plan.dirs.contains(&root.join(".git").join(path)), "{path}");
+    }
+    for path in private {
+        let first = path.split('/').next().unwrap();
+        assert!(
+            plan.dirs
+                .iter()
+                .all(|dir| !dir.starts_with(root.join(".git/annex").join(first))),
+            "{path}"
+        );
+    }
+}
+
+#[test]
+fn attribute_events_request_support_without_scanning_on_ordinary_edits() {
+    let dir = unique_temp_dir("gitcomet-monitor-attributes");
+    let root = dir.path();
+    fs::create_dir(root.join(".git")).unwrap();
+    for path in [".gitattributes", "sub/.gitattributes", "file.txt"] {
+        for kind in [
+            EventKind::Any,
+            EventKind::Remove(notify::event::RemoveKind::File),
+        ] {
+            let event = notify::Event {
+                kind,
+                paths: vec![root.join(path)],
+                attrs: Default::default(),
+            };
+            let change = classify_change(
+                root,
+                Some(&root.join(".git")),
+                &mut TestRules::default(),
+                &event,
+            )
+            .unwrap();
+            assert!(change.worktree);
+            assert_eq!(change.large_file_support, path.ends_with(".gitattributes"));
+            assert_eq!(
+                merge_change(change.clone(), RepoExternalChange::Worktree).large_file_support,
+                change.large_file_support
+            );
+        }
+    }
+    let event = notify::Event {
+        kind: EventKind::Any,
+        paths: vec![root.join(".git/info/attributes")],
+        attrs: Default::default(),
+    };
+    assert!(
+        classify_change(
+            root,
+            Some(&root.join(".git")),
+            &mut TestRules::default(),
+            &event
+        )
+        .unwrap()
+        .git_state
+    );
+}
+
+#[test]
+fn ignored_attributes_file_still_refreshes_support() {
+    let dir = unique_temp_dir("gitcomet-ignored-attributes");
+    let workdir = dir.path();
+    init_repo_for_ignore_tests(workdir);
+    fs::write(workdir.join(".gitignore"), ".gitattributes\n").unwrap();
+    let mut rules = load_gitignore_rules(workdir);
+    let event = notify::Event::new(EventKind::Any).add_path(workdir.join(".gitattributes"));
+    let change = summarize_event(workdir, Some(&workdir.join(".git")), &mut rules, &event)
+        .change
+        .unwrap();
+    assert!(change.large_file_support);
+}
+
+#[test]
+fn annex_ref_and_local_attributes_changes_refresh_support_selectively() {
+    let dir = unique_temp_dir("gitcomet-annex-support-events");
+    let root = dir.path();
+    fs::create_dir(root.join(".git")).unwrap();
+    for (path, expected) in [
+        (".git/index", false),
+        (".git/HEAD", false),
+        (".git/refs/heads/main", false),
+        (".git/refs/heads/git-annex", true),
+        (".git/refs/remotes/origin/git-annex", true),
+        (".git/info/attributes", true),
+    ] {
+        let event = notify::Event::new(EventKind::Any).add_path(root.join(path));
+        let change = classify_change(
+            root,
+            Some(&root.join(".git")),
+            &mut TestRules::default(),
+            &event,
+        )
+        .unwrap();
+        assert_eq!(change.large_file_support, expected, "{path}");
+    }
+}
+/// Cost of the monitor's index-only reload, which every index write (stage,
+/// unstage, commit, an external `git add`) triggers, on real repositories:
+/// `GITCOMET_PROBE_REPOS=/a:/b`.
+#[test]
+#[ignore = "timing probe"]
+fn timing_monitor_index_reload_real_repos() {
+    let Ok(repos) = std::env::var("GITCOMET_PROBE_REPOS") else {
+        eprintln!("GITCOMET_PROBE_REPOS not set");
+        return;
+    };
+    let backend = gitcomet_git_gix::GixBackend;
+    let best = |mut run: Box<dyn FnMut() + '_>| {
+        run();
+        (0..5)
+            .map(|_| {
+                let start = Instant::now();
+                run();
+                start.elapsed().as_secs_f64() * 1e3
+            })
+            .fold(f64::MAX, f64::min)
+    };
+    for path in repos.split(':') {
+        let workdir = Path::new(path);
+        let name = workdir.file_name().unwrap().to_string_lossy();
+        let mut state = MonitorState::default();
+        assert!(state.reload(workdir, &backend, false));
+        let reload = best(Box::new(|| {
+            state.reload(workdir, &backend, true);
+        }));
+        let inputs = best(Box::new(|| {
+            WatchInputs::load(workdir, &backend).unwrap();
+        }));
+        let info = WatchInputs::load(workdir, &backend).unwrap().info;
+        let mut rules = IgnoreRules::default();
+        let rules_ms = best(Box::new(|| {
+            rules.reload(workdir, &backend, &info);
+        }));
+        println!(
+            "timing monitor_index_reload {name} reload={reload:.2}ms watch_inputs={inputs:.2}ms ignore_rules={rules_ms:.2}ms"
+        );
+    }
 }

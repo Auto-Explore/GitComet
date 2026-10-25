@@ -1,0 +1,12 @@
+flowchart LR
+  classDef hot fill:#f00,stroke:#000,color:#fff,stroke-width:2
+  classDef cool fill:#00f,stroke:#0ff,color:#fff
+
+  A[Alpha] --> B[Beta]
+  C[Gamma] -.-> D[Delta]
+
+  class A hot
+  class C cool
+
+  style B fill:#0f0,stroke:#090,stroke-width:3,color:#111
+  linkStyle 1 stroke:#ff0,stroke-width:4,stroke-dasharray:5 5

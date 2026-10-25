@@ -1,4 +1,4 @@
-use crate::domain::{Diff, DiffLineKind, SharedLineText};
+use crate::domain::{Diff, DiffLineKind, SharedLineText, parse_unified_hunk_header};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AnnotatedDiffLine {
@@ -14,11 +14,22 @@ pub fn annotate_unified(diff: &Diff) -> Vec<AnnotatedDiffLine> {
 
     let mut out = Vec::with_capacity(diff.lines.len());
     for line in &diff.lines {
+        if line.text.raw_bytes().starts_with(b"\\") {
+            out.push(AnnotatedDiffLine {
+                kind: line.kind,
+                text: line.text.clone(),
+                old_line: None,
+                new_line: None,
+            });
+            continue;
+        }
         match line.kind {
             DiffLineKind::Hunk => {
-                if let Some((old_start, new_start)) = parse_unified_hunk_header(&line.text) {
-                    old_line = Some(old_start);
-                    new_line = Some(new_start);
+                if let Some(header) = parse_unified_hunk_header(line.text.as_bytes())
+                    && let [old] = header.parents.as_slice()
+                {
+                    old_line = Some(old.start);
+                    new_line = Some(header.result.start);
                 } else {
                     old_line = None;
                     new_line = None;
@@ -83,28 +94,6 @@ pub fn annotate_unified(diff: &Diff) -> Vec<AnnotatedDiffLine> {
     out
 }
 
-fn parse_unified_hunk_header(text: &str) -> Option<(u32, u32)> {
-    // Formats:
-    // @@ -l,s +l,s @@
-    // @@ -l +l @@
-    // @@ -l,0 +l,0 @@
-    let text = text.strip_prefix("@@")?.trim_start();
-    let text = text.split("@@").next()?.trim();
-
-    let mut it = text.split_whitespace();
-    let old = it.next()?;
-    let new = it.next()?;
-
-    let old_start = parse_range_start(old.strip_prefix('-')?)?;
-    let new_start = parse_range_start(new.strip_prefix('+')?)?;
-    Some((old_start, new_start))
-}
-
-fn parse_range_start(s: &str) -> Option<u32> {
-    let start = s.split(',').next()?;
-    start.parse::<u32>().ok()
-}
-
 /// Post-image path of the file section whose `diff --git` line is the first of
 /// `section_lines`. Scanning stops at the section's first hunk or at the next
 /// file's header, so callers can simply hand over the rest of the diff.
@@ -136,9 +125,13 @@ pub fn unified_diff_file_path<'a>(
             }
         } else if line.starts_with("--- ") {
             old_path = old_path.or_else(|| parse_unified_path_header(line));
-        } else if let Some(rest) = line.strip_prefix("rename to ") {
-            // A rename with no content change has no `---`/`+++` pair at all.
-            // Unlike those, this name is written bare, with no `a/` or `b/`.
+        } else if let Some(rest) = line
+            .strip_prefix("rename to ")
+            .or_else(|| line.strip_prefix("copy to "))
+        {
+            // A rename or copy with no content change has no `---`/`+++` pair
+            // at all. Unlike those, this name is written bare, with no `a/` or
+            // `b/`.
             rename_to = rename_to.or_else(|| Some(unquote_git_path(rest)));
         }
     }
@@ -236,57 +229,14 @@ fn unquote_git_path(name: &str) -> String {
 /// Decodes a leading C-quoted name as written by git's `quote_c_style`, and
 /// returns it together with whatever follows the closing quote.
 fn split_quoted_git_path(text: &str) -> Option<(String, &str)> {
-    let bytes = text.as_bytes();
-    if bytes.first() != Some(&b'"') {
+    if !text.starts_with('"') {
         return None;
     }
-
-    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
-    let mut ix = 1usize;
-    while ix < bytes.len() {
-        match bytes[ix] {
-            b'"' => {
-                let rest = text.get(ix + 1..)?;
-                return Some((String::from_utf8_lossy(&out).into_owned(), rest));
-            }
-            b'\\' => {
-                ix += 1;
-                let escape = *bytes.get(ix)?;
-                match escape {
-                    b'a' => out.push(0x07),
-                    b'b' => out.push(0x08),
-                    b'f' => out.push(0x0c),
-                    b'n' => out.push(b'\n'),
-                    b'r' => out.push(b'\r'),
-                    b't' => out.push(b'\t'),
-                    b'v' => out.push(0x0b),
-                    b'0'..=b'7' => {
-                        // Up to three octal digits, as git emits them.
-                        let mut value = u32::from(escape - b'0');
-                        let mut digits = 1;
-                        while digits < 3
-                            && let Some(next) = bytes.get(ix + 1)
-                            && (b'0'..=b'7').contains(next)
-                        {
-                            value = value * 8 + u32::from(next - b'0');
-                            ix += 1;
-                            digits += 1;
-                        }
-                        out.push(u8::try_from(value).ok()?);
-                    }
-                    other => out.push(other),
-                }
-                ix += 1;
-            }
-            other => {
-                out.push(other);
-                ix += 1;
-            }
-        }
-    }
-
-    // Unterminated quote: not something git produces.
-    None
+    let (decoded, consumed) = gix_quote::ansi_c::undo(text.as_bytes().into()).ok()?;
+    Some((
+        String::from_utf8_lossy(&decoded).into_owned(),
+        text.get(consumed..)?,
+    ))
 }
 
 #[cfg(test)]
@@ -296,12 +246,25 @@ mod tests {
     use std::path::PathBuf;
 
     #[test]
+    fn git_quoted_paths_decode_controls_and_keep_the_remaining_header() {
+        assert_eq!(
+            split_quoted_git_path(r#""a/\303\244\t\n\"\\\377" b/other"#),
+            Some(("a/ä\t\n\"\\\u{fffd}".into(), " b/other"))
+        );
+        assert_eq!(
+            split_quoted_git_path(r#""" suffix"#),
+            Some((String::new(), " suffix"))
+        );
+        for malformed in [r#""unterminated"#, r#""bad\q""#, r#""bad\40""#] {
+            assert!(split_quoted_git_path(malformed).is_none());
+            assert_eq!(unquote_git_path(malformed), malformed);
+        }
+    }
+
+    #[test]
     fn annotate_tracks_line_numbers_through_hunks() {
         let diff = Diff::from_unified(
-            DiffTarget::WorkingTree {
-                path: PathBuf::from("src/lib.rs"),
-                area: DiffArea::Unstaged,
-            },
+            DiffTarget::working_tree(PathBuf::from("src/lib.rs"), DiffArea::Unstaged),
             "\
 diff --git a/src/lib.rs b/src/lib.rs
 index 1111111..2222222 100644
@@ -354,12 +317,36 @@ index 1111111..2222222 100644
 
     #[test]
     fn parse_hunk_header_variants() {
-        assert_eq!(parse_unified_hunk_header("@@ -1 +2 @@"), Some((1, 2)));
-        assert_eq!(parse_unified_hunk_header("@@ -1,0 +2,10 @@"), Some((1, 2)));
+        let range = |start, count| crate::domain::UnifiedHunkRange { start, count };
+        let starts_and_counts = |text: &str| {
+            parse_unified_hunk_header(text.as_bytes())
+                .map(|header| (header.parents.to_vec(), header.result))
+        };
         assert_eq!(
-            parse_unified_hunk_header("@@ -42,7 +100,8 @@ fn x"),
-            Some((42, 100))
+            starts_and_counts("@@ -1 +2 @@"),
+            Some((vec![range(1, 1)], range(2, 1)))
         );
+        assert_eq!(
+            starts_and_counts("@@ -1,0 +2,10 @@"),
+            Some((vec![range(1, 0)], range(2, 10)))
+        );
+        assert_eq!(
+            starts_and_counts("@@ -42,7 +100,8 @@ fn x"),
+            Some((vec![range(42, 7)], range(100, 8)))
+        );
+        assert_eq!(
+            starts_and_counts("@@@ -1,2 -3,4 +5,6 @@@"),
+            Some((vec![range(1, 2), range(3, 4)], range(5, 6)))
+        );
+        for malformed in [
+            "@@ -1 @@",
+            "@@ +1 -2 @@",
+            "@@ -1 +2",
+            "@@@ -1 +2 @@@",
+            "@ -1 +1 @",
+        ] {
+            assert_eq!(starts_and_counts(malformed), None, "{malformed:?}");
+        }
     }
 
     fn file_path_of(section: &str) -> Option<String> {
@@ -452,6 +439,23 @@ index 1e0101a..313043d 100644
 ",
             ),
             Some("src/rules - Copy.rs".to_string())
+        );
+    }
+
+    /// Copy detection (`-C`) writes `copy from`/`copy to` where a rename
+    /// writes `rename from`/`rename to`.
+    #[test]
+    fn file_path_reads_a_pure_copy() {
+        assert_eq!(
+            file_path_of(
+                "\
+diff --git a/old name.txt b/new name.txt
+similarity index 100%
+copy from old name.txt
+copy to new name.txt
+",
+            ),
+            Some("new name.txt".to_string())
         );
     }
 

@@ -50,10 +50,8 @@ pub struct PatchDiffPagedRowsFixture {
 
 impl PatchDiffPagedRowsFixture {
     pub fn new(lines: usize) -> Self {
-        let target = DiffTarget::WorkingTree {
-            path: std::path::PathBuf::from("src/lib.rs"),
-            area: DiffArea::Unstaged,
-        };
+        let target =
+            DiffTarget::working_tree(std::path::PathBuf::from("src/lib.rs"), DiffArea::Unstaged);
         let text = build_synthetic_unified_patch(lines);
         let diff = Arc::new(Diff::from_unified(target, text.as_str()));
         let mut pending_removes = 0usize;
@@ -84,6 +82,8 @@ impl PatchDiffPagedRowsFixture {
     }
 
     pub fn run_eager_full_materialize_step(&self) -> u64 {
+        let tab_width = 4;
+
         let annotated = annotate_unified(&self.diff);
         let split = build_patch_split_rows(&annotated);
         let theme = AppTheme::gitcomet_dark();
@@ -144,6 +144,7 @@ impl PatchDiffPagedRowsFixture {
                 continue;
             }
             let styled = super::diff_text::build_cached_diff_styled_text(
+                tab_width,
                 theme,
                 diff_content_text(line),
                 &[],
@@ -159,6 +160,8 @@ impl PatchDiffPagedRowsFixture {
     }
 
     pub fn run_paged_first_window_step(&self, window: usize) -> u64 {
+        let tab_width = 4;
+
         let window = window.max(1);
         let rows_provider = Arc::new(PagedPatchDiffRows::new(Arc::clone(&self.diff), 256));
         let split_provider = PagedPatchSplitRows::new_with_len_hint(
@@ -190,6 +193,7 @@ impl PatchDiffPagedRowsFixture {
             ) {
                 let content_text = diff_content_text(&line);
                 let styled = super::diff_text::build_cached_diff_styled_text_with_source_identity(
+                    tab_width,
                     theme,
                     content_text,
                     Some(super::diff_text::DiffTextSourceIdentity::from_str(
@@ -331,6 +335,8 @@ impl PatchDiffPagedRowsFixture {
     /// `len_hint()` to avoid indexing past the end.  Used for deep-scroll
     /// benchmarks.
     pub fn run_paged_window_at_step(&self, start_row: usize, window: usize) -> u64 {
+        let tab_width = 4;
+
         let window = window.max(1);
         let rows_provider = Arc::new(PagedPatchDiffRows::new(Arc::clone(&self.diff), 256));
         let split_provider = PagedPatchSplitRows::new_with_len_hint(
@@ -341,7 +347,7 @@ impl PatchDiffPagedRowsFixture {
         let language = diff_syntax_language_for_path("src/lib.rs");
 
         // Compute per-provider deep offsets clamped to valid range.
-        let patch_start = start_row.min(rows_provider.len_hint().saturating_sub(window).max(0));
+        let patch_start = start_row.min(rows_provider.len_hint().saturating_sub(window));
         let split_start = split_provider
             .len_hint()
             .saturating_mul(9)
@@ -375,6 +381,7 @@ impl PatchDiffPagedRowsFixture {
             ) {
                 let content_text = diff_content_text(&line);
                 let styled = super::diff_text::build_cached_diff_styled_text_with_source_identity(
+                    tab_width,
                     theme,
                     content_text,
                     Some(super::diff_text::DiffTextSourceIdentity::from_str(
@@ -590,7 +597,7 @@ impl DiffRefreshFixture {
     /// that would occur when the content actually changes.
     pub fn run_rebuild_step(&self) -> u64 {
         #[cfg(feature = "benchmarks")]
-        let rebuild = crate::view::panes::main::diff_cache::build_file_diff_cache_rebuild(
+        let rebuild = crate::view::panes::diff::diff_cache::build_file_diff_cache_rebuild(
             &self.incoming_file,
             std::path::Path::new("/tmp/gitcomet-bench-diff-refresh"),
         )
@@ -632,7 +639,7 @@ impl DiffRefreshFixture {
     #[cfg(any(test, feature = "benchmarks"))]
     pub fn measure_rebuild(&self) -> DiffRefreshMetrics {
         #[cfg(feature = "benchmarks")]
-        let rebuild = crate::view::panes::main::diff_cache::build_file_diff_cache_rebuild(
+        let rebuild = crate::view::panes::diff::diff_cache::build_file_diff_cache_rebuild(
             &self.incoming_file,
             std::path::Path::new("/tmp/gitcomet-bench-diff-refresh"),
         )
@@ -680,8 +687,8 @@ pub struct FileDiffOpenMetrics {
 /// of split (side-by-side) or inline rows — the dominant cost when a user
 /// opens a file diff.
 pub struct FileDiffOpenFixture {
-    split: std::sync::Arc<crate::view::panes::main::diff_cache::PagedFileDiffRows>,
-    inline: std::sync::Arc<crate::view::panes::main::diff_cache::PagedFileDiffInlineRows>,
+    split: std::sync::Arc<crate::view::panes::diff::diff_cache::PagedFileDiffRows>,
+    inline: std::sync::Arc<crate::view::panes::diff::diff_cache::PagedFileDiffInlineRows>,
 }
 
 impl FileDiffOpenFixture {
@@ -832,7 +839,7 @@ impl PaneResizeDragStepFixture {
     }
 
     pub fn run_hash_and_clamp_counts(&mut self) -> (u64, u64, u64) {
-        use crate::view::panes::main::pane_content_width_for_layout;
+        use crate::view::panes::diff::pane_content_width_for_layout;
 
         let handle = self.handle();
         let total_width = self.total_width;
@@ -899,7 +906,7 @@ impl PaneResizeDragStepFixture {
     }
 
     pub fn run_with_metrics(&mut self) -> (u64, PaneResizeDragMetrics) {
-        use crate::view::panes::main::pane_content_width_for_layout;
+        use crate::view::panes::diff::pane_content_width_for_layout;
 
         let handle = self.handle();
         let total_width = self.total_width;
@@ -1212,7 +1219,7 @@ impl WindowResizeLayoutFixture {
     }
 
     pub fn run_with_metrics(&self) -> (u64, WindowResizeLayoutMetrics) {
-        use crate::view::panes::main::pane_content_width_for_layout;
+        use crate::view::panes::diff::pane_content_width_for_layout;
 
         let step_delta = (self.end_total_w - self.start_total_w) / self.steps.max(1) as f32;
         let sidebar_px = px(self.sidebar_w);
@@ -1391,7 +1398,7 @@ impl WindowResizeLayoutExtremeFixture {
     }
 
     fn run_internal(&self) -> (u64, f64, f64, u64, u64, u64) {
-        use crate::view::panes::main::pane_content_width_for_layout;
+        use crate::view::panes::diff::pane_content_width_for_layout;
         use crate::view::{diff_split_column_widths, diff_split_drag_params};
 
         let step_delta = (self.end_total_w - self.start_total_w) / self.steps.max(1) as f32;
@@ -1991,7 +1998,7 @@ pub struct PatchDiffSearchQueryUpdateFixture {
     stable_cache: Vec<Option<CachedDiffStyledText>>,
     query_cache: Vec<Option<PatchDiffSearchQueryCacheEntry>>,
     query_cache_query: SharedString,
-    query_cache_matcher: Option<crate::view::panes::main::diff_search::DiffSearchMatcher>,
+    query_cache_matcher: Option<crate::view::panes::diff::diff_search::DiffSearchMatcher>,
     query_cache_generation: u64,
 }
 
@@ -2117,7 +2124,7 @@ impl PatchDiffSearchQueryUpdateFixture {
         if self.query_cache_query.as_ref() != query {
             self.query_cache_query = query.to_string().into();
             self.query_cache_matcher = (!query.is_empty()).then(|| {
-                crate::view::panes::main::diff_search::DiffSearchMatcher::new(
+                crate::view::panes::diff::diff_search::DiffSearchMatcher::new(
                     query,
                     Default::default(),
                 )
@@ -2127,6 +2134,8 @@ impl PatchDiffSearchQueryUpdateFixture {
     }
 
     fn row_styled(&mut self, src_ix: usize, query: &str) -> Option<CachedDiffStyledText> {
+        let tab_width = 4;
+
         let query = query.trim();
         let query_active = !query.is_empty();
         let click_kind = self
@@ -2160,6 +2169,7 @@ impl PatchDiffSearchQueryUpdateFixture {
                 };
 
                 super::diff_text::build_cached_diff_styled_text(
+                    tab_width,
                     self.theme,
                     diff_content_text(line),
                     word_ranges,
@@ -2170,6 +2180,7 @@ impl PatchDiffSearchQueryUpdateFixture {
                 )
             } else {
                 super::diff_text::build_cached_diff_styled_text(
+                    tab_width,
                     self.theme,
                     line.text.as_ref(),
                     &[],

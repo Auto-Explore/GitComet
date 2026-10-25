@@ -47,9 +47,29 @@ pub(super) fn schedule_open_repo(
                     repo_id,
                     spec.workdir.display()
                 );
+                let key = repo
+                    .common_dir()
+                    .map(gitcomet_core::path_utils::canonicalize_or_original)
+                    .map(crate::model::RepositoryKey::CommonDir)
+                    .unwrap_or_else(|| crate::model::RepositoryKey::Worktree(spec.workdir.clone()));
+                let (preferences, persistence) =
+                    msg_tx
+                        .preferences
+                        .initialize(key, &spec.workdir, repo.as_ref());
+                if let Err(error) = persistence {
+                    send_or_log(
+                        &msg_tx,
+                        Msg::Internal(crate::msg::InternalMsg::SessionPersistFailed {
+                            repo_id: Some(repo_id),
+                            action: "initializing repository preferences",
+                            error: error.to_string(),
+                        }),
+                    );
+                }
                 send_or_log(
                     &msg_tx,
                     Msg::Internal(crate::msg::InternalMsg::RepoOpenedOk {
+                        preferences: Some(preferences),
                         repo_id,
                         spec,
                         repo,

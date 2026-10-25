@@ -5,23 +5,6 @@
 //! - Interval coalescing for overlapping ranges
 //! - Newline-aware text manipulation
 
-use std::any::Any;
-
-/// Renders a `catch_unwind` / `JoinHandle::join` payload for diagnostics,
-/// using `fallback` for payloads that are not `&str` or `String`.
-///
-/// Callers keep their own fallback wording; taking a reference means a caller
-/// holding a `Box` can pass `payload.as_ref()` without giving up ownership.
-pub fn panic_payload_to_string(payload: &(dyn Any + Send), fallback: &str) -> String {
-    if let Some(message) = payload.downcast_ref::<&'static str>() {
-        (*message).to_string()
-    } else if let Some(message) = payload.downcast_ref::<String>() {
-        message.clone()
-    } else {
-        fallback.to_string()
-    }
-}
-
 /// Wraps text in POSIX single quotes, escaping embedded single quotes with the
 /// standard `'"'"'` idiom.
 ///
@@ -120,6 +103,54 @@ where
     }
 
     if saw_cr { "\r" } else { "\n" }
+}
+
+/// Byte offset of each line's start: 0, then one past every `\n`, so text
+/// ending in a newline has an empty last line and empty text has one. Callers
+/// with another convention (no lines for empty text, or tree-sitter's, with
+/// no start after a trailing newline) adjust the result.
+pub fn line_starts(text: &str) -> Vec<usize> {
+    let bytes = text.as_bytes();
+    let mut starts = Vec::with_capacity(bytes.len() / 64 + 1);
+    starts.push(0);
+    starts.extend(memchr::memchr_iter(b'\n', bytes).map(|ix| ix + 1));
+    starts
+}
+
+/// Lines described by [`line_starts`] for text of `source_len` bytes: none
+/// for empty text, else one per start (a trailing newline keeps its final
+/// empty line).
+pub fn line_count_from_starts(source_len: usize, line_starts: &[usize]) -> usize {
+    if source_len == 0 {
+        0
+    } else {
+        line_starts.len().max(1)
+    }
+}
+
+/// Byte range of line `line_ix` without its `\n`, from [`line_starts`];
+/// the empty line after a trailing newline is `len..len`.
+pub fn line_byte_range(
+    line_starts: &[usize],
+    source_len: usize,
+    line_ix: usize,
+) -> Option<std::ops::Range<usize>> {
+    if line_ix >= line_count_from_starts(source_len, line_starts) {
+        return None;
+    }
+    let start = line_starts
+        .get(line_ix)
+        .copied()
+        .unwrap_or(source_len)
+        .min(source_len);
+    let end = line_starts
+        .get(line_ix.saturating_add(1))
+        .copied()
+        .map(|next| next.saturating_sub(1))
+        .unwrap_or(source_len)
+        .min(source_len)
+        .max(start);
+    Some(start..end)
 }
 
 /// `(CRLF count, total LF count)` of `text` in one scan; every LF is found
@@ -836,6 +867,32 @@ pub(crate) fn delete_last_line(text: &str) -> &str {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn line_starts_begin_after_every_newline() {
+        use super::line_starts;
+        assert_eq!(line_starts(""), vec![0]);
+        assert_eq!(line_starts("a"), vec![0]);
+        assert_eq!(line_starts("a\n"), vec![0, 2]);
+        assert_eq!(line_starts("a\r\nbc\n\nd"), vec![0, 3, 6, 7]);
+    }
+
+    #[test]
+    fn line_ranges_exclude_newlines_and_keep_the_trailing_empty_line() {
+        use super::{line_byte_range, line_count_from_starts, line_starts};
+        let text = "ab\n\ncd\n";
+        let starts = line_starts(text);
+        assert_eq!(line_count_from_starts(text.len(), &starts), 4);
+        let ranges: Vec<_> = (0..5)
+            .map(|ix| line_byte_range(&starts, text.len(), ix))
+            .collect();
+        assert_eq!(
+            ranges,
+            vec![Some(0..2), Some(3..3), Some(4..6), Some(7..7), None]
+        );
+        assert_eq!(line_count_from_starts(0, &line_starts("")), 0);
+        assert_eq!(line_byte_range(&line_starts(""), 0, 0), None);
+    }
+
+    #[test]
     fn redact_url_userinfo_masks_secrets_and_keeps_the_rest() {
         use super::redact_url_userinfo;
         assert_eq!(
@@ -1533,5 +1590,49 @@ mod meld_tests {
     #[test]
     fn delete_last_line_single_line_with_newline() {
         assert_eq!(delete_last_line("hello\n"), "hello");
+    }
+}
+
+/// Short size label for UI: `512 B`, `1.5 KB`, `12.3 MB`, `1.2 GB` (decimal
+/// units, one fraction digit above bytes, no trailing `.0`).
+pub fn human_readable_bytes(bytes: u64) -> String {
+    const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
+    let mut value = bytes as f64;
+    let mut unit = 0;
+    while value >= 1000.0 && unit + 1 < UNITS.len() {
+        value /= 1000.0;
+        unit += 1;
+    }
+    if unit == 0 {
+        return format!("{bytes} B");
+    }
+    let mut rounded = (value * 10.0).round() / 10.0;
+    if rounded >= 1000.0 && unit + 1 < UNITS.len() {
+        rounded /= 1000.0;
+        unit += 1;
+    }
+    if rounded.fract() == 0.0 {
+        format!("{rounded:.0} {}", UNITS[unit])
+    } else {
+        format!("{rounded:.1} {}", UNITS[unit])
+    }
+}
+
+#[cfg(test)]
+mod human_readable_bytes_tests {
+    use super::human_readable_bytes;
+
+    #[test]
+    fn formats_decimal_units_with_one_fraction_digit() {
+        assert_eq!(human_readable_bytes(0), "0 B");
+        assert_eq!(human_readable_bytes(999), "999 B");
+        assert_eq!(human_readable_bytes(1_000), "1 KB");
+        assert_eq!(human_readable_bytes(1_536), "1.5 KB");
+        assert_eq!(human_readable_bytes(999_949), "999.9 KB");
+        assert_eq!(human_readable_bytes(999_950), "1 MB");
+        assert_eq!(human_readable_bytes(999_950_000), "1 GB");
+        assert_eq!(human_readable_bytes(12_345_678), "12.3 MB");
+        assert_eq!(human_readable_bytes(1_200_000_000), "1.2 GB");
+        assert_eq!(human_readable_bytes(5_000_000_000_000_000), "5000 TB");
     }
 }

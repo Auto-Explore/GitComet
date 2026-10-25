@@ -1,63 +1,50 @@
-//! Hexadecimal byte encoding and decoding.
+//! Hexadecimal adapters using faster-hex, shared by persisted paths and Git IDs.
 
-/// Renders bytes as lowercase hexadecimal text.
-pub fn encode(bytes: &[u8]) -> String {
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    let mut out = String::with_capacity(bytes.len() * 2);
-    for &byte in bytes {
-        out.push(HEX[(byte >> 4) as usize] as char);
-        out.push(HEX[(byte & 0x0f) as usize] as char);
-    }
-    out
-}
+pub use faster_hex::hex_string as encode;
 
 /// Decodes hexadecimal text (either case) into bytes.
 pub fn decode(hex: &str) -> Option<Vec<u8>> {
     if !hex.len().is_multiple_of(2) {
         return None;
     }
-    let mut out = Vec::with_capacity(hex.len() / 2);
-    let bytes = hex.as_bytes();
-    for pair in bytes.as_chunks::<2>().0 {
-        let high = nibble(pair[0])?;
-        let low = nibble(pair[1])?;
-        out.push((high << 4) | low);
+    let mut out = vec![0; hex.len() / 2];
+    faster_hex::hex_decode(hex.as_bytes(), &mut out).ok()?;
+    Some(out)
+}
+
+/// Decode a fixed-size value without a heap allocation. Require an exact
+/// length: the library also supports decoding into a shorter destination.
+pub fn decode_array<const N: usize>(hex: &str) -> Option<[u8; N]> {
+    if hex.len() != N * 2 {
+        return None;
     }
+    let mut out = [0; N];
+    faster_hex::hex_decode(hex.as_bytes(), &mut out).ok()?;
     Some(out)
 }
 
 /// Encode a supported Git object ID with a stack buffer and one shared allocation.
 pub fn encode_object_id(bytes: &[u8]) -> std::sync::Arc<str> {
     assert!(matches!(bytes.len(), 20 | 32));
-    const HEX: &[u8; 16] = b"0123456789abcdef";
     let mut buffer = [0u8; 64];
-    for (byte, pair) in bytes.iter().zip(buffer.as_chunks_mut::<2>().0) {
-        pair[0] = HEX[(byte >> 4) as usize];
-        pair[1] = HEX[(byte & 15) as usize];
-    }
-    std::sync::Arc::from(std::str::from_utf8(&buffer[..bytes.len() * 2]).unwrap())
+    let hex: &str = faster_hex::hex_encode(bytes, &mut buffer[..bytes.len() * 2])
+        .expect("Git object ID fits the buffer");
+    std::sync::Arc::from(hex)
 }
 
-/// Compare binary bytes to hexadecimal text without a temporary buffer.
+/// Compare binary bytes to hexadecimal text without a heap allocation.
 pub fn matches(bytes: &[u8], hex: &str) -> bool {
-    hex.len() == bytes.len() * 2
-        && bytes
-            .iter()
-            .zip(hex.as_bytes().as_chunks::<2>().0)
-            .all(|(&byte, pair)| {
-                nibble(pair[0])
-                    .zip(nibble(pair[1]))
-                    .is_some_and(|(hi, lo)| byte == hi * 16 + lo)
-            })
-}
-
-fn nibble(byte: u8) -> Option<u8> {
-    match byte {
-        b'0'..=b'9' => Some(byte - b'0'),
-        b'a'..=b'f' => Some(byte - b'a' + 10),
-        b'A'..=b'F' => Some(byte - b'A' + 10),
-        _ => None,
+    if bytes.len().checked_mul(2) != Some(hex.len()) {
+        return false;
     }
+    let mut buffer = [0; 32];
+    bytes
+        .chunks(32)
+        .zip(hex.as_bytes().chunks(64))
+        .all(|(bytes, hex)| {
+            let decoded = &mut buffer[..bytes.len()];
+            faster_hex::hex_decode(hex, decoded).is_ok() && decoded == bytes
+        })
 }
 
 #[cfg(test)]
@@ -83,5 +70,30 @@ mod tests {
     fn encode_decode_round_trips() {
         let bytes = b"round trip \xff bytes";
         assert_eq!(decode(&encode(bytes)).as_deref(), Some(&bytes[..]));
+    }
+
+    #[test]
+    fn git_id_adapters_keep_exact_lengths_and_reject_invalid_input() {
+        for len in [20, 32] {
+            let bytes: Vec<_> = (0..len).map(|i| 0xa0 + i as u8).collect();
+            let hex = encode_object_id(&bytes);
+            assert_eq!(hex.as_ref(), encode(&bytes));
+            assert!(matches(&bytes, &hex));
+            assert!(matches(&bytes, &hex.to_ascii_uppercase()));
+            assert!(!matches(&bytes, &hex[..hex.len() - 1]));
+            assert!(!matches(&bytes, &format!("{hex}00")));
+            assert!(!matches(&bytes, &format!("{}z0", &hex[..hex.len() - 2])));
+        }
+        assert_eq!(decode_array::<2>("aB01"), Some([0xab, 1]));
+        for invalid in ["", "ab", "abc", "abcdef", "zzzz", "é00"] {
+            assert_eq!(decode_array::<2>(invalid), None, "{invalid:?}");
+        }
+        let bytes: Vec<u8> = (0..=255).collect();
+        assert!(
+            matches(&bytes, &encode(&bytes)),
+            "comparison crosses stack-buffer boundaries"
+        );
+        assert!(matches(&[], ""));
+        assert_eq!(decode_array::<0>(""), Some([]));
     }
 }

@@ -1,0 +1,53 @@
+[package]
+name = "gitcomet-app"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+default = ["ui-gpui", "gix"]
+# The windowed modes. Without it the library builds headless: the command-line
+# difftool/mergetool, Git tool setup, and fixture extraction still work.
+ui-gpui-runtime = [
+    "dep:gitcomet-extension-api",
+    "dep:gitcomet-ui-gpui",
+    "dep:gitcomet-win32-window-utils",
+    "dep:sysinfo",
+]
+ui-gpui = ["ui-gpui-runtime"]
+gix = ["dep:gitcomet-git-gix"]
+
+[dependencies]
+clap = { workspace = true }
+fs2 = { workspace = true }
+gitcomet-core = { workspace = true }
+gitcomet-extension-api = { workspace = true, optional = true }
+gitcomet-git-gix = { workspace = true, optional = true }
+gitcomet-state = { workspace = true }
+gitcomet-ui-gpui = { workspace = true, optional = true }
+log = { workspace = true }
+rustc-hash = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+smol = { workspace = true }
+sysinfo = { workspace = true, optional = true }
+tempfile = { workspace = true }
+uuid = { workspace = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+wayland-client = { workspace = true }
+
+[target.'cfg(unix)'.dependencies]
+signal-hook = { workspace = true }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+gitcomet-win32-window-utils = { path = "../win32-window-utils", optional = true }
+
+[dev-dependencies]
+gitcomet-core = { workspace = true, features = ["test-support"] }

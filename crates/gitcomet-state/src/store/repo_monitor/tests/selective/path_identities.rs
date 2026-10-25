@@ -29,16 +29,15 @@ fn directory_symlink_is_not_hidden_by_directory_only_ignore_for_any_event_kind()
         let target = unique_temp_dir("gitcomet-directory-symlink-target");
         fs::write(root.join(".gitignore"), "build/\n").unwrap();
         let link = root.join("build");
-        #[cfg(unix)]
-        std::os::unix::fs::symlink(target.path(), &link).unwrap();
-        #[cfg(windows)]
-        std::os::windows::fs::symlink_dir(target.path(), &link).unwrap();
+        if !gitcomet_core::test_support::symlink::directory(target.path(), &link) {
+            return;
+        }
         let mut rules = load_gitignore_rules(&root);
         let event = notify::Event::new(kind).add_path(link);
         assert_eq!(path_dir_hint(&event), expected_hint, "{kind:?}");
         let effect = summarize_event(&root, Some(&root.join(".git")), &mut rules, &event);
         assert!(
-            effect.change.is_some_and(|change| change.worktree),
+            effect.change.as_ref().is_some_and(|change| change.worktree),
             "a symlink to a directory is visible to Git after {kind:?}: {effect:?}"
         );
         assert!(effect.new_ignored_dirs.is_empty(), "{kind:?}");
@@ -65,15 +64,14 @@ fn symlink_over_tracked_directory_is_never_ignored() {
         let target = unique_temp_dir("gitcomet-tracked-directory-symlink-target");
         fs::remove_dir_all(root.join("vendor")).unwrap();
         let link = root.join("vendor");
-        #[cfg(unix)]
-        std::os::unix::fs::symlink(target.path(), &link).unwrap();
-        #[cfg(windows)]
-        std::os::windows::fs::symlink_dir(target.path(), &link).unwrap();
+        if !gitcomet_core::test_support::symlink::directory(target.path(), &link) {
+            return;
+        }
         let mut rules = load_gitignore_rules(&root);
         let event = notify::Event::new(kind).add_path(link);
         let effect = summarize_event(&root, Some(&root.join(".git")), &mut rules, &event);
         assert!(
-            effect.change.is_some_and(|change| change.worktree),
+            effect.change.as_ref().is_some_and(|change| change.worktree),
             "tracked files vanished behind the link after {kind:?}: {effect:?}"
         );
     }
@@ -86,10 +84,9 @@ fn moving_directory_symlink_into_worktree_refreshes_status() {
     let target = external.path().join("target");
     let incoming = external.path().join("incoming");
     fs::create_dir(&target).unwrap();
-    #[cfg(unix)]
-    std::os::unix::fs::symlink(&target, &incoming).unwrap();
-    #[cfg(windows)]
-    std::os::windows::fs::symlink_dir(&target, &incoming).unwrap();
+    if !gitcomet_core::test_support::symlink::directory(&target, &incoming) {
+        return;
+    }
     fs::write(root.join(".gitignore"), "build/\n").unwrap();
     let monitor = RunningMonitor::start_for_unique_path(&root);
     // Only the destination is watched, so an event for a visible source path
@@ -101,7 +98,7 @@ fn moving_directory_symlink_into_worktree_refreshes_status() {
                 .unwrap())
             .worktree
     );
-    let status = Command::new("git")
+    let status = gitcomet_core::test_support::git_fixture::git_command()
         .arg("--no-optional-locks")
         .arg("-C")
         .arg(&root)
@@ -134,11 +131,25 @@ fn ignored_parent_of_separate_git_dir_keeps_metadata_visible() {
         "native exclusions hide the only Git metadata stream: {exclusions:?}"
     );
     assert!(exclusions.contains(&git_dir.join("objects")));
-    let monitor = RunningMonitor::start(&root);
-    run_git(&root, &["commit", "--allow-empty", "-m", "External commit"]);
-    monitor.refresh();
-    run_git(&root, &["checkout", "-b", "other"]);
-    monitor.refresh();
+    // Moving .git named only the directory, never these ref files, so startup
+    // residue cannot satisfy the waits and no settle is needed.
+    let head = fs::read_to_string(git_dir.join("HEAD")).unwrap();
+    let reftable = git_dir.join("reftable").is_dir();
+    let branch = if reftable {
+        git_dir.join("reftable/tables.list")
+    } else {
+        git_dir.join(head.trim().strip_prefix("ref: ").unwrap())
+    };
+    let monitor = RunningMonitor::start_for_unique_path(&root);
+    let commit = || run_git(&root, &["commit", "--allow-empty", "-m", "External commit"]);
+    assert!(monitor.expect_change(&branch, commit).git_state);
+    let other = if reftable {
+        branch.clone()
+    } else {
+        git_dir.join("refs/heads/other")
+    };
+    let checkout = || run_git(&root, &["checkout", "-b", "other"]);
+    assert!(monitor.expect_change(&other, checkout).git_state);
 }
 
 #[test]
@@ -269,10 +280,9 @@ fn lfs_parent_after_symlink_keeps_source_coverage(absolute: bool) {
     fs::write(&source, "tracked source").unwrap();
     run_git(&root, &["add", "other/Storage/tmp/tracked.txt"]);
     let link = root.join("link");
-    #[cfg(unix)]
-    std::os::unix::fs::symlink(root.join("other/child"), &link).unwrap();
-    #[cfg(windows)]
-    std::os::windows::fs::symlink_dir(root.join("other/child"), &link).unwrap();
+    if !gitcomet_core::test_support::symlink::directory(root.join("other/child"), &link) {
+        return;
+    }
     let storage = if absolute {
         link.join("../Storage")
     } else {
@@ -281,7 +291,7 @@ fn lfs_parent_after_symlink_keeps_source_coverage(absolute: bool) {
     run_git(&root, &["config", "lfs.storage", storage.to_str().unwrap()]);
     // Git LFS cleans the path before traversing links. Its actual cache is
     // Storage/tmp; other/Storage/tmp is an unrelated tracked source directory.
-    let env = Command::new("git")
+    let env = gitcomet_core::test_support::git_fixture::git_command()
         .arg("-C")
         .arg(&root)
         .args(["lfs", "env"])

@@ -1,61 +1,16 @@
-use super::terminal_alacritty::*;
 use super::*;
 use crate::kit::click::PointerClickExt as _;
 use crate::kit::interaction as controls;
 use crate::view::components::{ControlInteractionExt, InteractionState, InteractionStyle};
+use gitcomet_ui_terminal::*;
 #[cfg(unix)]
 use rustix::process::{Pid, Signal, kill_process_group};
 use std::path::PathBuf;
 
-mod painting;
-mod viewport;
-
 #[cfg(test)]
 mod tests;
 
-/// How long a save-and-close waits for the dispatched writes to land before
-/// closing anyway. A wedged command must not leave the user unable to quit.
-const UNSAVED_FILE_EDITS_FLUSH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
-const UNSAVED_FILE_EDITS_FLUSH_POLL: std::time::Duration = std::time::Duration::from_millis(25);
-/// Minimum time to wait before believing an in-flight count of zero. A
-/// `dispatch` is a channel send; the worker needs a turn to reduce it into a
-/// running command, and until it has, "nothing in flight" means "not started".
-const UNSAVED_FILE_EDITS_FLUSH_GRACE: std::time::Duration = std::time::Duration::from_millis(150);
-
-/// Re-run whatever the unsaved-edits prompt interrupted.
-fn retry_close_action(action: UnsavedFileEditsAction, cx: &mut gpui::App) {
-    match action {
-        UnsavedFileEditsAction::CloseWindow(window_id) => {
-            crate::app::close_window_by_id_or_warn(cx, window_id)
-        }
-        UnsavedFileEditsAction::QuitApp => crate::app::quit_app_or_warn(cx),
-    }
-}
-
 const TERMINAL_PANEL_MIN_HEIGHT_PX: f32 = 120.0;
-const TERMINAL_LINE_HEIGHT_SCALE: f32 = 1.15;
-const TERMINAL_MIN_GRID_ROWS: u16 = 2;
-const TERMINAL_MIN_GRID_COLS: u16 = 8;
-const TERMINAL_CARET_WIDTH_RATIO: f32 = 0.12;
-/// Close affordance on a terminal tab. Smaller than a control by design, but it
-/// still follows the density ramp so the target grows with the tab.
-const TERMINAL_CARET_MIN_WIDTH_PX: f32 = 2.0;
-const TERMINAL_CARET_MAX_WIDTH_PX: f32 = 3.0;
-const TERMINAL_CARET_VERTICAL_INSET_PX: f32 = 1.0;
-const TERMINAL_CARET_RADIUS_PX: f32 = 0.0;
-const TERMINAL_CARET_BLINK_INTERVAL_MS: u64 = 530;
-const TERMINAL_CARET_RESUME_DELAY_MS: u64 = 700;
-const TERMINAL_SELECTION_ALPHA: f32 = 0.32;
-const BRACKETED_PASTE_START: &[u8] = b"\x1b[200~";
-const BRACKETED_PASTE_END: &[u8] = b"\x1b[201~";
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(in crate::view) enum TerminalCommand {
-    Copy,
-    Paste,
-    SelectAll,
-    ClearScreenAndScrollback,
-}
 
 /// Which surviving terminal receives focus after a stable-sequence close.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -127,57 +82,6 @@ impl GitCometView {
         })
     }
 
-    fn deactivate_terminal_cursor_blink(&mut self) {
-        self.terminal_cursor_blink_active = false;
-        self.terminal_cursor_blink_task_scheduled = false;
-        self.terminal_cursor_blink_seq = self.terminal_cursor_blink_seq.wrapping_add(1);
-        self.terminal_cursor_blink_visible = true;
-        self.terminal_cursor_blink_hold_until = Instant::now();
-    }
-
-    fn schedule_terminal_cursor_blink_tick(&mut self, cx: &mut gpui::Context<Self>) {
-        if !crate::ui_runtime::current().uses_cursor_blink()
-            || !self.terminal_cursor_blink_active
-            || self.terminal_cursor_blink_task_scheduled
-        {
-            return;
-        }
-        self.terminal_cursor_blink_task_scheduled = true;
-        let blink_seq = self.terminal_cursor_blink_seq;
-        cx.spawn(
-            async move |view: WeakEntity<GitCometView>, cx: &mut gpui::AsyncApp| {
-                smol::Timer::after(Duration::from_millis(TERMINAL_CARET_BLINK_INTERVAL_MS)).await;
-                let _ = view.update(cx, |this, cx| {
-                    this.advance_terminal_cursor_blink(blink_seq, cx)
-                });
-            },
-        )
-        .detach();
-    }
-
-    fn advance_terminal_cursor_blink(&mut self, blink_seq: u64, cx: &mut gpui::Context<Self>) {
-        if self.terminal_cursor_blink_seq != blink_seq {
-            return;
-        }
-        self.terminal_cursor_blink_task_scheduled = false;
-        if !self.terminal_cursor_blink_active {
-            self.terminal_cursor_blink_visible = true;
-            return;
-        }
-        let now = Instant::now();
-        if now < self.terminal_cursor_blink_hold_until {
-            if !self.terminal_cursor_blink_visible {
-                self.terminal_cursor_blink_visible = true;
-                cx.notify();
-            }
-            self.schedule_terminal_cursor_blink_tick(cx);
-            return;
-        }
-        self.terminal_cursor_blink_visible = !self.terminal_cursor_blink_visible;
-        cx.notify();
-        self.schedule_terminal_cursor_blink_tick(cx);
-    }
-
     pub(in crate::view) fn apply_terminal_preferences(
         &mut self,
         next: TerminalPreferences,
@@ -190,7 +94,7 @@ impl GitCometView {
         self.update_ui_preferences(cx, move |preferences| {
             preferences.terminal = next;
         });
-        self.sync_action_bar_terminal_target(cx);
+        self.sync_terminal_button_target(cx);
         cx.notify();
     }
 
@@ -220,28 +124,13 @@ impl GitCometView {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
-        match self.terminal_preferences.action_bar_terminal_target {
-            ActionBarTerminalTarget::Embedded => self.toggle_terminal_for_active_repo(window, cx),
-            ActionBarTerminalTarget::External => {
+        match self.terminal_preferences.terminal_button_target {
+            TerminalButtonTarget::Embedded => self.toggle_terminal_for_active_repo(window, cx),
+            TerminalButtonTarget::External => {
                 if let Some(repo_id) = self.active_repo_id() {
                     self.open_external_terminal_for_repo(repo_id, cx);
                 }
             }
-        }
-    }
-
-    fn reset_terminal_cursor_blink(&mut self, cx: &mut gpui::Context<Self>) {
-        let was_visible = self.terminal_cursor_blink_visible;
-        self.terminal_cursor_blink_visible = true;
-        self.terminal_cursor_blink_hold_until =
-            Instant::now() + Duration::from_millis(TERMINAL_CARET_RESUME_DELAY_MS);
-        if !crate::ui_runtime::current().uses_cursor_blink() {
-            self.terminal_cursor_blink_active = false;
-            self.terminal_cursor_blink_task_scheduled = false;
-        }
-        self.schedule_terminal_cursor_blink_tick(cx);
-        if !was_visible {
-            cx.notify();
         }
     }
 
@@ -250,7 +139,12 @@ impl GitCometView {
             .is_some_and(|repo_id| self.terminal_sessions.contains_key(&repo_id))
     }
 
-    fn sync_terminal_indicator_views(&mut self, cx: &mut gpui::Context<Self>) {
+    /// Tells the repository tabs, the action bar and extensions which
+    /// terminals are open.
+    fn terminal_sessions_changed(&mut self, cx: &mut gpui::Context<Self>) {
+        if let Some(extension_window) = &self.extension_window {
+            extension_window.set_terminals(self.open_terminals());
+        }
         let repo_ids = self
             .terminal_sessions
             .keys()
@@ -268,11 +162,29 @@ impl GitCometView {
         });
     }
 
-    pub(in crate::view) fn sync_action_bar_terminal_target(&self, cx: &mut gpui::Context<Self>) {
-        let target = self.terminal_preferences.action_bar_terminal_target;
+    /// Each repository's open terminal tabs, as extensions see them.
+    fn open_terminals(&self) -> FxHashMap<RepoId, Vec<super::extension_host::OpenTerminal>> {
+        self.terminal_sessions
+            .iter()
+            .map(|(repo_id, session)| {
+                let tabs = session
+                    .instances
+                    .iter()
+                    .map(|instance| super::extension_host::OpenTerminal {
+                        id: gitcomet_extension_api::TerminalId::new(instance.session_seq),
+                        shell_pid: instance.child_pid,
+                    })
+                    .collect();
+                (*repo_id, tabs)
+            })
+            .collect()
+    }
+
+    pub(in crate::view) fn sync_terminal_button_target(&self, cx: &mut gpui::Context<Self>) {
+        let target = self.terminal_preferences.terminal_button_target;
         let action_bar = self.action_bar.clone();
         cx.defer(move |cx| {
-            action_bar.update(cx, |bar, cx| bar.set_action_bar_terminal_target(target, cx));
+            action_bar.update(cx, |bar, cx| bar.set_terminal_button_target(target, cx));
         });
     }
 
@@ -301,10 +213,7 @@ impl GitCometView {
                 }
             }
         }
-        if !self.active_repo_has_open_terminal() {
-            self.deactivate_terminal_cursor_blink();
-        }
-        self.sync_terminal_indicator_views(cx);
+        self.terminal_sessions_changed(cx);
         cx.notify();
     }
 
@@ -337,8 +246,7 @@ impl GitCometView {
         );
 
         self.spawn_terminal_event_task(repo_id, session_seq, cx);
-        self.reset_terminal_cursor_blink(cx);
-        self.sync_terminal_indicator_views(cx);
+        self.terminal_sessions_changed(cx);
         self.focus_terminal_view(repo_id, window, cx);
         cx.notify();
     }
@@ -368,8 +276,7 @@ impl GitCometView {
         session.active_index = session.instances.len() - 1;
 
         self.spawn_terminal_event_task(repo_id, session_seq, cx);
-        self.reset_terminal_cursor_blink(cx);
-        self.sync_terminal_indicator_views(cx);
+        self.terminal_sessions_changed(cx);
         self.focus_terminal_view(repo_id, window, cx);
         cx.notify();
     }
@@ -382,7 +289,9 @@ impl GitCometView {
         cx: &mut gpui::Context<Self>,
     ) -> Option<TerminalInstance> {
         let window_id = 0u64;
-        let spawned = match spawn_alacritty_terminal(workdir, window_id) {
+        let spawned = match resolve_embedded_shell_program()
+            .and_then(|shell| spawn_alacritty_terminal(&shell, workdir, window_id))
+        {
             Ok(spawned) => spawned,
             Err(err) => {
                 self.push_toast(
@@ -530,10 +439,7 @@ impl GitCometView {
                 shutdown_terminal_instance(instance, false);
             }
         }
-        if !self.active_repo_has_open_terminal() {
-            self.deactivate_terminal_cursor_blink();
-        }
-        self.sync_terminal_indicator_views(cx);
+        self.terminal_sessions_changed(cx);
         cx.notify();
     }
 
@@ -581,12 +487,13 @@ impl GitCometView {
         if session_emptied {
             self.terminal_sessions.remove(&repo_id);
         }
-        if !self.active_repo_has_open_terminal() {
-            self.deactivate_terminal_cursor_blink();
-        } else if focus_surviving_tab && self.active_repo_id() == Some(repo_id) {
+        if focus_surviving_tab
+            && self.active_repo_id() == Some(repo_id)
+            && self.active_repo_has_open_terminal()
+        {
             self.focus_terminal_view(repo_id, window, cx);
         }
-        self.sync_terminal_indicator_views(cx);
+        self.terminal_sessions_changed(cx);
         cx.notify();
     }
 
@@ -647,6 +554,34 @@ impl GitCometView {
         cx.notify();
     }
 
+    /// Shows `terminal` for an extension: makes its repository the active
+    /// one, selects and focuses the tab and activates the window. A tab that
+    /// closed, or a repository that did, is left alone.
+    pub(in crate::view) fn show_terminal_tab(
+        &mut self,
+        terminal: &gitcomet_extension_api::TerminalTab,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.repository_state(&terminal.repository).is_none() {
+            return;
+        }
+        let repo_id = terminal.repository.repo_id();
+        let Some(index) = self
+            .terminal_sessions
+            .get(&repo_id)
+            .and_then(|session| session.index_by_seq(terminal.id.get()))
+        else {
+            return;
+        };
+        self.activate_repo(repo_id, cx);
+        self.select_terminal_tab(repo_id, index, window, cx);
+        window.activate();
+    }
+
+    /// Focuses the repository's active terminal tab and brings the terminal
+    /// to the front of the bottom panel, so focus never lands in a terminal
+    /// hidden behind another panel.
     fn focus_terminal_view(
         &mut self,
         repo_id: RepoId,
@@ -661,8 +596,9 @@ impl GitCometView {
         else {
             return;
         };
+        self.active_bottom_panel
+            .insert(repo_id, BottomPanelTab::Terminal);
         window.focus(&focus_handle, cx);
-        self.reset_terminal_cursor_blink(cx);
     }
 
     pub(crate) fn running_terminal_summary(&self) -> TerminalShutdownSummary {
@@ -694,6 +630,7 @@ impl GitCometView {
     ) -> TerminalShutdownSummary {
         match action {
             TerminalShutdownAction::CloseRepo { repo_id }
+            | TerminalShutdownAction::MoveRepo { repo_id, .. }
             | TerminalShutdownAction::CloseTerminalForRepo { repo_id } => {
                 let mut summary = self
                     .terminal_sessions
@@ -706,6 +643,22 @@ impl GitCometView {
                     && let Some(session) = self.terminal_sessions.get(repo_id)
                 {
                     summary.repo_names = vec![session.repo_name.clone()];
+                }
+                summary
+            }
+            TerminalShutdownAction::CloseRepos { repo_ids, .. } => {
+                let sessions: Vec<_> = repo_ids
+                    .iter()
+                    .filter_map(|repo_id| self.terminal_sessions.get(repo_id))
+                    .collect();
+                let mut summary = terminal_shutdown_summary_for_instances(
+                    sessions.iter().flat_map(|session| session.instances.iter()),
+                );
+                if summary.running_command_count > 0 {
+                    summary.repo_names = sessions
+                        .iter()
+                        .map(|session| session.repo_name.clone())
+                        .collect();
                 }
                 summary
             }
@@ -728,9 +681,9 @@ impl GitCometView {
                 }
                 summary
             }
-            TerminalShutdownAction::CloseWindow | TerminalShutdownAction::QuitApp => {
-                self.running_terminal_summary()
-            }
+            TerminalShutdownAction::CloseWindow
+            | TerminalShutdownAction::DeleteWorkspace { .. }
+            | TerminalShutdownAction::QuitApp => self.running_terminal_summary(),
         }
     }
 
@@ -755,165 +708,6 @@ impl GitCometView {
         }
         self.queue_terminal_shutdown_prompt(action, summary, cx);
         true
-    }
-
-    pub(crate) fn request_close_window_or_warn(
-        &mut self,
-        window_id: gpui::WindowId,
-        cx: &mut gpui::Context<Self>,
-    ) -> bool {
-        if self
-            .request_unsaved_file_edits_prompt(UnsavedFileEditsAction::CloseWindow(window_id), cx)
-        {
-            return true;
-        }
-        self.request_terminal_shutdown_action(TerminalShutdownAction::CloseWindow, cx)
-    }
-
-    /// [`Self::request_unsaved_file_edits_prompt`] for a quit, callable from
-    /// the app-level shutdown path (which cannot name the action enum).
-    pub(crate) fn request_quit_unsaved_file_edits_prompt(
-        &mut self,
-        cx: &mut gpui::Context<Self>,
-    ) -> bool {
-        self.request_unsaved_file_edits_prompt(UnsavedFileEditsAction::QuitApp, cx)
-    }
-
-    /// Queue the unsaved-edits dialog if the editor is holding writes that
-    /// closing would throw away. Returns whether it took over the action.
-    ///
-    /// Resolving it re-runs the original request rather than closing directly,
-    /// so a window with both unsaved edits and a running command still gets the
-    /// terminal warning afterwards.
-    pub(in crate::view) fn request_unsaved_file_edits_prompt(
-        &mut self,
-        action: UnsavedFileEditsAction,
-        cx: &mut gpui::Context<Self>,
-    ) -> bool {
-        // `pending_*_prompt` is `take()`n by `Render` when it opens the popover,
-        // so it is `None` for as long as the dialog is actually on screen. Ask
-        // the popover host whether the dialog is up rather than mirroring that
-        // into a bool: a mirror only stays true, and every way the popover can
-        // go away without being closed — `open_popover` replacing it, say —
-        // would leave it stuck and the window permanently unclosable.
-        if self.pending_unsaved_file_edits_prompt.is_some()
-            || self.unsaved_file_edits_dialog_open(cx)
-        {
-            return true;
-        }
-        // With auto-save on, a buffer inside its 800 ms quiet period is not an
-        // unsaved edit — it is a write that has not fired yet, so the user is
-        // asked nothing. But flushing only *dispatches* the write, and returning
-        // `false` here let the caller quit out from under it: the store never
-        // reduced the message and the edits were lost. Take over the close and
-        // let it through once the write has actually drained.
-        let flushed_a_pending_write = self.main_pane.update(cx, |pane, cx| {
-            let pending = pane.auto_save_file_edits && !pane.unsaved_file_edit_labels().is_empty();
-            pane.flush_file_editor_buffer(cx);
-            pending
-        });
-        if flushed_a_pending_write {
-            self.retry_once_file_edit_writes_drain(action, cx);
-            return true;
-        }
-        let files = self.main_pane.read(cx).unsaved_file_edit_labels();
-        if files.is_empty() {
-            return false;
-        }
-        self.pending_unsaved_file_edits_prompt = Some(UnsavedFileEditsPrompt { action, files });
-        cx.notify();
-        true
-    }
-
-    /// Whether the unsaved-edits dialog is the popover currently on screen.
-    fn unsaved_file_edits_dialog_open(&self, cx: &gpui::App) -> bool {
-        self.popover_host
-            .read(cx)
-            .showing_unsaved_file_edits_prompt()
-    }
-
-    pub(in crate::view) fn clear_pending_unsaved_file_edits_prompt(
-        &mut self,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        self.pending_unsaved_file_edits_prompt = None;
-        cx.notify();
-    }
-
-    /// Save or discard the unsaved buffers, then retry what the user asked for.
-    ///
-    /// Discarding can retry immediately, but saving cannot: the writes go
-    /// through the store's command executor, and `cx.quit()` on the next flush
-    /// would race them — the app would exit with some files still unwritten.
-    /// `local_actions_in_flight` is the store's own count of exactly those
-    /// commands, so the retry waits for it to drain (bounded, so a wedged
-    /// command cannot trap the user in an app that will not close).
-    pub(in crate::view) fn resolve_unsaved_file_edits(
-        &mut self,
-        action: UnsavedFileEditsAction,
-        save: bool,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        self.pending_unsaved_file_edits_prompt = None;
-        self.main_pane.update(cx, |pane, cx| {
-            if save {
-                pane.save_all_file_edits(cx);
-            } else {
-                pane.discard_all_file_edits(cx);
-            }
-        });
-
-        if !save {
-            // Ordering note: the caller's `close_popover` defers a clear of
-            // `pending_unsaved_file_edits_prompt`, and it runs *after* this
-            // retry. If the retry finds edits still outstanding and queues a
-            // fresh prompt, that clear would silently swallow it and the close
-            // would do nothing — so the retry is deferred behind the clear.
-            cx.defer(move |cx| cx.defer(move |cx| retry_close_action(action, cx)));
-            return;
-        }
-        self.retry_once_file_edit_writes_drain(action, cx);
-    }
-
-    /// Re-run `action` once the dispatched worktree writes have landed.
-    ///
-    /// `dispatch` is a channel send, so the store worker needs a turn before
-    /// `local_actions_in_flight` means anything — quitting on the count it reads
-    /// immediately would exit with the writes still queued.
-    fn retry_once_file_edit_writes_drain(
-        &mut self,
-        action: UnsavedFileEditsAction,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        self.pending_unsaved_file_edits_flush = Some(cx.spawn(async move |view, cx| {
-            let started = std::time::Instant::now();
-            let deadline = started + UNSAVED_FILE_EDITS_FLUSH_TIMEOUT;
-            loop {
-                cx.background_executor()
-                    .timer(UNSAVED_FILE_EDITS_FLUSH_POLL)
-                    .await;
-                let now = std::time::Instant::now();
-                if now >= deadline {
-                    break;
-                }
-                if now.duration_since(started) < UNSAVED_FILE_EDITS_FLUSH_GRACE {
-                    continue;
-                }
-                let drained = view
-                    .read_with(cx, |view, _cx| {
-                        !view
-                            .state
-                            .repos
-                            .iter()
-                            .any(|repo| repo.local_actions_in_flight > 0)
-                    })
-                    .unwrap_or(true);
-                if drained {
-                    break;
-                }
-            }
-            cx.update(move |cx| cx.defer(move |cx| retry_close_action(action, cx)));
-        }));
     }
 
     pub(crate) fn request_quit_or_warn(
@@ -945,6 +739,8 @@ impl GitCometView {
         cx.notify();
     }
 
+    /// The user chose to terminate running commands; the later close guards
+    /// still get their say before anything closes.
     pub(in crate::view) fn confirm_terminal_shutdown(
         &mut self,
         prompt: TerminalShutdownPrompt,
@@ -952,11 +748,48 @@ impl GitCometView {
         cx: &mut gpui::Context<Self>,
     ) {
         self.pending_terminal_shutdown_prompt = None;
-        terminate_terminals_for_action(self, &prompt.action);
-        match prompt.action {
+        if self.request_late_close_guards(&prompt.action, cx) {
+            return;
+        }
+        self.perform_close_action(prompt.action, window, cx);
+    }
+
+    /// Terminates the action's terminals and performs it. Every guard has
+    /// passed by the time this runs.
+    pub(in crate::view) fn perform_close_action(
+        &mut self,
+        action: TerminalShutdownAction,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        terminate_terminals_for_action(self, &action);
+        match action {
             TerminalShutdownAction::CloseRepo { repo_id } => {
                 self.store.dispatch(Msg::CloseRepo { repo_id });
                 cx.notify();
+            }
+            TerminalShutdownAction::CloseRepos {
+                repo_ids,
+                activate_after,
+            } => {
+                self.store.dispatch(Msg::CloseRepos {
+                    repo_ids,
+                    activate_after,
+                });
+                cx.notify();
+            }
+            TerminalShutdownAction::MoveRepo {
+                repo_id,
+                path,
+                target_workspace,
+            } => {
+                crate::app::move_repository_to_workspace_from_view(
+                    cx,
+                    window.window_handle().window_id(),
+                    repo_id,
+                    path,
+                    target_workspace,
+                );
             }
             TerminalShutdownAction::CloseTerminalForRepo { repo_id } => {
                 self.close_terminal_for_repo(repo_id, cx);
@@ -974,8 +807,20 @@ impl GitCometView {
                 );
             }
             TerminalShutdownAction::CloseWindow => {
-                crate::app::mark_clean_shutdown_if_last_window_from_view(cx);
+                self.flush_workspace_environment(cx);
+                crate::app::mark_window_closing(cx, window.window_handle().window_id());
                 window.remove_window();
+                if self.view_mode != GitCometViewMode::Normal {
+                    // A focused tool ends with its window, Settings or not.
+                    cx.quit();
+                }
+            }
+            TerminalShutdownAction::DeleteWorkspace { workspace_id } => {
+                // Deferred: finishing may update this view to reset it.
+                let window_id = window.window_handle().window_id();
+                cx.defer(move |cx| {
+                    crate::app::finish_workspace_delete(cx, window_id, workspace_id);
+                });
             }
             TerminalShutdownAction::QuitApp => {
                 for weak in self.pending_quit_other_views.drain(..) {
@@ -989,8 +834,7 @@ impl GitCometView {
                         });
                     }
                 }
-                crate::app::mark_clean_shutdown_from_view(cx);
-                cx.quit();
+                cx.defer(crate::app::finish_quit_or_restart);
             }
         }
     }
@@ -1222,7 +1066,6 @@ impl GitCometView {
                     .justify_center()
                     .size(control_height)
                     .rounded(px(theme.radii.row))
-                    .cursor(CursorStyle::PointingHand)
                     .control_interaction(
                         InteractionStyle::new(theme),
                         InteractionState::default().disabled(disabled),
@@ -1287,7 +1130,6 @@ impl GitCometView {
             .justify_center()
             .size(control_height)
             .rounded(px(theme.radii.row))
-            .cursor(CursorStyle::PointingHand)
             .control_interaction(InteractionStyle::new(theme), InteractionState::default())
             .child(svg_icon(
                 "icons/plus.svg",
@@ -1675,10 +1517,20 @@ fn terminal_instance_has_running_command(instance: &TerminalInstance) -> bool {
 fn terminate_terminals_for_action(view: &mut GitCometView, action: &TerminalShutdownAction) {
     match action {
         TerminalShutdownAction::CloseRepo { repo_id }
+        | TerminalShutdownAction::MoveRepo { repo_id, .. }
         | TerminalShutdownAction::CloseTerminalForRepo { repo_id } => {
             if let Some(session) = view.terminal_sessions.get(repo_id) {
                 for instance in &session.instances {
                     terminate_terminal_process_group(instance.child_pid);
+                }
+            }
+        }
+        TerminalShutdownAction::CloseRepos { repo_ids, .. } => {
+            for repo_id in repo_ids {
+                if let Some(session) = view.terminal_sessions.get(repo_id) {
+                    for instance in &session.instances {
+                        terminate_terminal_process_group(instance.child_pid);
+                    }
                 }
             }
         }
@@ -1694,7 +1546,9 @@ fn terminate_terminals_for_action(view: &mut GitCometView, action: &TerminalShut
                 terminate_terminal_process_group(instance.child_pid);
             }
         }
-        TerminalShutdownAction::CloseWindow | TerminalShutdownAction::QuitApp => {
+        TerminalShutdownAction::CloseWindow
+        | TerminalShutdownAction::DeleteWorkspace { .. }
+        | TerminalShutdownAction::QuitApp => {
             for session in view.terminal_sessions.values() {
                 for instance in &session.instances {
                     shutdown_terminal_instance(instance, true);
@@ -1749,27 +1603,6 @@ fn terminate_terminal_process_group(child_pid: Option<u32>) {
 #[cfg(not(unix))]
 fn terminate_terminal_process_group(_child_pid: Option<u32>) {}
 
-fn terminal_clipboard_shortcut_action(keystroke: &gpui::Keystroke) -> Option<TerminalCommand> {
-    let action = match keystroke.key.as_str() {
-        "c" | "C" => TerminalCommand::Copy,
-        "v" | "V" => TerminalCommand::Paste,
-        "a" | "A" => TerminalCommand::SelectAll,
-        _ => return None,
-    };
-    let mods = keystroke.modifiers;
-    if cfg!(target_os = "macos") {
-        if mods.platform && !mods.control && !mods.alt && !mods.function && !mods.shift {
-            Some(action)
-        } else {
-            None
-        }
-    } else if mods.control && mods.shift && !mods.platform && !mods.alt && !mods.function {
-        Some(action)
-    } else {
-        None
-    }
-}
-
 #[cfg(test)]
 mod terminal_title_tests {
     use super::{MAX_TERMINAL_TITLE_CHARS, friendly_terminal_title, sanitize_terminal_title};
@@ -1793,5 +1626,23 @@ mod terminal_title_tests {
             friendly_terminal_title(long).chars().count(),
             MAX_TERMINAL_TITLE_CHARS
         );
+    }
+
+    #[test]
+    fn friendly_terminal_title_collapses_shell_paths_to_the_program_stem() {
+        assert_eq!(
+            friendly_terminal_title("C:\\Program Files\\PowerShell\\7\\pwsh.exe".to_string()),
+            "pwsh"
+        );
+        assert_eq!(
+            friendly_terminal_title("C:/Windows/System32/cmd.EXE".to_string()),
+            "cmd"
+        );
+        // Application-set titles pass through, even when they contain paths.
+        assert_eq!(
+            friendly_terminal_title("PS C:\\Users\\sampo\\git\\GitComet".to_string()),
+            "PS C:\\Users\\sampo\\git\\GitComet"
+        );
+        assert_eq!(friendly_terminal_title("vim".to_string()), "vim");
     }
 }

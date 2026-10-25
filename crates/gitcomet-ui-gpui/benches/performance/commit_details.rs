@@ -78,9 +78,13 @@ pub(crate) fn bench_commit_details(c: &mut Criterion) {
     group.bench_function(
         BenchmarkId::from_parameter("path_display_cache_churn"),
         |b| {
-            b.iter(|| {
-                path_churn.reset_runtime_state();
-                path_churn.run()
+            b.iter_custom(|iters| {
+                time_iterations_with_reset(
+                    iters,
+                    &mut path_churn,
+                    |fixture| fixture.reset_runtime_state(),
+                    |fixture| fixture.run(),
+                )
             })
         },
     );

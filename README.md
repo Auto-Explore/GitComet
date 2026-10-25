@@ -15,7 +15,11 @@ GitComet is built for teams that want fast Git operations with local-first priva
 
 Available for Linux, Windows, and macOS.
 
-<img alt="GitComet demo" src="assets/gitcomet-0.2.0.gif"/>
+
+
+https://github.com/user-attachments/assets/acc45615-7e13-4952-aebe-36f600cc4f24
+
+
 
 ### Download
 
@@ -43,16 +47,18 @@ App and `gitcomet` command from tap:
 brew install --cask gitcomet
 ```
 
-On Linux, the cask installs the AppImage build. If your system cannot launch AppImages, use the APT repo, AUR package, release tarball, or `.deb` instead.
+On Linux, the cask installs the AppImage build. If your system cannot launch AppImages, use the APT repo, the RPM, the release tarball, or the `.deb` instead.
 
 </details>
 
 <details>
 <summary>AUR (Arch Linux)</summary>
 
+The [`gitcomet-bin`](https://aur.archlinux.org/packages/gitcomet-bin) package repackages the release tarballs for x86_64 and aarch64 and is updated by the release workflow:
+
 ```bash
-git clone https://aur.archlinux.org/gitcomet.git
-cd gitcomet && makepkg -si
+git clone https://aur.archlinux.org/gitcomet-bin.git
+cd gitcomet-bin && makepkg -si
 ```
 
 </details>
@@ -76,17 +82,30 @@ sudo apt update
 sudo apt install gitcomet
 ```
 
-If you install a Linux tarball or Homebrew binary on Debian, Ubuntu, or WSLg instead of the official `apt` package, install the GUI runtime libraries separately:
+If you install a Linux tarball or Homebrew binary on Debian, Ubuntu, or WSLg instead of the official `apt` package, install the GUI runtime libraries separately. GitComet uses Fontconfig to discover fonts, draws with Vulkan, or EGL when Vulkan is unavailable, and uses the Wayland libraries in Wayland sessions:
 
 ```bash
-sudo apt install libxcb1 libxkbcommon0 libxkbcommon-x11-0
+sudo apt install libfontconfig1 libxcb1 libxkbcommon0 libxkbcommon-x11-0 libvulkan1 libegl1 libwayland-client0 libwayland-egl1
 ```
+
+</details>
+
+<details>
+<summary>RPM (Fedora)</summary>
+
+Download the `.rpm` for your architecture from [GitHub Releases](https://github.com/Auto-Explore/GitComet/releases) and install it:
+
+```bash
+sudo dnf install ./gitcomet-<version>-1.x86_64.rpm
+```
+
+The RPM supports Fedora 42 and newer. It needs glibc 2.35 or newer, so RHEL 9 and its rebuilds (glibc 2.34) cannot install it.
 
 </details>
 
 ### Requirements
 
-GitComet requires a local Git installation of `2.50` or newer.
+GitComet requires a local Git installation of `2.53` or newer. With an older Git, GitComet shows a notice asking you to update, and features that need newer Git (such as repository maintenance) are turned off.
 
 ### GitComet User Survey
 
@@ -111,6 +130,8 @@ GitComet started from frustration with existing tools on huge codebases like Chr
   - Multi-repository browsing
   - Inline and side-by-side diffs
   - 2-way and 3-way merge tools
+  - Git LFS: file status, content downloads, locks and tracking ([docs](docs/git-lfs.md))
+  - git-annex: content get/drop/copy/move, special remotes, adjusted branches ([docs](docs/git-annex.md))
 
 #### Professional
 
@@ -123,6 +144,8 @@ GitComet started from frustration with existing tools on huge codebases like Chr
 - Join waitlist: [gitcomet.dev/#editions](https://gitcomet.dev/#editions)
 
 ### Build from source
+
+On Linux, install Clang and mold first; see [developer setup](CONTRIBUTING.md#getting-started).
 
 ```bash
 cargo build -p gitcomet --features ui-gpui,gix
@@ -221,9 +244,15 @@ KDiff3 and Meld invocation forms are supported (`--L1/--L2/--L3`, `-o/--output/-
 
 ### Commit signature verification
 
+Verification is disabled by default because it can slow down the Git log. Enable **Settings → Git log → Verify commit signatures** to show verification badges.
+
 GitComet shows verification badges on signed commits. Git performs the check, using `gpg` for GPG and X.509 signatures and `ssh-keygen` for SSH signatures, so badges need those programs and the signers' public keys. **Settings → Executables** shows which programs GitComet found.
 
 To install GnuPG, trust GitHub's signing key, and configure SSH allowed signers, see the [commit signature guide](docs/commit-signatures.md).
+
+### Difftastic
+
+Choose **Settings → Diff → Diff Engine** to make Difftastic the default, or use the diff viewer's cog for a temporary override. Both Split and Inline layouts support it. See [Difftastic](docs/difftastic.md) for partial staging and fallbacks.
 
 ### Themes
 
@@ -245,7 +274,8 @@ On Linux, the directory normally is `~/.local/state/gitcomet/crashes/`.
 GitComet creates a process-specific `session-in-progress-<pid>.log` before it
 starts the GPUI runtime. A native abort, terminated UI, or GPUI event loop exit
 without an explicitly requested user shutdown leaves that marker behind; Rust
-panics also write `panic-*.log`. Error-level runtime diagnostics are mirrored to
+panics also write `panic-*.log`, except a panic GitComet contains in code it
+does not own (such as Difftastic), which falls back instead. Error-level runtime diagnostics are mirrored to
 `last-runtime-error-<pid>.log`, including their source location and a backtrace,
 so fatal errors logged and consumed by the UI runtime remain reportable.
 Recovery ignores markers owned by still-running GitComet processes, so one open

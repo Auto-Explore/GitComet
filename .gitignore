@@ -17,9 +17,15 @@ dist/
 __pycache__/
 *.pyc
 criterion
+
+# Local Mermaid benchmark measurements and reports.
+/crates/gitcomet-diagrams/benches/results/
+
 .codex
 .worktrees/
 .reasonix/
+.claude/
+.envrc
 
 # `cargo test --manifest-path vendor/tree-sitter-vue/Cargo.toml` (the standalone
 # check for the vendored grammar's own bindings) writes a lockfile there. The

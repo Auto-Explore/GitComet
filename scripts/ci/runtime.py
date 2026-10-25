@@ -15,10 +15,10 @@ import uuid
 import run as runner
 
 
-def measure(output, samples, schedule, threads, nextest_profile="ci", ui_threads=None, session=None, batch_pure_tests="auto"):
-    if samples < 1 or any(value is not None and (value < 1 or schedule != "serial")
-                          for value in (threads, ui_threads)):
-        raise ValueError("positive samples/threads required; threads requires serial")
+def measure(output, samples, schedule, threads, nextest_profile="ci", ui_threads=None, session=None, batch_pure_tests="auto", pure_threads=None, resource_stats=False):
+    if samples < 1 or any(value is not None and value < 1
+                          for value in (threads, ui_threads, pure_threads)):
+        raise ValueError("positive samples/threads required")
     if nextest_profile not in runner.NEXTEST_PROFILES:
         raise ValueError(f"Unsupported nextest profile: {nextest_profile}")
     runner.batch_pure_enabled(batch_pure_tests)
@@ -41,6 +41,7 @@ def measure(output, samples, schedule, threads, nextest_profile="ci", ui_threads
     metadata = {
         "measurement_id": str(uuid.uuid4()),
         "batch_pure_tests": batch_pure_tests,
+        "resource_stats": resource_stats,
         "machine_id": platform.node(), "local_session": session,
         "runner_environment": os.environ.get("RUNNER_ENVIRONMENT"),
         # Raw bytes, like local-performance.py: text mode rejects non-UTF-8 and rewrites CRLF.
@@ -67,10 +68,15 @@ def measure(output, samples, schedule, threads, nextest_profile="ci", ui_threads
             summary = sample / "workspace/execution.json"
             try:
                 sample.mkdir()
-                shutil.copytree(source, sample / "workspace",
-                                ignore=shutil.ignore_patterns("execution.json", "junit.xml"))
+                compiled = sample / "workspace"
+                compiled.mkdir()
+                for name in ("cargo.json", "features.txt", "binaries.json", "binaries-original.json",
+                             "tests.json", "coverage.json"):
+                    if (source / name).exists():
+                        shutil.copy2(source / name, compiled / name)
                 runner.REPORTS = sample
-                runner.execute("workspace", schedule, threads, nextest_profile, ui_threads, batch_pure_tests)
+                runner.execute("workspace", schedule, threads, nextest_profile, ui_threads, batch_pure_tests,
+                               pure_threads=pure_threads, resource_stats=resource_stats)
             finally:
                 runner.REPORTS = original_reports
                 if summary.exists():
@@ -79,7 +85,8 @@ def measure(output, samples, schedule, threads, nextest_profile="ci", ui_threads
                     metadata["samples"].append({"success": False, "seconds": None,
                                                 "nextest_profile": nextest_profile,
                                                 "schedule": schedule, "nextest_threads": threads,
-                                                "ui_threads": ui_threads})
+                                                "ui_threads": ui_threads, "pure_threads": pure_threads,
+                                                "resource_stats": None if not resource_stats else {"incomplete": True}})
     finally:
         runner.REPORTS = original_reports
         (output / "runtime.json").write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
@@ -92,6 +99,8 @@ def main():
     parser.add_argument("--schedule", choices=("serial", "balanced"), default="serial")
     parser.add_argument("--nextest-threads", type=int)
     parser.add_argument("--ui-threads", type=int)
+    parser.add_argument("--pure-threads", type=int)
+    parser.add_argument("--resource-stats", action="store_true", help="Instrumented diagnostics; excluded from acceptance")
     parser.add_argument("--nextest-profile", choices=runner.NEXTEST_PROFILES, default="ci")
     parser.add_argument("--session", help="Independent local measurement session identifier")
     parser.add_argument("--batch-pure-tests", choices=("auto", "on", "off"), default="auto")
@@ -101,7 +110,7 @@ def main():
         runner.ROOT = args.checkout.resolve()
         runner.REPORTS = runner.ROOT / "target/ci-reports"
     measure(args.output, args.samples, args.schedule, args.nextest_threads, args.nextest_profile,
-            args.ui_threads, args.session, args.batch_pure_tests)
+            args.ui_threads, args.session, args.batch_pure_tests, args.pure_threads, args.resource_stats)
 
 
 if __name__ == "__main__":

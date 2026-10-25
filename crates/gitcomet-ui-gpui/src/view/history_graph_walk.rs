@@ -462,7 +462,7 @@ mod tests {
             if row != 8 && row != 20 {
                 parents.push(row + 6);
             }
-            if row % 15 == 0 {
+            if row.is_multiple_of(15) {
                 parents.push(row + 7);
             }
             parents

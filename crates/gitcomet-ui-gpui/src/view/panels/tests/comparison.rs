@@ -32,12 +32,12 @@ impl Files {
             Files::Failed(message) => Loadable::Error(message.to_string()),
             Files::Loaded(count) => Loadable::Ready(Arc::new(
                 (0..count)
-                    .map(|ix| CommitFileChange {
-                        path: std::path::PathBuf::from(format!("src/file_{ix}.rs")),
-                        kind: FileStatusKind::Modified,
-                        is_submodule: false,
-                        additions: Some(1),
-                        deletions: Some(0),
+                    .map(|ix| {
+                        CommitFileChange::new(
+                            std::path::PathBuf::from(format!("src/file_{ix}.rs")),
+                            FileStatusKind::Modified,
+                        )
+                        .with_line_stats((Some(1), Some(0)).into())
                     })
                     .collect(),
             )),
@@ -57,6 +57,53 @@ fn draw_comparison(
     selected: usize,
     files: Files,
 ) -> &mut gpui::VisualTestContext {
+    draw_comparison_view(cx, repo_id, commit_count, selected, files).1
+}
+
+/// [`draw_comparison`], also returning the root view.
+fn draw_comparison_view(
+    cx: &mut gpui::TestAppContext,
+    repo_id: RepoId,
+    commit_count: usize,
+    selected: usize,
+    files: Files,
+) -> (
+    gpui::Entity<super::super::GitCometView>,
+    &mut gpui::VisualTestContext,
+) {
+    // Oldest is the base, newest the tip — the same ordering the reducer
+    // produces for either flow.
+    let range = RangeSelection {
+        from: CommitId(sha(commit_count.saturating_sub(1)).into()),
+        to: Some(CommitId(sha(0).into())),
+        from_label: "base".into(),
+        to_label: "tip".into(),
+        options: Default::default(),
+        base: None,
+    };
+    draw_details(
+        cx,
+        repo_id,
+        commit_count,
+        &(0..selected).collect::<Vec<_>>(),
+        Some(range),
+        files,
+    )
+}
+
+/// Draw the details pane over a log of `commit_count` commits, with the log
+/// rows `selected` multi-selected and `range` as the active comparison.
+fn draw_details<'a>(
+    cx: &'a mut gpui::TestAppContext,
+    repo_id: RepoId,
+    commit_count: usize,
+    selected: &[usize],
+    range: Option<RangeSelection>,
+    files: Files,
+) -> (
+    gpui::Entity<super::super::GitCometView>,
+    &'a mut gpui::VisualTestContext,
+) {
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
@@ -74,20 +121,14 @@ fn draw_comparison(
             }));
             repo.log_rev = 1;
             repo.history_state.multi_selection = CommitMultiSelection {
-                commits: (0..selected)
-                    .map(|ix| CommitId(sha(ix).into()))
+                commits: selected
+                    .iter()
+                    .map(|&ix| CommitId(sha(ix).into()))
                     .collect::<Vec<_>>()
                     .into(),
                 ..Default::default()
             };
-            // Oldest is the base, newest the tip — the same ordering the
-            // reducer produces for either flow.
-            repo.history_state.range_selection = Some(RangeSelection {
-                from: CommitId(sha(commit_count.saturating_sub(1)).into()),
-                to: Some(CommitId(sha(0).into())),
-                from_label: "base".into(),
-                to_label: "tip".into(),
-            });
+            repo.history_state.range_selection = range;
             repo.history_state.range_files = files.into_loadable();
 
             let next_state = app_state_with_repo(repo, repo_id);
@@ -100,7 +141,26 @@ fn draw_comparison(
     cx.update(|window, app| {
         let _ = window.draw(app);
     });
-    cx
+    (view, cx)
+}
+
+/// Commits that are not consecutive have no merged diff, so the reducer opens
+/// no comparison for them. The pane lists them and says why there is no diff,
+/// rather than leaving a list that reads as if the diff were still to come.
+#[gpui::test]
+fn a_selection_without_a_merged_diff_says_why(cx: &mut gpui::TestAppContext) {
+    let (_, cx) = draw_details(cx, RepoId(76), 3, &[0, 2], None, Files::Loading);
+
+    assert!(
+        cx.debug_bounds("multi_commit_no_merged_diff").is_some(),
+        "expected the hint that only consecutive commits have a combined diff"
+    );
+    assert!(cx.debug_bounds("commit_multi_row_0").is_some());
+    assert!(cx.debug_bounds("commit_multi_row_1").is_some());
+    assert!(
+        cx.debug_bounds("range_comparison_body").is_none(),
+        "no comparison body without a comparison"
+    );
 }
 
 /// A range comparison started via "mark + compare" (or a branch/tag/worktree
@@ -376,6 +436,53 @@ mod worktree_uncommitted {
         cx
     }
 
+    /// A linked worktree's rows carry the edit its scan computed, which the
+    /// Edits sort orders by, not just the counts.
+    #[gpui::test]
+    fn worktree_file_rows_keep_their_edit(cx: &mut gpui::TestAppContext) {
+        let repo_id = RepoId(98);
+        let mut signed = gitcomet_core::edit_signature::EditSignatureBuilder::default();
+        let additions = signed.added_lines(b"fn added() {}\n");
+        let stats = gitcomet_core::domain::LineStats {
+            additions: Some(additions),
+            deletions: Some(0),
+            edit: signed.finish(),
+        };
+        let mut line_stats = gitcomet_core::domain::UncommittedLineStats::default();
+        line_stats
+            .unstaged
+            .insert(std::path::PathBuf::from("a.rs"), stats);
+        let summary = WorktreeDirtySummary {
+            path: std::path::PathBuf::from("/tmp/linked-worktree-edits"),
+            head: Some(CommitId(sha(0).into())),
+            branch: Some("side".into()),
+            detached: false,
+            added: 0,
+            modified: 1,
+            deleted: 0,
+            staged: Vec::new(),
+            unstaged: vec![file("a.rs", FileStatusKind::Modified)],
+            line_stats,
+        };
+        let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+        let (view, cx) = cx.add_window_view(|window, cx| {
+            super::super::super::GitCometView::new(store, events, None, window, cx)
+        });
+
+        let edit = cx.update(|_window, app| {
+            view.read(app)
+                .details_pane
+                .read(app)
+                .cached_worktree_file_inputs(repo_id, 0, &summary)
+                .files[0]
+                .line_stats
+                .edit
+        });
+
+        assert!(stats.edit.is_some());
+        assert_eq!(edit, stats.edit);
+    }
+
     /// `selected_ix` indexes the entry list the reducer re-derives from the
     /// scan, so it must stay a source index no matter how the rows are sorted
     /// or grouped. Passing the display row instead opens a different file, and
@@ -509,7 +616,6 @@ mod worktree_uncommitted {
                 repo.status = Loadable::Ready(gitcomet_core::domain::RepoStatus::default().into());
                 repo.worktree_dirty = Loadable::Ready(Arc::new(vec![summary.clone()]));
                 repo.history_state.worktree_selection = Some(worktree_path.clone());
-                repo.diff_state.diff_target = Some(target.clone());
                 repo.diff_state.inline_submodule_diff =
                     Some(gitcomet_state::model::InlineSubmoduleDiffState {
                         origin: gitcomet_state::model::ForeignDiffOrigin::Worktree {
@@ -564,8 +670,8 @@ mod worktree_uncommitted {
         direction: i8,
     ) -> bool {
         cx.update(|window, app| {
-            let main_pane = view.read(app).main_pane.clone();
-            main_pane.update(app, |pane, cx| {
+            let diff_renderer = view.read(app).diff_renderer.clone();
+            diff_renderer.update(app, |pane, cx| {
                 pane.try_select_adjacent_diff_file(repo_id, direction, window, cx)
             })
         })
@@ -603,8 +709,11 @@ mod worktree_uncommitted {
         let (view, cx) =
             draw_sorted_worktree_inline_diff(cx, repo_id, 2, crate::view::FileListLayout::Flat);
 
-        assert!(cx.debug_bounds("diff_prev_file").is_none());
-        assert!(cx.debug_bounds("diff_next_file").is_some());
+        assert_eq!(drawn_file_arrows(cx, &view), Some((false, true)));
+        assert_eq!(
+            diff_bar_position(cx, &view).as_deref(),
+            Some("1 of 3 files")
+        );
         assert!(
             navigate_worktree_inline_diff(cx, &view, repo_id, 1),
             "next-file from the first drawn row should move"
@@ -624,8 +733,11 @@ mod worktree_uncommitted {
         let (view, cx) =
             draw_sorted_worktree_inline_diff(cx, repo_id, 0, crate::view::FileListLayout::Flat);
 
-        assert!(cx.debug_bounds("diff_prev_file").is_some());
-        assert!(cx.debug_bounds("diff_next_file").is_none());
+        assert_eq!(drawn_file_arrows(cx, &view), Some((true, false)));
+        assert_eq!(
+            diff_bar_position(cx, &view).as_deref(),
+            Some("3 of 3 files")
+        );
         assert!(
             !navigate_worktree_inline_diff(cx, &view, repo_id, 1),
             "next-file from the last drawn row must not jump back up the list"
@@ -641,8 +753,7 @@ mod worktree_uncommitted {
         let (view, cx) =
             draw_sorted_worktree_inline_diff(cx, repo_id, 2, crate::view::FileListLayout::Tree);
 
-        assert!(cx.debug_bounds("diff_prev_file").is_none());
-        assert!(cx.debug_bounds("diff_next_file").is_some());
+        assert_eq!(drawn_file_arrows(cx, &view), Some((false, true)));
         assert!(
             navigate_worktree_inline_diff(cx, &view, repo_id, 1),
             "next-file from the first drawn row should move in tree layout too"
@@ -659,8 +770,7 @@ mod worktree_uncommitted {
         let (view, cx) =
             draw_sorted_worktree_inline_diff(cx, RepoId(101), 2, crate::view::FileListLayout::Flat);
         draw_and_drain_test_window(cx);
-        assert!(cx.debug_bounds("diff_prev_file").is_none());
-        assert!(cx.debug_bounds("diff_next_file").is_some());
+        assert_eq!(drawn_file_arrows(cx, &view), Some((false, true)));
         cx.update(|_window, app| {
             view.read(app).details_pane.clone().update(app, |pane, cx| {
                 pane.set_file_list_sort(
@@ -671,8 +781,7 @@ mod worktree_uncommitted {
             });
         });
         draw_and_drain_test_window(cx);
-        assert!(cx.debug_bounds("diff_prev_file").is_some());
-        assert!(cx.debug_bounds("diff_next_file").is_none());
+        assert_eq!(drawn_file_arrows(cx, &view), Some((true, false)));
         for (filter, has_previous) in [
             (crate::view::rows::CommitFileFilter::Added, false),
             (crate::view::rows::CommitFileFilter::All, true),
@@ -687,14 +796,16 @@ mod worktree_uncommitted {
                 });
             });
             draw_and_drain_test_window(cx);
-            assert_eq!(cx.debug_bounds("diff_prev_file").is_some(), has_previous);
+            assert_eq!(
+                drawn_file_arrows(cx, &view).is_some_and(|(previous, _)| previous),
+                has_previous
+            );
         }
     }
 
     #[gpui::test]
     fn worktree_filters_activate_on_key_release_like_other_controls(cx: &mut gpui::TestAppContext) {
         use crate::view::rows::{CommitFileFilter, FileListId};
-        let _guard = crate::test_support::lock_visual_test();
         let cx = draw_worktree(
             cx,
             RepoId(103),
@@ -944,5 +1055,316 @@ fn range_filters_fit_the_measured_width(cx: &mut gpui::TestAppContext) {
     assert!(
         last.right() <= tabs.right(),
         "last filter must fit: {last:?} in {tabs:?}"
+    );
+}
+
+fn right_click(cx: &mut gpui::VisualTestContext, selector: &'static str) {
+    let center = cx
+        .debug_bounds(selector)
+        .unwrap_or_else(|| panic!("{selector} should render"))
+        .center();
+    cx.simulate_mouse_down(center, gpui::MouseButton::Right, gpui::Modifiers::default());
+    cx.simulate_mouse_up(center, gpui::MouseButton::Right, gpui::Modifiers::default());
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+}
+
+fn open_popover(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+) -> Option<PopoverKind> {
+    cx.update(|_window, app| {
+        view.read(app)
+            .popover_host
+            .read(app)
+            .popover_kind_for_tests()
+    })
+}
+
+fn entry_labels(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+    kind: PopoverKind,
+) -> Vec<String> {
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.popover_host.update(cx, |host, cx| {
+                host.context_menu_model(&kind, cx)
+                    .expect("a context menu model")
+                    .items
+                    .iter()
+                    .filter_map(|item| match item {
+                        ContextMenuItem::Entry { label, .. } => Some(label.to_string()),
+                        _ => None,
+                    })
+                    .collect()
+            })
+        })
+    })
+}
+
+/// Comparison rows get the commit-details file menu, anchored to the row.
+#[gpui::test]
+fn right_clicking_a_comparison_file_opens_its_file_menu(cx: &mut gpui::TestAppContext) {
+    let repo_id = RepoId(120);
+    let (view, cx) = draw_comparison_view(cx, repo_id, 2, 0, Files::Loaded(3));
+
+    right_click(cx, "range_file_120_1");
+
+    assert_eq!(
+        open_popover(cx, &view),
+        Some(PopoverKind::CommitRangeFileMenu {
+            repo_id,
+            from_commit_id: CommitId(sha(1).into()),
+            to_commit_id: Some(CommitId(sha(0).into())),
+            path: std::path::PathBuf::from("src/file_1.rs"),
+        })
+    );
+}
+
+/// "Apply change" replays the comparison's diff, so it is offered only when
+/// both ends are commits; a comparison to the working tree is already applied.
+/// No menu offers "Open diff" any more: a row click opens it.
+#[gpui::test]
+fn comparison_file_menu_offers_apply_change_only_between_commits(cx: &mut gpui::TestAppContext) {
+    let repo_id = RepoId(121);
+    let (view, cx) = draw_comparison_view(cx, repo_id, 2, 0, Files::Loaded(1));
+    let menu = |to: Option<CommitId>| PopoverKind::CommitRangeFileMenu {
+        repo_id,
+        from_commit_id: CommitId(sha(1).into()),
+        to_commit_id: to,
+        path: std::path::PathBuf::from("src/file_0.rs"),
+    };
+
+    let between_commits = entry_labels(cx, &view, menu(Some(CommitId(sha(0).into()))));
+    assert!(
+        between_commits.iter().any(|label| label == "Apply change"),
+        "{between_commits:?}"
+    );
+    assert!(
+        !between_commits.iter().any(|label| label == "Open diff"),
+        "{between_commits:?}"
+    );
+
+    let to_worktree = entry_labels(cx, &view, menu(None));
+    assert!(
+        !to_worktree.iter().any(|label| label == "Apply change"),
+        "{to_worktree:?}"
+    );
+    assert!(to_worktree.iter().any(|label| label == "Open file"));
+}
+
+fn click_with(
+    cx: &mut gpui::VisualTestContext,
+    selector: &'static str,
+    modifiers: gpui::Modifiers,
+) {
+    let center = cx
+        .debug_bounds(selector)
+        .unwrap_or_else(|| panic!("{selector} should render"))
+        .center();
+    cx.simulate_mouse_move(center, None, modifiers);
+    cx.simulate_mouse_down(center, gpui::MouseButton::Left, modifiers);
+    cx.simulate_mouse_up(center, gpui::MouseButton::Left, modifiers);
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+}
+
+fn range_selection(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+    repo_id: RepoId,
+) -> Vec<String> {
+    cx.update(|_window, app| {
+        view.read(app)
+            .details_pane
+            .read(app)
+            .commit_list_selected_paths(repo_id, crate::view::rows::FileListId::RangeFiles)
+            .iter()
+            .map(|path| path.display().to_string())
+            .collect()
+    })
+}
+
+fn previewed_diff(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+) -> Option<DiffTarget> {
+    cx.run_until_parked();
+    cx.update(|_window, app| {
+        view.read(app)
+            .details_pane
+            .read(app)
+            .active_repo()
+            .and_then(|repo| repo.diff_state.diff_target.clone())
+    })
+}
+
+fn ctrl() -> gpui::Modifiers {
+    gpui::Modifiers {
+        control: true,
+        ..Default::default()
+    }
+}
+
+fn shift() -> gpui::Modifiers {
+    gpui::Modifiers {
+        shift: true,
+        ..Default::default()
+    }
+}
+
+/// Ctrl/Cmd-click toggles rows into the selection and Shift-click spans
+/// from the anchor; neither opens a diff.
+#[gpui::test]
+fn comparison_rows_multi_select_with_ctrl_and_shift(cx: &mut gpui::TestAppContext) {
+    let repo_id = RepoId(122);
+    let (view, cx) = draw_comparison_view(cx, repo_id, 2, 0, Files::Loaded(5));
+
+    click_with(cx, "range_file_122_1", gpui::Modifiers::default());
+    let previewed = previewed_diff(cx, &view);
+    assert_eq!(range_selection(cx, &view, repo_id), ["src/file_1.rs"]);
+
+    click_with(cx, "range_file_122_3", ctrl());
+    assert_eq!(
+        range_selection(cx, &view, repo_id),
+        ["src/file_1.rs", "src/file_3.rs"]
+    );
+    assert_eq!(
+        previewed_diff(cx, &view),
+        previewed,
+        "Ctrl-click opens no diff"
+    );
+
+    click_with(cx, "range_file_122_3", ctrl());
+    assert_eq!(range_selection(cx, &view, repo_id), ["src/file_1.rs"]);
+
+    // The anchor stays on the last Ctrl-clicked row, as in the status lists.
+    click_with(cx, "range_file_122_4", shift());
+    assert_eq!(
+        range_selection(cx, &view, repo_id),
+        ["src/file_3.rs", "src/file_4.rs"]
+    );
+    click_with(cx, "range_file_122_1", ctrl());
+    click_with(cx, "range_file_122_4", shift());
+    assert_eq!(
+        range_selection(cx, &view, repo_id),
+        [
+            "src/file_1.rs",
+            "src/file_2.rs",
+            "src/file_3.rs",
+            "src/file_4.rs"
+        ]
+    );
+    assert_eq!(
+        previewed_diff(cx, &view),
+        previewed,
+        "Shift-click opens no diff"
+    );
+
+    click_with(cx, "range_file_122_0", gpui::Modifiers::default());
+    assert_eq!(range_selection(cx, &view, repo_id), ["src/file_0.rs"]);
+}
+
+/// A right-click inside the selection offers its files; outside it, only the
+/// clicked file.
+#[gpui::test]
+fn comparison_file_menu_applies_the_selection_it_was_opened_in(cx: &mut gpui::TestAppContext) {
+    let repo_id = RepoId(123);
+    let (view, cx) = draw_comparison_view(cx, repo_id, 2, 0, Files::Loaded(4));
+    click_with(cx, "range_file_123_0", gpui::Modifiers::default());
+    click_with(cx, "range_file_123_2", ctrl());
+    let menu = |path: &str| PopoverKind::CommitRangeFileMenu {
+        repo_id,
+        from_commit_id: CommitId(sha(1).into()),
+        to_commit_id: Some(CommitId(sha(0).into())),
+        path: std::path::PathBuf::from(path),
+    };
+
+    let inside = entry_labels(cx, &view, menu("src/file_2.rs"));
+    assert!(
+        inside.iter().any(|label| label == "Apply changes (2)"),
+        "{inside:?}"
+    );
+    let outside = entry_labels(cx, &view, menu("src/file_3.rs"));
+    assert!(
+        outside.iter().any(|label| label == "Apply change"),
+        "{outside:?}"
+    );
+
+    right_click(cx, "range_file_123_2");
+    assert_eq!(
+        range_selection(cx, &view, repo_id),
+        ["src/file_0.rs", "src/file_2.rs"],
+        "a right-click keeps the selection"
+    );
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.popover_host.update(cx, |host, cx| {
+                host.context_menu_activate_action(
+                    ContextMenuAction::ApplyFileChange {
+                        repo_id,
+                        target: gitcomet_core::domain::ApplyChangeTarget::range(
+                            CommitId(sha(1).into()),
+                            CommitId(sha(0).into()),
+                            vec![
+                                std::path::PathBuf::from("src/file_0.rs"),
+                                std::path::PathBuf::from("src/file_2.rs"),
+                            ],
+                        ),
+                    },
+                    window,
+                    cx,
+                );
+            });
+        });
+    });
+    assert!(matches!(
+        open_popover(cx, &view),
+        Some(PopoverKind::ApplyFileChangeConfirm { target, .. }) if target.paths.len() == 2
+    ));
+}
+
+/// A comparison tree's folder menu applies the folder's files from the range.
+#[gpui::test]
+fn comparison_folder_menu_applies_the_range_to_its_files(cx: &mut gpui::TestAppContext) {
+    let repo_id = RepoId(124);
+    let (view, cx) = draw_comparison_view(cx, repo_id, 2, 0, Files::Loaded(3));
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.details_pane.update(cx, |pane, cx| {
+                pane.toggle_file_list_layout(
+                    repo_id,
+                    crate::view::rows::FileListId::RangeFiles,
+                    cx,
+                );
+            });
+        });
+    });
+    cx.update(|window, app| {
+        window.refresh();
+        let _ = window.draw(app);
+    });
+
+    right_click(cx, "range_file_dir_124_0");
+
+    let kind = open_popover(cx, &view).expect("the folder menu opens");
+    assert!(
+        matches!(
+            &kind,
+            PopoverKind::FileListFolderMenu {
+                list: crate::view::rows::FileListId::RangeFiles,
+                apply_source: Some(gitcomet_core::domain::ApplyChangeSource::Range { from, to }),
+                ..
+            } if from.as_ref() == sha(1) && to.as_ref() == sha(0)
+        ),
+        "{kind:?}"
+    );
+    let labels = entry_labels(cx, &view, kind);
+    assert!(
+        labels.iter().any(|label| label == "Apply changes (3)"),
+        "{labels:?}"
     );
 }

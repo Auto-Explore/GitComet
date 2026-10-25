@@ -104,6 +104,9 @@
   "await"
 ] @keyword.coroutine
 
+(unsafe_expression
+  "unsafe" @keyword)
+
 (shebang_line) @keyword.directive
 
 (class_body

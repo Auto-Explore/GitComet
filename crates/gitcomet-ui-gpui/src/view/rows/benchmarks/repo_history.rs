@@ -5,6 +5,7 @@ use crate::view::caches::{
     branch_sidebar_cache_lookup_by_cached_source, branch_sidebar_cache_lookup_by_source,
     branch_sidebar_cache_store,
 };
+use gitcomet_state::msg::{PersistenceEffect, ReferenceEffect, StatusEffect};
 use std::collections::BTreeSet;
 
 fn branch_sidebar_branch_label(name: &str) -> SharedString {
@@ -57,7 +58,11 @@ struct HistoryShortShaVm(SharedString);
 
 impl HistoryShortShaVm {
     fn new(commit_id: &str) -> Self {
-        Self(commit_id.chars().take(7).collect::<String>().into())
+        Self(
+            gitcomet_core::domain::short_commit_id(commit_id)
+                .to_owned()
+                .into(),
+        )
     }
 
     fn as_str(&self) -> &str {
@@ -450,6 +455,20 @@ pub(in crate::view) fn hash_branch_sidebar_rows(rows: &[BranchSidebarRow]) -> u6
     for row in rows.iter().take(256) {
         std::mem::discriminant(row).hash(&mut h);
         match row {
+            BranchSidebarRow::ContributionHeader {
+                title,
+                collapsed,
+                collapse_key,
+                ..
+            } => {
+                title.hash(&mut h);
+                collapsed.hash(&mut h);
+                collapse_key.hash(&mut h);
+            }
+            BranchSidebarRow::ContributionItem { label, key, .. } => {
+                label.hash(&mut h);
+                key.hash(&mut h);
+            }
             BranchSidebarRow::SectionHeader {
                 section,
                 top_border,
@@ -463,13 +482,6 @@ pub(in crate::view) fn hash_branch_sidebar_rows(rows: &[BranchSidebarRow]) -> u6
                 .hash(&mut h);
                 top_border.hash(&mut h);
                 collapsed.hash(&mut h);
-            }
-            BranchSidebarRow::FilterGroupHeader { section } => {
-                match section {
-                    BranchSection::Local => 0u8,
-                    BranchSection::Remote => 1u8,
-                }
-                .hash(&mut h);
             }
             BranchSidebarRow::Placeholder { section, message } => {
                 match section {
@@ -567,14 +579,14 @@ pub(in crate::view) fn hash_branch_sidebar_rows(rows: &[BranchSidebarRow]) -> u6
                 message.len().hash(&mut h);
                 tooltip.len().hash(&mut h);
             }
-            BranchSidebarRow::PinnedHeader { collapsed, .. } => {
-                collapsed.hash(&mut h);
-            }
             BranchSidebarRow::SectionSpacer
             | BranchSidebarRow::WorktreesHeader { .. }
             | BranchSidebarRow::WorktreePlaceholder { .. }
             | BranchSidebarRow::SubmodulesHeader { .. }
             | BranchSidebarRow::SubmodulePlaceholder { .. }
+            | BranchSidebarRow::AnnexHeader { .. }
+            | BranchSidebarRow::AnnexPlaceholder { .. }
+            | BranchSidebarRow::AnnexRepositoryItem { .. }
             | BranchSidebarRow::StashHeader { .. }
             | BranchSidebarRow::StashPlaceholder { .. } => {}
         }
@@ -993,7 +1005,7 @@ impl RepoSwitchMetrics {
 
         for effect in effects {
             match effect {
-                Effect::PersistSession { .. } => {
+                Effect::Persistence(PersistenceEffect::PersistSession { .. }) => {
                     metrics.persist_session_effect_count =
                         metrics.persist_session_effect_count.saturating_add(1);
                 }
@@ -1006,16 +1018,16 @@ impl RepoSwitchMetrics {
                     metrics.selected_diff_reload_effect_count =
                         metrics.selected_diff_reload_effect_count.saturating_add(1);
                 }
-                Effect::LoadBranches { .. }
-                | Effect::LoadRemotes { .. }
-                | Effect::LoadRemoteBranches { .. }
-                | Effect::LoadStatus { .. }
-                | Effect::LoadHeadBranch { .. }
-                | Effect::LoadUpstreamDivergence { .. }
+                Effect::References(ReferenceEffect::LoadBranches { .. })
+                | Effect::References(ReferenceEffect::LoadRemotes { .. })
+                | Effect::References(ReferenceEffect::LoadRemoteBranches { .. })
+                | Effect::Status(StatusEffect::LoadStatus { .. })
+                | Effect::References(ReferenceEffect::LoadHeadBranch { .. })
+                | Effect::References(ReferenceEffect::LoadUpstreamDivergence { .. })
                 | Effect::LoadLog { .. }
                 | Effect::LoadRebaseAndMergeState { .. }
-                | Effect::LoadTags { .. }
-                | Effect::LoadRemoteTags { .. }
+                | Effect::References(ReferenceEffect::LoadTags { .. })
+                | Effect::References(ReferenceEffect::LoadRemoteTags { .. })
                 | Effect::LoadStashes { .. }
                 | Effect::LoadRebaseState { .. }
                 | Effect::LoadMergeCommitMessage { .. } => {
@@ -1032,11 +1044,13 @@ impl RepoSwitchMetrics {
 fn hash_repo_switch_outcome(state: &AppState, effects: &[Effect]) -> u64 {
     fn hash_diff_target(target: &DiffTarget, h: &mut FxHasher) {
         match target {
-            DiffTarget::WorkingTree { path, area } => {
+            DiffTarget::WorkingTree { path, area, .. } => {
                 path.hash(h);
                 (*area as u8).hash(h);
             }
-            DiffTarget::Commit { commit_id, path } => {
+            DiffTarget::Commit {
+                commit_id, path, ..
+            } => {
                 commit_id.hash(h);
                 path.hash(h);
             }
@@ -1044,6 +1058,7 @@ fn hash_repo_switch_outcome(state: &AppState, effects: &[Effect]) -> u64 {
                 from_commit_id,
                 to_commit_id,
                 path,
+                ..
             } => {
                 from_commit_id.hash(h);
                 to_commit_id.hash(h);
@@ -1080,9 +1095,9 @@ fn hash_repo_switch_outcome(state: &AppState, effects: &[Effect]) -> u64 {
                 limit.hash(&mut h);
                 cursor.is_some().hash(&mut h);
             }
-            Effect::PersistSession {
+            Effect::Persistence(PersistenceEffect::PersistSession {
                 repo_id, action, ..
-            } => {
+            }) => {
                 repo_id.hash(&mut h);
                 action.hash(&mut h);
             }
@@ -1090,14 +1105,14 @@ fn hash_repo_switch_outcome(state: &AppState, effects: &[Effect]) -> u64 {
                 repo_id.0.hash(&mut h);
                 limit.hash(&mut h);
             }
-            Effect::LoadBranches { repo_id }
-            | Effect::LoadRemotes { repo_id }
-            | Effect::LoadRemoteBranches { repo_id }
-            | Effect::LoadStatus { repo_id }
-            | Effect::LoadHeadBranch { repo_id }
-            | Effect::LoadUpstreamDivergence { repo_id }
-            | Effect::LoadTags { repo_id }
-            | Effect::LoadRemoteTags { repo_id }
+            Effect::References(ReferenceEffect::LoadBranches { repo_id })
+            | Effect::References(ReferenceEffect::LoadRemotes { repo_id })
+            | Effect::References(ReferenceEffect::LoadRemoteBranches { repo_id })
+            | Effect::Status(StatusEffect::LoadStatus { repo_id })
+            | Effect::References(ReferenceEffect::LoadHeadBranch { repo_id })
+            | Effect::References(ReferenceEffect::LoadUpstreamDivergence { repo_id })
+            | Effect::References(ReferenceEffect::LoadTags { repo_id })
+            | Effect::References(ReferenceEffect::LoadRemoteTags { repo_id })
             | Effect::LoadRebaseState { repo_id }
             | Effect::LoadMergeCommitMessage { repo_id } => {
                 repo_id.0.hash(&mut h);

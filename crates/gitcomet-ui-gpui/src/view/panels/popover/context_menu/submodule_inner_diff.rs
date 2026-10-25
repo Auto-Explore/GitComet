@@ -7,15 +7,11 @@ pub(super) fn model(
 ) -> ContextMenuModel {
     let label = match target {
         DiffTarget::WorkingTree { path, .. } => path.display().to_string(),
-        DiffTarget::Commit {
-            path: Some(path), ..
-        }
+        DiffTarget::Commit { path, .. }
         | DiffTarget::CommitRange {
             path: Some(path), ..
         } => path.display().to_string(),
-        DiffTarget::Commit { path: None, .. } | DiffTarget::CommitRange { path: None, .. } => {
-            "Nested diff".to_string()
-        }
+        DiffTarget::CommitRange { path: None, .. } => "Nested diff".to_string(),
     };
     ContextMenuModel::new(vec![
         ContextMenuItem::Header("Submodule diff".into()),

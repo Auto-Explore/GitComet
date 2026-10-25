@@ -2,6 +2,23 @@ use super::*;
 use gitcomet_core::domain::HistoryMode;
 use gitcomet_state::model::GitLogTagFetchMode;
 
+/// The changed-file lists' default layout and sort, for lists built where
+/// the preferences are not passed in: a list an extension opens starts from
+/// them. Set from the preferences and on every change to them.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(in crate::view) struct FileListDefaults {
+    pub(in crate::view) layout: FileListLayout,
+    pub(in crate::view) sort: crate::view::rows::CommitFileSort,
+}
+
+impl gpui::Global for FileListDefaults {}
+
+impl FileListDefaults {
+    pub(in crate::view) fn current(cx: &App) -> Self {
+        cx.try_global::<Self>().copied().unwrap_or_default()
+    }
+}
+
 /// Window geometry and pane state restored at startup.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(super) struct WindowPreferences {
@@ -25,7 +42,11 @@ pub(super) struct AppearancePreferences {
 impl Default for AppearancePreferences {
     fn default() -> Self {
         Self {
-            metrics: crate::appearance::Appearance::default(),
+            // What a fresh session resolves to, not the neutral baseline.
+            metrics: crate::appearance::Appearance {
+                density: crate::appearance::UiDensity::PREFERENCE_DEFAULT,
+                ..crate::appearance::Appearance::default()
+            },
             theme_mode: ThemeMode::default(),
             ui_scale_percent: 100,
             date_time_format: DateTimeFormat::YmdHm,
@@ -47,6 +68,7 @@ pub(super) struct ChangeTrackingPreferences {
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(super) struct FileListPreferences {
     pub(super) layout: FileListLayout,
+    pub(super) sort: crate::view::rows::CommitFileSort,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -54,10 +76,13 @@ pub(super) struct DiffPreferences {
     pub(super) scroll_sync: DiffScrollSync,
     pub(super) content_mode: DiffContentMode,
     pub(super) whitespace_mode: DiffWhitespaceMode,
+    pub(super) engine: DiffEngine,
     pub(super) view_mode: DiffViewMode,
     pub(super) annotate_enabled: bool,
     pub(super) reveal_whitespace_chars: bool,
     pub(super) word_wrap: bool,
+    /// Columns a tab advances to, unless the file or its attributes say.
+    pub(super) tab_size: u8,
     pub(super) show_line_numbers: bool,
 }
 
@@ -67,10 +92,12 @@ impl Default for DiffPreferences {
             scroll_sync: DiffScrollSync::default(),
             content_mode: DiffContentMode::default(),
             whitespace_mode: DiffWhitespaceMode::default(),
+            engine: DiffEngine::default(),
             view_mode: DiffViewMode::Split,
             annotate_enabled: false,
             reveal_whitespace_chars: false,
             word_wrap: false,
+            tab_size: crate::view::tab_width::DEFAULT_TAB_WIDTH,
             show_line_numbers: true,
         }
     }
@@ -191,6 +218,7 @@ impl HistoryBranchNamesMode {
 pub(super) struct HistoryPreferences {
     pub(super) branch_names: HistoryBranchNamesMode,
     pub(super) show_graph: bool,
+    pub(super) show_graph_gradient: bool,
     pub(super) show_author: bool,
     pub(super) show_date: bool,
     pub(super) show_sha: bool,
@@ -209,6 +237,7 @@ impl Default for HistoryPreferences {
         Self {
             branch_names: HistoryBranchNamesMode::default(),
             show_graph: true,
+            show_graph_gradient: true,
             show_author: true,
             show_date: true,
             show_sha: false,
@@ -247,6 +276,17 @@ impl Default for RemotePreferences {
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct MaintenancePreferences {
+    pub(super) recommend: bool,
+}
+
+impl Default for MaintenancePreferences {
+    fn default() -> Self {
+        Self { recommend: true }
+    }
+}
+
 /// Parsed, defaulted preferences shared by the root view and its child views.
 ///
 /// The on-disk session remains a backwards-compatible DTO of optional fields;
@@ -265,7 +305,9 @@ pub(super) struct UiPreferences {
     pub(super) file_editing: FileEditingPreferences,
     pub(super) repository: RepositoryPreferences,
     pub(super) remotes: RemotePreferences,
+    pub(super) maintenance: MaintenancePreferences,
     pub(super) terminal: TerminalPreferences,
+    pub(super) large_files: gitcomet_state::model::LargeFileSettings,
 }
 
 impl UiPreferences {
@@ -279,7 +321,7 @@ impl UiPreferences {
                 sidebar_collapsed: session.sidebar_collapsed.unwrap_or(false),
             },
             appearance: AppearancePreferences {
-                metrics: crate::appearance::Appearance::from_session(session),
+                metrics: crate::session_ui::appearance(session),
                 theme_mode: session
                     .theme_mode
                     .as_deref()
@@ -313,6 +355,11 @@ impl UiPreferences {
                     .as_deref()
                     .and_then(FileListLayout::from_key)
                     .unwrap_or_default(),
+                sort: session
+                    .file_list_sort
+                    .as_deref()
+                    .and_then(crate::view::rows::CommitFileSort::from_key)
+                    .unwrap_or_default(),
             },
             diff: DiffPreferences {
                 scroll_sync: session
@@ -330,6 +377,11 @@ impl UiPreferences {
                     .as_deref()
                     .and_then(DiffWhitespaceMode::from_key)
                     .unwrap_or_default(),
+                engine: session
+                    .diff_engine
+                    .as_deref()
+                    .and_then(DiffEngine::from_key)
+                    .unwrap_or_default(),
                 view_mode: session
                     .diff_view_mode
                     .as_deref()
@@ -338,6 +390,10 @@ impl UiPreferences {
                 annotate_enabled: session.annotate_enabled.unwrap_or(false),
                 reveal_whitespace_chars: session.diff_reveal_whitespace_chars.unwrap_or(false),
                 word_wrap: session.diff_word_wrap.unwrap_or(false),
+                tab_size: session
+                    .diff_tab_size
+                    .filter(|size| (1..=crate::view::tab_width::MAX_TAB_WIDTH).contains(size))
+                    .unwrap_or(crate::view::tab_width::DEFAULT_TAB_WIDTH),
                 show_line_numbers: session.diff_show_line_numbers.unwrap_or(true),
             },
             security: SecurityPreferences {
@@ -369,6 +425,7 @@ impl UiPreferences {
                     .and_then(HistoryBranchNamesMode::from_key)
                     .unwrap_or_default(),
                 show_graph: session.history_show_graph.unwrap_or(true),
+                show_graph_gradient: session.history_show_graph_gradient.unwrap_or(true),
                 show_author: session.history_show_author.unwrap_or(true),
                 show_date: session.history_show_date.unwrap_or(true),
                 show_sha: session.history_show_sha.unwrap_or(false),
@@ -394,7 +451,24 @@ impl UiPreferences {
                     .fetch_prune_deleted_remote_branches
                     .unwrap_or(true),
             },
+            maintenance: MaintenancePreferences {
+                recommend: session.recommend_repo_maintenance.unwrap_or(true),
+            },
             terminal: TerminalPreferences::from_ui_session(session),
+            large_files: {
+                let defaults = gitcomet_state::model::LargeFileSettings::default();
+                gitcomet_state::model::LargeFileSettings {
+                    hide_annex_refs: session
+                        .annex_hide_bookkeeping_refs
+                        .unwrap_or(defaults.hide_annex_refs),
+                    annex_pull_push: session
+                        .annex_pull_push_on_adjusted
+                        .unwrap_or(defaults.annex_pull_push),
+                    annex_sync_content: session
+                        .annex_sync_content
+                        .unwrap_or(defaults.annex_sync_content),
+                }
+            },
         }
     }
 }
@@ -427,8 +501,10 @@ mod tests {
         let preferences = UiPreferences::from_session(&session::UiSession::default());
         assert_eq!(preferences, UiPreferences::default());
         assert_eq!(preferences.diff.view_mode, DiffViewMode::Split);
+        assert_eq!(preferences.diff.engine, DiffEngine::LineByLine);
         assert!(preferences.diff.show_line_numbers);
         assert!(preferences.history.show_graph);
+        assert!(preferences.history.show_graph_gradient);
         // The store carries its own default for the reducer; the two must agree
         // or the Files tab would follow the selection until the first sync.
         assert_eq!(
@@ -438,6 +514,10 @@ mod tests {
         assert!(preferences.merge_tool.view_three_way);
         assert!(preferences.remotes.prune_deleted_remote_branches_on_fetch);
         assert_eq!(
+            preferences.maintenance.recommend,
+            gitcomet_state::model::MaintenanceSettings::default().recommend
+        );
+        assert_eq!(
             preferences.security.remote_markdown_images,
             RemoteMarkdownImagePolicy::AlwaysLoad
         );
@@ -446,6 +526,17 @@ mod tests {
             RemoteUrlPolicy::default()
         );
         assert!(preferences.security.check_for_updates_on_startup);
+    }
+
+    #[test]
+    fn graph_gradient_restores_explicit_preferences() {
+        for enabled in [false, true] {
+            let preferences = UiPreferences::from_session(&session::UiSession {
+                history_show_graph_gradient: Some(enabled),
+                ..Default::default()
+            });
+            assert_eq!(preferences.history.show_graph_gradient, enabled);
+        }
     }
 
     #[test]

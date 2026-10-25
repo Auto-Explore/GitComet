@@ -3,8 +3,20 @@ use super::native_watcher::WatchMode;
 use super::*;
 use std::collections::VecDeque;
 
+/// Actual planner work, retained across setup retries for operation deltas.
+#[cfg(test)]
+#[derive(Clone, Copy, Default, Debug, Eq, PartialEq)]
+pub(super) struct DiscoveryWork {
+    pub metadata_visits: usize,
+    pub metadata_reads: usize,
+    pub worktree_visits: usize,
+    pub worktree_reads: usize,
+}
+
 #[derive(Default, Debug)]
 pub(super) struct WatchPlan {
+    #[cfg(test)]
+    pub discovery_work: DiscoveryWork,
     pub dirs: FxHashSet<PathBuf>,
     pub worktree_dirs: FxHashSet<PathBuf>,
     pub boundaries: Vec<PathBuf>,
@@ -13,6 +25,7 @@ pub(super) struct WatchPlan {
     pub failures: usize,
 }
 impl WatchPlan {
+    #[cfg(test)]
     pub fn walk(
         &mut self,
         starts: impl IntoIterator<Item = PathBuf>,
@@ -21,11 +34,37 @@ impl WatchPlan {
         rules: &mut IgnoreRules,
         inputs: &mut WatchInputs,
         limit: usize,
-        mut visit: impl FnMut(&Path) -> notify::Result<()>,
+        visit: impl FnMut(&Path) -> notify::Result<()>,
     ) {
+        self.walk_while(
+            starts,
+            worktree,
+            policy,
+            rules,
+            inputs,
+            limit,
+            visit,
+            || true,
+        );
+    }
+
+    pub fn walk_while(
+        &mut self,
+        starts: impl IntoIterator<Item = PathBuf>,
+        worktree: bool,
+        policy: &PolicySnapshot,
+        rules: &mut IgnoreRules,
+        inputs: &mut WatchInputs,
+        limit: usize,
+        mut visit: impl FnMut(&Path) -> notify::Result<()>,
+        keep_going: impl Fn() -> bool,
+    ) -> bool {
         let mut pending: VecDeque<_> = starts.into_iter().collect();
         let mut visited = FxHashSet::default();
         while let Some(dir) = pending.pop_front() {
+            if !keep_going() {
+                return false;
+            }
             if !visited.insert(dir.clone()) || self.dirs.contains(&dir) {
                 continue;
             }
@@ -63,6 +102,12 @@ impl WatchPlan {
             }
             // This ordering closes the creation gap: an earlier child is found
             // below; a later one generates an event from the registered parent.
+            #[cfg(test)]
+            if worktree {
+                self.discovery_work.worktree_visits += 1;
+            } else {
+                self.discovery_work.metadata_visits += 1;
+            }
             if visit(&dir).is_err() {
                 self.failures += 1;
             }
@@ -70,10 +115,22 @@ impl WatchPlan {
             if worktree {
                 self.worktree_dirs.insert(dir.clone());
             }
+            if !keep_going() {
+                return false;
+            }
+            #[cfg(test)]
+            if worktree {
+                self.discovery_work.worktree_reads += 1;
+            } else {
+                self.discovery_work.metadata_reads += 1;
+            }
             match fs::read_dir(&dir) {
                 Ok(entries) => {
                     let mut children = Vec::new();
                     for entry in entries {
+                        if !keep_going() {
+                            return false;
+                        }
                         match entry {
                             Ok(entry) => {
                                 if worktree && entry.file_name() == ".gitignore" {
@@ -94,6 +151,7 @@ impl WatchPlan {
                 Err(_) => self.failures += 1,
             }
         }
+        keep_going()
     }
 
     pub fn outcome(

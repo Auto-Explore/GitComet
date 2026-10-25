@@ -1,11 +1,11 @@
 use crate::msg::Msg;
-use gitcomet_core::auth::StagedGitAuth;
 use gitcomet_core::auth::askpass::{
     AskPassScript, GIT_COMMAND_TIMEOUT_ENV, PromptAuth, append_host_prompt_to_stderr,
-    configure_git_auth_prompt, create_askpass_script, git_command_timeout,
-    remember_successful_prompt_auth, resolve_git_auth,
+    configure_git_auth_prompt, create_askpass_script, git_command_timeout, resolve_auth_outcome,
+    resolve_git_auth,
 };
-use gitcomet_core::error::{Error, ErrorKind};
+use gitcomet_core::auth::{AuthOutcome, StagedGitAuth};
+use gitcomet_core::error::{Error, ErrorKind, GitFailure, GitFailureId};
 use gitcomet_core::process::{bytes_to_text_preserving_utf8, git_command};
 use gitcomet_core::remote_url::{RemoteUrlPolicy, validate_remote_url_with_policy};
 use gitcomet_core::services::CommandOutput;
@@ -15,7 +15,7 @@ use std::fs;
 use std::io::Read as _;
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStderr, ChildStdout, Command, ExitStatus, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -200,7 +200,9 @@ fn cleanup_aborted_clone_destination(dest: &Path, dest_preexisted: bool) -> Resu
             return Err(Error::new(ErrorKind::Backend(format!(
                 "clone aborted, but failed to inspect partially created destination `{}`: {err}",
                 dest.display()
-            ))));
+            )))
+            .with_source(err)
+            .with_context("inspect aborted clone destination", Some(dest)));
         }
     };
 
@@ -230,7 +232,36 @@ fn cleanup_aborted_clone_destination(dest: &Path, dest_preexisted: bool) -> Resu
             "clone aborted, but failed to remove partially created destination `{}`: {err}",
             dest.display()
         )))
+        .with_source(err)
+        .with_context("remove aborted clone destination", Some(dest))
     })
+}
+
+#[derive(Debug)]
+struct CloneCleanupError {
+    original: Error,
+    cleanup: Error,
+}
+
+impl CloneCleanupError {
+    fn combine(original: Error, cleanup: Error, destination: &Path) -> Error {
+        let cause = Self { original, cleanup };
+        Error::new(ErrorKind::Backend(cause.to_string()))
+            .with_source(cause)
+            .with_context("clean up aborted clone", Some(destination))
+    }
+}
+
+impl std::fmt::Display for CloneCleanupError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}; {}", self.original, self.cleanup)
+    }
+}
+
+impl std::error::Error for CloneCleanupError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.original)
+    }
 }
 
 pub(super) fn schedule_clone_repo(
@@ -261,6 +292,16 @@ pub(super) fn schedule_clone_repo(
         }
 
         let mut cmd = build_clone_command(&url, &dest);
+        // git-lfs is silent on a non-terminal stderr; its progress file is the
+        // only sign of life while a large checkout downloads.
+        let lfs_progress = tempfile::Builder::new()
+            .prefix("gitcomet-clone-lfs-progress-")
+            .tempfile()
+            .ok()
+            .map(|file| file.into_temp_path());
+        if let Some(path) = lfs_progress.as_ref() {
+            cmd.env("GIT_LFS_PROGRESS", path.as_os_str());
+        }
         cmd.stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .stdin(Stdio::null())
@@ -268,7 +309,9 @@ pub(super) fn schedule_clone_repo(
 
         let (askpass_script, prompt_auth) = match (|| {
             let auth = resolve_git_auth(auth);
-            let script = create_askpass_script().map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
+            let script = create_askpass_script().map_err(|e| {
+                Error::from(e).with_context("create Git authentication prompt script", None)
+            })?;
             configure_git_auth_prompt(&mut cmd, auth.as_ref(), &script);
             Ok::<(AskPassScript, Option<PromptAuth>), Error>((script, auth))
         })() {
@@ -291,7 +334,8 @@ pub(super) fn schedule_clone_repo(
         let child = match cmd.spawn() {
             Ok(child) => child,
             Err(e) => {
-                let err = Error::new(ErrorKind::Io(e.kind()));
+                let err = Error::from(e)
+                    .with_context("start git clone", Some(Path::new(cmd.get_program())));
                 send_or_log(
                     &msg_tx,
                     Msg::Internal(crate::msg::InternalMsg::CloneRepoFinished {
@@ -306,6 +350,10 @@ pub(super) fn schedule_clone_repo(
         active_clone.set_child(child);
 
         let (stdout, stderr) = active_clone.take_stdio();
+        // Millis since `start` of the last stderr chunk: the deadline measures
+        // silence, so a clone that keeps reporting progress is never killed.
+        let start = Instant::now();
+        let last_activity = Arc::new(AtomicU64::new(0));
         let stdout_handle = std::thread::spawn(move || {
             let mut buf = Vec::new();
             if let Some(mut stdout) = stdout {
@@ -316,6 +364,7 @@ pub(super) fn schedule_clone_repo(
 
         let progress_dest = Arc::new(dest.clone());
         let progress_tx = msg_tx.clone();
+        let stderr_activity = Arc::clone(&last_activity);
         let stderr_handle = std::thread::spawn(move || {
             let mut stderr_bytes = Vec::new();
             let mut pending = Vec::new();
@@ -325,6 +374,9 @@ pub(super) fn schedule_clone_repo(
                     match stderr.read(&mut buf) {
                         Ok(0) => break,
                         Ok(n) => {
+                            let millis =
+                                u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX);
+                            stderr_activity.fetch_max(millis, Ordering::Relaxed);
                             let chunk = &buf[..n];
                             stderr_bytes.extend_from_slice(chunk);
                             pending.extend_from_slice(chunk);
@@ -355,13 +407,26 @@ pub(super) fn schedule_clone_repo(
         });
 
         let timeout = git_command_timeout();
-        let start = Instant::now();
         let mut timed_out = false;
+        let mut lfs_progress_len = 0u64;
         let status = loop {
             match active_clone.try_wait() {
                 Ok(Some(status)) => break Ok(status),
                 Ok(None) => {
-                    if start.elapsed() >= timeout {
+                    if let Some(len) = lfs_progress
+                        .as_ref()
+                        .and_then(|path| fs::metadata(path).ok())
+                        .map(|metadata| metadata.len())
+                        .filter(|len| *len != lfs_progress_len)
+                    {
+                        lfs_progress_len = len;
+                        let millis = u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX);
+                        last_activity.fetch_max(millis, Ordering::Relaxed);
+                    }
+                    let idle = start.elapsed().saturating_sub(Duration::from_millis(
+                        last_activity.load(Ordering::Relaxed),
+                    ));
+                    if idle >= timeout {
                         timed_out = true;
                         active_clone.request_cancel();
                         break active_clone.wait();
@@ -373,6 +438,16 @@ pub(super) fn schedule_clone_repo(
         };
         let stdout_str = stdout_handle.join().unwrap_or_default();
         let mut stderr_bytes = stderr_handle.join().unwrap_or_default();
+        let auth_outcome = if timed_out || active_clone.cancel_requested() {
+            AuthOutcome::Unknown
+        } else {
+            resolve_auth_outcome(
+                prompt_auth.as_ref(),
+                &askpass_script,
+                &stderr_bytes,
+                status.as_ref().is_ok_and(|status| status.success()),
+            )
+        };
         append_host_prompt_to_stderr(&mut stderr_bytes, &askpass_script);
         let stderr_acc = bytes_to_text_preserving_utf8(&stderr_bytes);
 
@@ -380,7 +455,7 @@ pub(super) fn schedule_clone_repo(
             Ok(status) => {
                 if timed_out {
                     Err(Error::new(ErrorKind::Backend(format!(
-                        "{command_str} timed out after {} seconds (set {GIT_COMMAND_TIMEOUT_ENV} to override)",
+                        "{command_str} timed out after {} seconds without output (set {GIT_COMMAND_TIMEOUT_ENV} to override)",
                         timeout.as_secs()
                     ))))
                 } else if active_clone.cancel_requested() && !status.success() {
@@ -396,29 +471,30 @@ pub(super) fn schedule_clone_repo(
                         Ok(out)
                     } else {
                         let combined = out.combined();
-                        let message = if combined.is_empty() {
-                            format!("{} failed", out.command)
-                        } else {
-                            format!("{} failed: {combined}", out.command)
-                        };
-                        Err(Error::new(ErrorKind::Backend(message)))
+                        Err(Error::new(ErrorKind::Git(
+                            GitFailure::new(
+                                out.command,
+                                GitFailureId::CommandFailed,
+                                out.exit_code,
+                                out.stdout.into_bytes(),
+                                out.stderr.into_bytes(),
+                                (!combined.is_empty()).then_some(combined),
+                            )
+                            .with_auth_outcome(auth_outcome),
+                        )))
                     }
                 }
             }
-            Err(e) => Err(Error::new(ErrorKind::Io(e.kind()))),
+            Err(e) => Err(Error::from(e).with_context("wait for git clone", Some(&dest))),
         };
 
         if result.is_err() && active_clone.cancel_requested()
             && let Err(cleanup_err) = cleanup_aborted_clone_destination(&dest, dest_preexisted) {
                 result = Err(match result {
                     Ok(_) => cleanup_err,
-                    Err(err) => Error::new(ErrorKind::Backend(format!("{err}; {cleanup_err}"))),
+                    Err(err) => CloneCleanupError::combine(err, cleanup_err, &dest),
                 });
             }
-
-        if result.is_ok() {
-            remember_successful_prompt_auth(prompt_auth.as_ref(), &askpass_script);
-        }
 
         let ok = result.is_ok();
         send_or_log(
@@ -452,7 +528,46 @@ mod tests {
     use gitcomet_core::remote_url::validate_remote_url;
 
     use super::*;
+    use std::error::Error as _;
     use std::process::Command;
+
+    #[test]
+    fn clone_cleanup_failure_keeps_both_original_causes() {
+        let destination = Path::new("clone-destination");
+        let original = Error::new(ErrorKind::Backend("clone failed".into()))
+            .with_source(std::io::Error::from_raw_os_error(5));
+        let cleanup = Error::new(ErrorKind::Backend("cleanup failed".into()))
+            .with_source(std::io::Error::from_raw_os_error(28));
+        let error = CloneCleanupError::combine(original, cleanup, destination);
+        assert!(matches!(
+            error.kind(),
+            ErrorKind::Backend(message) if message == "clone failed; cleanup failed"
+        ));
+        assert_eq!(error.context().unwrap().path(), Some(destination));
+        let cloned = error.clone();
+        assert!(std::ptr::eq(
+            error.source().unwrap(),
+            cloned.source().unwrap()
+        ));
+        drop(error);
+        let cause = cloned
+            .source()
+            .unwrap()
+            .downcast_ref::<CloneCleanupError>()
+            .unwrap();
+        for (error, expected) in [(&cause.original, 5), (&cause.cleanup, 28)] {
+            assert_eq!(
+                error
+                    .source()
+                    .unwrap()
+                    .downcast_ref::<std::io::Error>()
+                    .unwrap()
+                    .raw_os_error(),
+                Some(expected)
+            );
+        }
+        assert!(std::ptr::addr_eq(cause.source().unwrap(), &cause.original));
+    }
 
     fn command_env_value(cmd: &Command, key: &str) -> Option<String> {
         use std::ffi::OsStr;
@@ -515,6 +630,8 @@ mod tests {
             [
                 std::ffi::OsStr::new("-c"),
                 std::ffi::OsStr::new("protocol.ext.allow=never"),
+                std::ffi::OsStr::new("-c"),
+                std::ffi::OsStr::new("maintenance.auto=false"),
                 std::ffi::OsStr::new("-c"),
                 std::ffi::OsStr::new("color.ui=false"),
                 std::ffi::OsStr::new("clone"),
@@ -673,7 +790,7 @@ mod tests {
     #[test]
     fn configure_clone_auth_prompt_sets_cached_passphrase_env_and_removes_username() {
         let askpass = create_askpass_script().expect("askpass script creation");
-        let mut cmd = Command::new("git");
+        let mut cmd = gitcomet_core::test_support::git_fixture::git_command();
         cmd.env(GITCOMET_AUTH_USERNAME_ENV, "legacy-user");
         let auth = PromptAuth::CachedPassphrases(vec![
             CachedPassphraseEntry {

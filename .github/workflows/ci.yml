@@ -25,23 +25,30 @@ on:
         type: number
         default: 1
       nextest-threads:
-        description: Workspace nextest concurrency (serial schedule only)
+        description: Workspace nextest concurrency
         type: string
         default: ''
       nextest-profile:
         description: Workspace nextest concurrency policy
         type: choice
-        options: [ci, ci-git-limited]
+        options: [ci, ci-git-limited, ci-watch-limited-4, ci-watch-limited-8, ci-watch-first, ci-throughput]
         default: ci
-      ui-threads:
-        description: Workspace UI libtest concurrency (serial schedule only)
+      pure-threads:
+        description: Optional positive concurrency for audited pure batches
         type: string
         default: ''
-      benchmark-profile:
-        description: Compile/link profile (candidate disables UI optimization)
-        type: choice
-        options: [ci-bench, ci-bench-candidate]
-        default: ci-bench
+      resource-stats:
+        description: Collect instrumented process-tree diagnostics
+        type: boolean
+        default: false
+      batch-pure-tests:
+        description: Audited batching mode (auto enables on Windows)
+        type: string
+        default: auto
+      ui-threads:
+        description: Workspace UI libtest concurrency
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -66,12 +73,14 @@ jobs:
       execution-samples: ${{ inputs.execution-samples || 1 }}
       nextest-threads: ${{ inputs.nextest-threads || '' }}
       nextest-profile: ${{ inputs.nextest-profile || 'ci' }}
+      pure-threads: ${{ inputs.pure-threads || '' }}
+      resource-stats: ${{ inputs.resource-stats || false }}
+      batch-pure-tests: ${{ inputs.batch-pure-tests || 'auto' }}
       ui-threads: ${{ inputs.ui-threads || '' }}
   benchmarks:
     uses: ./.github/workflows/benchmark-targets.yml
     with:
       cold-cache: ${{ inputs.cold-cache || false }}
-      benchmark-profile: ${{ inputs.benchmark-profile || 'ci-bench' }}
   complete:
     name: CI complete
     runs-on: ubuntu-22.04
@@ -83,6 +92,10 @@ jobs:
       actions: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # report.py imports cache.py, which needs tomllib (3.11+); the runner's system Python is 3.10.
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
       - name: Verify every validation lane completed
         env:
           CI_RESULTS: ${{ toJSON(needs) }}

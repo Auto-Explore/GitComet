@@ -1,8 +1,10 @@
 use super::*;
+use crate::msg::RepoCommandEffect;
+use crate::store::repository_runtime::RepositoryRuntimes;
 
 #[test]
 fn dropped_existing_repo_focuses_its_tab_without_creating_a_duplicate() {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
 
@@ -28,7 +30,7 @@ fn dropped_existing_repo_focuses_its_tab_without_creating_a_duplicate() {
 }
 
 #[test]
-fn diagnostics_are_capped() {
+fn diagnostics_are_not_capped() {
     let mut repo_state = RepoState::new_opening(
         RepoId(1),
         RepoSpec {
@@ -37,11 +39,18 @@ fn diagnostics_are_capped() {
     );
 
     for i in 0..205 {
-        super::reducer::push_diagnostic(&mut repo_state, DiagnosticKind::Error, format!("err-{i}"));
+        super::reducer::push_diagnostic(
+            &crate::store::reducer::test_inputs::clock(),
+            &mut repo_state,
+            DiagnosticKind::Error,
+            format!("err-{i}"),
+        );
     }
 
-    assert_eq!(repo_state.feedback.diagnostics.len(), 200);
-    assert_eq!(repo_state.feedback.diagnostics[0].message, "err-5");
+    // The window acknowledges diagnostics it has shown; until then none
+    // are dropped.
+    assert_eq!(repo_state.feedback.diagnostics.len(), 205);
+    assert_eq!(repo_state.feedback.diagnostics[0].message, "err-0");
     assert_eq!(
         repo_state.feedback.diagnostics.last().unwrap().message,
         "err-204"
@@ -59,6 +68,7 @@ fn session_persist_error_reports_notification_and_repo_diagnostic() {
     ));
 
     super::reducer::handle_session_persist_result(
+        &crate::store::reducer::test_inputs::clock(),
         &mut state,
         Some(RepoId(1)),
         "opening a repository",
@@ -94,6 +104,7 @@ fn session_persist_error_without_repo_still_reports_notification() {
     let mut state = AppState::test_default();
 
     super::reducer::handle_session_persist_result(
+        &crate::store::reducer::test_inputs::clock(),
         &mut state,
         Some(RepoId(999)),
         "closing a repository",
@@ -111,7 +122,7 @@ fn session_persist_error_without_repo_still_reports_notification() {
 
 #[test]
 fn session_persist_failed_msg_reports_notification_and_repo_diagnostic() {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
     state.repos.push(RepoState::new_opening(
@@ -188,7 +199,7 @@ fn recursive_expand_opens_the_folder_and_every_directory_under_it() {
 #[test]
 fn recursive_collapse_closes_exactly_the_subtree_it_opened() {
     let (mut repos, id_alloc, mut state, repo_id) = state_with_file_browser_tree();
-    for path in ["other", "src", "src/nested"] {
+    for path in ["other", "src", "src/nested", "src/no-longer-listed/deep"] {
         state.repos[0]
             .file_browser
             .expanded_dirs
@@ -228,12 +239,14 @@ fn recursive_expand_does_not_match_name_prefixes_of_sibling_folders() {
             path: Arc::new(PathBuf::from("src")),
             kind: gitcomet_core::domain::FileEntryKind::Directory,
             depth: 0,
+            ignored: false,
         },
         gitcomet_core::domain::FileEntry {
             name: "src_generated".to_string(),
             path: Arc::new(PathBuf::from("src_generated")),
             kind: gitcomet_core::domain::FileEntryKind::Directory,
             depth: 0,
+            ignored: false,
         },
     ]));
 
@@ -371,7 +384,7 @@ fn folder_toggles_stay_live_for_a_whitespace_only_query() {
 
 #[test]
 fn delete_branches_emits_one_effect_carrying_every_name() {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
     reduce(
@@ -421,7 +434,7 @@ fn delete_branches_emits_one_effect_carrying_every_name() {
 
 #[test]
 fn delete_branches_with_an_empty_list_does_nothing() {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
     reduce(
@@ -453,7 +466,7 @@ fn delete_branches_with_an_empty_list_does_nothing() {
 
 #[test]
 fn delete_remote_branches_keeps_the_batch_under_one_remote() {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
     reduce(
@@ -479,9 +492,11 @@ fn delete_remote_branches_keeps_the_batch_under_one_remote() {
     let batched = effects
         .iter()
         .find_map(|effect| match effect {
-            Effect::DeleteRemoteBranches {
-                remote, branches, ..
-            } => Some((remote.clone(), branches.clone())),
+            Effect::RepoCommand(RepoCommandEffect::DeleteRemoteBranches {
+                remote,
+                branches,
+                ..
+            }) => Some((remote.clone(), branches.clone())),
             _ => None,
         })
         .expect("expected a batched remote delete effect");

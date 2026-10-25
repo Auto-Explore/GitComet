@@ -3,17 +3,25 @@ use super::*;
 /// Shown when closing the window or quitting would throw away buffers the file
 /// editor is still holding.
 ///
-/// Only reachable with auto-save off — with it on the buffers are already on
-/// disk by the time anything can close.
+/// Also used when an auto-save has failed or takes too long to finish.
 pub(super) fn panel(
     this: &mut PopoverHost,
     prompt: UnsavedFileEditsPrompt,
     cx: &mut gpui::Context<PopoverHost>,
 ) -> gpui::Div {
     let theme = this.theme;
-    let (title, discard_label) = match prompt.action {
-        UnsavedFileEditsAction::CloseWindow(_) => ("Close window?", "Discard and close"),
-        UnsavedFileEditsAction::QuitApp => ("Quit GitComet?", "Discard and quit"),
+    let quit_title = format!("Quit {}?", crate::view::product_name());
+    let (title, discard_label) = if prompt.waiting_for_writes {
+        ("Waiting for saves", "Wait for saves")
+    } else {
+        match &prompt.action {
+            UnsavedFileEditsAction::CloseWindow(_) => ("Close window?", "Discard and close"),
+            UnsavedFileEditsAction::DeleteWorkspace { .. } => {
+                ("Delete workspace?", "Discard and delete")
+            }
+            UnsavedFileEditsAction::QuitApp => (quit_title.as_str(), "Discard and quit"),
+            UnsavedFileEditsAction::MoveRepo { .. } => ("Move repository?", "Discard and move"),
+        }
     };
     let detail = if prompt.files.len() == 1 {
         "1 edited file has not been saved.".to_string()
@@ -21,39 +29,21 @@ pub(super) fn panel(
         format!("{} edited files have not been saved.", prompt.files.len())
     };
 
-    let action = prompt.action;
-    let dialog = ConfirmDialog::new(title, DIALOG_440_WIDTH)
-        .text(
-            theme,
-            format!("{detail} Save them, or discard the changes."),
+    let detail = if prompt.waiting_for_writes {
+        "A save is still running. Wait for it to finish before moving the repository, or cancel the move.".to_string()
+    } else if prompt.action.moving_repo().is_some() {
+        format!(
+            "{detail} Save them, or discard the changes. Saves already running must finish before the repository can move."
         )
-        .section(
-            div()
-                .px_2()
-                .pb_1()
-                .text_size(theme.ui_text(14.0))
-                .text_color(theme.colors.foreground.secondary)
-                .child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        // Capped: a long list would push the buttons out of the
-                        // dialog, and the count above already says how many.
-                        .children(prompt.files.iter().take(8).map(|label| {
-                            div()
-                                .font_family(crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY)
-                                .ml_2()
-                                .child(label.clone())
-                        }))
-                        .when(prompt.files.len() > 8, |d| {
-                            d.child(
-                                div()
-                                    .ml_2()
-                                    .child(format!("…and {} more", prompt.files.len() - 8)),
-                            )
-                        }),
-                ),
-        );
+    } else {
+        format!("{detail} Save them, or discard the changes.")
+    };
+    let waiting_for_writes = prompt.waiting_for_writes;
+    let discard_action = prompt.action.clone();
+    let save_action = prompt.action;
+    let dialog = ConfirmDialog::new(title, DIALOG_440_WIDTH)
+        .text(theme, detail)
+        .file_list(theme, &prompt.files);
 
     dialog.render(
         theme,
@@ -64,9 +54,7 @@ pub(super) fn panel(
         )
         .on_click(theme, cx, |this, _e, _window, cx| {
             let root_view = this.root_view.clone();
-            let _ = root_view.update(cx, |root, cx| {
-                root.clear_pending_unsaved_file_edits_prompt(cx);
-            });
+            let _ = root_view.request(RootRequest::ClearPendingUnsavedFileEditsPrompt, None, cx);
             this.close_popover(cx);
         }),
         div()
@@ -75,26 +63,41 @@ pub(super) fn panel(
             .gap_1()
             .child(
                 components::Button::new("unsaved_file_edits_discard", discard_label)
-                    .style(components::ButtonStyle::Danger)
+                    .style(if waiting_for_writes {
+                        components::ButtonStyle::Filled
+                    } else {
+                        components::ButtonStyle::Danger
+                    })
                     .on_click(theme, cx, move |this, _e, _window, cx| {
                         let root_view = this.root_view.clone();
-                        let _ = root_view.update(cx, |root, cx| {
-                            root.resolve_unsaved_file_edits(action, false, cx);
-                        });
-                        this.close_popover(cx);
+                        let action = discard_action.clone();
+                        let _ = root_view.request(
+                            RootRequest::ResolveUnsavedFileEdits {
+                                action,
+                                save: false,
+                            },
+                            None,
+                            cx,
+                        );
+                        this.close_resolved_popover(cx);
                     }),
             )
-            .child(
-                components::Button::new("unsaved_file_edits_save", "Save all")
-                    .style(components::ButtonStyle::Filled)
-                    .on_click(theme, cx, move |this, _e, _window, cx| {
-                        let root_view = this.root_view.clone();
-                        let _ = root_view.update(cx, |root, cx| {
-                            root.resolve_unsaved_file_edits(action, true, cx);
-                        });
-                        this.close_popover(cx);
-                    }),
-            ),
+            .when(!waiting_for_writes, |buttons| {
+                buttons.child(
+                    components::Button::new("unsaved_file_edits_save", "Save all")
+                        .style(components::ButtonStyle::Filled)
+                        .on_click(theme, cx, move |this, _e, _window, cx| {
+                            let root_view = this.root_view.clone();
+                            let action = save_action.clone();
+                            let _ = root_view.request(
+                                RootRequest::ResolveUnsavedFileEdits { action, save: true },
+                                None,
+                                cx,
+                            );
+                            this.close_resolved_popover(cx);
+                        }),
+                )
+            }),
         cx,
     )
 }

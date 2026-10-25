@@ -1,11 +1,12 @@
 use super::*;
+use crate::kit::interaction_paint::InteractionPaint;
 use gpui::{
     App, Bounds, Element, ElementId, GlobalElementId, InspectorElementId, IntoElement, Pixels,
     Style, StyleRefinement, Styled, Window,
 };
 
 type PrepaintCallback<T> = Box<dyn FnOnce(Bounds<Pixels>, &mut Window, &mut App) -> T>;
-type PaintCallback<T> = Box<dyn FnOnce(Bounds<Pixels>, T, &mut Window, &mut App)>;
+type PaintCallback<T> = Box<dyn FnOnce(Bounds<Pixels>, T, &GlobalElementId, &mut Window, &mut App)>;
 
 pub(super) fn take_once_or_debug<T>(slot: &mut Option<T>, context: &'static str) -> Option<T> {
     let value = slot.take();
@@ -18,11 +19,23 @@ pub(super) fn keyed_canvas<T>(
     prepaint: impl 'static + FnOnce(Bounds<Pixels>, &mut Window, &mut App) -> T,
     paint: impl 'static + FnOnce(Bounds<Pixels>, T, &mut Window, &mut App),
 ) -> KeyedCanvas<T> {
+    keyed_canvas_with_id(id, prepaint, move |bounds, state, _, window, cx| {
+        paint(bounds, state, window, cx)
+    })
+}
+
+/// Reuse the element's existing global identity for persistent paint state.
+pub(super) fn keyed_canvas_with_id<T>(
+    id: impl Into<ElementId>,
+    prepaint: impl 'static + FnOnce(Bounds<Pixels>, &mut Window, &mut App) -> T,
+    paint: impl 'static + FnOnce(Bounds<Pixels>, T, &GlobalElementId, &mut Window, &mut App),
+) -> KeyedCanvas<T> {
     KeyedCanvas {
         id: id.into(),
         prepaint: Some(Box::new(prepaint)),
         paint: Some(Box::new(paint)),
         style: StyleRefinement::default(),
+        interaction: None,
     }
 }
 
@@ -31,6 +44,14 @@ pub(super) struct KeyedCanvas<T> {
     prepaint: Option<PrepaintCallback<T>>,
     paint: Option<PaintCallback<T>>,
     style: StyleRefinement,
+    interaction: Option<InteractionPaint>,
+}
+
+impl<T> KeyedCanvas<T> {
+    pub(super) fn track_interaction(mut self, interaction: InteractionPaint) -> Self {
+        self.interaction = Some(interaction);
+        self
+    }
 }
 
 impl<T: 'static> IntoElement for KeyedCanvas<T> {
@@ -77,6 +98,9 @@ impl<T: 'static> Element for KeyedCanvas<T> {
     ) -> Option<T> {
         let prepaint =
             take_once_or_debug(&mut self.prepaint, "KeyedCanvas::prepaint callback missing")?;
+        if let Some(interaction) = &self.interaction {
+            interaction.prepaint_canvas(_id.expect("keyed canvas has an id"), bounds, window);
+        }
         Some(prepaint(bounds, window, cx))
     }
 
@@ -101,8 +125,17 @@ impl<T: 'static> Element for KeyedCanvas<T> {
             return;
         };
 
+        if let Some(interaction) = &self.interaction {
+            interaction.paint_canvas(window);
+        }
         style.paint(bounds, window, cx, move |window, cx| {
-            paint(bounds, prepaint_state, window, cx)
+            paint(
+                bounds,
+                prepaint_state,
+                _id.expect("keyed canvas has an id"),
+                window,
+                cx,
+            )
         });
     }
 }

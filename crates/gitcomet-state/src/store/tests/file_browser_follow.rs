@@ -2,10 +2,293 @@
 
 use super::*;
 use crate::model::{FileBrowserSettings, SidebarMode};
+use crate::msg::ControlEffect;
+use crate::store::repository_runtime::RepositoryRuntimes;
 use gitcomet_core::domain::{FileEntry, FileEntryKind, FileSource};
 use std::sync::atomic::AtomicU64;
 
-type Repos = FxHashMap<RepoId, Arc<dyn GitRepository>>;
+type Repos = RepositoryRuntimes;
+
+#[test]
+fn opening_a_background_document_preserves_the_active_repository_and_its_loads() {
+    let (mut repos, ids, mut state, repo_id) = ready_state(SidebarMode::Files);
+    let effects = reduce(
+        &mut repos,
+        &ids,
+        &mut state,
+        Msg::OpenDocumentRepository {
+            path: PathBuf::from("/tmp/gitcomet-another-document-repo"),
+            activate: false,
+        },
+    );
+    assert_eq!(state.active_repo, Some(repo_id));
+    assert!(!effects.iter().any(|effect| matches!(
+        effect,
+        Effect::Control(ControlEffect::CancelRepoLoads { .. })
+    )));
+    assert!(
+        effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::OpenRepo { .. }))
+    );
+    // Opened workdirs are stored normalized; `/tmp/repo` has no drive on Windows.
+    let same = crate::store::reducer::normalize_repo_path(state.repos[0].spec.workdir.clone());
+    state.repos[0].spec.workdir = same.clone();
+    let effects = reduce(
+        &mut repos,
+        &ids,
+        &mut state,
+        Msg::OpenDocumentRepository {
+            path: same,
+            activate: false,
+        },
+    );
+    assert!(effects.is_empty());
+    assert_eq!(state.active_repo, Some(repo_id));
+}
+
+#[test]
+fn a_superseded_explorer_reply_cannot_replace_current_rows() {
+    let (mut repos, ids, mut state, repo_id) = ready_state(SidebarMode::Files);
+    let cancellation = gitcomet_core::services::CancellationToken::new();
+    cancellation.cancel();
+    reduce(
+        &mut repos,
+        &ids,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::FileBrowserLoaded {
+            cancellation: Some(cancellation),
+            repo_id,
+            source: FileSource::WorkingDirectory,
+            result: Ok(vec![dir_entry("stale-ignored-subtree")]),
+        }),
+    );
+    let Loadable::Ready(entries) = &state.repos[0].file_browser.entries else {
+        panic!("listing changed");
+    };
+    assert_eq!(entries[0].path.as_path(), Path::new("src"));
+}
+
+#[test]
+fn focusing_an_explorer_row_preserves_selection_and_range_anchor() {
+    let (mut repos, ids, mut state, repo_id) = ready_state(SidebarMode::Files);
+    let paths: Vec<_> = ["a", "b", "c"].into_iter().map(PathBuf::from).collect();
+    reduce(
+        &mut repos,
+        &ids,
+        &mut state,
+        Msg::SelectExplorerPath {
+            repo_id,
+            path: paths[0].clone(),
+            visible: paths.clone(),
+            toggle: false,
+            range: false,
+            context_menu: false,
+        },
+    );
+    reduce(
+        &mut repos,
+        &ids,
+        &mut state,
+        Msg::FocusExplorerPath {
+            repo_id,
+            path: paths[2].clone(),
+        },
+    );
+    let selection = &state.repos[0].file_browser.selection;
+    assert_eq!(selection.focused.as_ref(), Some(&paths[2]));
+    assert_eq!(selection.anchor.as_ref(), Some(&paths[0]));
+    assert_eq!(
+        selection.paths.iter().cloned().collect::<Vec<_>>(),
+        vec![paths[0].clone()]
+    );
+}
+
+#[test]
+fn hiding_dot_files_drops_them_from_the_selection_unless_revealed() {
+    let (mut repos, ids, mut state, repo_id) = ready_state(SidebarMode::Files);
+    let paths: Vec<_> = [".env", ".github/ci.yml", "src"]
+        .into_iter()
+        .map(PathBuf::from)
+        .collect();
+    let file_browser = &mut state.repos[0].file_browser;
+    file_browser.show_ignored = true;
+    file_browser.selection.paths = paths.iter().cloned().collect();
+    file_browser.selection.focused = Some(paths[0].clone());
+    file_browser
+        .revealed_paths
+        .insert(PathBuf::from(".github/ci.yml"));
+    reduce(
+        &mut repos,
+        &ids,
+        &mut state,
+        Msg::SetExplorerVisibility {
+            repo_id,
+            hidden: Some(false),
+            ignored: None,
+        },
+    );
+    assert!(state.repos[0].file_browser.show_ignored);
+    let selection = &state.repos[0].file_browser.selection;
+    assert_eq!(
+        selection.paths,
+        [PathBuf::from(".github/ci.yml"), PathBuf::from("src")]
+            .into_iter()
+            .collect()
+    );
+    assert_eq!(selection.focused, None, "focus on a hidden row goes too");
+}
+
+#[test]
+fn a_complete_listing_drops_selected_paths_that_are_gone() {
+    let (mut repos, ids, mut state, repo_id) = ready_state(SidebarMode::Files);
+    state.repos[0].file_browser.selection.paths = ["src", "ignored.log"]
+        .into_iter()
+        .map(PathBuf::from)
+        .collect();
+    reduce(
+        &mut repos,
+        &ids,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::FileBrowserLoaded {
+            cancellation: None,
+            repo_id,
+            source: FileSource::WorkingDirectory,
+            result: Ok(vec![dir_entry("src")]),
+        }),
+    );
+    assert_eq!(
+        state.repos[0].file_browser.selection.paths,
+        [PathBuf::from("src")].into_iter().collect()
+    );
+}
+
+#[test]
+fn file_repository_discovery_retains_path_resolution_error_details() {
+    use std::error::Error as _;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    struct DiscoveryBackend {
+        opened: AtomicBool,
+    }
+
+    impl GitBackend for DiscoveryBackend {
+        fn open(&self, _path: &Path) -> Result<Arc<dyn GitRepository>> {
+            self.opened.store(true, Ordering::Relaxed);
+            Err(Error::new(ErrorKind::NotARepository))
+        }
+    }
+
+    let directory = tempfile::tempdir().unwrap();
+    fs::create_dir(directory.path().join(".git")).unwrap();
+    let missing_parent = directory.path().join("missing-parent");
+    #[cfg(unix)]
+    let name = {
+        use std::os::unix::ffi::OsStringExt;
+        std::ffi::OsString::from_vec(b"document-\xff.txt".to_vec())
+    };
+    #[cfg(not(unix))]
+    let name = std::ffi::OsString::from("document.txt");
+    let file = missing_parent.join(name);
+    let expected = fs::canonicalize(&missing_parent).unwrap_err();
+    assert_eq!(expected.kind(), std::io::ErrorKind::NotFound);
+    assert!(expected.raw_os_error().is_some());
+    let backend = Arc::new(DiscoveryBackend {
+        opened: AtomicBool::new(false),
+    });
+    let (store, _) = AppStore::new_test(backend.clone());
+
+    let error = store.discover_file_repository(&file).unwrap_err();
+    store.shutdown_for_test().recv().unwrap();
+
+    assert!(!backend.opened.load(Ordering::Relaxed));
+    assert!(matches!(
+        error.kind(),
+        ErrorKind::Io(std::io::ErrorKind::NotFound)
+    ));
+    let source = error
+        .source()
+        .expect("path resolution keeps its original I/O error")
+        .downcast_ref::<std::io::Error>()
+        .unwrap();
+    assert_eq!(source.kind(), expected.kind());
+    assert_eq!(source.raw_os_error(), expected.raw_os_error());
+    assert_eq!(source.to_string(), expected.to_string());
+    let context = error.context().unwrap();
+    assert_eq!(
+        context.operation(),
+        "resolve file path for repository discovery"
+    );
+    assert_eq!(context.path(), Some(file.as_path()));
+    assert!(error.to_string().contains(&expected.to_string()));
+}
+
+#[test]
+fn file_repository_discovery_honors_nested_repositories_and_linked_worktrees() {
+    let directory = tempfile::tempdir().unwrap();
+    let outer = directory.path().join("outer");
+    let nested = outer.join("nested");
+    let linked = directory.path().join("linked");
+    fn git(directory: &Path, arguments: &[&std::ffi::OsStr]) {
+        let result = gitcomet_core::test_support::git_fixture::git_command()
+            .arg("-C")
+            .arg(directory)
+            .args([
+                "-c",
+                "user.name=Test",
+                "-c",
+                "user.email=test@example.invalid",
+                "-c",
+                "commit.gpgsign=false",
+            ])
+            .args(arguments)
+            .output()
+            .unwrap();
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+    }
+    std::fs::create_dir_all(&nested).unwrap();
+    git(&outer, &["init".as_ref()]);
+    git(&nested, &["init".as_ref()]);
+    git(
+        &outer,
+        &[
+            "commit".as_ref(),
+            "--allow-empty".as_ref(),
+            "-m".as_ref(),
+            "initial".as_ref(),
+        ],
+    );
+    git(
+        &outer,
+        &[
+            "worktree".as_ref(),
+            "add".as_ref(),
+            "-b".as_ref(),
+            "linked-test".as_ref(),
+            linked.as_os_str(),
+        ],
+    );
+    let (store, _) = AppStore::new_test(Arc::new(gitcomet_git_gix::GixBackend));
+    for root in [&outer, &nested, &linked] {
+        let file = root.join("document.txt");
+        std::fs::write(&file, "contents").unwrap();
+        assert_eq!(
+            store
+                .discover_file_repository(&file)
+                .unwrap_or_else(|error| panic!("discover {}: {error:?}", file.display())),
+            Some(gitcomet_core::path_utils::canonicalize_or_original(
+                root.to_path_buf()
+            ))
+        );
+    }
+    let standalone = directory.path().join("outside.txt");
+    std::fs::write(&standalone, "contents").unwrap();
+    assert_eq!(store.discover_file_repository(&standalone).unwrap(), None);
+}
 
 fn commit(n: u8) -> CommitId {
     CommitId(format!("{n:0>40}").into())
@@ -17,6 +300,7 @@ fn dir_entry(path: &str) -> FileEntry {
         path: Arc::new(PathBuf::from(path)),
         kind: FileEntryKind::Directory,
         depth: 0,
+        ignored: false,
     }
 }
 
@@ -51,7 +335,7 @@ fn ready_state(sidebar_mode: SidebarMode) -> (Repos, AtomicU64, AppState, RepoId
         .file_browser
         .expanded_dirs
         .insert(Arc::new(PathBuf::from("src")));
-    (FxHashMap::default(), AtomicU64::new(1), state, repo_id)
+    (Default::default(), AtomicU64::new(1), state, repo_id)
 }
 
 fn select(
@@ -65,7 +349,11 @@ fn select(
         repos,
         id_alloc,
         state,
-        Msg::SelectCommit { repo_id, commit_id },
+        Msg::SelectCommit {
+            request_id: None,
+            repo_id,
+            commit_id,
+        },
     )
 }
 
@@ -82,6 +370,7 @@ fn deliver_listing(
         id_alloc,
         state,
         Msg::Internal(crate::msg::InternalMsg::FileBrowserLoaded {
+            cancellation: None,
             repo_id,
             source,
             result: Ok(vec![dir_entry("src")]),
@@ -214,7 +503,10 @@ fn the_working_tree_row_goes_live() {
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::ClearCommitSelection { repo_id },
+        Msg::ClearCommitSelection {
+            request_id: None,
+            repo_id,
+        },
     );
 
     assert_eq!(
@@ -269,7 +561,15 @@ fn exiting_file_browsing_stays_live_until_explicitly_started_again() {
     );
 
     // Unrelated traffic must not drag the tree back to the selected commit.
-    let effects = reduce(&mut repos, &id_alloc, &mut state, Msg::DismissBannerError);
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::ReportError {
+            repo_id: None,
+            message: "unrelated".to_string(),
+        },
+    );
     assert!(file_browser_loads(&effects).is_empty());
     assert_eq!(state.repos[0].browsing_commit(), None);
 
@@ -455,7 +755,15 @@ fn a_manual_browse_elsewhere_sticks_until_the_selection_moves() {
         FileSource::Commit(c.clone()),
     );
 
-    let effects = reduce(&mut repos, &id_alloc, &mut state, Msg::DismissBannerError);
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::ReportError {
+            repo_id: None,
+            message: "unrelated".to_string(),
+        },
+    );
     assert!(file_browser_loads(&effects).is_empty());
     assert_eq!(state.repos[0].browsing_commit(), Some(&c));
 
@@ -610,7 +918,13 @@ fn activating_a_repo_tab_enters_it_live_with_one_walk() {
     // Coming back clears the selection, so the tab enters at its live tip and
     // the activation's own listing request already names the live tree.
     let mut effects = crate::store::reducer::SetActiveRepoEffects::new();
-    crate::store::reducer::fill_set_active_repo_inline(&repos, &mut state, repo_id, &mut effects);
+    crate::store::tests::fill_set_active_repo_inline(
+        &repos,
+        &mut state,
+        repo_id,
+        false,
+        &mut effects,
+    );
 
     assert_eq!(
         file_browser_loads(&effects),
@@ -667,6 +981,7 @@ fn following_reopens_the_file_at_the_latest_selection_and_closes_it_when_missing
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::FileBrowserLoaded {
+            cancellation: None,
             repo_id,
             source: FileSource::Commit(latest.clone()),
             result: Ok(vec![
@@ -676,16 +991,14 @@ fn following_reopens_the_file_at_the_latest_selection_and_closes_it_when_missing
                     path: Arc::new(path.clone()),
                     kind: FileEntryKind::File,
                     depth: 1,
+                    ignored: false,
                 },
             ]),
         }),
     );
     assert_eq!(
         state.repos[0].diff_state.diff_target,
-        Some(DiffTarget::Commit {
-            commit_id: latest,
-            path: Some(path),
-        })
+        Some(DiffTarget::commit(latest, path))
     );
     assert!(
         effects

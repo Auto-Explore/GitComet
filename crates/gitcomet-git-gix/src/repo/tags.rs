@@ -51,19 +51,15 @@ fn local_tags_to_prune(local_tags_output: &str, remote_tags: &FxHashSet<String>)
 
 fn delete_local_tag(repo: &gix::Repository, name: &str) -> Result<()> {
     let ref_name = format!("refs/tags/{name}");
-    let reference = repo
-        .find_reference(ref_name.as_str())
-        .map_err(|e| Error::new(ErrorKind::Backend(format!("gix find tag reference: {e}"))))?;
-    reference
-        .delete()
-        .map_err(|e| Error::new(ErrorKind::Backend(format!("gix delete tag {name}: {e}"))))
+    if !crate::refs::delete_named(repo, &ref_name)? {
+        return Err(Error::new(ErrorKind::Backend(format!(
+            "tag {name} not found"
+        ))));
+    }
+    Ok(())
 }
 
 impl GixRepo {
-    pub(super) fn list_tags_impl(&self) -> Result<Vec<Tag>> {
-        self.list_tags_cancellable_impl(&CancellationToken::new())
-    }
-
     pub(super) fn list_tags_cancellable_impl(
         &self,
         cancellation: &CancellationToken,
@@ -71,21 +67,21 @@ impl GixRepo {
         cancellation.check_cancelled()?;
         let repo = self.repo();
 
-        let refs = repo
-            .references()
-            .map_err(|e| Error::new(ErrorKind::Backend(format!("gix references: {e}"))))?;
+        let refs = crate::refs::view_cancellable(&repo, cancellation).map_err(|e| {
+            Error::new(ErrorKind::Backend(format!("gix references: {e}"))).with_source(e)
+        })?;
 
         let iter = refs
             .tags()
-            .map_err(|e| Error::new(ErrorKind::Backend(format!("gix tags: {e}"))))?
-            .peeled()
-            .map_err(|e| Error::new(ErrorKind::Backend(format!("gix peel refs: {e}"))))?;
+            .map_err(|e| Error::new(ErrorKind::Backend(format!("gix tags: {e}"))).with_source(e))?
+            .peeled();
 
         let mut tags = Vec::with_capacity(iter.size_hint().0);
         for reference in iter {
             cancellation.check_cancelled()?;
-            let reference = reference
-                .map_err(|e| Error::new(ErrorKind::Backend(format!("gix ref iter: {e}"))))?;
+            let reference = reference.map_err(|e| {
+                Error::new(ErrorKind::Backend(format!("gix ref iter: {e}"))).with_source(e)
+            })?;
             let name = reference.name().shorten().to_str_lossy().into_owned();
             let target = CommitId(oid_to_arc_str(&reference.id()));
             tags.push(Tag { name, target });
@@ -94,10 +90,6 @@ impl GixRepo {
         cancellation.check_cancelled()?;
         tags.sort_unstable_by(|a, b| a.name.cmp(&b.name));
         Ok(tags)
-    }
-
-    pub(super) fn list_remote_tags_impl(&self) -> Result<Vec<RemoteTag>> {
-        self.list_remote_tags_cancellable_impl(&CancellationToken::new())
     }
 
     pub(super) fn list_remote_tags_cancellable_impl(
@@ -320,32 +312,15 @@ impl GixRepo {
 #[cfg(test)]
 mod tests {
     use super::{GixRepo, local_tags_to_prune, parse_ls_remote_tag_names, parse_ls_remote_tags};
+    use crate::test_support::init_test_repo;
     use gitcomet_core::error::ErrorKind;
     use gitcomet_core::services::CancellationToken;
     use rustc_hash::FxHashSet;
     use std::path::Path;
-    use std::process::Command;
-
-    fn run_git(workdir: &Path, args: &[&str]) {
-        let output = Command::new("git")
-            .arg("-C")
-            .arg(workdir)
-            .args(args)
-            .output()
-            .expect("git command to run");
-        assert!(
-            output.status.success(),
-            "git {:?} failed\nstdout:\n{}\nstderr:\n{}",
-            args,
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
 
     fn open_repo(workdir: &Path) -> GixRepo {
-        run_git(workdir, &["init"]);
-        let thread_safe_repo = gix::open(workdir).expect("open repo").into_sync();
-        GixRepo::new(workdir.to_path_buf(), thread_safe_repo)
+        init_test_repo(workdir);
+        crate::test_support::open_repo(workdir)
     }
 
     #[test]

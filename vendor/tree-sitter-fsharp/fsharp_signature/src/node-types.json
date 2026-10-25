@@ -1719,6 +1719,10 @@
           "named": true
         },
         {
+          "type": "curried_spec",
+          "named": true
+        },
+        {
           "type": "flexible_type",
           "named": true
         },
@@ -2103,7 +2107,7 @@
     "fields": {
       "name": {
         "multiple": false,
-        "required": true,
+        "required": false,
         "types": [
           {
             "type": "identifier",
@@ -4883,6 +4887,10 @@
         "types": [
           {
             "type": "identifier",
+            "named": true
+          },
+          {
+            "type": "op_identifier",
             "named": true
           }
         ]

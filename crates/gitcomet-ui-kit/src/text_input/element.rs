@@ -1,0 +1,969 @@
+use super::drag::single_line_reveal_pad;
+use super::highlight::*;
+use super::shaping::*;
+use super::state::*;
+use super::wrap::*;
+use super::*;
+use crate::text_layout::TextLayoutExt as _;
+
+pub(super) struct TextElement {
+    pub(super) input: Entity<TextInput>,
+}
+
+#[cfg(test)]
+thread_local! {
+    static SELECTION_QUAD_CAPACITY: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Selection-quad capacity this thread painted from since the last call.
+#[cfg(test)]
+pub(super) fn take_selection_quad_capacity_for_tests() -> usize {
+    SELECTION_QUAD_CAPACITY.with(|painted| painted.replace(0))
+}
+
+/// Gap between the caret and the top/bottom of its line box.
+const CARET_INSET_Y_PX: f32 = 3.0;
+
+/// The blinking caret's height and its inset from the top of the line box.
+///
+/// Sized from the **line box**, never from the control: a single-line field is
+/// taller than its text (`SINGLE_LINE_INPUT_HEIGHT_PX` vs the line height), so
+/// deriving the caret from the control height drew a visibly taller caret in the
+/// search and filter fields than in the file editor and the merge tool's
+/// resolved output, which have no fixed control height to derive from. One rule
+/// for every input keeps them looking like the same widget.
+///
+/// A caret is never taller than its line box, so it cannot overflow a control
+/// sized to hold that line.
+fn caret_metrics(line_height: Pixels) -> (Pixels, Pixels) {
+    let inset = px(CARET_INSET_Y_PX);
+    let height = (line_height - inset * 2.0).max(px(2.0));
+    // Recovered from the height rather than assumed to be `inset`, so the
+    // `max` clamp above stays centred on a line box shorter than 8px.
+    let top_inset = (line_height - height) / 2.0;
+    (height, top_inset)
+}
+
+/// Rows shaped past the viewport. During a drag the text can scroll by one
+/// autoscroll step before the next paint, and the head must still land on a
+/// shaped row there.
+fn guard_rows(selecting: bool, line_height: Pixels) -> usize {
+    if !selecting || line_height <= px(0.0) {
+        return TEXT_INPUT_GUARD_ROWS;
+    }
+    let step_rows = (crate::drag_autoscroll::DRAG_AUTOSCROLL_MAX_STEP / line_height).ceil();
+    (step_rows as usize + 1).max(TEXT_INPUT_GUARD_ROWS)
+}
+
+pub(super) struct PrepaintState {
+    layout: Option<TextInputLayout>,
+    cursor: Option<PaintQuad>,
+    selections: Vec<PaintQuad>,
+    line_starts: Option<Arc<[usize]>>,
+    wrap_cache: Option<WrapCache>,
+    scroll_x: Pixels,
+    visible_line_range: Range<usize>,
+    /// The host scroll offset this layout was positioned with.
+    scroll_offset: Option<Point<Pixels>>,
+    /// Whether any resolved highlight asks for a background. `ShapedLine::paint`
+    /// draws glyphs only — run backgrounds need the separate `paint_background`
+    /// pass — and walking every visible line for it is wasted work on the
+    /// overwhelmingly common input that has no background highlight at all.
+    has_background_runs: bool,
+}
+
+impl IntoElement for TextElement {
+    type Element = Self;
+
+    fn into_element(self) -> Self::Element {
+        self
+    }
+}
+
+impl Element for TextElement {
+    type RequestLayoutState = ();
+    type PrepaintState = PrepaintState;
+
+    fn id(&self) -> Option<ElementId> {
+        None
+    }
+
+    fn source_location(&self) -> Option<&'static core::panic::Location<'static>> {
+        None
+    }
+
+    fn request_layout(
+        &mut self,
+        _id: Option<&GlobalElementId>,
+        _inspector_id: Option<&gpui::InspectorElementId>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> (LayoutId, Self::RequestLayoutState) {
+        let input = self.input.read(cx);
+        let line_height = input.effective_line_height(window);
+        let mut style = Style::default();
+        style.size.width = relative(1.).into();
+        if input.multiline {
+            let line_count = input.content.line_starts().len().max(1) as f32;
+            if input.soft_wrap
+                && let Some(cache) = input.wrap.cache
+                && cache.rows > 0
+                && cache.width > px(0.0)
+            {
+                style.size.height = (line_height * cache.rows as f32).into();
+            } else if input.soft_wrap
+                && let Some(rows) = input.wrap.last_rows
+                && rows > 0
+            {
+                // Preserve the previous wrapped row count until the next wrap pass finishes.
+                style.size.height = (line_height * rows as f32).into();
+            } else {
+                style.size.height = (line_height * line_count).into();
+            }
+        } else {
+            style.size.height = line_height.into();
+        }
+        // Content-width layout (opt-in): size a non-wrapping multiline input to
+        // its widest line so an outer `overflow_scroll` container can scroll it
+        // horizontally and expose a real horizontal `max_offset`. Width is a
+        // monospace estimate (widest line's display columns × char advance) —
+        // cheap, no per-line shaping. Tabs expand to the tab stop so tabbed
+        // lines aren't under-measured (which would clip horizontal scroll to
+        // the caret), while byte length stays a safe over-estimate for
+        // multi-byte glyphs. The estimate is only ever a scroll bound, so a
+        // slight overestimate is harmless.
+        if input.multiline && input.interaction.content_width_layout && !input.soft_wrap {
+            let max_units = input.content_width_max_units();
+            let font_px = window.text_style().font_size.to_pixels(window.rem_size());
+            let advance_px = (f32::from(font_px) * TEXT_INPUT_WRAP_CHAR_ADVANCE_FACTOR).max(1.0);
+            let content_w = px(max_units as f32 * advance_px + 8.0);
+            style.size.width = content_w.into();
+            // Don't let the flex wrapper shrink the leaf back to the viewport.
+            style.flex_shrink = 0.0;
+        }
+        (window.request_layout(style, [], cx), ())
+    }
+
+    fn prepaint(
+        &mut self,
+        _id: Option<&GlobalElementId>,
+        _inspector_id: Option<&gpui::InspectorElementId>,
+        bounds: Bounds<Pixels>,
+        _request_layout: &mut Self::RequestLayoutState,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Self::PrepaintState {
+        // gpui has applied (and clamped) the offset before laying out children.
+        let scroll_offset = self
+            .input
+            .read(cx)
+            .interaction
+            .vertical_scroll_handle
+            .as_ref()
+            .map(ScrollHandle::offset);
+        self.input.update(cx, |input, cx| {
+            let content = input.content.snapshot();
+            let selected_range = input.selection.range.clone();
+            let cursor = input.cursor_offset();
+            let style_colors = input.style;
+            let soft_wrap = input.soft_wrap && input.multiline;
+            let style = window.text_style();
+            let has_content = !content.is_empty();
+
+            // A placeholder or masked rendering is a synthesized string that is
+            // not the document; everything else reads through the model.
+            let substitute_text: Option<SharedString> = if content.is_empty() {
+                Some(input.placeholder.clone())
+            } else if input.masked {
+                Some(mask_text_for_display(content.as_ref()).into())
+            } else {
+                None
+            };
+            let text_color = if content.is_empty() {
+                style_colors.placeholder
+            } else if input.display_text {
+                style.color
+            } else {
+                style_colors.text
+            };
+
+            let font_size = style.font_size.to_pixels(window.rem_size());
+            let line_height = input.effective_line_height(window);
+            let base_font = style.font();
+
+            let line_starts: Arc<[usize]> = match substitute_text.as_ref() {
+                Some(text) => compute_line_starts(text).into(),
+                None => content.shared_line_starts(),
+            };
+            let display_len = substitute_text
+                .as_ref()
+                .map(|text| text.len())
+                .unwrap_or_else(|| content.len());
+            let line_count = line_starts.len().max(1);
+            let (visible_top, visible_bottom) =
+                visible_vertical_window(bounds, input.interaction.vertical_scroll_handle.as_ref());
+            let guard_rows = guard_rows(input.interaction.is_selecting, line_height);
+
+            // Resolve highlights for the visible window in the buffer's own
+            // coordinates, interpolating across any edits the highlight source
+            // has not caught up with yet.
+            let highlights = if !has_content {
+                None
+            } else {
+                let byte_range = provider_prefetch_byte_range_for_visible_window(
+                    line_starts.as_ref(),
+                    display_len,
+                    line_count,
+                    line_height,
+                    visible_top,
+                    visible_bottom,
+                );
+                let resolved = input.effective_highlights_for_window(byte_range);
+                if resolved.pending {
+                    input.ensure_highlight_provider_poll(cx);
+                }
+                Some(resolved.highlights)
+            };
+            let highlight_slice = highlights.as_ref().map(|h| h.as_slice());
+            let has_background_runs = highlight_slice.is_some_and(|highlights| {
+                highlights
+                    .iter()
+                    .any(|(_, style)| style.background_color.is_some())
+            });
+            let shape_style = TextShapeStyle {
+                base_font: &base_font,
+                text_color,
+                highlights: highlight_slice,
+                font_size,
+            };
+
+            if !soft_wrap {
+                if !input.multiline
+                    && input.read_only
+                    && input.display_truncation.is_some()
+                    && has_content
+                    && !input.masked
+                {
+                    let mut base_text_style = style.clone();
+                    base_text_style.color = text_color;
+                    // Single line by construction, so materializing it is the
+                    // row, not the document.
+                    let single_line = content.as_shared_string();
+                    let truncated_line = shape_truncated_line_cached(
+                        window,
+                        cx,
+                        &base_text_style,
+                        &single_line,
+                        Some(bounds.size.width.max(px(0.0))),
+                        input
+                            .display_truncation
+                            .unwrap_or(TextTruncationProfile::End),
+                        highlight_slice.unwrap_or(&[]),
+                        None,
+                    );
+                    let (cursor_quad, selections) = if selected_range.is_empty() {
+                        let x = truncated_line_x_for_source_offset(&truncated_line, cursor);
+                        let (caret_h, caret_top_inset) = caret_metrics(line_height);
+                        let top = bounds.top() + caret_top_inset;
+                        let caret = PaintQuad::new(Bounds::new(
+                            point(bounds.left() + x, top),
+                            size(px(1.0), caret_h),
+                        ))
+                        .background(style_colors.cursor);
+                        (Some(caret), Vec::new())
+                    } else {
+                        let mut selections = Vec::with_capacity(4);
+                        for range in truncated_line
+                            .projection
+                            .selection_display_ranges(selected_range.clone())
+                        {
+                            let x0 = truncated_line.shaped_line.x_for_index(range.start);
+                            let x1 = truncated_line.shaped_line.x_for_index(range.end);
+                            if x1 <= x0 {
+                                continue;
+                            }
+                            selections.push(
+                                PaintQuad::new(Bounds::from_corners(
+                                    point(bounds.left() + x0, bounds.top()),
+                                    point(bounds.left() + x1, bounds.top() + line_height),
+                                ))
+                                .background(style_colors.selection),
+                            );
+                        }
+                        (None, selections)
+                    };
+
+                    return PrepaintState {
+                        layout: Some(TextInputLayout::TruncatedSingleLine(truncated_line)),
+                        cursor: cursor_quad,
+                        selections,
+                        line_starts: Some(line_starts),
+                        wrap_cache: None,
+                        scroll_x: px(0.0),
+                        visible_line_range: 0..1,
+                        scroll_offset,
+                        has_background_runs,
+                    };
+                }
+
+                let mut scroll_x = if input.multiline {
+                    px(0.0)
+                } else {
+                    input.layout.scroll_x
+                };
+                let mut visible_line_range = if input.multiline {
+                    visible_plain_line_range(
+                        line_count,
+                        line_height,
+                        visible_top,
+                        visible_bottom,
+                        guard_rows,
+                    )
+                } else {
+                    0..line_count
+                };
+                if visible_line_range.is_empty() {
+                    visible_line_range = 0..line_count.min(1);
+                }
+
+                let cursor_line_ix =
+                    line_index_for_offset(line_starts.as_ref(), cursor, line_count);
+                // The rows this frame will shape: the viewport, plus the caret's
+                // row when it has scrolled out of it. Every *text* read below
+                // goes through this, so shaping costs the viewport.
+                //
+                // The frame as a whole is not yet free of the document:
+                // `line_starts` above is still the whole-document array, and an
+                // edit drops that cache, so each post-edit frame rebuilds it
+                // (~1.6ms at 100k rows). Closing that means giving the handful
+                // of `line_starts` readers in prepaint and paint a windowed
+                // equivalent.
+                let line_source = match substitute_text.as_ref() {
+                    Some(text) => LineTextSource::Whole {
+                        text,
+                        starts: line_starts.as_ref(),
+                    },
+                    None => LineTextSource::window(
+                        &content,
+                        visible_line_range.clone(),
+                        (cursor_line_ix < line_count).then_some(cursor_line_ix),
+                    ),
+                };
+
+                let streamed_line_runs = input.streamed_highlight_runs_for_visible_window(
+                    &line_source,
+                    line_starts.as_ref(),
+                    visible_line_range.clone(),
+                    &shape_style,
+                );
+
+                // Only the visible window is shaped, so only the visible window
+                // is stored: see `PlainLineLayouts`.
+                let mut lines = PlainLineLayouts::new(
+                    line_count,
+                    visible_line_range.start,
+                    visible_line_range.len(),
+                );
+                for line_ix in visible_line_range.clone() {
+                    let precomputed_runs = visible_window_runs_for_line_ix(
+                        streamed_line_runs.as_deref(),
+                        visible_line_range.start,
+                        line_ix,
+                    );
+                    let shaped = input.shape_plain_line_cached(
+                        LineShapeInput {
+                            line_ix,
+                            line_start: line_starts.get(line_ix).copied().unwrap_or(0),
+                            line_text: line_source.line_text(line_ix),
+                        },
+                        precomputed_runs,
+                        &shape_style,
+                        window,
+                    );
+                    lines.push(shaped);
+                }
+
+                if cursor_line_ix < line_count
+                    && (cursor_line_ix < visible_line_range.start
+                        || cursor_line_ix >= visible_line_range.end)
+                {
+                    let shaped = input.shape_plain_line_cached(
+                        LineShapeInput {
+                            line_ix: cursor_line_ix,
+                            line_start: line_starts.get(cursor_line_ix).copied().unwrap_or(0),
+                            line_text: line_source.line_text(cursor_line_ix),
+                        },
+                        None,
+                        &shape_style,
+                        window,
+                    );
+                    lines.set_stray(cursor_line_ix, shaped);
+                }
+
+                let single_line_cursor = if !input.multiline && !lines.is_empty() {
+                    let (line_ix, local_ix) = line_for_offset(line_starts.as_ref(), &lines, cursor);
+                    lines
+                        .get(line_ix)
+                        .map(|line| (line.x_for_index(local_ix), line.width))
+                } else {
+                    None
+                };
+                if let Some((cursor_x, line_w)) = single_line_cursor {
+                    let viewport_w = bounds.size.width.max(px(0.0));
+                    let pad = single_line_reveal_pad(viewport_w);
+                    let max_scroll_x = (line_w - viewport_w).max(px(0.0));
+
+                    let left = scroll_x;
+                    let right = scroll_x + viewport_w;
+                    if cursor_x < left + pad {
+                        scroll_x = (cursor_x - pad).max(px(0.0));
+                    } else if cursor_x > right - pad {
+                        scroll_x = (cursor_x + pad - viewport_w).max(px(0.0));
+                    }
+                    scroll_x = scroll_x.min(max_scroll_x);
+                } else {
+                    scroll_x = px(0.0);
+                }
+
+                let (cursor_quad, selections) = if selected_range.is_empty() {
+                    let (line_ix, local_ix) = line_for_offset(line_starts.as_ref(), &lines, cursor);
+                    let x = lines
+                        .get(line_ix)
+                        .map(|line| line.x_for_index(local_ix))
+                        .unwrap_or(px(0.0))
+                        - scroll_x;
+                    let (caret_h, caret_top_inset) = caret_metrics(line_height);
+                    let top = bounds.top() + line_height * line_ix as f32 + caret_top_inset;
+                    let caret = PaintQuad::new(Bounds::new(
+                        point(bounds.left() + x, top),
+                        size(px(1.0), caret_h),
+                    ))
+                    .background(style_colors.cursor);
+                    (Some(caret), Vec::new())
+                } else {
+                    let mut selections = Vec::with_capacity(visible_line_range.len().max(1));
+                    for ix in visible_line_range.clone() {
+                        let Some(line) = lines.get(ix) else {
+                            continue;
+                        };
+                        let start = line_starts.get(ix).copied().unwrap_or(0);
+                        let next_start = line_starts.get(ix + 1).copied().unwrap_or(display_len);
+                        let line_end = start + line.len();
+
+                        let seg_start = selected_range.start.max(start);
+                        let seg_end = selected_range.end.min(next_start);
+                        if seg_start >= seg_end {
+                            continue;
+                        }
+
+                        let local_start = seg_start.min(line_end) - start;
+                        let local_end = seg_end.min(line_end) - start;
+
+                        let origin = point(
+                            bounds.left() - scroll_x,
+                            bounds.top() + line_height * ix as f32,
+                        );
+                        for mut rect in line.selection_bounds(local_start..local_end, line_height) {
+                            rect.origin += origin;
+                            selections
+                                .push(PaintQuad::new(rect).background(style_colors.selection));
+                        }
+                    }
+                    (None, selections)
+                };
+
+                return PrepaintState {
+                    layout: Some(TextInputLayout::Plain(lines)),
+                    cursor: cursor_quad,
+                    selections,
+                    line_starts: Some(line_starts),
+                    wrap_cache: None,
+                    scroll_x,
+                    visible_line_range,
+                    scroll_offset,
+                    has_background_runs,
+                };
+            }
+
+            // The soft-wrap arm still works over the whole document: its row
+            // counts, y-offset prefix sum and wrap job are all document-wide.
+            let display_text: SharedString = match substitute_text.as_ref() {
+                Some(text) => text.clone(),
+                None => content.as_shared_string(),
+            };
+            let display_text_str = display_text.as_ref();
+
+            let wrap_width = bounds.size.width.max(px(0.0));
+            let rounded_wrap_width = wrap_width.round();
+            if input.wrap.row_counts.len() != line_count {
+                input.wrap.row_counts.resize(line_count, 1);
+                input.wrap.row_counts_current.resize(line_count, false);
+                input.request_wrap_recompute();
+            }
+            let wrap_font = (base_font.clone(), font_size);
+            if input.wrap.row_counts_width != Some(rounded_wrap_width)
+                || input.wrap.row_counts_font.as_ref() != Some(&wrap_font)
+            {
+                input.wrap.row_counts_width = Some(rounded_wrap_width);
+                input.wrap.row_counts_font = Some(wrap_font);
+                input.wrap.row_counts_current.fill(false);
+                input.wrap.pending_job = None;
+                input.request_wrap_recompute();
+            }
+            for rows in &mut input.wrap.row_counts {
+                *rows = (*rows).max(1);
+            }
+            let dirty_ranges = input.take_normalized_wrap_dirty_ranges(line_count);
+            let dirty_line_count = dirty_ranges.iter().map(Range::len).sum::<usize>();
+            let mut pending_lines = Vec::new();
+            if dirty_line_count <= TEXT_INPUT_WRAP_DIRTY_SYNC_LINE_LIMIT {
+                // A normal edit keeps its last measured height until we shape
+                // its current text, even when the edited line is off-screen.
+                // Feeding a monospace estimate through here first made the
+                // same line shrink and grow again during a single keystroke.
+                pending_lines.extend(dirty_ranges.into_iter().flatten());
+            } else {
+                // Bulk replacements remain bounded; the visible portion is
+                // still measured below before this frame is painted.
+                for range in dirty_ranges {
+                    input.wrap.row_counts_current[range].fill(false);
+                }
+                input.request_wrap_recompute();
+            }
+            input.maybe_recompute_wrap_rows(
+                display_text_str,
+                line_starts.as_ref(),
+                rounded_wrap_width,
+                font_size,
+                line_count,
+                cx,
+            );
+
+            let cursor_line_ix = line_index_for_offset(line_starts.as_ref(), cursor, line_count);
+            pending_lines.push(cursor_line_ix);
+            let mut y_offsets = vec![Pixels::ZERO; line_count];
+            let mut lines = (0..line_count)
+                .map(|_| EditorLine::default())
+                .collect::<Vec<_>>();
+            let mut shaped_mask = vec![false; line_count];
+            let wrapped_line_source = LineTextSource::Whole {
+                text: display_text_str,
+                starts: line_starts.as_ref(),
+            };
+            let mut visible_line_range;
+            loop {
+                let mut y = Pixels::ZERO;
+                for (ix, rows) in input.wrap.row_counts.iter().enumerate() {
+                    y_offsets[ix] = y;
+                    y += line_height * *rows as f32;
+                }
+                visible_line_range = visible_wrapped_line_range(
+                    &y_offsets,
+                    &input.wrap.row_counts,
+                    line_height,
+                    visible_top,
+                    visible_bottom,
+                    guard_rows,
+                );
+                let streamed_line_runs = input.streamed_highlight_runs_for_visible_window(
+                    &wrapped_line_source,
+                    line_starts.as_ref(),
+                    visible_line_range.clone(),
+                    &shape_style,
+                );
+                pending_lines.extend(visible_line_range.clone());
+                let mut rows_changed = false;
+                for line_ix in pending_lines.drain(..) {
+                    if shaped_mask[line_ix] {
+                        continue;
+                    }
+                    let line_start = line_starts.get(line_ix).copied().unwrap_or(0);
+                    let line_text = line_text_for_index(display_text_str, &line_starts, line_ix);
+                    let precomputed_runs = visible_line_range
+                        .contains(&line_ix)
+                        .then(|| {
+                            visible_window_runs_for_line_ix(
+                                streamed_line_runs.as_deref(),
+                                visible_line_range.start,
+                                line_ix,
+                            )
+                        })
+                        .flatten();
+                    // Off-screen edits need the same font runs they would use
+                    // on-screen; a provider's visible-window result need not
+                    // include those bytes (bold text can also change wrapping).
+                    let offscreen_highlights = (!visible_line_range.contains(&line_ix)
+                        && input.highlight.provider.is_some())
+                    .then(|| {
+                        input.effective_highlights_for_window(
+                            line_start..line_start + line_text.len(),
+                        )
+                    });
+                    if offscreen_highlights
+                        .as_ref()
+                        .is_some_and(|resolved| resolved.pending)
+                    {
+                        input.ensure_highlight_provider_poll(cx);
+                    }
+                    let line_style = TextShapeStyle {
+                        highlights: offscreen_highlights
+                            .as_ref()
+                            .map(|resolved| resolved.highlights.as_slice())
+                            .or(shape_style.highlights),
+                        ..shape_style
+                    };
+                    let wrapped = shape_wrapped_line(
+                        LineShapeInput {
+                            line_ix,
+                            line_start,
+                            line_text,
+                        },
+                        wrap_width,
+                        precomputed_runs,
+                        &line_style,
+                        input.tab_size,
+                        window,
+                    );
+                    rows_changed |= input.set_measured_wrap_rows(line_ix, wrapped.line_count());
+                    lines[line_ix] = wrapped;
+                    shaped_mask[line_ix] = true;
+                }
+                if !rows_changed {
+                    break;
+                }
+                // Shorter measurements can bring more lines into view. Keep
+                // shaping until the final visible range is covered, with each
+                // logical line shaped at most once in this frame.
+            }
+
+            let total_rows = total_wrap_rows(input.wrap.row_counts.as_slice());
+            let wrap_cache = Some(WrapCache {
+                width: rounded_wrap_width,
+                rows: total_rows,
+            });
+
+            let (cursor_quad, selections) = if selected_range.is_empty() {
+                let line_ix = line_index_for_offset(line_starts.as_ref(), cursor, line_count);
+                let start = line_starts.get(line_ix).copied().unwrap_or(0);
+                let local = cursor.saturating_sub(start).min(lines[line_ix].len());
+                let (caret_h, caret_top_inset) = caret_metrics(line_height);
+                let pos = lines[line_ix]
+                    .position_for_index(local, line_height)
+                    .unwrap_or(point(Pixels::ZERO, Pixels::ZERO));
+                let top = bounds.top() + y_offsets[line_ix] + pos.y + caret_top_inset;
+                let caret = PaintQuad::new(Bounds::new(
+                    point(bounds.left() + pos.x, top),
+                    size(px(1.0), caret_h),
+                ))
+                .background(style_colors.cursor);
+                (Some(caret), Vec::new())
+            } else {
+                let mut selections = Vec::with_capacity(visible_line_range.len().max(1));
+                for ix in visible_line_range.clone() {
+                    let start = line_starts.get(ix).copied().unwrap_or(0);
+                    let next_start = line_starts.get(ix + 1).copied().unwrap_or(display_len);
+                    let line_len = lines[ix].len();
+                    let line_end = start + line_len;
+
+                    let seg_start = selected_range.start.max(start);
+                    let seg_end = selected_range.end.min(next_start);
+                    if seg_start >= seg_end {
+                        continue;
+                    }
+
+                    let local_start = seg_start.min(line_end) - start;
+                    let local_end = seg_end.min(line_end) - start;
+
+                    let origin = point(bounds.left(), bounds.top() + y_offsets[ix]);
+                    for mut rect in lines[ix].selection_bounds(local_start..local_end, line_height)
+                    {
+                        rect.origin += origin;
+                        selections.push(PaintQuad::new(rect).background(style_colors.selection));
+                    }
+                }
+                (None, selections)
+            };
+
+            PrepaintState {
+                layout: Some(TextInputLayout::Wrapped {
+                    lines,
+                    y_offsets,
+                    row_counts: input.wrap.row_counts.clone(),
+                }),
+                cursor: cursor_quad,
+                selections,
+                line_starts: Some(line_starts),
+                wrap_cache,
+                scroll_x: px(0.0),
+                visible_line_range,
+                scroll_offset,
+                has_background_runs,
+            }
+        })
+    }
+
+    fn paint(
+        &mut self,
+        _id: Option<&GlobalElementId>,
+        _inspector_id: Option<&gpui::InspectorElementId>,
+        bounds: Bounds<Pixels>,
+        _request_layout: &mut Self::RequestLayoutState,
+        prepaint: &mut Self::PrepaintState,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        let focus_handle = self.input.read(cx).focus_handle.clone();
+        if crate::window_focus::is_active(&focus_handle, window) {
+            window.handle_input(
+                &focus_handle,
+                ElementInputHandler::new(bounds, self.input.clone()),
+                cx,
+            );
+        }
+
+        // Clicking away blurs, as a browser does. Window-level rather than
+        // hitbox-gated, so it also sees surfaces that take no focus of their own.
+        if focus_handle.is_focused(window) {
+            let input = self.input.clone();
+            let window_handle = window.window_handle();
+            window.on_mouse_event(move |event: &MouseDownEvent, phase, window, cx| {
+                if phase != gpui::DispatchPhase::Capture {
+                    return;
+                }
+                // `on_mouse_down` is wired for these two only, so any other
+                // button would read as a press this input did not take -- even
+                // one inside it. `first_mouse` matches `install_reset`.
+                if !matches!(event.button, MouseButton::Left | MouseButton::Right)
+                    || event.first_mouse
+                {
+                    return;
+                }
+                // Read in the capture phase: a menu row clears this field and
+                // stops propagation in the bubble phase, so a later read sees
+                // `None` and mistakes Copy for clicking away. Adopt rather than
+                // just flag, or the resolver drops the selection the menu acts on.
+                if input.read(cx).interaction.context_menu.is_some() {
+                    input.update(cx, |input, cx| {
+                        input.selection_owner.adopt(window, cx);
+                        input.interaction.took_press = true;
+                    });
+                    return;
+                }
+                input.update(cx, |input, _cx| input.interaction.took_press = false);
+                let input = input.clone();
+                // Deferred so the bubble phase has run: only then is it known
+                // whether the press was ours, another surface took focus, or a
+                // neutral gesture spoke for it.
+                cx.defer(move |cx| {
+                    if input.read(cx).interaction.took_press {
+                        return;
+                    }
+                    let _ = window_handle.update(cx, |_view, window, cx| {
+                        if crate::text_selection_owner::press_keeps_focus(window, cx) {
+                            return;
+                        }
+                        if input.read(cx).focus_handle.is_focused(window) {
+                            window.blur(cx);
+                        }
+                    });
+                });
+            });
+        }
+
+        // Window-level, so the drag follows the pointer out of the input and
+        // past the window edge. Capture phase, so no bubble handler that stops
+        // propagation can hide a move or the release from it.
+        if self.input.read(cx).interaction.is_selecting {
+            let input = self.input.clone();
+            window.on_mouse_event(move |event: &MouseMoveEvent, phase, _window, cx| {
+                if phase != gpui::DispatchPhase::Capture {
+                    return;
+                }
+                input.update(cx, |input, cx| input.drag_mouse_moved(event, cx));
+            });
+
+            let input = self.input.clone();
+            window.on_mouse_event(move |event: &MouseUpEvent, phase, _window, cx| {
+                if phase != gpui::DispatchPhase::Capture || event.button != MouseButton::Left {
+                    return;
+                }
+                input.update(cx, |input, _cx| input.end_mouse_drag());
+            });
+        }
+
+        #[cfg(test)]
+        SELECTION_QUAD_CAPACITY.with(|painted| {
+            painted.set(painted.get() + prepaint.selections.capacity());
+        });
+        for selection in prepaint.selections.drain(..) {
+            window.paint_quad(selection);
+        }
+        let line_height = self.input.read(cx).effective_line_height(window);
+        if let Some(layout) = prepaint.layout.as_ref() {
+            match layout {
+                TextInputLayout::Plain(lines) => {
+                    for ix in prepaint.visible_line_range.clone() {
+                        let Some(line) = lines.get(ix) else {
+                            continue;
+                        };
+                        let origin = point(
+                            bounds.origin.x - prepaint.scroll_x,
+                            bounds.origin.y + line_height * ix as f32,
+                        );
+                        if prepaint.has_background_runs {
+                            let _ = line.paint_background(
+                                origin,
+                                line_height,
+                                TextAlign::Left,
+                                None,
+                                window,
+                                cx,
+                            );
+                        }
+                        let painted =
+                            line.paint(origin, line_height, TextAlign::Left, None, window, cx);
+                        debug_assert!(
+                            painted.is_ok(),
+                            "TextInput plain line paint failed at line index {ix}"
+                        );
+                    }
+                }
+                TextInputLayout::TruncatedSingleLine(line) => {
+                    if line.has_background_runs {
+                        let _ = line.shaped_line.paint_background(
+                            point(bounds.origin.x, bounds.origin.y),
+                            line.line_height,
+                            TextAlign::Left,
+                            None,
+                            window,
+                            cx,
+                        );
+                    }
+                    let _ = line.shaped_line.paint(
+                        point(bounds.origin.x, bounds.origin.y),
+                        line.line_height,
+                        TextAlign::Left,
+                        None,
+                        window,
+                        cx,
+                    );
+                }
+                TextInputLayout::Wrapped {
+                    lines, y_offsets, ..
+                } => {
+                    for ix in prepaint.visible_line_range.clone() {
+                        let Some(line) = lines.get(ix) else {
+                            continue;
+                        };
+                        let y = y_offsets.get(ix).copied().unwrap_or(Pixels::ZERO);
+                        let origin = point(bounds.origin.x, bounds.origin.y + y);
+                        if prepaint.has_background_runs {
+                            let _ = line.paint_background(
+                                origin,
+                                line_height,
+                                TextAlign::Left,
+                                Some(bounds),
+                                window,
+                                cx,
+                            );
+                        }
+                        let _ = line.paint(
+                            origin,
+                            line_height,
+                            TextAlign::Left,
+                            Some(bounds),
+                            window,
+                            cx,
+                        );
+                    }
+                }
+            }
+        }
+
+        let cursor_blink_visible = self.input.read(cx).interaction.cursor_blink_visible;
+        if crate::window_focus::is_active(&focus_handle, window)
+            && cursor_blink_visible
+            && let Some(cursor) = prepaint.cursor.take()
+        {
+            window.paint_quad(cursor);
+        }
+
+        self.input.update(cx, |input, cx| {
+            let prev_height_rows = if input.multiline && input.soft_wrap {
+                input
+                    .wrap
+                    .cache
+                    .map(|cache| cache.rows)
+                    .or(input.wrap.last_rows)
+            } else {
+                None
+            };
+            let had_pending_cursor_autoscroll = input.interaction.pending_cursor_autoscroll;
+            input.layout.last = prepaint.layout.take();
+            input.layout.line_starts = prepaint.line_starts.clone();
+            input.layout.bounds = Some(bounds);
+            input.layout.painted_scroll_offset = prepaint.scroll_offset;
+            input.layout.painted_line_range = prepaint.visible_line_range.clone();
+            input.layout.paint_seq = input.layout.paint_seq.wrapping_add(1);
+            input.layout.line_height = line_height;
+            input.wrap.cache = prepaint.wrap_cache;
+            if input.multiline && input.soft_wrap {
+                if let Some(cache) = input.wrap.cache {
+                    input.wrap.last_rows = Some(cache.rows);
+                }
+            } else {
+                input.wrap.last_rows = None;
+            }
+            input.layout.scroll_x = prepaint.scroll_x;
+            if had_pending_cursor_autoscroll {
+                input.ensure_cursor_visible_in_vertical_scroll(cx);
+            }
+            let next_height_rows = if input.multiline && input.soft_wrap {
+                input
+                    .wrap
+                    .cache
+                    .map(|cache| cache.rows)
+                    .or(input.wrap.last_rows)
+            } else {
+                None
+            };
+            if prev_height_rows != next_height_rows {
+                // Apply the measured height to the parent on the next frame.
+                // The caret reveal owns its bounded retry while that happens.
+                cx.notify();
+            }
+        });
+    }
+}
+
+#[cfg(test)]
+mod caret_tests {
+    use super::*;
+
+    /// The caret is a property of the line box, not of the widget around it.
+    ///
+    /// Single-line fields are taller than their text, so the previous
+    /// control-height rule drew a caret ~50% taller in the search and filter
+    /// fields than in the file editor. One rule means one caret everywhere.
+    #[test]
+    fn caret_is_the_same_for_every_input_at_a_given_line_height() {
+        let line_height = px(18.0);
+        let (height, top_inset) = caret_metrics(line_height);
+        assert_eq!(height, px(12.0));
+        assert_eq!(top_inset, px(3.0));
+        // Centred: the gap above equals the gap below.
+        assert_eq!(top_inset * 2.0 + height, line_height);
+    }
+
+    #[test]
+    fn caret_stays_visible_and_centred_in_a_tiny_line_box() {
+        // Below 8px the inset would leave nothing to draw, so the height clamps
+        // and the inset has to be recovered from it or the caret would hang
+        // below its line.
+        let line_height = px(4.0);
+        let (height, top_inset) = caret_metrics(line_height);
+        assert_eq!(height, px(2.0));
+        assert_eq!(top_inset, px(1.0));
+        assert_eq!(top_inset * 2.0 + height, line_height);
+    }
+}

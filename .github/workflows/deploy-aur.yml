@@ -16,7 +16,7 @@ on:
       aur_branch:
         required: false
         type: string
-        default: "master"
+        default: ""
       dry_run:
         required: false
         type: boolean
@@ -37,14 +37,14 @@ on:
         required: false
         type: string
       aur_repo:
-        description: "AUR Git remote URL. Defaults to AUR_GIT_REPOSITORY or ssh://aur@aur.archlinux.org/gitcomet.git."
+        description: "AUR Git remote URL. Defaults to AUR_GIT_REPOSITORY or ssh://aur@aur.archlinux.org/gitcomet-bin.git."
         required: false
         default: ""
         type: string
       aur_branch:
         description: "AUR branch. Defaults to AUR_GIT_BRANCH or master."
         required: false
-        default: "master"
+        default: ""
         type: string
       dry_run:
         description: "Validate and print PKGBUILD/.SRCINFO without pushing"
@@ -55,8 +55,12 @@ on:
 permissions:
   contents: read
 
+defaults:
+  run:
+    shell: bash
+
 concurrency:
-  group: deploy-aur-${{ inputs.tag || github.event.inputs.tag || inputs.version || github.event.inputs.version || github.run_id }}
+  group: deploy-aur-gitcomet-bin
   cancel-in-progress: false
 
 jobs:
@@ -70,7 +74,7 @@ jobs:
       - name: Install Arch packaging tooling
         run: |
           set -euo pipefail
-          pacman -Sy --noconfirm --needed ca-certificates ca-certificates-utils curl expect git openssh perl shadow
+          pacman -Syu --noconfirm --needed ca-certificates ca-certificates-utils curl expect git openssh shadow
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -129,7 +133,7 @@ jobs:
           fi
 
           if [ -z "$aur_repo" ]; then
-            aur_repo="ssh://aur@aur.archlinux.org/gitcomet.git"
+            aur_repo="ssh://aur@aur.archlinux.org/gitcomet-bin.git"
           fi
 
           case "$aur_repo" in
@@ -143,7 +147,7 @@ jobs:
               aur_repo_path="${aur_repo#aur@aur.archlinux.org:}"
               ;;
             *)
-              echo "::error title=Invalid AUR remote::aur_repo must be an AUR Git URL like ssh://aur@aur.archlinux.org/gitcomet.git."
+              echo "::error title=Invalid AUR remote::aur_repo must be an AUR Git URL like ssh://aur@aur.archlinux.org/gitcomet-bin.git."
               exit 1
               ;;
           esac
@@ -153,11 +157,20 @@ jobs:
             exit 1
           fi
 
+          # Existing repository variables may still use the former package name.
+          if [ "$aur_repo_path" = gitcomet.git ]; then
+            aur_repo_path=gitcomet-bin.git
+          fi
+          if [ "$aur_repo_path" != gitcomet-bin.git ]; then
+            echo "::error title=Invalid AUR package::aur_repo must point to the gitcomet-bin package repository."
+            exit 1
+          fi
+
           aur_fetch_repo="https://aur.archlinux.org/${aur_repo_path}"
           aur_repo="ssh://aur@aur.archlinux.org/${aur_repo_path}"
 
-          if [ -z "$aur_branch" ]; then
-            echo "::error title=Missing AUR branch::aur_branch must not be empty."
+          if ! git check-ref-format --branch "$aur_branch" >/dev/null; then
+            echo "::error title=Invalid AUR branch::aur_branch must be a valid Git branch name."
             exit 1
           fi
 
@@ -166,12 +179,14 @@ jobs:
             exit 1
           fi
 
-          echo "tag=$tag" >> "$GITHUB_OUTPUT"
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "aur_repo=$aur_repo" >> "$GITHUB_OUTPUT"
-          echo "aur_fetch_repo=$aur_fetch_repo" >> "$GITHUB_OUTPUT"
-          echo "aur_branch=$aur_branch" >> "$GITHUB_OUTPUT"
-          echo "dry_run=$dry_run" >> "$GITHUB_OUTPUT"
+          {
+            echo "tag=$tag"
+            echo "version=$version"
+            echo "aur_repo=$aur_repo"
+            echo "aur_fetch_repo=$aur_fetch_repo"
+            echo "aur_branch=$aur_branch"
+            echo "dry_run=$dry_run"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Create non-root packaging user
         run: |
@@ -186,12 +201,14 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p dist/aur
-          binary_name="gitcomet-v${VERSION}-linux-x86_64.tar.gz"
           source_name="gitcomet-source-v${VERSION}.tar.gz"
 
-          curl -fL --retry 3 --retry-all-errors \
-            "https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/${binary_name}" \
-            -o "dist/aur/${binary_name}"
+          for arch in x86_64 arm64; do
+            binary_name="gitcomet-v${VERSION}-linux-${arch}.tar.gz"
+            curl -fL --retry 3 --retry-all-errors \
+              "https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/${binary_name}" \
+              -o "dist/aur/${binary_name}"
+          done
 
           curl -fL --retry 3 --retry-all-errors \
             "https://github.com/${GITHUB_REPOSITORY}/archive/refs/tags/${TAG}.tar.gz" \
@@ -216,6 +233,7 @@ jobs:
             --aur-dir '$GITHUB_WORKSPACE/aur-repo' \
             --version '$VERSION' \
             --binary-tar '$GITHUB_WORKSPACE/dist/aur/gitcomet-v${VERSION}-linux-x86_64.tar.gz' \
+            --aarch64-binary-tar '$GITHUB_WORKSPACE/dist/aur/gitcomet-v${VERSION}-linux-arm64.tar.gz' \
             --source-tar '$GITHUB_WORKSPACE/dist/aur/gitcomet-source-v${VERSION}.tar.gz' \
             --verify-source"
 
@@ -269,7 +287,7 @@ jobs:
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git commit -m "gitcomet ${TAG}"
+          git commit -m "gitcomet-bin ${TAG}"
 
           install -d -m 700 "$HOME/.ssh"
           key_path="$HOME/.ssh/aur"

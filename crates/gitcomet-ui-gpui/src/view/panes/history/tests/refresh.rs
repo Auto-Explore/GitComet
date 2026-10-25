@@ -2,7 +2,7 @@ use super::*;
 use gitcomet_core::domain::{LogPage, WorktreeDirtySummary};
 use gitcomet_core::services::{CancellationToken, HistoryReadRequest, HistoryReadResult};
 
-fn mount(
+pub(super) fn mount(
     cx: &mut gpui::TestAppContext,
     page: Arc<LogPage>,
 ) -> (
@@ -157,7 +157,6 @@ fn release_rebuild(cx: &mut gpui::VisualTestContext, view: &Entity<GitCometView>
 fn deep_refresh_keeps_the_displayed_page_and_respects_scrolling_during_the_build(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _guard = crate::test_support::lock_visual_test();
     let page = Arc::new(log_page(commits(50_000), None));
     let (view, cx, mut state, _) = mount(cx, Arc::clone(&page));
     scroll(cx, &view, None);
@@ -188,7 +187,6 @@ fn deep_refresh_keeps_the_displayed_page_and_respects_scrolling_during_the_build
 fn interior_reorder_updates_the_graph_and_clicks_use_the_displayed_source(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _guard = crate::test_support::lock_visual_test();
     let page = Arc::new(log_page(commits(600), None));
     let (view, cx, mut state, store) = mount(cx, Arc::clone(&page));
     scroll(cx, &view, Some(450));
@@ -229,7 +227,6 @@ fn dirty(path: &str, head: &str) -> WorktreeDirtySummary {
 
 #[gpui::test]
 fn pagination_waits_for_the_new_source_and_uses_its_current_extent(cx: &mut gpui::TestAppContext) {
-    let _guard = crate::test_support::lock_visual_test();
     let (view, cx, mut state, store) = mount(cx, Arc::new(log_page(commits(600), None)));
     scroll(cx, &view, None);
     state.repos[0].log = Loadable::Ready(Arc::new(log_page(commits(1_000), Some("c999"))));
@@ -243,6 +240,7 @@ fn pagination_waits_for_the_new_source_and_uses_its_current_extent(cx: &mut gpui
         }
         // A user message is an ordering barrier after the frame's dispatches.
         store.dispatch(Msg::SelectCommit {
+            request_id: None,
             repo_id: RepoId(1),
             commit_id: CommitId(id.into()),
         });
@@ -265,7 +263,6 @@ fn pagination_waits_for_the_new_source_and_uses_its_current_extent(cx: &mut gpui
 fn synthetic_rows_and_deleted_anchors_preserve_the_nearest_surviving_commit(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _guard = crate::test_support::lock_visual_test();
     let page = Arc::new(log_page(commits(600), None));
     let (view, cx, mut state, _) = mount(cx, Arc::clone(&page));
     scroll(cx, &view, Some(450));
@@ -317,7 +314,6 @@ fn activate_and_check(
 fn worktree_viewport_anchors_follow_paths_when_status_reorders_and_moves_rows(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _guard = crate::test_support::lock_visual_test();
     let (view, cx, mut state, _) = mount(cx, Arc::new(log_page(commits(600), None)));
     state.repos[0].worktree_dirty = Loadable::Ready(Arc::new(vec![
         dirty("/wt/a", "c300"),
@@ -356,10 +352,9 @@ fn worktree_viewport_anchors_follow_paths_when_status_reorders_and_moves_rows(
 
 #[gpui::test]
 fn activation_through_store_to_render_preserves_the_oldest_commit(cx: &mut gpui::TestAppContext) {
-    let _guard = crate::test_support::lock_visual_test();
     let dir = tempfile::tempdir().unwrap();
     let git = |args: &[&str]| {
-        let output = std::process::Command::new("git")
+        let output = gitcomet_core::test_support::git_fixture::git_command()
             .arg("-C")
             .arg(dir.path())
             .args(args)
@@ -381,7 +376,7 @@ fn activation_through_store_to_render_preserves_the_oldest_commit(cx: &mut gpui:
         stream.push('\n');
     }
     stream.push_str("done\n");
-    let mut child = std::process::Command::new("git")
+    let mut child = gitcomet_core::test_support::git_fixture::git_command()
         .arg("-C")
         .arg(dir.path())
         .args(["fast-import", "--quiet", "--done"])
@@ -425,7 +420,7 @@ fn activation_through_store_to_render_preserves_the_oldest_commit(cx: &mut gpui:
     }
 }
 
-fn indexed_fixture(
+pub(super) fn indexed_fixture(
     count: usize,
 ) -> (
     gitcomet_core::history_index::HistoryIndexHandle,
@@ -478,16 +473,7 @@ fn indexed_fixture_with_width(
     (builder.finish(&CancellationToken::new()).unwrap(), commits)
 }
 
-fn install_index(state: &mut AppState, index: gitcomet_core::history_index::HistoryIndexHandle) {
-    let history = &mut state.repos[0].history_state;
-    history.log_snapshot = Some(index.snapshot.clone());
-    history.indexed.requested = Some(index.snapshot.clone());
-    history.indexed.index = Some(index);
-    history.indexed.rev += 1;
-}
-
 fn signature_demand_follows_the_viewport(cx: &mut gpui::TestAppContext, indexed: bool) {
-    let _guard = crate::test_support::lock_visual_test();
     let (index, commits) = indexed_fixture(600);
     let (view, cx, mut state, store) = mount(cx, Arc::new(log_page(commits.clone(), None)));
     let history = cx.update(|_, app| view.read(app).main_pane.read(app).history_view.clone());
@@ -604,7 +590,6 @@ fn logical_top(
 fn indexed_regression_displayed_rows_remain_selectable_during_range_handoff(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _guard = crate::test_support::lock_visual_test();
     let (index, commits) = indexed_fixture(500);
     let (view, cx, mut state, store) = mount(cx, Arc::new(log_page(commits[..200].to_vec(), None)));
     install_index(&mut state, index.clone());
@@ -653,7 +638,6 @@ fn indexed_regression_displayed_rows_remain_selectable_during_range_handoff(
 fn indexed_regression_unanchored_worktree_arrow_preserves_selection_and_viewport(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _guard = crate::test_support::lock_visual_test();
     let (index, commits) = indexed_fixture(500);
     let (view, cx, mut state, store) = mount(cx, Arc::new(log_page(commits[..200].to_vec(), None)));
     install_index(&mut state, index);
@@ -691,6 +675,7 @@ fn indexed_regression_unanchored_worktree_arrow_preserves_selection_and_viewport
                         !history.history_select_adjacent_commit(direction, cx),
                         "no visible worktree row to step from"
                     );
+                    assert!(!history.history_select_page(direction, cx));
                     assert_eq!(
                         history
                             .scroll_interaction
@@ -716,7 +701,6 @@ fn indexed_regression_unanchored_worktree_arrow_preserves_selection_and_viewport
 fn indexed_regression_stash_label_preserves_listed_message_and_summary_fallback(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _guard = crate::test_support::lock_visual_test();
     let (index, mut commits) = indexed_fixture(10);
     commits[0].summary = "On main: embedded message".into();
     commits[1].summary = "On main: fallback message".into();
@@ -755,7 +739,6 @@ fn indexed_regression_stash_label_preserves_listed_message_and_summary_fallback(
 fn indexed_history_real_wheel_and_thumb_keep_position_during_refresh(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _guard = crate::test_support::lock_visual_test();
     let (index, commits) = indexed_fixture(5000);
     let (view, cx, mut state, store) = mount(
         cx,
@@ -917,7 +900,6 @@ fn indexed_history_real_wheel_and_thumb_keep_position_during_refresh(
 
 #[gpui::test]
 fn indexed_history_bootstrap_preserves_worktree_row_anchor(cx: &mut gpui::TestAppContext) {
-    let _guard = crate::test_support::lock_visual_test();
     let (index, commits) = indexed_fixture(5000);
     let (view, cx, mut state, store) = mount(
         cx,
@@ -947,7 +929,6 @@ fn indexed_history_bootstrap_preserves_worktree_row_anchor(cx: &mut gpui::TestAp
 fn indexed_history_handoff_never_replaces_visible_commits_with_placeholders(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _guard = crate::test_support::lock_visual_test();
     let (index, commits) = indexed_fixture(5000);
     let (view, cx, mut state, store) = mount(
         cx,
@@ -996,7 +977,6 @@ fn indexed_history_handoff_never_replaces_visible_commits_with_placeholders(
 fn indexed_history_skeleton_waits_300ms_and_hydrates_without_a_minimum_dwell(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _guard = crate::test_support::lock_visual_test();
     let (index, commits) = indexed_fixture(5000);
     let (view, cx, mut state, store) = mount(
         cx,
@@ -1005,6 +985,13 @@ fn indexed_history_skeleton_waits_300ms_and_hydrates_without_a_minimum_dwell(
             next_cursor: None,
         }),
     );
+    cx.update(|_, app| {
+        let history = view.read(app).main_pane.read(app).history_view.read(app);
+        assert!(
+            history.scenario_indexed_window().is_none(),
+            "bootstrap rows must not satisfy indexed readiness"
+        );
+    });
     install_index(&mut state, index.clone());
     store.replace_snapshot_for_test(Arc::new(state.clone()));
     set_history_view_state_for_tests(cx, &view, Arc::new(state.clone()));
@@ -1036,6 +1023,11 @@ fn indexed_history_skeleton_waits_300ms_and_hydrates_without_a_minimum_dwell(
     let placeholder = cx
         .debug_bounds("history_skeleton_650")
         .expect("skeleton deadline must repaint without more input");
+    cx.update(|_, app| {
+        let history = view.read(app).main_pane.read(app).history_view.read(app);
+        assert!(matches!(history.scenario_indexed_window(), Some((5000, first, last, false)) if first <= 650 && last > 650),
+            "scrolling to placeholders must not satisfy the jump witness");
+    });
     state.repos[0]
         .history_state
         .indexed
@@ -1064,6 +1056,13 @@ fn indexed_history_skeleton_waits_300ms_and_hydrates_without_a_minimum_dwell(
         cx.debug_bounds("history_row_650").is_some()
     });
     let real = cx.debug_bounds("history_row_650").unwrap();
+    cx.update(|_, app| {
+        let history = view.read(app).main_pane.read(app).history_view.read(app);
+        assert!(
+            matches!(history.scenario_indexed_window(), Some((5000, _, _, true))),
+            "hydrated visible rows must satisfy the jump witness"
+        );
+    });
     assert_eq!(real.size.height, placeholder.size.height);
     assert_eq!(real.origin.y, placeholder.origin.y);
     assert!(cx.debug_bounds("history_skeleton_650").is_none());
@@ -1082,7 +1081,6 @@ fn indexed_history_skeleton_waits_300ms_and_hydrates_without_a_minimum_dwell(
 fn history_startup_keeps_recent_rows_interactive_with_a_capped_draggable_thumb(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _guard = crate::test_support::lock_visual_test();
     let (index, commits) = indexed_fixture(5000);
     let (view, cx, mut state, store) = mount(
         cx,
@@ -1163,7 +1161,6 @@ fn history_startup_keeps_recent_rows_interactive_with_a_capped_draggable_thumb(
 fn history_initial_skeleton_is_decorative_and_old_query_timers_are_cancelled(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _guard = crate::test_support::lock_visual_test();
     let (view, cx, mut state, store) = mount(
         cx,
         Arc::new(LogPage {
@@ -1230,7 +1227,6 @@ fn history_initial_skeleton_is_decorative_and_old_query_timers_are_cancelled(
 
 #[gpui::test]
 fn graph_column_width_holds_through_bootstrap_and_indexed_publish(cx: &mut gpui::TestAppContext) {
-    let _guard = crate::test_support::lock_visual_test();
     let (index, commits) = indexed_fixture(5000);
     let (view, cx, mut state, store) = mount(
         cx,
@@ -1279,7 +1275,6 @@ fn graph_column_width_holds_through_bootstrap_and_indexed_publish(cx: &mut gpui:
 
 #[gpui::test]
 fn indexed_history_unrelated_updates_reuse_text_and_graph_windows(cx: &mut gpui::TestAppContext) {
-    let _guard = crate::test_support::lock_visual_test();
     let (index, commits) = indexed_fixture(5000);
     let (view, cx, mut state, store) = mount(cx, Arc::new(log_page(commits[..200].to_vec(), None)));
     install_index(&mut state, index.clone());
@@ -1319,13 +1314,14 @@ fn indexed_history_unrelated_updates_reuse_text_and_graph_windows(cx: &mut gpui:
     });
     for progress in [true, false] {
         let history = &mut state.repos[0].history_state.indexed;
-        history.rev += 1;
         if progress {
+            history.status_rev += 1;
             history.progress = Some(gitcomet_core::history_index::HistoryIndexProgress {
                 scanned: 40_000,
                 matched: 30_000,
             });
         } else {
+            history.rev += 1;
             history.ranges.insert(
                 4096,
                 Arc::new(gitcomet_core::history_index::HistoryRange {
@@ -1402,7 +1398,6 @@ fn indexed_signature_tooltip_is_retracted(
 ) {
     use gitcomet_core::domain::{CommitSignature, SignatureFormat, SignatureStatus};
 
-    let _guard = crate::test_support::lock_visual_test();
     let (index, commits) = indexed_fixture(5000);
     let (view, cx, mut state, store) = mount(cx, Arc::new(log_page(commits[..200].to_vec(), None)));
     install_index(&mut state, index.clone());
@@ -1558,7 +1553,6 @@ fn indexed_history_signature_tooltip_clears_on_publication(cx: &mut gpui::TestAp
 #[ignore = "production GPUI input, window publication and draw benchmark"]
 fn indexed_history_real_frame_benchmark(cx: &mut gpui::TestAppContext) {
     use gitcomet_core::history_perf::{self, Work};
-    let _guard = crate::test_support::lock_visual_test();
     let width = std::env::var("GITCOMET_BENCH_GRAPH_WIDTH")
         .ok()
         .and_then(|s| s.parse().ok())
@@ -1577,7 +1571,7 @@ fn indexed_history_real_frame_benchmark(cx: &mut gpui::TestAppContext) {
         .and_then(|s| s.parse().ok())
         .unwrap_or(38.0);
     cx.update(|app| {
-        crate::ui_scale::set_current(app, scale);
+        crate::ui_scale::set_default(app, scale);
     });
     let (index, commits) = indexed_fixture_with_width(20_000, width);
     let (view, cx, mut state, store) = mount(cx, Arc::new(log_page(commits[..200].to_vec(), None)));
@@ -1741,11 +1735,11 @@ fn indexed_history_real_frame_benchmark(cx: &mut gpui::TestAppContext) {
         serde_json::json!(paths.iter().max()),
     );
     allocations.append_to_payload(&mut metrics);
-    let report = crate::perf_sidecar::PerfSidecarReport::new(
+    let report = gitcomet_perf::sidecar::PerfSidecarReport::new(
         format!("indexed_history_frames/{width}_columns/{graph_pixels}_pixels_{scale}_percent"),
         metrics,
     );
-    crate::perf_sidecar::write_criterion_sidecar(&report).unwrap();
+    gitcomet_perf::sidecar::write_criterion_sidecar(&report).unwrap();
     eprintln!(
         "GPUI draw width={width} graph_pixels={graph_pixels} scale={scale} draw_p50_ms={:.3} draw_p95_ms={:.3} draw_p99_ms={:.3} allocations_per_frame={:.1} bytes_per_frame={:.1}",
         draws[50],
@@ -1790,4 +1784,75 @@ fn indexed_history_real_frame_benchmark(cx: &mut gpui::TestAppContext) {
         "GPUI window rebuild request ui_thread_us_min={:.1} median={:.1} max={:.1}",
         rebuild_us[0], rebuild_us[2], rebuild_us[4]
     );
+}
+
+/// A 15px UI font makes the row height fractional (37.43px). Layout snaps each
+/// row's `top` and `h` to device pixels separately, so placing rows at
+/// `k·h − within` left 1px gaps (37px rows, 38px apart at 1x).
+#[gpui::test]
+fn indexed_history_rows_tile_without_gaps_at_a_fractional_row_height(
+    cx: &mut gpui::TestAppContext,
+) {
+    cx.update(|app| {
+        crate::appearance::pin_density_for_test(app, crate::appearance::UiDensity::Comfortable);
+        app.update_global::<crate::appearance::Appearance, _>(|appearance, _| {
+            appearance.ui_font_size_px = 15;
+        });
+    });
+    let (index, commits) = indexed_fixture(400);
+    let (view, cx, mut state, store) = mount(cx, Arc::new(log_page(commits[..200].to_vec(), None)));
+    install_index(&mut state, index);
+    store.replace_snapshot_for_test(Arc::new(state.clone()));
+    set_history_view_state_for_tests(cx, &view, Arc::new(state));
+    wait_until(cx, "indexed viewport", |cx| {
+        cx.debug_bounds("indexed_history_viewport").is_some()
+    });
+    let raw_height = cx.update(|_, app| {
+        let history = view.read(app).main_pane.read(app).history_view.read(app);
+        crate::view::rows::history_row_height(history.ui_scale())
+    });
+    assert!(
+        f32::from(raw_height).fract() > 0.1,
+        "the fixture needs a fractional row height, got {raw_height:?}"
+    );
+
+    for scale in [1.0, 1.5, 2.0] {
+        cx.update(|window, _| window.set_scale_factor(scale));
+        for delta in [-7.3, -50.6, -404.37] {
+            let bounds = cx.debug_bounds("indexed_history_viewport").unwrap();
+            cx.simulate_event(gpui::ScrollWheelEvent {
+                position: bounds.center(),
+                delta: gpui::ScrollDelta::Pixels(point(px(0.0), px(delta))),
+                ..Default::default()
+            });
+            for _ in 0..2 {
+                cx.update(|window, app| {
+                    window.refresh();
+                    let _ = window.draw(app);
+                });
+                cx.run_until_parked();
+            }
+            let (top, within, _) = logical_top(cx, &view);
+            assert!(
+                within > 0.0,
+                "scroll by {delta} should leave a sub-row offset"
+            );
+            let rows: Vec<_> = (top..top + 12)
+                .map_while(|ix| {
+                    cx.debug_bounds(Box::leak(format!("history_row_{ix}").into_boxed_str()))
+                })
+                .collect();
+            assert!(rows.len() >= 8, "only {} rows laid out", rows.len());
+            let device = |y: Pixels| (f32::from(y) * scale).round();
+            for (ix, pair) in rows.windows(2).enumerate() {
+                assert_eq!(
+                    device(pair[0].bottom()),
+                    device(pair[1].top()),
+                    "scale {scale}, scroll {delta}: rows {} and {} do not meet",
+                    top + ix,
+                    top + ix + 1
+                );
+            }
+        }
+    }
 }

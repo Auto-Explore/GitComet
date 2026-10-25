@@ -1,11 +1,15 @@
+use super::comparison::{
+    NumstatCounts, git_range_numstat_counts, git_range_status_changes, parse_numstat_field,
+};
 use super::history::gix_head_id_or_none;
-use super::{GixRepo, oid_to_arc_str};
+use super::{GixRepo, object_id_from_commit_id, oid_to_arc_str};
 use crate::util::{
     bytes_to_text_preserving_utf8, fnv1a_64, git_workdir_cmd_for, path_buf_from_git_bytes,
-    run_git_capture_bytes_cancellable, run_git_simple, run_git_with_output, stable_path_bytes,
+    push_literal_paths, run_git_capture_bytes_cancellable, run_git_simple, run_git_with_output,
+    stable_path_bytes, submodule_script_path,
 };
 use gitcomet_core::domain::{
-    CommitFileChange, CommitId, DiffTarget, FileStatus, RepoStatus, Submodule, SubmoduleDiffRange,
+    CommitId, DiffTarget, FileStatus, RepoStatus, Submodule, SubmoduleDiffRange,
     SubmoduleDiffRangeKind, SubmoduleDiffSummary, SubmoduleDiffSummaryMode, SubmoduleInnerChange,
     SubmoduleStatus,
 };
@@ -23,10 +27,6 @@ use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 use std::thread;
 use std::time::Duration;
-
-type NumstatLineCounts = (Option<u32>, Option<u32>);
-/// Lookup only (never iterated in order), so the unseeded hash map suffices.
-type NumstatCounts = rustc_hash::FxHashMap<PathBuf, NumstatLineCounts>;
 
 const SUBMODULE_HISTORY_UNAVAILABLE_REASON: &str = "Submodule history is not available locally.";
 const SUBMODULE_POINTER_SIDE_UNAVAILABLE_REASON: &str =
@@ -70,13 +70,6 @@ impl GixRepo {
         list_submodules_in(&repo, cancellation)
     }
 
-    pub(super) fn submodule_diff_summary_impl(
-        &self,
-        target: &DiffTarget,
-    ) -> Result<SubmoduleDiffSummary> {
-        self.submodule_diff_summary_cancellable_impl(target, &CancellationToken::new())
-    }
-
     pub(super) fn submodule_diff_summary_cancellable_impl(
         &self,
         target: &DiffTarget,
@@ -89,8 +82,7 @@ impl GixRepo {
                 submodule_worktree_diff_summary(&repo, path, cancellation)
             }
             DiffTarget::Commit {
-                commit_id,
-                path: Some(path),
+                commit_id, path, ..
             } => submodule_commit_diff_summary(&repo, commit_id, path, cancellation),
             _ => Err(Error::new(ErrorKind::Unsupported(
                 "submodule summaries require a submodule working-tree target or committed submodule path",
@@ -274,9 +266,9 @@ impl GixRepo {
                 path.display()
             )))
         } else {
-            Ok(combine_command_outputs(
+            Ok(CommandOutput::combine(
                 format!("Load submodule {}", path.display()),
-                outputs,
+                &outputs,
             ))
         }
     }
@@ -319,13 +311,14 @@ impl GixRepo {
         )?;
 
         let mut stage_cmd = self.git_workdir_cmd();
-        stage_cmd.arg("add").arg("--").arg(path);
+        stage_cmd.arg("add");
+        push_literal_paths(&mut stage_cmd, [path]);
         let stage_output =
             run_git_with_output(stage_cmd, &format!("git add -- {}", path.display()))?;
 
-        Ok(combine_command_outputs(
+        Ok(CommandOutput::combine(
             format!("Change submodule pointer {}", path.display()),
-            vec![checkout_output, stage_output],
+            &[checkout_output, stage_output],
         ))
     }
 
@@ -337,24 +330,22 @@ impl GixRepo {
             resolve_submodule_logical_name(&repo, path)?.unwrap_or_else(|| path.to_path_buf());
 
         let mut cmd1 = self.git_workdir_cmd();
-        cmd1.arg("submodule")
-            .arg("deinit")
-            .arg("-f")
-            .arg("--")
-            .arg(path);
+        cmd1.arg("submodule").arg("deinit").arg("-f");
+        push_literal_paths(&mut cmd1, [submodule_script_path(path)]);
         let out1 =
             run_git_with_output(cmd1, &format!("git submodule deinit -f {}", path.display()))?;
 
         let mut cmd2 = self.git_workdir_cmd();
-        cmd2.arg("rm").arg("-f").arg("--").arg(path);
+        cmd2.arg("rm").arg("-f");
+        push_literal_paths(&mut cmd2, [path]);
         let out2 = run_git_with_output(cmd2, &format!("git rm -f {}", path.display()))?;
 
         cleanup_removed_submodule_metadata(&workdir, &git_dir, &logical_name).map_err(|err| {
             Error::new(ErrorKind::Backend(format!(
                 "Removed submodule '{}' from the worktree and index, but failed to clean metadata: {err}",
                 path.display()
-            )))
-        })?;
+            ))).with_source(err)
+})?;
 
         Ok(CommandOutput {
             command: format!("Remove submodule {}", path.display()),
@@ -406,10 +397,9 @@ fn collect_repo_submodules(
 ) -> Result<()> {
     cancellation.check_cancelled()?;
     let mut gitlinks = collect_gitlinks(repo, cancellation)?;
-    if let Some(submodules) = repo
-        .submodules()
-        .map_err(|e| Error::new(ErrorKind::Backend(format!("gix submodules: {e}"))))?
-    {
+    if let Some(submodules) = crate::refs::submodules(repo).map_err(|e| {
+        Error::new(ErrorKind::Backend(format!("gix submodules: {e}"))).with_source(e)
+    })? {
         for submodule in submodules {
             cancellation.check_cancelled()?;
             let relative_path = submodule
@@ -511,7 +501,10 @@ fn push_submodule_add_args(
     }
     // The label stays a human-readable summary; `--` is an argv concern only,
     // and credentials in the URL are masked because the label is displayed.
-    cmd.arg("--").arg(url).arg(path);
+    push_literal_paths(
+        cmd,
+        [std::ffi::OsStr::new(url), &*submodule_script_path(path)],
+    );
     command.push_str(&format!(" {} {}", redact_url_userinfo(url), path.display()));
     command
 }
@@ -523,9 +516,9 @@ fn collect_repo_untrusted_submodule_sources(
     out: &mut BTreeMap<PathBuf, SubmoduleTrustTarget>,
     remote_url_policy: RemoteUrlPolicy,
 ) -> Result<()> {
-    let Some(submodules) = repo
-        .submodules()
-        .map_err(|e| Error::new(ErrorKind::Backend(format!("gix submodules: {e}"))))?
+    let Some(submodules) = crate::refs::submodules(repo).map_err(|e| {
+        Error::new(ErrorKind::Backend(format!("gix submodules: {e}"))).with_source(e)
+    })?
     else {
         return Ok(());
     };
@@ -566,9 +559,9 @@ fn update_repo_submodules_recursive(
     outputs: &mut Vec<CommandOutput>,
     remote_url_policy: RemoteUrlPolicy,
 ) -> Result<()> {
-    let Some(submodules) = repo
-        .submodules()
-        .map_err(|e| Error::new(ErrorKind::Backend(format!("gix submodules: {e}"))))?
+    let Some(submodules) = crate::refs::submodules(repo).map_err(|e| {
+        Error::new(ErrorKind::Backend(format!("gix submodules: {e}"))).with_source(e)
+    })?
     else {
         return Ok(());
     };
@@ -596,11 +589,8 @@ fn update_repo_submodules_recursive(
             allow_file_submodule_transport(&mut cmd);
         }
 
-        cmd.arg("submodule")
-            .arg("update")
-            .arg("--init")
-            .arg("--")
-            .arg(&relative_path);
+        cmd.arg("submodule").arg("update").arg("--init");
+        push_literal_paths(&mut cmd, [submodule_script_path(&relative_path)]);
         outputs.push(run_git_with_output(
             cmd,
             &format!("git submodule update --init -- {}", full_path.display()),
@@ -628,9 +618,9 @@ fn collect_target_submodule_untrusted_sources(
     out: &mut BTreeMap<PathBuf, SubmoduleTrustTarget>,
     remote_url_policy: RemoteUrlPolicy,
 ) -> Result<bool> {
-    let Some(submodules) = repo
-        .submodules()
-        .map_err(|e| Error::new(ErrorKind::Backend(format!("gix submodules: {e}"))))?
+    let Some(submodules) = crate::refs::submodules(repo).map_err(|e| {
+        Error::new(ErrorKind::Backend(format!("gix submodules: {e}"))).with_source(e)
+    })?
     else {
         return Ok(false);
     };
@@ -691,9 +681,9 @@ fn load_target_submodule_recursive(
     outputs: &mut Vec<CommandOutput>,
     remote_url_policy: RemoteUrlPolicy,
 ) -> Result<bool> {
-    let Some(submodules) = repo
-        .submodules()
-        .map_err(|e| Error::new(ErrorKind::Backend(format!("gix submodules: {e}"))))?
+    let Some(submodules) = crate::refs::submodules(repo).map_err(|e| {
+        Error::new(ErrorKind::Backend(format!("gix submodules: {e}"))).with_source(e)
+    })?
     else {
         return Ok(false);
     };
@@ -721,11 +711,8 @@ fn load_target_submodule_recursive(
                 allow_file_submodule_transport(&mut cmd);
             }
 
-            cmd.arg("submodule")
-                .arg("update")
-                .arg("--init")
-                .arg("--")
-                .arg(&relative_path);
+            cmd.arg("submodule").arg("update").arg("--init");
+            push_literal_paths(&mut cmd, [submodule_script_path(&relative_path)]);
             outputs.push(run_git_with_output(
                 cmd,
                 &format!("git submodule update --init -- {}", full_path.display()),
@@ -816,7 +803,7 @@ fn configured_submodule_row(
 /// Look up just this gitlink, including conflict stages, without collecting
 /// every file in an index or opening any sibling submodule repositories.
 fn index_gitlink_at_path(index: &gix::index::State, path: &Path) -> Option<GitlinkIndexState> {
-    let key = gix::path::to_unix_separators_on_windows(gix::path::into_bstr(path));
+    let key = gix::path::to_unix_separators_on_windows(gix::path::into_bstr(path).ok()?);
     let mut result = None;
     for stage in [
         gix::index::entry::Stage::Unconflicted,
@@ -847,9 +834,8 @@ fn submodule_worktree_diff_summary(
     cancellation: &CancellationToken,
 ) -> Result<SubmoduleDiffSummary> {
     cancellation.check_cancelled()?;
-    let index = repo
-        .index_or_load_from_head_or_empty()
-        .map_err(|e| Error::new(ErrorKind::Backend(format!("gix index: {e}"))))?;
+    let index = crate::refs::index_or_load_from_head_or_empty(repo)
+        .map_err(|e| Error::new(ErrorKind::Backend(format!("gix index: {e}"))).with_source(e))?;
     let gitlink = index_gitlink_at_path(&index, path);
     if gitlink.is_none() {
         // The sidebar includes nested paths. Resolve their pointers against
@@ -873,10 +859,9 @@ fn submodule_worktree_diff_summary(
     let mut submodule = None;
     let mut configured_repo = None;
     if let Some(gitlink) = gitlink {
-        if let Some(configured) = repo
-            .submodules()
-            .map_err(|e| Error::new(ErrorKind::Backend(format!("gix submodules: {e}"))))?
-        {
+        if let Some(configured) = crate::refs::submodules(repo).map_err(|e| {
+            Error::new(ErrorKind::Backend(format!("gix submodules: {e}"))).with_source(e)
+        })? {
             for candidate in configured {
                 cancellation.check_cancelled()?;
                 let candidate_path = candidate.path().map_err(|e| {
@@ -1098,7 +1083,7 @@ fn submodule_range_unavailable_reason(
 }
 
 fn submodule_commit_available(repo: &gix::Repository, commit_id: &CommitId) -> bool {
-    object_id_from_commit_id(commit_id)
+    object_id_from_commit_id(commit_id, repo.object_hash())
         .and_then(|object_id| repo.find_commit(object_id).ok())
         .is_some()
 }
@@ -1109,46 +1094,19 @@ fn submodule_range_changes_from_commits(
     to: &CommitId,
     cancellation: &CancellationToken,
 ) -> Result<Vec<SubmoduleInnerChange>> {
-    let status_changes = git_range_status_changes(nested_workdir, from, Some(to), cancellation)?;
-    let counts = git_range_numstat_counts(nested_workdir, from, Some(to), cancellation)?;
+    let status_changes =
+        git_range_status_changes(nested_workdir, from, Some(to), None, cancellation)?;
+    let counts = git_range_numstat_counts(nested_workdir, from, Some(to), None, cancellation)?;
     status_changes
         .into_iter()
         .map(|change| {
             cancellation.check_cancelled()?;
-            let (additions, deletions) = counts.get(&change.path).cloned().unwrap_or((None, None));
-            Ok(SubmoduleInnerChange {
-                path: change.path,
-                kind: change.kind,
-                additions,
-                deletions,
-            })
+            let (additions, deletions) = change.line_counts(&counts);
+            Ok(SubmoduleInnerChange::new(change.path, change.kind)
+                .with_line_counts(additions, deletions)
+                .with_old_path(change.old_path))
         })
         .collect()
-}
-
-/// List the files that differ between commit `from` and the live working tree
-/// (`git diff <from>`), for the compare-against-working-tree feature. Untracked
-/// files are excluded, matching the unified diff shown in the main pane.
-pub(super) fn diff_commit_to_worktree_files(
-    workdir: &Path,
-    from: &CommitId,
-) -> Result<Vec<CommitFileChange>> {
-    let cancellation = CancellationToken::new();
-    let status_changes = git_range_status_changes(workdir, from, None, &cancellation)?;
-    let counts = git_range_numstat_counts(workdir, from, None, &cancellation)?;
-    Ok(status_changes
-        .into_iter()
-        .map(|change| {
-            let (additions, deletions) = counts.get(&change.path).cloned().unwrap_or((None, None));
-            CommitFileChange {
-                path: change.path,
-                kind: change.kind,
-                is_submodule: change.is_submodule,
-                additions,
-                deletions,
-            }
-        })
-        .collect())
 }
 
 fn submodule_inner_changes_from_status(
@@ -1161,28 +1119,10 @@ fn submodule_inner_changes_from_status(
         .map(|entry| {
             cancellation.check_cancelled()?;
             let (additions, deletions) = counts.get(&entry.path).cloned().unwrap_or((None, None));
-            Ok(SubmoduleInnerChange {
-                path: entry.path.clone(),
-                kind: entry.kind,
-                additions,
-                deletions,
-            })
+            Ok(SubmoduleInnerChange::new(entry.path.clone(), entry.kind)
+                .with_line_counts(additions, deletions))
         })
         .collect()
-}
-
-fn parse_numstat_field(field: &[u8]) -> Option<u32> {
-    if field == b"-" {
-        return None;
-    }
-    std::str::from_utf8(field).ok()?.parse::<u32>().ok()
-}
-
-fn next_non_empty_nul_field<'a, I>(fields: &mut I) -> Option<&'a [u8]>
-where
-    I: Iterator<Item = &'a [u8]>,
-{
-    fields.find(|field| !field.is_empty())
 }
 
 fn git_numstat_counts(
@@ -1195,11 +1135,17 @@ fn git_numstat_counts(
     if cached {
         command.arg("--cached");
     }
-    command.arg("--numstat").arg("-z").arg("--no-renames");
+    // A gitlink would count its "Subproject commit" line, and these rows
+    // carry no mode to drop that by.
+    command
+        .arg("--numstat")
+        .arg("-z")
+        .arg("--no-renames")
+        .arg("--ignore-submodules=all");
     let label = if cached {
-        "git diff --cached --numstat -z --no-renames"
+        "git diff --cached --numstat -z --no-renames --ignore-submodules=all"
     } else {
-        "git diff --numstat -z --no-renames"
+        "git diff --numstat -z --no-renames --ignore-submodules=all"
     };
     let output = run_git_capture_bytes_cancellable(command, label, cancellation)?;
 
@@ -1220,152 +1166,17 @@ fn git_numstat_counts(
     Ok(counts)
 }
 
-/// One entry of a `git diff --raw` listing: what changed at `path`, and whether
-/// that entry is a gitlink on either side (i.e. a submodule pointer rather than
-/// a file).
-struct RangeStatusChange {
-    path: PathBuf,
-    kind: gitcomet_core::domain::FileStatusKind,
-    is_submodule: bool,
-}
-
-/// Git's tree entry mode for a gitlink (a submodule pointer).
-const GITLINK_ENTRY_MODE: &[u8] = b"160000";
-
-/// `--raw` rather than `--name-status` because the entry modes are the only
-/// thing in a CLI diff that identifies a submodule pointer, and callers that
-/// build `CommitFileChange` have to flag those the same way the gix tree-diff
-/// path does.
-fn git_range_status_changes(
-    workdir: &Path,
-    from: &CommitId,
-    to: Option<&CommitId>,
-    cancellation: &CancellationToken,
-) -> Result<Vec<RangeStatusChange>> {
-    let mut command = git_workdir_cmd_for(workdir);
-    command
-        .arg("--no-optional-locks")
-        .arg("diff")
-        .arg("--raw")
-        .arg("-z")
-        .arg("--find-renames")
-        .arg(from.as_ref());
-    // Omitting `to` makes git compare `from` against the working tree.
-    if let Some(to) = to {
-        command.arg(to.as_ref());
-    }
-    let label = "git diff --raw -z --find-renames";
-    let output = run_git_capture_bytes_cancellable(command, label, cancellation)?;
-
-    let mut fields = output.split(|byte| *byte == 0);
-    let mut changes = Vec::new();
-    // Each record is `:<srcmode> <dstmode> <srcsha> <dstsha> <status>\0<path>\0`,
-    // with renames and copies adding a second path field.
-    while let Some(header) = next_non_empty_nul_field(&mut fields) {
-        cancellation.check_cancelled()?;
-        let Some(header) = header.strip_prefix(b":") else {
-            continue;
-        };
-        let mut tokens = header.split(|byte| *byte == b' ').filter(|t| !t.is_empty());
-        let (Some(src_mode), Some(dst_mode)) = (tokens.next(), tokens.next()) else {
-            continue;
-        };
-        // The two object ids sit between the modes and the status letter.
-        let Some(status_field) = tokens.next_back() else {
-            continue;
-        };
-        let Some(status_code) = status_field.first().copied() else {
-            continue;
-        };
-        let kind = match status_code {
-            b'A' | b'C' => gitcomet_core::domain::FileStatusKind::Added,
-            b'D' => gitcomet_core::domain::FileStatusKind::Deleted,
-            b'R' => gitcomet_core::domain::FileStatusKind::Renamed,
-            b'U' => gitcomet_core::domain::FileStatusKind::Conflicted,
-            _ => gitcomet_core::domain::FileStatusKind::Modified,
-        };
-
-        let path_bytes = if matches!(status_code, b'R' | b'C') {
-            let _old_path = next_non_empty_nul_field(&mut fields);
-            next_non_empty_nul_field(&mut fields).unwrap_or_default()
-        } else {
-            next_non_empty_nul_field(&mut fields).unwrap_or_default()
-        };
-
-        if path_bytes.is_empty() {
-            continue;
-        }
-
-        changes.push(RangeStatusChange {
-            path: path_buf_from_git_bytes(path_bytes, "git diff --raw path")?,
-            kind,
-            // A submodule added or removed by the range is a gitlink on only one
-            // side, so either side counts.
-            is_submodule: src_mode == GITLINK_ENTRY_MODE || dst_mode == GITLINK_ENTRY_MODE,
-        });
-    }
-
-    Ok(changes)
-}
-
-fn git_range_numstat_counts(
-    workdir: &Path,
-    from: &CommitId,
-    to: Option<&CommitId>,
-    cancellation: &CancellationToken,
-) -> Result<NumstatCounts> {
-    let mut command = git_workdir_cmd_for(workdir);
-    command
-        .arg("--no-optional-locks")
-        .arg("diff")
-        .arg("--numstat")
-        .arg("-z")
-        .arg("--find-renames")
-        .arg(from.as_ref());
-    // Omitting `to` makes git compare `from` against the working tree.
-    if let Some(to) = to {
-        command.arg(to.as_ref());
-    }
-    let label = "git diff --numstat -z --find-renames";
-    let output = run_git_capture_bytes_cancellable(command, label, cancellation)?;
-
-    let mut counts = NumstatCounts::default();
-    let mut fields = output.split(|byte| *byte == 0);
-    while let Some(record) = next_non_empty_nul_field(&mut fields) {
-        cancellation.check_cancelled()?;
-        let mut columns = record.splitn(3, |byte| *byte == b'\t');
-        let additions = parse_numstat_field(columns.next().unwrap_or_default());
-        let deletions = parse_numstat_field(columns.next().unwrap_or_default());
-        let path_field = columns.next().unwrap_or_default();
-        let path_bytes = if path_field.is_empty() {
-            let _old_path = next_non_empty_nul_field(&mut fields);
-            next_non_empty_nul_field(&mut fields).unwrap_or_default()
-        } else {
-            path_field
-        };
-        if path_bytes.is_empty() {
-            continue;
-        }
-        counts.insert(
-            path_buf_from_git_bytes(path_bytes, "git diff --numstat path")?,
-            (additions, deletions),
-        );
-    }
-
-    Ok(counts)
-}
-
 fn resolve_submodule_target_commit_id(
     repo: &gix::Repository,
     reference: &str,
 ) -> Result<gix::ObjectId> {
-    let object = repo
-        .rev_parse_single(reference)
-        .map_err(|_| {
+    let object = crate::refs::resolve_required(repo, reference)
+        .map_err(|error| {
             Error::new(ErrorKind::Backend(format!(
                 "submodule reference '{}' did not resolve to an object",
                 reference
             )))
+            .with_source(error)
         })?
         .object()
         .map_err(|e| {
@@ -1387,7 +1198,7 @@ fn first_parent_commit_id(
     repo: &gix::Repository,
     commit_id: &CommitId,
 ) -> Result<Option<CommitId>> {
-    let Some(object_id) = object_id_from_commit_id(commit_id) else {
+    let Some(object_id) = object_id_from_commit_id(commit_id, repo.object_hash()) else {
         return Err(Error::new(ErrorKind::Backend(format!(
             "invalid commit id '{}'",
             commit_id.as_ref()
@@ -1407,14 +1218,14 @@ fn gitlink_commit_id_at_revision(
     revision: &str,
     path: &Path,
 ) -> Result<Option<CommitId>> {
-    let object_id = repo
-        .rev_parse_single(revision)
+    let object_id = crate::refs::resolve_required(repo, revision)
         .map(|id| id.detach())
         .map_err(|e| {
             Error::new(ErrorKind::Backend(format!(
                 "resolve revision '{revision}' for submodule '{}': {e}",
                 path.display()
             )))
+            .with_source(e)
         })?;
     gitlink_commit_id_in_object(repo, object_id, path)
 }
@@ -1458,9 +1269,9 @@ fn head_gitlink_commit_id(repo: &gix::Repository, path: &Path) -> Result<Option<
 }
 
 fn resolve_submodule_logical_name(repo: &gix::Repository, path: &Path) -> Result<Option<PathBuf>> {
-    let Some(submodules) = repo
-        .submodules()
-        .map_err(|e| Error::new(ErrorKind::Backend(format!("gix submodules: {e}"))))?
+    let Some(submodules) = crate::refs::submodules(repo).map_err(|e| {
+        Error::new(ErrorKind::Backend(format!("gix submodules: {e}"))).with_source(e)
+    })?
     else {
         return Ok(None);
     };
@@ -1499,7 +1310,12 @@ fn cleanup_failed_submodule_add_error(
         Err(probe_err) => {
             return append_failed_submodule_add_note(
                 err,
-                &format!("GitComet could not inspect failed submodule add state: {probe_err}"),
+                &format!(
+                    "{} could not inspect failed submodule add state: {probe_err}",
+                    gitcomet_core::identity::current().display_name()
+                ),
+                probe_err,
+                workdir,
             );
         }
     };
@@ -1513,6 +1329,8 @@ fn cleanup_failed_submodule_add_error(
         Err(cleanup_err) => append_failed_submodule_add_note(
             err,
             &format!("Cleanup after failed submodule add also failed: {cleanup_err}"),
+            cleanup_err,
+            workdir,
         ),
     }
 }
@@ -1535,9 +1353,9 @@ fn submodule_path_registered(repo: &gix::Repository, path: &Path) -> Result<bool
 }
 
 fn configured_submodule_path_exists(repo: &gix::Repository, path: &Path) -> Result<bool> {
-    let Some(submodules) = repo
-        .submodules()
-        .map_err(|e| Error::new(ErrorKind::Backend(format!("gix submodules: {e}"))))?
+    let Some(submodules) = crate::refs::submodules(repo).map_err(|e| {
+        Error::new(ErrorKind::Backend(format!("gix submodules: {e}"))).with_source(e)
+    })?
     else {
         return Ok(false);
     };
@@ -1609,6 +1427,8 @@ fn remove_failed_submodule_checkout(
             "remove failed submodule checkout {}: {e}",
             checkout_path.display()
         )))
+        .with_source(e)
+        .with_context("remove failed submodule checkout", Some(&checkout_path))
     })
 }
 
@@ -1630,14 +1450,20 @@ fn checkout_git_dir_reference(checkout_path: &Path) -> Result<Option<PathBuf>> {
     let metadata = match fs::metadata(&dot_git) {
         Ok(metadata) => metadata,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(err) => return Err(Error::new(ErrorKind::Io(err.kind()))),
+        Err(err) => {
+            return Err(
+                Error::from(err).with_context("inspect submodule Git directory", Some(&dot_git))
+            );
+        }
     };
 
     if metadata.is_dir() {
         return Ok(Some(canonicalize_or_original(dot_git)));
     }
 
-    let bytes = fs::read(&dot_git).map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
+    let bytes = fs::read(&dot_git).map_err(|error| {
+        Error::from(error).with_context("read submodule Git directory", Some(&dot_git))
+    })?;
     let text = bytes_to_text_preserving_utf8(&bytes);
     let Some(git_dir) = text.strip_prefix("gitdir:") else {
         return Ok(None);
@@ -1652,21 +1478,56 @@ fn checkout_git_dir_reference(checkout_path: &Path) -> Result<Option<PathBuf>> {
     Ok(Some(canonicalize_or_original(resolved)))
 }
 
-fn append_failed_submodule_add_note(err: Error, note: &str) -> Error {
-    match err.kind() {
-        ErrorKind::Git(failure) => Error::new(ErrorKind::Git(GitFailure::new(
-            failure.command(),
-            failure.id(),
-            failure.exit_code(),
-            failure.stdout().to_vec(),
-            failure.stderr().to_vec(),
-            Some(match failure.detail() {
-                Some(detail) if !detail.is_empty() => format!("{detail}\n\n{note}"),
-                _ => note.to_string(),
-            }),
-        ))),
-        _ => Error::new(ErrorKind::Backend(format!("{err}\n\n{note}"))),
+#[derive(Debug)]
+struct SubmoduleCleanupError {
+    original: Error,
+    cleanup: Error,
+}
+
+impl std::fmt::Display for SubmoduleCleanupError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}; {}", self.original, self.cleanup)
     }
+}
+
+impl std::error::Error for SubmoduleCleanupError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.original)
+    }
+}
+
+fn append_failed_submodule_add_note(
+    err: Error,
+    note: &str,
+    cleanup: Error,
+    workdir: &Path,
+) -> Error {
+    let error = match err.kind() {
+        ErrorKind::Git(failure) => {
+            let mut detailed_failure = GitFailure::new(
+                failure.command(),
+                failure.id(),
+                failure.exit_code(),
+                failure.stdout().to_vec(),
+                failure.stderr().to_vec(),
+                Some(match failure.detail() {
+                    Some(detail) if !detail.is_empty() => format!("{detail}\n\n{note}"),
+                    _ => note.to_string(),
+                }),
+            );
+            if let Some(auth_outcome) = failure.auth_outcome() {
+                detailed_failure = detailed_failure.with_auth_outcome(auth_outcome.clone());
+            }
+            Error::new(ErrorKind::Git(detailed_failure))
+        }
+        _ => Error::new(ErrorKind::Backend(format!("{err}\n\n{note}"))),
+    };
+    error
+        .with_source(SubmoduleCleanupError {
+            original: err,
+            cleanup,
+        })
+        .with_context("clean up failed submodule add", Some(workdir))
 }
 
 fn remove_local_submodule_config_section_if_present(
@@ -1685,9 +1546,7 @@ fn remove_local_submodule_config_section_if_present(
         .arg("--local")
         .arg("--remove-section")
         .arg(&section);
-    let output = cmd
-        .output()
-        .map_err(|err| Error::new(ErrorKind::Io(err.kind())))?;
+    let output = cmd.output().map_err(Error::from)?;
     if output.status.success() {
         return Ok(());
     }
@@ -1751,6 +1610,8 @@ fn remove_submodule_git_dir(git_dir: &Path, logical_name: &Path) -> Result<()> {
             "remove submodule git dir {}: {e}",
             module_dir.display()
         )))
+        .with_source(e)
+        .with_context("remove submodule Git directory", Some(&module_dir))
     })?;
     prune_empty_module_parent_dirs(&modules_root, &module_dir)
 }
@@ -1767,6 +1628,8 @@ fn prune_empty_module_parent_dirs(modules_root: &Path, removed_dir: &Path) -> Re
                 "read module metadata dir {}: {e}",
                 dir.display()
             )))
+            .with_source(e)
+            .with_context("read module metadata directory", Some(dir))
         })?;
         match entries.next() {
             None => {
@@ -1775,6 +1638,8 @@ fn prune_empty_module_parent_dirs(modules_root: &Path, removed_dir: &Path) -> Re
                         "remove empty module metadata dir {}: {e}",
                         dir.display()
                     )))
+                    .with_source(e)
+                    .with_context("remove empty module metadata directory", Some(dir))
                 })?;
                 current = dir.parent();
             }
@@ -1783,7 +1648,9 @@ fn prune_empty_module_parent_dirs(modules_root: &Path, removed_dir: &Path) -> Re
                 return Err(Error::new(ErrorKind::Backend(format!(
                     "read module metadata dir entry {}: {e}",
                     dir.display()
-                ))));
+                )))
+                .with_source(e)
+                .with_context("read module metadata directory entry", Some(dir)));
             }
         }
     }
@@ -1795,9 +1662,8 @@ fn collect_gitlinks(
     cancellation: &CancellationToken,
 ) -> Result<BTreeMap<PathBuf, GitlinkIndexState>> {
     cancellation.check_cancelled()?;
-    let index = repo
-        .index_or_load_from_head_or_empty()
-        .map_err(|e| Error::new(ErrorKind::Backend(format!("gix index: {e}"))))?;
+    let index = crate::refs::index_or_load_from_head_or_empty(repo)
+        .map_err(|e| Error::new(ErrorKind::Backend(format!("gix index: {e}"))).with_source(e))?;
     let path_backing = index.path_backing();
 
     let mut gitlinks: BTreeMap<PathBuf, GitlinkIndexState> = BTreeMap::new();
@@ -1831,22 +1697,21 @@ fn open_gitlink_repo(
 
     match crate::open::open_worktree_repo(&path) {
         Ok(repo) => Ok(Some(repo)),
-        Err(gix::open::Error::NotARepository { .. }) => Ok(None),
-        Err(gix::open::Error::Io(io)) if io.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(gix::open::Error::Io(io)) => Err(Error::new(ErrorKind::Io(io.kind()))),
-        Err(e) => Err(Error::new(ErrorKind::Backend(format!(
-            "gix open nested submodule repo {}: {e}",
-            path.display()
-        )))),
+        Err(e) if e.is_not_found() => Ok(None),
+        Err(e) => Err(crate::open::map_open_error(
+            e,
+            "gix open nested submodule repo",
+            &path,
+        )),
     }
 }
 
 fn open_configured_submodule_repo(
     submodule: &gix::Submodule<'_>,
 ) -> Result<Option<gix::Repository>> {
-    let state = submodule
-        .state()
-        .map_err(|e| Error::new(ErrorKind::Backend(format!("gix submodule state: {e}"))))?;
+    let state = crate::refs::submodule_state(submodule).map_err(|e| {
+        Error::new(ErrorKind::Backend(format!("gix submodule state: {e}"))).with_source(e)
+    })?;
     if !(state.repository_exists && state.worktree_checkout) {
         return Ok(None);
     }
@@ -2018,29 +1883,7 @@ fn untrusted_local_submodule_error(source: &SubmoduleTrustTarget, action: &str) 
 }
 
 fn combine_submodule_update_outputs(outputs: Vec<CommandOutput>) -> CommandOutput {
-    combine_command_outputs(
-        "git submodule update --init --recursive".to_string(),
-        outputs,
-    )
-}
-
-fn combine_command_outputs(command: String, outputs: Vec<CommandOutput>) -> CommandOutput {
-    CommandOutput {
-        command,
-        stdout: outputs
-            .iter()
-            .map(|output| output.stdout.trim_end())
-            .filter(|text| !text.is_empty())
-            .collect::<Vec<_>>()
-            .join("\n"),
-        stderr: outputs
-            .iter()
-            .map(|output| output.stderr.trim_end())
-            .filter(|text| !text.is_empty())
-            .collect::<Vec<_>>()
-            .join("\n"),
-        exit_code: Some(0),
-    }
+    CommandOutput::combine("git submodule update --init --recursive", &outputs)
 }
 
 fn repo_workdir_for_submodule_trust(repo: &gix::Repository) -> &Path {
@@ -2068,9 +1911,7 @@ fn git_config_get_bool_global(trust_root: &Path, key: &str) -> Result<Option<boo
         .arg("--get")
         .arg(key);
 
-    let output = cmd
-        .output()
-        .map_err(|err| Error::new(ErrorKind::Io(err.kind())))?;
+    let output = cmd.output().map_err(Error::from)?;
 
     if output.status.success() {
         let value = bytes_to_text_preserving_utf8(&output.stdout);
@@ -2095,13 +1936,9 @@ fn git_config_get_bool_global(trust_root: &Path, key: &str) -> Result<Option<boo
 }
 
 fn pathbuf_from_gix_path(path: &gix::bstr::BStr) -> Result<PathBuf> {
-    gix::path::try_from_bstr(path)
+    gix::path::from_bstr(path)
         .map(|path| path.into_owned())
         .map_err(|_| Error::new(ErrorKind::Unsupported("path is not valid UTF-8")))
-}
-
-fn object_id_from_commit_id(id: &CommitId) -> Option<gix::ObjectId> {
-    gix::ObjectId::from_hex(id.as_ref().as_bytes()).ok()
 }
 
 fn object_id_to_commit_id(id: gix::ObjectId) -> CommitId {
@@ -2127,13 +1964,73 @@ mod tests {
     };
 
     use super::*;
+    use crate::test_support::{git_success, init_test_repo, open_repo};
     use gitcomet_core::domain::{CommitId, DiffArea, DiffTarget, SubmoduleDiffRangeKind};
     use gitcomet_core::error::{Error, ErrorKind, GitFailure, GitFailureId};
     use gitcomet_core::services::CancellationToken;
     use std::cell::Cell;
+    use std::error::Error as _;
     use std::ffi::OsStr;
     use std::path::Path;
     use std::process::Command;
+
+    #[test]
+    fn submodule_cleanup_failure_keeps_original_git_details_and_both_causes() {
+        let failure = GitFailure::new(
+            "git submodule add",
+            GitFailureId::CommandFailed,
+            Some(128),
+            vec![0xff, b'\n'],
+            vec![0xfe, b'\n'],
+            Some("clone failed".into()),
+        );
+        for kind in [
+            ErrorKind::Backend("clone failed".into()),
+            ErrorKind::Git(failure.clone()),
+        ] {
+            let original = Error::new(kind).with_source(std::io::Error::from_raw_os_error(5));
+            let cleanup = Error::new(ErrorKind::Backend("cleanup failed".into()))
+                .with_source(std::io::Error::from_raw_os_error(28));
+            let workdir = Path::new("submodule-workdir");
+            let note = "Cleanup after failed submodule add also failed: cleanup failed";
+            let error = append_failed_submodule_add_note(original, note, cleanup, workdir);
+            match error.kind() {
+                ErrorKind::Backend(message) => {
+                    assert_eq!(message, &format!("clone failed\n\n{note}"));
+                }
+                ErrorKind::Git(actual) => {
+                    assert_eq!(actual.command(), "git submodule add");
+                    assert_eq!(actual.id(), GitFailureId::CommandFailed);
+                    assert_eq!(actual.exit_code(), Some(128));
+                    assert_eq!(actual.stdout(), &[0xff, b'\n']);
+                    assert_eq!(actual.stderr(), &[0xfe, b'\n']);
+                    assert_eq!(
+                        actual.detail(),
+                        Some(format!("clone failed\n\n{note}").as_str())
+                    );
+                }
+                other => panic!("classification changed: {other:?}"),
+            }
+            assert_eq!(error.context().unwrap().path(), Some(workdir));
+            let cause = error
+                .source()
+                .unwrap()
+                .downcast_ref::<SubmoduleCleanupError>()
+                .unwrap();
+            for (error, expected) in [(&cause.original, 5), (&cause.cleanup, 28)] {
+                assert_eq!(
+                    error
+                        .source()
+                        .unwrap()
+                        .downcast_ref::<std::io::Error>()
+                        .unwrap()
+                        .raw_os_error(),
+                    Some(expected)
+                );
+            }
+            assert!(std::ptr::addr_eq(cause.source().unwrap(), &cause.original));
+        }
+    }
 
     /// One unreadable submodule costs its own subtree and nothing else.
     #[test]
@@ -2185,32 +2082,104 @@ mod tests {
         }
     }
 
-    fn run_git(workdir: &Path, args: &[&str]) {
-        let output = Command::new("git")
-            .arg("-C")
-            .arg(workdir)
-            .args(args)
-            .output()
-            .expect("git command to run");
-        assert!(
-            output.status.success(),
-            "git {:?} failed\nstdout:\n{}\nstderr:\n{}",
-            args,
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
+    /// A submodule whose own nested submodule pointer `vendor/x` moves in
+    /// two commits and once more in the index. Returns the two commits.
+    fn nested_pointer_moves(dir: &Path) -> (CommitId, CommitId) {
+        init_test_repo(dir);
+        let point = |digit: char| {
+            let id = digit
+                .to_string()
+                .repeat(gix::open(dir).unwrap().object_hash().len_in_hex());
+            git_success(
+                dir,
+                &[
+                    "update-index",
+                    "--add",
+                    "--cacheinfo",
+                    &format!("160000,{id},vendor/x"),
+                ],
+            );
+        };
+        let head = || {
+            CommitId(
+                gix::open(dir)
+                    .unwrap()
+                    .head_id()
+                    .unwrap()
+                    .to_string()
+                    .into(),
+            )
+        };
+        point('1');
+        git_success(dir, &["commit", "-q", "-m", "first"]);
+        let first = head();
+        point('2');
+        git_success(dir, &["commit", "-q", "-m", "second"]);
+        let second = head();
+        point('3');
+        (first, second)
+    }
+
+    fn pointer_counts(changes: &[SubmoduleInnerChange]) -> (Option<u32>, Option<u32>) {
+        let pointer = changes
+            .iter()
+            .find(|change| change.path == Path::new("vendor/x"))
+            .expect("the nested pointer is listed");
+        (pointer.additions, pointer.deletions)
+    }
+
+    /// numstat counts a gitlink's "Subproject commit" line, not content.
+    #[test]
+    fn a_nested_pointer_has_no_line_counts_between_commits() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (first, second) = nested_pointer_moves(tmp.path());
+        let changes = submodule_range_changes_from_commits(
+            tmp.path(),
+            &first,
+            &second,
+            &CancellationToken::new(),
+        )
+        .unwrap();
+        assert_eq!(pointer_counts(&changes), (None, None));
+    }
+
+    #[test]
+    fn a_nested_pointer_has_no_line_counts_in_the_live_lists() {
+        let tmp = tempfile::tempdir().unwrap();
+        nested_pointer_moves(tmp.path());
+        let repo = open_repo(tmp.path()).repo();
+        let (staged, _) =
+            submodule_live_inner_changes(tmp.path(), Some(&repo), &CancellationToken::new())
+                .unwrap();
+        assert_eq!(pointer_counts(&staged), (None, None));
+    }
+
+    /// numstat still counts a gitlink replaced by a file, submodules ignored
+    /// or not; that change is a submodule's, so it has no counts either.
+    #[test]
+    fn a_nested_pointer_replaced_by_a_file_has_no_line_counts() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        let (_, second) = nested_pointer_moves(dir);
+        git_success(dir, &["rm", "--cached", "-q", "vendor/x"]);
+        std::fs::create_dir_all(dir.join("vendor")).unwrap();
+        std::fs::write(dir.join("vendor/x"), "a\nb\nc\n").unwrap();
+        git_success(dir, &["add", "vendor/x"]);
+        git_success(dir, &["commit", "-q", "-m", "third"]);
+        let third = CommitId(
+            gix::open(dir)
+                .unwrap()
+                .head_id()
+                .unwrap()
+                .to_string()
+                .into(),
         );
-    }
 
-    fn init_test_repo(workdir: &Path) {
-        run_git(workdir, &["init"]);
-        run_git(workdir, &["config", "commit.gpgsign", "false"]);
-        run_git(workdir, &["config", "user.name", "Test User"]);
-        run_git(workdir, &["config", "user.email", "test@example.com"]);
-    }
+        let changes =
+            submodule_range_changes_from_commits(dir, &second, &third, &CancellationToken::new())
+                .unwrap();
 
-    fn open_repo(workdir: &Path) -> GixRepo {
-        let thread_safe_repo = gix::open(workdir).expect("open repo").into_sync();
-        GixRepo::new(workdir.to_path_buf(), thread_safe_repo)
+        assert_eq!(pointer_counts(&changes), (None, None));
     }
 
     #[test]
@@ -2225,6 +2194,10 @@ mod tests {
             true,
         );
         let args: Vec<_> = cmd.get_args().collect();
+        assert_eq!(
+            cmd.get_envs().collect::<Vec<_>>(),
+            [(OsStr::new("GIT_LITERAL_PATHSPECS"), Some(OsStr::new("1")))]
+        );
         assert_eq!(
             args,
             [
@@ -2344,7 +2317,7 @@ mod tests {
             )
             .expect("write .gitmodules");
 
-            let repo = gix::open(tmp.path()).expect("open repo");
+            let repo = open_repo(tmp.path()).repo();
             let err = resolve_submodule_logical_name(&repo, Path::new("sub"))
                 .expect_err(&format!("name {name:?} must be rejected"));
             assert!(err.to_string().contains(name), "{name:?}: {err}");
@@ -2361,7 +2334,7 @@ mod tests {
         )
         .expect("write .gitmodules");
 
-        let repo = gix::open(tmp.path()).expect("open repo");
+        let repo = open_repo(tmp.path()).repo();
         let name = resolve_submodule_logical_name(&repo, Path::new("sub")).expect("resolve name");
         assert_eq!(name.as_deref(), Some(Path::new("group/sub")));
     }
@@ -2485,27 +2458,30 @@ mod tests {
         let tmp = tempfile::tempdir().expect("tempdir");
         let submodule_path = Path::new("vendor/submodule");
         init_test_repo(tmp.path());
-        run_git(
+        git_success(
             tmp.path(),
             &[
                 "update-index",
                 "--add",
                 "--cacheinfo",
-                "160000,1111111111111111111111111111111111111111,vendor/submodule",
+                &format!(
+                    "160000,{},vendor/submodule",
+                    "1".repeat(gix::open(tmp.path()).unwrap().object_hash().len_in_hex())
+                ),
             ],
         );
-        run_git(tmp.path(), &["commit", "-m", "add submodule gitlink"]);
-        run_git(
+        git_success(tmp.path(), &["commit", "-m", "add submodule gitlink"]);
+        git_success(
             tmp.path(),
             &["update-index", "--force-remove", "vendor/submodule"],
         );
 
         let repo = open_repo(tmp.path());
         let summary = repo
-            .submodule_diff_summary_impl(&DiffTarget::WorkingTree {
-                path: submodule_path.into(),
-                area: DiffArea::Staged,
-            })
+            .submodule_diff_summary_cancellable_impl(
+                &DiffTarget::working_tree(submodule_path.into(), DiffArea::Staged),
+                &gitcomet_core::services::CancellationToken::new(),
+            )
             .expect("staged submodule removal summary");
         let staged_range = summary
             .ranges
@@ -2517,7 +2493,9 @@ mod tests {
         assert_eq!(summary.status, None);
         assert_eq!(
             staged_range.from,
-            Some(CommitId("1111111111111111111111111111111111111111".into()))
+            Some(CommitId(
+                "1".repeat(repo.repo().object_hash().len_in_hex()).into()
+            ))
         );
         assert_eq!(staged_range.to, None);
     }

@@ -1,5 +1,5 @@
 use super::*;
-use crate::kit::interaction::{self as controls, ControlInteractionExt as _};
+use crate::kit::interaction as controls;
 
 fn checkout_toggle(
     theme: AppTheme,
@@ -7,50 +7,15 @@ fn checkout_toggle(
     focus_handle: &FocusHandle,
     cx: &mut gpui::Context<PopoverHost>,
 ) -> gpui::Stateful<gpui::Div> {
-    let scaled_px = super::popover_scaled_px_fn(cx);
-    let border = if enabled {
-        theme.colors.status.success.foreground
-    } else {
-        theme.colors.stroke.default
-    };
-    let background = if enabled {
-        with_alpha(
-            theme.colors.status.success.foreground,
-            if theme.is_dark { 0.18 } else { 0.12 },
-        )
-    } else {
-        gpui::rgba(0x00000000)
-    };
-
-    focusable_toggle_row(
+    super::checkbox_row(
         "create_branch_checkout_toggle",
         "create_branch_checkout_toggle",
-        theme,
+        "Checkout",
+        enabled,
         focus_handle,
+        theme,
         cx,
     )
-    .flex()
-    .gap_2()
-    .justify_start()
-    .child(
-        div()
-            .size(scaled_px(16.0))
-            .flex()
-            .items_center()
-            .justify_center()
-            .border_1()
-            .border_color(border)
-            .rounded(scaled_px(theme.radii.control * 0.5))
-            .bg(background)
-            .when(enabled, |this| {
-                this.child(crate::view::icons::svg_icon(
-                    "icons/check.svg",
-                    theme.colors.status.success.foreground,
-                    scaled_px(10.0),
-                ))
-            }),
-    )
-    .child(div().text_size(theme.ui_text(14.0)).child("Checkout"))
 }
 
 pub(super) fn panel(

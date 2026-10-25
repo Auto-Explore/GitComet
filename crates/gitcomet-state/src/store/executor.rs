@@ -1,8 +1,8 @@
-use super::send_diagnostics::{SendFailureKind, panic_payload_to_string, send_or_log};
-use gitcomet_core::mergetool_trace;
+use super::send_diagnostics::{SendFailureKind, send_or_log};
+use gitcomet_core::panic::payload_message;
+use gitcomet_core::{mergetool_trace, op_trace};
 use std::any::Any;
 use std::panic::{self, AssertUnwindSafe};
-#[cfg(any(test, feature = "test-support"))]
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, mpsc};
@@ -24,6 +24,7 @@ pub(super) struct SelectedDiffSlots {
     pub(super) submodule_summary: LatestTaskSlot,
     pub(super) file_image: LatestTaskSlot,
     pub(super) preview_text: LatestTaskSlot,
+    pub(super) text_attributes: LatestTaskSlot,
 }
 
 static WORKER_TASK_PANICS: AtomicU64 = AtomicU64::new(0);
@@ -50,20 +51,33 @@ pub(super) fn metadata_worker_threads() -> usize {
     2
 }
 
-#[cfg(any(test, feature = "test-support"))]
 #[derive(Clone, Copy)]
 pub(super) enum StoreExecutorPool {
     Primary,
-    RepoLoad,
     Metadata,
+    /// Optional network discovery must not queue ahead of local metadata.
+    RemoteMetadata,
     Signatures,
     SessionPersist,
+    /// `git maintenance`, which can run for hours; one thread of its own.
+    Maintenance,
 }
 
 pub(super) struct TaskExecutor {
     tx: mpsc::Sender<Task>,
+    /// Thread-name prefix, also the pool label in operation traces.
+    name: &'static str,
     _threads: Vec<thread::JoinHandle<()>>,
 }
+
+/// Disk writes and explorer mutations run on one thread, in submission order.
+pub(super) fn filesystem_queue() -> TaskExecutor {
+    TaskExecutor::named("gitcomet-filesystem", 1)
+}
+
+/// The queue every window's store shares.
+pub(super) static FILESYSTEM_QUEUE: std::sync::LazyLock<TaskExecutor> =
+    std::sync::LazyLock::new(filesystem_queue);
 
 /// A panicking task must not take its worker thread with it. These pools are
 /// small — [`repo_load_worker_threads`] caps at two — so a thread lost to an
@@ -102,7 +116,7 @@ fn record_worker_task_panic(payload: &(dyn Any + Send)) {
     let count = WORKER_TASK_PANICS.fetch_add(1, Ordering::Relaxed) + 1;
     let thread = thread::current();
     let thread = thread.name().unwrap_or("<unnamed>");
-    let message = panic_payload_to_string(payload);
+    let message = payload_message(payload);
     gitcomet_core::process::write_stderr_line(format_args!(
         "gitcomet-state: executor task panicked on worker thread {thread}: {message}; total_panics={count}"
     ));
@@ -120,6 +134,11 @@ impl TaskExecutor {
         task: impl FnOnce() + Send + 'static,
     ) -> bool {
         let context = mergetool_trace::current_capture_context();
+        #[cfg(any(test, feature = "test-support"))]
+        let task = super::test_support::track_task(task);
+        // Traced at request time: a replacement also replaces the operation
+        // the running task is attributed to.
+        let task = op_trace::wrap_task(self.name, task);
         let task: Task = Box::new(move || {
             let _trace = context.as_ref().map(mergetool_trace::attach_capture);
             task();
@@ -132,7 +151,7 @@ impl TaskExecutor {
             .is_some();
         if !already_queued {
             let queued = slot.clone();
-            let sent = self.try_spawn(move || {
+            let sent = self.try_spawn_untraced(move || {
                 let task = queued.0.lock().unwrap_or_else(|e| e.into_inner()).take();
                 if let Some(task) = task {
                     task();
@@ -145,24 +164,36 @@ impl TaskExecutor {
         }
         already_queued
     }
-    #[cfg_attr(feature = "test-support", allow(dead_code))]
+
+    #[cfg(test)]
     pub(super) fn new(threads: usize) -> Self {
+        Self::named("gitcomet-store-worker", threads)
+    }
+
+    #[cfg_attr(feature = "test-support", allow(dead_code))]
+    pub(super) fn named(name: &'static str, threads: usize) -> Self {
         let (tx, rx) = mpsc::channel::<Task>();
         let rx = Arc::new(std::sync::Mutex::new(rx));
 
+        // Named so profilers and per-thread CPU samples can attribute work.
         let mut worker_threads = Vec::with_capacity(threads);
-        for _ in 0..threads {
+        for ix in 0..threads {
             let rx = Arc::clone(&rx);
-            worker_threads.push(thread::spawn(move || worker_loop(rx)));
+            worker_threads.push(
+                thread::Builder::new()
+                    .name(format!("{name}-{ix}"))
+                    .spawn(move || worker_loop(rx))
+                    .expect("spawn store executor thread"),
+            );
         }
 
         Self {
             tx,
+            name,
             _threads: worker_threads,
         }
     }
 
-    #[cfg(any(test, feature = "test-support"))]
     pub(super) fn shared_for_store(pool: StoreExecutorPool, threads: usize) -> Self {
         fn sender_for(
             cell: &'static OnceLock<mpsc::Sender<Task>>,
@@ -184,34 +215,53 @@ impl TaskExecutor {
         }
 
         static PRIMARY: OnceLock<mpsc::Sender<Task>> = OnceLock::new();
-        static REPO_LOAD: OnceLock<mpsc::Sender<Task>> = OnceLock::new();
         static SIGNATURES: OnceLock<mpsc::Sender<Task>> = OnceLock::new();
         static METADATA: OnceLock<mpsc::Sender<Task>> = OnceLock::new();
+        static REMOTE_METADATA: OnceLock<mpsc::Sender<Task>> = OnceLock::new();
+        static REMOTE_METADATA_NAME: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+            format!(
+                "{}-store-remote-metadata",
+                gitcomet_core::identity::current().executable_name()
+            )
+        });
         static SESSION_PERSIST: OnceLock<mpsc::Sender<Task>> = OnceLock::new();
+        static MAINTENANCE: OnceLock<mpsc::Sender<Task>> = OnceLock::new();
 
-        let tx = match pool {
-            StoreExecutorPool::Primary => {
-                sender_for(&PRIMARY, "gitcomet-test-store-primary", threads)
+        let (cell, name) = match pool {
+            StoreExecutorPool::Primary => (&PRIMARY, "gitcomet-store-primary"),
+            StoreExecutorPool::Signatures => (&SIGNATURES, "gitcomet-store-signatures"),
+            StoreExecutorPool::Metadata => (&METADATA, "gitcomet-store-metadata"),
+            StoreExecutorPool::RemoteMetadata => (&REMOTE_METADATA, REMOTE_METADATA_NAME.as_str()),
+            StoreExecutorPool::SessionPersist => {
+                (&SESSION_PERSIST, "gitcomet-store-session-persist")
             }
-            StoreExecutorPool::RepoLoad => {
-                sender_for(&REPO_LOAD, "gitcomet-test-store-repo-load", threads)
-            }
-            StoreExecutorPool::Signatures => {
-                sender_for(&SIGNATURES, "gitcomet-test-store-signatures", threads)
-            }
-            StoreExecutorPool::Metadata => {
-                sender_for(&METADATA, "gitcomet-test-store-metadata", threads)
-            }
-            StoreExecutorPool::SessionPersist => sender_for(
-                &SESSION_PERSIST,
-                "gitcomet-test-store-session-persist",
-                threads,
-            ),
+            StoreExecutorPool::Maintenance => (&MAINTENANCE, "gitcomet-store-maintenance"),
         };
 
         Self {
-            tx,
+            tx: sender_for(cell, name, threads),
+            name,
             _threads: Vec::new(),
+        }
+    }
+
+    /// Closes the queue and waits for the workers, so a test process never
+    /// exits with store workers still running.
+    #[cfg(test)]
+    pub(super) fn join(mut self) {
+        self.join_workers();
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub(super) fn join_workers(&mut self) {
+        // Only private pools own handles. Never close a shared pool's sender.
+        if self._threads.is_empty() {
+            return;
+        }
+        let (disconnected, _) = mpsc::channel();
+        drop(std::mem::replace(&mut self.tx, disconnected));
+        for thread in self._threads.drain(..) {
+            thread.join().expect("store executor worker panicked");
         }
     }
 
@@ -221,6 +271,12 @@ impl TaskExecutor {
 
     /// `false` when the worker queue is disconnected (the failure is recorded).
     fn try_spawn(&self, task: impl FnOnce() + Send + 'static) -> bool {
+        self.try_spawn_untraced(op_trace::wrap_task(self.name, task))
+    }
+
+    fn try_spawn_untraced(&self, task: impl FnOnce() + Send + 'static) -> bool {
+        #[cfg(any(test, feature = "test-support"))]
+        let task = super::test_support::track_task(task);
         let mergetool_trace_context = mergetool_trace::current_capture_context();
         send_or_log(
             &self.tx,
@@ -240,6 +296,28 @@ impl TaskExecutor {
 mod tests {
     use super::*;
     use std::time::Duration;
+
+    #[test]
+    #[ignore = "manual find worker startup measurement"]
+    fn history_find_worker_startup_measurement() {
+        let start = std::time::Instant::now();
+        let workers: Vec<_> = (0..32)
+            .map(|_| {
+                std::sync::LazyLock::new(|| {
+                    TaskExecutor::named(crate::history_find::HISTORY_FIND_THREAD, 1)
+                })
+            })
+            .collect();
+        eprintln!(
+            "32 find executors: {:?}, started threads={}",
+            start.elapsed(),
+            workers
+                .iter()
+                .filter_map(std::sync::LazyLock::get)
+                .map(|worker| worker._threads.len())
+                .sum::<usize>()
+        );
+    }
 
     #[test]
     fn latest_slot_replaces_pending_work_without_blocking_other_slots() {

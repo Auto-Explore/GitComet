@@ -1,0 +1,19 @@
+{
+  "name": {
+    "title": "Full legal name",
+    "type": "string",
+    "githubKey": "name",
+    "required": true
+  },
+  "email": {
+    "title": "Contact email address",
+    "type": "string",
+    "githubKey": "email",
+    "required": true
+  },
+  "agreement": {
+    "title": "I have read and agree to the GitComet Individual Contributor License Agreement.",
+    "type": "boolean",
+    "required": true
+  }
+}

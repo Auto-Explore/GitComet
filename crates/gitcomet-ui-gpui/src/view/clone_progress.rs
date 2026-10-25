@@ -62,27 +62,8 @@ pub(crate) fn clone_progress_bar_fill_color(theme: AppTheme, op: &CloneOpState) 
     }
 }
 
-pub(crate) fn clone_progress_bar_track_color(theme: AppTheme) -> gpui::Rgba {
-    with_alpha(
-        theme.colors.stroke.default,
-        if theme.is_dark { 0.40 } else { 0.22 },
-    )
-}
-
-pub(crate) fn clone_progress_bar_border_color(theme: AppTheme) -> gpui::Rgba {
-    with_alpha(
-        theme.colors.stroke.default,
-        if theme.is_dark { 0.72 } else { 0.42 },
-    )
-}
-
 pub(crate) fn clone_progress_fill_ratio(percent: u8) -> f32 {
     f32::from(percent.min(100)) / 100.0
-}
-
-pub(crate) fn clone_progress_segment_weights(percent: u8) -> (f32, f32) {
-    let fill = clone_progress_fill_ratio(percent);
-    (fill, (1.0 - fill).max(0.0))
 }
 
 pub(crate) fn clone_progress_dest_label(dest: &Path) -> String {
@@ -143,13 +124,6 @@ mod tests {
     }
 
     #[test]
-    fn clone_progress_segment_weights_split_fill_and_remainder() {
-        assert_eq!(clone_progress_segment_weights(0), (0.0, 1.0));
-        assert_eq!(clone_progress_segment_weights(50), (0.5, 0.5));
-        assert_eq!(clone_progress_segment_weights(255), (1.0, 0.0));
-    }
-
-    #[test]
     fn clone_progress_color_uses_neutral_light_theme_alphas() {
         let theme = AppTheme::gitcomet_light();
         let loading = clone_op(CloneOpStatus::Running, CloneProgressStage::Loading, 10);
@@ -189,11 +163,11 @@ mod tests {
             with_alpha(theme.colors.status.warning.foreground, 0.84)
         );
         assert_eq!(
-            clone_progress_bar_track_color(theme),
+            crate::view::components::progress_bar_track_color(theme),
             with_alpha(theme.colors.stroke.default, 0.22)
         );
         assert_eq!(
-            clone_progress_bar_border_color(theme),
+            crate::view::components::progress_bar_border_color(theme),
             with_alpha(theme.colors.stroke.default, 0.42)
         );
     }
@@ -238,11 +212,11 @@ mod tests {
             with_alpha(theme.colors.status.warning.foreground, 0.92)
         );
         assert_eq!(
-            clone_progress_bar_track_color(theme),
+            crate::view::components::progress_bar_track_color(theme),
             with_alpha(theme.colors.stroke.default, 0.40)
         );
         assert_eq!(
-            clone_progress_bar_border_color(theme),
+            crate::view::components::progress_bar_border_color(theme),
             with_alpha(theme.colors.stroke.default, 0.72)
         );
     }

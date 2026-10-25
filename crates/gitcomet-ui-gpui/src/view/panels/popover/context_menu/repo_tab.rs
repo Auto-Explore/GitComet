@@ -1,6 +1,6 @@
 use super::*;
 
-use crate::view::shortcut_labels::secondary_shortcut;
+use crate::kit::components::secondary_shortcut;
 
 pub(super) fn model(host: &PopoverHost, repo_id: RepoId) -> ContextMenuModel {
     let workdir = host
@@ -9,17 +9,72 @@ pub(super) fn model(host: &PopoverHost, repo_id: RepoId) -> ContextMenuModel {
         .iter()
         .find(|repo| repo.id == repo_id)
         .map(|repo| repo.spec.workdir.clone());
-    model_for_state(host.state.as_ref(), repo_id, workdir)
+    let mut model = model_for_state_with_editor(
+        host.state.as_ref(),
+        repo_id,
+        workdir,
+        &host.cached_workspaces,
+        host.cached_workspace_id,
+        host.external_editor_available(),
+    );
+    if !host.extension_repo_tab_menu.is_empty() && !model.items.is_empty() {
+        // Above the Close group, which stays last.
+        let at = model
+            .items
+            .iter()
+            .rposition(|item| matches!(item, ContextMenuItem::Separator))
+            .unwrap_or(model.items.len());
+        let entries = host
+            .extension_repo_tab_menu
+            .iter()
+            .map(|entry| ContextMenuItem::Entry {
+                label: entry.label.clone(),
+                icon: None,
+                shortcut: None,
+                disabled: false,
+                action: Box::new(ContextMenuAction::RunExtensionCommand {
+                    id: entry.id.clone(),
+                    repo_id,
+                }),
+            });
+        let block: Vec<ContextMenuItem> = std::iter::once(ContextMenuItem::Separator)
+            .chain(entries)
+            .collect();
+        model.items.splice(at..at, block);
+    }
+    model
 }
 
+#[cfg(test)]
 fn model_for_state(
     state: &AppState,
     repo_id: RepoId,
     workdir: Option<std::path::PathBuf>,
+    workspaces: &[session::Workspace],
+    current_workspace: Option<session::WorkspaceId>,
+) -> ContextMenuModel {
+    model_for_state_with_editor(
+        state,
+        repo_id,
+        workdir,
+        workspaces,
+        current_workspace,
+        crate::external_editor::configured_setting().is_some(),
+    )
+}
+
+fn model_for_state_with_editor(
+    state: &AppState,
+    repo_id: RepoId,
+    workdir: Option<std::path::PathBuf>,
+    workspaces: &[session::Workspace],
+    current_workspace: Option<session::WorkspaceId>,
+    editor_available: bool,
 ) -> ContextMenuModel {
     let Some(repo_ix) = state.repos.iter().position(|repo| repo.id == repo_id) else {
         return ContextMenuModel::new(Vec::new());
     };
+    let move_disabled = state.repos[repo_ix].is_provisional_external_drop_open();
 
     let close_to_right: Vec<RepoId> = state
         .repos
@@ -58,9 +113,7 @@ fn model_for_state(
         });
     }
 
-    if crate::external_editor::configured_setting().is_some()
-        && let Some(ref workdir) = workdir
-    {
+    if editor_available && let Some(ref workdir) = workdir {
         items.push(ContextMenuItem::Entry {
             label: "Open in code editor".into(),
             icon: Some("icons/open_external.svg".into()),
@@ -71,6 +124,41 @@ fn model_for_state(
                 path: workdir.clone(),
             }),
         });
+    }
+
+    if let Some(ref workdir) = workdir {
+        items.push(ContextMenuItem::Separator);
+        items.push(ContextMenuItem::Entry {
+            label: "Move to new window".into(),
+            icon: Some("icons/swap.svg".into()),
+            shortcut: None,
+            disabled: move_disabled,
+            action: Box::new(ContextMenuAction::MoveRepoToWorkspace {
+                repo_id,
+                path: workdir.clone(),
+                target_workspace: None,
+            }),
+        });
+
+        let mut other_workspaces = workspaces
+            .iter()
+            .filter(|workspace| Some(workspace.id) != current_workspace)
+            .collect::<Vec<_>>();
+        other_workspaces
+            .sort_by_key(|workspace| std::cmp::Reverse(workspace.last_activation_order));
+        for workspace in other_workspaces {
+            items.push(ContextMenuItem::Entry {
+                label: format!("Move to {}", workspace.display_name()).into(),
+                icon: Some("icons/swap.svg".into()),
+                shortcut: None,
+                disabled: move_disabled,
+                action: Box::new(ContextMenuAction::MoveRepoToWorkspace {
+                    repo_id,
+                    path: workdir.clone(),
+                    target_workspace: Some(workspace.id),
+                }),
+            });
+        }
     }
 
     items.push(ContextMenuItem::Separator);
@@ -156,10 +244,14 @@ mod tests {
         (*disabled, action.as_ref())
     }
 
+    fn test_model(state: &AppState, repo_id: RepoId, workdir: Option<PathBuf>) -> ContextMenuModel {
+        model_for_state(state, repo_id, workdir, &[], None)
+    }
+
     #[test]
     fn activate_entry_activates_inactive_repo_tab() {
         let state = state_with_repo_tabs(RepoId(1), 3);
-        let model = model_for_state(&state, RepoId(2), None);
+        let model = test_model(&state, RepoId(2), None);
 
         let (disabled, action) = entry_action(&model, "Activate");
 
@@ -173,7 +265,7 @@ mod tests {
     #[test]
     fn activate_entry_is_disabled_for_active_repo_tab() {
         let state = state_with_repo_tabs(RepoId(2), 3);
-        let model = model_for_state(&state, RepoId(2), None);
+        let model = test_model(&state, RepoId(2), None);
 
         let (disabled, action) = entry_action(&model, "Activate");
 
@@ -187,7 +279,7 @@ mod tests {
     #[test]
     fn close_repo_entry_uses_repo_tab_close_icon() {
         let state = state_with_repo_tabs(RepoId(1), 3);
-        let model = model_for_state(&state, RepoId(2), None);
+        let model = test_model(&state, RepoId(2), None);
 
         let ContextMenuItem::Entry {
             icon,
@@ -214,7 +306,7 @@ mod tests {
     fn open_repository_location_entry_targets_the_repository_workdir() {
         let state = state_with_repo_tabs(RepoId(1), 3);
         let workdir = PathBuf::from("/tmp/repo-tab-menu-2");
-        let model = model_for_state(&state, RepoId(2), Some(workdir.clone()));
+        let model = test_model(&state, RepoId(2), Some(workdir.clone()));
 
         let (disabled, action) = entry_action(&model, "Open repository location");
 
@@ -228,7 +320,7 @@ mod tests {
     #[test]
     fn repo_tab_menu_uses_shared_shortcut_keycaps() {
         let state = state_with_repo_tabs(RepoId(1), 3);
-        let model = model_for_state(
+        let model = test_model(
             &state,
             RepoId(2),
             Some(PathBuf::from("/tmp/repo-tab-menu-2")),
@@ -240,7 +332,7 @@ mod tests {
     #[test]
     fn close_right_entry_targets_only_repos_to_the_right() {
         let state = state_with_repo_tabs(RepoId(3), 3);
-        let model = model_for_state(&state, RepoId(2), None);
+        let model = test_model(&state, RepoId(2), None);
 
         let (disabled, action) = entry_action(&model, "Close repositories to the right");
 
@@ -259,7 +351,7 @@ mod tests {
     #[test]
     fn close_right_entry_is_disabled_for_last_repo_tab() {
         let state = state_with_repo_tabs(RepoId(2), 3);
-        let model = model_for_state(&state, RepoId(3), None);
+        let model = test_model(&state, RepoId(3), None);
 
         let (disabled, action) = entry_action(&model, "Close repositories to the right");
 
@@ -278,7 +370,7 @@ mod tests {
     #[test]
     fn close_other_repositories_entry_targets_every_repo_except_selected() {
         let state = state_with_repo_tabs(RepoId(1), 3);
-        let model = model_for_state(&state, RepoId(2), None);
+        let model = test_model(&state, RepoId(2), None);
 
         let (disabled, action) = entry_action(&model, "Close other repositories");
 
@@ -297,7 +389,7 @@ mod tests {
     #[test]
     fn close_other_repositories_entry_is_disabled_for_single_repo_tab() {
         let state = state_with_repo_tabs(RepoId(1), 1);
-        let model = model_for_state(&state, RepoId(1), None);
+        let model = test_model(&state, RepoId(1), None);
 
         let (disabled, action) = entry_action(&model, "Close other repositories");
 
@@ -317,6 +409,68 @@ mod tests {
     fn missing_repo_tab_returns_empty_menu_model() {
         let state = state_with_repo_tabs(RepoId(1), 3);
 
-        assert!(model_for_state(&state, RepoId(99), None).items.is_empty());
+        assert!(test_model(&state, RepoId(99), None).items.is_empty());
+    }
+
+    #[test]
+    fn review_regression_move_entries_wait_for_external_drop_validation() {
+        use gitcomet_core::services::{GitBackend, GitRepository};
+        use std::sync::{Arc, Mutex, mpsc};
+        use std::time::{Duration, Instant};
+
+        struct Backend {
+            entered: mpsc::Sender<()>,
+            release: Mutex<mpsc::Receiver<()>>,
+        }
+        impl GitBackend for Backend {
+            fn open(
+                &self,
+                workdir: &std::path::Path,
+            ) -> gitcomet_core::services::Result<Arc<dyn GitRepository>> {
+                let _ = self.entered.send(());
+                let _ = self.release.lock().unwrap().recv();
+                Ok(Arc::new(
+                    gitcomet_core::test_support::UnconfiguredRepository::new(workdir),
+                ))
+            }
+        }
+        let directory = tempfile::tempdir().unwrap();
+        let workdir = directory.path().canonicalize().unwrap();
+        let (entered, started) = mpsc::channel();
+        let (release, wait) = mpsc::channel();
+        let (store, _events) = gitcomet_state::store::AppStore::new_test(Arc::new(Backend {
+            entered,
+            release: Mutex::new(wait),
+        }));
+        store.dispatch(Msg::OpenRepoFromExternalDrop(workdir.clone()));
+        started.recv_timeout(Duration::from_secs(3)).unwrap();
+        let provisional = store.snapshot();
+        let repo_id = provisional.repos[0].id;
+        let mut target = session::Workspace::new(Vec::new());
+        target.custom_name = Some("Target".to_string());
+        let check = |state: &AppState, disabled: bool| {
+            let model = model_for_state(
+                state,
+                repo_id,
+                Some(workdir.clone()),
+                std::slice::from_ref(&target),
+                None,
+            );
+            assert_eq!(entry_action(&model, "Move to new window").0, disabled);
+            assert_eq!(entry_action(&model, "Move to Target").0, disabled);
+            assert!(!entry_action(&model, "Close").0);
+        };
+        check(&provisional, true);
+        release.send(()).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(3);
+        loop {
+            let state = store.snapshot();
+            if !state.repos[0].is_provisional_external_drop_open() {
+                check(&state, false);
+                break;
+            }
+            assert!(Instant::now() < deadline, "validate dropped repository");
+            std::thread::sleep(Duration::from_millis(5));
+        }
     }
 }

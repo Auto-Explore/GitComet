@@ -12,15 +12,21 @@ pub(super) fn panel(
         format!("{} terminals", prompt.summary.terminal_count)
     };
     let title = match prompt.action {
-        TerminalShutdownAction::QuitApp => "Quit GitComet?",
-        TerminalShutdownAction::CloseWindow => "Close window?",
+        TerminalShutdownAction::QuitApp => format!("Quit {}?", crate::view::product_name()),
+        TerminalShutdownAction::CloseWindow => "Close window?".to_string(),
+        TerminalShutdownAction::DeleteWorkspace { .. } => "Delete workspace?".to_string(),
+        TerminalShutdownAction::MoveRepo { .. } => "Move repository?".to_string(),
+        TerminalShutdownAction::CloseRepos { .. } => "Close terminals?".to_string(),
         TerminalShutdownAction::CloseRepo { .. }
         | TerminalShutdownAction::CloseTerminalForRepo { .. }
-        | TerminalShutdownAction::CloseTerminalTab { .. } => "Close terminal?",
+        | TerminalShutdownAction::CloseTerminalTab { .. } => "Close terminal?".to_string(),
     };
     let confirm_label = match prompt.action {
         TerminalShutdownAction::QuitApp => "Terminate and quit",
         TerminalShutdownAction::CloseWindow => "Terminate and close",
+        TerminalShutdownAction::DeleteWorkspace { .. } => "Terminate and delete",
+        TerminalShutdownAction::MoveRepo { .. } => "Terminate and move",
+        TerminalShutdownAction::CloseRepos { .. } => "Terminate and close",
         TerminalShutdownAction::CloseRepo { .. }
         | TerminalShutdownAction::CloseTerminalForRepo { .. }
         | TerminalShutdownAction::CloseTerminalTab { .. } => "Terminate and close",
@@ -38,7 +44,10 @@ pub(super) fn panel(
     let show_repo_list = !repo_names.is_empty()
         && matches!(
             prompt.action,
-            TerminalShutdownAction::CloseWindow | TerminalShutdownAction::QuitApp
+            TerminalShutdownAction::CloseWindow
+                | TerminalShutdownAction::CloseRepos { .. }
+                | TerminalShutdownAction::DeleteWorkspace { .. }
+                | TerminalShutdownAction::QuitApp
         );
 
     let mut dialog = ConfirmDialog::new(title, DIALOG_440_WIDTH).text(
@@ -75,19 +84,24 @@ pub(super) fn panel(
         )
         .on_click(theme, cx, |this, _e, _window, cx| {
             let root_view = this.root_view.clone();
-            let _ = root_view.update(cx, |root, cx| {
-                root.clear_pending_terminal_shutdown_prompt(cx);
-            });
+            let _ = root_view.request(RootRequest::ClearPendingTerminalShutdownPrompt, None, cx);
             this.close_popover(cx);
         }),
         components::Button::new("terminal_shutdown_confirm", confirm_label)
             .style(components::ButtonStyle::Danger)
             .on_click(theme, cx, move |this, _e, window, cx| {
                 let root_view = this.root_view.clone();
-                let _ = root_view.update(cx, |root, cx| {
-                    root.confirm_terminal_shutdown(prompt.clone(), window, cx);
+                let prompt = prompt.clone();
+                this.close_resolved_popover(cx);
+                // Later close guards read this host. Release its update lease
+                // before checking them or closing the window that owns it.
+                window.defer(cx, move |window, cx| {
+                    let _ = root_view.request(
+                        RootRequest::ConfirmTerminalShutdown(prompt),
+                        Some(window),
+                        cx,
+                    );
                 });
-                this.close_popover(cx);
             }),
         cx,
     )

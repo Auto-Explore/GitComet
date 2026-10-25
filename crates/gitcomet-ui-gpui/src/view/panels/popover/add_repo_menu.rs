@@ -63,7 +63,7 @@ pub(super) fn activate(
             this.close_popover_and_restore_focus(window, cx);
             let _ = this
                 .root_view
-                .update(cx, |root, cx| root.prompt_open_repo(window, cx));
+                .request(RootRequest::PromptOpenRepo, Some(window), cx);
         }
         AddRepoMenuAction::Clone => {
             let Some(anchor) = this.popover_anchor.clone() else {
@@ -76,7 +76,7 @@ pub(super) fn activate(
             this.close_popover_and_restore_focus(window, cx);
             let _ = this
                 .root_view
-                .update(cx, |root, cx| root.prompt_init_repo(window, cx));
+                .request(RootRequest::PromptInitRepo, Some(window), cx);
         }
     }
 }

@@ -11,7 +11,7 @@ pub(crate) fn repository_watch_info(
         strip_windows_verbatim_prefix(path.canonicalize().unwrap_or_else(|_| path.to_path_buf()))
     };
     let repo = crate::open::open_worktree_repo(workdir)
-        .map_err(|error| crate::open::map_open_error(error, "watch metadata"))?;
+        .map_err(|error| crate::open::map_open_error(error, "watch metadata", workdir))?;
     let mut info = gitcomet_core::services::RepositoryWatchInfo::default();
     let home = gix::path::env::home_dir();
     if let Some(global) = std::env::var_os("GIT_CONFIG_GLOBAL") {
@@ -39,11 +39,7 @@ pub(crate) fn repository_watch_info(
             // Submodule::open() also opens retained administrative repositories
             // after deinit. Their configured workdir is not an initialized
             // checkout and cannot be used to construct an ignore matcher.
-            if workdir
-                .join(".git")
-                .try_exists()
-                .map_err(|error| Error::new(ErrorKind::Io(error.kind())))?
-            {
+            if workdir.join(".git").try_exists().map_err(Error::from)? {
                 info.worktrees.push(normalize(workdir));
                 // `git add child` can record an embedded repository as a
                 // gitlink without a .gitmodules entry. Follow the index too,
@@ -56,21 +52,22 @@ pub(crate) fn repository_watch_info(
                     .iter()
                     .filter(|entry| entry.mode == GitIndexMode::COMMIT)
                 {
-                    let relative =
-                        gix::path::try_from_bstr(entry.path(&index)).map_err(|error| {
-                            Error::new(ErrorKind::Backend(format!("watch gitlink path: {error}")))
-                        })?;
+                    let relative = gix::path::from_bstr(entry.path(&index)).map_err(|error| {
+                        Error::new(ErrorKind::Backend(format!("watch gitlink path: {error}")))
+                    })?;
                     let child = workdir.join(relative);
                     info.ignore_inputs.push(child.join(".git"));
                     match crate::open::open_worktree_repo(&child) {
                         Ok(child) => pending.push(child),
                         // Missing/deinitialized checkouts still retain their
                         // .git input above, so initialization rebuilds coverage.
-                        Err(gix::open::Error::NotARepository { .. }) => {}
-                        Err(gix::open::Error::Io(error))
-                            if error.kind() == std::io::ErrorKind::NotFound => {}
+                        Err(error) if error.is_not_found() => {}
                         Err(error) => {
-                            return Err(crate::open::map_open_error(error, "watch gitlink"));
+                            return Err(crate::open::map_open_error(
+                                error,
+                                "watch gitlink",
+                                &child,
+                            ));
                         }
                     }
                 }
@@ -92,7 +89,7 @@ pub(crate) fn repository_watch_info(
         {
             // LFS treats this as a literal path (no ~/ interpolation). Relative
             // storage belongs to the common Git directory for linked worktrees.
-            let storage = gix::path::try_from_bstr(&storage).map_err(|error| {
+            let storage = gix::path::from_bstr(&storage).map_err(|error| {
                 Error::new(ErrorKind::Backend(format!("watch LFS storage: {error}")))
             })?;
             let storage = if storage.is_absolute() {
@@ -102,7 +99,10 @@ pub(crate) fn repository_watch_info(
             };
             // Git LFS uses filepath.Join/Clean before opening the path. In
             // particular, link/../Storage must not follow link before popping it.
-            let storage = gix::path::normalize_saturating(storage.into(), workdir);
+            let storage =
+                gix::path::normalize_saturating(storage.into(), workdir).map_err(|error| {
+                    Error::new(ErrorKind::Backend(format!("watch LFS storage: {error}")))
+                })?;
             // Storage may share a directory with source files or Git metadata.
             // Only LFS-owned folders are private, not every path under storage.
             info.cache_dirs.extend(
@@ -168,10 +168,14 @@ pub(crate) fn repository_watch_info(
         {
             info.ignore_inputs.push(path);
         }
-        if let Some(submodules) = repo
-            .submodules()
-            .map_err(|error| Error::new(ErrorKind::Backend(format!("watch submodules: {error}"))))?
-        {
+        // The installation, system and user files gix's attribute stack reads.
+        info.ignore_inputs
+            .extend(repo.attribute_global_paths().map_err(|error| {
+                Error::new(ErrorKind::Backend(format!("watch attributes: {error}")))
+            })?);
+        if let Some(submodules) = crate::refs::submodules(&repo).map_err(|error| {
+            Error::new(ErrorKind::Backend(format!("watch submodules: {error}"))).with_source(error)
+        })? {
             for submodule in submodules {
                 if let Some(child) = submodule.open().map_err(|error| {
                     Error::new(ErrorKind::Backend(format!("watch submodule: {error}")))
@@ -230,8 +234,13 @@ pub(crate) fn repository_watch_info(
         }
     }
     for dir in &info.git_dirs {
-        info.cache_dirs
-            .extend([dir.join("objects"), dir.join("lfs")]);
+        // The rest of `annex/` is classified by the watcher itself.
+        info.cache_dirs.extend(
+            ["objects", "lfs"]
+                .into_iter()
+                .chain(gitcomet_core::annex::WATCH_PRIVATE_DIRS)
+                .map(|name| dir.join(name)),
+        );
         info.ignore_inputs.extend(
             ["config", "config.worktree", "commondir", "info/exclude"]
                 .into_iter()
@@ -257,8 +266,9 @@ pub(crate) struct GixWorktreeIgnoreMatcher {
 
 impl GixWorktreeIgnoreMatcher {
     pub(crate) fn load(workdir: &Path) -> Result<Self> {
-        let repo = crate::open::open_worktree_repo(workdir)
-            .map_err(|error| crate::open::map_open_error(error, "gix ignore matcher open"))?;
+        let repo = crate::open::open_worktree_repo(workdir).map_err(|error| {
+            crate::open::map_open_error(error, "gix ignore matcher open", workdir)
+        })?;
         repo.worktree().ok_or_else(|| {
             Error::new(ErrorKind::Backend(
                 "gix ignore matcher: repository has no worktree".to_string(),
@@ -296,20 +306,24 @@ impl GixWorktreeIgnoreMatcher {
     /// the watcher reported the path as: a file or symlink that replaced a
     /// tracked directory has just deleted every entry under it, so the caller's
     /// kind must not skip the lookup beneath the path.
-    fn path_is_tracked(&self, relative_path: &Path) -> bool {
-        let relative_path =
-            gix::path::to_unix_separators_on_windows(gix::path::into_bstr(relative_path));
-        self.index.entry_by_path(relative_path.as_ref()).is_some()
+    fn path_is_tracked(&self, relative_path: &Path) -> Result<bool> {
+        let relative_path = gix::path::into_bstr(relative_path).map_err(|error| {
+            Error::new(ErrorKind::Backend(format!(
+                "gix ignore matcher path: {error}"
+            )))
+        })?;
+        let relative_path = gix::path::to_unix_separators_on_windows(relative_path);
+        Ok(self.index.entry_by_path(relative_path.as_ref()).is_some()
             || self
                 .index
                 .entry_closest_to_directory_or_directory(relative_path.as_ref())
-                .is_some()
+                .is_some())
     }
 }
 
 impl WorktreeIgnoreMatcher for GixWorktreeIgnoreMatcher {
     fn is_ignored(&mut self, relative_path: &Path, kind: WorktreePathKind) -> Result<bool> {
-        if self.path_is_tracked(relative_path) {
+        if self.path_is_tracked(relative_path)? {
             return Ok(false);
         }
 
@@ -327,5 +341,34 @@ impl WorktreeIgnoreMatcher for GixWorktreeIgnoreMatcher {
                 )))
             })?;
         Ok(platform.is_excluded())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::test_support::{git_success, init_test_repo};
+
+    #[test]
+    fn watch_info_includes_every_global_attributes_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let workdir = gitcomet_core::path_utils::canonicalize_or_original(dir.path().to_path_buf());
+        init_test_repo(&workdir);
+        let configured = workdir.join("global-attributes");
+        git_success(
+            &workdir,
+            &[
+                "config",
+                "core.attributesFile",
+                configured.to_str().unwrap(),
+            ],
+        );
+        let info = super::repository_watch_info(&workdir).unwrap();
+        assert!(info.ignore_inputs.contains(&configured));
+        // Status also reads the system file, so editing it must refresh.
+        if let Some(system) =
+            gix::attrs::Source::System.storage_location(&mut |name| std::env::var_os(name))
+        {
+            assert!(info.ignore_inputs.contains(&system), "{system:?}");
+        }
     }
 }

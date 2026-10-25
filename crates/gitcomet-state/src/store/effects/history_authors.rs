@@ -1,9 +1,10 @@
 use super::*;
 use crate::history_authors::{HistoryAuthorsEffect, HistoryAuthorsMsg};
+use crate::store::repository_runtime::RepositoryRuntimes;
 use std::sync::OnceLock;
 
 pub(super) fn schedule(
-    repos: &util::RepoMap,
+    repos: &RepositoryRuntimes,
     tx: StoreWorkerSender,
     work: HistoryAuthorsEffect,
     parent: CancellationToken,
@@ -12,7 +13,7 @@ pub(super) fn schedule(
     static EXECUTOR: OnceLock<TaskExecutor> = OnceLock::new();
     let failed = work.clone();
     util::spawn_detached_with_repo_or_else(
-        EXECUTOR.get_or_init(|| TaskExecutor::new(1)),
+        EXECUTOR.get_or_init(|| TaskExecutor::named("gitcomet-history-authors", 1)),
         "history-authors",
         repos,
         work.repo_id,

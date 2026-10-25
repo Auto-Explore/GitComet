@@ -1,94 +1,59 @@
 use crate::model::{ConflictFileLoadMode, RepoId};
 use gitcomet_core::auth::StagedGitAuth;
 use gitcomet_core::domain::*;
-use gitcomet_core::git_operation::GitOperationId;
 use gitcomet_core::remote_url::RemoteUrlPolicy;
-use gitcomet_core::services::{
-    CheckoutRemoteBranchMode, ConflictSide, ForcePushLease, InteractiveRebaseEntry, PullMode,
-    RemoteUrlKind, ResetMode, SafePushAfterCommitContext, SafePushAfterCommitTarget,
-    SubmoduleTrustTarget,
-};
+use gitcomet_core::services::CheckoutRemoteBranchMode;
 use std::path::PathBuf;
 
 use super::RepoPathList;
 
-#[derive(Clone, Debug)]
+macro_rules! match_git_auth {
+    ($effect:expr, $auth:ident => $then:expr, $work:ident => $command:expr) => {
+        match $effect {
+            Effect::RepoCommand($work) => $command,
+            Effect::CloneRepo { auth: $auth, .. }
+            | Effect::Commit { auth: $auth, .. }
+            | Effect::CommitAmend { auth: $auth, .. } => $then,
+            _ => None,
+        }
+    };
+}
+
+impl Effect {
+    #[cfg(test)]
+    pub(crate) fn git_auth(&self) -> Option<&StagedGitAuth> {
+        match_git_auth!(self, auth => auth.as_ref(), work => work.git_auth())
+    }
+
+    pub(crate) fn git_auth_slot(&mut self) -> Option<&mut Option<StagedGitAuth>> {
+        match_git_auth!(self, auth => Some(auth), work => work.git_auth_slot())
+    }
+}
+
+#[derive(Clone, Debug, strum::IntoStaticStr)]
 pub enum Effect {
+    Persistence(super::PersistenceEffect),
+    Control(super::ControlEffect),
+    Status(super::StatusEffect),
+    References(super::ReferenceEffect),
+    RepoCommand(super::RepoCommandEffect),
+    ValidateAuthPrompt {
+        generation: u64,
+        challenge: gitcomet_core::auth::AuthChallenge,
+        auth: StagedGitAuth,
+        cancellation: gitcomet_core::services::CancellationToken,
+    },
+    Filesystem(gitcomet_core::filesystem::Request),
     IndexedHistory(crate::indexed_history::IndexedHistoryEffect),
+    DiffSession(crate::diff_session::DiffSessionEffect),
     HistoryAuthors(crate::history_authors::HistoryAuthorsEffect),
-    PersistSession {
-        repo_id: Option<RepoId>,
-        action: &'static str,
-    },
-    PersistRecentRepo {
-        repo_id: Option<RepoId>,
-        workdir: PathBuf,
-        action: &'static str,
-    },
-    PersistRepoHistoryMode {
-        repo_id: Option<RepoId>,
-        workdir: PathBuf,
-        mode: HistoryMode,
-        action: &'static str,
-    },
-    PersistRepoHistoryModesBatch {
-        repo_id: Option<RepoId>,
-        updates: Vec<(PathBuf, HistoryMode)>,
-        action: &'static str,
-    },
-    PersistRepoHistoryAuthorFilter {
-        repo_id: Option<RepoId>,
-        workdir: PathBuf,
-        author: Option<String>,
-        action: &'static str,
-    },
-    PersistRepoHistorySolo {
-        repo_id: Option<RepoId>,
-        workdir: PathBuf,
-        solo: HistorySoloSet,
-        action: &'static str,
-    },
+    HistoryFind(crate::history_find::HistoryFindEffect),
+
     OpenRepo {
         repo_id: RepoId,
         path: PathBuf,
     },
-    CancelRepoLoads {
-        repo_id: RepoId,
-        load_epoch: u64,
-    },
-    CancelGitOperation {
-        repo_id: RepoId,
-        operation_id: GitOperationId,
-    },
-    LoadBranches {
-        repo_id: RepoId,
-    },
-    LoadRemotes {
-        repo_id: RepoId,
-    },
-    LoadRemoteBranches {
-        repo_id: RepoId,
-    },
-    LoadWorktreeStatus {
-        repo_id: RepoId,
-    },
-    LoadStagedStatus {
-        repo_id: RepoId,
-    },
-    LoadUncommittedLineStats {
-        repo_id: RepoId,
-        generation: crate::model::LineStatsGeneration,
-        status: std::sync::Arc<RepoStatus>,
-    },
-    LoadStatus {
-        repo_id: RepoId,
-    },
-    LoadHeadBranch {
-        repo_id: RepoId,
-    },
-    LoadUpstreamDivergence {
-        repo_id: RepoId,
-    },
+
     LoadLog {
         repo_id: RepoId,
         /// Identifies this walk, so its replies can be told from those of a
@@ -102,12 +67,7 @@ pub enum Effect {
         limit: usize,
         cursor: Option<LogCursor>,
     },
-    LoadTags {
-        repo_id: RepoId,
-    },
-    LoadRemoteTags {
-        repo_id: RepoId,
-    },
+
     LoadStashes {
         repo_id: RepoId,
         limit: usize,
@@ -125,6 +85,7 @@ pub enum Effect {
     /// page; a cursor page resumes after it and is served from the backend's
     /// cached full follow walk, so one such request can ask for everything.
     LoadFileHistory {
+        request: crate::model::FileHistoryRequestId,
         repo_id: RepoId,
         path: PathBuf,
         limit: usize,
@@ -141,15 +102,27 @@ pub enum Effect {
     LoadWorktreeDirty {
         repo_id: RepoId,
         workdir: PathBuf,
+        scope: crate::model::WorktreeDirtyScope,
         /// Worktree whose changed-file lists the scan should carry back; every
         /// other worktree reports counts alone. `None` while no worktree row is
         /// selected. See [`gitcomet_core::domain::WorktreeDirtySummary`].
         files_for: Option<PathBuf>,
     },
-    LoadRefMetadata {
+
+    LoadSubmodules {
         repo_id: RepoId,
     },
-    LoadSubmodules {
+    LoadLargeFileSupport {
+        repo_id: RepoId,
+    },
+    LoadLfsLocks {
+        repo_id: RepoId,
+    },
+    LoadAnnexWhereis {
+        repo_id: RepoId,
+        key: String,
+    },
+    LoadAnnexUnused {
         repo_id: RepoId,
     },
     LoadFileBrowser {
@@ -207,6 +180,7 @@ pub enum Effect {
         from: CommitId,
         /// `None` lists files between `from` and the working tree.
         to: Option<CommitId>,
+        options: gitcomet_core::services::ComparisonOptions,
         /// Echoed back on the reply so a completion that lost a race against a
         /// newer load can be dropped. See `HistoryState::range_files_request`.
         request: u64,
@@ -281,23 +255,15 @@ pub enum Effect {
         load_file_image: bool,
     },
     LoadSelectedConflictFile {
+        request: crate::model::ConflictLoadRequestId,
         repo_id: RepoId,
         mode: ConflictFileLoadMode,
     },
     LoadConflictFile {
+        request: crate::model::ConflictLoadRequestId,
         repo_id: RepoId,
         path: PathBuf,
         mode: ConflictFileLoadMode,
-    },
-    SaveWorktreeFile {
-        repo_id: RepoId,
-        path: PathBuf,
-        contents: String,
-        stage: bool,
-    },
-    AppendGitignorePatterns {
-        repo_id: RepoId,
-        patterns: Vec<String>,
     },
 
     CheckoutBranch {
@@ -315,22 +281,7 @@ pub enum Effect {
         repo_id: RepoId,
         commit_id: CommitId,
     },
-    CherryPickCommit {
-        repo_id: RepoId,
-        commit_id: CommitId,
-        commit: bool,
-        mainline: Option<usize>,
-        summary: String,
-    },
-    RevertCommit {
-        repo_id: RepoId,
-        commit_id: CommitId,
-        commit: bool,
-        mainline: Option<usize>,
-        summary: String,
-        /// Signing or fetch auth staged when a failed revert is replayed.
-        auth: Option<StagedGitAuth>,
-    },
+
     CreateBranch {
         repo_id: RepoId,
         name: String,
@@ -369,95 +320,7 @@ pub enum Effect {
         remote_url_policy: RemoteUrlPolicy,
         auth: Option<StagedGitAuth>,
     },
-    AbortCloneRepo {
-        dest: PathBuf,
-    },
-    ExportPatch {
-        repo_id: RepoId,
-        commit_id: CommitId,
-        dest: PathBuf,
-    },
-    ApplyPatch {
-        repo_id: RepoId,
-        patch: PathBuf,
-    },
-    AddWorktree {
-        repo_id: RepoId,
-        path: PathBuf,
-        reference: Option<String>,
-    },
-    RemoveWorktree {
-        repo_id: RepoId,
-        path: PathBuf,
-    },
-    ForceRemoveWorktree {
-        repo_id: RepoId,
-        path: PathBuf,
-    },
-    CheckSubmoduleAddTrust {
-        repo_id: RepoId,
-        url: String,
-        path: PathBuf,
-        branch: Option<String>,
-        name: Option<String>,
-        force: bool,
-        remote_url_policy: RemoteUrlPolicy,
-    },
-    CheckSubmoduleUpdateTrust {
-        repo_id: RepoId,
-        remote_url_policy: RemoteUrlPolicy,
-    },
-    AddSubmodule {
-        repo_id: RepoId,
-        url: String,
-        path: PathBuf,
-        branch: Option<String>,
-        name: Option<String>,
-        force: bool,
-        approved_sources: Vec<SubmoduleTrustTarget>,
-        remote_url_policy: RemoteUrlPolicy,
-        auth: Option<StagedGitAuth>,
-    },
-    UpdateSubmodules {
-        repo_id: RepoId,
-        approved_sources: Vec<SubmoduleTrustTarget>,
-        remote_url_policy: RemoteUrlPolicy,
-        auth: Option<StagedGitAuth>,
-    },
-    CheckSubmoduleLoadTrust {
-        repo_id: RepoId,
-        path: PathBuf,
-        remote_url_policy: RemoteUrlPolicy,
-    },
-    LoadSubmodule {
-        repo_id: RepoId,
-        path: PathBuf,
-        approved_sources: Vec<SubmoduleTrustTarget>,
-        remote_url_policy: RemoteUrlPolicy,
-        auth: Option<StagedGitAuth>,
-    },
-    ChangeSubmodulePointer {
-        repo_id: RepoId,
-        path: PathBuf,
-        reference: String,
-    },
-    RemoveSubmodule {
-        repo_id: RepoId,
-        path: PathBuf,
-    },
-    StageHunk {
-        repo_id: RepoId,
-        patch: String,
-    },
-    UnstageHunk {
-        repo_id: RepoId,
-        patch: String,
-    },
-    ApplyWorktreePatch {
-        repo_id: RepoId,
-        patch: String,
-        reverse: bool,
-    },
+
     StagePath {
         repo_id: RepoId,
         path: PathBuf,
@@ -485,149 +348,28 @@ pub enum Effect {
     Commit {
         repo_id: RepoId,
         message: String,
+        identity: Option<gitcomet_core::commit_identity::CommitIdentity>,
         auth: Option<StagedGitAuth>,
     },
     CommitAmend {
         repo_id: RepoId,
         message: String,
+        identity: Option<gitcomet_core::commit_identity::CommitIdentity>,
         auth: Option<StagedGitAuth>,
     },
-    SafePushAfterCommit {
-        repo_id: RepoId,
-        context: SafePushAfterCommitContext,
-        auth: Option<StagedGitAuth>,
-    },
-    FetchAll {
-        repo_id: RepoId,
-        prune: bool,
-        auth: Option<StagedGitAuth>,
-    },
-    PruneMergedBranches {
-        repo_id: RepoId,
-    },
-    PruneLocalTags {
-        repo_id: RepoId,
-    },
-    Pull {
-        repo_id: RepoId,
-        mode: PullMode,
-        prune: bool,
-        auth: Option<StagedGitAuth>,
-    },
-    PullBranch {
-        repo_id: RepoId,
-        remote: String,
-        branch: String,
-        prune: bool,
-        auth: Option<StagedGitAuth>,
-    },
-    MergeRef {
-        repo_id: RepoId,
-        reference: String,
-    },
-    SquashRef {
-        repo_id: RepoId,
-        reference: String,
-    },
-    PushWithTags {
-        repo_id: RepoId,
-        request: gitcomet_core::tag_push::TagPushRequest,
-        auth: Option<StagedGitAuth>,
-    },
+
     PreviewTagPush {
         repo_id: RepoId,
         request: gitcomet_core::tag_push::TagPushRequest,
         cancellation: gitcomet_core::services::CancellationToken,
         generation: u64,
     },
-    Push {
-        repo_id: RepoId,
-        auth: Option<StagedGitAuth>,
-    },
-    PushAfterCommit {
-        repo_id: RepoId,
-        target: SafePushAfterCommitTarget,
-        set_upstream: bool,
-        auth: Option<StagedGitAuth>,
-    },
-    ForcePush {
-        repo_id: RepoId,
-        auth: Option<StagedGitAuth>,
-    },
-    ForcePushWithLease {
-        repo_id: RepoId,
-        lease: ForcePushLease,
-        auth: Option<StagedGitAuth>,
-    },
-    PushSetUpstream {
-        repo_id: RepoId,
-        remote: String,
-        branch: String,
-        auth: Option<StagedGitAuth>,
-    },
-    SetUpstreamBranch {
-        repo_id: RepoId,
-        branch: String,
-        upstream: Upstream,
-    },
-    UnsetUpstreamBranch {
-        repo_id: RepoId,
-        branch: String,
-    },
-    DeleteRemoteBranch {
-        repo_id: RepoId,
-        remote: String,
-        branch: String,
-        auth: Option<StagedGitAuth>,
-    },
-    DeleteRemoteBranches {
-        repo_id: RepoId,
-        remote: String,
-        branches: Vec<String>,
-        auth: Option<StagedGitAuth>,
-    },
-    Reset {
-        repo_id: RepoId,
-        target: String,
-        mode: ResetMode,
-    },
-    SquashCommits {
-        repo_id: RepoId,
-        oldest: CommitId,
-        expected_head: CommitId,
-        message: String,
-        count: usize,
-    },
-    Rebase {
-        repo_id: RepoId,
-        onto: String,
-    },
-    RebaseContinue {
-        repo_id: RepoId,
-        /// Signing auth (e.g. an ssh/gpg key passphrase) staged for the
-        /// replayed commit when the continue retries a sequencer step that
-        /// previously failed on a passphrase prompt.
-        auth: Option<StagedGitAuth>,
-    },
-    RebaseAbort {
-        repo_id: RepoId,
-    },
+
     LoadInteractiveRebaseSetup {
         repo_id: RepoId,
         base: String,
     },
-    InteractiveRebase {
-        repo_id: RepoId,
-        base: String,
-        entries: Vec<InteractiveRebaseEntry>,
-        /// True for the user-opened editor; false for automated todo-list
-        /// rebases (e.g. squashing history without HEAD).
-        interactive: bool,
-    }, // entries held here so the effect dispatcher can pass them to the scheduler
-    InteractiveCherryPick {
-        repo_id: RepoId,
-        entries: Vec<InteractiveRebaseEntry>,
-    },
+    // entries held here so the effect dispatcher can pass them to the scheduler
     /// Load the full `%B` messages of the commits selected for an
     /// interactive cherry-pick: the log page only carries subjects, and a
     /// reword edited from a subject-only seed would silently drop the body.
@@ -635,66 +377,7 @@ pub enum Effect {
         repo_id: RepoId,
         ids: Vec<String>,
     },
-    MergeAbort {
-        repo_id: RepoId,
-    },
-    CreateTag {
-        repo_id: RepoId,
-        name: String,
-        target: String,
-        message: Option<String>,
-        annotated: bool,
-    },
-    DeleteTag {
-        repo_id: RepoId,
-        name: String,
-    },
-    PushTag {
-        repo_id: RepoId,
-        remote: String,
-        name: String,
-        auth: Option<StagedGitAuth>,
-    },
-    DeleteRemoteTag {
-        repo_id: RepoId,
-        remote: String,
-        name: String,
-        auth: Option<StagedGitAuth>,
-    },
-    AddRemote {
-        repo_id: RepoId,
-        name: String,
-        url: String,
-        remote_url_policy: RemoteUrlPolicy,
-    },
-    RemoveRemote {
-        repo_id: RepoId,
-        name: String,
-    },
-    SetRemoteUrl {
-        repo_id: RepoId,
-        name: String,
-        url: String,
-        kind: RemoteUrlKind,
-        remote_url_policy: RemoteUrlPolicy,
-    },
-    CheckoutConflictSide {
-        repo_id: RepoId,
-        path: PathBuf,
-        side: ConflictSide,
-    },
-    AcceptConflictDeletion {
-        repo_id: RepoId,
-        path: PathBuf,
-    },
-    CheckoutConflictBase {
-        repo_id: RepoId,
-        path: PathBuf,
-    },
-    LaunchMergetool {
-        repo_id: RepoId,
-        path: PathBuf,
-    },
+
     Stash {
         repo_id: RepoId,
         message: String,
@@ -712,4 +395,86 @@ pub enum Effect {
         repo_id: RepoId,
         index: usize,
     },
+}
+
+impl Effect {
+    pub(crate) fn requires_available_git(&self) -> bool {
+        match self {
+            Self::Filesystem(_)
+            | Self::Persistence(_)
+            | Self::Control(_)
+            | Self::ValidateAuthPrompt { .. } => false,
+            Self::Status(_)
+            | Self::References(_)
+            | Self::RepoCommand(_)
+            | Self::IndexedHistory(_)
+            | Self::DiffSession(_)
+            | Self::HistoryAuthors(_)
+            | Self::HistoryFind(_)
+            | Self::OpenRepo { .. }
+            | Self::LoadLog { .. }
+            | Self::LoadStashes { .. }
+            | Self::LoadReflog { .. }
+            | Self::LoadRecentCommitMessages { .. }
+            | Self::LoadFileHistory { .. }
+            | Self::LoadBlame { .. }
+            | Self::LoadWorktrees { .. }
+            | Self::LoadWorktreeDirty { .. }
+            | Self::LoadSubmodules { .. }
+            | Self::LoadLargeFileSupport { .. }
+            | Self::LoadLfsLocks { .. }
+            | Self::LoadAnnexWhereis { .. }
+            | Self::LoadAnnexUnused { .. }
+            | Self::LoadFileBrowser { .. }
+            | Self::LoadRebaseAndMergeState { .. }
+            | Self::LoadRebaseState { .. }
+            | Self::LoadMergeCommitMessage { .. }
+            | Self::LoadCommitDetails { .. }
+            | Self::VerifyCommitSignatures { .. }
+            | Self::LoadHoverCommitMessage { .. }
+            | Self::ResolveCommitForReveal { .. }
+            | Self::ResolveCommitLookup { .. }
+            | Self::LoadRangeFiles { .. }
+            | Self::LoadSquashMessagePreview { .. }
+            | Self::LoadSquashRebaseSetup { .. }
+            | Self::OpenFileAtCommitParent { .. }
+            | Self::OpenFileAtCommit { .. }
+            | Self::LoadDiff { .. }
+            | Self::LoadDiffFile { .. }
+            | Self::LoadDiffPreviewTextFile { .. }
+            | Self::LoadSubmoduleSummary { .. }
+            | Self::LoadInlineSubmoduleSelectedDiff { .. }
+            | Self::LoadInlineSubmoduleSelectedDiffFile { .. }
+            | Self::LoadInlineSubmoduleSelectedDiffFileImage { .. }
+            | Self::LoadDiffFileImage { .. }
+            | Self::LoadSelectedDiff { .. }
+            | Self::LoadSelectedConflictFile { .. }
+            | Self::LoadConflictFile { .. }
+            | Self::CheckoutBranch { .. }
+            | Self::CheckoutRemoteBranch { .. }
+            | Self::CheckoutCommit { .. }
+            | Self::CreateBranch { .. }
+            | Self::CreateBranchAndCheckout { .. }
+            | Self::RenameBranch { .. }
+            | Self::DeleteBranch { .. }
+            | Self::ForceDeleteBranch { .. }
+            | Self::DeleteBranches { .. }
+            | Self::CloneRepo { .. }
+            | Self::StagePath { .. }
+            | Self::StagePaths { .. }
+            | Self::UnstagePath { .. }
+            | Self::UnstagePaths { .. }
+            | Self::DiscardWorktreeChangesPath { .. }
+            | Self::DiscardWorktreeChangesPaths { .. }
+            | Self::Commit { .. }
+            | Self::CommitAmend { .. }
+            | Self::PreviewTagPush { .. }
+            | Self::LoadInteractiveRebaseSetup { .. }
+            | Self::LoadInteractiveCherryPickMessages { .. }
+            | Self::Stash { .. }
+            | Self::ApplyStash { .. }
+            | Self::PopStash { .. }
+            | Self::DropStash { .. } => true,
+        }
+    }
 }

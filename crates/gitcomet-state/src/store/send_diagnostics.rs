@@ -1,9 +1,8 @@
 use crate::msg::StoreEvent;
-use std::any::Any;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering, fence};
 use std::sync::mpsc;
 
-use super::worker_channel::StoreInstanceId;
+use super::worker_channel::StoreWorkerSender;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum SendFailureKind {
@@ -28,15 +27,6 @@ fn failure_counter(kind: SendFailureKind) -> &'static AtomicU64 {
         SendFailureKind::RepoMonitorMessage => &REPO_MONITOR_MESSAGE_FAILURES,
         SendFailureKind::StoreEvent => &STORE_EVENT_FAILURES,
     }
-}
-
-/// Renders a `catch_unwind` / `JoinHandle::join` payload for a diagnostic.
-///
-/// Shared by every `store` caller that recovers from a panic so the wording
-/// stays consistent; takes a reference so a caller holding a `Box` can pass
-/// `payload.as_ref()` without giving up ownership.
-pub(super) fn panic_payload_to_string(payload: &(dyn Any + Send)) -> String {
-    gitcomet_core::text_utils::panic_payload_to_string(payload, "unknown panic payload")
 }
 
 fn record_send_failure(kind: SendFailureKind, context: &'static str) {
@@ -72,17 +62,21 @@ pub(super) fn send_or_log<T>(
 pub(super) fn try_send_state_changed_or_log(
     tx: &smol::channel::Sender<StoreEvent>,
     context: &'static str,
-    store_id: StoreInstanceId,
-    store_is_alive: bool,
+    store: &StoreWorkerSender,
 ) {
     match tx.try_send(StoreEvent::StateChanged) {
         Ok(()) | Err(smol::channel::TrySendError::Full(_)) => {}
         Err(smol::channel::TrySendError::Closed(_)) => {
-            if store_is_alive {
+            // Check liveness only after the send fails: a snapshot taken before
+            // it counts a store dropped ahead of its receiver as a failure. The
+            // queue reads its closed bit Relaxed; the fence makes a shutdown
+            // that preceded the close visible here.
+            fence(Ordering::Acquire);
+            if store.is_alive() {
                 record_send_failure_with_detail(
                     SendFailureKind::StoreEvent,
                     context,
-                    format!("store_id={}", store_id.get()),
+                    format!("store_id={}", store.store_id().get()),
                 );
             }
         }

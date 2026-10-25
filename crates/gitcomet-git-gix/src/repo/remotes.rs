@@ -2,11 +2,12 @@ use super::history::gix_head_id_or_none;
 use super::porcelain::edit_local_config_strict;
 use super::{GixRepo, oid_to_arc_str};
 use crate::util::{
-    bytes_to_text_preserving_utf8, git_command_failed_error, run_git_capture, run_git_raw_output,
-    run_git_simple, run_git_with_output, validate_hex_commit_id, validate_ref_like_arg,
+    bytes_to_text_preserving_utf8, describe_path_list, git_command_failed_error, run_git_capture,
+    run_git_raw_output, run_git_simple, run_git_with_output, validate_hex_commit_id,
+    validate_ref_like_arg,
 };
 use gitcomet_core::domain::{CommitId, Remote, RemoteBranch, Upstream};
-use gitcomet_core::error::{Error, ErrorKind};
+use gitcomet_core::error::{Error, ErrorKind, GitFailure, GitFailureId};
 use gitcomet_core::remote_url::{RemoteUrlPolicy, validate_remote_url_with_policy};
 use gitcomet_core::services::{
     CancellationToken, CommandOutput, ForcePushLease, PullMode, RemoteUrlKind, Result,
@@ -19,6 +20,16 @@ use std::process::Command;
 use std::str;
 
 const PENDING_UPSTREAM_CONFIG_KEY: &str = "gitcometPendingUpstream";
+
+/// Uncoloured output for the diffstat a pull, merge or squash prints:
+/// `color.ui` alone loses to a user's `color.diff=always`.
+const NO_COLOR_CONFIG: [&str; 4] = ["-c", "color.ui=false", "-c", "color.diff=false"];
+
+struct FetchAllRemotes {
+    names: Vec<String>,
+    /// Name the eligible remotes explicitly when --all would contact annex.
+    explicit: bool,
+}
 
 /// Display label for `git remote add`; the URL is masked because the label
 /// ends up in the command log and error toasts, unlike the argv.
@@ -77,6 +88,25 @@ fn branches_to_prune(
     candidates
 }
 
+/// The branch `refs/remotes/<remote>/HEAD` points at, as `git remote set-head`
+/// records it. An unreadable HEAD reads as none: only the Add-worktree dialog's
+/// preselection depends on it, never the remote itself.
+fn remote_default_branch(refs: &crate::refs::RefsView<'_>, remote: &str) -> Option<String> {
+    let head = refs
+        .find(format!("refs/remotes/{remote}/HEAD"))
+        .ok()
+        .flatten()?;
+    let gix::refs::TargetRef::Symbolic(target) = head.target() else {
+        return None;
+    };
+    let prefix = format!("refs/remotes/{remote}/");
+    target
+        .as_bstr()
+        .strip_prefix(prefix.as_bytes())
+        .filter(|branch| !branch.is_empty())
+        .map(|branch| branch.to_str_lossy().into_owned())
+}
+
 /// Forward-map an exact remote branch through that remote's fetch refspecs.
 /// This deliberately does not inspect any other remote, even when another
 /// remote maps to the same local tracking ref.
@@ -118,7 +148,7 @@ pub(super) fn tracking_refs_for_remote_branch(
     Ok(tracking_refs)
 }
 
-pub(super) fn configured_upstream_of(reference: &gix::Reference<'_>) -> Option<Upstream> {
+pub(super) fn configured_upstream_of(reference: &crate::refs::Reference<'_>) -> Option<Upstream> {
     let local_branch = reference
         .name()
         .as_bstr()
@@ -154,7 +184,7 @@ pub(super) fn configured_upstream_of(reference: &gix::Reference<'_>) -> Option<U
 /// Whether GitComet intentionally configured this upstream before the remote
 /// branch existed. This distinguishes a future branch from a formerly-live
 /// upstream that disappeared and remains eligible for fetch cleanup.
-pub(super) fn configured_upstream_is_pending(reference: &gix::Reference<'_>) -> bool {
+pub(super) fn configured_upstream_is_pending(reference: &crate::refs::Reference<'_>) -> bool {
     let local_branch = match reference.name().as_bstr().strip_prefix(b"refs/heads/") {
         Some(branch) => branch.as_bstr(),
         None => return false,
@@ -194,7 +224,7 @@ fn safe_push_ref_display(remote: &str, branch: &str) -> String {
     format!("{remote}/{branch}")
 }
 
-fn output_mentions_missing_remote_ref(output: &std::process::Output) -> bool {
+fn output_mentions_missing_remote_ref(output: &crate::util::GitOutput) -> bool {
     let mut text = bytes_to_text_preserving_utf8(&output.stderr);
     text.push('\n');
     text.push_str(&bytes_to_text_preserving_utf8(&output.stdout));
@@ -237,23 +267,37 @@ fn run_git_command_with_optional_output(
     )
 }
 
-fn combine_command_outputs(command: impl Into<String>, outputs: &[CommandOutput]) -> CommandOutput {
-    CommandOutput {
-        command: command.into(),
-        stdout: outputs
-            .iter()
-            .map(|output| output.stdout.trim_end())
-            .filter(|text| !text.is_empty())
-            .collect::<Vec<_>>()
-            .join("\n"),
-        stderr: outputs
-            .iter()
-            .map(|output| output.stderr.trim_end())
-            .filter(|text| !text.is_empty())
-            .collect::<Vec<_>>()
-            .join("\n"),
-        exit_code: Some(0),
+/// `Some(is_rebase)` while a merge or rebase is in progress. An unreadable ref
+/// store counts as neither.
+fn integration_in_progress(repo: &gix::Repository) -> Option<bool> {
+    match crate::refs::operation_state(repo).ok().flatten()? {
+        gix::state::InProgress::Merge => Some(false),
+        gix::state::InProgress::Rebase | gix::state::InProgress::RebaseInteractive => Some(true),
+        _ => None,
     }
+}
+
+/// The paths under the `Conflicts:` comment git adds to MERGE_MSG when a merge
+/// or pick stops at conflicts. They outlive rerere staging the resolutions.
+fn merge_msg_conflict_paths(git_dir: &std::path::Path) -> Vec<Vec<u8>> {
+    let message = std::fs::read(git_dir.join("MERGE_MSG")).unwrap_or_default();
+    let mut lines = message.split(|byte| *byte == b'\n');
+    // The comment prefix follows core.commentChar, so take it from the header.
+    let Some(prefix) = lines.by_ref().find_map(|line| {
+        let line = line.strip_suffix(b"\r").unwrap_or(line);
+        let prefix = line.strip_suffix(b"Conflicts:")?;
+        let comment = prefix.trim_ascii_end();
+        (!comment.is_empty()).then_some(comment)
+    }) else {
+        return Vec::new();
+    };
+    lines
+        .map(|line| line.strip_suffix(b"\r").unwrap_or(line))
+        .skip_while(|line| line.trim_ascii() == prefix)
+        .map_while(|line| line.strip_prefix(prefix)?.strip_prefix(b"\t"))
+        .filter(|path| !path.is_empty())
+        .map(<[u8]>::to_vec)
+        .collect()
 }
 
 /// A remote's configured fetch refspecs, grouped by destination namespace.
@@ -370,19 +414,46 @@ fn remote_name_is_config_key_safe(remote: &str) -> bool {
     !remote.is_empty() && !remote.contains(['=', '\n', '\r'])
 }
 
+/// A `[remote]` section git-annex wrote for a special remote (S3, directory,
+/// httpalso, ...): it carries `annex-uuid` but no URL, so Git cannot fetch it.
+fn is_annex_special_remote(config: &gix::config::Snapshot<'_>, remote_name: &str) -> bool {
+    let has = |key: &str| {
+        config
+            .sections_by_name("remote")
+            .into_iter()
+            .flatten()
+            .filter(|section| {
+                section.header().subsection_name() == Some(remote_name.as_bytes().as_bstr())
+            })
+            .any(|section| section.value(key).is_some())
+    };
+    has("annex-uuid") && !has("url")
+}
+
 /// Read a boolean directly from the matching `[remote "..."]` sections. This
 /// avoids interpolating the remote name into a dotted config key, where names
-/// containing `=` can be parsed as part of the value instead.
+/// containing `=` can be parsed as part of the value instead. Aliases share
+/// one setting in Git, so the last occurrence of any alias wins.
 fn remote_config_boolean(
     config: &gix::config::Snapshot<'_>,
     remote_name: &str,
-    value_name: &str,
+    value_names: &[&str],
 ) -> Option<bool> {
     let remote_name = remote_name.as_bytes().as_bstr();
     let value = config
         .sections_by_name("remote")?
         .filter(|section| section.header().subsection_name() == Some(remote_name))
-        .filter_map(|section| section.value_implicit(value_name))
+        .filter_map(|section| {
+            let name = section
+                .value_names()
+                .filter(|name| {
+                    value_names
+                        .iter()
+                        .any(|alias| name.eq_ignore_ascii_case(alias))
+                })
+                .last()?;
+            section.value_implicit(&name)
+        })
         .last()?;
     match value {
         // A key without `=` is Git's implicit true spelling.
@@ -395,7 +466,7 @@ fn remote_config_boolean(
 /// `tracking_ref` is populated only when the remote's positive and negative
 /// fetch refspecs map this upstream locally.
 fn configured_remote_upstream_of(
-    reference: &gix::Reference<'_>,
+    reference: &crate::refs::Reference<'_>,
 ) -> Option<ConfiguredRemoteUpstream> {
     let local_branch = reference.name().shorten().to_str_lossy().into_owned();
     let Upstream {
@@ -440,19 +511,26 @@ impl GixRepo {
         let Ok(repo) = self.reopen_repo() else {
             return;
         };
+        if crate::refs::backend(&repo).ok() == Some(crate::refs::RefBackend::Reftable) {
+            let names: Vec<_> = ref_names.into_iter().collect();
+            let _ = crate::refs::delete_batch(&repo, &names);
+            return;
+        }
         for ref_name in ref_names {
-            let Ok(Some(reference)) = repo.try_find_reference(ref_name) else {
+            let Ok(Some(reference)) = crate::refs::find(&repo, ref_name) else {
                 continue;
             };
-            let _ = reference.delete();
+            let _ = crate::refs::delete(reference);
         }
     }
 
     fn reference_exists(&self, ref_name: &str) -> Result<bool> {
         let repo = self.reopen_repo()?;
-        Ok(repo
-            .try_find_reference(ref_name)
-            .map_err(|e| Error::new(ErrorKind::Backend(format!("gix try_find_reference: {e}"))))?
+        Ok(crate::refs::find(&repo, ref_name)
+            .map_err(|e| {
+                Error::new(ErrorKind::Backend(format!("gix try_find_reference: {e}")))
+                    .with_source(e)
+            })?
             .is_some())
     }
 
@@ -560,20 +638,26 @@ impl GixRepo {
 
     /// Remotes `git fetch --all` contacts, in Git's own order. A remote it
     /// skips says nothing about whether that remote's branches still exist.
-    fn fetch_all_remote_names(&self) -> Result<Vec<String>> {
-        let repo = self.reopen_repo()?;
+    fn fetch_all_remotes(&self) -> Result<FetchAllRemotes> {
+        let repo = self.repo_with_current_config()?;
         let config = repo.config_snapshot();
         let mut names = Vec::new();
+        let mut explicit = false;
         for name in repo.remote_names() {
             let name = name.to_str_lossy().into_owned();
-            let skipped = ["skipFetchAll", "skipDefaultUpdate"]
-                .into_iter()
-                .any(|key| remote_config_boolean(&config, &name, key).unwrap_or(false));
-            if !skipped {
+            let skipped =
+                remote_config_boolean(&config, &name, &["skipFetchAll", "skipDefaultUpdate"])
+                    .unwrap_or(false);
+            if skipped {
+                continue;
+            }
+            if is_annex_special_remote(&config, &name) {
+                explicit = true;
+            } else {
                 names.push(name);
             }
         }
-        Ok(names)
+        Ok(FetchAllRemotes { names, explicit })
     }
 
     /// Configured branch upstreams. `tracking_ref` is populated only when the
@@ -583,17 +667,18 @@ impl GixRepo {
         scope: UpstreamCleanupScope<'_>,
     ) -> Result<Vec<ConfiguredRemoteUpstream>> {
         let repo = self.reopen_repo()?;
-        let refs = repo
-            .references()
-            .map_err(|e| Error::new(ErrorKind::Backend(format!("gix references: {e}"))))?;
-        let iter = refs
-            .local_branches()
-            .map_err(|e| Error::new(ErrorKind::Backend(format!("gix local_branches: {e}"))))?;
+        let refs = crate::refs::view(&repo).map_err(|e| {
+            Error::new(ErrorKind::Backend(format!("gix references: {e}"))).with_source(e)
+        })?;
+        let iter = refs.local_branches().map_err(|e| {
+            Error::new(ErrorKind::Backend(format!("gix local_branches: {e}"))).with_source(e)
+        })?;
         let mut upstreams = Vec::new();
 
         for reference in iter {
-            let reference = reference
-                .map_err(|e| Error::new(ErrorKind::Backend(format!("gix ref iter: {e}"))))?;
+            let reference = reference.map_err(|e| {
+                Error::new(ErrorKind::Backend(format!("gix ref iter: {e}"))).with_source(e)
+            })?;
             let Some(upstream) = configured_remote_upstream_of(&reference) else {
                 continue;
             };
@@ -613,6 +698,7 @@ impl GixRepo {
         expected_to_exist: bool,
     ) -> Result<Vec<ConfiguredRemoteUpstream>> {
         let repo = self.reopen_repo()?;
+        let refs = crate::refs::view(&repo)?;
         let mut matching = Vec::new();
         for mut upstream in upstreams {
             // Without a matching fetch refspec, a fetch was not authoritative
@@ -621,12 +707,13 @@ impl GixRepo {
             let Some(tracking_ref) = upstream.tracking_ref.as_deref() else {
                 continue;
             };
-            let tracking_exists = repo
-                .try_find_reference(tracking_ref)
+            let tracking_exists = refs
+                .find(tracking_ref)
                 .map_err(|e| {
                     Error::new(ErrorKind::Backend(format!(
                         "gix try_find upstream reference: {e}"
                     )))
+                    .with_source(e)
                 })?
                 .is_some();
             if tracking_exists && upstream.pending {
@@ -763,9 +850,9 @@ impl GixRepo {
 
         let repo = self.reopen_repo()?;
         let ref_name = format!("refs/heads/{branch_name}");
-        let Some(reference) = repo
-            .try_find_reference(ref_name.as_str())
-            .map_err(|e| Error::new(ErrorKind::Backend(format!("gix try_find_reference: {e}"))))?
+        let Some(reference) = crate::refs::find(&repo, ref_name.as_str()).map_err(|e| {
+            Error::new(ErrorKind::Backend(format!("gix try_find_reference: {e}"))).with_source(e)
+        })?
         else {
             return Ok(None);
         };
@@ -785,9 +872,9 @@ impl GixRepo {
 
         let repo = self.reopen_repo()?;
         let ref_name = format!("refs/heads/{branch_name}");
-        let Some(reference) = repo
-            .try_find_reference(ref_name.as_str())
-            .map_err(|e| Error::new(ErrorKind::Backend(format!("gix try_find_reference: {e}"))))?
+        let Some(reference) = crate::refs::find(&repo, ref_name.as_str()).map_err(|e| {
+            Error::new(ErrorKind::Backend(format!("gix try_find_reference: {e}"))).with_source(e)
+        })?
         else {
             return Ok(None);
         };
@@ -800,12 +887,12 @@ impl GixRepo {
             return Ok(None);
         };
 
-        let Some(mut tracking_ref) = repo
-            .try_find_reference(tracking_ref_name.as_str())
-            .map_err(|e| {
+        let Some(mut tracking_ref) =
+            crate::refs::find(&repo, tracking_ref_name.as_str()).map_err(|e| {
                 Error::new(ErrorKind::Backend(format!(
                     "gix try_find upstream reference: {e}"
                 )))
+                .with_source(e)
             })?
         else {
             return Ok(None);
@@ -851,6 +938,7 @@ impl GixRepo {
 
     pub(super) fn list_remotes_impl(&self) -> Result<Vec<Remote>> {
         let repo = self.reopen_repo()?;
+        let refs = crate::refs::view(&repo).ok();
         let mut remotes = Vec::new();
 
         for name in repo.remote_names() {
@@ -868,18 +956,19 @@ impl GixRepo {
                 })
                 .filter(|url| !url.is_empty());
 
+            let name = name.to_str_lossy().into_owned();
+            let default_branch = refs
+                .as_ref()
+                .and_then(|refs| remote_default_branch(refs, &name));
             remotes.push(Remote {
-                name: name.to_str_lossy().into_owned(),
+                name,
                 url,
+                default_branch,
             });
         }
 
         remotes.sort_unstable_by(|a, b| a.name.cmp(&b.name));
         Ok(remotes)
-    }
-
-    pub(super) fn list_remote_branches_impl(&self) -> Result<Vec<RemoteBranch>> {
-        self.list_remote_branches_cancellable_impl(&CancellationToken::new())
     }
 
     pub(super) fn list_remote_branches_cancellable_impl(
@@ -892,12 +981,12 @@ impl GixRepo {
         // before the command and resurrect already-pruned tracking branches in
         // the UI.
         let repo = self.reopen_repo()?;
-        let refs = repo
-            .references()
-            .map_err(|e| Error::new(ErrorKind::Backend(format!("gix references: {e}"))))?;
-        let iter = refs
-            .remote_branches()
-            .map_err(|e| Error::new(ErrorKind::Backend(format!("gix remote_branches: {e}"))))?;
+        let refs = crate::refs::view(&repo).map_err(|e| {
+            Error::new(ErrorKind::Backend(format!("gix references: {e}"))).with_source(e)
+        })?;
+        let iter = refs.remote_branches().map_err(|e| {
+            Error::new(ErrorKind::Backend(format!("gix remote_branches: {e}"))).with_source(e)
+        })?;
         let remotes = repo
             .remote_names()
             .into_iter()
@@ -914,8 +1003,9 @@ impl GixRepo {
         let mut tracking_refs = Vec::with_capacity(iter.size_hint().0);
         for reference in iter {
             cancellation.check_cancelled()?;
-            let mut reference = reference
-                .map_err(|e| Error::new(ErrorKind::Backend(format!("gix ref iter: {e}"))))?;
+            let mut reference = reference.map_err(|e| {
+                Error::new(ErrorKind::Backend(format!("gix ref iter: {e}"))).with_source(e)
+            })?;
 
             let target = match reference.try_id() {
                 Some(id) => id.detach(),
@@ -989,34 +1079,50 @@ impl GixRepo {
         Ok(branches)
     }
 
-    fn fetch_all_command_impl(&self, prune: bool, capture_output: bool) -> Result<CommandOutput> {
+    fn fetch_all_command_impl(
+        &self,
+        remotes: &FetchAllRemotes,
+        prune: bool,
+        capture_output: bool,
+    ) -> Result<CommandOutput> {
         let mut cmd = self.git_workdir_cmd();
-        cmd.arg("fetch").arg("--all");
-        if prune {
-            cmd.arg("--prune");
+        cmd.arg("fetch").arg("--progress");
+        // `--all` would also try a git-annex special remote left without
+        // `skipFetchAll`, and fail. Name the fetchable remotes instead.
+        let scope = if remotes.explicit {
+            "--multiple"
         } else {
-            cmd.arg("--no-prune");
-        }
+            "--all"
+        };
+        let prune_arg = if prune { "--prune" } else { "--no-prune" };
+        cmd.arg(scope).arg(prune_arg);
         cmd.arg("--no-prune-tags");
+        if remotes.explicit {
+            if remotes.names.is_empty() {
+                return Ok(CommandOutput {
+                    command: "git fetch".to_string(),
+                    stdout: String::new(),
+                    stderr: String::new(),
+                    exit_code: Some(0),
+                });
+            }
+            cmd.arg("--").args(&remotes.names);
+        }
         run_git_command_with_optional_output(
             cmd,
-            if prune {
-                "git fetch --all --prune --no-prune-tags"
-            } else {
-                "git fetch --all --no-prune --no-prune-tags"
-            },
+            &format!("git fetch {scope} {prune_arg} --no-prune-tags"),
             capture_output,
         )
     }
 
     fn fetch_all_command_with_optional_output_impl(
         &self,
-        remotes: &[String],
+        remotes: &FetchAllRemotes,
         prune: bool,
         capture_output: bool,
     ) -> Result<CommandOutput> {
         if !prune {
-            return self.fetch_all_command_impl(false, capture_output);
+            return self.fetch_all_command_impl(remotes, false, capture_output);
         }
 
         // `--prune` deletes every destination the remote's own refspecs map, so
@@ -1024,17 +1130,17 @@ impl GixRepo {
         // mirrors) would lose local tags and branches along with stale
         // remote-tracking refs. A remote whose refspecs cannot be read takes
         // the same scoped path rather than risk the broad prune.
-        let needs_scoped_prune = remotes.iter().any(|remote| {
+        let needs_scoped_prune = remotes.names.iter().any(|remote| {
             !self
                 .remote_prunes_only_tracking_refs(remote)
                 .unwrap_or(false)
         });
         if !needs_scoped_prune {
-            return self.fetch_all_command_impl(true, capture_output);
+            return self.fetch_all_command_impl(remotes, true, capture_output);
         }
 
-        let mut outputs = vec![self.fetch_all_command_impl(false, capture_output)?];
-        for remote in remotes {
+        let mut outputs = vec![self.fetch_all_command_impl(remotes, false, capture_output)?];
+        for remote in &remotes.names {
             outputs.push(
                 self.prune_remote_tracking_refs_command_with_optional_output_impl(
                     remote,
@@ -1042,8 +1148,8 @@ impl GixRepo {
                 )?,
             );
         }
-        Ok(combine_command_outputs(
-            "git fetch --all --no-prune --no-prune-tags && git fetch --prune per remote",
+        Ok(CommandOutput::combine(
+            format!("{} && git fetch --prune per remote", outputs[0].command),
             &outputs,
         ))
     }
@@ -1056,10 +1162,10 @@ impl GixRepo {
         // Only the remotes this fetch contacts are authoritative about their
         // upstreams. A remote it skips can have a configured upstream with no
         // remote-tracking ref for reasons this fetch says nothing about.
-        let remotes = self.fetch_all_remote_names()?;
+        let remotes = self.fetch_all_remotes()?;
         let tracked_before_fetch = if prune {
             let configured =
-                self.configured_remote_upstreams(UpstreamCleanupScope::Remotes(&remotes))?;
+                self.configured_remote_upstreams(UpstreamCleanupScope::Remotes(&remotes.names))?;
             self.configured_upstreams_with_tracking_presence(configured, true)?
         } else {
             Vec::new()
@@ -1079,8 +1185,35 @@ impl GixRepo {
             return Ok(output);
         }
         let unlinked =
-            self.unlink_missing_remote_upstreams(UpstreamCleanupScope::Remotes(&remotes));
+            self.unlink_missing_remote_upstreams(UpstreamCleanupScope::Remotes(&remotes.names));
         Ok(append_unlinked_upstreams(output, &unlinked))
+    }
+
+    /// `git fetch <remote> <refspec>...`: exactly the refspecs asked for, with
+    /// pruning off whatever the configuration says.
+    pub(super) fn fetch_refspecs_with_output_impl(
+        &self,
+        remote: &str,
+        refspecs: &[String],
+    ) -> Result<CommandOutput> {
+        validate_ref_like_arg(remote, "remote name")?;
+        if refspecs.is_empty() {
+            return Err(Error::new(ErrorKind::Backend(
+                "a refspec fetch needs at least one refspec".to_string(),
+            )));
+        }
+        for refspec in refspecs {
+            validate_ref_like_arg(refspec, "refspec")?;
+        }
+        let label = format!("git fetch {remote} {}", refspecs.join(" "));
+        let mut cmd = self.git_workdir_cmd();
+        cmd.arg("fetch")
+            .arg("--no-prune")
+            .arg("--no-prune-tags")
+            .arg("--")
+            .arg(remote)
+            .args(refspecs);
+        run_git_command_with_optional_output(cmd, &label, true)
     }
 
     fn prune_remote_tracking_refs_command_with_optional_output_impl(
@@ -1099,6 +1232,7 @@ impl GixRepo {
 
         let mut cmd = self.git_workdir_cmd();
         cmd.arg("fetch")
+            .arg("--progress")
             .arg("--prune")
             .arg("--no-prune-tags")
             .arg("--")
@@ -1128,11 +1262,6 @@ impl GixRepo {
         };
         let unlinked = self.unlink_missing_remote_upstreams(UpstreamCleanupScope::Remote(remote));
         Ok(append_unlinked_upstreams(output, &unlinked))
-    }
-
-    pub(super) fn fetch_all_impl(&self, prune: bool) -> Result<()> {
-        self.fetch_all_with_optional_output_impl(prune, false)
-            .map(|_| ())
     }
 
     pub(super) fn fetch_all_with_output_impl(&self, prune: bool) -> Result<CommandOutput> {
@@ -1170,7 +1299,7 @@ impl GixRepo {
             cmd.arg("-c")
                 .arg(format!("remote.{remote}.pruneTags=false"));
         }
-        cmd.arg("pull");
+        cmd.arg("pull").arg("--progress");
         Self::append_pull_mode_args(&mut cmd, mode);
         cmd
     }
@@ -1284,7 +1413,7 @@ impl GixRepo {
             "git pull --no-prune".to_string()
         };
 
-        let output = match run_git_command_with_optional_output(cmd, &label, capture_output) {
+        let output = match self.run_integrating_git(cmd, &label, capture_output) {
             Ok(output) => output,
             Err(error) => {
                 // `git pull --prune` deletes the tracking ref before it reports
@@ -1322,7 +1451,7 @@ impl GixRepo {
             None => Ok(output),
             Some(remote) => {
                 outputs.push(output);
-                Ok(combine_command_outputs(
+                Ok(CommandOutput::combine(
                     format!("git fetch {remote} --prune --no-prune-tags && {label}"),
                     &outputs,
                 ))
@@ -1343,11 +1472,7 @@ impl GixRepo {
             // No remote to name; let Git report why it cannot pull.
             let mut cmd = self.pull_cmd(None, mode);
             cmd.arg("--no-prune");
-            return run_git_command_with_optional_output(
-                cmd,
-                "git pull --no-prune",
-                capture_output,
-            );
+            return self.run_integrating_git(cmd, "git pull --no-prune", capture_output);
         };
         validate_ref_like_arg(&remote, "remote name")?;
         validate_ref_like_arg(branch, "branch name")?;
@@ -1362,7 +1487,7 @@ impl GixRepo {
         let mut cmd = self.pull_cmd(Some(&remote), mode);
         cmd.arg("--no-prune").arg("--").arg(&remote).arg(branch);
         let pull_label = format!("git pull --no-prune {remote} {branch}");
-        let output = run_git_command_with_optional_output(cmd, &pull_label, capture_output)?;
+        let output = self.run_integrating_git(cmd, &pull_label, capture_output)?;
 
         let mut set_upstream = self.git_workdir_cmd();
         set_upstream
@@ -1377,19 +1502,10 @@ impl GixRepo {
             return Ok(output);
         }
         outputs.push(output);
-        Ok(combine_command_outputs(
+        Ok(CommandOutput::combine(
             format!("git fetch {remote} --prune --no-prune-tags && {pull_label}"),
             &outputs,
         ))
-    }
-
-    pub(super) fn pull_impl(&self, mode: PullMode) -> Result<()> {
-        self.pull_with_optional_output_impl(mode, true, false)
-            .map(|_| ())
-    }
-
-    pub(super) fn pull_with_output_impl(&self, mode: PullMode) -> Result<CommandOutput> {
-        self.pull_with_optional_output_impl(mode, true, true)
     }
 
     pub(super) fn pull_with_output_prune_impl(
@@ -1491,18 +1607,18 @@ impl GixRepo {
             ))));
         }
 
-        let lease_ref = format!("refs/heads/{}", lease.branch);
-        let lease_arg = format!("--force-with-lease={}:{}", lease_ref, lease.expected);
-        let source_ref = format!("{}:{lease_ref}", lease.local_head);
-        let command_label = format!("git push {lease_arg} {} {source_ref}", lease.remote);
-
-        let mut cmd = self.git_workdir_cmd();
-        cmd.arg("push")
-            .arg(&lease_arg)
-            .arg("--")
-            .arg(&lease.remote)
-            .arg(source_ref);
-        run_git_with_output(cmd, &command_label)
+        // Built-in force push and multi-ref publication use the same exact
+        // lease validation and command builder. The source is the captured
+        // commit, so a branch moving after the checks cannot alter the push.
+        self.push_refs_impl(
+            &lease.remote,
+            &[gitcomet_core::services::RemoteRefUpdate {
+                branch: lease.branch.clone(),
+                expected: lease.expected.clone(),
+                new: lease.local_head.clone(),
+            }],
+            false,
+        )
     }
 
     pub(super) fn head_commit_id_impl(&self) -> Result<Option<CommitId>> {
@@ -1916,14 +2032,6 @@ impl GixRepo {
         self.push_head_to_branch_with_oid_lease_with_output_impl(lease)
     }
 
-    pub(super) fn pull_branch_with_output_impl(
-        &self,
-        remote: &str,
-        branch: &str,
-    ) -> Result<CommandOutput> {
-        self.pull_branch_with_output_prune_impl(remote, branch, false)
-    }
-
     pub(super) fn pull_branch_with_output_prune_impl(
         &self,
         remote: &str,
@@ -1949,7 +2057,7 @@ impl GixRepo {
                     return Err(remote_branch_gone_after_fetch_error(remote, branch));
                 }
                 let merge_output = self.merge_ref_with_output_impl(&tracking_ref)?;
-                return Ok(combine_command_outputs(
+                return Ok(CommandOutput::combine(
                     format!("git fetch {remote} --prune && git merge {tracking_ref}"),
                     &[prune_output, merge_output],
                 ));
@@ -1970,7 +2078,7 @@ impl GixRepo {
                 return Err(remote_branch_gone_after_fetch_error(remote, branch));
             };
             let merge_output = self.merge_ref_with_output_impl(tip.as_ref())?;
-            return Ok(combine_command_outputs(
+            return Ok(CommandOutput::combine(
                 format!(
                     "git fetch {remote} --prune && git fetch {remote} refs/heads/{branch} && git merge {tip}"
                 ),
@@ -1980,8 +2088,7 @@ impl GixRepo {
 
         let command_str = format!("git pull --no-rebase --ff --no-prune {remote} {branch}");
         let mut cmd = self.git_workdir_cmd();
-        cmd.arg("-c")
-            .arg("color.ui=false")
+        cmd.args(NO_COLOR_CONFIG)
             .arg("-c")
             .arg("fetch.pruneTags=false");
         if remote_name_is_config_key_safe(remote) {
@@ -1990,13 +2097,14 @@ impl GixRepo {
         }
         cmd.arg("--no-pager")
             .arg("pull")
+            .arg("--progress")
             .arg("--no-rebase")
             .arg("--ff")
             .arg("--no-prune")
             .arg("--")
             .arg(remote)
             .arg(branch);
-        run_git_with_output(cmd, &command_str)
+        self.run_integrating_git(cmd, &command_str, true)
     }
 
     pub(super) fn merge_ref_with_output_impl(&self, reference: &str) -> Result<CommandOutput> {
@@ -2004,15 +2112,116 @@ impl GixRepo {
 
         let command_str = format!("git merge --ff --no-edit {reference}");
         let mut cmd = self.git_workdir_cmd();
-        cmd.arg("-c")
-            .arg("color.ui=false")
+        cmd.args(NO_COLOR_CONFIG)
             .arg("--no-pager")
             .arg("merge")
             .arg("--ff")
             .arg("--no-edit")
             .arg("--")
             .arg(reference);
-        run_git_with_output(cmd, &command_str)
+        self.run_integrating_git(cmd, &command_str, true)
+    }
+
+    /// Runs a pull or merge. A failure that leaves a new merge or rebase
+    /// stopped at conflicts says so, instead of echoing git's fetch output.
+    fn run_integrating_git(
+        &self,
+        cmd: Command,
+        label: &str,
+        capture_output: bool,
+    ) -> Result<CommandOutput> {
+        // A merge or rebase already in progress makes git refuse; that stays a failure.
+        let integrating_before = integration_in_progress(&self.repo()).is_some();
+        run_git_command_with_optional_output(cmd, label, capture_output).map_err(|error| {
+            if integrating_before {
+                error
+            } else {
+                self.stopped_at_conflicts_error(error)
+            }
+        })
+    }
+
+    fn stopped_at_conflicts_error(&self, error: Error) -> Error {
+        let ErrorKind::Git(failure) = error.kind() else {
+            return error;
+        };
+        let repo = self.repo();
+        let Some(rebase) = integration_in_progress(&repo) else {
+            return error;
+        };
+        if failure.id() != GitFailureId::CommandFailed {
+            return error;
+        }
+        // Read fresh: the cached index may predate the merge on a filesystem
+        // whose timestamps are too coarse to show the rewrite.
+        let unmerged: Vec<Vec<u8>> = repo
+            .open_index()
+            .map(|index| {
+                let mut paths: Vec<Vec<u8>> = index
+                    .entries()
+                    .iter()
+                    .filter(|entry| entry.stage_raw() != 0)
+                    .map(|entry| entry.path(&index).to_vec())
+                    .collect();
+                paths.dedup();
+                paths
+            })
+            .unwrap_or_default();
+        // rerere with autoUpdate stages the recorded resolutions, leaving no
+        // unmerged entries, only MERGE_MSG's conflict list.
+        let (paths, rerere) = if unmerged.is_empty() {
+            (merge_msg_conflict_paths(repo.path()), true)
+        } else {
+            (unmerged, false)
+        };
+        if paths.is_empty() {
+            return error;
+        }
+        let files = describe_path_list(&paths);
+        let one = paths.len() == 1;
+        let (them, it_conflicts) = if one {
+            ("it", "a conflict")
+        } else {
+            ("them", "conflicts")
+        };
+        let lead = match (rebase, rerere) {
+            (false, false) => format!(
+                "Merge {} in {files}. Resolve {them}, then commit, or abort the merge.",
+                if one { "conflict" } else { "conflicts" }
+            ),
+            (false, true) => format!(
+                "Merge conflicts in {files} were resolved from recorded resolutions. Review them, then commit, or abort the merge."
+            ),
+            (true, false) => format!(
+                "Rebase stopped at {it_conflicts} in {files}. Resolve {them} and continue the rebase, or abort it."
+            ),
+            (true, true) => format!(
+                "Rebase stopped at conflicts in {files}, resolved from recorded resolutions. Review them and continue the rebase, or abort it."
+            ),
+        };
+        let output = [failure.stdout(), failure.stderr()]
+            .into_iter()
+            .map(|bytes| bytes_to_text_preserving_utf8(bytes).trim().to_string())
+            .filter(|text| !text.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n");
+        let detail = if output.is_empty() {
+            lead
+        } else {
+            format!("{lead}\n\n{output}")
+        };
+        let mut conflict_failure = GitFailure::new(
+            failure.command(),
+            GitFailureId::StoppedAtConflicts,
+            failure.exit_code(),
+            failure.stdout().to_vec(),
+            failure.stderr().to_vec(),
+            Some(detail),
+        );
+        if let Some(auth_outcome) = failure.auth_outcome() {
+            conflict_failure = conflict_failure.with_auth_outcome(auth_outcome.clone());
+        }
+        Error::new(ErrorKind::Git(conflict_failure))
     }
 
     pub(super) fn squash_ref_with_output_impl(&self, reference: &str) -> Result<CommandOutput> {
@@ -2020,8 +2229,7 @@ impl GixRepo {
 
         let command_str = format!("git merge --squash --no-commit {reference}");
         let mut cmd = self.git_workdir_cmd();
-        cmd.arg("-c")
-            .arg("color.ui=false")
+        cmd.args(NO_COLOR_CONFIG)
             .arg("--no-pager")
             .arg("merge")
             .arg("--squash")
@@ -2099,9 +2307,11 @@ impl GixRepo {
 
         let repo = self.reopen_repo()?;
         let local_ref = format!("refs/heads/{branch}");
-        if repo
-            .try_find_reference(local_ref.as_str())
-            .map_err(|e| Error::new(ErrorKind::Backend(format!("gix try_find_reference: {e}"))))?
+        if crate::refs::find(&repo, local_ref.as_str())
+            .map_err(|e| {
+                Error::new(ErrorKind::Backend(format!("gix try_find_reference: {e}")))
+                    .with_source(e)
+            })?
             .is_none()
         {
             return Err(Error::new(ErrorKind::Backend(format!(
@@ -2121,18 +2331,19 @@ impl GixRepo {
                 upstream.remote, upstream.branch
             ))));
         };
-        let tracking_ref_exists = match repo
-            .try_find_reference(tracking_ref.as_str())
-            .map_err(|e| Error::new(ErrorKind::Backend(format!("gix try_find_reference: {e}"))))?
-        {
-            Some(mut reference) => reference.peel_to_id().map(|_| true).map_err(|e| {
-                Error::new(ErrorKind::Backend(format!(
-                    "resolve remote branch {}/{}: {e}",
-                    upstream.remote, upstream.branch
-                )))
-            })?,
-            None => false,
-        };
+        let tracking_ref_exists =
+            match crate::refs::find(&repo, tracking_ref.as_str()).map_err(|e| {
+                Error::new(ErrorKind::Backend(format!("gix try_find_reference: {e}")))
+                    .with_source(e)
+            })? {
+                Some(mut reference) => reference.peel_to_id().map(|_| true).map_err(|e| {
+                    Error::new(ErrorKind::Backend(format!(
+                        "resolve remote branch {}/{}: {e}",
+                        upstream.remote, upstream.branch
+                    )))
+                })?,
+                None => false,
+            };
         // The mapping, rather than a local tracking ref's existence, is the
         // authority here. Git permits branch.<name>.remote/merge to name a
         // branch that will be created by a later push. Existing-target picker
@@ -2355,7 +2566,7 @@ impl GixRepo {
         // Keep configured upstreams intact until merged local branches have
         // been selected: that command intentionally uses a missing upstream as
         // one of its deletion criteria. Surviving branches are unlinked below.
-        let remotes = self.fetch_all_remote_names()?;
+        let remotes = self.fetch_all_remotes()?;
         let fetch_output =
             self.fetch_all_command_with_optional_output_impl(&remotes, true, true)?;
 
@@ -2448,7 +2659,7 @@ impl GixRepo {
             exit_code: Some(0),
         };
         let unlinked =
-            self.unlink_missing_remote_upstreams(UpstreamCleanupScope::Remotes(&remotes));
+            self.unlink_missing_remote_upstreams(UpstreamCleanupScope::Remotes(&remotes.names));
         Ok(append_unlinked_upstreams(output, &unlinked))
     }
 }
@@ -2458,7 +2669,7 @@ mod tests {
     use super::{branches_to_prune, normalize_remote_url, parse_refname_set, run_git_command};
     use gitcomet_core::services::CommandOutput;
     use rustc_hash::FxHashSet;
-    use std::{cell::Cell, process::Command};
+    use std::cell::Cell;
 
     #[test]
     fn parse_refname_set_trims_and_deduplicates_lines() {
@@ -2529,7 +2740,7 @@ feature/no-upstream\t\n";
         let with_output_called = Cell::new(false);
 
         let output = run_git_command(
-            Command::new("git"),
+            gitcomet_core::test_support::git_fixture::git_command(),
             "git push",
             false,
             |_, label| {
@@ -2561,7 +2772,7 @@ feature/no-upstream\t\n";
         };
 
         let output = run_git_command(
-            Command::new("git"),
+            gitcomet_core::test_support::git_fixture::git_command(),
             "git push",
             true,
             |_, _| {

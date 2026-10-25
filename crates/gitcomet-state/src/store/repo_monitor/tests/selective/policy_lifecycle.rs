@@ -64,29 +64,35 @@ fn full_rebuild_discards_nested_ignore_inputs_in_newly_ignored_trees() {
     fs::write(&nested_ignore, "*.log\n").unwrap();
     let builds = Arc::new(AtomicU64::new(0));
     let count = builds.clone();
+    // Keep the default idle tick: every step below edits a stamped ignore
+    // input, and an idle stamp check that wins the race rebuilds the watcher
+    // before FSEvents delivers, so expect_change never sees the path.
     let monitor = RunningMonitor::start_custom(
         &root,
         Arc::new(gitcomet_git_gix::GixBackend),
         MonitorConfig {
-            idle_tick: Duration::from_millis(100),
             before_registration: Some(Box::new(move || {
                 count.fetch_add(1, Ordering::Relaxed);
             })),
             ..Default::default()
         },
     );
+    // The fixture never wrote .gitignore, so startup residue cannot satisfy this.
+    let gitignore = root.join(".gitignore");
+    let ignore_build = || fs::write(&gitignore, "build/\n").unwrap();
+    assert!(monitor.expect_change(&gitignore, ignore_build).worktree);
     monitor.settle();
-    fs::write(root.join(".gitignore"), "build/\n").unwrap();
-    monitor.refresh();
     let before = builds.load(Ordering::Relaxed);
     fs::write(&nested_ignore, "*.log\n*.generated\n").unwrap();
-    monitor.revalidate();
-    monitor.quiet(); // Covers native events, activation and idle stamp checks.
+    monitor.revalidate(); // Runs the same stamp check as an idle tick.
+    monitor.quiet(); // Covers native events and that stamp check.
     assert_eq!(builds.load(Ordering::Relaxed), before);
-    fs::write(root.join(".gitignore"), "").unwrap();
-    monitor.refresh();
-    fs::write(&nested_ignore, "*.generated\n").unwrap();
-    monitor.refresh(); // A newly visible input must be discovered again.
+    let unignore = || fs::write(&gitignore, "").unwrap();
+    assert!(monitor.expect_change(&gitignore, unignore).worktree);
+    // A newly visible input must be discovered again. Its ignored edit above
+    // was unwatched and predates the quiet window.
+    let edit_nested = || fs::write(&nested_ignore, "*.generated\n").unwrap();
+    assert!(monitor.expect_change(&nested_ignore, edit_nested).worktree);
 }
 
 fn apply_directory_event(
@@ -307,7 +313,7 @@ fn delayed_file_removal_refreshes_before_excluding_its_replacement_directory() {
         let removed = notify::Event::new(kind).add_path(path.clone());
         let effect = summarize(&snapshot, &mut rules, &removed);
         assert!(
-            effect.change.is_some_and(|change| change.worktree),
+            effect.change.as_ref().is_some_and(|change| change.worktree),
             "{kind:?}"
         );
         rules

@@ -1,6 +1,8 @@
 use super::*;
-use crate::kit::interaction::ControlInteractionExt as _;
+use gitcomet_core::domain::Upstream;
 
+mod activate;
+mod annex;
 mod branch;
 mod branch_group;
 mod branch_section;
@@ -18,13 +20,18 @@ mod diff_actions;
 mod diff_content_mode_settings;
 mod diff_editor;
 mod diff_hunk;
+mod explorer_operations;
+mod explorer_settings;
 mod file_browser_file;
 mod file_browser_folder;
 pub(super) mod file_history_commit;
+mod file_list_folder;
+mod file_list_layout;
 mod history_branch_filter;
 mod history_refs;
+mod large_file;
+mod local_file_link;
 mod mergetool_settings;
-mod pinned_section;
 mod previous_commit_messages;
 mod pull;
 mod push;
@@ -41,10 +48,31 @@ mod submodule_inner_diff;
 mod submodule_section;
 mod tag;
 mod terminal;
+mod text_format_menu;
 mod ui_scale_picker;
 mod web_link;
 mod worktree;
+mod worktree_file;
 mod worktree_section;
+
+fn resolve_checkout_file_path(
+    workdir: &std::path::Path,
+    path: &std::path::Path,
+) -> Result<std::path::PathBuf, String> {
+    if path.is_absolute()
+        || path.components().any(|c| {
+            matches!(
+                c,
+                std::path::Component::ParentDir
+                    | std::path::Component::Prefix(_)
+                    | std::path::Component::RootDir
+            )
+        })
+    {
+        return Err("Refusing to open path outside repository".to_string());
+    }
+    Ok(normalize_platform_path(workdir.join(path)))
+}
 
 fn normalize_platform_path(path: std::path::PathBuf) -> std::path::PathBuf {
     #[cfg(target_os = "windows")]
@@ -108,6 +136,10 @@ pub(super) fn push_copy_path_entries(
             }),
         });
     }
+    // The root's relative path is empty text.
+    if path.as_os_str().is_empty() {
+        return;
+    }
     items.push(ContextMenuItem::Entry {
         label: "Copy relative path".into(),
         icon: Some("icons/copy.svg".into()),
@@ -119,31 +151,24 @@ pub(super) fn push_copy_path_entries(
     });
 }
 
-fn active_branch_tracking_upstream_name(host: &PopoverHost) -> Option<String> {
-    let repo_id = host.active_repo_id()?;
-    let repo = host.state.repos.iter().find(|repo| repo.id == repo_id)?;
-    let Loadable::Ready(head) = &repo.head_branch else {
-        return None;
-    };
-    let Loadable::Ready(branches) = &repo.branches else {
-        return None;
-    };
-
-    branches
+fn active_branch_tracking_upstream(host: &PopoverHost) -> Option<&Upstream> {
+    let repo = host.active_repo()?;
+    let head = repo.head_branch.ready()?;
+    repo.branches
+        .ready()?
         .iter()
         .find(|branch| branch.name == *head)
         .and_then(|branch| branch.upstream.as_ref())
-        .map(|upstream| format!("{}/{}", upstream.remote, upstream.branch))
 }
 
-fn action_menu_title(base: &'static str, tracking_branch_name: Option<&str>) -> SharedString {
-    match tracking_branch_name {
-        Some(name) => format!("{base} {name}").into(),
+fn action_menu_title(base: &'static str, upstream: Option<&Upstream>) -> SharedString {
+    match upstream {
+        Some(upstream) => format!("{base} {}/{}", upstream.remote, upstream.branch).into(),
         None => base.into(),
     }
 }
 
-fn context_menu_entry_debug_selector(label: &str) -> String {
+pub(super) fn context_menu_entry_debug_selector(label: &str) -> String {
     let mut slug = String::with_capacity(label.len());
     let mut previous_was_separator = true;
 
@@ -241,7 +266,135 @@ pub(in super::super) fn context_menu_shortcut_entry_ix(
 }
 
 impl PopoverHost {
+    pub(super) fn sidebar_pin_overflow_view(
+        &mut self,
+        repo_id: RepoId,
+        bottom: bool,
+        max_height: Pixels,
+        cx: &mut gpui::Context<Self>,
+    ) -> gpui::Div {
+        if !self
+            .pin_menu_entries
+            .as_ref()
+            .is_some_and(|(repo, edge, _)| *repo == repo_id && *edge == bottom)
+        {
+            let entries = self
+                .sidebar_pane
+                .read(cx)
+                .sidebar_pin_overflow_entries(bottom);
+            self.pin_menu_entries = Some((repo_id, bottom, entries.into()));
+            self.pin_menu_scroll
+                .scroll_to_item(0, gpui::ScrollStrategy::Top);
+        }
+        let entries = self.pin_menu_entries.as_ref().unwrap().2.clone();
+        let for_keys = entries.clone();
+        let theme = self.theme;
+        let scale = super::popover_ui_scale(cx);
+        let row_height = components::control_height(scale);
+        let height =
+            (row_height * entries.len().min(8)).min((max_height - scale.px(40.0)).max(row_height));
+        let list = uniform_list(
+            "sidebar_pin_overflow_list",
+            entries.len(),
+            cx.processor(move |this, range: Range<usize>, _, cx| {
+                range
+                    .map(|ix| {
+                        let (label, key) = entries[ix].clone();
+                        let selected = this.context_menu_selected_ix == Some(ix);
+                        components::Button::new(format!("pin_overflow_entry_{ix}"), label)
+                            .borderless()
+                            .style(components::ButtonStyle::Subtle)
+                            .selected(selected)
+                            .on_click(theme, cx, move |this, _, window, cx| {
+                                this.sidebar_pane.update(cx, |pane, cx| {
+                                    pane.navigate_sidebar_row_key(key.clone(), cx)
+                                });
+                                this.close_popover_and_restore_focus(window, cx);
+                            })
+                            .w_full()
+                            .h(row_height)
+                            .into_any_element()
+                    })
+                    .collect()
+            }),
+        )
+        .h_full()
+        .track_scroll(&self.pin_menu_scroll);
+        div()
+            .w(scale.px(280.0))
+            .flex()
+            .flex_col()
+            .min_h(px(0.0))
+            .track_focus(&self.context_menu_focus_handle)
+            .key_context("ContextMenu")
+            .on_key_down(
+                cx.listener(move |this, event: &gpui::KeyDownEvent, window, cx| {
+                    match event.keystroke.key.as_str() {
+                        "escape" => this.close_popover_and_restore_focus(window, cx),
+                        "enter" | "space" => {
+                            if let Some((_, key)) = this
+                                .context_menu_selected_ix
+                                .and_then(|ix| for_keys.get(ix))
+                            {
+                                this.sidebar_pane.update(cx, |pane, cx| {
+                                    pane.navigate_sidebar_row_key(key.clone(), cx)
+                                });
+                                this.close_popover_and_restore_focus(window, cx);
+                            }
+                        }
+                        "up" | "down" | "home" | "end" if !for_keys.is_empty() => {
+                            let next = match event.keystroke.key.as_str() {
+                                "home" => 0,
+                                "end" => for_keys.len() - 1,
+                                "up" => this
+                                    .context_menu_selected_ix
+                                    .unwrap_or(for_keys.len())
+                                    .saturating_sub(1),
+                                _ => this
+                                    .context_menu_selected_ix
+                                    .map_or(0, |ix| (ix + 1).min(for_keys.len() - 1)),
+                            };
+                            this.context_menu_selected_ix = Some(next);
+                            this.pin_menu_scroll
+                                .scroll_to_item(next, gpui::ScrollStrategy::Center);
+                            cx.notify();
+                        }
+                        _ => return,
+                    }
+                    cx.stop_propagation();
+                }),
+            )
+            .child(
+                div()
+                    .px(scale.px(8.0))
+                    .py(scale.px(6.0))
+                    .text_size(theme.ui_text(12.0))
+                    .child("More pinned items"),
+            )
+            .child(
+                div().relative().h(height).min_h(px(0.0)).child(list).child(
+                    components::Scrollbar::new(
+                        "pin_overflow_scrollbar",
+                        self.pin_menu_scroll.clone(),
+                    )
+                    .render(theme),
+                ),
+            )
+    }
+
     pub(super) fn workdir_for_repo(&self, repo_id: RepoId) -> Option<std::path::PathBuf> {
+        if let Some(binding) = self.store.binding {
+            let repo = binding
+                .repository(&self.state)
+                .filter(|repo| repo.id == repo_id)?;
+            return Some(
+                repo.diff_sessions
+                    .get(&binding.view)?
+                    .worktree()
+                    .unwrap_or(&repo.spec.workdir)
+                    .to_path_buf(),
+            );
+        }
         self.state
             .repos
             .iter()
@@ -254,23 +407,10 @@ impl PopoverHost {
         repo_id: RepoId,
         path: &std::path::Path,
     ) -> Result<std::path::PathBuf, String> {
-        if path.is_absolute()
-            || path.components().any(|c| {
-                matches!(
-                    c,
-                    std::path::Component::ParentDir
-                        | std::path::Component::Prefix(_)
-                        | std::path::Component::RootDir
-                )
-            })
-        {
-            return Err("Refusing to open path outside repository".to_string());
-        }
-
         let workdir = self
             .workdir_for_repo(repo_id)
             .ok_or_else(|| "Repository is not available".to_string())?;
-        Ok(normalize_platform_path(workdir.join(path)))
+        resolve_checkout_file_path(&workdir, path)
     }
 
     fn open_path_default(&mut self, path: std::path::PathBuf, cx: &mut gpui::Context<Self>) {
@@ -417,12 +557,35 @@ impl PopoverHost {
         repo_picker_row::model(self, entry)
     }
 
+    /// The actions of the entries of the menu `kind` opens, for tests.
+    #[cfg(test)]
+    pub(in crate::view) fn context_menu_actions_for_test(
+        &self,
+        kind: &PopoverKind,
+        cx: &gpui::Context<Self>,
+    ) -> Vec<ContextMenuAction> {
+        let model = self.context_menu_model(kind, cx).unwrap();
+        model
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                ContextMenuItem::Entry { action, .. } => Some((**action).clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
     pub(in super::super) fn context_menu_model(
         &self,
         kind: &PopoverKind,
         cx: &gpui::Context<Self>,
     ) -> Option<ContextMenuModel> {
         match kind {
+            PopoverKind::Hosted { id, menu: true } => self
+                .extension_dialog
+                .as_ref()
+                .filter(|dialog| dialog.id == *id)
+                .and_then(|dialog| dialog.menu.clone()),
             PopoverKind::AppMenu => Some(app_menu::model(self)),
             PopoverKind::AddRepoMenu => Some(add_repo_menu::model()),
             PopoverKind::PullPicker => Some(pull::model(self)),
@@ -442,6 +605,11 @@ impl PopoverHost {
                 target,
                 selector,
             } => Some(reflog_entry::model(*repo_id, selector, target)),
+            PopoverKind::FileHistoryCommitMenu {
+                repo_id,
+                commit_id,
+                path,
+            } => Some(file_history_commit::model(self, *repo_id, commit_id, path)),
             PopoverKind::TagMenu { repo_id, commit_id } => {
                 Some(tag::model(self, *repo_id, commit_id))
             }
@@ -450,6 +618,11 @@ impl PopoverHost {
                 area,
                 path,
             } => Some(status_file::model(self, *repo_id, *area, path, cx)),
+            PopoverKind::StatusConflictMenu {
+                repo_id,
+                area,
+                path,
+            } => Some(status_file::conflict_model(self, *repo_id, *area, path, cx)),
             PopoverKind::BranchMenu { repo_id, target } => {
                 Some(branch::model(self, *repo_id, target))
             }
@@ -469,10 +642,29 @@ impl PopoverHost {
                 load_remote_image_url,
             } => {
                 let load_remote_image_url = load_remote_image_url.as_deref().filter(|_| {
-                    self.main_pane.read(cx).remote_markdown_image_policy
+                    self.diff_renderer.read(cx).remote_markdown_images.policy
                         == RemoteMarkdownImagePolicy::AskBeforeLoading
                 });
                 Some(web_link::model(url, load_remote_image_url))
+            }
+            PopoverKind::LocalFileLinkMenu {
+                repo_id,
+                source,
+                path,
+                missing,
+                load_remote_image_url,
+            } => {
+                let load_remote_image_url = load_remote_image_url.as_deref().filter(|_| {
+                    self.diff_renderer.read(cx).remote_markdown_images.policy
+                        == RemoteMarkdownImagePolicy::AskBeforeLoading
+                });
+                Some(local_file_link::model(
+                    *repo_id,
+                    source,
+                    path,
+                    *missing,
+                    load_remote_image_url,
+                ))
             }
             PopoverKind::CommitShaLinkMenu {
                 repo_id,
@@ -490,8 +682,20 @@ impl PopoverHost {
             } => Some(worktree_section::model(*repo_id)),
             PopoverKind::Repo {
                 repo_id,
+                kind: RepoPopoverKind::Worktree(WorktreePopoverKind::CommitMenu { commit_id }),
+            } => Some(worktree::commit_model(self, *repo_id, commit_id)),
+            PopoverKind::Repo {
+                repo_id,
                 kind: RepoPopoverKind::Worktree(WorktreePopoverKind::Menu { path, branch }),
-            } => Some(worktree::model(*repo_id, path, branch.as_deref())),
+            } => Some(worktree::model(
+                *repo_id,
+                path,
+                branch.as_deref(),
+                self.external_editor_available(),
+                self.worktree_menu_location
+                    .as_ref()
+                    .is_some_and(|(cached_path, available)| cached_path == path && *available),
+            )),
             PopoverKind::Repo {
                 repo_id,
                 kind: RepoPopoverKind::Submodule(SubmodulePopoverKind::SectionMenu),
@@ -500,13 +704,50 @@ impl PopoverHost {
                 repo_id,
                 kind: RepoPopoverKind::Submodule(SubmodulePopoverKind::Menu { path }),
             } => Some(submodule::model(self, *repo_id, path)),
+            PopoverKind::Repo {
+                repo_id,
+                kind: RepoPopoverKind::Annex(AnnexPopoverKind::SectionMenu),
+            } => Some(annex::section_model(self, *repo_id)),
+            PopoverKind::Repo {
+                repo_id,
+                kind: RepoPopoverKind::Annex(AnnexPopoverKind::RepositoryMenu { uuid }),
+            } => Some(annex::repository_model(self, *repo_id, uuid)),
             PopoverKind::CommitFileMenu {
                 repo_id,
                 commit_id,
                 path,
-            } => Some(commit_file::model(self, *repo_id, commit_id, path)),
+            } => Some(commit_file::model(
+                self,
+                *repo_id,
+                commit_file::FileMenuSource::Commit(commit_id),
+                path,
+                cx,
+            )),
+            PopoverKind::WorktreeFileMenu {
+                repo_id,
+                worktree_path,
+                target,
+            } => Some(worktree_file::model(self, *repo_id, worktree_path, target)),
+            PopoverKind::CommitRangeFileMenu {
+                repo_id,
+                from_commit_id,
+                to_commit_id,
+                path,
+            } => Some(commit_file::model(
+                self,
+                *repo_id,
+                commit_file::FileMenuSource::Range {
+                    from: from_commit_id,
+                    to: to_commit_id.as_ref(),
+                },
+                path,
+                cx,
+            )),
             PopoverKind::CommitFileSortMenu { list } => {
                 Some(commit_file_sort::model(self, *list, cx))
+            }
+            PopoverKind::FileListLayoutMenu { repo_id, list } => {
+                Some(file_list_layout::model(self, *repo_id, *list, cx))
             }
             PopoverKind::FileBrowserFileMenu { repo_id, path } => {
                 Some(file_browser_file::model(self, *repo_id, path, cx))
@@ -514,6 +755,25 @@ impl PopoverHost {
             PopoverKind::FileBrowserFolderMenu { repo_id, path } => {
                 Some(file_browser_folder::model(self, *repo_id, path))
             }
+            PopoverKind::FileListFolderMenu {
+                repo_id,
+                list,
+                key,
+                chain,
+                collapsed,
+                apply_source,
+            } => Some(file_list_folder::model(
+                self,
+                file_list_folder::FolderMenu {
+                    repo_id: *repo_id,
+                    list: *list,
+                    key,
+                    chain,
+                    collapsed: *collapsed,
+                    apply_source: apply_source.as_ref(),
+                },
+                cx,
+            )),
             PopoverKind::BranchGroupMenu {
                 repo_id,
                 section,
@@ -526,8 +786,25 @@ impl PopoverHost {
                 remote.as_deref(),
                 path,
             )),
-            PopoverKind::PinnedSectionMenu { repo_id, section } => {
-                Some(pinned_section::model(self, *repo_id, *section))
+            PopoverKind::SidebarAncestorMenu { section, .. } => {
+                let mut items = vec![ContextMenuItem::Header("Active branch groups".into())];
+                for (label, key) in self
+                    .sidebar_pane
+                    .read(cx)
+                    .sidebar_ancestor_menu_entries(*section)
+                {
+                    items.push(ContextMenuItem::Entry {
+                        label: format!("Collapse {label}").into(),
+                        icon: Some("icons/chevron_down.svg".into()),
+                        shortcut: None,
+                        disabled: false,
+                        action: Box::new(ContextMenuAction::SetSidebarCollapseKey {
+                            collapse_key: key,
+                            collapsed: true,
+                        }),
+                    });
+                }
+                Some(ContextMenuModel::new(items))
             }
             PopoverKind::BrowseHistoryMenu { repo_id } => {
                 Some(browse_history::model(self, *repo_id))
@@ -542,7 +819,7 @@ impl PopoverHost {
                 target,
             )),
             PopoverKind::DiffHunkMenu { repo_id, src_ix } => {
-                Some(diff_hunk::model(self, *repo_id, *src_ix))
+                Some(diff_hunk::model(self, *repo_id, *src_ix, cx))
             }
             PopoverKind::DiffEditorMenu {
                 repo_id,
@@ -566,6 +843,7 @@ impl PopoverHost {
                 *lines_count,
                 copy_text,
                 *copy_target,
+                self.external_editor_available(),
             )),
             PopoverKind::ConflictResolverInputRowMenu {
                 line_label,
@@ -621,9 +899,15 @@ impl PopoverHost {
             PopoverKind::HistoryBranchFilter { repo_id } => {
                 Some(history_branch_filter::model(self, *repo_id))
             }
-            PopoverKind::DiffActionMenu => Some(diff_actions::model(self)),
+            PopoverKind::DiffActionMenu => Some(diff_actions::model(self, cx)),
+            PopoverKind::ExplorerSettingsMenu { repo_id } => {
+                Some(explorer_settings::model(self, *repo_id))
+            }
             PopoverKind::MergetoolSettingsMenu => Some(mergetool_settings::model(self, cx)),
             PopoverKind::DiffContentModeSettings => Some(diff_content_mode_settings::model(self)),
+            PopoverKind::TextFormatMenu { section } => {
+                Some(text_format_menu::model(self, *section, cx))
+            }
             PopoverKind::ChangeTrackingSettings => Some(change_tracking_settings::model(self)),
             PopoverKind::UiScalePicker => Some(ui_scale_picker::model(cx)),
             PopoverKind::InteractiveRebaseActionMenu {
@@ -650,1143 +934,6 @@ impl PopoverHost {
                 context,
             } => Some(terminal::model(*repo_id, *session_seq, *context, cx)),
             _ => None,
-        }
-    }
-
-    pub(in crate::view) fn context_menu_activate_action(
-        &mut self,
-        action: ContextMenuAction,
-        window: &mut Window,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        let mut close_after_action = true;
-        let mut restore_diff_panel_focus_after_action = false;
-        match action {
-            ContextMenuAction::ToggleHistoryRefGroup { target } => {
-                self.expanded_history_ref = if self.expanded_history_ref.as_ref() == Some(&target) {
-                    None
-                } else {
-                    Some(target.clone())
-                };
-                if let Some(kind) = self.popover.as_ref()
-                    && let Some(model) = self.context_menu_model(kind, cx)
-                {
-                    self.context_menu_selected_ix = model.items.iter().position(|item| matches!(item,
-                        ContextMenuItem::Entry { action, .. } if matches!(action.as_ref(), ContextMenuAction::ToggleHistoryRefGroup { target: candidate } if candidate == &target)));
-                }
-                cx.notify();
-                return;
-            }
-            ContextMenuAction::AppMenu(action) => {
-                app_menu::activate(self, action, window, cx);
-                return;
-            }
-            ContextMenuAction::AddRepoMenu(action) => {
-                add_repo_menu::activate(self, action, window, cx);
-                return;
-            }
-            ContextMenuAction::ShowFileChangesAtCommit {
-                repo_id,
-                commit_id,
-                path,
-            } => {
-                self.store.dispatch(Msg::ShowFileChangesAtCommit {
-                    repo_id,
-                    commit_id,
-                    path,
-                });
-            }
-            ContextMenuAction::OpenFileAtCommit {
-                repo_id,
-                commit_id,
-                path,
-            } => {
-                self.store.dispatch(Msg::OpenFileAtCommit {
-                    repo_id,
-                    commit_id,
-                    path,
-                });
-            }
-            ContextMenuAction::OpenFileAtCommitParent {
-                repo_id,
-                commit_id,
-                path,
-            } => {
-                self.store.dispatch(Msg::OpenFileAtCommitParent {
-                    repo_id,
-                    commit_id,
-                    path,
-                });
-            }
-            ContextMenuAction::SelectDiff { repo_id, target } => {
-                self.store.dispatch(Msg::SelectDiff { repo_id, target });
-            }
-            ContextMenuAction::OpenFileContent {
-                repo_id,
-                source,
-                path,
-            } => {
-                self.store.dispatch(Msg::OpenFileContent {
-                    repo_id,
-                    source,
-                    path,
-                });
-            }
-            ContextMenuAction::EditFile { repo_id, path } => {
-                self.store.dispatch(Msg::OpenFileEditor { repo_id, path });
-            }
-            ContextMenuAction::DiscardFileEdits { repo_id, path } => {
-                self.main_pane.update(cx, |pane, cx| {
-                    pane.discard_file_edits_for(repo_id, &path, cx);
-                });
-            }
-            ContextMenuAction::BrowseRepositoryAtCommit { repo_id, commit_id } => {
-                self.store
-                    .dispatch(Msg::BrowseRepositoryAtCommit { repo_id, commit_id });
-            }
-            ContextMenuAction::RevealHistoryCommit { repo_id, commit_id } => {
-                self.main_pane.update(cx, |main, cx| {
-                    main.reveal_history_commit(
-                        repo_id,
-                        commit_id,
-                        Some(gitcomet_core::domain::LogScope::AllBranches),
-                        cx,
-                    );
-                });
-            }
-            ContextMenuAction::ResetBrowseToLive { repo_id } => {
-                self.store.dispatch(Msg::ResetBrowseToLive { repo_id });
-            }
-            ContextMenuAction::ToggleFileBrowserDir { repo_id, path } => {
-                self.store
-                    .dispatch(Msg::ToggleFileBrowserDir { repo_id, path });
-            }
-            // The branch tree's collapse state is view-owned rather than a
-            // store message, so these four go through the sidebar pane.
-            ContextMenuAction::ToggleSidebarCollapseKey { collapse_key } => {
-                self.sidebar_pane.update(cx, |pane, cx| {
-                    pane.toggle_active_repo_collapse_key(collapse_key, cx);
-                });
-            }
-            ContextMenuAction::SetSidebarCollapseKey {
-                collapse_key,
-                collapsed,
-            } => {
-                self.sidebar_pane.update(cx, |pane, cx| {
-                    pane.set_active_repo_collapse_key(collapse_key, collapsed, cx);
-                });
-            }
-            ContextMenuAction::SetBranchGroupCollapsedRecursive {
-                section,
-                remote,
-                path,
-                collapsed,
-            } => {
-                self.sidebar_pane.update(cx, |pane, cx| {
-                    pane.set_branch_group_collapsed_recursive(section, remote, path, collapsed, cx);
-                });
-            }
-            ContextMenuAction::UnpinAllBranches { repo_id, section } => {
-                self.sidebar_pane.update(cx, |pane, cx| {
-                    pane.unpin_all_branches(repo_id, section, cx);
-                });
-            }
-            ContextMenuAction::ConfirmDeleteBranchGroup {
-                repo_id,
-                section,
-                remote,
-                path,
-                group_label,
-            } => {
-                let names = branch_group::deletable_branches(
-                    self,
-                    repo_id,
-                    section,
-                    remote.as_deref(),
-                    &path,
-                );
-                // The entry is disabled at zero, so this only fires if the group
-                // emptied between the last repaint and the click.
-                if names.is_empty() {
-                    self.close_popover(cx);
-                    return;
-                }
-                let anchor = self.popover_anchor_point();
-                self.open_popover_at(
-                    PopoverKind::DeleteBranchesConfirm {
-                        repo_id,
-                        section,
-                        remote,
-                        group_label,
-                        names,
-                    },
-                    anchor,
-                    window,
-                    cx,
-                );
-                return;
-            }
-            ContextMenuAction::SetFileBrowserDirExpandedRecursive {
-                repo_id,
-                path,
-                expanded,
-            } => {
-                self.store
-                    .dispatch(Msg::SetFileBrowserDirExpandedRecursive {
-                        repo_id,
-                        path,
-                        expanded,
-                    });
-            }
-            ContextMenuAction::SelectConflictDiff { repo_id, path } => {
-                self.store
-                    .dispatch(Msg::SelectConflictDiff { repo_id, path });
-            }
-            ContextMenuAction::OpenFile { repo_id, path } => {
-                let full_path = match self.resolve_workdir_path(repo_id, &path) {
-                    Ok(path) => path,
-                    Err(err) => {
-                        self.push_toast(components::ToastKind::Error, err, cx);
-                        self.close_popover(cx);
-                        return;
-                    }
-                };
-
-                if !full_path.exists() {
-                    self.push_toast(
-                        components::ToastKind::Error,
-                        format!("Path not found: {}", full_path.display()),
-                        cx,
-                    );
-                } else {
-                    self.open_path_default(full_path, cx);
-                }
-            }
-            ContextMenuAction::OpenFileLocation { repo_id, path } => {
-                let full_path = match self.resolve_workdir_path(repo_id, &path) {
-                    Ok(path) => path,
-                    Err(err) => {
-                        self.push_toast(components::ToastKind::Error, err, cx);
-                        self.close_popover(cx);
-                        return;
-                    }
-                };
-
-                let fallback = self.workdir_for_repo(repo_id);
-                self.reveal_path_in_file_manager(full_path, fallback, cx);
-            }
-            ContextMenuAction::OpenRepositoryLocation { path } => {
-                self.reveal_path_in_file_manager(path, None, cx);
-            }
-            ContextMenuAction::OpenInCodeEditor { repo_id, path } => {
-                let full_path = match repo_id {
-                    Some(repo_id) => match self.resolve_workdir_path(repo_id, &path) {
-                        Ok(path) => path,
-                        Err(err) => {
-                            self.push_toast(components::ToastKind::Error, err, cx);
-                            self.close_popover(cx);
-                            return;
-                        }
-                    },
-                    None => path,
-                };
-
-                // The root view owns this sequence (existence check, resolve,
-                // background launch, toast); routing through it keeps one copy.
-                let _ = self.root_view.update(cx, |root, cx| {
-                    root.open_path_in_external_code_editor(full_path, cx);
-                });
-            }
-            ContextMenuAction::OpenRepo { path } => {
-                self.store.dispatch(Msg::OpenRepo(path));
-            }
-            ContextMenuAction::ActivateRepo { repo_id } => {
-                if !self.repo_is_open(repo_id) {
-                    self.warn_repository_gone(cx);
-                    return;
-                }
-                self.store.dispatch(Msg::SetActiveRepo { repo_id });
-            }
-            ContextMenuAction::CloseRepo { repo_id } if !self.repo_is_open(repo_id) => {
-                // The row this came from went stale — a concurrent close from a
-                // repo tab, say. Dispatching would be a no-op the user cannot
-                // see, and the menu is already down by now.
-                self.warn_repository_gone(cx);
-                return;
-            }
-            ContextMenuAction::CloseRepo { repo_id } => {
-                // The reducer records the close as a recent; this keeps the
-                // repository picker's own snapshot of that list in step, cap
-                // included, for the frames before it next reads the session.
-                if let Some(workdir) = self.workdir_for_repo(repo_id) {
-                    session::promote_recent_repo(&mut self.cached_recent_repos, &workdir);
-                }
-                self.store.dispatch(Msg::CloseRepo { repo_id });
-            }
-            ContextMenuAction::PinRepository { path } => {
-                let _ = session::persist_pinned_repo(&path);
-                if !self.cached_pinned_repos.contains(&path) {
-                    self.cached_pinned_repos.push(path);
-                }
-                // Pinning is bookkeeping, not navigation: the menu that offered
-                // it goes, but the list it was over stays.
-                close_after_action = false;
-            }
-            ContextMenuAction::UnpinRepository { path } => {
-                let _ = session::remove_pinned_repo(&path);
-                self.cached_pinned_repos.retain(|pin| pin != &path);
-                close_after_action = false;
-            }
-            ContextMenuAction::ForgetRecentRepository { path } => {
-                // Open and pinned repositories have no entry for this, and the
-                // guard keeps it that way: a pin is what keeps a closed
-                // repository listed, so forgetting one would strand it.
-                if !self.cached_pinned_repos.contains(&path) {
-                    let _ = session::remove_recent_repo(&path);
-                    self.cached_recent_repos.retain(|recent| recent != &path);
-                }
-                close_after_action = false;
-            }
-            ContextMenuAction::CloseRepos {
-                repo_ids,
-                activate_after,
-            } => {
-                self.store.dispatch(Msg::CloseRepos {
-                    repo_ids,
-                    activate_after,
-                });
-            }
-            ContextMenuAction::OpenSubmoduleDiffInTab { path, target } => {
-                self.main_pane.update(cx, |pane, cx| {
-                    pane.open_submodule_inner_diff(path, target, cx);
-                });
-            }
-            ContextMenuAction::ExportPatch { repo_id, commit_id } => {
-                cx.stop_propagation();
-                let view = cx.weak_entity();
-                let sha = commit_id.as_ref();
-                let short = sha.get(0..8).unwrap_or(sha).to_string();
-                let rx = cx.prompt_for_paths(gpui::PathPromptOptions {
-                    files: false,
-                    directories: true,
-                    multiple: false,
-                    prompt: Some("Export patch to folder".into()),
-                });
-                window
-                    .spawn(cx, async move |cx| {
-                        let result = rx.await;
-                        let paths = match result {
-                            Ok(Ok(Some(paths))) => paths,
-                            Ok(Ok(None)) => return,
-                            Ok(Err(_)) | Err(_) => return,
-                        };
-                        let Some(folder) = paths.into_iter().next() else {
-                            return;
-                        };
-                        let dest = folder.join(format!("commit-{short}.patch"));
-                        let _ = view.update(cx, |this, cx| {
-                            this.store.dispatch(Msg::ExportPatch {
-                                repo_id,
-                                commit_id: commit_id.clone(),
-                                dest,
-                            });
-                            cx.notify();
-                        });
-                    })
-                    .detach();
-                self.close_popover(cx);
-                return;
-            }
-            ContextMenuAction::CheckoutCommit { repo_id, commit_id } => {
-                self.store
-                    .dispatch(Msg::CheckoutCommit { repo_id, commit_id });
-            }
-            ContextMenuAction::MarkForComparison {
-                repo_id,
-                commit_id,
-                label,
-            } => {
-                self.store.dispatch(Msg::MarkForComparison {
-                    repo_id,
-                    commit_id,
-                    label,
-                });
-            }
-            ContextMenuAction::CompareWithMarked {
-                repo_id,
-                commit_id,
-                label,
-            } => {
-                self.store.dispatch(Msg::CompareWithMarked {
-                    repo_id,
-                    commit_id,
-                    label,
-                });
-            }
-            ContextMenuAction::CompareWithWorkingTree {
-                repo_id,
-                commit_id,
-                label,
-            } => {
-                self.store.dispatch(Msg::CompareWithWorkingTree {
-                    repo_id,
-                    from: commit_id,
-                    from_label: label,
-                });
-            }
-            ContextMenuAction::ClearComparisonMark { repo_id } => {
-                self.store.dispatch(Msg::ClearComparisonMark { repo_id });
-            }
-            ContextMenuAction::CherryPickCommit { repo_id, commit_id } => {
-                let anchor = self.popover_anchor_point();
-                self.open_popover_at(
-                    PopoverKind::CherryPickCommitConfirm { repo_id, commit_id },
-                    anchor,
-                    window,
-                    cx,
-                );
-                return;
-            }
-            ContextMenuAction::RevertCommit { repo_id, commit_id } => {
-                let anchor = self.popover_anchor_point();
-                self.open_popover_at(
-                    PopoverKind::RevertCommitConfirm { repo_id, commit_id },
-                    anchor,
-                    window,
-                    cx,
-                );
-                return;
-            }
-            ContextMenuAction::SquashSelectedCommits { repo_id } => {
-                // PrepareSquash and the eventual SquashCommits are both
-                // discarded silently when the git runtime is unavailable, which
-                // would leave the prompt stuck on "Building combined message…".
-                // Don't open it in that state.
-                if !self.state.git_runtime.is_available() {
-                    self.close_popover(cx);
-                    return;
-                }
-                // Kick off the combined-message preview, then swap the menu
-                // for the confirmation prompt.
-                self.store.dispatch(Msg::PrepareSquash { repo_id });
-                let anchor = self.popover_anchor_point();
-                self.open_popover_at(PopoverKind::SquashPrompt { repo_id }, anchor, window, cx);
-                return;
-            }
-            ContextMenuAction::CheckoutBranch { repo_id, name } => {
-                self.store.dispatch(Msg::CheckoutBranch { repo_id, name });
-            }
-            ContextMenuAction::DeleteBranch { repo_id, name } => {
-                let _ = self.root_view.update(cx, |root, _| {
-                    root.pending_force_delete_branch_centered = false;
-                });
-                self.store.dispatch(Msg::DeleteBranch { repo_id, name });
-            }
-            ContextMenuAction::ToggleBranchPin {
-                repo_id,
-                section,
-                name,
-            } => {
-                self.sidebar_pane.update(cx, |pane, cx| {
-                    pane.toggle_pinned_branch(repo_id, section, &name, cx);
-                });
-            }
-            ContextMenuAction::SetHistoryScope { repo_id, scope } => {
-                self.store.dispatch(Msg::SetHistoryScope { repo_id, scope });
-            }
-            ContextMenuAction::ToggleHistorySolo { repo_id, target } => {
-                self.store
-                    .dispatch(Msg::ToggleHistorySolo { repo_id, target });
-            }
-            ContextMenuAction::SetHistorySolo { repo_id, solo } => {
-                self.store.dispatch(Msg::SetHistorySolo { repo_id, solo });
-            }
-            ContextMenuAction::SetCommitFileSort { list, sort } => {
-                self.details_pane.update(cx, |pane, cx| {
-                    pane.set_file_list_sort(list, sort, cx);
-                });
-            }
-            ContextMenuAction::SetDiffContentMode { mode } => {
-                self.diff_content_mode = mode;
-                let main_pane = self.main_pane.clone();
-                cx.defer(move |cx| {
-                    main_pane.update(cx, |pane, cx| {
-                        pane.set_diff_content_mode_and_persist(mode, cx);
-                    });
-                });
-            }
-            ContextMenuAction::SetDiffWhitespaceMode { mode } => {
-                close_after_action = false;
-                restore_diff_panel_focus_after_action = true;
-                self.diff_whitespace_mode = mode;
-                let main_pane = self.main_pane.clone();
-                cx.defer(move |cx| {
-                    main_pane.update(cx, |pane, cx| {
-                        pane.set_diff_whitespace_mode_and_persist(mode, cx);
-                    });
-                });
-            }
-            ContextMenuAction::SetDiffRevealWhitespaceChars { enabled } => {
-                close_after_action = false;
-                restore_diff_panel_focus_after_action = true;
-                self.diff_reveal_whitespace_chars = enabled;
-                let main_pane = self.main_pane.clone();
-                cx.defer(move |cx| {
-                    main_pane.update(cx, |pane, cx| {
-                        pane.set_diff_reveal_whitespace_chars_and_persist(enabled, cx);
-                    });
-                });
-            }
-            ContextMenuAction::SetDiffWordWrap { enabled } => {
-                close_after_action = false;
-                restore_diff_panel_focus_after_action = true;
-                self.diff_word_wrap = enabled;
-                let main_pane = self.main_pane.clone();
-                cx.defer(move |cx| {
-                    main_pane.update(cx, |pane, cx| {
-                        pane.set_diff_word_wrap_and_persist(enabled, cx);
-                    });
-                });
-            }
-            ContextMenuAction::SetDiffShowLineNumbers { enabled } => {
-                close_after_action = false;
-                restore_diff_panel_focus_after_action = true;
-                self.diff_show_line_numbers = enabled;
-                let main_pane = self.main_pane.clone();
-                cx.defer(move |cx| {
-                    main_pane.update(cx, |pane, cx| {
-                        pane.set_diff_show_line_numbers_and_persist(enabled, cx);
-                    });
-                });
-            }
-            ContextMenuAction::SetChangeTrackingView { view } => {
-                self.change_tracking_view = view;
-                let root_view = self.root_view.clone();
-                cx.defer(move |cx| {
-                    let _ = root_view.update(cx, |root, cx| {
-                        root.set_change_tracking_view(view, cx);
-                    });
-                });
-            }
-            ContextMenuAction::SetCommitAmendEnabled { enabled } => {
-                close_after_action = false;
-                self.commit_amend_enabled = enabled;
-                let root_view = self.root_view.clone();
-                cx.defer(move |cx| {
-                    let _ = root_view.update(cx, |root, cx| {
-                        root.set_commit_amend_enabled(enabled, cx);
-                    });
-                });
-            }
-            ContextMenuAction::SetCommitPushAfterEnabled { enabled } => {
-                close_after_action = false;
-                self.commit_push_after_enabled = enabled;
-                let root_view = self.root_view.clone();
-                cx.defer(move |cx| {
-                    let _ = root_view.update(cx, |root, cx| {
-                        root.set_commit_push_after_enabled(enabled, cx);
-                    });
-                });
-            }
-            ContextMenuAction::UseCommitMessage { message } => {
-                self.details_pane.update(cx, |pane, cx| {
-                    pane.set_commit_message_from_history(message, window, cx);
-                });
-            }
-            ContextMenuAction::StageSelectionOrPath {
-                repo_id,
-                area,
-                path,
-            } => {
-                // Staging is what marks a conflict resolved, so confirm first if
-                // any of these files still has conflict markers in the worktree.
-                // Resolved without consuming the selection, which the dialog
-                // takes over responsibility for.
-                let (paths, used_selection) =
-                    self.status_paths_for_action(repo_id, area, &path, cx);
-                if let Some(confirm) = crate::view::conflict_markers::stage_confirm_popover(
-                    &self.state,
-                    repo_id,
-                    paths.clone(),
-                    used_selection,
-                ) {
-                    let anchor = crate::view::conflict_markers::centered_dialog_anchor(window);
-                    self.open_popover_at(confirm, anchor, window, cx);
-                    return;
-                }
-                if used_selection {
-                    self.clear_status_multi_selection(repo_id, cx);
-                    self.store.dispatch(Msg::ClearDiffSelection { repo_id });
-                    self.store.dispatch(Msg::StagePaths {
-                        repo_id,
-                        paths: paths.into(),
-                    });
-                } else {
-                    self.store.dispatch(Msg::SelectDiff {
-                        repo_id,
-                        target: DiffTarget::WorkingTree {
-                            path: path.clone(),
-                            area,
-                        },
-                    });
-                    self.store.dispatch(Msg::StagePath { repo_id, path });
-                }
-            }
-            ContextMenuAction::UnstageSelectionOrPath {
-                repo_id,
-                area,
-                path,
-            } => {
-                let (paths, used_selection) =
-                    self.take_status_paths_for_action(repo_id, area, &path, cx);
-                if used_selection {
-                    self.store.dispatch(Msg::ClearDiffSelection { repo_id });
-                    self.store.dispatch(Msg::UnstagePaths {
-                        repo_id,
-                        paths: paths.into(),
-                    });
-                } else {
-                    self.store.dispatch(Msg::SelectDiff {
-                        repo_id,
-                        target: DiffTarget::WorkingTree {
-                            path: path.clone(),
-                            area,
-                        },
-                    });
-                    self.store.dispatch(Msg::UnstagePath { repo_id, path });
-                }
-            }
-            ContextMenuAction::DiscardWorktreeChangesSelectionOrPath {
-                repo_id,
-                area,
-                path,
-            } => {
-                let anchor = self.popover_anchor_point();
-                self.open_popover_at(
-                    PopoverKind::DiscardChangesConfirm {
-                        repo_id,
-                        area,
-                        path: Some(path),
-                    },
-                    anchor,
-                    window,
-                    cx,
-                );
-                return;
-            }
-            ContextMenuAction::AddToGitignoreSelectionOrPath {
-                repo_id,
-                area,
-                path,
-            } => {
-                let anchor = self.popover_anchor_point();
-                // Deliberately does not consume the row selection: the dialog
-                // can still be cancelled, and `submit_add_to_gitignore` is what
-                // clears it once the action is committed.
-                self.open_popover_at(
-                    PopoverKind::AddToGitignorePrompt {
-                        repo_id,
-                        area,
-                        path,
-                    },
-                    anchor,
-                    window,
-                    cx,
-                );
-                return;
-            }
-            ContextMenuAction::CheckoutConflictSideSelectionOrPath {
-                repo_id,
-                area,
-                path,
-                side,
-            } => {
-                let (paths, _) = self.take_status_paths_for_action(repo_id, area, &path, cx);
-                self.details_pane.update(cx, |pane, cx| {
-                    pane.status_multi_selection.remove(&repo_id);
-                    cx.notify();
-                });
-                self.store.dispatch(Msg::ClearDiffSelection { repo_id });
-                for path in paths {
-                    self.store.dispatch(Msg::CheckoutConflictSide {
-                        repo_id,
-                        path,
-                        side,
-                    });
-                }
-            }
-            ContextMenuAction::LaunchMergetool { repo_id, path } => {
-                self.store.dispatch(Msg::LaunchMergetool { repo_id, path });
-            }
-            ContextMenuAction::FetchAll { repo_id } => {
-                self.store.dispatch(Msg::FetchAll { repo_id });
-            }
-            ContextMenuAction::PruneMergedBranches { repo_id } => {
-                self.store.dispatch(Msg::PruneMergedBranches { repo_id });
-            }
-            ContextMenuAction::PruneLocalTags { repo_id } => {
-                self.store.dispatch(Msg::PruneLocalTags { repo_id });
-            }
-            ContextMenuAction::UpdateSubmodules { repo_id } => {
-                self.store.dispatch(Msg::UpdateSubmodules { repo_id });
-            }
-            ContextMenuAction::LoadSubmodule { repo_id, path } => {
-                self.store.dispatch(Msg::LoadSubmodule { repo_id, path });
-            }
-            ContextMenuAction::LoadWorktrees { repo_id } => {
-                self.store.dispatch(Msg::LoadWorktrees { repo_id });
-            }
-            ContextMenuAction::Pull { repo_id, mode } => {
-                self.store.dispatch(Msg::Pull { repo_id, mode });
-            }
-            ContextMenuAction::PullBranch {
-                repo_id,
-                remote,
-                branch,
-            } => {
-                self.store.dispatch(Msg::PullBranch {
-                    repo_id,
-                    remote,
-                    branch,
-                });
-            }
-            ContextMenuAction::MergeRef { repo_id, reference } => {
-                self.store.dispatch(Msg::MergeRef { repo_id, reference });
-            }
-            ContextMenuAction::SquashRef { repo_id, reference } => {
-                self.store.dispatch(Msg::SquashRef { repo_id, reference });
-            }
-            ContextMenuAction::ApplyStash { repo_id, index } => {
-                self.store.dispatch(Msg::ApplyStash { repo_id, index });
-            }
-            ContextMenuAction::PopStash { repo_id, index } => {
-                self.store.dispatch(Msg::PopStash { repo_id, index });
-            }
-            ContextMenuAction::DropStashConfirm {
-                repo_id,
-                index,
-                message,
-            } => {
-                let anchor = self.popover_anchor_point();
-                self.open_popover_at(
-                    PopoverKind::StashDropConfirm {
-                        repo_id,
-                        index,
-                        message,
-                    },
-                    anchor,
-                    window,
-                    cx,
-                );
-                return;
-            }
-            ContextMenuAction::PushWithTags { repo_id, mode } => {
-                let anchor = self.popover_anchor_point();
-                if self.push_with_tags(repo_id, mode, Some(anchor), window, cx) {
-                    return;
-                }
-            }
-            ContextMenuAction::Push { repo_id } => {
-                let request = self
-                    .state
-                    .repos
-                    .iter()
-                    .find(|repo| repo.id == repo_id)
-                    .map(push_request)
-                    .unwrap_or(PushRequest::NotReady);
-                match request {
-                    PushRequest::Push => self.store.dispatch(Msg::Push { repo_id }),
-                    PushRequest::SetUpstream { remote } => {
-                        let anchor = self.popover_anchor_point();
-                        self.open_popover_at(
-                            PopoverKind::PushSetUpstreamPrompt {
-                                repo_id,
-                                remote,
-                                configure_only_for: None,
-                            },
-                            anchor,
-                            window,
-                            cx,
-                        );
-                        return;
-                    }
-                    PushRequest::NoRemotes => self.push_toast(
-                        components::ToastKind::Error,
-                        "Cannot push: no remotes configured".to_string(),
-                        cx,
-                    ),
-                    PushRequest::NotReady => {}
-                }
-            }
-            ContextMenuAction::SetUpstreamBranch {
-                repo_id,
-                branch,
-                upstream,
-            } => {
-                self.store.dispatch(Msg::SetUpstreamBranch {
-                    repo_id,
-                    branch,
-                    upstream,
-                });
-            }
-            ContextMenuAction::UnsetUpstreamBranch { repo_id, branch } => {
-                self.store
-                    .dispatch(Msg::UnsetUpstreamBranch { repo_id, branch });
-            }
-            ContextMenuAction::SetUiScale { percent } => {
-                cx.defer(move |cx| {
-                    crate::app::set_app_ui_scale_percent(cx, percent);
-                });
-            }
-            ContextMenuAction::LoadInteractiveRebaseSetup { repo_id, base } => {
-                self.store
-                    .dispatch(Msg::LoadInteractiveRebaseSetup { repo_id, base });
-            }
-            ContextMenuAction::OpenInteractiveCherryPickSetup {
-                repo_id,
-                entries,
-                source_colors,
-            } => {
-                self.store.dispatch(Msg::OpenInteractiveCherryPickSetup {
-                    repo_id,
-                    entries,
-                    source_colors,
-                });
-            }
-            ContextMenuAction::SetInteractiveRebaseAction { ix, action } => {
-                let root_view = self.root_view.clone();
-                let was_reword = action == InteractiveRebaseAction::Reword;
-                let reword_state = if was_reword {
-                    self.main_pane.read_with(cx, |pane, _| {
-                        pane.active_irebase().and_then(|st| {
-                            let action = st.entries.get(ix)?.action;
-                            let msg = gitcomet_core::squash::reword_seed_message(&st.entries, ix);
-                            Some((action, msg))
-                        })
-                    })
-                } else {
-                    None
-                };
-                self.main_pane.update(cx, |pane, cx| {
-                    pane.set_rebase_action(ix, action, cx);
-                });
-                if let Some((original_action, msg)) = reword_state {
-                    let wh = window.window_handle();
-                    cx.defer(move |cx| {
-                        let _ = wh.update(cx, |_, window, cx| {
-                            let _ = root_view.update(cx, |root, cx| {
-                                root.open_popover_centered(
-                                    PopoverKind::RebaseReword {
-                                        ix,
-                                        original_action,
-                                        original_message: msg,
-                                    },
-                                    window,
-                                    cx,
-                                );
-                            });
-                        });
-                    });
-                }
-            }
-            ContextMenuAction::SetInteractiveRebaseAutosquashMode { mode } => {
-                let applied = self
-                    .main_pane
-                    .update(cx, |pane, cx| pane.apply_autosquash_mode(mode, cx));
-                if !applied {
-                    self.push_toast(
-                        components::ToastKind::Warning,
-                        "No automatic squashable commits found. Auto Squash searches for \
-                         commits with identical messages and amend-commits them."
-                            .to_string(),
-                        cx,
-                    );
-                }
-            }
-            ContextMenuAction::OpenPopover { kind } => {
-                let anchor = self.popover_anchor_point();
-                self.open_popover_at(kind, anchor, window, cx);
-                return;
-            }
-            ContextMenuAction::ConflictResolverPick { target } => {
-                self.main_pane.update(cx, |pane, cx| {
-                    pane.conflict_resolver_apply_pick_target(target, cx);
-                });
-            }
-            ContextMenuAction::ConflictResolverUnresolve { conflict_ix } => {
-                self.main_pane.update(cx, |pane, cx| {
-                    pane.conflict_resolver_select_conflict(conflict_ix, cx);
-                    pane.conflict_resolver_unresolve_active_conflict(cx);
-                });
-            }
-            ContextMenuAction::ConflictResolverSplitSelection => {
-                self.main_pane.update(cx, |pane, cx| {
-                    pane.conflict_resolver_split_selection(cx);
-                });
-            }
-            ContextMenuAction::ConflictResolverAlignManually => {
-                self.main_pane.update(cx, |pane, cx| {
-                    pane.conflict_resolver_align_manually(cx);
-                });
-            }
-            ContextMenuAction::ConflictResolverClearManualAlignments => {
-                self.main_pane.update(cx, |pane, cx| {
-                    pane.conflict_resolver_clear_manual_alignments(cx);
-                });
-            }
-            ContextMenuAction::ConflictResolverJoinRegions { target } => {
-                self.main_pane.update(cx, |pane, cx| {
-                    pane.conflict_resolver_join_regions(target, cx);
-                });
-            }
-            ContextMenuAction::SetMergetoolAutoAdvance { enabled } => {
-                close_after_action = false;
-                self.main_pane.update(cx, |pane, cx| {
-                    pane.set_mergetool_auto_advance_and_persist(enabled, cx);
-                });
-                cx.notify();
-            }
-            ContextMenuAction::ToggleMergetoolCollapseUnchanged => {
-                close_after_action = false;
-                self.main_pane.update(cx, |pane, cx| {
-                    pane.conflict_resolver_toggle_collapse_context(cx);
-                });
-                cx.notify();
-            }
-            ContextMenuAction::SetMergetoolOutputScrollSync { enabled } => {
-                close_after_action = false;
-                self.main_pane.update(cx, |pane, cx| {
-                    pane.set_mergetool_output_scroll_sync_and_persist(enabled, cx);
-                });
-                cx.notify();
-            }
-            ContextMenuAction::SetMergetoolShowLineNumbers { enabled } => {
-                close_after_action = false;
-                self.main_pane.update(cx, |pane, cx| {
-                    pane.set_mergetool_show_line_numbers_and_persist(enabled, cx);
-                });
-                cx.notify();
-            }
-            ContextMenuAction::SetMergetoolThreeWayView { enabled } => {
-                close_after_action = false;
-                self.main_pane.update(cx, |pane, cx| {
-                    pane.conflict_resolver_set_view_mode(
-                        if enabled {
-                            ConflictResolverViewMode::ThreeWay
-                        } else {
-                            ConflictResolverViewMode::TwoWayDiff
-                        },
-                        cx,
-                    );
-                });
-                cx.notify();
-            }
-            ContextMenuAction::ConflictResolverOutputCut { text } => {
-                crate::clipboard::write_text(cx, text, crate::clipboard::CopySource::ContextMenu);
-                self.main_pane.update(cx, |pane, cx| {
-                    pane.conflict_resolver_output_delete_selection(cx);
-                });
-            }
-            ContextMenuAction::ConflictResolverOutputPaste => {
-                if let Some(text) = crate::clipboard::read_text(cx) {
-                    self.main_pane.update(cx, |pane, cx| {
-                        pane.conflict_resolver_output_paste_text(&text, cx);
-                    });
-                }
-            }
-            ContextMenuAction::CopyText { text } => {
-                window.activate_window();
-                crate::clipboard::write_text(cx, text, crate::clipboard::CopySource::ContextMenu);
-            }
-            ContextMenuAction::CopyLinkAddress { url } => {
-                window.activate_window();
-                crate::clipboard::write_text(cx, url, crate::clipboard::CopySource::ContextMenu);
-                self.push_toast(
-                    components::ToastKind::Success,
-                    "Link copied to clipboard".to_string(),
-                    cx,
-                );
-            }
-            ContextMenuAction::LoadRemoteMarkdownImage { url } => {
-                self.main_pane.update(cx, |pane, cx| {
-                    pane.approve_remote_markdown_image(url, cx);
-                });
-            }
-            ContextMenuAction::OpenWebUrl { url } => {
-                crate::view::platform_open::spawn_launch(
-                    cx,
-                    move || crate::view::platform_open::open_url_blocking(&url),
-                    |this, result, cx| {
-                        if let Err(err) = result {
-                            this.push_toast(
-                                components::ToastKind::Error,
-                                format!("Failed to open link: {err}"),
-                                cx,
-                            );
-                        }
-                    },
-                );
-            }
-            ContextMenuAction::CopyDiffSelection { text } => {
-                window.activate_window();
-                crate::clipboard::write_text(
-                    cx,
-                    text,
-                    crate::clipboard::CopySource::DiffContextMenu,
-                );
-            }
-            ContextMenuAction::CopyDiffText { visible_ix, region } => {
-                window.activate_window();
-                self.main_pane.update(cx, |pane, cx| {
-                    pane.copy_diff_text_for_context_menu_to_clipboard(visible_ix, region, cx);
-                });
-            }
-            ContextMenuAction::TerminalCommand {
-                repo_id,
-                session_seq,
-                command,
-            } => {
-                window.activate_window();
-                let dispatched = self
-                    .root_view
-                    .update(cx, |root, cx| {
-                        root.dispatch_terminal_command(repo_id, session_seq, command, window, cx)
-                    })
-                    .unwrap_or(false);
-                if !dispatched {
-                    self.close_popover(cx);
-                    return;
-                }
-            }
-            ContextMenuAction::TerminalOpenExternal {
-                repo_id,
-                session_seq,
-            } => {
-                let dispatched = self
-                    .root_view
-                    .update(cx, |root, cx| {
-                        if root
-                            .terminal_viewport_for_session(repo_id, session_seq)
-                            .is_none()
-                        {
-                            return false;
-                        }
-                        root.open_external_terminal_from_menu(repo_id, window, cx);
-                        true
-                    })
-                    .unwrap_or(false);
-                if !dispatched {
-                    self.close_popover(cx);
-                    return;
-                }
-            }
-            ContextMenuAction::ApplyIndexPatch {
-                repo_id,
-                patch,
-                reverse,
-            } => {
-                if patch.trim().is_empty() {
-                    self.push_toast(
-                        components::ToastKind::Error,
-                        "Patch is empty".to_string(),
-                        cx,
-                    );
-                } else if reverse {
-                    self.store.dispatch(Msg::UnstageHunk { repo_id, patch });
-                } else {
-                    self.store.dispatch(Msg::StageHunk { repo_id, patch });
-                }
-            }
-            ContextMenuAction::ApplyWorktreePatch {
-                repo_id,
-                patch,
-                reverse,
-            } => {
-                if patch.trim().is_empty() {
-                    self.push_toast(
-                        components::ToastKind::Error,
-                        "Patch is empty".to_string(),
-                        cx,
-                    );
-                } else {
-                    self.store.dispatch(Msg::ApplyWorktreePatch {
-                        repo_id,
-                        patch,
-                        reverse,
-                    });
-                }
-            }
-            ContextMenuAction::StageHunk { repo_id, src_ix } => {
-                if let Some(patch) = self.build_unified_patch_for_hunk_src_ix(repo_id, src_ix) {
-                    self.store.dispatch(Msg::StageHunk { repo_id, patch });
-                } else {
-                    self.push_toast(
-                        components::ToastKind::Error,
-                        "Couldn't build patch for this hunk".to_string(),
-                        cx,
-                    );
-                }
-            }
-            ContextMenuAction::UnstageHunk { repo_id, src_ix } => {
-                if let Some(patch) = self.build_unified_patch_for_hunk_src_ix(repo_id, src_ix) {
-                    self.store.dispatch(Msg::UnstageHunk { repo_id, patch });
-                } else {
-                    self.push_toast(
-                        components::ToastKind::Error,
-                        "Couldn't build patch for this hunk".to_string(),
-                        cx,
-                    );
-                }
-            }
-            ContextMenuAction::DeleteTag { repo_id, name } => {
-                self.store.dispatch(Msg::DeleteTag { repo_id, name });
-            }
-            ContextMenuAction::PushTag {
-                repo_id,
-                remote,
-                name,
-            } => {
-                self.store.dispatch(Msg::PushTag {
-                    repo_id,
-                    remote,
-                    name,
-                });
-            }
-            ContextMenuAction::DeleteRemoteTag {
-                repo_id,
-                remote,
-                name,
-            } => {
-                self.store.dispatch(Msg::DeleteRemoteTag {
-                    repo_id,
-                    remote,
-                    name,
-                });
-            }
-        }
-        // A menu floating over a picker is not the popover: it closed itself on
-        // the way in, and whether the picker underneath survives is the picker's
-        // call, not the action's.
-        if close_after_action && !self.suppress_popover_close_after_action {
-            self.close_popover_and_restore_focus(window, cx);
-        } else {
-            if restore_diff_panel_focus_after_action {
-                let focus = self.main_pane.read(cx).diff_panel_focus_handle.clone();
-                window.focus(&focus, cx);
-            }
-            cx.notify();
-        }
-    }
-
-    fn context_menu_activate_model_entry(
-        &mut self,
-        model: &ContextMenuModel,
-        ix: usize,
-        window: &mut Window,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        if let Some(action) = context_menu_entry_action_at(model, ix) {
-            self.context_menu_activate_action(action, window, cx);
         }
     }
 
@@ -1855,6 +1002,51 @@ impl PopoverHost {
         Some((paths, suggestions))
     }
 
+    pub(super) fn explorer_gitignore_target(
+        &self,
+        repo_id: RepoId,
+        path: &std::path::Path,
+    ) -> Option<(
+        Vec<std::path::PathBuf>,
+        gitcomet_core::gitignore::GitignoreSuggestions,
+    )> {
+        let repo = self.state.repos.iter().find(|r| r.id == repo_id)?;
+        if repo.file_browser.source != gitcomet_core::domain::FileSource::WorkingDirectory
+            || path.as_os_str().is_empty()
+        {
+            return None;
+        }
+        let paths: Vec<_> = if repo.file_browser.selection.paths.contains(path) {
+            repo.file_browser.selection.paths.iter().cloned().collect()
+        } else {
+            vec![path.to_path_buf()]
+        };
+        let Loadable::Ready(entries) = &repo.file_browser.entries else {
+            return None;
+        };
+        let mut targets = Vec::new();
+        for path in &paths {
+            if matches!(&repo.submodules, Loadable::Ready(submodules) if submodules.iter().any(|submodule| submodule.path.as_path() == path))
+            {
+                return None;
+            }
+            let directory = entries.iter().any(|e| {
+                e.path.as_path() == path
+                    && e.kind == gitcomet_core::domain::FileEntryKind::Directory
+            });
+            if !directory
+                && !repo
+                    .status_entry_for_path(DiffArea::Unstaged, path)
+                    .is_some_and(|s| s.kind == gitcomet_core::domain::FileStatusKind::Untracked)
+            {
+                return None;
+            }
+            targets.push((path.clone(), directory));
+        }
+        let suggestions = gitcomet_core::gitignore::suggestions_for_entries(&targets)?;
+        Some((paths, suggestions))
+    }
+
     /// Seed the "Add to .gitignore" dialog when it opens.
     pub(super) fn prepare_add_to_gitignore(
         &mut self,
@@ -1864,7 +1056,11 @@ impl PopoverHost {
         window: &mut gpui::Window,
         cx: &mut gpui::Context<Self>,
     ) {
-        let target = self.add_to_gitignore_target(repo_id, area, path, cx);
+        let target = if self.gitignore_explorer {
+            self.explorer_gitignore_target(repo_id, path)
+        } else {
+            self.add_to_gitignore_target(repo_id, area, path, cx)
+        };
         let scope = gitcomet_core::gitignore::GitignoreScope::File;
         let text = target
             .as_ref()
@@ -1879,10 +1075,8 @@ impl PopoverHost {
         self.gitignore_suggestions = suggestions;
         self.gitignore_scope = scope;
 
-        let theme = self.theme;
         self.gitignore_patterns_input.update(cx, |input, cx| {
             input.clear_transient_key_presses();
-            input.set_theme(theme, cx);
             input.set_text(&text, cx);
             cx.notify();
         });
@@ -1967,7 +1161,9 @@ impl PopoverHost {
         // Now that the action is going ahead, the row selection has served its
         // purpose and is cleared. The returned paths are unused — the patterns
         // come from the field, which the user may have edited.
-        let _ = self.take_status_paths_for_action(repo_id, area, &path, cx);
+        if !self.gitignore_explorer {
+            let _ = self.take_status_paths_for_action(repo_id, area, &path, cx);
+        }
         self.store
             .dispatch(Msg::AppendGitignorePatterns { repo_id, patterns });
         self.close_popover(cx);
@@ -2022,7 +1218,6 @@ impl PopoverHost {
         };
 
         if paths.len() > 1 {
-            self.store.dispatch(Msg::ClearDiffSelection { repo_id });
             self.store
                 .dispatch(Msg::DiscardWorktreeChangesPaths { repo_id, paths });
             return;
@@ -2032,38 +1227,6 @@ impl PopoverHost {
             return;
         };
 
-        let is_added_file = self
-            .state
-            .repos
-            .iter()
-            .find(|r| r.id == repo_id)
-            .and_then(|repo| {
-                repo.status_entry_for_path(DiffArea::Unstaged, path.as_path())
-                    .or_else(|| repo.status_entry_for_path(DiffArea::Staged, path.as_path()))
-                    .map(|status| status.kind)
-            })
-            .is_some_and(|kind| matches!(kind, FileStatusKind::Untracked | FileStatusKind::Added));
-
-        if is_added_file {
-            let path_is_selected = self
-                .active_repo()
-                .filter(|r| r.id == repo_id)
-                .and_then(|r| r.diff_state.diff_target.as_ref())
-                .is_some_and(|target| {
-                    matches!(target, DiffTarget::WorkingTree { path: selected, .. } if *selected == path)
-                });
-            if path_is_selected {
-                self.store.dispatch(Msg::ClearDiffSelection { repo_id });
-            }
-        } else {
-            self.store.dispatch(Msg::SelectDiff {
-                repo_id,
-                target: DiffTarget::WorkingTree {
-                    path: path.clone(),
-                    area: DiffArea::Unstaged,
-                },
-            });
-        }
         self.store
             .dispatch(Msg::DiscardWorktreeChangesPath { repo_id, path });
     }
@@ -2072,20 +1235,48 @@ impl PopoverHost {
         &self,
         repo_id: RepoId,
         hunk_src_ix: usize,
-    ) -> Option<String> {
-        let repo = self.state.repos.iter().find(|r| r.id == repo_id)?;
-        let Loadable::Ready(diff) = &repo.diff_state.diff else {
+        cx: &gpui::App,
+    ) -> Option<gitcomet_state::msg::ContentBytes> {
+        let pane = self.diff_renderer.read(cx);
+        // Payload row numbers do not address hunks in the Git pointer patch.
+        if pane.active_repo_id() != Some(repo_id)
+            || pane.is_inline_submodule_diff_active()
+            || pane.has_large_file_text_diff()
+        {
+            return None;
+        }
+        let Some(Loadable::Ready(diff)) = pane.rendered_patch_diff_loadable() else {
             return None;
         };
         crate::view::diff_utils::build_unified_patch_for_hunk(diff.lines.as_slice(), hunk_src_ix)
+            .map(Into::into)
     }
 
-    fn scroll_context_menu_selection(&self, window: &mut Window, cx: &mut gpui::Context<Self>) {
-        if let Some(anchor) = self
+    /// Scrolls the least that fully shows the selected row, counting the area
+    /// under a visible scroll arrow as hidden. Reads the extents recorded in the
+    /// last prepaint; navigation does not change the rows, so they still hold.
+    fn scroll_context_menu_selection(&self, cx: &mut gpui::Context<Self>) {
+        let Some((top, height)) = self
             .context_menu_selected_ix
-            .and_then(|ix| self.context_menu_scroll_anchors.get(ix))
-        {
-            anchor.scroll_to(window, cx);
+            .and_then(|ix| self.context_menu_row_extents.borrow().get(ix).copied())
+            .flatten()
+        else {
+            return;
+        };
+        let scroll = &self.context_menu_scroll;
+        let offset = scroll.offset();
+        let current = -offset.y;
+        let edge = super::popover_ui_scale(cx).px(components::MENU_SCROLL_ARROW_HEIGHT_PX);
+        let target = crate::kit::menu_placement::reveal_scroll(
+            top,
+            top + height,
+            scroll.bounds().size.height,
+            scroll.max_offset().y,
+            current,
+            edge,
+        );
+        if target != current {
+            scroll.set_offset(point(offset.x, -target));
         }
     }
 
@@ -2100,16 +1291,17 @@ impl PopoverHost {
         let model = self
             .context_menu_model(&kind, cx)
             .unwrap_or_else(|| ContextMenuModel::new(vec![]));
-        self.context_menu_scroll_anchors
-            .resize_with(model.items.len(), || {
-                gpui::ScrollAnchor::for_handle(self.context_menu_scroll.clone())
-            });
-        let scroll_anchors = self.context_menu_scroll_anchors.clone();
+        self.context_menu_row_extents
+            .borrow_mut()
+            .resize(model.items.len(), None);
+        let row_extents = self.context_menu_row_extents.clone();
+        let menu_scroll = self.context_menu_scroll.clone();
         let model_for_keys = model.clone();
         let model_for_mouse = model.clone();
         let tooltip_host = self.tooltip_host.clone();
         let entry_tooltips = model.entry_tooltips.clone();
         let entry_debug_selectors = model.entry_debug_selectors.clone();
+        let slots = context_menu_slots(model.items.len(), &model.groups);
         let shortcut_keycaps = model.shortcut_keycaps;
 
         let focus = self.context_menu_focus_handle.clone();
@@ -2147,6 +1339,7 @@ impl PopoverHost {
             )
             .on_key_down(
                 cx.listener(move |this, e: &gpui::KeyDownEvent, window, cx| {
+                    this.latch_context_menu_placement();
                     let key = e.keystroke.key.as_str();
                     let mods = e.keystroke.modifiers;
                     if mods.control || mods.platform || mods.alt || mods.function {
@@ -2187,7 +1380,7 @@ impl PopoverHost {
                             let next =
                                 model_for_keys.next_selectable(this.context_menu_selected_ix, -1);
                             this.context_menu_selected_ix = next;
-                            this.scroll_context_menu_selection(window, cx);
+                            this.scroll_context_menu_selection(cx);
                             cx.notify();
                         }
                         "down" => {
@@ -2195,7 +1388,7 @@ impl PopoverHost {
                             let next =
                                 model_for_keys.next_selectable(this.context_menu_selected_ix, 1);
                             this.context_menu_selected_ix = next;
-                            this.scroll_context_menu_selection(window, cx);
+                            this.scroll_context_menu_selection(cx);
                             cx.notify();
                         }
                         "tab" => {
@@ -2203,19 +1396,19 @@ impl PopoverHost {
                             let direction = if mods.shift { -1 } else { 1 };
                             this.context_menu_selected_ix = model_for_keys
                                 .next_selectable(this.context_menu_selected_ix, direction);
-                            this.scroll_context_menu_selection(window, cx);
+                            this.scroll_context_menu_selection(cx);
                             cx.notify();
                         }
                         "home" => {
                             cx.stop_propagation();
                             this.context_menu_selected_ix = model_for_keys.first_selectable();
-                            this.scroll_context_menu_selection(window, cx);
+                            this.scroll_context_menu_selection(cx);
                             cx.notify();
                         }
                         "end" => {
                             cx.stop_propagation();
                             this.context_menu_selected_ix = model_for_keys.last_selectable();
-                            this.scroll_context_menu_selection(window, cx);
+                            this.scroll_context_menu_selection(cx);
                             cx.notify();
                         }
                         "enter" | "space" => {
@@ -2242,177 +1435,284 @@ impl PopoverHost {
                     }
                 }),
             )
-            .children(model.items.into_iter().enumerate().map(move |(ix, item)| {
-                match item {
-                    ContextMenuItem::Separator => {
-                        components::context_menu_separator(theme, ui_scale)
-                            .id(("context_menu_sep", ix))
-                            .into_any_element()
+            .on_children_prepainted({
+                let slots = slots.clone();
+                record_row_extents(row_extents.clone(), menu_scroll.clone(), move |child| {
+                    match slots.get(child) {
+                        Some(MenuSlot::Row(ix)) => Some(*ix),
+                        _ => None,
                     }
-                    ContextMenuItem::Header(title) => components::context_menu_header(
-                        theme,
-                        ui_scale,
-                        title,
-                        Some(tooltip_host.clone()),
-                        cx,
-                    )
-                    .id(("context_menu_header", ix))
-                    .into_any_element(),
-                    ContextMenuItem::Description(text) => components::context_menu_description(
-                        theme,
-                        ui_scale,
-                        text,
-                        Some(tooltip_host.clone()),
-                        cx,
-                    )
-                    .id(("context_menu_description", ix))
-                    .into_any_element(),
-                    ContextMenuItem::Label(text) => components::context_menu_label(
-                        theme,
-                        ui_scale,
-                        text,
-                        Some(tooltip_host.clone()),
-                        cx,
-                    )
-                    .id(("context_menu_label", ix))
-                    .into_any_element(),
-                    ContextMenuItem::Segmented { label, segments } => {
-                        // Same construction as the toolbar's Inline/Split style
-                        // toggles: one bordered pill, dividers between segments,
-                        // the active one filled.
-                        let mut control = div()
-                            .id(("context_menu_segmented", ix))
-                            .flex()
-                            .items_center()
-                            .h(components::control_height(ui_scale))
-                            .rounded(px(theme.radii.row))
-                            .border_1()
-                            .border_color(theme.colors.stroke.default)
-                            .overflow_hidden()
-                            .p(px(1.0));
-                        for (seg_ix, segment) in segments.into_iter().enumerate() {
-                            if seg_ix > 0 {
-                                control = control.child(
-                                    div().h_full().w(px(1.0)).bg(theme.colors.stroke.default),
-                                );
-                            }
-                            let ContextMenuSegment {
-                                id,
-                                label,
-                                tooltip,
-                                selected,
-                                action,
-                            } = segment;
-                            let debug_selector = id.clone();
-                            let mut button = components::Button::new(id, label)
-                                .borderless()
-                                .style(components::ButtonStyle::Subtle)
-                                .selected(selected)
-                                .selected_bg(theme.colors.interaction.pressed_background)
-                                .on_click(theme, cx, move |this, _e, window, cx| {
-                                    this.context_menu_activate_action(action.clone(), window, cx);
-                                })
-                                .debug_selector(move || debug_selector.to_string());
-                            if let Some(tooltip) = tooltip {
-                                button = button.gitcomet_tooltip(theme, tooltip);
-                            }
-                            control = control.child(button);
+                })
+            })
+            .children(group_context_menu_rows(
+                model
+                    .items
+                    .into_iter()
+                    .enumerate()
+                    .map(move |(ix, item)| match item {
+                        ContextMenuItem::Separator => {
+                            components::context_menu_separator(theme, ui_scale)
+                                .id(("context_menu_sep", ix))
+                                .into_any_element()
                         }
-                        components::context_menu_label(
+                        ContextMenuItem::Header(title) => components::context_menu_header(
                             theme,
                             ui_scale,
-                            label,
+                            title,
                             Some(tooltip_host.clone()),
                             cx,
                         )
-                        .id(("context_menu_segmented_row", ix))
-                        .flex()
-                        .items_center()
-                        .justify_between()
-                        .gap_2()
-                        .child(control)
-                        .into_any_element()
-                    }
-                    ContextMenuItem::Entry {
-                        label,
-                        icon,
-                        shortcut,
-                        disabled,
-                        action,
-                    } => {
-                        let selected = selected_for_render == Some(ix);
-                        let debug_selector = entry_debug_selectors
-                            .get(&ix)
-                            .map(|selector| selector.to_string())
-                            .unwrap_or_else(|| context_menu_entry_debug_selector(label.as_ref()));
-                        let tooltip_text = entry_tooltips
-                            .get(&ix)
-                            .cloned()
-                            .or_else(|| context_menu_entry_tooltip(action.as_ref()));
-                        let tooltip_host_for_move = tooltip_host.clone();
-                        let tooltip_text_for_move = tooltip_text.clone();
-                        let tooltip_host_for_hover = tooltip_host.clone();
-                        let activate_on_release = model_for_mouse.clone();
-                        let icon_slot = match icon {
-                            Some(icon) => components::ContextMenuIconSlot::Icon(icon),
-                            None if reserve_icon_column => {
-                                components::ContextMenuIconSlot::Reserved
+                        .id(("context_menu_header", ix))
+                        .into_any_element(),
+                        ContextMenuItem::Description(text) => components::context_menu_description(
+                            theme,
+                            ui_scale,
+                            text,
+                            Some(tooltip_host.clone()),
+                            cx,
+                        )
+                        .id(("context_menu_description", ix))
+                        .into_any_element(),
+                        ContextMenuItem::Label(text) => components::context_menu_label(
+                            theme,
+                            ui_scale,
+                            text,
+                            Some(tooltip_host.clone()),
+                            cx,
+                        )
+                        .id(("context_menu_label", ix))
+                        .into_any_element(),
+                        ContextMenuItem::Segmented { label, segments } => {
+                            // The kit's segmented control, as the diff toolbar's
+                            // Inline/Split uses.
+                            let mut control = components::SegmentedControl::new(
+                                SharedString::from(format!("context_menu_segmented_{ix}")),
+                            );
+                            let mut actions = Vec::with_capacity(segments.len());
+                            for segment in segments {
+                                let ContextMenuSegment {
+                                    id,
+                                    label,
+                                    tooltip,
+                                    selected,
+                                    action,
+                                } = segment;
+                                actions.push(action);
+                                let mut part =
+                                    components::Segment::new(id, label).selected(selected);
+                                if let Some(tooltip) = tooltip {
+                                    part = part.tooltip(tooltip, Vec::new());
+                                }
+                                control = control.segment(part);
                             }
-                            None => components::ContextMenuIconSlot::None,
-                        };
-                        let row =
-                            components::ContextMenuEntry::new(("context_menu_entry", ix), label)
-                                .icon(icon_slot)
-                                .shortcut(shortcut)
-                                .shortcut_keycaps(shortcut_keycaps)
-                                .selected(selected)
-                                .disabled(disabled)
-                                .tooltip_host(tooltip_host.clone())
-                                .render(theme, ui_scale, cx)
-                                .anchor_scroll(scroll_anchors.get(ix).cloned())
-                                .debug_selector(move || debug_selector.clone());
-
-                        row.on_mouse_move(cx.listener(
-                            move |this, event: &MouseMoveEvent, _w, cx| {
-                                this.context_menu_selected_ix = Some(ix);
-                                if let Some(tooltip_text) = tooltip_text_for_move.as_ref() {
-                                    let _ = tooltip_host_for_move.update(cx, |host, cx| {
-                                        host.on_mouse_moved(event.position, cx);
-                                        host.set_tooltip_text_if_changed(
-                                            Some(tooltip_text.clone()),
+                            let control = control.render(
+                                theme,
+                                ui_scale,
+                                cx,
+                                move |this, index, window, cx| {
+                                    if let Some(action) = actions.get(index) {
+                                        this.context_menu_activate_action(
+                                            action.clone(),
+                                            window,
                                             cx,
                                         );
+                                    }
+                                },
+                            );
+                            components::context_menu_label(
+                                theme,
+                                ui_scale,
+                                label,
+                                Some(tooltip_host.clone()),
+                                cx,
+                            )
+                            .id(("context_menu_segmented_row", ix))
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .gap_2()
+                            .child(control)
+                            .into_any_element()
+                        }
+                        ContextMenuItem::Entry {
+                            label,
+                            icon,
+                            shortcut,
+                            disabled,
+                            action,
+                        } => {
+                            let selected = selected_for_render == Some(ix);
+                            let debug_selector = entry_debug_selectors
+                                .get(&ix)
+                                .map(|selector| selector.to_string())
+                                .unwrap_or_else(|| {
+                                    context_menu_entry_debug_selector(label.as_ref())
+                                });
+                            let tooltip_text = entry_tooltips
+                                .get(&ix)
+                                .cloned()
+                                .or_else(|| context_menu_entry_tooltip(action.as_ref()));
+                            let tooltip_host_for_move = tooltip_host.clone();
+                            let tooltip_text_for_move = tooltip_text.clone();
+                            let tooltip_host_for_hover = tooltip_host.clone();
+                            let activate_on_release = model_for_mouse.clone();
+                            let (icon_slot, tone) =
+                                crate::view::menu_presentation::entry_presentation(
+                                    label.as_ref(),
+                                    icon,
+                                    reserve_icon_column,
+                                );
+                            let row = components::ContextMenuEntry::new(
+                                ("context_menu_entry", ix),
+                                label,
+                            )
+                            .icon(icon_slot)
+                            .tone(tone)
+                            .shortcut(shortcut)
+                            .shortcut_keycaps(shortcut_keycaps)
+                            .selected(selected)
+                            .disabled(disabled)
+                            .tooltip_host(tooltip_host.clone())
+                            .render(theme, ui_scale, cx)
+                            .debug_selector(move || debug_selector.clone());
+
+                            row.on_mouse_move(cx.listener(
+                                move |this, event: &MouseMoveEvent, _w, cx| {
+                                    this.context_menu_selected_ix = Some(ix);
+                                    if let Some(tooltip_text) = tooltip_text_for_move.as_ref() {
+                                        let _ = tooltip_host_for_move.update(cx, |host, cx| {
+                                            host.on_mouse_moved(event.position, cx);
+                                            host.set_tooltip_text_if_changed(
+                                                Some(tooltip_text.clone()),
+                                                cx,
+                                            );
+                                        });
+                                    }
+                                    cx.notify();
+                                },
+                            ))
+                            .on_hover(cx.listener(move |this, hovering: &bool, _w, cx| {
+                                if *hovering {
+                                    this.context_menu_selected_ix = Some(ix);
+                                    cx.notify();
+                                } else if let Some(tooltip_text) = tooltip_text.as_ref() {
+                                    let _ = tooltip_host_for_hover.update(cx, |host, cx| {
+                                        host.clear_tooltip_if_matches(tooltip_text, cx);
                                     });
                                 }
-                                cx.notify();
-                            },
-                        ))
-                        .on_hover(cx.listener(move |this, hovering: &bool, _w, cx| {
-                            if *hovering {
-                                this.context_menu_selected_ix = Some(ix);
-                                cx.notify();
-                            } else if let Some(tooltip_text) = tooltip_text.as_ref() {
-                                let _ = tooltip_host_for_hover.update(cx, |host, cx| {
-                                    host.clear_tooltip_if_matches(tooltip_text, cx);
-                                });
-                            }
-                        }))
-                        .on_menu_activate(
-                            disabled,
-                            cx.listener(move |this, _e: &ClickEvent, window, cx| {
-                                this.context_menu_activate_model_entry(
-                                    &activate_on_release,
-                                    ix,
-                                    window,
-                                    cx,
-                                );
-                            }),
-                        )
-                        .into_any_element()
-                    }
-                }
-            }))
+                            }))
+                            .on_menu_activate(
+                                disabled,
+                                cx.listener(move |this, _e: &ClickEvent, window, cx| {
+                                    this.context_menu_activate_model_entry(
+                                        &activate_on_release,
+                                        ix,
+                                        window,
+                                        cx,
+                                    );
+                                }),
+                            )
+                            .into_any_element()
+                        }
+                    }),
+                &slots,
+                theme,
+                ui_scale,
+                &row_extents,
+                &menu_scroll,
+            ))
     }
+}
+
+/// Content-space `(top, height)` of each menu row from the last prepaint.
+pub(super) type RowExtents = Rc<std::cell::RefCell<Vec<Option<(Pixels, Pixels)>>>>;
+
+/// A direct child of the menu column: one row, or one group block of rows.
+#[derive(Clone, Debug, PartialEq)]
+enum MenuSlot {
+    Row(usize),
+    Group(std::ops::Range<usize>),
+}
+
+/// How `len` rows lay out once each model group is wrapped in one block. A
+/// group that runs past the last row stays unwrapped.
+fn context_menu_slots(len: usize, groups: &[std::ops::Range<usize>]) -> Vec<MenuSlot> {
+    let mut slots = Vec::new();
+    let mut groups = groups.iter().filter(|range| !range.is_empty()).peekable();
+    let mut block_start = None;
+    for ix in 0..len {
+        let Some(range) = groups.peek().filter(|range| range.start <= ix) else {
+            slots.push(MenuSlot::Row(ix));
+            continue;
+        };
+        let start = *block_start.get_or_insert(ix);
+        if ix + 1 == range.end {
+            slots.push(MenuSlot::Group(start..ix + 1));
+            block_start = None;
+            groups.next();
+        }
+    }
+    if let Some(start) = block_start {
+        slots.extend((start..len).map(MenuSlot::Row));
+    }
+    slots
+}
+
+/// Records the content-space extents of a column's children; `row_of` maps a
+/// child index to the menu row it is, if it is one.
+pub(super) fn record_row_extents(
+    extents: RowExtents,
+    scroll: ScrollHandle,
+    row_of: impl Fn(usize) -> Option<usize> + 'static,
+) -> impl Fn(Vec<Bounds<Pixels>>, &mut Window, &mut gpui::App) + 'static {
+    move |bounds, _window, _cx| {
+        let content_top = scroll.bounds().top() + scroll.offset().y;
+        let mut extents = extents.borrow_mut();
+        for (child, bounds) in bounds.iter().enumerate() {
+            if let Some(slot) = row_of(child).and_then(|ix| extents.get_mut(ix)) {
+                *slot = Some((bounds.top() - content_top, bounds.size.height));
+            }
+        }
+    }
+}
+
+/// Wrap each model group's rows in one tinted block; other rows pass through.
+fn group_context_menu_rows(
+    rows: impl Iterator<Item = AnyElement>,
+    slots: &[MenuSlot],
+    theme: AppTheme,
+    ui_scale: crate::ui_scale::UiScale,
+    extents: &RowExtents,
+    scroll: &ScrollHandle,
+) -> Vec<AnyElement> {
+    let mut rows: Vec<Option<AnyElement>> = rows.map(Some).collect();
+    let mut take = |ix: usize| rows[ix].take().expect("each menu row is placed once");
+    let mut previous_end = None;
+    let mut out = Vec::with_capacity(slots.len());
+    for slot in slots {
+        match slot {
+            MenuSlot::Row(ix) => out.push(take(*ix)),
+            MenuSlot::Group(range) => {
+                let start = range.start;
+                // Neighbouring blocks would merge into one tint without a gap.
+                let spaced = previous_end == Some(start);
+                previous_end = Some(range.end);
+                out.push(
+                    components::context_menu_group(theme, ui_scale, spaced)
+                        .on_children_prepainted(record_row_extents(
+                            extents.clone(),
+                            scroll.clone(),
+                            move |child| Some(start + child),
+                        ))
+                        .id(("context_menu_group", start))
+                        .debug_selector(move || format!("context_menu_group_{start}"))
+                        .children(range.clone().map(&mut take))
+                        .into_any_element(),
+                );
+            }
+        }
+    }
+    out
 }
 
 fn interactive_rebase_action_menu_model(
@@ -2495,7 +1795,7 @@ fn interactive_rebase_autosquash_menu_model() -> ContextMenuModel {
 mod tests {
     use super::*;
 
-    use crate::view::shortcut_labels::secondary_shortcut;
+    use crate::kit::components::secondary_shortcut;
 
     #[test]
     fn context_menu_shortcut_entry_ix_matches_first_enabled_single_character_entry() {

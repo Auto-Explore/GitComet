@@ -4,7 +4,7 @@ fn display_target(target: &str) -> SharedString {
     let is_full_object_id =
         matches!(target.len(), 40 | 64) && target.bytes().all(|byte| byte.is_ascii_hexdigit());
     if is_full_object_id {
-        format!("{}…", &target[..7]).into()
+        format!("{}…", gitcomet_core::domain::short_commit_id(target)).into()
     } else {
         target.to_owned().into()
     }
@@ -19,7 +19,7 @@ fn worktree_note(
     operation: &BranchExistsPromptOperation,
 ) -> Option<String> {
     let repo = this.state.repos.iter().find(|repo| repo.id == repo_id)?;
-    let path = crate::view::rows::listed_workspace_paths_by_branch(repo).remove(name)?;
+    let path = crate::view::rows::listed_worktree_paths_by_branch(repo).remove(name)?;
     let mut note = format!(
         "'{name}' is checked out in the worktree at {}. Checkout existing opens that worktree; overwriting applies there and opens it.",
         path.display()

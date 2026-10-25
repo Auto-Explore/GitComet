@@ -1,0 +1,27 @@
+flowchart LR
+  A((A)) --> B((B))
+  A --> C((C))
+  A --> D((D))
+  B --> E((E))
+  C --> E
+  D --> E
+  B --> F((F))
+  C --> F
+  D --> F
+  E --> G((G))
+  F --> G
+  G --> H((H))
+  B --> H
+  C --> H
+  D --> H
+
+  subgraph Cluster1
+    I[Node I] --> J[Node J]
+    J --> K[Node K]
+    K --> L[Node L]
+    L --> I
+  end
+
+  H --> I
+  A --> L
+  K --> D

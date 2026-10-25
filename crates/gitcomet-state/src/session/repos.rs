@@ -232,9 +232,7 @@ pub fn persist_repos_snapshot_to_path(
     snapshot: &SessionReposSnapshot,
     path: &Path,
 ) -> io::Result<()> {
-    with_session_file_persist_lock(|| {
-        let mut file = load_file(path).unwrap_or_default();
-        file.version = CURRENT_SESSION_FILE_VERSION;
+    update_session_file(path, |file| {
         file.open_repos = snapshot
             .open_repos
             .iter()
@@ -245,7 +243,7 @@ pub fn persist_repos_snapshot_to_path(
             .and_then(|ix| snapshot.open_repos.get(ix))
             .map(|path| path.to_string());
 
-        persist_to_path(path, &file)
+        SessionUpdate::Write
     })
 }
 
@@ -259,7 +257,7 @@ fn promote_within_recents_cap<T: PartialEq>(list: &mut Vec<T>, value: T) {
     list.truncate(MAX_RECENT_REPOS);
 }
 
-/// [`promote_within_recents_cap`] for a caller holding its own copy of what
+/// `promote_within_recents_cap` for a caller holding its own copy of what
 /// [`UiSession::recent_repos`] last returned: applies one recents bump to that
 /// copy so it still matches the file after [`persist_recent_repo`] writes it.
 pub fn promote_recent_repo(recents: &mut Vec<PathBuf>, workdir: &Path) {
@@ -297,10 +295,7 @@ fn recent_repo_storage_key(workdir: &Path) -> String {
 }
 
 pub fn persist_recent_repo_to_path(workdir: &Path, session_file_path: &Path) -> io::Result<()> {
-    with_session_file_persist_lock(|| {
-        let mut file = load_file(session_file_path).unwrap_or_default();
-        file.version = CURRENT_SESSION_FILE_VERSION;
-
+    update_session_file(session_file_path, |file| {
         let workdir_key = recent_repo_storage_key(workdir);
         let raw_key = path_storage_key(workdir);
         let recent_repos = file.recent_repos.get_or_insert_with(Vec::new);
@@ -320,7 +315,7 @@ pub fn persist_recent_repo_to_path(workdir: &Path, session_file_path: &Path) -> 
         });
         promote_within_recents_cap(recent_repos, workdir_key);
 
-        persist_to_path(session_file_path, &file)
+        SessionUpdate::Write
     })
 }
 
@@ -332,16 +327,13 @@ pub fn remove_recent_repo(workdir: &Path) -> io::Result<()> {
 }
 
 pub fn remove_recent_repo_to_path(workdir: &Path, session_file_path: &Path) -> io::Result<()> {
-    with_session_file_persist_lock(|| {
-        let mut file = load_file(session_file_path).unwrap_or_default();
-        file.version = CURRENT_SESSION_FILE_VERSION;
-
+    update_session_file(session_file_path, |file| {
         // Must key exactly as `persist_recent_repo_to_path` does, or removal
         // silently misses entries written in the other form.
         let workdir_key = recent_repo_storage_key(workdir);
         let raw_key = path_storage_key(workdir);
         let Some(recent_repos) = file.recent_repos.as_mut() else {
-            return Ok(());
+            return SessionUpdate::Unchanged;
         };
         // `raw_key` also clears entries left by older builds, which stored the
         // path uncanonicalized. Entries are normalized on their own side as
@@ -369,7 +361,7 @@ pub fn remove_recent_repo_to_path(workdir: &Path, session_file_path: &Path) -> i
             normalized != workdir_key && normalized != raw_key
         });
 
-        persist_to_path(session_file_path, &file)
+        SessionUpdate::Write
     })
 }
 
@@ -385,10 +377,7 @@ pub fn persist_pinned_repo(workdir: &Path) -> io::Result<()> {
 /// only when the user unpins them. Pinning something already pinned therefore
 /// leaves it where it is rather than moving it to the end.
 pub fn persist_pinned_repo_to_path(workdir: &Path, session_file_path: &Path) -> io::Result<()> {
-    with_session_file_persist_lock(|| {
-        let mut file = load_file(session_file_path).unwrap_or_default();
-        file.version = CURRENT_SESSION_FILE_VERSION;
-
+    update_session_file(session_file_path, |file| {
         let workdir_key = path_storage_key(workdir);
         let pinned_repos = file.pinned_repos.get_or_insert_with(Vec::new);
         pinned_repos.retain(|path| !path.trim().is_empty());
@@ -396,7 +385,7 @@ pub fn persist_pinned_repo_to_path(workdir: &Path, session_file_path: &Path) -> 
             pinned_repos.push(workdir_key);
         }
 
-        persist_to_path(session_file_path, &file)
+        SessionUpdate::Write
     })
 }
 
@@ -408,16 +397,13 @@ pub fn remove_pinned_repo(workdir: &Path) -> io::Result<()> {
 }
 
 pub fn remove_pinned_repo_to_path(workdir: &Path, session_file_path: &Path) -> io::Result<()> {
-    with_session_file_persist_lock(|| {
-        let mut file = load_file(session_file_path).unwrap_or_default();
-        file.version = CURRENT_SESSION_FILE_VERSION;
-
+    update_session_file(session_file_path, |file| {
         let workdir_key = path_storage_key(workdir);
         let Some(pinned_repos) = file.pinned_repos.as_mut() else {
-            return Ok(());
+            return SessionUpdate::Unchanged;
         };
         pinned_repos.retain(|path| path.trim() != workdir_key);
 
-        persist_to_path(session_file_path, &file)
+        SessionUpdate::Write
     })
 }

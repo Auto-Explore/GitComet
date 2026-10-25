@@ -1,6 +1,6 @@
 use super::*;
-use crate::kit::interaction::{self as controls, ControlInteractionExt as _};
-use crate::view::terminal_alacritty::{terminal_default_background, terminal_default_foreground};
+use crate::kit::interaction as controls;
+use gitcomet_ui_terminal::{terminal_default_background, terminal_default_foreground};
 
 #[derive(Clone, Copy, PartialEq)]
 pub(super) enum TextSection {
@@ -88,7 +88,6 @@ fn text(
         });
     field.seen = true;
     field.input.update(cx, |input, cx| {
-        input.set_theme(this.theme, cx);
         if section == TextSection::Output {
             input.set_vertical_scroll_handle(Some(this.hook_activity_output_scroll.clone()));
             input.set_text_preserving_selection_on_append(value, cx);
@@ -397,7 +396,7 @@ fn history_row(
         )
 }
 
-fn visible_scroll_surface(
+pub(super) fn visible_scroll_surface(
     theme: AppTheme,
     container_id: &'static str,
     surface_id: &'static str,
@@ -662,7 +661,7 @@ fn operation_detail(
         .child(svg_icon(
             "icons/terminal.svg",
             theme.colors.foreground.secondary,
-            px(12.0),
+            ui_scale.px(12.0),
         ))
         .child(
             div()
@@ -831,6 +830,15 @@ fn operation_detail(
                                 )),
                         ),
                 )
+                .when_some(operation.transfer.as_ref(), |header, transfer| {
+                    header.child(text(
+                        this,
+                        format!("detail_{}_transfer", operation_id.0),
+                        transfer.summary(),
+                        TextSection::Detail,
+                        cx,
+                    ))
+                })
                 .when_some(operation.context.clone(), |header, context| {
                     header.child(
                         div()
@@ -876,7 +884,7 @@ pub(super) fn panel(
     }
     let ui_scale = popover_ui_scale(cx);
     let scaled_px = crate::ui_scale::scaler(ui_scale);
-    let window_size = window.window_bounds().get_bounds().size;
+    let window_size = crate::kit::window_chrome::window_surface_bounds(window).size;
     let margin = scaled_px(DIALOG_MARGIN_PX);
     let available = gpui::size(
         (window_size.width - margin * 2.0).max(px(0.0)),
@@ -908,7 +916,7 @@ pub(super) fn panel(
                 repo.feedback
                     .hook_activity
                     .iter()
-                    .filter(|operation| operation.has_hooks())
+                    .filter(|operation| operation.is_reportable())
                     .rev()
                     .cloned()
                     .collect::<Vec<_>>(),
@@ -1026,7 +1034,7 @@ pub(super) fn panel(
             .child(text(
                 this,
                 "empty",
-                "No Git hooks have run in this repository during this session.",
+                "No Git hooks or LFS transfers have run in this repository during this session.",
                 TextSection::Detail,
                 cx,
             ))

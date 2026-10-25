@@ -23,52 +23,46 @@ pub(crate) fn bench_history_cache_build(c: &mut Criterion) {
     group.warm_up_time(Duration::from_secs(1));
 
     group.bench_function(BenchmarkId::from_parameter("balanced"), |b| {
-        b.iter_custom(|iters| {
-            let start = Instant::now();
-            for _ in 0..iters {
-                let _ = balanced.run();
-            }
-            let (_, metrics) = measure_sidecar_allocations(|| balanced.run());
-            emit_history_cache_build_sidecar("balanced", &metrics);
-            start.elapsed()
-        });
+        b.iter(|| balanced.run().0);
     });
+    if let Some((_, metrics)) =
+        measure_sidecar_allocations_if_selected("history_cache_build/balanced", || balanced.run())
+    {
+        emit_history_cache_build_sidecar("balanced", &metrics);
+    }
 
     group.bench_function(BenchmarkId::from_parameter("merge_dense"), |b| {
-        b.iter_custom(|iters| {
-            let start = Instant::now();
-            for _ in 0..iters {
-                let _ = merge_dense.run();
-            }
-            let (_, metrics) = measure_sidecar_allocations(|| merge_dense.run());
-            emit_history_cache_build_sidecar("merge_dense", &metrics);
-            start.elapsed()
-        });
+        b.iter(|| merge_dense.run().0);
     });
+    if let Some((_, metrics)) =
+        measure_sidecar_allocations_if_selected("history_cache_build/merge_dense", || {
+            merge_dense.run()
+        })
+    {
+        emit_history_cache_build_sidecar("merge_dense", &metrics);
+    }
 
     group.bench_function(BenchmarkId::from_parameter("decorated_refs_heavy"), |b| {
-        b.iter_custom(|iters| {
-            let start = Instant::now();
-            for _ in 0..iters {
-                let _ = decorated_refs_heavy.run();
-            }
-            let (_, metrics) = measure_sidecar_allocations(|| decorated_refs_heavy.run());
-            emit_history_cache_build_sidecar("decorated_refs_heavy", &metrics);
-            start.elapsed()
-        });
+        b.iter(|| decorated_refs_heavy.run().0);
     });
+    if let Some((_, metrics)) =
+        measure_sidecar_allocations_if_selected("history_cache_build/decorated_refs_heavy", || {
+            decorated_refs_heavy.run()
+        })
+    {
+        emit_history_cache_build_sidecar("decorated_refs_heavy", &metrics);
+    }
 
     group.bench_function(BenchmarkId::from_parameter("stash_heavy"), |b| {
-        b.iter_custom(|iters| {
-            let start = Instant::now();
-            for _ in 0..iters {
-                let _ = stash_heavy.run();
-            }
-            let (_, metrics) = measure_sidecar_allocations(|| stash_heavy.run());
-            emit_history_cache_build_sidecar("stash_heavy", &metrics);
-            start.elapsed()
-        });
+        b.iter(|| stash_heavy.run().0);
     });
+    if let Some((_, metrics)) =
+        measure_sidecar_allocations_if_selected("history_cache_build/stash_heavy", || {
+            stash_heavy.run()
+        })
+    {
+        emit_history_cache_build_sidecar("stash_heavy", &metrics);
+    }
 
     group.finish();
 }

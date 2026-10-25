@@ -131,7 +131,7 @@ fn context_menu_default_actions_do_not_render_enter_shortcuts(cx: &mut gpui::Tes
             })
         })
         .expect("expected commit context menu model");
-    assert_first_entry_has_no_enter_shortcut(&commit_model, "Open diff");
+    assert_first_entry_has_no_enter_shortcut(&commit_model, "Start file browsing");
 
     let commit_file_model = cx
         .update(|_window, app| {
@@ -149,7 +149,7 @@ fn context_menu_default_actions_do_not_render_enter_shortcuts(cx: &mut gpui::Tes
             })
         })
         .expect("expected commit file context menu model");
-    assert_first_entry_has_no_enter_shortcut(&commit_file_model, "Open diff");
+    assert_first_entry_has_no_enter_shortcut(&commit_file_model, "Open file");
 
     let status_file_model = cx
         .update(|_window, app| {
@@ -167,5 +167,5 @@ fn context_menu_default_actions_do_not_render_enter_shortcuts(cx: &mut gpui::Tes
             })
         })
         .expect("expected status file context menu model");
-    assert_first_entry_has_no_enter_shortcut(&status_file_model, "Open diff");
+    assert_first_entry_has_no_enter_shortcut(&status_file_model, "Open file");
 }

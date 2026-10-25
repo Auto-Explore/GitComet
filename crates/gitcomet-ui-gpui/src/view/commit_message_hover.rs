@@ -110,6 +110,13 @@ pub(in crate::view) struct CommitMessageHoverHost {
 }
 
 impl CommitMessageHoverHost {
+    /// Read-only completion witness for the opt-in live application driver.
+    pub(in crate::view) fn scenario_contains_source(&self, position: Point<Pixels>) -> bool {
+        self.state
+            .as_ref()
+            .is_some_and(|state| state.source_bounds.contains(&position))
+    }
+
     pub(in crate::view) fn new(
         theme: AppTheme,
         store: Arc<AppStore>,
@@ -416,7 +423,8 @@ impl Render for CommitMessageHoverHost {
         // unwrap and no panic path through `render`.
         let body = self.body.get_or_insert_with(|| {
             let message = hover_card_message(&state, loaded.as_ref());
-            let highlights = commit_message_highlights(message.as_ref(), theme);
+            let highlights =
+                commit_message_highlights(message.as_ref(), theme, state.commit_id.as_ref().len());
             CommitMessageHoverBody {
                 commit_id: state.commit_id.clone(),
                 loaded: loaded.is_some(),
@@ -488,7 +496,6 @@ impl Render for CommitMessageHoverHost {
                     .border_1()
                     .border_color(theme.colors.stroke.default)
                     .rounded(px(theme.radii.popover))
-                    .shadow(crate::theme::shadow_popover(theme))
                     .text_size(theme.ui_text(12.0))
                     .text_color(theme.colors.foreground.primary)
                     .child(message_text)
@@ -543,7 +550,8 @@ mod tests {
         let (store, _events) = AppStore::new_test(Arc::new(NoopBackend));
         let store = Arc::new(store);
         cx.update(|cx| {
-            let ui_model = cx.new(|_cx| AppUiModel::new(store.snapshot()));
+            let ui_model =
+                cx.new(|cx| AppUiModel::new(store.snapshot(), Arc::downgrade(&store), cx));
             cx.new(|_cx| CommitMessageHoverHost::new(AppTheme::gitcomet_dark(), store, ui_model))
         })
     }

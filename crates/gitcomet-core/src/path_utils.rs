@@ -51,6 +51,47 @@ pub fn is_git_metadata_component(component: &std::ffi::OsStr) -> bool {
     bytes.eq_ignore_ascii_case(b".git") || (cfg!(windows) && bytes.eq_ignore_ascii_case(b"git~1"))
 }
 
+/// Name prefix of the filesystem service's staging and undo areas.
+pub const OPERATION_AREA_PREFIX: &str = ".gitcomet-operation-";
+/// Name prefix of an editor save's temporary file beside its target.
+pub const SAVE_STAGING_PREFIX: &str = ".gitcomet-save-";
+
+/// A staging entry the filesystem service owns; never user content.
+pub fn is_service_owned_name(name: &[u8]) -> bool {
+    name.starts_with(OPERATION_AREA_PREFIX.as_bytes())
+        || name.starts_with(SAVE_STAGING_PREFIX.as_bytes())
+}
+
+pub fn has_service_owned_component(path: &Path) -> bool {
+    path.components()
+        .any(|component| is_service_owned_name(component.as_os_str().as_encoded_bytes()))
+}
+
+/// The Git directory of `workdir`: its `.git` directory, or the directory a
+/// `gitdir:` file points at (linked worktrees, submodules).
+pub fn resolved_git_dir(workdir: &Path) -> Option<PathBuf> {
+    let dot_git = workdir.join(".git");
+    let metadata = std::fs::metadata(&dot_git).ok()?;
+    if metadata.is_dir() {
+        return Some(dot_git);
+    }
+    if !metadata.is_file() {
+        return None;
+    }
+    let contents = std::fs::read_to_string(&dot_git).ok()?;
+    let target = contents
+        .lines()
+        .next()?
+        .trim()
+        .strip_prefix("gitdir:")?
+        .trim();
+    if target.is_empty() {
+        return None;
+    }
+    let target = canonicalize_or_original(workdir.join(target));
+    target.is_dir().then_some(target)
+}
+
 /// When a workdir path ends with ".git" and contains a `.git` entry (e.g.
 /// `/home/user/myrepo.git`), gix::open may misinterpret the workdir as the git
 /// directory itself.  This helper returns the `.git` entry — whether a directory
@@ -138,10 +179,67 @@ pub fn symlink_free_write_target(workdir: &Path, relative: &Path) -> io::Result<
 
 #[cfg(test)]
 mod tests {
-    use super::{git_dir_for_workdir, symlink_free_write_target, validated_repo_relative_path};
+    use super::{
+        canonicalize_or_original, git_dir_for_workdir, has_service_owned_component,
+        is_service_owned_name, resolved_git_dir, symlink_free_write_target,
+        validated_repo_relative_path,
+    };
     use std::fs;
     use std::path::Path;
     use tempfile::tempdir;
+
+    #[test]
+    fn service_owned_names_cover_operation_areas_and_save_staging_only() {
+        assert!(is_service_owned_name(b".gitcomet-operation-a1b2"));
+        assert!(is_service_owned_name(b".gitcomet-save-x"));
+        for name in [&b"gitcomet-operation-x"[..], b".gitcomet", b"notes.md", b""] {
+            assert!(!is_service_owned_name(name), "{name:?}");
+        }
+        assert!(has_service_owned_component(Path::new(
+            "src/.gitcomet-operation-x/item"
+        )));
+        assert!(!has_service_owned_component(Path::new(
+            "src/gitcomet-operation-x/item"
+        )));
+    }
+
+    #[test]
+    fn resolved_git_dir_follows_directories_and_gitdir_files() {
+        let dir = tempdir().unwrap();
+        // Without the `\\?\` prefix `fs::canonicalize` adds on Windows.
+        let root = canonicalize_or_original(dir.path().to_path_buf());
+        let plain = root.join("plain");
+        fs::create_dir_all(plain.join(".git")).unwrap();
+        assert_eq!(resolved_git_dir(&plain), Some(plain.join(".git")));
+
+        let target = root.join("gitdirs/linked");
+        fs::create_dir_all(&target).unwrap();
+        let absolute = root.join("absolute");
+        fs::create_dir(&absolute).unwrap();
+        fs::write(
+            absolute.join(".git"),
+            format!("gitdir: {}\n", target.display()),
+        )
+        .unwrap();
+        assert_eq!(resolved_git_dir(&absolute), Some(target.clone()));
+
+        let relative = root.join("relative");
+        fs::create_dir(&relative).unwrap();
+        fs::write(relative.join(".git"), "gitdir: ../gitdirs/linked\n").unwrap();
+        assert_eq!(resolved_git_dir(&relative), Some(target));
+
+        for (name, contents) in [
+            ("empty", "gitdir:   \n"),
+            ("dangling", "gitdir: ../missing\n"),
+            ("garbage", "not a pointer\n"),
+        ] {
+            let workdir = root.join(name);
+            fs::create_dir(&workdir).unwrap();
+            fs::write(workdir.join(".git"), contents).unwrap();
+            assert_eq!(resolved_git_dir(&workdir), None, "{name}");
+        }
+        assert_eq!(resolved_git_dir(&root.join("missing")), None);
+    }
 
     #[test]
     fn repository_relative_paths_reject_escape_and_git_metadata() {

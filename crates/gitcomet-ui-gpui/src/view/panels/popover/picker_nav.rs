@@ -20,23 +20,8 @@ impl<T: Clone + 'static> PickerNavRows for Vec<T> {
     }
 }
 
-pub(super) struct IndexedNavRows<T> {
-    pub len: usize,
-    pub resolve: Box<dyn Fn(usize) -> Option<T>>,
-}
-
-impl<T: Clone + 'static> PickerNavRows for IndexedNavRows<T> {
-    type Item = T;
-    fn len(&self) -> usize {
-        self.len
-    }
-    fn get(&self, index: usize) -> Option<T> {
-        (self.resolve)(index)
-    }
-}
-
-#[derive(Default)]
-pub(super) struct PickerNavKeys {
+#[derive(Default, PartialEq)]
+pub(in crate::view) struct PickerNavKeys {
     pub escape: bool,
     pub arrow_up: bool,
     pub arrow_down: bool,
@@ -50,7 +35,7 @@ pub(super) struct PickerNavKeys {
 }
 
 impl PickerNavKeys {
-    pub(super) fn take(input: &mut components::TextInput) -> Self {
+    pub(in crate::view) fn take(input: &mut components::TextInput) -> Self {
         Self {
             escape: input.take_escape_pressed(),
             arrow_up: input.take_arrow_up_pressed(),
@@ -66,7 +51,7 @@ impl PickerNavKeys {
     }
 }
 
-pub(super) enum PickerNavOutcome {
+pub(in crate::view) enum PickerNavOutcome {
     Escape,
     Navigated,
     Enter,
@@ -79,7 +64,7 @@ pub(super) enum PickerNavOutcome {
 /// Input notifications can coalesce, leaving navigation and Enter set at the
 /// same time. In that case the selection moves first and Enter wins as the
 /// outcome, so the caller submits the row the user just moved to.
-pub(super) fn handle_picker_nav(
+pub(in crate::view) fn handle_picker_nav(
     keys: &PickerNavKeys,
     selected: &mut Option<usize>,
     count: usize,

@@ -2,6 +2,9 @@ use std::ptr::null;
 use std::sync::OnceLock;
 use std::time::Duration;
 
+mod process;
+pub use process::terminate_process_tree;
+
 use windows_sys::Win32::Foundation::{
     CloseHandle, FALSE, FILETIME, HANDLE, HWND, LPARAM, POINT, TRUE, WPARAM,
 };

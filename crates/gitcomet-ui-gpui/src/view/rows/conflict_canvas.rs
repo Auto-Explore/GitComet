@@ -8,8 +8,8 @@ use super::canvas_text::{
 use super::diff_text::{whitespace_visible_line_styled_text_for_raw, whitespace_visible_line_text};
 use super::*;
 use gpui::{
-    App, Bounds, ContentMask, DispatchPhase, Hitbox, HitboxBehavior, Pixels, Styled, TextStyle,
-    Window, fill, point, px, size,
+    App, Bounds, ContentMask, DispatchPhase, Hitbox, HitboxBehavior, PaintQuad, Pixels, Styled,
+    TextStyle, Window, point, px, size,
 };
 use palette::IntoColor;
 use rustc_hash::FxHasher;
@@ -35,25 +35,27 @@ pub(super) struct ConflictChunkContext {
 }
 
 fn conflict_canvas_click_target(
-    view: &Entity<MainPaneView>,
-    action: &str,
+    view: &Entity<DiffRenderer>,
+    action: impl std::hash::Hash,
     cx: &App,
 ) -> gpui::ElementId {
     let state = &view.read(cx).conflict_resolver;
-    (
-        gpui::ElementId::View(view.entity_id()),
-        SharedString::from(format!(
-            "conflict:{:?}:{:?}:{:?}:{action}",
-            state.repo_id, state.path, state.source_hash,
-        )),
+    crate::kit::click::canvas_target(
+        "conflict-click",
+        (
+            view.entity_id(),
+            state.repo_id,
+            &state.path,
+            state.source_hash,
+            action,
+        ),
     )
-        .into()
 }
 
 impl ConflictChunkContext {
     fn install_menu(
         &self,
-        view: &Entity<MainPaneView>,
+        view: &Entity<DiffRenderer>,
         target: gpui::ElementId,
         hitbox: &Hitbox,
         invoker: SharedString,
@@ -64,7 +66,7 @@ impl ConflictChunkContext {
         let chunk = self.clone();
         crate::kit::click::on_canvas_click(
             window,
-            (target, "menu").into(),
+            crate::kit::click::canvas_target("conflict-menu", &target),
             hitbox,
             gpui::MouseButton::Right,
             true,
@@ -105,8 +107,9 @@ pub(super) struct AlignmentMarkContext {
 
 #[allow(clippy::too_many_arguments)]
 pub(super) fn split_conflict_row_canvas(
+    tab_width: usize,
     theme: AppTheme,
-    view: Entity<MainPaneView>,
+    view: Entity<DiffRenderer>,
     visible_row_ix: usize,
     row_ix: usize,
     min_width: Pixels,
@@ -127,10 +130,18 @@ pub(super) fn split_conflict_row_canvas(
     chunk_context: Option<ConflictChunkContext>,
     ui_scale_percent: u32,
 ) -> AnyElement {
-    let left_prepared =
-        prepare_conflict_text_for_canvas(left_text, left_styled, reveal_whitespace_chars);
-    let right_prepared =
-        prepare_conflict_text_for_canvas(right_text, right_styled, reveal_whitespace_chars);
+    let left_prepared = prepare_conflict_text_for_canvas(
+        tab_width,
+        left_text,
+        left_styled,
+        reveal_whitespace_chars,
+    );
+    let right_prepared = prepare_conflict_text_for_canvas(
+        tab_width,
+        right_text,
+        right_styled,
+        reveal_whitespace_chars,
+    );
 
     keyed_canvas(
         ("conflict_resolver_split_row_canvas", visible_row_ix),
@@ -165,23 +176,24 @@ pub(super) fn split_conflict_row_canvas(
             let right_gutter =
                 sticky_gutter_bounds(prepaint.right_col, clip_bounds, pad, gap, line_no_w);
 
-            window.paint_quad(fill(prepaint.left_col, left_bg));
-            window.paint_quad(fill(prepaint.right_col, right_bg));
+            window.paint_quad(PaintQuad::new(prepaint.left_col).background(left_bg));
+            window.paint_quad(PaintQuad::new(prepaint.right_col).background(right_bg));
 
             let divider_x = prepaint.handle_bounds.left()
                 + ((prepaint.handle_bounds.size.width - px(1.0)).max(px(0.0)) * 0.5).floor();
-            window.paint_quad(fill(
-                Bounds::new(
+            window.paint_quad(
+                PaintQuad::new(Bounds::new(
                     point(divider_x, prepaint.handle_bounds.top()),
                     size(px(1.0), prepaint.handle_bounds.size.height),
-                ),
-                theme.colors.stroke.default,
-            ));
+                ))
+                .background(theme.colors.stroke.default),
+            );
 
             if show_line_numbers {
                 window.with_content_mask(
                     Some(ContentMask {
                         bounds: left_gutter,
+                        ..Default::default()
                     }),
                     |window| {
                         paint_gutter_text(
@@ -199,6 +211,7 @@ pub(super) fn split_conflict_row_canvas(
                 window.with_content_mask(
                     Some(ContentMask {
                         bounds: right_gutter,
+                        ..Default::default()
                     }),
                     |window| {
                         paint_gutter_text(
@@ -252,6 +265,7 @@ pub(super) fn split_conflict_row_canvas(
             window.with_content_mask(
                 Some(ContentMask {
                     bounds: left_text_clip,
+                    ..Default::default()
                 }),
                 |window| {
                     paint_conflict_text(
@@ -268,6 +282,7 @@ pub(super) fn split_conflict_row_canvas(
             window.with_content_mask(
                 Some(ContentMask {
                     bounds: right_text_clip,
+                    ..Default::default()
                 }),
                 |window| {
                     paint_conflict_text(
@@ -292,7 +307,16 @@ pub(super) fn split_conflict_row_canvas(
                         chunk_context.conflict_ix, row_ix
                     )
                     .into();
-                    let target = conflict_canvas_click_target(&view, &invoker, cx);
+                    let target = conflict_canvas_click_target(
+                        &view,
+                        (
+                            "two-way-split-chunk",
+                            side,
+                            chunk_context.conflict_ix,
+                            row_ix,
+                        ),
+                        cx,
+                    );
                     let select_view = view.clone();
                     let conflict_ix = chunk_context.conflict_ix;
                     crate::kit::click::on_canvas_click(
@@ -323,8 +347,9 @@ pub(super) fn split_conflict_row_canvas(
 /// Canvas renderer for a single conflict column (used when per-column lists are active).
 #[allow(clippy::too_many_arguments)]
 pub(super) fn single_column_conflict_canvas(
+    tab_width: usize,
     theme: AppTheme,
-    view: Entity<MainPaneView>,
+    view: Entity<DiffRenderer>,
     id_prefix: &'static str,
     visible_row_ix: usize,
     row_ix: usize,
@@ -352,7 +377,8 @@ pub(super) fn single_column_conflict_canvas(
     hitbox_column: Option<ThreeWayColumn>,
     ui_scale_percent: u32,
 ) -> AnyElement {
-    let prepared = prepare_conflict_text_for_canvas(text, styled, reveal_whitespace_chars);
+    let prepared =
+        prepare_conflict_text_for_canvas(tab_width, text, styled, reveal_whitespace_chars);
     let row_selected = row_selection == Some(true);
     let alignment_marked = alignment_mark.is_some_and(|mark| mark.marked);
 
@@ -371,30 +397,24 @@ pub(super) fn single_column_conflict_canvas(
             let clip_bounds = window.content_mask().bounds;
             let gutter_bounds = sticky_gutter_bounds(bounds, clip_bounds, pad, gap, line_no_w);
 
-            window.paint_quad(fill(bounds, bg));
+            window.paint_quad(PaintQuad::new(bounds).background(bg));
 
             // section 30 split: highlight rows in the drag selection.
             if row_selected {
-                window.paint_quad(fill(
-                    bounds,
-                    with_alpha(
-                        theme.colors.accent.foreground,
-                        if theme.is_dark { 0.20 } else { 0.14 },
-                    ),
-                ));
+                window.paint_quad(PaintQuad::new(bounds).background(with_alpha(
+                    theme.colors.accent.foreground,
+                    if theme.is_dark { 0.20 } else { 0.14 },
+                )));
             }
 
             // kdiff3 manual diff help: marked lines use the warning hue so they
             // stay distinguishable from an accent-tinted split selection, which
             // can be active in the same columns at the same time.
             if alignment_marked {
-                window.paint_quad(fill(
-                    bounds,
-                    with_alpha(
-                        theme.colors.status.warning.foreground,
-                        if theme.is_dark { 0.22 } else { 0.16 },
-                    ),
-                ));
+                window.paint_quad(PaintQuad::new(bounds).background(with_alpha(
+                    theme.colors.status.warning.foreground,
+                    if theme.is_dark { 0.22 } else { 0.16 },
+                )));
             }
 
             // section 30: mark the active conflict's rows with an accent bar so a
@@ -414,13 +434,14 @@ pub(super) fn single_column_conflict_canvas(
                         bounds.size.height,
                     ),
                 );
-                window.paint_quad(fill(bar, theme.colors.accent.foreground));
+                window.paint_quad(PaintQuad::new(bar).background(theme.colors.accent.foreground));
             }
 
             if show_line_numbers {
                 window.with_content_mask(
                     Some(ContentMask {
                         bounds: gutter_bounds,
+                        ..Default::default()
                     }),
                     |window| {
                         paint_gutter_text(
@@ -454,6 +475,7 @@ pub(super) fn single_column_conflict_canvas(
             window.with_content_mask(
                 Some(ContentMask {
                     bounds: text_clip_bounds,
+                    ..Default::default()
                 }),
                 |window| {
                     if let Some(layout) =
@@ -476,10 +498,7 @@ pub(super) fn single_column_conflict_canvas(
 
             let target = conflict_canvas_click_target(
                 &view,
-                &format!(
-                    "{id_prefix}:{visible_row_ix}:{row_ix}:{}",
-                    prepared.text_hash
-                ),
+                (id_prefix, visible_row_ix, row_ix, prepared.text_hash),
                 cx,
             );
             let conflict_ix = chunk_context.as_ref().map(|chunk| chunk.conflict_ix);
@@ -602,6 +621,7 @@ struct PreparedConflictText {
 }
 
 fn prepare_conflict_text_for_canvas(
+    tab_width: usize,
     text: SharedString,
     styled: Option<&CachedDiffStyledText>,
     reveal_whitespace_chars: bool,
@@ -641,7 +661,7 @@ fn prepare_conflict_text_for_canvas(
     }
 
     if reveal_whitespace_chars {
-        let visible = whitespace_visible_line_styled_text_for_raw(styled, text.as_ref());
+        let visible = whitespace_visible_line_styled_text_for_raw(tab_width, styled, text.as_ref());
         return PreparedConflictText {
             text: visible.text,
             highlights: visible.highlights,
@@ -890,7 +910,7 @@ fn ensure_layout_cached(
         let run = base_style.to_run(prepared.text.len());
         window
             .text_system()
-            .shape_line(prepared.text.clone(), metrics.font_size, &[run], None)
+            .shape_line(prepared.text.clone(), metrics.font_size, &[run])
     } else {
         let runs = compute_runs(
             prepared.text.as_ref(),
@@ -899,7 +919,7 @@ fn ensure_layout_cached(
         );
         window
             .text_system()
-            .shape_line(prepared.text.clone(), metrics.font_size, &runs, None)
+            .shape_line(prepared.text.clone(), metrics.font_size, &runs)
     };
 
     CONFLICT_TEXT_LAYOUT_CACHE.with(|cache| {
@@ -934,7 +954,9 @@ mod tests {
 
     #[test]
     fn prepare_text_cell_applies_whitespace_when_no_styled_text() {
-        let prepared = prepare_conflict_text_for_canvas("a b\t".into(), None, true);
+        let tab_width = 4;
+
+        let prepared = prepare_conflict_text_for_canvas(tab_width, "a b\t".into(), None, true);
         assert_eq!(prepared.text.as_ref(), "a·b→↵");
         assert!(prepared.highlights.is_empty());
     }
@@ -1006,6 +1028,8 @@ mod tests {
 
     #[test]
     fn prepare_text_cell_remaps_highlighted_styled_text_for_whitespace() {
+        let tab_width = 4;
+
         let style = gpui::HighlightStyle::default();
         let styled = CachedDiffStyledText {
             text: "a b".into(),
@@ -1014,7 +1038,8 @@ mod tests {
             text_hash: 7,
         };
 
-        let prepared = prepare_conflict_text_for_canvas("a b".into(), Some(&styled), true);
+        let prepared =
+            prepare_conflict_text_for_canvas(tab_width, "a b".into(), Some(&styled), true);
         assert_eq!(prepared.text.as_ref(), "a·b↵");
         assert_eq!(prepared.highlights.len(), 1);
         assert_eq!(prepared.highlights[0].0, 1..4);
@@ -1024,6 +1049,8 @@ mod tests {
 
     #[test]
     fn prepare_text_cell_applies_whitespace_for_unhighlighted_styled_text() {
+        let tab_width = 4;
+
         let styled = CachedDiffStyledText {
             text: "a b\t".into(),
             highlights: empty_highlights(),
@@ -1031,7 +1058,8 @@ mod tests {
             text_hash: 1,
         };
 
-        let prepared = prepare_conflict_text_for_canvas("a b\t".into(), Some(&styled), true);
+        let prepared =
+            prepare_conflict_text_for_canvas(tab_width, "a b\t".into(), Some(&styled), true);
         assert_eq!(prepared.text.as_ref(), "a·b→↵");
         assert!(prepared.highlights.is_empty());
         assert_eq!(prepared.highlights_hash, 0);

@@ -588,7 +588,10 @@ impl TextInputPrepaintWindowedFixture {
         // the document keeps its shape over a long benchmark run.
         match self.typing_line_original.take() {
             Some((previous_ix, original)) if previous_ix == line_ix => {
-                if self.keystrokes % TEXT_INPUT_STEADY_TYPING_BURST == 0 {
+                if self
+                    .keystrokes
+                    .is_multiple_of(TEXT_INPUT_STEADY_TYPING_BURST)
+                {
                     self.lines[previous_ix].clone_from(&original);
                 }
                 self.typing_line_original = Some((previous_ix, original));

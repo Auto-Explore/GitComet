@@ -1,0 +1,276 @@
+#[allow(unused_imports)]
+use super::*;
+
+#[test]
+fn notify_fingerprint_tracks_line_stats_for_the_open_diff_area() {
+    let repo_id = RepoId(1);
+    let mut state = AppState::test_default();
+    state.active_repo = Some(repo_id);
+    state.repos.push(RepoState::new_opening(
+        repo_id,
+        gitcomet_core::domain::RepoSpec {
+            workdir: "/tmp/repo".into(),
+        },
+    ));
+
+    for area in [DiffArea::Staged, DiffArea::Unstaged] {
+        state.repos[0].diff_state.diff_target = Some(DiffTarget::working_tree("a.rs".into(), area));
+        let before =
+            DiffRenderer::notify_fingerprint_for(&DiffPaneInput::selected(Arc::new(state.clone())));
+        match area {
+            DiffArea::Staged => state.repos[0].staged_line_stats_rev += 1,
+            DiffArea::Unstaged => state.repos[0].unstaged_line_stats_rev += 1,
+        }
+        let after =
+            DiffRenderer::notify_fingerprint_for(&DiffPaneInput::selected(Arc::new(state.clone())));
+        assert_ne!(before, after, "{area:?} counts can change file neighbors");
+
+        match area {
+            DiffArea::Staged => state.repos[0].unstaged_line_stats_rev += 1,
+            DiffArea::Unstaged => state.repos[0].staged_line_stats_rev += 1,
+        }
+        assert_eq!(
+            after,
+            DiffRenderer::notify_fingerprint_for(&DiffPaneInput::selected(Arc::new(state.clone())))
+        );
+    }
+}
+
+#[test]
+fn notify_fingerprint_tracks_disk_revs_only_for_working_tree_targets() {
+    let repo_id = RepoId(1);
+    let mut state = AppState::test_default();
+    state.active_repo = Some(repo_id);
+    state.repos.push(RepoState::new_opening(
+        repo_id,
+        gitcomet_core::domain::RepoSpec {
+            workdir: "/tmp/repo".into(),
+        },
+    ));
+
+    state.repos[0].diff_state.diff_target =
+        Some(DiffTarget::working_tree("a.rs".into(), DiffArea::Unstaged));
+    let before =
+        DiffRenderer::notify_fingerprint_for(&DiffPaneInput::selected(Arc::new(state.clone())));
+    state.repos[0].worktree_change_rev += 1;
+    let after_worktree =
+        DiffRenderer::notify_fingerprint_for(&DiffPaneInput::selected(Arc::new(state.clone())));
+    assert_ne!(
+        before, after_worktree,
+        "a worktree change must reach the pane"
+    );
+    state.repos[0].local_worktree_write_rev += 1;
+    let after_local =
+        DiffRenderer::notify_fingerprint_for(&DiffPaneInput::selected(Arc::new(state.clone())));
+    assert_ne!(
+        after_worktree, after_local,
+        "a finished git command must reach the pane"
+    );
+
+    state.repos[0].diff_state.diff_target = Some(DiffTarget::commit(
+        gitcomet_core::domain::CommitId(std::sync::Arc::from("abc")),
+        "a.rs".into(),
+    ));
+    let commit_before =
+        DiffRenderer::notify_fingerprint_for(&DiffPaneInput::selected(Arc::new(state.clone())));
+    state.repos[0].worktree_change_rev += 1;
+    state.repos[0].local_worktree_write_rev += 1;
+    assert_eq!(
+        commit_before,
+        DiffRenderer::notify_fingerprint_for(&DiffPaneInput::selected(Arc::new(state.clone()))),
+        "a commit's file does not live on disk; nothing to check"
+    );
+}
+
+#[test]
+fn should_request_blame_retries_failure_only_when_forced() {
+    use gitcomet_state::model::Loadable;
+    // A new/changed target always loads, regardless of state or force.
+    assert!(should_request_blame(
+        false,
+        &Loadable::<()>::Ready(()),
+        false
+    ));
+    assert!(should_request_blame(
+        false,
+        &Loadable::<()>::Error("x".into()),
+        false
+    ));
+    // Same target, healthy or in flight: never reload (even when forced), so a
+    // toggle-on doesn't re-blame an already-loaded file.
+    assert!(!should_request_blame(
+        true,
+        &Loadable::<()>::Ready(()),
+        true
+    ));
+    assert!(!should_request_blame(true, &Loadable::<()>::Loading, true));
+    // Same target, not yet loaded: load.
+    assert!(should_request_blame(
+        true,
+        &Loadable::<()>::NotLoaded,
+        false
+    ));
+    // Same target, failed: never retry from the per-frame Render path
+    // (force=false), but retry on an explicit toggle (force=true).
+    assert!(!should_request_blame(
+        true,
+        &Loadable::<()>::Error("e".into()),
+        false
+    ));
+    assert!(should_request_blame(
+        true,
+        &Loadable::<()>::Error("e".into()),
+        true
+    ));
+}
+
+#[test]
+fn clamp_raw_scroll_y_uses_gpui_negative_offset_range() {
+    assert_eq!(clamp_raw_scroll_y(px(-180.0), px(120.0)), px(-120.0));
+    assert_eq!(clamp_raw_scroll_y(px(180.0), px(120.0)), px(0.0));
+    assert_eq!(clamp_raw_scroll_y(px(-40.0), px(120.0)), px(-40.0));
+}
+
+#[test]
+fn synced_scroll_offsets_keep_longer_pane_as_master_after_shorter_clamps() {
+    let targets = compute_synced_scroll_offsets(
+        [px(-100.0), px(-500.0)],
+        [px(100.0), px(500.0)],
+        [px(-90.0), px(-90.0)],
+        1,
+    );
+
+    assert_eq!(targets, [px(-100.0), px(-500.0)]);
+}
+
+#[test]
+fn synced_scroll_offsets_follow_shorter_pane_when_user_scrolled_it() {
+    let targets = compute_synced_scroll_offsets(
+        [px(-100.0), px(-320.0)],
+        [px(100.0), px(500.0)],
+        [px(-80.0), px(-320.0)],
+        1,
+    );
+
+    assert_eq!(targets, [px(-100.0), px(-100.0)]);
+}
+
+#[test]
+fn synced_scroll_offsets_support_four_panes_when_output_is_scrolled() {
+    let targets = compute_synced_scroll_offsets(
+        [px(-100.0), px(-100.0), px(-100.0), px(-320.0)],
+        [px(100.0), px(100.0), px(100.0), px(500.0)],
+        [px(-100.0), px(-100.0), px(-100.0), px(-80.0)],
+        3,
+    );
+
+    assert_eq!(targets, [px(-100.0), px(-100.0), px(-100.0), px(-320.0)]);
+}
+
+#[test]
+fn synced_scroll_offsets_hold_steady_when_nothing_changed() {
+    // A clamped follower (shorter pane, offset -100) sits alongside a master
+    // scrolled further (-320). Nothing moved since the last sync (offsets ==
+    // last_synced), so even though the offsets are unequal the follower must
+    // stay put — re-driving it onto the widest handle here is the idle-frame
+    // snap-back the horizontal output sync used to produce.
+    let steady = [px(-100.0), px(-320.0)];
+    let targets = compute_synced_scroll_offsets(steady, [px(100.0), px(500.0)], steady, 1);
+
+    assert_eq!(targets, steady);
+}
+
+#[test]
+fn synced_scroll_offsets_do_not_promote_a_follower_clamped_during_paint() {
+    let steady = [px(-100.0), px(-500.0)];
+    let targets = compute_synced_scroll_offsets(
+        steady,
+        [px(100.0), px(500.0)],
+        // The previous render requested -120 for the shorter follower;
+        // GPUI painted it at its current -100 maximum afterward.
+        [px(-120.0), px(-500.0)],
+        1,
+    );
+
+    assert_eq!(targets, steady);
+}
+
+#[test]
+fn explicit_wheel_master_wins_when_multiple_handles_changed() {
+    let targets = compute_synced_scroll_offsets_with_master(
+        [px(0.0), px(-100.0)],
+        [px(500.0), px(500.0)],
+        [px(-100.0), px(0.0)],
+        0,
+        Some(1),
+    );
+
+    assert_eq!(targets, [px(-100.0), px(-100.0)]);
+}
+
+#[test]
+fn explicit_wheel_master_at_top_pulls_stale_follower_to_top() {
+    let targets = compute_synced_scroll_offsets_with_master(
+        [px(0.0), px(-100.0)],
+        [px(500.0), px(500.0)],
+        [px(0.0), px(-100.0)],
+        1,
+        Some(0),
+    );
+
+    assert_eq!(targets, [px(0.0), px(0.0)]);
+}
+
+#[test]
+fn revealed_whitespace_wrap_ranges_follow_rendered_tab_markers() {
+    let tab_width = 4;
+
+    // The tab after "a" runs to the stop at column 4.
+    let hidden = diff_wrap_byte_ranges_for_text(tab_width, "a   b", Some("a\tb"), 4, false)
+        .into_iter()
+        .map(rows::DiffWrapByteRange::range)
+        .collect::<Vec<_>>();
+    assert_eq!(hidden, vec![0..4, 4..5]);
+
+    let revealed = diff_wrap_byte_ranges_for_text(tab_width, "a   b", Some("a\tb"), 4, true)
+        .into_iter()
+        .map(rows::DiffWrapByteRange::range)
+        .collect::<Vec<_>>();
+    assert_eq!(revealed, vec![0..5]);
+}
+
+/// Sidebar file search and folder expansion move `file_browser_rev` on every
+/// keystroke; the pane only shows the historical-browse tint, which follows
+/// the browser's `active` flag and `source`.
+#[test]
+fn notify_fingerprint_ignores_file_browser_search() {
+    let repo_id = RepoId(1);
+    let mut state = AppState::test_default();
+    state.active_repo = Some(repo_id);
+    state.repos.push(RepoState::new_opening(
+        repo_id,
+        gitcomet_core::domain::RepoSpec {
+            workdir: "/tmp/repo".into(),
+        },
+    ));
+    let before =
+        DiffRenderer::notify_fingerprint_for(&DiffPaneInput::selected(Arc::new(state.clone())));
+
+    let browser = &mut state.repos[0].file_browser;
+    browser.search_query = "src".into();
+    browser.expanded_dirs.insert(Arc::new("src".into()));
+    browser.bump_rev();
+    assert_eq!(
+        before,
+        DiffRenderer::notify_fingerprint_for(&DiffPaneInput::selected(Arc::new(state.clone())))
+    );
+
+    let browser = &mut state.repos[0].file_browser;
+    browser.active = true;
+    browser.source = gitcomet_core::domain::FileSource::Commit(CommitId("c1".into()));
+    browser.bump_rev();
+    assert_ne!(
+        before,
+        DiffRenderer::notify_fingerprint_for(&DiffPaneInput::selected(Arc::new(state.clone())))
+    );
+}

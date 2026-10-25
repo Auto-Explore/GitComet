@@ -1,0 +1,25 @@
+[package]
+name = "gitcomet-text"
+description = "Text foundations shared by syntax highlighting, previews and the UI kit: rope, text model, tab expansion, caches and token kinds."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+test-support = []
+benchmarks = []
+
+[dependencies]
+gpui_shared_string = { workspace = true }
+gpui_sum_tree = { workspace = true }
+lru = { workspace = true }
+jiff = { workspace = true }
+memchr = { workspace = true }
+rustc-hash = { workspace = true }
+smallvec = { workspace = true }

@@ -1,0 +1,8 @@
+%%{init: {"theme":"dark"}}%%
+C4Context
+  Person(admin, "AdminUpdated")
+  System(sys, "System")
+  Rel(admin, sys, "Uses")
+  Boundary(b0, "Boundary") {
+    SystemDb(db, "DB")
+  }

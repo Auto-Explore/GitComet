@@ -1,7 +1,5 @@
-use crate::view::diff_utils::UnifiedDiffLine;
+use crate::view::diff_utils::{NO_NEWLINE_MARKER, UnifiedDiffLine};
 use gitcomet_core::domain::{DiffLineKind, DiffTarget};
-
-const NO_NEWLINE_AT_END_OF_FILE_MARKER: &str = "\\ No newline at end of file";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct ReconstructedFilePreview {
@@ -16,9 +14,7 @@ fn preview_abs_path(
 ) -> Option<std::path::PathBuf> {
     let rel_path = match target? {
         DiffTarget::WorkingTree { path, .. } => path.clone(),
-        DiffTarget::Commit {
-            path: Some(path), ..
-        }
+        DiffTarget::Commit { path, .. }
         | DiffTarget::CommitRange {
             path: Some(path), ..
         } => path.clone(),
@@ -50,7 +46,7 @@ fn collect_preview_lines_and_source_len<T: UnifiedDiffLine>(
         source_len = source_len.saturating_add(text.len());
         if !matches!(
             diff.get(ix + 1),
-            Some(next) if next.text() == NO_NEWLINE_AT_END_OF_FILE_MARKER
+            Some(next) if next.text() == NO_NEWLINE_MARKER
         ) {
             source_len = source_len.saturating_add(1);
         }
@@ -158,10 +154,7 @@ mod tests {
     #[test]
     fn new_file_preview_extracts_added_lines() {
         let workdir = PathBuf::from("repo");
-        let target = DiffTarget::WorkingTree {
-            path: PathBuf::from("new.txt"),
-            area: DiffArea::Unstaged,
-        };
+        let target = DiffTarget::working_tree(PathBuf::from("new.txt"), DiffArea::Unstaged);
         let diff = vec![
             line(DiffLineKind::Header, "diff --git a/new.txt b/new.txt"),
             line(DiffLineKind::Header, "new file mode 100644"),
@@ -181,10 +174,7 @@ mod tests {
     #[test]
     fn new_file_preview_returns_none_when_diff_has_removes() {
         let workdir = PathBuf::from("repo");
-        let target = DiffTarget::WorkingTree {
-            path: PathBuf::from("new.txt"),
-            area: DiffArea::Unstaged,
-        };
+        let target = DiffTarget::working_tree(PathBuf::from("new.txt"), DiffArea::Unstaged);
         let diff = vec![
             line(DiffLineKind::Header, "diff --git a/new.txt b/new.txt"),
             line(DiffLineKind::Header, "new file mode 100644"),
@@ -198,10 +188,7 @@ mod tests {
     #[test]
     fn deleted_file_preview_extracts_removed_lines() {
         let workdir = PathBuf::from("repo");
-        let target = DiffTarget::WorkingTree {
-            path: PathBuf::from("old.txt"),
-            area: DiffArea::Unstaged,
-        };
+        let target = DiffTarget::working_tree(PathBuf::from("old.txt"), DiffArea::Unstaged);
         let diff = vec![
             line(DiffLineKind::Header, "diff --git a/old.txt b/old.txt"),
             line(DiffLineKind::Header, "deleted file mode 100644"),
@@ -221,10 +208,7 @@ mod tests {
     #[test]
     fn deleted_file_preview_returns_none_when_diff_has_adds() {
         let workdir = PathBuf::from("repo");
-        let target = DiffTarget::WorkingTree {
-            path: PathBuf::from("old.txt"),
-            area: DiffArea::Unstaged,
-        };
+        let target = DiffTarget::working_tree(PathBuf::from("old.txt"), DiffArea::Unstaged);
         let diff = vec![
             line(DiffLineKind::Header, "diff --git a/old.txt b/old.txt"),
             line(DiffLineKind::Header, "deleted file mode 100644"),
@@ -238,15 +222,12 @@ mod tests {
     #[test]
     fn new_file_preview_source_len_respects_missing_final_newline_marker() {
         let workdir = PathBuf::from("repo");
-        let target = DiffTarget::WorkingTree {
-            path: PathBuf::from("new.txt"),
-            area: DiffArea::Unstaged,
-        };
+        let target = DiffTarget::working_tree(PathBuf::from("new.txt"), DiffArea::Unstaged);
         let diff = vec![
             line(DiffLineKind::Header, "diff --git a/new.txt b/new.txt"),
             line(DiffLineKind::Header, "new file mode 100644"),
             line(DiffLineKind::Add, "+hello"),
-            line(DiffLineKind::Context, NO_NEWLINE_AT_END_OF_FILE_MARKER),
+            line(DiffLineKind::Context, NO_NEWLINE_MARKER),
         ];
 
         let preview = build_new_file_preview_from_diff(&diff, &workdir, Some(&target)).unwrap();
@@ -257,15 +238,12 @@ mod tests {
     #[test]
     fn deleted_file_preview_source_len_respects_missing_final_newline_marker() {
         let workdir = PathBuf::from("repo");
-        let target = DiffTarget::WorkingTree {
-            path: PathBuf::from("old.txt"),
-            area: DiffArea::Unstaged,
-        };
+        let target = DiffTarget::working_tree(PathBuf::from("old.txt"), DiffArea::Unstaged);
         let diff = vec![
             line(DiffLineKind::Header, "diff --git a/old.txt b/old.txt"),
             line(DiffLineKind::Header, "deleted file mode 100644"),
             line(DiffLineKind::Remove, "-hello"),
-            line(DiffLineKind::Context, NO_NEWLINE_AT_END_OF_FILE_MARKER),
+            line(DiffLineKind::Context, NO_NEWLINE_MARKER),
         ];
 
         let preview = build_deleted_file_preview_from_diff(&diff, &workdir, Some(&target)).unwrap();

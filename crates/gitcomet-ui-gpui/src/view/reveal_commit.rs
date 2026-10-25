@@ -32,7 +32,10 @@ const MIN_LOOKUP_QUERY_LEN: usize = 2;
 /// Shown while the query is too short to look up. Made-up values on purpose:
 /// real ones from the repository would read as results.
 const EXAMPLES: &[(&str, &str)] = &[
-    ("a1b2c3d", "Commit SHA — 4 characters or more, or all 40"),
+    (
+        "a1b2c3d",
+        "Commit SHA — 4 characters or more, or the full id",
+    ),
     ("main", "Branch"),
     ("origin/main", "Remote-tracking branch"),
     ("v1.2.0", "Tag"),
@@ -122,7 +125,7 @@ impl RevealCommitView {
         cx: &mut gpui::Context<Self>,
     ) -> Self {
         let query_input = cx.new(|cx| {
-            let mut input = components::TextInput::new(
+            components::TextInput::new(
                 components::TextInputOptions {
                     placeholder: "Paste a commit SHA, or type a branch, tag, or revision…".into(),
                     chromeless: true,
@@ -130,9 +133,7 @@ impl RevealCommitView {
                 },
                 window,
                 cx,
-            );
-            input.set_theme(theme, cx);
-            input
+            )
         });
         let input_subscription = cx.observe_in(&query_input, window, |this, input, window, cx| {
             this.handle_input_notification(input, window, cx);
@@ -155,8 +156,6 @@ impl RevealCommitView {
 
     pub(crate) fn set_theme(&mut self, theme: AppTheme, cx: &mut gpui::Context<Self>) {
         self.theme = theme;
-        self.query_input
-            .update(cx, |input, cx| input.set_theme(theme, cx));
         cx.notify();
     }
 

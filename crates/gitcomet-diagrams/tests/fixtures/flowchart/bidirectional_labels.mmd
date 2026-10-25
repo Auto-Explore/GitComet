@@ -1,0 +1,11 @@
+flowchart TD
+    dep1 -->|subs| link1
+    link1 -->|sub| sub1
+    sub1 -->|deps| link1
+    link1 -->|dep| dep1
+
+    link1 -->|nextSub| link2
+    link2 -->|prevSub| link1
+
+    link2 -->|sub| sub2
+    sub2 -->|deps| link2

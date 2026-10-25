@@ -1,9 +1,9 @@
 use super::*;
+use gitcomet_core::edit_signature::EditSignature;
 use gpui::Pixels;
 use rustc_hash::FxHasher;
 use std::cell::RefCell;
-use std::hash::{BuildHasherDefault, Hash, Hasher};
-use std::num::NonZeroUsize;
+use std::hash::{Hash, Hasher};
 
 pub(in crate::view) const MAX_LINES_FOR_SYNTAX_HIGHLIGHTING: usize = 4_000;
 const MAX_CACHED_LINE_NUMBER: usize = 16_384;
@@ -40,157 +40,11 @@ pub(in crate::view) fn conflict_line_no_width(scale: impl Into<ui_scale::UiScale
     )
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(in crate::view) struct LruCacheMetrics {
-    pub(in crate::view) hits: u64,
-    pub(in crate::view) misses: u64,
-    pub(in crate::view) evictions: u64,
-    pub(in crate::view) clears: u64,
-}
-
-#[derive(Debug)]
-pub(in crate::view) struct InstrumentedLruCache<
-    K: std::hash::Hash + Eq,
-    V,
-    S: std::hash::BuildHasher = lru::DefaultHasher,
-> {
-    cache: lru::LruCache<K, V, S>,
-    metrics: LruCacheMetrics,
-}
-
-impl<K: std::hash::Hash + Eq, V> InstrumentedLruCache<K, V> {
-    pub(in crate::view) fn new(cap: usize) -> Self {
-        Self {
-            cache: lru::LruCache::new(non_zero_lru_capacity(cap)),
-            metrics: LruCacheMetrics::default(),
-        }
-    }
-}
-
-impl<K: std::hash::Hash + Eq, V, S: std::hash::BuildHasher> InstrumentedLruCache<K, V, S> {
-    pub(in crate::view) fn with_hasher(cap: usize, hash_builder: S) -> Self {
-        Self {
-            cache: lru::LruCache::with_hasher(non_zero_lru_capacity(cap), hash_builder),
-            metrics: LruCacheMetrics::default(),
-        }
-    }
-
-    pub(in crate::view) fn get(&mut self, key: &K) -> Option<&V> {
-        let value = self.cache.get(key);
-        if value.is_some() {
-            self.metrics.hits = self.metrics.hits.saturating_add(1);
-        } else {
-            self.metrics.misses = self.metrics.misses.saturating_add(1);
-        }
-        value
-    }
-
-    #[cfg(test)]
-    pub(in crate::view) fn peek(&self, key: &K) -> Option<&V> {
-        self.cache.peek(key)
-    }
-
-    pub(in crate::view) fn put(&mut self, key: K, value: V) -> Option<V> {
-        let will_evict =
-            self.cache.peek(&key).is_none() && self.cache.len() >= self.cache.cap().get();
-        let previous = self.cache.put(key, value);
-        if will_evict {
-            self.metrics.evictions = self.metrics.evictions.saturating_add(1);
-        }
-        previous
-    }
-
-    #[cfg(any(test, feature = "benchmarks"))]
-    #[allow(dead_code)]
-    pub(in crate::view) fn len(&self) -> usize {
-        self.cache.len()
-    }
-
-    #[cfg(test)]
-    pub(in crate::view) fn clear(&mut self) {
-        self.cache.clear();
-        self.metrics.clears = self.metrics.clears.saturating_add(1);
-    }
-
-    #[cfg(test)]
-    pub(in crate::view) fn metrics(&self) -> LruCacheMetrics {
-        self.metrics
-    }
-}
-
-fn non_zero_lru_capacity(cap: usize) -> NonZeroUsize {
-    NonZeroUsize::new(cap).expect("LRU cache capacity must be > 0")
-}
-
-pub(in crate::view) type LruCache<K, V> = InstrumentedLruCache<K, V>;
-/// LRU cache backed by FxHasher for fast hashing of u64 keys (text layout caches).
-pub(in crate::view) type FxLruCache<K, V> =
-    InstrumentedLruCache<K, V, BuildHasherDefault<FxHasher>>;
-
-pub(in crate::view) fn new_lru_cache<K: std::hash::Hash + Eq, V>(cap: usize) -> LruCache<K, V> {
-    InstrumentedLruCache::new(cap)
-}
-
-/// Create a new FxHasher-backed LRU cache with the given capacity.
-pub(in crate::view) fn new_fx_lru_cache<K: std::hash::Hash + Eq, V>(
-    cap: usize,
-) -> FxLruCache<K, V> {
-    InstrumentedLruCache::with_hasher(cap, BuildHasherDefault::default())
-}
-
-/// A VecDeque-backed recency queue for caches that keep their own entry maps
-/// and only need the touch/evict-order half of an LRU.
-#[derive(Clone, Debug)]
-pub(in crate::view) struct LruTouchQueue<K> {
-    order: std::collections::VecDeque<K>,
-}
-
-impl<K> Default for LruTouchQueue<K> {
-    fn default() -> Self {
-        Self {
-            order: std::collections::VecDeque::new(),
-        }
-    }
-}
-
-impl<K: Eq> LruTouchQueue<K> {
-    pub(in crate::view) fn touch(&mut self, key: K) {
-        if self.order.back() == Some(&key) {
-            return;
-        }
-        if let Some(pos) = self.order.iter().position(|existing| *existing == key) {
-            self.order.remove(pos);
-        }
-        self.order.push_back(key);
-    }
-
-    pub(in crate::view) fn remove(&mut self, key: &K) -> bool {
-        if let Some(pos) = self.order.iter().position(|existing| existing == key) {
-            self.order.remove(pos);
-            true
-        } else {
-            false
-        }
-    }
-
-    pub(in crate::view) fn back(&self) -> Option<&K> {
-        self.order.back()
-    }
-
-    #[cfg(test)]
-    pub(in crate::view) fn is_empty(&self) -> bool {
-        self.order.is_empty()
-    }
-
-    #[cfg(any(test, feature = "benchmarks"))]
-    pub(in crate::view) fn clear(&mut self) {
-        self.order.clear();
-    }
-
-    pub(in crate::view) fn pop_oldest(&mut self) -> Option<K> {
-        self.order.pop_front()
-    }
-}
+#[cfg(test)]
+pub(in crate::view) use gitcomet_text::cache::LruCacheMetrics;
+pub(in crate::view) use gitcomet_text::cache::{
+    FxLruCache, LruCache, new_fx_lru_cache, new_lru_cache,
+};
 
 #[derive(Clone, Debug)]
 pub(in crate::view) struct CommitFileRowPresentation {
@@ -207,17 +61,77 @@ pub(in crate::view) enum CommitFileSort {
     FileTypeDescending,
     EditSizeAscending,
     EditSizeDescending,
+    /// Files changed the same way next to each other: the largest set of
+    /// files sharing one edit first, then the files whose edit is their own.
+    Edits,
+}
+
+impl From<CommitFileSort> for gitcomet_state::model::RepositoryFileSort {
+    fn from(sort: CommitFileSort) -> Self {
+        match sort {
+            CommitFileSort::PathAscending => Self::PathAscending,
+            CommitFileSort::PathDescending => Self::PathDescending,
+            CommitFileSort::FileTypeAscending => Self::FileTypeAscending,
+            CommitFileSort::FileTypeDescending => Self::FileTypeDescending,
+            CommitFileSort::EditSizeAscending => Self::EditSizeAscending,
+            CommitFileSort::EditSizeDescending => Self::EditSizeDescending,
+            CommitFileSort::Edits => Self::Edits,
+        }
+    }
+}
+
+impl From<gitcomet_state::model::RepositoryFileSort> for CommitFileSort {
+    fn from(sort: gitcomet_state::model::RepositoryFileSort) -> Self {
+        use gitcomet_state::model::RepositoryFileSort;
+        match sort {
+            RepositoryFileSort::PathAscending => Self::PathAscending,
+            RepositoryFileSort::PathDescending => Self::PathDescending,
+            RepositoryFileSort::FileTypeAscending => Self::FileTypeAscending,
+            RepositoryFileSort::FileTypeDescending => Self::FileTypeDescending,
+            RepositoryFileSort::EditSizeAscending => Self::EditSizeAscending,
+            RepositoryFileSort::EditSizeDescending => Self::EditSizeDescending,
+            RepositoryFileSort::Edits => Self::Edits,
+        }
+    }
 }
 
 impl CommitFileSort {
-    pub(in crate::view) const ALL: [Self; 6] = [
+    pub(in crate::view) const ALL: [Self; 7] = [
         Self::PathAscending,
         Self::PathDescending,
         Self::FileTypeAscending,
         Self::FileTypeDescending,
         Self::EditSizeAscending,
         Self::EditSizeDescending,
+        Self::Edits,
     ];
+
+    /// The name the setting is stored under.
+    pub(in crate::view) const fn key(self) -> &'static str {
+        match self {
+            Self::PathAscending => "path_ascending",
+            Self::PathDescending => "path_descending",
+            Self::FileTypeAscending => "file_type_ascending",
+            Self::FileTypeDescending => "file_type_descending",
+            Self::EditSizeAscending => "edit_size_smallest",
+            Self::EditSizeDescending => "edit_size_largest",
+            Self::Edits => "edits",
+        }
+    }
+
+    pub(in crate::view) fn from_key(raw: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|sort| sort.key() == raw)
+    }
+
+    pub(in crate::view) const fn needs_line_stats(self) -> bool {
+        match self {
+            Self::EditSizeAscending | Self::EditSizeDescending | Self::Edits => true,
+            Self::PathAscending
+            | Self::PathDescending
+            | Self::FileTypeAscending
+            | Self::FileTypeDescending => false,
+        }
+    }
 
     /// Each option reads "Ascending"/"Descending" its own way -- path A→Z, file
     /// type by extension A→Z -- so the direction word is the same everywhere and
@@ -232,6 +146,47 @@ impl CommitFileSort {
             Self::FileTypeDescending => "File type: Descending",
             Self::EditSizeAscending => "Edit size: Smallest",
             Self::EditSizeDescending => "Edit size: Largest",
+            Self::Edits => "Edits: Repeated first",
+        }
+    }
+}
+
+/// The Edits sort's order over one list: files sharing an edit form a
+/// cluster, clusters come largest first (ties by their first path), then the
+/// files whose edit no other file shares, then those with no edit known.
+/// Path order applies inside each of those, so the result is stable.
+struct EditClusters {
+    by_edit: rustc_hash::FxHashMap<EditSignature, (usize, String)>,
+}
+
+impl EditClusters {
+    fn new<'a>(items: impl Iterator<Item = (Option<EditSignature>, &'a str)>) -> Self {
+        let mut by_edit = rustc_hash::FxHashMap::<EditSignature, (usize, String)>::default();
+        for (edit, path_key) in items {
+            let Some(edit) = edit else { continue };
+            let entry = by_edit
+                .entry(edit)
+                .or_insert_with(|| (0, path_key.to_owned()));
+            entry.0 += 1;
+            if path_key < entry.1.as_str() {
+                path_key.clone_into(&mut entry.1);
+            }
+        }
+        Self { by_edit }
+    }
+
+    /// Compared before the path. The edit itself is last, so two clusters
+    /// whose first paths compare equal still do not interleave.
+    fn rank(
+        &self,
+        edit: Option<EditSignature>,
+    ) -> (u8, std::cmp::Reverse<usize>, &str, Option<EditSignature>) {
+        match edit.and_then(|edit| Some((edit, self.by_edit.get(&edit)?))) {
+            Some((edit, (count, first))) if *count > 1 => {
+                (0, std::cmp::Reverse(*count), first.as_str(), Some(edit))
+            }
+            Some(_) => (1, std::cmp::Reverse(0), "", None),
+            None => (2, std::cmp::Reverse(0), "", None),
         }
     }
 }
@@ -345,7 +300,7 @@ impl<K: Eq + Clone> Default for CommitFileProjectionCache<K> {
 }
 
 fn commit_file_edit_size(file: &gitcomet_core::domain::CommitFileChange) -> Option<u64> {
-    Some(u64::from(file.additions?) + u64::from(file.deletions?))
+    Some(u64::from(file.line_stats.additions?) + u64::from(file.line_stats.deletions?))
 }
 
 fn commit_file_path_sort_key(path: &std::path::Path) -> String {
@@ -412,6 +367,9 @@ pub(in crate::view) fn status_section_sorted_indexes(
         let stats = stats?.get(&entry.path)?;
         Some(u64::from(stats.additions?) + u64::from(stats.deletions?))
     };
+    let edit = |ix: usize| -> Option<EditSignature> { stats?.get(&entries.get(ix)?.path)?.edit };
+    let clusters = (sort == CommitFileSort::Edits)
+        .then(|| EditClusters::new(sortable.iter().map(|item| (edit(item.0), item.1.as_str()))));
     let by_path = |left: &(usize, String, String), right: &(usize, String, String)| {
         left.1
             .cmp(&right.1)
@@ -454,6 +412,15 @@ pub(in crate::view) fn status_section_sorted_indexes(
                 (None, None) => by_path(left, right),
             }
         }
+        CommitFileSort::Edits => clusters
+            .as_ref()
+            .map(|clusters| {
+                clusters
+                    .rank(edit(left.0))
+                    .cmp(&clusters.rank(edit(right.0)))
+            })
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| by_path(left, right)),
     });
     sortable
         .into_iter()
@@ -498,6 +465,13 @@ fn build_commit_file_projection(
         })
         .collect();
 
+    let clusters = (sort == CommitFileSort::Edits).then(|| {
+        EditClusters::new(
+            sortable
+                .iter()
+                .map(|item| (files[item.0].line_stats.edit, item.1.as_str())),
+        )
+    });
     sortable.sort_by(|left, right| match sort {
         CommitFileSort::PathAscending => compare_commit_file_paths(left, right, files),
         CommitFileSort::PathDescending => compare_commit_file_paths(left, right, files).reverse(),
@@ -530,6 +504,15 @@ fn build_commit_file_projection(
                 (None, None) => compare_commit_file_paths(left, right, files),
             }
         }
+        CommitFileSort::Edits => clusters
+            .as_ref()
+            .map(|clusters| {
+                clusters
+                    .rank(files[left.0].line_stats.edit)
+                    .cmp(&clusters.rank(files[right.0].line_stats.edit))
+            })
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| compare_commit_file_paths(left, right, files)),
     });
 
     CommitFileProjection {
@@ -595,6 +578,8 @@ fn commit_file_row_presentation_signature(
         ix.hash(&mut primary);
         kind_key.hash(&mut primary);
         path_bytes.hash(&mut primary);
+        // The chip is part of the row's presentation.
+        file.large_file.hash(&mut primary);
 
         kind_key.hash(&mut secondary);
         ix.hash(&mut secondary);
@@ -660,9 +645,14 @@ impl<K: Eq + Clone> CommitFileRowPresentationCache<K> {
         key: &K,
         files: &[gitcomet_core::domain::CommitFileChange],
     ) -> Arc<[CommitFileRowPresentation]> {
+        if let Some(entry) = &self.cached
+            && entry.key == *key
+        {
+            return Arc::clone(&entry.rows);
+        }
         let signature = commit_file_row_presentation_signature(files);
         if let Some(reused_rows) = self.cached.as_ref().and_then(|entry| {
-            if entry.key == *key || entry.signature == signature {
+            if entry.signature == signature {
                 Some(entry.rows.clone())
             } else {
                 None
@@ -817,6 +807,23 @@ pub(in crate::view) fn file_kind_row_tint(
     Some(with_alpha(color, alpha))
 }
 
+/// Background wash for an explorer row that is normally out of sight; ignored
+/// wins over hidden. Hidden rows lean toward the canvas, away from the hover
+/// overlay, so they never read as hovered. Translucent like the kind tints.
+pub(in crate::view) fn explorer_row_tint(
+    theme: &AppTheme,
+    hidden: bool,
+    ignored: bool,
+) -> Option<gpui::Rgba> {
+    if ignored {
+        Some(with_alpha(theme.colors.status.warning.foreground, 0.10))
+    } else if hidden {
+        Some(with_alpha(theme.colors.surface.canvas, 0.45))
+    } else {
+        None
+    }
+}
+
 #[inline]
 fn row_tint_alpha(is_dark: bool) -> f32 {
     if is_dark {
@@ -913,10 +920,10 @@ pub(in crate::view) fn file_row_icon_slot(
                     .rounded_full()
                     .bg(disc.resting)
                     .when_some(disc.hover, |badge, (group, hovered)| {
-                        badge.group_hover(group, |badge| badge.bg(hovered))
+                        badge.group_hover_style(group, |badge| badge.bg(hovered))
                     })
                     .when_some(disc.pressed, |badge, (group, pressed)| {
-                        badge.group_active(group, |badge| badge.bg(pressed))
+                        badge.group_active_style(group, |badge| badge.bg(pressed))
                     })
                     .flex()
                     .items_center()
@@ -937,6 +944,18 @@ pub(in crate::view) struct FileRowBadgeDisc {
     /// whose rows carry no group.
     pub(in crate::view) hover: Option<(SharedString, gpui::Rgba)>,
     pressed: Option<(SharedString, gpui::Rgba)>,
+}
+
+impl FileRowBadgeDisc {
+    /// A disc on a surface that does not react to the pointer, such as the
+    /// diff's header.
+    pub(in crate::view) fn still(background: gpui::Rgba) -> Self {
+        Self {
+            resting: background,
+            hover: None,
+            pressed: None,
+        }
+    }
 }
 
 /// One state/color calculation for file rows and the opaque discs laid over
@@ -1073,7 +1092,7 @@ mod canvas_text;
 mod conflict_canvas;
 mod conflict_resolver;
 mod diff;
-pub(in crate::view) use diff::BlameLabelCache;
+pub(in crate::view) use diff::blame_presentation::BlameLabelCache;
 
 /// A comparison/multi-selection card's per-commit strings, prepared once.
 pub(in crate::view) struct CommitCard {
@@ -1123,20 +1142,29 @@ impl CommitCard {
 mod diff_canvas;
 mod file_list;
 pub(in crate::view) use file_list::{
-    CollapsedDirs, DirectoryRowDetail, DirectoryRowProps, FileListId, FileListPlan,
-    FileListPlanCache, FileListRow, FileOrdinal, FileTree, FileTreeItem, RowIx, directory_row,
-    directory_row_detail_for_width, file_list_projection_key, file_list_projection_key_scoped,
-    file_row_indent_px,
+    ChangedFileRow, CollapsedDirs, DirectoryRowDetail, DirectoryRowProps, DirectoryToggle,
+    FileListId, FileListMultiSelection, FileListPlan, FileListPlanCache, FileListRow, FileOrdinal,
+    FileTree, FileTreeItem, GroupHeaderProps, PlanShape, RowIx, StickyGroupHeaders,
+    changed_file_directory_row, changed_file_row, directory_row, directory_row_detail_for_width,
+    file_list_folder_menu_invoker, file_list_projection_key, file_list_projection_key_scoped,
+    file_row_indent_px, group_header_row,
 };
 mod diff_text;
 mod history;
 pub(in crate::view) use history::history_row_height;
 mod history_canvas;
+#[cfg(test)]
+pub(in crate::view) use history_canvas::{
+    history_mark_chip, history_mark_menu_chip, history_mark_menu_invoker, history_row_menu_is_open,
+};
 pub(in crate::view) mod history_graph_paint;
+pub(in crate::view) mod history_node;
+mod history_shapes;
 mod markdown_document;
 mod markdown_flow_text;
 pub(in crate::view) mod sidebar;
-mod status;
+pub(in crate::view) mod status;
+pub(in crate::view) use status::apply_file_list_selection_click;
 
 #[cfg(feature = "benchmarks")]
 pub(crate) mod benchmarks;
@@ -1144,32 +1172,45 @@ pub(crate) mod benchmarks;
 pub(in crate::view) use self::conflict_resolver::{
     resolved_output_gutter_width, resolved_output_line_no_width,
 };
-pub(in crate::view) use self::diff::{BlameRenderCtx, build_row_blame_paint};
+pub(in crate::view) use self::diff::blame_presentation::{BlameRenderCtx, build_row_blame_paint};
 pub(in crate::view) use self::diff_canvas::blame_gutter_row_canvas;
+#[cfg(test)]
+pub(in crate::view) use self::history::take_markdown_image_stats_for_tests;
 pub(in crate::view) use self::history::{
+    MarkdownDrawnPictures, MarkdownImageRoot, MarkdownPictureContext, MarkdownPreviewHoveredLink,
     MarkdownPreviewImageSource, MarkdownPreviewPictureSizes, MarkdownPreviewQuery,
     MarkdownPreviewRevealRequest, MarkdownRemoteImageAccess, markdown_preview_alert_bar_color,
-    markdown_preview_alert_label, markdown_preview_flow_image, markdown_preview_highlighted_text,
-    markdown_preview_image_source, markdown_preview_inline_image, markdown_preview_marker_label,
+    markdown_preview_alert_label, markdown_preview_document_path, markdown_preview_flow_image,
+    markdown_preview_highlighted_text, markdown_preview_image_source,
+    markdown_preview_inline_image, markdown_preview_justify, markdown_preview_local_link_missing,
+    markdown_preview_local_link_target, markdown_preview_marker_label,
     markdown_preview_remote_image_url, markdown_preview_reveal_offset_y,
     markdown_preview_row_background, markdown_preview_row_extent,
-    markdown_preview_styled_row_with_query, worktree_markdown_preview_bar_color,
+    markdown_preview_styled_row_with_query, markdown_preview_task_checkbox,
+    percent_decode_link_path, worktree_markdown_preview_bar_color,
 };
+#[cfg(test)]
+pub(in crate::view) use self::markdown_document::markdown_block_estimate_for_tests;
 pub(in crate::view) use self::markdown_document::{
-    MarkdownDocumentBlockCache, MarkdownDocumentBlockScrolls, MarkdownDocumentContext,
-    render_markdown_document,
+    MarkdownChangeExtents, MarkdownDocumentBlockCache, MarkdownDocumentBlockScrolls,
+    MarkdownDocumentContext, MarkdownDocumentLayoutCache, MarkdownRowBoxes,
+    render_markdown_diff_split, render_markdown_document, render_markdown_document_with_blocks,
 };
 #[cfg(test)]
 pub(in crate::view) use self::markdown_flow_text::{
-    MarkdownFlowPaintPhase, begin_markdown_flow_paint_phase_capture_for_tests,
-    clear_markdown_selection_paint_log_for_tests, markdown_flow_paint_phases_for_tests,
-    markdown_selection_paint_log_for_tests,
+    MarkdownFlowPaintPhase, begin_markdown_flow_font_capture_for_tests,
+    begin_markdown_flow_paint_phase_capture_for_tests,
+    clear_markdown_selection_paint_log_for_tests, markdown_flow_fonts_for_tests,
+    markdown_flow_paint_phases_for_tests, markdown_selection_paint_log_for_tests,
+    take_markdown_flow_texts_built_for_tests,
 };
 pub(in crate::view) use self::markdown_flow_text::{
-    markdown_flow_painted_offset, markdown_flow_row_offset,
+    markdown_flow_painted_offset, markdown_flow_range_rects, markdown_flow_row_offset,
 };
-pub(in crate::view) use self::sidebar::active_workspace_paths_by_branch;
-pub(in crate::view) use self::sidebar::listed_workspace_paths_by_branch;
+pub(in crate::view) use self::sidebar::active_worktree_paths_by_branch;
+pub(in crate::view) use self::sidebar::{
+    branch_checked_out_at, branch_held_elsewhere, listed_worktree_paths_by_branch,
+};
 
 #[cfg(any(test, feature = "benchmarks"))]
 pub(in crate::view) use diff_text::has_pending_prepared_diff_syntax_chunk_builds_for_document;
@@ -1180,7 +1221,7 @@ pub(in crate::view) use diff_text::{
     DiffSyntaxEdit, DiffSyntaxLanguage, DiffSyntaxMode, LiveSyntaxDocument, LiveSyntaxSnapshot,
     LiveSyntaxSyncOutcome, PREPARED_DIFF_SYNTAX_DOCUMENT_MAX_TEXT_BYTES,
     PrepareDiffSyntaxDocumentResult, PreparedDiffSyntaxDocument, PreparedDiffSyntaxLine,
-    PreparedDiffSyntaxReparseSeed, SyntaxPair, diff_syntax_language_for_code_fence_info,
+    PreparedDiffSyntaxReparseSeed, SyntaxPair, default_diff_syntax_budget,
     diff_syntax_language_for_path, diff_wrap_ranges_for_text,
     drain_completed_prepared_diff_syntax_chunk_builds,
     drain_completed_prepared_diff_syntax_chunk_builds_for_document,
@@ -1192,17 +1233,20 @@ pub(in crate::view) use diff_text::{
     prepared_diff_syntax_line_for_one_based_line,
     prepared_diff_syntax_occurrences_at_display_offset,
     prepared_diff_syntax_pair_at_display_offset, prepared_diff_syntax_reparse_seed,
-    query_highlight_colors, request_syntax_highlights_for_prepared_document_byte_range,
+    query_highlight_style, request_syntax_highlights_for_prepared_document_byte_range,
     resolved_output_line_text, shared_byte_affix_bounds, syntax_highlights_for_line,
     whitespace_visible_line_text,
 };
 #[cfg(test)]
 pub(in crate::view) use diff_text::{OCCURRENCE_MAX_TEXT_BYTES, SyntaxPairKind};
 
+pub(in crate::view) use self::diff_canvas::annotation::{
+    DIFF_ANNOTATION_COLUMN_WIDTH_PX, DIFF_ANNOTATION_MAX_WIDTH_PX, DIFF_ANNOTATION_MIN_WIDTH_PX,
+};
+
 pub(in crate::view) use self::diff_canvas::{
-    AnnotArea, DIFF_ANNOTATION_COLUMN_WIDTH_PX, DIFF_ANNOTATION_MAX_WIDTH_PX,
-    DIFF_ANNOTATION_MIN_WIDTH_PX, DiffStageHover, DiffStageSlot, DiffTextWrapSlice,
-    DiffWrapByteRange, diff_change_bar_width as diff_canvas_change_bar_width,
+    AnnotArea, DiffStageHover, DiffStageSlot, DiffTextWrapSlice, DiffWrapByteRange,
+    diff_change_bar_width as diff_canvas_change_bar_width,
     diff_inline_text_start as diff_canvas_inline_text_start,
     diff_row_horizontal_padding as diff_canvas_row_horizontal_padding,
     diff_single_column_text_start as diff_canvas_single_column_text_start,
@@ -1225,23 +1269,19 @@ pub(in crate::view) use diff_text::{
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gitcomet_core::domain::{CommitFileChange, FileStatusKind};
+    use gitcomet_core::domain::{CommitFileChange, FileStatusKind, LineStats};
     use std::path::{Path, PathBuf};
     use std::sync::Arc;
 
-    /// The five bundled themes, so a tint invariant is proved against every
+    /// Every bundled theme, so a tint invariant is proved against every
     /// palette that ships rather than the default dark one alone.
     fn bundled_themes() -> Vec<AppTheme> {
-        [
-            "gitcomet_dark",
-            "gitcomet_light",
-            "tokyo_night",
-            "amber_dark",
-            "sunset_veil",
-        ]
-        .into_iter()
-        .map(|key| AppTheme::from_key(key).unwrap_or_else(|| panic!("bundled theme `{key}`")))
-        .collect()
+        crate::theme::bundled_theme_keys()
+            .into_iter()
+            .map(|(key, _)| {
+                AppTheme::from_key(&key).unwrap_or_else(|| panic!("bundled theme `{key}`"))
+            })
+            .collect()
     }
 
     #[test]
@@ -1323,6 +1363,29 @@ mod tests {
                     "{kind:?} disc must have somewhere to move to",
                 );
             }
+        }
+    }
+
+    #[test]
+    fn explorer_rows_tint_ignored_over_hidden_and_never_like_hover() {
+        for theme in bundled_themes() {
+            assert_eq!(explorer_row_tint(&theme, false, false), None);
+            let ignored = explorer_row_tint(&theme, false, true).expect("ignored tint");
+            assert_eq!(explorer_row_tint(&theme, true, true), Some(ignored));
+            let hidden = explorer_row_tint(&theme, true, false).expect("hidden tint");
+            assert_ne!(hidden, ignored);
+
+            // Hover moves the chrome toward the text colour; a hidden row must
+            // move it the other way.
+            let chrome = theme.colors.surface.chrome;
+            let lightness = |c: gpui::Rgba| c.red + c.green + c.blue;
+            let hovered = composite_over(chrome, theme.hover_overlay());
+            let washed = composite_over(chrome, hidden);
+            assert!(
+                (lightness(hovered) - lightness(chrome)) * (lightness(washed) - lightness(chrome))
+                    < 0.0,
+                "{chrome:?}: hover {hovered:?}, hidden {washed:?}"
+            );
         }
     }
 
@@ -1602,32 +1665,17 @@ mod tests {
         let mut cache: CommitFileRowPresentationCache<u64> =
             CommitFileRowPresentationCache::default();
         let files = vec![
-            CommitFileChange {
-                path: PathBuf::from("src/lib.rs"),
-                kind: FileStatusKind::Modified,
-                is_submodule: false,
-                additions: None,
-                deletions: None,
-            },
-            CommitFileChange {
-                path: PathBuf::from("README.md"),
-                kind: FileStatusKind::Added,
-                is_submodule: false,
-                additions: None,
-                deletions: None,
-            },
+            CommitFileChange::new(PathBuf::from("src/lib.rs"), FileStatusKind::Modified),
+            CommitFileChange::new(PathBuf::from("README.md"), FileStatusKind::Added),
         ];
 
         let first = cache.rows_for(&7, &files);
         let reused = cache.rows_for(
             &7,
-            &[CommitFileChange {
-                path: PathBuf::from("should/not/appear.rs"),
-                kind: FileStatusKind::Deleted,
-                is_submodule: false,
-                additions: None,
-                deletions: None,
-            }],
+            &[CommitFileChange::new(
+                PathBuf::from("should/not/appear.rs"),
+                FileStatusKind::Deleted,
+            )],
         );
 
         assert!(Arc::ptr_eq(&first, &reused));
@@ -1649,13 +1697,10 @@ mod tests {
 
         let replacement = cache.rows_for(
             &8,
-            &[CommitFileChange {
-                path: PathBuf::from("docs/guide.md"),
-                kind: FileStatusKind::Renamed,
-                is_submodule: false,
-                additions: None,
-                deletions: None,
-            }],
+            &[CommitFileChange::new(
+                PathBuf::from("docs/guide.md"),
+                FileStatusKind::Renamed,
+            )],
         );
 
         assert!(!Arc::ptr_eq(&first, &replacement));
@@ -1672,19 +1717,36 @@ mod tests {
         );
     }
 
+    #[test]
+    fn commit_file_signature_changes_with_large_file_state() {
+        let plain = vec![commit_file("a.bin", FileStatusKind::Modified, None, None)];
+        let mut managed = plain.clone();
+        managed[0].large_file = Some(gitcomet_core::large_files::LargeFileState {
+            pointer: gitcomet_core::large_files::LargeFilePointer::Lfs(
+                gitcomet_core::lfs::LfsPointer {
+                    oid: gitcomet_core::lfs::LfsOid([1; 32]),
+                    size: 5,
+                },
+            ),
+            in_local_store: Some(true),
+            worktree: None,
+            lockable: false,
+        });
+        assert_ne!(
+            commit_file_row_presentation_signature(&plain),
+            commit_file_row_presentation_signature(&managed),
+            "a chip appearing must invalidate cached rows"
+        );
+    }
+
     fn commit_file(
         path: &str,
         kind: FileStatusKind,
         additions: Option<u32>,
         deletions: Option<u32>,
     ) -> CommitFileChange {
-        CommitFileChange {
-            path: PathBuf::from(path),
-            kind,
-            is_submodule: false,
-            additions,
-            deletions,
-        }
+        CommitFileChange::new(PathBuf::from(path), kind)
+            .with_line_stats((additions, deletions).into())
     }
 
     #[test]
@@ -1827,6 +1889,71 @@ mod tests {
         assert_eq!(descending.source_indices.as_ref(), &[1, 3, 2, 0]);
     }
 
+    pub(in crate::view) fn edit(text: &str) -> Option<EditSignature> {
+        let mut edit = gitcomet_core::edit_signature::EditSignatureBuilder::default();
+        edit.added(text.as_bytes());
+        edit.finish()
+    }
+
+    #[test]
+    fn edits_put_the_largest_shared_edit_first_then_singles_then_unknown() {
+        let file = |path: &str, text: Option<&str>| {
+            CommitFileChange::new(PathBuf::from(path), FileStatusKind::Modified).with_line_stats(
+                LineStats {
+                    additions: Some(1),
+                    deletions: Some(1),
+                    edit: text.and_then(edit),
+                },
+            )
+        };
+        let files = vec![
+            file("z/one.rs", Some("a")),
+            file("b.rs", Some("b")),
+            file("a.rs", Some("a")),
+            file("c.rs", Some("b")),
+            file("d.rs", Some("b")),
+            file("solo2.rs", Some("c")),
+            file("solo1.rs", Some("d")),
+            file("bin.png", None),
+            file("aaa.rs", None),
+            file("0.rs", Some("e")),
+            file("y.rs", Some("e")),
+        ];
+
+        let projection =
+            build_commit_file_projection(&files, CommitFileSort::Edits, CommitFileFilter::All);
+
+        // Three share "b"; "e" and "a" share by two each, "e" first by its
+        // first path; then the singles and the unknown, each by path.
+        assert_eq!(
+            projection.source_indices.as_ref(),
+            &[1, 3, 4, 9, 10, 2, 0, 6, 5, 8, 7]
+        );
+    }
+
+    #[test]
+    fn edits_cluster_only_the_files_a_filter_shows() {
+        let file = |path: &str, kind: FileStatusKind, text: &str| {
+            CommitFileChange::new(PathBuf::from(path), kind).with_line_stats(LineStats {
+                additions: Some(1),
+                deletions: Some(0),
+                edit: edit(text),
+            })
+        };
+        let files = vec![
+            file("a.rs", FileStatusKind::Added, "x"),
+            file("b.rs", FileStatusKind::Modified, "x"),
+            file("c.rs", FileStatusKind::Modified, "y"),
+            file("d.rs", FileStatusKind::Modified, "y"),
+        ];
+
+        let modified =
+            build_commit_file_projection(&files, CommitFileSort::Edits, CommitFileFilter::Modified);
+
+        // With `a.rs` filtered out, "x" is one file's edit and sorts as a single.
+        assert_eq!(modified.source_indices.as_ref(), &[2, 3, 1]);
+    }
+
     /// The direction word is the same across options; only the noun changes.
     #[test]
     fn sort_labels_name_what_is_ordered_and_which_way() {
@@ -1935,13 +2062,10 @@ mod tests {
 
         let first = cache.rows_for(
             &(1, PathBuf::from("/wt/a")),
-            &[CommitFileChange {
-                path: PathBuf::from("a.rs"),
-                kind: FileStatusKind::Modified,
-                is_submodule: false,
-                additions: None,
-                deletions: None,
-            }],
+            &[CommitFileChange::new(
+                PathBuf::from("a.rs"),
+                FileStatusKind::Modified,
+            )],
         );
         assert_eq!(first[0].label.as_ref(), "a.rs");
 
@@ -1949,13 +2073,10 @@ mod tests {
         // these apart.
         let second = cache.rows_for(
             &(1, PathBuf::from("/wt/b")),
-            &[CommitFileChange {
-                path: PathBuf::from("b.rs"),
-                kind: FileStatusKind::Modified,
-                is_submodule: false,
-                additions: None,
-                deletions: None,
-            }],
+            &[CommitFileChange::new(
+                PathBuf::from("b.rs"),
+                FileStatusKind::Modified,
+            )],
         );
         assert_eq!(
             second[0].label.as_ref(),
@@ -1969,20 +2090,8 @@ mod tests {
         let mut cache: CommitFileRowPresentationCache<u64> =
             CommitFileRowPresentationCache::default();
         let files = vec![
-            CommitFileChange {
-                path: PathBuf::from("src/lib.rs"),
-                kind: FileStatusKind::Modified,
-                is_submodule: false,
-                additions: None,
-                deletions: None,
-            },
-            CommitFileChange {
-                path: PathBuf::from("README.md"),
-                kind: FileStatusKind::Added,
-                is_submodule: false,
-                additions: None,
-                deletions: None,
-            },
+            CommitFileChange::new(PathBuf::from("src/lib.rs"), FileStatusKind::Modified),
+            CommitFileChange::new(PathBuf::from("README.md"), FileStatusKind::Added),
         ];
 
         let first = cache.rows_for(&7, &files);

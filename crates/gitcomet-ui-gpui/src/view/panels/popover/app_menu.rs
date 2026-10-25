@@ -1,6 +1,6 @@
 use super::*;
 
-use crate::view::shortcut_labels::Shortcut;
+use crate::kit::components::Shortcut;
 
 fn push_entry(
     items: &mut Vec<ContextMenuItem>,
@@ -23,7 +23,11 @@ fn push_entry(
 }
 
 pub(super) fn model(this: &PopoverHost) -> ContextMenuModel {
-    model_with_update_checks_disabled(this, crate::view::update_checks_disabled_by_environment())
+    model_with_update_checks_disabled(
+        this,
+        crate::view::update_checks_disabled_by_environment()
+            || !crate::view::update_checks_available(),
+    )
 }
 
 pub(super) fn model_with_update_checks_disabled(
@@ -32,7 +36,7 @@ pub(super) fn model_with_update_checks_disabled(
 ) -> ContextMenuModel {
     let active_repo_id = this.active_repo().map(|repo| repo.id);
     let active_repo_workdir = this.active_repo().map(|repo| repo.spec.workdir.clone());
-    let external_editor_configured = crate::external_editor::configured_setting().is_some();
+    let external_editor_configured = this.external_editor_available();
     let show_command_palette = command_palette_available(this.root_view_mode);
 
     let mut items = Vec::new();
@@ -57,6 +61,15 @@ pub(super) fn model_with_update_checks_disabled(
         Shortcut::Secondary(","),
         false,
         AppMenuAction::Settings,
+    );
+    push_entry(
+        &mut items,
+        &mut debug_selectors,
+        "app_menu_open_workspace",
+        "Open Workspace…",
+        Shortcut::Secondary("Shift+R"),
+        false,
+        AppMenuAction::OpenWorkspace,
     );
     if external_editor_configured {
         push_entry(
@@ -140,6 +153,49 @@ pub(super) fn model_with_update_checks_disabled(
     );
     items.push(ContextMenuItem::Separator);
 
+    if !this.extension_app_menu.is_empty() {
+        for entry in this.extension_app_menu.iter() {
+            debug_selectors.insert(
+                items.len(),
+                format!("app_menu_extension_{}", entry.id).into(),
+            );
+            items.push(ContextMenuItem::Entry {
+                label: entry.label.clone(),
+                icon: None,
+                shortcut: None,
+                disabled: entry.requires_repository && active_repo_id.is_none(),
+                action: Box::new(ContextMenuAction::AppMenu(
+                    AppMenuAction::ExtensionCommand {
+                        id: entry.id.clone(),
+                    },
+                )),
+            });
+        }
+        items.push(ContextMenuItem::Separator);
+    }
+
+    for (debug_selector, label, shortcut, action) in [
+        ("app_menu_zoom_in", "Zoom In", "=", AppMenuAction::ZoomIn),
+        ("app_menu_zoom_out", "Zoom Out", "-", AppMenuAction::ZoomOut),
+        (
+            "app_menu_reset_zoom",
+            "Reset Zoom",
+            "0",
+            AppMenuAction::ResetZoom,
+        ),
+    ] {
+        push_entry(
+            &mut items,
+            &mut debug_selectors,
+            debug_selector,
+            label,
+            Shortcut::Secondary(shortcut),
+            false,
+            action,
+        );
+    }
+    items.push(ContextMenuItem::Separator);
+
     // Only platforms with a real desktop-entry story get the row at all; a
     // permanently inert entry is noise everywhere else.
     #[cfg(any(target_os = "linux", target_os = "freebsd"))]
@@ -190,9 +246,9 @@ pub(super) fn activate(
         }
         AppMenuAction::LocateFileInExplorer => {
             this.close_popover_and_restore_focus(window, cx);
-            let _ = this.root_view.update(cx, |root, cx| {
-                root.locate_open_file_in_explorer(cx);
-            });
+            let _ = this
+                .root_view
+                .request(RootRequest::LocateOpenFileInExplorer, None, cx);
         }
         AppMenuAction::OpenRemoteInBrowser => {
             this.close_popover_and_restore_focus(window, cx);
@@ -204,11 +260,25 @@ pub(super) fn activate(
             this.close_popover_and_restore_focus(window, cx);
             cx.defer(crate::view::open_settings_window);
         }
+        AppMenuAction::ZoomIn | AppMenuAction::ZoomOut | AppMenuAction::ResetZoom => {
+            this.close_popover_and_restore_focus(window, cx);
+            let action: Box<dyn gpui::Action> = match action {
+                AppMenuAction::ZoomIn => Box::new(crate::app::IncreaseUiScale),
+                AppMenuAction::ZoomOut => Box::new(crate::app::DecreaseUiScale),
+                _ => Box::new(crate::app::ResetUiScale),
+            };
+            window.dispatch_action(action, cx);
+        }
+        AppMenuAction::OpenWorkspace => {
+            this.close_popover_and_restore_focus(window, cx);
+            // Dispatched: opening the chooser updates this host again.
+            window.dispatch_action(Box::new(crate::app::OpenWorkspace), cx);
+        }
         AppMenuAction::OpenInCodeEditor { path } => {
             if let Some(path) = path {
-                let _ = this.root_view.update(cx, |root, cx| {
-                    root.open_path_in_external_code_editor(path, cx);
-                });
+                let _ = this
+                    .root_view
+                    .request(RootRequest::OpenInExternalEditor(path), None, cx);
             }
             this.close_popover_and_restore_focus(window, cx);
         }
@@ -217,9 +287,9 @@ pub(super) fn activate(
             let Some(repo_id) = repo_id else {
                 return;
             };
-            let _ = this.root_view.update(cx, |root, cx| {
-                root.open_reflog_panel(repo_id, cx);
-            });
+            let _ = this
+                .root_view
+                .request(RootRequest::OpenReflogPanel(repo_id), None, cx);
         }
         AppMenuAction::ApplyPatch { repo_id } => {
             let Some(repo_id) = repo_id else {
@@ -233,6 +303,7 @@ pub(super) fn activate(
                 directories: false,
                 multiple: false,
                 prompt: Some("Select patch file".into()),
+                directory: None,
             });
             window
                 .spawn(cx, async move |cx| {
@@ -252,9 +323,9 @@ pub(super) fn activate(
         }
         AppMenuAction::CheckForUpdates => {
             this.close_popover_and_restore_focus(window, cx);
-            let _ = this.root_view.update(cx, |root, cx| {
-                root.check_for_updates_manually(cx);
-            });
+            let _ = this
+                .root_view
+                .request(RootRequest::CheckForUpdates, None, cx);
         }
         #[cfg(any(target_os = "linux", target_os = "freebsd"))]
         AppMenuAction::InstallDesktopIntegration => {
@@ -263,11 +334,28 @@ pub(super) fn activate(
         }
         AppMenuAction::Quit => {
             this.close_popover_and_restore_focus(window, cx);
-            crate::app::quit_app_or_warn(cx);
+            // The quit scan asks every root view whether its unsaved-edits
+            // dialog is open. This callback still owns PopoverHost's update
+            // lease, so let it unwind before the scan can read this host.
+            cx.defer(crate::app::quit_app_or_warn);
+        }
+        AppMenuAction::ExtensionCommand { id } => {
+            this.close_popover_and_restore_focus(window, cx);
+            let _ = this.root_view.request(
+                RootRequest::RunExtensionCommand {
+                    id: id.to_string(),
+                    repo: None,
+                },
+                None,
+                cx,
+            );
         }
         AppMenuAction::CloseWindow => {
             this.close_popover_and_restore_focus(window, cx);
-            crate::app::close_window_or_warn(window, cx);
+            // Closing performs the same unsaved-edits query as quitting and
+            // therefore must also run after this PopoverHost update finishes.
+            let window_id = window.window_handle().window_id();
+            cx.defer(move |cx| crate::app::close_window_by_id_or_warn(cx, window_id));
         }
     }
 }

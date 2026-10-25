@@ -1,9 +1,22 @@
 use super::*;
 
+fn width_for_all_columns_with_slack() -> Pixels {
+    px(HISTORY_COL_BRANCH_PX
+        + HISTORY_COL_GRAPH_PX
+        + HISTORY_COL_AUTHOR_PX
+        + HISTORY_COL_DATE_PX
+        + HISTORY_COL_SHA_PX
+        + HISTORY_COL_MESSAGE_MIN_PX
+        + 2.0)
+}
+
 #[test]
 fn inline_refs_release_width_for_columns_and_graph_resizing() {
     let mut layout = all_columns_visible_drag_layout();
-    let available = px(600.0);
+    let available = px(HISTORY_COL_GRAPH_PX
+        + HISTORY_COL_AUTHOR_PX
+        + HISTORY_COL_DATE_PX
+        + HISTORY_COL_MESSAGE_MIN_PX);
     assert_eq!(
         history_visible_columns_for_layout(available, layout, 100),
         (true, false, false)
@@ -55,7 +68,7 @@ fn history_column_drag_clamp_respects_static_maximums() {
 
 #[test]
 fn history_column_drag_clamp_preserves_message_space() {
-    let available = history_columns_available_width(px(836.0));
+    let available = width_for_all_columns_with_slack();
     let layout = all_columns_visible_drag_layout();
     let next = history_column_drag_clamped_width(
         HistoryColResizeHandle::Branch,
@@ -66,7 +79,7 @@ fn history_column_drag_clamp_preserves_message_space() {
     );
 
     let next_f: f32 = next.into();
-    assert!((next_f - 132.0).abs() < 1e-3);
+    assert!((next_f - (HISTORY_COL_BRANCH_PX + 2.0)).abs() < 1e-3);
 }
 
 #[test]
@@ -128,7 +141,7 @@ fn graph_drag_ignores_auto_hidden_optional_columns() {
 #[test]
 fn reset_widths_clamp_default_graph_in_narrow_windows() {
     let widths = history_reset_widths_for_available_width(
-        history_columns_available_width(px(396.0)),
+        px(HISTORY_COL_BRANCH_PX + HISTORY_COL_GRAPH_MIN_PX + HISTORY_COL_MESSAGE_MIN_PX),
         HistoryBranchNamesMode::SeparateColumn,
         true,
         (true, true, true),
@@ -137,7 +150,7 @@ fn reset_widths_clamp_default_graph_in_narrow_windows() {
 
     // The graph gives way first; the branch column keeps its default.
     assert_eq!(widths.branch, px(HISTORY_COL_BRANCH_PX));
-    assert_eq!(widths.graph, px(30.0));
+    assert_eq!(widths.graph, px(HISTORY_COL_GRAPH_MIN_PX));
 }
 
 #[test]
@@ -151,7 +164,11 @@ fn reset_widths_clamp_branch_after_graph_reaches_minimum() {
     );
 
     assert_eq!(widths.graph, px(HISTORY_COL_GRAPH_MIN_PX));
-    assert_eq!(widths.branch, px(96.0));
+    assert_eq!(
+        widths.branch,
+        history_columns_available_width(px(360.0))
+            - px(HISTORY_COL_MESSAGE_MIN_PX + HISTORY_COL_GRAPH_MIN_PX)
+    );
 }
 
 #[test]
@@ -174,7 +191,7 @@ fn history_resize_state_uses_actual_visible_columns_in_narrow_windows() {
 
 #[test]
 fn history_resize_state_preserves_visible_columns_within_drag_bounds() {
-    let available = history_columns_available_width(px(836.0));
+    let available = width_for_all_columns_with_slack();
     let layout = all_columns_visible_drag_layout();
     let state = history_column_resize_state(
         HistoryColResizeHandle::Graph,
@@ -197,7 +214,7 @@ fn history_resize_state_preserves_visible_columns_within_drag_bounds() {
 
 #[test]
 fn history_resize_state_visibility_fast_path_falls_back_for_out_of_bounds_layout() {
-    let available = history_columns_available_width(px(836.0));
+    let available = width_for_all_columns_with_slack();
     let state = history_column_resize_state(
         HistoryColResizeHandle::Graph,
         px(0.0),
@@ -223,7 +240,7 @@ fn history_resize_state_visibility_fast_path_falls_back_for_out_of_bounds_layout
 
 #[test]
 fn history_resize_state_visible_columns_fast_path_rejects_stale_current_width() {
-    let available = history_columns_available_width(px(836.0));
+    let available = width_for_all_columns_with_slack();
     let layout = all_columns_visible_drag_layout();
     let state = history_column_resize_state(
         HistoryColResizeHandle::Date,

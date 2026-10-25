@@ -1,4 +1,4 @@
-//! Conflict resolver rendering for [`MainPaneView`].
+//! Conflict resolver rendering for [`DiffRenderer`].
 //!
 //! Extracted from `diff_view.rs`: the kdiff3-style three-way resolver pane,
 //! its toolbar control clusters, and the rendered (SVG/Markdown) conflict
@@ -23,6 +23,67 @@ const CONFLICT_VSPLIT_CHROME_PX: f32 = 200.0;
 /// rather than borrowing a control height it does not match.
 const CONFLICT_PANEL_HEADER_HEIGHT_PX: f32 = 24.0;
 
+/// A way out of the text resolver, offered in the bottom bar.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ConflictSave {
+    Save,
+    SaveAndStage,
+    /// The mergetool window's save: writes the result for git and exits.
+    SaveAndClose,
+}
+
+impl ConflictSave {
+    /// The bar's saves in order, the primary one last.
+    fn for_view_mode(view_mode: GitCometViewMode) -> &'static [Self] {
+        match view_mode {
+            GitCometViewMode::Normal => &[Self::Save, Self::SaveAndStage],
+            GitCometViewMode::FocusedMergetool => &[Self::SaveAndClose],
+            // A difftool window shows a snapshot, never a conflict.
+            GitCometViewMode::FocusedDiff => &[],
+        }
+    }
+
+    fn id(self) -> &'static str {
+        match self {
+            Self::Save => "conflict_save",
+            Self::SaveAndStage => "conflict_save_stage",
+            Self::SaveAndClose => "conflict_save_close",
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Save => "Save",
+            Self::SaveAndStage => "Save & stage",
+            Self::SaveAndClose => "Save & close",
+        }
+    }
+
+    fn tooltip(self) -> &'static str {
+        match self {
+            Self::Save => "Save the resolved file",
+            Self::SaveAndStage => "Save the resolved file and stage it",
+            Self::SaveAndClose => "Save the resolved file and close",
+        }
+    }
+
+    fn stages(self) -> bool {
+        match self {
+            Self::SaveAndStage => true,
+            Self::Save | Self::SaveAndClose => false,
+        }
+    }
+
+    /// The primary save is framed with an icon, like Stage.
+    fn primary_icon(self) -> Option<&'static str> {
+        match self {
+            Self::Save => None,
+            Self::SaveAndStage => Some("icons/plus.svg"),
+            Self::SaveAndClose => Some("icons/check.svg"),
+        }
+    }
+}
+
 fn scaled_panel_header_height(ui_scale_percent: u32) -> Pixels {
     crate::ui_scale::design_px_from_percent(CONFLICT_PANEL_HEADER_HEIGHT_PX, ui_scale_percent)
 }
@@ -35,49 +96,16 @@ fn conflict_output_post_layout_scroll_y(gutter_y: Pixels, editor_max_y: Pixels) 
     gutter_y.clamp(-editor_max_y.max(px(0.0)), px(0.0))
 }
 
-#[cfg(test)]
-mod wheel_tests {
-    use super::*;
-
-    #[test]
-    fn resolved_output_vertical_wheel_keeps_gutter_sync_render_scheduled() {
-        assert!(conflict_output_wheel_requires_notify(px(-1.0), false));
-        assert!(conflict_output_wheel_requires_notify(px(0.0), true));
-        assert!(!conflict_output_wheel_requires_notify(px(0.0), false));
-    }
-
-    #[test]
-    fn resolved_output_post_layout_scroll_clamps_to_editor_range() {
-        assert_eq!(
-            conflict_output_post_layout_scroll_y(px(-240.0), px(180.0)),
-            px(-180.0)
-        );
-        assert_eq!(
-            conflict_output_post_layout_scroll_y(px(-120.0), px(180.0)),
-            px(-120.0)
-        );
-        assert_eq!(
-            conflict_output_post_layout_scroll_y(px(12.0), px(180.0)),
-            px(0.0)
-        );
-    }
-}
-
-impl MainPaneView {
+impl DiffRenderer {
     /// Toolbar controls for simple conflict strategies (binary, keep/delete,
-    /// decision-only): file navigation plus resolved counts.
+    /// decision-only): resolved counts. File navigation is in the bottom bar.
     pub(super) fn conflict_toolbar_simple_controls(
         &self,
         mut controls: gpui::Div,
-        prev_file_btn: Option<AnyElement>,
-        next_file_btn: Option<AnyElement>,
         theme: AppTheme,
     ) -> gpui::Div {
         // Binary, keep/delete, and decision-only conflicts handle actions
-        // inline in their dedicated panels; only show file navigation.
-        controls = controls
-            .when_some(prev_file_btn, |d, btn| d.child(btn))
-            .when_some(next_file_btn, |d, btn| d.child(btn));
+        // inline in their dedicated panels.
         let conflict_count = self.conflict_resolver_conflict_count();
         if conflict_count > 0 {
             let resolved_count = self.conflict_resolver_resolved_count();
@@ -105,16 +133,12 @@ impl MainPaneView {
     }
 
     /// Toolbar controls for the full text resolver: conflict navigation,
-    /// pick actions, view-mode toggles, autosolve entry points, and the
-    /// save/stage completion actions.
+    /// pick actions, view-mode toggles and autosolve entry points. Its saves
+    /// sit in the bottom bar.
     pub(super) fn conflict_toolbar_full_controls(
         &self,
-        mut controls: gpui::Div,
-        prev_file_btn: Option<AnyElement>,
-        next_file_btn: Option<AnyElement>,
+        controls: gpui::Div,
         conflict_rendered_preview_active: bool,
-        repo_id: Option<RepoId>,
-        conflict_target_path: &Option<std::path::PathBuf>,
         theme: AppTheme,
         cx: &mut gpui::Context<Self>,
     ) -> gpui::Div {
@@ -126,8 +150,7 @@ impl MainPaneView {
             ui_scale_percent,
         );
         let active_pick_state = self.conflict_resolver_active_pick_state();
-        controls = controls
-            .when_some(prev_file_btn, |d, btn| d.child(btn))
+        controls
             .when(!conflict_rendered_preview_active, |d| {
                 let can_nav_prev = self.conflict_has_prev();
                 let can_nav_next = self.conflict_has_next();
@@ -169,7 +192,7 @@ impl MainPaneView {
                             theme,
                             format!(
                                 "Previous conflict (F2 / Shift+F7 / {})",
-                                crate::view::shortcut_labels::alt_shortcut("Up")
+                                crate::kit::components::alt_shortcut("Up")
                             )
                             .into(),
                         ),
@@ -192,7 +215,7 @@ impl MainPaneView {
                             theme,
                             format!(
                                 "Next conflict (F3 / F7 / {})",
-                                crate::view::shortcut_labels::alt_shortcut("Down")
+                                crate::kit::components::alt_shortcut("Down")
                             )
                             .into(),
                         ),
@@ -348,128 +371,190 @@ impl MainPaneView {
                     }
                 },
             )
-            .when_some(next_file_btn, |d, btn| d.child(btn));
+    }
 
-        if let (Some(repo_id), Some(path)) = (repo_id, conflict_target_path.clone()) {
-            let total = self.conflict_resolver_conflict_count();
-            let resolved = self.conflict_resolver_resolved_count();
-            let unresolved = total.saturating_sub(resolved);
-            let focused_mergetool_mode = self.view_mode == GitCometViewMode::FocusedMergetool;
-            let save_label = if focused_mergetool_mode {
-                "Save & close"
-            } else {
-                "Save"
-            };
-            let save_path = path.clone();
-            let stage_path = path.clone();
-            let gate_unresolved = if self.conflict_resolver.output_is_protected {
-                self.conflict_resolver_input.read_with(cx, |input, _| {
-                    usize::from(conflict_resolver::text_contains_conflict_markers(
-                        input.text(),
-                    ))
-                })
-            } else if self.conflict_resolved_output_is_streamed() {
-                unresolved
-            } else {
-                self.conflict_resolver_input.read_with(cx, |input, _| {
-                    conflict_resolver::conflict_stage_safety_check(
-                        input.text(),
-                        &self.conflict_resolver.marker_segments,
-                        &self.conflict_resolved_output_block_map,
-                    )
-                    .unresolved_blocks
-                })
-            };
-            let save_button = components::Button::new("conflict_save", save_label)
-                .style(components::ButtonStyle::Outlined)
-                .disabled(gate_unresolved > 0)
-                .on_click(theme, cx, move |this, _e, _w, cx| {
-                    let text = this.current_conflict_resolved_output_text(cx);
-                    let blocks_save = if this.conflict_resolver.output_is_protected {
-                        conflict_resolver::text_contains_conflict_markers(&text)
-                    } else {
-                        conflict_resolver::conflict_stage_safety_check(
-                            &text,
-                            &this.conflict_resolver.marker_segments,
-                            &this.conflict_resolved_output_block_map,
-                        )
-                        .blocks_save()
-                    };
-                    if blocks_save {
-                        cx.notify();
-                        return;
-                    }
-                    if this.view_mode == GitCometViewMode::FocusedMergetool {
-                        this.focused_mergetool_save_and_exit(repo_id, save_path.clone(), cx);
-                        return;
-                    }
-                    let text = this.conflict_resolver_save_contents_from_text(text);
-                    this.store.dispatch(Msg::SaveWorktreeFile {
-                        repo_id,
-                        path: save_path.clone(),
-                        contents: text,
-                        stage: false,
-                    });
-                });
-            controls = controls
-                .child(
-                    div()
-                        .w(px(1.0))
-                        .h(divider_h)
-                        .bg(theme.colors.stroke.default),
-                )
-                .child(save_button)
-                .when(show_conflict_save_stage_action(self.view_mode), |d| {
-                    let mut save_stage_btn =
-                        components::Button::new("conflict_save_stage", "Save & stage")
-                            .style(components::ButtonStyle::Filled)
-                            .disabled(gate_unresolved > 0)
-                            .on_click(theme, cx, move |this, _e, _window, cx| {
-                                let text = this.current_conflict_resolved_output_text(cx);
-                                let blocks_stage = if this.conflict_resolver.output_is_protected {
-                                    conflict_resolver::text_contains_conflict_markers(&text)
-                                } else {
-                                    conflict_resolver::conflict_stage_safety_check(
-                                        &text,
-                                        &this.conflict_resolver.marker_segments,
-                                        &this.conflict_resolved_output_block_map,
-                                    )
-                                    .blocks_save()
-                                };
-                                if blocks_stage {
-                                    cx.notify();
-                                } else {
-                                    let text = this.conflict_resolver_save_contents_from_text(text);
-                                    this.store.dispatch(Msg::SaveWorktreeFile {
-                                        repo_id,
-                                        path: stage_path.clone(),
-                                        contents: text,
-                                        stage: true,
-                                    });
-                                }
-                            });
-                    if gate_unresolved > 0 {
-                        let noun = if gate_unresolved == 1 {
-                            "conflict is"
-                        } else {
-                            "conflicts are"
-                        };
-                        save_stage_btn = save_stage_btn.gitcomet_tooltip(
-                            theme,
-                            format!("Disabled: {gate_unresolved} {noun} still unresolved").into(),
-                        );
-                    }
-                    d.child(save_stage_btn)
-                });
+    /// Binary, keep/delete and decision-only conflicts act inside their own
+    /// panels; only the full text resolver has the toolbar's picks.
+    pub(super) fn conflict_resolver_is_simple_strategy(&self) -> bool {
+        matches!(
+            self.conflict_resolver.strategy,
+            Some(
+                gitcomet_core::conflict_session::ConflictResolverStrategy::BinarySidePick
+                    | gitcomet_core::conflict_session::ConflictResolverStrategy::TwoWayKeepDelete
+                    | gitcomet_core::conflict_session::ConflictResolverStrategy::DecisionOnly
+            )
+        )
+    }
+
+    /// The text resolver's saves for the bottom bar's action slot, primary
+    /// last. Empty unless a loaded text resolver is on screen.
+    pub(super) fn conflict_save_bar_actions(
+        &self,
+        theme: AppTheme,
+        scale: crate::ui_scale::UiScale,
+        cx: &mut gpui::Context<Self>,
+    ) -> Vec<AnyElement> {
+        if self.text_conflict_save_target().is_none() {
+            return Vec::new();
         }
+        let check = self.conflict_save_check(cx);
+        let blocked = match check.unresolved_blocks {
+            0 if check.has_conflict_markers => Some(SharedString::from(
+                "Disabled: conflict markers remain in the output",
+            )),
+            0 => None,
+            1 => Some("Disabled: 1 conflict is still unresolved".into()),
+            n => Some(format!("Disabled: {n} conflicts are still unresolved").into()),
+        };
+        let pane = cx.entity().downgrade();
+        ConflictSave::for_view_mode(self.view_mode)
+            .iter()
+            .filter(|save| self.store.admits_save(save.stages()))
+            .map(|&save| {
+                let pane = pane.clone();
+                let button =
+                    components::ActionButton::new(save.id(), save.label(), move |(), cx| {
+                        let _ = pane.update(cx, |pane, cx| {
+                            pane.save_conflict_resolver_output(save, cx);
+                        });
+                    })
+                    .enabled(blocked.is_none())
+                    .with_tooltip(blocked.clone().unwrap_or_else(|| save.tooltip().into()));
+                match save.primary_icon() {
+                    Some(icon) => button.with_icon(icon).framed(),
+                    None => button,
+                }
+                .render(save.id(), (), theme, scale)
+            })
+            .collect()
+    }
 
-        controls
+    /// Where the text resolver's output saves to: only while the pane shows
+    /// the full text resolver, loaded for the conflict on screen.
+    fn text_conflict_save_target(&self) -> Option<(RepoId, std::path::PathBuf)> {
+        if self.conflict_resolver.is_binary_conflict
+            || self.conflict_resolver.strategy
+                != Some(gitcomet_core::conflict_session::ConflictResolverStrategy::FullTextResolver)
+        {
+            return None;
+        }
+        let repo_id = self.active_repo_id()?;
+        let (path, _) = self.active_conflict_target()?;
+        self.conflict_resolver
+            .matches_target(repo_id, &path)
+            .then_some((repo_id, path))
+    }
+
+    /// What keeps the resolved output from saving. The bar and the click both
+    /// ask, so an enabled save is never refused.
+    fn conflict_save_check(
+        &self,
+        cx: &mut gpui::Context<Self>,
+    ) -> conflict_resolver::ConflictStageSafetyCheck {
+        if self.conflict_resolver.output_is_protected {
+            let has_conflict_markers = self.conflict_resolver_input.read_with(cx, |input, _| {
+                conflict_resolver::text_contains_conflict_markers(input.text())
+            });
+            return conflict_resolver::ConflictStageSafetyCheck {
+                has_conflict_markers,
+                unresolved_blocks: 0,
+            };
+        }
+        if self.conflict_resolved_output_is_streamed() {
+            let total = self.conflict_resolver_conflict_count();
+            return conflict_resolver::ConflictStageSafetyCheck {
+                has_conflict_markers: false,
+                unresolved_blocks: total.saturating_sub(self.conflict_resolver_resolved_count()),
+            };
+        }
+        self.conflict_resolver_input.read_with(cx, |input, _| {
+            conflict_resolver::conflict_stage_safety_check(
+                input.text(),
+                &self.conflict_resolver.marker_segments,
+                &self.conflict_resolved_output_block_map,
+            )
+        })
+    }
+
+    /// Writes the resolved output to the conflict on screen, unless the
+    /// output is not ready to save.
+    fn save_conflict_resolver_output(&mut self, save: ConflictSave, cx: &mut gpui::Context<Self>) {
+        let Some((repo_id, path)) = self.text_conflict_save_target() else {
+            return;
+        };
+        if self.conflict_save_check(cx).blocks_save() {
+            cx.notify();
+            return;
+        }
+        let stage = match save {
+            ConflictSave::SaveAndClose => {
+                self.focused_mergetool_save_and_exit(repo_id, path, cx);
+                return;
+            }
+            ConflictSave::Save | ConflictSave::SaveAndStage => save.stages(),
+        };
+        let text = self.current_conflict_resolved_output_text(cx);
+        let text = self.conflict_resolver_save_contents_from_text(text);
+        let saved_text: Arc<str> = Arc::from(text.as_str());
+        let Some(contents) = self.conflict_output_bytes_for_save(text, cx) else {
+            return;
+        };
+        let Some(file) = self
+            .conflict_resolver
+            .cached_loaded_file_for_target(repo_id, &path)
+        else {
+            return;
+        };
+        let previous_contents = file
+            .current_bytes
+            .clone()
+            .or_else(|| file.current.as_ref().map(|text| Arc::from(text.as_bytes())));
+        let expected_contents = previous_contents.clone().map_or(
+            gitcomet_state::msg::WorktreeSaveBaseline::Absent,
+            gitcomet_state::msg::WorktreeSaveBaseline::Present,
+        );
+        let saved_contents: Arc<[u8]> = Arc::from(contents.as_bytes());
+        let (completion, completed) = smol::channel::bounded(1);
+        self.store.dispatch(Msg::SaveWorktreeFile {
+            repo_id,
+            path: path.clone(),
+            contents,
+            expected_contents,
+            stage,
+            completion: Some(completion),
+        });
+        cx.spawn(async move |view, cx| {
+            if crate::ui_runtime::background_compute(move || completed.recv_blocking()).await
+                != Ok(true)
+            {
+                return;
+            }
+            let _ = view.update(cx, |this, cx| {
+                if !this.conflict_resolver.matches_target(repo_id, &path) {
+                    return;
+                }
+                let Some(file) = &mut this.conflict_resolver.loaded_file else {
+                    return;
+                };
+                let current = file
+                    .current_bytes
+                    .clone()
+                    .or_else(|| file.current.as_ref().map(|text| Arc::from(text.as_bytes())));
+                if current != previous_contents {
+                    return;
+                }
+                file.current_bytes = Some(saved_contents);
+                file.current = Some(saved_text);
+                cx.notify();
+            });
+        })
+        .detach();
+        self.mark_conflict_resolved_output_saved(cx);
     }
 
     /// Footer bar for the text conflict resolver (section 30): live resolution
-    /// status line plus the leftover-marker indicator. The save/stage
-    /// completion actions live in the top toolbar; merge abort lives in
-    /// the action bar's "Abort merge" button.
+    /// status line plus the leftover-marker indicator. The saves live in the
+    /// bottom bar; merge abort lives in the action bar's "Abort merge" button.
     fn conflict_resolver_footer(
         &self,
         theme: AppTheme,
@@ -600,12 +685,13 @@ impl MainPaneView {
         conflict_target_path: Option<std::path::PathBuf>,
         repo_id: Option<RepoId>,
         theme: AppTheme,
-        ui_scale_percent: u32,
         editor_font_family: String,
+        window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
         let _perf_scope =
             crate::view::perf::span(crate::view::perf::ViewPerfSpan::RenderConflictResolverPane);
+        let ui_scale_percent = crate::ui_scale::UiScale::current(cx).percent();
         let repo = self.active_repo();
         match (repo, conflict_target_path) {
             (None, _) => {
@@ -639,6 +725,7 @@ impl MainPaneView {
                                     repo_id,
                                     path,
                                     &file,
+                                    window,
                                     cx,
                                 )
                             }
@@ -761,7 +848,8 @@ impl MainPaneView {
                                 })
                                 ;
 
-                            let preview_kind = super::super::preview_path_rendered_kind(&path);
+                            let preview_kind = super::super::preview_path_rendered_kind(&path)
+                                .filter(|kind| *kind != RenderedPreviewKind::Diagram);
                             let show_preview_toggle = preview_kind.is_some();
                             let preview_mode = self.conflict_resolver.resolver_preview_mode;
                             let is_rendered_preview_active =
@@ -1240,10 +1328,10 @@ impl MainPaneView {
                             } else if is_rendered_preview_active {
                                 match preview_kind {
                                     Some(RenderedPreviewKind::Svg) => self
-                                        .render_conflict_resolver_svg_preview(theme, cx),
+                                        .render_conflict_resolver_svg_preview(theme, window, cx),
                                     Some(RenderedPreviewKind::Markdown) => self
                                         .render_conflict_resolver_markdown_preview(theme, cx),
-                                    None => components::empty_state(
+                                    None | Some(RenderedPreviewKind::Diagram) => components::empty_state(
                                         theme,
                                         "Preview",
                                         "Preview is not available for this file.",
@@ -1716,6 +1804,7 @@ impl MainPaneView {
                                         components::MinimapColumn::new(
                                             "conflict_minimap",
                                             self.conflict_resolver.minimap_bands.clone(),
+                                            minimap_band_color,
                                         )
                                         .width(minimap_w)
                                         .driver(self.conflict_resolver_diff_scroll.clone())
@@ -2264,6 +2353,7 @@ impl MainPaneView {
     fn render_conflict_resolver_svg_preview(
         &mut self,
         theme: AppTheme,
+        window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
         let ui_scale_percent = crate::ui_scale::current(cx).percent;
@@ -2293,10 +2383,18 @@ impl MainPaneView {
             .image(ThreeWayColumn::Theirs)
             .clone();
 
-        let preview_cell = |id: &'static str,
-                            label: &'static str,
-                            image: Loadable<Option<ConflictPreviewImage>>,
-                            has_source: bool| {
+        let group = self.prepare_conflict_image_preview(window, cx);
+        let sources = self
+            .conflict_resolver
+            .image_preview
+            .sources
+            .each_ref()
+            .map(Option::is_some);
+        let mut preview_cell = |side: usize,
+                                id: &'static str,
+                                label: &'static str,
+                                image: Loadable<Option<ConflictPreviewImage>>,
+                                has_source: bool| {
             div()
                 .id(id)
                 .flex_1()
@@ -2327,40 +2425,44 @@ impl MainPaneView {
                         .flex()
                         .items_center()
                         .justify_center()
-                        .child(match image {
-                            Loadable::Ready(Some(ConflictPreviewImage::Encoded(image))) => {
-                                gpui::img(image)
-                                    .w_full()
-                                    .h_full()
-                                    .object_fit(gpui::ObjectFit::Contain)
-                                    .into_any_element()
+                        .child(if sources[side] {
+                            self.image_preview_viewport(group.clone(), side, cx)
+                        } else {
+                            match image {
+                                Loadable::Ready(Some(ConflictPreviewImage::Encoded(image))) => {
+                                    gpui::img(image)
+                                        .w_full()
+                                        .h_full()
+                                        .object_fit(gpui::ObjectFit::Contain)
+                                        .into_any_element()
+                                }
+                                Loadable::Ready(Some(ConflictPreviewImage::Rendered(image))) => {
+                                    preview_render_image_element(image, 0, clamp_preview_size)
+                                        .w_full()
+                                        .h_full()
+                                        .into_any_element()
+                                }
+                                Loadable::NotLoaded | Loadable::Loading if has_source => div()
+                                    .text_size(theme.ui_text(12.0))
+                                    .text_color(theme.colors.foreground.secondary)
+                                    .child("Processing preview...")
+                                    .into_any_element(),
+                                Loadable::Error(error) => div()
+                                    .text_size(theme.ui_text(12.0))
+                                    .text_color(theme.colors.foreground.secondary)
+                                    .child(error)
+                                    .into_any_element(),
+                                Loadable::Ready(None) if has_source => div()
+                                    .text_size(theme.ui_text(12.0))
+                                    .text_color(theme.colors.foreground.secondary)
+                                    .child("Preview unavailable.")
+                                    .into_any_element(),
+                                _ => div()
+                                    .text_size(theme.ui_text(12.0))
+                                    .text_color(theme.colors.foreground.secondary)
+                                    .child("(empty)")
+                                    .into_any_element(),
                             }
-                            Loadable::Ready(Some(ConflictPreviewImage::Rendered(image))) => {
-                                preview_render_image_element(image, 0, clamp_preview_size)
-                                    .w_full()
-                                    .h_full()
-                                    .into_any_element()
-                            }
-                            Loadable::NotLoaded | Loadable::Loading if has_source => div()
-                                .text_size(theme.ui_text(12.0))
-                                .text_color(theme.colors.foreground.secondary)
-                                .child("Processing preview...")
-                                .into_any_element(),
-                            Loadable::Error(error) => div()
-                                .text_size(theme.ui_text(12.0))
-                                .text_color(theme.colors.foreground.secondary)
-                                .child(error)
-                                .into_any_element(),
-                            Loadable::Ready(None) if has_source => div()
-                                .text_size(theme.ui_text(12.0))
-                                .text_color(theme.colors.foreground.secondary)
-                                .child("Preview unavailable.")
-                                .into_any_element(),
-                            _ => div()
-                                .text_size(theme.ui_text(12.0))
-                                .text_color(theme.colors.foreground.secondary)
-                                .child("(empty)")
-                                .into_any_element(),
                         }),
                 )
         };
@@ -2375,18 +2477,21 @@ impl MainPaneView {
             .p_2()
             .bg(theme.colors.surface.canvas)
             .child(preview_cell(
+                0,
                 "conflict_preview_base",
                 "Base (A)",
                 base_img,
                 base_has_source,
             ))
             .child(preview_cell(
+                1,
                 "conflict_preview_ours",
                 "Local (B)",
                 ours_img,
                 ours_has_source,
             ))
             .child(preview_cell(
+                2,
                 "conflict_preview_theirs",
                 "Remote (C)",
                 theirs_img,
@@ -2400,8 +2505,10 @@ impl MainPaneView {
         theme: AppTheme,
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
-        self.ensure_conflict_markdown_preview_cache();
+        self.ensure_conflict_markdown_preview_cache(cx);
         self.sync_conflict_preview_scroll();
+        // One matcher for the three columns: each compiles a regex.
+        let query = self.markdown_preview_search_query();
 
         let scroll_for = |side: ThreeWayColumn| -> ScrollHandle {
             match side {
@@ -2415,11 +2522,14 @@ impl MainPaneView {
             .clone()
         };
 
-        let row_count = |side: ThreeWayColumn| -> usize {
-            match self.conflict_resolver.markdown_preview.document(side) {
+        // The shared scrollbar follows the column with the most to scroll;
+        // before the first layout, the longest document.
+        let extent = |side: ThreeWayColumn| -> (f32, usize) {
+            let rows = match self.conflict_resolver.markdown_preview.document(side) {
                 Loadable::Ready(doc) => doc.rows.len(),
                 _ => 0,
-            }
+            };
+            (f32::from(scroll_for(side).max_offset().y), rows)
         };
         let tallest = [
             ThreeWayColumn::Base,
@@ -2427,7 +2537,10 @@ impl MainPaneView {
             ThreeWayColumn::Theirs,
         ]
         .into_iter()
-        .max_by_key(|s| row_count(*s))
+        .max_by(|a, b| {
+            let (a, b) = (extent(*a), extent(*b));
+            a.0.total_cmp(&b.0).then(a.1.cmp(&b.1))
+        })
         .unwrap_or(ThreeWayColumn::Base);
         let vertical_handle = scroll_for(tallest);
         let vertical_sync_enabled = self.diff_scroll_sync.includes_vertical();
@@ -2445,6 +2558,9 @@ impl MainPaneView {
             .relative()
             .flex_1()
             .min_h(px(0.0))
+            // A column, so the row of documents gets a height to scroll in.
+            .flex()
+            .flex_col()
             .w_full()
             .p_2()
             .bg(theme.colors.surface.canvas)
@@ -2459,16 +2575,19 @@ impl MainPaneView {
                     .child(self.render_conflict_markdown_preview_column(
                         theme,
                         ThreeWayColumn::Base,
+                        query.clone(),
                         cx,
                     ))
                     .child(self.render_conflict_markdown_preview_column(
                         theme,
                         ThreeWayColumn::Ours,
+                        query.clone(),
                         cx,
                     ))
                     .child(self.render_conflict_markdown_preview_column(
                         theme,
                         ThreeWayColumn::Theirs,
+                        query.clone(),
                         cx,
                     )),
             )
@@ -2489,15 +2608,17 @@ impl MainPaneView {
         &mut self,
         theme: AppTheme,
         side: ThreeWayColumn,
+        query: Option<rows::MarkdownPreviewQuery>,
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
+        let tab_width = self.display_tab_width;
+
         let ui_scale_percent = crate::ui_scale::current(cx).percent;
-        let (id, list_id, vscrollbar_id, hscrollbar_id, label, scroll) = match side {
+        let (id, list_id, vscrollbar_id, label, scroll) = match side {
             ThreeWayColumn::Base => (
                 "conflict_preview_base",
                 "conflict_preview_base_list",
                 "conflict_preview_base_scrollbar",
-                "conflict_preview_base_hscrollbar",
                 "Base (A)",
                 self.conflict_resolver_diff_scroll.clone(),
             ),
@@ -2505,7 +2626,6 @@ impl MainPaneView {
                 "conflict_preview_ours",
                 "conflict_preview_ours_list",
                 "conflict_preview_ours_scrollbar",
-                "conflict_preview_ours_hscrollbar",
                 "Local (B)",
                 self.conflict_preview_ours_scroll.clone(),
             ),
@@ -2513,7 +2633,6 @@ impl MainPaneView {
                 "conflict_preview_theirs",
                 "conflict_preview_theirs_list",
                 "conflict_preview_theirs_scrollbar",
-                "conflict_preview_theirs_hscrollbar",
                 "Remote (C)",
                 self.conflict_preview_theirs_scroll.clone(),
             ),
@@ -2533,22 +2652,46 @@ impl MainPaneView {
                 .into_any_element()
         };
 
-        // Macro to build the column list+scrollbar from a side-specific processor.
-        // Each side needs its own fn item type for `cx.processor()`.
-        macro_rules! mk_list {
-            ($document:expr, $processor:expr) => {{
-                let list = uniform_list(list_id, $document.rows.len(), cx.processor($processor))
-                    .h_full()
-                    .min_h(px(0.0))
-                    .track_scroll(&scroll)
-                    .with_horizontal_sizing_behavior(
-                        gpui::ListHorizontalSizingBehavior::Unconstrained,
-                    );
+        let body = match self.conflict_resolver.markdown_preview.document(side) {
+            Loadable::NotLoaded | Loadable::Loading => status("Processing preview…".into()),
+            Loadable::Error(error) => status(error.clone().into()),
+            Loadable::Ready(document) if document.rows.is_empty() => status("Empty file.".into()),
+            Loadable::Ready(document) => {
+                // The file preview's renderer, read-only: the columns are for
+                // comparing, and scroll in step through their shared handles.
+                let document = Arc::clone(document);
+                let column = self.conflict_resolver.markdown_preview.columns[side].clone();
+                let handle = scroll.0.borrow().base_handle.clone();
+                let context = rows::MarkdownDocumentContext {
+                    theme,
+                    ui_scale_percent,
+                    editor_font_family: crate::font_preferences::current_editor_font_family(cx)
+                        .into(),
+                    image_root: self.conflict_markdown_image_root(),
+                    remote_image_access: self.markdown_remote_image_access(Some(cx.entity())),
+                    picture_sizes: Default::default(),
+                    drawn_pictures: None,
+                    row_boxes: Default::default(),
+                    block_scrolls: column.block_scrolls,
+                    blocks: column.blocks,
+                    layout: column.layout,
+                    view: None,
+                    text_region: DiffTextRegion::Inline,
+                    change_bar_color: None,
+                    query,
+                    reveal: column.reveal,
+                    scroll: Some(handle.clone()),
+                    diagram_heights: crate::view::diagram_preview::block::DiagramHeights::new(cx),
+                    hovered_link: None,
+                    change_extents: None,
+                    tasks_editable: false,
+                    disclosures: None,
+                };
                 let vertical_scrollbar_gutter = if vertical_sync_enabled {
                     px(0.0)
                 } else {
                     components::Scrollbar::visible_gutter(
-                        scroll.clone(),
+                        handle.clone(),
                         components::ScrollbarAxis::Vertical,
                     )
                 };
@@ -2558,41 +2701,24 @@ impl MainPaneView {
                     .min_h(px(0.0))
                     .child(
                         div()
-                            .h_full()
+                            .id(list_id)
+                            .size_full()
                             .min_h(px(0.0))
+                            .overflow_y_scroll()
+                            .track_scroll(&handle)
                             .pr(vertical_scrollbar_gutter)
-                            .child(list),
+                            .child(rows::render_markdown_document(
+                                tab_width, &document, &context,
+                            )),
                     )
                     .when(!vertical_sync_enabled, |d| {
                         d.child(
-                            components::Scrollbar::new(vscrollbar_id, scroll.clone())
+                            components::Scrollbar::new(vscrollbar_id, handle)
                                 .always_visible()
                                 .render(theme),
                         )
                     })
-                    .child(
-                        components::Scrollbar::horizontal(hscrollbar_id, scroll.clone())
-                            .always_visible()
-                            .render(theme),
-                    )
                     .into_any_element()
-            }};
-        }
-
-        let body = match (side, self.conflict_resolver.markdown_preview.document(side)) {
-            (_, Loadable::NotLoaded | Loadable::Loading) => status("Processing preview…".into()),
-            (_, Loadable::Error(error)) => status(error.clone().into()),
-            (_, Loadable::Ready(document)) if document.rows.is_empty() => {
-                status("Empty file.".into())
-            }
-            (ThreeWayColumn::Base, Loadable::Ready(doc)) => {
-                mk_list!(doc, Self::render_conflict_markdown_base_rows)
-            }
-            (ThreeWayColumn::Ours, Loadable::Ready(doc)) => {
-                mk_list!(doc, Self::render_conflict_markdown_ours_rows)
-            }
-            (ThreeWayColumn::Theirs, Loadable::Ready(doc)) => {
-                mk_list!(doc, Self::render_conflict_markdown_theirs_rows)
             }
         };
 
@@ -2622,9 +2748,125 @@ impl MainPaneView {
                 div()
                     .flex_1()
                     .min_h(px(0.0))
+                    .flex()
+                    .flex_col()
                     .bg(theme.colors.surface.canvas)
                     .child(body),
             )
             .into_any_element()
+    }
+}
+
+/// Each side's change color, a muted settled conflict, and the danger color
+/// for conflicts still open.
+fn minimap_band_color(
+    theme: AppTheme,
+    kind: gitcomet_core::merge::MinimapRowKind,
+) -> Option<gpui::Rgba> {
+    use gitcomet_core::merge::MinimapRowKind;
+    let changed_alpha = if theme.is_dark { 0.85 } else { 0.70 };
+    // A settled conflict drops to a muted neutral, so the red that remains is
+    // exactly the work left and it reads as neither side's change color.
+    let resolved_alpha = if theme.is_dark { 0.45 } else { 0.35 };
+    let (mut color, alpha) = match kind {
+        MinimapRowKind::Unchanged => return None,
+        MinimapRowKind::LocalChanged => (theme.colors.diff.added.foreground, changed_alpha),
+        MinimapRowKind::RemoteChanged => (theme.colors.accent.foreground, changed_alpha),
+        MinimapRowKind::ResolvedConflict => (theme.colors.foreground.secondary, resolved_alpha),
+        MinimapRowKind::Conflict => (theme.colors.status.danger.foreground, changed_alpha),
+    };
+    color.alpha = alpha;
+    Some(color)
+}
+
+#[cfg(test)]
+mod conflict_save_tests {
+    use super::ConflictSave;
+    use crate::view::GitCometViewMode;
+
+    #[test]
+    fn only_the_main_window_stages_and_only_a_mergetool_closes() {
+        let labels = |mode| {
+            ConflictSave::for_view_mode(mode)
+                .iter()
+                .map(|save| save.label())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(labels(GitCometViewMode::Normal), ["Save", "Save & stage"]);
+        assert_eq!(labels(GitCometViewMode::FocusedMergetool), ["Save & close"]);
+        assert!(labels(GitCometViewMode::FocusedDiff).is_empty());
+    }
+
+    #[test]
+    fn only_save_and_stage_stages() {
+        let saves = [
+            ConflictSave::Save,
+            ConflictSave::SaveAndStage,
+            ConflictSave::SaveAndClose,
+        ];
+        assert_eq!(saves.map(ConflictSave::stages), [false, true, false]);
+    }
+}
+
+#[cfg(test)]
+mod minimap_color_tests {
+    use super::minimap_band_color;
+    use crate::theme::AppTheme;
+    use gitcomet_core::merge::MinimapRowKind;
+
+    #[test]
+    fn unchanged_bands_are_not_painted() {
+        let theme = AppTheme::gitcomet_dark();
+        assert!(minimap_band_color(theme, MinimapRowKind::Unchanged).is_none());
+        assert!(minimap_band_color(theme, MinimapRowKind::Conflict).is_some());
+        assert!(minimap_band_color(theme, MinimapRowKind::LocalChanged).is_some());
+        assert!(minimap_band_color(theme, MinimapRowKind::RemoteChanged).is_some());
+    }
+
+    #[test]
+    fn a_resolved_conflict_is_painted_but_not_in_the_conflict_color() {
+        for theme in [AppTheme::gitcomet_dark(), AppTheme::gitcomet_light()] {
+            let resolved = minimap_band_color(theme, MinimapRowKind::ResolvedConflict)
+                .expect("a resolved conflict still marks its rows");
+            let open = minimap_band_color(theme, MinimapRowKind::Conflict)
+                .expect("an open conflict paints");
+            assert_ne!(
+                (resolved.red, resolved.green, resolved.blue),
+                (open.red, open.green, open.blue),
+                "a resolved conflict must not keep the open-conflict hue",
+            );
+            assert!(
+                resolved.alpha < open.alpha,
+                "a resolved conflict should recede: {resolved:?} vs {open:?}",
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod wheel_tests {
+    use super::*;
+
+    #[test]
+    fn resolved_output_vertical_wheel_keeps_gutter_sync_render_scheduled() {
+        assert!(conflict_output_wheel_requires_notify(px(-1.0), false));
+        assert!(conflict_output_wheel_requires_notify(px(0.0), true));
+        assert!(!conflict_output_wheel_requires_notify(px(0.0), false));
+    }
+
+    #[test]
+    fn resolved_output_post_layout_scroll_clamps_to_editor_range() {
+        assert_eq!(
+            conflict_output_post_layout_scroll_y(px(-240.0), px(180.0)),
+            px(-180.0)
+        );
+        assert_eq!(
+            conflict_output_post_layout_scroll_y(px(-120.0), px(180.0)),
+            px(-120.0)
+        );
+        assert_eq!(
+            conflict_output_post_layout_scroll_y(px(12.0), px(180.0)),
+            px(0.0)
+        );
     }
 }

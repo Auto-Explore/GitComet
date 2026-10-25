@@ -17,29 +17,51 @@ pub(crate) fn bench_fs_event(c: &mut Criterion) {
 
     group.bench_function(
         BenchmarkId::from_parameter("single_file_save_to_status_update"),
-        |b| b.iter(|| single_save.run()),
+        |b| b.iter_custom(|iters| time_status_refresh(&single_save, iters)),
     );
     group.bench_function(
         BenchmarkId::from_parameter("git_checkout_200_files_to_status_update"),
-        |b| b.iter(|| checkout_batch.run()),
+        |b| b.iter_custom(|iters| time_status_refresh(&checkout_batch, iters)),
     );
     group.bench_function(
         BenchmarkId::from_parameter("rapid_saves_debounce_coalesce"),
-        |b| b.iter(|| rapid_saves.run()),
+        |b| b.iter_custom(|iters| time_status_refresh(&rapid_saves, iters)),
     );
     group.bench_function(
         BenchmarkId::from_parameter("false_positive_rate_under_churn"),
-        |b| b.iter(|| false_positive.run()),
+        |b| b.iter_custom(|iters| time_status_refresh(&false_positive, iters)),
     );
     group.finish();
 
-    // Emit sidecar metrics from a final run.
-    let (_, single_save_metrics) = measure_sidecar_allocations(|| single_save.run_with_metrics());
+    // Sidecar allocations cover the refresh alone, like the timings.
+    let single_save_metrics = measure_refresh_allocations(&single_save);
     emit_fs_event_sidecar("single_file_save_to_status_update", &single_save_metrics);
-    let (_, checkout_metrics) = measure_sidecar_allocations(|| checkout_batch.run_with_metrics());
+    let checkout_metrics = measure_refresh_allocations(&checkout_batch);
     emit_fs_event_sidecar("git_checkout_200_files_to_status_update", &checkout_metrics);
-    let (_, rapid_metrics) = measure_sidecar_allocations(|| rapid_saves.run_with_metrics());
+    let rapid_metrics = measure_refresh_allocations(&rapid_saves);
     emit_fs_event_sidecar("rapid_saves_debounce_coalesce", &rapid_metrics);
-    let (_, fp_metrics) = measure_sidecar_allocations(|| false_positive.run_with_metrics());
+    let fp_metrics = measure_refresh_allocations(&false_positive);
     emit_fs_event_sidecar("false_positive_rate_under_churn", &fp_metrics);
+}
+
+/// Only the status refresh is timed; the disk writes that trigger it and the
+/// restoration afterwards are setup.
+fn time_status_refresh(fixture: &FsEventFixture, iters: u64) -> Duration {
+    let mut elapsed = Duration::ZERO;
+    for _ in 0..iters {
+        let mutation = fixture.apply_mutation();
+        let started = Instant::now();
+        let refreshed = fixture.refresh_status(&mutation);
+        elapsed += started.elapsed();
+        std::hint::black_box(refreshed);
+        fixture.restore(mutation);
+    }
+    elapsed
+}
+
+fn measure_refresh_allocations(fixture: &FsEventFixture) -> FsEventMetrics {
+    let mutation = fixture.apply_mutation();
+    let (_, metrics) = measure_sidecar_allocations(|| fixture.refresh_status(&mutation));
+    fixture.restore(mutation);
+    metrics
 }

@@ -1,0 +1,6 @@
+stateDiagram-v2
+%%{init: {broken}}%%
+[*] --> Idle
+Idle --> Active : start
+state "Waiting" as Wait
+Wait --> Active

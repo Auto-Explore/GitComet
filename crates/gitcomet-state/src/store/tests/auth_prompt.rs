@@ -1,21 +1,40 @@
 use super::*;
 use crate::model::{AuthPromptKind, AuthPromptState, AuthRetryOperation, PendingCommitRetry};
+use crate::msg::RepoCommandEffect;
+use crate::store::repository_runtime::RepositoryRuntimes;
 use gitcomet_core::auth::{
     GitAuthKind, StagedGitAuth, clear_staged_git_auth, stage_git_auth, take_staged_git_auth,
 };
 use gitcomet_core::domain::Upstream;
 use gitcomet_core::services::{ConflictSide, RemoteUrlKind, ResetMode};
 
+mod feedback;
+mod validation;
+
+fn assert_auth_attempt_is_recoverable(state: &AppState) {
+    let feedback = &state.repos[0].feedback;
+    assert!(feedback.last_error.is_none());
+    let entry = feedback.command_log.last().expect("auth attempt logged");
+    assert!(!entry.ok);
+    assert!(entry.handled_by_auth_prompt);
+}
+
+fn assert_terminal_failure(state: &AppState) {
+    assert!(state.auth_prompt.is_none());
+    let feedback = &state.repos[0].feedback;
+    assert!(feedback.last_error.is_some());
+    let entry = feedback.command_log.last().expect("failed attempt logged");
+    assert!(!entry.ok);
+    assert!(!entry.handled_by_auth_prompt);
+}
+
 fn auth_error(message: &str) -> Error {
     Error::new(ErrorKind::Backend(message.to_string()))
 }
 
-fn setup_open_repo(
-    repo_id: RepoId,
-    workdir: &str,
-) -> (FxHashMap<RepoId, Arc<dyn GitRepository>>, AppState) {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
-    repos.insert(repo_id, Arc::new(DummyRepo::new(workdir)));
+fn setup_open_repo(repo_id: RepoId, workdir: &str) -> (RepositoryRuntimes, AppState) {
+    let mut repos: RepositoryRuntimes = Default::default();
+    repos.attach_repository_for_test(repo_id, Arc::new(DummyRepo::new(workdir)));
 
     let mut state = AppState::test_default();
     state.repos.push(RepoState::new_opening(
@@ -28,33 +47,200 @@ fn setup_open_repo(
     (repos, state)
 }
 
-fn effect_git_auth(effect: &Effect) -> Option<&StagedGitAuth> {
-    match effect {
-        Effect::CloneRepo { auth, .. }
-        | Effect::AddSubmodule { auth, .. }
-        | Effect::UpdateSubmodules { auth, .. }
-        | Effect::Commit { auth, .. }
-        | Effect::CommitAmend { auth, .. }
-        | Effect::SafePushAfterCommit { auth, .. }
-        | Effect::FetchAll { auth, .. }
-        | Effect::Pull { auth, .. }
-        | Effect::PullBranch { auth, .. }
-        | Effect::PushWithTags { auth, .. }
-        | Effect::Push { auth, .. }
-        | Effect::PushAfterCommit { auth, .. }
-        | Effect::ForcePush { auth, .. }
-        | Effect::ForcePushWithLease { auth, .. }
-        | Effect::PushSetUpstream { auth, .. }
-        | Effect::DeleteRemoteBranch { auth, .. }
-        | Effect::DeleteRemoteBranches { auth, .. }
-        | Effect::PushTag { auth, .. }
-        | Effect::DeleteRemoteTag { auth, .. } => auth.as_ref(),
-        _ => None,
+#[test]
+fn review_busy_annex_auth_retry_keeps_credentials_until_push_runs() {
+    use gitcomet_core::large_files::LargeFileCommand as C;
+    let _lock = super::staged_auth_test_lock();
+    clear_staged_git_auth();
+    let repo_id = RepoId(1);
+    let (mut repos, mut state) = setup_open_repo(repo_id, "/tmp/repo");
+    let id_alloc = AtomicU64::new(1);
+    reduce(&mut repos, &id_alloc, &mut state, Msg::Push { repo_id });
+    state.auth_prompt = Some(AuthPromptState {
+        generation: 1,
+        challenge: None,
+        status: crate::model::AuthPromptStatus::AwaitingInput,
+        kind: AuthPromptKind::UsernamePassword,
+        reason: "auth required".into(),
+        operation: AuthRetryOperation::RepoCommand {
+            repo_id,
+            command: RepoCommandKind::LargeFile {
+                command: C::AnnexPush { content: true },
+            },
+        },
+    });
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::SubmitAuthPrompt {
+            generation: 1,
+            username: Some("alice".into()),
+            secret: "test-token".into(),
+        },
+    );
+    assert!(effects.is_empty(), "wait until the push finishes");
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
+            repo_id,
+            command: RepoCommandKind::Push,
+            result: Ok(gitcomet_core::services::CommandOutput::default()),
+        }),
+    );
+    let auth = effects
+        .iter()
+        .find_map(|effect| match effect {
+            Effect::RepoCommand(RepoCommandEffect::RunLargeFileCommand {
+                command: C::AnnexPush { content: true },
+                auth,
+                ..
+            }) => auth.as_ref(),
+            _ => None,
+        })
+        .expect("the queued retry must keep its credentials");
+    assert_eq!(auth.username.as_deref(), Some("alice"));
+    assert_eq!(auth.secret, "test-token");
+    clear_staged_git_auth();
+}
+
+/// With nothing busy to queue behind, a large-file retry runs at once; the
+/// immediate effect must carry the credentials the user just typed.
+#[test]
+fn large_file_auth_retry_runs_with_the_submitted_credentials() {
+    use gitcomet_core::large_files::LargeFileCommand as C;
+    let _lock = super::staged_auth_test_lock();
+    let context = gitcomet_core::services::SafePushAfterCommitContext {
+        amend: false,
+        local_branch: Some("adjusted/main(unlocked)".into()),
+        pre_head: None,
+        post_head: None,
+    };
+    for (operation, expected) in [
+        (
+            AuthRetryOperation::RepoCommand {
+                repo_id: RepoId(1),
+                command: RepoCommandKind::LargeFile {
+                    command: C::LfsFetchAll,
+                },
+            },
+            C::LfsFetchAll,
+        ),
+        (
+            AuthRetryOperation::SafePushAfterCommit {
+                repo_id: RepoId(1),
+                context,
+            },
+            C::AnnexPush { content: false },
+        ),
+    ] {
+        clear_staged_git_auth();
+        let (mut repos, mut state) = setup_open_repo(RepoId(1), "/tmp/repo");
+        let mut support = gitcomet_core::large_files::LargeFileSupport::default();
+        support.annex.uuid = Some("here".into());
+        state.repos[0].large_file_support = Loadable::Ready(Arc::new(support));
+        state.repos[0].head_branch = Loadable::Ready("adjusted/main(unlocked)".into());
+        state.auth_prompt = Some(AuthPromptState {
+            generation: 1,
+            challenge: None,
+            status: crate::model::AuthPromptStatus::AwaitingInput,
+            kind: AuthPromptKind::UsernamePassword,
+            reason: "auth required".into(),
+            operation,
+        });
+        let effects = reduce(
+            &mut repos,
+            &AtomicU64::new(1),
+            &mut state,
+            Msg::SubmitAuthPrompt {
+                generation: 1,
+                username: Some("alice".into()),
+                secret: "test-token".into(),
+            },
+        );
+        let auth = effects
+            .iter()
+            .find(|effect| matches!(effect, Effect::RepoCommand(RepoCommandEffect::RunLargeFileCommand { command, .. }) if *command == expected))
+            .unwrap_or_else(|| panic!("expected {expected:?}: {effects:?}"))
+            .git_auth()
+            .unwrap_or_else(|| panic!("{expected:?} must carry the credentials"));
+        assert_eq!(auth.username.as_deref(), Some("alice"));
+        assert_eq!(auth.secret, "test-token");
     }
+    clear_staged_git_auth();
+}
+
+#[test]
+fn safe_push_auth_retry_preserves_credentials_when_annex_takeover_is_queued() {
+    use gitcomet_core::large_files::LargeFileCommand as C;
+    let _lock = super::staged_auth_test_lock();
+    clear_staged_git_auth();
+    let repo_id = RepoId(1);
+    let (mut repos, mut state) = setup_open_repo(repo_id, "/tmp/repo");
+    let mut support = gitcomet_core::large_files::LargeFileSupport::default();
+    support.annex.uuid = Some("here".into());
+    state.repos[0].large_file_support = Loadable::Ready(Arc::new(support));
+    state.repos[0].head_branch = Loadable::Ready("adjusted/main(unlocked)".into());
+    let id_alloc = AtomicU64::new(1);
+    reduce(&mut repos, &id_alloc, &mut state, Msg::Push { repo_id });
+    state.auth_prompt = Some(AuthPromptState {
+        generation: 1,
+        challenge: None,
+        status: crate::model::AuthPromptStatus::AwaitingInput,
+        kind: AuthPromptKind::UsernamePassword,
+        reason: "auth required".into(),
+        operation: AuthRetryOperation::SafePushAfterCommit {
+            repo_id,
+            context: gitcomet_core::services::SafePushAfterCommitContext {
+                amend: false,
+                local_branch: Some("adjusted/main(unlocked)".into()),
+                pre_head: None,
+                post_head: None,
+            },
+        },
+    });
+    assert!(
+        reduce(
+            &mut repos,
+            &id_alloc,
+            &mut state,
+            Msg::SubmitAuthPrompt {
+                generation: 1,
+                username: Some("alice".into()),
+                secret: "test-token".into(),
+            }
+        )
+        .is_empty()
+    );
+    assert_eq!(state.repos[0].pending.large_file_commands.len(), 1);
+    assert_eq!(
+        state.repos[0].pending.large_file_commands[0]
+            .auth
+            .as_ref()
+            .map(|auth| auth.secret.as_str()),
+        Some("test-token")
+    );
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
+            repo_id,
+            command: RepoCommandKind::LargeFile {
+                command: C::AnnexPush { content: false },
+            },
+            result: Ok(gitcomet_core::services::CommandOutput::default()),
+        }),
+    );
+    assert!(effects.iter().any(|effect| matches!(effect, Effect::RepoCommand(RepoCommandEffect::RunLargeFileCommand { auth: Some(auth), .. }) if auth.secret == "test-token")));
+    clear_staged_git_auth();
 }
 
 #[test]
 fn repo_command_finished_auth_error_sets_username_password_prompt() {
+    let _lock = super::staged_auth_test_lock();
     let repo_id = RepoId(1);
     let (mut repos, mut state) = setup_open_repo(repo_id, "/tmp/repo");
     let id_alloc = AtomicU64::new(1);
@@ -72,6 +258,7 @@ fn repo_command_finished_auth_error_sets_username_password_prompt() {
         }),
     );
 
+    assert_auth_attempt_is_recoverable(&state);
     let prompt = state.auth_prompt.expect("expected auth prompt");
     assert_eq!(prompt.kind, AuthPromptKind::UsernamePassword);
     assert!(prompt.reason.contains("could not read Username"));
@@ -86,6 +273,7 @@ fn repo_command_finished_auth_error_sets_username_password_prompt() {
 
 #[test]
 fn repo_command_finished_auth_error_sets_passphrase_prompt() {
+    let _lock = super::staged_auth_test_lock();
     let repo_id = RepoId(1);
     let (mut repos, mut state) = setup_open_repo(repo_id, "/tmp/repo");
     let id_alloc = AtomicU64::new(1);
@@ -105,6 +293,7 @@ fn repo_command_finished_auth_error_sets_passphrase_prompt() {
         }),
     );
 
+    assert_auth_attempt_is_recoverable(&state);
     let prompt = state.auth_prompt.expect("expected auth prompt");
     assert_eq!(prompt.kind, AuthPromptKind::Passphrase);
     assert!(prompt.reason.contains("passphrase"));
@@ -121,6 +310,7 @@ fn repo_command_finished_auth_error_sets_passphrase_prompt() {
 
 #[test]
 fn repo_command_finished_host_key_error_sets_host_verification_prompt() {
+    let _lock = super::staged_auth_test_lock();
     let repo_id = RepoId(1);
     let (mut repos, mut state) = setup_open_repo(repo_id, "/tmp/repo");
     let id_alloc = AtomicU64::new(1);
@@ -135,11 +325,12 @@ fn repo_command_finished_host_key_error_sets_host_verification_prompt() {
                 mode: PullMode::Default,
             },
             result: Err(auth_error(
-                "git pull --no-rebase origin main failed: Host key verification failed.\nfatal: Could not read from remote repository.",
+                "git pull --no-rebase origin main failed: Host key verification failed.\nAre you sure you want to continue connecting (yes/no/[fingerprint])?",
             )),
         }),
     );
 
+    assert_auth_attempt_is_recoverable(&state);
     let prompt = state.auth_prompt.expect("expected auth prompt");
     assert_eq!(prompt.kind, AuthPromptKind::HostVerification);
     assert!(prompt.reason.contains("Host key verification failed"));
@@ -173,7 +364,7 @@ fn repo_command_finished_non_auth_error_does_not_set_prompt() {
         }),
     );
 
-    assert!(state.auth_prompt.is_none());
+    assert_terminal_failure(&state);
 }
 
 #[test]
@@ -206,12 +397,13 @@ fn repo_command_finished_auth_error_does_not_prompt_for_non_replayable_commands(
                 )),
             }),
         );
-        assert!(state.auth_prompt.is_none());
+        assert_terminal_failure(&state);
     }
 }
 
 #[test]
 fn commit_finished_auth_error_uses_pending_retry_and_clears_it() {
+    let _lock = super::staged_auth_test_lock();
     let repo_id = RepoId(1);
     let (mut repos, mut state) = setup_open_repo(repo_id, "/tmp/repo");
     let id_alloc = AtomicU64::new(1);
@@ -234,6 +426,7 @@ fn commit_finished_auth_error_uses_pending_retry_and_clears_it() {
     );
 
     assert!(state.repos[0].pending.commit_retry.is_none());
+    assert_auth_attempt_is_recoverable(&state);
     let prompt = state.auth_prompt.expect("expected auth prompt");
     assert_eq!(prompt.kind, AuthPromptKind::UsernamePassword);
     assert_eq!(
@@ -265,11 +458,12 @@ fn commit_finished_auth_error_without_pending_retry_does_not_prompt() {
         }),
     );
 
-    assert!(state.auth_prompt.is_none());
+    assert_terminal_failure(&state);
 }
 
 #[test]
 fn commit_amend_finished_auth_error_uses_pending_retry_with_amend() {
+    let _lock = super::staged_auth_test_lock();
     let repo_id = RepoId(1);
     let (mut repos, mut state) = setup_open_repo(repo_id, "/tmp/repo");
     let id_alloc = AtomicU64::new(1);
@@ -292,6 +486,7 @@ fn commit_amend_finished_auth_error_uses_pending_retry_with_amend() {
     );
 
     assert!(state.repos[0].pending.commit_retry.is_none());
+    assert_auth_attempt_is_recoverable(&state);
     let prompt = state.auth_prompt.expect("expected auth prompt");
     assert_eq!(prompt.kind, AuthPromptKind::Passphrase);
     assert_eq!(
@@ -307,6 +502,7 @@ fn commit_amend_finished_auth_error_uses_pending_retry_with_amend() {
 
 #[test]
 fn safe_push_after_commit_auth_error_uses_safe_push_retry() {
+    let _lock = super::staged_auth_test_lock();
     let repo_id = RepoId(1);
     let (mut repos, mut state) = setup_open_repo(repo_id, "/tmp/repo");
     let id_alloc = AtomicU64::new(1);
@@ -331,6 +527,7 @@ fn safe_push_after_commit_auth_error_uses_safe_push_retry() {
         }),
     );
 
+    assert_auth_attempt_is_recoverable(&state);
     let prompt = state.auth_prompt.expect("expected auth prompt");
     assert_eq!(prompt.kind, AuthPromptKind::UsernamePassword);
     assert_eq!(
@@ -341,7 +538,8 @@ fn safe_push_after_commit_auth_error_uses_safe_push_retry() {
 
 #[test]
 fn clone_finished_auth_error_sets_clone_retry_prompt() {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let _lock = super::staged_auth_test_lock();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
     let url = "https://example.com/private/repo.git".to_string();
@@ -360,6 +558,10 @@ fn clone_finished_auth_error_sets_clone_retry_prompt() {
         }),
     );
 
+    assert!(matches!(
+        state.clone.as_ref().unwrap().status,
+        CloneOpStatus::WaitingForAuthentication
+    ));
     let prompt = state.auth_prompt.expect("expected auth prompt");
     assert_eq!(prompt.kind, AuthPromptKind::UsernamePassword);
     assert_eq!(
@@ -373,8 +575,8 @@ fn clone_finished_auth_error_sets_clone_retry_prompt() {
 }
 
 #[test]
-fn clone_finished_ssh_publickey_error_sets_passphrase_prompt() {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+fn clone_finished_bare_ssh_publickey_error_is_terminal() {
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
     let url = "git@github.com:private/repo.git".to_string();
@@ -393,63 +595,11 @@ fn clone_finished_ssh_publickey_error_sets_passphrase_prompt() {
         }),
     );
 
-    let prompt = state.auth_prompt.expect("expected auth prompt");
-    assert_eq!(prompt.kind, AuthPromptKind::Passphrase);
-    assert_eq!(
-        prompt.operation,
-        AuthRetryOperation::Clone {
-            url,
-            dest: dest.clone(),
-        }
-    );
-    assert!(prompt.reason.contains("Permission denied (publickey)"));
-}
-
-#[test]
-fn submit_auth_prompt_clears_stale_repo_banner_before_retry() {
-    let _lock = super::staged_auth_test_lock();
-    clear_staged_git_auth();
-
-    let repo_id = RepoId(1);
-    let (mut repos, mut state) = setup_open_repo(repo_id, "/tmp/repo");
-    let id_alloc = AtomicU64::new(1);
-    state.banner_error = Some(crate::model::BannerErrorState {
-        repo_id: Some(repo_id),
-        message: "git pull failed: Enter passphrase for key '/home/user/.ssh/id_ed25519'"
-            .to_string(),
-    });
-    state.auth_prompt = Some(AuthPromptState {
-        kind: AuthPromptKind::Passphrase,
-        reason: "auth required".to_string(),
-        operation: AuthRetryOperation::RepoCommand {
-            repo_id,
-            command: RepoCommandKind::Pull {
-                mode: PullMode::Default,
-            },
-        },
-    });
-
-    let effects = reduce(
-        &mut repos,
-        &id_alloc,
-        &mut state,
-        Msg::SubmitAuthPrompt {
-            username: None,
-            secret: "passphrase".to_string(),
-        },
-    );
-
     assert!(matches!(
-        effects.as_slice(),
-        [Effect::Pull {
-            repo_id: RepoId(1),
-            mode: PullMode::Default,
-            ..
-        }]
+        state.clone.as_ref().unwrap().status,
+        CloneOpStatus::FinishedErr(_)
     ));
-    assert!(state.banner_error.is_none());
     assert!(state.auth_prompt.is_none());
-    clear_staged_git_auth();
 }
 
 #[test]
@@ -461,6 +611,9 @@ fn submit_auth_prompt_replays_repo_command_and_stages_trimmed_credentials() {
     let (mut repos, mut state) = setup_open_repo(repo_id, "/tmp/repo");
     let id_alloc = AtomicU64::new(1);
     state.auth_prompt = Some(AuthPromptState {
+        generation: 1,
+        challenge: None,
+        status: crate::model::AuthPromptStatus::AwaitingInput,
         kind: AuthPromptKind::UsernamePassword,
         reason: "auth required".to_string(),
         operation: AuthRetryOperation::RepoCommand {
@@ -477,6 +630,7 @@ fn submit_auth_prompt_replays_repo_command_and_stages_trimmed_credentials() {
         &id_alloc,
         &mut state,
         Msg::SubmitAuthPrompt {
+            generation: 1,
             username: Some(" alice ".to_string()),
             secret: "token-123".to_string(),
         },
@@ -484,17 +638,19 @@ fn submit_auth_prompt_replays_repo_command_and_stages_trimmed_credentials() {
 
     assert!(matches!(
         effects.as_slice(),
-        [Effect::PushSetUpstream {
+        [Effect::RepoCommand(RepoCommandEffect::PushSetUpstream {
             repo_id: RepoId(1),
             remote,
             branch,
             ..
-        }] if remote == "origin" && branch == "main"
+        })] if remote == "origin" && branch == "main"
     ));
     assert!(state.auth_prompt.is_none());
     assert_eq!(state.repos[0].push_in_flight, 1);
 
-    let staged = effect_git_auth(&effects[0]).expect("staged auth should be present");
+    let staged = effects[0]
+        .git_auth()
+        .expect("staged auth should be present");
     assert_eq!(staged.kind, GitAuthKind::UsernamePassword);
     assert_eq!(staged.username.as_deref(), Some("alice"));
     assert_eq!(staged.secret, "token-123");
@@ -512,6 +668,9 @@ fn submit_auth_prompt_stages_credentials_for_a_batch_remote_branch_delete() {
     let (mut repos, mut state) = setup_open_repo(repo_id, "/tmp/repo");
     let id_alloc = AtomicU64::new(1);
     state.auth_prompt = Some(AuthPromptState {
+        generation: 1,
+        challenge: None,
+        status: crate::model::AuthPromptStatus::AwaitingInput,
         kind: AuthPromptKind::UsernamePassword,
         reason: "auth required".to_string(),
         operation: AuthRetryOperation::RepoCommand {
@@ -528,6 +687,7 @@ fn submit_auth_prompt_stages_credentials_for_a_batch_remote_branch_delete() {
         &id_alloc,
         &mut state,
         Msg::SubmitAuthPrompt {
+            generation: 1,
             username: Some("alice".to_string()),
             secret: "token-123".to_string(),
         },
@@ -535,15 +695,17 @@ fn submit_auth_prompt_stages_credentials_for_a_batch_remote_branch_delete() {
 
     assert!(matches!(
         effects.as_slice(),
-        [Effect::DeleteRemoteBranches {
+        [Effect::RepoCommand(RepoCommandEffect::DeleteRemoteBranches {
             repo_id: RepoId(1),
             remote,
             branches,
             ..
-        }] if remote == "origin" && branches.len() == 2
+        })] if remote == "origin" && branches.len() == 2
     ));
 
-    let staged = effect_git_auth(&effects[0]).expect("staged auth should be present");
+    let staged = effects[0]
+        .git_auth()
+        .expect("staged auth should be present");
     assert_eq!(staged.kind, GitAuthKind::UsernamePassword);
     assert_eq!(staged.username.as_deref(), Some("alice"));
     assert_eq!(staged.secret, "token-123");
@@ -559,6 +721,9 @@ fn submit_auth_prompt_replays_commit_and_commit_amend() {
     let id_alloc = AtomicU64::new(1);
 
     state.auth_prompt = Some(AuthPromptState {
+        generation: 1,
+        challenge: None,
+        status: crate::model::AuthPromptStatus::AwaitingInput,
         kind: AuthPromptKind::Passphrase,
         reason: "auth required".to_string(),
         operation: AuthRetryOperation::Commit {
@@ -573,6 +738,7 @@ fn submit_auth_prompt_replays_commit_and_commit_amend() {
         &id_alloc,
         &mut state,
         Msg::SubmitAuthPrompt {
+            generation: 1,
             username: None,
             secret: "passphrase".to_string(),
         },
@@ -585,7 +751,9 @@ fn submit_auth_prompt_replays_commit_and_commit_amend() {
             ..
         }] if message == "first"
     ));
-    let commit_auth = effect_git_auth(&commit_effects[0]).expect("commit auth should be present");
+    let commit_auth = commit_effects[0]
+        .git_auth()
+        .expect("commit auth should be present");
     assert_eq!(commit_auth.kind, GitAuthKind::Passphrase);
     assert_eq!(commit_auth.secret, "passphrase");
     assert_eq!(
@@ -598,6 +766,9 @@ fn submit_auth_prompt_replays_commit_and_commit_amend() {
     );
 
     state.auth_prompt = Some(AuthPromptState {
+        generation: 1,
+        challenge: None,
+        status: crate::model::AuthPromptStatus::AwaitingInput,
         kind: AuthPromptKind::Passphrase,
         reason: "auth required".to_string(),
         operation: AuthRetryOperation::Commit {
@@ -612,6 +783,7 @@ fn submit_auth_prompt_replays_commit_and_commit_amend() {
         &id_alloc,
         &mut state,
         Msg::SubmitAuthPrompt {
+            generation: 1,
             username: None,
             secret: "passphrase".to_string(),
         },
@@ -624,7 +796,9 @@ fn submit_auth_prompt_replays_commit_and_commit_amend() {
             ..
         }] if message == "second"
     ));
-    let amend_auth = effect_git_auth(&amend_effects[0]).expect("amend auth should be present");
+    let amend_auth = amend_effects[0]
+        .git_auth()
+        .expect("amend auth should be present");
     assert_eq!(amend_auth.kind, GitAuthKind::Passphrase);
     assert_eq!(amend_auth.secret, "passphrase");
     assert_eq!(
@@ -653,6 +827,9 @@ fn submit_auth_prompt_replays_safe_push_after_commit() {
     };
 
     state.auth_prompt = Some(AuthPromptState {
+        generation: 1,
+        challenge: None,
+        status: crate::model::AuthPromptStatus::AwaitingInput,
         kind: AuthPromptKind::Passphrase,
         reason: "auth required".to_string(),
         operation: AuthRetryOperation::SafePushAfterCommit {
@@ -665,6 +842,7 @@ fn submit_auth_prompt_replays_safe_push_after_commit() {
         &id_alloc,
         &mut state,
         Msg::SubmitAuthPrompt {
+            generation: 1,
             username: None,
             secret: "passphrase".to_string(),
         },
@@ -672,13 +850,15 @@ fn submit_auth_prompt_replays_safe_push_after_commit() {
 
     assert!(matches!(
         effects.as_slice(),
-        [Effect::SafePushAfterCommit {
+        [Effect::RepoCommand(RepoCommandEffect::SafePushAfterCommit {
             repo_id: RepoId(1),
             context: emitted,
             ..
-        }] if emitted == &context
+        })] if emitted == &context
     ));
-    let auth = effect_git_auth(&effects[0]).expect("safe push auth should be present");
+    let auth = effects[0]
+        .git_auth()
+        .expect("safe push auth should be present");
     assert_eq!(auth.kind, GitAuthKind::Passphrase);
     assert_eq!(auth.secret, "passphrase");
 }
@@ -688,16 +868,15 @@ fn submit_auth_prompt_replays_clone_operation() {
     let _lock = super::staged_auth_test_lock();
     clear_staged_git_auth();
 
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
     let url = "ssh://git@example.com/private/repo.git".to_string();
     let dest = PathBuf::from("/tmp/retry-clone");
-    state.banner_error = Some(crate::model::BannerErrorState {
-        repo_id: None,
-        message: "Clone failed:\n\nPermission denied (publickey).".to_string(),
-    });
     state.auth_prompt = Some(AuthPromptState {
+        generation: 1,
+        challenge: None,
+        status: crate::model::AuthPromptStatus::AwaitingInput,
         kind: AuthPromptKind::Passphrase,
         reason: "auth required".to_string(),
         operation: AuthRetryOperation::Clone {
@@ -711,6 +890,7 @@ fn submit_auth_prompt_replays_clone_operation() {
         &id_alloc,
         &mut state,
         Msg::SubmitAuthPrompt {
+            generation: 1,
             username: None,
             secret: "passphrase".to_string(),
         },
@@ -724,112 +904,8 @@ fn submit_auth_prompt_replays_clone_operation() {
             ..
         }] if effect_url == &url && effect_dest == &dest
     ));
-    assert!(state.banner_error.is_none());
     assert!(state.auth_prompt.is_none());
-    let staged = effect_git_auth(&effects[0]).expect("clone auth should be present");
-    assert_eq!(staged.kind, GitAuthKind::Passphrase);
-    assert_eq!(staged.secret, "passphrase");
-}
-
-#[test]
-fn submit_auth_prompt_clears_repo_scoped_clone_banner_before_retry() {
-    let _lock = super::staged_auth_test_lock();
-    clear_staged_git_auth();
-
-    let repo_id = RepoId(7);
-    let (mut repos, mut state) = setup_open_repo(repo_id, "/tmp/existing-repo");
-    let id_alloc = AtomicU64::new(1);
-    let url = "ssh://git@example.com/private/repo.git".to_string();
-    let dest = PathBuf::from("/tmp/retry-clone");
-    state.banner_error = Some(crate::model::BannerErrorState {
-        repo_id: Some(repo_id),
-        message: "Clone failed:\n\ngit@github.com: Permission denied (publickey).".to_string(),
-    });
-    state.auth_prompt = Some(AuthPromptState {
-        kind: AuthPromptKind::Passphrase,
-        reason: "auth required".to_string(),
-        operation: AuthRetryOperation::Clone {
-            url: url.clone(),
-            dest: dest.clone(),
-        },
-    });
-
-    let effects = reduce(
-        &mut repos,
-        &id_alloc,
-        &mut state,
-        Msg::SubmitAuthPrompt {
-            username: None,
-            secret: "passphrase".to_string(),
-        },
-    );
-
-    assert!(matches!(
-        effects.as_slice(),
-        [Effect::CloneRepo {
-            url: effect_url,
-            dest: effect_dest,
-            ..
-        }] if effect_url == &url && effect_dest == &dest
-    ));
-    assert!(state.banner_error.is_none());
-    assert!(state.auth_prompt.is_none());
-    let staged = effect_git_auth(&effects[0]).expect("clone auth should be present");
-    assert_eq!(staged.kind, GitAuthKind::Passphrase);
-    assert_eq!(staged.secret, "passphrase");
-}
-
-#[test]
-fn submit_auth_prompt_preserves_non_clone_banner_when_replaying_clone() {
-    let _lock = super::staged_auth_test_lock();
-    clear_staged_git_auth();
-
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
-    let id_alloc = AtomicU64::new(1);
-    let mut state = AppState::test_default();
-    let url = "ssh://git@example.com/private/repo.git".to_string();
-    let dest = PathBuf::from("/tmp/retry-clone");
-    let banner_message = "Fetch failed".to_string();
-    state.banner_error = Some(crate::model::BannerErrorState {
-        repo_id: None,
-        message: banner_message.clone(),
-    });
-    state.auth_prompt = Some(AuthPromptState {
-        kind: AuthPromptKind::Passphrase,
-        reason: "auth required".to_string(),
-        operation: AuthRetryOperation::Clone {
-            url: url.clone(),
-            dest: dest.clone(),
-        },
-    });
-
-    let effects = reduce(
-        &mut repos,
-        &id_alloc,
-        &mut state,
-        Msg::SubmitAuthPrompt {
-            username: None,
-            secret: "passphrase".to_string(),
-        },
-    );
-
-    assert!(matches!(
-        effects.as_slice(),
-        [Effect::CloneRepo {
-            url: effect_url,
-            dest: effect_dest,
-            ..
-        }] if effect_url == &url && effect_dest == &dest
-    ));
-    assert_eq!(
-        state.banner_error,
-        Some(crate::model::BannerErrorState {
-            repo_id: None,
-            message: banner_message,
-        })
-    );
-    assert!(state.auth_prompt.is_none());
-    let staged = effect_git_auth(&effects[0]).expect("clone auth should be present");
+    let staged = effects[0].git_auth().expect("clone auth should be present");
     assert_eq!(staged.kind, GitAuthKind::Passphrase);
     assert_eq!(staged.secret, "passphrase");
 }
@@ -843,6 +919,9 @@ fn submit_auth_prompt_host_verification_replays_repo_command_and_stages_confirma
     let (mut repos, mut state) = setup_open_repo(repo_id, "/tmp/repo");
     let id_alloc = AtomicU64::new(1);
     state.auth_prompt = Some(AuthPromptState {
+        generation: 1,
+        challenge: None,
+        status: crate::model::AuthPromptStatus::AwaitingInput,
         kind: AuthPromptKind::HostVerification,
         reason: "Host key verification failed".to_string(),
         operation: AuthRetryOperation::RepoCommand {
@@ -856,6 +935,7 @@ fn submit_auth_prompt_host_verification_replays_repo_command_and_stages_confirma
         &id_alloc,
         &mut state,
         Msg::SubmitAuthPrompt {
+            generation: 1,
             username: None,
             secret: " YES ".to_string(),
         },
@@ -863,20 +943,22 @@ fn submit_auth_prompt_host_verification_replays_repo_command_and_stages_confirma
 
     assert!(matches!(
         effects.as_slice(),
-        [Effect::FetchAll {
+        [Effect::RepoCommand(RepoCommandEffect::FetchAll {
             repo_id: RepoId(1),
             ..
-        }]
+        })]
     ));
     assert!(state.auth_prompt.is_none());
 
-    let staged = effect_git_auth(&effects[0]).expect("staged auth should be present");
+    let staged = effects[0]
+        .git_auth()
+        .expect("staged auth should be present");
     assert_eq!(staged.kind, GitAuthKind::HostVerification);
     assert_eq!(staged.secret, "yes");
 }
 
 #[test]
-fn submit_auth_prompt_validation_failure_keeps_prompt_and_sets_diagnostic() {
+fn submit_auth_prompt_validation_failure_keeps_inline_feedback() {
     let _lock = super::staged_auth_test_lock();
     clear_staged_git_auth();
 
@@ -884,7 +966,11 @@ fn submit_auth_prompt_validation_failure_keeps_prompt_and_sets_diagnostic() {
     let (mut repos, mut state) = setup_open_repo(repo_id, "/tmp/repo");
     let id_alloc = AtomicU64::new(1);
 
+    state.auth_prompt_generation = 1;
     state.auth_prompt = Some(AuthPromptState {
+        generation: 1,
+        challenge: None,
+        status: crate::model::AuthPromptStatus::AwaitingInput,
         kind: AuthPromptKind::UsernamePassword,
         reason: "auth required".to_string(),
         operation: AuthRetryOperation::RepoCommand {
@@ -898,6 +984,7 @@ fn submit_auth_prompt_validation_failure_keeps_prompt_and_sets_diagnostic() {
         &id_alloc,
         &mut state,
         Msg::SubmitAuthPrompt {
+            generation: 1,
             username: Some("   ".to_string()),
             secret: "token".to_string(),
         },
@@ -905,14 +992,27 @@ fn submit_auth_prompt_validation_failure_keeps_prompt_and_sets_diagnostic() {
 
     assert!(effects.is_empty());
     assert!(state.auth_prompt.is_some());
-    let repo_state = &state.repos[0];
-    let diagnostic = repo_state
-        .feedback
-        .diagnostics
-        .last()
-        .expect("expected validation diagnostic");
-    assert_eq!(diagnostic.kind, DiagnosticKind::Error);
-    assert!(diagnostic.message.contains("username cannot be empty"));
+    let prompt = state.auth_prompt.as_ref().unwrap();
+    assert_eq!(prompt.status, crate::model::AuthPromptStatus::Rejected);
+    assert_eq!(prompt.generation, 2);
+    assert!(prompt.reason.contains("username cannot be empty"));
+    let rejected_prompt = prompt.clone();
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::SubmitAuthPrompt {
+            generation: 2,
+            username: Some("   ".to_string()),
+            secret: "token".to_string(),
+        },
+    );
+    assert!(effects.is_empty());
+    let prompt = state.auth_prompt.as_ref().unwrap();
+    assert_eq!(prompt.status, rejected_prompt.status);
+    assert_eq!(prompt.reason, rejected_prompt.reason);
+    assert_eq!(prompt.generation, 3);
+    assert!(state.repos[0].feedback.diagnostics.is_empty());
 
     clear_staged_git_auth();
 }
@@ -931,6 +1031,7 @@ fn submit_auth_prompt_without_prompt_is_noop() {
         &id_alloc,
         &mut state,
         Msg::SubmitAuthPrompt {
+            generation: 1,
             username: Some("alice".to_string()),
             secret: "secret".to_string(),
         },
@@ -947,6 +1048,7 @@ fn cancel_auth_prompt_clears_prompt_and_staged_auth() {
     clear_staged_git_auth();
 
     stage_git_auth(StagedGitAuth {
+        challenge: None,
         kind: GitAuthKind::UsernamePassword,
         username: Some("alice".to_string()),
         secret: "token".to_string(),
@@ -956,6 +1058,9 @@ fn cancel_auth_prompt_clears_prompt_and_staged_auth() {
     let (mut repos, mut state) = setup_open_repo(repo_id, "/tmp/repo");
     let id_alloc = AtomicU64::new(1);
     state.auth_prompt = Some(AuthPromptState {
+        generation: 1,
+        challenge: None,
+        status: crate::model::AuthPromptStatus::AwaitingInput,
         kind: AuthPromptKind::UsernamePassword,
         reason: "auth required".to_string(),
         operation: AuthRetryOperation::RepoCommand {
@@ -981,6 +1086,9 @@ fn submit_auth_prompt_replays_expected_repo_command_mappings() {
         let (mut repos, mut state) = setup_open_repo(repo_id, "/tmp/repo");
         let id_alloc = AtomicU64::new(1);
         state.auth_prompt = Some(AuthPromptState {
+            generation: 1,
+            challenge: None,
+            status: crate::model::AuthPromptStatus::AwaitingInput,
             kind: AuthPromptKind::UsernamePassword,
             reason: "auth required".to_string(),
             operation: AuthRetryOperation::RepoCommand { repo_id, command },
@@ -990,6 +1098,7 @@ fn submit_auth_prompt_replays_expected_repo_command_mappings() {
             &id_alloc,
             &mut state,
             Msg::SubmitAuthPrompt {
+                generation: 1,
                 username: Some("alice".to_string()),
                 secret: "secret".to_string(),
             },
@@ -1001,10 +1110,10 @@ fn submit_auth_prompt_replays_expected_repo_command_mappings() {
     let fetch_effects = replay_case(RepoCommandKind::FetchAll);
     assert!(matches!(
         fetch_effects.as_slice(),
-        [Effect::FetchAll {
+        [Effect::RepoCommand(RepoCommandEffect::FetchAll {
             repo_id: RepoId(1),
             ..
-        }]
+        })]
     ));
 
     let pull_branch_effects = replay_case(RepoCommandKind::PullBranch {
@@ -1013,12 +1122,12 @@ fn submit_auth_prompt_replays_expected_repo_command_mappings() {
     });
     assert!(matches!(
         pull_branch_effects.as_slice(),
-        [Effect::PullBranch {
+        [Effect::RepoCommand(RepoCommandEffect::PullBranch {
             repo_id: RepoId(1),
             remote,
             branch,
             ..
-        }] if remote == "origin" && branch == "main"
+        })] if remote == "origin" && branch == "main"
     ));
 
     let force_with_lease_effects = replay_case(RepoCommandKind::ForcePushWithLease {
@@ -1032,11 +1141,11 @@ fn submit_auth_prompt_replays_expected_repo_command_mappings() {
     });
     assert!(matches!(
         force_with_lease_effects.as_slice(),
-        [Effect::ForcePushWithLease {
+        [Effect::RepoCommand(RepoCommandEffect::ForcePushWithLease {
             repo_id: RepoId(1),
             lease,
             ..
-        }] if lease.remote == "origin" && lease.branch == "main"
+        })] if lease.remote == "origin" && lease.branch == "main"
     ));
 
     let push_after_commit_target = gitcomet_core::services::SafePushAfterCommitTarget {
@@ -1051,12 +1160,12 @@ fn submit_auth_prompt_replays_expected_repo_command_mappings() {
     });
     assert!(matches!(
         push_after_commit_effects.as_slice(),
-        [Effect::PushAfterCommit {
+        [Effect::RepoCommand(RepoCommandEffect::PushAfterCommit {
             repo_id: RepoId(1),
             target,
             set_upstream: true,
             ..
-        }] if target == &push_after_commit_target
+        })] if target == &push_after_commit_target
     ));
 
     let unset_upstream_effects = replay_case(RepoCommandKind::UnsetUpstreamBranch {
@@ -1064,10 +1173,10 @@ fn submit_auth_prompt_replays_expected_repo_command_mappings() {
     });
     assert!(matches!(
         unset_upstream_effects.as_slice(),
-        [Effect::UnsetUpstreamBranch {
+        [Effect::RepoCommand(RepoCommandEffect::UnsetUpstreamBranch {
             repo_id: RepoId(1),
             branch,
-        }] if branch == "feature/current"
+        })] if branch == "feature/current"
     ));
 
     let set_upstream_effects = replay_case(RepoCommandKind::SetUpstreamBranch {
@@ -1079,11 +1188,11 @@ fn submit_auth_prompt_replays_expected_repo_command_mappings() {
     });
     assert!(matches!(
         set_upstream_effects.as_slice(),
-        [Effect::SetUpstreamBranch {
+        [Effect::RepoCommand(RepoCommandEffect::SetUpstreamBranch {
             repo_id: RepoId(1),
             branch,
             upstream,
-        }] if branch == "feature/current"
+        })] if branch == "feature/current"
             && upstream.remote == "origin"
             && upstream.branch == "feature/current"
     ));
@@ -1094,11 +1203,11 @@ fn submit_auth_prompt_replays_expected_repo_command_mappings() {
     });
     assert!(matches!(
         reset_effects.as_slice(),
-        [Effect::Reset {
+        [Effect::RepoCommand(RepoCommandEffect::Reset {
             repo_id: RepoId(1),
             target,
             mode: ResetMode::Mixed,
-        }] if target == "HEAD~1"
+        })] if target == "HEAD~1"
     ));
 
     let set_remote_url_effects = replay_case(RepoCommandKind::SetRemoteUrl {
@@ -1108,13 +1217,13 @@ fn submit_auth_prompt_replays_expected_repo_command_mappings() {
     });
     assert!(matches!(
         set_remote_url_effects.as_slice(),
-        [Effect::SetRemoteUrl {
+        [Effect::RepoCommand(RepoCommandEffect::SetRemoteUrl {
             repo_id: RepoId(1),
             name,
             url,
             kind: RemoteUrlKind::Push,
             ..
-        }] if name == "origin" && url == "https://example.com/repo.git"
+        })] if name == "origin" && url == "https://example.com/repo.git"
     ));
 
     let checkout_conflict_effects = replay_case(RepoCommandKind::CheckoutConflict {
@@ -1123,11 +1232,11 @@ fn submit_auth_prompt_replays_expected_repo_command_mappings() {
     });
     assert!(matches!(
         checkout_conflict_effects.as_slice(),
-        [Effect::CheckoutConflictSide {
+        [Effect::RepoCommand(RepoCommandEffect::CheckoutConflictSide {
             repo_id: RepoId(1),
             path,
             side: ConflictSide::Ours,
-        }] if path == &PathBuf::from("conflicted.txt")
+        })] if path == &PathBuf::from("conflicted.txt")
     ));
 
     let remove_submodule_effects = replay_case(RepoCommandKind::RemoveSubmodule {
@@ -1135,10 +1244,10 @@ fn submit_auth_prompt_replays_expected_repo_command_mappings() {
     });
     assert!(matches!(
         remove_submodule_effects.as_slice(),
-        [Effect::RemoveSubmodule {
+        [Effect::RepoCommand(RepoCommandEffect::RemoveSubmodule {
             repo_id: RepoId(1),
             path,
-        }] if path == &PathBuf::from("vendor/lib")
+        })] if path == &PathBuf::from("vendor/lib")
     ));
 
     // A revert is replayed whole with the staged auth: the backend resumes one
@@ -1153,15 +1262,104 @@ fn submit_auth_prompt_replays_expected_repo_command_mappings() {
         assert!(
             matches!(
                 revert_effects.as_slice(),
-                [Effect::RevertCommit {
+                [Effect::RepoCommand(RepoCommandEffect::RevertCommit {
                     repo_id: RepoId(1),
                     commit: replayed,
                     mainline: Some(1),
                     auth: Some(_),
                     ..
-                }] if *replayed == commit
+                })] if *replayed == commit
             ),
             "commit={commit}: {revert_effects:?}"
+        );
+    }
+
+    // A single pick is replayed whole too: one beside staged work rolled its
+    // failed commit step back, and one stopped at the commit step resumes.
+    for commit in [true, false] {
+        let pick_effects = replay_case(RepoCommandKind::CherryPick {
+            commit_id: gitcomet_core::domain::CommitId("deadbeef".into()),
+            commit,
+            mainline: None,
+            summary: "pick me".to_string(),
+        });
+        assert!(
+            matches!(
+                pick_effects.as_slice(),
+                [Effect::RepoCommand(RepoCommandEffect::CherryPickCommit {
+                    repo_id: RepoId(1),
+                    commit: replayed,
+                    mainline: None,
+                    auth: Some(_),
+                    ..
+                })] if *replayed == commit
+            ),
+            "commit={commit}: {pick_effects:?}"
+        );
+    }
+
+    // A committing multi-pick continues git's paused sequencer; an
+    // uncommitted one keeps no sequencer and is replayed whole.
+    let multi_entries = vec![gitcomet_core::services::InteractiveRebaseEntry {
+        action: gitcomet_core::services::InteractiveRebaseAction::Pick,
+        commit_id: "deadbeef".to_string(),
+        summary: "pick me".to_string(),
+        message: "pick me".to_string(),
+        new_message: None,
+    }];
+    let committing_multi_effects = replay_case(RepoCommandKind::InteractiveCherryPick {
+        entries: multi_entries.clone(),
+        commit: true,
+    });
+    assert!(
+        matches!(
+            committing_multi_effects.as_slice(),
+            [Effect::RepoCommand(RepoCommandEffect::RebaseContinue {
+                repo_id: RepoId(1),
+                auth: Some(_),
+            })]
+        ),
+        "{committing_multi_effects:?}"
+    );
+    let uncommitted_multi_effects = replay_case(RepoCommandKind::InteractiveCherryPick {
+        entries: multi_entries.clone(),
+        commit: false,
+    });
+    assert!(
+        matches!(
+            uncommitted_multi_effects.as_slice(),
+            [Effect::RepoCommand(RepoCommandEffect::InteractiveCherryPick {
+                repo_id: RepoId(1),
+                entries,
+                commit: false,
+            })] if entries == &multi_entries
+        ),
+        "{uncommitted_multi_effects:?}"
+    );
+
+    // A failure before staging replays the apply; a commit failure carries
+    // the checkpoint so the authenticated retry commits only that result.
+    let apply_target = gitcomet_core::domain::ApplyChangeTarget::commit(
+        gitcomet_core::domain::CommitId("deadbeef".into()),
+        PathBuf::from("a.txt"),
+    );
+    let retry = gitcomet_core::domain::ApplyFileChangeRetry {
+        target: apply_target.clone(),
+        head: Some(CommitId("12345678".into())),
+        index: Vec::new(),
+    };
+    for commit_retry in [None, Some(retry)] {
+        let apply_effects = replay_case(RepoCommandKind::ApplyFileChange {
+            commit_retry: commit_retry.clone(),
+            target: apply_target.clone(),
+            commit: true,
+        });
+        assert!(
+            matches!(apply_effects.as_slice(), [Effect::RepoCommand(RepoCommandEffect::ApplyFileChange {
+            commit_retry: replayed,
+            repo_id: RepoId(1), target, commit: true, auth: Some(_),
+        })] if target == &apply_target && replayed == &commit_retry),
+            "{apply_effects:?}"
         );
     }
 
@@ -1171,6 +1369,7 @@ fn submit_auth_prompt_replays_expected_repo_command_mappings() {
 
 #[test]
 fn revert_signing_passphrase_failure_sets_passphrase_prompt() {
+    let _lock = super::staged_auth_test_lock();
     let repo_id = RepoId(1);
     let (mut repos, mut state) = setup_open_repo(repo_id, "/tmp/repo");
     let id_alloc = AtomicU64::new(1);
@@ -1194,6 +1393,7 @@ fn revert_signing_passphrase_failure_sets_passphrase_prompt() {
         }),
     );
 
+    assert_auth_attempt_is_recoverable(&state);
     let prompt = state.auth_prompt.expect("expected auth prompt");
     assert_eq!(prompt.kind, AuthPromptKind::Passphrase);
     assert_eq!(
@@ -1219,6 +1419,9 @@ fn tag_push_auth_retry_preserves_mode_destination_and_upstream_choice() {
             set_upstream: true,
         };
         state.auth_prompt = Some(AuthPromptState {
+            generation: 1,
+            challenge: None,
+            status: crate::model::AuthPromptStatus::AwaitingInput,
             kind: AuthPromptKind::UsernamePassword,
             reason: "auth required".into(),
             operation: AuthRetryOperation::RepoCommand {
@@ -1233,14 +1436,15 @@ fn tag_push_auth_retry_preserves_mode_destination_and_upstream_choice() {
             &AtomicU64::new(1),
             &mut state,
             Msg::SubmitAuthPrompt {
+                generation: 1,
                 username: Some("alice".into()),
                 secret: "test-token".into(),
             },
         );
         assert!(
-            matches!(effects.as_slice(), [Effect::PushWithTags { request: retry, .. }] if retry == &request)
+            matches!(effects.as_slice(), [Effect::RepoCommand(RepoCommandEffect::PushWithTags { request: retry, .. })] if retry == &request)
         );
-        assert_eq!(effect_git_auth(&effects[0]).unwrap().secret, "test-token");
+        assert_eq!(effects[0].git_auth().unwrap().secret, "test-token");
         assert_eq!(state.repos[0].push_in_flight, 1);
         assert!(state.auth_prompt.is_none());
     }
@@ -1336,4 +1540,54 @@ fn tag_push_preview_discards_stale_results_and_does_not_start_auth_or_mark_push_
     ));
     assert!(state.auth_prompt.is_none());
     assert_eq!(state.repos[0].push_in_flight, 0);
+}
+
+/// A refspec fetch that needs credentials replays with exactly its remote
+/// and refspecs, authenticated, like a full fetch.
+#[test]
+fn submit_auth_prompt_replays_a_refspec_fetch() {
+    let _lock = super::staged_auth_test_lock();
+    clear_staged_git_auth();
+
+    let repo_id = RepoId(1);
+    let (mut repos, mut state) = setup_open_repo(repo_id, "/tmp/repo");
+    let id_alloc = AtomicU64::new(1);
+    let command = RepoCommandKind::FetchRefspecs {
+        remote: "origin".to_string(),
+        refspecs: vec!["+refs/pull/7/head:refs/remotes/origin/pr/7".to_string()],
+    };
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
+            repo_id,
+            command: command.clone(),
+            result: Err(auth_error(
+                "git fetch failed: fatal: could not read Username for 'https://example.com': terminal prompts disabled",
+            )),
+        }),
+    );
+    assert_eq!(
+        state.auth_prompt.as_ref().map(|prompt| &prompt.operation),
+        Some(&AuthRetryOperation::RepoCommand { repo_id, command })
+    );
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::SubmitAuthPrompt {
+            generation: 1,
+            username: Some("alice".to_string()),
+            secret: "token".to_string(),
+        },
+    );
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::RepoCommand(RepoCommandEffect::FetchRefspecs { remote, refspecs, .. })]
+            if remote == "origin" && refspecs == &["+refs/pull/7/head:refs/remotes/origin/pr/7"]
+    ));
+    assert!(effects[0].git_auth().is_some());
+    assert_eq!(state.repos[0].pull_in_flight, 1);
 }

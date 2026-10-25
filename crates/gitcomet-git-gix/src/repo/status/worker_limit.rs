@@ -2,30 +2,6 @@
 //! pipelines can cost much more than comparing the files themselves.
 use gitcomet_core::services::{CancellationToken, Result};
 
-pub(super) fn for_repo(
-    repo: &gix::Repository,
-    cancellation: &CancellationToken,
-) -> Result<Option<usize>> {
-    #[cfg(windows)]
-    {
-        if let Some(limit) = benchmark_override() {
-            return Ok(limit);
-        }
-        if !has_lfs_filter(&repo.config_snapshot()) {
-            return Ok(None);
-        }
-        match repo.index_or_empty() {
-            Ok(index) => for_index(repo, &index, cancellation),
-            Err(_) => Ok(Some(bounded_limit())),
-        }
-    }
-    #[cfg(not(windows))]
-    {
-        let _ = (repo, cancellation);
-        Ok(None)
-    }
-}
-
 pub(super) fn for_index(
     repo: &gix::Repository,
     index: &gix::index::State,
@@ -46,13 +22,6 @@ pub(super) fn for_index(
 }
 
 #[cfg(any(windows, test))]
-fn has_lfs_filter(config: &gix::config::File) -> bool {
-    ["filter.lfs.process", "filter.lfs.clean"]
-        .iter()
-        .any(|key| config.string(*key).is_some_and(|value| !value.is_empty()))
-}
-
-#[cfg(any(windows, test))]
 fn bounded_limit() -> usize {
     std::thread::available_parallelism()
         .map_or(1, usize::from)
@@ -66,7 +35,7 @@ fn production_limit(
     cancellation: &CancellationToken,
 ) -> Result<Option<usize>> {
     use gix::index::entry::Mode;
-    if !has_lfs_filter(&repo.config_snapshot()) {
+    if !super::super::large_files::lfs_filter_configured(&repo.config_snapshot()) {
         return Ok(None);
     }
     cancellation.check_cancelled()?;
@@ -82,7 +51,9 @@ fn production_limit(
     ) else {
         return Ok(Some(bounded_limit()));
     };
-    let mut outcome = gix::attrs::search::Outcome::default();
+    // Only the effective filter controls this policy. Let gix stop matching
+    // once it resolves that attribute, including through macros and overrides.
+    let mut outcome = attributes.selected_attribute_matches(["filter"]);
     let mut filtered = 0usize;
     let mut bytes = 0u64;
     for entry in index.entries().iter().filter(regular) {
@@ -92,8 +63,8 @@ fn production_limit(
             return Ok(Some(bounded_limit()));
         };
         platform.matching_attributes(&mut outcome);
-        let lfs = outcome.iter().any(|matched| {
-            matched.assignment.name.as_str() == "filter" && matches!(matched.assignment.state, gix::attrs::StateRef::Value(value) if value.as_bstr() == b"lfs")
+        let lfs = outcome.iter_selected().any(|matched| {
+            matches!(matched.assignment.state, gix::attrs::StateRef::Value(value) if value.as_bstr() == super::super::large_files::LFS_FILTER_DRIVER)
         });
         if !lfs {
             continue;
@@ -103,7 +74,7 @@ fn production_limit(
         if files > 128 {
             return Ok(Some(bounded_limit()));
         }
-        let Ok(path) = gix::path::try_from_bstr(path) else {
+        let Ok(path) = gix::path::from_bstr(path) else {
             return Ok(Some(bounded_limit()));
         };
         let Ok(metadata) = std::fs::symlink_metadata(workdir.join(path)) else {
@@ -146,40 +117,31 @@ fn benchmark_override() -> Option<Option<usize>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::process::Command;
+    use crate::test_support::{git_success, open_gix};
 
     fn fixture(attributes: &str) -> (tempfile::TempDir, gix::Repository) {
         let dir = tempfile::tempdir().unwrap();
-        let git = |args: &[&str]| {
-            let output = Command::new("git")
-                .arg("-C")
-                .arg(dir.path())
-                .args(args)
-                .env("GIT_CONFIG_NOSYSTEM", "1")
-                .env("GIT_CONFIG_GLOBAL", "")
-                .output()
-                .unwrap();
-            assert!(
-                output.status.success(),
-                "{}",
-                String::from_utf8_lossy(&output.stderr)
-            );
-        };
-        git(&["init"]);
+        git_success(dir.path(), &["init"]);
         std::fs::write(dir.path().join("a.bin"), b"asset").unwrap();
         std::fs::write(dir.path().join(".gitattributes"), attributes).unwrap();
-        git(&[
-            "-c",
-            "filter.lfs.required=false",
-            "-c",
-            "filter.lfs.process=",
-            "-c",
-            "filter.lfs.clean=",
-            "add",
-            ".",
-        ]);
-        git(&["config", "filter.lfs.process", "git-lfs filter-process"]);
-        let repo = gix::open(dir.path()).unwrap();
+        git_success(
+            dir.path(),
+            &[
+                "-c",
+                "filter.lfs.required=false",
+                "-c",
+                "filter.lfs.process=",
+                "-c",
+                "filter.lfs.clean=",
+                "add",
+                ".",
+            ],
+        );
+        git_success(
+            dir.path(),
+            &["config", "filter.lfs.process", "git-lfs filter-process"],
+        );
+        let repo = open_gix(dir.path());
         (dir, repo)
     }
 
@@ -200,13 +162,50 @@ mod tests {
 
     #[test]
     fn resolves_effective_attributes_and_index_fallback() {
-        let (dir, repo) = fixture("[attr]asset filter=lfs\n*.bin asset\n");
+        let (dir, repo) =
+            fixture("[attr]asset filter=lfs -diff -text\n*.bin asset\n*.bin eol=lf\n");
         assert_eq!(policy(&repo), Some(1));
-        std::fs::write(dir.path().join(".git/info/attributes"), b"a.bin -filter\n").unwrap();
-        assert_eq!(policy(&repo), None);
+        for assignment in ["-filter", "!filter", "filter", "filter=other"] {
+            std::fs::write(
+                dir.path().join(".git/info/attributes"),
+                format!("a.bin {assignment} text eol=lf\n"),
+            )
+            .unwrap();
+            assert_eq!(policy(&repo), None, "override: {assignment}");
+        }
         std::fs::remove_file(dir.path().join(".git/info/attributes")).unwrap();
         std::fs::remove_file(dir.path().join(".gitattributes")).unwrap();
         assert_eq!(policy(&repo), Some(1));
+    }
+
+    #[test]
+    fn selection_discovers_nested_filter_and_preserves_worktree_over_index_precedence() {
+        let (dir, _) = fixture("* text=auto\n");
+        let root = dir.path();
+        std::fs::create_dir(root.join("nested")).unwrap();
+        std::fs::write(root.join("nested/b.bin"), "asset").unwrap();
+        git_success(root, &["add", "nested/b.bin"]);
+        let repo = open_gix(root);
+        assert_eq!(policy(&repo), None);
+
+        // The selection is created before at_entry discovers this first
+        // definition of filter. Unrelated later rules must not hide its value.
+        let nested_attributes = root.join("nested/.gitattributes");
+        std::fs::write(
+            &nested_attributes,
+            "*.bin filter=lfs\n*.bin text eol=lf -diff\n",
+        )
+        .unwrap();
+        assert_eq!(policy(&repo), Some(bounded_limit()));
+
+        git_success(root, &["add", "nested/.gitattributes"]);
+        let repo = open_gix(root);
+        std::fs::remove_file(&nested_attributes).unwrap();
+        assert_eq!(policy(&repo), Some(bounded_limit()));
+        std::fs::write(&nested_attributes, "*.bin !filter\n").unwrap();
+        assert_eq!(policy(&repo), None);
+        std::fs::remove_file(&nested_attributes).unwrap();
+        assert_eq!(policy(&repo), Some(bounded_limit()));
     }
 
     #[test]
@@ -214,39 +213,28 @@ mod tests {
         let (dir, _) = fixture("");
         let global = dir.path().join(".git/global-attributes");
         std::fs::write(&global, "*.bin filter=lfs\n").unwrap();
-        let git = |args: &[&std::ffi::OsStr]| {
-            assert!(
-                Command::new("git")
-                    .arg("-C")
-                    .arg(dir.path())
-                    .args(args)
-                    .env("GIT_CONFIG_GLOBAL", "")
-                    .env("GIT_CONFIG_NOSYSTEM", "1")
-                    .status()
-                    .unwrap()
-                    .success()
-            );
-        };
-        git(&[
-            "config".as_ref(),
-            "core.attributesFile".as_ref(),
-            global.as_os_str(),
-        ]);
-        let repo = gix::open(dir.path()).unwrap();
+        git_success(
+            dir.path(),
+            &["config", "core.attributesFile", global.to_str().unwrap()],
+        );
+        let repo = open_gix(dir.path());
         assert_eq!(policy(&repo), Some(1));
         std::fs::create_dir(dir.path().join("nested")).unwrap();
         std::fs::write(dir.path().join("nested/b.bin"), "asset").unwrap();
-        git(&[
-            "-c".as_ref(),
-            "filter.lfs.required=false".as_ref(),
-            "-c".as_ref(),
-            "filter.lfs.process=".as_ref(),
-            "-c".as_ref(),
-            "filter.lfs.clean=".as_ref(),
-            "add".as_ref(),
-            "nested/b.bin".as_ref(),
-        ]);
-        let repo = gix::open(dir.path()).unwrap();
+        git_success(
+            dir.path(),
+            &[
+                "-c",
+                "filter.lfs.required=false",
+                "-c",
+                "filter.lfs.process=",
+                "-c",
+                "filter.lfs.clean=",
+                "add",
+                "nested/b.bin",
+            ],
+        );
+        let repo = open_gix(dir.path());
         assert_eq!(policy(&repo), Some(1));
         std::fs::write(dir.path().join("nested/.gitattributes"), "*.bin -filter\n").unwrap();
         assert_eq!(policy(&repo), Some(bounded_limit()));

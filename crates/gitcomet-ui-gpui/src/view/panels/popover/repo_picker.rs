@@ -1,7 +1,33 @@
 use super::super::super::path_display;
 use super::*;
-use crate::kit::interaction::{self as controls, ControlInteractionExt as _};
+use crate::kit::interaction as controls;
 use std::collections::BTreeSet;
+
+impl PopoverHost {
+    /// The real input and cached filter result. This witness must not build rows
+    /// or run filtering itself: doing so would hide missing production updates.
+    pub(in crate::view) fn scenario_repo_picker_state(
+        &self,
+        cx: &App,
+    ) -> Option<(String, Option<usize>, Option<usize>)> {
+        if !matches!(self.popover, Some(PopoverKind::RepoPicker { .. })) {
+            return None;
+        }
+        let query = self
+            .repo_picker_search_input
+            .as_ref()?
+            .read(cx)
+            .text()
+            .to_string();
+        let count = (self.repo_picker_search_query == query.trim())
+            .then(|| {
+                self.repo_picker_rows_cache
+                    .filtered_len_for_query(query.trim())
+            })
+            .flatten();
+        Some((query, count, self.repo_picker_selected_index))
+    }
+}
 
 /// Height this picker caps its row list at. Taller than the badge pickers'
 /// [`components::PICKER_LIST_MAX_HEIGHT_PX`] because three sections share the
@@ -12,13 +38,16 @@ use std::collections::BTreeSet;
 pub(super) const REPO_PICKER_LIST_MAX_HEIGHT_PX: f32 = 360.0;
 
 pub(super) const PINNED_SECTION: &str = "Pinned";
+pub(super) const WORKSPACES_SECTION: &str = "Workspaces";
 pub(super) const OPEN_SECTION: &str = "Open Repositories";
 pub(super) const RECENTLY_CLOSED_SECTION: &str = "Recently Closed";
 
 /// Sections in render order, paired with the key their collapse state persists
 /// under. The keys are deliberately not the labels, so the headings can be
 /// reworded without stranding everyone's folded sections.
-const SECTIONS: [(&str, &str); 3] = [
+const SECTIONS: [(&str, &str); 4] = [
+    // Historical key from when workspaces were called window groups.
+    (WORKSPACES_SECTION, "window_groups"),
     (PINNED_SECTION, "pinned"),
     (OPEN_SECTION, "open"),
     (RECENTLY_CLOSED_SECTION, "recently_closed"),
@@ -35,6 +64,7 @@ fn section_storage_key(label: &str) -> Option<&'static str> {
 /// of the two it happens to be — the pin only decides which section it sits in.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) enum RepoPickerEntry {
+    Workspace(session::WorkspaceId),
     Open(RepoId),
     Closed(std::path::PathBuf),
 }
@@ -42,6 +72,7 @@ pub(super) enum RepoPickerEntry {
 impl RepoPickerEntry {
     pub(super) fn workdir(&self, this: &PopoverHost) -> Option<std::path::PathBuf> {
         match self {
+            Self::Workspace(_) => None,
             Self::Open(repo_id) => this.workdir_for_repo(*repo_id),
             Self::Closed(path) => Some(path.clone()),
         }
@@ -105,11 +136,25 @@ pub(super) fn persist_sort(sort: RepoPickerSort) {
     });
 }
 
+/// The open picker's scope; `All` when the picker is not what is open.
+fn scope(this: &PopoverHost) -> RepoPickerScope {
+    match this.popover {
+        Some(PopoverKind::RepoPicker { scope }) => scope,
+        _ => RepoPickerScope::All,
+    }
+}
+
+fn show_workspaces(this: &PopoverHost, query: &str) -> bool {
+    !this.cached_workspaces.is_empty()
+        && (scope(this) == RepoPickerScope::WorkspacesOnly || query.trim().is_empty())
+}
+
 /// Section labels the picker should fold away right now. A query overrides
-/// collapse entirely: typing searches every section, the way the branch
-/// sidebar's filter force-expands its own.
+/// collapse entirely: typing searches every repository section, the way the
+/// branch sidebar's filter force-expands its own. The workspace chooser ignores a
+/// fold made in the full picker, or it could open to an empty list.
 fn collapsed_sections(this: &PopoverHost, query: &str) -> BTreeSet<gpui::SharedString> {
-    if !query.is_empty() {
+    if !query.is_empty() || scope(this) == RepoPickerScope::WorkspacesOnly {
         return BTreeSet::new();
     }
     SECTIONS
@@ -200,7 +245,12 @@ fn repo_picker_item(workdir: &std::path::Path) -> components::PickerPromptItem {
 ///
 /// The three sections live in one flat list so the rendered rows, keyboard
 /// navigation and Enter target share an index space.
-pub(super) fn entries(this: &PopoverHost) -> Vec<(RepoPickerEntry, components::PickerPromptItem)> {
+/// Workspaces lead the list when browsing or choosing a workspace, but are
+/// omitted before matching during a repository search.
+pub(super) fn entries(
+    this: &PopoverHost,
+    query: &str,
+) -> Vec<(RepoPickerEntry, components::PickerPromptItem)> {
     let sort = this.repo_picker_sort;
     // Pins, recents and open workdirs are all canonicalized before they are
     // stored, so plain equality is enough to match them up.
@@ -211,6 +261,18 @@ pub(super) fn entries(this: &PopoverHost) -> Vec<(RepoPickerEntry, components::P
             .iter()
             .find(|repo| repo.spec.workdir == path)
     };
+
+    let workspace_rows = if show_workspaces(this, query) {
+        workspace_rows(this.cached_workspaces.clone(), sort)
+    } else {
+        Vec::new()
+    };
+    if scope(this) == RepoPickerScope::WorkspacesOnly {
+        return workspace_rows
+            .into_iter()
+            .map(|row| (row.entry, row.item))
+            .collect();
+    }
 
     // A pin outlives both the recents cap and the repository being closed, so
     // this section is built from the pin list itself and nothing else.
@@ -287,12 +349,46 @@ pub(super) fn entries(this: &PopoverHost) -> Vec<(RepoPickerEntry, components::P
     sort_rows(&mut open_rows, sort);
     sort_rows(&mut recent_rows, sort);
 
-    pinned_rows
+    workspace_rows
         .into_iter()
+        .chain(pinned_rows)
         .chain(open_rows)
         .chain(recent_rows)
         .map(|row| (row.entry, row.item))
         .collect()
+}
+
+fn workspace_rows(
+    mut workspaces: Vec<session::Workspace>,
+    sort: RepoPickerSort,
+) -> Vec<SortableRow> {
+    crate::workspaces::sort_workspaces(&mut workspaces);
+    let mut rows = workspaces
+        .into_iter()
+        .enumerate()
+        .map(|(recency, workspace)| workspace_row(workspace, recency))
+        .collect::<Vec<_>>();
+    sort_rows(&mut rows, sort);
+    rows
+}
+
+fn workspace_row(workspace: session::Workspace, recency: usize) -> SortableRow {
+    let name_key = workspace.display_name().to_lowercase();
+    let path_key = workspace
+        .repositories
+        .iter()
+        .map(|path| path.display().to_string())
+        .collect::<Vec<_>>()
+        .join("\n")
+        .to_lowercase();
+    SortableRow {
+        entry: RepoPickerEntry::Workspace(workspace.id),
+        item: crate::view::workspace_picker::workspace_picker_item(&workspace)
+            .section(WORKSPACES_SECTION),
+        name_key,
+        path_key,
+        recency,
+    }
 }
 
 fn sortable_row(
@@ -395,6 +491,20 @@ mod tests {
             format!("Sort: {}", RepoPickerSort::Path.label())
         );
     }
+
+    #[test]
+    fn review_regression_selected_sort_applies_to_workspace_rows() {
+        let mut zulu = session::Workspace::new(vec!["/repos/zulu".into()]);
+        zulu.custom_name = Some("Zulu".to_string());
+        zulu.last_activation_order = 20;
+        let mut alpha = session::Workspace::new(vec!["/repos/alpha".into()]);
+        alpha.custom_name = Some("Alpha".to_string());
+        alpha.last_activation_order = 10;
+
+        let rows = workspace_rows(vec![zulu, alpha], RepoPickerSort::Name);
+
+        assert_eq!(names(&rows), vec!["alpha", "zulu"]);
+    }
 }
 
 /// Digest of everything [`entries`] reads, for the rows cache to key on.
@@ -404,11 +514,20 @@ mod tests {
 /// more than the rebuild it is there to avoid. Miss an input here and the picker
 /// shows a stale list with nothing to say so, the trap
 /// [`super::rows_cache`] and [`super::fingerprint`] both carry.
-fn rows_signature(this: &PopoverHost) -> u64 {
+fn rows_signature(this: &PopoverHost, query: &str) -> u64 {
     use std::hash::Hash;
 
     super::rows_cache::signature(|hasher| {
         this.repo_picker_sort.hash(hasher);
+        scope(this).hash(hasher);
+        // Search changes the model only when there are workspace rows to omit.
+        // Later query edits reuse the repository rows without building them again.
+        let show_workspaces = show_workspaces(this, query);
+        show_workspaces.hash(hasher);
+        if show_workspaces {
+            this.cached_workspaces.hash(hasher);
+            this.cached_workspace_id.hash(hasher);
+        }
         this.cached_pinned_repos.hash(hasher);
         this.cached_recent_repos.hash(hasher);
         // Marks the row for the repository that is active.
@@ -433,21 +552,31 @@ pub(super) fn cached(
     this: &PopoverHost,
     query: &str,
 ) -> std::rc::Rc<super::rows_cache::CachedRows<RepoPickerEntry>> {
+    let query = query.trim();
     let key = super::rows_cache::RowsCacheKey::new(
         super::rows_cache::RowsCacheOwner::RepoPicker,
-        rows_signature(this),
+        rows_signature(this, query),
         query,
     )
     // Must match what `panel` renders with, or Enter activates a different row
     // than the highlighted one.
     .with_collapsed(&collapsed_sections(this, query));
     super::rows_cache::get_or_build(&this.repo_picker_rows_cache, key, |_now| {
-        let entries = entries(this);
-        let marked_index = this.state.active_repo.and_then(|active| {
-            entries
-                .iter()
-                .position(|(entry, _)| *entry == RepoPickerEntry::Open(active))
-        });
+        let entries = entries(this, query);
+        let marked_index = this
+            .cached_workspace_id
+            .and_then(|workspace_id| {
+                entries
+                    .iter()
+                    .position(|(entry, _)| *entry == RepoPickerEntry::Workspace(workspace_id))
+            })
+            .or_else(|| {
+                this.state.active_repo.and_then(|active| {
+                    entries
+                        .iter()
+                        .position(|(entry, _)| *entry == RepoPickerEntry::Open(active))
+                })
+            });
         let (payloads, items) = entries.into_iter().unzip();
         (items, payloads, marked_index)
     })
@@ -461,6 +590,24 @@ pub(super) fn filtered_layout(
 ) -> (Vec<RepoPickerEntry>, components::PickerPromptLayout) {
     let rows = cached(this, query);
     (rows.filtered_payloads(), (*rows.layout).clone())
+}
+
+/// Open a workspace row from this picker's window: an empty window adopts it,
+/// otherwise its own window is focused or opened.
+pub(super) fn activate_workspace(
+    this: &mut PopoverHost,
+    workspace_id: session::WorkspaceId,
+    cx: &mut gpui::Context<PopoverHost>,
+) {
+    this.close_popover(cx);
+    let root_view = this.root_view.clone();
+    cx.defer(move |cx| {
+        let Ok(window_id) = root_view.read_with(cx, |root, _| root.window_handle.window_id())
+        else {
+            return;
+        };
+        crate::app::open_workspace_in_window(cx, window_id, workspace_id);
+    });
 }
 
 /// What the arrow keys walk in the picker: repository rows normally, sort
@@ -561,7 +708,6 @@ fn sort_toggle(this: &PopoverHost, cx: &mut gpui::Context<PopoverHost>) -> impl 
         .h(scaled_px(24.0))
         .px(scaled_px(8.0))
         .rounded(px(theme.radii.control))
-        .cursor(CursorStyle::PointingHand)
         .text_size(theme.ui_text(12.0))
         .text_color(if menu_open {
             theme.colors.foreground.primary
@@ -619,6 +765,7 @@ fn sort_menu(this: &PopoverHost, cx: &mut gpui::Context<PopoverHost>) -> impl In
             } else {
                 components::ContextMenuIconSlot::Reserved
             })
+            .tone(components::ContextMenuTone::Accent)
             .selected(selected_index == Some(ix))
             .on_select(theme, ui_scale_percent, cx, move |this, _e, _w, cx| {
                 apply_sort(this, sort, cx);
@@ -634,14 +781,23 @@ pub(super) fn activate(
     entry: RepoPickerEntry,
     cx: &mut gpui::Context<PopoverHost>,
 ) {
+    // Deferred: activation can run inside a root-view update.
+    let root_view = this.root_view.clone();
+    cx.defer(move |cx| {
+        let _ = root_view.request(RootRequest::ShowRepositoryCanvas, None, cx);
+    });
     match entry {
+        RepoPickerEntry::Workspace(workspace_id) => activate_workspace(this, workspace_id, cx),
         RepoPickerEntry::Open(repo_id) => {
             this.store.dispatch(Msg::SetActiveRepo { repo_id });
             this.close_popover(cx);
         }
         RepoPickerEntry::Closed(path) => {
             this.close_popover(cx);
-            this.store.dispatch(Msg::OpenRepo(path));
+            let root_view = this.root_view.clone();
+            cx.defer(move |cx| {
+                let _ = root_view.request(RootRequest::OpenRepoPath(path), None, cx);
+            });
         }
     }
 }
@@ -694,6 +850,7 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
         let remove_entries = std::rc::Rc::clone(&built.payloads);
 
         let row_menu = this.picker_row_menu.as_ref();
+        let workspaces_only = scope(this) == RepoPickerScope::WorkspacesOnly;
         let mut prompt = components::PickerPrompt::new(search, this.picker_prompt_scroll.clone())
             // Prebuilt items and layout: the cache already filtered, sorted and
             // folded them, so `render` must not repeat that work. The collapsed
@@ -707,7 +864,11 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
             // navigation scrolls by the row geometry to match
             // (`scroll_picker_prompt_to_row`), which has to be told the same
             .tooltip_host(this.tooltip_host.clone())
-            .empty_text("No repositories")
+            .empty_text(match (workspaces_only, query.is_empty()) {
+                (true, _) => "No workspaces",
+                (false, true) => "No workspaces or repositories",
+                (false, false) => "No repositories",
+            })
             .max_height(scaled_px(REPO_PICKER_LIST_MAX_HEIGHT_PX))
             // While a row menu is open the arrow keys walk its actions, so the
             // list's highlight marks the invoking row instead — without the
@@ -718,7 +879,6 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
                     .or(this.repo_picker_selected_index),
             )
             .marked_index(built.marked_index)
-            .accent_selection()
             .padded_query_row()
             .remove_tooltip("Remove from recently closed")
             .on_context_menu(cx.listener(
@@ -726,16 +886,16 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
                     let Some(entry) = row_entries.get(event.original_index).cloned() else {
                         return;
                     };
-                    picker_row_menu::open(
-                        this,
-                        picker_row_menu::PickerRowMenuTarget::Repo(entry),
-                        event.display_index,
-                        event.position,
-                        cx,
-                    );
+                    let target = picker_row_menu::PickerRowMenuTarget::Repo(entry);
+                    if !target.has_menu(this) {
+                        return;
+                    }
+                    picker_row_menu::open(this, target, event.display_index, event.position, cx);
                 },
-            ))
-            .query_row_trailing(sort_toggle(this, cx));
+            ));
+        if !workspaces_only {
+            prompt = prompt.query_row_trailing(sort_toggle(this, cx));
+        }
         // A query suspends collapse, so the headers are plain labels while one
         // is active: leaving them clickable would let a click flip the persisted
         // fold with nothing moving on screen to show for it.
@@ -746,6 +906,8 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
                 },
             ));
         }
+        // The row a menu was opened on gets the plain highlight every other
+        // right-clicked row in the app gets: no Enter hint.
         if row_menu.is_none() {
             prompt = prompt.selected_hint("Enter");
         }
@@ -777,7 +939,7 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
     } else {
         // No search input yet, so no cache key to build one against: this is the
         // plain menu the picker falls back to, and it is not windowed.
-        let entries = entries(this);
+        let entries = entries(this, "");
         let mut menu = div()
             .flex()
             .flex_col()
@@ -797,6 +959,11 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
                 ));
             }
             let label = match entry {
+                RepoPickerEntry::Workspace(workspace_id) => this
+                    .cached_workspaces
+                    .iter()
+                    .find(|workspace| workspace.id == *workspace_id)
+                    .map(|workspace| gpui::SharedString::from(workspace.display_name())),
                 RepoPickerEntry::Open(repo_id) => this
                     .state
                     .repos
@@ -808,12 +975,14 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
             let Some(label) = label else {
                 continue;
             };
+            let tone = crate::view::menu_presentation::context_menu_tone(label.as_ref(), None);
             let entry = entry.clone();
             menu = menu.child(
                 components::ContextMenuEntry::new(
                     ("repo_item", ix),
                     components::ContextMenuText::path_single_line(label),
                 )
+                .tone(tone)
                 .tooltip_host(this.tooltip_host.clone())
                 .on_select(theme, ui_scale_percent, cx, move |this, _e, _w, cx| {
                     activate(this, entry.clone(), cx);

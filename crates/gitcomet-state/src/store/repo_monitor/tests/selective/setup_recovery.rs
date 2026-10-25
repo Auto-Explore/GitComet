@@ -278,16 +278,9 @@ fn replacement_reconciles_all_state(ignore_trigger: bool, recovery: bool) {
                 if hook_armed.swap(false, Ordering::Relaxed) {
                     fs::write(hook_root.join("source/file.txt"), "during gap").unwrap();
                     run_git(&hook_root, &["add", "source/file.txt"]);
-                    let head = fs::read_to_string(hook_root.join(".git/HEAD")).unwrap();
-                    let oid = fs::read(
-                        hook_root
-                            .join(".git")
-                            .join(head.trim().strip_prefix("ref: ").unwrap()),
-                    )
-                    .unwrap();
-                    fs::write(hook_root.join(".git/refs/heads/gap"), &oid).unwrap();
-                    fs::write(hook_root.join(".git/refs/tags/gap"), oid).unwrap();
-                    fs::write(hook_root.join(".git/HEAD"), "ref: refs/heads/gap\n").unwrap();
+                    run_git(&hook_root, &["update-ref", "refs/heads/gap", "HEAD"]);
+                    run_git(&hook_root, &["update-ref", "refs/tags/gap", "HEAD"]);
+                    run_git(&hook_root, &["symbolic-ref", "HEAD", "refs/heads/gap"]);
                 }
             })),
             idle_tick: Duration::from_millis(100),
@@ -352,4 +345,73 @@ fn ignore_replacement_refreshes_all_state() {
 #[test]
 fn degraded_recovery_refreshes_all_state() {
     replacement_reconciles_all_state(false, true);
+}
+
+#[test]
+fn cancellation_during_registration_releases_setup_without_readiness_or_warning() {
+    let (_temp, root) = repository();
+    let enabled = Arc::new(AtomicBool::new(true));
+    let cancel = Arc::clone(&enabled);
+    let mut config = MonitorConfig {
+        before_registration: Some(Box::new(move || cancel.store(false, Ordering::Relaxed))),
+        ..Default::default()
+    };
+    let (tx, _rx) = mpsc::channel();
+    let mut state = MonitorState::default();
+    assert!(matches!(
+        state.setup(
+            &root,
+            &gitcomet_git_gix::GixBackend,
+            RepoId(1),
+            &tx,
+            &enabled,
+            &mut config,
+            true
+        ),
+        WatchSetup::Cancelled
+    ));
+    assert!(state.plan.dirs.is_empty());
+}
+
+#[test]
+fn readiness_failure_joins_a_panicked_worker_without_a_second_panic() {
+    let (_temp, root) = repository();
+    let config = MonitorConfig {
+        before_registration: Some(Box::new(|| panic!("controlled registration failure"))),
+        ..Default::default()
+    };
+    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        RunningMonitor::start_custom(&root, Arc::new(gitcomet_git_gix::GixBackend), config);
+    }))
+    .expect_err("registration failure must be reported");
+    let message = failure
+        .downcast_ref::<String>()
+        .expect("readiness diagnostics");
+    assert!(message.contains("watcher readiness failed"));
+    assert!(message.contains("phase="));
+    assert!(message.contains("worker_finished="));
+}
+
+#[test]
+fn traversal_cancellation_stops_before_enumerating_children() {
+    let (_temp, root) = repository();
+    fs::create_dir_all(root.join("child/grandchild")).unwrap();
+    let enabled = std::cell::Cell::new(true);
+    let mut state = load_gitignore_rules(&root);
+    let snapshot = state.state.snapshot();
+    let complete = state.state.plan.walk_while(
+        [root.clone()],
+        true,
+        &snapshot,
+        &mut state.state.rules,
+        &mut state.state.inputs,
+        usize::MAX,
+        |_| {
+            enabled.set(false);
+            Ok(())
+        },
+        || enabled.get(),
+    );
+    assert!(!complete);
+    assert_eq!(state.state.plan.dirs.len(), 1);
 }

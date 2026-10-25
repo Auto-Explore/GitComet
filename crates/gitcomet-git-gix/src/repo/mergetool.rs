@@ -3,7 +3,9 @@ use super::mergetool_builtin::{
     builtin_tool_program,
 };
 use super::{GixRepo, conflict_stages::gix_index_stage_blob_bytes_optional};
-use crate::util::{bytes_to_text_preserving_utf8, fnv1a_64, run_git_simple, stable_path_bytes};
+use crate::util::{
+    bytes_to_text_preserving_utf8, fnv1a_64, push_literal_paths, run_git_simple, stable_path_bytes,
+};
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::path_utils::{
     canonicalize_or_original, symlink_free_write_target, validated_repo_relative_path,
@@ -12,11 +14,13 @@ use gitcomet_core::process::background_command as no_window_command;
 use gitcomet_core::services::{
     CommandOutput, MergetoolResult, Result, validate_conflict_resolution_text,
 };
+#[cfg(any(test, feature = "test-support"))]
 use rustc_hash::FxHashSet;
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 #[cfg(any(not(windows), test))]
 use std::process::Command;
+#[cfg(any(test, feature = "test-support"))]
 use std::sync::{Mutex, OnceLock};
 
 impl GixRepo {
@@ -132,6 +136,8 @@ impl GixRepo {
                     Error::new(ErrorKind::Backend(format!(
                         "Failed to launch mergetool '{tool_name}' ({tool_executable}): {e}"
                     )))
+                    .with_source(e)
+                    .with_context("launch mergetool", Some(Path::new(tool_executable)))
                 })?
         };
 
@@ -196,14 +202,16 @@ impl GixRepo {
 
                 // Stage the file
                 let mut add = self.git_workdir_cmd();
-                add.arg("add").arg("--").arg(path);
+                add.arg("add");
+                push_literal_paths(&mut add, [path]);
                 run_git_simple(add, "git add (after mergetool)")?;
 
                 Some(bytes)
             }
             MergedFileState::Missing => {
                 let mut rm = self.git_workdir_cmd();
-                rm.arg("rm").arg("--").arg(path);
+                rm.arg("rm");
+                push_literal_paths(&mut rm, [path]);
                 run_git_simple(rm, "git rm (after mergetool)")?;
                 None
             }
@@ -279,12 +287,12 @@ fn run_custom_mergetool_command(
         let script_dir = tempfile::Builder::new()
             .prefix("gitcomet-mergetool-shell-")
             .tempdir()
-            .map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
+            .map_err(Error::from)?;
         let script_path = script_dir.path().join("run-mergetool.cmd");
         let mut script = String::from("@echo off\r\n");
         script.push_str(custom_cmd);
         script.push_str("\r\n");
-        std::fs::write(&script_path, script).map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
+        std::fs::write(&script_path, script).map_err(Error::from)?;
 
         let mut command = no_window_command("cmd");
         command.arg("/C").arg(&script_path);
@@ -294,9 +302,7 @@ fn run_custom_mergetool_command(
             .env("REMOTE", remote_path)
             .env("MERGED", merged_path)
             .current_dir(workdir);
-        command
-            .output()
-            .map_err(|e| Error::new(ErrorKind::Io(e.kind())))
+        command.output().map_err(Error::from)
     }
     #[cfg(not(windows))]
     {
@@ -307,9 +313,7 @@ fn run_custom_mergetool_command(
             .env("REMOTE", remote_path)
             .env("MERGED", merged_path)
             .current_dir(workdir);
-        command
-            .output()
-            .map_err(|e| Error::new(ErrorKind::Io(e.kind())))
+        command.output().map_err(Error::from)
     }
 }
 
@@ -430,35 +434,34 @@ fn resolve_mergetool_name_with_trust_mode(
     gui_default: GuiDefault,
     has_display: bool,
 ) -> Result<String> {
-    let trusted_tool = git_config_get_with_scope(repo, "merge.tool", GitConfigScope::Trusted)?;
-    let trusted_guitool =
-        git_config_get_with_scope(repo, "merge.guitool", GitConfigScope::Trusted)?;
+    let vetted_tool = git_config_get_with_scope(repo, "merge.tool", GitConfigScope::Trusted)?;
+    let vetted_guitool = git_config_get_with_scope(repo, "merge.guitool", GitConfigScope::Trusted)?;
     let local_tool = git_config_get_with_scope(repo, "merge.tool", GitConfigScope::Repository)?;
     let local_guitool =
         git_config_get_with_scope(repo, "merge.guitool", GitConfigScope::Repository)?;
 
-    let trusted_choice = choose_mergetool_name(
-        trusted_tool.clone(),
-        trusted_guitool.clone(),
+    let vetted_choice = choose_mergetool_name(
+        vetted_tool.clone(),
+        vetted_guitool.clone(),
         gui_default,
         has_display,
     )
     .ok();
     let tool_name = choose_mergetool_name(
-        local_tool.clone().or(trusted_tool),
-        local_guitool.clone().or(trusted_guitool),
+        local_tool.clone().or(vetted_tool),
+        local_guitool.clone().or(vetted_guitool),
         gui_default,
         has_display,
     )?;
 
-    if trusted_choice.as_deref() == Some(tool_name.as_str())
+    if vetted_choice.as_deref() == Some(tool_name.as_str())
         || builtin_tool_key(&tool_name).is_some()
         || repo_local_mergetool_command_allowed(repo, &tool_name)?
     {
         return Ok(tool_name);
     }
-    if let Some(trusted) = trusted_choice {
-        return Ok(trusted);
+    if let Some(vetted) = vetted_choice {
+        return Ok(vetted);
     }
 
     let key = if local_guitool.as_deref() == Some(tool_name.as_str())
@@ -523,6 +526,7 @@ fn untrusted_repo_local_mergetool_config_error(
 fn repo_local_mergetool_command_allowed(repo: &gix::Repository, tool_name: &str) -> Result<bool> {
     let consent_key =
         repo_local_mergetool_command_consent_key(repo_workdir_for_mergetool(repo), tool_name);
+    #[cfg(any(test, feature = "test-support"))]
     if test_repo_local_mergetool_command_allowed(&consent_key) {
         return Ok(true);
     }
@@ -541,9 +545,11 @@ fn repo_local_mergetool_command_consent_key(workdir: &Path, tool_name: &str) -> 
     format!("gitcomet.mergetool.allowrepolocalcmd-{repo_tool_fingerprint}")
 }
 
+#[cfg(any(test, feature = "test-support"))]
 static TEST_ALLOWED_REPO_LOCAL_MERGETOOL_COMMANDS: OnceLock<Mutex<FxHashSet<String>>> =
     OnceLock::new();
 
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn allow_test_repo_local_mergetool_command(workdir: &Path, tool_name: &str) {
     let consent_key = repo_local_mergetool_command_consent_key(workdir, tool_name);
     let allowed =
@@ -554,6 +560,7 @@ pub(crate) fn allow_test_repo_local_mergetool_command(workdir: &Path, tool_name:
         .insert(consent_key);
 }
 
+#[cfg(any(test, feature = "test-support"))]
 fn test_repo_local_mergetool_command_allowed(consent_key: &str) -> bool {
     let Some(allowed) = TEST_ALLOWED_REPO_LOCAL_MERGETOOL_COMMANDS.get() else {
         return false;
@@ -646,7 +653,7 @@ fn build_stage_paths(
         let tmp_dir = tempfile::Builder::new()
             .prefix("gitcomet-mergetool-")
             .tempdir()
-            .map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
+            .map_err(Error::from)?;
         let (tmp_dir_path, temp_dir_guard) = if keep_temporaries {
             (tmp_dir.keep(), None)
         } else {
@@ -748,6 +755,8 @@ fn validated_mergetool_path(path: &Path) -> Result<PathBuf> {
             "invalid mergetool conflict path '{}': {err}",
             path.display()
         )))
+        .with_source(err)
+        .with_context("validate mergetool conflict path", Some(path))
     })
 }
 
@@ -781,6 +790,8 @@ fn mergetool_worktree_target(workdir: &Path, path: &Path) -> Result<PathBuf> {
             "unsafe mergetool conflict path '{}': {err}",
             path.display()
         )))
+        .with_source(err)
+        .with_context("resolve mergetool conflict path", Some(&workdir.join(path)))
     })
 }
 
@@ -797,9 +808,9 @@ fn stage_path_to_fs_path(workdir: &Path, stage_path: &Path) -> Result<PathBuf> {
 fn write_stage_bytes(workdir: &Path, stage_path: &Path, bytes: &[u8]) -> Result<()> {
     let path = stage_path_to_fs_path(workdir, stage_path)?;
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
+        std::fs::create_dir_all(parent).map_err(Error::from)?;
     }
-    std::fs::write(path, bytes).map_err(|e| Error::new(ErrorKind::Io(e.kind())))
+    std::fs::write(path, bytes).map_err(Error::from)
 }
 
 /// Read a git config value. Returns `Ok(None)` if the key is not set.
@@ -849,7 +860,11 @@ fn git_config_get_bool_with_scope(
     match value.transpose() {
         Some(Ok(value)) => Ok(Some(value)),
         Some(Err(err)) => {
-            let value = bytes_to_text_preserving_utf8(err.input.as_ref());
+            let input = err.metadata().find_map(|values| match values.get("input") {
+                Some(gix::error::MetadataValue::Bytes(input)) => Some(input.as_slice()),
+                _ => None,
+            });
+            let value = bytes_to_text_preserving_utf8(input.unwrap_or_default());
             Err(Error::new(ErrorKind::Backend(format!(
                 "Invalid boolean value for git config {key}: {:?}. Expected true/false, yes/no, on/off, or 1/0.",
                 value
@@ -905,7 +920,7 @@ fn read_merged_file_state(path: &Path) -> Result<MergedFileState> {
     match std::fs::read(path) {
         Ok(bytes) => Ok(MergedFileState::Present(bytes)),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(MergedFileState::Missing),
-        Err(e) => Err(Error::new(ErrorKind::Io(e.kind()))),
+        Err(e) => Err(Error::from(e)),
     }
 }
 
@@ -922,7 +937,7 @@ mod tests {
         // Create a temporary git repo
         let tmp = tempfile::tempdir().unwrap();
         let workdir = tmp.path();
-        Command::new("git")
+        gitcomet_core::test_support::git_fixture::git_command()
             .arg("-C")
             .arg(workdir)
             .arg("init")
@@ -938,7 +953,7 @@ mod tests {
     fn test_git_config_get_existing_key() {
         let tmp = tempfile::tempdir().unwrap();
         let workdir = tmp.path();
-        Command::new("git")
+        gitcomet_core::test_support::git_fixture::git_command()
             .arg("-C")
             .arg(workdir)
             .arg("init")
@@ -946,7 +961,7 @@ mod tests {
             .unwrap();
 
         // Set a config value
-        Command::new("git")
+        gitcomet_core::test_support::git_fixture::git_command()
             .arg("-C")
             .arg(workdir)
             .arg("config")
@@ -964,19 +979,19 @@ mod tests {
     fn test_git_config_get_with_scope_local_ignores_worktree_config() {
         let tmp = tempfile::tempdir().unwrap();
         let workdir = tmp.path();
-        Command::new("git")
+        gitcomet_core::test_support::git_fixture::git_command()
             .arg("-C")
             .arg(workdir)
             .arg("init")
             .output()
             .unwrap();
-        Command::new("git")
+        gitcomet_core::test_support::git_fixture::git_command()
             .arg("-C")
             .arg(workdir)
             .args(["config", "extensions.worktreeConfig", "true"])
             .output()
             .unwrap();
-        Command::new("git")
+        gitcomet_core::test_support::git_fixture::git_command()
             .arg("-C")
             .arg(workdir)
             .args(["config", "--worktree", "mergetool.fake.cmd", "worktree-cmd"])
@@ -998,7 +1013,7 @@ mod tests {
     fn test_read_index_stage_bytes_optional_no_conflict() {
         let tmp = tempfile::tempdir().unwrap();
         let workdir = tmp.path();
-        Command::new("git")
+        gitcomet_core::test_support::git_fixture::git_command()
             .arg("-C")
             .arg(workdir)
             .arg("init")
@@ -1164,7 +1179,9 @@ mod tests {
         std::fs::write(&remote, b"theirs\n").unwrap();
 
         let output = run_custom_mergetool_command(
-            r#"cmd /D /S /C "copy /Y "%REMOTE%" "%MERGED%" >NUL""#,
+            // Cargo can grow PATH beyond cmd's 8191-character environment
+            // limit. Resolve the nested shell independently of that PATH.
+            r#""%ComSpec%" /D /S /C "copy /Y "%REMOTE%" "%MERGED%" >NUL""#,
             workdir,
             Path::new("base.txt"),
             Path::new("local.txt"),
@@ -1305,7 +1322,7 @@ mod tests {
     fn test_git_config_get_bool_nonexistent_key_returns_none() {
         let tmp = tempfile::tempdir().unwrap();
         let workdir = tmp.path();
-        Command::new("git")
+        gitcomet_core::test_support::git_fixture::git_command()
             .arg("-C")
             .arg(workdir)
             .arg("init")
@@ -1321,14 +1338,14 @@ mod tests {
     fn test_git_config_get_bool_parses_variants() {
         let tmp = tempfile::tempdir().unwrap();
         let workdir = tmp.path();
-        Command::new("git")
+        gitcomet_core::test_support::git_fixture::git_command()
             .arg("-C")
             .arg(workdir)
             .arg("init")
             .output()
             .unwrap();
 
-        Command::new("git")
+        gitcomet_core::test_support::git_fixture::git_command()
             .arg("-C")
             .arg(workdir)
             .arg("config")
@@ -1342,7 +1359,7 @@ mod tests {
             Some(true)
         );
 
-        Command::new("git")
+        gitcomet_core::test_support::git_fixture::git_command()
             .arg("-C")
             .arg(workdir)
             .arg("config")
@@ -1361,14 +1378,14 @@ mod tests {
     fn test_git_config_get_bool_invalid_value_errors() {
         let tmp = tempfile::tempdir().unwrap();
         let workdir = tmp.path();
-        Command::new("git")
+        gitcomet_core::test_support::git_fixture::git_command()
             .arg("-C")
             .arg(workdir)
             .arg("init")
             .output()
             .unwrap();
 
-        Command::new("git")
+        gitcomet_core::test_support::git_fixture::git_command()
             .arg("-C")
             .arg(workdir)
             .arg("config")
@@ -1382,6 +1399,7 @@ mod tests {
         assert!(matches!(
             err.kind(),
             ErrorKind::Backend(message) if message.contains("Invalid boolean value")
+                && message.contains("\"sometimes\"")
         ));
     }
 
@@ -1389,7 +1407,7 @@ mod tests {
     fn test_git_config_get_bool_bare_key_is_true() {
         let tmp = tempfile::tempdir().unwrap();
         let workdir = tmp.path();
-        Command::new("git")
+        gitcomet_core::test_support::git_fixture::git_command()
             .arg("-C")
             .arg(workdir)
             .arg("init")
@@ -1412,38 +1430,38 @@ mod tests {
     fn test_resolve_mergetool_config_prefers_guitool_and_reads_path_override() {
         let tmp = tempfile::tempdir().unwrap();
         let workdir = tmp.path();
-        Command::new("git")
+        gitcomet_core::test_support::git_fixture::git_command()
             .arg("-C")
             .arg(workdir)
             .arg("init")
             .output()
             .unwrap();
 
-        Command::new("git")
+        gitcomet_core::test_support::git_fixture::git_command()
             .arg("-C")
             .arg(workdir)
             .args(["config", "merge.tool", "cli"])
             .output()
             .unwrap();
-        Command::new("git")
+        gitcomet_core::test_support::git_fixture::git_command()
             .arg("-C")
             .arg(workdir)
             .args(["config", "merge.guitool", "gui"])
             .output()
             .unwrap();
-        Command::new("git")
+        gitcomet_core::test_support::git_fixture::git_command()
             .arg("-C")
             .arg(workdir)
             .args(["config", "mergetool.guiDefault", "true"])
             .output()
             .unwrap();
-        Command::new("git")
+        gitcomet_core::test_support::git_fixture::git_command()
             .arg("-C")
             .arg(workdir)
             .args(["config", "mergetool.gui.path", "/opt/fake-gui-tool"])
             .output()
             .unwrap();
-        Command::new("git")
+        gitcomet_core::test_support::git_fixture::git_command()
             .arg("-C")
             .arg(workdir)
             .args(["config", "mergetool.gui.trustExitCode", "yes"])
@@ -1467,26 +1485,26 @@ mod tests {
     fn test_resolve_mergetool_config_auto_without_display_uses_merge_tool() {
         let tmp = tempfile::tempdir().unwrap();
         let workdir = tmp.path();
-        Command::new("git")
+        gitcomet_core::test_support::git_fixture::git_command()
             .arg("-C")
             .arg(workdir)
             .arg("init")
             .output()
             .unwrap();
 
-        Command::new("git")
+        gitcomet_core::test_support::git_fixture::git_command()
             .arg("-C")
             .arg(workdir)
             .args(["config", "merge.tool", "cli"])
             .output()
             .unwrap();
-        Command::new("git")
+        gitcomet_core::test_support::git_fixture::git_command()
             .arg("-C")
             .arg(workdir)
             .args(["config", "merge.guitool", "gui"])
             .output()
             .unwrap();
-        Command::new("git")
+        gitcomet_core::test_support::git_fixture::git_command()
             .arg("-C")
             .arg(workdir)
             .args(["config", "mergetool.guiDefault", "auto"])
@@ -1508,20 +1526,20 @@ mod tests {
     fn test_resolve_mergetool_config_trust_exit_code_falls_back_to_global_setting() {
         let tmp = tempfile::tempdir().unwrap();
         let workdir = tmp.path();
-        Command::new("git")
+        gitcomet_core::test_support::git_fixture::git_command()
             .arg("-C")
             .arg(workdir)
             .arg("init")
             .output()
             .unwrap();
 
-        Command::new("git")
+        gitcomet_core::test_support::git_fixture::git_command()
             .arg("-C")
             .arg(workdir)
             .args(["config", "merge.tool", "cli"])
             .output()
             .unwrap();
-        Command::new("git")
+        gitcomet_core::test_support::git_fixture::git_command()
             .arg("-C")
             .arg(workdir)
             .args(["config", "mergetool.trustExitCode", "true"])
@@ -1540,26 +1558,26 @@ mod tests {
     fn test_resolve_mergetool_config_tool_specific_trust_exit_overrides_global() {
         let tmp = tempfile::tempdir().unwrap();
         let workdir = tmp.path();
-        Command::new("git")
+        gitcomet_core::test_support::git_fixture::git_command()
             .arg("-C")
             .arg(workdir)
             .arg("init")
             .output()
             .unwrap();
 
-        Command::new("git")
+        gitcomet_core::test_support::git_fixture::git_command()
             .arg("-C")
             .arg(workdir)
             .args(["config", "merge.tool", "cli"])
             .output()
             .unwrap();
-        Command::new("git")
+        gitcomet_core::test_support::git_fixture::git_command()
             .arg("-C")
             .arg(workdir)
             .args(["config", "mergetool.trustExitCode", "true"])
             .output()
             .unwrap();
-        Command::new("git")
+        gitcomet_core::test_support::git_fixture::git_command()
             .arg("-C")
             .arg(workdir)
             .args(["config", "mergetool.cli.trustExitCode", "false"])
@@ -1578,20 +1596,20 @@ mod tests {
     fn test_resolve_mergetool_config_reads_write_to_temp() {
         let tmp = tempfile::tempdir().unwrap();
         let workdir = tmp.path();
-        Command::new("git")
+        gitcomet_core::test_support::git_fixture::git_command()
             .arg("-C")
             .arg(workdir)
             .arg("init")
             .output()
             .unwrap();
 
-        Command::new("git")
+        gitcomet_core::test_support::git_fixture::git_command()
             .arg("-C")
             .arg(workdir)
             .args(["config", "merge.tool", "cli"])
             .output()
             .unwrap();
-        Command::new("git")
+        gitcomet_core::test_support::git_fixture::git_command()
             .arg("-C")
             .arg(workdir)
             .args(["config", "mergetool.writeToTemp", "true"])
@@ -1611,20 +1629,20 @@ mod tests {
     fn test_resolve_mergetool_config_reads_keep_temporaries() {
         let tmp = tempfile::tempdir().unwrap();
         let workdir = tmp.path();
-        Command::new("git")
+        gitcomet_core::test_support::git_fixture::git_command()
             .arg("-C")
             .arg(workdir)
             .arg("init")
             .output()
             .unwrap();
 
-        Command::new("git")
+        gitcomet_core::test_support::git_fixture::git_command()
             .arg("-C")
             .arg(workdir)
             .args(["config", "merge.tool", "cli"])
             .output()
             .unwrap();
-        Command::new("git")
+        gitcomet_core::test_support::git_fixture::git_command()
             .arg("-C")
             .arg(workdir)
             .args(["config", "mergetool.keepTemporaries", "true"])
@@ -1641,7 +1659,7 @@ mod tests {
     }
 
     fn init_repo(workdir: &Path) {
-        let status = Command::new("git")
+        let status = gitcomet_core::test_support::git_fixture::git_command()
             .arg("-C")
             .arg(workdir)
             .arg("init")
@@ -1653,7 +1671,7 @@ mod tests {
     }
 
     fn git_config(workdir: &Path, args: &[&str]) {
-        let status = Command::new("git")
+        let status = gitcomet_core::test_support::git_fixture::git_command()
             .arg("-C")
             .arg(workdir)
             .arg("config")

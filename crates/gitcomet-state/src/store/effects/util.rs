@@ -1,9 +1,9 @@
 use crate::model::GitOperationOuterOutcome;
 use crate::msg::{InternalMsg, Msg};
+use crate::store::repository_runtime::RepositoryRuntimes;
 use gitcomet_core::error::{Error, ErrorKind, GitFailureId};
 use gitcomet_core::git_operation::{self, GitOperationContext, GitOperationScope};
 use gitcomet_core::services::GitRepository;
-use rustc_hash::FxHashMap;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::{Instant, SystemTime};
@@ -11,8 +11,6 @@ use std::time::{Instant, SystemTime};
 use super::super::{
     RepoId, executor::TaskExecutor, repo_load_trace, worker_channel::StoreWorkerSender,
 };
-
-pub(super) type RepoMap = FxHashMap<RepoId, Arc<dyn GitRepository>>;
 
 pub(super) fn missing_repo_error(repo_id: RepoId) -> Error {
     Error::new(ErrorKind::Backend(format!(
@@ -95,6 +93,17 @@ impl GitOperationTask {
         display_context: Option<String>,
         msg_tx: &StoreWorkerSender,
     ) -> Self {
+        Self::start_with_progress_lane(repo_id, label, display_context, false, msg_tx)
+    }
+
+    /// [`Self::start`] for work the UI shows as a progress card.
+    pub(super) fn start_with_progress_lane(
+        repo_id: RepoId,
+        label: impl Into<String>,
+        display_context: Option<String>,
+        progress_lane: bool,
+        msg_tx: &StoreWorkerSender,
+    ) -> Self {
         let label = label.into();
         let event_tx = msg_tx.clone();
         let context = GitOperationContext::new(label.clone(), move |operation_id, event| {
@@ -116,6 +125,7 @@ impl GitOperationTask {
                 label,
                 context: display_context,
                 time: SystemTime::now(),
+                progress_lane,
             }),
         );
         Self {
@@ -163,7 +173,7 @@ fn outer_outcome<T>(result: &Result<T, Error>) -> GitOperationOuterOutcome {
 
 pub(super) fn spawn_with_repo(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     repo_id: RepoId,
     msg_tx: StoreWorkerSender,
     task: impl FnOnce(Arc<dyn GitRepository>, StoreWorkerSender) + Send + 'static,
@@ -173,13 +183,13 @@ pub(super) fn spawn_with_repo(
 
 pub(super) fn spawn_with_repo_or_else(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     repo_id: RepoId,
     msg_tx: StoreWorkerSender,
     task: impl FnOnce(Arc<dyn GitRepository>, StoreWorkerSender) + Send + 'static,
     on_missing: impl FnOnce(StoreWorkerSender) + Send + 'static,
 ) -> bool {
-    if let Some(repo) = repos.get(&repo_id).cloned() {
+    if let Some(repo) = repos.repository(&repo_id).cloned() {
         repo_load_trace::trace!("queue_repo_task repo_id={:?}", repo_id);
         executor.spawn(move || {
             if msg_tx.is_cancelled() {
@@ -208,13 +218,13 @@ pub(super) fn spawn_with_repo_or_else(
 pub(super) fn spawn_detached_with_repo_or_else(
     executor: &TaskExecutor,
     task_name: &'static str,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     repo_id: RepoId,
     msg_tx: StoreWorkerSender,
     task: impl FnOnce(Arc<dyn GitRepository>, StoreWorkerSender) + Send + 'static,
     on_missing: impl FnOnce(StoreWorkerSender) + Send + 'static,
 ) -> bool {
-    if let Some(repo) = repos.get(&repo_id).cloned() {
+    if let Some(repo) = repos.repository(&repo_id).cloned() {
         repo_load_trace::trace!(
             "spawn_detached_repo_task task={} repo_id={:?}",
             task_name,

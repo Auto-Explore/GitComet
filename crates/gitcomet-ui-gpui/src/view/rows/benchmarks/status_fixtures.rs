@@ -290,11 +290,13 @@ impl StatusSelectDiffOpenMetrics {
 
 fn hash_status_select_diff_target(target: &DiffTarget, hasher: &mut FxHasher) {
     match target {
-        DiffTarget::WorkingTree { path, area } => {
+        DiffTarget::WorkingTree { path, area, .. } => {
             path.hash(hasher);
             (*area as u8).hash(hasher);
         }
-        DiffTarget::Commit { commit_id, path } => {
+        DiffTarget::Commit {
+            commit_id, path, ..
+        } => {
             commit_id.hash(hasher);
             path.hash(hasher);
         }
@@ -302,6 +304,7 @@ fn hash_status_select_diff_target(target: &DiffTarget, hasher: &mut FxHasher) {
             from_commit_id,
             to_commit_id,
             path,
+            ..
         } => {
             from_commit_id.hash(hasher);
             to_commit_id.hash(hasher);
@@ -327,10 +330,7 @@ impl StatusSelectDiffOpenFixture {
 
         Self {
             baseline: bench_app_state(vec![repo], Some(RepoId(1))),
-            diff_target: DiffTarget::WorkingTree {
-                path: target_path,
-                area: DiffArea::Unstaged,
-            },
+            diff_target: DiffTarget::working_tree(target_path, DiffArea::Unstaged),
         }
     }
 
@@ -345,10 +345,7 @@ impl StatusSelectDiffOpenFixture {
 
         Self {
             baseline: bench_app_state(vec![repo], Some(RepoId(1))),
-            diff_target: DiffTarget::WorkingTree {
-                path: target_path,
-                area: DiffArea::Staged,
-            },
+            diff_target: DiffTarget::working_tree(target_path, DiffArea::Staged),
         }
     }
 

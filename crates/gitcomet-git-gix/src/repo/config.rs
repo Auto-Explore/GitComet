@@ -1,0 +1,264 @@
+//! Retain the repository/index across text loads, refreshing its config
+//! snapshot only when one of the configuration inputs changes.
+use super::GixRepo;
+use gitcomet_core::services::Result;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+pub(super) struct ConfigRepo {
+    repo: Arc<gix::ThreadSafeRepository>,
+    inputs: Vec<(PathBuf, std::io::Result<ConfigStamp>)>,
+    branch: Option<Option<Vec<u8>>>,
+}
+
+/// Config freshness needs metadata, not another read of every input. Include
+/// file identity and change time on Unix to catch replacements/backdated edits.
+#[derive(Debug, PartialEq, Eq)]
+struct ConfigStamp {
+    len: u64,
+    modified: std::time::SystemTime,
+    #[cfg(unix)]
+    identity: (u64, u64, i64, i64),
+}
+
+impl ConfigStamp {
+    fn read(path: &Path) -> std::io::Result<Self> {
+        let metadata = std::fs::metadata(path)?;
+        #[cfg(unix)]
+        use std::os::unix::fs::MetadataExt;
+        Ok(Self {
+            len: metadata.len(),
+            modified: metadata.modified()?,
+            #[cfg(unix)]
+            identity: (
+                metadata.dev(),
+                metadata.ino(),
+                metadata.ctime(),
+                metadata.ctime_nsec(),
+            ),
+        })
+    }
+}
+
+fn symbolic_head(repo: &gix::Repository) -> Result<Option<Vec<u8>>> {
+    Ok(crate::refs::head_name(repo)?.map(|name| name.as_bstr().to_vec()))
+}
+
+impl ConfigRepo {
+    pub(super) fn new(repo: gix::Repository) -> Self {
+        let mut paths = vec![
+            repo.common_dir().join("config"),
+            repo.git_dir().join("config.worktree"),
+            repo.git_dir().join("commondir"),
+        ];
+        let config = repo.config_snapshot();
+        let home = gix::path::env::home_dir();
+        if let Some(home) = &home {
+            paths.push(home.join(".gitconfig"));
+        }
+        if let Some(path) = gix::path::env::xdg_config("config", &mut |key| std::env::var_os(key)) {
+            paths.push(path);
+        }
+        let mut depends_on_branch = false;
+        for section in config.plumbing().sections() {
+            if let Some(path) = &section.meta().path {
+                paths.push(path.clone());
+            }
+            let name = section.header().name();
+            depends_on_branch |= name.eq_ignore_ascii_case(b"includeIf")
+                && section
+                    .header()
+                    .subsection_name()
+                    .is_some_and(|condition| condition.starts_with(b"onbranch:"));
+            if name.eq_ignore_ascii_case(b"include") || name.eq_ignore_ascii_case(b"includeIf") {
+                for value in section.values("path") {
+                    let value = gix::config::Path::from(value);
+                    if let Ok(path) = value.interpolate(gix::config::path::interpolate::Context {
+                        home_dir: home.as_deref(),
+                        git_install_dir: gix::path::env::installation_config_prefix(),
+                        ..Default::default()
+                    }) {
+                        let parent = section
+                            .meta()
+                            .path
+                            .as_ref()
+                            .and_then(|path| path.parent())
+                            .unwrap_or(repo.common_dir());
+                        paths.push(if path.is_absolute() {
+                            path
+                        } else {
+                            parent.join(path)
+                        });
+                    }
+                }
+            }
+        }
+        paths.sort();
+        paths.dedup();
+        let inputs = paths
+            .into_iter()
+            .map(|path| {
+                let stamp = ConfigStamp::read(&path);
+                (path, stamp)
+            })
+            .collect();
+        let branch = depends_on_branch.then(|| symbolic_head(&repo).ok().flatten());
+        Self {
+            repo: Arc::new(repo.into_sync()),
+            inputs,
+            branch,
+        }
+    }
+
+    /// Keeps this config snapshot but reads objects through `repo`'s store.
+    pub(super) fn share_objects(&mut self, repo: &gix::ThreadSafeRepository) {
+        let mut shared = (*self.repo).clone();
+        shared.objects = repo.objects.clone();
+        self.repo = Arc::new(shared);
+    }
+
+    fn is_current(&self) -> bool {
+        self.branch.as_ref().is_none_or(|previous| {
+            symbolic_head(&self.repo.to_thread_local()).is_ok_and(|name| name == *previous)
+        }) && self.inputs.iter().all(
+            |(path, previous)| match (previous, ConfigStamp::read(path)) {
+                (Ok(previous), Ok(current)) => *previous == current,
+                (Err(previous), Err(current)) => {
+                    previous.kind() == std::io::ErrorKind::NotFound
+                        && current.kind() == std::io::ErrorKind::NotFound
+                }
+                _ => false,
+            },
+        )
+    }
+}
+
+impl GixRepo {
+    pub(super) fn repo_with_current_config(&self) -> Result<gix::Repository> {
+        let mut cached = self
+            .config_repo
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if !cached.is_current() {
+            // Opening may select a different compatible object store. Do not
+            // hold the config lock while installing it (maintenance also updates
+            // this snapshot). Keep this worktree's existing parsed index.
+            drop(cached);
+            let (fresh, _) = self.fresh_history_store()?;
+            let fresh = fresh.to_thread_local();
+            cached = self
+                .config_repo
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            let mut repo = self.repo();
+            let mut config = repo.config_snapshot_mut();
+            *config = fresh.config_snapshot().plumbing().clone();
+            config.commit().map_err(|error| {
+                gitcomet_core::error::Error::new(gitcomet_core::error::ErrorKind::Backend(format!(
+                    "gix refresh config: {error}"
+                )))
+            })?;
+            *cached = ConfigRepo::new(repo);
+        }
+        Ok(cached.repo.to_thread_local())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn config_refresh_keeps_the_shared_index() {
+        use crate::test_support::{git_success, init_test_repo, open_repo, write_file};
+        let dir = tempfile::tempdir().unwrap();
+        init_test_repo(dir.path());
+        write_file(dir.path(), "file.txt", "content\n");
+        git_success(dir.path(), &["add", "."]);
+        let repo = open_repo(dir.path());
+        let original = repo.repo().index().unwrap();
+        git_success(dir.path(), &["config", "core.whitespace", "tabwidth=8"]);
+        let current = repo.repo_with_current_config().unwrap();
+        assert_eq!(
+            current.config_snapshot().string("core.whitespace").unwrap(),
+            "tabwidth=8"
+        );
+        let refreshed = current.index().unwrap();
+        assert!(
+            std::ptr::eq(&**original, &**refreshed),
+            "config refresh must reuse the parsed index"
+        );
+    }
+
+    #[test]
+    fn review_detached_head_commits_do_not_reopen_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = gix::init(dir.path()).unwrap();
+        let head = dir.path().join(".git/HEAD");
+        std::fs::write(&head, format!("{}\n", "1".repeat(40))).unwrap();
+        let cached = ConfigRepo::new(repo);
+        std::fs::write(&head, format!("{}\n", "2".repeat(40))).unwrap();
+        assert!(
+            cached.is_current(),
+            "detached commit IDs cannot change onbranch includes"
+        );
+    }
+
+    #[test]
+    fn onbranch_inputs_track_branch_names_and_missing_includes() {
+        let dir = tempfile::tempdir().unwrap();
+        gix::init(dir.path()).unwrap();
+        let git_dir = dir.path().join(".git");
+        std::fs::write(
+            git_dir.join("config"),
+            "[includeIf \"onbranch:main\"]\npath = branch-config\n",
+        )
+        .unwrap();
+        let head = git_dir.join("HEAD");
+        std::fs::write(&head, format!("{}\n", "1".repeat(40))).unwrap();
+        let cached = ConfigRepo::new(gix::open(dir.path()).unwrap());
+        std::fs::write(&head, format!("{}\n", "2".repeat(40))).unwrap();
+        assert!(cached.is_current());
+        std::fs::write(&head, "ref: refs/heads/main\n").unwrap();
+        assert!(!cached.is_current());
+        let cached = ConfigRepo::new(gix::open(dir.path()).unwrap());
+        std::fs::write(
+            git_dir.join("branch-config"),
+            "[gui]\nencoding = windows-1250\n",
+        )
+        .unwrap();
+        assert!(
+            !cached.is_current(),
+            "creating a previously missing include invalidates the snapshot"
+        );
+    }
+
+    #[test]
+    fn text_loads_reuse_repo_until_configuration_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = gix::init(dir.path()).unwrap();
+        let repo = GixRepo::new(dir.path().to_path_buf(), repo.into_sync());
+        let cached = Arc::clone(&repo.config_repo.lock().unwrap().repo);
+        for _ in 0..3 {
+            repo.text_attributes_impl(std::path::Path::new("a.txt"))
+                .unwrap();
+        }
+        assert!(Arc::ptr_eq(&cached, &repo.config_repo.lock().unwrap().repo));
+        let config_path = dir.path().join(".git/config");
+        let mut text = std::fs::read_to_string(&config_path).unwrap();
+        text.push_str("\n[core]\nwhitespace = tabwidth=8\n");
+        std::fs::write(config_path, text).unwrap();
+        assert_eq!(
+            repo.text_attributes_impl(std::path::Path::new("a.txt"))
+                .unwrap()
+                .tab_width
+                .unwrap()
+                .columns,
+            8
+        );
+        assert!(!Arc::ptr_eq(
+            &cached,
+            &repo.config_repo.lock().unwrap().repo
+        ));
+    }
+}

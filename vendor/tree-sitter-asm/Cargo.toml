@@ -21,14 +21,13 @@
 # Cargo.toml) is a hard requirement, enforced by
 # `vendored_asm_grammar_is_abi_compatible_with_workspace_tree_sitter` and
 # `vendored_asm_grammar_parses_dotted_mnemonics_and_directives` in
-# crates/gitcomet-ui-gpui/src/view/rows/diff_text/syntax.rs. Depending on
+# crates/gitcomet-syntax/src/tests/grammar_compat.rs. Depending on
 # `tree-sitter-language` rather than `tree-sitter` is what keeps that true.
 #
-# `queries/` is deliberately not vendored, matching vendor/tree-sitter-vue:
-# GitComet keeps its own asm query in
-# crates/gitcomet-ui-gpui/src/view/rows/diff_text/queries/asm_highlights.scm,
-# and upstream's `HIGHLIGHTS_QUERY` const is removed from lib.rs because it
-# `include_str!`s a file that is not here.
+# `queries/asm/highlights.scm` and lib.rs's `HIGHLIGHTS_QUERY` are upstream's at this revision,
+# vendored for vendor/difftastic. GitComet's highlighter keeps its own asm query in
+# crates/gitcomet-syntax/src/queries/asm_highlights.scm, which captures the `mnemonic`
+# node this grammar adds.
 [package]
 name = "tree-sitter-asm"
 description = "assembly grammar for the tree-sitter parsing library"

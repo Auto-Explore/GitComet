@@ -1,4 +1,6 @@
 #include "tree_sitter/parser.h"
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <wctype.h>
 
@@ -278,7 +280,12 @@ struct ScannerState {
 };
 
 void *tree_sitter_swift_external_scanner_create() {
-    return calloc(1, sizeof(struct ScannerState));
+    void *payload = calloc(1, sizeof(struct ScannerState));
+    if (!payload) {
+        fprintf(stderr, "tree-sitter-swift: out of memory allocating scanner state\n");
+        exit(1);
+    }
+    return payload;
 }
 
 void tree_sitter_swift_external_scanner_destroy(void *payload) {

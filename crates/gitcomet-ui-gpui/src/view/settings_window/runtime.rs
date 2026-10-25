@@ -3,6 +3,7 @@ use super::*;
 impl Drop for SettingsWindowView {
     fn drop(&mut self) {
         self.signing_tools_cancellation.cancel();
+        self.large_file_tools_cancellation.cancel();
     }
 }
 
@@ -11,8 +12,9 @@ pub(super) struct SettingsRuntimeInfo {
     pub(super) git: GitRuntimeInfo,
     /// `None` until the background probe finishes.
     pub(super) signing_tools: Option<SigningToolsState>,
-    pub(super) app_version_display: SharedString,
-    pub(super) operating_system: SharedString,
+    /// `None` while the `git lfs` / `git annex` probe runs.
+    pub(super) large_file_tools: Option<gitcomet_core::large_file_tools::LargeFileToolsState>,
+    pub(super) environment: gitcomet_core::environment::EnvironmentSnapshot,
 }
 
 #[derive(Clone, Debug)]
@@ -32,12 +34,6 @@ pub(super) enum GitCompatibility {
     Checking,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) struct GitVersion {
-    pub(super) major: u32,
-    pub(super) minor: u32,
-}
-
 #[derive(Clone, Debug)]
 pub(super) struct TerminalSettingsStatus {
     pub(super) is_error: bool,
@@ -50,6 +46,21 @@ pub(super) enum TerminalProgramInputTarget {
 }
 
 impl SettingsWindowView {
+    pub(super) fn copy_environment_details(
+        &mut self,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        crate::environment::refresh_current(window, cx);
+        self.runtime_info.environment = cx.global::<crate::environment::Environment>().0.clone();
+        crate::clipboard::write_text(
+            cx,
+            self.runtime_info.environment.summary(),
+            crate::clipboard::CopySource::EnvironmentDetails,
+        );
+        cx.notify();
+    }
+
     pub(super) fn selected_git_executable_path(&self) -> Option<std::path::PathBuf> {
         match self.git_executable_mode {
             GitExecutableMode::SystemPath => None,
@@ -69,6 +80,7 @@ impl SettingsWindowView {
         runtime: GitRuntimeState,
         cx: &mut gpui::Context<Self>,
     ) {
+        super::super::large_file_tools_probe::supersede_settings_tool_probe(cx);
         self.git_executable_mode = GitExecutableMode::from_preference(&runtime.preference);
         if let GitExecutablePreference::Custom(path) = &runtime.preference {
             let next_draft = if path.as_os_str().is_empty() {
@@ -83,17 +95,16 @@ impl SettingsWindowView {
             }
         }
 
-        let signing_tools = self.runtime_info.signing_tools.take();
-        self.runtime_info = SettingsRuntimeInfo::from_runtime(runtime.clone());
-        self.runtime_info.signing_tools = signing_tools;
-        // A different Git resolves gpg and ssh-keygen with a different PATH.
+        self.runtime_info.update_git(runtime.clone());
+        crate::environment::refresh_git(cx);
+        // A different Git resolves gpg, ssh-keygen, git-lfs and git-annex with
+        // a different PATH.
         self.cancel_signing_tools_probe();
+        self.large_file_tools_cancellation.cancel();
+        self.large_file_tools_probe = None;
+        self.runtime_info.large_file_tools = Some(Default::default());
         self.persist_preferences(cx);
-        self.update_main_windows(cx, move |view, _window, _cx| {
-            view.cancel_signing_tools_probe();
-            view.store
-                .dispatch(Msg::SetGitRuntimeState(runtime.clone()));
-        });
+        self.broadcast_preference(PreferenceChange::GitRuntime(runtime), cx);
         cx.notify();
     }
 
@@ -123,8 +134,87 @@ impl SettingsWindowView {
         runtime: GitRuntimeState,
         cx: &mut gpui::Context<Self>,
     ) {
-        self.runtime_info = SettingsRuntimeInfo::from_runtime(runtime);
+        self.runtime_info.update_git(runtime);
         self.refresh_signing_tools(cx);
+        self.refresh_large_file_tools(cx);
+        cx.notify();
+    }
+
+    pub(super) fn refresh_large_file_tools(&mut self, cx: &mut gpui::Context<Self>) {
+        if self.large_file_tools_closed {
+            return;
+        }
+        let generation = super::super::large_file_tools_probe::supersede_settings_tool_probe(cx);
+        self.large_file_tools_cancellation.cancel();
+        self.large_file_tools_probe = None;
+        self.runtime_info.large_file_tools = Some(Default::default());
+        if cfg!(test) || !current_git_runtime().is_available() {
+            return;
+        }
+        self.large_file_tools_cancellation = Default::default();
+        let cancellation = self.large_file_tools_cancellation.clone();
+        let runtime = current_git_runtime();
+        let worker_runtime = runtime.clone();
+        let worker_cancellation = cancellation.clone();
+        self.runtime_info.large_file_tools = None;
+        let detection = cx.background_spawn(async move {
+            gitcomet_core::large_file_tools::detect_large_file_tools_for_runtime_cancellable(
+                &worker_runtime,
+                &worker_cancellation,
+            )
+        });
+        self.large_file_tools_probe = Some(cx.spawn(async move |view, cx| {
+            let tools = detection.await;
+            let _ = view.update(cx, |this, cx| {
+                if cancellation.is_cancelled() || current_git_runtime() != runtime {
+                    return;
+                }
+                this.apply_large_file_tools_probe_for_request(runtime, generation, tools, cx);
+            });
+        }));
+    }
+
+    /// Main windows probe once per Git runtime; a recheck here is how they
+    /// learn a tool was installed or removed since.
+    #[cfg(test)]
+    pub(super) fn apply_large_file_tools_probe(
+        &mut self,
+        tools: gitcomet_core::large_file_tools::LargeFileToolsState,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.apply_large_file_tools_probe_for_request(
+            current_git_runtime(),
+            super::super::large_file_tools_probe::settings_tool_probe_generation(cx),
+            tools,
+            cx,
+        );
+    }
+
+    pub(super) fn apply_large_file_tools_probe_for_request(
+        &mut self,
+        runtime: GitRuntimeState,
+        generation: u64,
+        tools: gitcomet_core::large_file_tools::LargeFileToolsState,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.large_file_tools_closed
+            || current_git_runtime() != runtime
+            || generation
+                != super::super::large_file_tools_probe::settings_tool_probe_generation(cx)
+        {
+            return;
+        }
+        self.runtime_info.large_file_tools = Some(tools.clone());
+        self.broadcast_preference(
+            PreferenceChange::LargeFileTools(
+                super::super::large_file_tools_probe::LargeFileToolsPublication {
+                    runtime,
+                    generation,
+                    tools,
+                },
+            ),
+            cx,
+        );
         cx.notify();
     }
 
@@ -163,40 +253,33 @@ impl SettingsWindowView {
 }
 
 impl SettingsRuntimeInfo {
+    pub(super) fn update_git(&mut self, runtime: GitRuntimeState) {
+        self.environment.git_version = runtime.version_output().map(str::to_owned);
+        self.git = git_runtime_info_from_state(runtime);
+    }
+
     pub(super) fn detect() -> Self {
         Self::from_runtime(current_git_runtime())
     }
 
     pub(super) fn from_runtime(runtime: GitRuntimeState) -> Self {
+        let mut environment = gitcomet_core::environment::cached();
+        environment.git_version = runtime.version_output().map(str::to_owned);
         Self {
             git: git_runtime_info_from_state(runtime),
             signing_tools: Some(SigningToolsState::default()),
-            app_version_display: format!("GitComet v{}", env!("CARGO_PKG_VERSION")).into(),
-            operating_system: format!(
-                "{} ({})",
-                os_display_name(std::env::consts::OS),
-                std::env::consts::ARCH
-            )
-            .into(),
+            large_file_tools: Some(Default::default()),
+            environment,
         }
     }
 }
 
-/// Human-readable OS name for the Environment card ("windows" reads like a
-/// debug dump; "Windows" reads like a product).
-pub(super) fn os_display_name(os: &str) -> &str {
-    match os {
-        "windows" => "Windows",
-        "macos" => "macOS",
-        "linux" => "Linux",
-        "freebsd" => "FreeBSD",
-        other => other,
-    }
-}
-
 pub(super) fn git_runtime_info_from_state(runtime: GitRuntimeState) -> GitRuntimeInfo {
-    let compatibility_message =
-        format!("GitComet has been tested only with Git {MIN_GIT_MAJOR}.{MIN_GIT_MINOR} or newer.");
+    let compatibility_message = format!(
+        "{} requires Git {} or newer.",
+        crate::view::product_name(),
+        gitcomet_core::process::GitVersion::MINIMUM
+    );
     let compatibility = if matches!(
         runtime.availability,
         gitcomet_core::process::GitExecutableAvailability::Checking
@@ -205,8 +288,8 @@ pub(super) fn git_runtime_info_from_state(runtime: GitRuntimeState) -> GitRuntim
     } else if !runtime.is_available() {
         GitCompatibility::Unavailable
     } else {
-        match runtime.version_output().and_then(parse_git_version) {
-            Some(version) if is_supported_git_version(version) => GitCompatibility::Supported,
+        match runtime.version() {
+            Some(version) if version.is_supported() => GitCompatibility::Supported,
             Some(_) => GitCompatibility::TooOld,
             None => GitCompatibility::Unknown,
         }
@@ -238,36 +321,80 @@ pub(super) fn git_runtime_info_from_state(runtime: GitRuntimeState) -> GitRuntim
     }
 }
 
-pub(super) fn parse_git_version(raw: &str) -> Option<GitVersion> {
-    raw.split_whitespace().find_map(parse_git_version_token)
-}
-
-pub(super) fn parse_git_version_token(token: &str) -> Option<GitVersion> {
-    let mut parts = token.split('.');
-    let major = parse_u32_prefix(parts.next()?)?;
-    let minor = parse_u32_prefix(parts.next()?)?;
-    Some(GitVersion { major, minor })
-}
-
-pub(super) fn parse_u32_prefix(part: &str) -> Option<u32> {
-    let end = part
-        .char_indices()
-        .find_map(|(ix, ch)| (!ch.is_ascii_digit()).then_some(ix))
-        .unwrap_or(part.len());
-    if end == 0 {
-        return None;
-    }
-    part[..end].parse::<u32>().ok()
-}
-
-pub(super) fn is_supported_git_version(version: GitVersion) -> bool {
-    version.major > MIN_GIT_MAJOR
-        || (version.major == MIN_GIT_MAJOR && version.minor >= MIN_GIT_MINOR)
-}
-
 pub(super) const GPG_DESCRIPTION: &str =
     "Verifies GPG and X.509 commit signatures, such as commits made on GitHub.";
 pub(super) const SSH_KEYGEN_DESCRIPTION: &str = "Verifies SSH commit signatures.";
+pub(super) const GIT_LFS_DESCRIPTION: &str =
+    "Stores large files outside Git history; needed to check out, fetch and push them.";
+pub(super) const GIT_ANNEX_DESCRIPTION: &str =
+    "Manages annexed file content across repositories and special remotes.";
+
+pub(super) fn git_lfs_info(
+    tools: Option<&gitcomet_core::large_file_tools::LargeFileToolsState>,
+) -> SigningToolInfo {
+    large_file_tool_info(
+        tools.map(|tools| &tools.git_lfs),
+        "git-lfs",
+        "Git LFS files",
+    )
+}
+
+pub(super) fn git_annex_info(
+    tools: Option<&gitcomet_core::large_file_tools::LargeFileToolsState>,
+) -> SigningToolInfo {
+    large_file_tool_info(
+        tools.map(|tools| &tools.git_annex),
+        "git-annex",
+        "Annexed files",
+    )
+}
+
+fn large_file_tool_info(
+    availability: Option<&SigningToolAvailability>,
+    program: &str,
+    files: &str,
+) -> SigningToolInfo {
+    let Some(availability) = availability else {
+        return SigningToolInfo {
+            status: SigningToolStatus::Detecting,
+            version_display: SharedString::default(),
+            detail: None,
+        };
+    };
+    match availability {
+        SigningToolAvailability::NotChecked => SigningToolInfo {
+            status: SigningToolStatus::NotChecked,
+            version_display: "Not checked".into(),
+            detail: None,
+        },
+        SigningToolAvailability::Available { version } => SigningToolInfo {
+            status: SigningToolStatus::Found,
+            version_display: version.as_deref().unwrap_or(program).to_string().into(),
+            detail: None,
+        },
+        SigningToolAvailability::NotFound { detail } => SigningToolInfo {
+            status: SigningToolStatus::NotFound,
+            version_display: program.to_string().into(),
+            detail: Some(
+                format!(
+                    "{detail} {files} can be browsed but not fetched or pushed. Install {program} where Git can find it."
+                )
+                .into(),
+            ),
+        },
+        SigningToolAvailability::Unknown => SigningToolInfo {
+            status: SigningToolStatus::Unknown,
+            version_display: program.to_string().into(),
+            detail: Some(
+                format!(
+                    "{} could not tell whether Git can run {program}.",
+                    crate::view::product_name()
+                )
+                .into(),
+            ),
+        },
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum SigningToolStatus {
@@ -320,7 +447,7 @@ fn signing_tool_info(
     match &tool.availability {
         SigningToolAvailability::NotChecked => SigningToolInfo {
             status: SigningToolStatus::NotChecked, version_display: "Not checked".into(),
-            detail: Some("Enable commit signature verification in History settings to check signing tools.".into()),
+            detail: Some("Enable \"Verify commit signatures\" in Settings > Git log to check signing tools.".into()),
         },
         SigningToolAvailability::Available { version } => SigningToolInfo {
             status: SigningToolStatus::Found,

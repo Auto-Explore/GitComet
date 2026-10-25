@@ -3,32 +3,61 @@ use super::support::*;
 
 #[gpui::test]
 fn terminal_toolbar_fill_tracks_panel_lifetime_and_target(cx: &mut gpui::TestAppContext) {
-    use crate::test_support::{painted_control_quads as paint, refresh_and_draw};
+    assert_terminal_toolbar_fill_tracks_panel_lifetime_and_target(cx);
+}
 
-    let _guard = crate::test_support::lock_visual_test();
+struct StatusBarTerminal;
+
+impl gitcomet_extension_api::Extension for StatusBarTerminal {
+    fn id(&self) -> gitcomet_extension_api::ExtensionId {
+        gitcomet_extension_api::ExtensionId::new("com.example.terminal-layout").unwrap()
+    }
+
+    fn register(&self, registrar: &mut gitcomet_extension_api::Registrar) {
+        registrar.place_bar_item(
+            gitcomet_extension_api::BuiltinBarItem::Terminal,
+            gitcomet_extension_api::BarItemLocation::StatusBarEnd,
+        );
+    }
+}
+
+#[gpui::test]
+fn relocated_terminal_toolbar_fill_tracks_panel_lifetime_and_target(cx: &mut gpui::TestAppContext) {
+    cx.update(|app| {
+        crate::view::extension_host::install(
+            gitcomet_extension_api::Registry::build(vec![Box::new(StatusBarTerminal)]).unwrap(),
+            app,
+        );
+    });
+    assert_terminal_toolbar_fill_tracks_panel_lifetime_and_target(cx);
+}
+
+fn assert_terminal_toolbar_fill_tracks_panel_lifetime_and_target(cx: &mut gpui::TestAppContext) {
+    use crate::test_support::painted_control_quads as paint;
+    use crate::view::test_support::redraw;
+
     let (view, repo_id, cx) = test_root_view_with_active_repo(cx);
     cx.update(|_, app| {
         view.update(app, |view, cx| {
             let state = Arc::clone(&view.state);
             crate::view::test_support::push_test_state(view, state, cx);
-            view.terminal_preferences.action_bar_terminal_target =
-                ActionBarTerminalTarget::Embedded;
-            view.sync_action_bar_terminal_target(cx);
+            view.terminal_preferences.terminal_button_target = TerminalButtonTarget::Embedded;
+            view.sync_terminal_button_target(cx);
         })
     });
     cx.run_until_parked();
-    refresh_and_draw(cx);
+    redraw(cx);
     let closed = paint(cx, "terminal");
     cx.update(|_, app| {
         view.update(app, |view, cx| {
             view.terminal_sessions
                 .insert(repo_id, test_terminal_session(vec![(10, None)], 0, cx));
-            view.sync_terminal_indicator_views(cx);
+            view.terminal_sessions_changed(cx);
             cx.notify();
         })
     });
     cx.run_until_parked();
-    refresh_and_draw(cx);
+    redraw(cx);
     assert_ne!(
         paint(cx, "terminal"),
         closed,
@@ -36,13 +65,12 @@ fn terminal_toolbar_fill_tracks_panel_lifetime_and_target(cx: &mut gpui::TestApp
     );
     cx.update(|_, app| {
         view.update(app, |view, cx| {
-            view.terminal_preferences.action_bar_terminal_target =
-                ActionBarTerminalTarget::External;
-            view.sync_action_bar_terminal_target(cx);
+            view.terminal_preferences.terminal_button_target = TerminalButtonTarget::External;
+            view.sync_terminal_button_target(cx);
         })
     });
     cx.run_until_parked();
-    refresh_and_draw(cx);
+    redraw(cx);
     assert_eq!(
         paint(cx, "terminal"),
         closed,
@@ -50,14 +78,13 @@ fn terminal_toolbar_fill_tracks_panel_lifetime_and_target(cx: &mut gpui::TestApp
     );
     cx.update(|window, app| {
         view.update(app, |view, cx| {
-            view.terminal_preferences.action_bar_terminal_target =
-                ActionBarTerminalTarget::Embedded;
-            view.sync_action_bar_terminal_target(cx);
+            view.terminal_preferences.terminal_button_target = TerminalButtonTarget::Embedded;
+            view.sync_terminal_button_target(cx);
             view.close_terminal_tab(repo_id, 0, window, cx);
         })
     });
     cx.run_until_parked();
-    refresh_and_draw(cx);
+    redraw(cx);
     assert_eq!(
         paint(cx, "terminal"),
         closed,
@@ -66,8 +93,39 @@ fn terminal_toolbar_fill_tracks_panel_lifetime_and_target(cx: &mut gpui::TestApp
 }
 
 #[gpui::test]
+fn the_terminal_toggle_defaults_to_the_action_bar(cx: &mut gpui::TestAppContext) {
+    let (view, _repo_id, cx) = test_root_view_with_active_repo(cx);
+    cx.update(|_, app| {
+        view.update(app, |view, cx| {
+            let state = Arc::clone(&view.state);
+            crate::view::test_support::push_test_state(view, state, cx);
+        })
+    });
+    cx.run_until_parked();
+    crate::test_support::refresh_and_draw(cx);
+
+    let terminal = cx.debug_bounds("terminal").expect("the terminal toggle");
+    let branch = cx.debug_bounds("create_branch").expect("the branch action");
+    let stash = cx.debug_bounds("stash").expect("the stash action");
+    let actions = cx
+        .debug_bounds("right_action_group")
+        .expect("the action bar's right group");
+    assert!(
+        actions.contains(&terminal.center()),
+        "Terminal belongs in the action bar: {terminal:?} vs {actions:?}"
+    );
+    assert!(
+        terminal.right() <= branch.left() && branch.right() <= stash.left(),
+        "Terminal, Branch and Stash retain their original order"
+    );
+    assert!(
+        (terminal.center().y - branch.center().y).abs() < gpui::px(1.0),
+        "on the action bar's row: {terminal:?} vs {branch:?}"
+    );
+}
+
+#[gpui::test]
 fn shell_exit_closes_the_matching_tab_after_indices_shift(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (view, repo_id, cx) = test_root_view_with_active_repo(cx);
 
     let events_tx = cx.update(|window, app| {
@@ -111,7 +169,6 @@ fn shell_exit_closes_the_matching_tab_after_indices_shift(cx: &mut gpui::TestApp
 
 #[gpui::test]
 fn shell_exit_of_the_last_tab_closes_the_terminal_panel(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (view, repo_id, cx) = test_root_view_with_active_repo(cx);
 
     let events_tx = cx.update(|_window, app| {
@@ -136,14 +193,12 @@ fn shell_exit_of_the_last_tab_closes_the_terminal_panel(cx: &mut gpui::TestAppCo
             assert!(!this.terminal_sessions.contains_key(&repo_id));
             let theme = this.theme;
             assert!(this.render_terminal_panel(theme, window, cx).is_none());
-            assert!(!this.terminal_cursor_blink_active);
         });
     });
 }
 
 #[gpui::test]
 fn stale_shell_exit_after_manual_close_does_not_close_another_tab(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (view, repo_id, cx) = test_root_view_with_active_repo(cx);
 
     let events_tx = cx.update(|window, app| {
@@ -180,7 +235,6 @@ fn stale_shell_exit_after_manual_close_does_not_close_another_tab(cx: &mut gpui:
 fn shutdown_confirmation_for_an_exited_tab_does_not_close_its_sibling(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (view, repo_id, cx) = test_root_view_with_active_repo(cx);
 
     let (events_tx, prompt) = cx.update(|_window, app| {
@@ -237,7 +291,6 @@ fn shutdown_confirmation_for_an_exited_tab_does_not_close_its_sibling(
 #[gpui::test]
 fn comfortable_bottom_panel_tabs_grow_with_the_density(cx: &mut gpui::TestAppContext) {
     use crate::appearance::{Appearance, UiDensity};
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (view, repo_id, cx) = test_root_view_with_active_repo(cx);
 
     cx.update(|_window, app| {
@@ -302,4 +355,45 @@ fn comfortable_bottom_panel_tabs_grow_with_the_density(cx: &mut gpui::TestAppCon
             );
         }
     }
+}
+
+/// Selecting a terminal tab behind the reflog shows the terminal, so focus
+/// never lands in a terminal that is not drawn.
+#[gpui::test]
+fn selecting_a_terminal_tab_brings_the_terminal_in_front_of_the_reflog(
+    cx: &mut gpui::TestAppContext,
+) {
+    use crate::view::test_support::redraw;
+    let (view, repo_id, cx) = test_root_view_with_active_repo(cx);
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.terminal_sessions.insert(
+                repo_id,
+                test_terminal_session(vec![(10, None), (11, None)], 0, cx),
+            );
+            this.open_reflog_panel(repo_id, cx);
+        })
+    });
+    redraw(cx);
+    assert!(cx.debug_bounds("bottom_panel_tab_reflog").is_some());
+    assert!(cx.debug_bounds("terminal_tab-1").is_none());
+
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.select_terminal_tab(repo_id, 1, window, cx)
+        })
+    });
+    redraw(cx);
+
+    assert!(cx.debug_bounds("terminal_tab-1").is_some());
+    cx.update(|window, app| {
+        let this = view.read(app);
+        assert_eq!(
+            this.active_bottom_panel.get(&repo_id),
+            Some(&crate::view::BottomPanelTab::Terminal)
+        );
+        let session = &this.terminal_sessions[&repo_id];
+        assert_eq!(session.active_index, 1);
+        assert!(session.instances[1].focus_handle.is_focused(window));
+    });
 }

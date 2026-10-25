@@ -13,7 +13,7 @@
 # `tree_sitter/` headers come from vendor/tree-sitter-headers, `build.rs` is a
 # one-line call into vendor/tree-sitter-build, and `queries/` is not vendored
 # because GitComet keeps its own in
-# crates/gitcomet-ui-gpui/src/view/rows/diff_text/queries/. The package name is
+# crates/gitcomet-syntax/src/queries/. The package name is
 # upstream's so `tree_sitter_jinja_dialects::LANGUAGE` call sites are unchanged.
 [package]
 name = "tree-sitter-jinja-dialects"

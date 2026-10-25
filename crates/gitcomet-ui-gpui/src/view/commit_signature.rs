@@ -113,7 +113,8 @@ mod tests {
     #[test]
     fn verified_statuses_use_the_shield_check_and_the_info_palette() {
         let theme = AppTheme::gitcomet_dark();
-        for status in [SignatureStatus::Good] {
+        {
+            let status = SignatureStatus::Good;
             let badge = signature_badge(theme, &signature(status));
             assert_eq!(badge.icon, SHIELD_CHECK_ICON_PATH);
             assert_eq!(badge.palette, theme.colors.status.info);

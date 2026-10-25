@@ -53,10 +53,7 @@ impl HistoryIndex {
             return None;
         }
         let mut bytes = [0u8; 32];
-        for (slot, pair) in bytes.iter_mut().zip(id.as_bytes().as_chunks::<2>().0) {
-            let digit = |b: u8| (b as char).to_digit(16).map(|n| n as u8);
-            *slot = digit(pair[0])? * 16 + digit(pair[1])?;
-        }
+        faster_hex::hex_decode(id.as_bytes(), &mut bytes[..self.hash_len]).ok()?;
         self.position_bytes(&bytes[..self.hash_len])
     }
     /// Resolve a full ID or a unique hexadecimal prefix (at least seven digits).
@@ -69,15 +66,15 @@ impl HistoryIndex {
         }
         let mut lower = [0u8; 32];
         let mut upper = [255u8; 32];
-        for (ix, byte) in reference.bytes().enumerate() {
-            let digit = (byte as char).to_digit(16)? as u8;
-            if ix.is_multiple_of(2) {
-                lower[ix / 2] = digit << 4;
-                upper[ix / 2] = (digit << 4) | 15;
-            } else {
-                lower[ix / 2] |= digit;
-                upper[ix / 2] = lower[ix / 2];
-            }
+        // Pad an odd-length prefix with a zero nibble for its lower bound.
+        // The upper bound includes every possible low nibble of that byte.
+        let mut padded = [b'0'; 64];
+        padded[..reference.len()].copy_from_slice(reference.as_bytes());
+        let byte_len = reference.len().div_ceil(2);
+        faster_hex::hex_decode(&padded[..byte_len * 2], &mut lower[..byte_len]).ok()?;
+        upper[..byte_len].copy_from_slice(&lower[..byte_len]);
+        if !reference.len().is_multiple_of(2) {
+            upper[byte_len - 1] |= 0x0f;
         }
         let start = self
             .sorted_rows
@@ -403,6 +400,41 @@ impl HistoryIndexBuilder {
         }
         Ok(())
     }
+
+    /// Refine the stash candidates after traversal, when the walk's temporary
+    /// storage can be released. Parent IDs retain their original order and
+    /// include parents outside this index. An error aborts construction.
+    pub fn retain_probable_stashes(
+        &mut self,
+        mut predicate: impl FnMut(&[u8], std::slice::ChunksExact<'_, u8>) -> Result<bool>,
+    ) -> Result<()> {
+        let hash_len = self.index.hash_len;
+        let mut retained = 0;
+        for candidate in 0..self.index.probable_stashes.len() {
+            let row = self.index.probable_stashes[candidate] as usize;
+            let start = self.index.parent_offsets[row] as usize * hash_len;
+            let end = self.index.parent_offsets[row + 1] as usize * hash_len;
+            match predicate(
+                self.index
+                    .id_bytes(row)
+                    .expect("candidate is an indexed row"),
+                self.parent_ids[start..end].chunks_exact(hash_len),
+            ) {
+                Ok(true) => {
+                    self.index.probable_stashes[retained] = row as u32;
+                    retained += 1;
+                }
+                Ok(false) => {}
+                Err(error) => {
+                    self.index.probable_stashes.truncate(retained);
+                    return Err(error);
+                }
+            }
+        }
+        self.index.probable_stashes.truncate(retained);
+        Ok(())
+    }
+
     /// Estimated peak construction storage, including the cached-prefix sort
     /// (retained through parent resolution), unresolved parents, and capacity
     /// growth if every parent is external. Retained index bytes are reported
@@ -562,6 +594,114 @@ mod tests {
             assert_eq!(index.position("invalid"), None);
             assert_eq!(index.commit_id(usize::MAX), None);
         }
+    }
+
+    #[test]
+    fn abbreviated_ids_preserve_odd_nibble_boundaries_and_ambiguity() {
+        for hash_len in [20, 32] {
+            let mut builder = HistoryIndexBuilder::new(
+                HistorySnapshot("prefixes".into()),
+                HistoryMode::FullReachable,
+                hash_len,
+            )
+            .unwrap();
+            let mut first = vec![0xab; hash_len];
+            first[3] = 0xc0;
+            let mut second = first.clone();
+            second[3] = 0xcf;
+            let mut third = first.clone();
+            third[3] = 0xd0;
+            for id in [&first, &second, &third] {
+                builder
+                    .push(id, std::iter::empty::<&[u8]>(), false)
+                    .unwrap();
+            }
+            let index = builder.finish(&CancellationToken::new()).unwrap();
+            assert_eq!(
+                index.resolve_reference("abababc"),
+                None,
+                "both low-nibble extremes match"
+            );
+            assert_eq!(index.resolve_reference("abababd"), Some(2));
+            assert_eq!(index.resolve_reference("ABABABCF"), Some(1));
+            for bad in [
+                "ababab",
+                "abababe",
+                "abababg",
+                "abababé",
+                "abababcé",
+                "abababc ",
+            ] {
+                assert_eq!(index.resolve_reference(bad), None, "{bad:?}");
+            }
+            let full = crate::hex::encode(&third);
+            for len in 7..=full.len() {
+                assert_eq!(index.resolve_reference(&full[..len]), Some(2));
+            }
+        }
+    }
+
+    #[test]
+    fn deferred_stash_filter_preserves_parent_order_and_external_ids() {
+        for hash_len in [20, 32] {
+            let mut builder = HistoryIndexBuilder::new(
+                HistorySnapshot("stashes".into()),
+                HistoryMode::AllBranches,
+                hash_len,
+            )
+            .unwrap();
+            let ids: Vec<_> = (1..=6).map(|byte| vec![byte; hash_len]).collect();
+            for row in 0..4 {
+                builder
+                    .push(&ids[row], [ids[4].as_slice(), ids[5].as_slice()], row != 1)
+                    .unwrap();
+            }
+            let mut visited = Vec::new();
+            builder
+                .retain_probable_stashes(|id, parents| {
+                    visited.push(id[0]);
+                    assert_eq!(
+                        parents.collect::<Vec<_>>(),
+                        [ids[4].as_slice(), ids[5].as_slice()]
+                    );
+                    Ok(id[0] % 2 == 1)
+                })
+                .unwrap();
+            assert_eq!(visited, [1, 3, 4]);
+            let index = builder.finish(&CancellationToken::new()).unwrap();
+            assert_eq!(index.probable_stash_rows(), [0, 2]);
+            for row in 0..4 {
+                assert_eq!(index.parent_id_bytes(row, 0), Some(ids[4].as_slice()));
+                assert_eq!(index.parent_id_bytes(row, 1), Some(ids[5].as_slice()));
+            }
+        }
+    }
+
+    #[test]
+    fn deferred_stash_filter_stops_on_cancellation() {
+        let mut builder = HistoryIndexBuilder::new(
+            HistorySnapshot("cancel".into()),
+            HistoryMode::AllBranches,
+            20,
+        )
+        .unwrap();
+        for byte in 1..=4 {
+            builder.push(&[byte; 20], std::iter::empty(), true).unwrap();
+        }
+        let cancellation = CancellationToken::new();
+        let mut visited = 0;
+        let error = builder
+            .retain_probable_stashes(|_, _| {
+                visited += 1;
+                if visited == 2 {
+                    cancellation.cancel();
+                }
+                cancellation.check_cancelled()?;
+                Ok(true)
+            })
+            .unwrap_err();
+        assert!(matches!(error.kind(), ErrorKind::Cancelled));
+        assert_eq!(visited, 2);
     }
 
     #[test]
@@ -733,7 +873,7 @@ mod lookup_regressions {
             }
             // Every fourth ID shares one prefix; externals borrow a prefix that is
             // in the index so a miss must survive the equal-prefix run search.
-            if row % 4 == 0 || (external && row % 2 == 0) {
+            if row.is_multiple_of(4) || (external && row.is_multiple_of(2)) {
                 id[..8].fill(0xab);
             }
             id[16..].copy_from_slice(&(row as u32).to_be_bytes());
@@ -807,9 +947,9 @@ mod lookup_regressions {
                 hidden_before[raw] + usize::from(hidden.binary_search(&(raw as u32)).is_ok());
         }
         let mut visible_rows = Vec::with_capacity(projection.len());
-        for raw in 0..count {
+        for (raw, &hidden_count) in hidden_before.iter().enumerate().take(count) {
             let is_hidden = hidden.binary_search(&(raw as u32)).is_ok();
-            let expected_visible = (!is_hidden).then_some(raw - hidden_before[raw]);
+            let expected_visible = (!is_hidden).then_some(raw - hidden_count);
             assert_eq!(
                 projection.visible_position(raw),
                 expected_visible,
@@ -817,7 +957,7 @@ mod lookup_regressions {
             );
             assert_eq!(
                 projection.visible_position_at_or_after(raw),
-                raw - hidden_before[raw],
+                raw - hidden_count,
                 "raw {raw}"
             );
             if !is_hidden {

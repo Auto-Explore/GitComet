@@ -20,13 +20,13 @@ const LINUX_AUTOMATIC_TERMINALS: &[LinuxAutomaticTerminal] = &[
 ];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Default)]
-pub(in crate::view) enum ActionBarTerminalTarget {
+pub(in crate::view) enum TerminalButtonTarget {
     #[default]
     Embedded,
     External,
 }
 
-impl ActionBarTerminalTarget {
+impl TerminalButtonTarget {
     pub(in crate::view) fn from_key(raw: &str) -> Option<Self> {
         match raw.trim() {
             "embedded" => Some(Self::Embedded),
@@ -86,7 +86,7 @@ pub(in crate::view) struct TerminalPreferences {
     pub(in crate::view) external_terminal_mode: ExternalTerminalMode,
     pub(in crate::view) external_terminal_program: String,
     pub(in crate::view) external_terminal_args: Vec<String>,
-    pub(in crate::view) action_bar_terminal_target: ActionBarTerminalTarget,
+    pub(in crate::view) terminal_button_target: TerminalButtonTarget,
 }
 
 impl Default for TerminalPreferences {
@@ -95,7 +95,7 @@ impl Default for TerminalPreferences {
             external_terminal_mode: ExternalTerminalMode::SystemDefault,
             external_terminal_program: String::new(),
             external_terminal_args: Vec::new(),
-            action_bar_terminal_target: ActionBarTerminalTarget::Embedded,
+            terminal_button_target: TerminalButtonTarget::Embedded,
         }
     }
 }
@@ -123,9 +123,9 @@ impl TerminalPreferences {
         if let Some(target) = ui_session
             .terminal_action_bar_target
             .as_deref()
-            .and_then(ActionBarTerminalTarget::from_key)
+            .and_then(TerminalButtonTarget::from_key)
         {
-            preferences.action_bar_terminal_target = target;
+            preferences.terminal_button_target = target;
         }
         preferences
     }
@@ -134,8 +134,7 @@ impl TerminalPreferences {
         settings.terminal_external_mode = Some(self.external_terminal_mode.key().to_string());
         settings.terminal_external_program = Some(self.external_terminal_program.clone());
         settings.terminal_external_args = Some(self.external_terminal_args.clone());
-        settings.terminal_action_bar_target =
-            Some(self.action_bar_terminal_target.key().to_string());
+        settings.terminal_action_bar_target = Some(self.terminal_button_target.key().to_string());
     }
 
     pub(in crate::view) fn external_summary(&self) -> String {
@@ -694,8 +693,8 @@ mod tests {
             vec!["start".to_string(), "{cwd}".to_string()]
         );
         assert_eq!(
-            preferences.action_bar_terminal_target,
-            ActionBarTerminalTarget::External
+            preferences.terminal_button_target,
+            TerminalButtonTarget::External
         );
     }
 
@@ -719,7 +718,7 @@ mod tests {
                 "--cwd".to_string(),
                 "{cwd}".to_string(),
             ],
-            action_bar_terminal_target: ActionBarTerminalTarget::External,
+            terminal_button_target: TerminalButtonTarget::External,
         };
 
         let mut settings = session::UiSettings::default();

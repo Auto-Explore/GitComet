@@ -6,15 +6,18 @@ use std::sync::Arc;
 
 pub(super) fn hash_diff_target<H: Hasher>(target: &DiffTarget, hasher: &mut H) {
     match target {
-        DiffTarget::WorkingTree { path, area } => {
+        DiffTarget::WorkingTree { path, area, .. } => {
             0u8.hash(hasher);
             path.hash(hasher);
             match area {
                 DiffArea::Staged => 0u8.hash(hasher),
                 DiffArea::Unstaged => 1u8.hash(hasher),
             }
+            target.worktree().hash(hasher);
         }
-        DiffTarget::Commit { commit_id, path } => {
+        DiffTarget::Commit {
+            commit_id, path, ..
+        } => {
             1u8.hash(hasher);
             commit_id.hash(hasher);
             path.hash(hasher);
@@ -23,6 +26,7 @@ pub(super) fn hash_diff_target<H: Hasher>(target: &DiffTarget, hasher: &mut H) {
             from_commit_id,
             to_commit_id,
             path,
+            ..
         } => {
             2u8.hash(hasher);
             from_commit_id.hash(hasher);

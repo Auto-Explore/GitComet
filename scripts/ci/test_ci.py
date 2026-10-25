@@ -12,6 +12,7 @@ from itertools import product
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 import tarfile
@@ -21,7 +22,11 @@ import time
 import unittest
 from unittest.mock import patch
 
+import boundaries
 import cache
+import grammar_symbols
+import identity_literals
+import inventory
 import report
 import runtime
 
@@ -38,9 +43,36 @@ local_spec.loader.exec_module(local_performance)
 ui_spec = importlib.util.spec_from_file_location("ui_responsiveness", Path(__file__).resolve().parents[1] / "profiling/ui-responsiveness.py")
 ui_responsiveness = importlib.util.module_from_spec(ui_spec)
 ui_spec.loader.exec_module(ui_responsiveness)
+live_spec = importlib.util.spec_from_file_location("live_ui", Path(__file__).resolve().parents[1] / "profiling/live-ui.py")
+live_ui = importlib.util.module_from_spec(live_spec)
+live_spec.loader.exec_module(live_ui)
+perf_metadata = live_ui.perf_metadata
 lfs_spec = importlib.util.spec_from_file_location("lfs_performance", Path(__file__).resolve().parents[1] / "profiling/lfs-performance.py")
 lfs_performance = importlib.util.module_from_spec(lfs_spec)
 lfs_spec.loader.exec_module(lfs_performance)
+
+
+GIT_REPOSITORY_ENVIRONMENT = patch.dict(os.environ)
+
+
+def setUpModule():
+    # Hooks and `git rebase --exec` export GIT_DIR and friends; tests run git in temporary repositories.
+    GIT_REPOSITORY_ENVIRONMENT.start()
+    local = subprocess.run(["git", "rev-parse", "--local-env-vars"], capture_output=True, text=True, check=True)
+    for name in local.stdout.split():
+        os.environ.pop(name, None)
+
+
+def tearDownModule():
+    GIT_REPOSITORY_ENVIRONMENT.stop()
+
+
+def nextest_compile_output(name, command, *, output=None, **kwargs):
+    # `cargo nextest list --cargo-message-format json-render-diagnostics`: cargo's messages, then the binary list.
+    if name.endswith("-compile"):
+        Path(output).write_text('{"reason": "build-finished", "success": true}\n'
+                                '{"rust-build-meta": {}, "rust-binaries": {}}\n')
+    return 0
 
 
 class LfsFixtureTests(unittest.TestCase):
@@ -166,9 +198,241 @@ class UiMeasurementTests(unittest.TestCase):
                 ui_responsiveness.report_sessions([root])
 
 
+class LiveUiMeasurementTests(unittest.TestCase):
+    """The Linux live harness must reject runs whose numbers cannot be trusted."""
+
+    RUN_ID = "run-1"
+
+    def write_run(self, root, records=None, capture=None, process=None):
+        capture = {"run_id": self.RUN_ID, "scenario": "history-select", "binary_sha256": "abc",
+                   "repository_head": "head", "outcome": "passed", "exit_code": 0, "crash_reports": [],
+                   **(capture or {})}
+        (root / "capture.json").write_text(json.dumps(capture), encoding="utf-8")
+        if records is None:
+            records = self.records()
+        (root / "frames.jsonl").write_text("\n".join(map(json.dumps, records)) + "\n", encoding="utf-8")
+        process = process or [
+            {"unix_ms": 10_000 + 1000, "rss_kib": 100, "pss_kib": 90, "threads": 10, "fds": 20,
+             "cpu_s": 1.0, "children_cpu_s": 0, "voluntary_switches": 100},
+            {"unix_ms": 10_000 + 3000, "rss_kib": 120, "pss_kib": 95, "threads": 10, "fds": 20,
+             "cpu_s": 1.5, "children_cpu_s": 0, "voluntary_switches": 300}]
+        (root / "process.jsonl").write_text("".join(json.dumps(p) + "\n" for p in process), encoding="utf-8")
+
+    def records(self):
+        stage = lambda at, op, name, a=0, b=0, label="x": {  # noqa: E731
+            "event": "stage", "at_ms": at, "op": op, "stage": name, "label": label, "a": a, "b": b,
+            "thread": 1}
+        return [
+            {"event": "start", "unix_ms": 10_000, "run_id": self.RUN_ID, "main_tid": 7},
+            {"event": "scenario_ready", "at_ms": 900, "unix_ms": 10_900, "detail": {}},
+            {"event": "scenario_phase", "at_ms": 1000, "detail": {"name": "select", "state": "begin"}},
+            # Scheduled at 1000 ms, dispatched 0.5 ms late, witnessed at 1012.
+            stage(1000.5, 5, "input", a=1000 * 1e6, b=1),
+            stage(1001.0, 5, "input_handled", a=0.2e6, b=1),
+            stage(1002.0, 5, "received", a=0.1e6, label="SelectCommit"),
+            stage(1003.0, 5, "reduced", a=0.05e6, b=41, label="reduce"),
+            stage(1004.0, 0, "applied", a=41, b=0.3e6, label="set_state"),
+            stage(1012.0, 5, "witness", a=1, label="commit_details"),
+            {"event": "draw", "window": "w", "start_ms": 1013.0, "at_ms": 1016.0,
+             "duration_ms": 3.0, "dirty_ms": 1012.5, "invalidations": 1},
+            {"event": "submit", "window": "w", "start_ms": 1016.0, "at_ms": 1017.0, "duration_ms": 1.0},
+            {"event": "interval", "at_ms": 2000, "wall_ms": 1000, "wake_ms": [0.1, 0.4],
+             "main_cpu_percent": 5.0, "records_dropped": 0, "stage_records_dropped": 0},
+            {"event": "scenario_phase", "at_ms": 3000, "detail": {"name": "select", "state": "end"}},
+            {"event": "scenario_end", "at_ms": 3000, "detail": {"outcome": "passed", "errors": []}},
+        ]
+
+    def test_a_complete_run_reports_every_stage_of_its_inputs(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.write_run(root)
+            summary = live_ui.summarize(root)
+            self.assertTrue(summary["valid"], summary["problems"])
+            inputs = summary["phases"]["select"]["inputs"]
+            self.assertEqual((inputs["count"], inputs["witnessed"], inputs["superseded"]), (1, 1, 0))
+            self.assertAlmostEqual(inputs["dispatch_delay_ms"]["p50"], 0.5)
+            self.assertAlmostEqual(inputs["input_to_witness_ms"]["p50"], 12.0)
+            self.assertAlmostEqual(inputs["input_to_draw_ms"]["p50"], 16.0)
+            self.assertAlmostEqual(inputs["input_to_submit_ms"]["p50"], 17.0)
+            self.assertAlmostEqual(inputs["apply_ms"]["p50"], 0.3)
+            self.assertAlmostEqual(summary["phases"]["select"]["process_cpu_cores"], 0.25)
+
+    def test_runs_missing_witnesses_losing_records_or_mixing_identities_are_rejected(self):
+        cases = {
+            "expected a witness": lambda r: [x for x in r if x.get("stage") != "witness"],
+            "dropped records": lambda r: [dict(x, records_dropped=3) if x["event"] == "interval" else x for x in r],
+            "another run": lambda r: [dict(x, run_id="other") if x["event"] == "start" else x for x in r],
+            "did not finish": lambda r: [x for x in r if x["event"] != "scenario_end"],
+        }
+        for problem, mutate in cases.items():
+            with self.subTest(problem), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                self.write_run(root, mutate(self.records()))
+                summary = live_ui.summarize(root)
+                self.assertFalse(summary["valid"])
+                self.assertTrue(any(problem in p for p in summary["problems"]), summary["problems"])
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.write_run(root, capture={"outcome": "failed", "exit_code": 101})
+            self.assertIn("application exited 101", live_ui.summarize(root)["problems"])
+
+    def test_a_stall_is_retained_as_performance_evidence(self):
+        # A complete visible capture of a slow frame is exactly the evidence
+        # this tool must preserve; delay alone does not prove occlusion.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.write_run(root, self.records() + [
+                {"event": "draw", "window": "w", "start_ms": 2500.0,
+                 "at_ms": 2501.0, "duration_ms": 1.0, "dirty_ms": 1200.0}])
+            summary = live_ui.summarize(root)
+            self.assertTrue(summary["valid"], summary["problems"])
+            self.assertEqual(summary["long_frames"][0]["dirty_to_draw_ms"], 1301.0)
+
+    def test_corrupted_records_are_an_error_not_a_shorter_run(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.write_run(root)
+            with open(root / "frames.jsonl", "a", encoding="utf-8") as stream:
+                stream.write('{"event": "draw", "start_ms"\n')
+            with self.assertRaisesRegex(ValueError, "corrupt record"):
+                live_ui.summarize(root)
+
+    def test_sessions_must_be_complete_independent_and_alike(self):
+        with tempfile.TemporaryDirectory() as directory:
+            first, second = Path(directory) / "a", Path(directory) / "b"
+            first.mkdir()
+            second.mkdir()
+            environment = perf_metadata.collect()
+            session = {"measurement_id": "one", "complete": True, "session": "first", "pairs": 1,
+                       "hashes": {"baseline": "b", "candidate": "c"}, "scenarios": ["idle"],
+                       "repository_head": "h", "display": "headless", "environment": environment,
+                       "samples": []}
+            (first / "session.json").write_text(json.dumps(session), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "copied session"):
+                live_ui.report([first, first])
+            (second / "session.json").write_text(json.dumps(dict(session, measurement_id="two",
+                                                                 hashes={"baseline": "x", "candidate": "c"})),
+                                                  encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "disagree on hashes"):
+                live_ui.report([first, second])
+            (second / "session.json").write_text(json.dumps(dict(session, measurement_id="two",
+                                                                 complete=False)), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "complete sessions"):
+                live_ui.report([first, second])
+            # Same binaries, but the candidate ran with other runtime settings.
+            (second / "session.json").write_text(json.dumps(dict(
+                session, measurement_id="two",
+                candidate_runtime={"wrap": None, "env": {"MIMALLOC_ALLOW_THP": "0"}})), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "disagree on candidate_runtime"):
+                live_ui.report([first, second])
+
+    def test_latency_over_different_completed_inputs_is_flagged(self):
+        def sample(variant, witnessed, p95):
+            phase = {"inputs": {"witnessed": witnessed, "input_to_witness_ms": {"p95": p95}},
+                     "draw_ms": {"p95": 3.0}}
+            return {"session": "s", "pair": 1, "scenario": "diff-search", "variant": variant,
+                    "summary": {"phases": {"typing": phase}}}
+        result = live_ui.compare([sample("baseline", 40, 6.0), sample("candidate", 240, 19.0)],
+                                 ["diff-search"])["diff-search"]["typing"]
+        self.assertIn("not_comparable", result["inputs.input_to_witness_ms.p95"])
+        self.assertNotIn("not_comparable", result["draw_ms.p95"])
+
+    def test_lifecycle_cycle_count_sets_only_the_measured_phase(self):
+        secondary = Path("/other")
+        steps = live_ui.scenario("lifecycle", Path("/repo"), secondary=secondary, cycles=3)["steps"]
+        phases = [ix for ix, step in enumerate(steps) if step["do"] == "phase"]
+        opens = lambda start, end: sum(step["do"] == "open_repo" for step in steps[start:end])  # noqa: E731
+        self.assertEqual((opens(phases[0], phases[1]), opens(phases[1], phases[2])), (10, 3))
+        # Each open waits for the history before selecting in it.
+        for ix, step in enumerate(steps):
+            if step["do"] == "open_repo":
+                self.assertEqual([s["do"] for s in steps[ix + 1:ix + 3]], ["wait_ready", "focus"])
+            if step["do"] == "command":
+                self.assertEqual(step["witness"], {"kind": "repo_closed", "path": str(secondary)})
+
+    def test_status_touch_rewrites_the_save_file_with_its_own_bytes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repository = Path(directory)
+            (repository / "x.txt").write_bytes(b"one\r\ntwo\n")
+            steps = live_ui.scenario("status-touch", repository, save_file="x.txt")["steps"]
+            write = next(step for step in steps if step["do"] == "write_files")
+            self.assertEqual((write["paths"], write["contents"]), (["x.txt"], "one\r\ntwo\n"))
+            # A missing file would be created untracked and deleted each round.
+            with self.assertRaises(ValueError):
+                live_ui.scenario("status-touch", repository, save_file="missing.txt")
+
+    def test_lifecycle_growth_is_per_measured_cycle(self):
+        phase = lambda at, name, state: {"event": "scenario_phase", "at_ms": at,  # noqa: E731
+                                         "detail": {"name": name, "state": state}}
+        records = [{"event": "start", "unix_ms": 10_000, "run_id": self.RUN_ID, "main_tid": 7},
+                   {"event": "scenario_ready", "at_ms": 900, "unix_ms": 10_900, "detail": {}},
+                   phase(1000, "warmup_cycles", "begin"), phase(2000, "warmup_cycles", "end"),
+                   phase(2000, "cycles", "begin"), phase(4000, "cycles", "end"),
+                   phase(4000, "after_cycles", "begin"), phase(5000, "after_cycles", "end"),
+                   {"event": "scenario_end", "at_ms": 5000, "detail": {"outcome": "passed", "errors": []}}]
+        sample = lambda at, pss: {"unix_ms": 10_000 + at, "rss_kib": pss, "pss_kib": pss,  # noqa: E731
+                                  "threads": 10, "fds": 20, "cpu_s": 1.0, "children_cpu_s": 0,
+                                  "voluntary_switches": 0}
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.write_run(root, records=records, capture={"scenario": "lifecycle", "cycles": 20},
+                           process=[sample(1500, 1000), sample(3500, 2000), sample(4500, 3000)])
+            retention = live_ui.summarize(root)["retention"]
+        self.assertEqual(retention["pss_kib"]["growth_per_cycle"], 100)
+
+    def test_launch_times_are_compared_per_run(self):
+        def sample(variant, pair, ready):
+            return {"session": "s", "pair": pair, "scenario": "startup", "variant": variant,
+                    "summary": {"phases": {}, "startup": {"spawn_to_ready_ms": ready,
+                                                           "spawn_to_first_draw_ms": ready - 30}}}
+        samples = [sample(v, pair, 220 + pair + (20 if v == "candidate" else 0))
+                   for pair in range(1, 4) for v in ("baseline", "candidate")]
+        launch = live_ui.compare(samples, ["startup"])["startup"]["launch"]
+        self.assertEqual((launch["spawn_to_ready_ms"]["baseline_median"],
+                          launch["spawn_to_ready_ms"]["candidate_median"]), (222, 242))
+        self.assertGreater(launch["spawn_to_first_draw_ms"]["ratio"]["ci95"][0], 1.0)
+
+    def test_quiet_gate_waits_for_the_load_to_drop(self):
+        loads = iter([["9.0", "5", "5"], ["4.0", "5", "5"], ["1.5", "5", "5"]])
+        with patch.object(live_ui.perf_platform, "load_average", lambda: next(loads)), \
+                patch.object(live_ui.time, "sleep", lambda _: None):
+            live_ui.wait_for_quiet(2.0)
+        with self.assertRaises(StopIteration):
+            next(loads)
+        with patch.object(live_ui.perf_platform, "load_average", lambda: ["9.0", "5", "5"]), \
+                patch.object(live_ui.time, "sleep", lambda _: None), \
+                self.assertRaises(TimeoutError):
+            live_ui.wait_for_quiet(2.0, timeout_s=0)
+
+    @unittest.skipUnless(sys.platform.startswith("linux"), "reads /proc")
+    def test_process_sample_survives_a_thread_exiting_mid_read(self):
+        real = Path.read_text
+
+        def exited(path, *args, **kwargs):
+            if "/task/" in str(path):
+                raise ProcessLookupError(3, "No such process")
+            return real(path, *args, **kwargs)
+
+        with patch.object(Path, "read_text", exited):
+            sample = live_ui.read_proc(os.getpid())
+        self.assertIsNotNone(sample)
+        self.assertEqual(sample["voluntary_switches"], 0)
+
+    def test_live_gpu_state_does_not_split_a_pair_but_the_driver_does(self):
+        gpu = lambda driver, state: {"gpu": {"cards": [], "vulkan": [],  # noqa: E731
+                                             "nvidia": f"RTX, {driver}", "nvidia_state": state}}
+        base = gpu("580.1", "P8, 210 MHz, 40")
+        warm = gpu("580.1", "P0, 1800 MHz, 55")
+        newer = gpu("590.2", "P8, 210 MHz, 40")
+        self.assertNotIn("gpu.nvidia", perf_metadata.compare(base, warm)["invalidating"])
+        self.assertIn("gpu.nvidia", perf_metadata.compare(base, newer)["invalidating"])
+
+
 class CacheTests(unittest.TestCase):
     def test_local_worktree_manifests_do_not_change_cache_keys(self):
+        # Keep the Rust probe mock separate from subprocess calls in platform.
         with tempfile.TemporaryDirectory() as directory, patch.object(cache, "ROOT", Path(directory)), \
+                patch.object(cache.platform, "platform", return_value="test-platform"), \
                 patch.object(cache.subprocess, "check_output", return_value=b"rustc test"):
             root = Path(directory)
             (root / "Cargo.toml").write_text('[package]\nname = "fixture"\nversion = "0.1.0"\n')
@@ -196,8 +460,14 @@ class CacheTests(unittest.TestCase):
             lock = root / "Cargo.lock"
             lock.write_text("dependencies v1")
             before = cache.cache_keys("windows-arm64-workspace-ci-test")
-            self.assertEqual(before["source-restore-key"], f"{cache.PREFIX}sources-windows-")
+            self.assertTrue(before["source-restore-key"].startswith(f"{cache.PREFIX}sources-windows-"))
             self.assertTrue(before["source-key"].startswith(before["source-restore-key"]))
+            # A packing change must not prefix-restore bundles the old packer wrote.
+            packer = root / "cache.py"
+            packer.write_text("changed packer")
+            with patch.object(cache, "__file__", str(packer)):
+                self.assertFalse(cache.cache_keys("windows-arm64-workspace-ci-test")["source-key"]
+                                 .startswith(before["source-restore-key"]))
             lock.write_text("dependencies v2")
             after = cache.cache_keys("windows-arm64-workspace-ci-test")
             self.assertNotEqual(before["key"], after["key"])
@@ -221,6 +491,7 @@ class CacheTests(unittest.TestCase):
 
     def test_compatible_prefix_restore_reports_actual_bundle_mode(self):
         with tempfile.TemporaryDirectory() as directory, patch.object(cache, "ROOT", Path(directory)), \
+                patch.object(cache, "REPORTS", Path(directory) / "target/ci-reports"), \
                 patch.dict(os.environ, {"CI_CACHE_HIT": "false", "CI_CACHE_RESTORED": "true",
                                        "CI_CACHE_MATCHED_KEY": "compatible-older-lockfile", "CI_COLD_CACHE": "false"}, clear=True), \
                 redirect_stdout(io.StringIO()):
@@ -229,9 +500,9 @@ class CacheTests(unittest.TestCase):
             source.write_text("retained timestamp")
             os.utime(source, (1700000000, 1700000000))
             bundle = root / "cache.tar.gz"
-            cache.write_bundle(bundle, [(source, "cargo/registry/src/source"), (source, "target/ci-test/deps/libexternal.rlib")], mode="dependencies")
+            cache.write_bundle(bundle, [(source, "cargo/registry/src/source"), (source, "target/ci-test/deps/libexternal.rlib")], mode="compiled")
             details = cache.restore(bundle, root / "cargo", root / "target")
-            self.assertEqual(details["mode"], "dependencies")
+            self.assertEqual(details["mode"], "compiled")
             self.assertEqual((root / "cargo/registry/src/source").stat().st_mtime, 1700000000)
             self.assertTrue((root / "target/ci-test/deps/libexternal.rlib").exists())
             reports = root / "target/ci-reports"
@@ -239,25 +510,26 @@ class CacheTests(unittest.TestCase):
             (reports / "cache-unpack.json").write_text(json.dumps(details))
             cache.report_restore()
             state = json.loads((reports / "cache-restore.json").read_text())
-            self.assertEqual(state["mode"], "dependencies")
+            self.assertEqual(state["mode"], "compiled")
             self.assertEqual(state["CI_CACHE_HIT"], "false")
             self.assertEqual(state["CI_CACHE_RESTORED"], "true")
             with patch.dict(os.environ, {"CI_COLD_CACHE": "true"}):
                 cache.report_restore()
                 self.assertEqual(json.loads((reports / "cache-restore.json").read_text())["mode"], "bypassed")
 
-    def test_cache_migration_waits_for_replacements_in_the_same_scope(self):
-        def entry(key, scope="refs/heads/dev"):
-            return {"key": key, "ref": scope, "created_at": "2026-09-19"}
-        native = entry("gitcomet-ci-v1-windows-x64-workspace-ci-test-old")
-        bench = entry("gitcomet-ci-v1-windows-x64-benchmarks-ci-bench-old")
-        unrelated = entry("release-cache")
-        other_scope = entry("gitcomet-ci-v2-deps-windows-x64-workspace-ci-test-compat-new", "refs/heads/main")
-        self.assertEqual(report.obsolete_caches([native, bench, unrelated, other_scope]), [])
-        replacement = entry("gitcomet-ci-v2-deps-windows-x64-workspace-ci-test-compat-new")
-        sources = entry("gitcomet-ci-v2-sources-windows-new")
-        obsolete = report.obsolete_caches([native, bench, unrelated, other_scope, replacement, sources])
-        self.assertCountEqual(obsolete, [native, bench])
+    def test_pruning_keeps_the_newest_bundle_per_scope_and_context(self):
+        def entry(key, created_at, scope="refs/heads/dev"):
+            return {"key": key, "ref": scope, "created_at": created_at}
+        with patch.object(report, "COMPILED_BUDGETS_MIB", {"windows-x64-workspace-ci-test": 1}):
+            older = entry("gitcomet-ci-v2-compiled-windows-x64-workspace-ci-test-compat-old", "2026-09-19")
+            newer = entry("gitcomet-ci-v2-compiled-windows-x64-workspace-ci-test-compat-new", "2026-09-20")
+            other_scope = entry("gitcomet-ci-v2-compiled-windows-x64-workspace-ci-test-compat-old", "2026-09-19",
+                                "refs/heads/main")
+            sources = entry("gitcomet-ci-v2-sources-windows-layout1-deps", "2026-09-19")
+            relaid_sources = entry("gitcomet-ci-v2-sources-windows-layout2-deps", "2026-09-20")
+            unrelated = entry("release-cache", "2026-09-18")
+            obsolete = report.obsolete_caches([older, newer, other_scope, sources, relaid_sources, unrelated])
+        self.assertCountEqual(obsolete, [older, sources])
 
     def test_roundtrip_preserves_dependency_and_source_but_no_credentials(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -270,13 +542,33 @@ class CacheTests(unittest.TestCase):
             os.utime(source, (1700000000, 1700000000))
             (cargo / "credentials.toml").write_text("never archive")
             bundle = root / "bundle.tar.gz"
-            cache.write_bundle(bundle, list(cache.source_entries(cargo)))
+            cache.write_bundle(bundle, list(cache.extracted_entries(cargo, {"demo-1.0"}, [])))
             restored = root / "restored"
             cache.restore(bundle, restored, root / "target")
             result = restored / source.relative_to(cargo)
             self.assertEqual(result.read_text(), "source")
             self.assertEqual(int(result.stat().st_mtime), 1700000000)
             self.assertFalse((restored / "credentials.toml").exists())
+
+    def test_crate_target_modules_survive_but_checkout_builds_do_not(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            cargo = root / "cargo-home"
+            # cc ships src/target/*.rs; dropping them broke every cc build restored from cache.
+            module = cargo / "registry/src/index.crates.io-0000/cc-1.4.7/src/target/apple.rs"
+            checkout = cargo / "git/checkouts/demo-0000/abcdef0"
+            nested = checkout / "crates/demo/src/target/mod.rs"
+            artifact = checkout / "target/debug/libdemo.rlib"
+            for path in (module, nested, artifact):
+                path.parent.mkdir(parents=True)
+                path.write_text("content")
+            bundle = root / "bundle.tar.gz"
+            cache.write_bundle(bundle, list(cache.extracted_entries(cargo, {"cc-1.4.7"}, [checkout])))
+            restored = root / "restored"
+            cache.restore(bundle, restored, root / "target")
+            for kept in (module, nested):
+                self.assertEqual((restored / kept.relative_to(cargo)).read_text(), "content")
+            self.assertFalse((restored / checkout.relative_to(cargo) / "target").exists())
 
     def test_archive_cannot_escape_destination(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -303,31 +595,366 @@ class CacheTests(unittest.TestCase):
                 {"name": "gitcomet-core", "source": None, "targets": [{"name": "gitcomet_core"}]},
                 {"name": "vendored-grammar", "source": None, "targets": [{"name": "vendored_grammar"}]},
             ]}
-            entries = list(cache.dependency_entries(root, metadata))
+            entries = list(cache.dependency_entries(root, metadata, {"0123456789abcdef"}))
             self.assertEqual([p.name for p, _ in entries], ["libserde-0123456789abcdef.rlib"])
 
-    def test_oversized_bundle_is_not_published(self):
+    def cache_job(self, root):
+        # A finished CI job after a prefix restore: current and stale units, current and older crates.
+        cargo, target = root / "cargo-home", root / "target"
+        files = {
+            "cargo-home/registry/cache/index-0000/serde-1.0.2.crate": "current crate",
+            "cargo-home/registry/cache/index-0000/serde-1.0.1.crate": "older lockfile's crate",
+            "cargo-home/registry/index/index-0000/.cache/se/rd/serde": "index entry",
+            "cargo-home/registry/src/index-0000/serde-1.0.2/src/lib.rs": "current source",
+            "cargo-home/registry/src/index-0000/serde-1.0.1/src/lib.rs": "older lockfile's source",
+            "cargo-home/registry/cache/index-0000/windows-0.62.2.crate": "crate this platform never builds",
+            "cargo-home/registry/src/index-0000/windows-0.62.2/src/lib.rs": "source this platform never builds",
+            "cargo-home/git/db/gpui-0000/objects/pack/pack-1.pack": "git database",
+            "cargo-home/git/checkouts/gpui-0000/abcdef0/src/lib.rs": "checkout",
+            "cargo-home/git/checkouts/gpui-0000/1234567/src/lib.rs": "older lockfile's checkout",
+            "cargo-home/git/db/dropped-0000/objects/pack/pack-2.pack": "a repository the lockfile dropped",
+            "cargo-home/git/checkouts/dropped-0000/7654321/src/lib.rs": "a repository the lockfile dropped",
+            "target/ci-test/deps/libserde-1111111111111111.rlib": "current unit",
+            "target/ci-test/deps/libserde-2222222222222222.rlib": "stale unit",
+            "target/ci-test/.fingerprint/serde-1111111111111111/lib-serde": "current fingerprint",
+            "target/ci-test/.fingerprint/serde-2222222222222222/lib-serde": "stale fingerprint",
+            "target/ci-test/build/serde-3333333333333333/build-script-build": "current build script",
+            "target/ci-test/build/serde-4444444444444444/out/generated.rs": "current script output",
+            "target/ci-test/build/serde-5555555555555555/out/generated.rs": "stale script output",
+        }
+        for name, text in files.items():
+            (root / name).parent.mkdir(parents=True, exist_ok=True)
+            (root / name).write_text(text)
+        package = "registry+https://github.com/rust-lang/crates.io-index#serde@1.0.2"
+        messages = [
+            {"reason": "compiler-artifact", "package_id": package,
+             "filenames": [str(target / "ci-test/deps/libserde-1111111111111111.rlib")]},
+            {"reason": "compiler-artifact", "package_id": package,
+             "filenames": [str(target / "ci-test/build/serde-3333333333333333/build-script-build")]},
+            {"reason": "build-script-executed", "package_id": package,
+             "out_dir": str(target / "ci-test/build/serde-4444444444444444/out")},
+            {"reason": "build-finished", "success": True},
+        ]
+        reports = target / "ci-reports/workspace"
+        reports.mkdir(parents=True)
+        (reports / "cargo-messages.jsonl").write_text("".join(json.dumps(message) + "\n" for message in messages))
+        metadata = {"packages": [
+            {"name": "serde", "version": "1.0.2", "source": "registry+https://github.com/rust-lang/crates.io-index",
+             "targets": [{"name": "serde"}]},
+            {"name": "windows", "version": "0.62.2", "source": "registry+https://github.com/rust-lang/crates.io-index",
+             "targets": [{"name": "windows"}]},
+            {"name": "gpui", "version": "0.2.2", "source": "git+https://example.com/gpui.git?rev=abcdef0#"
+             "abcdef0123456789abcdef0123456789abcdef01", "targets": [{"name": "gpui"}]},
+            {"name": "gitcomet-core", "version": "0.3.0", "source": None, "targets": [{"name": "gitcomet_core"}]},
+        ]}
+        return cargo, target, metadata
+
+    def run_cache(self, root, metadata, *arguments):
+        with patch.object(cache, "ROOT", root), patch.object(cache, "REPORTS", root / "target/ci-reports"), \
+                patch.object(sys, "argv", ["cache.py", *arguments]), \
+                patch.object(cache.subprocess, "check_output", return_value=json.dumps(metadata).encode()), \
+                redirect_stdout(io.StringIO()) as printed:
+            cache.main()
+        return printed.getvalue()
+
+    def restored_files(self, root, bundle):
+        restored = root / "restored"
+        cache.restore(bundle, restored / "cargo-home", restored / "target")
+        return {path.relative_to(restored).as_posix() for path in restored.rglob("*") if path.is_file()}
+
+    def test_compiled_bundle_keeps_this_jobs_units_and_current_sources_only(self):
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.dict(cache.COMPILED_BUDGETS_MIB, {"fixture-workspace-ci-test": 1}, clear=True):
+            root = Path(directory)
+            cargo, target, metadata = self.cache_job(root)
+            bundle = root / "bundle.tar.gz"
+            self.run_cache(root, metadata, "pack-compiled", "--context", "fixture-workspace-ci-test", "--bundle", str(bundle),
+                           "--cargo-home", str(cargo), "--target", str(target))
+            self.assertEqual(self.restored_files(root, bundle), {
+                "cargo-home/registry/cache/index-0000/serde-1.0.2.crate",
+                "cargo-home/registry/cache/index-0000/windows-0.62.2.crate",
+                "cargo-home/registry/index/index-0000/.cache/se/rd/serde",
+                "cargo-home/registry/src/index-0000/serde-1.0.2/src/lib.rs",
+                "cargo-home/git/db/gpui-0000/objects/pack/pack-1.pack",
+                "cargo-home/git/checkouts/gpui-0000/abcdef0/src/lib.rs",
+                "target/ci-test/deps/libserde-1111111111111111.rlib",
+                "target/ci-test/.fingerprint/serde-1111111111111111/lib-serde",
+                "target/ci-test/build/serde-3333333333333333/build-script-build",
+                "target/ci-test/build/serde-4444444444444444/out/generated.rs",
+            })
+
+    def test_compiled_bundle_over_budget_fails_and_leaves_nothing_to_save(self):
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.dict(cache.COMPILED_BUDGETS_MIB, {"fixture-workspace-ci-test": 1}, clear=True):
+            root = Path(directory)
+            cargo, target, metadata = self.cache_job(root)
+            (target / "ci-test/deps/libserde-1111111111111111.rlib").write_bytes(os.urandom(2 * 1024**2))
+            bundle = root / "bundle.tar.gz"
+            with self.assertRaisesRegex(RuntimeError, "over its 1 MiB budget"):
+                self.run_cache(root, metadata, "pack-compiled", "--context", "fixture-workspace-ci-test", "--bundle", str(bundle),
+                               "--cargo-home", str(cargo), "--target", str(target))
+            self.assertFalse(bundle.exists())
+            report = json.loads((target / "ci-reports/cache-compiled.json").read_text())
+            self.assertEqual(report["mode"], "compiled")
+            self.assertGreater(report["bytes"], 1024**2)
+
+    def test_compiled_pack_refuses_package_ids_it_cannot_read(self):
+        # Skipping them would drop every crate's unpacked sources, and a restore would rerun their build scripts.
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.dict(cache.COMPILED_BUDGETS_MIB, {"fixture-workspace-ci-test": 1}, clear=True):
+            root = Path(directory)
+            cargo, target, metadata = self.cache_job(root)
+            messages = target / "ci-reports/workspace/cargo-messages.jsonl"
+            messages.write_text(messages.read_text().replace(
+                "registry+https://github.com/rust-lang/crates.io-index#serde@1.0.2",
+                "serde 1.0.2 (registry+https://github.com/rust-lang/crates.io-index)"))
+            bundle = root / "bundle.tar.gz"
+            with self.assertRaisesRegex(RuntimeError, "unrecognised cargo package id 'serde 1.0.2"):
+                self.run_cache(root, metadata, "pack-compiled", "--context", "fixture-workspace-ci-test",
+                               "--bundle", str(bundle), "--cargo-home", str(cargo), "--target", str(target))
+            self.assertFalse(bundle.exists())
+
+    def test_compiled_pack_refuses_without_this_jobs_cargo_messages(self):
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.dict(cache.COMPILED_BUDGETS_MIB, {"fixture-workspace-ci-test": 1}, clear=True):
+            root = Path(directory)
+            cargo, target, metadata = self.cache_job(root)
+            (target / "ci-reports/workspace/cargo-messages.jsonl").unlink()
+            bundle = root / "bundle.tar.gz"
+            with self.assertRaisesRegex(RuntimeError, "cargo-messages.jsonl"):
+                self.run_cache(root, metadata, "pack-compiled", "--context", "fixture-workspace-ci-test", "--bundle", str(bundle),
+                               "--cargo-home", str(cargo), "--target", str(target))
+            self.assertFalse(bundle.exists())
+
+    def test_shared_source_bundle_holds_only_what_cargo_would_fetch(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            downloads = root / "cargo/registry/cache"
-            downloads.mkdir(parents=True)
-            (downloads / "crate").write_bytes(os.urandom(4096))
-            with patch.object(cache, "ROOT", root), patch.object(cache, "output") as output:
-                cache.pack(root / "bundle.tar.gz", root / "cargo", root / "target", 512, False)
-            self.assertIn(unittest.mock.call("save", "false"), output.call_args_list)
-            self.assertFalse((root / "bundle.tar.gz").exists())
+            cargo, target, metadata = self.cache_job(root)
+            bundle = root / "bundle.tar.gz"
+            self.run_cache(root, metadata, "pack-sources", "--bundle", str(bundle), "--cargo-home", str(cargo),
+                           "--target", str(target))
+            self.assertEqual(self.restored_files(root, bundle), {
+                "cargo-home/registry/cache/index-0000/serde-1.0.2.crate",
+                "cargo-home/registry/cache/index-0000/windows-0.62.2.crate",
+                "cargo-home/registry/index/index-0000/.cache/se/rd/serde",
+                "cargo-home/git/db/gpui-0000/objects/pack/pack-1.pack",
+            })
 
-    def test_pruning_only_retires_owned_superseded_contexts(self):
-        caches = [
-            {"key": "gitcomet-ci-v1-macos15-arm-test-aaa", "created_at": "2026-09-18"},
-            {"key": "gitcomet-ci-v1-macos15-arm-test-bbb", "created_at": "2026-09-19"},
-            {"key": "gitcomet-ci-v1-macos26-arm-test-ccc", "created_at": "2026-09-18"},
-            {"key": "unrelated-release-cache", "created_at": "2026-09-17"},
-        ]
-        self.assertEqual(report.obsolete_caches(caches), [caches[0]])
+    def test_only_budgeted_contexts_restore_compiled_bundles(self):
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.dict(cache.COMPILED_BUDGETS_MIB, {"fixture-workspace-ci-test": 1}, clear=True), \
+                patch.dict(os.environ, {"GITHUB_OUTPUT": ""}):
+            root = Path(directory)
+            (root / "Cargo.lock").write_text("lock")
+            with patch.object(cache.platform, "platform", return_value="test-platform"):
+                compiled = self.run_cache(root, {}, "key", "--context", "fixture-workspace-ci-test")
+                clippy = self.run_cache(root, {}, "key", "--context", "fixture-clippy")
+            self.assertIn("compiled=true\n", compiled)
+            self.assertIn("compiled=false\n", clippy)
+
+    def test_ci_finish_packs_only_after_the_whole_job_succeeded(self):
+        # Inside a composite, success() sees only the action's steps; a skipped compile would pack a partial bundle.
+        finish = (Path(__file__).resolve().parents[2] / ".github/actions/ci-finish/action.yml").read_text(encoding="utf-8")
+        gates = re.findall(r"^      if: (.*)\n      shell: bash\n      run: python3 scripts/ci/cache\.py pack", finish,
+                           re.MULTILINE)
+        self.assertEqual(len(gates), 2)
+        for gate in gates:
+            self.assertIn("!cancelled() && job.status == 'success' && ", gate)
+
+    def test_every_python_setup_pins_one_minor_version(self):
+        github = Path(__file__).resolve().parents[2] / ".github"
+        pins = {(path.name, version) for path in sorted(github.rglob("*.yml"))
+                for version in re.findall(r'python-version: "([^"]+)"', path.read_text(encoding="utf-8"))}
+        self.assertGreaterEqual(len(pins), 3)
+        self.assertEqual(len({version for _, version in pins}), 1, pins)
+        for name, version in pins:
+            self.assertRegex(version, r"^\d+\.\d+$",
+                             f"{name}: an exact patch makes setup-python reinstall when an image caches another patch")
+
+    def test_every_job_running_ci_helpers_sets_up_their_python(self):
+        # The runners' system Python 3.10 has no tomllib, which cache.py (and report.py through it) imports.
+        for workflow in sorted((Path(__file__).resolve().parents[2] / ".github/workflows").glob("*.yml")):
+            jobs = re.split(r"^  (?=[\w-]+:\n)", workflow.read_text(encoding="utf-8").split("\njobs:\n", 1)[-1], flags=re.MULTILINE)
+            for job in jobs:
+                for helper in re.finditer(r"scripts/ci/(?:report|cache)\.py", job):
+                    with self.subTest(workflow=workflow.name, job=job.split(":", 1)[0]):
+                        setup = re.search(r"actions/setup-python@|\./\.github/actions/ci-setup", job)
+                        self.assertTrue(setup and setup.start() < helper.start())
+
+    def test_compiled_lanes_exist_and_fit_the_cache_allowance(self):
+        workflow = (Path(__file__).resolve().parents[2] / ".github/workflows/cross-platform-tests.yml").read_text(encoding="utf-8")
+        self.assertIn("context: ${{ matrix.name }}-workspace-ci-test", workflow)
+        lanes = set(re.findall(r"^\s+- name: ([\w-]+)$", workflow, re.MULTILINE))
+        for context in cache.COMPILED_BUDGETS_MIB:
+            self.assertIn(context.removesuffix("-workspace-ci-test"), lanes)
+        # GitHub evicts beyond 10 GB per repository. The audit binary is the only other owned cache (7 MB).
+        self.assertLessEqual(cache.CACHE_ALLOWANCE_BYTES, 10_000_000_000)
+        budgets = sum(cache.COMPILED_BUDGETS_MIB.values()) + 3 * cache.SOURCES_BUDGET_MIB
+        self.assertLessEqual(budgets * 1024**2 + 64 * 1024**2, cache.CACHE_ALLOWANCE_BYTES)
+
+    def test_budget_changes_keep_every_cache_key(self):
+        with tempfile.TemporaryDirectory() as directory, patch.object(cache, "ROOT", Path(directory)), \
+                patch.object(cache.platform, "platform", return_value="test-platform"), \
+                patch.object(cache.subprocess, "check_output", return_value=b"rustc test"):
+            root = Path(directory)
+            (root / "Cargo.lock").write_text("lock")
+            budgets = root / "scripts/ci/cache-budgets.toml"
+            budgets.parent.mkdir(parents=True)
+            budgets.write_text((Path(cache.__file__).with_name("cache-budgets.toml")).read_text(encoding="utf-8"))
+            before = cache.cache_keys("windows-x64-workspace-ci-test")
+            budgets.write_text(budgets.read_text().replace("sources_mib = 600", "sources_mib = 700"))
+            self.assertEqual(cache.cache_keys("windows-x64-workspace-ci-test"), before)
+
+    def test_misspelled_budget_tables_are_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            budgets = Path(directory) / "cache-budgets.toml"
+            budgets.write_text('allowance_bytes = 1\nsources_mib = 1\n[compiled_mb]\nfixture-workspace-ci-test = 1\n')
+            with self.assertRaisesRegex(ValueError, "exactly allowance_bytes, sources_mib and \\[compiled_mib\\]"):
+                cache.load_budgets(budgets)
+            budgets.write_text(budgets.read_text().replace("[compiled_mb]", "[compiled_mib]"))
+            self.assertEqual(cache.load_budgets(budgets), (1, 1, {"fixture-workspace-ci-test": 1}))
+
+    def test_ci_finish_reads_only_the_cache_state_ci_setup_exports(self):
+        actions = Path(__file__).resolve().parents[2] / ".github/actions"
+        setup = (actions / "ci-setup/action.yml").read_text(encoding="utf-8")
+        exported = set(re.search(r"for name in ([A-Z_ ]+); do\n\s+echo \"\$name=\$\{!name\}\" >> \"\$GITHUB_ENV\"",
+                                 setup)[1].split())
+        finish = (actions / "ci-finish/action.yml").read_text(encoding="utf-8")
+        read = set(re.findall(r"env\.(CI_[A-Z_]+)", finish)) | set(re.findall(r"\$(CI_[A-Z_]+)", finish))
+        self.assertTrue({"CI_CACHE_COMPILED", "CI_CACHE_KEY", "CI_SOURCE_KEY"} <= read)
+        self.assertEqual(read - exported, set())
+
+    def test_contexts_without_a_compiled_budget_lose_their_bundles(self):
+        def entry(context, created_at, scope="refs/heads/dev"):
+            return {"key": f"gitcomet-ci-v2-compiled-{context}-compat0123456789-deps0123456789",
+                    "ref": scope, "created_at": created_at}
+        budgeted_old = entry("fixture-workspace-ci-test", "2026-10-14")
+        budgeted_new = entry("fixture-workspace-ci-test", "2026-10-15")
+        orphaned = entry("ubuntu22-x64-workspace-ci-test", "2026-10-15")
+        sources = {"key": "gitcomet-ci-v2-sources-linux-layout0123456789-deps0123456789",
+                   "ref": "refs/heads/dev", "created_at": "2026-10-15"}
+        with patch.object(report, "COMPILED_BUDGETS_MIB", {"fixture-workspace-ci-test": 1}):
+            obsolete = report.obsolete_caches([budgeted_old, budgeted_new, orphaned, sources])
+        self.assertCountEqual(obsolete, [budgeted_old, orphaned])
 
 
 class RunnerTests(unittest.TestCase):
+    def watcher_stress_results(self, outcomes, *, fail_inventory=False):
+        selected = {"state": {"package-id": "state", "testcases": {
+            "required": {"ignored": False, "filter-match": {"status": "matches"}},
+            "unrelated": {"ignored": False, "filter-match": {"status": "mismatch"}},
+            "manual": {"ignored": True, "filter-match": {"status": "matches"}},
+        }}}
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.object(runner, "REPORTS", Path(directory)), \
+                patch.object(runner, "prepare_runtime_binaries"), \
+                patch.object(runner, "reuse_args", return_value=[]), \
+                patch.object(runner, "package_names", return_value={"state": "gitcomet-state"}), \
+                redirect_stdout(io.StringIO()):
+            junit = Path(directory) / "nextest.xml"
+            junit.write_text("stale")
+            root = runner.paths("workspace") / "watcher-stress"
+            root.mkdir()
+            (root / "summary.json").write_text('{"success": true}')
+            executions = []
+
+            def invoke(name, command, **kwargs):
+                self.assertNotIn("--stress-count", command)
+                if "list" in command:
+                    if fail_inventory:
+                        raise RuntimeError("inventory failed")
+                    Path(kwargs["output"]).write_text(json.dumps({"rust-suites": selected}))
+                    return 0
+                self.assertFalse(junit.exists(), "stale JUnit survived between iterations")
+                self.assertEqual(command[command.index("--test-threads") + 1], "4")
+                outcome = outcomes[len(executions)]
+                executions.append(name)
+                if isinstance(outcome, BaseException):
+                    raise outcome
+                code, report = outcome
+                if report is not None:
+                    junit.write_text(report)
+                if isinstance(code, BaseException):
+                    raise code
+                return code
+
+            error = None
+            with patch.object(runner, "nextest_junit_path", return_value=junit), \
+                    patch.object(runner, "run", side_effect=invoke):
+                try:
+                    runner.watcher_stress(iterations=len(outcomes), nextest_threads=4)
+                except (RuntimeError, KeyboardInterrupt) as caught:
+                    error = caught
+            root = Path(directory) / "workspace/watcher-stress"
+            summary = json.loads((root / "summary.json").read_text())
+            reports = {index: (root / f"iteration-{index}/junit.xml").read_text()
+                       for index in range(1, len(outcomes) + 1)
+                       if (root / f"iteration-{index}/junit.xml").exists()}
+            return error, summary, reports
+
+    @staticmethod
+    def watcher_junit(body=""):
+        return '<testsuites><testsuite name="state"><testcase name="required">' + body + \
+               '</testcase></testsuite></testsuites>'
+
+    def test_ordinary_validation_rejects_failed_junit_even_with_successful_execution(self):
+        suites = {"state": {"package-id": "state", "testcases": {"required": {"ignored": False}}}}
+        with tempfile.TemporaryDirectory() as directory, redirect_stdout(io.StringIO()):
+            junit = Path(directory) / "junit.xml"
+            junit.write_text(self.watcher_junit('<failure message="panic"/>'))
+            with self.assertRaisesRegex(RuntimeError, "reported 1 failed"):
+                runner.check_nextest_results("workspace", suites, {"state": "gitcomet-state"}, junit)
+
+    def test_watcher_stress_cannot_hide_an_earlier_failure_with_a_later_pass(self):
+        failed = self.watcher_junit('<failure message="panic"/>')
+        passed = self.watcher_junit()
+        for code in (0, 100):
+            with self.subTest(returncode=code):
+                error, summary, reports = self.watcher_stress_results([(code, failed), (0, passed)])
+                self.assertIsInstance(error, RuntimeError)
+                self.assertFalse(summary["success"])
+                self.assertEqual([row["success"] for row in summary["results"]], [False, True])
+                self.assertEqual(reports, {1: failed, 2: passed})
+
+    def test_watcher_stress_rejects_missing_malformed_incomplete_and_skipped_reports(self):
+        error, summary, _ = self.watcher_stress_results([None], fail_inventory=True)
+        self.assertIsInstance(error, RuntimeError)
+        self.assertFalse(summary["success"])
+        self.assertEqual(summary["results"], [])
+        reports = (None, "broken XML", '<testsuites/>', self.watcher_junit().replace('<testsuites>', '<testsuites errors="1">'), self.watcher_junit().replace('<testsuites>', '<testsuites errors="invalid">'), '<testsuites><testsuite><testcase/></testsuite></testsuites>', self.watcher_junit('<skipped/>'),
+                   self.watcher_junit('<error message="crash"/>'),
+                   self.watcher_junit('<system-err>skipping Git-for-Windows shell startup</system-err>'),
+                   self.watcher_junit('<system-err>skipping: git-lfs is not installed</system-err>'),
+                   self.watcher_junit('<system-out>skipping syntax corpus test: unavailable</system-out>'))
+        for report in reports:
+            with self.subTest(report=report):
+                error, summary, _ = self.watcher_stress_results([(0, report), (0, self.watcher_junit())])
+                self.assertIsInstance(error, RuntimeError)
+                self.assertFalse(summary["success"])
+                self.assertEqual(len(summary["results"]), 2)
+
+    def test_watcher_stress_keeps_nonzero_status_and_interruption(self):
+        error, summary, _ = self.watcher_stress_results([(100, self.watcher_junit())])
+        self.assertIsInstance(error, RuntimeError)
+        self.assertFalse(summary["success"])
+        error, summary, _ = self.watcher_stress_results([(0, self.watcher_junit()), KeyboardInterrupt()])
+        self.assertIsInstance(error, KeyboardInterrupt)
+        self.assertFalse(summary["success"])
+        self.assertFalse(summary["results"][-1]["success"])
+        partial = self.watcher_junit('<error message="interrupted"/>')
+        error, summary, reports = self.watcher_stress_results([(KeyboardInterrupt(), partial)])
+        self.assertIsInstance(error, KeyboardInterrupt)
+        self.assertFalse(summary["success"])
+        self.assertEqual(reports, {1: partial})
+
+    def test_watcher_stress_validates_selected_coverage_and_preserves_worktree_cases(self):
+        error, summary, reports = self.watcher_stress_results([(0, self.watcher_junit())] * 2)
+        self.assertIsNone(error)
+        self.assertTrue(summary["success"])
+        self.assertEqual(len(reports), 2)
+        self.assertIn("::worktree_redirect::", runner.WATCHER_FILTER)
+        self.assertIn("::selective::", runner.WATCHER_FILTER)
+
     def test_pure_batch_partition_is_explicit_and_preserves_ignored_tests(self):
         suite = {"package-name": "gitcomet-core", "package-id": "core", "kind": "lib",
                  "testcases": {"conflict_session::pure": {"ignored": False},
@@ -410,6 +1037,44 @@ class RunnerTests(unittest.TestCase):
                 self.assertTrue(Path(first["LOCALAPPDATA"]).is_relative_to(directory))
                 self.assertTrue(Path(first["LOCALAPPDATA"]).is_dir())
 
+    def test_metadata_keeps_feature_switches_but_not_package_selection(self):
+        self.assertEqual(runner.feature_args(runner.CONTEXTS["app"]), ["--no-default-features", "--features", "gix"])
+        self.assertEqual(runner.feature_args(runner.CONTEXTS["workspace"]),
+                         ["--no-default-features", "--features", "gix,gitcomet-ui-gpui/default"])
+        self.assertEqual(runner.feature_args(runner.CONTEXTS["core"]), [])
+        self.assertEqual(runner.feature_args(runner.CONTEXTS["example"]), [])
+
+    def test_the_example_product_builds_outside_the_workspace_context(self):
+        workspace = runner.CONTEXTS["workspace"]
+        for package in runner.EXAMPLE_PACKAGES:
+            self.assertIn(package, workspace[workspace.index("--exclude"):])
+            self.assertIn(package, runner.CONTEXTS["example"])
+
+    def test_every_gpui_harness_runs_in_libtest_with_isolated_settings(self):
+        packages = {"core": "gitcomet-core", "ui": runner.UI, "kit": "gitcomet-ui-kit",
+                    "media": "gitcomet-ui-media", "terminal": "gitcomet-ui-terminal",
+                    "example": "gitcomet-extension-example"}
+        self.assertEqual(runner.gpui_packages(packages), runner.GPUI_PACKAGES)
+        self.assertEqual(runner.nextest_filter([], runner.gpui_packages(packages)),
+                         "not (package(=gitcomet-ui-gpui) | package(=gitcomet-ui-kit) | "
+                         "package(=gitcomet-ui-media) | package(=gitcomet-ui-terminal) | "
+                         "package(=gitcomet-extension-example))")
+        # A package absent from the metadata cannot appear in a filterset.
+        self.assertEqual(runner.gpui_packages({"core": "gitcomet-core", "ui": runner.UI}), (runner.UI,))
+        self.assertIsNone(runner.nextest_filter([], ()))
+        self.assertFalse(runner.uses_libtest("gitcomet-core"))
+        with tempfile.TemporaryDirectory() as directory, patch.object(runner, "REPORTS", Path(directory)), \
+                patch.dict(os.environ, {"GITCOMET_SESSION_FILE": "personal-session.json"}), runner.ExitStack() as cleanup:
+            (runner.paths("kit") / "binaries.json").write_text(
+                json.dumps({"rust-build-meta": {"target-directory": directory}}))
+            for package in runner.GPUI_PACKAGES:
+                with self.subTest(package=package):
+                    self.assertTrue(runner.uses_libtest(package))
+                    env = runner.suite_env("kit", {"package-name": package, "binary-path": str(Path(directory) / "t")},
+                                           cleanup=cleanup)
+                    self.assertNotIn("GITCOMET_SESSION_FILE", env)
+                    self.assertEqual(env["GITCOMET_DISABLE_SESSION_PERSIST"], "1")
+
     def test_ui_appdata_is_removed_after_success_failure_and_interruption(self):
         # Exercise Windows appdata ownership on any host without changing
         # pathlib's platform-dependent Path implementation.
@@ -431,7 +1096,7 @@ class RunnerTests(unittest.TestCase):
                     created.append(appdata)
                     if isinstance(outcome, BaseException):
                         raise outcome
-                    (Path(directory) / "ui-suite-all.log").write_text("test result: ok. 1 passed; 0 failed;\n")
+                    (Path(directory) / "ui-suite-all.log").write_text("test test ... ok\ntest result: ok. 1 passed; 0 failed;\n")
                     return outcome
                 with patch.object(runner, "run", side_effect=execute):
                     if isinstance(outcome, BaseException):
@@ -463,11 +1128,25 @@ class RunnerTests(unittest.TestCase):
 
                 def execute(name, command, **kwargs):
                     (Path(kwargs["env"]["LOCALAPPDATA"]) / "locked.db").write_text("held")
-                    (Path(directory) / "ui-suite-all.log").write_text("test result: ok. 1 passed; 0 failed;\n")
+                    (Path(directory) / "ui-suite-all.log").write_text("test test ... ok\ntest result: ok. 1 passed; 0 failed;\n")
                     return outcome
 
                 with patch.object(runner, "run", side_effect=execute), patch.object(os, "unlink", locked_unlink):
                     self.assertEqual(runner.run_suite("ui", "suite", suite), outcome)
+
+    def test_nextest_reports_use_the_configured_store_and_inherited_profile(self):
+        with tempfile.TemporaryDirectory() as directory, patch.object(runner, "ROOT", Path(directory)):
+            config = Path(directory) / ".config/nextest.toml"
+            config.parent.mkdir()
+            config.write_text('[profile.ci.junit]\npath = "results.xml"\n'
+                              '[profile.child]\ninherits = "ci"\n')
+            self.assertEqual(runner.nextest_junit_path("child"),
+                             Path(directory) / "target/nextest/child/results.xml")
+            config.write_text('[store]\ndir = "reports"\n' + config.read_text())
+            self.assertEqual(runner.nextest_junit_path("child"),
+                             Path(directory) / "reports/child/results.xml")
+            with self.assertRaisesRegex(ValueError, "No JUnit path"):
+                runner.nextest_junit_path("unknown")
 
     def test_coverage_runner_labels_follow_the_executed_batching_mode(self):
         suite = {"package-id": "core", "package-name": "gitcomet-core", "kind": "lib", "binary-name": "gitcomet_core",
@@ -484,14 +1163,16 @@ class RunnerTests(unittest.TestCase):
                     patch.object(runner.subprocess, "check_output", return_value="rust"):
                 target = Path(directory)
                 # Compile and test are separate CLI invocations; only the latter knows the mode.
-                with patch.object(runner, "run"), redirect_stdout(io.StringIO()):
+                with patch.object(runner, "run", side_effect=nextest_compile_output), redirect_stdout(io.StringIO()):
                     runner.compile_tests("workspace", "ci-test")
                 (target / "workspace/binaries.json").write_text(json.dumps({"rust-build-meta": {"target-directory": directory}}))
                 (target / "nextest/ci").mkdir(parents=True)
                 routed = {}
 
                 def run_nextest(name, command, **kwargs):
-                    ran = ["process::isolated"] if "conflict_session" in command[command.index("-E") + 1] else \
+                    # Without a GPUI package or a batch there is nothing to exclude.
+                    expression = command[command.index("-E") + 1] if "-E" in command else ""
+                    ran = ["process::isolated"] if "conflict_session" in expression else \
                           ["conflict_session::pure", "process::isolated"]
                     routed.update(dict.fromkeys(ran, "nextest"))
                     (target / "nextest/ci/junit.xml").write_text('<testsuites><testsuite name="gitcomet-core">' +
@@ -502,7 +1183,8 @@ class RunnerTests(unittest.TestCase):
                     routed["conflict_session::pure"] = "libtest-pure"
                     return 0
 
-                with patch.object(runner, "run", side_effect=run_nextest), \
+                with patch.object(runner, "nextest_junit_path", return_value=target / "nextest/ci/junit.xml"), \
+                        patch.object(runner, "run", side_effect=run_nextest), \
                         patch.object(runner, "run_suite", side_effect=run_pure):
                     runner.execute("workspace", batch_pure_tests=mode)
                 coverage = json.loads((target / "workspace/coverage.json").read_text())
@@ -536,13 +1218,15 @@ class RunnerTests(unittest.TestCase):
             with self.subTest(platform=platform_name, schedule=schedule, cpus=cpus, group=group, profile=profile), \
                     tempfile.TemporaryDirectory() as directory, patch.object(runner, "REPORTS", Path(directory)), \
                     patch.object(runner.sys, "platform", platform_name), \
-                    patch.object(runner.os, "cpu_count", return_value=cpus):
+                    patch.object(runner, "available_cpus", return_value=cpus):
                 selected = (nextest_suites | ui_suites) if group == "both" else nextest_suites if group == "nextest" else ui_suites
                 parallel = schedule == "balanced" and cpus > 1 and group == "both"
                 target = Path(directory)
                 (target / "workspace").mkdir()
-                (target / "workspace/binaries.json").write_text(json.dumps({"rust-build-meta": {"target-directory": directory}}))
+                (target / "workspace/binaries.json").write_text(json.dumps({"rust-build-meta": {"target-directory": str(target / "cargo-artifacts")}}))
                 (target / "nextest" / profile).mkdir(parents=True)
+                junit = target / "nextest" / profile / "junit.xml"
+                junit.write_text("stale results must be removed before execution")
                 barrier, completed = threading.Barrier(2), []
 
                 def run_nextest(name, command, **kwargs):
@@ -556,7 +1240,9 @@ class RunnerTests(unittest.TestCase):
                         self.assertEqual(command[-2:], ["--test-threads", str(threads)])
                     else:
                         self.assertNotIn("--test-threads", command)
-                    self.write_junit(target / "nextest" / profile / "junit.xml", nextest_suites)
+                    self.assertNotIn("--target-dir", command, "build flags conflict with reused metadata")
+                    self.assertFalse(junit.exists(), "a previous report must not satisfy this run")
+                    self.write_junit(junit, nextest_suites)
                     completed.append("nextest")
                     return 0
 
@@ -571,7 +1257,8 @@ class RunnerTests(unittest.TestCase):
                     completed.append("ui")
                     return 0
 
-                with patch.object(runner, "package_names", return_value=packages), \
+                with patch.object(runner, "nextest_junit_path", return_value=junit), \
+                        patch.object(runner, "package_names", return_value=packages), \
                         patch.object(runner, "inventory", return_value={"rust-suites": selected}), \
                         patch.object(runner, "run", side_effect=run_nextest), patch.object(runner, "run_suite", side_effect=run_ui):
                     runner.execute("workspace", schedule, threads, profile, ui_threads)
@@ -579,6 +1266,7 @@ class RunnerTests(unittest.TestCase):
                 self.assertCountEqual(completed, expected)
                 execution = json.loads((target / "workspace/execution.json").read_text())
                 self.assertTrue(execution["success"])
+                self.assertEqual(execution["cpus"], cpus)
                 self.assertEqual(execution["nextest_profile"], profile)
                 self.assertEqual(execution["effective_schedule"], "balanced" if parallel else "serial")
                 self.assertEqual(execution["ui_threads"], ui_threads)
@@ -586,7 +1274,7 @@ class RunnerTests(unittest.TestCase):
                 self.assertEqual(execution["effective_nextest_threads"], cpus - max(1, cpus // 2) if parallel else threads or cpus)
 
     def test_invalid_concurrency_is_rejected_before_running(self):
-        for schedule, threads in [("serial", 0), ("serial", -1), ("balanced", 8)]:
+        for schedule, threads in [("serial", 0), ("serial", -1), ("balanced", 0)]:
             with self.subTest(schedule=schedule, threads=threads), self.assertRaises(ValueError):
                 runner.execute("workspace", schedule, threads)
             with self.subTest(schedule=schedule, ui_threads=threads), self.assertRaises(ValueError):
@@ -598,6 +1286,7 @@ class RunnerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory, patch.object(runner, "REPORTS", Path(directory)), \
                 patch.dict(os.environ, {"GITHUB_STEP_SUMMARY": ""}), redirect_stdout(io.StringIO()):
             heartbeat = Path(directory) / "heartbeat"
+            second_heartbeat = Path(directory) / "second-heartbeat"
             child = ("import pathlib, sys, time\npath = pathlib.Path(sys.argv[1])\n"
                      "while True:\n    path.write_text(str(time.monotonic_ns()))\n    time.sleep(0.02)\n")
             parent = ("import subprocess, sys, time; "
@@ -605,22 +1294,28 @@ class RunnerTests(unittest.TestCase):
 
             def fail_after_start(**kwargs):
                 deadline = time.monotonic() + 10
-                while not heartbeat.exists() and time.monotonic() < deadline:
+                while not (heartbeat.exists() and second_heartbeat.exists()) and time.monotonic() < deadline:
                     time.sleep(0.02)
                 self.assertTrue(heartbeat.exists(), "child did not start")
+                self.assertTrue(second_heartbeat.exists(), "third family did not start")
                 raise RuntimeError("inventory failure")
 
             with self.assertRaisesRegex(RuntimeError, "inventory failure"):
                 runner.run_parallel([
                     partial(runner.run, "cancelled", [sys.executable, "-c", parent, child, str(heartbeat)], timeout=15),
+                    partial(runner.run, "also-cancelled", [sys.executable, "-c", parent, child, str(second_heartbeat)], timeout=15),
                     fail_after_start,
                 ])
             before = heartbeat.read_text()
+            second_before = second_heartbeat.read_text()
             time.sleep(0.15)
             self.assertEqual(heartbeat.read_text(), before, "descendant survived cancellation")
-            timing = json.loads((Path(directory) / "timings.jsonl").read_text())
-            self.assertTrue(timing["cancelled"])
-            self.assertEqual(timing["returncode"], 130)
+            self.assertEqual(second_heartbeat.read_text(), second_before, "third family survived cancellation")
+            timings = [json.loads(line) for line in (Path(directory) / "timings.jsonl").read_text().splitlines()]
+            self.assertEqual(len(timings), 2)
+            for timing in timings:
+                self.assertTrue(timing["cancelled"])
+                self.assertEqual(timing["returncode"], 130)
 
     def test_failed_runner_does_not_skip_other_tests_on_any_platform(self):
         packages = {"core": "gitcomet-core", "ui": runner.UI}
@@ -629,7 +1324,7 @@ class RunnerTests(unittest.TestCase):
         for platform_name, schedule, failed in product(("linux", "darwin", "win32"), ("serial", "balanced"), ("nextest", "ui")):
             with self.subTest(platform=platform_name, schedule=schedule, failed=failed), \
                     tempfile.TemporaryDirectory() as directory, patch.object(runner, "REPORTS", Path(directory)), \
-                    patch.object(runner.sys, "platform", platform_name), patch.object(runner.os, "cpu_count", return_value=4):
+                    patch.object(runner.sys, "platform", platform_name), patch.object(runner, "available_cpus", return_value=4):
                 target = Path(directory)
                 (target / "workspace").mkdir()
                 (target / "workspace/binaries.json").write_text(json.dumps({"rust-build-meta": {"target-directory": directory}}))
@@ -645,13 +1340,16 @@ class RunnerTests(unittest.TestCase):
                     completed.append("ui")
                     return 1 if failed == "ui" else 0
 
-                with patch.object(runner, "package_names", return_value=packages), \
+                with patch.object(runner, "nextest_junit_path", return_value=target / "nextest/ci/junit.xml"), \
+                        patch.object(runner, "package_names", return_value=packages), \
                         patch.object(runner, "inventory", return_value={"rust-suites": suites}), \
                         patch.object(runner, "run", side_effect=run_nextest), patch.object(runner, "run_suite", side_effect=run_ui):
                     with self.assertRaisesRegex(RuntimeError, "test execution failed"):
                         runner.execute("workspace", schedule)
                 self.assertCountEqual(completed, ["nextest", "ui"], "one failed runner must not skip the rest")
-                self.assertFalse(json.loads((target / "workspace/execution.json").read_text())["success"])
+                execution = json.loads((target / "workspace/execution.json").read_text())
+                self.assertFalse(execution["success"])
+                self.assertEqual(execution["effective_schedule"], schedule)
 
     def test_all_git_integration_suites_require_nextest_results_on_every_platform(self):
         suites = self.git_integration_suites()
@@ -748,13 +1446,111 @@ class RunnerTests(unittest.TestCase):
             with self.subTest(platform=platform_name, threads=threads), tempfile.TemporaryDirectory() as directory, \
                     patch.object(runner, "REPORTS", Path(directory)), patch.object(runner.sys, "platform", platform_name), \
                     patch.object(runner, "suite_env", return_value={}), patch.object(runner, "run", return_value=0) as run:
-                (Path(directory) / "workspace-ui-all.log").write_text("test result: ok. 1 passed; 0 failed;\n")
+                (Path(directory) / "workspace-ui-all.log").write_text("test required ... ok\ntest result: ok. 1 passed; 0 failed;\n")
                 self.assertEqual(runner.run_suite("workspace", "ui", suite, threads=threads), 0)
                 command = run.call_args.args[1]
+                # Captured output lands under the failing test; skip notices stay in the log.
+                self.assertEqual(command[1:4], ["--format", "pretty", "--show-output"])
+                self.assertNotIn("--nocapture", command)
+                self.assertTrue(run.call_args.kwargs["dots"])
                 if threads is None:
                     self.assertNotIn("--test-threads", command)
                 else:
                     self.assertEqual(command[-2:], ["--test-threads", str(threads)])
+
+    def test_smoke_runs_keep_uncaptured_full_console_output(self):
+        suite = {"binary-path": "unused", "cwd": runner.ROOT, "testcases": {"gui_default": {"ignored": False}}}
+        with tempfile.TemporaryDirectory() as directory, patch.object(runner, "REPORTS", Path(directory)), \
+                patch.object(runner, "suite_env", return_value={}), patch.object(runner, "run", return_value=0) as run:
+            (Path(directory) / "app-smoke-gui_default.log").write_text("test result: ok. 1 passed; 0 failed;\n")
+            runner.run_suite("app", "smoke", suite, test_filter="gui_default")
+        self.assertIn("--nocapture", run.call_args.args[1])
+        self.assertFalse(run.call_args.kwargs["dots"])
+
+    def dot_console(self, text, chunk):
+        console = runner.DotConsole()
+        with redirect_stdout(io.StringIO()) as out:
+            for index in range(0, len(text), chunk):
+                console.write(text[index:index + chunk])
+            console.close()
+        return out.getvalue()
+
+    def test_dot_console_hides_libtest_passes_and_keeps_failure_detail(self):
+        log = ("\nrunning 153 tests\n" + "".join(f"test ui::pass_{index} ... ok\n" for index in range(150)) +
+               "test ui::skipped ... ignored, needs a display\n"
+               "test ui::hangs has been running for over 60 seconds\n"
+               "unattributed background output\n"
+               "test ui::broken ... FAILED\n"
+               "\nsuccesses:\n\n---- ui::pass_1 stdout ----\nskipping corpus: submodule missing\n\n"
+               "successes:\n    ui::pass_0\n    ui::pass_1\n"
+               "\nfailures:\n\n---- ui::broken stdout ----\n\nthread 'ui::broken' panicked at src/lib.rs:1:1:\n"
+               "  left: \"ours\\r\\n\"\n\nfailures:\n    ui::broken\n\n"
+               "test result: FAILED. 150 passed; 1 failed; 1 ignored; 0 measured; 0 filtered out\n")
+        # Live mode tails arbitrary chunks, so lines split mid-way must still classify.
+        for chunk in (7, len(log)):
+            with self.subTest(chunk=chunk):
+                console = self.dot_console(log, chunk)
+                self.assertIn("running 153 tests\n" + "." * 100 + " 100/153\n" + "." * 50 + "i 151/153\n"
+                              "test ui::hangs has been running for over 60 seconds\n"
+                              "unattributed background output\ntest ui::broken ... FAILED\n", console)
+                self.assertIn("thread 'ui::broken' panicked at src/lib.rs:1:1:\n  left: \"ours\\r\\n\"\n", console)
+                self.assertIn("failures:\n    ui::broken\n\ntest result: FAILED.", console)
+                for hidden in ("... ok", "ui::pass_1 stdout", "skipping corpus", "    ui::pass_0"):
+                    self.assertNotIn(hidden, console)
+
+    def test_dot_console_keeps_slow_failed_and_output_bearing_nextest_results(self):
+        green, reset = "\x1b[32;1m", "\x1b[0m"
+        scoreboard = f"{green}        PASS{reset} [   0.200s] (  2/5) core scoreboard"
+        slow = f"{green}        PASS{reset} [  12.500s] (  3/5) state slow_one"
+        log = ("    Starting 5 tests across 2 binaries\n"
+               f"{green}        PASS{reset} [   0.100s] (  1/5) core fast_one\n"
+               f"{scoreboard}\n  stdout ───\n    running 1 test\n    budget gate: <= 105\n\n{slow}\n"
+               "        SLOW [> 60.000s] (─────────) state hanging\n"
+               "        FAIL [   0.300s] (  4/5) state broken\n"
+               "  stderr ───\n    thread 'broken' panicked at src/lib.rs:1:1:\n"
+               f"{green}        PASS{reset} [   0.100s] (  5/5) state fast_two\n"
+               "────────────\n     Summary [  61.000s] 5 tests run: 4 passed (1 slow), 1 failed\n")
+        console = self.dot_console(log, 5)
+        self.assertEqual(console, "    Starting 5 tests across 2 binaries\n.. 2/5\n"
+                         f"{scoreboard}\n  stdout ───\n    running 1 test\n    budget gate: <= 105\n\n{slow}\n"
+                         "        SLOW [> 60.000s] (─────────) state hanging\n"
+                         "        FAIL [   0.300s] (  4/5) state broken\n"
+                         "  stderr ───\n    thread 'broken' panicked at src/lib.rs:1:1:\n. 5/5\n"
+                         "────────────\n     Summary [  61.000s] 5 tests run: 4 passed (1 slow), 1 failed\n")
+
+    def test_dot_run_filters_the_console_but_keeps_the_complete_log(self):
+        output = "running 2 tests\ntest a ... ok\ntest b ... FAILED\n\nfailures:\n    b\n\ntest result: FAILED. 1 passed; 1 failed;\n"
+        child = [sys.executable, "-c", f"import sys; sys.stdout.write({output!r}); sys.exit(101)"]
+        for live in (True, False):
+            with self.subTest(live=live), tempfile.TemporaryDirectory() as directory, \
+                    patch.object(runner, "REPORTS", Path(directory)), patch.dict(os.environ, {"GITHUB_STEP_SUMMARY": ""}), \
+                    redirect_stdout(io.StringIO()) as console:
+                self.assertEqual(runner.run("dots", child, check=False, live=live, dots=True), 101)
+                self.assertEqual((Path(directory) / "dots.log").read_text(encoding="utf-8"), output)
+            # Skip the ::group:: and echoed command lines, which quote the child's source.
+            shown = console.getvalue().split("\n", 2)[2]
+            self.assertTrue(shown.startswith("running 2 tests\n. 1/2\ntest b ... FAILED\n"), shown)
+            self.assertNotIn("test a ... ok", shown)
+            self.assertIn("dots.log in the uploaded", shown)
+
+    def test_failed_tests_become_error_annotations(self):
+        suite = {"binary-path": "unused", "cwd": runner.ROOT, "testcases": {"broken": {"ignored": False}}}
+        with tempfile.TemporaryDirectory() as directory, patch.object(runner, "REPORTS", Path(directory)), \
+                patch.object(runner, "suite_env", return_value={}), patch.object(runner, "run", return_value=101), \
+                redirect_stdout(io.StringIO()) as console:
+            (Path(directory) / "workspace-ui-all.log").write_text(
+                "test ui::broken ... FAILED\n\nfailures:\n    ui::broken\n\ntest result: FAILED. 0 passed; 1 failed;\n")
+            self.assertEqual(runner.run_suite("workspace", "ui", suite), 101)
+            junit = Path(directory) / "junit.xml"
+            junit.write_text('<testsuites><testsuite name="core"><testcase name="passes"/>'
+                             '<testcase name="fails"><failure message="panicked"/></testcase>'
+                             '<testcase name="crashes"><error message="SIGSEGV"/></testcase></testsuite></testsuites>')
+            runner.annotate_failures("workspace-nextest", runner.failed_junit_cases(junit))
+        self.assertEqual(console.getvalue().splitlines(), [
+            "::error title=Test failed::workspace-ui-all: ui::broken",
+            "::error title=Test failed::workspace-nextest: core fails",
+            "::error title=Test failed::workspace-nextest: core crashes",
+        ])
 
     def test_ignored_or_unreported_test_is_not_counted_as_executed(self):
         suites = {"core": {"package-id": "core", "binary-name": "gitcomet_core",
@@ -805,6 +1601,31 @@ class RunnerTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "required Git test did not run"):
                 runner.run_suite("workspace", "status_integration", suite)
 
+    def test_optional_and_partial_runtime_skips_are_recorded_and_warned(self):
+        text = """normal output
+Summary: 10 tests passed, 2 skipped
+Skipping symlink fixture: Windows symlink privilege is unavailable
+skipping: git-annex is not installed
+No writable second Windows volume; cross-volume assertion skipped
+"""
+        with tempfile.TemporaryDirectory() as directory, patch.object(runner, "REPORTS", Path(directory)), \
+                redirect_stdout(io.StringIO()) as console:
+            runner.record_runtime_exclusions("workspace", text)
+            log = (Path(directory) / "runtime-exclusions.log").read_text()
+        self.assertEqual(len(log.splitlines()), 3)
+        self.assertIn("cross-volume assertion skipped", log)
+        self.assertIn("3 runtime skip notice(s)", console.getvalue())
+        self.assertIn("::warning title=Incomplete test coverage", console.getvalue())
+
+    def test_runner_supplies_its_python_and_preserves_an_explicit_interpreter(self):
+        with tempfile.TemporaryDirectory() as directory, patch.object(runner, "REPORTS", Path(directory)), \
+                redirect_stdout(io.StringIO()), patch.dict(os.environ, {}, clear=True):
+            command = [sys.executable, "-c", 'import os; print(os.environ["GITCOMET_TEST_PYTHON"])']
+            runner.run("python-default", command)
+            runner.run("python-explicit", command, env={"GITCOMET_TEST_PYTHON": "chosen"})
+            self.assertEqual((Path(directory) / "python-default.log").read_text().strip(), sys.executable)
+            self.assertEqual((Path(directory) / "python-explicit.log").read_text().strip(), "chosen")
+
     def test_display_profiles_reuse_workspace_ui_and_headless_app(self):
         with patch.object(sys, "argv", ["run.py", "display"]), patch.object(runner, "smoke") as smoke:
             runner.main()
@@ -839,9 +1660,11 @@ class RuntimeTests(unittest.TestCase):
             (source / "binaries.json").write_text('"compiled-once"')
             (source / "execution.json").write_text('{"success": true, "seconds": 99}')
             (source / "junit.xml").write_text("stale")
+            (source / "nextest-old").mkdir()
+            (source / "nextest-old/junit.xml").write_text("stale store")
             calls = []
 
-            def execute(context, schedule, threads, profile, ui_threads, batch_pure_tests):
+            def execute(context, schedule, threads, profile, ui_threads, batch_pure_tests, **kwargs):
                 self.assertEqual(profile, "ci-git-limited")
                 self.assertEqual(ui_threads, 8)
                 self.assertEqual(batch_pure_tests, "off")
@@ -850,6 +1673,7 @@ class RuntimeTests(unittest.TestCase):
                 self.assertEqual((sample / "binaries.json").read_text(), '"compiled-once"')
                 self.assertFalse((sample / "execution.json").exists())
                 self.assertFalse((sample / "junit.xml").exists())
+                self.assertFalse((sample / "nextest-old").exists())
                 for name in ("workspace-nextest.log", "workspace-ui-all.log", "timings.jsonl"):
                     (runtime.runner.REPORTS / name).write_text(str(len(calls)))
                 (sample / "execution.json").write_text(json.dumps(dict(success=True, seconds=len(calls))))
@@ -885,7 +1709,7 @@ class RuntimeTests(unittest.TestCase):
                     self.assertRaisesRegex(RuntimeError, "failed"):
                 runtime.measure(root / "output", 5, "serial", None)
             record = json.loads((root / "output/runtime.json").read_text())
-            self.assertEqual(record["samples"], [{"success": False, "seconds": None, "schedule": "serial", "nextest_threads": None, "nextest_profile": "ci", "ui_threads": None}])
+            self.assertEqual(record["samples"], [{"success": False, "seconds": None, "schedule": "serial", "nextest_threads": None, "nextest_profile": "ci", "ui_threads": None, "pure_threads": None, "resource_stats": None}])
             self.assertTrue((root / "output/sample-1").is_dir())
 
     def test_source_diff_hash_matches_local_performance_for_non_utf8_and_crlf_changes(self):
@@ -902,8 +1726,8 @@ class RuntimeTests(unittest.TestCase):
                     patch.dict(os.environ, env, clear=True):
                 root = Path(directory)
                 repo = root / "repo"
-                git = ["git", "-C", str(repo), "-c", "user.name=CI", "-c", "user.email=ci@example.invalid"]
-                subprocess.run(["git", "init", "-q", str(repo)], check=True)
+                git = ["git", "-c", "maintenance.auto=false", "-C", str(repo), "-c", "user.name=CI", "-c", "user.email=ci@example.invalid"]
+                subprocess.run(["git", "-c", "maintenance.auto=false", "init", "-q", str(repo)], check=True)
                 subprocess.run([*git, "config", "core.autocrlf", "false"], check=True)
                 (repo / "notes.txt").write_bytes(b"base\n")
                 subprocess.run([*git, "add", "notes.txt"], check=True)
@@ -912,7 +1736,7 @@ class RuntimeTests(unittest.TestCase):
                 reports = root / "reports"
                 (reports / "workspace").mkdir(parents=True)
 
-                def execute(context, *args):
+                def execute(context, *args, **kwargs):
                     (runtime.runner.paths(context) / "execution.json").write_text('{"success": true, "seconds": 1}')
 
                 with patch.object(runtime.runner, "ROOT", repo), patch.object(runtime.runner, "REPORTS", reports), \
@@ -943,7 +1767,7 @@ class ApplicationProbeTests(unittest.TestCase):
         suite = {"package-id": "app", "testcases": {"help_flag_exits_zero": {"ignored": False}}}
         with tempfile.TemporaryDirectory() as directory, \
                 patch.object(runner, "REPORTS", Path(directory)), \
-                patch.object(runner, "run") as run_mock, \
+                patch.object(runner, "run", side_effect=nextest_compile_output) as run_mock, \
                 patch.object(runner, "windows_linker_environment", return_value=None), \
                 patch.object(runner, "prepare_runtime_binaries"), \
                 patch.object(runner, "package_names", return_value={"app": "gitcomet"}), \
@@ -957,12 +1781,43 @@ class ApplicationProbeTests(unittest.TestCase):
             coverage = json.loads((Path(directory) / "app/coverage.json").read_text())
             self.assertEqual(coverage["selection"][-2:], ["--test", "standalone_tool_mode_integration"])
 
+    def test_compile_keeps_cargo_messages_apart_from_the_binary_list(self):
+        suite = {"package-id": "app", "testcases": {"help_flag_exits_zero": {"ignored": False}}}
+        listing = {"rust-build-meta": {"target-directory": "target"}, "rust-binaries": {}}
+        artifact = {"reason": "compiler-artifact", "filenames": ["target/ci-test/deps/libserde-1111111111111111.rlib"]}
+        commands = {}
+
+        def nextest(name, command, *, output=None, **kwargs):
+            commands[name] = command
+            if name == "app-compile":
+                Path(output).write_text(f"{json.dumps(artifact)}\n{json.dumps(listing)}\n"
+                                        '{"reason": "build-finished", "success": true}\n')
+            return 0
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.object(runner, "REPORTS", Path(directory)), \
+                patch.object(runner, "run", side_effect=nextest), \
+                patch.object(runner, "windows_linker_environment", return_value=None), \
+                patch.object(runner, "prepare_runtime_binaries"), \
+                patch.object(runner, "package_names", return_value={"app": "gitcomet"}), \
+                patch.object(runner, "inventory", return_value={"rust-suites": {"smoke": suite}}), \
+                patch.object(runner.subprocess, "check_output", return_value="rust"), \
+                redirect_stdout(io.StringIO()):
+            runner.compile_tests("app", "ci-test")
+            compile_command = commands["app-compile"]
+            self.assertEqual(compile_command[compile_command.index("--cargo-message-format") + 1],
+                             "json-render-diagnostics")
+            reports = Path(directory) / "app"
+            self.assertEqual(json.loads((reports / "binaries.json").read_text()), listing)
+            messages = (reports / "cargo-messages.jsonl").read_text().splitlines()
+            self.assertEqual([json.loads(line)["reason"] for line in messages], ["compiler-artifact", "build-finished"])
+
     def test_failed_probe_retains_failure_record_and_rejects_stale_results(self):
         for failure in ("metadata", "build"):
             with self.subTest(failure=failure), tempfile.TemporaryDirectory() as directory, \
                     patch.dict(os.environ, {}, clear=True), \
                     patch.object(sys, "argv", ["application-probe.py", "--profiles", "ci-test"]), \
                     patch.object(application_probe.runner, "REPORTS", Path(directory)), \
+                    patch.object(application_probe.platform, "platform", return_value="fixture-os"), \
                     patch.object(application_probe.subprocess, "check_output", return_value="fixture",
                                  side_effect=RuntimeError("metadata failed") if failure == "metadata" else None), \
                     patch.object(application_probe.runner, "run", side_effect=RuntimeError("build failed")):
@@ -987,6 +1842,334 @@ class ApplicationProbeTests(unittest.TestCase):
                     application_probe.main()
                 self.assertEqual(error.exception.code, 2)
                 self.assertFalse((Path(directory) / "application-probe").exists())
+
+
+class InventoryTests(unittest.TestCase):
+    def compare(self, old, new):
+        with tempfile.TemporaryDirectory() as directory:
+            paths = [Path(directory) / "old.json", Path(directory) / "new.json", Path(directory) / "map.json"]
+            paths[0].write_text(json.dumps(old))
+            paths[1].write_text(json.dumps(new))
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()) as errors:
+                code = inventory.compare(paths[0], paths[1], paths[2])
+            return code, json.loads(paths[2].read_text()), errors.getvalue()
+
+    def test_moves_into_child_modules_map_one_to_one(self):
+        code, mapping, _ = self.compare(
+            {"ui:lib:ui": {"view::tests::a": False, "view::tests::b": True, "other::c": False}},
+            {"ui:lib:ui": {"view::tests::group::a": False, "view::tests::other::b": True, "other::c": False}})
+        self.assertEqual(code, 0)
+        self.assertEqual(mapping["ui:lib:ui"], {"view::tests::a": "view::tests::group::a",
+                                                "view::tests::b": "view::tests::other::b", "other::c": "other::c"})
+        code, mapping, _ = self.compare({"exe:bin:exe": {"tests::a": False}}, {"exe:bin:exe": {"launch::tests::a": False}})
+        self.assertEqual((code, mapping["exe:bin:exe"]), (0, {"tests::a": "launch::tests::a"}))
+
+    def test_dropped_renamed_reignored_or_moved_up_tests_fail(self):
+        cases = [
+            ({"view::tests::a": False}, {}),
+            ({"view::tests::a": False}, {"view::tests::renamed": False}),
+            ({"view::tests::a": False}, {"view::tests::group::a": True}),
+            ({"view::tests::group::a": False}, {"view::a": False}),
+            ({"view::tests::a": False}, {"tests::view::a": False}),
+            ({"view::tests::a": False}, {"view::tests::x::a": False, "view::tests::y::a": False}),
+        ]
+        for old, new in cases:
+            with self.subTest(old=old, new=new):
+                code, _, errors = self.compare({"ui:lib:ui": old}, {"ui:lib:ui": new} if new else {"ui:lib:ui": {"z": False}})
+                self.assertEqual(code, 1, errors)
+
+    def test_declared_harness_moves_and_replacements_are_accepted(self):
+        with tempfile.TemporaryDirectory() as directory:
+            old, new, replaced = (Path(directory) / name for name in ("old.json", "new.json", "replaced.json"))
+            old.write_text(json.dumps({"exe:bin:exe": {"cli::tests::a": False, "dirs::b": False},
+                                       "core:lib:core": {"x": False}}))
+            new.write_text(json.dumps({"app:lib:app": {"cli::tests::a": False},
+                                       "core:lib:core": {"x": False, "platform::dirs::tests::b": False}}))
+            replaced.write_text(json.dumps({
+                "removed": {"app:lib:app dirs::b": "covered by platform::dirs::tests::b"},
+                "added": {"core:lib:core platform::dirs::tests::b": "replaces dirs::b"}}))
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                self.assertEqual(inventory.compare(old, new, None, ["exe:bin:exe=app:lib:app"], replaced), 0)
+                self.assertEqual(inventory.compare(old, new, None, ["exe:bin:exe=app:lib:app"]), 1)
+
+    def test_a_test_cannot_change_harness(self):
+        code, _, errors = self.compare({"a:lib:a": {"t": False}, "b:lib:b": {"u": False}},
+                                       {"a:lib:a": {"u": False}, "b:lib:b": {"t": False}})
+        self.assertEqual(code, 1, errors)
+
+    def test_package_names_come_from_path_and_registry_ids(self):
+        self.assertEqual(inventory.package_name("path+file:///x/crates/gitcomet-core#0.2.6"), "gitcomet-core")
+        self.assertEqual(inventory.package_name("path+file:///x/crates/win32-window-utils#gitcomet-win32-window-utils@0.1.0"),
+                         "gitcomet-win32-window-utils")
+
+
+class BoundaryTests(unittest.TestCase):
+    def test_tree_output_yields_package_names_including_repeated_subtrees(self):
+        output = ("gitcomet-ui-kit v0.2.6 (/x/crates/gitcomet-ui-kit)\n"
+                  "gpui-ce v0.2.2 (https://github.com/Havunen/gpui-ce.git?rev=1#1)\n"
+                  "gitcomet-core v0.2.6 (/x/crates/gitcomet-core) (*)\n\n")
+        self.assertEqual(boundaries.parse_tree(output), {"gitcomet-ui-kit", "gpui-ce", "gitcomet-core"})
+
+    def test_forbidden_reachable_packages_are_reported_but_the_package_itself_is_not(self):
+        rules = {package: forbidden for package, _, forbidden in boundaries.RULES}
+        self.assertEqual(boundaries.violations("gitcomet-ui-kit", {"gitcomet-ui-kit", "gpui-ce", "gitcomet-ui-gpui"},
+                                               rules["gitcomet-ui-kit"]), ["gitcomet-ui-gpui"])
+        self.assertEqual(boundaries.violations("gitcomet", {"gitcomet", "gitcomet-core"}, rules["gitcomet"]), [])
+        self.assertIn("gpui-ce", rules["gitcomet-app"])
+        self.assertIn("gitcomet-ui-gpui", rules["gitcomet-extension-api"])
+
+    def test_glob_patterns_forbid_every_matching_package(self):
+        rules = {package: forbidden for package, _, forbidden in boundaries.RULES}
+        reached = {"difftastic", "tree-sitter", "gitcomet", "gitcomet-core", "gitcomet-base"}
+        self.assertEqual(boundaries.violations("difftastic", reached, rules["difftastic"]),
+                         ["gitcomet", "gitcomet-base", "gitcomet-core"])
+        self.assertEqual(boundaries.violations("difftastic", {"difftastic", "tree-sitter"}, rules["difftastic"]), [])
+
+    def test_missing_packages_are_skipped_and_violations_fail(self):
+        reached = {"gitcomet-core": {"gitcomet-core"}, "gitcomet": {"gitcomet", "gpui-ce"}}
+        with patch.object(boundaries, "workspace_packages", return_value={"gitcomet-core", "gitcomet"}), \
+                patch.object(boundaries, "reachable", side_effect=lambda package, features: reached[package]), \
+                redirect_stdout(io.StringIO()) as out, redirect_stderr(io.StringIO()) as err:
+            self.assertEqual(boundaries.main(), 1)
+        self.assertIn("skip gitcomet-ui-kit", out.getvalue())
+        self.assertIn("gitcomet (--no-default-features --features gix) reaches forbidden packages: gpui-ce", err.getvalue())
+
+
+class GrammarSymbolTests(unittest.TestCase):
+    def write_parser(self, root, relative, text):
+        path = root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+
+    def package(self, root, name, version="1.0.0", source=None):
+        directory = root / f"{name}-{version}-{len(list(root.iterdir()))}"
+        directory.mkdir()
+        (directory / "Cargo.toml").write_text("")
+        return {"id": f"{name} {directory.name}", "name": name, "version": version, "source": source,
+                "manifest_path": str(directory / "Cargo.toml")}
+
+    def metadata(self, root, edges, packages):
+        nodes = [{"id": package["id"], "deps": [{"pkg": target["id"], "dep_kinds": [{"kind": kind} for kind in kinds]}
+                                                for source, target, kinds in edges if source is package]}
+                 for package in packages]
+        return {"packages": packages, "workspace_members": [root["id"]], "resolve": {"nodes": nodes}}
+
+    def test_definitions_are_found_in_every_generated_parser_outside_target(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.write_parser(root, "src/parser.c",
+                              '#include "tree_sitter/parser.h"\n'
+                              "const TSLanguage *tree_sitter_declared(void);\n"
+                              "TS_PUBLIC const TSLanguage *tree_sitter_alpha(void) {\n  return &language;\n}\n")
+            self.write_parser(root, "tsx/src/parser.c",
+                              '#include "tree_sitter/parser.h"\nextern const TSLanguage *tree_sitter_beta(void)\n{\n}\n')
+            self.write_parser(root, "fish/src/parser.c",
+                              '#include "tree_sitter/parser.h"\nTS_PUBLIC const TSLanguage *tree_sitter_fish() {\n}\n')
+            self.write_parser(root, "runtime/lib/src/parser.c", "static void ts_parser__advance(void) {}\n")
+            self.write_parser(root, "target/build/parser.c",
+                              '#include "tree_sitter/parser.h"\nconst TSLanguage *tree_sitter_built(void) {}\n')
+            self.assertEqual(grammar_symbols.language_functions(root),
+                             ({"tree_sitter_alpha", "tree_sitter_beta", "tree_sitter_fish"}, []))
+
+    def test_a_generated_parser_without_a_readable_definition_is_reported(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.write_parser(root, "src/parser.c",
+                              '#include "tree_sitter/parser.h"\nLANGUAGE_FN(tree_sitter_hidden)\n')
+            self.assertEqual(grammar_symbols.language_functions(root), (set(), [root / "src/parser.c"]))
+
+    def test_a_function_defined_by_two_packages_clashes(self):
+        found = grammar_symbols.clashes({
+            "tree-sitter-perl 1.1.2 (git)": {"tree_sitter_perl"},
+            "ts-parser-perl 1.2.1 (registry)": {"tree_sitter_perl"},
+            "tree-sitter-rust 0.24.2 (registry)": {"tree_sitter_rust"},
+        })
+        self.assertEqual(found, {"tree_sitter_perl": ["tree-sitter-perl 1.1.2 (git)", "ts-parser-perl 1.2.1 (registry)"]})
+
+    def test_linked_packages_follow_normal_dependencies_transitively(self):
+        packages = {name: {"id": f"{name}-id", "name": name, "version": "1.0.0", "source": None,
+                           "manifest_path": f"/x/{name}/Cargo.toml"}
+                    for name in ("gitcomet", "app", "grammar", "shared", "test-grammar", "builder")}
+        meta = self.metadata(packages["gitcomet"], [
+            (packages["gitcomet"], packages["app"], [None]),
+            (packages["app"], packages["grammar"], [None]),
+            (packages["gitcomet"], packages["shared"], ["dev", None]),
+            (packages["gitcomet"], packages["test-grammar"], ["dev"]),
+            (packages["gitcomet"], packages["builder"], ["build"]),
+        ], list(packages.values()))
+        self.assertEqual([package["name"] for package in grammar_symbols.linked_packages(meta, "gitcomet")],
+                         ["app", "gitcomet", "grammar", "shared"])
+
+    def test_the_same_grammar_version_from_two_places_fails(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            app = self.package(root, "gitcomet")
+            vendored = self.package(root, "tree-sitter-solidity", "1.2.13")
+            registry = self.package(root, "tree-sitter-solidity", "1.2.13", source="registry+https://example")
+            for package in (vendored, registry):
+                self.write_parser(Path(package["manifest_path"]).parent, "src/parser.c",
+                                  '#include "tree_sitter/parser.h"\nTS_PUBLIC const TSLanguage *tree_sitter_solidity(void) {}\n')
+            meta = self.metadata(app, [(app, vendored, [None]), (app, registry, [None])], [app, vendored, registry])
+            with patch.object(grammar_symbols, "metadata", return_value=meta), \
+                    redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()) as err:
+                self.assertEqual(grammar_symbols.main(), 1)
+        self.assertIn("tree_sitter_solidity is defined by tree-sitter-solidity 1.2.13 (", err.getvalue())
+        self.assertIn("tree-sitter-solidity 1.2.13 (registry+https://example)", err.getvalue())
+
+    def test_distinct_functions_pass(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            app = self.package(root, "gitcomet")
+            packages = [app]
+            for name in ("rust", "perl"):
+                package = self.package(root, f"tree-sitter-{name}")
+                self.write_parser(Path(package["manifest_path"]).parent, "src/parser.c",
+                                  f'#include "tree_sitter/parser.h"\nTS_PUBLIC const TSLanguage *tree_sitter_{name}(void) {{}}\n')
+                packages.append(package)
+            meta = self.metadata(app, [(app, package, [None]) for package in packages[1:]], packages)
+            with patch.object(grammar_symbols, "metadata", return_value=meta), \
+                    redirect_stdout(io.StringIO()) as out, redirect_stderr(io.StringIO()):
+                self.assertEqual(grammar_symbols.main(), 0)
+        self.assertIn("ok   2 language functions in 2 linked packages", out.getvalue())
+
+    def test_an_unreadable_generated_parser_fails_the_check(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            app = self.package(root, "gitcomet")
+            hidden = self.package(root, "tree-sitter-hidden")
+            parser = Path(hidden["manifest_path"]).parent / "src/parser.c"
+            self.write_parser(parser.parent.parent, "src/parser.c",
+                              '#include "tree_sitter/parser.h"\nLANGUAGE_FN(tree_sitter_hidden)\n')
+            meta = self.metadata(app, [(app, hidden, [None])], [app, hidden])
+            with patch.object(grammar_symbols, "metadata", return_value=meta), \
+                    redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()) as err:
+                self.assertEqual(grammar_symbols.main(), 1)
+        self.assertIn(f"tree-sitter-hidden 1.0.0 ({parser.parent.parent}): no tree-sitter language function found in {parser}",
+                      err.getvalue())
+
+
+class GitIsolationTests(unittest.TestCase):
+    def test_git_location_variables_never_reach_temporary_repositories(self):
+        # `git rebase --exec` and hooks export GIT_DIR; a test's `git add` would then stage into that repository.
+        with tempfile.TemporaryDirectory() as directory:
+            sentinel = Path(directory) / "sentinel"
+            git = ["git", "-c", "maintenance.auto=false", "-C", str(sentinel)]
+            subprocess.run(["git", "-c", "maintenance.auto=false", "init", "-q", str(sentinel)], check=True)
+            (sentinel / "kept.txt").write_text("kept")
+            subprocess.run([*git, "add", "kept.txt"], check=True)
+            index = subprocess.run([*git, "ls-files", "--stage"], capture_output=True, text=True, check=True).stdout
+            child = subprocess.run([sys.executable, "-B", "-m", "unittest", "test_ci.IdentityLiteralTests"],
+                                   cwd=Path(__file__).parent, capture_output=True, text=True,
+                                   env={**os.environ, "GIT_DIR": str(sentinel / ".git")})
+            self.assertEqual(child.returncode, 0, child.stderr[-2000:])
+            after = subprocess.run([*git, "ls-files", "--stage"], capture_output=True, text=True, check=True).stdout
+            self.assertEqual(after, index)
+
+
+class IdentityLiteralTests(unittest.TestCase):
+    def test_lexer_preserves_literals_lines_and_nested_test_module_boundaries(self):
+        source = '''/* outer "GitComet" /* nested */ still a comment */
+const URL: &str = r##"https://example/GitComet/*not a comment*/"##;
+fn chars<'a>(_: &'a str) { let _ = ('"', '{', '\\u{7d}', '\\''); }
+#[cfg(test)] mod checks {
+    mod nested { const RAW: &str = r#"quote " } GitComet"#; }
+}
+#[cfg(not(test))] mod production { const NAME: &str = "gitcomet"; }
+const ESCAPED: &str = "a \\" quote // GitComet";
+'''
+        code = identity_literals.strip_comments_and_test_modules(source)
+        self.assertEqual((len(code), code.count("\n")), (len(source), source.count("\n")))
+        self.assertEqual(identity_literals.occurrences(source), [
+            (2, "display-name", "https://example/GitComet/*not a comment*/"),
+            (7, "identifier", "gitcomet"), (8, "display-name", 'a \\" quote // GitComet')])
+
+    def test_scan_shares_lexical_pass_and_excludes_test_descendants(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "crates/example/src"
+            source.mkdir(parents=True)
+            (source / "lib.rs").write_text(
+                '#[cfg(test)] mod checks;\nconst NAME: &str = "GitComet";')
+            (source / "checks.rs").write_text('mod child;\nconst TEST: &str = "GitComet";')
+            (source / "checks").mkdir()
+            (source / "checks/child.rs").write_text('const TEST: &str = "GitComet";')
+            (source / "smoke_tests.rs").write_text(
+                'mod child;\n#[cfg(test)] #[path="relocated.rs"] mod relocated;\n'
+                'const TEST: &str = "GitComet";')
+            (source / "smoke_tests").mkdir()
+            (source / "smoke_tests/child.rs").write_text('const TEST: &str = "GitComet";')
+            (source / "relocated.rs").write_text('const TEST: &str = "GitComet";')
+            (source / "simple_tests.rs").write_text('const TEST: &str = "GitComet";')
+            subprocess.run(["git", "-c", "maintenance.auto=false", "init", "-q", directory], check=True)
+            strip = identity_literals.strip_comments_and_test_modules
+            with patch.object(identity_literals, "ROOT", root), \
+                    patch.object(identity_literals, "strip_comments_and_test_modules", wraps=strip) as lexical_pass:
+                self.assertEqual(identity_literals.scan(),
+                                 {("crates/example/src/lib.rs", "display-name"): 1})
+            # Each source shares its pass between discovery and counting,
+            # except known tests with no cfg declarations. Test files that
+            # declare modules in other directories still need discovery.
+            self.assertEqual(lexical_pass.call_count, 6)
+
+    def test_scan_includes_new_files_and_tolerates_deleted_files(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "crates/example/src"
+            source.mkdir(parents=True)
+            deleted = source / "deleted.rs"
+            deleted.write_text('const NAME: &str = "GitComet";')
+            subprocess.run(["git", "-c", "maintenance.auto=false", "init", "-q", directory], check=True)
+            subprocess.run(["git", "-c", "maintenance.auto=false", "add", "."], cwd=root, check=True)
+            deleted.unlink()
+            (source / "new.rs").write_text('const NAME: &str = "GitComet";')
+            with patch.object(identity_literals, "ROOT", root):
+                self.assertEqual(identity_literals.scan(),
+                                 {("crates/example/src/new.rs", "display-name"): 1})
+
+    def test_only_production_string_literals_count(self):
+        source = """
+// GitComet in a comment is fine
+/* "gitcomet" in a block comment too */
+const A: &str = "Open GitComet";
+const B: &str = r#"gitcomet.desktop"#;
+const C: &str = "gitcomet_core::x GITCOMET_SESSION_FILE";
+const D: &str = concat!(env!("CARGO_PKG_REPOSITORY"), "/x");
+fn f() -> char { '"' }
+const E: &str = "https://github.com/Auto-Explore/x";
+#[cfg(test)]
+mod tests {
+    const T: &str = "GitComet gitcomet";
+    fn g() { let _ = "}"; }
+}
+const F: &str = "after the test module: gitcomet-gui";
+"""
+        self.assertEqual(identity_literals.scan_text(source),
+                         {"display-name": 1, "identifier": 2, "vendor": 1, "package-metadata": 1})
+
+    def test_test_files_are_not_scanned(self):
+        for path in ("crates/a/src/tests.rs", "crates/a/src/x_tests.rs", "crates/a/tests/it.rs",
+                     "crates/a/src/view/tests/mod.rs", "crates/a/benches/b.rs", "crates/a/src/test_support.rs"):
+            self.assertTrue(identity_literals.is_test_path(path), path)
+        self.assertFalse(identity_literals.is_test_path("crates/a/src/testsuite.rs"))
+
+    def test_counts_must_match_exactly(self):
+        allowed = {("a.rs", "identifier"): (2, "wire format"), ("b.rs", "display-name"): (1, "x")}
+        self.assertEqual(identity_literals.compare({("a.rs", "identifier"): 2, ("b.rs", "display-name"): 1}, allowed), [])
+        problems = identity_literals.compare({("a.rs", "identifier"): 3, ("c.rs", "vendor"): 1}, allowed)
+        self.assertEqual(len(problems), 3)
+        self.assertTrue(any("1 new identifier" in problem for problem in problems))
+        self.assertTrue(any("b.rs: display-name exception allows 1 but 0 remain" in problem for problem in problems))
+
+    def test_allowlist_round_trips_reasons(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "allow.txt"
+            path.write_text("# header\na.rs identifier 1 argv wire marker\n")
+            identity_literals.write({("a.rs", "identifier"): 2, ("b.rs", "vendor"): 1},
+                                    identity_literals.read_allowlist(path), path)
+            entries = identity_literals.read_allowlist(path)
+            self.assertEqual(entries[("a.rs", "identifier")], (2, "argv wire marker"))
+            self.assertTrue(entries[("b.rs", "vendor")][1].startswith("TODO"))
+            self.assertTrue(path.read_text().startswith("# header\n"))
 
 
 class ReportTests(unittest.TestCase):
@@ -1016,7 +2199,7 @@ class ReportTests(unittest.TestCase):
                 return real_check_output(args, **kwargs)
             return outputs[key] if kwargs.get("text") else outputs[key].encode()
 
-        def execute(context, *args):
+        def execute(context, *args, **kwargs):
             (runtime.runner.paths(context) / "execution.json").write_text(json.dumps(
                 dict(success=True, seconds=500, schedule="serial", nextest_threads=None)))
 

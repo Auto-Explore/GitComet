@@ -15,7 +15,44 @@ pub(crate) fn sync_store_snapshot(view: &GitCometView, cx: &mut impl gpui::AppCo
     push_test_state(view, view.store.snapshot(), cx);
 }
 
-#[cfg(target_os = "macos")]
+pub(crate) fn startup_repository_state_for_test(
+    view: &GitCometView,
+) -> (bool, usize, Option<std::path::PathBuf>) {
+    (
+        view.startup_repo_bootstrap_pending,
+        view.state.repos.len(),
+        view.active_repo_workdir(),
+    )
+}
+
+pub(crate) fn dispatch_restore_session_for_test(
+    view: &GitCometView,
+    open_repos: Vec<std::path::PathBuf>,
+    active_repo: Option<std::path::PathBuf>,
+) {
+    view.store.dispatch(Msg::RestoreSession {
+        open_repos,
+        active_repo,
+    });
+}
+
+pub(crate) fn activate_closed_repo_picker_entry_for_test(
+    view: &GitCometView,
+    path: std::path::PathBuf,
+    cx: &mut gpui::Context<GitCometView>,
+) {
+    view.popover_host.update(cx, |host, cx| {
+        host.activate_closed_repo_picker_entry_for_test(path, cx);
+    });
+}
+
+/// Close every error toast, for fixtures whose backend reports errors the
+/// test is not about: error toasts stay, and would cover the controls it clicks.
+pub(crate) fn dismiss_error_toasts(view: &Entity<GitCometView>, cx: &mut App) {
+    let toast_host = view.read(cx).toast_host.clone();
+    toast_host.update(cx, |host, cx| host.dismiss_all_errors(cx));
+}
+
 pub(crate) fn apply_state_snapshot_for_test(
     view: &mut GitCometView,
     state: Arc<AppState>,
@@ -143,31 +180,30 @@ pub(crate) fn redraw(cx: &mut gpui::VisualTestContext) {
 /// GPUI's test executor does not drive the worker thread, so a snapshot read
 /// right after a dispatch may predate it. A plain message sent now is reduced
 /// strictly after everything already queued (only control messages overtake,
-/// and only internal ones), so once its effect is visible, so is every earlier
-/// dispatch. The message flips the default tag type, which nothing here reads.
+/// and only internal ones), so its acknowledgment covers every earlier
+/// dispatch without changing preferences.
 /// Messages the worker itself sends while handling a command's effects can
 /// still land later; wait on their own state when a test depends on them.
 pub(crate) fn drain_store_worker(
     view: &gpui::Entity<GitCometView>,
     cx: &mut gpui::VisualTestContext,
 ) {
-    use gitcomet_state::model::DefaultTagType;
     let store = cx.update(|_window, app| view.read(app).store.clone());
-    let sentinel = match store.snapshot().default_tag_type {
-        DefaultTagType::Lightweight => DefaultTagType::Annotated,
-        DefaultTagType::Annotated => DefaultTagType::Lightweight,
-    };
-    store.dispatch(gitcomet_state::msg::Msg::SetDefaultTagType(sentinel));
+    let barrier = store.barrier_for_test();
     let deadline = std::time::Instant::now() + Duration::from_secs(3);
     loop {
         redraw(cx);
         cx.run_until_parked();
-        if store.snapshot().default_tag_type == sentinel {
-            return;
+        match barrier.try_recv() {
+            Ok(_) => return,
+            Err(std::sync::mpsc::TryRecvError::Empty) => {}
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                panic!("store worker stopped before its barrier")
+            }
         }
         assert!(
             std::time::Instant::now() < deadline,
-            "the store worker did not reduce the sentinel message"
+            "the store worker did not acknowledge its barrier"
         );
         std::thread::sleep(Duration::from_millis(10));
     }
@@ -295,3 +331,44 @@ impl gitcomet_core::services::GitBackend for NoopBackend {
         ))
     }
 }
+
+/// Head of a real `tests/unit/helpers.ts` whose file preview once showed
+/// garbled colours from row 14 on: a stale parse, not the grammar.
+pub(crate) const TS_COMPILER_OPTIONS_HELPERS: &str = r#"import * as assert from 'node:assert/strict'
+import * as ts from 'typescript'
+import transformer from '../../src'
+
+/*
+ * Assertion based test helpers. The reference suite (tests/index.ts) compiles whole files and compares them
+ * to tests/references*, these helpers compile small TSX snippets in memory so a test can pin one behaviour.
+ */
+
+// Same flavour of options as tests/index.ts: no "use strict" prologue, LF newlines
+const baseCompilerOptions: ts.CompilerOptions = {
+    jsx: ts.JsxEmit.Preserve,
+    strict: false,
+    // alwaysStrict=false is deprecated in TypeScript 6 and reported as a diagnostic without this
+    ignoreDeprecations: '6.0',
+    alwaysStrict: false,
+    experimentalDecorators: true,
+    target: ts.ScriptTarget.ESNext,
+    module: ts.ModuleKind.ESNext,
+    newLine: ts.NewLineKind.LineFeed
+}
+
+// Compiler options that can be passed as `compilerOptions` to the transform functions
+export const es5: ts.CompilerOptions = {target: ts.ScriptTarget.ES5, module: ts.ModuleKind.ESNext}
+export const es5CommonJS: ts.CompilerOptions = {target: ts.ScriptTarget.ES5, module: ts.ModuleKind.CommonJS}
+export const es2015: ts.CompilerOptions = {target: ts.ScriptTarget.ES2015, module: ts.ModuleKind.ES2015}
+export const commonJS: ts.CompilerOptions = {module: ts.ModuleKind.CommonJS}
+
+export interface TranspileResult {
+    code: string
+    map: string | undefined
+    diagnostics: readonly ts.Diagnostic[]
+}
+
+/*
+ * Compiles `input` with the plugin as an `after` transformer and returns the emitted code untouched,
+ * the source map when compilerOptions.sourceMap is set, and the syntactic diagnostics of the input.
+ */"#;

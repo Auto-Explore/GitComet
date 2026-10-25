@@ -1,0 +1,11 @@
+name: Set up mold
+description: Install checksum-pinned mold 3.0.0 for Linux builds
+runs:
+  using: composite
+  steps:
+    - name: Install mold
+      if: runner.os == 'Linux'
+      shell: bash
+      run: |
+        clang --version
+        python3 "$GITHUB_ACTION_PATH/../../../scripts/install-mold.py" --bin-dir "$RUNNER_TEMP/gitcomet-mold-bin"

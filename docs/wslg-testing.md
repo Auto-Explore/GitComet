@@ -19,7 +19,7 @@ GitComet's Linux build can run inside WSL with WSLg.
 This file documents how to validate GitComet's Linux GPUI application inside Windows WSL with WSLg.
 
 Source of truth:
-- `crates/gitcomet-ui-gpui/src/linux_gui_env.rs`
+- `crates/gitcomet-ui-kit/src/linux_gui_env.rs`
 - `crates/gitcomet-ui-gpui/src/view/platform_open.rs`
 - `crates/gitcomet-ui-gpui/src/app.rs`
 

@@ -2,14 +2,37 @@
 resolver = "3"
 members = [
   "crates/gitcomet",
+  "crates/gitcomet-app",
+  "crates/gitcomet-base",
+  "crates/gitcomet-conflict-resolver",
   "crates/gitcomet-core",
+  "crates/gitcomet-difftastic",
+  "crates/gitcomet-diagrams",
+  "crates/gitcomet-fonts",
+  "crates/gitcomet-extension-api",
+  "crates/gitcomet-extension-example",
+  "crates/gitcomet-extension-example-app",
   "crates/gitcomet-git-gix",
+  "crates/gitcomet-markdown",
+  "crates/gitcomet-perf",
   "crates/gitcomet-state",
   "crates/gitcomet-fs-watch",
+  "crates/gitcomet-syntax",
+  "crates/gitcomet-text",
   "crates/gitcomet-tree-sitter-alloc",
   "crates/gitcomet-ui-gpui",
+  "crates/gitcomet-ui-kit",
+  "crates/gitcomet-ui-media",
+  "crates/gitcomet-ui-terminal",
+  # Upstream source, a member so its grammars resolve to the workspace crates.
+  # See vendor/README.md.
+  "vendor/difftastic",
 ]
 exclude = [
+  "vendor/block",
+  "vendor/block/test_utils",
+  "vendor/mermaid-rs-renderer",
+  "crates/gitcomet-filesystem-native",
   "crates/win32-window-utils",
   "vendor/tree-sitter-asm",
   "vendor/tree-sitter-build",
@@ -28,20 +51,25 @@ exclude = [
   "vendor/tree-sitter-gitignore",
   "vendor/tree-sitter-haskell",
   "vendor/tree-sitter-html",
+  "vendor/tree-sitter-janet-simple",
   "vendor/tree-sitter-jinja-dialects",
   "vendor/tree-sitter-julia",
   "vendor/tree-sitter-just",
   "vendor/tree-sitter-kdl",
   "vendor/tree-sitter-kotlin-sg",
+  "vendor/tree-sitter-latex",
   "vendor/tree-sitter-objc",
   "vendor/tree-sitter-ocaml",
   "vendor/tree-sitter-php",
   "vendor/tree-sitter-powershell",
+  "vendor/tree-sitter-properties",
   "vendor/tree-sitter-ron",
   "vendor/tree-sitter-ruby",
   "vendor/tree-sitter-rust",
   "vendor/tree-sitter-scala",
   "vendor/tree-sitter-sequel",
+  "vendor/tree-sitter-smali",
+  "vendor/tree-sitter-solidity",
   "vendor/tree-sitter-spirv",
   "vendor/tree-sitter-swift",
   "vendor/tree-sitter-typescript",
@@ -52,33 +80,67 @@ exclude = [
 
 default-members = [
   "crates/gitcomet",
+  "crates/gitcomet-app",
+  "crates/gitcomet-base",
+  "crates/gitcomet-conflict-resolver",
   "crates/gitcomet-core",
   "crates/gitcomet-git-gix",
+  "crates/gitcomet-markdown",
+  "crates/gitcomet-perf",
   "crates/gitcomet-state",
+  "crates/gitcomet-syntax",
+  "crates/gitcomet-text",
   "crates/gitcomet-ui-gpui",
+  "crates/gitcomet-ui-kit",
+  "crates/gitcomet-ui-media",
+  "crates/gitcomet-ui-terminal",
+  "vendor/difftastic",
 ]
 
 [workspace.package]
-version = "0.2.5"
+version = "0.3.2"
 edition = "2024"
 license = "AGPL-3.0-only"
 authors = ["AutoExplore Oy <info@autoexplore.ai>"]
 repository = "https://github.com/Auto-Explore/GitComet"
-rust-version = "1.98.1"
+rust-version = "1.99.1"
+
+[patch.crates-io]
+# block 0.1.6 has no released fix for its uninhabited extern class static.
+block = { path = "vendor/block" }
 
 [workspace.dependencies]
 # Internal crates
+gitcomet-app = { path = "crates/gitcomet-app", default-features = false }
+gitcomet-base = { path = "crates/gitcomet-base" }
+gitcomet-conflict-resolver = { path = "crates/gitcomet-conflict-resolver" }
 gitcomet-core = { path = "crates/gitcomet-core" }
+gitcomet-difftastic = { path = "crates/gitcomet-difftastic" }
+gitcomet-diagrams = { path = "crates/gitcomet-diagrams" }
+gitcomet-fonts = { path = "crates/gitcomet-fonts" }
+gitcomet-extension-api = { path = "crates/gitcomet-extension-api" }
 gitcomet-git-gix = { path = "crates/gitcomet-git-gix" }
+gitcomet-markdown = { path = "crates/gitcomet-markdown" }
+gitcomet-perf = { path = "crates/gitcomet-perf" }
 gitcomet-state = { path = "crates/gitcomet-state" }
+gitcomet-syntax = { path = "crates/gitcomet-syntax" }
+gitcomet-text = { path = "crates/gitcomet-text" }
 gitcomet-tree-sitter-alloc = { path = "crates/gitcomet-tree-sitter-alloc" }
 gitcomet-ui-gpui = { path = "crates/gitcomet-ui-gpui", default-features = false }
+gitcomet-ui-kit = { path = "crates/gitcomet-ui-kit" }
+gitcomet-ui-media = { path = "crates/gitcomet-ui-media" }
+gitcomet-ui-terminal = { path = "crates/gitcomet-ui-terminal" }
 
 # External crates
 alacritty_terminal = "0.26"
 anyhow = "1"
-clap = { version = "4.6.7", features = ["derive"] }
+# `string`: the command's name and version come from the product identity.
+clap = { version = "4.6.7", features = ["derive", "string"] }
 criterion = "0.8.2"
+crc32fast = "1.5"
+flate2 = { version = "1.1", default-features = false, features = ["zlib-rs"] }
+# Charset guess for files that are not UTF-8 (the detector Firefox uses).
+chardetng = { version = "1.0.0", default-features = false }
 # Runs the tree-sitter allocator install before `main` in every binary that
 # links gitcomet-tree-sitter-alloc, tests included, so no process ever switches
 # allocators while tree-sitter is already holding blocks. Already in the graph
@@ -87,41 +149,71 @@ ctor = "1.0.13"
 # Groovy grammar: the `tree-sitter-groovy` crate name is taken by amaanq's fork,
 # which ships no highlights query. This one does.
 dekobon-tree-sitter-groovy = "0.3.0"
+# Vendored as a library; see vendor/README.md.
+difftastic = { path = "vendor/difftastic" }
+# Already in the tree via gix-filter; decodes and encodes non-UTF-8 file text.
+encoding_rs = { version = "0.8.42", default-features = false, features = ["alloc", "fast-legacy-encode"] }
+faster-hex = { version = "1.0.0", default-features = false, features = ["std"] }
+# Already in the tree via gix-index; the timestamp type of an in-memory index.
+filetime = "0.2.29"
+fnv = "1.0.7"
 fontdb = "0.24.0"
+fs2 = "0.4.3"
 futures = "0.3.34"
-gix = { version = "0.87.1", default-features = false, features = ["max-performance-safe", "comfort", "basic", "auto-chain-error", "status", "blame", "sha1"] }
-gpui = { package = "gpui-ce", git = "https://github.com/Havunen/gpui-ce.git", rev = "dd2493af9c5acfbcdee8a625570d566d9247296b" }
-gpui_platform = { package = "gpui_ce_platform", git = "https://github.com/Havunen/gpui-ce.git", rev = "dd2493af9c5acfbcdee8a625570d566d9247296b", features = ["font-kit"] }
+gix = { version = "0.90.0", default-features = false, features = ["max-performance", "zlib-sirocco", "comfort", "basic", "status", "blame", "sha1", "sha256"] }
+# Already in the tree via gix; Git-compatible quoting for attribute patterns.
+gix-quote = "0.10.1"
+# Git's ref-name rules for branch names the UI is about to hand to git. Already
+# in the graph through gix, so this adds no new compilation.
+gix-validate = "0.13.1"
+gpui = { package = "gpui-ce", git = "https://github.com/Havunen/gpui-ce.git", rev = "81b1e374d98a356f6dcdd38d4466739edde6b866" }
+gpui_platform = { package = "gpui_ce_platform", git = "https://github.com/Havunen/gpui-ce.git", rev = "81b1e374d98a356f6dcdd38d4466739edde6b866", features = ["font-kit"] }
+gpui_wgpu = { package = "gpui_ce_wgpu", git = "https://github.com/Havunen/gpui-ce.git", rev = "81b1e374d98a356f6dcdd38d4466739edde6b866" }
+gpui_parley = { package = "gpui_ce_parley", git = "https://github.com/Havunen/gpui-ce.git", rev = "81b1e374d98a356f6dcdd38d4466739edde6b866", default-features = false }
+gpui_shared_string = { package = "gpui_ce_shared_string", git = "https://github.com/Havunen/gpui-ce.git", rev = "81b1e374d98a356f6dcdd38d4466739edde6b866" }
+gpui_sum_tree = { package = "gpui_ce_sum_tree", git = "https://github.com/Havunen/gpui-ce.git", rev = "81b1e374d98a356f6dcdd38d4466739edde6b866" }
 image = "0.25.10"
+fast_image_resize = { version = "6.1.0", features = ["image"] }
+# Already in the dependency graph; merges sorted reference streams lazily.
+itertools = "0.15.0"
 # Already in the tree via gix-date; used directly for system-timezone lookups.
 jiff = "0.2"
 log = "0.4.34"
-lru = "0.18"
+lru = "0.19"
+mermaid-rs-renderer = { path = "vendor/mermaid-rs-renderer", version = "0.3.1", default-features = false }
+roxmltree = "0.21"
+# git-annex object paths are hashed with MD5 (not for security).
+md-5 = "0.11"
 memchr = "2.8.3"
 pulldown-cmark = { version = "0.13", default-features = false, features = ["simd"] }
-notify = "9.0.0-rc.5"
+notify = "9.0.0-rc.6"
 palette = "0.7.7"
+percent-encoding = "2.3.2"
 process-wrap = { version = "10.0.1", default-features = false, features = ["std", "creation-flags", "job-object", "process-group"] }
 raw-window-handle = "0.6"
 regex = "1.13.1"
-resvg = { version = "0.48.1", default-features = false, features = ["text", "system-fonts", "raster-images"] }
+resvg = { version = "0.49.0", default-features = false, features = ["text", "system-fonts", "raster-images"] }
+strum = { version = "0.28", default-features = false, features = ["derive"] }
 rustc-hash = "2.1.3"
-rustfs-mimalloc = "0.5.6"
-rustfs-mimalloc-sys = "0.5.6"
+rustfs-mimalloc = "0.7.2"
+rustfs-mimalloc-sys = "0.7.2"
 rustix = { version = "1.1.5", default-features = false, features = ["std", "process"] }
+same-file = "1.0.6"
 semver = "1.0.28"
-schemars = "1.2.2"
+sha2 = "0.11.1"
+schemars = "1.2.3"
 serde = { version = "1.0.229", features = ["derive"] }
-serde_json = "1.0.151"
-signal-hook = "0.4.4"
-smallvec = "1.16.1"
+serde_json = "1.0.154"
+signal-hook = "0.4.5"
+smallvec = "1.16.4"
 smol = "2.0.2"
 stats_alloc = { version = "0.1.10", features = ["nightly"] }
 strsim = "0.11.1"
 sysinfo = { version = "0.39", default-features = false, features = ["system"] }
 tempfile = "3.27.0"
 thiserror = "2.0"
-tree-sitter = "0.27.0"
+tree-sitter = "0.27.1"
+uuid = { version = "1.29.0", features = ["serde", "v4"] }
 # Fifteen of the grammars below are `path = "vendor/..."` purely to shrink the
 # release binary: they are upstream's source, regenerated with a larger
 # small-state threshold. tree-sitter's generator gives a parse state either a
@@ -135,6 +227,7 @@ tree-sitter = "0.27.0"
 # against upstream. vendor/README.md has the procedure, the proof, and the one
 # grammar this is *not* safe for; each crate's Cargo.toml header has its own
 # numbers.
+tree-sitter-ada = "0.1.0"
 # Vendored, not from crates.io: the grammar needed a `mnemonic` token so an
 # arm64 `b.eq` is one node instead of an ERROR, and upstream has not changed.
 # See vendor/tree-sitter-asm/Cargo.toml for the full list of edits.
@@ -153,6 +246,7 @@ tree-sitter-caddyfile = { path = "vendor/tree-sitter-caddyfile" }
 # Written here rather than vendored: no CIL or crontab grammar exists upstream.
 tree-sitter-cil = { path = "vendor/tree-sitter-cil" }
 tree-sitter-cmake = "0.7.5"
+tree-sitter-commonlisp = "0.4.1"
 # Dockerfile / Containerfile. The crate is named for the OCI-neutral spelling but
 # the grammar is the Docker one.
 tree-sitter-containerfile = "0.9.2"
@@ -169,11 +263,15 @@ tree-sitter-cue = { path = "vendor/tree-sitter-cue" }
 # vendor/tree-sitter-css/Cargo.toml.
 tree-sitter-css = { path = "vendor/tree-sitter-css" }
 tree-sitter-dart = "0.2.0"
+tree-sitter-devicetree = "0.15.0"
 tree-sitter-dhall = { path = "vendor/tree-sitter-dhall" }
 tree-sitter-diff = "0.1.0"
 tree-sitter-ebnf = { path = "vendor/tree-sitter-ebnf" }
+tree-sitter-elisp = "1.7.2"
 tree-sitter-elixir = "0.3.5"
-tree-sitter-erlang = "0.20.0"
+tree-sitter-elm = "5.9.4"
+tree-sitter-erlang = "0.21.0"
+tree-sitter-fish = "3.6.0"
 tree-sitter-fsharp = { path = "vendor/tree-sitter-fsharp" }
 tree-sitter-gitcommit = { git = "https://github.com/zed-industries/tree-sitter-git-commit", rev = "88309716a69dd13ab83443721ba6e0b491d37ee9" }
 tree-sitter-gleam = "1.0.0"
@@ -193,6 +291,9 @@ tree-sitter-html = { path = "vendor/tree-sitter-html" }
 tree-sitter-ini = "1.4.0"
 tree-sitter-javascript = "0.25.0"
 tree-sitter-java = "0.23.5"
+# From difftastic's vendored parsers, shared with vendor/difftastic. See the
+# crate headers.
+tree-sitter-janet-simple = { path = "vendor/tree-sitter-janet-simple" }
 tree-sitter-jinja-dialects = { path = "vendor/tree-sitter-jinja-dialects" }
 tree-sitter-jsdoc = "0.25.0"
 tree-sitter-jsonnet = "0.0.1"
@@ -204,10 +305,12 @@ tree-sitter-just = { path = "vendor/tree-sitter-just" }
 tree-sitter-kdl = { path = "vendor/tree-sitter-kdl" }
 tree-sitter-julia = { path = "vendor/tree-sitter-julia" }
 tree-sitter-kotlin-sg = { path = "vendor/tree-sitter-kotlin-sg" }
+tree-sitter-latex = { path = "vendor/tree-sitter-latex" }
 tree-sitter-llvm = "1.1.0"
 tree-sitter-lua = "0.5.0"
 tree-sitter-make = "1.1.1"
 tree-sitter-md = { git = "https://github.com/tree-sitter-grammars/tree-sitter-markdown", rev = "9a23c1a96c0513d8fc6520972beedd419a973539" }
+tree-sitter-newick = "1.1.0"
 tree-sitter-nix = "0.3.0"
 tree-sitter-objc = { path = "vendor/tree-sitter-objc" }
 tree-sitter-ocaml = { path = "vendor/tree-sitter-ocaml" }
@@ -228,10 +331,15 @@ tree-sitter-php = { path = "vendor/tree-sitter-php" }
 tree-sitter-powershell = { path = "vendor/tree-sitter-powershell" }
 # Pascal and Protobuf ship no highlights query; GitComet authors both.
 tree-sitter-pascal = "0.10.2"
-tree-sitter-properties = "0.3.0"
+# Vendored for a scanner fix: 0.3.0 keeps its EOF flag in a C global, and two
+# threads parsing `.properties` at once can loop forever. See
+# vendor/tree-sitter-properties/Cargo.toml.
+tree-sitter-properties = { path = "vendor/tree-sitter-properties" }
 tree-sitter-proto = "0.6.0"
 tree-sitter-python = "0.25.0"
+tree-sitter-qmljs = "0.3.1"
 tree-sitter-r = "1.3.0"
+tree-sitter-racket = "0.25.0"
 tree-sitter-regex = "0.25.0"
 tree-sitter-ron = { path = "vendor/tree-sitter-ron" }
 # Vendored for a grammar fix: a `=begin` block comment ended at any `=end`,
@@ -240,8 +348,13 @@ tree-sitter-ron = { path = "vendor/tree-sitter-ron" }
 tree-sitter-ruby = { path = "vendor/tree-sitter-ruby" }
 tree-sitter-rust = { path = "vendor/tree-sitter-rust" }
 tree-sitter-scala = { path = "vendor/tree-sitter-scala" }
+tree-sitter-scheme = "0.25.0"
 tree-sitter-sequel = { path = "vendor/tree-sitter-sequel" }
-tree-sitter-solidity = "1.2.13"
+tree-sitter-sfapex = "3.0.1"
+tree-sitter-smali = { path = "vendor/tree-sitter-smali" }
+# Vendored to fix its highlight query for the workspace tree-sitter. See
+# vendor/tree-sitter-solidity/Cargo.toml.
+tree-sitter-solidity = { path = "vendor/tree-sitter-solidity" }
 # Vendored: no crates.io release, no Rust bindings upstream.
 tree-sitter-spirv = { path = "vendor/tree-sitter-spirv" }
 tree-sitter-svelte-ng = "1.0.2"
@@ -249,24 +362,33 @@ tree-sitter-swift = { path = "vendor/tree-sitter-swift" }
 tree-sitter-toml-ng = "0.7.0"
 tree-sitter-typescript = { path = "vendor/tree-sitter-typescript" }
 tree-sitter-v = { path = "vendor/tree-sitter-v" }
+tree-sitter-vhdl = "1.4.0"
 tree-sitter-vue = { path = "vendor/tree-sitter-vue" }
 # Vendored: nothing on crates.io provides a WebAssembly text grammar.
 tree-sitter-wat = { path = "vendor/tree-sitter-wat" }
 tree-sitter-xml = "0.7.0"
 tree-sitter-yaml = "0.7.2"
 tree-sitter-zig = "1.1.2"
+unicode-normalization = "0.1.26"
 unicode-segmentation = "1.13.3"
-ureq = { version = "3.4.2", default-features = false, features = ["rustls", "gzip"] }
+ureq = { version = "3.5.0", default-features = false, features = ["rustls", "gzip"] }
 url = "2.5.8"
 wayland-client = "0.31.15"
 x11-clipboard = "0.9.3"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(gitcomet_probe_legacy_repository_api)"] }
 
 [profile.dev]
 incremental = true
 opt-level = 0
+
+# Dependencies use the same settings under `cargo build` and `cargo test` (the
+# test profile inherits this), so switching between them reuses every artifact.
+[profile.dev.package."*"]
+opt-level = 1
+debug = "line-tables-only"
 
 # Keep application code quick to rebuild while optimizing the layout/render
 # dependencies. Windows measurements and reproduction: scripts/profiling/README.md.
@@ -279,18 +401,32 @@ opt-level = 2
 [profile.dev.package.taffy]
 opt-level = 2
 
+# Native text shaping also runs on the UI thread. Font-table reads and glyph
+# substitution dominated first-use repository-picker draws in the Linux trace.
+[profile.dev.package.harfrust]
+opt-level = 2
+
+[profile.dev.package.read-fonts]
+opt-level = 2
+
+[profile.dev.package.font-types]
+opt-level = 2
+
+# Text decoding runs on every non-UTF-8 file load; at opt-level 0 it is
+# tens of times slower than the file read itself.
+[profile.dev.package.encoding_rs]
+opt-level = 2
+
+[profile.dev.package.chardetng]
+opt-level = 2
+
+# A structural diff gets five seconds; unoptimized, Difftastic takes several times
+# longer than a release build and misses that on larger files.
+[profile.dev.package.difftastic]
+opt-level = 2
+debug = "line-tables-only"
+
 [profile.test]
-opt-level = 1
-split-debuginfo = "packed"
-
-# Test profiles inherit dev package overrides; retain their measured settings.
-[profile.test.package.gpui-ce]
-opt-level = 1
-
-[profile.test.package.gpui_ce_windows]
-opt-level = 1
-
-[profile.test.package.taffy]
 opt-level = 1
 
 # CI avoids generating and packaging debugger symbols on ephemeral runners.
@@ -306,6 +442,10 @@ incremental = false
 debug-assertions = true
 overflow-checks = true
 
+# Overrides the inherited dev dependency debug info.
+[profile.ci-test.package."*"]
+debug = 0
+
 [profile.ci-test.package.gitcomet-ui-gpui]
 opt-level = 0
 
@@ -318,11 +458,14 @@ opt-level = 1
 [profile.ci-test.package.taffy]
 opt-level = 1
 
-# Compile/link coverage only. Actual performance measurements still use bench,
-# which inherits the production release settings below.
+[profile.ci-test.package.difftastic]
+debug = 0
+
+# Unoptimized compile/link coverage only. Actual performance measurements use
+# release or bench with the production release settings below.
 [profile.ci-bench]
 inherits = "release"
-opt-level = 1
+opt-level = 0
 debug = 0
 split-debuginfo = "off"
 lto = "off"
@@ -360,10 +503,3 @@ strip = "debuginfo"
 inherits = "release"
 debug = 2
 strip = "none"
-
-# Diagnostic compile/link candidate. Promote only after paired hosted measurements.
-[profile.ci-bench-candidate]
-inherits = "ci-bench"
-
-[profile.ci-bench-candidate.package.gitcomet-ui-gpui]
-opt-level = 0

@@ -10,10 +10,7 @@ use serde::Deserialize;
 use std::sync::Arc;
 
 const UPDATE_CHECK_DISABLE_ENV: &str = "GITCOMET_NO_UPDATE_CHECK";
-#[cfg(not(test))]
 const UPDATE_CHECK_REPO_ENV: &str = "GITCOMET_UPDATE_REPO";
-#[cfg(not(test))]
-const DEFAULT_UPDATE_REPO: &str = "GitComet/gitcomet";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct UpdateNotice {
@@ -46,6 +43,16 @@ pub(crate) fn update_checks_disabled_by_environment() -> bool {
     std::env::var_os(UPDATE_CHECK_DISABLE_ENV).is_some()
 }
 
+/// Whether this product checks for updates at all: its identity names an
+/// update source, or `GITCOMET_UPDATE_REPO` supplies one.
+pub(crate) fn update_checks_available() -> bool {
+    std::env::var_os(UPDATE_CHECK_REPO_ENV).is_some_and(|value| !value.is_empty())
+        || !matches!(
+            gitcomet_core::identity::current().update_source(),
+            gitcomet_core::identity::UpdateSource::Disabled
+        )
+}
+
 impl GitCometView {
     pub(in crate::view) fn maybe_check_for_updates_on_startup(
         &mut self,
@@ -54,6 +61,7 @@ impl GitCometView {
         if self.view_mode != GitCometViewMode::Normal
             || !self.check_for_updates_on_startup
             || update_checks_disabled_by_environment()
+            || !update_checks_available()
         {
             return;
         }
@@ -62,7 +70,10 @@ impl GitCometView {
     }
 
     pub(crate) fn check_for_updates_manually(&mut self, cx: &mut gpui::Context<Self>) {
-        if self.view_mode != GitCometViewMode::Normal || update_checks_disabled_by_environment() {
+        if self.view_mode != GitCometViewMode::Normal
+            || update_checks_disabled_by_environment()
+            || !update_checks_available()
+        {
             return;
         }
         self.start_update_check(true, cx);
@@ -89,12 +100,17 @@ impl GitCometView {
         #[cfg(not(test))]
         cx.spawn(
             async move |view: WeakEntity<GitCometView>, cx: &mut gpui::AsyncApp| {
-                let outcome = fetch_update_check_outcome(
-                    env!("CARGO_PKG_VERSION"),
-                    resolve_update_repo(),
-                    http_client,
-                )
-                .await;
+                let outcome = match resolve_update_repo() {
+                    Some(repo) => {
+                        fetch_update_check_outcome(
+                            gitcomet_core::identity::current().version(),
+                            repo,
+                            http_client,
+                        )
+                        .await
+                    }
+                    None => Err(()),
+                };
 
                 let _ = view.update(cx, |this, cx| {
                     this.update_check_in_flight = false;
@@ -104,8 +120,10 @@ impl GitCometView {
                             this.push_toast_with_link(
                                 components::ToastKind::Warning,
                                 format!(
-                                    "A newer GitComet version is available: {} (current {}).",
-                                    notice.latest_version, notice.current_version
+                                    "A newer {} version is available: {} (current {}).",
+                                    crate::view::product_name(),
+                                    notice.latest_version,
+                                    notice.current_version
                                 ),
                                 notice.releases_url,
                                 "Open Releases".to_string(),
@@ -115,7 +133,10 @@ impl GitCometView {
                         Ok(UpdateCheckOutcome::UpToDate { current_version }) if manual => {
                             this.push_toast(
                                 components::ToastKind::Success,
-                                format!("GitComet is up to date (version {current_version})."),
+                                format!(
+                                    "{} is up to date (version {current_version}).",
+                                    crate::view::product_name()
+                                ),
                                 cx,
                             );
                         }
@@ -245,13 +266,22 @@ fn parse_semver_tag(raw: &str) -> Option<Version> {
 }
 
 #[cfg(not(test))]
-fn resolve_update_repo() -> GitHubRepo {
+fn resolve_update_repo() -> Option<GitHubRepo> {
     std::env::var(UPDATE_CHECK_REPO_ENV)
         .ok()
         .as_deref()
         .and_then(parse_repo_slug)
-        .or_else(|| parse_repo_slug(env!("CARGO_PKG_REPOSITORY")))
-        .unwrap_or_else(|| GitHubRepo::from_slug(DEFAULT_UPDATE_REPO))
+        .or_else(
+            || match gitcomet_core::identity::current().update_source() {
+                gitcomet_core::identity::UpdateSource::GitHubReleases { owner, repo, .. } => {
+                    Some(GitHubRepo {
+                        owner: owner.to_string(),
+                        repo: repo.to_string(),
+                    })
+                }
+                _ => None,
+            },
+        )
 }
 
 #[cfg(not(test))]

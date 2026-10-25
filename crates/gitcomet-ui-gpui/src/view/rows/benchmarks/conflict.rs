@@ -1,8 +1,9 @@
 use super::*;
 use crate::view::conflict_resolver::{
-    self, ConflictBlock, ConflictChoice, ConflictPickSide, ConflictSegment,
-    ConflictSplitStyledTextCache, ThreeWayVisibleItem, TwoWayWordHighlights, WordHighlights,
+    self, ConflictBlock, ConflictChoice, ConflictPickSide, ConflictSegment, ThreeWayVisibleItem,
+    TwoWayWordHighlights, WordHighlights,
 };
+use crate::view::conflict_style_cache::ConflictSplitStyledTextCache;
 use gitcomet_core::conflict_session::{ConflictPayload, ConflictSession};
 use gitcomet_core::mergetool_trace::{
     self, MergetoolTraceEvent, MergetoolTraceRenderingMode, MergetoolTraceSideStats,
@@ -97,7 +98,7 @@ impl ConflictThreeWayScrollFixture {
 
         let (base_document, ours_document, theirs_document) = if prepare_documents {
             let lang = language.unwrap_or(DiffSyntaxLanguage::Rust);
-            let budget = DiffSyntaxBudget::default();
+            let budget = default_diff_syntax_budget();
             (
                 prepare_bench_diff_syntax_document(lang, budget, &base_text, None),
                 prepare_bench_diff_syntax_document(lang, budget, &ours_text, None),
@@ -129,6 +130,8 @@ impl ConflictThreeWayScrollFixture {
     }
 
     pub fn run_scroll_step(&self, start: usize, window: usize) -> u64 {
+        let tab_width = 4;
+
         if self.visible_map.is_empty() || window == 0 {
             return 0;
         }
@@ -166,6 +169,7 @@ impl ConflictThreeWayScrollFixture {
             ] {
                 if let Some(line) = lines.get(line_ix) {
                     let styled = super::diff_text::build_cached_diff_styled_text(
+                        tab_width,
                         self.theme,
                         line.as_ref(),
                         word_ranges_for_line(highlights, line_ix),
@@ -195,6 +199,8 @@ impl ConflictThreeWayScrollFixture {
     /// This exercises the post-background-parse rendering path that the real
     /// conflict resolver uses once tree-sitter documents are ready.
     pub fn run_prepared_scroll_step(&self, start: usize, window: usize) -> u64 {
+        let tab_width = 4;
+
         if self.visible_map.is_empty() || window == 0 {
             return 0;
         }
@@ -251,7 +257,7 @@ impl ConflictThreeWayScrollFixture {
                     let prepared_line =
                         super::diff_text::PreparedDiffSyntaxLine { document, line_ix };
                     let result =
-                        super::diff_text::build_cached_diff_styled_text_for_prepared_document_line_nonblocking(
+                        super::diff_text::build_cached_diff_styled_text_for_prepared_document_line_nonblocking(tab_width,
                             self.theme,
                             line.as_ref(),
                             word_ranges_for_line(highlights, line_ix),
@@ -477,6 +483,7 @@ fn build_block_local_two_way_benchmark_rows(
 }
 
 fn prewarm_two_way_split_stable_cache(
+    tab_width: usize,
     diff_rows: &[gitcomet_core::file_diff::FileDiffRow],
     diff_word_highlights_split: &TwoWayWordHighlights,
     theme: AppTheme,
@@ -505,6 +512,7 @@ fn prewarm_two_way_split_stable_cache(
                 stable_cache.insert(
                     key,
                     super::diff_text::build_cached_diff_styled_text_with_source_identity(
+                        tab_width,
                         theme,
                         text.as_ref(),
                         Some(super::diff_text::DiffTextSourceIdentity::from_str(
@@ -526,6 +534,8 @@ fn prewarm_two_way_split_stable_cache(
 
 impl ConflictTwoWaySplitScrollFixture {
     pub fn new(lines: usize, conflict_blocks: usize) -> Self {
+        let tab_width = 4;
+
         let theme = AppTheme::gitcomet_dark();
         let segments = build_synthetic_two_way_segments(lines, conflict_blocks);
         let conflict_count = conflict_block_count_for_segments(&segments);
@@ -538,6 +548,7 @@ impl ConflictTwoWaySplitScrollFixture {
         let language = diff_syntax_language_for_path("src/conflict.rs");
         let syntax_mode = DiffSyntaxMode::Auto;
         let stable_cache = prewarm_two_way_split_stable_cache(
+            tab_width,
             &diff_rows,
             &diff_word_highlights_split,
             theme,
@@ -812,6 +823,9 @@ fn stage_loaded_stage_parts_from_payload(
 ) -> (Option<Arc<[u8]>>, Option<Arc<str>>) {
     match payload {
         ConflictPayload::Text(text) => (None, Some(Arc::<str>::from(text.as_ref()))),
+        ConflictPayload::EncodedText { text, bytes } => {
+            (Some(bytes.clone()), Some(Arc::<str>::from(text.as_ref())))
+        }
         ConflictPayload::Binary(bytes) => (Some(bytes.clone()), None),
         ConflictPayload::Absent => (None, None),
     }
@@ -952,7 +966,7 @@ pub struct ConflictSearchQueryUpdateFixture {
     stable_cache: ConflictSplitStyledTextCache,
     query_cache: ConflictSplitStyledTextCache,
     query_cache_query: SharedString,
-    query_cache_matcher: Option<crate::view::panes::main::diff_search::DiffSearchMatcher>,
+    query_cache_matcher: Option<crate::view::panes::diff::diff_search::DiffSearchMatcher>,
 }
 
 impl ConflictSearchQueryUpdateFixture {
@@ -1030,7 +1044,7 @@ impl ConflictSearchQueryUpdateFixture {
         if self.query_cache_query.as_ref() != query {
             self.query_cache_query = query.to_string().into();
             self.query_cache_matcher = (!query.is_empty()).then(|| {
-                crate::view::panes::main::diff_search::DiffSearchMatcher::new(
+                crate::view::panes::diff::diff_search::DiffSearchMatcher::new(
                     query,
                     Default::default(),
                 )
@@ -1049,10 +1063,12 @@ impl ConflictSearchQueryUpdateFixture {
         text: Option<&gitcomet_core::file_diff::FileDiffLineText>,
         word_ranges: &[Range<usize>],
         query: &str,
-        query_matcher: Option<&crate::view::panes::main::diff_search::DiffSearchMatcher>,
+        query_matcher: Option<&crate::view::panes::diff::diff_search::DiffSearchMatcher>,
         syntax_lang: Option<DiffSyntaxLanguage>,
         syntax_mode: DiffSyntaxMode,
     ) -> Option<ConflictSearchQueryStyledSource> {
+        let tab_width = 4;
+
         let text = text?;
         if text.is_empty() {
             return None;
@@ -1069,6 +1085,7 @@ impl ConflictSearchQueryUpdateFixture {
             stable_cache.insert(
                 key,
                 super::diff_text::build_cached_diff_styled_text_with_source_identity(
+                    tab_width,
                     theme,
                     text,
                     source_identity,
@@ -1092,6 +1109,7 @@ impl ConflictSearchQueryUpdateFixture {
                     )
                 } else {
                     super::diff_text::build_cached_diff_styled_text_with_source_identity(
+                        tab_width,
                         theme,
                         text,
                         source_identity,
@@ -3213,11 +3231,9 @@ impl ConflictResolvedOutputLiveSyntaxFixture {
     pub fn new(lines: usize, conflict_blocks: usize) -> Self {
         let mut text = String::new();
         let mut mask = Vec::new();
-        let conflict_every = if conflict_blocks == 0 {
-            usize::MAX
-        } else {
-            (lines / conflict_blocks).max(1)
-        };
+        let conflict_every = lines
+            .checked_div(conflict_blocks)
+            .map_or(usize::MAX, |every| every.max(1));
         for ix in 0..lines {
             if ix > 0 && conflict_every != usize::MAX && ix % conflict_every == 0 {
                 // An unresolved block renders as one placeholder row, which the
@@ -3235,7 +3251,7 @@ impl ConflictResolvedOutputLiveSyntaxFixture {
             ));
         }
 
-        let rope = crate::kit::rope::Rope::from_str(&text);
+        let rope = crate::kit::rope::Rope::from_text(&text);
         let mask: Arc<[Range<usize>]> = mask.into();
         let theme = AppTheme::gitcomet_dark();
         let document = super::diff_text::LiveSyntaxDocument::new(
@@ -3306,7 +3322,9 @@ impl ConflictResolvedOutputLiveSyntaxFixture {
         let start = row_start(start_line);
         let end = row_start(start_line.saturating_add(rows));
         let highlights = document
-            .snapshot(self.theme)
+            .snapshot(crate::kit::syntax_style::SyntaxHighlightPalette::new(
+                self.theme,
+            ))
             .highlights_for_byte_range(start..end);
         highlights.len() as u64
     }
@@ -3321,5 +3339,117 @@ impl ConflictResolvedOutputLiveSyntaxFixture {
         )
         .map(|document| document.version())
         .unwrap_or(0)
+    }
+}
+
+/// A bounded edit trace for root and injected grammars. Insert/delete pairs
+/// restore the same document size, and recovery is measured separately.
+pub struct LiveSyntaxEditTraceFixture {
+    rope: crate::kit::rope::Rope,
+    document: super::diff_text::LiveSyntaxDocument,
+    language: super::diff_text::DiffSyntaxLanguage,
+    at: usize,
+    inserted: bool,
+}
+impl LiveSyntaxEditTraceFixture {
+    pub fn new(language: &str, lines: usize) -> Self {
+        let blocks = if lines < 1000 { 4 } else { 16 };
+        let body_lines = lines.div_ceil(blocks).saturating_sub(2);
+        let (language, text) = match language {
+            "rust" => (
+                DiffSyntaxLanguage::Rust,
+                "let value: usize = compute(shared());\n".repeat(lines),
+            ),
+            "markdown" => (
+                DiffSyntaxLanguage::Markdown,
+                format!(
+                    "```rust\n{}```\n",
+                    "let value: usize = compute(shared());\n".repeat(body_lines)
+                )
+                .repeat(blocks),
+            ),
+            "html" => (
+                DiffSyntaxLanguage::Html,
+                format!(
+                    "<script>\n{}</script>\n",
+                    "const value = compute(shared());\n".repeat(body_lines)
+                )
+                .repeat(blocks),
+            ),
+            _ => panic!("unsupported edit trace language"),
+        };
+        let rope = crate::kit::rope::Rope::from_text(&text);
+        let document =
+            super::diff_text::LiveSyntaxDocument::new(language, rope.clone(), Arc::default(), None)
+                .unwrap();
+        let at = text.find("value").unwrap() + 2;
+        Self {
+            rope,
+            document,
+            language,
+            at,
+            inserted: false,
+        }
+    }
+    /// Outcome: 0 reparsed, 1 deferred, 2 abandoned. Pending injected layers
+    /// can require recovery even when the root reparsed successfully.
+    pub fn edit(&mut self) -> u8 {
+        self.edit_with_budget(Duration::from_millis(1))
+    }
+    pub fn defer_edit(&mut self) {
+        self.edit_with_budget(Duration::ZERO);
+    }
+    fn edit_with_budget(&mut self, budget: Duration) -> u8 {
+        let (old, new) = if self.inserted {
+            self.rope.replace(self.at..self.at + 1, "");
+            (self.at..self.at + 1, self.at..self.at)
+        } else {
+            self.rope.replace(self.at..self.at, "x");
+            (self.at..self.at, self.at..self.at + 1)
+        };
+        self.inserted = !self.inserted;
+        match self.document.sync(
+            self.rope.clone(),
+            Arc::default(),
+            Some((old, new)),
+            Some(budget),
+        ) {
+            super::diff_text::LiveSyntaxSyncOutcome::Reparsed => 0,
+            super::diff_text::LiveSyntaxSyncOutcome::Deferred => 1,
+            super::diff_text::LiveSyntaxSyncOutcome::Abandoned => 2,
+        }
+    }
+    pub fn recover(&mut self) -> bool {
+        let Some(request) = self.document.background_reparse_request() else {
+            return false;
+        };
+        let (version, tree, injections) = super::diff_text::live_syntax_reparse(request).unwrap();
+        assert!(
+            self.document
+                .adopt_background_tree(version, tree, injections)
+        );
+        true
+    }
+    pub fn text_bytes(&self) -> usize {
+        self.rope.len()
+    }
+    /// Call outside all timing and allocation measurements.
+    pub fn verify(&self) {
+        assert!(self.document.background_reparse_request().is_none());
+        let cold = super::diff_text::LiveSyntaxDocument::new(
+            self.language,
+            self.rope.clone(),
+            Arc::default(),
+            None,
+        )
+        .unwrap();
+        let theme = AppTheme::gitcomet_dark();
+        assert_eq!(
+            self.document
+                .snapshot(crate::kit::syntax_style::SyntaxHighlightPalette::new(theme))
+                .highlights_for_byte_range(0..self.rope.len()),
+            cold.snapshot(crate::kit::syntax_style::SyntaxHighlightPalette::new(theme))
+                .highlights_for_byte_range(0..self.rope.len())
+        );
     }
 }

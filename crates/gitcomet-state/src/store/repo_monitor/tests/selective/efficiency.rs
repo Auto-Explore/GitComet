@@ -163,15 +163,25 @@ fn ignored_directory_replaced_by_file_keeps_creation_and_edits_visible() {
     for cycle in 0..2 {
         fs::remove_dir_all(&boundary).unwrap();
         monitor.quiet(); // Removing an ignored directory alone is still noise.
-        if cycle == 0 {
-            fs::write(&boundary, "now an untracked file").unwrap();
+        // Each expect_change below awaits `build` once after a quiet window or
+        // settle, so a late event for an earlier write cannot satisfy it.
+        let created = if cycle == 0 {
+            monitor.expect_change(&boundary, || {
+                fs::write(&boundary, "now an untracked file").unwrap()
+            })
         } else {
             let replacement = root.join("replacement");
-            fs::write(&replacement, "renamed into the excluded boundary").unwrap();
-            monitor.refresh();
-            fs::rename(replacement, &boundary).unwrap();
-        }
-        let status = Command::new("git")
+            assert!(
+                monitor
+                    .expect_change(&replacement, || {
+                        fs::write(&replacement, "renamed into the excluded boundary").unwrap()
+                    })
+                    .worktree
+            );
+            monitor.expect_change(&boundary, || fs::rename(&replacement, &boundary).unwrap())
+        };
+        assert!(created.worktree);
+        let status = gitcomet_core::test_support::git_fixture::git_command()
             .arg("-C")
             .arg(&root)
             .args([
@@ -185,12 +195,25 @@ fn ignored_directory_replaced_by_file_keeps_creation_and_edits_visible() {
             .unwrap();
         assert!(status.status.success());
         assert_eq!(String::from_utf8_lossy(&status.stdout).trim(), "?? build");
-        monitor.refresh();
-        fs::write(&boundary, "later in-place edit").unwrap();
-        monitor.refresh();
-        fs::remove_file(&boundary).unwrap();
-        fs::create_dir(&boundary).unwrap();
-        monitor.refresh(); // The previously visible file was removed.
+        monitor.settle();
+        assert!(
+            monitor
+                .expect_change(&boundary, || {
+                    fs::write(&boundary, "later in-place edit").unwrap()
+                })
+                .worktree
+        );
+        monitor.settle();
+        // The previously visible file was removed.
+        assert!(
+            monitor
+                .expect_change(&boundary, || {
+                    fs::remove_file(&boundary).unwrap();
+                    fs::create_dir(&boundary).unwrap();
+                })
+                .worktree
+        );
+        monitor.settle();
         let before = builds.load(Ordering::Relaxed);
         fs::write(boundary.join(format!("ignored-{cycle}")), "ignored again").unwrap();
         monitor.quiet();
@@ -209,7 +232,7 @@ fn null_device_global_config_keeps_coverage_healthy() {
             module_path!(),
             "::null_device_global_config_keeps_coverage_healthy"
         );
-        let output = Command::new(std::env::current_exe().unwrap())
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
             .args(["--exact", name.split_once("::").unwrap().1, "--nocapture"])
             .env(CHILD, "1")
             .env("GIT_CONFIG_GLOBAL", "NUL")
@@ -283,8 +306,12 @@ fn force_adding_file_under_ignored_dir_starts_watching_it() {
         "coverage reused the refreshed index snapshot"
     );
     assert_eq!(builds.load(Ordering::Relaxed), 1);
-    fs::write(&source, "tracked edit").unwrap();
-    monitor.refresh();
+    // `source` has not been written since the fixture, so this awaits only the edit.
+    assert!(
+        monitor
+            .expect_change(&source, || fs::write(&source, "tracked edit").unwrap())
+            .worktree
+    );
 }
 
 #[test]
@@ -319,8 +346,127 @@ fn external_excludes_edit_applies_on_revalidate() {
     monitor.revalidate();
     monitor.refresh();
     assert_eq!(builds.load(Ordering::Relaxed), 1);
-    fs::write(root.join("generated/nested/source.txt"), "now observed").unwrap();
-    monitor.refresh();
+    let source = root.join("generated/nested/source.txt");
+    assert!(
+        monitor
+            .expect_change(&source, || fs::write(&source, "now observed").unwrap())
+            .worktree
+    );
+}
+
+#[test]
+fn activation_checks_missed_changes_without_reloading_unchanged_git_metadata() {
+    let (_temp, root) = repository();
+    struct CountingBackend(Arc<AtomicU64>);
+    impl GitBackend for CountingBackend {
+        fn open(
+            &self,
+            root: &Path,
+        ) -> gitcomet_core::services::Result<Arc<dyn gitcomet_core::services::GitRepository>>
+        {
+            gitcomet_git_gix::GixBackend.open(root)
+        }
+        fn repository_watch_info(
+            &self,
+            root: &Path,
+        ) -> gitcomet_core::services::Result<Option<gitcomet_core::services::RepositoryWatchInfo>>
+        {
+            self.0.fetch_add(1, Ordering::Relaxed);
+            gitcomet_git_gix::GixBackend.repository_watch_info(root)
+        }
+        fn worktree_ignore_matcher(
+            &self,
+            root: &Path,
+        ) -> gitcomet_core::services::Result<Option<Box<dyn WorktreeIgnoreMatcher>>> {
+            gitcomet_git_gix::GixBackend.worktree_ignore_matcher(root)
+        }
+    }
+    let discoveries = Arc::new(AtomicU64::new(0));
+    // Hold native callbacks away from the monitor to exercise the same
+    // fallback needed when an external editor's events do not cross a mount.
+    let (native_tx, _native_rx) = mpsc::channel();
+    let monitor = RunningMonitor::start_with_callback(
+        &root,
+        Arc::new(CountingBackend(discoveries.clone())),
+        MonitorConfig::default(),
+        Some(native_tx),
+    );
+    let activate = || {
+        monitor
+            .tx
+            .send(MonitorMsg::RefreshOnActivation(
+                ActivationContext::ready_for_test(),
+            ))
+            .unwrap();
+        let mut worktree_scan = false;
+        loop {
+            match monitor.rx.recv_timeout(Duration::from_secs(10)).unwrap() {
+                Msg::LoadWorktreeDirty { repo_id: RepoId(1) } => worktree_scan = true,
+                Msg::RepoExternallyChanged {
+                    repo_id: RepoId(1),
+                    change,
+                } => {
+                    return (change, worktree_scan);
+                }
+                other => panic!("unexpected activation result: {other:?}"),
+            }
+        }
+    };
+    assert!(activate().0.git_state, "first focus establishes a baseline");
+    assert_eq!(
+        discoveries.load(Ordering::Relaxed),
+        2,
+        "the first readable activation baseline needs one exact-input discovery"
+    );
+    let (unchanged, worktree_scan) = activate();
+    assert!(!unchanged.git_state && !unchanged.tags);
+    assert!(unchanged.worktree && unchanged.index);
+    assert!(
+        !worktree_scan,
+        "the store decides about linked scans after validating this reply"
+    );
+    fs::write(root.join("source.txt"), "unseen working edit").unwrap();
+    assert!(!activate().0.git_state);
+    run_git(&root, &["add", "source.txt"]);
+    let (index_change, _) = activate();
+    assert!(index_change.index && !index_change.git_state && !index_change.tags);
+    assert_eq!(
+        discoveries.load(Ordering::Relaxed),
+        3,
+        "index validation needs one discovery, without an activation duplicate"
+    );
+    run_git(&root, &["branch", "unseen-branch"]);
+    assert!(
+        activate().0.git_state,
+        "missed ref writes must refresh history"
+    );
+    assert!(!activate().0.git_state);
+    assert_eq!(
+        discoveries.load(Ordering::Relaxed),
+        3,
+        "ref changes do not change discovery inputs"
+    );
+    run_git(&root, &["tag", "unseen-tag"]);
+    assert!(
+        activate().0.tags,
+        "missed tag writes must refresh decorations"
+    );
+    fs::write(
+        root.join(".git/info/attributes"),
+        vec![b'#'; 4 * 1024 * 1024 + 1],
+    )
+    .unwrap();
+    for _ in 0..2 {
+        assert!(
+            activate().0.git_state,
+            "oversized metadata needs a full data refresh"
+        );
+    }
+    assert_eq!(
+        discoveries.load(Ordering::Relaxed),
+        3,
+        "an unavailable metadata probe must not rebuild healthy watcher coverage"
+    );
 }
 
 #[test]
@@ -404,7 +550,11 @@ fn unchanged_failed_policy_waits_for_throttled_recovery() {
     failing.store(false, Ordering::Relaxed);
     fs::write(root.join(".gitignore"), "other/\n").unwrap();
     monitor.revalidate();
-    monitor.refresh();
+    // The quiet checks above leave nothing queued, so this refresh is the recovery.
+    assert!(matches!(
+        monitor.rx.recv_timeout(Duration::from_secs(10)),
+        Ok(Msg::RepoExternallyChanged { .. })
+    ));
 }
 
 #[cfg(windows)]

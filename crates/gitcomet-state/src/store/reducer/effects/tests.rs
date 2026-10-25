@@ -1,19 +1,66 @@
+use super::super::conflict_load::{conflict_file_loaded, load_conflict_file};
+use super::super::file_history::{file_history_loaded, load_file_history};
 use super::*;
+use crate::model::LoadKind;
 use crate::model::{
     ConflictFile, PendingFileBrowserReopen, RepoState, SidebarDataRequest, SidebarMode,
 };
+use crate::msg::{ReferenceEffect, StatusEffect};
+use crate::store::repository_runtime::RepositoryRuntimes;
+use gitcomet_core::conflict_session::{ConflictPayload, ConflictSession};
 use gitcomet_core::domain::{
     DiffArea, DiffTarget, FileConflictKind, FileEntry, FileEntryKind, FileSource, FileStatus,
     LogScope, RemoteBranch, RepoSpec,
 };
+use gitcomet_core::domain::{LogCursor, LogPage};
 use gitcomet_core::error::{Error, ErrorKind};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+mod worktrees;
+
+fn file_browser_loaded(
+    repos: &RepositoryRuntimes,
+    state: &mut AppState,
+    repo_id: RepoId,
+    source: FileSource,
+    result: Result<Vec<FileEntry>, Error>,
+) -> Vec<Effect> {
+    let inputs = crate::store::reducer::test_inputs::for_message(
+        state,
+        repos,
+        crate::msg::Msg::Internal(crate::msg::InternalMsg::FileBrowserLoaded {
+            cancellation: None,
+            repo_id,
+            source: source.clone(),
+            result: result.clone(),
+        }),
+    );
+    super::file_browser_loaded(&inputs, state, repo_id, source, result)
+}
+
+fn commit_details_loaded(
+    state: &mut AppState,
+    repo_id: RepoId,
+    commit_id: CommitId,
+    result: Result<CommitDetails, Error>,
+) -> Vec<Effect> {
+    let inputs = crate::store::reducer::test_inputs::for_message(
+        state,
+        &Default::default(),
+        crate::msg::Msg::Internal(crate::msg::InternalMsg::CommitDetailsLoaded {
+            repo_id,
+            commit_id: commit_id.clone(),
+            result: result.clone(),
+        }),
+    );
+    super::commit_details_loaded(&inputs, state, repo_id, commit_id, result)
+}
+
 /// No backends: these tests exercise browse-point bookkeeping, not the HEAD
 /// gitlink classification that `open_file_content` performs behind it.
-fn no_repos() -> FxHashMap<RepoId, Arc<dyn GitRepository>> {
-    FxHashMap::default()
+fn no_repos() -> RepositoryRuntimes {
+    Default::default()
 }
 
 fn backend_error(message: &str) -> Error {
@@ -127,7 +174,7 @@ fn mark_repo_open_ready(state: &mut AppState, repo_id: RepoId) {
     repo_mut(state, repo_id).set_open(Loadable::Ready(()));
 }
 
-fn mark_pending(state: &mut AppState, repo_id: RepoId, flag: u32) {
+fn mark_pending(state: &mut AppState, repo_id: RepoId, flag: LoadKind) {
     let repo = repo_mut(state, repo_id);
     assert!(repo.loads_in_flight.request(flag));
     assert!(!repo.loads_in_flight.request(flag));
@@ -142,8 +189,10 @@ fn unknown_repo_handlers_are_noops() {
 
     assert!(
         file_history_loaded(
+            &crate::store::reducer::test_inputs::clock(),
             &mut state,
             repo_id,
+            crate::model::FileHistoryRequestId::default(),
             path.clone(),
             None,
             Ok(Arc::new(empty_log_page()))
@@ -152,6 +201,7 @@ fn unknown_repo_handlers_are_noops() {
     );
     assert!(
         blame_loaded(
+            &crate::store::reducer::test_inputs::clock(),
             &mut state,
             repo_id,
             path.clone(),
@@ -160,9 +210,37 @@ fn unknown_repo_handlers_are_noops() {
         )
         .is_empty()
     );
-    assert!(conflict_file_loaded(&mut state, repo_id, path.clone(), Ok(None), None).is_empty());
-    assert!(worktrees_loaded(&mut state, repo_id, Ok(Vec::new())).is_empty());
-    assert!(submodules_loaded(&mut state, repo_id, Ok(Vec::new())).is_empty());
+    assert!(
+        conflict_file_loaded(
+            &crate::store::reducer::test_inputs::clock(),
+            &mut state,
+            repo_id,
+            crate::model::ConflictLoadRequestId::default(),
+            path.clone(),
+            Ok(None),
+            None
+        )
+        .is_empty()
+    );
+    assert!(
+        worktrees_loaded(
+            &crate::store::reducer::test_inputs::clock(),
+            &mut state,
+            repo_id,
+            WorktreeListRead::explicit(),
+            Ok(Arc::new(Vec::new()))
+        )
+        .is_empty()
+    );
+    assert!(
+        submodules_loaded(
+            &crate::store::reducer::test_inputs::clock(),
+            &mut state,
+            repo_id,
+            Ok(Vec::new())
+        )
+        .is_empty()
+    );
     assert!(select_commit(&mut state, repo_id, commit_id.clone()).is_empty());
     assert!(clear_commit_selection(&mut state, repo_id).is_empty());
     assert!(load_stashes(&mut state, repo_id).is_empty());
@@ -189,16 +267,96 @@ fn unknown_repo_handlers_are_noops() {
     );
     assert!(load_worktrees(&mut state, repo_id).is_empty());
     assert!(load_submodules(&mut state, repo_id).is_empty());
-    assert!(branches_loaded(&mut state, repo_id, Ok(Vec::new())).is_empty());
-    assert!(remotes_loaded(&mut state, repo_id, Ok(Vec::new())).is_empty());
-    assert!(remote_branches_loaded(&mut state, repo_id, Ok(Vec::new())).is_empty());
-    assert!(status_loaded(&mut state, repo_id, Ok(RepoStatus::default())).is_empty());
-    assert!(head_branch_loaded(&mut state, repo_id, Ok("main".to_string())).is_empty());
-    assert!(upstream_divergence_loaded(&mut state, repo_id, Ok(None)).is_empty());
-    assert!(tags_loaded(&mut state, repo_id, Ok(Vec::new())).is_empty());
-    assert!(remote_tags_loaded(&mut state, repo_id, Ok(Vec::new())).is_empty());
-    assert!(stashes_loaded(&mut state, repo_id, Ok(Vec::new())).is_empty());
-    assert!(reflog_loaded(&mut state, repo_id, Ok(Vec::new())).is_empty());
+    assert!(
+        branches_loaded(
+            &crate::store::reducer::test_inputs::clock(),
+            &mut state,
+            repo_id,
+            Ok(Vec::new())
+        )
+        .is_empty()
+    );
+    assert!(
+        remotes_loaded(
+            &crate::store::reducer::test_inputs::clock(),
+            &mut state,
+            repo_id,
+            Ok(Vec::new())
+        )
+        .is_empty()
+    );
+    assert!(
+        remote_branches_loaded(
+            &crate::store::reducer::test_inputs::clock(),
+            &mut state,
+            repo_id,
+            Ok(Vec::new())
+        )
+        .is_empty()
+    );
+    assert!(
+        status_loaded(
+            &crate::store::reducer::test_inputs::clock(),
+            &mut state,
+            repo_id,
+            Ok(RepoStatus::default())
+        )
+        .is_empty()
+    );
+    assert!(
+        head_branch_loaded(
+            &crate::store::reducer::test_inputs::clock(),
+            &mut state,
+            repo_id,
+            Ok("main".to_string())
+        )
+        .is_empty()
+    );
+    assert!(
+        upstream_divergence_loaded(
+            &crate::store::reducer::test_inputs::clock(),
+            &mut state,
+            repo_id,
+            Ok(None)
+        )
+        .is_empty()
+    );
+    assert!(
+        tags_loaded(
+            &crate::store::reducer::test_inputs::clock(),
+            &mut state,
+            repo_id,
+            Ok(Vec::new())
+        )
+        .is_empty()
+    );
+    assert!(
+        remote_tags_loaded(
+            &crate::store::reducer::test_inputs::clock(),
+            &mut state,
+            repo_id,
+            Ok(Vec::new())
+        )
+        .is_empty()
+    );
+    assert!(
+        stashes_loaded(
+            &crate::store::reducer::test_inputs::clock(),
+            &mut state,
+            repo_id,
+            Ok(Vec::new())
+        )
+        .is_empty()
+    );
+    assert!(
+        reflog_loaded(
+            &crate::store::reducer::test_inputs::clock(),
+            &mut state,
+            repo_id,
+            Ok(Vec::new())
+        )
+        .is_empty()
+    );
     assert!(
         commit_details_loaded(
             &mut state,
@@ -231,24 +389,26 @@ fn file_history_loaded_updates_only_matching_path_and_reports_errors() {
     let mut state = new_state_with_repo(repo_id);
     let tracked = PathBuf::from("tracked.txt");
 
-    repo_mut(&mut state, repo_id)
-        .history_state
-        .file_history_path = Some(tracked.clone());
+    let request = file_history_request(&load_file_history(&mut state, repo_id, tracked.clone(), 2));
     file_history_loaded(
+        &crate::store::reducer::test_inputs::clock(),
         &mut state,
         repo_id,
+        request,
         PathBuf::from("other.txt"),
         None,
         Ok(Arc::new(empty_log_page())),
     );
     assert!(matches!(
         repo_mut(&mut state, repo_id).history_state.file_history,
-        Loadable::NotLoaded
+        Loadable::Loading
     ));
 
     file_history_loaded(
+        &crate::store::reducer::test_inputs::clock(),
         &mut state,
         repo_id,
+        request,
         tracked.clone(),
         None,
         Ok(Arc::new(empty_log_page())),
@@ -258,9 +418,12 @@ fn file_history_loaded_updates_only_matching_path_and_reports_errors() {
         Loadable::Ready(_)
     ));
 
+    let request = file_history_request(&load_file_history(&mut state, repo_id, tracked.clone(), 2));
     file_history_loaded(
+        &crate::store::reducer::test_inputs::clock(),
         &mut state,
         repo_id,
+        request,
         tracked,
         None,
         Err(backend_error("file history failed")),
@@ -295,6 +458,181 @@ fn file_history_ids(state: &mut AppState, repo_id: RepoId) -> Vec<String> {
     page.commits.iter().map(|c| c.id.to_string()).collect()
 }
 
+fn file_history_request(effects: &[Effect]) -> crate::model::FileHistoryRequestId {
+    let [Effect::LoadFileHistory { request, .. }] = effects else {
+        panic!("expected one file history request");
+    };
+    *request
+}
+
+#[test]
+fn file_history_duplicate_first_page_cannot_replace_completed_continuation() {
+    let repo_id = RepoId(1);
+    let mut state = new_state_with_repo(repo_id);
+    let path = PathBuf::from("tracked.txt");
+    let request = file_history_request(&load_file_history(&mut state, repo_id, path.clone(), 2));
+    let cursor = file_history_cursor("first");
+    let inputs = crate::store::reducer::test_inputs::clock();
+    file_history_loaded(
+        &inputs,
+        &mut state,
+        repo_id,
+        request,
+        path.clone(),
+        None,
+        Ok(Arc::new(file_history_page(
+            &["first"],
+            Some(cursor.clone()),
+        ))),
+    );
+    file_history_loaded(
+        &inputs,
+        &mut state,
+        repo_id,
+        request,
+        path.clone(),
+        Some(cursor),
+        Ok(Arc::new(file_history_page(&["rest"], None))),
+    );
+    let effects = file_history_loaded(
+        &inputs,
+        &mut state,
+        repo_id,
+        request,
+        path,
+        None,
+        Ok(Arc::new(file_history_page(&["first"], None))),
+    );
+    assert!(effects.is_empty());
+    assert_eq!(file_history_ids(&mut state, repo_id), ["first", "rest"]);
+}
+
+#[test]
+fn file_history_reopened_path_rejects_older_first_page_error() {
+    let repo_id = RepoId(1);
+    let mut state = new_state_with_repo(repo_id);
+    let path = PathBuf::from("tracked.txt");
+    let old = file_history_request(&load_file_history(&mut state, repo_id, path.clone(), 2));
+    let fresh = file_history_request(&load_file_history(&mut state, repo_id, path.clone(), 2));
+    let inputs = crate::store::reducer::test_inputs::clock();
+    file_history_loaded(
+        &inputs,
+        &mut state,
+        repo_id,
+        fresh,
+        path.clone(),
+        None,
+        Ok(Arc::new(file_history_page(&["fresh"], None))),
+    );
+    let effects = file_history_loaded(
+        &inputs,
+        &mut state,
+        repo_id,
+        old,
+        path,
+        None,
+        Err(backend_error("obsolete first page")),
+    );
+    assert!(effects.is_empty());
+    assert_eq!(file_history_ids(&mut state, repo_id), ["fresh"]);
+    assert!(
+        repo_mut(&mut state, repo_id)
+            .feedback
+            .diagnostics
+            .is_empty()
+    );
+}
+
+#[test]
+fn file_history_return_to_path_rejects_older_first_page() {
+    let repo_id = RepoId(1);
+    let mut state = new_state_with_repo(repo_id);
+    let path = PathBuf::from("tracked.txt");
+    let old = file_history_request(&load_file_history(&mut state, repo_id, path.clone(), 2));
+    load_file_history(&mut state, repo_id, PathBuf::from("other.txt"), 2);
+    let fresh = file_history_request(&load_file_history(&mut state, repo_id, path.clone(), 2));
+    let inputs = crate::store::reducer::test_inputs::clock();
+    file_history_loaded(
+        &inputs,
+        &mut state,
+        repo_id,
+        fresh,
+        path.clone(),
+        None,
+        Ok(Arc::new(file_history_page(&["fresh"], None))),
+    );
+    file_history_loaded(
+        &inputs,
+        &mut state,
+        repo_id,
+        old,
+        path,
+        None,
+        Ok(Arc::new(file_history_page(&["obsolete"], None))),
+    );
+    assert_eq!(file_history_ids(&mut state, repo_id), ["fresh"]);
+}
+
+#[test]
+fn file_history_reopened_path_rejects_older_equal_cursor_error() {
+    let repo_id = RepoId(1);
+    let mut state = new_state_with_repo(repo_id);
+    let path = PathBuf::from("tracked.txt");
+    let cursor = file_history_cursor("same");
+    let inputs = crate::store::reducer::test_inputs::clock();
+    let old = file_history_request(&load_file_history(&mut state, repo_id, path.clone(), 2));
+    file_history_loaded(
+        &inputs,
+        &mut state,
+        repo_id,
+        old,
+        path.clone(),
+        None,
+        Ok(Arc::new(file_history_page(
+            &["first"],
+            Some(cursor.clone()),
+        ))),
+    );
+    let fresh = file_history_request(&load_file_history(&mut state, repo_id, path.clone(), 2));
+    file_history_loaded(
+        &inputs,
+        &mut state,
+        repo_id,
+        fresh,
+        path.clone(),
+        None,
+        Ok(Arc::new(file_history_page(
+            &["first"],
+            Some(cursor.clone()),
+        ))),
+    );
+    file_history_loaded(
+        &inputs,
+        &mut state,
+        repo_id,
+        old,
+        path.clone(),
+        Some(cursor.clone()),
+        Err(backend_error("obsolete continuation")),
+    );
+    file_history_loaded(
+        &inputs,
+        &mut state,
+        repo_id,
+        fresh,
+        path,
+        Some(cursor),
+        Ok(Arc::new(file_history_page(&["rest"], None))),
+    );
+    assert_eq!(file_history_ids(&mut state, repo_id), ["first", "rest"]);
+    assert!(
+        repo_mut(&mut state, repo_id)
+            .feedback
+            .diagnostics
+            .is_empty()
+    );
+}
+
 /// The first page is bounded so the picker opens at once. When it reports
 /// more, the reducer asks for the rest right away — unbounded, since the
 /// backend serves it from one cached follow walk — rather than leaving the
@@ -306,11 +644,14 @@ fn file_history_first_page_with_more_requests_the_rest() {
     let tracked = PathBuf::from("tracked.txt");
     let effects = load_file_history(&mut state, repo_id, tracked.clone(), 2);
     assert_eq!(effects.len(), 1);
+    let request = file_history_request(&effects);
 
     let cursor = file_history_cursor("b");
     let effects = file_history_loaded(
+        &crate::store::reducer::test_inputs::clock(),
         &mut state,
         repo_id,
+        request,
         tracked.clone(),
         None,
         Ok(Arc::new(file_history_page(
@@ -321,18 +662,21 @@ fn file_history_first_page_with_more_requests_the_rest() {
     assert!(matches!(
         &effects[..],
         [Effect::LoadFileHistory {
+            request: continuation_request,
             repo_id: rid,
             path,
             limit: usize::MAX,
             cursor: Some(c),
-        }] if *rid == repo_id && path == &tracked && *c == cursor
+        }] if *rid == repo_id && path == &tracked && *c == cursor && *continuation_request == request
     ));
     assert_eq!(file_history_ids(&mut state, repo_id), ["a", "b"]);
 
-    // A complete first page has nothing to chain.
+    let request = file_history_request(&load_file_history(&mut state, repo_id, tracked.clone(), 2));
     let effects = file_history_loaded(
+        &crate::store::reducer::test_inputs::clock(),
         &mut state,
         repo_id,
+        request,
         tracked,
         None,
         Ok(Arc::new(file_history_page(&["a", "b"], None))),
@@ -356,8 +700,10 @@ fn file_history_remainder_extends_the_page_that_requested_it() {
     }
 
     let effects = file_history_loaded(
+        &crate::store::reducer::test_inputs::clock(),
         &mut state,
         repo_id,
+        crate::model::FileHistoryRequestId::default(),
         tracked,
         Some(cursor),
         Ok(Arc::new(file_history_page(&["c", "d"], None))),
@@ -386,8 +732,10 @@ fn file_history_remainder_for_another_page_is_dropped() {
     }
 
     let effects = file_history_loaded(
+        &crate::store::reducer::test_inputs::clock(),
         &mut state,
         repo_id,
+        crate::model::FileHistoryRequestId::default(),
         tracked.clone(),
         Some(stale.clone()),
         Ok(Arc::new(file_history_page(&["x"], None))),
@@ -405,8 +753,10 @@ fn file_history_remainder_for_another_page_is_dropped() {
         file_history_page(&["a", "b"], Some(current.clone())),
     ));
     let effects = file_history_loaded(
+        &crate::store::reducer::test_inputs::clock(),
         &mut state,
         repo_id,
+        crate::model::FileHistoryRequestId::default(),
         tracked,
         Some(stale),
         Ok(Arc::new(file_history_page(&["x"], None))),
@@ -437,8 +787,10 @@ fn file_history_remainder_error_keeps_the_first_page() {
     }
 
     let effects = file_history_loaded(
+        &crate::store::reducer::test_inputs::clock(),
         &mut state,
         repo_id,
+        crate::model::FileHistoryRequestId::default(),
         tracked,
         Some(cursor),
         Err(backend_error("follow failed")),
@@ -464,11 +816,12 @@ fn blame_loaded_requires_matching_path_and_source() {
 
     {
         let repo = repo_mut(&mut state, repo_id);
-        repo.history_state.blame_path = Some(path.clone());
-        repo.history_state.blame_source = Some(source.clone());
+        repo.diff_state.blame_path = Some(path.clone());
+        repo.diff_state.blame_source = Some(source.clone());
     }
 
     blame_loaded(
+        &crate::store::reducer::test_inputs::clock(),
         &mut state,
         repo_id,
         path.clone(),
@@ -476,11 +829,12 @@ fn blame_loaded_requires_matching_path_and_source() {
         Ok(Vec::new()),
     );
     assert!(matches!(
-        repo_mut(&mut state, repo_id).history_state.blame,
+        repo_mut(&mut state, repo_id).diff_state.blame,
         Loadable::NotLoaded
     ));
 
     blame_loaded(
+        &crate::store::reducer::test_inputs::clock(),
         &mut state,
         repo_id,
         path.clone(),
@@ -488,11 +842,12 @@ fn blame_loaded_requires_matching_path_and_source() {
         Ok(Vec::new()),
     );
     assert!(matches!(
-        repo_mut(&mut state, repo_id).history_state.blame,
+        repo_mut(&mut state, repo_id).diff_state.blame,
         Loadable::Ready(_)
     ));
 
     blame_loaded(
+        &crate::store::reducer::test_inputs::clock(),
         &mut state,
         repo_id,
         path,
@@ -500,7 +855,7 @@ fn blame_loaded_requires_matching_path_and_source() {
         Err(backend_error("blame failed")),
     );
     let repo = repo_mut(&mut state, repo_id);
-    assert!(matches!(repo.history_state.blame, Loadable::Error(_)));
+    assert!(matches!(repo.diff_state.blame, Loadable::Error(_)));
     assert_eq!(repo.feedback.diagnostics.len(), 1);
 }
 
@@ -535,7 +890,15 @@ fn conflict_file_loaded_builds_session_from_merged_markers() {
         ),
     };
 
-    conflict_file_loaded(&mut state, repo_id, path.clone(), Ok(Some(file)), None);
+    conflict_file_loaded(
+        &crate::store::reducer::test_inputs::clock(),
+        &mut state,
+        repo_id,
+        crate::model::ConflictLoadRequestId::default(),
+        path.clone(),
+        Ok(Some(file)),
+        None,
+    );
     let repo = repo_mut(&mut state, repo_id);
     assert!(matches!(
         repo.conflict_state.conflict_file,
@@ -578,7 +941,15 @@ fn conflict_file_loaded_uses_synthetic_session_for_non_marker_payloads() {
         current: None,
     };
 
-    conflict_file_loaded(&mut state, repo_id, path, Ok(Some(file)), None);
+    conflict_file_loaded(
+        &crate::store::reducer::test_inputs::clock(),
+        &mut state,
+        repo_id,
+        crate::model::ConflictLoadRequestId::default(),
+        path,
+        Ok(Some(file)),
+        None,
+    );
     let repo = repo_mut(&mut state, repo_id);
     let session = repo
         .conflict_state
@@ -605,8 +976,10 @@ fn conflict_file_loaded_prefers_provided_session_and_records_errors() {
     );
 
     conflict_file_loaded(
+        &crate::store::reducer::test_inputs::clock(),
         &mut state,
         repo_id,
+        crate::model::ConflictLoadRequestId::default(),
         tracked_path.clone(),
         Err(backend_error("conflict failed")),
         Some(provided.clone()),
@@ -631,8 +1004,10 @@ fn conflict_file_loaded_prefers_provided_session_and_records_errors() {
     }
 
     conflict_file_loaded(
+        &crate::store::reducer::test_inputs::clock(),
         &mut state,
         repo_id,
+        crate::model::ConflictLoadRequestId::default(),
         other_path,
         Ok(Some(empty_conflict_file(&tracked_path))),
         None,
@@ -684,6 +1059,7 @@ fn load_requests_set_loading_and_emit_effects() {
     assert!(matches!(
         effects[0],
         Effect::LoadConflictFile {
+            request: _,
             repo_id: rid,
             ref path,
             mode: ConflictFileLoadMode::CurrentOnly
@@ -705,6 +1081,7 @@ fn load_requests_set_loading_and_emit_effects() {
     assert!(matches!(
         effects[0],
         Effect::LoadFileHistory {
+            request: _,
             repo_id: rid,
             ref path,
             limit,
@@ -737,14 +1114,14 @@ fn load_requests_set_loading_and_emit_effects() {
     ));
     {
         let repo = repo_mut(&mut state, repo_id);
-        assert_eq!(repo.history_state.blame_path.as_ref(), Some(&blame_path));
+        assert_eq!(repo.diff_state.blame_path.as_ref(), Some(&blame_path));
         assert_eq!(
-            repo.history_state.blame_source,
+            repo.diff_state.blame_source,
             Some(gitcomet_core::domain::BlameSource::Revision(Some(
                 "HEAD".to_string()
             )))
         );
-        assert!(repo.history_state.blame.is_loading());
+        assert!(repo.diff_state.blame.is_loading());
     }
 
     let effects = load_worktrees(&mut state, repo_id);
@@ -768,7 +1145,7 @@ fn load_requests_set_loading_and_emit_effects() {
     assert_eq!(effects.len(), 1);
     assert!(matches!(
         effects[0],
-        Effect::LoadTags { repo_id: rid } if rid == repo_id
+        Effect::References(ReferenceEffect::LoadTags { repo_id: rid }) if rid == repo_id
     ));
     assert!(repo_mut(&mut state, repo_id).tags.is_loading());
     assert!(load_tags(&mut state, repo_id).is_empty());
@@ -790,7 +1167,7 @@ fn load_requests_set_loading_and_emit_effects() {
     assert_eq!(effects.len(), 1);
     assert!(matches!(
         effects[0],
-        Effect::LoadBranches { repo_id: rid } if rid == repo_id
+        Effect::References(ReferenceEffect::LoadBranches { repo_id: rid }) if rid == repo_id
     ));
     assert!(refresh_branches(&mut state, repo_id).is_empty());
 
@@ -853,14 +1230,23 @@ fn worktree_refresh_retains_badge_data_until_results_arrive() {
         ..old_worktree
     };
     assert!(matches!(
-        worktrees_loaded(&mut state, repo_id, Ok(vec![updated.clone()])).as_slice(),
+        worktrees_loaded(&crate::store::reducer::test_inputs::clock(), &mut state, repo_id, WorktreeListRead::explicit(), Ok(Arc::new(vec![updated.clone()]))).as_slice(),
         [Effect::LoadWorktrees { repo_id: id }] if *id == repo_id
     ));
     assert_eq!(
         repo_mut(&mut state, repo_id).worktrees,
         Loadable::Ready(Arc::new(vec![updated]))
     );
-    assert!(worktrees_loaded(&mut state, repo_id, Ok(Vec::new())).is_empty());
+    assert!(
+        worktrees_loaded(
+            &crate::store::reducer::test_inputs::clock(),
+            &mut state,
+            repo_id,
+            WorktreeListRead::explicit(),
+            Ok(Arc::new(Vec::new()))
+        )
+        .is_empty()
+    );
     assert_eq!(
         repo_mut(&mut state, repo_id).worktrees,
         Loadable::Ready(Arc::new(Vec::new()))
@@ -880,7 +1266,7 @@ fn pre_open_worktree_and_submodule_loads_are_noops() {
     assert!(
         !repo_mut(&mut state, repo_id)
             .loads_in_flight
-            .is_in_flight(RepoLoadsInFlight::WORKTREES)
+            .is_in_flight(LoadKind::Worktrees)
     );
 
     assert!(load_submodules(&mut state, repo_id).is_empty());
@@ -1145,6 +1531,7 @@ fn squash_preview_accepted_by_pending_request_even_when_plan_invalid() {
         repo.set_squash_preview(Loadable::Loading);
     }
     let effects = squash_message_preview_loaded(
+        &crate::store::reducer::test_inputs::clock(),
         &mut state,
         repo_id,
         oldest.clone(),
@@ -1177,6 +1564,7 @@ fn squash_preview_dropped_when_request_range_differs() {
     }
     // A stale result for a range we are no longer waiting on is ignored.
     squash_message_preview_loaded(
+        &crate::store::reducer::test_inputs::clock(),
         &mut state,
         repo_id,
         CommitId("old".into()),
@@ -1329,9 +1717,17 @@ fn multi_selection_compares_merged_diff_from_oldest_parent_to_newest() {
         next_cursor: None,
     })));
 
-    // Select c4 (newest) and c2 (oldest of the pair). The merged diff spans
-    // c2's parent (c1) → c4, so every selected commit's own changes show.
+    // Select c4 (newest) through c2 (oldest). The merged diff spans c2's
+    // parent (c1) → c4, so every selected commit's own changes show.
     select_commit(&mut state, repo_id, CommitId("c4".into()));
+    select_commit_multi(
+        &mut state,
+        repo_id,
+        CommitId("c3".into()),
+        CommitSelectMode::Toggle,
+        Some(1),
+        None,
+    );
     let effects = select_commit_multi(
         &mut state,
         repo_id,
@@ -1360,15 +1756,25 @@ fn multi_selection_reaching_root_uses_the_empty_tree_as_base() {
     let repo_id = RepoId(1);
     let mut state = new_state_with_repo(repo_id);
     repo_mut(&mut state, repo_id).set_log(Loadable::Ready(Arc::new(LogPage {
-        commits: vec![test_commit("c2", Some("c1")), test_commit("c1", None)],
+        commits: vec![
+            test_commit(
+                "2222222222222222222222222222222222222222",
+                Some("1111111111111111111111111111111111111111"),
+            ),
+            test_commit("1111111111111111111111111111111111111111", None),
+        ],
         next_cursor: None,
     })));
 
-    select_commit(&mut state, repo_id, CommitId("c2".into()));
+    select_commit(
+        &mut state,
+        repo_id,
+        CommitId("2222222222222222222222222222222222222222".into()),
+    );
     select_commit_multi(
         &mut state,
         repo_id,
-        CommitId("c1".into()),
+        CommitId("1111111111111111111111111111111111111111".into()),
         CommitSelectMode::Toggle,
         Some(1),
         None,
@@ -1382,9 +1788,15 @@ fn multi_selection_reaching_root_uses_the_empty_tree_as_base() {
     // The oldest selected commit is the root and has no parent to diff from.
     // Basing on the root itself would drop everything it introduces from the
     // merged diff, so the empty tree is the base instead.
-    assert_eq!(range.from, CommitId(EMPTY_TREE_ID.into()));
+    assert_eq!(
+        range.from,
+        CommitId(gitcomet_core::domain::EMPTY_TREE_ID_SHA1.into())
+    );
     assert_eq!(range.from_label, "start of history");
-    assert_eq!(range.to, Some(CommitId("c2".into())));
+    assert_eq!(
+        range.to,
+        Some(CommitId("2222222222222222222222222222222222222222".into()))
+    );
 }
 
 #[test]
@@ -1409,43 +1821,64 @@ fn loaded_handlers_reschedule_when_pending() {
     let repo_id = RepoId(1);
     let mut state = new_state_with_repo(repo_id);
 
-    mark_pending(&mut state, repo_id, RepoLoadsInFlight::BRANCHES);
-    let effects = branches_loaded(&mut state, repo_id, Ok(Vec::new()));
+    mark_pending(&mut state, repo_id, LoadKind::Branches);
+    let effects = branches_loaded(
+        &crate::store::reducer::test_inputs::clock(),
+        &mut state,
+        repo_id,
+        Ok(Vec::new()),
+    );
     assert_eq!(effects.len(), 1);
     assert!(matches!(
         effects[0],
-        Effect::LoadBranches { repo_id: rid } if rid == repo_id
+        Effect::References(ReferenceEffect::LoadBranches { repo_id: rid }) if rid == repo_id
     ));
     assert!(matches!(
         repo_mut(&mut state, repo_id).branches,
         Loadable::Ready(_)
     ));
 
-    mark_pending(&mut state, repo_id, RepoLoadsInFlight::REMOTES);
-    let effects = remotes_loaded(&mut state, repo_id, Ok(Vec::new()));
+    mark_pending(&mut state, repo_id, LoadKind::Remotes);
+    let effects = remotes_loaded(
+        &crate::store::reducer::test_inputs::clock(),
+        &mut state,
+        repo_id,
+        Ok(Vec::new()),
+    );
     assert_eq!(effects.len(), 1);
     assert!(matches!(
         effects[0],
-        Effect::LoadRemotes { repo_id: rid } if rid == repo_id
+        Effect::References(ReferenceEffect::LoadRemotes { repo_id: rid }) if rid == repo_id
     ));
     assert!(matches!(
         repo_mut(&mut state, repo_id).remotes,
         Loadable::Ready(_)
     ));
 
-    mark_pending(&mut state, repo_id, RepoLoadsInFlight::REMOTE_BRANCHES);
-    let effects = remote_branches_loaded(&mut state, repo_id, Ok(Vec::new()));
+    mark_pending(&mut state, repo_id, LoadKind::RemoteBranches);
+    let effects = remote_branches_loaded(
+        &crate::store::reducer::test_inputs::clock(),
+        &mut state,
+        repo_id,
+        Ok(Vec::new()),
+    );
     assert_eq!(effects.len(), 1);
     assert!(matches!(
         effects[0],
-        Effect::LoadRemoteBranches { repo_id: rid } if rid == repo_id
+        Effect::References(ReferenceEffect::LoadRemoteBranches { repo_id: rid }) if rid == repo_id
     ));
     assert!(matches!(
         repo_mut(&mut state, repo_id).remote_branches,
         Loadable::NotLoaded
     ));
     assert!(
-        remote_branches_loaded(&mut state, repo_id, Ok(Vec::new())).is_empty(),
+        remote_branches_loaded(
+            &crate::store::reducer::test_inputs::clock(),
+            &mut state,
+            repo_id,
+            Ok(Vec::new())
+        )
+        .is_empty(),
         "the promoted latest load should finish without another refresh"
     );
     assert!(matches!(
@@ -1453,8 +1886,14 @@ fn loaded_handlers_reschedule_when_pending() {
         Loadable::Ready(_)
     ));
 
-    mark_pending(&mut state, repo_id, RepoLoadsInFlight::WORKTREES);
-    let effects = worktrees_loaded(&mut state, repo_id, Ok(Vec::new()));
+    mark_pending(&mut state, repo_id, LoadKind::Worktrees);
+    let effects = worktrees_loaded(
+        &crate::store::reducer::test_inputs::clock(),
+        &mut state,
+        repo_id,
+        WorktreeListRead::explicit(),
+        Ok(Arc::new(Vec::new())),
+    );
     assert_eq!(effects.len(), 1);
     assert!(matches!(
         effects[0],
@@ -1465,20 +1904,26 @@ fn loaded_handlers_reschedule_when_pending() {
         Loadable::Ready(_)
     ));
 
-    mark_pending(&mut state, repo_id, RepoLoadsInFlight::HEAD_BRANCH);
-    let effects = head_branch_loaded(&mut state, repo_id, Ok("main".to_string()));
+    mark_pending(&mut state, repo_id, LoadKind::HeadBranch);
+    let effects = head_branch_loaded(
+        &crate::store::reducer::test_inputs::clock(),
+        &mut state,
+        repo_id,
+        Ok("main".to_string()),
+    );
     assert_eq!(effects.len(), 1);
     assert!(matches!(
         effects[0],
-        Effect::LoadHeadBranch { repo_id: rid } if rid == repo_id
+        Effect::References(ReferenceEffect::LoadHeadBranch { repo_id: rid }) if rid == repo_id
     ));
     assert!(matches!(
         repo_mut(&mut state, repo_id).head_branch,
         Loadable::Ready(_)
     ));
 
-    mark_pending(&mut state, repo_id, RepoLoadsInFlight::UPSTREAM_DIVERGENCE);
+    mark_pending(&mut state, repo_id, LoadKind::UpstreamDivergence);
     let effects = upstream_divergence_loaded(
+        &crate::store::reducer::test_inputs::clock(),
         &mut state,
         repo_id,
         Ok(Some(UpstreamDivergence {
@@ -1489,15 +1934,20 @@ fn loaded_handlers_reschedule_when_pending() {
     assert_eq!(effects.len(), 1);
     assert!(matches!(
         effects[0],
-        Effect::LoadUpstreamDivergence { repo_id: rid } if rid == repo_id
+        Effect::References(ReferenceEffect::LoadUpstreamDivergence { repo_id: rid }) if rid == repo_id
     ));
     assert!(matches!(
         repo_mut(&mut state, repo_id).upstream_divergence,
         Loadable::Ready(_)
     ));
 
-    mark_pending(&mut state, repo_id, RepoLoadsInFlight::STASHES);
-    let effects = stashes_loaded(&mut state, repo_id, Ok(Vec::new()));
+    mark_pending(&mut state, repo_id, LoadKind::Stashes);
+    let effects = stashes_loaded(
+        &crate::store::reducer::test_inputs::clock(),
+        &mut state,
+        repo_id,
+        Ok(Vec::new()),
+    );
     assert_eq!(effects.len(), 1);
     assert!(matches!(
         effects[0],
@@ -1511,8 +1961,13 @@ fn loaded_handlers_reschedule_when_pending() {
         Loadable::Ready(_)
     ));
 
-    mark_pending(&mut state, repo_id, RepoLoadsInFlight::REFLOG);
-    let effects = reflog_loaded(&mut state, repo_id, Ok(Vec::new()));
+    mark_pending(&mut state, repo_id, LoadKind::Reflog);
+    let effects = reflog_loaded(
+        &crate::store::reducer::test_inputs::clock(),
+        &mut state,
+        repo_id,
+        Ok(Vec::new()),
+    );
     assert_eq!(effects.len(), 1);
     assert!(matches!(
         effects[0],
@@ -1526,24 +1981,34 @@ fn loaded_handlers_reschedule_when_pending() {
         Loadable::Ready(_)
     ));
 
-    mark_pending(&mut state, repo_id, RepoLoadsInFlight::TAGS);
-    let effects = tags_loaded(&mut state, repo_id, Ok(Vec::new()));
+    mark_pending(&mut state, repo_id, LoadKind::Tags);
+    let effects = tags_loaded(
+        &crate::store::reducer::test_inputs::clock(),
+        &mut state,
+        repo_id,
+        Ok(Vec::new()),
+    );
     assert_eq!(effects.len(), 1);
     assert!(matches!(
         effects[0],
-        Effect::LoadTags { repo_id: rid } if rid == repo_id
+        Effect::References(ReferenceEffect::LoadTags { repo_id: rid }) if rid == repo_id
     ));
     assert!(matches!(
         repo_mut(&mut state, repo_id).tags,
         Loadable::Ready(_)
     ));
 
-    mark_pending(&mut state, repo_id, RepoLoadsInFlight::REMOTE_TAGS);
-    let effects = remote_tags_loaded(&mut state, repo_id, Ok(Vec::new()));
+    mark_pending(&mut state, repo_id, LoadKind::RemoteTags);
+    let effects = remote_tags_loaded(
+        &crate::store::reducer::test_inputs::clock(),
+        &mut state,
+        repo_id,
+        Ok(Vec::new()),
+    );
     assert_eq!(effects.len(), 1);
     assert!(matches!(
         effects[0],
-        Effect::LoadRemoteTags { repo_id: rid } if rid == repo_id
+        Effect::References(ReferenceEffect::LoadRemoteTags { repo_id: rid }) if rid == repo_id
     ));
     assert!(matches!(
         repo_mut(&mut state, repo_id).remote_tags,
@@ -1564,40 +2029,55 @@ fn status_lanes_replay_pending_refresh_even_when_payload_unchanged() {
     // re-arms the lane.
     let mut state = new_state_with_repo(repo_id);
     repo_mut(&mut state, repo_id).set_status(Loadable::Ready(Arc::new(RepoStatus::default())));
-    mark_pending(&mut state, repo_id, RepoLoadsInFlight::WORKTREE_STATUS);
-    let effects = status_loaded(&mut state, repo_id, Ok(RepoStatus::default()));
+    mark_pending(&mut state, repo_id, LoadKind::WorktreeStatus);
+    let effects = status_loaded(
+        &crate::store::reducer::test_inputs::clock(),
+        &mut state,
+        repo_id,
+        Ok(RepoStatus::default()),
+    );
     assert_eq!(effects.len(), 1);
     assert!(matches!(
         effects[0],
-        Effect::LoadWorktreeStatus { repo_id: rid } if rid == repo_id
+        Effect::Status(StatusEffect::LoadWorktreeStatus { repo_id: rid }) if rid == repo_id
     ));
     assert!(
         repo_mut(&mut state, repo_id)
             .loads_in_flight
-            .is_in_flight(RepoLoadsInFlight::WORKTREE_STATUS),
+            .is_in_flight(LoadKind::WorktreeStatus),
         "the replayed load should re-arm the lane"
     );
 
     // Worktree-only lane.
     let mut state = new_state_with_repo(repo_id);
     repo_mut(&mut state, repo_id).set_worktree_status(Loadable::Ready(Vec::new()));
-    mark_pending(&mut state, repo_id, RepoLoadsInFlight::WORKTREE_STATUS);
-    let effects = worktree_status_loaded(&mut state, repo_id, Ok(Vec::new()));
+    mark_pending(&mut state, repo_id, LoadKind::WorktreeStatus);
+    let effects = worktree_status_loaded(
+        &crate::store::reducer::test_inputs::clock(),
+        &mut state,
+        repo_id,
+        Ok(Vec::new()),
+    );
     assert_eq!(effects.len(), 1);
     assert!(matches!(
         effects[0],
-        Effect::LoadWorktreeStatus { repo_id: rid } if rid == repo_id
+        Effect::Status(StatusEffect::LoadWorktreeStatus { repo_id: rid }) if rid == repo_id
     ));
 
     // Staged-only lane.
     let mut state = new_state_with_repo(repo_id);
     repo_mut(&mut state, repo_id).set_staged_status(Loadable::Ready(Vec::new()));
-    mark_pending(&mut state, repo_id, RepoLoadsInFlight::STAGED_STATUS);
-    let effects = staged_status_loaded(&mut state, repo_id, Ok(Vec::new()));
+    mark_pending(&mut state, repo_id, LoadKind::StagedStatus);
+    let effects = staged_status_loaded(
+        &crate::store::reducer::test_inputs::clock(),
+        &mut state,
+        repo_id,
+        Ok(Vec::new()),
+    );
     assert_eq!(effects.len(), 1);
     assert!(matches!(
         effects[0],
-        Effect::LoadStagedStatus { repo_id: rid } if rid == repo_id
+        Effect::Status(StatusEffect::LoadStagedStatus { repo_id: rid }) if rid == repo_id
     ));
 }
 
@@ -1607,7 +2087,12 @@ fn head_branch_loaded_clears_detached_head_commit_when_attached() {
     let mut state = new_state_with_repo(repo_id);
     repo_mut(&mut state, repo_id).set_detached_head_commit(Some(CommitId("c1".into())));
 
-    let _ = head_branch_loaded(&mut state, repo_id, Ok("main".to_string()));
+    let _ = head_branch_loaded(
+        &crate::store::reducer::test_inputs::clock(),
+        &mut state,
+        repo_id,
+        Ok("main".to_string()),
+    );
 
     let repo = repo_mut(&mut state, repo_id);
     assert!(matches!(repo.head_branch, Loadable::Ready(ref v) if v == "main"));
@@ -1629,7 +2114,12 @@ fn head_branch_loaded_backfills_detached_head_commit_from_log() {
         next_cursor: None,
     })));
 
-    let _ = head_branch_loaded(&mut state, repo_id, Ok("HEAD".to_string()));
+    let _ = head_branch_loaded(
+        &crate::store::reducer::test_inputs::clock(),
+        &mut state,
+        repo_id,
+        Ok("HEAD".to_string()),
+    );
 
     let repo = repo_mut(&mut state, repo_id);
     assert!(matches!(repo.head_branch, Loadable::Ready(ref v) if v == "HEAD"));
@@ -1671,7 +2161,12 @@ fn head_branch_loaded_does_not_backfill_detached_head_commit_from_filtered_logs(
         repo_mut(&mut state, repo_id).history_state.history_scope = scope;
         repo_mut(&mut state, repo_id).set_log(Loadable::Ready(Arc::new(page)));
 
-        let _ = head_branch_loaded(&mut state, repo_id, Ok("HEAD".to_string()));
+        let _ = head_branch_loaded(
+            &crate::store::reducer::test_inputs::clock(),
+            &mut state,
+            repo_id,
+            Ok("HEAD".to_string()),
+        );
 
         let repo = repo_mut(&mut state, repo_id);
         assert!(matches!(repo.head_branch, Loadable::Ready(ref v) if v == "HEAD"));
@@ -1693,13 +2188,18 @@ fn superseded_remote_branch_load_keeps_the_last_complete_snapshot() {
     };
     repo_mut(&mut state, repo_id).set_remote_branches(Loadable::Ready(vec![previous.clone()]));
     let previous_rev = repo_mut(&mut state, repo_id).remote_branches_rev;
-    mark_pending(&mut state, repo_id, RepoLoadsInFlight::REMOTE_BRANCHES);
+    mark_pending(&mut state, repo_id, LoadKind::RemoteBranches);
 
-    let effects = remote_branches_loaded(&mut state, repo_id, Ok(Vec::new()));
+    let effects = remote_branches_loaded(
+        &crate::store::reducer::test_inputs::clock(),
+        &mut state,
+        repo_id,
+        Ok(Vec::new()),
+    );
 
     assert!(matches!(
         effects.as_slice(),
-        [Effect::LoadRemoteBranches { repo_id: id }] if *id == repo_id
+        [Effect::References(ReferenceEffect::LoadRemoteBranches { repo_id: id })] if *id == repo_id
     ));
     assert!(matches!(
         &repo_mut(&mut state, repo_id).remote_branches,
@@ -1715,7 +2215,15 @@ fn superseded_remote_branch_load_keeps_the_last_complete_snapshot() {
         name: "release".to_string(),
         target: CommitId("2222222".into()),
     };
-    assert!(remote_branches_loaded(&mut state, repo_id, Ok(vec![replacement.clone()])).is_empty());
+    assert!(
+        remote_branches_loaded(
+            &crate::store::reducer::test_inputs::clock(),
+            &mut state,
+            repo_id,
+            Ok(vec![replacement.clone()])
+        )
+        .is_empty()
+    );
     assert!(matches!(
         &repo_mut(&mut state, repo_id).remote_branches,
         Loadable::Ready(branches) if branches.as_slice() == [replacement]
@@ -1738,22 +2246,23 @@ fn remote_branch_load_during_pull_keeps_the_last_complete_snapshot() {
     let repo = repo_mut(&mut state, repo_id);
     repo.set_remote_branches(Loadable::Ready(vec![previous.clone()]));
     repo.pull_in_flight = 1;
-    assert!(
-        repo.loads_in_flight
-            .request(RepoLoadsInFlight::REMOTE_BRANCHES)
-    );
+    assert!(repo.loads_in_flight.request(LoadKind::RemoteBranches));
 
-    assert!(remote_branches_loaded(&mut state, repo_id, Ok(Vec::new())).is_empty());
+    assert!(
+        remote_branches_loaded(
+            &crate::store::reducer::test_inputs::clock(),
+            &mut state,
+            repo_id,
+            Ok(Vec::new())
+        )
+        .is_empty()
+    );
     let repo = repo_mut(&mut state, repo_id);
     assert!(matches!(
         &repo.remote_branches,
         Loadable::Ready(branches) if branches.as_slice() == [previous]
     ));
-    assert!(
-        !repo
-            .loads_in_flight
-            .is_in_flight(RepoLoadsInFlight::REMOTE_BRANCHES)
-    );
+    assert!(!repo.loads_in_flight.is_in_flight(LoadKind::RemoteBranches));
 }
 
 #[test]
@@ -1761,20 +2270,88 @@ fn loaded_handler_error_paths_record_diagnostics() {
     let repo_id = RepoId(1);
     let mut state = new_state_with_repo(repo_id);
 
-    assert!(branches_loaded(&mut state, repo_id, Err(backend_error("branches"))).is_empty());
-    assert!(remotes_loaded(&mut state, repo_id, Err(backend_error("remotes"))).is_empty());
     assert!(
-        remote_branches_loaded(&mut state, repo_id, Err(backend_error("remote branches")))
-            .is_empty()
+        branches_loaded(
+            &crate::store::reducer::test_inputs::clock(),
+            &mut state,
+            repo_id,
+            Err(backend_error("branches"))
+        )
+        .is_empty()
     );
-    assert!(head_branch_loaded(&mut state, repo_id, Err(backend_error("head"))).is_empty());
     assert!(
-        upstream_divergence_loaded(&mut state, repo_id, Err(backend_error("upstream"))).is_empty()
+        remotes_loaded(
+            &crate::store::reducer::test_inputs::clock(),
+            &mut state,
+            repo_id,
+            Err(backend_error("remotes"))
+        )
+        .is_empty()
     );
-    assert!(stashes_loaded(&mut state, repo_id, Err(backend_error("stashes"))).is_empty());
-    assert!(reflog_loaded(&mut state, repo_id, Err(backend_error("reflog"))).is_empty());
-    assert!(worktrees_loaded(&mut state, repo_id, Err(backend_error("worktrees"))).is_empty());
-    assert!(submodules_loaded(&mut state, repo_id, Err(backend_error("submodules"))).is_empty());
+    assert!(
+        remote_branches_loaded(
+            &crate::store::reducer::test_inputs::clock(),
+            &mut state,
+            repo_id,
+            Err(backend_error("remote branches"))
+        )
+        .is_empty()
+    );
+    assert!(
+        head_branch_loaded(
+            &crate::store::reducer::test_inputs::clock(),
+            &mut state,
+            repo_id,
+            Err(backend_error("head"))
+        )
+        .is_empty()
+    );
+    assert!(
+        upstream_divergence_loaded(
+            &crate::store::reducer::test_inputs::clock(),
+            &mut state,
+            repo_id,
+            Err(backend_error("upstream"))
+        )
+        .is_empty()
+    );
+    assert!(
+        stashes_loaded(
+            &crate::store::reducer::test_inputs::clock(),
+            &mut state,
+            repo_id,
+            Err(backend_error("stashes"))
+        )
+        .is_empty()
+    );
+    assert!(
+        reflog_loaded(
+            &crate::store::reducer::test_inputs::clock(),
+            &mut state,
+            repo_id,
+            Err(backend_error("reflog"))
+        )
+        .is_empty()
+    );
+    assert!(
+        worktrees_loaded(
+            &crate::store::reducer::test_inputs::clock(),
+            &mut state,
+            repo_id,
+            WorktreeListRead::explicit(),
+            Err(backend_error("worktrees"))
+        )
+        .is_empty()
+    );
+    assert!(
+        submodules_loaded(
+            &crate::store::reducer::test_inputs::clock(),
+            &mut state,
+            repo_id,
+            Err(backend_error("submodules"))
+        )
+        .is_empty()
+    );
     assert!(
         file_browser_loaded(
             &no_repos(),
@@ -1854,12 +2431,17 @@ fn status_loaded_clears_resolved_conflicts_and_preserves_unresolved_ones() {
         )));
         repo.set_conflict_hide_resolved(true);
     }
-    mark_pending(&mut state, repo_id, RepoLoadsInFlight::WORKTREE_STATUS);
-    let effects = status_loaded(&mut state, repo_id, Ok(RepoStatus::default()));
+    mark_pending(&mut state, repo_id, LoadKind::WorktreeStatus);
+    let effects = status_loaded(
+        &crate::store::reducer::test_inputs::clock(),
+        &mut state,
+        repo_id,
+        Ok(RepoStatus::default()),
+    );
     assert_eq!(effects.len(), 1);
     assert!(matches!(
         effects[0],
-        Effect::LoadWorktreeStatus { repo_id: rid } if rid == repo_id
+        Effect::Status(StatusEffect::LoadWorktreeStatus { repo_id: rid }) if rid == repo_id
     ));
     {
         let repo = repo_mut(&mut state, repo_id);
@@ -1889,7 +2471,15 @@ fn status_loaded_clears_resolved_conflicts_and_preserves_unresolved_ones() {
         repo.set_conflict_hide_resolved(true);
     }
     let unresolved = conflicted_status(&path, FileConflictKind::BothModified);
-    assert!(status_loaded(&mut state, repo_id, Ok(unresolved)).is_empty());
+    assert!(
+        status_loaded(
+            &crate::store::reducer::test_inputs::clock(),
+            &mut state,
+            repo_id,
+            Ok(unresolved)
+        )
+        .is_empty()
+    );
     {
         let repo = repo_mut(&mut state, repo_id);
         assert_eq!(repo.conflict_state.conflict_file_path.as_ref(), Some(&path));
@@ -1897,7 +2487,15 @@ fn status_loaded_clears_resolved_conflicts_and_preserves_unresolved_ones() {
         assert!(repo.conflict_state.conflict_hide_resolved);
     }
 
-    assert!(status_loaded(&mut state, repo_id, Err(backend_error("status"))).is_empty());
+    assert!(
+        status_loaded(
+            &crate::store::reducer::test_inputs::clock(),
+            &mut state,
+            repo_id,
+            Err(backend_error("status"))
+        )
+        .is_empty()
+    );
     let repo = repo_mut(&mut state, repo_id);
     assert!(matches!(repo.status, Loadable::Error(_)));
     assert!(!repo.feedback.diagnostics.is_empty());
@@ -1908,27 +2506,59 @@ fn tags_and_remote_tags_handle_unsupported_as_empty_ready() {
     let repo_id = RepoId(1);
     let mut state = new_state_with_repo(repo_id);
 
-    assert!(tags_loaded(&mut state, repo_id, Err(unsupported_error())).is_empty());
+    assert!(
+        tags_loaded(
+            &crate::store::reducer::test_inputs::clock(),
+            &mut state,
+            repo_id,
+            Err(unsupported_error())
+        )
+        .is_empty()
+    );
     assert!(matches!(
         repo_mut(&mut state, repo_id).tags,
         Loadable::Ready(_)
     ));
     assert_eq!(repo_mut(&mut state, repo_id).feedback.diagnostics.len(), 0);
 
-    assert!(remote_tags_loaded(&mut state, repo_id, Err(unsupported_error())).is_empty());
+    assert!(
+        remote_tags_loaded(
+            &crate::store::reducer::test_inputs::clock(),
+            &mut state,
+            repo_id,
+            Err(unsupported_error())
+        )
+        .is_empty()
+    );
     assert!(matches!(
         repo_mut(&mut state, repo_id).remote_tags,
         Loadable::Ready(_)
     ));
     assert_eq!(repo_mut(&mut state, repo_id).feedback.diagnostics.len(), 0);
 
-    assert!(tags_loaded(&mut state, repo_id, Err(backend_error("tags"))).is_empty());
+    assert!(
+        tags_loaded(
+            &crate::store::reducer::test_inputs::clock(),
+            &mut state,
+            repo_id,
+            Err(backend_error("tags"))
+        )
+        .is_empty()
+    );
     assert!(matches!(
         repo_mut(&mut state, repo_id).tags,
         Loadable::Error(_)
     ));
 
-    assert!(remote_tags_loaded(&mut state, repo_id, Err(backend_error("remote tags"))).is_empty());
+    assert!(
+        remote_tags_loaded(
+            &crate::store::reducer::test_inputs::clock(),
+            &mut state,
+            repo_id,
+            Err(backend_error("remote tags"))
+        )
+        .is_empty()
+    );
     assert!(matches!(
         repo_mut(&mut state, repo_id).remote_tags,
         Loadable::Error(_)
@@ -1942,19 +2572,43 @@ fn cancelled_metadata_results_reset_to_not_loaded_without_diagnostics() {
     let mut state = new_state_with_repo(repo_id);
     let cancelled = || Error::new(ErrorKind::Cancelled);
 
-    assert!(tags_loaded(&mut state, repo_id, Err(cancelled())).is_empty());
+    assert!(
+        tags_loaded(
+            &crate::store::reducer::test_inputs::clock(),
+            &mut state,
+            repo_id,
+            Err(cancelled())
+        )
+        .is_empty()
+    );
     assert!(matches!(
         repo_mut(&mut state, repo_id).tags,
         Loadable::NotLoaded
     ));
 
-    assert!(remote_tags_loaded(&mut state, repo_id, Err(cancelled())).is_empty());
+    assert!(
+        remote_tags_loaded(
+            &crate::store::reducer::test_inputs::clock(),
+            &mut state,
+            repo_id,
+            Err(cancelled())
+        )
+        .is_empty()
+    );
     assert!(matches!(
         repo_mut(&mut state, repo_id).remote_tags,
         Loadable::NotLoaded
     ));
 
-    assert!(submodules_loaded(&mut state, repo_id, Err(cancelled())).is_empty());
+    assert!(
+        submodules_loaded(
+            &crate::store::reducer::test_inputs::clock(),
+            &mut state,
+            repo_id,
+            Err(cancelled())
+        )
+        .is_empty()
+    );
     assert!(matches!(
         repo_mut(&mut state, repo_id).submodules,
         Loadable::NotLoaded
@@ -2012,6 +2666,7 @@ fn file_browser_loaded_updates_state_and_records_errors() {
         path: Arc::new(PathBuf::from("src")),
         kind: FileEntryKind::Directory,
         depth: 0,
+        ignored: false,
     }];
     let source = FileSource::WorkingDirectory;
 
@@ -2055,6 +2710,7 @@ fn file_browser_loaded_discards_stale_results() {
         path: Arc::new(PathBuf::from("stale.txt")),
         kind: FileEntryKind::File,
         depth: 0,
+        ignored: false,
     }];
     let wrong_source = FileSource::WorkingDirectory;
 
@@ -2179,6 +2835,7 @@ fn tree_file(path: &str) -> FileEntry {
         depth: path.components().count().saturating_sub(1),
         path: Arc::new(path),
         kind: FileEntryKind::File,
+        ignored: false,
     }
 }
 
@@ -2348,10 +3005,7 @@ fn browse_open_content_path_captures_previews_only() {
     let path = PathBuf::from("src/main.rs");
     let repo = repo_mut(&mut state, repo_id);
     repo.diff_state.content_preview = true;
-    repo.set_diff_target(Some(DiffTarget::Commit {
-        commit_id: commit_id.clone(),
-        path: Some(path.clone()),
-    }));
+    repo.set_diff_target(Some(DiffTarget::commit(commit_id.clone(), path.clone())));
     assert_eq!(
         browse_open_content_path(repo),
         Some(PendingFileBrowserReopen {
@@ -2361,10 +3015,10 @@ fn browse_open_content_path_captures_previews_only() {
     );
 
     // WorkingTree target
-    repo.set_diff_target(Some(DiffTarget::WorkingTree {
-        path: path.clone(),
-        area: DiffArea::Unstaged,
-    }));
+    repo.set_diff_target(Some(DiffTarget::working_tree(
+        path.clone(),
+        DiffArea::Unstaged,
+    )));
     assert_eq!(
         browse_open_content_path(repo).map(|reopen| reopen.path),
         Some(path)
@@ -2374,13 +3028,6 @@ fn browse_open_content_path_captures_previews_only() {
     repo.diff_state.edit_mode = true;
     assert!(browse_open_content_path(repo).is_none());
     repo.diff_state.edit_mode = false;
-
-    // Commit with path: None → None
-    repo.set_diff_target(Some(DiffTarget::Commit {
-        commit_id,
-        path: None,
-    }));
-    assert!(browse_open_content_path(repo).is_none());
 
     // diff_target is None → None
     repo.set_diff_target(None);
@@ -2392,10 +3039,10 @@ fn open_preview_at(state: &mut AppState, repo_id: RepoId, commit: &CommitId, pat
     let repo = repo_mut(state, repo_id);
     repo.diff_state.content_preview = true;
     repo.diff_state.edit_mode = false;
-    repo.set_diff_target(Some(DiffTarget::Commit {
-        commit_id: commit.clone(),
-        path: Some(PathBuf::from(path)),
-    }));
+    repo.set_diff_target(Some(DiffTarget::commit(
+        commit.clone(),
+        PathBuf::from(path),
+    )));
 }
 
 fn load_selected_diffs(effects: &[Effect]) -> usize {
@@ -2449,10 +3096,7 @@ fn browse_repository_at_commit_reopens_active_file_once_the_listing_lands() {
     let repo = repo_mut(&mut state, repo_id);
     assert_eq!(
         repo.diff_state.diff_target,
-        Some(DiffTarget::Commit {
-            commit_id: commit_b,
-            path: Some(PathBuf::from("src/lib.rs")),
-        })
+        Some(DiffTarget::commit(commit_b, PathBuf::from("src/lib.rs")))
     );
     assert!(repo.diff_state.content_preview);
     assert!(repo.file_browser.pending_reopen.is_none());
@@ -2487,10 +3131,10 @@ fn reset_browse_to_live_reopens_active_file_once_the_listing_lands() {
     assert_eq!(load_selected_diffs(&effects), 1);
     assert_eq!(
         repo_mut(&mut state, repo_id).diff_state.diff_target,
-        Some(DiffTarget::WorkingTree {
-            path: PathBuf::from("README.md"),
-            area: DiffArea::Unstaged,
-        })
+        Some(DiffTarget::working_tree(
+            PathBuf::from("README.md"),
+            DiffArea::Unstaged
+        ))
     );
 }
 
@@ -2616,10 +3260,10 @@ fn the_editor_is_never_retargeted_by_a_browse() {
         let repo = repo_mut(&mut state, repo_id);
         repo.diff_state.content_preview = true;
         repo.diff_state.edit_mode = true;
-        repo.set_diff_target(Some(DiffTarget::WorkingTree {
-            path: PathBuf::from("src/lib.rs"),
-            area: DiffArea::Unstaged,
-        }));
+        repo.set_diff_target(Some(DiffTarget::working_tree(
+            PathBuf::from("src/lib.rs"),
+            DiffArea::Unstaged,
+        )));
     }
     let commit_b = CommitId("bbbbbbbb".into());
     browse_repository_at_commit(&mut state, repo_id, commit_b.clone());
@@ -2787,7 +3431,7 @@ fn set_sidebar_mode_waits_for_the_repo_to_be_ready_before_claiming_the_lane() {
     assert!(
         !repo_mut(&mut state, repo_id)
             .loads_in_flight
-            .is_in_flight(RepoLoadsInFlight::FILE_BROWSER)
+            .is_in_flight(LoadKind::FileBrowser)
     );
 }
 
@@ -2805,10 +3449,7 @@ fn browse_repository_at_commit_same_commit_with_file_open_does_not_reopen() {
         let repo = repo_mut(&mut state, repo_id);
         repo.file_browser.source = FileSource::Commit(commit_id.clone());
         repo.diff_state.content_preview = true;
-        repo.diff_state.diff_target = Some(DiffTarget::Commit {
-            commit_id: commit_id.clone(),
-            path: Some(file_path),
-        });
+        repo.diff_state.diff_target = Some(DiffTarget::commit(commit_id.clone(), file_path));
     }
 
     // Browse the SAME commit — source unchanged, no LoadFileBrowser emitted
@@ -2872,10 +3513,7 @@ fn load_blame_reloads_when_target_changes_while_loading() {
     let effects = load_blame(&mut state, repo_id, other.clone(), source);
     assert_eq!(effects.len(), 1);
     assert_eq!(
-        repo_mut(&mut state, repo_id)
-            .history_state
-            .blame_path
-            .as_ref(),
+        repo_mut(&mut state, repo_id).diff_state.blame_path.as_ref(),
         Some(&other)
     );
 }
@@ -2889,17 +3527,17 @@ fn load_blame_retains_ready_annotations_for_the_same_target() {
     let lines = Arc::new(vec![blame_line("let x = 1;")]);
     {
         let repo = repo_mut(&mut state, repo_id);
-        repo.history_state.blame_path = Some(path.clone());
-        repo.history_state.blame_source = Some(source.clone());
-        repo.history_state.blame = Loadable::Ready(Arc::clone(&lines));
+        repo.diff_state.blame_path = Some(path.clone());
+        repo.diff_state.blame_source = Some(source.clone());
+        repo.diff_state.blame = Loadable::Ready(Arc::clone(&lines));
     }
 
     load_blame(&mut state, repo_id, path, source);
 
     let repo = repo_mut(&mut state, repo_id);
-    assert!(repo.history_state.blame.is_loading());
+    assert!(repo.diff_state.blame.is_loading());
     assert!(
-        repo.history_state
+        repo.diff_state
             .retained_blame_while_loading
             .as_ref()
             .is_some_and(|held| Arc::ptr_eq(held, &lines)),
@@ -2914,16 +3552,16 @@ fn load_blame_drops_retained_annotations_when_retargeting() {
     let source = gitcomet_core::domain::BlameSource::WorkingTree(DiffArea::Unstaged);
     {
         let repo = repo_mut(&mut state, repo_id);
-        repo.history_state.blame_path = Some(PathBuf::from("src/lib.rs"));
-        repo.history_state.blame_source = Some(source.clone());
-        repo.history_state.blame = Loadable::Ready(Arc::new(vec![blame_line("let x = 1;")]));
+        repo.diff_state.blame_path = Some(PathBuf::from("src/lib.rs"));
+        repo.diff_state.blame_source = Some(source.clone());
+        repo.diff_state.blame = Loadable::Ready(Arc::new(vec![blame_line("let x = 1;")]));
     }
 
     load_blame(&mut state, repo_id, PathBuf::from("src/main.rs"), source);
 
     assert!(
         repo_mut(&mut state, repo_id)
-            .history_state
+            .diff_state
             .retained_blame_while_loading
             .is_none(),
         "annotations for a different file must never be painted"
@@ -2941,13 +3579,14 @@ fn blame_loaded_reuses_the_retained_allocation_when_unchanged() {
     let lines = Arc::new(vec![blame_line("let x = 1;")]);
     {
         let repo = repo_mut(&mut state, repo_id);
-        repo.history_state.blame_path = Some(path.clone());
-        repo.history_state.blame_source = Some(source.clone());
-        repo.history_state.blame = Loadable::Ready(Arc::clone(&lines));
+        repo.diff_state.blame_path = Some(path.clone());
+        repo.diff_state.blame_source = Some(source.clone());
+        repo.diff_state.blame = Loadable::Ready(Arc::clone(&lines));
     }
     load_blame(&mut state, repo_id, path.clone(), source.clone());
 
     blame_loaded(
+        &crate::store::reducer::test_inputs::clock(),
         &mut state,
         repo_id,
         path,
@@ -2956,8 +3595,8 @@ fn blame_loaded_reuses_the_retained_allocation_when_unchanged() {
     );
 
     let repo = repo_mut(&mut state, repo_id);
-    assert!(matches!(&repo.history_state.blame, Loadable::Ready(got) if Arc::ptr_eq(got, &lines)));
-    assert!(repo.history_state.retained_blame_while_loading.is_none());
+    assert!(matches!(&repo.diff_state.blame, Loadable::Ready(got) if Arc::ptr_eq(got, &lines)));
+    assert!(repo.diff_state.retained_blame_while_loading.is_none());
 }
 
 #[test]
@@ -2969,13 +3608,14 @@ fn blame_loaded_replaces_the_retained_allocation_when_changed() {
     let lines = Arc::new(vec![blame_line("let x = 1;")]);
     {
         let repo = repo_mut(&mut state, repo_id);
-        repo.history_state.blame_path = Some(path.clone());
-        repo.history_state.blame_source = Some(source.clone());
-        repo.history_state.blame = Loadable::Ready(Arc::clone(&lines));
+        repo.diff_state.blame_path = Some(path.clone());
+        repo.diff_state.blame_source = Some(source.clone());
+        repo.diff_state.blame = Loadable::Ready(Arc::clone(&lines));
     }
     load_blame(&mut state, repo_id, path.clone(), source.clone());
 
     blame_loaded(
+        &crate::store::reducer::test_inputs::clock(),
         &mut state,
         repo_id,
         path,
@@ -2984,8 +3624,8 @@ fn blame_loaded_replaces_the_retained_allocation_when_changed() {
     );
 
     let repo = repo_mut(&mut state, repo_id);
-    assert!(matches!(&repo.history_state.blame, Loadable::Ready(got) if !Arc::ptr_eq(got, &lines)));
-    assert!(repo.history_state.retained_blame_while_loading.is_none());
+    assert!(matches!(&repo.diff_state.blame, Loadable::Ready(got) if !Arc::ptr_eq(got, &lines)));
+    assert!(repo.diff_state.retained_blame_while_loading.is_none());
 }
 
 #[test]

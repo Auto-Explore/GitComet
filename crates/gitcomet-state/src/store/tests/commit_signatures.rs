@@ -1,4 +1,5 @@
 use super::*;
+use crate::store::repository_runtime::RepositoryRuntimes;
 use gitcomet_core::domain::{CommitSignature, SignatureFormat, SignatureFormats, SignatureStatus};
 use gitcomet_core::signing_tools::{SigningToolAvailability, SigningToolsState};
 
@@ -88,7 +89,7 @@ fn batch(effects: Vec<Effect>) -> Option<Batch> {
 }
 struct Fixture {
     state: AppState,
-    repos: FxHashMap<RepoId, Arc<dyn GitRepository>>,
+    repos: RepositoryRuntimes,
 }
 impl Fixture {
     fn new() -> Self {
@@ -104,7 +105,7 @@ impl Fixture {
         state.active_repo = Some(RepoId(1));
         Self {
             state,
-            repos: FxHashMap::default(),
+            repos: Default::default(),
         }
     }
     fn send(&mut self, msg: Msg) -> Option<Batch> {
@@ -220,6 +221,7 @@ fn scrolling_replaces_pending_work_and_selected_commit_goes_first() {
     assert!(f.targets((100..140).map(id)).is_none());
     assert!(
         f.send(Msg::SelectCommit {
+            request_id: None,
             repo_id: RepoId(1),
             commit_id: id(999)
         })
@@ -242,6 +244,7 @@ fn selection_verifies_immediately_without_waiting_for_details_or_viewport() {
     let mut f = Fixture::new();
     let running = f
         .send(Msg::SelectCommit {
+            request_id: None,
             repo_id: RepoId(1),
             commit_id: id(999),
         })
@@ -250,6 +253,7 @@ fn selection_verifies_immediately_without_waiting_for_details_or_viewport() {
     assert!(f.finish(&running, true).is_none());
     assert!(
         f.send(Msg::SelectCommit {
+            request_id: None,
             repo_id: RepoId(1),
             commit_id: id(999)
         })

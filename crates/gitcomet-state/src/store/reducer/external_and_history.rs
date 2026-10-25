@@ -1,4 +1,5 @@
 use super::actions_emit_effects::invalidate_loaded_blame;
+use super::conflict_load::{start_conflict_target_reload, start_current_conflict_target_reload};
 use super::effects::{append_ensure_sidebar_data_effects, select_commit_and_load_details};
 use super::repo_management::{
     append_cancel_repo_loads_effect_for_repo, append_selected_history_reload_effects,
@@ -6,20 +7,24 @@ use super::repo_management::{
 };
 use super::util::{
     SelectedConflictTarget, append_auto_background_metadata_effects,
-    append_requested_status_refresh_effects, clear_banner_error_for_repo, diff_reload_effects,
-    push_diagnostic, refresh_full_effects, refresh_primary_effects, selected_conflict_target,
-    start_conflict_target_reload, start_current_conflict_target_reload,
+    append_requested_status_refresh_effects, diff_reload_effects, push_diagnostic,
+    refresh_full_effects, refresh_primary_effects, selected_conflict_target,
 };
+use super::{diff_selection, repo_management};
 use crate::model::{
-    AppState, BranchExistsPromptState, DiagnosticKind, InteractiveRebaseSetup, Loadable,
-    RepoLoadsInFlight, SidebarMode,
+    AppState, BranchExistsPromptState, DiagnosticKind, InteractiveRebaseSetup, LoadKind, Loadable,
+    RepoId, SidebarMode,
 };
-use crate::msg::{Effect, RepoActionKind, RepoExternalChange};
+use crate::msg::{Effect, RepoActionKind, RepoExternalChange, RepoPathList};
+use crate::msg::{PersistenceEffect, ReferenceEffect, StatusEffect};
+use crate::store::reducer::prepared::ReducerInputs;
 use gitcomet_core::domain::{DiffArea, DiffTarget, LogCursor, LogPage, LogScope};
 use gitcomet_core::error::Error;
-use gitcomet_core::services::{GitRepository, InteractiveRebaseEntry, SequencerState};
+use gitcomet_core::services::{InteractiveRebaseEntry, SequencerState};
 use rustc_hash::{FxHashMap, FxHashSet};
+use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::AtomicU64;
 
 const LARGE_HISTORY_APPEND_LEN_THRESHOLD: usize = 4_096;
 const SMALL_APPEND_GROWTH_RATIO: usize = 8;
@@ -63,7 +68,7 @@ fn reserve_initial_paginated_log_append_slack<T>(commits: &mut Vec<T>) {
 }
 
 pub(super) fn reload_repo(
-    repos: &FxHashMap<crate::model::RepoId, Arc<dyn GitRepository>>,
+    inputs: &ReducerInputs,
     state: &mut AppState,
     repo_id: crate::model::RepoId,
 ) -> Vec<Effect> {
@@ -95,11 +100,10 @@ pub(super) fn reload_repo(
     repo_state.set_rebase_in_progress(Loadable::Loading);
     repo_state.set_sequencer_state(Loadable::Loading);
     repo_state.set_merge_commit_message(Loadable::Loading);
-    repo_state.history_state.file_history_path = None;
-    repo_state.history_state.file_history = Loadable::NotLoaded;
-    repo_state.history_state.blame_path = None;
-    repo_state.history_state.blame_source = None;
-    repo_state.history_state.blame = Loadable::NotLoaded;
+    repo_state.history_state.clear_file_history();
+    repo_state.diff_state.blame_path = None;
+    repo_state.diff_state.blame_source = None;
+    repo_state.diff_state.blame = Loadable::NotLoaded;
     repo_state.clear_retained_blame();
     repo_state.set_worktrees(Loadable::NotLoaded);
     repo_state.set_submodules(Loadable::NotLoaded);
@@ -120,9 +124,16 @@ pub(super) fn reload_repo(
     // Reload deliberately retains the working-tree diff target. Rebuild the
     // target's classification immediately, before later activation or status
     // results can use the freshly cleared cache.
-    super::refresh_selected_head_gitlink(repos, state, repo_id);
+    super::refresh_selected_head_gitlink(inputs, state, repo_id);
     let repo_state = &mut state.repos[repo_ix];
     effects.extend(refresh_full_effects(repo_state, git_log_settings));
+    if let Some(effect) = super::effects::request_worktrees_effect(repo_state) {
+        effects.push(effect);
+    }
+    effects.extend(super::effects::request_large_file_support_effect(
+        repo_state,
+    ));
+    effects.extend(super::util::reload_selected_text_attributes(repo_state));
     append_auto_background_metadata_effects(repo_state, git_log_settings, &mut effects);
     // Linked-worktree rows survive a reload, so their dirty counts have to be
     // refreshed along with everything else. The monitor only flushes for this
@@ -131,6 +142,9 @@ pub(super) fn reload_repo(
     if let Some(effect) = super::effects::request_worktree_dirty_effect(repo_state) {
         effects.push(effect);
     }
+    // The view only re-requests sections when its request changes, so ensure
+    // the remaining reset sections here too.
+    append_ensure_sidebar_data_effects(repo_state, &mut effects);
     effects
 }
 
@@ -139,7 +153,7 @@ pub(super) fn reload_repo(
 /// user is looking at the tree, and is deferred as `stale` otherwise.
 fn file_browser_refresh_for_external_change(
     repo_state: &mut crate::model::RepoState,
-    change: RepoExternalChange,
+    change: &RepoExternalChange,
     sidebar_shows_this_files_tree: bool,
 ) -> Option<Effect> {
     if !(change.worktree || change.index || change.git_state) {
@@ -157,12 +171,46 @@ fn file_browser_refresh_for_external_change(
     super::effects::request_file_browser_load(repo_state)
 }
 
+/// Whether `change` can alter `target`'s diff. Index, HEAD and attribute
+/// changes reach every live target; worktree edits reach the files they name
+/// in a diff that reads the worktree. Commits never change.
+pub(super) fn external_change_reloads_diff(
+    target: &DiffTarget,
+    change: &RepoExternalChange,
+) -> bool {
+    let reads_worktree = match target {
+        DiffTarget::Commit { .. }
+        | DiffTarget::CommitRange {
+            to_commit_id: Some(_),
+            ..
+        } => return false,
+        DiffTarget::WorkingTree { area, .. } => *area == DiffArea::Unstaged,
+        DiffTarget::CommitRange {
+            to_commit_id: None, ..
+        } => true,
+    };
+    if change.index || change.git_state || change.text_attributes {
+        return true;
+    }
+    reads_worktree
+        && change.worktree
+        && (target
+            .file_path()
+            .is_none_or(|path| change.paths.may_have_changed(path))
+            || target
+                .old_file_path()
+                .is_some_and(|path| change.paths.may_have_changed(path)))
+}
+
 pub(super) fn repo_externally_changed(
-    repos: &FxHashMap<crate::model::RepoId, Arc<dyn GitRepository>>,
+    inputs: &ReducerInputs,
     state: &mut AppState,
     repo_id: crate::model::RepoId,
     change: RepoExternalChange,
 ) -> Vec<Effect> {
+    if super::maintenance::defer_external_change(state, repo_id, &change) {
+        return Vec::new();
+    }
     if change.verification_context && state.git_log_settings.verify_commit_signatures {
         // Config includes and control-file replacements can change the verifier
         // or trust settings without changing any commit. Wait for fresh tool
@@ -179,33 +227,46 @@ pub(super) fn repo_externally_changed(
         if let Some(repo_state) = state.repos.iter_mut().find(|repo| repo.id == repo_id) {
             repo_state.head_gitlink_paths.clear();
         }
-        super::refresh_selected_head_gitlink(repos, state, repo_id);
+        super::refresh_selected_head_gitlink(inputs, state, repo_id);
     }
     let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
         return Vec::new();
     };
+    // Outside the index/worktree chain below: an event that touched both must
+    // still tell the view to look at the open file.
+    if change.worktree {
+        repo_state.record_worktree_change(change.paths.clone());
+    }
+    let session_reloads =
+        if change.worktree || change.index || change.git_state || change.text_attributes {
+            super::diff_session::reload_worktree_sessions(repo_state, &change, None)
+        } else {
+            Vec::new()
+        };
 
-    let file_browser_effect =
-        file_browser_refresh_for_external_change(repo_state, change, sidebar_shows_this_files_tree);
+    let file_browser_effect = file_browser_refresh_for_external_change(
+        repo_state,
+        &change,
+        sidebar_shows_this_files_tree,
+    );
 
     // Coalesce refreshes while a refresh is already in flight.
-    let mut effects = if change.git_state {
+    let mut effects = session_reloads;
+    effects.extend(if change.git_state {
         // A git-state watcher event can be produced by the safety fetch that
         // prepared a pending force-push lease. Preserve that offer; the force
         // push command validates the branch and HEAD again before pushing.
         repo_state.set_recent_commit_messages(Loadable::NotLoaded);
         let mut effects = refresh_primary_effects(repo_state);
-        if repo_state
-            .loads_in_flight
-            .request(RepoLoadsInFlight::BRANCHES)
-        {
-            effects.push(Effect::LoadBranches { repo_id });
+        if repo_state.loads_in_flight.request(LoadKind::Branches) {
+            effects.push(Effect::References(ReferenceEffect::LoadBranches {
+                repo_id,
+            }));
         }
-        if repo_state
-            .loads_in_flight
-            .request(RepoLoadsInFlight::REMOTE_BRANCHES)
-        {
-            effects.push(Effect::LoadRemoteBranches { repo_id });
+        if repo_state.loads_in_flight.request(LoadKind::RemoteBranches) {
+            effects.push(Effect::References(ReferenceEffect::LoadRemoteBranches {
+                repo_id,
+            }));
         }
         if let Some(effect) = super::effects::request_worktree_dirty_effect(repo_state) {
             effects.push(effect);
@@ -222,55 +283,40 @@ pub(super) fn repo_externally_changed(
             append_requested_status_refresh_effects(repo_state, &mut effects);
         } else if change.worktree {
             repo_state.loads_in_flight.invalidate_line_stats();
-            if repo_state
-                .loads_in_flight
-                .request(RepoLoadsInFlight::WORKTREE_STATUS)
-            {
-                effects.push(Effect::LoadWorktreeStatus { repo_id });
+            if repo_state.loads_in_flight.request(LoadKind::WorktreeStatus) {
+                effects.push(Effect::Status(StatusEffect::LoadWorktreeStatus { repo_id }));
             }
         }
         effects
-    };
+    });
 
     effects.extend(file_browser_effect);
+    // The watcher identifies attributes/config/annex-ref changes explicitly.
+    // Ordinary index and HEAD updates do not change large-file capabilities.
+    if change.large_file_support || change.verification_context {
+        effects.extend(super::effects::request_large_file_support_effect(
+            repo_state,
+        ));
+    }
+    if change.text_attributes || change.verification_context {
+        effects.extend(super::util::reload_selected_text_attributes(repo_state));
+    }
 
     // Tag reloads are driven by the `tags` flag alone, independent of
     // `git_state`, so any change that sets `tags` refreshes them regardless of
-    // which other lanes the event touched.
-    if change.tags {
-        repo_state.set_tags(Loadable::NotLoaded);
-        if repo_state.loads_in_flight.request(RepoLoadsInFlight::TAGS) {
-            effects.push(Effect::LoadTags { repo_id });
-        }
+    // which other lanes the event touched. The loaded list stays until the
+    // reload lands: every activation sets the flag, and a reset showed no tags
+    // in history for that window and rebuilt its decorations twice.
+    if change.tags && repo_state.loads_in_flight.request(LoadKind::Tags) {
+        effects.push(Effect::References(ReferenceEffect::LoadTags { repo_id }));
     }
 
-    let should_reload_diff = repo_state
+    if let Some(target) = repo_state
         .diff_state
         .diff_target
         .as_ref()
-        .is_some_and(|target| match target {
-            DiffTarget::WorkingTree { area, .. } => {
-                change.git_state || change.index || (*area == DiffArea::Unstaged && change.worktree)
-            }
-            DiffTarget::Commit { .. } => false,
-            // A commit↔commit range is immutable; a commit↔working-tree range
-            // (to == None) tracks the worktree, so reload it on any change that
-            // moves the index or worktree.
-            DiffTarget::CommitRange { to_commit_id, .. } => {
-                to_commit_id.is_none() && (change.git_state || change.index || change.worktree)
-            }
-        });
-
-    if should_reload_diff
-        && let Some(target) = repo_state.diff_state.diff_target.clone()
-        && matches!(
-            target,
-            DiffTarget::WorkingTree { .. }
-                | DiffTarget::CommitRange {
-                    to_commit_id: None,
-                    ..
-                }
-        )
+        .filter(|target| external_change_reloads_diff(target, &change))
+        .cloned()
     {
         // A moved HEAD (external commit / checkout / rebase) can leave the patch
         // byte-identical while every line's attribution changes ("Not Committed
@@ -293,7 +339,7 @@ pub(super) fn repo_externally_changed(
                 }
             }
         } else {
-            effects.extend(diff_reload_effects(repo_state, repo_id, target));
+            effects.extend(diff_reload_effects(inputs, repo_state, repo_id, target));
         }
     }
 
@@ -303,12 +349,12 @@ pub(super) fn repo_externally_changed(
     // results are dropped if the selection no longer matches (see
     // `range_files_loaded`), so a late reply after the user re-selects is safe.
     if (change.git_state || change.index || change.worktree)
-        && let Some(from) = repo_state
+        && let Some((from, options)) = repo_state
             .history_state
             .range_selection
             .as_ref()
             .filter(|range| range.to.is_none())
-            .map(|range| range.from.clone())
+            .map(|range| (range.from.clone(), range.options))
         // A refresh means two full-tree `git diff` calls, so a debounced save
         // storm must not stack them up. One in flight absorbs the rest and is
         // re-run once when it lands, the same coalescing the status and tag
@@ -321,6 +367,7 @@ pub(super) fn repo_externally_changed(
             repo_id,
             from,
             to: None,
+            options,
             request,
         });
     }
@@ -359,16 +406,38 @@ pub(super) fn set_history_scope(
     let Some(repo_ix) = state.repos.iter().position(|r| r.id == repo_id) else {
         return Vec::new();
     };
+    let shared_key = state.repos[repo_ix]
+        .shared_preferences
+        .as_ref()
+        .map(|snapshot| snapshot.key.clone());
     if state.repos[repo_ix].history_state.history_scope == scope {
-        return Vec::new();
+        // Another tab's choice may still be queued. Every explicit shared
+        // selection must reach the queue, even when this tab needs no reload.
+        return shared_key
+            .map(|key| {
+                Effect::Persistence(PersistenceEffect::UpdateRepositoryPreferences {
+                    repo_id,
+                    key,
+                    update: crate::model::RepositoryPreferenceUpdate::HistoryMode(scope),
+                })
+            })
+            .into_iter()
+            .collect();
     }
     state.repos[repo_ix].set_log_scope(scope);
 
-    restart_history_load(state, repo_ix, |workdir| Effect::PersistRepoHistoryMode {
-        repo_id: Some(repo_id),
-        workdir,
-        mode: scope,
-        action: "updating history mode",
+    restart_history_load(state, repo_ix, |workdir| match shared_key {
+        Some(key) => Effect::Persistence(PersistenceEffect::UpdateRepositoryPreferences {
+            repo_id,
+            key,
+            update: crate::model::RepositoryPreferenceUpdate::HistoryMode(scope),
+        }),
+        None => Effect::Persistence(PersistenceEffect::PersistRepoHistoryMode {
+            repo_id: Some(repo_id),
+            workdir,
+            mode: scope,
+            action: "updating history mode",
+        }),
     })
 }
 
@@ -386,12 +455,12 @@ pub(super) fn set_history_author_filter(
     state.repos[repo_ix].set_history_author_filter(author.clone());
 
     restart_history_load(state, repo_ix, |workdir| {
-        Effect::PersistRepoHistoryAuthorFilter {
+        Effect::Persistence(PersistenceEffect::PersistRepoHistoryAuthorFilter {
             repo_id: Some(repo_id),
             workdir,
             author,
             action: "updating history author filter",
-        }
+        })
     })
 }
 
@@ -408,11 +477,13 @@ pub(super) fn set_history_solo(
     }
     state.repos[repo_ix].set_history_solo(solo.clone());
 
-    restart_history_load(state, repo_ix, |workdir| Effect::PersistRepoHistorySolo {
-        repo_id: Some(repo_id),
-        workdir,
-        solo,
-        action: "updating history solo",
+    restart_history_load(state, repo_ix, |workdir| {
+        Effect::Persistence(PersistenceEffect::PersistRepoHistorySolo {
+            repo_id: Some(repo_id),
+            workdir,
+            solo,
+            action: "updating history solo",
+        })
     })
 }
 
@@ -511,11 +582,7 @@ pub(super) fn load_more_history(
         return Vec::new();
     };
 
-    if repo_state.history_state.log_loading_more
-        || repo_state
-            .loads_in_flight
-            .is_in_flight(RepoLoadsInFlight::LOG)
-    {
+    if repo_state.history_state.log_loading_more || repo_state.loads_in_flight.log_in_flight() {
         return Vec::new();
     }
 
@@ -537,6 +604,7 @@ pub(super) fn load_more_history(
 }
 
 pub(super) fn rebase_state_loaded(
+    inputs: &ReducerInputs,
     state: &mut AppState,
     repo_id: crate::model::RepoId,
     result: std::result::Result<SequencerState, Error>,
@@ -550,16 +618,13 @@ pub(super) fn rebase_state_loaded(
             ),
             Err(e) => {
                 let error = e.to_string();
-                push_diagnostic(repo_state, DiagnosticKind::Error, error.clone());
+                push_diagnostic(inputs, repo_state, DiagnosticKind::Error, error.clone());
                 (Loadable::Error(error.clone()), Loadable::Error(error))
             }
         };
         repo_state.set_sequencer_state(sequencer_value);
         repo_state.set_rebase_in_progress(rebase_value);
-        if repo_state
-            .loads_in_flight
-            .finish(RepoLoadsInFlight::REBASE_STATE)
-        {
+        if repo_state.loads_in_flight.finish(LoadKind::RebaseState) {
             effects.push(Effect::LoadRebaseState { repo_id });
         }
     }
@@ -567,6 +632,7 @@ pub(super) fn rebase_state_loaded(
 }
 
 pub(super) fn interactive_rebase_setup_loaded(
+    inputs: &ReducerInputs,
     state: &mut AppState,
     repo_id: crate::model::RepoId,
     base: String,
@@ -584,7 +650,7 @@ pub(super) fn interactive_rebase_setup_loaded(
             let entries = match result {
                 Ok(v) => Loadable::Ready(v),
                 Err(e) => {
-                    push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
+                    push_diagnostic(inputs, repo_state, DiagnosticKind::Error, e.to_string());
                     Loadable::Error(e.to_string())
                 }
             };
@@ -668,6 +734,7 @@ pub(super) fn interactive_cherry_pick_messages_loaded(
 }
 
 pub(super) fn merge_commit_message_loaded(
+    inputs: &ReducerInputs,
     state: &mut AppState,
     repo_id: crate::model::RepoId,
     result: std::result::Result<Option<String>, Error>,
@@ -677,14 +744,14 @@ pub(super) fn merge_commit_message_loaded(
         let value = match result {
             Ok(v) => Loadable::Ready(v),
             Err(e) => {
-                push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
+                push_diagnostic(inputs, repo_state, DiagnosticKind::Error, e.to_string());
                 Loadable::Error(e.to_string())
             }
         };
         repo_state.set_merge_commit_message(value);
         if repo_state
             .loads_in_flight
-            .finish(RepoLoadsInFlight::MERGE_COMMIT_MESSAGE)
+            .finish(LoadKind::MergeCommitMessage)
         {
             effects.push(Effect::LoadMergeCommitMessage { repo_id });
         }
@@ -732,6 +799,7 @@ pub(super) fn log_chunk_loaded(
 }
 
 pub(super) fn log_loaded(
+    inputs: &ReducerInputs,
     state: &mut AppState,
     repo_id: crate::model::RepoId,
     seq: crate::model::LogLoadSeq,
@@ -761,7 +829,7 @@ pub(super) fn log_loaded(
             // A cancelled walk is not a failure: the request that replaced it
             // owns the state now, so leave everything as the newer load found it.
             Err(e) if matches!(e.kind(), gitcomet_core::error::ErrorKind::Cancelled) => {
-                return finish_log_load(repo_state);
+                return finish_log_load(repo_state, seq);
             }
             Ok(gitcomet_core::services::HistoryReadResult::Unchanged) => {
                 // A failed checkout may have changed the optimistic detached
@@ -769,12 +837,12 @@ pub(super) fn log_loaded(
                 reconcile_detached_head_from_log(repo_state, scope);
                 // Activation and watcher checks can leave history unchanged.
                 // Keep its badges and ongoing verification until a page reloads.
-                return finish_log_load(repo_state);
+                return finish_log_load(repo_state, seq);
             }
             Ok(gitcomet_core::services::HistoryReadResult::Invalidated) => {
                 let request = super::util::refresh_log_request(repo_state);
                 repo_state.loads_in_flight.request_log(request);
-                return finish_log_load(repo_state);
+                return finish_log_load(repo_state, seq);
             }
             Ok(gitcomet_core::services::HistoryReadResult::Page { mut page, snapshot }) => {
                 if is_load_more && let Loadable::Ready(existing) = &mut repo_state.log {
@@ -805,11 +873,11 @@ pub(super) fn log_loaded(
                 repo_state.history_state.log_snapshot = snapshot;
             }
             Err(e) => {
-                push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
+                push_diagnostic(inputs, repo_state, DiagnosticKind::Error, e.to_string());
                 if !matches!(repo_state.log, Loadable::Ready(_)) {
                     repo_state.set_log(Loadable::Error(e.to_string()));
                 }
-                return finish_log_load(repo_state);
+                return finish_log_load(repo_state, seq);
             }
         }
 
@@ -891,7 +959,7 @@ pub(super) fn log_loaded(
             ));
         }
 
-        effects.extend(finish_log_load(repo_state));
+        effects.extend(finish_log_load(repo_state, seq));
     }
     effects
 }
@@ -905,10 +973,13 @@ fn reconcile_detached_head_from_log(repo_state: &mut crate::model::RepoState, sc
     }
 }
 
-fn finish_log_load(repo_state: &mut crate::model::RepoState) -> Vec<Effect> {
+fn finish_log_load(
+    repo_state: &mut crate::model::RepoState,
+    seq: crate::model::LogLoadSeq,
+) -> Vec<Effect> {
     repo_state.set_log_loading_more(false);
     let refresh_limit = super::util::refresh_log_limit(repo_state);
-    if let Some((seq, next)) = repo_state.loads_in_flight.finish_log(|next| {
+    if let Some((seq, next)) = repo_state.loads_in_flight.finish_log(seq, |next| {
         if next.cursor.is_none() {
             next.limit = refresh_limit;
         }
@@ -935,34 +1006,41 @@ enum RepoActionCompletion {
 }
 
 fn finish_repo_action(
-    repos: &FxHashMap<crate::model::RepoId, Arc<dyn GitRepository>>,
+    inputs: &ReducerInputs,
     state: &mut AppState,
     repo_id: crate::model::RepoId,
     action: RepoActionKind,
     completion: RepoActionCompletion,
 ) -> Vec<Effect> {
     let rebuild_selected_head_gitlink = repo_action_clears_head_dependent_state(action);
-    let mut clear_banner = false;
+    let refresh_worktrees = matches!(completion, RepoActionCompletion::Succeeded)
+        && matches!(
+            action,
+            RepoActionKind::CheckoutBranch
+                | RepoActionKind::CheckoutRemoteBranch
+                | RepoActionKind::CheckoutCommit
+                | RepoActionKind::CreateBranchAndCheckout
+                | RepoActionKind::RenameBranch
+        );
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
         repo_state.local_actions_in_flight = repo_state.local_actions_in_flight.saturating_sub(1);
         repo_state.bump_ops_rev();
+        if action.writes_worktree() {
+            repo_state.bump_local_worktree_write_rev();
+        }
         match completion {
             RepoActionCompletion::Succeeded => {
-                repo_state.feedback.last_error = None;
+                repo_state.feedback_mut().last_error = None;
                 if repo_action_clears_head_dependent_state(action) {
                     repo_state.clear_head_dependent_cached_state();
                 }
-                clear_banner = true;
             }
             RepoActionCompletion::ExpectedNoop => {}
             RepoActionCompletion::Failed(e) => {
-                repo_state.feedback.last_error = Some(e.to_string());
-                push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
+                repo_state.feedback_mut().last_error = Some(e.to_string());
+                push_diagnostic(inputs, repo_state, DiagnosticKind::Error, e.to_string());
             }
         }
-    }
-    if clear_banner {
-        clear_banner_error_for_repo(state, repo_id);
     }
 
     // HEAD-changing actions invalidate this cache when they start. Classify the
@@ -971,7 +1049,7 @@ fn finish_repo_action(
     // may retain the staged deletion, while partial failures may still move
     // HEAD.
     if rebuild_selected_head_gitlink {
-        super::refresh_selected_head_gitlink(repos, state, repo_id);
+        super::refresh_selected_head_gitlink(inputs, state, repo_id);
     }
     let is_active = state.active_repo == Some(repo_id);
 
@@ -991,23 +1069,29 @@ fn finish_repo_action(
     // were just cleared, so request_* dispatches fresh loads under the new epoch.
     effects.extend(refresh_primary_effects(repo_state));
 
+    // Only queue the scan after cancellation above. Its successful full listing
+    // refreshes branch badges too, without a second list request from the worker.
+    if refresh_worktrees
+        && let Some(effect) = super::effects::request_worktree_dirty_effect(repo_state)
+    {
+        effects.push(effect);
+    }
+
     // Selected views (branch lists, history, diff) only matter for the repo the user is viewing. A
     // non-active repo's in-flight views were reset to `NotLoaded` and reload when it is next
     // activated; the primary panes above are still refreshed so they are current on return.
     if is_active {
         // Re-issue branch lists when one was in flight before (refresh_primary_effects does not
         // cover them); request() returns true now that the flag was cleared.
-        if repo_state
-            .loads_in_flight
-            .request(RepoLoadsInFlight::BRANCHES)
-        {
-            effects.push(Effect::LoadBranches { repo_id });
+        if repo_state.loads_in_flight.request(LoadKind::Branches) {
+            effects.push(Effect::References(ReferenceEffect::LoadBranches {
+                repo_id,
+            }));
         }
-        if repo_state
-            .loads_in_flight
-            .request(RepoLoadsInFlight::REMOTE_BRANCHES)
-        {
-            effects.push(Effect::LoadRemoteBranches { repo_id });
+        if repo_state.loads_in_flight.request(LoadKind::RemoteBranches) {
+            effects.push(Effect::References(ReferenceEffect::LoadRemoteBranches {
+                repo_id,
+            }));
         }
 
         // Re-issue sidebar data loads (worktrees, submodules, stashes) that were
@@ -1028,7 +1112,7 @@ fn finish_repo_action(
                     }
                 }
             } else {
-                effects.extend(diff_reload_effects(repo_state, repo_id, target));
+                effects.extend(diff_reload_effects(inputs, repo_state, repo_id, target));
             }
         }
     }
@@ -1037,7 +1121,7 @@ fn finish_repo_action(
 }
 
 pub(super) fn repo_action_finished(
-    repos: &FxHashMap<crate::model::RepoId, Arc<dyn GitRepository>>,
+    inputs: &ReducerInputs,
     state: &mut AppState,
     repo_id: crate::model::RepoId,
     action: RepoActionKind,
@@ -1047,11 +1131,11 @@ pub(super) fn repo_action_finished(
         Ok(()) => RepoActionCompletion::Succeeded,
         Err(error) => RepoActionCompletion::Failed(error),
     };
-    finish_repo_action(repos, state, repo_id, action, completion)
+    finish_repo_action(inputs, state, repo_id, action, completion)
 }
 
 pub(super) fn branch_already_exists(
-    repos: &FxHashMap<crate::model::RepoId, Arc<dyn GitRepository>>,
+    inputs: &ReducerInputs,
     state: &mut AppState,
     action: RepoActionKind,
     prompt: BranchExistsPromptState,
@@ -1063,7 +1147,7 @@ pub(super) fn branch_already_exists(
     let repo_id = prompt.repo_id;
     state.branch_exists_prompt = Some(prompt);
     finish_repo_action(
-        repos,
+        inputs,
         state,
         repo_id,
         action,
@@ -1071,7 +1155,7 @@ pub(super) fn branch_already_exists(
     )
 }
 
-fn repo_action_clears_head_dependent_state(action: RepoActionKind) -> bool {
+pub(super) fn repo_action_clears_head_dependent_state(action: RepoActionKind) -> bool {
     matches!(
         action,
         RepoActionKind::CheckoutBranch
@@ -1081,6 +1165,53 @@ fn repo_action_clears_head_dependent_state(action: RepoActionKind) -> bool {
             | RepoActionKind::CreateBranchAndCheckout
             | RepoActionKind::RenameBranch
     )
+}
+
+pub(super) fn repo_paths_action_finished(
+    inputs: &ReducerInputs,
+    state: &mut AppState,
+    repo_id: RepoId,
+    action: RepoActionKind,
+    paths: RepoPathList,
+    result: Result<(), Error>,
+) -> Vec<Effect> {
+    if result.is_ok() {
+        if matches!(
+            action,
+            RepoActionKind::DiscardWorktreeChangesPath
+                | RepoActionKind::DiscardWorktreeChangesPaths
+        ) {
+            diff_selection::clear_diff_selection_after_discard(state, repo_id, paths.as_slice());
+        } else if let Some(area) = action.status_diff_area() {
+            diff_selection::clear_diff_selection_for_status_action(
+                state,
+                repo_id,
+                area,
+                paths.as_slice(),
+            );
+        }
+    }
+    repo_action_finished(inputs, state, repo_id, action, result)
+}
+
+pub(super) fn repo_action_finished_in_worktree(
+    inputs: &ReducerInputs,
+    id_alloc: &AtomicU64,
+    state: &mut AppState,
+    repo_id: RepoId,
+    action: RepoActionKind,
+    worktree_path: PathBuf,
+    result: Result<(), Error>,
+) -> Vec<Effect> {
+    // Open first so the origin tab is inactive when its action finishes and
+    // only refreshes its primary state instead of reloading everything.
+    let mut effects = if result.is_ok() {
+        repo_management::open_repo(inputs, id_alloc, state, worktree_path)
+    } else {
+        Vec::new()
+    };
+    effects.extend(repo_action_finished(inputs, state, repo_id, action, result));
+    effects
 }
 
 #[cfg(test)]

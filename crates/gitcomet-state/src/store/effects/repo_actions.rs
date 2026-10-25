@@ -1,5 +1,6 @@
 use crate::model::{BranchExistsPromptOperation, BranchExistsPromptState};
 use crate::msg::{InternalMsg, Msg, RepoActionKind, RepoPathList};
+use crate::store::repository_runtime::RepositoryRuntimes;
 use gitcomet_core::auth::{ScopedStagedGitAuth, StagedGitAuth};
 use gitcomet_core::error::{Error, ErrorKind, GitFailureId};
 use gitcomet_core::services::{CheckoutRemoteBranchMode, GitBackend, GitRepository};
@@ -8,7 +9,7 @@ use std::sync::Arc;
 
 use super::super::{RepoId, executor::TaskExecutor, worker_channel::StoreWorkerSender};
 use super::util::{
-    GitOperationTask, RepoMap, message_subject, missing_repo_error, path_context, paths_context,
+    GitOperationTask, message_subject, missing_repo_error, path_context, paths_context,
     send_or_log, short_commit_id, single_line_context, spawn_with_repo, spawn_with_repo_or_else,
 };
 
@@ -20,27 +21,38 @@ use super::util::{
 /// leave the stage, unstage and discard controls disabled for good.
 fn spawn_repo_action(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     repo_id: RepoId,
     msg_tx: StoreWorkerSender,
     action: RepoActionKind,
     task: impl FnOnce(Arc<dyn GitRepository>, StoreWorkerSender) + Send + 'static,
 ) {
-    spawn_with_repo_or_else(executor, repos, repo_id, msg_tx, task, move |msg_tx| {
-        send_or_log(
-            &msg_tx,
-            Msg::Internal(InternalMsg::RepoActionFinished {
-                repo_id,
-                action,
-                result: Err(missing_repo_error(repo_id)),
-            }),
-        );
-    });
+    spawn_with_repo_or_else(
+        executor,
+        repos,
+        repo_id,
+        msg_tx,
+        move |repo, msg_tx| {
+            let gate = super::super::mutation_gate::for_repo(repo.as_ref());
+            let _mutation = gate.read().unwrap_or_else(|error| error.into_inner());
+            task(repo, msg_tx);
+        },
+        move |msg_tx| {
+            send_or_log(
+                &msg_tx,
+                Msg::Internal(InternalMsg::RepoActionFinished {
+                    repo_id,
+                    action,
+                    result: Err(missing_repo_error(repo_id)),
+                }),
+            );
+        },
+    );
 }
 
 fn schedule_repo_action_with_hook<F, H, M>(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     action: RepoActionKind,
@@ -76,7 +88,7 @@ fn schedule_repo_action_with_hook<F, H, M>(
 
 fn schedule_repo_action_with_result<T, F, M>(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     label: &'static str,
@@ -89,7 +101,7 @@ fn schedule_repo_action_with_result<T, F, M>(
     M: FnOnce(RepoId, Result<T, Error>) -> InternalMsg + Send + 'static,
 {
     // See `spawn_repo_action`: a missing handle must still complete the action.
-    if !repos.contains_key(&repo_id) {
+    if !repos.has_repository(&repo_id) {
         if !msg_tx.is_cancelled() {
             send_or_log(
                 &msg_tx,
@@ -99,6 +111,8 @@ fn schedule_repo_action_with_result<T, F, M>(
         return;
     }
     spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
+        let gate = super::super::mutation_gate::for_repo(repo.as_ref());
+        let _mutation = gate.read().unwrap_or_else(|error| error.into_inner());
         let operation = GitOperationTask::start(repo_id, label, context, &msg_tx);
         let result = {
             let _scope = operation.attach();
@@ -122,7 +136,7 @@ fn repo_action_finished(
 
 fn schedule_repo_action<F>(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     action: RepoActionKind,
@@ -152,26 +166,6 @@ fn send_refresh_branches_on_success(
     if result.is_ok() {
         send_or_log(msg_tx, Msg::RefreshBranches { repo_id });
     }
-}
-
-fn send_load_worktrees_on_success(
-    msg_tx: &StoreWorkerSender,
-    repo_id: RepoId,
-    result: &Result<(), Error>,
-) {
-    if result.is_ok() {
-        send_or_log(msg_tx, Msg::LoadWorktrees { repo_id });
-        send_or_log(msg_tx, Msg::LoadWorktreeDirty { repo_id });
-    }
-}
-
-fn send_refresh_branches_and_load_worktrees_on_success(
-    msg_tx: &StoreWorkerSender,
-    repo_id: RepoId,
-    result: &Result<(), Error>,
-) {
-    send_refresh_branches_on_success(msg_tx, repo_id, result);
-    send_load_worktrees_on_success(msg_tx, repo_id, result);
 }
 
 fn dedup_paths(mut paths: Vec<PathBuf>) -> Vec<PathBuf> {
@@ -231,7 +225,7 @@ fn open_worktree_holding_branch(
             path.display()
         ))));
     }
-    let current = handle.current_branch()?;
+    let current = handle.current_branch(&gitcomet_core::services::CancellationToken::new())?;
     if current != branch {
         return Err(Error::new(ErrorKind::Backend(format!(
             "the worktree at '{}' no longer has branch '{branch}' checked out",
@@ -275,7 +269,7 @@ fn finish_branch_collision(
 #[allow(clippy::too_many_arguments)]
 fn schedule_branch_action(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     backend: Arc<dyn GitBackend>,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
@@ -313,7 +307,7 @@ fn schedule_branch_action(
                 }
             };
             if ran {
-                send_refresh_branches_and_load_worktrees_on_success(&msg_tx, repo_id, &result);
+                send_refresh_branches_on_success(&msg_tx, repo_id, &result);
             }
             let outcome = GitOperationTask::outcome(&result);
             let message = match host {
@@ -338,7 +332,7 @@ fn schedule_branch_action(
 
 pub(super) fn schedule_checkout_branch(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     backend: Arc<dyn GitBackend>,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
@@ -363,7 +357,7 @@ pub(super) fn schedule_checkout_branch(
 #[allow(clippy::too_many_arguments)]
 pub(super) fn schedule_checkout_remote_branch(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     backend: Arc<dyn GitBackend>,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
@@ -382,7 +376,7 @@ pub(super) fn schedule_checkout_remote_branch(
             RepoActionKind::CheckoutRemoteBranch,
             context,
             move |repo| repo.checkout_remote_branch(&remote, &branch, &local_branch, mode),
-            send_refresh_branches_and_load_worktrees_on_success,
+            send_refresh_branches_on_success,
             repo_action_finished(RepoActionKind::CheckoutRemoteBranch),
         ),
         CheckoutRemoteBranchMode::Overwrite => {
@@ -405,7 +399,7 @@ pub(super) fn schedule_checkout_remote_branch(
 
 pub(super) fn schedule_checkout_commit(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     commit_id: gitcomet_core::domain::CommitId,
@@ -419,14 +413,14 @@ pub(super) fn schedule_checkout_commit(
         RepoActionKind::CheckoutCommit,
         context,
         move |repo| repo.checkout_commit(&commit_id),
-        send_load_worktrees_on_success,
+        |_msg_tx, _repo_id, _result| {},
         repo_action_finished(RepoActionKind::CheckoutCommit),
     );
 }
 
 pub(super) fn schedule_create_branch(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     name: String,
@@ -452,7 +446,7 @@ pub(super) fn schedule_create_branch(
 #[allow(clippy::too_many_arguments)]
 pub(super) fn schedule_create_branch_and_checkout(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     backend: Arc<dyn GitBackend>,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
@@ -523,10 +517,6 @@ pub(super) fn schedule_create_branch_and_checkout(
             if refresh {
                 send_or_log(&msg_tx, Msg::RefreshBranches { repo_id });
             }
-            if result.is_ok() {
-                send_or_log(&msg_tx, Msg::LoadWorktrees { repo_id });
-                send_or_log(&msg_tx, Msg::LoadWorktreeDirty { repo_id });
-            }
             let outcome = GitOperationTask::outcome(&result);
             operation.finish(
                 outcome,
@@ -543,7 +533,7 @@ pub(super) fn schedule_create_branch_and_checkout(
 #[allow(clippy::too_many_arguments)]
 pub(super) fn schedule_rename_branch(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     backend: Arc<dyn GitBackend>,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
@@ -601,7 +591,7 @@ pub(super) fn schedule_rename_branch(
                 );
                 return;
             }
-            send_refresh_branches_and_load_worktrees_on_success(&msg_tx, repo_id, &result);
+            send_refresh_branches_on_success(&msg_tx, repo_id, &result);
             let outcome = GitOperationTask::outcome(&result);
             operation.finish(
                 outcome,
@@ -617,7 +607,7 @@ pub(super) fn schedule_rename_branch(
 
 pub(super) fn schedule_delete_branch(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     name: String,
@@ -647,7 +637,7 @@ pub(super) fn schedule_delete_branch(
 /// failures are summarised into one error rather than aborting on the first.
 pub(super) fn schedule_delete_branches(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     names: Vec<String>,
@@ -728,7 +718,7 @@ fn delete_branches_failure_message(
 
 pub(super) fn schedule_force_delete_branch(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     name: String,
@@ -749,13 +739,14 @@ pub(super) fn schedule_force_delete_branch(
 
 pub(super) fn schedule_stage_path(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     path: PathBuf,
 ) {
     let context = path_context(&path);
-    schedule_repo_action(
+    let completed_paths = vec![path.clone()].into();
+    schedule_repo_action_with_hook(
         executor,
         repos,
         msg_tx,
@@ -766,18 +757,26 @@ pub(super) fn schedule_stage_path(
             let path_ref: &Path = &path;
             repo.stage(&[path_ref])
         },
+        |_msg_tx, _repo_id, _result| {},
+        move |repo_id, result| InternalMsg::RepoPathsActionFinished {
+            repo_id,
+            action: RepoActionKind::StagePath,
+            paths: completed_paths,
+            result,
+        },
     );
 }
 
 pub(super) fn schedule_stage_paths(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     paths: RepoPathList,
 ) {
     let context = paths_context(paths.as_slice(), "files");
-    schedule_repo_action(
+    let completed_paths = paths.clone();
+    schedule_repo_action_with_hook(
         executor,
         repos,
         msg_tx,
@@ -789,18 +788,26 @@ pub(super) fn schedule_stage_paths(
             let refs = unique.iter().map(|p| p.as_path()).collect::<Vec<_>>();
             repo.stage(&refs)
         },
+        |_msg_tx, _repo_id, _result| {},
+        move |repo_id, result| InternalMsg::RepoPathsActionFinished {
+            repo_id,
+            action: RepoActionKind::StagePaths,
+            paths: completed_paths,
+            result,
+        },
     );
 }
 
 pub(super) fn schedule_unstage_path(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     path: PathBuf,
 ) {
     let context = path_context(&path);
-    schedule_repo_action(
+    let completed_paths = vec![path.clone()].into();
+    schedule_repo_action_with_hook(
         executor,
         repos,
         msg_tx,
@@ -811,18 +818,26 @@ pub(super) fn schedule_unstage_path(
             let path_ref: &Path = &path;
             repo.unstage(&[path_ref])
         },
+        |_msg_tx, _repo_id, _result| {},
+        move |repo_id, result| InternalMsg::RepoPathsActionFinished {
+            repo_id,
+            action: RepoActionKind::UnstagePath,
+            paths: completed_paths,
+            result,
+        },
     );
 }
 
 pub(super) fn schedule_unstage_paths(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     paths: RepoPathList,
 ) {
     let context = paths_context(paths.as_slice(), "files");
-    schedule_repo_action(
+    let completed_paths = paths.clone();
+    schedule_repo_action_with_hook(
         executor,
         repos,
         msg_tx,
@@ -834,18 +849,26 @@ pub(super) fn schedule_unstage_paths(
             let refs = unique.iter().map(|p| p.as_path()).collect::<Vec<_>>();
             repo.unstage(&refs)
         },
+        |_msg_tx, _repo_id, _result| {},
+        move |repo_id, result| InternalMsg::RepoPathsActionFinished {
+            repo_id,
+            action: RepoActionKind::UnstagePaths,
+            paths: completed_paths,
+            result,
+        },
     );
 }
 
 pub(super) fn schedule_discard_worktree_changes_path(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     path: PathBuf,
 ) {
     let context = path_context(&path);
-    schedule_repo_action(
+    let completed_paths = vec![path.clone()].into();
+    schedule_repo_action_with_hook(
         executor,
         repos,
         msg_tx,
@@ -856,18 +879,26 @@ pub(super) fn schedule_discard_worktree_changes_path(
             let path_ref: &Path = &path;
             repo.discard_worktree_changes(&[path_ref])
         },
+        |_msg_tx, _repo_id, _result| {},
+        move |repo_id, result| InternalMsg::RepoPathsActionFinished {
+            repo_id,
+            action: RepoActionKind::DiscardWorktreeChangesPath,
+            paths: completed_paths,
+            result,
+        },
     );
 }
 
 pub(super) fn schedule_discard_worktree_changes_paths(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     paths: Vec<PathBuf>,
 ) {
     let context = paths_context(&paths, "files");
-    schedule_repo_action(
+    let completed_paths = paths.clone().into();
+    schedule_repo_action_with_hook(
         executor,
         repos,
         msg_tx,
@@ -879,15 +910,23 @@ pub(super) fn schedule_discard_worktree_changes_paths(
             let refs = unique.iter().map(|p| p.as_path()).collect::<Vec<_>>();
             repo.discard_worktree_changes(&refs)
         },
+        |_msg_tx, _repo_id, _result| {},
+        move |repo_id, result| InternalMsg::RepoPathsActionFinished {
+            repo_id,
+            action: RepoActionKind::DiscardWorktreeChangesPaths,
+            paths: completed_paths,
+            result,
+        },
     );
 }
 
 pub(super) fn schedule_commit(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     message: String,
+    identity: Option<gitcomet_core::commit_identity::CommitIdentity>,
     auth: Option<StagedGitAuth>,
 ) {
     let context = message_subject(&message).or_else(|| Some("No commit message".to_string()));
@@ -898,17 +937,22 @@ pub(super) fn schedule_commit(
         repo_id,
         "Commit",
         context,
-        move |repo| run_with_git_auth(auth, || repo.commit_with_outcome(&message)),
+        move |repo| {
+            run_with_git_auth(auth, || {
+                repo.commit_with_identity(&message, identity.as_ref())
+            })
+        },
         |repo_id, result| InternalMsg::CommitFinished { repo_id, result },
     );
 }
 
 pub(super) fn schedule_commit_amend(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     message: String,
+    identity: Option<gitcomet_core::commit_identity::CommitIdentity>,
     auth: Option<StagedGitAuth>,
 ) {
     let context = message_subject(&message).or_else(|| Some("No commit message".to_string()));
@@ -919,14 +963,18 @@ pub(super) fn schedule_commit_amend(
         repo_id,
         "Amend commit",
         context,
-        move |repo| run_with_git_auth(auth, || repo.commit_amend_with_outcome(&message)),
+        move |repo| {
+            run_with_git_auth(auth, || {
+                repo.commit_amend_with_identity(&message, identity.as_ref())
+            })
+        },
         |repo_id, result| InternalMsg::CommitAmendFinished { repo_id, result },
     );
 }
 
 pub(super) fn schedule_stash(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     message: String,
@@ -957,7 +1005,7 @@ pub(super) fn schedule_stash(
 
 pub(super) fn schedule_apply_stash(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     index: usize,
@@ -975,7 +1023,7 @@ pub(super) fn schedule_apply_stash(
 
 pub(super) fn schedule_pop_stash(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     index: usize,
@@ -1019,7 +1067,7 @@ pub(super) fn schedule_pop_stash(
 
 pub(super) fn schedule_drop_stash(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     index: usize,

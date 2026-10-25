@@ -1,16 +1,17 @@
 use super::{
     GixRepo, bstr_to_arc_str,
-    conflict_stages::{gix_index_stage_blob_bytes_optional, gix_index_stage_exists},
+    conflict_stages::{
+        gix_index_stage_blob_bytes_optional, gix_index_stage_exists, gix_index_stage_mode_optional,
+    },
     oid_to_arc_str,
 };
 use crate::util::{
     bytes_to_text_preserving_utf8, git_command_timeout, path_buf_from_git_bytes,
-    run_git_capture_bytes, run_git_with_output, run_git_with_stdin_capture,
+    push_literal_paths, run_git_capture_bytes, run_git_with_output, run_git_with_stdin_capture,
 };
 use gitcomet_core::domain::{DiffArea, is_uncommitted_commit_id};
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::services::{BlameLine, CommandOutput, ConflictSide, Result};
-use gix::bstr::ByteSlice as _;
 use rustc_hash::FxHashMap;
 use std::collections::hash_map::Entry;
 use std::fs;
@@ -56,11 +57,11 @@ fn tree_contains_path(repo: &gix::Repository, id: gix::ObjectId, path: &Path) ->
 /// when there is no `HEAD` (unborn branch) or the path is absent there — exactly
 /// when `git blame` would fail with "no such path ... in HEAD" because the file
 /// has no committed history and all of its lines are local changes.
-fn path_exists_at_head(repo: &gix::Repository, path: &Path) -> bool {
-    let Ok(id) = repo.head_id() else {
-        return false;
+fn path_exists_at_head(repo: &gix::Repository, path: &Path) -> Result<bool> {
+    let Some(id) = crate::refs::head_oid(repo)? else {
+        return Ok(false);
     };
-    tree_contains_path(repo, id.detach(), path)
+    Ok(tree_contains_path(repo, id, path))
 }
 
 /// Read the staged (index) content for `path` to blame. This is normally the
@@ -84,11 +85,10 @@ fn staged_blob_for_blame(repo: &gix::Repository, path: &Path) -> Result<Vec<u8>>
 /// committed history (newly added / untracked) where every line is local. The
 /// all-zero object id matches what `git blame --line-porcelain` emits for
 /// uncommitted lines, so the UI treats these rows the same way.
-fn synthesize_uncommitted_blame(contents: &[u8]) -> Vec<BlameLine> {
+fn synthesize_uncommitted_blame(contents: &[u8], null_id: gix::ObjectId) -> Vec<BlameLine> {
     const NOT_COMMITTED: &str = "Not Committed Yet";
-    const UNCOMMITTED_ID: &str = "0000000000000000000000000000000000000000";
 
-    let commit_id: Arc<str> = Arc::from(UNCOMMITTED_ID);
+    let commit_id: Arc<str> = Arc::from(null_id.to_string());
     let author: Arc<str> = Arc::from(NOT_COMMITTED);
     blame_blob_lines(contents)
         .map(|line| BlameLine {
@@ -382,9 +382,10 @@ impl GixRepo {
 
         let repo = self.repo();
         let spec = rev.unwrap_or("HEAD");
-        let suspect = repo
-            .rev_parse_single(spec)
-            .map_err(|e| Error::new(ErrorKind::Backend(format!("gix rev-parse {spec}: {e}"))))?
+        let suspect = crate::refs::resolve_required(&repo, spec)
+            .map_err(|e| {
+                Error::new(ErrorKind::Backend(format!("gix rev-parse {spec}: {e}"))).with_source(e)
+            })?
             .detach();
         let git_path = gix::path::os_str_into_bstr(path.as_os_str())
             .map(gix::path::to_unix_separators_on_windows)
@@ -426,7 +427,10 @@ impl GixRepo {
             let source_path = entry
                 .source_file_name
                 .as_ref()
-                .map(|name| gix::path::from_bstr(name.as_bstr()).into_owned())
+                .map(|name| {
+                    crate::util::path_buf_from_git_bytes(name.as_ref(), "gix blame source path")
+                })
+                .transpose()?
                 .filter(|source| source.as_path() != path);
             let metadata = blame_commit_metadata(
                 &repo,
@@ -474,15 +478,21 @@ impl GixRepo {
         // line is local, so synthesize the blame directly from the shown content
         // (working tree for unstaged, the staged blob for staged).
         let repo = self.repo();
-        if !path_exists_at_head(&repo, path) {
+        if !path_exists_at_head(&repo, path)? {
             let contents = match area {
                 DiffArea::Unstaged => {
                     let abs_path = self.spec.workdir.join(path);
-                    fs::read(&abs_path).map_err(|e| Error::new(ErrorKind::Io(e.kind())))?
+                    fs::read(&abs_path).map_err(|error| {
+                        Error::from(error)
+                            .with_context("read worktree blame content", Some(&abs_path))
+                    })?
                 }
                 DiffArea::Staged => staged_blob_for_blame(&repo, path)?,
             };
-            return Ok(synthesize_uncommitted_blame(&contents));
+            return Ok(synthesize_uncommitted_blame(
+                &contents,
+                repo.object_hash().null(),
+            ));
         }
 
         let mut cmd = self.git_workdir_cmd();
@@ -528,7 +538,8 @@ impl GixRepo {
 
         if !gix_index_stage_exists(&repo, path, desired_stage)? {
             let mut rm = self.git_workdir_cmd();
-            rm.arg("rm").arg("--").arg(path);
+            rm.arg("rm");
+            push_literal_paths(&mut rm, [path]);
             return run_git_with_output(rm, "git rm --");
         }
 
@@ -542,11 +553,12 @@ impl GixRepo {
                 checkout.arg("--theirs");
             }
         }
-        checkout.arg("--").arg(path);
+        push_literal_paths(&mut checkout, [path]);
         let checkout_out = run_git_with_output(checkout, "git checkout --ours/--theirs")?;
 
         let mut add = self.git_workdir_cmd();
-        add.arg("add").arg("--").arg(path);
+        add.arg("add");
+        push_literal_paths(&mut add, [path]);
         let add_out = run_git_with_output(add, "git add --")?;
 
         Ok(CommandOutput {
@@ -567,40 +579,58 @@ impl GixRepo {
 
     pub(super) fn accept_conflict_deletion_impl(&self, path: &Path) -> Result<CommandOutput> {
         let mut rm = self.git_workdir_cmd();
-        rm.arg("rm").arg("--").arg(path);
+        rm.arg("rm");
+        push_literal_paths(&mut rm, [path]);
         run_git_with_output(rm, "git rm --")
     }
 
     pub(super) fn checkout_conflict_base_impl(&self, path: &Path) -> Result<CommandOutput> {
         let repo = self.repo();
-        let base_bytes = gix_index_stage_blob_bytes_optional(&repo, path, 1)?.ok_or_else(|| {
-            Error::new(ErrorKind::Backend(format!(
-                "base conflict stage is not available for {}",
-                path.display()
-            )))
-        })?;
-        let abs_path = self.spec.workdir.join(path);
-        if let Some(parent) = abs_path.parent() {
-            fs::create_dir_all(parent).map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
+        match gix_index_stage_mode_optional(&repo, path, 1)? {
+            None => {
+                return Err(Error::new(ErrorKind::Backend(format!(
+                    "base conflict stage is not available for {}",
+                    path.display()
+                ))));
+            }
+            // checkout-index skips a gitlink and the `git add` below would
+            // then record whatever the submodule has checked out.
+            Some(mode) if mode == gix::index::entry::Mode::COMMIT => {
+                return Err(Error::new(ErrorKind::Backend(format!(
+                    "{} is a submodule conflict; take a side instead of the base",
+                    path.display()
+                ))));
+            }
+            Some(_) => {}
         }
-        fs::write(&abs_path, base_bytes).map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
+        // Write the stage the way a checkout does: replacing a symlink in the
+        // worktree rather than writing through it, as a symlink when the base
+        // is one, and through the smudge filters and eol rules.
+        let mut checkout = self.git_workdir_cmd();
+        checkout
+            .args(["checkout-index", "-f", "--stage=1", "--"])
+            .arg(path);
+        let checkout_out = run_git_with_output(checkout, "git checkout-index --stage=1")?;
 
         let mut add = self.git_workdir_cmd();
-        add.arg("add").arg("--").arg(path);
+        add.arg("add");
+        push_literal_paths(&mut add, [path]);
         let add_out = run_git_with_output(add, "git add --")?;
 
-        Ok(CommandOutput {
-            command: format!("git show :1:{} + git add --", path.display()),
-            stdout: add_out.stdout,
-            stderr: add_out.stderr,
-            exit_code: add_out.exit_code,
-        })
+        Ok(CommandOutput::combine(
+            format!(
+                "git checkout-index --stage=1 {} + git add --",
+                path.display()
+            ),
+            &[checkout_out, add_out],
+        ))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::{git_success, open_gix};
 
     #[test]
     fn blame_line_text_trims_crlf_and_lf() {
@@ -729,7 +759,8 @@ mod tests {
         // A newly added file with no committed history: every line is surfaced as
         // an uncommitted ("Not Committed Yet") entry with the all-zero object id
         // and no parent revision to navigate to.
-        let lines = synthesize_uncommitted_blame(b"first\nsecond\nthird");
+        let lines =
+            synthesize_uncommitted_blame(b"first\nsecond\nthird", gix::hash::Kind::Sha1.null());
         assert_eq!(lines.len(), 3);
         assert_eq!(
             lines.iter().map(|l| l.line.as_str()).collect::<Vec<_>>(),
@@ -751,7 +782,7 @@ mod tests {
 
     #[test]
     fn synthesize_uncommitted_blame_is_empty_for_empty_file() {
-        assert!(synthesize_uncommitted_blame(b"").is_empty());
+        assert!(synthesize_uncommitted_blame(b"", gix::hash::Kind::Sha1.null()).is_empty());
     }
 
     #[test]
@@ -823,32 +854,19 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let repo_path = dir.path();
 
-        let ok = std::process::Command::new("git")
-            .args(["init", "-b", "main"])
-            .current_dir(repo_path)
-            .status()
-            .unwrap()
-            .success();
-        assert!(ok, "git init must succeed");
+        git_success(repo_path, &["init", "-b", "main"]);
 
         // Default (no diff.renames): rename tracking enabled.
-        let repo = gix::open(repo_path).unwrap();
+        let repo = open_gix(repo_path);
         assert!(
             configured_rewrites(&repo).is_some(),
             "default (no diff.renames) must enable rewrites"
         );
 
         // Explicit disable via diff.renames=false.
-        let ok = std::process::Command::new("git")
-            .args(["-C"])
-            .arg(repo_path.to_string_lossy().as_ref())
-            .args(["config", "diff.renames", "false"])
-            .status()
-            .unwrap()
-            .success();
-        assert!(ok, "git config must succeed");
+        git_success(repo_path, &["config", "diff.renames", "false"]);
 
-        let repo = gix::open(repo_path).unwrap();
+        let repo = open_gix(repo_path);
         assert!(
             configured_rewrites(&repo).is_none(),
             "diff.renames=false must disable rewrites entirely"

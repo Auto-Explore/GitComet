@@ -1,0 +1,7 @@
+architecture-beta
+    service a(server)[A]
+    service b(server)[B]
+    service c(database)[C]
+    a:R -- L:b
+    a:B -- T:c
+    c:R -- L:b

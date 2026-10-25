@@ -18,15 +18,27 @@ on:
         type: number
         default: 1
       nextest-threads:
-        description: Optional positive nextest concurrency (serial schedule only)
+        description: Optional positive nextest concurrency
         type: string
         default: ''
       nextest-profile:
         description: Optional limit for concurrent Git-heavy tests
         type: string
         default: ci
+      pure-threads:
+        description: Optional positive concurrency for audited pure batches
+        type: string
+        default: ''
+      resource-stats:
+        description: Collect instrumented process-tree diagnostics
+        type: boolean
+        default: false
+      batch-pure-tests:
+        description: Audited batching mode (auto enables on Windows)
+        type: string
+        default: auto
       ui-threads:
-        description: Optional positive UI libtest concurrency (serial schedule only)
+        description: Optional positive UI libtest concurrency
         type: string
         default: ''
       fixture-timings:
@@ -36,7 +48,7 @@ on:
   workflow_dispatch:
     inputs:
       watcher-stress:
-        description: Repeat native watcher synchronization and lifecycle tests ten times
+        description: Repeat native watcher and worktree cleanup tests ten times
         type: boolean
         default: false
       cold-cache:
@@ -53,16 +65,28 @@ on:
         type: number
         default: 1
       nextest-threads:
-        description: Optional positive nextest concurrency (serial schedule only)
+        description: Optional positive nextest concurrency
         type: string
         default: ''
       nextest-profile:
         description: Optional limit for concurrent Git-heavy tests
         type: choice
-        options: [ci, ci-git-limited]
+        options: [ci, ci-git-limited, ci-watch-limited-4, ci-watch-limited-8, ci-watch-first, ci-throughput]
         default: ci
+      pure-threads:
+        description: Optional positive concurrency for audited pure batches
+        type: string
+        default: ''
+      resource-stats:
+        description: Collect instrumented process-tree diagnostics
+        type: boolean
+        default: false
+      batch-pure-tests:
+        description: Audited batching mode (auto enables on Windows)
+        type: string
+        default: auto
       ui-threads:
-        description: Optional positive UI libtest concurrency (serial schedule only)
+        description: Optional positive UI libtest concurrency
         type: string
         default: ''
       fixture-timings:
@@ -75,9 +99,14 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  GITCOMET_REQUIRE_SYNTAX_CORPUS: "1"
+  GITCOMET_REQUIRE_GIT_LFS: "1"
   CI_EXECUTION_SAMPLES: ${{ inputs.execution-samples || 1 }}
   CI_NEXTEST_THREADS: ${{ inputs.nextest-threads || '' }}
   CI_NEXTEST_PROFILE: ${{ inputs.nextest-profile || 'ci' }}
+  CI_PURE_THREADS: ${{ inputs.pure-threads || '' }}
+  CI_RESOURCE_STATS: ${{ inputs.resource-stats || false }}
+  CI_BATCH_PURE_TESTS: ${{ inputs.batch-pure-tests || 'auto' }}
   CI_UI_THREADS: ${{ inputs.ui-threads || '' }}
   CI_TEST_SCHEDULE: ${{ inputs.test-schedule || 'serial' }}
   GITCOMET_CI_FIXTURE_TIMINGS: ${{ inputs.fixture-timings && format('{0}/target/ci-reports/fixture-timings', github.workspace) || '' }}
@@ -86,7 +115,7 @@ jobs:
   native:
     name: Native Tests (${{ matrix.name }})
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: ${{ inputs.execution-samples > 1 && 180 || 60 }}
+    timeout-minutes: ${{ inputs.execution-samples > 1 && 180 || matrix.name == 'macos15-x64' && 90 || 60 }}
     strategy:
       fail-fast: false
       matrix:
@@ -114,6 +143,8 @@ jobs:
             host: aarch64-pc-windows-msvc
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: true
       - name: Install Linux link dependencies
         if: runner.os == 'Linux'
         run: |
@@ -143,8 +174,7 @@ jobs:
             sh -lc 'exit 0'
           fi
           python3 -c 'import os, subprocess; version = subprocess.check_output(["rustc", "-vV"], text=True); assert "host: " + os.environ["EXPECTED_HOST"] in version, version'
-      - name: Verify Windows CI subprocess handling
-        if: runner.os == 'Windows'
+      - name: Verify CI helpers on the native platform
         run: python3 -m unittest discover -s scripts/ci -p 'test_*.py' -v
       - name: Compile and inventory workspace tests
         run: python3 scripts/ci/run.py compile --context workspace
@@ -152,28 +182,25 @@ jobs:
         id: tests
         shell: bash
         run: |
-          args=(--nextest-profile "$CI_NEXTEST_PROFILE")
+          args=(--nextest-profile "$CI_NEXTEST_PROFILE" --batch-pure-tests "$CI_BATCH_PURE_TESTS")
           if [[ -n "$CI_NEXTEST_THREADS" ]]; then args+=(--nextest-threads "$CI_NEXTEST_THREADS"); fi
+          if [[ -n "$CI_PURE_THREADS" ]]; then args+=(--pure-threads "$CI_PURE_THREADS"); fi
+          if [[ "$CI_RESOURCE_STATS" == true ]]; then args+=(--resource-stats); fi
           if [[ -n "$CI_UI_THREADS" ]]; then args+=(--ui-threads "$CI_UI_THREADS"); fi
           if [[ "$CI_EXECUTION_SAMPLES" == 1 ]]; then
             python3 scripts/ci/run.py test --context workspace --schedule "$CI_TEST_SCHEDULE" "${args[@]}"
           else
             python3 scripts/ci/runtime.py target/ci-reports/runtime --samples "$CI_EXECUTION_SAMPLES" --schedule "$CI_TEST_SCHEDULE" "${args[@]}"
           fi
-      - name: Stress native watcher synchronization
+      - name: Stress native watcher synchronization and worktree cleanup
         if: success() && inputs.watcher-stress
         shell: bash
         env:
           GITCOMET_TEST_SYNC_TRACE: "1"
         run: |
           args=()
-          if [[ -n "$CI_NEXTEST_THREADS" ]]; then args+=(--test-threads "$CI_NEXTEST_THREADS"); fi
-          python3 scripts/ci/run.py command --name watcher-stress -- \
-            cargo nextest run \
-            --binaries-metadata target/ci-reports/workspace/binaries.json \
-            --cargo-metadata target/ci-reports/workspace/cargo.json \
-            --profile ci-watch-stress --stress-count 10 --no-tests=fail "${args[@]}" \
-            -E 'package(=gitcomet-fs-watch) | (package(=gitcomet-state) & (test(native_sync_) | test(native_barrier_) | test(::selective::synchronization::) | test(::selective::native_lifecycle::) | test(::selective::path_identities::)))'
+          if [[ -n "$CI_NEXTEST_THREADS" ]]; then args+=(--nextest-threads "$CI_NEXTEST_THREADS"); fi
+          python3 scripts/ci/run.py watcher-stress --context workspace --iterations 10 "${args[@]}"
       - name: Workspace doctests
         if: success() || (failure() && steps.tests.outcome == 'failure')
         shell: bash
@@ -189,6 +216,14 @@ jobs:
         if: success() && matrix.name == 'ubuntu22-x64'
         shell: bash
         run: python3 scripts/ci/run.py display
+      # The release build runs the same check; this catches a dependency
+      # update that adds a runtime-loaded library before release day.
+      - name: Check Linux runtime library dependencies
+        if: success() && matrix.name == 'ubuntu22-x64'
+        shell: bash
+        run: |
+          python3 scripts/ci/run.py command --name linux-runtime-deps-build -- cargo build --locked --profile ci-test -p gitcomet --bin gitcomet
+          scripts/check-linux-runtime-deps.sh target/ci-test/gitcomet
       - name: Compile original Windows CMD smoke context
         if: success() && runner.os == 'Windows'
         shell: pwsh
@@ -197,44 +232,11 @@ jobs:
         if: success() && runner.os == 'Windows'
         shell: cmd
         run: python3 scripts/ci/run.py cmd-smoke
-      - name: Show path behavior (PowerShell and Git Bash)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          Write-Host "PowerShell path: $pwd"
-          bash -lc "pwd"
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Show path behavior (CMD and Git Bash)
-        if: runner.os == 'Windows'
-        shell: cmd
-        run: |
-          echo CMD path: %CD%
-          bash -lc "pwd"
-      - name: Gatekeeper and code-signing check (informational)
-        if: success() && runner.os == 'macOS'
-        shell: bash
-        run: |
-          cargo_config_output="$(scripts/macos-cargo-config.sh "$(uname -m)" release)"
-          args=()
-          if [[ -n "$cargo_config_output" ]]; then
-            while IFS= read -r arg; do args+=("$arg"); done <<<"$cargo_config_output"
-          fi
-          python3 scripts/ci/run.py command --name macos-release-signing-build -- cargo build "${args[@]}" -p gitcomet --no-default-features --features gix --release --locked
-          codesign --verify --verbose target/release/gitcomet || true
-          spctl --assess --type execute --verbose target/release/gitcomet || true
       - uses: ./.github/actions/ci-finish
         if: always()
         with:
           name: ${{ matrix.name }}
           source-writer: ${{ matrix.name == 'ubuntu22-x64' || matrix.name == 'macos15-arm64' || matrix.name == 'windows-x64' }}
-          source-key: ${{ steps.setup.outputs.source-key }}
-          source-hit: ${{ steps.setup.outputs.source-hit }}
-          cache-key: ${{ steps.setup.outputs.cache-key }}
-          cache-hit: ${{ steps.setup.outputs.cache-hit }}
-          cold-cache: ${{ inputs.cold-cache }}
-          # Ubuntu x64 and Windows also compile the headless app context.
-          # Keep the total active cache set below 8 GB.
-          budget-mib: ${{ matrix.name == 'ubuntu22-x64' && '1200' || (runner.os == 'Windows' && '800' || '700') }}
 
   fedora:
     name: Linux Headless Suite (Fedora container)
@@ -245,12 +247,14 @@ jobs:
     steps:
       - name: Install native dependencies
         run: |
-          dnf -y install bash curl findutils fontconfig-devel gcc gcc-c++ git git-lfs make openssl-devel pkg-config tar which python3 libxcb-devel libxkbcommon-devel libxkbcommon-x11-devel
+          dnf -y install bash clang curl findutils fontconfig-devel gcc gcc-c++ git git-annex git-lfs make openssl-devel pkg-config tar which python3 libxcb-devel libxkbcommon-devel libxkbcommon-x11-devel
           pkg-config --libs --cflags fontconfig
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs -o /tmp/rustup-init.sh
           sh /tmp/rustup-init.sh -y --profile minimal --default-toolchain none
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: true
       - uses: ./.github/actions/ci-setup
         id: setup
         with:
@@ -261,14 +265,24 @@ jobs:
         run: |
           git --version
           git lfs version
+          # The only lane with git-annex: Ubuntu 22.04 ships 8.x, which has no
+          # `annex pull`/`push`. Its integration tests fail rather than skip here.
+          git annex version | head -1
+          echo "GITCOMET_REQUIRE_GIT_ANNEX=1" >> "$GITHUB_ENV"
+          # The container runs as root over a checkout the runner user owns;
+          # checkout's own safe.directory entry does not outlive its step.
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git -C "$GITHUB_WORKSPACE" rev-parse --is-inside-work-tree
       - name: Compile and inventory workspace tests
         run: python3 scripts/ci/run.py compile --context workspace
       - name: Execute workspace tests
         id: tests
         shell: bash
         run: |
-          args=(--nextest-profile "$CI_NEXTEST_PROFILE")
+          args=(--nextest-profile "$CI_NEXTEST_PROFILE" --batch-pure-tests "$CI_BATCH_PURE_TESTS")
           if [[ -n "$CI_NEXTEST_THREADS" ]]; then args+=(--nextest-threads "$CI_NEXTEST_THREADS"); fi
+          if [[ -n "$CI_PURE_THREADS" ]]; then args+=(--pure-threads "$CI_PURE_THREADS"); fi
+          if [[ "$CI_RESOURCE_STATS" == true ]]; then args+=(--resource-stats); fi
           if [[ -n "$CI_UI_THREADS" ]]; then args+=(--ui-threads "$CI_UI_THREADS"); fi
           if [[ "$CI_EXECUTION_SAMPLES" == 1 ]]; then
             python3 scripts/ci/run.py test --context workspace --schedule "$CI_TEST_SCHEDULE" "${args[@]}"
@@ -282,6 +296,3 @@ jobs:
         if: always()
         with:
           name: fedora41-x64
-          cache-key: ${{ steps.setup.outputs.cache-key }}
-          cache-hit: ${{ steps.setup.outputs.cache-hit }}
-          cold-cache: ${{ inputs.cold-cache }}

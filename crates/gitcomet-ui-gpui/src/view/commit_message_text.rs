@@ -65,12 +65,17 @@ pub(in crate::view) fn commit_message_summary_highlights(
 /// The result is sanitized, so it is safe to hand straight to `StyledText` --
 /// a highlight range that fell off a UTF-8 boundary would otherwise abort the
 /// process inside `str::split_at`.
-pub(in crate::view) fn commit_message_highlights(message: &str, theme: AppTheme) -> TextHighlights {
+pub(in crate::view) fn commit_message_highlights(
+    message: &str,
+    theme: AppTheme,
+    max_id_len: usize,
+) -> TextHighlights {
     let link_style = commit_link_style(theme);
-    let links: TextHighlights = crate::text_selection::commit_message_link_ranges(message)
-        .into_iter()
-        .map(|link| (link.range, link_style))
-        .collect();
+    let links: TextHighlights =
+        crate::text_selection::commit_message_link_ranges(message, max_id_len)
+            .into_iter()
+            .map(|link| (link.range, link_style))
+            .collect();
 
     // Summary emphasis is computed against the links so the two never overlap.
     let mut highlights = commit_message_summary_highlights(message, theme, &links);
@@ -91,7 +96,7 @@ mod tests {
     #[test]
     fn summary_line_is_emphasised_and_body_is_not() {
         let message = "Fix the thing\n\nA longer explanation.";
-        let highlights = commit_message_highlights(message, theme());
+        let highlights = commit_message_highlights(message, theme(), 40);
 
         assert!(
             highlights
@@ -109,7 +114,7 @@ mod tests {
     #[test]
     fn summary_emphasis_does_not_overlap_a_link_in_the_summary() {
         let message = "Revert 1234567890abcdef1234567890abcdef12345678 for now\n\nbody";
-        let highlights = commit_message_highlights(message, theme());
+        let highlights = commit_message_highlights(message, theme(), 40);
 
         for pair in highlights.windows(2) {
             assert!(
@@ -125,7 +130,7 @@ mod tests {
     fn highlights_survive_multibyte_text() {
         // A range landing mid-character would abort the process when shaped.
         let message = "Fix “smart quotes” and émoji 🎉\n\nbody é";
-        let highlights = commit_message_highlights(message, theme());
+        let highlights = commit_message_highlights(message, theme(), 40);
 
         assert!(crate::text_runs::highlights_are_shapeable(
             message,
@@ -135,6 +140,6 @@ mod tests {
 
     #[test]
     fn empty_summary_produces_no_highlights() {
-        assert!(commit_message_highlights("\nbody only", theme()).is_empty());
+        assert!(commit_message_highlights("\nbody only", theme(), 40).is_empty());
     }
 }

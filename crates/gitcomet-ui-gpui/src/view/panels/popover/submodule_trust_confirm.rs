@@ -72,7 +72,7 @@ pub(super) fn panel(
                 .max_w(scaled_px(460.0))
                 .text_size(theme.ui_text(14.0))
                 .text_color(theme.colors.foreground.secondary)
-                .child("Git blocks local file transport for submodules by default. Trusting these sources will allow GitComet to enable file transport only for this repo/source pair."),
+                .child(format!("Git blocks local file transport for submodules by default. Trusting these sources will allow {} to enable file transport only for this repo/source pair.", crate::view::product_name())),
         )
         .section(
             div().px_2().pb_1().child(
@@ -83,10 +83,10 @@ pub(super) fn panel(
                     .end_slot(svg_icon(
                         "icons/open_external.svg",
                         theme.colors.accent.foreground,
-                        px(14.0),
+                        scaled_px(14.0),
                     ))
                     .on_click(theme, cx, |_this, _e, _window, cx| {
-                        cx.open_url(SUBMODULE_TRUST_CVE_URL);
+                        crate::view::platform_open::open_url_later(SUBMODULE_TRUST_CVE_URL, cx);
                     }),
             ),
         );
@@ -179,28 +179,23 @@ pub(super) fn panel(
                     name,
                     force,
                 } => {
-                    let theme = this.theme;
                     let restored_branch = branch.unwrap_or_default();
                     let restored_branch_for_input = restored_branch.clone();
                     let restored_name = name.unwrap_or_default();
                     let restored_name_for_input = restored_name.clone();
                     this.submodule_url_input.update(cx, |input, cx| {
-                        input.set_theme(theme, cx);
                         input.set_text(&url, cx);
                         cx.notify();
                     });
                     this.submodule_path_input.update(cx, |input, cx| {
-                        input.set_theme(theme, cx);
                         input.set_text(path.display().to_string(), cx);
                         cx.notify();
                     });
                     this.submodule_branch_input.update(cx, move |input, cx| {
-                        input.set_theme(theme, cx);
                         input.set_text(&restored_branch_for_input, cx);
                         cx.notify();
                     });
                     this.submodule_name_input.update(cx, move |input, cx| {
-                        input.set_theme(theme, cx);
                         input.set_text(&restored_name_for_input, cx);
                         cx.notify();
                     });

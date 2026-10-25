@@ -15,9 +15,13 @@ pub(crate) fn bench_indexed_history(c: &mut Criterion) {
             b.iter(|| fixture.build_graph())
         });
         group.bench_function(BenchmarkId::new(&case, "first_touch"), |b| {
-            b.iter(|| {
-                fixture.clear_window();
-                fixture.window(first_touch_start, 40, None)
+            b.iter_custom(|iters| {
+                time_iterations_with_reset(
+                    iters,
+                    &mut &fixture,
+                    |fixture| fixture.clear_window(),
+                    |fixture| fixture.window(first_touch_start, 40, None),
+                )
             })
         });
         group.bench_function(BenchmarkId::new(&case, "warm"), |b| {

@@ -1,6 +1,21 @@
+use super::preference_change::PreferenceChange;
 use super::*;
 
 impl GitCometView {
+    pub(in crate::view) fn set_diff_engine(
+        &mut self,
+        next: DiffEngine,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.ui_model.read(cx).preferences.diff.engine == next {
+            return;
+        }
+        self.update_ui_preferences(cx, move |preferences| preferences.diff.engine = next);
+        self.ui_model.update(cx, |_, cx| cx.notify());
+        self.diff_renderer
+            .update(cx, |pane, cx| pane.set_diff_engine_default(next, cx));
+        self.schedule_ui_settings_persist(cx);
+    }
     pub(in crate::view) fn set_remote_url_policy(
         &mut self,
         next: RemoteUrlPolicy,
@@ -29,7 +44,7 @@ impl GitCometView {
         self.update_ui_preferences(cx, move |preferences| {
             preferences.security.remote_markdown_images = next;
         });
-        self.main_pane.update(cx, |pane, cx| {
+        self.diff_renderer.update(cx, |pane, cx| {
             pane.set_remote_markdown_image_policy(next, cx);
         });
         self.schedule_ui_settings_persist(cx);
@@ -93,6 +108,48 @@ impl GitCometView {
 
     pub(super) fn sidebar_min_width(&self) -> Pixels {
         self.scaled_px(SIDEBAR_MIN_PX)
+            .max(self.sidebar_header_minimum)
+    }
+
+    pub(super) fn sync_sidebar_header_layout(
+        &mut self,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let scale = self.ui_scale();
+        let theme = self.theme;
+        let minimum = self.sidebar_pane.update(cx, |pane, cx| {
+            pane.header_minimum_width(theme, scale, window, cx)
+        });
+        if self.sidebar_header_minimum != minimum {
+            self.sidebar_header_minimum = minimum;
+            self.pane_resize = None;
+        }
+        if self.sidebar_collapsed || !renders_full_chrome(self.view_mode) {
+            self.sidebar_window_size_request = None;
+            return;
+        }
+        let details = if self.details_collapsed {
+            self.pane_collapsed_width()
+        } else {
+            self.details_min_width()
+        };
+        let base_minimum = crate::app::main_window_min_size_for_percent(self.ui_scale_percent);
+        let current = window.viewport_size();
+        let divider_allowance =
+            self.pane_resize_handle_width() * if self.details_collapsed { 1.0 } else { 2.0 };
+        let required = gpui::size(
+            base_minimum.width.max(
+                self.sidebar_min_width() + self.main_min_width() + details + divider_allowance,
+            ),
+            current.height,
+        );
+        if current.width >= required.width {
+            self.sidebar_window_size_request = None;
+        } else if self.sidebar_window_size_request != Some((required, current)) {
+            self.sidebar_window_size_request = Some((required, current));
+            crate::app::ensure_window_respects_min_size(window, required);
+        }
     }
 
     pub(super) fn details_min_width(&self) -> Pixels {
@@ -142,9 +199,16 @@ impl GitCometView {
         self.details_pane.update(cx, |pane, cx| {
             pane.apply_ui_scale_percent(previous_percent, percent, change_tracking_view, cx);
         });
-        self.main_pane.update(cx, |pane, cx| {
+        self.diff_renderer.update(cx, |pane, cx| {
             pane.apply_ui_scale_percent(previous_percent, percent, cx);
         });
+        self.main_pane
+            .read(cx)
+            .history_view
+            .clone()
+            .update(cx, |history, cx| {
+                history.apply_ui_scale_percent(previous_percent, percent, cx);
+            });
         self.reflog_pane.update(cx, |pane, cx| {
             pane.set_ui_scale_percent(percent, cx);
         });
@@ -157,6 +221,8 @@ impl GitCometView {
         self.schedule_ui_settings_persist(cx);
     }
 
+    /// Change the global theme preference. A window whose workspace
+    /// overrides the theme records it but keeps its own look.
     pub(super) fn set_theme_mode(
         &mut self,
         mode: ThemeMode,
@@ -168,20 +234,58 @@ impl GitCometView {
         }
 
         self.theme_mode = mode.clone();
+        self.window_appearance = appearance;
         let shared_mode = mode.clone();
         self.update_ui_preferences(cx, move |preferences| {
             preferences.appearance.theme_mode = shared_mode;
         });
-        self.set_theme(mode.resolve_theme(appearance), cx);
+        let host_mode = mode.clone();
+        self.popover_host
+            .update(cx, |host, _cx| host.sync_global_theme_mode(host_mode));
+        if self.workspace_theme_mode.is_none() {
+            self.set_theme(mode.resolve_theme(appearance), cx);
+        }
         self.schedule_ui_settings_persist(cx);
+    }
+
+    pub(super) fn effective_theme_mode(&self) -> &ThemeMode {
+        self.workspace_theme_mode
+            .as_ref()
+            .unwrap_or(&self.theme_mode)
+    }
+
+    /// Re-read this window's workspace theme override from the manager.
+    /// An unknown key (for example a deleted user theme) counts as no override.
+    pub(crate) fn sync_workspace_theme_override(&mut self, cx: &mut gpui::Context<Self>) {
+        let mode = self.workspace_id.and_then(|id| {
+            crate::workspaces::with_workspace(cx, id, |workspace| {
+                workspace
+                    .theme_mode
+                    .as_deref()
+                    .and_then(ThemeMode::from_key)
+            })
+            .flatten()
+        });
+        if self.workspace_theme_mode == mode {
+            return;
+        }
+        self.workspace_theme_mode = mode;
+        let theme = self
+            .effective_theme_mode()
+            .resolve_theme(self.window_appearance);
+        self.set_theme(theme, cx);
     }
 
     fn sync_date_preferences_to_children(&mut self, cx: &mut gpui::Context<Self>) {
         let format = self.date_time_format;
         let timezone = self.timezone;
         let show_timezone = self.show_timezone;
-        self.main_pane.update(cx, |pane, cx| {
+        self.diff_renderer.update(cx, |pane, cx| {
             pane.set_date_time_format(format, cx);
+        });
+        self.main_pane.update(cx, |pane, cx| {
+            pane.history_view
+                .update(cx, |history, cx| history.set_date_time_format(format, cx));
             pane.set_timezone(timezone, cx);
             pane.set_show_timezone(show_timezone, cx);
         });
@@ -189,6 +293,9 @@ impl GitCometView {
             pane.set_date_settings(format, timezone, show_timezone, cx)
         });
         self.reflog_pane.update(cx, |pane, cx| {
+            pane.set_date_settings(format, timezone, show_timezone, cx)
+        });
+        self.file_history_pane.update(cx, |pane, cx| {
             pane.set_date_settings(format, timezone, show_timezone, cx)
         });
         self.popover_host.update(cx, |host, cx| {
@@ -276,8 +383,32 @@ impl GitCometView {
         self.update_ui_preferences(cx, move |preferences| {
             preferences.file_lists.layout = next;
         });
+        cx.update_default_global::<crate::view::FileListDefaults, _>(|defaults, _| {
+            defaults.layout = next;
+        });
         self.details_pane
             .update(cx, |pane, cx| pane.set_file_list_layout(next, cx));
+        self.schedule_ui_settings_persist(cx);
+    }
+
+    pub(in crate::view) fn set_file_list_sort(
+        &mut self,
+        next: crate::view::rows::CommitFileSort,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.file_list_sort == next {
+            return;
+        }
+
+        self.file_list_sort = next;
+        self.update_ui_preferences(cx, move |preferences| {
+            preferences.file_lists.sort = next;
+        });
+        cx.update_default_global::<crate::view::FileListDefaults, _>(|defaults, _| {
+            defaults.sort = next;
+        });
+        self.details_pane
+            .update(cx, |pane, cx| pane.set_default_file_list_sort(next, cx));
         self.schedule_ui_settings_persist(cx);
     }
 
@@ -329,7 +460,7 @@ impl GitCometView {
         self.update_ui_preferences(cx, move |preferences| {
             preferences.diff.scroll_sync = next;
         });
-        self.main_pane
+        self.diff_renderer
             .update(cx, |pane, cx| pane.set_diff_scroll_sync(next, cx));
         self.schedule_ui_settings_persist(cx);
     }
@@ -347,7 +478,7 @@ impl GitCometView {
         self.update_ui_preferences(cx, move |preferences| {
             preferences.diff.view_mode = next;
         });
-        self.main_pane
+        self.diff_renderer
             .update(cx, |pane, cx| pane.set_diff_view_mode(next, cx));
         self.schedule_ui_settings_persist(cx);
     }
@@ -369,7 +500,7 @@ impl GitCometView {
         // column in Split (see `rows::diff`, `annotation_active() && is_left`)
         // just as it does in Inline, and the wrap widths already account for it
         // in both. Toggling it must leave the selected mode alone.
-        self.main_pane
+        self.diff_renderer
             .update(cx, |pane, cx| pane.set_annotate_enabled(next, cx));
         self.schedule_ui_settings_persist(cx);
     }
@@ -393,9 +524,9 @@ impl GitCometView {
         true
     }
 
-    // MainPaneView sometimes owns the active GPUI update when the diff-header
+    // DiffRenderer sometimes owns the active GPUI update when the diff-header
     // toggle is clicked, so syncing the root preference must not call back into
-    // `main_pane.update(...)`.
+    // `diff_renderer.update(...)`.
     pub(in crate::view) fn sync_diff_content_mode_from_pane(
         &mut self,
         next: DiffContentMode,
@@ -413,7 +544,7 @@ impl GitCometView {
             return;
         }
 
-        self.main_pane
+        self.diff_renderer
             .update(cx, |pane, cx| pane.set_diff_content_mode(next, cx));
     }
 
@@ -453,8 +584,8 @@ impl GitCometView {
             return;
         }
 
-        self.main_pane
-            .update(cx, |pane, cx| pane.set_diff_whitespace_mode(next, cx));
+        self.diff_renderer
+            .update(cx, |pane, cx| pane.choose_diff_whitespace_mode(next, cx));
     }
 
     pub(super) fn apply_diff_reveal_whitespace_chars_preference(
@@ -494,7 +625,7 @@ impl GitCometView {
             return;
         }
 
-        self.main_pane.update(cx, |pane, cx| {
+        self.diff_renderer.update(cx, |pane, cx| {
             pane.set_diff_reveal_whitespace_chars(next, cx)
         });
     }
@@ -531,8 +662,23 @@ impl GitCometView {
             return;
         }
 
-        self.main_pane
+        self.diff_renderer
             .update(cx, |pane, cx| pane.set_diff_word_wrap(next, cx));
+    }
+
+    /// The default tab size, from the settings window.
+    pub(in crate::view) fn set_diff_tab_size(&mut self, next: u8, cx: &mut gpui::Context<Self>) {
+        let next = next.clamp(1, crate::view::tab_width::MAX_TAB_WIDTH);
+        if self.diff_tab_size == next {
+            return;
+        }
+        self.diff_tab_size = next;
+        self.update_ui_preferences(cx, move |preferences| {
+            preferences.diff.tab_size = next;
+        });
+        self.schedule_ui_settings_persist(cx);
+        self.diff_renderer
+            .update(cx, |pane, cx| pane.set_default_tab_size(next, cx));
     }
 
     pub(super) fn apply_diff_show_line_numbers_preference(
@@ -571,7 +717,7 @@ impl GitCometView {
             return;
         }
 
-        self.main_pane
+        self.diff_renderer
             .update(cx, |pane, cx| pane.set_diff_show_line_numbers(next, cx));
     }
 
@@ -605,7 +751,7 @@ impl GitCometView {
         self.update_ui_preferences(cx, move |preferences| {
             preferences.file_editing.auto_save = next;
         });
-        self.main_pane
+        self.diff_renderer
             .update(cx, |pane, cx| pane.set_auto_save_file_edits(next, cx));
     }
 
@@ -673,6 +819,20 @@ impl GitCometView {
         cx.notify();
     }
 
+    pub(in crate::view) fn set_history_show_graph_gradient(
+        &mut self,
+        enabled: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.update_ui_preferences(cx, move |preferences| {
+            preferences.history.show_graph_gradient = enabled;
+        });
+        self.main_pane.update(cx, |pane, cx| {
+            pane.set_history_show_graph_gradient(enabled, cx);
+        });
+        cx.notify();
+    }
+
     pub(in crate::view) fn set_history_relative_dates(
         &mut self,
         enabled: bool,
@@ -684,6 +844,8 @@ impl GitCometView {
         self.main_pane.update(cx, |pane, cx| {
             pane.set_history_relative_dates(enabled, cx);
         });
+        self.file_history_pane
+            .update(cx, |pane, cx| pane.set_relative_dates(enabled, cx));
         self.popover_host
             .update(cx, |host, cx| host.set_history_relative_dates(enabled, cx));
         self.schedule_ui_settings_persist(cx);
@@ -719,7 +881,7 @@ impl GitCometView {
         });
         if show_tags
             && auto_fetch_tags_on_repo_activation
-            && let Some(repo) = self.main_pane.read(cx).active_repo()
+            && let Some(repo) = self.diff_renderer.read(cx).active_repo()
         {
             if matches!(repo.tags, Loadable::NotLoaded | Loadable::Error(_)) {
                 self.store.dispatch(Msg::LoadTags { repo_id: repo.id });
@@ -768,6 +930,17 @@ impl GitCometView {
         self.store.dispatch(Msg::SetDefaultTagType(tag_type));
     }
 
+    pub(in crate::view) fn set_large_file_settings_preference(
+        &mut self,
+        settings: gitcomet_state::model::LargeFileSettings,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.update_ui_preferences(cx, move |preferences| {
+            preferences.large_files = settings;
+        });
+        self.store.dispatch(Msg::SetLargeFileSettings(settings));
+    }
+
     pub(in crate::view) fn set_remote_prune_preference(
         &mut self,
         enabled: bool,
@@ -779,6 +952,20 @@ impl GitCometView {
         self.store.dispatch(Msg::SetRemoteSettings(RemoteSettings {
             prune_deleted_remote_branches_on_fetch: enabled,
         }));
+    }
+
+    pub(in crate::view) fn set_maintenance_recommendation_preference(
+        &mut self,
+        enabled: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.update_ui_preferences(cx, move |preferences| {
+            preferences.maintenance.recommend = enabled;
+        });
+        self.store
+            .dispatch(Msg::SetMaintenanceSettings(MaintenanceSettings {
+                recommend: enabled,
+            }));
     }
 
     pub(in crate::view) fn set_files_follow_selected_commit_preference(
@@ -803,5 +990,100 @@ impl GitCometView {
         self.update_ui_preferences(cx, move |preferences| {
             preferences.history.default_mode = mode;
         });
+    }
+}
+
+impl GitCometView {
+    /// Applies a change the settings window broadcast to every main window.
+    pub(in crate::view) fn apply_preference_change(
+        &mut self,
+        change: &PreferenceChange,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        match change.clone() {
+            PreferenceChange::Terminal(next) => self.apply_terminal_preferences(next, cx),
+            PreferenceChange::Toast(kind, message) => self.push_toast(kind, message, cx),
+            PreferenceChange::ThemeMode(mode) => self.set_theme_mode(mode, window.appearance(), cx),
+            PreferenceChange::Fonts => self.notify_font_preferences_changed(cx),
+            PreferenceChange::DateTimeFormat(format) => {
+                self.set_date_time_format_preference(format, cx)
+            }
+            PreferenceChange::Timezone(timezone) => self.set_timezone_preference(timezone, cx),
+            PreferenceChange::ShowTimezone(enabled) => {
+                self.set_show_timezone_preference(enabled, cx)
+            }
+            PreferenceChange::ChangeTrackingView(next) => self.set_change_tracking_view(next, cx),
+            PreferenceChange::FileListLayout(next) => self.set_file_list_layout(next, cx),
+            PreferenceChange::FileListSort(next) => self.set_file_list_sort(next, cx),
+            PreferenceChange::DiffScrollSync(next) => self.set_diff_scroll_sync(next, cx),
+            PreferenceChange::DiffContentMode(next) => self.set_diff_content_mode(next, cx),
+            PreferenceChange::DiffWhitespaceMode(next) => self.set_diff_whitespace_mode(next, cx),
+            PreferenceChange::DiffViewMode(next) => self.set_diff_view_mode(next, cx),
+            PreferenceChange::DiffEngine(next) => self.set_diff_engine(next, cx),
+            PreferenceChange::DiffRevealWhitespaceChars(next) => {
+                self.set_diff_reveal_whitespace_chars(next, cx)
+            }
+            PreferenceChange::DiffWordWrap(next) => self.set_diff_word_wrap(next, cx),
+            PreferenceChange::DiffTabSize(next) => self.set_diff_tab_size(next, cx),
+            PreferenceChange::DiffShowLineNumbers(next) => {
+                self.set_diff_show_line_numbers(next, cx)
+            }
+            PreferenceChange::AutoSaveFileEdits(next) => self.set_auto_save_file_edits(next, cx),
+            PreferenceChange::RemoteMarkdownImagePolicy(next) => {
+                self.set_remote_markdown_image_policy(next, cx)
+            }
+            PreferenceChange::RemoteUrlPolicy(next) => self.set_remote_url_policy(next, cx),
+            PreferenceChange::CheckForUpdatesOnStartup(next) => {
+                self.set_check_for_updates_on_startup(next, cx)
+            }
+            PreferenceChange::HistoryBranchNames(next) => self.set_history_branch_names(next, cx),
+            PreferenceChange::HistoryColumns {
+                graph,
+                author,
+                date,
+                sha,
+            } => self.set_history_column_preferences(graph, author, date, sha, cx),
+            PreferenceChange::HistoryHighlightCommitChain(enabled) => {
+                self.set_history_highlight_commit_chain(enabled, cx)
+            }
+            PreferenceChange::HistoryShowGraphGradient(enabled) => {
+                self.set_history_show_graph_gradient(enabled, cx)
+            }
+            PreferenceChange::FilesFollowSelectedCommit(enabled) => {
+                self.set_files_follow_selected_commit_preference(enabled, cx)
+            }
+            PreferenceChange::HistoryRelativeDates(enabled) => {
+                self.set_history_relative_dates(enabled, cx)
+            }
+            PreferenceChange::HistoryTags { show, fetch_mode } => {
+                self.set_history_tag_preferences(show, fetch_mode, cx)
+            }
+            PreferenceChange::VerifyCommitSignatures(enabled) => {
+                self.set_verify_commit_signatures_preference(enabled, cx)
+            }
+            PreferenceChange::DefaultHistoryMode(mode) => {
+                self.set_default_history_mode_preference(mode, cx)
+            }
+            PreferenceChange::DefaultTagType(tag_type) => {
+                self.set_default_tag_type_preference(tag_type, cx)
+            }
+            PreferenceChange::LargeFileSettings(settings) => {
+                self.set_large_file_settings_preference(settings, cx)
+            }
+            PreferenceChange::RemotePrune(enabled) => self.set_remote_prune_preference(enabled, cx),
+            PreferenceChange::MaintenanceRecommendations(enabled) => {
+                self.set_maintenance_recommendation_preference(enabled, cx)
+            }
+            PreferenceChange::ResetHistoryColumnWidths => self.reset_history_column_widths(cx),
+            PreferenceChange::GitRuntime(runtime) => {
+                self.cancel_large_file_tools_probe();
+                self.cancel_signing_tools_probe();
+                self.store.dispatch(Msg::SetGitRuntimeState(runtime));
+            }
+            PreferenceChange::LargeFileTools(publication) => {
+                self.accept_large_file_tools_publication(publication, cx);
+            }
+        }
     }
 }

@@ -64,13 +64,13 @@ impl GitCometView {
         tab: BottomPanelTab,
         cx: &mut gpui::Context<Self>,
     ) {
-        match tab {
-            BottomPanelTab::Terminal => {
-                if !self.request_close_terminal_for_repo(repo_id, cx) {
-                    self.close_terminal_for_repo(repo_id, cx);
-                }
-            }
-            BottomPanelTab::Reflog => self.close_reflog_panel(repo_id, cx),
+        if let Some(provider) = self
+            .bottom_panel_providers
+            .iter()
+            .find(|provider| provider.tab() == tab)
+            .cloned()
+        {
+            provider.close(self, repo_id, cx);
         }
     }
 
@@ -88,6 +88,7 @@ impl GitCometView {
     /// terminal sessions. The reflog panel's own per-repo state is pruned by
     /// the panel itself, on the same state snapshot.
     pub(super) fn sync_reflog_panels_with_state(&mut self) {
+        self.sync_extension_bottom_panels_with_state();
         if self.active_bottom_panel.is_empty() {
             return;
         }
@@ -97,14 +98,14 @@ impl GitCometView {
             .retain(|repo_id, _| active_repo_ids.contains(repo_id));
     }
 
-    /// The bottom panel: the terminal, the reflog panel, or — when both are
-    /// open for the active repo — a small tab switcher above whichever one is
-    /// currently selected. Mirrors `render_terminal_panel`'s `None` contract,
-    /// so a repo with neither open still renders nothing here.
+    /// The bottom panel: the terminal, the reflog panel, extension panels,
+    /// or — when more than one is open for the active repo — a small tab
+    /// switcher above whichever one is selected. Mirrors
+    /// `render_terminal_panel`'s `None` contract, so a repo with none open
+    /// still renders nothing here.
     ///
-    /// When the reflog panel isn't open this returns exactly what
-    /// `render_terminal_panel` would have returned on its own: the terminal's
-    /// behavior and shape are unchanged from before this panel existed.
+    /// With only the terminal open this returns exactly what
+    /// `render_terminal_panel` would have returned on its own.
     pub(super) fn render_bottom_panel(
         &mut self,
         theme: AppTheme,
@@ -112,42 +113,52 @@ impl GitCometView {
         cx: &mut gpui::Context<Self>,
     ) -> Option<AnyElement> {
         let repo_id = self.active_repo_id()?;
-        let reflog_open = self.reflog_panel_is_open(repo_id, cx);
+        let providers = self.bottom_panel_providers.clone();
+        let tabs: Vec<BottomPanelTab> = providers
+            .iter()
+            .filter(|provider| provider.is_open(self, repo_id, cx))
+            .map(|provider| provider.tab())
+            .collect();
+        let content_for = |this: &mut Self,
+                           tab: BottomPanelTab,
+                           window: &mut Window,
+                           cx: &mut gpui::Context<Self>| {
+            providers
+                .iter()
+                .find(|provider| provider.tab() == tab)?
+                .render(this, theme, window, cx)
+        };
 
-        if !reflog_open {
-            return self.render_terminal_panel(theme, window, cx);
-        }
-
-        let terminal_open = self
-            .terminal_sessions
-            .get(&repo_id)
-            .and_then(|s| s.active_instance())
-            .is_some();
-
-        if !terminal_open {
+        if let [only] = tabs[..] {
+            let content = content_for(self, only, window, cx)?;
+            if providers
+                .iter()
+                .any(|provider| provider.tab() == only && provider.owns_height())
+            {
+                return Some(content);
+            }
             return Some(
                 div()
                     .flex()
                     .flex_col()
                     .h(self.terminal_panel_height)
                     .min_h(self.ui_scale().px(REFLOG_PANEL_MIN_HEIGHT_PX))
-                    .child(self.reflog_pane.clone())
+                    .child(content)
                     .into_any(),
             );
         }
 
+        // The remembered tab while it is open, else the latest opened.
         let active_tab = self
             .active_bottom_panel
             .get(&repo_id)
             .copied()
-            .unwrap_or(BottomPanelTab::Reflog);
+            .filter(|tab| tabs.contains(tab))
+            .or(tabs.last().copied())?;
 
         let tab_bar_height = bottom_panel_tab_bar_height(self.ui_scale());
-        let tab_bar = self.render_bottom_panel_tab_bar(theme, repo_id, active_tab, cx);
-        let content = match active_tab {
-            BottomPanelTab::Terminal => self.render_terminal_panel(theme, window, cx)?,
-            BottomPanelTab::Reflog => self.reflog_pane.clone().into_any_element(),
-        };
+        let tab_bar = self.render_bottom_panel_tab_bar(theme, repo_id, active_tab, &tabs, cx);
+        let content = content_for(self, active_tab, window, cx)?;
 
         Some(
             div()
@@ -161,42 +172,54 @@ impl GitCometView {
         )
     }
 
-    /// Minimal two-way switcher between the terminal and the reflog panel,
-    /// styled after the terminal panel's own per-instance tab row (see
+    /// Minimal switcher between the open bottom panels, styled after the
+    /// terminal panel's own per-instance tab row (see
     /// `render_terminal_header` in `terminal_panel.rs`) rather than the
     /// browser-style `components::Tab`/`TabBar`, which is sized and shaped for
     /// the top-level repository tab strip and would look out of place this
-    /// far down the chrome.
+    /// far down the chrome. `labels` are the extension tabs' titles and
+    /// icons, in order.
     fn render_bottom_panel_tab_bar(
         &mut self,
         theme: AppTheme,
         repo_id: RepoId,
         active_tab: BottomPanelTab,
+        tabs: &[BottomPanelTab],
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
         let ui_scale = self.ui_scale();
-        let tab = |id: &'static str,
-                   close_id: &'static str,
-                   icon: &'static str,
-                   label: &'static str,
-                   close_tip: &'static str,
-                   this_tab: BottomPanelTab,
-                   cx: &mut gpui::Context<Self>| {
-            let is_active = this_tab == active_tab;
-            let text_color = components::panel_tab_text_color(theme, is_active);
-            components::panel_tab(id, theme, ui_scale, icon, label, is_active)
-                .child(bottom_panel_tab_close(
-                    theme, ui_scale, close_id, close_tip, text_color, repo_id, this_tab, cx,
-                ))
-                .on_activate(
-                    false,
-                    controls::ControlActivation::Action,
-                    cx.listener(move |this, _e: &gpui::ClickEvent, _window, cx| {
-                        this.active_bottom_panel.insert(repo_id, this_tab);
-                        cx.notify();
-                    }),
+        let providers = self.bottom_panel_providers.clone();
+        let tab_elements: Vec<_> = tabs
+            .iter()
+            .filter_map(|&this_tab| {
+                let provider = providers
+                    .iter()
+                    .find(|provider| provider.tab() == this_tab)?;
+                let super::bottom_panel_providers::PanelLabels {
+                    id,
+                    title: label,
+                    icon,
+                } = provider.labels();
+                let close_id: SharedString = format!("{id}_close").into();
+                let close_tip: SharedString = format!("Close {}", label.to_lowercase()).into();
+                let is_active = this_tab == active_tab;
+                let text_color = components::panel_tab_text_color(theme, is_active);
+                Some(
+                    components::panel_tab(id, theme, ui_scale, icon, label, is_active)
+                        .child(bottom_panel_tab_close(
+                            theme, ui_scale, close_id, close_tip, text_color, repo_id, this_tab, cx,
+                        ))
+                        .on_activate(
+                            false,
+                            controls::ControlActivation::Action,
+                            cx.listener(move |this, _e: &gpui::ClickEvent, _window, cx| {
+                                this.active_bottom_panel.insert(repo_id, this_tab);
+                                cx.notify();
+                            }),
+                        ),
                 )
-        };
+            })
+            .collect();
 
         div()
             .flex()
@@ -210,24 +233,7 @@ impl GitCometView {
             .bg(theme.colors.surface.panel)
             .border_b_1()
             .border_color(theme.colors.stroke.subtle)
-            .child(tab(
-                "bottom_panel_tab_terminal",
-                "bottom_panel_tab_terminal_close",
-                "icons/terminal.svg",
-                "Terminal",
-                "Close terminal",
-                BottomPanelTab::Terminal,
-                cx,
-            ))
-            .child(tab(
-                "bottom_panel_tab_reflog",
-                "bottom_panel_tab_reflog_close",
-                "icons/history.svg",
-                "Reflog",
-                "Close reflog",
-                BottomPanelTab::Reflog,
-                cx,
-            ))
+            .children(tab_elements)
             .into_any()
     }
 }
@@ -239,16 +245,15 @@ impl GitCometView {
 fn bottom_panel_tab_close(
     theme: AppTheme,
     ui_scale: crate::ui_scale::UiScale,
-    id: &'static str,
-    tip: &'static str,
+    id: SharedString,
+    tip: SharedString,
     text_color: gpui::Rgba,
     repo_id: RepoId,
     tab: BottomPanelTab,
     cx: &mut gpui::Context<GitCometView>,
 ) -> gpui::Stateful<gpui::Div> {
     components::on_nested_control_click(
-        components::panel_tab_close(id, theme, ui_scale, text_color)
-            .gitcomet_tooltip(theme, tip.into()),
+        components::panel_tab_close(id, theme, ui_scale, text_color).gitcomet_tooltip(theme, tip),
         cx,
         move |this, _e: &gpui::ClickEvent, _window, cx| {
             this.close_bottom_panel_tab(repo_id, tab, cx);

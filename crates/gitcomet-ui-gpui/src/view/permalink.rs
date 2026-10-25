@@ -350,42 +350,48 @@ fn code_commit_base(host: &str, path: &str) -> Option<ForgeWebBase> {
     })
 }
 
-/// Whether a reference is a full 40-hex-digit git commit id. Forges like
+/// Whether a reference is a full 40- or 64-hex-digit git commit id. Forges like
 /// Azure DevOps and Gitea need to distinguish branches from commits in the
 /// URL (`GB`/`GC`, `src/branch`/`src/commit`).
 fn is_full_sha(reference: &str) -> bool {
-    reference.len() == 40 && reference.bytes().all(|b| b.is_ascii_hexdigit())
+    matches!(reference.len(), 40 | 64) && reference.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
 /// Percent-encode every character outside the RFC 3986 unreserved set (plus
 /// `/`, which separates path segments). Backslashes from Windows path
 /// rendering are normalized to forward slashes.
 fn encode_path(path: &str) -> String {
-    let mut out = String::with_capacity(path.len());
-    for byte in path.bytes() {
-        match byte {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'/' | b'-' | b'_' | b'.' | b'~' => {
-                out.push(byte as char)
-            }
-            b'\\' => out.push('/'),
-            _ => {
-                out.push('%');
-                out.push(char::from(b"0123456789ABCDEF"[(byte >> 4) as usize]));
-                out.push(char::from(b"0123456789ABCDEF"[(byte & 0x0F) as usize]));
-            }
-        }
-    }
-    out
+    let path = if path.contains('\\') {
+        std::borrow::Cow::Owned(path.replace('\\', "/"))
+    } else {
+        std::borrow::Cow::Borrowed(path)
+    };
+    gitcomet_core::url_encoding::encode_path(path.as_bytes()).collect()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    #[test]
+    fn path_encoding_preserves_separators_and_normalizes_windows_paths() {
+        assert_eq!(
+            encode_path(r"src\ä file+#%.rs"),
+            "src/%C3%A4%20file%2B%23%25.rs"
+        );
+        assert_eq!(encode_path("src/az-_.~09.rs"), "src/az-_.~09.rs");
+    }
+
+    /// Full-length ids of both object formats, so width-sensitive tests share
+    /// one recognizable pattern.
+    const SHA1_ID: &str = "0123456789abcdef0123456789abcdef01234567";
+    const SHA256_ID: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
     fn remote(name: &str, url: &str) -> Remote {
         Remote {
             name: name.to_string(),
             url: Some(url.to_string()),
+            default_branch: None,
         }
     }
 
@@ -675,13 +681,32 @@ mod tests {
             "origin",
             "https://dev.azure.com/org/project/_git/repo",
         )];
-        let sha = "0123456789abcdef0123456789abcdef01234567";
-        assert_eq!(
-            file_permalink(&remotes, sha, "src/main.rs").as_deref(),
-            Some(
-                "https://dev.azure.com/org/project/_git/repo?path=/src/main.rs&version=GC0123456789abcdef0123456789abcdef01234567&_a=contents"
-            )
-        );
+        // Both object formats are commits (`GC…`), not branches (`GB…`).
+        for sha in [SHA1_ID, SHA256_ID] {
+            assert_eq!(
+                file_permalink(&remotes, sha, "src/main.rs"),
+                Some(format!(
+                    "https://dev.azure.com/org/project/_git/repo?path=/src/main.rs&version=GC{sha}&_a=contents"
+                )),
+                "{sha}"
+            );
+        }
+    }
+
+    #[test]
+    fn is_full_sha_accepts_40_and_64_hex_digits() {
+        for (reference, expected) in [
+            (SHA1_ID.to_string(), true),
+            (SHA256_ID.to_string(), true),
+            (SHA256_ID.to_uppercase(), true),
+            (SHA1_ID[..39].to_string(), false),
+            (SHA256_ID[..41].to_string(), false),
+            (SHA256_ID[..63].to_string(), false),
+            (format!("{SHA256_ID}a"), false),
+            ("g".repeat(64), false),
+        ] {
+            assert_eq!(is_full_sha(&reference), expected, "{reference}");
+        }
     }
 
     #[test]
@@ -729,13 +754,16 @@ mod tests {
             file_permalink(&remotes, "main", "src/lib.rs").as_deref(),
             Some("https://codeberg.org/org/repo/src/branch/main/src/lib.rs")
         );
-        let sha = "0123456789abcdef0123456789abcdef01234567";
-        assert_eq!(
-            file_permalink(&remotes, sha, "src/lib.rs").as_deref(),
-            Some(
-                "https://codeberg.org/org/repo/src/commit/0123456789abcdef0123456789abcdef01234567/src/lib.rs"
-            )
-        );
+        // Both object formats are commits (`src/commit`), not branches.
+        for sha in [SHA1_ID, SHA256_ID] {
+            assert_eq!(
+                file_permalink(&remotes, sha, "src/lib.rs"),
+                Some(format!(
+                    "https://codeberg.org/org/repo/src/commit/{sha}/src/lib.rs"
+                )),
+                "{sha}"
+            );
+        }
     }
 
     #[test]
@@ -764,7 +792,7 @@ mod tests {
                 "https://us-east-1.console.aws.amazon.com/codesuite/codecommit/repositories/my-repo/browse/refs/heads/main/--/src/lib.rs"
             )
         );
-        let sha = "0123456789abcdef0123456789abcdef01234567";
+        let sha = SHA1_ID;
         assert_eq!(
             file_permalink(&remotes, sha, "src/lib.rs").as_deref(),
             Some(
@@ -800,6 +828,7 @@ mod tests {
         let no_url = [Remote {
             name: "origin".to_string(),
             url: None,
+            default_branch: None,
         }];
         assert_eq!(commit_permalink(&no_url, "abc123"), None);
     }
@@ -880,6 +909,7 @@ mod tests {
             Remote {
                 name: "no-url".to_string(),
                 url: None,
+                default_branch: None,
             },
             remote("local", "/srv/git/repo.git"),
             remote("upstream", "https://github.com/org/repo.git"),

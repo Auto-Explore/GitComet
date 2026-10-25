@@ -8,12 +8,11 @@ use crate::util::{
 };
 use gitcomet_core::domain::{CommitId, FileStatusKind, StashEntry, Upstream};
 use gitcomet_core::error::{Error, ErrorKind, GitFailure, GitFailureId};
-use gitcomet_core::path_utils::canonicalize_or_original;
+use gitcomet_core::path_utils::{canonicalize_or_original, symlink_free_write_target};
 use gitcomet_core::services::{CheckoutRemoteBranchMode, CommitOperationOutcome, Result};
 use gix::bstr::ByteSlice as _;
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::fs;
-use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
 fn stash_spec(index: usize) -> String {
@@ -25,9 +24,9 @@ fn local_branch_ref_name(branch: &str) -> String {
 }
 
 fn head_targets_branch(repo: &gix::Repository, branch_ref_name: &str) -> Result<bool> {
-    let head_name = repo
-        .head_name()
-        .map_err(|e| Error::new(ErrorKind::Backend(format!("gix head_name: {e}"))))?;
+    let head_name = crate::refs::head_name(repo).map_err(|e| {
+        Error::new(ErrorKind::Backend(format!("gix head_name: {e}"))).with_source(e)
+    })?;
     Ok(head_name.is_some_and(|name| name.as_bstr() == branch_ref_name))
 }
 
@@ -101,18 +100,11 @@ fn cannot_force_update_branch_error(command: &str, branch: &str, worktree: &Path
 /// Delete `refs/heads/<name>` and its config; the caller checked no worktree holds it.
 fn delete_local_branch_ref_and_config(repo: &gix::Repository, name: &str) -> Result<()> {
     let ref_name = local_branch_ref_name(name);
-    let Some(reference) = repo
-        .try_find_reference(ref_name.as_str())
-        .map_err(|e| Error::new(ErrorKind::Backend(format!("gix try_find_reference: {e}"))))?
-    else {
+    if !crate::refs::delete_named(repo, &ref_name)? {
         return Err(delete_branch_force_error(format!(
             "error: branch '{name}' not found"
         )));
-    };
-
-    reference
-        .delete()
-        .map_err(|e| Error::new(ErrorKind::Backend(format!("gix delete branch {name}: {e}"))))?;
+    }
     delete_local_branch_config_section(repo, name)
 }
 
@@ -177,58 +169,27 @@ fn edit_local_config_with_policy(
     edit: impl FnOnce(&mut gix::config::File) -> Result<bool>,
 ) -> Result<()> {
     let config_path = repo.common_dir().join("config");
-    let mut config = match gix::config::File::from_path_no_includes(
-        config_path.clone(),
-        gix::config::Source::Local,
-    ) {
+    // Locks before reading, follows a symlinked config and keeps its mode.
+    let mut config = match repo.config_file_mut(&config_path) {
         Ok(config) => config,
-        Err(gix::config::file::init::from_paths::Error::Io { source, .. })
-            if source.kind() == std::io::ErrorKind::NotFound
-                && policy == LocalConfigEditPolicy::BestEffortCleanup =>
-        {
+        // Git still deletes the branch ref when branch-config cleanup can't
+        // take the config lock; it only warns and leaves the config in place.
+        Err(e) if e.is_retryable() && policy == LocalConfigEditPolicy::BestEffortCleanup => {
             return Ok(());
         }
         Err(e) => {
             return Err(Error::new(ErrorKind::Backend(format!(
-                "gix read local config {}: {e}",
+                "gix open local config {}: {e}",
                 config_path.display()
             ))));
         }
     };
 
     if edit(&mut config)? {
-        let serialized = config.to_bstring();
-        let mut lock = match gix::lock::File::acquire_to_update_resource(
-            &config_path,
-            gix::lock::acquire::Fail::Immediately,
-            None,
-        ) {
-            Ok(lock) => lock,
-            // Git still deletes the branch ref when branch-config cleanup can't
-            // take the config lock; it only warns and leaves the config in place.
-            Err(gix::lock::acquire::Error::PermanentlyLocked { .. })
-                if policy == LocalConfigEditPolicy::BestEffortCleanup =>
-            {
-                return Ok(());
-            }
-            Err(e) => {
-                return Err(Error::new(ErrorKind::Backend(format!(
-                    "lock local config {}: {e}",
-                    config_path.display()
-                ))));
-            }
-        };
-        lock.write_all(serialized.as_ref() as &[u8]).map_err(|e| {
+        config.commit().map_err(|e| {
             Error::new(ErrorKind::Backend(format!(
                 "write local config {}: {e}",
                 config_path.display()
-            )))
-        })?;
-        lock.commit().map_err(|e| {
-            Error::new(ErrorKind::Backend(format!(
-                "commit local config {}: {}",
-                config_path.display(),
-                e.error
             )))
         })?;
     }
@@ -269,9 +230,9 @@ fn branch_already_exists_error(command: &str, branch: &str) -> Error {
     )))
 }
 
-fn checkout_remote_branch_missing_error(remote: &str, branch: &str) -> Error {
+fn remote_branch_missing_error(command: &str, remote: &str, branch: &str) -> Error {
     Error::new(ErrorKind::Git(GitFailure::new(
-        "git checkout --track",
+        command,
         GitFailureId::CommandFailed,
         Some(128),
         Vec::new(),
@@ -302,35 +263,36 @@ fn branch_target_missing_error(repo: &gix::Repository, target: &str) -> Error {
 }
 
 fn resolve_branch_target_commit_id(repo: &gix::Repository, target: &str) -> Result<gix::ObjectId> {
-    let object = repo
-        .rev_parse_single(target)
-        .map_err(|_| branch_target_missing_error(repo, target))?
+    let object = crate::refs::resolve_required(repo, target)
+        .map_err(|error| branch_target_missing_error(repo, target).with_source(error))?
         .object()
         .map_err(|e| {
             Error::new(ErrorKind::Backend(format!(
                 "gix rev-parse {target} object: {e}"
             )))
         })?;
-    let commit = object.peel_to_commit().map_err(|e| match e {
-        gix::object::peel::to_kind::Error::NotFound { oid, actual, .. } => create_branch_error(
-            format!(
-                "error: object {oid} is a {actual}, not a commit\nfatal: not a valid branch point: '{target}'"
-            ),
-        ),
-        other => Error::new(ErrorKind::Backend(format!(
-            "gix branch target {target} to commit: {other}"
-        ))),
+    let object = object.peel_tags_to_end().map_err(|e| {
+        Error::new(ErrorKind::Backend(format!(
+            "gix branch target {target} to commit: {e}"
+        )))
     })?;
-    Ok(commit.id)
+    if object.kind != gix::object::Kind::Commit {
+        return Err(create_branch_error(format!(
+            "error: object {} is a {}, not a commit\nfatal: not a valid branch point: '{target}'",
+            object.id, object.kind
+        )));
+    }
+    Ok(object.id)
 }
 
 fn resolve_stash_commit(repo: &gix::Repository, index: usize) -> Result<gix::Commit<'_>> {
     let stash_spec = stash_spec(index);
-    repo.rev_parse_single(stash_spec.as_str())
+    crate::refs::resolve_required(repo, stash_spec.as_str())
         .map_err(|e| {
             Error::new(ErrorKind::Backend(format!(
                 "gix rev-parse {stash_spec}: {e}"
             )))
+            .with_source(e)
         })?
         .object()
         .map_err(|e| {
@@ -511,12 +473,13 @@ impl GixRepo {
     }
 
     fn ref_exists_in_repo(repo: &gix::Repository, ref_name: &str) -> Result<bool> {
-        Ok(repo
-            .try_find_reference(ref_name)
+        Ok(crate::refs::view(repo)?
+            .find_exact(ref_name)
             .map_err(|e| {
                 Error::new(ErrorKind::Backend(format!(
                     "gix try_find_reference {ref_name}: {e}"
                 )))
+                .with_source(e)
             })?
             .is_some())
     }
@@ -544,18 +507,19 @@ impl GixRepo {
         repo.committer_or_set_generic_fallback()
             .map_err(|e| Error::new(ErrorKind::Backend(format!("gix committer fallback: {e}"))))?;
 
-        if let Err(e) = repo.reference(
-            local_branch_ref_name(branch),
+        if let Err(e) = crate::refs::create(
+            &repo,
+            &local_branch_ref_name(branch),
             target_id,
-            gix::refs::transaction::PreviousValue::MustNotExist,
-            format!("branch: Created from {target}"),
+            &format!("branch: Created from {target}"),
         ) {
             if self.local_branch_exists(branch)? {
                 return Err(branch_already_exists_error("git branch", branch));
             }
             return Err(Error::new(ErrorKind::Backend(format!(
                 "gix create branch {branch}: {e}"
-            ))));
+            )))
+            .with_source(e));
         }
         Ok(())
     }
@@ -617,8 +581,9 @@ impl GixRepo {
                 path.display()
             ))));
         }
-        let holder = crate::open::open_worktree_repo(&path)
-            .map_err(|e| crate::open::map_open_error(e, "gix open worktree holding branch"))?;
+        let holder = crate::open::open_worktree_repo(&path).map_err(|e| {
+            crate::open::map_open_error(e, "gix open worktree holding branch", &path)
+        })?;
         let same_repo = canonicalize_or_original(holder.common_dir().to_path_buf())
             == canonicalize_or_original(repo.common_dir().to_path_buf());
         if !same_repo {
@@ -761,21 +726,11 @@ impl GixRepo {
         validate_ref_like_arg(branch, "branch name")?;
         validate_ref_like_arg(local_branch, "branch name")?;
 
-        let repo = self.reopen_repo()?;
         let upstream = Upstream {
             remote: remote.to_string(),
             branch: branch.to_string(),
         };
-        let tracking_refs = tracking_refs_for_remote_branch(&repo, &upstream)?;
-        let mut live_tracking_refs = Vec::new();
-        for tracking_ref in tracking_refs {
-            if Self::ref_exists_in_repo(&repo, tracking_ref.as_str())? {
-                live_tracking_refs.push(tracking_ref);
-            }
-        }
-        let [tracking_ref] = live_tracking_refs.as_slice() else {
-            return Err(checkout_remote_branch_missing_error(remote, branch));
-        };
+        let tracking_ref = self.live_tracking_ref(&upstream, "git checkout --track")?;
 
         let mut cmd = self.git_workdir_cmd();
         cmd.arg("checkout")
@@ -787,6 +742,25 @@ impl GixRepo {
             .arg(local_branch)
             .arg(tracking_ref);
         run_git_simple(cmd, "git checkout --track")
+    }
+
+    /// The one remote-tracking ref of `upstream` that exists; `command` labels the failure.
+    pub(super) fn live_tracking_ref(&self, upstream: &Upstream, command: &str) -> Result<String> {
+        let repo = self.reopen_repo()?;
+        let mut live_tracking_refs = Vec::new();
+        for tracking_ref in tracking_refs_for_remote_branch(&repo, upstream)? {
+            if Self::ref_exists_in_repo(&repo, tracking_ref.as_str())? {
+                live_tracking_refs.push(tracking_ref);
+            }
+        }
+        let [tracking_ref] = live_tracking_refs.as_slice() else {
+            return Err(remote_branch_missing_error(
+                command,
+                &upstream.remote,
+                &upstream.branch,
+            ));
+        };
+        Ok(tracking_ref.clone())
     }
 
     pub(super) fn checkout_commit_impl(&self, id: &CommitId) -> Result<()> {
@@ -861,14 +835,17 @@ impl GixRepo {
         }
 
         let detail = stash_apply_failure_detail(&stdout, &stderr);
-        Err(Error::new(ErrorKind::Git(GitFailure::new(
-            "git stash apply",
-            failure_id,
-            output.status.code(),
-            output.stdout,
-            output.stderr,
-            detail,
-        ))))
+        Err(Error::new(ErrorKind::Git(
+            GitFailure::new(
+                "git stash apply",
+                failure_id,
+                output.status.code(),
+                output.stdout,
+                output.stderr,
+                detail,
+            )
+            .with_auth_outcome(output.auth_outcome),
+        )))
     }
 
     pub(super) fn stash_drop_impl(&self, index: usize) -> Result<()> {
@@ -878,7 +855,62 @@ impl GixRepo {
     }
 
     pub(super) fn stage_impl(&self, paths: &[&Path]) -> Result<()> {
-        run_git_simple_with_paths(&self.spec.workdir, "git add", &["add", "-A"], paths)
+        if paths.is_empty() {
+            return run_git_simple_with_paths(&self.spec.workdir, "git add", &["add", "-A"], paths);
+        }
+        // As a pathspec, a file's path also names everything under a directory
+        // that replaced it, so `git add` would add that directory's files too.
+        // Staging the file stages its deletion and nothing else.
+        let replaced = self.files_replaced_by_directories(paths)?;
+        let (deletions, others): (Vec<&Path>, Vec<&Path>) =
+            paths.iter().partition(|path| replaced.contains(*path));
+        if !deletions.is_empty() {
+            run_git_simple_with_paths(
+                &self.spec.workdir,
+                "git rm --cached",
+                &["rm", "--cached", "--quiet"],
+                &deletions,
+            )?;
+        }
+        if !others.is_empty() {
+            run_git_simple_with_paths(&self.spec.workdir, "git add", &["add", "-A"], &others)?;
+        }
+        Ok(())
+    }
+
+    /// The `paths` the index holds as a file (stage 0, not a submodule) while
+    /// the working tree has a directory there.
+    fn files_replaced_by_directories<'a>(&self, paths: &[&'a Path]) -> Result<Vec<&'a Path>> {
+        let directories: Vec<&Path> = paths
+            .iter()
+            .copied()
+            .filter(|path| {
+                fs::symlink_metadata(self.spec.workdir.join(path))
+                    .is_ok_and(|metadata| metadata.is_dir())
+            })
+            .collect();
+        if directories.is_empty() {
+            return Ok(directories);
+        }
+        let index = self.repo().index_or_empty().map_err(|error| {
+            Error::new(ErrorKind::Backend(format!("reading the index: {error}")))
+        })?;
+        let mut replaced = Vec::new();
+        for path in directories {
+            let key = gix::path::into_bstr(path).map_err(|error| {
+                Error::new(ErrorKind::Backend(format!(
+                    "encoding path {}: {error}",
+                    path.display()
+                )))
+            })?;
+            let key = gix::path::to_unix_separators_on_windows(key);
+            if index.entry_by_path(key.as_ref()).is_some_and(|entry| {
+                entry.stage_raw() == 0 && entry.mode != gix::index::entry::Mode::COMMIT
+            }) {
+                replaced.push(path);
+            }
+        }
+        Ok(replaced)
     }
 
     fn merge_untracked_restore_conflicts_from_stash(
@@ -906,13 +938,18 @@ impl GixRepo {
         }
 
         for path in conflicts.paths {
-            let ours_path = self.spec.workdir.join(&path);
+            // A symlink at or above the path has no text of its own to merge,
+            // and reading and writing through it would rewrite its target.
+            let Ok(ours_path) = symlink_free_write_target(&self.spec.workdir, &path) else {
+                continue;
+            };
             if !ours_path.exists() {
                 continue;
             }
 
-            let ours_bytes =
-                fs::read(&ours_path).map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
+            let ours_bytes = fs::read(&ours_path).map_err(|error| {
+                Error::from(error).with_context("read untracked stash conflict", Some(&ours_path))
+            })?;
             let theirs_bytes = stashed_contents.remove(&path).ok_or_else(|| {
                 stash_apply_error(
                     GitFailureId::UntrackedRestoreConflict,
@@ -943,7 +980,9 @@ impl GixRepo {
             })?;
 
             let merged_text = build_untracked_conflict_markers(ours_text, theirs_text);
-            fs::write(&ours_path, merged_text).map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
+            fs::write(&ours_path, merged_text).map_err(|error| {
+                Error::from(error).with_context("write untracked stash conflict", Some(&ours_path))
+            })?;
         }
 
         Ok(())
@@ -1047,7 +1086,7 @@ impl GixRepo {
             if has_commits {
                 // A bare `git reset` would also end a conflict-free operation
                 // in progress (a resolved merge, a stopped revert).
-                if conflicted.is_empty() && !self.operation_state_on_disk() {
+                if conflicted.is_empty() && !self.operation_state_on_disk()? {
                     let mut cmd = self.git_workdir_cmd();
                     cmd.arg("reset");
                     return run_git_simple(cmd, "git reset");
@@ -1105,14 +1144,32 @@ impl GixRepo {
     }
 
     pub(super) fn commit_impl(&self, message: &str) -> Result<()> {
+        self.commit_identity_impl(message, None, false)
+    }
+
+    fn commit_identity_impl(
+        &self,
+        message: &str,
+        identity: Option<&gitcomet_core::commit_identity::CommitIdentity>,
+        amend: bool,
+    ) -> Result<()> {
         let merge_in_progress = self.merge_in_progress_for_commit()?;
         let mut cmd = self.git_workdir_cmd();
         cmd.arg("commit");
+        if amend {
+            self.refuse_amending_annex_adjustment()?;
+            cmd.arg("--amend");
+        }
+        if let Some(identity) = identity {
+            identity.apply(&mut cmd)?;
+        }
         if merge_in_progress {
             cmd.arg("--allow-empty");
         }
         cmd.arg("-m").arg(message);
-        let label = if merge_in_progress {
+        let label = if amend {
+            "git commit --amend"
+        } else if merge_in_progress {
             "git commit --allow-empty"
         } else {
             "git commit"
@@ -1134,13 +1191,28 @@ impl GixRepo {
 
     fn merge_in_progress_for_commit(&self) -> Result<bool> {
         let repo = self.repo();
-        Ok(repo.state() == Some(gix::state::InProgress::Merge))
+        Ok(crate::refs::operation_state(&repo)? == Some(gix::state::InProgress::Merge))
     }
 
     pub(super) fn commit_amend_impl(&self, message: &str) -> Result<()> {
-        let mut cmd = self.git_workdir_cmd();
-        cmd.arg("commit").arg("--amend").arg("-m").arg(message);
-        run_git_simple(cmd, "git commit --amend")
+        self.commit_identity_impl(message, None, true)
+    }
+
+    pub(super) fn commit_with_identity_impl(
+        &self,
+        message: &str,
+        identity: Option<&gitcomet_core::commit_identity::CommitIdentity>,
+        amend: bool,
+    ) -> Result<CommitOperationOutcome> {
+        let local_branch = self.current_branch_name_for_outcome()?;
+        let pre_head = self.head_commit_id_for_outcome()?;
+        self.commit_identity_impl(message, identity, amend)?;
+        let post_head = self.head_commit_id_for_outcome()?;
+        Ok(CommitOperationOutcome {
+            local_branch,
+            pre_head,
+            post_head,
+        })
     }
 
     pub(super) fn commit_amend_with_outcome_impl(

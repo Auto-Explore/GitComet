@@ -3,27 +3,26 @@ mod backend;
 pub mod command_trace;
 mod ignore;
 mod open;
+mod refs;
 mod repo;
+#[cfg(feature = "benchmarks")]
+#[doc(hidden)]
+pub mod status_trace;
+#[cfg(any(test, feature = "test-support"))]
+mod test_support;
 mod util;
 
 pub use backend::GixBackend;
 
+#[cfg(any(test, feature = "test-support"))]
 #[doc(hidden)]
-pub fn install_test_git_command_environment(
-    global_config: std::path::PathBuf,
-    home_dir: std::path::PathBuf,
-    xdg_config_home: std::path::PathBuf,
-    gnupg_home: std::path::PathBuf,
-) {
-    util::install_test_git_command_environment(util::TestGitCommandEnvironment {
-        global_config,
-        home_dir,
-        xdg_config_home,
-        gnupg_home,
-    });
-}
+pub use test_support::{
+    allow_test_repo_local_mergetool_command, install_test_git_command_environment,
+};
 
+/// Optional decoded retention and caller-pinned allocations, in bytes, followed
+/// by optional retained row count. Pinned bytes may overlap retained bytes.
 #[doc(hidden)]
-pub fn allow_test_repo_local_mergetool_command(repo: &std::path::Path, tool_name: &str) {
-    repo::allow_test_repo_local_mergetool_command(repo, tool_name);
+pub fn shared_history_memory() -> (usize, usize, usize) {
+    repo::shared_history_memory()
 }

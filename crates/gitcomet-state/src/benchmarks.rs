@@ -98,6 +98,7 @@ pub fn reset_conflict_resolutions_sync(state: &mut AppState, repo_id: RepoId, pa
 mod tests {
     use super::*;
     use crate::model::{Loadable, RepoState};
+    use crate::msg::{PersistenceEffect, StatusEffect};
     use gitcomet_core::conflict_session::{
         ConflictPayload, ConflictRegion, ConflictRegionResolution, ConflictRegionText,
         ConflictSession,
@@ -174,7 +175,7 @@ mod tests {
             assert!(
                 effects.iter().any(|effect| matches!(
                     effect,
-                    Effect::LoadStatus { repo_id } if *repo_id == RepoId(2)
+                    Effect::Status(StatusEffect::LoadStatus { repo_id }) if *repo_id == RepoId(2)
                 )),
                 "expected reducer refresh effects for the target repo"
             );
@@ -209,10 +210,10 @@ mod tests {
         with_reorder_repo_tabs_sync(&mut state, RepoId(1), None, |_state, effects| {
             assert!(matches!(
                 effects,
-                [Effect::PersistSession {
+                [Effect::Persistence(PersistenceEffect::PersistSession {
                     repo_id: Some(RepoId(1)),
                     action: "reordering repository tabs",
-                }]
+                })]
             ));
         });
         assert_eq!(state.repos[0].id, RepoId(2));
@@ -234,10 +235,7 @@ mod tests {
         state.repos.push(repo);
         state.active_repo = Some(RepoId(1));
 
-        let target = DiffTarget::WorkingTree {
-            path: PathBuf::from("src/lib.rs"),
-            area: DiffArea::Staged,
-        };
+        let target = DiffTarget::working_tree(PathBuf::from("src/lib.rs"), DiffArea::Staged);
 
         with_select_diff_sync(&mut state, RepoId(1), target.clone(), |state, effects| {
             assert!(matches!(
@@ -420,4 +418,13 @@ mod tests {
         );
         assert_eq!(state.repos[0].conflict_state.conflict_rev, before_rev + 1);
     }
+}
+
+/// Native setup, excluding fixture creation and watcher teardown.
+pub fn watcher_startup(
+    root: &std::path::Path,
+    backend: &dyn gitcomet_core::services::GitBackend,
+    cancel_during_setup: bool,
+) -> (std::time::Duration, usize, bool) {
+    crate::store::watcher_startup_for_bench(root, backend, cancel_during_setup)
 }

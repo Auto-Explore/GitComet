@@ -56,6 +56,93 @@ pub(in crate::view) fn spawn_launch<V, E>(
     .detach();
 }
 
+/// A browser or file launch the user asked for.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum Launch {
+    Url(String),
+    Path(std::path::PathBuf),
+}
+
+impl Launch {
+    /// Refuses what must never reach the OS opener, before anything runs.
+    fn validate(&self) -> io::Result<()> {
+        match self {
+            Self::Url(url) => validate_external_url(url).map(|_| ()),
+            Self::Path(path) if path.as_os_str().is_empty() => {
+                Err(io::Error::new(io::ErrorKind::InvalidInput, "Path is empty"))
+            }
+            Self::Path(_) => Ok(()),
+        }
+    }
+
+    fn run(self) -> io::Result<()> {
+        match self {
+            Self::Url(url) => open_url_blocking(&url),
+            Self::Path(path) => open_path_blocking(&path),
+        }
+    }
+}
+
+thread_local! {
+    /// Launches a deterministic runtime recorded instead of running.
+    static RECORDED_LAUNCHES: std::cell::RefCell<Vec<Launch>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Validates `launch` now and runs it once the calling update has ended, off
+/// the main thread (see [`spawn_launch`]); `on_error` reports a failed launch
+/// back on the main thread. Outside the live runtime a URL goes to the
+/// platform instead (a test platform records it) and every launch to
+/// [`take_recorded_launches`].
+pub(crate) fn launch_later(
+    launch: Launch,
+    on_error: impl FnOnce(io::Error, &mut gpui::App) + 'static,
+    cx: &mut gpui::App,
+) -> io::Result<()> {
+    launch.validate()?;
+    if !crate::ui_runtime::current().launches_applications() {
+        cx.spawn(async move |cx| {
+            cx.update(|cx| {
+                // A test platform records URLs but cannot open paths.
+                if let Launch::Url(url) = &launch {
+                    cx.open_url(url);
+                }
+                RECORDED_LAUNCHES.with(|launches| launches.borrow_mut().push(launch));
+            })
+        })
+        .detach();
+        return Ok(());
+    }
+    let task = cx.background_spawn(async move { launch.run() });
+    cx.spawn(async move |cx| {
+        if let Err(err) = task.await {
+            cx.update(|cx| on_error(err, cx));
+        }
+    })
+    .detach();
+    Ok(())
+}
+
+/// Opens a known-safe link (the product's own pages) like [`launch_later`],
+/// logging a failure.
+pub(in crate::view) fn open_url_later(url: &str, cx: &mut gpui::App) {
+    let result = launch_later(
+        Launch::Url(url.to_string()),
+        |err, _| eprintln!("Failed to open a link: {err}"),
+        cx,
+    );
+    if let Err(err) = result {
+        eprintln!("Refused to open a link: {err}");
+    }
+}
+
+/// Launches recorded on this thread since the last call (deterministic
+/// runtimes only).
+#[cfg(test)]
+pub(crate) fn take_recorded_launches() -> Vec<Launch> {
+    RECORDED_LAUNCHES.with(|launches| std::mem::take(&mut *launches.borrow_mut()))
+}
+
 /// Open a URL in the user's default browser.
 pub(in crate::view) fn open_url_blocking(url: &str) -> Result<(), io::Error> {
     let url = validate_external_url(url)?;
@@ -249,41 +336,7 @@ fn validate_external_url(url: &str) -> Result<&str, io::Error> {
 /// `javascript:`/`data:`/`vbscript:` are script payloads, and `file:` would let
 /// text we did not author — a commit message in a cloned repository, say — open
 /// an arbitrary local file with its default application.
-const DENIED_URL_SCHEMES: [&str; 4] = ["javascript", "data", "vbscript", "file"];
-
-/// Whether a URL is something the app is willing to linkify and open.
-///
-/// Anything with a hierarchical `scheme://` part qualifies (`ssh://`, `git://`,
-/// `vscode://`, …) plus the flat `mailto:`. Requiring `://` is what keeps the
-/// script schemes out structurally — they are written `javascript:…`, never with
-/// an authority — and [`DENIED_URL_SCHEMES`] covers the rest.
-pub(crate) fn is_supported_link_url(url: &str) -> bool {
-    let Some((scheme, rest)) = url.split_once(':') else {
-        return false;
-    };
-    if !is_url_scheme(scheme) {
-        return false;
-    }
-    if DENIED_URL_SCHEMES
-        .iter()
-        .any(|denied| scheme.eq_ignore_ascii_case(denied))
-    {
-        return false;
-    }
-
-    if scheme.eq_ignore_ascii_case("mailto") {
-        !rest.is_empty()
-    } else {
-        rest.strip_prefix("//").is_some_and(|body| !body.is_empty())
-    }
-}
-
-/// The RFC 3986 scheme grammar: `ALPHA *( ALPHA / DIGIT / "+" / "-" / "." )`.
-fn is_url_scheme(scheme: &str) -> bool {
-    let mut bytes = scheme.bytes();
-    bytes.next().is_some_and(|byte| byte.is_ascii_alphabetic())
-        && bytes.all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'-' | b'.'))
-}
+pub(crate) use gitcomet_ui_kit::text_selection::is_supported_link_url;
 
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
 fn linux_open_helpers(is_wsl: bool) -> &'static [LinuxOpenHelper] {
@@ -438,18 +491,7 @@ fn file_uri_for_file_manager(path: &Path) -> Result<String, io::Error> {
     let mut uri = String::with_capacity(path_bytes.len() + "file://".len());
     uri.push_str("file://");
 
-    for &byte in path_bytes {
-        match byte {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'/' | b'-' | b'_' | b'.' | b'~' => {
-                uri.push(byte as char);
-            }
-            _ => {
-                uri.push('%');
-                uri.push(char::from(b"0123456789ABCDEF"[(byte >> 4) as usize]));
-                uri.push(char::from(b"0123456789ABCDEF"[(byte & 0x0F) as usize]));
-            }
-        }
-    }
+    uri.extend(gitcomet_core::url_encoding::encode_path(path_bytes));
 
     Ok(uri)
 }
@@ -658,6 +700,24 @@ mod windows_tests {
 }
 
 #[cfg(test)]
+mod launch_validation_tests {
+    use super::Launch;
+
+    #[test]
+    fn launches_refuse_script_and_file_urls_and_empty_paths() {
+        assert!(Launch::Url("https://example.com".into()).validate().is_ok());
+        assert!(
+            Launch::Url("javascript:alert(1)".into())
+                .validate()
+                .is_err()
+        );
+        assert!(Launch::Url("file:///etc/passwd".into()).validate().is_err());
+        assert!(Launch::Path("/tmp/report.txt".into()).validate().is_ok());
+        assert!(Launch::Path("".into()).validate().is_err());
+    }
+}
+
+#[cfg(test)]
 mod spawn_launch_tests {
     use super::spawn_launch;
     use std::sync::Arc;
@@ -688,7 +748,6 @@ mod spawn_launch_tests {
     /// by `background_spawn`'s `Send` bound at the type level instead.
     #[gpui::test]
     fn spawn_launch_defers_the_launch_out_of_the_calling_handler(cx: &mut gpui::TestAppContext) {
-        let _visual_guard = crate::test_support::lock_visual_test();
         let launched = Arc::new(AtomicBool::new(false));
         let (view, cx) = cx.add_window_view(|_window, _cx| LaunchProbe {
             on_result_ran: false,

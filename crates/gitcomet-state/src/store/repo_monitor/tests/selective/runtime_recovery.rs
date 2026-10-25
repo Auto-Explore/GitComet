@@ -84,7 +84,7 @@ fn embedded_gitlink_commit_refreshes_parent() {
     run_git(&child, &["commit", "--allow-empty", "-m", "Advance child"]);
     // Read status without refreshing either index: the probe itself must not
     // generate the parent notification this test is looking for.
-    let status = std::process::Command::new("git")
+    let status = gitcomet_core::test_support::git_fixture::git_command()
         .arg("--no-optional-locks")
         .arg("-C")
         .arg(&root)
@@ -183,6 +183,7 @@ fn runtime_ignore_failure_warns_and_recovers_without_another_edit() {
         other => panic!("runtime failure did not reconcile missed changes: {other:?}"),
     }
     monitor.settle();
-    fs::write(root.join("source/file.txt"), "edit after recovery").unwrap();
-    monitor.refresh();
+    let file = root.join("source/file.txt");
+    let edit = || fs::write(&file, "edit after recovery").unwrap();
+    assert!(monitor.expect_change(&file, edit).worktree);
 }

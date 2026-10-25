@@ -54,7 +54,25 @@ pub(super) struct ScrollInteraction {
     pub manual_pending: bool,
     pub generation: u64,
     pub logical: Option<LogicalViewport>,
+    /// Window-space bounds of the indexed viewport at its last prepaint, and
+    /// the repository it showed.
+    pub viewport_bounds: Option<(RepoId, Bounds<Pixels>)>,
+    /// The last row height the viewport snapped to device pixels, keyed by the
+    /// unsnapped height it came from.
+    pub snapped_row_height: Option<(Pixels, f64)>,
     frozen_extent: Option<Pixels>,
+}
+
+impl ScrollInteraction {
+    /// Row pitch for `row_height`: its device-snapped value once the viewport
+    /// has measured it. Layout snaps each row's height, so an unsnapped pitch
+    /// leaves rows 1px apart.
+    pub fn row_height(&self, row_height: Pixels) -> f64 {
+        match self.snapped_row_height {
+            Some((raw, snapped)) if raw == row_height => snapped,
+            _ => f64::from(f32::from(row_height)),
+        }
+    }
 }
 
 pub(super) type SharedScrollInteraction = Rc<RefCell<ScrollInteraction>>;

@@ -17,12 +17,11 @@ use crate::view::mod_helpers::{
     PaneResizeHandle, PaneResizeState, StatusMultiSelection, StatusSection,
 };
 use crate::view::next_pane_resize_drag_width;
-use crate::view::panes::main::{
-    AsciiCaseInsensitiveNeedle, DiffSearchQueryReuse,
-    diff_cache::{
-        PagedFileDiffRows, PagedPatchDiffRows, PagedPatchSplitRows, PatchInlineVisibleMap,
-    },
-    diff_search_query_reuse,
+use crate::view::panes::diff::diff_cache::{
+    PagedFileDiffRows, PagedPatchDiffRows, PagedPatchSplitRows, PatchInlineVisibleMap,
+};
+use crate::view::panes::diff::diff_search::{
+    AsciiCaseInsensitiveNeedle, DiffSearchQueryReuse, diff_search_query_reuse,
 };
 use crate::view::path_display;
 use gitcomet_core::domain::DiffLineKind;
@@ -58,6 +57,10 @@ use tempfile::TempDir;
 
 mod conflict;
 mod diff_fixtures;
+#[cfg(feature = "benchmarks")]
+mod extension_fixtures;
+#[cfg(feature = "benchmarks")]
+pub use extension_fixtures::*;
 mod git_ops;
 mod picker_fixtures;
 mod real_repo;
@@ -70,6 +73,7 @@ mod support;
 mod syntax;
 mod text_fixtures;
 
+pub use crate::view::panes::SidebarStickyFrameFixture;
 pub use conflict::*;
 pub(crate) use diff_fixtures::should_hide_unified_diff_header_for_bench;
 pub use diff_fixtures::*;

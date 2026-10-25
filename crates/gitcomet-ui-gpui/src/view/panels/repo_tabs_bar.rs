@@ -23,6 +23,8 @@ pub(in super::super) struct RepoTabsBarView {
     active_context_menu_invoker: Option<SharedString>,
     repo_tab_spinner_delay: Option<RepoTabSpinnerDelayState>,
     repo_tab_spinner_delay_seq: u64,
+    /// Show the busy spinner only once a load outlasts the delay.
+    uses_spinner_delay: bool,
     notify_fingerprint: u64,
     repo_tab_drag_visual: Option<RepoTabDragVisual>,
     tab_scroll: components::TabBarScroll,
@@ -77,9 +79,9 @@ struct RepoTabDragCarrier;
 
 impl Render for RepoTabDragCarrier {
     fn render(&mut self, _window: &mut Window, _cx: &mut gpui::Context<Self>) -> impl IntoElement {
-        // GPUI's drag machinery requires a preview entity. Keep that carrier
-        // invisible: the real tab remains in the strip and is what reorders.
-        div().size(px(1.0)).opacity(0.0)
+        // GPUI's drag machinery requires a preview entity. This empty one
+        // paints nothing: the real tab remains in the strip and is what reorders.
+        div().size(px(1.0))
     }
 }
 
@@ -149,7 +151,7 @@ fn repo_tab_text_width(label: SharedString, font_size: Pixels, window: &mut Wind
     let run = style.to_run(label.len());
     window
         .text_system()
-        .shape_line(label, font_size, &[run], None)
+        .shape_line(label, font_size, &[run])
         .width
 }
 
@@ -328,17 +330,36 @@ impl RepoTabsBarView {
                     err.hash(&mut hasher);
                 }
             }
-            repo.loads_in_flight.any_in_flight().hash(&mut hasher);
-            repo.local_actions_in_flight.hash(&mut hasher);
-            repo.pull_in_flight.hash(&mut hasher);
-            repo.push_in_flight.hash(&mut hasher);
         }
+        // Busy is left out: it flips on every background refresh, and only
+        // the delayed spinner shows it (see `shows_spinner`).
         hasher.finish()
     }
 
+    fn shows_spinner(&self, repo: &RepoState) -> bool {
+        Some(repo.id) == self.active_repo_id()
+            && Self::is_repo_busy(repo)
+            && self
+                .repo_tab_spinner_delay
+                .as_ref()
+                .is_some_and(|s| s.repo_id == repo.id && s.show_spinner)
+    }
+
+    fn active_tab_shows_spinner(&self) -> bool {
+        self.state.repos.iter().any(|repo| self.shows_spinner(repo))
+    }
+
     fn is_repo_busy(repo: &RepoState) -> bool {
+        // Focus and filesystem refreshes retain the usable primary view.
+        // Their checks must not make the whole tab appear to load again.
+        // Opening, explicit Reload and history-filter changes replace these
+        // values with Loading; pagination has its own explicit pending flag.
+        let primary_view_ready = matches!(repo.head_branch, Loadable::Ready(_))
+            && matches!(repo.status, Loadable::Ready(_))
+            && matches!(repo.log, Loadable::Ready(_));
         matches!(repo.open, Loadable::Loading)
-            || repo.loads_in_flight.any_in_flight()
+            || (repo.loads_in_flight.any_foreground_in_flight()
+                && (!primary_view_ready || repo.log_loading_more))
             || repo.local_actions_in_flight > 0
             || repo.pull_in_flight > 0
             || repo.push_in_flight > 0
@@ -367,12 +388,9 @@ impl RepoTabsBarView {
     fn close_repo_tab(&mut self, repo_id: RepoId, cx: &mut gpui::Context<Self>) {
         self.hovered_repo_tab = None;
         self.pressed_repo_tab = None;
-        if let Ok(true) = self.root_view.update(cx, |root, cx| {
-            root.request_terminal_shutdown_action(TerminalShutdownAction::CloseRepo { repo_id }, cx)
-        }) {
-            return;
-        }
-        self.store.dispatch(Msg::CloseRepo { repo_id });
+        let _ = self.root_view.update(cx, |root, cx| {
+            root.request_close_repos(vec![repo_id], None, cx);
+        });
         cx.notify();
     }
 
@@ -388,6 +406,7 @@ impl RepoTabsBarView {
         let subscription = cx.observe(&ui_model, |this, model, cx| {
             let next = Arc::clone(&model.read(cx).state);
             let next_fingerprint = Self::notify_fingerprint(&next);
+            let showed_spinner = this.active_tab_shows_spinner();
 
             this.state = next;
             this.update_repo_tab_spinner_delay(cx);
@@ -405,7 +424,9 @@ impl RepoTabsBarView {
                 this.pressed_repo_tab = None;
             }
 
-            if next_fingerprint != this.notify_fingerprint {
+            if next_fingerprint != this.notify_fingerprint
+                || showed_spinner != this.active_tab_shows_spinner()
+            {
                 this.notify_fingerprint = next_fingerprint;
                 cx.notify();
             }
@@ -425,6 +446,7 @@ impl RepoTabsBarView {
             active_context_menu_invoker: None,
             repo_tab_spinner_delay: None,
             repo_tab_spinner_delay_seq: 0,
+            uses_spinner_delay: crate::ui_runtime::current().uses_repo_tab_spinner_delay(),
             notify_fingerprint,
             repo_tab_drag_visual: None,
             tab_scroll: components::TabBarScroll::new(),
@@ -627,6 +649,13 @@ impl RepoTabsBarView {
         });
     }
 
+    /// The live runtime's spinner delay, for this view only: forcing the
+    /// whole runtime live would also start its background work.
+    #[cfg(test)]
+    pub(in crate::view) fn use_spinner_delay_for_tests(&mut self) {
+        self.uses_spinner_delay = true;
+    }
+
     #[cfg(test)]
     pub(in crate::view) fn tab_scroll_for_tests(&self) -> (Pixels, Pixels) {
         (self.tab_scroll.scrolled(), self.tab_scroll.max_scroll())
@@ -687,7 +716,7 @@ impl RepoTabsBarView {
 
         self.repo_tab_spinner_delay_seq = self.repo_tab_spinner_delay_seq.wrapping_add(1);
         let seq = self.repo_tab_spinner_delay_seq;
-        let uses_spinner_delay = crate::ui_runtime::current().uses_repo_tab_spinner_delay();
+        let uses_spinner_delay = self.uses_spinner_delay;
         self.repo_tab_spinner_delay = Some(RepoTabSpinnerDelayState {
             repo_id,
             show_spinner: !uses_spinner_delay,
@@ -698,9 +727,11 @@ impl RepoTabsBarView {
             return;
         }
 
+        // The app executor's timer, not smol's: it runs on the test clock.
+        let delay = cx.background_executor().timer(Duration::from_millis(100));
         cx.spawn(
             async move |view: WeakEntity<RepoTabsBarView>, cx: &mut gpui::AsyncApp| {
-                smol::Timer::after(Duration::from_millis(100)).await;
+                delay.await;
                 let _ = view.update(cx, |this, cx| {
                     if this.repo_tab_spinner_delay_seq != seq {
                         return;
@@ -746,7 +777,17 @@ impl Render for RepoTabsBarView {
         // Tabs are transparent, so a label fading out has to land on whatever
         // is actually behind it: the bar for an idle tab, the content strip
         // for the active one.
-        let strip_bg = crate::view::chrome::title_bar_background(theme, window.is_window_active());
+        let workspace_color = crate::workspaces::with_workspace_for_window(
+            cx,
+            window.window_handle().window_id(),
+            |workspace| workspace.color,
+        )
+        .flatten();
+        let strip_bg = crate::view::chrome::title_bar_background(
+            theme,
+            window.is_window_active(),
+            workspace_color,
+        );
 
         // Reveal the active tab when the repository changes, then leave the
         // offset alone so manual scrolling sticks.
@@ -788,13 +829,7 @@ impl Render for RepoTabsBarView {
             let repo_id = repo.id;
             let next_repo_id = self.state.repos.get(ix + 1).map(|r| r.id);
             let is_active = Some(repo_id) == active;
-            let is_busy = Self::is_repo_busy(repo);
-            let show_spinner = is_active
-                && is_busy
-                && self
-                    .repo_tab_spinner_delay
-                    .as_ref()
-                    .is_some_and(|s| s.repo_id == repo_id && s.show_spinner);
+            let show_spinner = self.shows_spinner(repo);
             let context_menu_invoker: SharedString = format!("repo_tab_{}", repo_id.0).into();
             let context_menu_active =
                 self.active_context_menu_invoker.as_ref() == Some(&context_menu_invoker);
@@ -848,7 +883,6 @@ impl Render for RepoTabsBarView {
                 // Fully cover any label ink beneath the button; the sibling
                 // ramp transitions into this exact background.
                 .bg(label_bg)
-                .cursor_pointer()
                 .control_interaction(
                     controls::InteractionStyle::destructive(theme).on_surface(label_bg),
                     controls::InteractionState::default(),
@@ -1100,7 +1134,10 @@ impl Render for RepoTabsBarView {
                 .on_activate(
                     false,
                     controls::ControlActivation::Composite,
-                    cx.listener(move |this, _e: &ClickEvent, _w, _cx| {
+                    cx.listener(move |this, _e: &ClickEvent, _w, cx| {
+                        let _ = this
+                            .root_view
+                            .update(cx, |root, cx| root.show_repository_canvas(cx));
                         if let Some(msg) =
                             Self::repo_tab_click_message(this.active_repo_id(), repo_id)
                         {
@@ -1269,10 +1306,15 @@ impl Render for RepoTabsBarView {
             .can_drop(|dragged, _window, _cx| {
                 dragged
                     .downcast_ref::<gpui::ExternalPaths>()
-                    .is_some_and(|paths| matches!(paths.paths(), [_]))
+                    .is_some_and(|paths| !paths.paths().is_empty())
             })
             .on_drop(
-                cx.listener(|this, paths: &gpui::ExternalPaths, _window, cx| {
+                cx.listener(|this, paths: &gpui::ExternalPaths, window, cx| {
+                    if let Some(transfer) = window.take_file_drop() {
+                        transfer
+                            .completion
+                            .complete(Some(gpui::FileTransferOperation::Copy));
+                    }
                     this.set_external_folder_drag_active(false, cx);
                     let paths = paths.clone();
                     let _ = this.root_view.update(cx, |root, cx| {
@@ -1410,6 +1452,53 @@ mod tests {
     }
 
     #[test]
+    fn remote_tag_discovery_does_not_keep_the_repository_tab_busy() {
+        use gitcomet_state::model::{LoadKind, Loadable};
+        let mut repo = repo_state("/tmp/remote-tag-loading");
+        repo.open = Loadable::Ready(());
+        repo.loads_in_flight.request(LoadKind::RemoteTags);
+        assert!(!RepoTabsBarView::is_repo_busy(&repo));
+
+        // Local data and user operations still own the tab's progress mark.
+        let mut local_load = repo.clone();
+        local_load.loads_in_flight.request(LoadKind::Tags);
+        assert!(RepoTabsBarView::is_repo_busy(&local_load));
+        repo.local_actions_in_flight = 1;
+        assert!(RepoTabsBarView::is_repo_busy(&repo));
+    }
+
+    #[test]
+    fn retained_primary_data_keeps_background_refreshes_out_of_the_tab_spinner() {
+        use gitcomet_state::model::{LoadKind, Loadable};
+        let mut repo = repo_state("/tmp/focus-refresh");
+        repo.open = Loadable::Ready(());
+        repo.head_branch = Loadable::Ready("main".into());
+        repo.status = Loadable::Ready(std::sync::Arc::new(gitcomet_core::domain::RepoStatus {
+            staged: Default::default(),
+            unstaged: Default::default(),
+        }));
+        repo.log = Loadable::Ready(std::sync::Arc::new(gitcomet_core::domain::LogPage {
+            commits: Vec::new(),
+            next_cursor: None,
+        }));
+        repo.loads_in_flight.request(LoadKind::WorktreeStatus);
+        repo.loads_in_flight.request(LoadKind::Tags);
+        assert!(!RepoTabsBarView::is_repo_busy(&repo));
+
+        let mut reload = repo.clone();
+        reload.status = Loadable::Loading;
+        assert!(RepoTabsBarView::is_repo_busy(&reload));
+        let mut history_filter = repo.clone();
+        history_filter.log = Loadable::Loading;
+        assert!(RepoTabsBarView::is_repo_busy(&history_filter));
+        let mut pagination = repo.clone();
+        pagination.log_loading_more = true;
+        assert!(RepoTabsBarView::is_repo_busy(&pagination));
+        repo.local_actions_in_flight = 1;
+        assert!(RepoTabsBarView::is_repo_busy(&repo));
+    }
+
+    #[test]
     fn repo_tab_tooltip_defaults_to_repo_path() {
         let repo = repo_state("/tmp/repo");
         assert_eq!(
@@ -1421,7 +1510,7 @@ mod tests {
     #[test]
     fn repo_tab_tooltip_reports_missing_repository() {
         let mut repo = repo_state("/tmp/missing-repo");
-        repo.feedback.missing_on_disk = true;
+        repo.feedback_mut().missing_on_disk = true;
         assert_eq!(
             RepoTabsBarView::repo_tab_tooltip(&repo).as_ref(),
             "Repository not found!\n/tmp/missing-repo"
@@ -1431,7 +1520,7 @@ mod tests {
     #[test]
     fn missing_repo_warning_icon_yields_to_spinner() {
         let mut repo = repo_state("/tmp/missing-repo");
-        repo.feedback.missing_on_disk = true;
+        repo.feedback_mut().missing_on_disk = true;
         assert!(RepoTabsBarView::repo_tab_shows_missing_warning(
             &repo, false
         ));

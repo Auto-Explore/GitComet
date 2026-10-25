@@ -15,6 +15,7 @@ benchmarks = []
 test-support = []
 
 [dependencies]
+gitcomet-base = { workspace = true }
 gitcomet-core = { workspace = true }
 notify = { workspace = true }
 rustfs-mimalloc = { workspace = true }
@@ -22,8 +23,10 @@ smol = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 rustc-hash = { workspace = true }
+strum = { workspace = true }
 smallvec = { workspace = true }
 tempfile = { workspace = true }
+uuid = { workspace = true }
 
 [dev-dependencies]
 gitcomet-core = { workspace = true, features = ["test-support"] }

@@ -11,6 +11,8 @@ import re
 import statistics
 import subprocess
 
+from cache import CACHE_ALLOWANCE_BYTES, COMPILED_BUDGETS_MIB
+
 LEGACY_LANES = {
     "Linux Headless Suite (x86_64-linux / ubuntu-22.04)": "native/ubuntu22-x64",
     "Linux Headless Suite (aarch64-linux / ubuntu-22.04-arm)": "native/ubuntu22-arm64",
@@ -126,12 +128,10 @@ def summarize(records):
 
 
 def cache_context(key):
-    if key.startswith("gitcomet-ci-v2-deps-"):
-        return "deps/" + key.removeprefix("gitcomet-ci-v2-deps-").rsplit("-", 2)[0]
+    if key.startswith("gitcomet-ci-v2-compiled-"):
+        return "compiled/" + key.removeprefix("gitcomet-ci-v2-compiled-").rsplit("-", 2)[0]
     if key.startswith("gitcomet-ci-v2-sources-"):
-        return "sources/" + key.removeprefix("gitcomet-ci-v2-sources-").rsplit("-", 1)[0]
-    if key.startswith("gitcomet-ci-v1-"):
-        return "deps/" + key.removeprefix("gitcomet-ci-v1-").rsplit("-", 1)[0]
+        return "sources/" + key.removeprefix("gitcomet-ci-v2-sources-").rsplit("-", 2)[0]
     if key.startswith("gitcomet-ci-audit-"):
         return "gitcomet-ci-audit"
     return None
@@ -172,20 +172,31 @@ def runtime_statistics(directory):
                                      else record.get("machine_id"))
         environment["source_diff_sha256"] = record.get("source_diff_sha256")
         for sample in record["samples"]:
+            resources = sample.get("resource_stats") or {}
             descriptor = dict(environment, schedule=sample.get("schedule"),
                               batch_pure_tests=sample.get("batch_pure_tests", record.get("batch_pure_tests", "off")),
                               nextest_profile=sample.get("nextest_profile", "ci"),
                               nextest_threads=sample.get("nextest_threads"),
                               ui_threads=sample.get("ui_threads"),
                               effective_nextest_threads=sample.get("effective_nextest_threads"),
-                              effective_ui_threads=sample.get("effective_ui_threads"))
+                              effective_ui_threads=sample.get("effective_ui_threads"),
+                              pure_threads=sample.get("pure_threads"),
+                              effective_pure_threads=sample.get("effective_pure_threads"),
+                              inventory_sha256=sample.get("inventory_sha256"),
+                              binaries_sha256=sample.get("binaries_sha256"),
+                              resource_instrumented=bool(record.get("resource_stats") or resources),
+                              resource_collector_version=resources.get("collector_version"),
+                              resource_interval_seconds=resources.get("interval_seconds"))
             key = json.dumps(descriptor, sort_keys=True)
-            group = groups.setdefault(key, {"descriptor": descriptor, "seconds": [], "failed": 0, "jobs": set(), "local_sessions": set()})
+            group = groups.setdefault(key, {"descriptor": descriptor, "seconds": [], "failed": 0, "jobs": set(),
+                                           "local_sessions": set(), "resources": []})
             group["jobs"].add(record["job"])
             if record["job"].startswith("local/") and record.get("local_session"):
                 group["local_sessions"].add(record["local_session"])
             if sample["success"]:
                 group["seconds"].append(sample["seconds"])
+                if resources:
+                    group["resources"].append(resources)
             else:
                 group["failed"] += 1
     result = []
@@ -199,7 +210,13 @@ def runtime_statistics(directory):
         local_recorded = all(descriptor.get(field) is not None for field in
                              (*[field for field in environment_fields if field != "runner_image"],
                               "machine_id", "source_diff_sha256"))
+        diagnostics = {}
+        for field in ("observed_peak_rss_bytes", "observed_peak_threads", "observed_cpu_seconds"):
+            observed = [resource[field] for resource in group["resources"] if resource.get(field) is not None]
+            diagnostics[field] = dict(samples=len(observed), median=statistics.median(observed) if observed else None,
+                                      max=max(observed) if observed else None)
         result.append(dict(descriptor, samples=len(values), failed=group["failed"],
+                           resource_diagnostics=diagnostics,
                            median_seconds=statistics.median(values) if values else None,
                            # Nearest-rank p95; with fewer than 20 samples this
                            # conservatively reports the slowest observation.
@@ -209,9 +226,9 @@ def runtime_statistics(directory):
                            jobs=sorted(jobs), environment_recorded=environment_recorded,
                            local_sessions=sorted(group["local_sessions"]),
                            local_enough_samples=len(values) >= 6 and len(group["local_sessions"]) >= 2
-                                                and not group["failed"] and local_recorded,
+                                                and not group["failed"] and local_recorded and not descriptor["resource_instrumented"],
                            enough_samples=len(values) >= 5 and len(jobs) >= 2 and not group["failed"]
-                                          and environment_recorded and not descriptor["dirty"]))
+                                          and environment_recorded and not descriptor["dirty"] and not descriptor["resource_instrumented"]))
     return result
 
 
@@ -230,21 +247,15 @@ def git_trace2(path):
 
 def obsolete_caches(caches):
     seen, obsolete = set(), []
-    # Prefer a published v2 replacement over v1 regardless of creation order.
-    ordered = sorted(caches, key=lambda item: (item["key"].startswith("gitcomet-ci-v2-"), item["created_at"]), reverse=True)
-    source_refs = {(cache.get("ref", ""), cache_context(cache["key"]).removeprefix("sources/"))
-                   for cache in caches if cache["key"].startswith("gitcomet-ci-v2-sources-")}
-    for cache in ordered:
+    for cache in sorted(caches, key=lambda item: item["created_at"], reverse=True):
         context = cache_context(cache["key"])
         if context is None:
             continue
         scope = cache.get("ref", "")
-        # Retire the former source-only allocations only after the OS fallback exists.
-        if cache["key"].startswith("gitcomet-ci-v1-") and ("benchmarks-ci-bench" in context or context.endswith("-clippy")):
-            os_family = "windows" if "windows" in context else "darwin" if "macos" in context else "linux"
-            if (scope, os_family) in source_refs:
-                obsolete.append(cache)
-                continue
+        # No lane restores a compiled bundle for a context without a budget.
+        if context.startswith("compiled/") and context.removeprefix("compiled/") not in COMPILED_BUDGETS_MIB:
+            obsolete.append(cache)
+            continue
         identity = (scope, context)
         if identity in seen:
             obsolete.append(cache)
@@ -262,12 +273,13 @@ def manage_caches(repository, prune):
     removed = {cache["id"] for cache in obsolete} if prune else set()
     owned = [cache for cache in caches if cache_context(cache["key"]) and cache["id"] not in removed]
     total = sum(cache["size_in_bytes"] for cache in owned)
-    report = {"validation_cache_bytes": total, "budget_bytes": 8_000_000_000,
+    report = {"validation_cache_bytes": total, "budget_bytes": CACHE_ALLOWANCE_BYTES,
               "cache_count": len(owned), "obsolete_count": len(obsolete), "pruned": prune}
     print(json.dumps(report, indent=2))
     if os.environ.get("GITHUB_STEP_SUMMARY"):
         with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as stream:
-            stream.write(f"\nValidation caches: {total / 1e9:.2f} GB / 8 GB in {len(owned)} entries.\n")
+            stream.write(f"\nValidation caches: {total / 1e9:.2f} GB / {CACHE_ALLOWANCE_BYTES / 1e9:.1f} GB"
+                         f" in {len(owned)} entries.\n")
     if total > report["budget_bytes"]:
         raise RuntimeError("Validation cache budget exceeded; reduce cache quotas before adding contexts")
 

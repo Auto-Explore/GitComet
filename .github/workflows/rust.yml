@@ -49,12 +49,18 @@ jobs:
         run: rustup show active-toolchain
       - name: Check formatting
         run: cargo fmt --all --check
+      - name: Check Rust source layout
+        run: bash scripts/check-rust-source-size.sh
+      - name: Check product identity literals
+        run: python3 scripts/ci/identity_literals.py
       - name: Install Python for CI helpers
-        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: "3.14.7"
+          python-version: "3.14"
       - name: Check CI helpers
         run: python3 -m unittest discover -s scripts/ci -p 'test_*.py' -v
+      - name: Test performance capture policy and workload witnesses
+        run: python3 -m unittest discover -s scripts/profiling -p 'test_*.py' -v
       - name: Lint workflows
         run: |
           curl -fsSL https://raw.githubusercontent.com/rhysd/actionlint/v1.7.12/scripts/download-actionlint.bash -o "$RUNNER_TEMP/actionlint-installer.bash"
@@ -105,19 +111,49 @@ jobs:
           context: ubuntu22-x64-clippy
           cold-cache: ${{ inputs.cold-cache }}
           nextest: "false"
-          compiled: "false"
       - name: Clippy (libraries)
-        run: cargo clippy --locked -p gitcomet-core -p gitcomet-state -p gitcomet-git-gix -p gitcomet-tree-sitter-alloc -- -D warnings
+        run: cargo clippy --locked -p gitcomet-core -p gitcomet-diagrams -p gitcomet-state -p gitcomet-git-gix -p gitcomet-tree-sitter-alloc -p difftastic -- -D warnings
       - name: Clippy (headless app)
-        run: cargo clippy --locked -p gitcomet --no-default-features --features gix -- -D warnings
+        run: cargo clippy --locked -p gitcomet -p gitcomet-app --no-default-features --features gix -- -D warnings
+      - name: Check crate dependency boundaries
+        run: python3 scripts/ci/boundaries.py
+      - name: Check each grammar symbol has one definition
+        run: python3 scripts/ci/grammar_symbols.py
+      - name: Check the open-source licence list matches Cargo.lock
+        run: bash scripts/generate-open-source-licenses.sh --check
       - uses: ./.github/actions/ci-finish
         if: always()
         with:
           name: clippy
-          cache-key: ${{ steps.setup.outputs.cache-key }}
-          cache-hit: ${{ steps.setup.outputs.cache-hit }}
+
+  ui-clippy:
+    name: UI and extension API lint
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install UI native dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libxcb1-dev libxkbcommon-dev libxkbcommon-x11-dev
+      - uses: ./.github/actions/ci-setup
+        id: setup
+        with:
+          context: ubuntu22-x64-ui-clippy
           cold-cache: ${{ inputs.cold-cache }}
-          compiled: "false"
+          nextest: "false"
+      - name: Lint public libraries and host
+        run: cargo clippy --locked -p gitcomet-ui-kit -p gitcomet-extension-api -p gitcomet-extension-example -p gitcomet-ui-gpui -p gitcomet-app -- -D warnings
+      - name: Build public documentation
+        env:
+          RUSTDOCFLAGS: "-D warnings"
+        run: cargo doc --locked --no-deps -p gitcomet-ui-kit -p gitcomet-extension-api
+      - name: Test the downstream example and API contracts
+        run: cargo test --locked -p gitcomet-extension-api -p gitcomet-extension-example
+      - uses: ./.github/actions/ci-finish
+        if: always()
+        with:
+          name: ui-clippy
 
   headless:
     name: Headless builds and package test suites
@@ -138,13 +174,13 @@ jobs:
           python3 scripts/ci/run.py command --name headless-build-app -- cargo build --locked --profile ci-test -p gitcomet --no-default-features --features gix
       - name: Compile package test contexts
         run: |
-          for context in core state backend app; do
+          for context in core diagrams state backend app; do
             python3 scripts/ci/run.py compile --context "$context"
           done
       - name: Run every package context and doctests
         run: |
           result=0
-          for context in core state backend app; do
+          for context in core diagrams state backend app; do
             python3 scripts/ci/run.py test --context "$context" --schedule "$CI_TEST_SCHEDULE" || result=1
             python3 scripts/ci/run.py doc --context "$context" || result=1
           done
@@ -153,7 +189,3 @@ jobs:
         if: always()
         with:
           name: headless
-          cache-key: ${{ steps.setup.outputs.cache-key }}
-          cache-hit: ${{ steps.setup.outputs.cache-hit }}
-          cold-cache: ${{ inputs.cold-cache }}
-          budget-mib: "400"

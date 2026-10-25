@@ -20,6 +20,7 @@ use crate::services::{GitRepository, PullMode, Result};
 use std::path::{Path, PathBuf};
 
 pub mod git_fixture;
+pub mod symlink;
 
 fn unsupported<T>() -> Result<T> {
     Err(Error::new(ErrorKind::Unsupported(
@@ -56,7 +57,10 @@ impl GitRepository for UnconfiguredRepository {
         &self,
         _limit: usize,
         _cursor: Option<&LogCursor>,
+        cancellation: &crate::services::CancellationToken,
     ) -> Result<std::sync::Arc<LogPage>> {
+        cancellation.check_cancelled()?;
+
         unsupported()
     }
 
@@ -68,23 +72,42 @@ impl GitRepository for UnconfiguredRepository {
         unsupported()
     }
 
-    fn current_branch(&self) -> Result<String> {
+    fn current_branch(&self, cancellation: &crate::services::CancellationToken) -> Result<String> {
+        cancellation.check_cancelled()?;
+
         unsupported()
     }
 
-    fn list_branches(&self) -> Result<Vec<Branch>> {
+    fn list_branches(
+        &self,
+        cancellation: &crate::services::CancellationToken,
+    ) -> Result<Vec<Branch>> {
+        cancellation.check_cancelled()?;
+
         unsupported()
     }
 
-    fn list_remotes(&self) -> Result<Vec<Remote>> {
+    fn list_remotes(
+        &self,
+        cancellation: &crate::services::CancellationToken,
+    ) -> Result<Vec<Remote>> {
+        cancellation.check_cancelled()?;
+
         unsupported()
     }
 
-    fn list_remote_branches(&self) -> Result<Vec<RemoteBranch>> {
+    fn list_remote_branches(
+        &self,
+        cancellation: &crate::services::CancellationToken,
+    ) -> Result<Vec<RemoteBranch>> {
+        cancellation.check_cancelled()?;
+
         unsupported()
     }
 
-    fn status(&self) -> Result<RepoStatus> {
+    fn status(&self, cancellation: &crate::services::CancellationToken) -> Result<RepoStatus> {
+        cancellation.check_cancelled()?;
+
         unsupported()
     }
 
@@ -116,7 +139,12 @@ impl GitRepository for UnconfiguredRepository {
         unsupported()
     }
 
-    fn stash_list(&self) -> Result<Vec<StashEntry>> {
+    fn stash_list(
+        &self,
+        cancellation: &crate::services::CancellationToken,
+    ) -> Result<Vec<StashEntry>> {
+        cancellation.check_cancelled()?;
+
         unsupported()
     }
 
@@ -140,11 +168,11 @@ impl GitRepository for UnconfiguredRepository {
         unsupported()
     }
 
-    fn fetch_all(&self) -> Result<()> {
+    fn fetch_all(&self, _prune: bool) -> Result<crate::services::CommandOutput> {
         unsupported()
     }
 
-    fn pull(&self, _mode: PullMode) -> Result<()> {
+    fn pull(&self, _mode: PullMode, _prune: bool) -> Result<crate::services::CommandOutput> {
         unsupported()
     }
 
@@ -172,7 +200,7 @@ mod tests {
             PathBuf::from("/tmp/unconfigured")
         );
         let error = repository
-            .current_branch()
+            .current_branch(&crate::services::CancellationToken::new())
             .expect_err("an unconfigured operation must be unsupported");
         assert!(matches!(error.kind(), ErrorKind::Unsupported(_)));
     }

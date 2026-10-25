@@ -33,8 +33,44 @@ pub struct GitOutputChunk {
     pub text: String,
 }
 
+/// Large-file transfer progress, as git-lfs reports it through
+/// `GIT_LFS_PROGRESS` (also during hook-driven transfers in push and checkout).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TransferProgress {
+    /// `download`, `upload` or `checkout`.
+    pub direction: String,
+    pub files_done: u64,
+    pub files_total: u64,
+    pub bytes_done: u64,
+    pub bytes_total: u64,
+    pub name: String,
+}
+
+impl TransferProgress {
+    /// One line for activity rows: `LFS download 3/10 files · 12 MB of 40 MB`,
+    /// or for git-annex, which reports one file at a time,
+    /// `annex get big.bin · 12 MB of 40 MB`. A total of 0 means unknown.
+    pub fn summary(&self) -> String {
+        use crate::text_utils::human_readable_bytes;
+        let mut bytes = human_readable_bytes(self.bytes_done);
+        if self.bytes_total > 0 {
+            bytes = format!("{bytes} of {}", human_readable_bytes(self.bytes_total));
+        }
+        if let Some(command) = self.direction.strip_prefix("annex ") {
+            return format!("annex {command} {} · {bytes}", self.name);
+        }
+        format!(
+            "LFS {} {}/{} files · {bytes}",
+            self.direction, self.files_done, self.files_total
+        )
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum GitOperationEvent {
+    /// An explicit command needs an activity row (and cancellation) even
+    /// before it produces hook events or transfer progress.
+    CommandStarted,
     Output {
         chunks: Vec<GitOutputChunk>,
     },
@@ -48,6 +84,9 @@ pub enum GitOperationEvent {
         exit_code: Option<i32>,
         duration: Duration,
     },
+    TransferProgress(TransferProgress),
+    /// Progress GitComet measured itself, for work git reports no meter for.
+    Progress(crate::git_progress::GitProgressMeter),
 }
 
 type EventSink = dyn Fn(GitOperationId, GitOperationEvent) + Send + Sync + 'static;
@@ -180,6 +219,25 @@ pub fn current() -> Option<GitOperationContext> {
 mod tests {
     use super::*;
     use std::sync::Mutex;
+
+    /// git-annex leaves out `total-size` when a key's size is unknown; the
+    /// summary must not claim a total of "0 B".
+    #[test]
+    fn transfer_summary_omits_an_unknown_total() {
+        let progress = |direction: &str| TransferProgress {
+            direction: direction.into(),
+            files_done: 1,
+            files_total: 2,
+            bytes_done: 12_000_000,
+            bytes_total: 0,
+            name: "big.bin".into(),
+        };
+        assert_eq!(progress("annex get").summary(), "annex get big.bin · 12 MB");
+        assert_eq!(
+            progress("download").summary(),
+            "LFS download 1/2 files · 12 MB"
+        );
+    }
 
     #[test]
     fn attach_restores_the_previous_context() {

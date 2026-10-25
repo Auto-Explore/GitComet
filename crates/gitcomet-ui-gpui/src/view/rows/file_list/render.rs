@@ -1,9 +1,11 @@
+use super::FileListId;
 use crate::theme::AppTheme;
 use crate::view::components::{self, InteractiveRowExt, InteractiveRowState, InteractiveRowStyle};
 use crate::view::file_icons;
 use crate::view::icons::svg_icon;
 use gpui::prelude::*;
 use gpui::{CursorStyle, Div, ElementId, SharedString, Stateful, px};
+use std::path::Path;
 
 /// Design indent per tree level, matched to the file explorer's.
 pub(in crate::view) const INDENT_STEP_PX: f32 = 12.0;
@@ -77,6 +79,17 @@ pub(in crate::view) struct DirectoryRowProps<'a> {
     pub(in crate::view) row_group: Option<SharedString>,
     /// From [`directory_row_detail_for_width`].
     pub(in crate::view) detail: DirectoryRowDetail,
+    /// The row's context menu is open, so it stays lit like a file row's.
+    pub(in crate::view) menu_open: bool,
+}
+
+/// Names the folder row whose menu is open, so the row can show it.
+pub(in crate::view) fn file_list_folder_menu_invoker(
+    repo_id: u64,
+    list: FileListId,
+    key: &Path,
+) -> SharedString {
+    format!("file_list_folder_menu_{repo_id}_{list:?}_{}", key.display()).into()
 }
 
 /// Indent a file row sitting at `depth` in a tree, so its label lines up under
@@ -101,6 +114,7 @@ pub(in crate::view) fn directory_row(props: DirectoryRowProps<'_>) -> Stateful<D
         row_height,
         row_group,
         detail,
+        menu_open,
     } = props;
     let scaled = |value: f32| crate::ui_scale::design_px_from_percent(value, ui_scale_percent);
     let secondary = theme.colors.foreground.secondary;
@@ -120,7 +134,7 @@ pub(in crate::view) fn directory_row(props: DirectoryRowProps<'_>) -> Stateful<D
         .cursor(CursorStyle::PointingHand)
         .interactive_row(
             InteractiveRowStyle::new(theme, theme.colors.surface.panel).flat(),
-            InteractiveRowState::default(),
+            InteractiveRowState::default().open(menu_open),
         )
         .child(
             gpui::div()
@@ -171,4 +185,132 @@ pub(in crate::view) fn directory_row(props: DirectoryRowProps<'_>) -> Stateful<D
                 )))
             },
         )
+}
+
+/// A group header row's contents.
+pub(in crate::view) struct GroupHeaderProps {
+    /// Element id, with the group's index.
+    pub(in crate::view) id: (&'static str, usize),
+    pub(in crate::view) selector: String,
+    pub(in crate::view) label: SharedString,
+    pub(in crate::view) count: usize,
+    pub(in crate::view) collapsed: bool,
+}
+
+/// A group's header row, `row_height` like every file row of its list (the
+/// list is uniform); activating it runs `toggle`, which collapses or expands
+/// the group.
+pub(in crate::view) fn group_header_row(
+    props: GroupHeaderProps,
+    theme: AppTheme,
+    ui_scale: crate::ui_scale::UiScale,
+    row_height: gpui::Pixels,
+    toggle: impl Fn(&mut gpui::App) + 'static,
+) -> gpui::AnyElement {
+    use crate::kit::interaction::{self as controls, ControlInteractionExt as _};
+    let GroupHeaderProps {
+        id,
+        selector,
+        label,
+        count,
+        collapsed,
+    } = props;
+    gpui::div()
+        .id(id)
+        .debug_selector(move || selector)
+        .h(row_height)
+        .w_full()
+        .flex()
+        .items_center()
+        .gap(ui_scale.px(4.0))
+        .px(ui_scale.px(8.0))
+        .bg(theme.colors.surface.panel)
+        .control_interaction(
+            controls::InteractionStyle::new(theme),
+            controls::InteractionState::default(),
+        )
+        .text_size(theme.ui_text(12.0))
+        .text_color(theme.colors.foreground.secondary)
+        .child(if collapsed { "▸" } else { "▾" })
+        .child(format!("{label} ({count})"))
+        .on_activate(
+            false,
+            controls::ControlActivation::Action,
+            move |_, _, cx| {
+                cx.stop_propagation();
+                toggle(cx);
+            },
+        )
+        .into_any_element()
+}
+
+/// Draws the header of row `row` pinned over the list, or `None` when that
+/// row is not a header. Given the row height the list measured.
+pub(in crate::view) type PinnedHeader =
+    std::rc::Rc<dyn Fn(usize, gpui::Pixels, &mut gpui::App) -> Option<gpui::AnyElement>>;
+
+/// Pins the header of the group at the top of a list over its rows; the
+/// next header pushes it up as it arrives. Computed per frame from the
+/// header rows it was given, so scrolling never replans.
+#[derive(Clone)]
+pub(in crate::view) struct StickyGroupHeaders {
+    /// The row of each header, ascending.
+    pub(in crate::view) headers: std::sync::Arc<[usize]>,
+    pub(in crate::view) header: PinnedHeader,
+}
+
+impl StickyGroupHeaders {
+    /// The header of the group holding `row`.
+    fn header_for(&self, row: usize) -> Option<usize> {
+        let after = self.headers.partition_point(|&header| header <= row);
+        after.checked_sub(1).map(|ix| self.headers[ix])
+    }
+
+    /// The first header below `row`.
+    fn next_header(&self, row: usize) -> Option<usize> {
+        let after = self.headers.partition_point(|&header| header <= row);
+        self.headers.get(after).copied()
+    }
+}
+
+impl gpui::UniformListDecoration for StickyGroupHeaders {
+    fn compute(
+        &self,
+        _visible_range: std::ops::Range<usize>,
+        _bounds: gpui::Bounds<gpui::Pixels>,
+        scroll_offset: gpui::Point<gpui::Pixels>,
+        item_height: gpui::Pixels,
+        _item_count: usize,
+        _window: &mut gpui::Window,
+        cx: &mut gpui::App,
+    ) -> gpui::AnyElement {
+        let scrolled = -scroll_offset.y;
+        if scrolled <= px(0.0) || item_height <= px(0.0) {
+            return gpui::div().into_any_element();
+        }
+        let first = (scrolled / item_height).floor() as usize;
+        let Some(header) = self
+            .header_for(first)
+            .and_then(|row| (self.header)(row, item_height, cx))
+        else {
+            return gpui::div().into_any_element();
+        };
+        // The decoration's origin scrolls with the rows; `scrolled` is the
+        // viewport's top in its coordinates.
+        let mut top = scrolled;
+        if let Some(next) = self.next_header(first) {
+            let next_top = item_height * next as f32 - scrolled;
+            if next_top < item_height {
+                top -= item_height - next_top;
+            }
+        }
+        gpui::div()
+            .absolute()
+            .top(top)
+            .left_0()
+            .right_0()
+            .occlude()
+            .child(header)
+            .into_any_element()
+    }
 }

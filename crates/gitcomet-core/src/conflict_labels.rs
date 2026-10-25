@@ -5,9 +5,6 @@
 
 use std::path::PathBuf;
 
-/// Default short SHA width for marker labels (matches git default behavior).
-const DEFAULT_SHORT_SHA_LEN: usize = 7;
-
 /// Base-side label scenario used when formatting conflict markers.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum BaseLabelScenario {
@@ -55,9 +52,8 @@ pub fn format_base_label(scenario: &BaseLabelScenario) -> String {
     scenario.format_label()
 }
 
-fn short_commit_id(commit_id: &str) -> String {
-    let trimmed = commit_id.trim();
-    trimmed.chars().take(DEFAULT_SHORT_SHA_LEN).collect()
+fn short_commit_id(commit_id: &str) -> &str {
+    crate::domain::short_commit_id(commit_id.trim())
 }
 
 fn format_git_path(path: &std::path::Path) -> String {

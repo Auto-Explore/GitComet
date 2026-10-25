@@ -1,7 +1,7 @@
 //! Mainline-parent picker shared by the cherry-pick and revert confirmations.
 
 use super::*;
-use crate::kit::interaction::{self as controls, ControlInteractionExt as _};
+use crate::kit::interaction as controls;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct MainlineChoice {

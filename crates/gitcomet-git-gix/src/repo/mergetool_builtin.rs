@@ -156,7 +156,8 @@ pub(super) fn builtin_merge_command(tool: &str, files: &MergetoolFiles<'_>) -> B
             if !base_present {
                 return BuiltinMergeCommand::Unsupported(format!(
                     "Merge tool '{tool}' cannot be used without a merge base. \
-                     Resolve this conflict in GitComet or configure a different merge.tool."
+                     Resolve this conflict in {} or configure a different merge.tool.",
+                    gitcomet_core::identity::current().display_name()
                 ));
             }
             argv![
@@ -170,7 +171,8 @@ pub(super) fn builtin_merge_command(tool: &str, files: &MergetoolFiles<'_>) -> B
             if !base_present {
                 return BuiltinMergeCommand::Unsupported(format!(
                     "Merge tool '{tool}' cannot be used without a merge base. \
-                     Resolve this conflict in GitComet or configure a different merge.tool."
+                     Resolve this conflict in {} or configure a different merge.tool.",
+                    gitcomet_core::identity::current().display_name()
                 ));
             }
             argv![

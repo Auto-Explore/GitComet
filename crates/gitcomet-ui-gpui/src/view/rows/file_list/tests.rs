@@ -37,6 +37,12 @@ fn rows(plan: &FileListPlan) -> Vec<String> {
             FileListRow::File { ordinal, depth } => {
                 format!("{}#{}", "  ".repeat(depth), ordinal.0)
             }
+            FileListRow::Group {
+                label,
+                count,
+                collapsed,
+                ..
+            } => format!("{}{label} ({count})", if collapsed { ">" } else { "v" }),
         })
         .collect()
 }
@@ -503,4 +509,105 @@ fn perf_display_position_per_visible_row() {
         "display_position: {FRAMES} frames x {VISIBLE} rows over {FILES} files in {elapsed:?} ({:?}/frame, sink={sink})",
         elapsed / FRAMES as u32
     );
+}
+
+#[test]
+fn the_plan_cache_counts_only_the_plans_it_builds() {
+    let paths: Vec<PathBuf> = ["src/a.rs", "src/b.rs"].iter().map(PathBuf::from).collect();
+    let build = || {
+        FileTree::build(
+            paths.iter().map(|p| FileTreeItem::new(p.as_path())),
+            CommitFileSort::PathAscending,
+        )
+    };
+    let collapsed = CollapsedDirs::default();
+    let shape = |layout, collapsed_groups| PlanShape {
+        layout,
+        collapsed: &collapsed,
+        collapsed_groups,
+        file_count: 2,
+    };
+    let groups = || -> GroupsOfOrdinals { (vec![0, 1], labels(&["A", "B"])) };
+    let mut cache = FileListPlanCache::default();
+    let first = cache.plan_for(1, shape(FileListLayout::Tree, &[]), build, groups);
+    let again = cache.plan_for(1, shape(FileListLayout::Tree, &[]), build, groups);
+    assert!(Arc::ptr_eq(&first, &again));
+    assert_eq!(cache.builds(), 1);
+    cache.plan_for(2, shape(FileListLayout::Tree, &[]), build, groups);
+    assert_eq!(cache.builds(), 2);
+    // A grouped plan is rebuilt when a group collapses, and not otherwise.
+    let grouped = cache.plan_for(
+        2,
+        shape(FileListLayout::Groups, &[false, false]),
+        build,
+        groups,
+    );
+    assert!(Arc::ptr_eq(
+        &grouped,
+        &cache.plan_for(
+            2,
+            shape(FileListLayout::Groups, &[false, false]),
+            build,
+            groups
+        )
+    ));
+    assert_eq!(cache.builds(), 3);
+    cache.plan_for(
+        2,
+        shape(FileListLayout::Groups, &[true, false]),
+        build,
+        groups,
+    );
+    assert_eq!(cache.builds(), 4);
+    assert!(Arc::ptr_eq(
+        &cache.current().unwrap(),
+        &cache.plan.as_ref().unwrap().3
+    ));
+}
+
+fn labels(labels: &[&str]) -> Arc<[SharedString]> {
+    labels
+        .iter()
+        .map(|label| SharedString::from(label.to_string()))
+        .collect()
+}
+
+#[test]
+fn a_grouped_plan_lists_each_group_under_its_header_in_projection_order() {
+    // Ordinals 0..5 in groups B, A, B, -, A; group 2 is empty and gets no header.
+    let groups = [1, 0, 1, 3, 0];
+    let plan = FileListPlan::grouped(&groups, &labels(&["A", "B", "C", "D"]), &[]);
+    assert!(plan.is_grouped() && plan.reorders() && !plan.is_tree());
+    assert_eq!(
+        rows(&plan),
+        ["vA (2)", "#1", "#4", "vB (2)", "#0", "#2", "vD (1)", "#3"]
+    );
+    assert_eq!(plan.headers().as_deref(), Some(&[0, 3, 6][..]));
+    assert_eq!(plan.ordered().iter().collect::<Vec<_>>(), [1, 4, 0, 2, 3]);
+    assert_eq!(plan.display_position(FileOrdinal(0)), Some(2));
+    assert_eq!(plan.row_ix_for_ordinal(FileOrdinal(3)), Some(RowIx(7)));
+    assert_eq!(plan.file_count(), 5);
+    assert_eq!(plan.ordinal_at(RowIx(0)), None);
+    assert_eq!(plan.reveal_group(FileOrdinal(1)), None, "already shown");
+}
+
+#[test]
+fn a_collapsed_group_hides_its_files_but_not_their_place_in_the_order() {
+    let groups = [1, 0, 1];
+    let plan = FileListPlan::grouped(&groups, &labels(&["A", "B"]), &[false, true]);
+    assert_eq!(rows(&plan), ["vA (1)", "#1", ">B (2)"]);
+    assert_eq!(plan.ordered().iter().collect::<Vec<_>>(), [1, 0, 2]);
+    assert_eq!(plan.row_ix_for_ordinal(FileOrdinal(0)), None);
+    assert_eq!(plan.display_position(FileOrdinal(2)), Some(2));
+    assert_eq!(plan.reveal_group(FileOrdinal(0)), Some(1));
+    assert!(
+        plan.reveal(FileOrdinal(0)).is_empty(),
+        "no folders to expand"
+    );
+}
+
+#[test]
+fn a_group_past_the_labels_falls_into_the_last() {
+    let plan = FileListPlan::grouped(&[0, 9], &labels(&["A", "Other"]), &[]);
+    assert_eq!(rows(&plan), ["vA (1)", "#0", "vOther (1)", "#1"]);
 }

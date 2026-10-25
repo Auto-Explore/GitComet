@@ -482,7 +482,7 @@ fn invalidate_session_setting_cache() {
 #[cfg(test)]
 thread_local! {
     static TEST_CONFIGURED_SETTING_OVERRIDE: std::cell::RefCell<Option<Option<ExternalCodeEditorSetting>>> =
-        std::cell::RefCell::new(None);
+        const { std::cell::RefCell::new(None) };
 }
 
 #[cfg(not(test))]
@@ -629,6 +629,7 @@ pub(crate) fn label_for_setting(setting: Option<&ExternalCodeEditorSetting>) -> 
 /// always true, and it does not pump the Windows message queue, but a PATH
 /// entry on an unreachable share can still stall the click. Caching it (as
 /// [`configured_setting`] already caches the setting itself) is a follow-up.
+#[cfg(test)]
 pub(crate) fn launch_command_for_configured_editor(
     target: &Path,
 ) -> Result<ExternalEditorLaunchCommand, ExternalEditorError> {

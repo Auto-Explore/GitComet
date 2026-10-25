@@ -24,6 +24,8 @@ impl Poller {
             };
         }
 
+        let probe_window = crate::ui_probe::jsonl_enabled()
+            .then(|| format!("{:?}", window.window_handle().window_id()));
         let task = window.spawn(cx, async move |cx| {
             loop {
                 if events.recv().await.is_err() {
@@ -34,19 +36,42 @@ impl Poller {
                 // The read is a lock plus an `Arc` clone; only when the reducer
                 // holds the write lock is it worth a thread hop to keep the UI
                 // thread from waiting on it.
-                let snapshot = if let Some(snapshot) = store.try_snapshot() {
-                    snapshot
-                } else if runtime.uses_background_compute() {
-                    smol::unblock({
-                        let store = Arc::clone(&store);
-                        move || store.snapshot()
-                    })
-                    .await
-                } else {
-                    store.snapshot()
-                };
+                let (snapshot, publication) =
+                    if let Some(snapshot) = store.try_snapshot_with_publication() {
+                        snapshot
+                    } else if runtime.uses_background_compute() {
+                        smol::unblock({
+                            let store = Arc::clone(&store);
+                            move || store.snapshot_with_publication()
+                        })
+                        .await
+                    } else {
+                        store.snapshot_with_publication()
+                    };
 
+                let applying = gitcomet_core::op_trace::enabled().then(Instant::now);
                 let _ = model.update(cx, |model, cx| model.set_state(snapshot, cx));
+                if let Some(applying) = applying {
+                    // Observers of the model run inside this update, so the
+                    // span covers every pane's synchronous state application.
+                    let elapsed = gitcomet_core::op_trace::duration_ns(applying.elapsed());
+                    gitcomet_core::op_trace::record(
+                        gitcomet_core::op_trace::Stage::Applied,
+                        0,
+                        "set_state",
+                        publication,
+                        elapsed,
+                    );
+                    if let Some(window) = &probe_window {
+                        // Publication sequences are local to a store. A different
+                        // window can have the same sequence, so the profiler must
+                        // identify the window before matching an applied state.
+                        crate::ui_probe::scenario_record(
+                            "state_applied",
+                            serde_json::json!({"window": window, "publication": publication, "duration_ns": elapsed}),
+                        );
+                    }
+                }
             }
         });
 

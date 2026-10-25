@@ -43,10 +43,12 @@ pub(crate) fn bench_git_ops(c: &mut Criterion) {
     );
     let status_clean = GitOpsFixture::status_clean(status_clean_files);
     let ref_enumerate = GitOpsFixture::ref_enumerate(ref_count);
-    let diff_rename = GitOpsFixture::diff_rename_heavy(diff_rename_files);
-    let diff_binary = GitOpsFixture::diff_binary_heavy(diff_binary_files, diff_binary_bytes);
-    let diff_large_single_file =
-        GitOpsFixture::diff_large_single_file(diff_large_file_lines, diff_large_file_line_bytes);
+    let diff_rename = GitOpsFixture::diff_range_rename_heavy(diff_rename_files);
+    let diff_binary = GitOpsFixture::diff_range_binary_heavy(diff_binary_files, diff_binary_bytes);
+    let diff_range_large_single_file = GitOpsFixture::diff_range_large_single_file(
+        diff_large_file_lines,
+        diff_large_file_line_bytes,
+    );
     let blame_large_file =
         GitOpsFixture::blame_large_file(blame_large_file_lines, blame_large_file_commits);
     let file_history = GitOpsFixture::file_history(
@@ -78,15 +80,17 @@ pub(crate) fn bench_git_ops(c: &mut Criterion) {
     group.bench_function(BenchmarkId::from_parameter("ref_enumerate_10k_refs"), |b| {
         b.iter(|| ref_enumerate.run())
     });
-    group.bench_function(BenchmarkId::from_parameter("diff_rename_heavy"), |b| {
-        b.iter(|| diff_rename.run())
-    });
-    group.bench_function(BenchmarkId::from_parameter("diff_binary_heavy"), |b| {
-        b.iter(|| diff_binary.run())
-    });
     group.bench_function(
-        BenchmarkId::from_parameter("diff_large_single_file_100k_lines"),
-        |b| b.iter(|| diff_large_single_file.run()),
+        BenchmarkId::from_parameter("diff_range_rename_heavy"),
+        |b| b.iter(|| diff_rename.run()),
+    );
+    group.bench_function(
+        BenchmarkId::from_parameter("diff_range_binary_heavy"),
+        |b| b.iter(|| diff_binary.run()),
+    );
+    group.bench_function(
+        BenchmarkId::from_parameter("diff_range_large_single_file_100k_lines"),
+        |b| b.iter(|| diff_range_large_single_file.run()),
     );
     group.bench_function(BenchmarkId::from_parameter("blame_large_file"), |b| {
         b.iter(|| blame_large_file.run())
@@ -107,7 +111,7 @@ pub(crate) fn bench_git_ops(c: &mut Criterion) {
     let (_, diff_rename_metrics) = measure_sidecar_allocations(|| diff_rename.run_with_metrics());
     let (_, diff_binary_metrics) = measure_sidecar_allocations(|| diff_binary.run_with_metrics());
     let (_, diff_large_metrics) =
-        measure_sidecar_allocations(|| diff_large_single_file.run_with_metrics());
+        measure_sidecar_allocations(|| diff_range_large_single_file.run_with_metrics());
     let (_, blame_large_metrics) =
         measure_sidecar_allocations(|| blame_large_file.run_with_metrics());
     let (_, file_history_metrics) = measure_sidecar_allocations(|| file_history.run_with_metrics());
@@ -116,9 +120,12 @@ pub(crate) fn bench_git_ops(c: &mut Criterion) {
     emit_git_ops_sidecar("log_walk_100k_commits_shallow", &log_shallow_metrics);
     emit_git_ops_sidecar("status_clean_10k_files", &status_clean_metrics);
     emit_git_ops_sidecar("ref_enumerate_10k_refs", &ref_enumerate_metrics);
-    emit_git_ops_sidecar("diff_rename_heavy", &diff_rename_metrics);
-    emit_git_ops_sidecar("diff_binary_heavy", &diff_binary_metrics);
-    emit_git_ops_sidecar("diff_large_single_file_100k_lines", &diff_large_metrics);
+    emit_git_ops_sidecar("diff_range_rename_heavy", &diff_rename_metrics);
+    emit_git_ops_sidecar("diff_range_binary_heavy", &diff_binary_metrics);
+    emit_git_ops_sidecar(
+        "diff_range_large_single_file_100k_lines",
+        &diff_large_metrics,
+    );
     emit_git_ops_sidecar("blame_large_file", &blame_large_metrics);
     emit_git_ops_sidecar(
         "file_history_first_page_sparse_100k_commits",

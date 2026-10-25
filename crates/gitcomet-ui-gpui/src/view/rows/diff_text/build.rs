@@ -1,22 +1,7 @@
 use super::*;
 use crate::kit::click::PointerClickExt as _;
-use crate::view::panes::main::diff_search::{DiffSearchMatcher, normalize_diff_search_query};
+use crate::view::panes::diff::diff_search::{DiffSearchMatcher, normalize_diff_search_query};
 use palette::IntoColor;
-
-fn maybe_expand_tabs(s: &str) -> SharedString {
-    if !s.contains('\t') {
-        return SharedString::new(s);
-    }
-
-    let mut out = String::with_capacity(s.len());
-    for ch in s.chars() {
-        match ch {
-            '\t' => out.push_str("    "),
-            _ => out.push(ch),
-        }
-    }
-    out.into()
-}
 
 #[inline]
 pub(super) fn segment_overlaps_sorted_ranges(
@@ -36,6 +21,7 @@ pub(super) fn segment_overlaps_sorted_ranges(
 
 #[cfg(test)]
 pub(super) fn build_diff_text_segments(
+    tab_width: usize,
     text: &str,
     word_ranges: &[Range<usize>],
     query: &str,
@@ -54,7 +40,9 @@ pub(super) fn build_diff_text_segments(
         && syntax_tokens_override.is_none()
     {
         return vec![CachedDiffTextSegment {
-            text: maybe_expand_tabs(text),
+            text: crate::view::tab_width::expand_tabs(tab_width, text)
+                .into_owned()
+                .into(),
             in_word: false,
             in_query: false,
             syntax: SyntaxTokenKind::None,
@@ -111,6 +99,7 @@ pub(super) fn build_diff_text_segments(
         let mut token_ix = 0usize;
         let mut word_ix = 0usize;
         let mut query_ix = 0usize;
+        let mut column = 0usize;
         let mut segments = Vec::with_capacity(boundaries.len().saturating_sub(1));
         for w in boundaries.windows(2) {
             let (a, b) = (w[0], w[1]);
@@ -120,7 +109,9 @@ pub(super) fn build_diff_text_segments(
             let b = b.min(text.len());
             let Some(seg) = text.get(a..b) else {
                 return vec![CachedDiffTextSegment {
-                    text: maybe_expand_tabs(text),
+                    text: crate::view::tab_width::expand_tabs(tab_width, text)
+                        .into_owned()
+                        .into(),
                     in_word: false,
                     in_query: false,
                     syntax: SyntaxTokenKind::None,
@@ -139,8 +130,11 @@ pub(super) fn build_diff_text_segments(
             let in_word = segment_overlaps_sorted_ranges(a, b, word_ranges, &mut word_ix);
             let in_query = segment_overlaps_sorted_ranges(a, b, &query_ranges, &mut query_ix);
 
+            // Segments continue one line, so tab stops count from its start.
+            let mut expanded = String::with_capacity(seg.len());
+            crate::view::tab_width::push_expanded(tab_width, &mut expanded, seg, &mut column);
             segments.push(CachedDiffTextSegment {
-                text: maybe_expand_tabs(seg),
+                text: expanded.into(),
                 in_word,
                 in_query,
                 syntax,
@@ -158,7 +152,7 @@ pub(in super::super) fn selectable_cached_diff_text(
     base_fg: gpui::Rgba,
     styled: Option<&CachedDiffStyledText>,
     fallback_text: SharedString,
-    cx: &mut gpui::Context<MainPaneView>,
+    cx: &mut gpui::Context<DiffRenderer>,
 ) -> AnyElement {
     let view = cx.entity();
     let (text, highlights) = if let Some(styled) = styled {
@@ -280,7 +274,7 @@ pub(in crate::view::rows) fn hash_rgba_bits(hasher: &mut FxHasher, rgba: gpui::R
     rgba.alpha.to_bits().hash(hasher);
 }
 
-pub(super) fn syntax_theme_signature(theme: AppTheme) -> u64 {
+pub(in crate::view::rows) fn syntax_theme_signature(theme: AppTheme) -> u64 {
     let mut hasher = FxHasher::default();
     let syntax = theme.syntax;
     hash_rgba_bits(&mut hasher, syntax.comment);
@@ -367,6 +361,7 @@ fn styled_text_to_cached(
 /// consuming it.  Creates the `Arc<[…]>` from a slice copy so the caller can
 /// reuse the Vec across calls (thread_local pattern).
 pub(super) fn styled_text_to_cached_from_buf(
+    tab_width: usize,
     text: &str,
     highlights: &DiffTextHighlights,
 ) -> CachedDiffStyledText {
@@ -381,7 +376,7 @@ pub(super) fn styled_text_to_cached_from_buf(
         SharedString::new(text)
     } else {
         let (expanded, mut remapped) =
-            expanded_text_and_remapped_relative_highlights(text, highlights);
+            expanded_text_and_remapped_relative_highlights(tab_width, text, highlights);
         crate::text_runs::sanitize_highlights(expanded.as_ref(), &mut remapped);
         let text_hash = hash_text_content(expanded.as_ref());
 
@@ -467,11 +462,21 @@ pub(in crate::view) enum DiffSearchMatchEmphasis {
 
 /// Same shape for the search-match highlight, off `editor.search_match_*`.
 ///
-/// Shared with the file editor, which paints this wash through its highlight
-/// provider rather than through these row builders.
-pub(in crate::view) fn query_highlight_colors(theme: AppTheme) -> (gpui::Rgba, Option<gpui::Rgba>) {
+/// Painted outside these row builders through [`query_highlight_style`].
+pub(super) fn query_highlight_colors(theme: AppTheme) -> (gpui::Rgba, Option<gpui::Rgba>) {
     let foreground = (!theme.is_dark).then_some(theme.colors.editor.search_match_foreground);
     (theme.colors.editor.search_match_background, foreground)
+}
+
+/// [`query_highlight_colors`] as a highlight, for washing matches over styled
+/// text with [`crate::text_runs::overlay_highlights`].
+pub(in crate::view) fn query_highlight_style(theme: AppTheme) -> gpui::HighlightStyle {
+    let (background, foreground) = query_highlight_colors(theme);
+    gpui::HighlightStyle {
+        color: foreground.map(IntoColor::into_color),
+        background_color: Some(background.into_color()),
+        ..gpui::HighlightStyle::default()
+    }
 }
 
 /// The wash for the match the cursor is on: the same token `TextInput` fills a
@@ -497,6 +502,7 @@ fn query_highlight_colors_for(
 /// boundary windows, skipping intermediate `Vec<CachedDiffTextSegment>` and
 /// per-segment `SharedString` allocations.
 pub(super) fn build_styled_text_fused(
+    tab_width: usize,
     theme: AppTheme,
     request: FusedDiffTextBuildRequest<'_>,
 ) -> CachedDiffStyledText {
@@ -520,7 +526,9 @@ pub(super) fn build_styled_text_fused(
         && language.is_none()
         && syntax_tokens_override.is_none()
     {
-        let expanded = maybe_expand_tabs(text);
+        let expanded = crate::view::tab_width::expand_tabs(tab_width, text)
+            .into_owned()
+            .into();
         return styled_text_to_cached(expanded, Vec::new());
     }
 
@@ -583,6 +591,7 @@ pub(super) fn build_styled_text_fused(
         let mut token_ix = 0usize;
         let mut word_ix = 0usize;
         let mut query_ix = 0usize;
+        let mut column = 0usize;
 
         for w in boundaries.windows(2) {
             let (a, b) = (w[0], w[1]);
@@ -592,7 +601,9 @@ pub(super) fn build_styled_text_fused(
             let b = b.min(text.len());
             let Some(seg) = text.get(a..b) else {
                 // Fallback: return whole text expanded, no highlights.
-                let expanded = maybe_expand_tabs(text);
+                let expanded = crate::view::tab_width::expand_tabs(tab_width, text)
+                    .into_owned()
+                    .into();
                 return styled_text_to_cached(expanded, Vec::new());
             };
 
@@ -609,13 +620,9 @@ pub(super) fn build_styled_text_fused(
             let in_query = segment_overlaps_sorted_ranges(a, b, &query_ranges, &mut query_ix);
 
             let offset = combined.len();
-            if has_tabs && seg.contains('\t') {
-                for ch in seg.chars() {
-                    match ch {
-                        '\t' => combined.push_str("    "),
-                        _ => combined.push(ch),
-                    }
-                }
+            if has_tabs {
+                // Segments continue one line, so tab stops count from its start.
+                crate::view::tab_width::push_expanded(tab_width, &mut combined, seg, &mut column);
             } else {
                 combined.push_str(seg);
             }
@@ -660,13 +667,19 @@ pub(super) fn build_styled_text_fused(
 }
 
 pub(in super::super) fn build_cached_diff_styled_text_from_relative_highlights(
+    tab_width: usize,
     text: &str,
     highlights: &[(Range<usize>, gpui::HighlightStyle)],
 ) -> CachedDiffStyledText {
-    build_cached_diff_styled_text_from_owned_relative_highlights(text, highlights.to_vec())
+    build_cached_diff_styled_text_from_owned_relative_highlights(
+        tab_width,
+        text,
+        highlights.to_vec(),
+    )
 }
 
 fn build_cached_diff_styled_text_from_owned_relative_highlights(
+    tab_width: usize,
     text: &str,
     highlights: Vec<(Range<usize>, gpui::HighlightStyle)>,
 ) -> CachedDiffStyledText {
@@ -679,7 +692,7 @@ fn build_cached_diff_styled_text_from_owned_relative_highlights(
     }
 
     let (expanded_text, remapped_highlights) =
-        expanded_text_and_remapped_relative_highlights(text, &highlights);
+        expanded_text_and_remapped_relative_highlights(tab_width, text, &highlights);
     styled_text_to_cached(expanded_text, remapped_highlights)
 }
 
@@ -688,6 +701,7 @@ fn empty_styled_text() -> CachedDiffStyledText {
 }
 
 pub(in super::super) fn build_cached_diff_styled_text(
+    tab_width: usize,
     theme: AppTheme,
     text: &str,
     word_ranges: &[Range<usize>],
@@ -697,6 +711,7 @@ pub(in super::super) fn build_cached_diff_styled_text(
     word_kind: Option<crate::theme::DiffColorKind>,
 ) -> CachedDiffStyledText {
     build_cached_diff_styled_text_with_optional_palette(
+        tab_width,
         theme,
         None,
         DiffTextBuildRequest {
@@ -714,6 +729,7 @@ pub(in super::super) fn build_cached_diff_styled_text(
 }
 
 pub(in super::super) fn build_cached_diff_styled_text_with_source_identity(
+    tab_width: usize,
     theme: AppTheme,
     text: &str,
     source_identity: Option<DiffTextSourceIdentity>,
@@ -724,6 +740,7 @@ pub(in super::super) fn build_cached_diff_styled_text_with_source_identity(
     word_kind: Option<crate::theme::DiffColorKind>,
 ) -> CachedDiffStyledText {
     build_cached_diff_styled_text_with_optional_palette(
+        tab_width,
         theme,
         None,
         DiffTextBuildRequest {
@@ -742,11 +759,13 @@ pub(in super::super) fn build_cached_diff_styled_text_with_source_identity(
 
 #[cfg(feature = "benchmarks")]
 pub(in super::super) fn build_cached_diff_styled_text_with_palette(
+    tab_width: usize,
     theme: AppTheme,
     highlight_palette: &SyntaxHighlightPalette,
     request: DiffTextBuildRequest<'_>,
 ) -> CachedDiffStyledText {
     build_cached_diff_styled_text_with_optional_palette(
+        tab_width,
         theme,
         Some(highlight_palette),
         request,
@@ -760,6 +779,7 @@ thread_local! {
 }
 
 fn build_cached_diff_styled_text_with_optional_palette(
+    tab_width: usize,
     theme: AppTheme,
     highlight_palette: Option<&SyntaxHighlightPalette>,
     request: DiffTextBuildRequest<'_>,
@@ -805,7 +825,7 @@ fn build_cached_diff_styled_text_with_optional_palette(
                 } else {
                     buf.clear();
                 }
-                styled_text_to_cached_from_buf(text, buf)
+                styled_text_to_cached_from_buf(tab_width, text, buf)
             })
         };
 
@@ -815,7 +835,14 @@ fn build_cached_diff_styled_text_with_optional_palette(
         {
             let (key, cached) = SINGLE_LINE_STYLED_TEXT_CACHE.with(|cache| {
                 let mut cache = cache.borrow_mut();
-                let key = cache.key_for(theme, language, syntax_mode, text, source_identity);
+                let key = cache.key_for(
+                    tab_width,
+                    theme,
+                    language,
+                    syntax_mode,
+                    text,
+                    source_identity,
+                );
                 let styled = cache.get(key, text);
                 (key, styled)
             });
@@ -842,6 +869,7 @@ fn build_cached_diff_styled_text_with_optional_palette(
         let (key, cached) = SINGLE_LINE_STYLED_TEXT_CACHE.with(|cache| {
             let mut cache = cache.borrow_mut();
             let key = cache.word_highlighted_key_for(
+                tab_width,
                 theme,
                 language,
                 syntax_mode,
@@ -857,6 +885,7 @@ fn build_cached_diff_styled_text_with_optional_palette(
         }
 
         let styled = build_styled_text_fused(
+            tab_width,
             theme,
             FusedDiffTextBuildRequest {
                 build: request,
@@ -872,6 +901,7 @@ fn build_cached_diff_styled_text_with_optional_palette(
     }
 
     build_styled_text_fused(
+        tab_width,
         theme,
         FusedDiffTextBuildRequest {
             build: request,
@@ -1052,78 +1082,8 @@ pub(super) fn hash_word_ranges(ranges: &[Range<usize>]) -> u64 {
     hasher.finish()
 }
 
-fn syntax_highlight_color(theme: AppTheme, kind: SyntaxTokenKind) -> Option<gpui::Rgba> {
-    match kind {
-        SyntaxTokenKind::None => None,
-        SyntaxTokenKind::Comment => Some(theme.syntax.comment),
-        SyntaxTokenKind::CommentDoc => Some(theme.syntax.comment_doc),
-        SyntaxTokenKind::String => Some(theme.syntax.string),
-        SyntaxTokenKind::StringEscape => Some(theme.syntax.string_escape),
-        SyntaxTokenKind::StringRegex => Some(theme.syntax.string_regex),
-        SyntaxTokenKind::StringSpecial => Some(theme.syntax.string_special),
-        SyntaxTokenKind::Keyword => Some(theme.syntax.keyword),
-        SyntaxTokenKind::KeywordControl => Some(theme.syntax.keyword_control),
-        SyntaxTokenKind::Preproc => Some(theme.syntax.preproc),
-        SyntaxTokenKind::Number => Some(theme.syntax.number),
-        SyntaxTokenKind::Boolean => Some(theme.syntax.boolean),
-        SyntaxTokenKind::Function => Some(theme.syntax.function),
-        SyntaxTokenKind::FunctionMethod => Some(theme.syntax.function_method),
-        SyntaxTokenKind::FunctionSpecial => Some(theme.syntax.function_special),
-        SyntaxTokenKind::Constructor => Some(theme.syntax.constructor),
-        SyntaxTokenKind::Type => Some(theme.syntax.type_name),
-        SyntaxTokenKind::TypeBuiltin => Some(theme.syntax.type_builtin),
-        SyntaxTokenKind::TypeInterface => Some(theme.syntax.type_interface),
-        SyntaxTokenKind::Namespace => Some(theme.syntax.namespace),
-        SyntaxTokenKind::Variable => theme.syntax.variable,
-        SyntaxTokenKind::VariableParameter => Some(theme.syntax.variable_parameter),
-        SyntaxTokenKind::VariableSpecial => Some(theme.syntax.variable_special),
-        SyntaxTokenKind::VariableBuiltin => Some(theme.syntax.variable_builtin),
-        SyntaxTokenKind::Property => Some(theme.syntax.property),
-        SyntaxTokenKind::Label => theme.syntax.label,
-        SyntaxTokenKind::Constant => Some(theme.syntax.constant),
-        SyntaxTokenKind::ConstantBuiltin => Some(theme.syntax.constant_builtin),
-        SyntaxTokenKind::Operator => Some(theme.syntax.operator),
-        SyntaxTokenKind::Punctuation => Some(theme.syntax.punctuation),
-        SyntaxTokenKind::PunctuationBracket => Some(theme.syntax.punctuation_bracket),
-        SyntaxTokenKind::PunctuationDelimiter => Some(theme.syntax.punctuation_delimiter),
-        SyntaxTokenKind::PunctuationSpecial => Some(theme.syntax.punctuation_special),
-        SyntaxTokenKind::PunctuationListMarker => Some(theme.syntax.punctuation_list_marker),
-        SyntaxTokenKind::Tag => Some(theme.syntax.tag),
-        SyntaxTokenKind::Attribute => Some(theme.syntax.attribute),
-        SyntaxTokenKind::MarkupHeading => Some(theme.syntax.markup_heading),
-        SyntaxTokenKind::MarkupLink => Some(theme.syntax.markup_link),
-        SyntaxTokenKind::TextLiteral => Some(theme.syntax.text_literal),
-        SyntaxTokenKind::DiffPlus => Some(theme.syntax.diff_plus),
-        SyntaxTokenKind::DiffMinus => Some(theme.syntax.diff_minus),
-        SyntaxTokenKind::DiffDelta => Some(theme.syntax.diff_delta),
-        SyntaxTokenKind::Lifetime => Some(theme.syntax.lifetime),
-    }
-}
-
-pub(super) fn syntax_highlight_style(
-    theme: AppTheme,
-    kind: SyntaxTokenKind,
-) -> Option<gpui::HighlightStyle> {
-    let fg = syntax_highlight_color(theme, kind)?;
-    let mut style = gpui::HighlightStyle {
-        color: Some(fg.into_color()),
-        ..gpui::HighlightStyle::default()
-    };
-    match kind {
-        // Doc comments render italic to distinguish from regular comments.
-        SyntaxTokenKind::CommentDoc => {
-            style.font_style = Some(gpui::FontStyle::Italic);
-        }
-        // Control-flow keywords (if/else/for/while/return/match) render semibold.
-        SyntaxTokenKind::KeywordControl => {
-            style.font_weight = Some(gpui::FontWeight::SEMIBOLD);
-        }
-        _ => {}
-    }
-    Some(style)
-}
-
 fn expanded_text_and_remapped_relative_highlights(
+    tab_width: usize,
     text: &str,
     highlights: &[(Range<usize>, gpui::HighlightStyle)],
 ) -> (SharedString, Vec<(Range<usize>, gpui::HighlightStyle)>) {
@@ -1133,13 +1093,17 @@ fn expanded_text_and_remapped_relative_highlights(
 
     let mut out = String::with_capacity(text.len());
     let mut byte_map = vec![0usize; text.len() + 1];
+    let mut column = 0usize;
 
     for (start, ch) in text.char_indices() {
         byte_map[start] = out.len();
-        match ch {
-            '\t' => out.push_str("    "),
-            _ => out.push(ch),
-        }
+        let mut buf = [0u8; 4];
+        crate::view::tab_width::push_expanded(
+            tab_width,
+            &mut out,
+            ch.encode_utf8(&mut buf),
+            &mut column,
+        );
         let end = start + ch.len_utf8();
         let mapped_end = out.len();
         for mapped in byte_map.iter_mut().take(end + 1).skip(start + 1) {

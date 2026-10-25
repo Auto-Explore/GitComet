@@ -3,18 +3,14 @@ use super::*;
 pub(super) fn model(this: &PopoverHost) -> ContextMenuModel {
     let active_repo_id = this.active_repo_id();
     let repo_disabled = active_repo_id.is_none();
-    // Every pull mode needs a live remote-tracking upstream, like the main
-    // Pull button; the preferred-remote fallback is not offered from here.
     let pull_disabled = this
         .active_repo()
-        .is_none_or(|repo| !head_branch_has_live_upstream(repo));
+        .is_none_or(|repo| !pull_enabled(repo, &this.state.large_file_settings));
     let repo_id = active_repo_id.unwrap_or(RepoId(0));
-    let tracking_branch_name = super::active_branch_tracking_upstream_name(this);
+    let upstream = super::active_branch_tracking_upstream(this);
 
-    ContextMenuModel::new(vec![
-        ContextMenuItem::Header(
-            super::action_menu_title("Pull", tracking_branch_name.as_deref()).into(),
-        ),
+    let mut model = ContextMenuModel::new(vec![
+        ContextMenuItem::Header(super::action_menu_title("Pull", upstream).into()),
         ContextMenuItem::Separator,
         ContextMenuItem::Entry {
             label: "Pull (default)".into(),
@@ -78,5 +74,13 @@ pub(super) fn model(this: &PopoverHost) -> ContextMenuModel {
             disabled: repo_disabled,
             action: Box::new(ContextMenuAction::PruneLocalTags { repo_id }),
         },
-    ])
+    ]);
+    model.items.extend(super::large_file::pull_items(
+        &this.state,
+        this.active_repo(),
+    ));
+    model
+        .items
+        .extend(super::annex::pull_items(&this.state, this.active_repo()));
+    model
 }

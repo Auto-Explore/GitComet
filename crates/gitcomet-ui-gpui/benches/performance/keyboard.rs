@@ -58,98 +58,60 @@ pub(crate) fn bench_keyboard(c: &mut Criterion) {
     group.bench_function(
         BenchmarkId::from_parameter("arrow_scroll_history_sustained_repeat"),
         |b| {
-            b.iter_custom(|iters| {
-                let started = Instant::now();
-                let mut hash = 0u64;
-
-                for _ in 0..iters {
-                    let (case_hash, _stats, _metrics) = history_fixture.run_with_metrics();
-                    hash ^= case_hash;
-                }
-
-                std::hint::black_box(hash);
-                let (_hash, stats, metrics) =
-                    measure_sidecar_allocations(|| history_fixture.run_with_metrics());
-                emit_keyboard_arrow_scroll_sidecar(
-                    "arrow_scroll_history_sustained_repeat",
-                    &stats,
-                    metrics,
-                );
-                started.elapsed()
-            });
+            b.iter(|| history_fixture.run());
         },
     );
+    if let Some((_hash, stats, metrics)) = measure_sidecar_allocations_if_selected(
+        "keyboard/arrow_scroll_history_sustained_repeat",
+        || history_fixture.run_with_metrics(),
+    ) {
+        emit_keyboard_arrow_scroll_sidecar(
+            "arrow_scroll_history_sustained_repeat",
+            &stats,
+            metrics,
+        );
+    }
 
     group.bench_function(
         BenchmarkId::from_parameter("arrow_scroll_diff_sustained_repeat"),
         |b| {
-            b.iter_custom(|iters| {
-                let started = Instant::now();
-                let mut hash = 0u64;
-
-                for _ in 0..iters {
-                    let (case_hash, _stats, _metrics) = diff_fixture.run_with_metrics();
-                    hash ^= case_hash;
-                }
-
-                std::hint::black_box(hash);
-                let (_hash, stats, metrics) =
-                    measure_sidecar_allocations(|| diff_fixture.run_with_metrics());
-                emit_keyboard_arrow_scroll_sidecar(
-                    "arrow_scroll_diff_sustained_repeat",
-                    &stats,
-                    metrics,
-                );
-                started.elapsed()
-            });
+            b.iter(|| diff_fixture.run());
         },
     );
+    if let Some((_hash, stats, metrics)) = measure_sidecar_allocations_if_selected(
+        "keyboard/arrow_scroll_diff_sustained_repeat",
+        || diff_fixture.run_with_metrics(),
+    ) {
+        emit_keyboard_arrow_scroll_sidecar("arrow_scroll_diff_sustained_repeat", &stats, metrics);
+    }
 
     group.bench_function(
         BenchmarkId::from_parameter("tab_focus_cycle_all_panes"),
         |b| {
-            b.iter_custom(|iters| {
-                let started = Instant::now();
-                let mut hash = 0u64;
-
-                for _ in 0..iters {
-                    let (case_hash, _stats, _metrics) = tab_focus_fixture.run_with_metrics();
-                    hash ^= case_hash;
-                }
-
-                std::hint::black_box(hash);
-                let (_hash, stats, metrics) =
-                    measure_sidecar_allocations(|| tab_focus_fixture.run_with_metrics());
-                emit_keyboard_tab_focus_sidecar("tab_focus_cycle_all_panes", &stats, metrics);
-                started.elapsed()
-            });
+            b.iter(|| tab_focus_fixture.run());
         },
     );
+    if let Some((_hash, stats, metrics)) =
+        measure_sidecar_allocations_if_selected("keyboard/tab_focus_cycle_all_panes", || {
+            tab_focus_fixture.run_with_metrics()
+        })
+    {
+        emit_keyboard_tab_focus_sidecar("tab_focus_cycle_all_panes", &stats, metrics);
+    }
 
     group.bench_function(
         BenchmarkId::from_parameter("stage_unstage_toggle_rapid"),
         |b| {
-            b.iter_custom(|iters| {
-                let started = Instant::now();
-                let mut hash = 0u64;
-
-                for _ in 0..iters {
-                    let (case_hash, _stats, _metrics) = stage_toggle_fixture.run_with_metrics();
-                    hash ^= case_hash;
-                }
-
-                std::hint::black_box(hash);
-                let (_hash, stats, metrics) =
-                    measure_sidecar_allocations(|| stage_toggle_fixture.run_with_metrics());
-                emit_keyboard_stage_unstage_toggle_sidecar(
-                    "stage_unstage_toggle_rapid",
-                    &stats,
-                    metrics,
-                );
-                started.elapsed()
-            });
+            b.iter(|| stage_toggle_fixture.run());
         },
     );
+    if let Some((_hash, stats, metrics)) =
+        measure_sidecar_allocations_if_selected("keyboard/stage_unstage_toggle_rapid", || {
+            stage_toggle_fixture.run_with_metrics()
+        })
+    {
+        emit_keyboard_stage_unstage_toggle_sidecar("stage_unstage_toggle_rapid", &stats, metrics);
+    }
 
     group.finish();
 }

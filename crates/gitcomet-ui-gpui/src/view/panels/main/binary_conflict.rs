@@ -1,7 +1,15 @@
 use super::*;
 use gitcomet_core::services::ConflictSide;
 
-impl MainPaneView {
+/// Same units as the binary diff placeholder and the large-file card.
+fn side_size_label(size: Option<usize>) -> SharedString {
+    match size {
+        None => "absent".into(),
+        Some(n) => gitcomet_core::text_utils::human_readable_bytes(n as u64).into(),
+    }
+}
+
+impl DiffRenderer {
     /// Render the binary/non-UTF8 conflict resolver panel.
     ///
     /// Shows file size info for each conflict side and provides "Use Base" /
@@ -12,23 +20,15 @@ impl MainPaneView {
         repo_id: RepoId,
         path: std::path::PathBuf,
         file: &gitcomet_state::model::ConflictFile,
+        window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
         let ui_scale_percent = crate::ui_scale::current(cx).percent;
         let scaled_px = crate::ui_scale::scaler(ui_scale_percent);
         let [base_size, ours_size, theirs_size] = self.conflict_resolver.binary_side_sizes;
 
-        let format_size = |size: Option<usize>| -> SharedString {
-            match size {
-                None => "absent".into(),
-                Some(n) if n < 1024 => format!("{} B", n).into(),
-                Some(n) if n < 1024 * 1024 => format!("{:.1} KiB", n as f64 / 1024.0).into(),
-                Some(n) => format!("{:.1} MiB", n as f64 / (1024.0 * 1024.0)).into(),
-            }
-        };
-
         let side_row = |label: &'static str, size: Option<usize>, has_text: bool| -> gpui::Div {
-            let size_label = format_size(size);
+            let size_label = side_size_label(size);
             let kind_label: SharedString = if has_text {
                 "text (valid UTF-8)".into()
             } else if size.is_some() {
@@ -221,10 +221,18 @@ impl MainPaneView {
                 .image(ThreeWayColumn::Theirs)
                 .clone();
 
-            let image_cell = |id: &'static str,
-                              label: &'static str,
-                              image: Loadable<Option<ConflictPreviewImage>>,
-                              has_source: bool| {
+            let group = self.prepare_conflict_image_preview(window, cx);
+            let sources = self
+                .conflict_resolver
+                .image_preview
+                .sources
+                .each_ref()
+                .map(Option::is_some);
+            let mut image_cell = |side: usize,
+                                  id: &'static str,
+                                  label: &'static str,
+                                  image: Loadable<Option<ConflictPreviewImage>>,
+                                  has_source: bool| {
                 div()
                     .id(id)
                     .flex_1()
@@ -256,40 +264,46 @@ impl MainPaneView {
                             .flex()
                             .items_center()
                             .justify_center()
-                            .child(match image {
-                                Loadable::Ready(Some(ConflictPreviewImage::Encoded(image))) => {
-                                    gpui::img(image)
-                                        .w_full()
-                                        .h_full()
-                                        .object_fit(gpui::ObjectFit::Contain)
-                                        .into_any_element()
+                            .child(if sources[side] {
+                                self.image_preview_viewport(group.clone(), side, cx)
+                            } else {
+                                match image {
+                                    Loadable::Ready(Some(ConflictPreviewImage::Encoded(image))) => {
+                                        gpui::img(image)
+                                            .w_full()
+                                            .h_full()
+                                            .object_fit(gpui::ObjectFit::Contain)
+                                            .into_any_element()
+                                    }
+                                    Loadable::Ready(Some(ConflictPreviewImage::Rendered(
+                                        image,
+                                    ))) => {
+                                        preview_render_image_element(image, 0, clamp_preview_size)
+                                            .w_full()
+                                            .h_full()
+                                            .into_any_element()
+                                    }
+                                    Loadable::NotLoaded | Loadable::Loading if has_source => div()
+                                        .text_size(theme.ui_text(12.0))
+                                        .text_color(theme.colors.foreground.secondary)
+                                        .child("Processing image...")
+                                        .into_any_element(),
+                                    Loadable::Error(error) => div()
+                                        .text_size(theme.ui_text(12.0))
+                                        .text_color(theme.colors.foreground.secondary)
+                                        .child(error)
+                                        .into_any_element(),
+                                    Loadable::Ready(None) if has_source => div()
+                                        .text_size(theme.ui_text(12.0))
+                                        .text_color(theme.colors.foreground.secondary)
+                                        .child("Preview unavailable.")
+                                        .into_any_element(),
+                                    _ => div()
+                                        .text_size(theme.ui_text(12.0))
+                                        .text_color(theme.colors.foreground.secondary)
+                                        .child("No image")
+                                        .into_any_element(),
                                 }
-                                Loadable::Ready(Some(ConflictPreviewImage::Rendered(image))) => {
-                                    preview_render_image_element(image, 0, clamp_preview_size)
-                                        .w_full()
-                                        .h_full()
-                                        .into_any_element()
-                                }
-                                Loadable::NotLoaded | Loadable::Loading if has_source => div()
-                                    .text_size(theme.ui_text(12.0))
-                                    .text_color(theme.colors.foreground.secondary)
-                                    .child("Processing image...")
-                                    .into_any_element(),
-                                Loadable::Error(error) => div()
-                                    .text_size(theme.ui_text(12.0))
-                                    .text_color(theme.colors.foreground.secondary)
-                                    .child(error)
-                                    .into_any_element(),
-                                Loadable::Ready(None) if has_source => div()
-                                    .text_size(theme.ui_text(12.0))
-                                    .text_color(theme.colors.foreground.secondary)
-                                    .child("Preview unavailable.")
-                                    .into_any_element(),
-                                _ => div()
-                                    .text_size(theme.ui_text(12.0))
-                                    .text_color(theme.colors.foreground.secondary)
-                                    .child("No image")
-                                    .into_any_element(),
                             }),
                     )
             };
@@ -312,18 +326,21 @@ impl MainPaneView {
                         .flex()
                         .gap_2()
                         .child(image_cell(
+                            0,
                             "binary_conflict_preview_base",
                             "Base (A)",
                             base_image,
                             has_base,
                         ))
                         .child(image_cell(
+                            1,
                             "binary_conflict_preview_ours",
                             "Ours (B)",
                             ours_image,
                             has_ours,
                         ))
                         .child(image_cell(
+                            2,
                             "binary_conflict_preview_theirs",
                             "Theirs (C)",
                             theirs_image,
@@ -396,5 +413,18 @@ impl MainPaneView {
                     .child(action_section),
             )
             .into_any_element()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::side_size_label;
+
+    #[test]
+    fn side_sizes_use_the_shared_decimal_units() {
+        assert_eq!(side_size_label(None).as_ref(), "absent");
+        assert_eq!(side_size_label(Some(512)).as_ref(), "512 B");
+        assert_eq!(side_size_label(Some(1_536)).as_ref(), "1.5 KB");
+        assert_eq!(side_size_label(Some(12_345_678)).as_ref(), "12.3 MB");
     }
 }

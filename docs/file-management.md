@@ -1,0 +1,237 @@
+# File management and Documents
+
+The Files sidebar operates on the working tree. Historical views remain revision
+previews. File operations do not stage changes.
+
+## Explorer
+
+Click a file to preview it. Click a folder or its chevron to expand or collapse it
+while preserving the file selection. Ctrl/Cmd-click toggles selection; Shift-click
+selects a range, including folders, without toggling expansion. Right-clicking an
+item in the selection preserves the selection. Keyboard focus is independent of
+selection.
+
+The context menu provides New File, New Folder, Cut, Copy, Paste, Duplicate,
+Rename, Add to .gitignore, Trash, and Delete permanently. Creation and rename use
+inline entry with Enter to accept and Escape to cancel. Root menus provide
+creation and paste. Tracked files cannot be added to .gitignore through this menu;
+directory rules cover untracked contents and future files without changing the
+index.
+
+| Action with explorer focus | macOS | Windows / Linux |
+| --- | --- | --- |
+| Copy / Cut / Paste | Cmd-C / Cmd-X / Cmd-V | Ctrl-C / Ctrl-X / Ctrl-V |
+| Move previously copied files here | Option-Cmd-V | Cut, then Paste |
+| Duplicate | Cmd-D | Ctrl-D |
+| Select all visible rows | Cmd-A | Ctrl-A |
+| Rename | F2 | F2 |
+| Open focused item | Enter | Enter |
+| Move focus and selection | Up / Down / Home / End | Up / Down / Home / End |
+| Extend selection | Shift + navigation | Shift + navigation |
+| Move focus without changing selection | Cmd + navigation | Ctrl + navigation |
+| Expand / collapse or navigate folders | Right / Left | Right / Left |
+| Undo / Redo file operation | Cmd-Z / Cmd-Shift-Z | Ctrl-Z / Ctrl-Shift-Z or Ctrl-Y |
+| Trash / permanent deletion | Delete / Shift-Delete | Delete / Shift-Delete |
+| Cancel inline entry, pending cut, or transfer | Escape | Escape |
+
+These bindings are scoped to explorer focus. Text editing and terminal bindings
+remain available in their respective controls. Hidden files are visible by
+default, ignored files are hidden, and `.git` stays hidden. The Hidden and Ignored
+buttons change visibility. Explicit search can load ignored subtrees in the
+background; opening a hidden or ignored file explicitly reveals it.
+
+Copy and Cut use the selected items, falling back to the focused item when nothing
+is selected. Paste uses the focused folder, the focused file's parent, or the
+repository root. Clicking empty explorer space focuses the root. This lets you
+select files, click a destination folder, and copy/paste without losing the selection.
+Context-menu commands use the clicked location. Native file clipboard contents
+from other applications can also be pasted.
+
+Copy/paste uses saved disk contents. Pending cut items and descendants of cut
+folders are muted and marked until completed or cancelled. A folder receives
+items inside it; a file targets its parent; empty explorer space targets the
+repository root. During internal or external dragging, the destination folder and
+its visible descendants are highlighted together. Hovering expands folders and
+scrolls near viewport edges.
+
+Internal dragging moves by default; Ctrl on Windows/Linux or Option on macOS
+selects Copy. Incoming desktop file drops copy by default; Shift requests Move.
+Desktop clipboard payloads must contain native files, not plain text paths.
+Copying into the same folder or duplicating creates `name copy.ext`, followed by
+numbered variants. A move to the current location does nothing. Other collisions
+offer Keep Both, Replace, Skip, or Cancel; directory collisions also offer Merge.
+
+## Documents
+
+The bottom-bar Documents button is available without an open repository. It
+opens a searchable picker above the button with unsaved and recent documents,
+an Open File button for the system dialog, and Save All while anything is
+unsaved. Typing an absolute or `~/` path offers to open that path directly.
+Each recent entry can be removed from its row or its context menu. History
+contains up to 50 normalized absolute paths, shared across windows and
+persisted in the session file. Removing history never deletes files. Missing
+entries remain removable and report an error when opened.
+
+Opening a file discovers its owning repository, including nested repositories
+and linked worktrees. GitComet prefers an existing tab in the current window,
+then another window, and opens the repository when needed. The working-tree
+explorer reveals the file. Files outside repositories open in the document
+viewer. With a repository open, the viewer takes the main content area and the
+sidebar, details pane and action bar stay visible; without one it fills the
+content card. The viewer header shows the file name and a selectable absolute
+path. Text has line numbers, syntax highlighting and a Wrap toggle (on by
+default for prose such as Markdown), plus Edit, Discard, Save and Save As;
+image and binary previews use the existing restrictions.
+
+The viewer's close button, selecting a repository tab, or opening a file or
+commit in the repository restores the repository canvas. Unsaved standalone
+buffers remain available above recent documents even after history removal or
+eviction. A multiple-file drop records every successful file and displays the
+first one; later background replies cannot steal focus after another navigation.
+
+## Image previews
+
+Image files, image diffs, and image conflict previews support zoom and pan.
+The bottom bar provides Fit, Actual size, zoom steps from 1% to 6400%, and sampling
+controls. At 100%, one original image pixel occupies one physical screen pixel,
+independently of the application's UI scale. Drag or scroll to pan; hold Ctrl or
+Cmd while scrolling to zoom around the pointer. Double-click to fit.
+
+Auto uses the selected smooth filter below 300% and nearest neighbor at 300%
+and above. Smooth always uses Spline36, Robidoux, or Hann; Pixels always uses
+nearest neighbor. At 100%, all modes preserve original pixels. The default is
+Auto with Spline36. Sampling choices are shared across windows and repositories
+and survive restart. SVG previews remain vector-rendered and have no raster
+sampling selector. ICO files do not enlarge automatically in Fit mode.
+
+SVG text uses system and bundled fonts. Filtered SVGs render as a whole before
+tiling so shadows and offsets cross tile boundaries correctly. If that render
+would exceed the 16 MiB raster limit, the bounded preview remains visible with
+a detail-unavailable message; zooming out restores detailed rendering.
+
+Comparison panes share zoom and pan by default, with their top-left source
+coordinates aligned. Click Linked zoom & pan to inspect each pane independently:
+each image gets its own zoom percentage, zoom menu, Fit, and Actual size controls
+beneath it. Actual size sets zoom to 100%; Fit sizes the image to its pane.
+Linking again uses the last image you adjusted. Opening another file resets to
+Fit and Linked zoom & pan.
+For animated GIF and WebP files, Pause to inspect freezes the displayed frame
+and loads its original pixels; Resume returns to the bounded animation preview.
+With reduced motion turned on, animations stay on one frame at full detail and
+have no Pause control.
+If the visible image exceeds the 64 MiB tile cache, central tiles retain full
+detail and peripheral areas use the smaller preview. Reducing the pane size
+allows the entire view to fit within that budget.
+
+## Diagram previews
+
+Mermaid files (`.mmd`, `.mermaid`) and Mermaid code blocks in Markdown previews
+render as diagrams. A code block counts as Mermaid when its info string names
+`mermaid` (also as `language-mermaid` or `{.mermaid}`), or when it has none and
+its source reads as a Mermaid diagram.
+
+- **Size**: a diagram in a Markdown preview shows at its full height at 100%.
+  One taller than 320 px has a **Collapse diagram** bar under it that folds it
+  to 320 px; **Show full diagram** opens it again. Collapsing a diagram whose top
+  has scrolled out of view scrolls it back into view.
+- **Preview | Code**: the toggle above each Markdown diagram switches between the
+  diagram and its source. This choice and the collapse are kept for the session
+  per diagram source, so a diagram opens the same way after scrolling away, an
+  edit above it, or in another view of the same source.
+- **Zoom**: Ctrl or Cmd while scrolling zooms around the pointer, from 50% to
+  400%, one step per wheel notch or per 40 px of trackpad scrolling. Zooming
+  pans inside a Markdown diagram and leaves its height alone. Double-click
+  returns to 100%.
+- **Pan**: drag the diagram, or use the scrollbars that appear along each edge
+  the diagram runs past. A sideways swipe or Shift while scrolling pans
+  horizontally; in a Mermaid file, plain scrolling pans vertically too, while in
+  Markdown it scrolls the document. A diagram that fits its box stays inside it.
+
+## Filesystem service and recovery
+
+`gitcomet-core::filesystem` owns typed requests, cancellation, progress, per-item
+results, path mappings, disk versions, and a session journal of 100 logical
+operations. `gitcomet-state` submits work through a shared filesystem executor.
+The process-wide filesystem lock also coordinates editor saves across windows.
+Editors pause and drain outstanding saves before operations, then adopt successful
+path mappings before saving resumes. Saving checks the disk version loaded by
+the editor; newer external bytes require a conflict decision.
+
+Transfers enumerate actual contents, preserve links and executable permissions,
+and reject protected repository roots, Git metadata, nested repositories, and
+submodule boundaries. Replacements retain the old destination before installing
+new data. Cross-filesystem moves finish the copy before source removal.
+Cancellation leaves completed items available to Undo. Undo and Redo verify
+current contents, identities, and parent boundaries before reversing a step.
+Conflicting later changes are preserved and the operation remains retryable.
+
+Native Trash uses an exact restore receipt. A Trash error never triggers
+permanent deletion. Permanent deletion requires confirmation and has no Undo.
+Operations completed by another application are outside GitComet's journal.
+For incoming local Linux file URLs, GitComet performs the move and acknowledges
+the native transfer after completion; native completion alone does not remove
+the source file.
+
+Rollback storage uses `.gitcomet-operation-*` directories on the affected
+filesystem, preferring the temporary directory, then the repository's Git
+directory, then the affected parent. Before moving retained data, `recovery.log`
+records both native paths with percent-escaped native path bytes. Recovery data
+survives an interrupted process or an unsuccessful rollback. The log is not
+fsynced: renames are not fsynced either, so after a power loss it can name a
+move that did not land -- it over-reports rather than under-reports, which is
+what a log read by hand wants. Recovery after a crash is manual: inspect the
+recorded paths and retain conflicting current files before restoring parked
+items. The session journal is not replayed after restart.
+
+## Verification and native acceptance
+
+Filesystem tests cover recursive transfers, conflict decisions and merges,
+permissions, links, native filenames, case-only renames, cancellation, protected
+paths, later external changes, journal bounds, and interrupted batches. UI/state
+tests cover selection and focus, clipboard ownership, document routing and
+history, missing files, unsaved buffers, and autosave coordination during rename.
+
+Run normal checks with:
+
+```sh
+cargo test --workspace --no-fail-fast
+cargo test --workspace --all-features --no-fail-fast
+cargo fmt --all --check
+cargo fmt --manifest-path crates/gitcomet-filesystem-native/Cargo.toml --check
+cargo clippy --workspace --all-targets --all-features
+```
+
+The native Trash test is intentionally opt-in because it uses the current user's
+Trash. The cross-filesystem test uses `/dev/shm` on Linux when it is a distinct
+filesystem:
+
+```sh
+cargo test -p gitcomet-core native_trash_restores_the_exact_entry -- --ignored
+cargo test -p gitcomet-core cross_filesystem_move_and_its_undo_redo
+```
+
+Both GPUI dependencies use the same published commit. Platform implementation and
+CI results are in [GPUI PR #16](https://github.com/Havunen/gpui-ce/pull/16).
+
+The implementation was exercised against real Nautilus on an isolated X11
+display: clipboard copy/cut in both directions, conflict cancellation, outbound
+dragging, inbound file/folder drops, receiver-owned Move/Undo/Redo, and document
+opening. Linux Trash restoration and cross-filesystem Move/Undo/Redo were also
+exercised. GPUI's native CI runs cover Windows, macOS, Wayland, and X11 builds and
+automated tests. Finder, Windows
+Explorer, Dolphin, WSLg, and a real Wayland desktop still require their manual
+acceptance passes; a successful build does not substitute for those transfers.
+
+The September 10, 2026 workspace run passed 6,420 tests, with 16 ignored. The final
+UI run against the published GPUI pin passed 3,617 tests, including the added
+native move acknowledgement/Undo regression, with four ignored. The
+all-features run reached 6,650 passes and 23 failures in the optional row benchmark
+tests. An untouched checkout at `5d11e006` reproduced 22 of those failures; the
+remaining prepared-conflict wrap-offset test passed in isolation. Workspace
+Clippy passed with existing warnings. The strict Clippy commands used by the
+repository's Rust CI passed. The broader all-targets/all-features `-D warnings`
+command also encounters warnings in existing tests and benchmark code.
+
+For each desktop, test both directions, multiple files and folders, Copy versus
+Move, cancellation, clipboard replacement, conflicts, source removal exactly
+once, and Trash restoration. Include hidden files, links, and unsaved editors.

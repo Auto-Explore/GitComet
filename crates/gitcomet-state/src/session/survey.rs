@@ -55,16 +55,14 @@ pub fn persist_survey_prompt_opened_to_path(
     survey_id: &str,
     now_unix_seconds: u64,
 ) -> io::Result<()> {
-    with_session_file_persist_lock(|| {
-        let mut file = load_file(session_file_path).unwrap_or_default();
-        file.version = CURRENT_SESSION_FILE_VERSION;
+    update_session_file(session_file_path, |file| {
         file.survey_prompt = Some(SurveyPromptSession {
             survey_id: survey_id.to_string(),
             opened_at_unix_seconds: Some(now_unix_seconds),
             postponed_until_unix_seconds: None,
         });
 
-        persist_to_path(session_file_path, &file)
+        SessionUpdate::Write
     })
 }
 
@@ -86,20 +84,18 @@ pub fn persist_survey_prompt_postponed_to_path(
     postpone_seconds: u64,
     now_unix_seconds: u64,
 ) -> io::Result<()> {
-    with_session_file_persist_lock(|| {
-        let mut file = load_file(session_file_path).unwrap_or_default();
-        file.version = CURRENT_SESSION_FILE_VERSION;
+    update_session_file(session_file_path, |file| {
         file.survey_prompt = Some(SurveyPromptSession {
             survey_id: survey_id.to_string(),
             opened_at_unix_seconds: None,
             postponed_until_unix_seconds: Some(now_unix_seconds.saturating_add(postpone_seconds)),
         });
 
-        persist_to_path(session_file_path, &file)
+        SessionUpdate::Write
     })
 }
 
-fn current_unix_seconds() -> u64 {
+pub(super) fn current_unix_seconds() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()

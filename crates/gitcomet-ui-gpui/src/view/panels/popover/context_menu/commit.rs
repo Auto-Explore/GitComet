@@ -165,6 +165,43 @@ fn repo_commit_is_ancestor_of_head(repo: &RepoState, commit_id: &CommitId) -> bo
     false
 }
 
+/// Branch names a commit's menu offers to copy: the local branches pointing at
+/// it, or, when there are none, its remote branches as `remote/branch` (the
+/// same text the branch's own menu copies).
+fn commit_branch_names_to_copy(
+    this: &PopoverHost,
+    repo_id: RepoId,
+    commit_id: &CommitId,
+) -> Vec<String> {
+    let Some(repo) = this.state.repos.iter().find(|repo| repo.id == repo_id) else {
+        return Vec::new();
+    };
+    let local: Vec<String> = repo
+        .branches
+        .ready()
+        .map(|branches| {
+            branches
+                .iter()
+                .filter(|branch| branch.target == *commit_id)
+                .map(|branch| branch.name.clone())
+                .collect()
+        })
+        .unwrap_or_default();
+    if !local.is_empty() {
+        return local;
+    }
+    repo.remote_branches
+        .ready()
+        .map(|branches| {
+            branches
+                .iter()
+                .filter(|branch| branch.target == *commit_id)
+                .map(|branch| format!("{}/{}", branch.remote, branch.name))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 pub(super) fn model(this: &PopoverHost, repo_id: RepoId, commit_id: &CommitId) -> ContextMenuModel {
     model_with_header(this, repo_id, commit_id, true)
 }
@@ -273,7 +310,8 @@ fn model_with_header(
         let label = format!("Squash {} commits", plan.commit_count).into();
         items.push(ContextMenuItem::Entry {
             label,
-            icon: Some("icons/git_commit.svg".into()),
+            // The branch menu's "Squash into current" icon.
+            icon: Some("icons/arrow_right.svg".into()),
             shortcut: None,
             disabled: history_rewrite_disabled,
             action: Box::new(ContextMenuAction::SquashSelectedCommits { repo_id }),
@@ -296,19 +334,6 @@ fn model_with_header(
         items.push(ContextMenuItem::Separator);
     }
     items.push(ContextMenuItem::Entry {
-        label: "Open diff".into(),
-        icon: Some("icons/open_external.svg".into()),
-        shortcut: None,
-        disabled: false,
-        action: Box::new(ContextMenuAction::SelectDiff {
-            repo_id,
-            target: DiffTarget::Commit {
-                commit_id: commit_id.clone(),
-                path: None,
-            },
-        }),
-    });
-    items.push(ContextMenuItem::Entry {
         label: "Start file browsing".into(),
         icon: Some("icons/history.svg".into()),
         shortcut: None,
@@ -318,6 +343,32 @@ fn model_with_header(
             commit_id: commit_id.clone(),
         }),
     });
+    // The file history menu embeds these actions without the header and
+    // offers its own "Copy SHA" among its file entries.
+    if include_header {
+        items.push(ContextMenuItem::Entry {
+            label: "Copy commit SHA".into(),
+            icon: Some("icons/copy.svg".into()),
+            shortcut: Some("C".into()),
+            disabled: false,
+            action: Box::new(ContextMenuAction::CopyText { text: sha.clone() }),
+        });
+        let names = commit_branch_names_to_copy(this, repo_id, commit_id);
+        let single = names.len() == 1;
+        for name in names {
+            items.push(ContextMenuItem::Entry {
+                label: if single {
+                    "Copy branch name".into()
+                } else {
+                    format!("Copy branch name {name}").into()
+                },
+                icon: Some("icons/copy.svg".into()),
+                shortcut: None,
+                disabled: false,
+                action: Box::new(ContextMenuAction::CopyText { text: name }),
+            });
+        }
+    }
     if let Some(permalink) = this
         .state
         .repos
@@ -375,6 +426,17 @@ fn model_with_header(
             shortcut: None,
             disabled: false,
             action: Box::new(ContextMenuAction::CompareWithMarked {
+                repo_id,
+                commit_id: commit_id.clone(),
+                label: short.to_string(),
+            }),
+        });
+        items.push(ContextMenuItem::Entry {
+            label: "Compare with merge base".into(),
+            icon: Some("icons/open_external.svg".into()),
+            shortcut: None,
+            disabled: false,
+            action: Box::new(ContextMenuAction::CompareWithMergeBase {
                 repo_id,
                 commit_id: commit_id.clone(),
                 label: short.to_string(),
@@ -550,9 +612,10 @@ fn model_with_header(
     // about to refuse. `commit_is_ancestor_of_head` already looks the repository
     // up this way.
     let merge_repo = this.state.repos.iter().find(|repo| repo.id == repo_id);
-    let merge_into_current_disabled =
-        !super::super::merge_commit_confirm::merge_commit_repo_is_ready(merge_repo)
-            || commit_is_ancestor_of_head(this, repo_id, commit_id);
+    let merge_into_current_disabled = !super::super::merge_commit_confirm::merge_commit_is_allowed(
+        merge_repo,
+        &this.state.large_file_settings,
+    ) || commit_is_ancestor_of_head(this, repo_id, commit_id);
     let merge_destination =
         super::super::merge_commit_confirm::merge_commit_destination_label(merge_repo);
     items.push(ContextMenuItem::Entry {
