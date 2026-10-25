@@ -31,7 +31,6 @@ benchmarks = [
 
 [dependencies]
 alacritty_terminal = { workspace = true }
-fontdb = { workspace = true }
 futures = { workspace = true }
 gitcomet-conflict-resolver = { workspace = true }
 gitcomet-core = { workspace = true }
@@ -52,13 +51,9 @@ gitcomet-ui-terminal = { workspace = true }
 gpui = { workspace = true, features = ["profiler"] }
 gpui_platform = { workspace = true }
 image = { workspace = true }
-fast_image_resize = { workspace = true }
 jiff = { workspace = true }
-lru = { workspace = true }
 memchr = { workspace = true }
 palette = { workspace = true }
-pulldown-cmark = { workspace = true }
-unicode-normalization = { workspace = true }
 regex = { workspace = true }
 raw-window-handle = { workspace = true }
 rustc-hash = { workspace = true }
@@ -75,7 +70,6 @@ smol = { workspace = true }
 stats_alloc = { workspace = true }
 sysinfo = { workspace = true }
 tempfile = { workspace = true }
-unicode-segmentation = { workspace = true }
 url = { workspace = true }
 ureq = { workspace = true }
 anyhow = { workspace = true }
