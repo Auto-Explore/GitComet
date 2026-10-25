@@ -579,7 +579,7 @@ impl GitCometView {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> bool {
-        let Some(repo) = self.repository_state(repository) else {
+        let Some(repo) = self.repository_state(repository).cloned() else {
             return false;
         };
         let active = self.active_view_target(&repo);
@@ -604,17 +604,14 @@ impl GitCometView {
         true
     }
 
-    fn repository_state(
+    /// The repository `repository` names, while it is still the one it named.
+    pub(in crate::view) fn repository_state(
         &self,
         repository: &gitcomet_extension_api::RepositoryHandle,
-    ) -> Option<RepoState> {
-        self.state
-            .repos
-            .iter()
-            .find(|repo| {
-                repo.id == repository.repo_id() && repo.lifetime() == repository.lifetime()
-            })
-            .cloned()
+    ) -> Option<&RepoState> {
+        self.state.repos.iter().find(|repo| {
+            repo.id == repository.repo_id() && repo.lifetime() == repository.lifetime()
+        })
     }
 
     /// Shows the built-in content (`None`) or contribution `index` in
@@ -648,15 +645,7 @@ impl GitCometView {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
-        let Some(repo) = self
-            .state
-            .repos
-            .iter()
-            .find(|repo| {
-                repo.id == repository.repo_id() && repo.lifetime() == repository.lifetime()
-            })
-            .cloned()
-        else {
+        let Some(repo) = self.repository_state(repository).cloned() else {
             return;
         };
         self.select_routed_for_repo(repo, RoutedArea::Main, index, window, cx);

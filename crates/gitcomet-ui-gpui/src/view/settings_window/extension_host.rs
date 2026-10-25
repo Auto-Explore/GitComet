@@ -477,6 +477,7 @@ impl Render for SettingsMenu {
                             action,
                             icon,
                             disabled,
+                            tooltip,
                             ..
                         } => {
                             let action = action.clone();
@@ -498,6 +499,9 @@ impl Render for SettingsMenu {
                                 action.invoke(cx);
                             })
                             .debug_selector(move || format!("settings_hosted_action_{index}"))
+                            .when_some(tooltip.clone(), |row, text| {
+                                row.gitcomet_tooltip(self.theme, text)
+                            })
                             .into_any_element()
                         }
                         _ => gpui::Empty.into_any_element(),

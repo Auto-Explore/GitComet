@@ -52,7 +52,7 @@ fn assert_terminal_toolbar_fill_tracks_panel_lifetime_and_target(cx: &mut gpui::
         view.update(app, |view, cx| {
             view.terminal_sessions
                 .insert(repo_id, test_terminal_session(vec![(10, None)], 0, cx));
-            view.sync_terminal_indicator_views(cx);
+            view.terminal_sessions_changed(cx);
             cx.notify();
         })
     });
@@ -355,4 +355,45 @@ fn comfortable_bottom_panel_tabs_grow_with_the_density(cx: &mut gpui::TestAppCon
             );
         }
     }
+}
+
+/// Selecting a terminal tab behind the reflog shows the terminal, so focus
+/// never lands in a terminal that is not drawn.
+#[gpui::test]
+fn selecting_a_terminal_tab_brings_the_terminal_in_front_of_the_reflog(
+    cx: &mut gpui::TestAppContext,
+) {
+    use crate::view::test_support::redraw;
+    let (view, repo_id, cx) = test_root_view_with_active_repo(cx);
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.terminal_sessions.insert(
+                repo_id,
+                test_terminal_session(vec![(10, None), (11, None)], 0, cx),
+            );
+            this.open_reflog_panel(repo_id, cx);
+        })
+    });
+    redraw(cx);
+    assert!(cx.debug_bounds("bottom_panel_tab_reflog").is_some());
+    assert!(cx.debug_bounds("terminal_tab-1").is_none());
+
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.select_terminal_tab(repo_id, 1, window, cx)
+        })
+    });
+    redraw(cx);
+
+    assert!(cx.debug_bounds("terminal_tab-1").is_some());
+    cx.update(|window, app| {
+        let this = view.read(app);
+        assert_eq!(
+            this.active_bottom_panel.get(&repo_id),
+            Some(&crate::view::BottomPanelTab::Terminal)
+        );
+        let session = &this.terminal_sessions[&repo_id];
+        assert_eq!(session.active_index, 1);
+        assert!(session.instances[1].focus_handle.is_focused(window));
+    });
 }

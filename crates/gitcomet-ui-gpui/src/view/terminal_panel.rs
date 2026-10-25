@@ -139,7 +139,12 @@ impl GitCometView {
             .is_some_and(|repo_id| self.terminal_sessions.contains_key(&repo_id))
     }
 
-    fn sync_terminal_indicator_views(&mut self, cx: &mut gpui::Context<Self>) {
+    /// Tells the repository tabs, the action bar and extensions which
+    /// terminals are open.
+    fn terminal_sessions_changed(&mut self, cx: &mut gpui::Context<Self>) {
+        if let Some(extension_window) = &self.extension_window {
+            extension_window.set_terminals(self.open_terminals());
+        }
         let repo_ids = self
             .terminal_sessions
             .keys()
@@ -155,6 +160,24 @@ impl GitCometView {
             action_bar.update(cx, |bar, cx| bar.set_open_terminal_repo_ids(repo_ids, cx));
             popover_host.update(cx, |host, cx| host.dismiss_stale_terminal_menu(cx));
         });
+    }
+
+    /// Each repository's open terminal tabs, as extensions see them.
+    fn open_terminals(&self) -> FxHashMap<RepoId, Vec<super::extension_host::OpenTerminal>> {
+        self.terminal_sessions
+            .iter()
+            .map(|(repo_id, session)| {
+                let tabs = session
+                    .instances
+                    .iter()
+                    .map(|instance| super::extension_host::OpenTerminal {
+                        id: gitcomet_extension_api::TerminalId::new(instance.session_seq),
+                        shell_pid: instance.child_pid,
+                    })
+                    .collect();
+                (*repo_id, tabs)
+            })
+            .collect()
     }
 
     pub(in crate::view) fn sync_terminal_button_target(&self, cx: &mut gpui::Context<Self>) {
@@ -190,7 +213,7 @@ impl GitCometView {
                 }
             }
         }
-        self.sync_terminal_indicator_views(cx);
+        self.terminal_sessions_changed(cx);
         cx.notify();
     }
 
@@ -223,7 +246,7 @@ impl GitCometView {
         );
 
         self.spawn_terminal_event_task(repo_id, session_seq, cx);
-        self.sync_terminal_indicator_views(cx);
+        self.terminal_sessions_changed(cx);
         self.focus_terminal_view(repo_id, window, cx);
         cx.notify();
     }
@@ -253,7 +276,7 @@ impl GitCometView {
         session.active_index = session.instances.len() - 1;
 
         self.spawn_terminal_event_task(repo_id, session_seq, cx);
-        self.sync_terminal_indicator_views(cx);
+        self.terminal_sessions_changed(cx);
         self.focus_terminal_view(repo_id, window, cx);
         cx.notify();
     }
@@ -416,7 +439,7 @@ impl GitCometView {
                 shutdown_terminal_instance(instance, false);
             }
         }
-        self.sync_terminal_indicator_views(cx);
+        self.terminal_sessions_changed(cx);
         cx.notify();
     }
 
@@ -470,7 +493,7 @@ impl GitCometView {
         {
             self.focus_terminal_view(repo_id, window, cx);
         }
-        self.sync_terminal_indicator_views(cx);
+        self.terminal_sessions_changed(cx);
         cx.notify();
     }
 
@@ -531,6 +554,34 @@ impl GitCometView {
         cx.notify();
     }
 
+    /// Shows `terminal` for an extension: makes its repository the active
+    /// one, selects and focuses the tab and activates the window. A tab that
+    /// closed, or a repository that did, is left alone.
+    pub(in crate::view) fn show_terminal_tab(
+        &mut self,
+        terminal: &gitcomet_extension_api::TerminalTab,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.repository_state(&terminal.repository).is_none() {
+            return;
+        }
+        let repo_id = terminal.repository.repo_id();
+        let Some(index) = self
+            .terminal_sessions
+            .get(&repo_id)
+            .and_then(|session| session.index_by_seq(terminal.id.get()))
+        else {
+            return;
+        };
+        self.activate_repo(repo_id, cx);
+        self.select_terminal_tab(repo_id, index, window, cx);
+        window.activate();
+    }
+
+    /// Focuses the repository's active terminal tab and brings the terminal
+    /// to the front of the bottom panel, so focus never lands in a terminal
+    /// hidden behind another panel.
     fn focus_terminal_view(
         &mut self,
         repo_id: RepoId,
@@ -545,6 +596,8 @@ impl GitCometView {
         else {
             return;
         };
+        self.active_bottom_panel
+            .insert(repo_id, BottomPanelTab::Terminal);
         window.focus(&focus_handle, cx);
     }
 

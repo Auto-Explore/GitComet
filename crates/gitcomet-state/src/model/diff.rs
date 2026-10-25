@@ -56,6 +56,10 @@ pub struct DiffState {
     pub inline_submodule_diff_rev: u64,
     pub inline_submodule_diff: Option<InlineSubmoduleDiffState>,
     pub diff_file_image: Loadable<Option<Shared<FileDiffImage>>>,
+    /// The target whose bytes showed an image that its name does not announce
+    /// (a file without an extension). While it is the selected target, it loads
+    /// and shows as an image, as a named one would.
+    pub content_image_target: Option<DiffTarget>,
     pub text_attributes_rev: u64,
     /// `.gitattributes` and config for the selected file.
     pub text_attributes: Loadable<Arc<TextAttributes>>,
@@ -86,6 +90,12 @@ impl DiffState {
         let path = self.diff_target.as_ref()?.file_path()?;
         self.text_override_for(path)?.encoding
     }
+
+    /// Whether the selected target's bytes showed it is an image although
+    /// its name does not say so.
+    pub fn selected_content_is_image(&self) -> bool {
+        self.diff_target.is_some() && self.content_image_target == self.diff_target
+    }
 }
 
 impl Default for DiffState {
@@ -113,6 +123,7 @@ impl Default for DiffState {
             inline_submodule_diff_rev: 0,
             inline_submodule_diff: None,
             diff_file_image: Loadable::NotLoaded,
+            content_image_target: None,
             text_attributes_rev: 0,
             text_attributes: Loadable::NotLoaded,
             text_override_rev: 0,

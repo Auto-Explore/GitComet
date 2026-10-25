@@ -982,6 +982,138 @@ fn stage_and_unstage_read_glob_characters_in_names_literally() {
     assert_eq!(staged_paths(), vec![PathBuf::from("a.txt")]);
 }
 
+/// A repository whose tracked file `foo` has been replaced by a directory
+/// holding the untracked `foo/new.txt`.
+fn init_file_replaced_by_directory(repo: &Path) {
+    run_git(repo, &["init"]);
+    run_git(repo, &["config", "user.email", "you@example.com"]);
+    run_git(repo, &["config", "user.name", "You"]);
+    run_git(repo, &["config", "commit.gpgsign", "false"]);
+
+    write(repo, "foo", "tracked file\n");
+    run_git(repo, &["add", "foo"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "init"],
+    );
+
+    fs::remove_file(repo.join("foo")).unwrap();
+    write(repo, "foo/new.txt", "untracked work\n");
+}
+
+/// `foo` is a pathspec for everything under the directory now at `foo`, so
+/// staging the deleted file also added the directory's untracked files.
+#[test]
+fn staging_a_file_replaced_by_a_directory_stages_only_its_deletion() {
+    test_git_env::ensure_initialized();
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    init_file_replaced_by_directory(repo);
+
+    let opened = GixBackend.open(repo).unwrap();
+    opened.stage(&[Path::new("foo")]).unwrap();
+
+    let status = opened
+        .status(&gitcomet_core::services::CancellationToken::new())
+        .unwrap();
+    let staged: Vec<_> = status
+        .staged
+        .iter()
+        .map(|entry| (entry.path.clone(), entry.kind))
+        .collect();
+    assert_eq!(staged, [(PathBuf::from("foo"), FileStatusKind::Deleted)]);
+    let unstaged: Vec<_> = status
+        .unstaged
+        .iter()
+        .map(|entry| (entry.path.clone(), entry.kind))
+        .collect();
+    assert_eq!(
+        unstaged,
+        [(PathBuf::from("foo/new.txt"), FileStatusKind::Untracked)]
+    );
+}
+
+/// Restoring `foo` means removing the directory in its place, and a forced
+/// checkout does that without asking: discarding the deleted file also
+/// deleted every untracked and ignored file under the directory.
+#[test]
+fn discarding_a_file_replaced_by_a_directory_keeps_unselected_files() {
+    test_git_env::ensure_initialized();
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    init_file_replaced_by_directory(repo);
+    write(repo, ".git/info/exclude", "*.log\n");
+    write(repo, "foo/build.log", "ignored output\n");
+
+    let opened = GixBackend.open(repo).unwrap();
+
+    opened
+        .discard_worktree_changes(&[Path::new("foo")])
+        .expect_err("the directory holds files the selection does not discard");
+    opened
+        .discard_worktree_changes(&[Path::new("foo"), Path::new("foo/new.txt")])
+        .expect_err("the directory holds an ignored file");
+    assert_eq!(
+        fs::read_to_string(repo.join("foo/new.txt")).unwrap(),
+        "untracked work\n"
+    );
+    assert_eq!(
+        fs::read_to_string(repo.join("foo/build.log")).unwrap(),
+        "ignored output\n"
+    );
+
+    fs::remove_file(repo.join("foo/build.log")).unwrap();
+    opened
+        .discard_worktree_changes(&[Path::new("foo"), Path::new("foo/new.txt")])
+        .unwrap();
+    assert_eq!(
+        fs::read_to_string(repo.join("foo")).unwrap(),
+        "tracked file\n"
+    );
+}
+
+/// The mirror case: restoring `dir/a.txt` means creating the directory `dir`,
+/// and a forced checkout deleted the untracked file standing at `dir`.
+#[test]
+fn discarding_a_file_whose_directory_was_replaced_by_a_file_keeps_that_file() {
+    test_git_env::ensure_initialized();
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+
+    run_git(repo, &["init"]);
+    run_git(repo, &["config", "user.email", "you@example.com"]);
+    run_git(repo, &["config", "user.name", "You"]);
+    run_git(repo, &["config", "commit.gpgsign", "false"]);
+
+    write(repo, "dir/a.txt", "tracked file\n");
+    run_git(repo, &["add", "dir/a.txt"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "init"],
+    );
+
+    fs::remove_dir_all(repo.join("dir")).unwrap();
+    write(repo, "dir", "untracked work\n");
+
+    let opened = GixBackend.open(repo).unwrap();
+
+    opened
+        .discard_worktree_changes(&[Path::new("dir/a.txt")])
+        .expect_err("an untracked file stands where the directory goes");
+    assert_eq!(
+        fs::read_to_string(repo.join("dir")).unwrap(),
+        "untracked work\n"
+    );
+
+    opened
+        .discard_worktree_changes(&[Path::new("dir/a.txt"), Path::new("dir")])
+        .unwrap();
+    assert_eq!(
+        fs::read_to_string(repo.join("dir/a.txt")).unwrap(),
+        "tracked file\n"
+    );
+}
+
 /// Taking a side for the conflicted `[a].txt` also took it for the
 /// conflicted `a.txt`, resolving a file the user never chose.
 #[test]

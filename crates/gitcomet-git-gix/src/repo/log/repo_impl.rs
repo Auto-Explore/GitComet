@@ -228,6 +228,7 @@ impl GixRepo {
         path: &Path,
         commit: &CommitId,
     ) -> Result<Option<PathBuf>> {
+        let path = &self.head_name_of(path);
         // Fast path: the file is named `path` in this commit already.
         if self.path_exists_in_commit_tree(commit, path) {
             return Ok(Some(path.to_path_buf()));
@@ -235,6 +236,54 @@ impl GixRepo {
         // Otherwise the file is named differently in this commit; follow renames
         // to find the name it has in that commit's tree.
         self.resolve_renamed_path_at_commit(path, commit)
+    }
+
+    /// The name the file at `path` has in `HEAD`. A staged rename gives a file
+    /// a name no commit has yet, so `git log --follow` finds no history under
+    /// it: that history is the rename source's. Any other path, and any lookup
+    /// that fails, keeps its own name.
+    fn head_name_of(&self, path: &Path) -> PathBuf {
+        self.staged_rename_source(path)
+            .unwrap_or_else(|| path.to_path_buf())
+    }
+
+    fn staged_rename_source(&self, path: &Path) -> Option<PathBuf> {
+        let repo = self.repo();
+        let tree = repo.head_tree().ok()?;
+        if tree.lookup_entry_by_path(path).ok()?.is_some() {
+            return None;
+        }
+        let mut cmd = self.git_workdir_cmd();
+        cmd.args([
+            "diff",
+            "--cached",
+            "--find-renames",
+            "--name-status",
+            "-z",
+            "HEAD",
+        ]);
+        let output =
+            crate::util::run_git_capture_bytes(cmd, "git diff --cached --name-status").ok()?;
+        // `<status>\0<path>\0`, with a second path after a rename or copy.
+        let mut fields = output.split(|byte| *byte == 0);
+        while let Some(status) = fields.next() {
+            match status.first() {
+                Some(b'R') => {
+                    let (source, destination) = (fields.next()?, fields.next()?);
+                    if path_buf_from_git_bytes(destination, "git diff rename path").ok()? == path {
+                        return path_buf_from_git_bytes(source, "git diff rename source").ok();
+                    }
+                }
+                Some(b'C') => {
+                    fields.next();
+                    fields.next();
+                }
+                _ => {
+                    fields.next();
+                }
+            }
+        }
+        None
     }
 
     /// Whether `path` is present in the tree of `commit`. Best-effort: any lookup
@@ -265,6 +314,7 @@ impl GixRepo {
             .arg("core.quotePath=false")
             .arg("log")
             .arg("--follow")
+            .arg("--no-show-signature")
             .arg("--name-status")
             .arg("-M")
             // Record separator (0x1e) before each commit hash so records can be
@@ -390,6 +440,9 @@ impl GixRepo {
         let mut cmd = self.git_workdir_cmd();
         cmd.arg("log")
             .arg("--follow")
+            // `log.showSignature=true` would print the signature check ahead
+            // of each record, inside its hash field.
+            .arg("--no-show-signature")
             .arg("--date=unix")
             .arg("--pretty=format:%H%x1f%P%x1f%an%x1f%ct%x1f%s%x1e");
         if let Some(max_count) = max_count {
@@ -864,6 +917,7 @@ impl GixRepo {
         if limit == 0 {
             return Ok(Arc::new(empty_log_page()));
         }
+        let path = &self.head_name_of(path);
 
         // Only the first page is bounded. `git log --follow` does not combine
         // reliably with `--skip` across renames. Cursor pages cache the full

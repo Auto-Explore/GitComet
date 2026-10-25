@@ -9,6 +9,38 @@ pub(in crate::view) struct ExtensionDialog {
     pub(super) title: SharedString,
     pub(super) content: Option<gpui::AnyView>,
     pub(super) menu: Option<ContextMenuModel>,
+    /// Told when the dialog goes, with it.
+    pub(super) on_closed: Option<OnClosed>,
+}
+
+/// What an extension runs once its menu closes, however it closes: chosen
+/// from, dismissed, replaced by another popover, or gone with its window.
+/// It runs on the app's next turn after the dialog holding it is dropped,
+/// never inside the update that dropped it.
+pub(in crate::view) struct OnClosed {
+    run: Option<gitcomet_extension_api::OnMenuClosed>,
+    cx: gpui::AsyncApp,
+}
+
+impl OnClosed {
+    pub(in crate::view) fn new(run: gitcomet_extension_api::OnMenuClosed, cx: &App) -> Self {
+        Self {
+            run: Some(run),
+            cx: cx.to_async(),
+        }
+    }
+}
+
+impl Drop for OnClosed {
+    fn drop(&mut self) {
+        if let Some(run) = self.run.take() {
+            let cx = self.cx.clone();
+            self.cx
+                .foreground_executor()
+                .spawn(async move { cx.update(run) })
+                .detach();
+        }
+    }
 }
 
 pub(super) fn panel(
@@ -79,6 +111,7 @@ impl PopoverHost {
             title,
             content: Some(content),
             menu: None,
+            on_closed: None,
         });
         self.open_popover_centered(
             PopoverKind::Hosted {
@@ -95,10 +128,14 @@ impl PopoverHost {
         id: u64,
         items: Vec<gitcomet_extension_api::HostedMenuItem>,
         anchor: Point<Pixels>,
+        on_closed: Option<OnClosed>,
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
         self.set_hosted_menu(id, items);
+        if let Some(dialog) = &mut self.extension_dialog {
+            dialog.on_closed = on_closed;
+        }
         self.open_popover_at(PopoverKind::Hosted { id, menu: true }, anchor, window, cx);
     }
 
@@ -110,31 +147,40 @@ impl PopoverHost {
         items: Vec<gitcomet_extension_api::HostedMenuItem>,
     ) {
         use gitcomet_extension_api::HostedMenuItem;
-        let items = items
-            .into_iter()
-            .filter_map(|item| match item {
+        let mut entries = Vec::with_capacity(items.len());
+        let mut tooltips = FxHashMap::default();
+        for item in items {
+            let entry = match item {
                 HostedMenuItem::Action {
                     action,
                     icon,
                     disabled,
+                    tooltip,
                     ..
-                } => Some(ContextMenuItem::Entry {
-                    label: action.label().clone(),
-                    icon,
-                    shortcut: None,
-                    disabled,
-                    action: Box::new(ContextMenuAction::Hosted(action)),
-                }),
-                HostedMenuItem::Header(label) => Some(ContextMenuItem::Header(label.into())),
-                HostedMenuItem::Separator => Some(ContextMenuItem::Separator),
-                _ => None,
-            })
-            .collect();
+                } => {
+                    if let Some(tooltip) = tooltip {
+                        tooltips.insert(entries.len(), tooltip);
+                    }
+                    ContextMenuItem::Entry {
+                        label: action.label().clone(),
+                        icon,
+                        shortcut: None,
+                        disabled,
+                        action: Box::new(ContextMenuAction::Hosted(action)),
+                    }
+                }
+                HostedMenuItem::Header(label) => ContextMenuItem::Header(label.into()),
+                HostedMenuItem::Separator => ContextMenuItem::Separator,
+                _ => continue,
+            };
+            entries.push(entry);
+        }
         self.extension_dialog = Some(ExtensionDialog {
             id,
             title: "".into(),
             content: None,
-            menu: Some(ContextMenuModel::new(items)),
+            menu: Some(ContextMenuModel::new(entries).with_entry_tooltips(tooltips)),
+            on_closed: None,
         });
     }
 

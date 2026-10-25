@@ -182,19 +182,20 @@ impl DiffRenderer {
                 Loadable::Loading | Loadable::Error(_) | Loadable::Ready(Some(_))
             )
         });
-        let has_untracked_preview = self.untracked_worktree_preview_path().is_some_and(|p| {
-            !crate::view::should_bypass_text_file_preview_for_path(&p) && p.is_file()
-        });
+        // An image shows as one, however the file is named.
+        let content_is_image = self.selected_content_is_image();
+        let shows_text = |path: &std::path::Path| {
+            !content_is_image && !crate::view::should_bypass_text_file_preview_for_path(path)
+        };
+        let has_untracked_preview = self
+            .untracked_worktree_preview_path()
+            .is_some_and(|p| shows_text(&p) && p.is_file());
         let has_added_preview = self.added_file_preview_abs_path().is_some_and(|p| {
-            !crate::view::should_bypass_text_file_preview_for_path(&p)
-                && !p.is_dir()
-                && (p.is_file() || preview_text_file_available)
+            shows_text(&p) && !p.is_dir() && (p.is_file() || preview_text_file_available)
         });
-        let has_deleted_preview = self.deleted_file_preview_abs_path().is_some_and(|p| {
-            !crate::view::should_bypass_text_file_preview_for_path(&p)
-                && !p.is_dir()
-                && preview_text_file_available
-        });
+        let has_deleted_preview = self
+            .deleted_file_preview_abs_path()
+            .is_some_and(|p| shows_text(&p) && !p.is_dir() && preview_text_file_available);
         // File-browser "open content" forces a full-content preview for any file.
         let has_content_preview = self.content_preview_abs_path().is_some_and(|p| {
             !self.content_preview_is_picture(&p)
