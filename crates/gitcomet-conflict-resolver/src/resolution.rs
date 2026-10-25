@@ -121,16 +121,6 @@ impl ResolvedOutputBlockMap {
                 .all(|ranges| ranges[0].end <= ranges[1].start)
     }
 
-    pub fn block_slice<'a>(
-        &self,
-        segments: &[ConflictSegment],
-        output_text: &'a str,
-        block_index: usize,
-    ) -> Option<&'a str> {
-        self.is_valid_for(segments, output_text).then_some(())?;
-        output_text.get(self.ranges.get(block_index)?.clone())
-    }
-
     fn owner_for_edit_start(&self, start: usize) -> Option<usize> {
         self.ranges
             .iter()
@@ -243,12 +233,13 @@ pub fn derive_region_resolution_updates_from_output(
     }
     let mut updates = Vec::with_capacity(block_map.ranges().len());
 
-    let mut block_ix = 0usize;
-    for seg in segments {
-        let ConflictSegment::Block(block) = seg else {
-            continue;
-        };
-        let content = block_map.block_slice(segments, output_text, block_ix)?;
+    // The map is valid: one char-boundary range per block, in order.
+    let blocks = segments.iter().filter_map(|segment| match segment {
+        ConflictSegment::Block(block) => Some(block),
+        ConflictSegment::Text(_) => None,
+    });
+    for (block_ix, (block, range)) in blocks.zip(block_map.ranges()).enumerate() {
+        let content = &output_text[range.clone()];
         let region_ix = block_region_indices
             .get(block_ix)
             .copied()
@@ -269,7 +260,6 @@ pub fn derive_region_resolution_updates_from_output(
             R::ManualEdit(content.to_string())
         };
         updates.push((region_ix, resolution));
-        block_ix += 1;
     }
 
     Some(updates)
