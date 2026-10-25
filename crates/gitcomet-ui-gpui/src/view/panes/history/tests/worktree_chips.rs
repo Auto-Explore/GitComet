@@ -2,9 +2,9 @@ use super::*;
 use crate::view::caches::history_worktree_chips_by_head;
 use gitcomet_core::domain::{Worktree, WorktreeDirtySummary};
 
-fn worktree(path: &str, head: Option<&str>, branch: Option<&str>) -> Worktree {
+fn worktree(path: impl Into<PathBuf>, head: Option<&str>, branch: Option<&str>) -> Worktree {
     Worktree {
-        path: PathBuf::from(path),
+        path: path.into(),
         head: head.map(|head| CommitId(head.into())),
         branch: branch.map(str::to_owned),
         detached: false,
@@ -50,9 +50,15 @@ struct Mounted<'a> {
     base_row: usize,
 }
 
-const ROOT: &str = "/tmp/history-worktree-chips";
+fn worktree_path(folder: &str) -> PathBuf {
+    // `/tmp/...` has no drive prefix on Windows, so opening it adds one.
+    // Use absolute fixture paths that stay the same when opened.
+    std::env::temp_dir()
+        .join("history-worktree-chips")
+        .join(folder)
+}
 
-/// `tip` on `base`, opened at `ROOT/main` on `tip`; `others` are
+/// `tip` on `base`, opened at `main` on `tip`; `others` are
 /// `(folder, branch)` worktrees on `base`, and `dirty` the folders with changes.
 fn mount<'a>(
     cx: &'a mut gpui::TestAppContext,
@@ -72,7 +78,7 @@ fn mount<'a>(
     let mut repo = RepoState::new_opening(
         repo_id,
         RepoSpec {
-            workdir: PathBuf::from(format!("{ROOT}/main")),
+            workdir: worktree_path("main"),
         },
     );
     repo.history_state.history_scope = LogScope::AllBranches;
@@ -84,11 +90,11 @@ fn mount<'a>(
     repo.log_rev = 1;
     repo.history_state.log = Loadable::Ready(page);
     repo.history_state.log_rev = 1;
-    let mut worktrees = vec![worktree(&format!("{ROOT}/main"), Some("tip"), Some("main"))];
+    let mut worktrees = vec![worktree(worktree_path("main"), Some("tip"), Some("main"))];
     worktrees.extend(
-        others.iter().map(|(folder, branch)| {
-            worktree(&format!("{ROOT}/{folder}"), Some("base"), Some(branch))
-        }),
+        others
+            .iter()
+            .map(|(folder, branch)| worktree(worktree_path(folder), Some("base"), Some(branch))),
     );
     repo.worktrees = Loadable::Ready(Arc::new(worktrees));
     repo.worktrees_rev = 1;
@@ -96,7 +102,7 @@ fn mount<'a>(
         dirty
             .iter()
             .map(|folder| WorktreeDirtySummary {
-                path: PathBuf::from(format!("{ROOT}/{folder}")),
+                path: worktree_path(folder),
                 head: Some(CommitId("base".into())),
                 modified: 1,
                 ..Default::default()
@@ -145,7 +151,7 @@ fn bounds_of(cx: &mut gpui::VisualTestContext, selector: String) -> Option<Bound
 }
 
 fn wait_for_open(cx: &mut gpui::VisualTestContext, store: &AppStore, folder: &str) {
-    let path = PathBuf::from(format!("{ROOT}/{folder}"));
+    let path = worktree_path(folder);
     wait_until(cx, &format!("{folder} to open"), |_| {
         store
             .snapshot()
