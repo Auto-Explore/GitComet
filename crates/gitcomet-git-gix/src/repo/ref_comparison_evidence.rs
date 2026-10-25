@@ -120,13 +120,14 @@ fn current_content(
     let paths: Vec<_> = desired.keys().collect();
     for paths in paths.chunks(TREE_ENTRY_BATCH) {
         let mut command = analysis.command(&["ls-tree", "--full-tree", "-z", target]);
-        command.env("GIT_LITERAL_PATHSPECS", "1").arg("--");
-        for path in paths {
-            command.arg(
+        let literal_paths = paths
+            .iter()
+            .map(|path| {
                 crate::util::path_buf_from_git_bytes(path, "comparison tree path")
-                    .map_err(|_| RefComparisonReason::IncompleteHistory)?,
-            );
-        }
+                    .map_err(|_| RefComparisonReason::IncompleteHistory)
+            })
+            .collect::<AnalysisResult<Vec<_>>>()?;
+        crate::util::push_literal_paths(&mut command, literal_paths);
         let limit = analysis.memory / 8;
         let entries = analysis.run(command, &[], move |reader| {
             let mut bytes = Vec::new();
