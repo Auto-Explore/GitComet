@@ -352,6 +352,14 @@ pub trait WindowHostImpl {
     fn focus_terminal(&self, _terminal: &TerminalTab, _cx: &mut App) -> Result<(), HostError> {
         Err(HostError::Unsupported)
     }
+    fn reveal_commit(
+        &self,
+        _repository: &RepositoryHandle,
+        _commit: &gitcomet_core::domain::CommitId,
+        _cx: &mut App,
+    ) -> Result<(), HostError> {
+        Err(HostError::Unsupported)
+    }
 
     fn dispatch(&self, msg: Msg, cx: &mut App) -> Result<(), HostError>;
 
@@ -653,6 +661,21 @@ impl WindowHost {
     pub fn focus_terminal(&self, terminal: &TerminalTab, cx: &mut App) -> Result<(), HostError> {
         self.check(&terminal.repository, cx)?;
         self.0.focus_terminal(terminal, cx)
+    }
+
+    /// Shows `commit` in `repository`'s History once this update ends, as a
+    /// click on a branch in the sidebar shows its tip: switches to History,
+    /// selects the commit and scrolls its row into view. A commit History's
+    /// mode leaves out switches History to all branches, and that mode is
+    /// kept, as the sidebar keeps it.
+    pub fn reveal_commit(
+        &self,
+        repository: &RepositoryHandle,
+        commit: &gitcomet_core::domain::CommitId,
+        cx: &mut App,
+    ) -> Result<(), HostError> {
+        self.check(repository, cx)?;
+        self.0.reveal_commit(repository, commit, cx)
     }
 
     pub fn set_commit_identity_resolver(

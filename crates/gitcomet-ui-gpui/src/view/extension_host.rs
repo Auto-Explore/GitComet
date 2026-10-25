@@ -915,6 +915,37 @@ impl WindowHostImpl for HostWindow {
         });
         Ok(())
     }
+    fn reveal_commit(
+        &self,
+        repository: &RepositoryHandle,
+        commit: &gitcomet_core::domain::CommitId,
+        cx: &mut App,
+    ) -> Result<(), HostError> {
+        self.live()?;
+        let view = self.view.clone();
+        let handle = self.window_handle;
+        let repository = repository.clone();
+        let commit = commit.clone();
+        cx.defer(move |cx| {
+            let _ = handle.update(cx, |_, window, cx| {
+                let _ = view.update(cx, |root, cx| {
+                    if root.repository_state(&repository).is_none() {
+                        return;
+                    }
+                    root.select_repository_view(&repository, None, window, cx);
+                    root.main_pane.update(cx, |pane, cx| {
+                        pane.reveal_history_commit(
+                            repository.repo_id(),
+                            commit,
+                            Some(gitcomet_core::domain::LogScope::AllBranches),
+                            cx,
+                        );
+                    });
+                });
+            });
+        });
+        Ok(())
+    }
     fn set_commit_identity_resolver(
         &self,
         resolver: Option<gitcomet_extension_api::CommitIdentityResolver>,
