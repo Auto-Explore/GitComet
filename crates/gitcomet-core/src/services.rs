@@ -621,7 +621,7 @@ pub trait GitRepository: Send + Sync {
         walk: &HistoryWalk,
         cancellation: &CancellationToken,
     ) -> Result<Arc<[Arc<str>]>> {
-        refuse_excluded_refs(walk)?;
+        refuse_hidden_remotes(walk)?;
         let mode = walk.mode();
         let mut authors = Vec::new();
         let mut seen = std::collections::HashSet::new();
@@ -691,7 +691,7 @@ pub trait GitRepository: Send + Sync {
         cancellation: &CancellationToken,
         on_chunk: &mut dyn FnMut(LogChunk),
     ) -> Result<HistoryReadResult> {
-        refuse_excluded_refs(walk)?;
+        refuse_hidden_remotes(walk)?;
         let mode = walk.mode();
         let page = match request {
             HistoryReadRequest::Page {
@@ -2076,30 +2076,6 @@ impl HistoryRefFilter {
         }
     }
 
-    /// Excludes every remote-tracking ref of each named remote
-    /// (`refs/remotes/<name>`); a remote named `team/x` shares `team`'s
-    /// namespace, as in Git. Empty names and names with `*`, which would widen
-    /// the pattern, are skipped.
-    pub fn excluding_remotes<I, S>(names: I) -> Self
-    where
-        I: IntoIterator<Item = S>,
-        S: AsRef<str>,
-    {
-        Self::excluding(
-            names
-                .into_iter()
-                .filter(|name| !name.as_ref().is_empty() && !name.as_ref().contains('*'))
-                .map(|name| format!("refs/remotes/{}", name.as_ref())),
-        )
-    }
-
-    pub fn union(&self, other: &Self) -> Self {
-        if other.is_empty() {
-            return self.clone();
-        }
-        Self::excluding(self.excluded.iter().chain(other.excluded.iter()).cloned())
-    }
-
     pub fn is_empty(&self) -> bool {
         self.excluded.is_empty()
     }
@@ -2116,25 +2092,32 @@ impl HistoryRefFilter {
     }
 }
 
-/// What a history walk starts from: its mode, and the refs an all-branches
-/// walk leaves out on top of [`RepositoryOptions::history_ref_filter`]. Other
-/// modes walk only HEAD, so they carry no exclusions.
+/// What a history walk starts from: its mode, and the remotes an all-branches
+/// walk leaves out. A hidden remote's refs are the remote-tracking refs its
+/// fetch refspecs write, unless a shown remote's refspecs write them too.
+/// Other modes walk only HEAD, so they hide nothing.
 #[derive(Clone, Debug, Default, Eq, PartialEq, Hash)]
 pub struct HistoryWalk {
     mode: HistoryMode,
-    excluded_refs: HistoryRefFilter,
+    hidden_remotes: Arc<[Arc<str>]>,
 }
 
 impl HistoryWalk {
-    pub fn new(mode: HistoryMode, excluded_refs: HistoryRefFilter) -> Self {
-        let excluded_refs = if mode.is_all_branches() {
-            excluded_refs
+    pub fn new<I, S>(mode: HistoryMode, hidden_remotes: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<Arc<str>>,
+    {
+        let mut hidden: Vec<Arc<str>> = if mode.is_all_branches() {
+            hidden_remotes.into_iter().map(Into::into).collect()
         } else {
-            HistoryRefFilter::default()
+            Vec::new()
         };
+        hidden.sort();
+        hidden.dedup();
         Self {
             mode,
-            excluded_refs,
+            hidden_remotes: hidden.into(),
         }
     }
 
@@ -2142,14 +2125,15 @@ impl HistoryWalk {
         self.mode
     }
 
-    pub fn excluded_refs(&self) -> &HistoryRefFilter {
-        &self.excluded_refs
+    /// Sorted remote names.
+    pub fn hidden_remotes(&self) -> &[Arc<str>] {
+        &self.hidden_remotes
     }
 }
 
 impl From<HistoryMode> for HistoryWalk {
     fn from(mode: HistoryMode) -> Self {
-        Self::new(mode, HistoryRefFilter::default())
+        Self::new(mode, std::iter::empty::<Arc<str>>())
     }
 }
 
@@ -2215,10 +2199,10 @@ impl RepositoryOptions {
     }
 }
 
-fn refuse_excluded_refs(walk: &HistoryWalk) -> Result<()> {
-    if !walk.excluded_refs().is_empty() {
+fn refuse_hidden_remotes(walk: &HistoryWalk) -> Result<()> {
+    if !walk.hidden_remotes().is_empty() {
         return Err(Error::new(ErrorKind::Unsupported(
-            "hiding refs from history is not supported by this backend",
+            "hiding remotes from history is not supported by this backend",
         )));
     }
     Ok(())

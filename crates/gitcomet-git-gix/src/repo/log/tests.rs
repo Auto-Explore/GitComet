@@ -1343,10 +1343,10 @@ fn all_branches_tips_reuse_cached_tips_until_the_ref_namespace_changes() {
     let repo = open_repo(tmp.path());
     let handle = repo.repo();
     let first = repo
-        .all_branches_tips(&handle, &repo.history_ref_filter, None)
+        .all_branches_tips(&handle, &repo.history_ref_filter, &[], None)
         .expect("tips");
     let second = repo
-        .all_branches_tips(&handle, &repo.history_ref_filter, None)
+        .all_branches_tips(&handle, &repo.history_ref_filter, &[], None)
         .expect("tips again");
     assert!(
         Arc::ptr_eq(&first, &second),
@@ -1361,14 +1361,14 @@ fn all_branches_tips_reuse_cached_tips_until_the_ref_namespace_changes() {
     commit_file(tmp.path(), "a.txt", "2\n", "c2");
     let handle = repo.repo();
     let moved = repo
-        .all_branches_tips(&handle, &repo.history_ref_filter, None)
+        .all_branches_tips(&handle, &repo.history_ref_filter, &[], None)
         .expect("tips after commit");
     assert_eq!(moved.len(), 2, "main moved away from topic");
     assert!(!Arc::ptr_eq(&first, &moved));
 
     git_success(tmp.path(), &["tag", "-m", "v2", "v2"]);
     let tagged = repo
-        .all_branches_tips(&handle, &repo.history_ref_filter, None)
+        .all_branches_tips(&handle, &repo.history_ref_filter, &[], None)
         .expect("tips after tag");
     assert!(
         Arc::ptr_eq(&moved, &tagged),
@@ -1377,14 +1377,14 @@ fn all_branches_tips_reuse_cached_tips_until_the_ref_namespace_changes() {
 
     git_success(tmp.path(), &["branch", "-D", "topic"]);
     let deleted = repo
-        .all_branches_tips(&handle, &repo.history_ref_filter, None)
+        .all_branches_tips(&handle, &repo.history_ref_filter, &[], None)
         .expect("tips after delete");
     assert_eq!(deleted.len(), 1);
 
     write_file(tmp.path(), "a.txt", "dirty\n");
     git_success(tmp.path(), &["stash", "-q"]);
     let stashed = repo
-        .all_branches_tips(&handle, &repo.history_ref_filter, None)
+        .all_branches_tips(&handle, &repo.history_ref_filter, &[], None)
         .expect("tips after stash");
     assert!(
         stashed.len() > deleted.len(),
@@ -1409,7 +1409,7 @@ fn all_branches_tips_follow_symbolic_refs_into_the_tag_namespace() {
     let repo = open_repo(tmp.path());
     let handle = repo.repo();
     let first = repo
-        .all_branches_tips(&handle, &repo.history_ref_filter, None)
+        .all_branches_tips(&handle, &repo.history_ref_filter, &[], None)
         .expect("tips");
     assert_eq!(
         first.len(),
@@ -1420,7 +1420,7 @@ fn all_branches_tips_follow_symbolic_refs_into_the_tag_namespace() {
     commit_file(tmp.path(), "a.txt", "2\n", "c2");
     let handle = repo.repo();
     let moved = repo
-        .all_branches_tips(&handle, &repo.history_ref_filter, None)
+        .all_branches_tips(&handle, &repo.history_ref_filter, &[], None)
         .expect("tips after commit");
     assert_eq!(moved.len(), 2, "latest still reaches c1 through the tag");
 
@@ -1428,10 +1428,10 @@ fn all_branches_tips_follow_symbolic_refs_into_the_tag_namespace() {
     // symbolic ref that follows it now seeds a different commit.
     git_success(tmp.path(), &["update-ref", "refs/tags/moving", "HEAD"]);
     let retagged = repo
-        .all_branches_tips(&handle, &repo.history_ref_filter, None)
+        .all_branches_tips(&handle, &repo.history_ref_filter, &[], None)
         .expect("tips after retag");
     let fresh = open_repo(tmp.path())
-        .all_branches_tips(&handle, &repo.history_ref_filter, None)
+        .all_branches_tips(&handle, &repo.history_ref_filter, &[], None)
         .expect("fresh tips");
     assert_eq!(retagged.as_ref(), fresh.as_ref());
     assert_eq!(retagged.len(), 1, "latest now resolves to main's tip");
@@ -1439,7 +1439,7 @@ fn all_branches_tips_follow_symbolic_refs_into_the_tag_namespace() {
     // An annotated tag makes the symbolic chain end at a tag object.
     git_success(tmp.path(), &["tag", "-f", "-m", "old", "moving", "HEAD~1"]);
     let annotated = repo
-        .all_branches_tips(&handle, &repo.history_ref_filter, None)
+        .all_branches_tips(&handle, &repo.history_ref_filter, &[], None)
         .expect("tips after annotated retag");
     assert_eq!(annotated.len(), 2, "latest resolves back to c1");
 }
@@ -2179,7 +2179,7 @@ fn peel_failure_reports_underlying_io_error() {
     let (repo, _) = repo_with_unmappable_loaded_pack(tmp.path());
 
     let error = repo
-        .all_branches_tips(&repo.repo(), &repo.history_ref_filter, None)
+        .all_branches_tips(&repo.repo(), &repo.history_ref_filter, &[], None)
         .expect_err("stale store cannot map pack A");
     let message = error.to_string();
     assert!(

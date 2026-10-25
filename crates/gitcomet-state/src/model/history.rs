@@ -2,7 +2,7 @@
 
 use super::{CommitSignatureMap, Loadable, RepoState, Shared};
 use gitcomet_core::domain::*;
-use gitcomet_core::services::{HistoryRefFilter, HistoryWalk};
+use gitcomet_core::services::HistoryWalk;
 use rustc_hash::FxHashSet;
 use std::collections::{BTreeSet, VecDeque};
 use std::path::PathBuf;
@@ -565,7 +565,7 @@ impl RepoState {
     pub fn history_walk(&self) -> HistoryWalk {
         HistoryWalk::new(
             self.history_state.history_scope,
-            HistoryRefFilter::excluding_remotes(self.history_hidden_remotes()),
+            self.history_hidden_remotes().iter().map(String::as_str),
         )
     }
 

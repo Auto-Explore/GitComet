@@ -7,7 +7,7 @@ use crate::model::{
 use crate::msg::PersistenceEffect;
 use crate::store::repository_runtime::RepositoryRuntimes;
 use gitcomet_core::domain::HistoryMode;
-use gitcomet_core::services::{HistoryRefFilter, HistoryWalk};
+use gitcomet_core::services::HistoryWalk;
 use std::collections::{BTreeMap, BTreeSet};
 
 fn preferences(store: &AppStore, id: RepoId) -> RepositoryPreferencesSnapshot {
@@ -830,10 +830,7 @@ fn hiding_a_remote_restarts_every_all_branches_reader_without_its_refs() {
         "the old walk's authors are not offered for the new one"
     );
 
-    let expected = HistoryWalk::new(
-        HistoryMode::AllBranches,
-        HistoryRefFilter::excluding_remotes(["origin"]),
-    );
+    let expected = HistoryWalk::new(HistoryMode::AllBranches, ["origin"]);
     let (seq, walk) = load_log_walk(&effects).expect("the walk restarts");
     assert_eq!(walk, expected);
     assert_ne!(seq, running, "a new walk replaces the running one");
@@ -958,10 +955,7 @@ fn an_opened_repository_walks_without_its_hidden_remotes_from_the_first_load() {
     let (_, walk) = load_log_walk(&effects).expect("the first walk starts");
     assert_eq!(
         walk,
-        HistoryWalk::new(
-            HistoryMode::AllBranches,
-            HistoryRefFilter::excluding_remotes(["upstream"]),
-        )
+        HistoryWalk::new(HistoryMode::AllBranches, ["upstream"])
     );
 }
 

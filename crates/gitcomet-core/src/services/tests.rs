@@ -767,13 +767,10 @@ fn log_history_mode_page_delegates_current_branch_modes_to_head_log() {
 }
 
 #[test]
-fn provided_history_readers_refuse_excluded_refs_they_cannot_apply() {
-    use super::{HistoryReadRequest, HistoryRefFilter, HistoryWalk};
+fn provided_history_readers_refuse_hidden_remotes_they_cannot_apply() {
+    use super::{HistoryReadRequest, HistoryWalk};
     let repo = RecordingHistoryModeRepo::new();
-    let hidden = HistoryWalk::new(
-        HistoryMode::AllBranches,
-        HistoryRefFilter::excluding_remotes(["origin"]),
-    );
+    let hidden = HistoryWalk::new(HistoryMode::AllBranches, ["origin"]);
     let first_page = HistoryReadRequest::Page {
         limit: 7,
         cursor: None,
@@ -808,17 +805,20 @@ fn provided_history_readers_refuse_excluded_refs_they_cannot_apply() {
         &cancel,
         &mut |_| {},
     )
-    .expect("nothing to exclude");
+    .expect("nothing to hide");
     assert_eq!(repo.calls(), vec![("all", 7, None)]);
 }
 
 #[test]
-fn only_an_all_branches_walk_carries_excluded_refs() {
-    use super::{HistoryRefFilter, HistoryWalk};
-    let hidden = HistoryRefFilter::excluding_remotes(["origin"]);
+fn only_an_all_branches_walk_hides_remotes() {
+    use super::HistoryWalk;
+    let walk = HistoryWalk::new(HistoryMode::AllBranches, ["upstream", "origin", "upstream"]);
     assert_eq!(
-        HistoryWalk::new(HistoryMode::AllBranches, hidden.clone()).excluded_refs(),
-        &hidden
+        walk.hidden_remotes()
+            .iter()
+            .map(AsRef::as_ref)
+            .collect::<Vec<&str>>(),
+        ["origin", "upstream"]
     );
     for mode in [
         HistoryMode::FullReachable,
@@ -826,40 +826,8 @@ fn only_an_all_branches_walk_carries_excluded_refs() {
         HistoryMode::NoMerges,
         HistoryMode::MergesOnly,
     ] {
-        let walk = HistoryWalk::new(mode, hidden.clone());
-        assert!(walk.excluded_refs().is_empty(), "{mode:?}");
+        let walk = HistoryWalk::new(mode, ["origin"]);
+        assert!(walk.hidden_remotes().is_empty(), "{mode:?}");
         assert_eq!(walk, HistoryWalk::from(mode), "{mode:?}");
     }
-}
-
-#[test]
-fn remote_filters_cover_each_remote_namespace_only() {
-    use super::HistoryRefFilter;
-    let filter = HistoryRefFilter::excluding_remotes(["origin", "", "**", "or*", "fork"]);
-    assert_eq!(
-        filter.patterns().len(),
-        2,
-        "names Git cannot give a remote would hide other remotes"
-    );
-    for excluded in [
-        "refs/remotes/origin/main",
-        "refs/remotes/origin/feat/x",
-        "refs/remotes/origin/HEAD",
-        "refs/remotes/fork/main",
-    ] {
-        assert!(filter.excludes(excluded), "{excluded}");
-    }
-    for kept in [
-        "refs/remotes/origin2/main",
-        "refs/remotes/upstream/main",
-        "refs/heads/origin/main",
-    ] {
-        assert!(!filter.excludes(kept), "{kept}");
-    }
-
-    let product = HistoryRefFilter::excluding(["refs/pull"]);
-    let merged = product.union(&filter);
-    assert!(merged.excludes("refs/pull/1/head"));
-    assert!(merged.excludes("refs/remotes/fork/main"));
-    assert_eq!(product.union(&HistoryRefFilter::default()), product);
 }
