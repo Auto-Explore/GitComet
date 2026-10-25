@@ -2676,11 +2676,11 @@ pub(super) fn hidden_remote_tracking_refs(
         let reference = reference.map_err(|e| {
             Error::new(ErrorKind::Backend(format!("gix ref iter: {e}"))).with_source(e)
         })?;
-        // Refspecs match by name, so a symbolic ref needs no target.
-        let target = reference
-            .try_id()
-            .map_or_else(|| gix::ObjectId::null(repo.object_hash()), |id| id.detach());
-        tracking_refs.push((reference.name().to_owned(), target));
+        // Refspecs map by name; the target is unused.
+        tracking_refs.push((
+            reference.name().to_owned(),
+            gix::ObjectId::null(repo.object_hash()),
+        ));
     }
     let mut hidden = vec![false; tracking_refs.len()];
     let mut shown = vec![false; tracking_refs.len()];
