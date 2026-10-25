@@ -5,7 +5,8 @@ use super::util::send_or_log;
 use crate::model::RepoLifetime;
 use crate::msg::Msg;
 use crate::ref_comparisons::{
-    MAX_COMPARISON_PROJECTIONS, RefComparisonSubscription, RefComparisonsEffect, RefComparisonsMsg,
+    ComparisonMetrics, MAX_COMPARISON_PROJECTIONS, RefComparisonSubscription, RefComparisonsEffect,
+    RefComparisonsMsg,
 };
 use gitcomet_core::domain::CommitId;
 use gitcomet_core::error::{Error, ErrorKind};
@@ -74,6 +75,7 @@ struct Cohort {
     subscribers: FxHashMap<RepoLifetime, Subscriber>,
     reservation: Option<Arc<ComparisonReservation>>,
     bytes: usize,
+    metrics: ComparisonMetrics,
 }
 
 #[derive(Default)]
@@ -428,6 +430,7 @@ fn complete(queue: &mut Queue, task: &Task, completion: Completion) {
                         subscribers: FxHashMap::default(),
                         reservation: None,
                         bytes: 0,
+                        metrics: ComparisonMetrics::default(),
                     });
                     work.cohorts.len() - 1
                 });
@@ -482,6 +485,24 @@ fn complete(queue: &mut Queue, task: &Task, completion: Completion) {
                 })
                 .cloned()
                 .collect();
+            cohort.metrics.cache_hits = cohort
+                .metrics
+                .cache_hits
+                .saturating_add(subscriber.pending.len() as u64);
+            if subscriber.subjects.contains(&target.oid) {
+                cohort.results.insert(
+                    target.oid.clone(),
+                    RefComparison {
+                        subject: target.oid.clone(),
+                        counts: RefComparisonCounts::Exact {
+                            ahead: 0,
+                            behind: 0,
+                        },
+                        integration: RefIntegration::Confirmed(IntegrationEvidence::UpToDate),
+                    },
+                );
+                subscriber.pending.insert(target.oid.clone());
+            }
             subscriber.target = Some(target);
             cohort.subscribers.insert(*owner, subscriber);
         }
@@ -494,6 +515,13 @@ fn complete(queue: &mut Queue, task: &Task, completion: Completion) {
             {
                 return;
             }
+            cohort.metrics.jobs = cohort.metrics.jobs.saturating_add(1);
+            cohort.metrics.graph_reads =
+                cohort.metrics.graph_reads.saturating_add(batch.graph_reads);
+            cohort.metrics.cache_hits = cohort
+                .metrics
+                .cache_hits
+                .saturating_add(batch.cache_hits as u64);
             for mut result in batch.results {
                 if *depth != RefComparisonDepth::Counts
                     && matches!(
@@ -530,6 +558,7 @@ fn complete(queue: &mut Queue, task: &Task, completion: Completion) {
                     cohort, subjects, ..
                 } => {
                     if let Some(cohort) = work.cohorts.get_mut(*cohort) {
+                        cohort.metrics.jobs = cohort.metrics.jobs.saturating_add(1);
                         for subject in subjects {
                             cohort.results.insert(
                                 subject.clone(),
@@ -635,6 +664,7 @@ fn publish(queue: &mut Queue) -> Option<Duration> {
                         lifetime: subscriber.request.lifetime,
                         generation: subscriber.request.generation,
                         reservation,
+                        metrics: cohort.metrics,
                         batch: RefComparisonBatch {
                             target: target.clone(),
                             results,

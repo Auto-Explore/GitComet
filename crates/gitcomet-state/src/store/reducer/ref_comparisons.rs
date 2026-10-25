@@ -260,6 +260,7 @@ pub(super) fn reduce(state: &mut AppState, message: RefComparisonsMsg) -> Vec<Ef
                         .is_none_or(|old| old.oid != target.oid || old.context != target.context)
                     {
                         comparisons.decorations = ComparisonDecorations::default();
+                        comparisons.metrics = Default::default();
                     }
                     comparisons.captured_target = Some(target.clone());
                     comparisons.publication_generation = Some(generation);
@@ -276,6 +277,7 @@ pub(super) fn reduce(state: &mut AppState, message: RefComparisonsMsg) -> Vec<Ef
             generation,
             batch,
             reservation,
+            metrics,
             ..
         } => {
             let _reservation = reservation;
@@ -291,6 +293,9 @@ pub(super) fn reduce(state: &mut AppState, message: RefComparisonsMsg) -> Vec<Ef
             {
                 return Vec::new();
             }
+            let publications = repo.ref_comparisons.metrics.publications.saturating_add(1);
+            repo.ref_comparisons.metrics = metrics;
+            repo.ref_comparisons.metrics.publications = publications;
             if let Some(memory) = &repo.ref_comparisons.memory {
                 let results: Vec<_> = batch
                     .results

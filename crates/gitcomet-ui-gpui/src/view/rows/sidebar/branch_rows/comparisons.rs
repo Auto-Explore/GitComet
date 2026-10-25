@@ -55,98 +55,6 @@ fn checkout_cleanliness(
     })
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use gitcomet_core::domain::{FileStatus, FileStatusKind, RepoSpec};
-    use gitcomet_core::worktree_scan::ObservedWorktreeStatus;
-
-    #[test]
-    fn cleanliness_uses_recorded_head_when_comparison_metadata_is_unavailable() {
-        let mut repo = RepoState::new_opening(
-            RepoId(1),
-            RepoSpec {
-                workdir: "/repo".into(),
-            },
-        );
-        let path = std::path::Path::new("/linked");
-        let old = CommitId("old".into());
-        let new = CommitId("new".into());
-        Arc::make_mut(&mut repo.worktree_observations).insert(
-            path.into(),
-            ObservedWorktreeStatus {
-                scan_id: 1,
-                head: Some(old.clone()),
-                cleanliness: WorktreeCleanliness::Clean,
-            },
-        );
-        assert!(matches!(
-            checkout_cleanliness(&repo, path, Some(&new), false),
-            WorktreeCleanliness::Unknown(_)
-        ));
-        assert_eq!(
-            checkout_cleanliness(&repo, path, Some(&old), false),
-            WorktreeCleanliness::Clean
-        );
-        Arc::make_mut(&mut repo.worktree_observations)
-            .get_mut(path)
-            .unwrap()
-            .head = Some(new.clone());
-        assert_eq!(
-            checkout_cleanliness(&repo, path, Some(&new), false),
-            WorktreeCleanliness::Clean
-        );
-        assert!(matches!(
-            checkout_cleanliness(&repo, std::path::Path::new("/missing"), Some(&new), false),
-            WorktreeCleanliness::Unknown(_)
-        ));
-    }
-
-    #[test]
-    fn active_checkout_cleanliness_uses_both_live_status_lanes() {
-        let mut repo = RepoState::new_opening(
-            RepoId(1),
-            RepoSpec {
-                workdir: "/repo".into(),
-            },
-        );
-        let path = std::path::Path::new("/repo");
-        repo.status = Loadable::Ready(Arc::new(gitcomet_core::domain::RepoStatus {
-            staged: Arc::new(Vec::new()),
-            unstaged: Arc::new(Vec::new()),
-        }));
-        assert_eq!(
-            checkout_cleanliness(&repo, path, None, true),
-            WorktreeCleanliness::Clean
-        );
-        repo.worktree_status = Loadable::Ready(Arc::new(vec![FileStatus {
-            path: "new.txt".into(),
-            kind: FileStatusKind::Untracked,
-            conflict: None,
-        }]));
-        assert_eq!(
-            checkout_cleanliness(&repo, path, None, true),
-            WorktreeCleanliness::Dirty
-        );
-        repo.worktree_status = Loadable::Ready(Arc::new(Vec::new()));
-        repo.staged_status = Loadable::Error("unavailable".into());
-        assert!(matches!(
-            checkout_cleanliness(&repo, path, None, true),
-            WorktreeCleanliness::Unknown(_)
-        ));
-        repo.staged_status = Loadable::Loading;
-        assert!(matches!(
-            checkout_cleanliness(&repo, path, None, true),
-            WorktreeCleanliness::Unknown(_)
-        ));
-        repo.staged_status = Loadable::Ready(Arc::new(Vec::new()));
-        assert_eq!(
-            checkout_cleanliness(&repo, path, None, true),
-            WorktreeCleanliness::Clean
-        );
-    }
-}
-
 impl SidebarPaneView {
     pub(super) fn worktree_cleanliness_badge(
         &self,
@@ -261,5 +169,97 @@ impl SidebarPaneView {
                 .gitcomet_tooltip(ctx.theme, tooltip.into())
                 .into_any_element(),
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gitcomet_core::domain::{FileStatus, FileStatusKind, RepoSpec};
+    use gitcomet_core::worktree_scan::ObservedWorktreeStatus;
+
+    #[test]
+    fn cleanliness_uses_recorded_head_when_comparison_metadata_is_unavailable() {
+        let mut repo = RepoState::new_opening(
+            RepoId(1),
+            RepoSpec {
+                workdir: "/repo".into(),
+            },
+        );
+        let path = std::path::Path::new("/linked");
+        let old = CommitId("old".into());
+        let new = CommitId("new".into());
+        Arc::make_mut(&mut repo.worktree_observations).insert(
+            path.into(),
+            ObservedWorktreeStatus {
+                scan_id: 1,
+                head: Some(old.clone()),
+                cleanliness: WorktreeCleanliness::Clean,
+            },
+        );
+        assert!(matches!(
+            checkout_cleanliness(&repo, path, Some(&new), false),
+            WorktreeCleanliness::Unknown(_)
+        ));
+        assert_eq!(
+            checkout_cleanliness(&repo, path, Some(&old), false),
+            WorktreeCleanliness::Clean
+        );
+        Arc::make_mut(&mut repo.worktree_observations)
+            .get_mut(path)
+            .unwrap()
+            .head = Some(new.clone());
+        assert_eq!(
+            checkout_cleanliness(&repo, path, Some(&new), false),
+            WorktreeCleanliness::Clean
+        );
+        assert!(matches!(
+            checkout_cleanliness(&repo, std::path::Path::new("/missing"), Some(&new), false),
+            WorktreeCleanliness::Unknown(_)
+        ));
+    }
+
+    #[test]
+    fn active_checkout_cleanliness_uses_both_live_status_lanes() {
+        let mut repo = RepoState::new_opening(
+            RepoId(1),
+            RepoSpec {
+                workdir: "/repo".into(),
+            },
+        );
+        let path = std::path::Path::new("/repo");
+        repo.status = Loadable::Ready(Arc::new(gitcomet_core::domain::RepoStatus {
+            staged: Arc::new(Vec::new()),
+            unstaged: Arc::new(Vec::new()),
+        }));
+        assert_eq!(
+            checkout_cleanliness(&repo, path, None, true),
+            WorktreeCleanliness::Clean
+        );
+        repo.worktree_status = Loadable::Ready(Arc::new(vec![FileStatus {
+            path: "new.txt".into(),
+            kind: FileStatusKind::Untracked,
+            conflict: None,
+        }]));
+        assert_eq!(
+            checkout_cleanliness(&repo, path, None, true),
+            WorktreeCleanliness::Dirty
+        );
+        repo.worktree_status = Loadable::Ready(Arc::new(Vec::new()));
+        repo.staged_status = Loadable::Error("unavailable".into());
+        assert!(matches!(
+            checkout_cleanliness(&repo, path, None, true),
+            WorktreeCleanliness::Unknown(_)
+        ));
+        repo.staged_status = Loadable::Loading;
+        assert!(matches!(
+            checkout_cleanliness(&repo, path, None, true),
+            WorktreeCleanliness::Unknown(_)
+        ));
+        repo.staged_status = Loadable::Ready(Arc::new(Vec::new()));
+        assert_eq!(
+            checkout_cleanliness(&repo, path, None, true),
+            WorktreeCleanliness::Clean
+        );
     }
 }

@@ -89,6 +89,51 @@ fn resolve_all(queue: &mut Queue, targets: &FxHashMap<RepoLifetime, RefCompariso
 }
 
 #[test]
+fn an_equal_visible_tip_is_published_before_other_tips_are_walked() {
+    let subjects: Vec<_> = (1..=300).map(oid).collect();
+    let (subscriber, rx) = subscriber("/repo", &subjects);
+    let owner = subscriber.request.lifetime;
+    let mut work = RepositoryWork::default();
+    work.targets.insert(owner, subscriber);
+    let mut queue = Queue::default();
+    queue.repositories.insert(1, work);
+    resolve_all(&mut queue, &FxHashMap::from_iter([(owner, target(1))]));
+    rx.try_recv().unwrap();
+    publish(&mut queue);
+    let Msg::RefComparisons(RefComparisonsMsg::Publish { batch, metrics, .. }) =
+        rx.try_recv().unwrap()
+    else {
+        panic!("equal inputs establish an immediate result");
+    };
+    assert_eq!(batch.results.len(), 1);
+    assert_eq!(batch.results[0].subject, oid(1));
+    assert_eq!(
+        batch.results[0].counts,
+        RefComparisonCounts::Exact {
+            ahead: 0,
+            behind: 0
+        }
+    );
+    assert_eq!(
+        batch.results[0].integration,
+        RefIntegration::Confirmed(IntegrationEvidence::UpToDate)
+    );
+    assert_eq!(metrics.jobs, 0);
+    assert_eq!(metrics.cache_hits, 0);
+    let task = take_task(&mut queue).unwrap();
+    let Step::Analyze { subjects, .. } = task.step else {
+        panic!()
+    };
+    assert_eq!(subjects.len(), 127);
+    assert!(
+        subjects
+            .iter()
+            .all(|id| (2..=128).map(oid).any(|visible| visible == *id))
+    );
+    assert!(!subjects.contains(&oid(1)));
+}
+
+#[test]
 fn targets_resolve_through_each_subscribers_backend_before_coalescing_by_oid() {
     let (first, _) = subscriber("/first", &[oid(1)]);
     let (second, _) = subscriber("/second", &[oid(1)]);
@@ -246,6 +291,7 @@ fn a_deeper_request_reuses_exact_counts_and_retries_integration() {
     let mut work = RepositoryWork::default();
     work.targets.insert(owner, subscriber);
     work.cohorts.push(Cohort {
+        metrics: Default::default(),
         reservation: None,
         bytes: 0,
         target: target(8),
@@ -284,6 +330,7 @@ fn deeper_coverage_applies_to_the_requested_subjects() {
     deeper.request.deep = true;
     let (automatic, _automatic_rx) = subscriber("/automatic", &[oid(2)]);
     let cohort = Cohort {
+        metrics: Default::default(),
         reservation: None,
         bytes: 0,
         target: target(8),
@@ -319,6 +366,7 @@ fn active_and_visible_tips_precede_other_worktrees_and_hidden_branches() {
         subscriber._reservation,
     );
     let mut cohort = Cohort {
+        metrics: Default::default(),
         target: target(8),
         results: FxHashMap::default(),
         subscribers: FxHashMap::from_iter([(subscriber.request.lifetime, subscriber)]),
@@ -387,6 +435,7 @@ fn visible_publications_precede_a_backlog_of_hidden_completed_results() {
         .collect();
     let mut work = RepositoryWork::default();
     work.cohorts.push(Cohort {
+        metrics: Default::default(),
         target: target(8),
         results,
         subscribers: FxHashMap::from_iter([(subscriber.request.lifetime, subscriber)]),
@@ -453,6 +502,7 @@ fn publication_memory_exhaustion_defers_without_a_worker_or_publication_retry() 
         .unwrap();
     let mut work = RepositoryWork::default();
     work.cohorts.push(Cohort {
+        metrics: Default::default(),
         target: target(8),
         results: FxHashMap::default(),
         subscribers: FxHashMap::from_iter([(subscriber.request.lifetime, subscriber)]),

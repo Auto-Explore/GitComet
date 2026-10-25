@@ -11,6 +11,19 @@ pub(crate) fn bench_branch_sidebar_extreme_scale(c: &mut Criterion) {
         BenchmarkId::from_parameter("20k_branches_100_remotes"),
         |b| b.iter(|| extreme_scale.run()),
     );
+    for (name, shared_tips) in [
+        ("20k_local_5k_worktrees_shared", true),
+        ("20k_local_5k_worktrees_distinct", false),
+    ] {
+        let fixture = BranchSidebarFixture::twenty_thousand_local_branches_five_thousand_worktrees(
+            shared_tips,
+        );
+        let (_, metrics) = measure_sidecar_allocations(|| fixture.run_with_metrics());
+        group.bench_function(BenchmarkId::from_parameter(name), |b| {
+            b.iter(|| fixture.run())
+        });
+        emit_branch_sidebar_sidecar(name, &metrics);
+    }
     group.finish();
 
     emit_branch_sidebar_sidecar("20k_branches_100_remotes", &metrics);

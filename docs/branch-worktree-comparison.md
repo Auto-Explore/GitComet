@@ -8,7 +8,7 @@ The default target is the ref named by the locally recorded `refs/remotes/origin
 
 The heading names the target. Row counts are exact ancestry counts: ↑ ahead and ↓ behind. A squash or rebase patch match can leave nonzero counts. Worktrees use their recorded HEAD, including detached checkouts. Tips shared by several branches or worktrees share analysis.
 
-Comparison inputs are captured OIDs. A shared `rev-list --topo-order --parents --stdin` walk propagates per-seed reachability, excluding ancestry proven common to every seed. Exact numbers are published only after the walk completes successfully. Shallow, replacement, grafted, missing-object, interrupted, and budget-limited histories cannot establish exact results.
+Comparison inputs are captured OIDs. Equal subject and target OIDs establish an immediate up-to-date result after target validation. Other inputs use a shared `rev-list --topo-order --parents --stdin` walk to propagate per-seed reachability, excluding ancestry proven common to every seed. Exact numbers are published only after that walk completes successfully. Shallow, replacement, grafted, missing-object, interrupted, and budget-limited histories cannot establish exact walk results.
 
 ## Scheduling and display
 
@@ -51,6 +51,19 @@ Filesystem scans use their existing separate worker pool and checkout-handle cac
 
 Backend tests compare the shared walk with independent immutable-OID `rev-list --left-right --count` calls, including skewed commit dates, nested tips, merges, disconnected roots, and all 128 membership bits. Reducer tests cover stale generations, repository replacement, immutable publications, structural revisions, and unchanged refresh reuse.
 
-Large-scale latency, frame cost, graph reads, cache reuse, memory limits, and release measurements remain a release gate while this feature is under implementation.
+Build and run the isolated accepted-snapshot probe with:
+
+```bash
+cargo build --release -p gitcomet-state --example comparison-probe --features benchmarks,test-support
+python3 scripts/bench-ref-comparisons.py --probe target/release/examples/comparison-probe
+```
+
+The generator owns a fresh directory under `target/comparison-scale`. It creates one million skew-dated commits, 20,000 local branches, and 5,000 worktrees, then runs shared and distinct tips with commit graphs disabled and enabled. The four-case driver requires Linux process handles for process-tree ownership and cleanup. `--commits`, `--branches`, and `--worktrees` allow small feasibility probes. Omitting `--probe` generates fixtures without running analysis and works on other platforms. Fixture commands discard inherited Git overrides, disable global/system configuration, and initialize without templates. The Rust probe can also read an existing repository with `comparison-probe REPO [--deep]`; it sanitizes Git overrides, isolates user settings, and disables repository monitors and session persistence. Cross-platform performance validation remains a release gate.
+
+JSON-line records separate input-listing time from first-visible and full comparison time after snapshot acceptance. They report exact and unavailable counts, completed graph rows, completed jobs, cache hits, publication counts, warm local-branch refresh work, reservation peaks, supervised Git memory peaks, and release after closure. Warm records require a settled cold comparison and successful branch metadata and target; otherwise the measurement is skipped or unavailable. They exercise `RefreshBranches`, not a full metadata refresh. Up to eight exact results are checked against independent immutable-OID count commands after the measured cold phase. Linux sampling additionally records Git and probe RSS; independent count-oracle processes are excluded. Samples are lower bounds and include mapped/shared pages, so they cannot be added directly to reservations or treated as allocation totals. Run the tooling regressions with `python3 scripts/test_bench_ref_comparisons.py`.
+
+The presentation benchmark also includes `branch_sidebar/20k_local_5k_worktrees_shared` and `branch_sidebar/20k_local_5k_worktrees_distinct`, alongside the existing remote-branch fixture. Large-scale throughput and strict native-memory bounds remain failing release gates: the million-commit distinct-tip probe defers walks under the configured budget, and sampled native memory can exceed its quota between observations. A completed deferred batch is not successful exact-count coverage.
+
+The [2026-10-25 release-profile capture](benchmarks/ref-comparison-2026-10-25.json) records the small and million-commit probes, machine/tool versions, independent oracle coverage, reservations, RSS, and zero ownership after closure. These are single feasibility runs with warmed filesystem caches. Shared large tips produced an exact result in about 15 ms; distinct tips produced the identity result in about 21 ms and completed deferred publications in about 15.9 seconds. All 19,999 other distinct tips remained unavailable. Warm branch-only refreshes started no comparison jobs or publications. The native supervisor observed peaks above its quota, and 10 ms external sampling caught still higher short-lived peaks. An additional run refused target resolution under the budget; the unavailable-target path is recorded separately from valid warm measurements. Frame cost and cross-platform performance are outside this capture.
 
 The Git behavior used here is documented in [git-rev-list](https://git-scm.com/docs/git-rev-list) and [git-patch-id](https://git-scm.com/docs/git-patch-id).

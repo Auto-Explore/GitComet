@@ -11,6 +11,14 @@ pub const MAX_COMPARISON_PROJECTIONS: usize = 65_536;
 #[cfg(test)]
 pub(crate) static MEMORY_TESTS: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct ComparisonMetrics {
+    pub jobs: u64,
+    pub graph_reads: u64,
+    pub cache_hits: u64,
+    pub publications: u64,
+}
+
 #[derive(Debug, Default)]
 pub struct ComparisonPriorities {
     pub subjects: Vec<CommitId>,
@@ -47,6 +55,7 @@ pub struct RefComparisonsState {
     pub projections: Arc<ComparisonProjections>,
     pub(crate) memory: Option<Arc<ComparisonMemory>>,
     pub deferred: Option<gitcomet_core::ref_comparison::RefComparisonReason>,
+    pub metrics: ComparisonMetrics,
     pub rev: u64,
     pub(crate) generation: u64,
     pub(crate) publication_generation: Option<u64>,
@@ -66,6 +75,7 @@ impl Default for RefComparisonsState {
             projections: Arc::default(),
             memory: None,
             deferred: None,
+            metrics: ComparisonMetrics::default(),
             rev: 0,
             generation: 0,
             publication_generation: None,
@@ -80,6 +90,14 @@ impl Default for RefComparisonsState {
 }
 
 impl RefComparisonsState {
+    #[cfg(feature = "benchmarks")]
+    pub fn for_benchmarks(memory: Arc<ComparisonMemory>) -> Self {
+        Self {
+            memory: Some(memory),
+            ..Self::default()
+        }
+    }
+
     pub(crate) fn forget_subjects(&mut self) {
         self.generation = self.generation.wrapping_add(1);
         self.publication_generation = None;
@@ -141,6 +159,7 @@ pub enum RefComparisonsMsg {
         generation: u64,
         batch: RefComparisonBatch,
         reservation: Arc<ComparisonReservation>,
+        metrics: ComparisonMetrics,
     },
 }
 

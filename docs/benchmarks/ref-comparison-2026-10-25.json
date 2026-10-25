@@ -1,0 +1,532 @@
+{
+  "date": "2026-10-25",
+  "platform": "Linux 7.2.11-zen1-1-zen x86_64",
+  "cpu": "AMD Ryzen 9 5950X, 16 cores / 32 threads",
+  "rust": "1.99.1",
+  "python": "3.14.8",
+  "git": "2.56.0",
+  "profile": "release: opt-level 3, fat LTO, one codegen unit",
+  "binary_sha256": "88a2fb3b5859a5ee175446941baadf0d7ceff8fa5f7fe26a7780a3ab2df1a3b0",
+  "repetitions": 1,
+  "comparison_cache": "cold process; filesystem cache warmed by fixture generation",
+  "background_builds": false,
+  "warm_scope": "RefreshBranches only; full metadata refresh not measured",
+  "frame_cost": "not part of this backend/coordinator capture",
+  "strict_native_memory_gate": "failed: sampling permits overshoot and misses short-lived peaks",
+  "million_distinct_coverage_gate": "failed: 1 of 20000 subject tips exact, remaining 19999 unavailable",
+  "captures": {
+    "small": {
+      "fixture": {
+        "commits": 200,
+        "local_branches": 20,
+        "worktrees": 10,
+        "generation_seconds": 0.023919951003335882,
+        "git_version": "git version 2.56.0"
+      },
+      "cases": {
+        "no-graph-shared": [
+          {
+            "deep": false,
+            "event": "inputs",
+            "local_branches": 20,
+            "milliseconds": 3.1777149999999996,
+            "worktrees": 10
+          },
+          {
+            "accounted_bytes": 159031,
+            "accounted_peak_bytes": 16933155,
+            "cache_hits": 0,
+            "completed_graph_rows": 0,
+            "confirmed": 1,
+            "deferred": null,
+            "event": "cold_complete",
+            "exact": 1,
+            "first_exact_ms": 10.132197000000001,
+            "first_visible_ms": 10.132107,
+            "jobs": 0,
+            "milliseconds": 10.132537000000001,
+            "not_confirmed": 0,
+            "pending": 0,
+            "publications": 1,
+            "subjects": 1,
+            "supervised_git_peak_bytes": 851968,
+            "target_error": null,
+            "unavailable_counts": 0
+          },
+          {
+            "event": "oracles",
+            "validated": 1
+          },
+          {
+            "event": "warm_branch_complete",
+            "milliseconds": 5.107659,
+            "new_graph_rows": 0,
+            "new_jobs": 0,
+            "new_publications": 0,
+            "projections_reused": true,
+            "scope": "local_branches"
+          },
+          {
+            "accounted_bytes": 0,
+            "accounted_peak_bytes": 16933155,
+            "event": "released",
+            "milliseconds": 0.161631
+          },
+          {
+            "event": "native_memory",
+            "sample_period_ms": 10,
+            "sampled_git_peak_rss": 0,
+            "sampled_probe_peak_rss": 13869056,
+            "returncode": 0
+          }
+        ],
+        "no-graph-distinct": [
+          {
+            "deep": false,
+            "event": "inputs",
+            "local_branches": 20,
+            "milliseconds": 3.347026,
+            "worktrees": 10
+          },
+          {
+            "accounted_bytes": 176503,
+            "accounted_peak_bytes": 16973751,
+            "cache_hits": 0,
+            "completed_graph_rows": 199,
+            "confirmed": 20,
+            "deferred": null,
+            "event": "cold_complete",
+            "exact": 20,
+            "first_exact_ms": 10.129337,
+            "first_visible_ms": 10.129277,
+            "jobs": 1,
+            "milliseconds": 111.449901,
+            "not_confirmed": 0,
+            "pending": 0,
+            "publications": 2,
+            "subjects": 20,
+            "supervised_git_peak_bytes": 5410816,
+            "target_error": null,
+            "unavailable_counts": 0
+          },
+          {
+            "event": "oracles",
+            "validated": 8
+          },
+          {
+            "event": "warm_branch_complete",
+            "milliseconds": 5.108109,
+            "new_graph_rows": 0,
+            "new_jobs": 0,
+            "new_publications": 0,
+            "projections_reused": true,
+            "scope": "local_branches"
+          },
+          {
+            "accounted_bytes": 0,
+            "accounted_peak_bytes": 16973751,
+            "event": "released",
+            "milliseconds": 0.19162
+          },
+          {
+            "event": "native_memory",
+            "sample_period_ms": 10,
+            "sampled_git_peak_rss": 0,
+            "sampled_probe_peak_rss": 14565376,
+            "returncode": 0
+          }
+        ],
+        "graph-shared": [
+          {
+            "deep": false,
+            "event": "inputs",
+            "local_branches": 20,
+            "milliseconds": 3.228155,
+            "worktrees": 10
+          },
+          {
+            "accounted_bytes": 159031,
+            "accounted_peak_bytes": 16933155,
+            "cache_hits": 0,
+            "completed_graph_rows": 0,
+            "confirmed": 1,
+            "deferred": null,
+            "event": "cold_complete",
+            "exact": 1,
+            "first_exact_ms": 10.133358,
+            "first_visible_ms": 10.133278,
+            "jobs": 0,
+            "milliseconds": 10.133718,
+            "not_confirmed": 0,
+            "pending": 0,
+            "publications": 1,
+            "subjects": 1,
+            "supervised_git_peak_bytes": 1077248,
+            "target_error": null,
+            "unavailable_counts": 0
+          },
+          {
+            "event": "oracles",
+            "validated": 1
+          },
+          {
+            "event": "warm_branch_complete",
+            "milliseconds": 5.089869,
+            "new_graph_rows": 0,
+            "new_jobs": 0,
+            "new_publications": 0,
+            "projections_reused": true,
+            "scope": "local_branches"
+          },
+          {
+            "accounted_bytes": 0,
+            "accounted_peak_bytes": 16933155,
+            "event": "released",
+            "milliseconds": 0.14522
+          },
+          {
+            "event": "native_memory",
+            "sample_period_ms": 10,
+            "sampled_git_peak_rss": 0,
+            "sampled_probe_peak_rss": 13938688,
+            "returncode": 0
+          }
+        ],
+        "graph-distinct": [
+          {
+            "deep": false,
+            "event": "inputs",
+            "local_branches": 20,
+            "milliseconds": 3.267766,
+            "worktrees": 10
+          },
+          {
+            "accounted_bytes": 176503,
+            "accounted_peak_bytes": 16973751,
+            "cache_hits": 0,
+            "completed_graph_rows": 199,
+            "confirmed": 20,
+            "deferred": null,
+            "event": "cold_complete",
+            "exact": 20,
+            "first_exact_ms": 10.105658,
+            "first_visible_ms": 10.105608,
+            "jobs": 1,
+            "milliseconds": 111.255641,
+            "not_confirmed": 0,
+            "pending": 0,
+            "publications": 2,
+            "subjects": 20,
+            "supervised_git_peak_bytes": 5595136,
+            "target_error": null,
+            "unavailable_counts": 0
+          },
+          {
+            "event": "oracles",
+            "validated": 8
+          },
+          {
+            "event": "warm_branch_complete",
+            "milliseconds": 5.115469,
+            "new_graph_rows": 0,
+            "new_jobs": 0,
+            "new_publications": 0,
+            "projections_reused": true,
+            "scope": "local_branches"
+          },
+          {
+            "accounted_bytes": 0,
+            "accounted_peak_bytes": 16973751,
+            "event": "released",
+            "milliseconds": 0.21975999999999998
+          },
+          {
+            "event": "native_memory",
+            "sample_period_ms": 10,
+            "sampled_git_peak_rss": 4661248,
+            "sampled_probe_peak_rss": 13996032,
+            "returncode": 0
+          }
+        ]
+      }
+    },
+    "million": {
+      "fixture": {
+        "commits": 1000000,
+        "local_branches": 20000,
+        "worktrees": 5000,
+        "generation_seconds": 10.356877519996488,
+        "git_version": "git version 2.56.0"
+      },
+      "cases": {
+        "no-graph-shared": [
+          {
+            "deep": false,
+            "event": "inputs",
+            "local_branches": 20000,
+            "milliseconds": 360.93030500000003,
+            "worktrees": 5000
+          },
+          {
+            "accounted_bytes": 8312299,
+            "accounted_peak_bytes": 25086423,
+            "cache_hits": 0,
+            "completed_graph_rows": 0,
+            "confirmed": 1,
+            "deferred": null,
+            "event": "cold_complete",
+            "exact": 1,
+            "first_exact_ms": 15.190655000000001,
+            "first_visible_ms": 15.190565,
+            "jobs": 0,
+            "milliseconds": 15.190975,
+            "not_confirmed": 0,
+            "pending": 0,
+            "publications": 1,
+            "subjects": 1,
+            "supervised_git_peak_bytes": 897024,
+            "target_error": null,
+            "unavailable_counts": 0
+          },
+          {
+            "event": "oracles",
+            "validated": 1
+          },
+          {
+            "event": "warm_branch_complete",
+            "milliseconds": 116.666202,
+            "new_graph_rows": 0,
+            "new_jobs": 0,
+            "new_publications": 0,
+            "projections_reused": true,
+            "scope": "local_branches"
+          },
+          {
+            "accounted_bytes": 0,
+            "accounted_peak_bytes": 25086423,
+            "event": "released",
+            "milliseconds": 2.5071239999999997
+          },
+          {
+            "event": "native_memory",
+            "sample_period_ms": 10,
+            "sampled_git_peak_rss": 30961664,
+            "sampled_probe_peak_rss": 21352448,
+            "returncode": 0
+          }
+        ],
+        "no-graph-distinct": [
+          {
+            "deep": false,
+            "event": "inputs",
+            "local_branches": 20000,
+            "milliseconds": 352.183456,
+            "worktrees": 5000
+          },
+          {
+            "accounted_bytes": 16210475,
+            "accounted_peak_bytes": 30329899,
+            "cache_hits": 0,
+            "completed_graph_rows": 0,
+            "confirmed": 1,
+            "deferred": null,
+            "event": "cold_complete",
+            "exact": 1,
+            "first_exact_ms": 21.262383999999997,
+            "first_visible_ms": 21.262264,
+            "jobs": 158,
+            "milliseconds": 15895.820023,
+            "not_confirmed": 19999,
+            "pending": 0,
+            "publications": 158,
+            "subjects": 20000,
+            "supervised_git_peak_bytes": 19914752,
+            "target_error": null,
+            "unavailable_counts": 19999
+          },
+          {
+            "event": "oracles",
+            "validated": 1
+          },
+          {
+            "event": "warm_branch_complete",
+            "milliseconds": 116.499161,
+            "new_graph_rows": 0,
+            "new_jobs": 0,
+            "new_publications": 0,
+            "projections_reused": true,
+            "scope": "local_branches"
+          },
+          {
+            "accounted_bytes": 0,
+            "accounted_peak_bytes": 30329899,
+            "event": "released",
+            "milliseconds": 2.810125
+          },
+          {
+            "event": "native_memory",
+            "sample_period_ms": 10,
+            "sampled_git_peak_rss": 30920704,
+            "sampled_probe_peak_rss": 30965760,
+            "returncode": 0
+          }
+        ],
+        "graph-shared": [
+          {
+            "deep": false,
+            "event": "inputs",
+            "local_branches": 20000,
+            "milliseconds": 345.786676,
+            "worktrees": 5000
+          },
+          {
+            "accounted_bytes": 8312299,
+            "accounted_peak_bytes": 25086423,
+            "cache_hits": 0,
+            "completed_graph_rows": 0,
+            "confirmed": 1,
+            "deferred": null,
+            "event": "cold_complete",
+            "exact": 1,
+            "first_exact_ms": 15.189053,
+            "first_visible_ms": 15.188983,
+            "jobs": 0,
+            "milliseconds": 15.189403,
+            "not_confirmed": 0,
+            "pending": 0,
+            "publications": 1,
+            "subjects": 1,
+            "supervised_git_peak_bytes": 868352,
+            "target_error": null,
+            "unavailable_counts": 0
+          },
+          {
+            "event": "oracles",
+            "validated": 1
+          },
+          {
+            "event": "warm_branch_complete",
+            "milliseconds": 111.305739,
+            "new_graph_rows": 0,
+            "new_jobs": 0,
+            "new_publications": 0,
+            "projections_reused": true,
+            "scope": "local_branches"
+          },
+          {
+            "accounted_bytes": 0,
+            "accounted_peak_bytes": 25086423,
+            "event": "released",
+            "milliseconds": 2.0195629999999998
+          },
+          {
+            "event": "native_memory",
+            "sample_period_ms": 10,
+            "sampled_git_peak_rss": 31014912,
+            "sampled_probe_peak_rss": 20746240,
+            "returncode": 0
+          }
+        ],
+        "graph-distinct": [
+          {
+            "deep": false,
+            "event": "inputs",
+            "local_branches": 20000,
+            "milliseconds": 350.32435,
+            "worktrees": 5000
+          },
+          {
+            "accounted_bytes": 16210475,
+            "accounted_peak_bytes": 30313643,
+            "cache_hits": 0,
+            "completed_graph_rows": 0,
+            "confirmed": 1,
+            "deferred": null,
+            "event": "cold_complete",
+            "exact": 1,
+            "first_exact_ms": 21.325582,
+            "first_visible_ms": 21.325542,
+            "jobs": 158,
+            "milliseconds": 15892.424673000001,
+            "not_confirmed": 19999,
+            "pending": 0,
+            "publications": 158,
+            "subjects": 20000,
+            "supervised_git_peak_bytes": 20221952,
+            "target_error": null,
+            "unavailable_counts": 19999
+          },
+          {
+            "event": "oracles",
+            "validated": 1
+          },
+          {
+            "event": "warm_branch_complete",
+            "milliseconds": 118.05957000000001,
+            "new_graph_rows": 0,
+            "new_jobs": 0,
+            "new_publications": 0,
+            "projections_reused": true,
+            "scope": "local_branches"
+          },
+          {
+            "accounted_bytes": 0,
+            "accounted_peak_bytes": 30313643,
+            "event": "released",
+            "milliseconds": 4.097326
+          },
+          {
+            "event": "native_memory",
+            "sample_period_ms": 10,
+            "sampled_git_peak_rss": 30814208,
+            "sampled_probe_peak_rss": 33079296,
+            "returncode": 0
+          }
+        ]
+      }
+    }
+  },
+  "diagnostic_target_refusals": [
+    {
+      "case": "no-graph-distinct",
+      "overlapped_ui_compilation": true,
+      "cold": {
+        "accounted_bytes": 8243287,
+        "accounted_peak_bytes": 27183319,
+        "cache_hits": 0,
+        "completed_graph_rows": 0,
+        "confirmed": 0,
+        "deferred": null,
+        "event": "cold_complete",
+        "exact": 0,
+        "first_exact_ms": null,
+        "first_visible_ms": null,
+        "jobs": 0,
+        "milliseconds": 37.74613,
+        "not_confirmed": 0,
+        "pending": 20000,
+        "publications": 0,
+        "subjects": 20000,
+        "supervised_git_peak_bytes": 24064000,
+        "target_error": "Comparison analysis is unavailable. The analysis reached its resource or history limit. Run a deeper check to search further.",
+        "unavailable_counts": 0
+      }
+    }
+  ],
+  "unsupervised_native_baseline": [
+    {
+      "commit_graph": "false",
+      "captured_target": "4eefbb7a2384464e5960e8bff21f105c05d237d7",
+      "captured_subject": "5c721474ab496664d21229637047e4bfd53f235f",
+      "seconds": 2.9308573640009854,
+      "native_peak_rss_bytes": 340185088
+    },
+    {
+      "commit_graph": "true",
+      "captured_target": "4eefbb7a2384464e5960e8bff21f105c05d237d7",
+      "captured_subject": "5c721474ab496664d21229637047e4bfd53f235f",
+      "seconds": 0.9459887689954485,
+      "native_peak_rss_bytes": 214364160
+    }
+  ]
+}

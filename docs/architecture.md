@@ -18,6 +18,8 @@ The extension [`Registry`](../crates/gitcomet-extension-api/src/registry.rs) val
 
 The gix backend owns its repository handles and private [history cache](../crates/gitcomet-git-gix/src/repo/log/cache.rs). Cache keys, retention limits, canonical repository identity, and shared history data remain backend concerns.
 
+[Branch and worktree comparisons](branch-worktree-comparison.md) use an optional cancellable service after metadata snapshots are accepted. Their dedicated coordinator schedules immutable OID analysis and publishes paged row decorations; branch listing and filesystem status scanning remain separate operations.
+
 Core [`Error`](../crates/gitcomet-core/src/error.rs) retains an `ErrorKind` for recovery decisions, with optional typed source and operation/path context. Backend and state wrappers preserve native I/O causes; recovery and cleanup errors retain independent failures together. Paths keep their native representation, and `GitFailure` retains raw stdout and stderr bytes. The shared error representation makes errors cheap to clone into state. Formatting includes diagnostic context; callers classify failures through `kind()`.
 
 ## State and repository work

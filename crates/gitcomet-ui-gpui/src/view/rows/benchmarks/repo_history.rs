@@ -425,7 +425,7 @@ impl OpenRepoFixture {
 }
 
 pub struct BranchSidebarFixture {
-    repo: RepoState,
+    pub(in crate::view) repo: RepoState,
     local_branches: usize,
     remote_branches: usize,
     remotes: usize,
@@ -626,6 +626,27 @@ impl BranchSidebarFixture {
 
     pub fn twenty_thousand_branches_hundred_remotes() -> Self {
         Self::new(1, 20_000, 100, 0, 0, 0)
+    }
+
+    pub fn twenty_thousand_local_branches_five_thousand_worktrees(shared_tips: bool) -> Self {
+        let mut fixture = Self::new(20_000, 0, 1, 5_000, 0, 0);
+        let Loadable::Ready(branches) = &mut fixture.repo.branches else {
+            unreachable!("synthetic branches are ready");
+        };
+        let branches = Arc::make_mut(branches);
+        for (index, branch) in branches.iter_mut().enumerate() {
+            branch.target =
+                CommitId(format!("{:040x}", if shared_tips { 1 } else { index + 1 }).into());
+        }
+        let Loadable::Ready(worktrees) = &mut fixture.repo.worktrees else {
+            unreachable!("synthetic worktrees are ready");
+        };
+        for (index, worktree) in Arc::make_mut(worktrees).iter_mut().enumerate() {
+            let branch = &branches[index % branches.len()];
+            worktree.head = Some(branch.target.clone());
+            worktree.branch = (!worktree.detached).then(|| branch.name.clone());
+        }
+        fixture
     }
 
     pub fn run(&self) -> u64 {

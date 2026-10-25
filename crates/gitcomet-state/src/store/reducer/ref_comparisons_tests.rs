@@ -64,6 +64,7 @@ fn publish(state: &mut AppState, work: &crate::ref_comparisons::RefComparisonSub
     reduce(
         state,
         RefComparisonsMsg::Publish {
+            metrics: Default::default(),
             repo_id: work.repo_id,
             lifetime: work.lifetime,
             generation: work.generation,

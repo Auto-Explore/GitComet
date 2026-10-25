@@ -827,6 +827,37 @@ fn branch_sidebar_row_hash_separates_submodule_rows_by_what_they_draw() {
 }
 
 #[test]
+fn branch_sidebar_local_extreme_fixtures_cover_shared_and_distinct_tips() {
+    for shared_tips in [true, false] {
+        let fixture = BranchSidebarFixture::twenty_thousand_local_branches_five_thousand_worktrees(
+            shared_tips,
+        );
+        let (_, metrics) = fixture.run_with_metrics();
+        assert_eq!(metrics.local_branches, 20_000);
+        assert_eq!(metrics.remote_branches, 0);
+        assert_eq!(metrics.worktrees, 5_000);
+        assert_eq!(metrics.branch_rows, 20_000);
+        let branches = fixture.repo.branches.ready().unwrap();
+        let tips: FxHashSet<_> = branches.iter().map(|branch| &branch.target).collect();
+        assert_eq!(tips.len(), if shared_tips { 1 } else { 20_000 });
+        assert!(
+            fixture
+                .repo
+                .worktrees
+                .ready()
+                .unwrap()
+                .iter()
+                .all(|worktree| {
+                    worktree
+                        .head
+                        .as_ref()
+                        .is_some_and(|head| tips.contains(head))
+                })
+        );
+    }
+}
+
+#[test]
 fn branch_sidebar_extreme_fixture_reports_expected_structural_metrics() {
     let fixture = BranchSidebarFixture::twenty_thousand_branches_hundred_remotes();
     let (hash, metrics) = fixture.run_with_metrics();

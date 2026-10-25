@@ -42,7 +42,11 @@ exact_filtered_target!(bench_branch_sidebar_selected => bench_branch_sidebar, [
 ]);
 exact_filtered_target!(
     bench_branch_sidebar_extreme_scale_selected => bench_branch_sidebar_extreme_scale,
-    ["branch_sidebar/20k_branches_100_remotes",]
+    [
+        "branch_sidebar/20k_branches_100_remotes",
+        "branch_sidebar/20k_local_5k_worktrees_shared",
+        "branch_sidebar/20k_local_5k_worktrees_distinct",
+    ]
 );
 exact_filtered_target!(bench_branch_sidebar_cache_selected => bench_branch_sidebar_cache, [
     "branch_sidebar/cache_hit_balanced",
