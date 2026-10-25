@@ -1886,8 +1886,9 @@ pub(super) fn remotes_loaded(
 }
 
 /// A remote added back under a removed one's name starts out shown. Only a
-/// remote this tab listed before counts as removed: another window may have
-/// added and hidden one this load predates.
+/// remote the replaced listing held counts as removed, since another window
+/// may have added and hidden one this load predates; a Reload or a failed
+/// load starts the comparison over.
 fn forget_hidden_remotes_that_were_removed(repo: &RepoState, loaded: &[Remote]) -> Vec<Effect> {
     let Loadable::Ready(previous) = &repo.remotes else {
         return Vec::new();
