@@ -834,6 +834,7 @@ impl HistoryView {
             let dragging = active_col_resize.is_some_and(|state| state.handle == handle);
             div()
                 .id(id)
+                .debug_selector(move || id.to_string())
                 .group(id)
                 .absolute()
                 .w(handle_w)
@@ -848,9 +849,7 @@ impl HistoryView {
                     dragging,
                     Some(theme.colors.stroke.subtle),
                 ))
-                .on_drag(handle, |_handle, _offset, _window, cx| {
-                    cx.new(|_cx| HistoryColResizeDragGhost)
-                })
+                .on_resize_drag(handle)
                 .on_mouse_down(
                     MouseButton::Left,
                     cx.listener(move |this, e: &MouseDownEvent, _w, cx| {
