@@ -613,13 +613,16 @@ pub trait GitRepository: Send + Sync {
     /// packs written since become visible; later reads reopen the store.
     fn release_object_store(&self) {}
 
-    /// Distinct author names across the complete, unfiltered history scope.
-    /// Called on demand, independently of the visible commit metadata cache.
+    /// Distinct author names across the walk's complete history, without an
+    /// author filter. Called on demand, independently of the visible commit
+    /// metadata cache.
     fn history_authors(
         &self,
-        mode: HistoryMode,
+        walk: &HistoryWalk,
         cancellation: &CancellationToken,
     ) -> Result<Arc<[Arc<str>]>> {
+        refuse_excluded_refs(walk)?;
+        let mode = walk.mode();
         let mut authors = Vec::new();
         let mut seen = std::collections::HashSet::new();
         let mut cursor = None;
@@ -645,7 +648,7 @@ pub trait GitRepository: Send + Sync {
     /// from the branch tip to the requested offset.
     fn build_history_index(
         &self,
-        _mode: HistoryMode,
+        _walk: &HistoryWalk,
         _author: Option<&str>,
         cancellation: &CancellationToken,
         _on_progress: &mut dyn FnMut(crate::history_index::HistoryIndexProgress),
@@ -682,12 +685,14 @@ pub trait GitRepository: Send + Sync {
     /// conservatively rebuild and never claim an unchanged result.
     fn read_history(
         &self,
-        mode: HistoryMode,
+        walk: &HistoryWalk,
         author: Option<&str>,
         request: &HistoryReadRequest,
         cancellation: &CancellationToken,
         on_chunk: &mut dyn FnMut(LogChunk),
     ) -> Result<HistoryReadResult> {
+        refuse_excluded_refs(walk)?;
+        let mode = walk.mode();
         let page = match request {
             HistoryReadRequest::Page {
                 limit,
@@ -2071,6 +2076,30 @@ impl HistoryRefFilter {
         }
     }
 
+    /// Excludes every remote-tracking ref of each named remote
+    /// (`refs/remotes/<name>`); a remote named `team/x` shares `team`'s
+    /// namespace, as in Git. Empty names and names with `*`, which would widen
+    /// the pattern, are skipped.
+    pub fn excluding_remotes<I, S>(names: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        Self::excluding(
+            names
+                .into_iter()
+                .filter(|name| !name.as_ref().is_empty() && !name.as_ref().contains('*'))
+                .map(|name| format!("refs/remotes/{}", name.as_ref())),
+        )
+    }
+
+    pub fn union(&self, other: &Self) -> Self {
+        if other.is_empty() {
+            return self.clone();
+        }
+        Self::excluding(self.excluded.iter().chain(other.excluded.iter()).cloned())
+    }
+
     pub fn is_empty(&self) -> bool {
         self.excluded.is_empty()
     }
@@ -2084,6 +2113,43 @@ impl HistoryRefFilter {
         self.excluded
             .iter()
             .any(|pattern| ref_pattern_matches(pattern, name))
+    }
+}
+
+/// What a history walk starts from: its mode, and the refs an all-branches
+/// walk leaves out on top of [`RepositoryOptions::history_ref_filter`]. Other
+/// modes walk only HEAD, so they carry no exclusions.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Hash)]
+pub struct HistoryWalk {
+    mode: HistoryMode,
+    excluded_refs: HistoryRefFilter,
+}
+
+impl HistoryWalk {
+    pub fn new(mode: HistoryMode, excluded_refs: HistoryRefFilter) -> Self {
+        let excluded_refs = if mode.is_all_branches() {
+            excluded_refs
+        } else {
+            HistoryRefFilter::default()
+        };
+        Self {
+            mode,
+            excluded_refs,
+        }
+    }
+
+    pub fn mode(&self) -> HistoryMode {
+        self.mode
+    }
+
+    pub fn excluded_refs(&self) -> &HistoryRefFilter {
+        &self.excluded_refs
+    }
+}
+
+impl From<HistoryMode> for HistoryWalk {
+    fn from(mode: HistoryMode) -> Self {
+        Self::new(mode, HistoryRefFilter::default())
     }
 }
 
@@ -2147,6 +2213,15 @@ impl RepositoryOptions {
     pub fn is_default(&self) -> bool {
         *self == Self::default()
     }
+}
+
+fn refuse_excluded_refs(walk: &HistoryWalk) -> Result<()> {
+    if !walk.excluded_refs().is_empty() {
+        return Err(Error::new(ErrorKind::Unsupported(
+            "hiding refs from history is not supported by this backend",
+        )));
+    }
+    Ok(())
 }
 
 fn unsupported_repository_options() -> Error {

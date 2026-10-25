@@ -186,7 +186,7 @@ pub fn history_loose_commit_graph_and_packs(hash: &str, refs: &str) {
         );
         let index = repo
             .build_history_index(
-                HistoryMode::AllBranches,
+                &HistoryMode::AllBranches.into(),
                 None,
                 &CancellationToken::new(),
                 &mut |_| {},
@@ -353,7 +353,12 @@ pub fn status_diff_commit_reflog_and_file_history(hash: &str, refs: &str) {
 
     let cancellation = CancellationToken::new();
     let index = repo
-        .build_history_index(HistoryMode::FullReachable, None, &cancellation, &mut |_| {})
+        .build_history_index(
+            &HistoryMode::FullReachable.into(),
+            None,
+            &cancellation,
+            &mut |_| {},
+        )
         .unwrap()
         .unwrap();
     let range = repo

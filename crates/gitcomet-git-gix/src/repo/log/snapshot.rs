@@ -1,10 +1,12 @@
 use super::*;
-use gitcomet_core::services::{HistoryReadRequest, HistoryReadResult, refresh_history_page};
+use gitcomet_core::services::{
+    HistoryReadRequest, HistoryReadResult, HistoryWalk, refresh_history_page,
+};
 
 impl GixRepo {
     pub(in super::super) fn read_history_impl(
         &self,
-        mode: HistoryMode,
+        walk: &HistoryWalk,
         author: Option<&str>,
         request: &HistoryReadRequest,
         cancellation: &CancellationToken,
@@ -17,10 +19,11 @@ impl GixRepo {
             &repo,
             shared.id,
             shared.common.id,
-            mode,
+            walk,
             author,
             cancellation,
         )?;
+        let mode = walk.mode();
         let snapshot = shared.snapshot(&query);
         let tips = query.tips;
         let shallow = query.shallow;

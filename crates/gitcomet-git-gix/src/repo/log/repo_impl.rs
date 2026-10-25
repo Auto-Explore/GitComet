@@ -738,6 +738,7 @@ impl GixRepo {
     pub(super) fn all_branches_tips(
         &self,
         repo: &gix::Repository,
+        filter: &gitcomet_core::services::HistoryRefFilter,
         cancellation: Option<&CancellationToken>,
     ) -> Result<Arc<[gix::ObjectId]>> {
         use rustc_hash::FxHasher;
@@ -749,10 +750,9 @@ impl GixRepo {
                     Error::new(ErrorKind::Backend(format!("gix references: {e}"))).with_source(e)
                 })?;
 
-        // Refs the product leaves out of History. Every all-branches reader
-        // (pages, authors, the index, snapshots) starts from these tips, so
-        // excluding here reaches all of them and their caches.
-        let filter = &self.history_ref_filter;
+        // Refs left out of History. Every all-branches reader (pages, authors,
+        // the index, snapshots) starts from these tips, so excluding here
+        // reaches all of them and their caches.
         let excluded = |reference: &crate::refs::Reference<'_>| {
             !filter.is_empty() && filter.excludes(&reference.name().as_bstr().to_string())
         };
@@ -881,7 +881,7 @@ impl GixRepo {
 
         let repo = self.repo();
         let shallow = shallow_snapshot(&repo)?;
-        let tips = self.all_branches_tips(&repo, cancellation)?;
+        let tips = self.all_branches_tips(&repo, &self.history_ref_filter, cancellation)?;
 
         let cache_key = self.log_page_cache_key(
             HistoryMode::AllBranches,

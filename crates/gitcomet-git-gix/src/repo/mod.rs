@@ -683,10 +683,10 @@ impl GitRepository for GixRepo {
     }
     fn history_authors(
         &self,
-        mode: HistoryMode,
+        walk: &gitcomet_core::services::HistoryWalk,
         cancellation: &CancellationToken,
     ) -> Result<Arc<[Arc<str>]>> {
-        self.with_store_retry(|| self.history_authors_impl(mode, cancellation))
+        self.with_store_retry(|| self.history_authors_impl(walk, cancellation))
     }
     fn spec(&self) -> &RepoSpec {
         &self.spec
@@ -711,13 +711,13 @@ impl GitRepository for GixRepo {
 
     fn build_history_index(
         &self,
-        mode: HistoryMode,
+        walk: &gitcomet_core::services::HistoryWalk,
         author: Option<&str>,
         cancellation: &CancellationToken,
         on_progress: &mut dyn FnMut(gitcomet_core::history_index::HistoryIndexProgress),
     ) -> Result<Option<gitcomet_core::history_index::HistoryIndexHandle>> {
         self.with_store_retry(|| {
-            self.build_history_index_impl(mode, author, cancellation, &mut *on_progress)
+            self.build_history_index_impl(walk, author, cancellation, &mut *on_progress)
         })
     }
 
@@ -741,14 +741,14 @@ impl GitRepository for GixRepo {
 
     fn read_history(
         &self,
-        mode: HistoryMode,
+        walk: &gitcomet_core::services::HistoryWalk,
         author: Option<&str>,
         request: &gitcomet_core::services::HistoryReadRequest,
         cancellation: &CancellationToken,
         on_chunk: &mut dyn FnMut(gitcomet_core::services::LogChunk),
     ) -> Result<gitcomet_core::services::HistoryReadResult> {
         self.with_store_retry(|| {
-            self.read_history_impl(mode, author, request, cancellation, &mut *on_chunk)
+            self.read_history_impl(walk, author, request, cancellation, &mut *on_chunk)
         })
     }
 

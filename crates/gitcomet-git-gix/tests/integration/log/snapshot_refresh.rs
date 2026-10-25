@@ -18,7 +18,7 @@ fn read(
     request: HistoryReadRequest,
 ) -> HistoryReadResult {
     repo.read_history(
-        mode,
+        &mode.into(),
         author,
         &request,
         &CancellationToken::new(),
@@ -299,7 +299,7 @@ fn snapshot_refresh_real_repository() {
 fn assert_index_matches(repo: &dyn GitRepository, mode: HistoryMode, author: Option<&str>) {
     let cancellation = CancellationToken::new();
     let index = repo
-        .build_history_index(mode, author, &cancellation, &mut |_| {})
+        .build_history_index(&mode.into(), author, &cancellation, &mut |_| {})
         .unwrap()
         .unwrap();
     let (page, snapshot) = first(repo, mode, author, 10_000);
@@ -393,7 +393,12 @@ fn indexed_history_matches_queries_and_retains_immutable_ranges() {
     }
     let cancellation = CancellationToken::new();
     let index = repo
-        .build_history_index(HistoryMode::AllBranches, None, &cancellation, &mut |_| {})
+        .build_history_index(
+            &HistoryMode::AllBranches.into(),
+            None,
+            &cancellation,
+            &mut |_| {},
+        )
         .unwrap()
         .unwrap();
     let before = repo
@@ -484,7 +489,12 @@ fn indexed_history_large_repository_benchmark() {
     let cancellation = CancellationToken::new();
     let started = Instant::now();
     let index = repo
-        .build_history_index(HistoryMode::AllBranches, None, &cancellation, &mut |_| {})
+        .build_history_index(
+            &HistoryMode::AllBranches.into(),
+            None,
+            &cancellation,
+            &mut |_| {},
+        )
         .unwrap()
         .unwrap();
     eprintln!(
@@ -580,7 +590,7 @@ fn indexed_history_reads_headers_only_when_needed_and_decodes_ranges_once() {
                 let _capture = capture();
                 let cancel = CancellationToken::new();
                 let index = repo
-                    .build_history_index(mode, author, &cancel, &mut |_| {})
+                    .build_history_index(&mode.into(), author, &cancel, &mut |_| {})
                     .unwrap()
                     .unwrap();
                 if author.is_none() {
@@ -607,7 +617,12 @@ fn indexed_range_reads_reopen_their_object_store_every_sixty_four_blocks() {
     let repo = GixBackend.open(dir.path()).unwrap();
     let cancel = CancellationToken::new();
     let index = repo
-        .build_history_index(HistoryMode::FullReachable, None, &cancel, &mut |_| {})
+        .build_history_index(
+            &HistoryMode::FullReachable.into(),
+            None,
+            &cancel,
+            &mut |_| {},
+        )
         .unwrap()
         .unwrap();
     let _capture = capture();
@@ -666,7 +681,7 @@ fn indexed_history_stash_topology_rejects_misleading_merge_messages() {
         for author in [None, Some("Alice")] {
             let index = repo
                 .build_history_index(
-                    HistoryMode::AllBranches,
+                    &HistoryMode::AllBranches.into(),
                     author,
                     &CancellationToken::new(),
                     &mut |_| {},

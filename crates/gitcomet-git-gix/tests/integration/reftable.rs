@@ -166,7 +166,7 @@ fn files_and_reftable_twins_have_the_same_refs_status_history_and_reflogs() {
             );
             assert_eq!(
                 repo.build_history_index(
-                    HistoryMode::AllBranches,
+                    &HistoryMode::AllBranches.into(),
                     None,
                     &CancellationToken::new(),
                     &mut |_| {}

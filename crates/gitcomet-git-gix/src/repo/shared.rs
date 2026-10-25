@@ -543,7 +543,7 @@ mod tests {
                         scope.spawn(move || {
                             let mut progress = Vec::new();
                             let result = repo.build_history_index_impl(
-                                HistoryMode::AllBranches,
+                                &HistoryMode::AllBranches.into(),
                                 None,
                                 token,
                                 &mut |value| progress.push(value),
@@ -588,7 +588,7 @@ mod tests {
             // A cancelled registration cannot poison a later request.
             assert!(
                 repo.build_history_index_impl(
-                    HistoryMode::AllBranches,
+                    &HistoryMode::AllBranches.into(),
                     None,
                     &CancellationToken::new(),
                     &mut |_| {}

@@ -2,7 +2,7 @@ use super::*;
 use gitcomet_core::history_index::{
     HistoryIndexBuilder, HistoryIndexHandle, HistoryIndexProgress, HistoryRange,
 };
-use gitcomet_core::services::HistorySnapshot;
+use gitcomet_core::services::{HistorySnapshot, HistoryWalk};
 use std::ops::Range;
 use std::time::{Duration, Instant};
 
@@ -26,7 +26,7 @@ impl HistoryQuery {
 impl GixRepo {
     pub(in super::super) fn build_history_index_impl(
         &self,
-        mode: HistoryMode,
+        walk: &HistoryWalk,
         author: Option<&str>,
         cancellation: &CancellationToken,
         on_progress: &mut dyn FnMut(HistoryIndexProgress),
@@ -37,7 +37,7 @@ impl GixRepo {
             &store.to_thread_local(),
             shared.id,
             shared.common.id,
-            mode,
+            walk,
             author,
             cancellation,
         )?;
@@ -51,13 +51,15 @@ impl GixRepo {
         repo: &gix::Repository,
         generation: u64,
         common: u64,
-        mode: HistoryMode,
+        walk: &HistoryWalk,
         author: Option<&str>,
         cancellation: &CancellationToken,
     ) -> Result<HistoryQuery> {
         let shallow = shallow_snapshot(repo)?;
+        let mode = walk.mode();
+        let exclusions = self.history_ref_filter.union(walk.excluded_refs());
         let tips = if mode == HistoryMode::AllBranches {
-            self.all_branches_tips(repo, Some(cancellation))?
+            self.all_branches_tips(repo, &exclusions, Some(cancellation))?
         } else {
             Arc::from(gix_head_id_or_none(repo)?.into_iter().collect::<Vec<_>>())
         };
@@ -66,7 +68,7 @@ impl GixRepo {
             generation,
             mode,
             author: AuthorFilter::new(author),
-            exclusions: self.history_ref_filter.clone(),
+            exclusions,
             tips,
             shallow,
         })

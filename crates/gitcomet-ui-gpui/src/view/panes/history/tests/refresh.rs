@@ -389,7 +389,7 @@ fn activation_through_store_to_render_preserves_the_oldest_commit(cx: &mut gpui:
     let repo = gitcomet_git_gix::GixBackend.open(dir.path()).unwrap();
     let HistoryReadResult::Page { page, snapshot } = repo
         .read_history(
-            LogScope::AllBranches,
+            &LogScope::AllBranches.into(),
             None,
             &HistoryReadRequest::Page {
                 limit: 6_000,

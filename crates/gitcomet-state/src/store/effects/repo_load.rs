@@ -144,7 +144,7 @@ pub(super) fn schedule_load_log(
                 );
             };
             let result = repo.read_history(
-                scope,
+                &scope.into(),
                 author.as_deref(),
                 &request,
                 &cancellation,

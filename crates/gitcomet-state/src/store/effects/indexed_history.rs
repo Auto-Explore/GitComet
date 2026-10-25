@@ -40,7 +40,7 @@ pub(super) fn schedule(
                 } => {
                     let cancellation = cancellation.with_parent(parent);
                     let result = repo.build_history_index(
-                        mode,
+                        &mode.into(),
                         author.as_deref(),
                         &cancellation,
                         &mut |progress| {
