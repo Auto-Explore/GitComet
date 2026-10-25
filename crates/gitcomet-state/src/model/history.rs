@@ -2,8 +2,9 @@
 
 use super::{CommitSignatureMap, Loadable, RepoState, Shared};
 use gitcomet_core::domain::*;
+use gitcomet_core::services::{HistoryRefFilter, HistoryWalk};
 use rustc_hash::FxHashSet;
-use std::collections::VecDeque;
+use std::collections::{BTreeSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -529,12 +530,34 @@ impl RepoState {
         self.history_state.log_scan_progress = scanned;
     }
 
+    /// Remotes the history graph leaves out, from the shared repository
+    /// preferences.
+    pub fn history_hidden_remotes(&self) -> &BTreeSet<String> {
+        static NONE: BTreeSet<String> = BTreeSet::new();
+        self.shared_preferences.as_ref().map_or(&NONE, |snapshot| {
+            &snapshot.preferences.history_hidden_remotes
+        })
+    }
+
+    /// What the history pane walks: its mode, without the hidden remotes.
+    pub fn history_walk(&self) -> HistoryWalk {
+        HistoryWalk::new(
+            self.history_state.history_scope,
+            HistoryRefFilter::excluding_remotes(self.history_hidden_remotes()),
+        )
+    }
+
     pub(crate) fn set_log_scope(&mut self, scope: LogScope) {
         if self.history_state.history_scope == scope {
             return;
         }
-        self.history_state.indexed.reset_query();
         self.history_state.history_scope = scope;
+        self.reset_history_readers();
+    }
+
+    /// The walk changed: drop the index query and authors read for the old one.
+    pub(crate) fn reset_history_readers(&mut self) {
+        self.history_state.indexed.reset_query();
         self.history_state.authors.cancellation.cancel();
         self.bump_log_revs();
     }

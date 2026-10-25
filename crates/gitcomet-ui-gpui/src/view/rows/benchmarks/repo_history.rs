@@ -1083,14 +1083,14 @@ fn hash_repo_switch_outcome(state: &AppState, effects: &[Effect]) -> u64 {
             }
             Effect::LoadLog {
                 repo_id,
-                scope,
+                walk,
                 author,
                 limit,
                 cursor,
                 ..
             } => {
                 repo_id.0.hash(&mut h);
-                std::mem::discriminant(scope).hash(&mut h);
+                walk.hash(&mut h);
                 author.hash(&mut h);
                 limit.hash(&mut h);
                 cursor.is_some().hash(&mut h);
@@ -2012,7 +2012,7 @@ impl HistoryLoadMoreAppendFixture {
         let seq = state.repos[0]
             .loads_in_flight
             .request_log(gitcomet_state::model::PendingLogLoad {
-                scope: self.scope,
+                walk: self.scope.into(),
                 author: None,
                 limit: self.existing_commits.len(),
                 cursor: None,
@@ -2073,7 +2073,7 @@ impl HistoryLoadMoreAppendFixture {
         let seq = repo.loads_in_flight.active_log_seq().unwrap_or_else(|| {
             repo.loads_in_flight
                 .request_log(gitcomet_state::model::PendingLogLoad {
-                    scope: self.scope,
+                    walk: self.scope.into(),
                     author: None,
                     limit: page.commits.len(),
                     cursor: cursor.clone(),

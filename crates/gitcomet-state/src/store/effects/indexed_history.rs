@@ -34,13 +34,13 @@ pub(super) fn schedule(
                 Work::Build {
                     repo_id,
                     seq,
-                    mode,
+                    walk,
                     author,
                     cancellation,
                 } => {
                     let cancellation = cancellation.with_parent(parent);
                     let result = repo.build_history_index(
-                        &mode.into(),
+                        &walk,
                         author.as_deref(),
                         &cancellation,
                         &mut |progress| {

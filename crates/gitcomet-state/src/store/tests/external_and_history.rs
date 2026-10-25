@@ -172,7 +172,7 @@ fn expect_log_reply(
     repo_state
         .loads_in_flight
         .request_log(crate::model::PendingLogLoad {
-            scope,
+            walk: scope.into(),
             author: author.map(str::to_owned),
             limit: 200,
             cursor,
@@ -1095,11 +1095,11 @@ fn external_git_state_refresh_is_coalesced_and_replayed_once() {
         effects.as_slice(),
         [Effect::LoadLog {
             repo_id: RepoId(1),
-            scope,
+            walk,
             limit: 200,
             cursor: None,
             ..
-        }] if *scope == history_scope
+        }] if walk.mode() == history_scope
     ));
 }
 
@@ -1696,12 +1696,12 @@ fn load_more_history_emits_paginated_load_log_effect() {
         effects.as_slice(),
         [Effect::LoadLog {
             repo_id: RepoId(1),
-            scope: LogScope::CurrentBranch,
+            walk,
             author: None,
             limit: 200,
             cursor: Some(_),
             ..
-        }]
+        }] if walk.mode() == LogScope::CurrentBranch
     ));
 }
 
@@ -1986,11 +1986,11 @@ fn activation_refresh_reloads_the_depth_the_user_paginated_to() {
             effect,
             Effect::LoadLog {
                 repo_id: RepoId(1),
-                scope: LogScope::CurrentBranch,
+                walk,
                 limit: 600,
                 cursor: None,
                 ..
-            }
+            } if walk.mode() == LogScope::CurrentBranch
         )),
         "expected the refresh to walk as deep as the loaded log, got {effects:?}"
     );
@@ -2176,10 +2176,10 @@ fn set_history_scope_emits_load_log_effect_for_every_history_mode() {
                 effect,
                 Effect::LoadLog {
                     repo_id: RepoId(1),
-                    scope,
+                    walk,
                     cursor: None,
                     ..
-                } if *scope == target_scope
+                } if walk.mode() == target_scope
             )),
             "expected LoadLog({target_scope:?}) effect, got {effects:?}"
         );
@@ -2272,7 +2272,7 @@ fn stale_log_loaded_result_replays_latest_pending_scope_switch() {
     let seq = repo_state
         .loads_in_flight
         .request_log(crate::model::PendingLogLoad {
-            scope: LogScope::FullReachable,
+            walk: LogScope::FullReachable.into(),
             author: None,
             limit: 200,
             cursor: None,
@@ -2294,10 +2294,10 @@ fn stale_log_loaded_result_replays_latest_pending_scope_switch() {
         effects.iter().any(|effect| matches!(
             effect,
             Effect::LoadLog {
-                scope: LogScope::AllBranches,
+                walk,
                 cursor: None,
                 ..
-            }
+            } if walk.mode() == LogScope::AllBranches
         )),
         "expected the scope switch to start its load immediately, got {effects:?}"
     );
@@ -2315,10 +2315,10 @@ fn stale_log_loaded_result_replays_latest_pending_scope_switch() {
         effects.iter().any(|effect| matches!(
             effect,
             Effect::LoadLog {
-                scope: LogScope::NoMerges,
+                walk,
                 cursor: None,
                 ..
-            }
+            } if walk.mode() == LogScope::NoMerges
         )),
         "expected the second scope switch to start immediately too, got {effects:?}"
     );
@@ -3828,7 +3828,7 @@ fn superseded_log_chunks_are_ignored() {
     state.repos[0]
         .loads_in_flight
         .request_log(crate::model::PendingLogLoad {
-            scope,
+            walk: scope.into(),
             author: Some("bob".to_string()),
             limit: 200,
             cursor: None,

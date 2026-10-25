@@ -783,6 +783,20 @@ impl PopoverHost {
                     ignored,
                 });
             }
+            ContextMenuAction::SetRemoteHistoryVisibility {
+                repo_id,
+                remote,
+                hidden,
+            } => {
+                self.store.dispatch(Msg::UpdateRepositoryPreference {
+                    repo_id,
+                    update:
+                        gitcomet_state::model::RepositoryPreferenceUpdate::RemoteHistoryVisibility {
+                            remote,
+                            hidden,
+                        },
+                });
+            }
             ContextMenuAction::SetChangeTrackingView { view } => {
                 self.change_tracking_view = view;
                 let root_view = self.root_view.clone();

@@ -162,7 +162,7 @@ fn begin_log_for_test(store: &AppStore, repo_id: RepoId) -> gitcomet_state::mode
     let seq = repo
         .loads_in_flight
         .request_log(gitcomet_state::model::PendingLogLoad {
-            scope: repo.history_state.history_scope,
+            walk: repo.history_state.history_scope.into(),
             author: None,
             limit: 200,
             cursor: None,

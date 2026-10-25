@@ -1,11 +1,9 @@
 use super::*;
 
 pub(super) fn model(this: &PopoverHost, repo_id: RepoId, name: &str) -> ContextMenuModel {
-    let remote_url = this
-        .state
-        .repos
-        .iter()
-        .find(|repo| repo.id == repo_id)
+    let repo = this.state.repos.iter().find(|repo| repo.id == repo_id);
+    let shown_in_history = !repo.is_some_and(|repo| repo.history_hidden_remotes().contains(name));
+    let remote_url = repo
         .and_then(|repo| repo.remotes.ready())
         .and_then(|remotes| remotes.iter().find(|remote| remote.name == name))
         .and_then(|remote| remote.url.as_deref());
@@ -31,6 +29,18 @@ pub(super) fn model(this: &PopoverHost, repo_id: RepoId, name: &str) -> ContextM
             }),
         });
     }
+    items.push(ContextMenuItem::Separator);
+    items.push(ContextMenuItem::Entry {
+        label: "Show in history graph".into(),
+        icon: shown_in_history.then_some("icons/check.svg".into()),
+        shortcut: None,
+        disabled: false,
+        action: Box::new(ContextMenuAction::SetRemoteHistoryVisibility {
+            repo_id,
+            remote: name.to_owned(),
+            hidden: shown_in_history,
+        }),
+    });
     items.push(ContextMenuItem::Separator);
     items.push(ContextMenuItem::Entry {
         label: "Fetch all".into(),

@@ -292,7 +292,7 @@ pub(super) fn schedule_effect(
         Effect::LoadLog {
             repo_id,
             seq,
-            scope,
+            walk,
             author,
             limit,
             cursor,
@@ -303,7 +303,7 @@ pub(super) fn schedule_effect(
             msg_tx,
             repo_id,
             seq,
-            scope,
+            walk,
             author,
             limit,
             cursor,

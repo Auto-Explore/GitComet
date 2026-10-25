@@ -527,7 +527,7 @@ fn file_status(path: &str, kind: FileStatusKind) -> FileStatus {
 
 fn log_request(scope: LogScope, author: Option<&str>, cursor: Option<LogCursor>) -> PendingLogLoad {
     PendingLogLoad {
-        scope,
+        walk: scope.into(),
         author: author.map(str::to_owned),
         limit: 20,
         cursor,

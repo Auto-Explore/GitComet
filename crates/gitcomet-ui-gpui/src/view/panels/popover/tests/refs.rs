@@ -2390,3 +2390,82 @@ fn local_branch_menu_excludes_pull_merge_and_squash_for_current_branch(
         assert!(delete_disabled, "expected delete entry to be disabled");
     });
 }
+
+#[gpui::test]
+fn remote_menu_checks_show_in_history_graph_for_shown_remotes(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let repo_id = RepoId(23);
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = RepoState::new_opening(
+                repo_id,
+                gitcomet_core::domain::RepoSpec {
+                    workdir: std::env::temp_dir().join("gitcomet_ui_test_remote_history_menu"),
+                },
+            );
+            repo.remotes = Loadable::Ready(Arc::new(vec![
+                web_remote("origin", None),
+                web_remote("upstream", None),
+            ]));
+            repo.shared_preferences = Some(gitcomet_state::model::RepositoryPreferencesSnapshot {
+                key: gitcomet_state::model::RepositoryKey::Worktree(repo.spec.workdir.clone()),
+                revision: 1,
+                preferences: Arc::new(gitcomet_state::model::SharedRepositoryPreferences {
+                    history_hidden_remotes: std::collections::BTreeSet::from([
+                        "upstream".to_string()
+                    ]),
+                    ..Default::default()
+                }),
+            });
+            let state = Arc::new(AppState {
+                repos: vec![repo],
+                active_repo: Some(repo_id),
+                ..AppState::test_default()
+            });
+            this.state = Arc::clone(&state);
+            this.ui_model
+                .update(cx, |model, cx| model.set_state(state, cx));
+        });
+    });
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.popover_host.update(cx, |host, cx| {
+                for (name, checked) in [("origin", true), ("upstream", false)] {
+                    let model = host
+                        .context_menu_model(
+                            &PopoverKind::remote(
+                                repo_id,
+                                RemotePopoverKind::Menu {
+                                    name: name.to_string(),
+                                },
+                            ),
+                            cx,
+                        )
+                        .expect("expected a remote menu");
+                    let ix = entry_ix(&model, "Show in history graph");
+                    let ContextMenuItem::Entry { icon, action, .. } = &model.items[ix] else {
+                        unreachable!();
+                    };
+                    assert_eq!(
+                        icon.as_ref().map(|icon| icon.as_ref()),
+                        checked.then_some("icons/check.svg"),
+                        "{name}"
+                    );
+                    assert!(
+                        matches!(
+                            action.as_ref(),
+                            ContextMenuAction::SetRemoteHistoryVisibility {
+                                repo_id: rid,
+                                remote,
+                                hidden,
+                            } if *rid == repo_id && remote == name && *hidden == checked
+                        ),
+                        "{name}: choosing it flips the remote's visibility"
+                    );
+                }
+            })
+        })
+    });
+}

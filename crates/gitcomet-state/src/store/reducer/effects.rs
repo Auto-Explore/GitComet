@@ -1867,6 +1867,9 @@ pub(super) fn remotes_loaded(
 ) -> Vec<Effect> {
     let mut effects = Vec::new();
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
+        if let Ok(remotes) = &result {
+            effects.extend(forget_hidden_remotes_that_are_gone(repo_state, remotes));
+        }
         let remotes = match result {
             Ok(v) => Loadable::Ready(v),
             Err(e) => {
@@ -1880,6 +1883,23 @@ pub(super) fn remotes_loaded(
         }
     }
     effects
+}
+
+/// A remote added back under a removed one's name starts out shown.
+fn forget_hidden_remotes_that_are_gone(repo: &RepoState, remotes: &[Remote]) -> Vec<Effect> {
+    repo.history_hidden_remotes()
+        .iter()
+        .filter(|hidden| !remotes.iter().any(|remote| remote.name == **hidden))
+        .filter_map(|gone| {
+            super::repository_preferences::update_effect(
+                repo,
+                crate::model::RepositoryPreferenceUpdate::RemoteHistoryVisibility {
+                    remote: gone.clone(),
+                    hidden: false,
+                },
+            )
+        })
+        .collect()
 }
 
 pub(super) fn remote_branches_loaded(
