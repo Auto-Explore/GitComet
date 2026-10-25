@@ -25,7 +25,6 @@ gix = ["dep:gitcomet-git-gix"]
 
 [dependencies]
 clap = { workspace = true }
-fs2 = { workspace = true }
 gitcomet-core = { workspace = true }
 gitcomet-extension-api = { workspace = true, optional = true }
 gitcomet-git-gix = { workspace = true, optional = true }

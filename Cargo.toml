@@ -158,7 +158,6 @@ faster-hex = { version = "1.0.0", default-features = false, features = ["std"] }
 filetime = "0.2.29"
 fnv = "1.0.7"
 fontdb = "0.24.0"
-fs2 = "0.4.3"
 futures = "0.3.34"
 gix = { version = "0.89.0", default-features = false, features = ["max-performance-safe", "comfort", "basic", "status", "blame", "sha1", "sha256"] }
 # Already in the tree via gix; Git-compatible quoting for attribute patterns.

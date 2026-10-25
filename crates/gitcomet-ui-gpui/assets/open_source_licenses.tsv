@@ -234,7 +234,6 @@ foreign-types-macros	0.2.4	MIT/Apache-2.0
 foreign-types-shared	0.3.1	MIT/Apache-2.0
 form_urlencoded	1.2.2	MIT OR Apache-2.0
 freetype-sys	0.23.0	MIT
-fs2	0.4.3	MIT/Apache-2.0
 futures	0.3.34	MIT OR Apache-2.0
 futures-channel	0.3.34	MIT OR Apache-2.0
 futures-concurrency	7.7.1	MIT OR Apache-2.0
