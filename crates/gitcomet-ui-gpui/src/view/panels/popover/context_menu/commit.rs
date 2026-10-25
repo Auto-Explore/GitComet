@@ -57,24 +57,19 @@ fn multi_cherry_pick_plan(
         return None;
     };
 
-    let branches = match &repo.branches {
-        Loadable::Ready(branches) => Some(branches),
-        _ => None,
-    };
-    let branch_heads = branches
-        .into_iter()
-        .flat_map(|branches| branches.iter().map(|branch| branch.target.as_ref()))
-        .chain(
-            repo.history_remote_branches_iter()
-                .map(|branch| branch.target.as_ref()),
-        )
-        .collect::<Vec<_>>();
-    let head_target = repo.head_commit_id();
-    let graph_rows = crate::view::history_graph::compute_graph(
+    let branches = repo.branches.ready().map_or(&[][..], |b| b.as_slice());
+    let stashes = repo.stashes.ready().map_or(&[][..], |s| s.as_slice());
+    let remote_branches = repo.history_remote_branches();
+    // The colours of the rows the history list shows for these commits.
+    let graph = crate::view::panes::history::build_history_page_graph(
+        repo.history_state.history_scope,
+        repo.detached_head_commit.as_ref(),
+        repo.head_branch.ready().map(String::as_str),
+        branches,
+        &remote_branches,
+        stashes,
         &page.commits,
         this.theme,
-        branch_heads,
-        head_target.as_ref().map(|head| head.as_ref()),
     );
 
     let mut selected = page
@@ -105,8 +100,8 @@ fn multi_cherry_pick_plan(
             message: commit.summary.to_string(),
             new_message: None,
         });
-        let color_ix = graph_rows
-            .get(page_ix)
+        let color_ix = graph
+            .row_for_commit_ix(page_ix)
             .map(|row| row.node_color_ix)
             .unwrap_or(0);
         source_colors.push((commit.id.as_ref().to_string(), color_ix));

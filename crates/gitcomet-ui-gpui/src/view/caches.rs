@@ -194,6 +194,14 @@ impl HistoryVisibleIndices {
         }
     }
 
+    /// The row showing the page's commit `commit_ix`, if it is shown.
+    pub(in crate::view) fn visible_ix(&self, commit_ix: usize) -> Option<usize> {
+        match self {
+            Self::All { len } => (commit_ix < *len).then_some(commit_ix),
+            Self::Filtered(indices) => indices.binary_search(&commit_ix).ok(),
+        }
+    }
+
     pub(in crate::view) fn iter(&self) -> HistoryVisibleIndicesIter<'_> {
         match self {
             Self::All { len } => HistoryVisibleIndicesIter::All(0..*len),

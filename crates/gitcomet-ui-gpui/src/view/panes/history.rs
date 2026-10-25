@@ -24,6 +24,7 @@ mod scroll;
 mod signatures;
 mod viewport;
 
+pub(in crate::view) use cache_build::build_history_page_graph;
 use cache_build::*;
 pub(in crate::view) use columns::*;
 
