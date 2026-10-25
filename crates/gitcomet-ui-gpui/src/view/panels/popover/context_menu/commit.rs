@@ -57,6 +57,16 @@ fn multi_cherry_pick_plan(
         return None;
     };
 
+    let mut selected = page
+        .commits
+        .iter()
+        .enumerate()
+        .filter(|(_, commit)| selection.contains(&commit.id))
+        .collect::<Vec<_>>();
+    if selected.len() < 2 {
+        return None;
+    }
+
     let branches = repo.branches.ready().map_or(&[][..], |b| b.as_slice());
     let stashes = repo.stashes.ready().map_or(&[][..], |s| s.as_slice());
     let remote_branches = repo.history_remote_branches();
@@ -71,16 +81,6 @@ fn multi_cherry_pick_plan(
         &page.commits,
         this.theme,
     );
-
-    let mut selected = page
-        .commits
-        .iter()
-        .enumerate()
-        .filter(|(_, commit)| selection.contains(&commit.id))
-        .collect::<Vec<_>>();
-    if selected.len() < 2 {
-        return None;
-    }
     // Use reversed page order as the stable oldest-first baseline. Before the
     // editor becomes available, the repository-backed setup load follows the
     // complete graph through unselected commits and corrects any ancestry
