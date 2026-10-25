@@ -526,6 +526,17 @@ impl PopoverHost {
             )
         });
 
+        let worktree_new_branch_input = cx.new(|cx| {
+            components::TextInput::new(
+                components::TextInputOptions {
+                    placeholder: "Defaults to the folder name".into(),
+                    ..Default::default()
+                },
+                window,
+                cx,
+            )
+        });
+
         let submodule_url_input = cx.new(|cx| {
             components::TextInput::new(
                 components::TextInputOptions {
@@ -742,21 +753,23 @@ impl PopoverHost {
             },
             |this, _window, cx| this.submit_push_set_upstream(cx),
         ));
-        prompt_input_subscriptions.push(Self::prompt_enter_subscription(
-            &worktree_path_input,
-            window,
-            cx,
-            |this| {
-                matches!(
-                    this.popover,
-                    Some(PopoverKind::Repo {
-                        kind: RepoPopoverKind::Worktree(WorktreePopoverKind::AddPrompt),
-                        ..
-                    })
-                )
-            },
-            |this, _window, cx| this.submit_worktree_add(cx),
-        ));
+        for input in [&worktree_path_input, &worktree_new_branch_input] {
+            prompt_input_subscriptions.push(Self::prompt_enter_subscription(
+                input,
+                window,
+                cx,
+                |this| {
+                    matches!(
+                        this.popover,
+                        Some(PopoverKind::Repo {
+                            kind: RepoPopoverKind::Worktree(WorktreePopoverKind::AddPrompt),
+                            ..
+                        })
+                    )
+                },
+                |this, _window, cx| this.submit_worktree_add(cx),
+            ));
+        }
         for input in [
             &submodule_url_input,
             &submodule_path_input,
@@ -798,6 +811,9 @@ impl PopoverHost {
         let create_tag_annotated_focus_handle = cx.focus_handle().tab_index(0).tab_stop(true);
         let filesystem_conflict_apply_to_all_focus_handle =
             cx.focus_handle().tab_index(0).tab_stop(true);
+        let worktree_remove_delete_branch_focus_handle =
+            cx.focus_handle().tab_index(0).tab_stop(true);
+        let worktree_add_create_branch_focus_handle = cx.focus_handle().tab_index(0).tab_stop(true);
         let remote_add_focus = DialogFocus::new(cx);
         let remote_edit_focus = DialogFocus::new(cx);
         let push_upstream_focus = DialogFocus::new(cx);
@@ -967,6 +983,8 @@ impl PopoverHost {
             create_tag_annotated_focus_handle,
             filesystem_conflict_apply_to_all: false,
             filesystem_conflict_apply_to_all_focus_handle,
+            worktree_remove_delete_branch: false,
+            worktree_remove_delete_branch_focus_handle,
             checkout_remote_branch_focus,
             stash_message_input,
             stash_focus,
@@ -1002,6 +1020,10 @@ impl PopoverHost {
             push_upstream_branch_input,
             worktree_path_input,
             worktree_ref_input,
+            worktree_new_branch_input,
+            worktree_add_create_branch: true,
+            worktree_add_create_branch_focus_handle,
+            worktree_add_open_after: false,
             submodule_url_input,
             submodule_path_input,
             submodule_ref_input,
@@ -2158,24 +2180,42 @@ impl PopoverHost {
                     window.focus(&focus, cx);
                 }
                 PopoverKind::Repo {
+                    repo_id,
                     kind: RepoPopoverKind::Worktree(WorktreePopoverKind::AddPrompt),
-                    ..
                 } => {
-                    let (path_prefill, reference_prefill) =
-                        self.pending_worktree_add_prefill.take().unwrap_or_default();
+                    let repo = self.state.repos.iter().find(|repo| repo.id == *repo_id);
+                    let folder = repo
+                        .map(|repo| repo.spec.workdir.display().to_string())
+                        .unwrap_or_default();
+                    let prefill = self.pending_worktree_add_prefill.take().unwrap_or_else(|| {
+                        WorktreeAddPrefill {
+                            source: repo
+                                .map(worktree_add_prompt::default_worktree_source)
+                                .unwrap_or_default(),
+                            create_branch: true,
+                            new_branch: String::new(),
+                            open_after: false,
+                        }
+                    });
                     self.worktree_path_input.update(cx, |input, cx| {
-                        input.set_text(path_prefill, cx);
+                        input.set_text(folder, cx);
                         cx.notify();
                     });
-                    self.worktree_ref_source_target = reference_prefill.clone();
+                    self.worktree_new_branch_input.update(cx, |input, cx| {
+                        input.set_text(prefill.new_branch, cx);
+                        cx.notify();
+                    });
+                    self.worktree_add_create_branch = prefill.create_branch;
+                    self.worktree_add_open_after = prefill.open_after;
+                    self.worktree_ref_source_target = prefill.source.clone();
                     self.suppress_worktree_submit_after_ref_enter = false;
                     let ref_input = self.ensure_branch_picker_search_input(window, cx);
                     // `ensure_*` blanks the input, so the prefilled ref has to be
                     // written back afterwards or the box would read empty while
                     // submit still used the reference.
-                    if !reference_prefill.is_empty() {
+                    if !prefill.source.is_empty() {
                         ref_input.update(cx, |input, cx| {
-                            input.set_text(reference_prefill, cx);
+                            input.set_text(prefill.source, cx);
                             cx.notify();
                         });
                     }
@@ -2350,6 +2390,13 @@ impl PopoverHost {
                 }
                 PopoverKind::FilesystemConflict(_) => {
                     self.filesystem_conflict_apply_to_all = false;
+                    window.focus(&self.prompt_tab_group_focus_handle, cx);
+                }
+                PopoverKind::Repo {
+                    kind: RepoPopoverKind::Worktree(WorktreePopoverKind::RemoveConfirm { .. }),
+                    ..
+                } => {
+                    self.worktree_remove_delete_branch = false;
                     window.focus(&self.prompt_tab_group_focus_handle, cx);
                 }
                 // Must sit above the generic confirm-dialog arm below, which

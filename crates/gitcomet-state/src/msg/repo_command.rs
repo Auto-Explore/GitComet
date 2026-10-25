@@ -5,7 +5,7 @@ use gitcomet_core::domain::*;
 use gitcomet_core::remote_url::RemoteUrlPolicy;
 use gitcomet_core::services::{
     ConflictSide, ForcePushLease, InteractiveRebaseEntry, PullMode, RemoteUrlKind, ResetMode,
-    SafePushAfterCommitContext, SafePushAfterCommitTarget, SubmoduleTrustTarget,
+    SafePushAfterCommitContext, SafePushAfterCommitTarget, SubmoduleTrustTarget, WorktreeCheckout,
 };
 use std::path::PathBuf;
 
@@ -70,7 +70,8 @@ pub enum RepoCommandEffect {
     AddWorktree {
         repo_id: RepoId,
         path: PathBuf,
-        reference: Option<String>,
+        checkout: WorktreeCheckout,
+        open_after: bool,
     },
     RemoveWorktree {
         repo_id: RepoId,
@@ -514,10 +515,16 @@ impl RepoCommandEffect {
             RepoCommandEffect::AddWorktree {
                 repo_id,
                 path,
-                reference,
-            } => {
-                Some(RepoCommandKind::AddWorktree { path, reference }.finished(repo_id, Err(error)))
-            }
+                checkout,
+                open_after,
+            } => Some(
+                RepoCommandKind::AddWorktree {
+                    path,
+                    checkout,
+                    open_after,
+                }
+                .finished(repo_id, Err(error)),
+            ),
             RepoCommandEffect::RemoveWorktree { repo_id, path } => {
                 Some(RepoCommandKind::RemoveWorktree { path }.finished(repo_id, Err(error)))
             }

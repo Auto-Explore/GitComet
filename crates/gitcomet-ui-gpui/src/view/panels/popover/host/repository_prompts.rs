@@ -393,12 +393,49 @@ impl PopoverHost {
         self.dismiss_inline_popover(window, cx);
     }
 
+    /// The `git worktree add` the open dialog's fields describe, or why Add is off.
+    pub(in crate::view::panels::popover) fn worktree_add_request(
+        &self,
+        repo_id: RepoId,
+        cx: &mut gpui::Context<Self>,
+    ) -> Result<
+        (
+            std::path::PathBuf,
+            gitcomet_core::services::WorktreeCheckout,
+        ),
+        worktree_add_prompt::WorktreeAddBlocked,
+    > {
+        let Some(repo) = self.state.repos.iter().find(|repo| repo.id == repo_id) else {
+            return Err(worktree_add_prompt::WorktreeAddBlocked::Incomplete);
+        };
+        let folder = self.worktree_path_input.read(cx).text().to_string();
+        let new_branch = self.worktree_new_branch_input.read(cx).text().to_string();
+        worktree_add_prompt::worktree_add_request(
+            repo,
+            &worktree_add_prompt::WorktreeAddFields {
+                folder: &folder,
+                source: &self.worktree_ref_source_target,
+                create_branch: self.worktree_add_create_branch,
+                new_branch: &new_branch,
+            },
+        )
+    }
+
     pub(in crate::view::panels::popover) fn can_submit_worktree_add(
         &self,
         cx: &mut gpui::Context<Self>,
     ) -> bool {
-        self.worktree_path_input
-            .read_with(cx, |i, _| !i.text().trim().is_empty())
+        let Some(PopoverKind::Repo {
+            repo_id,
+            kind: RepoPopoverKind::Worktree(WorktreePopoverKind::AddPrompt),
+        }) = self.popover
+        else {
+            return false;
+        };
+        matches!(
+            self.worktree_add_request(repo_id, cx),
+            Ok(_) | Err(worktree_add_prompt::WorktreeAddBlocked::CheckedOut(_))
+        )
     }
 
     pub(in crate::view::panels::popover) fn submit_worktree_add(
@@ -411,23 +448,34 @@ impl PopoverHost {
         let Some(PopoverKind::Repo {
             repo_id,
             kind: RepoPopoverKind::Worktree(WorktreePopoverKind::AddPrompt),
-        }) = self.popover.clone()
+        }) = self.popover
         else {
             return;
         };
-        if !self.can_submit_worktree_add(cx) {
-            return;
+        match self.worktree_add_request(repo_id, cx) {
+            Ok((path, checkout)) => {
+                self.store.dispatch(Msg::AddWorktree {
+                    repo_id,
+                    path,
+                    checkout,
+                    open_after: self.worktree_add_open_after,
+                });
+            }
+            Err(worktree_add_prompt::WorktreeAddBlocked::CheckedOut(path)) => {
+                let is_current = self
+                    .state
+                    .repos
+                    .iter()
+                    .any(|repo| repo.id == repo_id && repo.spec.workdir == path);
+                // The worktree the dialog started in is open already.
+                if !is_current {
+                    let _ = self
+                        .root_view
+                        .request(RootRequest::OpenRepoPath(path), None, cx);
+                }
+            }
+            Err(_) => return,
         }
-        let folder = self
-            .worktree_path_input
-            .read_with(cx, |i, _| i.text().trim().to_string());
-        let reference = self.worktree_ref_source_target.trim().to_string();
-        let reference = (!reference.is_empty()).then_some(reference);
-        self.store.dispatch(Msg::AddWorktree {
-            repo_id,
-            path: std::path::PathBuf::from(folder),
-            reference,
-        });
         self.close_popover(cx);
     }
 

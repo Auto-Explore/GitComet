@@ -67,8 +67,14 @@ from string literals: `scripts/ci/identity_literals.py` fails on new ones.
 
 Linux prerequisites:
 
-- Install Clang (`sudo apt-get install clang` on Ubuntu/Debian, `sudo dnf install clang` on Fedora, or `sudo pacman -S clang` on Arch).
-- Install the UI development libraries. On Ubuntu/Debian, CI uses `sudo apt-get install pkg-config libxcb1-dev libxkbcommon-dev libxkbcommon-x11-dev`.
+- Install the C toolchain, Clang, `pkg-config`, and the UI development libraries. On Ubuntu (tested on 26.04):
+
+  ```bash
+  sudo apt install build-essential clang pkg-config \
+    libfontconfig1-dev libfreetype6-dev libxkbcommon-dev libxkbcommon-x11-dev
+  ```
+
+  The `-dev` packages pull in their runtime libraries (`libfontconfig1`, `libxkbcommon0`, `libxkbcommon-x11-0`) and `libxcb1-dev`. On other distributions, install the equivalent packages (for example `sudo dnf install clang` on Fedora or `sudo pacman -S clang` on Arch).
 - Install mold 3.0.0 and its `ld.mold` alias on your `PATH`. The repository installer downloads checksum-pinned upstream binaries for x86_64 and ARM64 Linux:
 
   ```bash

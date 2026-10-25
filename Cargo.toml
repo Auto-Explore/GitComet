@@ -160,15 +160,18 @@ fnv = "1.0.7"
 fontdb = "0.24.0"
 fs2 = "0.4.3"
 futures = "0.3.34"
-gix = { version = "0.89.0", default-features = false, features = ["max-performance-safe", "comfort", "basic", "status", "blame", "sha1", "sha256"] }
+gix = { version = "0.90.0", default-features = false, features = ["max-performance", "zlib-sirocco", "comfort", "basic", "status", "blame", "sha1", "sha256"] }
 # Already in the tree via gix; Git-compatible quoting for attribute patterns.
-gix-quote = "0.10.0"
-gpui = { package = "gpui-ce", git = "https://github.com/Havunen/gpui-ce.git", rev = "1b6f3cedafcd97fa15e6bc5fdbb8f34cc805afc0" }
-gpui_platform = { package = "gpui_ce_platform", git = "https://github.com/Havunen/gpui-ce.git", rev = "1b6f3cedafcd97fa15e6bc5fdbb8f34cc805afc0", features = ["font-kit"] }
-gpui_wgpu = { package = "gpui_ce_wgpu", git = "https://github.com/Havunen/gpui-ce.git", rev = "1b6f3cedafcd97fa15e6bc5fdbb8f34cc805afc0" }
-gpui_parley = { package = "gpui_ce_parley", git = "https://github.com/Havunen/gpui-ce.git", rev = "1b6f3cedafcd97fa15e6bc5fdbb8f34cc805afc0", default-features = false }
-gpui_shared_string = { package = "gpui_ce_shared_string", git = "https://github.com/Havunen/gpui-ce.git", rev = "1b6f3cedafcd97fa15e6bc5fdbb8f34cc805afc0" }
-gpui_sum_tree = { package = "gpui_ce_sum_tree", git = "https://github.com/Havunen/gpui-ce.git", rev = "1b6f3cedafcd97fa15e6bc5fdbb8f34cc805afc0" }
+gix-quote = "0.10.1"
+# Git's ref-name rules for branch names the UI is about to hand to git. Already
+# in the graph through gix, so this adds no new compilation.
+gix-validate = "0.13.1"
+gpui = { package = "gpui-ce", git = "https://github.com/Havunen/gpui-ce.git", rev = "81b1e374d98a356f6dcdd38d4466739edde6b866" }
+gpui_platform = { package = "gpui_ce_platform", git = "https://github.com/Havunen/gpui-ce.git", rev = "81b1e374d98a356f6dcdd38d4466739edde6b866", features = ["font-kit"] }
+gpui_wgpu = { package = "gpui_ce_wgpu", git = "https://github.com/Havunen/gpui-ce.git", rev = "81b1e374d98a356f6dcdd38d4466739edde6b866" }
+gpui_parley = { package = "gpui_ce_parley", git = "https://github.com/Havunen/gpui-ce.git", rev = "81b1e374d98a356f6dcdd38d4466739edde6b866", default-features = false }
+gpui_shared_string = { package = "gpui_ce_shared_string", git = "https://github.com/Havunen/gpui-ce.git", rev = "81b1e374d98a356f6dcdd38d4466739edde6b866" }
+gpui_sum_tree = { package = "gpui_ce_sum_tree", git = "https://github.com/Havunen/gpui-ce.git", rev = "81b1e374d98a356f6dcdd38d4466739edde6b866" }
 image = "0.25.10"
 fast_image_resize = { version = "6.1.0", features = ["image"] }
 # Already in the dependency graph; merges sorted reference streams lazily.
@@ -189,11 +192,11 @@ percent-encoding = "2.3.2"
 process-wrap = { version = "10.0.1", default-features = false, features = ["std", "creation-flags", "job-object", "process-group"] }
 raw-window-handle = "0.6"
 regex = "1.13.1"
-resvg = { version = "0.48.1", default-features = false, features = ["text", "system-fonts", "raster-images"] }
+resvg = { version = "0.49.0", default-features = false, features = ["text", "system-fonts", "raster-images"] }
 strum = { version = "0.28", default-features = false, features = ["derive"] }
 rustc-hash = "2.1.3"
-rustfs-mimalloc = "0.7.1"
-rustfs-mimalloc-sys = "0.7.1"
+rustfs-mimalloc = "0.7.2"
+rustfs-mimalloc-sys = "0.7.2"
 rustix = { version = "1.1.5", default-features = false, features = ["std", "process"] }
 same-file = "1.0.6"
 semver = "1.0.28"
@@ -202,7 +205,7 @@ schemars = "1.2.3"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 signal-hook = "0.4.5"
-smallvec = "1.16.3"
+smallvec = "1.16.4"
 smol = "2.0.2"
 stats_alloc = { version = "0.1.10", features = ["nightly"] }
 strsim = "0.11.1"
@@ -210,7 +213,7 @@ sysinfo = { version = "0.39", default-features = false, features = ["system"] }
 tempfile = "3.27.0"
 thiserror = "2.0"
 tree-sitter = "0.27.1"
-uuid = { version = "1.28.0", features = ["serde", "v4"] }
+uuid = { version = "1.29.0", features = ["serde", "v4"] }
 # Fifteen of the grammars below are `path = "vendor/..."` purely to shrink the
 # release binary: they are upstream's source, regenerated with a larger
 # small-state threshold. tree-sitter's generator gives a parse state either a

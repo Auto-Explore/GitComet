@@ -6,6 +6,7 @@ use super::{
     app_menu, branch_group, components, context_menu_entry_action_at, push_request, repo_picker,
     resolve_checkout_file_path, session,
 };
+use crate::view::WorktreePopoverKind;
 use crate::view::gitcomet_view_requests::{RootRequest, RootRequests as _};
 
 impl PopoverHost {
@@ -493,6 +494,7 @@ impl PopoverHost {
                     directories: true,
                     multiple: false,
                     prompt: Some("Export patch to folder".into()),
+                    directory: None,
                 });
                 window
                     .spawn(cx, async move |cx| {
@@ -1135,6 +1137,16 @@ impl PopoverHost {
             ContextMenuAction::OpenPopover { kind } => {
                 let anchor = self.popover_anchor_point();
                 self.open_popover_at(kind, anchor, window, cx);
+                return;
+            }
+            ContextMenuAction::OpenWorktreeAddPrompt { repo_id, prefill } => {
+                self.pending_worktree_add_prefill = Some(prefill);
+                self.open_popover_centered(
+                    PopoverKind::worktree(repo_id, WorktreePopoverKind::AddPrompt),
+                    window,
+                    cx,
+                );
+                // Returning keeps `close_after_action` off the dialog just opened.
                 return;
             }
             ContextMenuAction::ConflictResolverPick { target } => {

@@ -50,7 +50,10 @@ pub(super) fn context_menu_tone(label: &str, icon_path: Option<&str>) -> Context
     if matches!(icon_path, Some("icons/arrow_down.svg")) || label.starts_with("Pull") {
         return ContextMenuTone::Warning;
     }
-    if matches!(icon_path, Some("icons/plus.svg")) || label.starts_with("Stage") {
+    if matches!(icon_path, Some("icons/plus.svg"))
+        || label.starts_with("Stage")
+        || label == "Open in new worktree"
+    {
         return ContextMenuTone::Success;
     }
     if matches!(icon_path, Some("icons/minus.svg")) || label.starts_with("Unstage") {

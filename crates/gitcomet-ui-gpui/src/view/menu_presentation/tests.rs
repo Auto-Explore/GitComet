@@ -140,6 +140,16 @@ fn context_menu_icon_color_preserves_destructive_and_warning_semantics() {
         context_menu_tone("Discard changes", Some("icons/warning.svg")),
         ContextMenuTone::Warning
     );
+    // Creating a worktree reads like the green "Create branch" beside it;
+    // opening an existing one stays neutral.
+    assert_eq!(
+        context_menu_tone("Open in new worktree", Some("icons/git_worktree.svg")),
+        ContextMenuTone::Success
+    );
+    assert_eq!(
+        context_menu_tone("Open worktree", Some("icons/git_worktree.svg")),
+        ContextMenuTone::Accent
+    );
     // The explorer's reversible Trash stays neutral; permanent deletion is red.
     assert_eq!(
         context_menu_tone("Trash", Some("icons/trash.svg")),

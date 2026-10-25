@@ -152,6 +152,13 @@ impl PopoverHost {
                         PopoverKind::worktree(repo_id, WorktreePopoverKind::Menu { path, branch }),
                         cx,
                     ),
+                    WorktreePopoverKind::CommitMenu { commit_id } => self.context_menu_view(
+                        PopoverKind::worktree(
+                            repo_id,
+                            WorktreePopoverKind::CommitMenu { commit_id },
+                        ),
+                        cx,
+                    ),
                     WorktreePopoverKind::AddPrompt => {
                         worktree_add_prompt::panel(self, repo_id, window, cx)
                     }
