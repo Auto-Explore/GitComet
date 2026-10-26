@@ -9,6 +9,9 @@ use gitcomet_extension_api::{
 use gitcomet_state::model::Loadable;
 use gitcomet_state::msg::WorktreeSaveBaseline;
 
+#[path = "hosted_context.rs"]
+mod context;
+
 fn git(dir: &Path, args: &[&str]) {
     crate::test_support::git(dir, args);
 }

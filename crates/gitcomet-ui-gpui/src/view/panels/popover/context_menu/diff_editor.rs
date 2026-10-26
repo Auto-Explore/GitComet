@@ -4,6 +4,7 @@ use crate::kit::components::secondary_shortcut;
 
 #[allow(clippy::too_many_arguments)]
 pub(super) fn model(
+    context_actions: &[gitcomet_extension_api::HostedAction],
     repo_id: Option<RepoId>,
     area: DiffArea,
     path: &Option<std::path::PathBuf>,
@@ -168,5 +169,15 @@ pub(super) fn model(
         }),
     });
 
+    if !context_actions.is_empty() {
+        items.push(ContextMenuItem::Separator);
+        items.extend(context_actions.iter().map(|action| ContextMenuItem::Entry {
+            label: action.label().clone(),
+            icon: None,
+            shortcut: None,
+            disabled: false,
+            action: Box::new(ContextMenuAction::Hosted(action.clone())),
+        }));
+    }
     ContextMenuModel::new(items)
 }

@@ -379,6 +379,7 @@ pub(crate) enum PopoverKind {
         allow_navigate: bool,
     },
     DiffEditorMenu {
+        context_actions: Vec<gitcomet_extension_api::HostedAction>,
         repo_id: Option<RepoId>,
         area: DiffArea,
         path: Option<std::path::PathBuf>,

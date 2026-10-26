@@ -924,6 +924,7 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
             path,
             hunks_count,
             lines_count,
+            context_actions,
             ..
         } => {
             repo_id.hash(hasher);
@@ -931,6 +932,7 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
             path.hash(hasher);
             hunks_count.hash(hasher);
             lines_count.hash(hasher);
+            context_actions.hash(hasher);
         }
         PopoverKind::ConflictResolverInputRowMenu {
             line_label,

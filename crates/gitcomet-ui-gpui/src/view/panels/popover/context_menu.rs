@@ -821,6 +821,7 @@ impl PopoverHost {
                 Some(diff_hunk::model(self, *repo_id, *src_ix, cx))
             }
             PopoverKind::DiffEditorMenu {
+                context_actions,
                 repo_id,
                 area,
                 path,
@@ -832,6 +833,7 @@ impl PopoverHost {
                 copy_text,
                 copy_target,
             } => Some(diff_editor::model(
+                context_actions,
                 *repo_id,
                 *area,
                 path,

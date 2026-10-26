@@ -34,6 +34,7 @@ pub(crate) struct FileListView {
     /// Some mark has a glyph, so every file row reserves the glyph column.
     marks_glyphs: bool,
     chips: Vec<gitcomet_extension_api::FileListFilterChip>,
+    header_items: Vec<gitcomet_extension_api::panes::FileListHeaderItem>,
     base: Option<CommitId>,
     /// The change list's revision and, for a worktree source, its lane's
     /// line-stats revision: the counts arrive after the files.
@@ -175,6 +176,7 @@ impl FileListView {
             marks: Default::default(),
             marks_glyphs: false,
             chips: Vec::new(),
+            header_items: Vec::new(),
             base: None,
             list_rev: None,
             loading: true,
@@ -367,6 +369,14 @@ impl FileListView {
             .flex_none()
             .items_center()
             .gap_1()
+            .children(self.header_items.iter().map(|item| {
+                item.render(
+                    format!("hosted_file_list_{list_id}_{}", item.id),
+                    (),
+                    theme,
+                    ui_scale,
+                )
+            }))
             .child(layout_button)
             .child(sort_button)
             .into_any_element()
@@ -842,6 +852,16 @@ pub(crate) struct HostedFileList {
 }
 
 impl FileListImpl for HostedFileList {
+    fn set_header_items(
+        &self,
+        items: Vec<gitcomet_extension_api::panes::FileListHeaderItem>,
+        cx: &mut App,
+    ) {
+        self.entity.update(cx, |list, cx| {
+            list.header_items = items;
+            cx.notify();
+        });
+    }
     fn observe(&self, on_change: Rc<dyn Fn(&mut App)>, cx: &mut App) -> Option<gpui::Subscription> {
         Some(cx.observe(&self.entity, move |_, cx| on_change(cx)))
     }

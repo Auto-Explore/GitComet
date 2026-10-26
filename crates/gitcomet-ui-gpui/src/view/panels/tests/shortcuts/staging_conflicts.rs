@@ -271,6 +271,7 @@ fn diff_editor_staging_context_menu_restores_diff_panel_focus_for_f4(
         cx,
         &view,
         PopoverKind::DiffEditorMenu {
+            context_actions: Vec::new(),
             repo_id: Some(repo_id),
             area: DiffArea::Unstaged,
             path: Some(first.clone()),

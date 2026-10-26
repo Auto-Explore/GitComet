@@ -1181,6 +1181,7 @@ fn diff_editor_menu_has_open_file_entries(cx: &mut gpui::TestAppContext) {
                 this.popover_host.update(cx, |host, cx| {
                     host.context_menu_model(
                         &PopoverKind::DiffEditorMenu {
+                            context_actions: Vec::new(),
                             repo_id: Some(repo_id),
                             area: DiffArea::Unstaged,
                             path: Some(path.clone()),
