@@ -1002,9 +1002,7 @@ impl DiffRenderer {
                                             dragging,
                                             Some(theme.colors.stroke.default),
                                         ))
-                                        .on_drag(which, |_handle, _offset, _window, cx| {
-                                            cx.new(|_cx| ConflictHSplitResizeDragGhost)
-                                        })
+                                        .on_resize_drag(which)
                                         .on_mouse_down(
                                             MouseButton::Left,
                                             cx.listener(move |this, e: &MouseDownEvent, _w, cx| {
@@ -1122,12 +1120,7 @@ impl DiffRenderer {
                                         conflict_diff_split_dragging,
                                         Some(theme.colors.stroke.default),
                                     ))
-                                    .on_drag(
-                                        ConflictDiffSplitResizeHandle::Divider,
-                                        |_, _, _, cx| {
-                                            cx.new(|_| ConflictDiffSplitResizeDragGhost)
-                                        },
-                                    )
+                                    .on_resize_drag(ConflictDiffSplitResizeHandle::Divider)
                                     .on_mouse_down(
                                         MouseButton::Left,
                                         cx.listener(|this, e: &MouseDownEvent, _w, cx| {
@@ -1891,12 +1884,7 @@ impl DiffRenderer {
                                     self.conflict_resolver_vsplit_resize.is_some(),
                                     Some(theme.colors.stroke.default),
                                 ))
-                                .on_drag(
-                                    ConflictVSplitResizeHandle::Divider,
-                                    |_handle, _offset, _window, cx| {
-                                        cx.new(|_cx| ConflictVSplitResizeDragGhost)
-                                    },
-                                )
+                                .on_resize_drag(ConflictVSplitResizeHandle::Divider)
                                 .on_mouse_down(
                                     MouseButton::Left,
                                     cx.listener(move |this, e: &MouseDownEvent, _w, cx| {

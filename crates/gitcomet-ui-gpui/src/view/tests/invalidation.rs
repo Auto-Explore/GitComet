@@ -382,3 +382,191 @@ fn pr530_home_rows_reuse_data_until_an_input_changes(cx: &mut gpui::TestAppConte
         });
     });
 }
+
+/// A shell with an open repository at 1400x900, cached views on from here.
+fn resize_test_shell<'a>(
+    cx: &'a mut gpui::TestAppContext,
+    handles: &[&'static str],
+) -> (
+    gpui::Entity<GitCometView>,
+    &'a mut gpui::VisualTestContext,
+    Vec<gpui::Bounds<Pixels>>,
+    StableCachedViewsTestGuard,
+) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let store_for_view = store.clone();
+    let (view, cx) = cx
+        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+    store.replace_snapshot_for_test(Arc::new(view_state_with_active_ready_repo(RepoId(1))));
+    sync_view_snapshot(cx, &view);
+    cx.simulate_resize(gpui::size(px(1400.0), px(900.0)));
+    test_support::redraw(cx);
+    // Cached frames do not replay debug bounds, so read them first.
+    let bounds = handles
+        .iter()
+        .map(|id| cx.debug_bounds(id).expect("resize strip"))
+        .collect();
+    let guard = enable_stable_cached_views_for_test();
+    cx.update(|window, app| {
+        window.refresh();
+        let _ = window.draw(app);
+    });
+    (view, cx, bounds, guard)
+}
+
+/// Drags horizontally from `start` by `step` per move and returns `probe`
+/// after the first move (which starts the drag) and after seven more.
+fn drag_and_probe<T>(
+    cx: &mut gpui::VisualTestContext,
+    start: gpui::Point<Pixels>,
+    step: Pixels,
+    probe: impl Fn(&mut gpui::VisualTestContext) -> T,
+) -> (T, T) {
+    let left = gpui::MouseButton::Left;
+    let at = |ix: usize| gpui::point(start.x + step * ix as f32, start.y);
+    cx.simulate_mouse_down(start, left, gpui::Modifiers::default());
+    cx.simulate_mouse_move(at(1), Some(left), gpui::Modifiers::default());
+    let before = probe(cx);
+    for ix in 2..=8 {
+        cx.simulate_mouse_move(at(ix), Some(left), gpui::Modifiers::default());
+    }
+    let after = probe(cx);
+    cx.simulate_mouse_up(at(8), left, gpui::Modifiers::default());
+    (before, after)
+}
+
+/// Divider drags redraw only the views they move: gpui's default redraws
+/// every cached view per pointer move. Starting and ending a drag may each
+/// cost one render.
+#[gpui::test]
+fn pane_resize_drags_leave_unmoved_cached_views_alone(cx: &mut gpui::TestAppContext) {
+    let (view, cx, handles, _cache_guard) =
+        resize_test_shell(cx, &["pane_resize_sidebar", "pane_resize_details"]);
+    let probe = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|_window, app| {
+            let root = view.read(app);
+            (
+                root.bottom_status_bar.read(app).render_count,
+                root.sidebar_pane.read(app).render_count,
+                root.sidebar_width,
+                root.details_width,
+            )
+        })
+    };
+
+    let (before, after) = drag_and_probe(cx, handles[0].center(), px(6.0), probe);
+    assert!(
+        after.2 > before.2,
+        "the sidebar drag must resize the sidebar"
+    );
+    assert_eq!(
+        after.0, before.0,
+        "sidebar drag moves must not re-render the status bar"
+    );
+
+    let (before, after) = drag_and_probe(cx, handles[1].center(), px(-6.0), probe);
+    assert!(
+        after.3 > before.3,
+        "the details drag must resize the details pane"
+    );
+    assert_eq!(
+        (after.0, after.1),
+        (before.0, before.1),
+        "details drag moves must not re-render the status bar or the sidebar"
+    );
+}
+
+/// The same for a divider inside a pane.
+#[gpui::test]
+fn history_column_drags_leave_other_cached_views_alone(cx: &mut gpui::TestAppContext) {
+    let (view, cx, handles, _cache_guard) = resize_test_shell(cx, &["history_col_resize_author"]);
+    let probe = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|_window, app| {
+            let root = view.read(app);
+            (
+                root.bottom_status_bar.read(app).render_count,
+                root.sidebar_pane.read(app).render_count,
+                root.details_pane.read(app).render_count,
+                root.main_pane
+                    .read(app)
+                    .history_view
+                    .read(app)
+                    .history_col_author,
+            )
+        })
+    };
+
+    let (before, after) = drag_and_probe(cx, handles[0].center(), px(-6.0), probe);
+    assert!(after.3 > before.3, "the drag must widen the author column");
+    assert_eq!(
+        (after.0, after.1, after.2),
+        (before.0, before.1, before.2),
+        "history column drag moves must not re-render the status bar, sidebar or details"
+    );
+}
+
+/// `cargo test -p gitcomet-ui-gpui --lib timing_divider_drag -- --ignored
+/// --nocapture`: mean time per pointer move, frame included, with cached views.
+#[gpui::test]
+#[ignore = "timing probe"]
+fn timing_divider_drag_moves(cx: &mut gpui::TestAppContext) {
+    // The history strip first: the pane drags move it.
+    let ids = [
+        "history_col_resize_author",
+        "pane_resize_sidebar",
+        "pane_resize_details",
+    ];
+    let (view, cx, handles, _cache_guard) = resize_test_shell(cx, &ids);
+    let width = |cx: &mut gpui::VisualTestContext, id: &str| {
+        cx.update(|_window, app| {
+            let root = view.read(app);
+            match id {
+                "pane_resize_sidebar" => root.sidebar_width,
+                "pane_resize_details" => root.details_width,
+                _ => {
+                    root.main_pane
+                        .read(app)
+                        .history_view
+                        .read(app)
+                        .history_col_author
+                }
+            }
+        })
+    };
+    let left = gpui::MouseButton::Left;
+    for (id, handle) in ids.iter().zip(handles) {
+        let mut widths = Vec::new();
+        let start = handle.center();
+        let step = if *id == "pane_resize_sidebar" {
+            2.0
+        } else {
+            -2.0
+        };
+        cx.simulate_mouse_down(start, left, gpui::Modifiers::default());
+        cx.simulate_mouse_move(
+            gpui::point(start.x + px(step), start.y),
+            Some(left),
+            gpui::Modifiers::default(),
+        );
+        let moves = 200;
+        let started = std::time::Instant::now();
+        for ix in 0..moves {
+            // To and fro, so every move changes the width.
+            let offset = (ix % 40) as f32 - 20.0;
+            let offset = 20.0 - offset.abs();
+            cx.simulate_mouse_move(
+                gpui::point(start.x + px(step * (offset + 2.0)), start.y),
+                Some(left),
+                gpui::Modifiers::default(),
+            );
+            widths.push(width(cx, id));
+        }
+        let per_move = started.elapsed() / moves;
+        widths.dedup();
+        cx.simulate_mouse_up(start, left, gpui::Modifiers::default());
+        println!(
+            "timing divider_drag {id} per_move {per_move:?} width_changes {}",
+            widths.len()
+        );
+    }
+}

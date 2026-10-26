@@ -381,3 +381,120 @@ fn protected_ranges_ride_along_with_edits_around_them(cx: &mut gpui::TestAppCont
         });
     });
 }
+
+/// `cargo test -p gitcomet-ui-kit --lib timing_undo_large_document --
+/// --ignored --nocapture`: undoing one typed character in a 4.8 MB document
+/// shown with the content-width layout (the file editor without wrap).
+#[gpui::test]
+#[ignore = "timing probe"]
+fn timing_undo_large_document(cx: &mut gpui::TestAppContext) {
+    let (input, cx) = multiline_input(cx);
+    let text = "let value = compute(alpha, beta);\n".repeat(140_000);
+    cx.update(|window, app| {
+        input.update(app, |input, cx| {
+            input.set_content_width_layout(true);
+            input.set_text(text.as_str(), cx);
+            let mut samples = Vec::new();
+            for key in 0..11 {
+                let at = text.len() / 2 + key * 40;
+                input.replace_utf8_range(at..at, "x", cx);
+                // What a frame reads between the keystroke and the undo.
+                let _ = input.text();
+                let started = std::time::Instant::now();
+                input.undo(&Undo, window, cx);
+                samples.push(started.elapsed());
+            }
+            samples.sort();
+            println!(
+                "timing undo_large_document bytes {} p50 {:?} min {:?}",
+                text.len(),
+                samples[5],
+                samples[0]
+            );
+        });
+    });
+}
+
+/// Undo finds the restored span from the two ropes' chunks. Flattening both
+/// texts to compare them, then re-measuring every line, cost 82 ms per step
+/// at 4.8 MB.
+#[gpui::test]
+fn undo_does_not_flatten_the_document(cx: &mut gpui::TestAppContext) {
+    let (input, cx) = multiline_input(cx);
+    let text = "let value = compute(alpha, beta);\n".repeat(2_000);
+    cx.update(|window, app| {
+        input.update(app, |input, cx| {
+            input.set_content_width_layout(true);
+            input.set_text(text.as_str(), cx);
+            let middle = text.len() / 2;
+            input.replace_utf8_range(middle..middle, "x\ny", cx);
+            input.undo(&Undo, window, cx);
+            let content = input.content.snapshot();
+            assert!(!content.is_materialized());
+            assert_eq!(input.text(), text);
+        });
+    });
+}
+
+/// The undo's width bookkeeping matches a full re-measure of the lines.
+#[gpui::test]
+fn undo_keeps_the_content_width_cache_exact(cx: &mut gpui::TestAppContext) {
+    let (input, cx) = multiline_input(cx);
+    let text = "short\n\tindented line\nwidest line of them all\n".repeat(300);
+    cx.update(|window, app| {
+        input.update(app, |input, cx| {
+            input.set_content_width_layout(true);
+            input.set_text(text.as_str(), cx);
+            let at = text.len() / 3;
+            input.replace_utf8_range(at..at + 40, "joined\n\n\nmuch wider replacement text\n", cx);
+            input.replace_utf8_range(0..0, "\t\t", cx);
+            for _ in 0..2 {
+                input.undo(&Undo, window, cx);
+                let incremental = input.content_width_cache.take().unwrap();
+                input.rebuild_content_width_cache();
+                let rebuilt = input.content_width_cache.as_ref().unwrap();
+                assert_eq!(incremental.line_units, rebuilt.line_units);
+                assert_eq!(incremental.unit_counts, rebuilt.unit_counts);
+            }
+            assert_eq!(input.text(), text);
+        });
+    });
+}
+
+/// Undo restores the minimal edit across rope chunks, including a change
+/// inside a multi-byte character (é and è share their first byte).
+#[gpui::test]
+fn undo_reports_the_minimal_edit_across_chunks(cx: &mut gpui::TestAppContext) {
+    let (input, cx) = multiline_input(cx);
+    let base = "αβγ plain ascii text é line\n".repeat(400);
+    let accent = base.rfind('é').unwrap();
+    let middle = (base.len() / 2..)
+        .find(|&ix| base.is_char_boundary(ix))
+        .unwrap();
+    cx.update(|window, app| {
+        input.update(app, |input, cx| {
+            input.set_text(base.as_str(), cx);
+            for (range, with) in [
+                (accent..accent + 'é'.len_utf8(), "è"),
+                (middle..middle, "inserted\nlines\n"),
+                (middle..middle + 30, ""),
+                (0..0, "x"),
+            ] {
+                let inserted = input.replace_utf8_range(range.clone(), with, cx);
+                let edited = input.text().to_string();
+                input.undo(&Undo, window, cx);
+                assert_eq!(input.text(), base);
+                assert_eq!(
+                    input.selection.pending_text_edit_deltas.last(),
+                    utf8_edit_delta_between_texts(&edited, &base).as_ref(),
+                    "undoing {range:?} -> {with:?}"
+                );
+                assert_eq!(
+                    input.selection.pending_text_edit_deltas.last(),
+                    Some(&(inserted, range.clone())),
+                    "undoing {range:?} -> {with:?}"
+                );
+            }
+        });
+    });
+}

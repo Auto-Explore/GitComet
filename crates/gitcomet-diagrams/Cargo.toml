@@ -18,7 +18,7 @@ gitcomet-base.workspace = true
 mermaid-rs-renderer.workspace = true
 roxmltree.workspace = true
 serde_json.workspace = true
-yaml-rust2 = { version = "0.13.0", default-features = false }
+yaml-rust2.workspace = true
 resvg.workspace = true
 gitcomet-fonts.workspace = true
 

@@ -294,7 +294,7 @@ backtrace.
 
 SourceTree, GitKraken, Zed, GPUI, KDiff3, Meld, Github Desktop, Git, Gix, Rust, Smol, and many more.
 
-This project has been created with the help of AI tools, including OpenAI Codex and Claude Code.
+This project has been created with the help of AI tools, including OpenAI Codex and Claude Code. The [AI policy](AI_POLICY.md) sets how contributors use them.
 
 ### Star History
 

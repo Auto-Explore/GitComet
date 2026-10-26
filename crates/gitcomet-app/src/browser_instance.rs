@@ -1,7 +1,7 @@
 use gitcomet_ui_gpui::{BrowserOpenRequest, BrowserOpenTarget};
 use gitcomet_ui_gpui::{BrowserRequestReceiver, BrowserRequestSender, browser_request_channel};
 use serde::{Deserialize, Serialize};
-use std::fs::{self, OpenOptions};
+use std::fs::{self, OpenOptions, TryLockError};
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::net::{Ipv4Addr, SocketAddrV4, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
@@ -268,11 +268,11 @@ fn acquire_browser_instance_claim(
     let file = options.open(lock_path)?;
     let deadline = Instant::now() + claim_wait;
     loop {
-        match fs2::FileExt::try_lock_exclusive(&file) {
+        match file.try_lock() {
             Ok(()) => return Ok(BrowserInstanceClaim::Acquired(file)),
-            // Windows reports ERROR_LOCK_VIOLATION, not WouldBlock. Use fs2's
-            // platform-specific error so simultaneous launches retry there too.
-            Err(error) if error.raw_os_error() == fs2::lock_contended_error().raw_os_error() => {
+            // std maps Windows' ERROR_LOCK_VIOLATION to WouldBlock as well, so
+            // simultaneous launches retry on every platform.
+            Err(TryLockError::WouldBlock) => {
                 // The primary retains the claim for its lifetime. Keep looking
                 // for its descriptor while publication is in progress instead
                 // of waiting on the lock and missing the moment forwarding
@@ -292,7 +292,7 @@ fn acquire_browser_instance_claim(
                 }
                 thread::sleep(Duration::from_millis(10));
             }
-            Err(error) => return Err(error),
+            Err(TryLockError::Error(error)) => return Err(error),
         }
     }
 }
@@ -886,8 +886,8 @@ mod tests {
             panic!("first broker unexpectedly forwarded");
         };
 
-        // Separate file handles produce the native fs2 contention error here:
-        // EWOULDBLOCK on Unix, ERROR_LOCK_VIOLATION on Windows.
+        // Separate file handles contend here: EWOULDBLOCK on Unix,
+        // ERROR_LOCK_VIOLATION on Windows, both TryLockError::WouldBlock.
         let wait = Duration::from_millis(50);
         let started = Instant::now();
         let result = start_or_forward_at(&descriptor_path, request.clone(), wait);

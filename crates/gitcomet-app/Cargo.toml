@@ -25,7 +25,6 @@ gix = ["dep:gitcomet-git-gix"]
 
 [dependencies]
 clap = { workspace = true }
-fs2 = { workspace = true }
 gitcomet-core = { workspace = true }
 gitcomet-extension-api = { workspace = true, optional = true }
 gitcomet-git-gix = { workspace = true, optional = true }
@@ -47,7 +46,7 @@ wayland-client = { workspace = true }
 signal-hook = { workspace = true }
 
 [target.'cfg(target_os = "windows")'.dependencies]
-gitcomet-win32-window-utils = { path = "../win32-window-utils", optional = true }
+gitcomet-win32-window-utils = { workspace = true, optional = true }
 
 [dev-dependencies]
 gitcomet-core = { workspace = true, features = ["test-support"] }

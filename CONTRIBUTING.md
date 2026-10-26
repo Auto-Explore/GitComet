@@ -32,6 +32,9 @@ Preserve the actual authors and co-authors of contributions. Ask maintainers for
 Questions about contribution permissions or signing records: info@gitcomet.dev. Do not include private signing details in public issue comments.
 <!-- gitcomet-cla:end -->
 
+### AI tools
+
+You may use AI tools for your contribution. The [AI policy](AI_POLICY.md) sets what that requires, starting with your own review of every line before you submit it.
 
 ### Workspace layout
 
@@ -62,6 +65,11 @@ repository lifetimes, and document ownership.
 
 Product names, identifiers, and links come from `gitcomet_core::identity`, never
 from string literals: `scripts/ci/identity_literals.py` fails on new ones.
+
+Declare dependencies for workspace members in the root `[workspace.dependencies]`
+table and inherit them with `workspace = true`, including build, development and
+target-specific dependencies. Keep optional flags and features needed by a
+particular member in that member's manifest.
 
 ### Getting started
 

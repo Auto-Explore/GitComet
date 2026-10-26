@@ -776,8 +776,6 @@ impl ContextMenuModel {
     }
 }
 
-// HistoryColResizeDragGhost moved to view/mod.rs for accessibility from panes::HistoryView.
-
 mod action_bar;
 pub(in crate::view) mod bar_items;
 mod bars;
