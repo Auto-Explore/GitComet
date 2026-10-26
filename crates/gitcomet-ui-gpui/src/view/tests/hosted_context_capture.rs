@@ -6,11 +6,12 @@ struct CardPreview {
 }
 
 impl Render for CardPreview {
-    fn render(&mut self, _: &mut Window, _: &mut gpui::Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
         div()
             .size_full()
             .font_family("IBM Plex Sans")
             .child(self.pane.view())
+            .child(self._owner.read(cx).popover_host.clone())
     }
 }
 
@@ -71,6 +72,62 @@ fn inline_card_visual_capture() {
                     .unwrap()
                     .save(directory.join(format!("{layout:?}-{scale}-{width}.png")))
                     .unwrap();
+                if scale == 100 && width == 900.0 && layout == DiffLayout::Inline {
+                    use gitcomet_extension_api::{HostedAction, HostedMenuItem};
+                    let owner = handle
+                        .read_with(&cx, |preview, _| preview._owner.clone())
+                        .unwrap();
+                    cx.update(|app| {
+                        owner.update(app, |owner, cx| {
+                            owner.set_theme(crate::theme::AppTheme::gitcomet_dark(), cx)
+                        })
+                    });
+                    for (name, items) in [
+                        (
+                            "notifications",
+                            vec![
+                                HostedMenuItem::action(HostedAction::new("Subscribed", |_| {}))
+                                    .with_icon("icons/check.svg")
+                                    .disabled(true),
+                                HostedMenuItem::action(HostedAction::new("Not subscribed", |_| {})),
+                                HostedMenuItem::action(HostedAction::new("Ignore", |_| {})),
+                            ],
+                        ),
+                        (
+                            "single-pr-actions",
+                            vec![
+                                HostedMenuItem::action(HostedAction::new("Open on GitHub", |_| {})),
+                                HostedMenuItem::action(HostedAction::new("Notifications…", |_| {})),
+                                HostedMenuItem::Separator,
+                                HostedMenuItem::action(HostedAction::new(
+                                    "Refresh local worktrees",
+                                    |_| {},
+                                ))
+                                .with_tooltip("No local worktree at this revision"),
+                            ],
+                        ),
+                    ] {
+                        let menu = cx.update(|app| {
+                            let host = owner.read(app).extension_window.as_ref().unwrap().host();
+                            host.open_menu(gpui::point(px(300.0), px(64.0)), items, app)
+                                .unwrap()
+                        });
+                        for _ in 0..4 {
+                            cx.run_until_parked();
+                            cx.update_window(handle.into(), |_, window, app| {
+                                window.refresh();
+                                let _ = window.draw(app);
+                            })
+                            .unwrap();
+                        }
+                        cx.capture_screenshot(handle.into())
+                            .unwrap()
+                            .save(directory.join(format!("{name}.png")))
+                            .unwrap();
+                        cx.update(|app| menu.close(app));
+                        cx.run_until_parked();
+                    }
+                }
                 cx.update_window(handle.into(), |_, window, _| window.remove_window())
                     .unwrap();
                 cx.run_until_parked();
