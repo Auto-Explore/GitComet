@@ -401,9 +401,10 @@ impl GitCometView {
                 if command.is_some() {
                     self.push_toast(
                         components::ToastKind::Warning,
-                        "The terminal opened outside GitComet, where the command could not be \
-                         typed"
-                            .to_string(),
+                        format!(
+                            "The terminal opened outside {}, where the command could not be typed",
+                            crate::view::product_name()
+                        ),
                         cx,
                     );
                 }
@@ -1484,9 +1485,7 @@ impl GitCometView {
                 self.terminal_panel_resize.is_some(),
                 Some(theme.colors.stroke.subtle),
             ))
-            .on_drag(TerminalPanelResizeDrag, |_payload, _offset, _window, cx| {
-                cx.new(|_cx| super::mod_helpers::ResizeDragGhost)
-            })
+            .on_resize_drag(TerminalPanelResizeDrag)
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |this, e: &MouseDownEvent, _w, cx| {

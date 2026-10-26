@@ -149,10 +149,12 @@ fn tag_menu_lists_remote_push_and_delete_entries(cx: &mut gpui::TestAppContext) 
                 gitcomet_core::domain::Remote {
                     name: "upstream".to_string(),
                     url: None,
+                    default_branch: None,
                 },
                 gitcomet_core::domain::Remote {
                     name: "origin".to_string(),
                     url: None,
+                    default_branch: None,
                 },
             ]));
             repo.remote_tags = Loadable::Ready(Arc::new(vec![gitcomet_core::domain::RemoteTag {
@@ -280,10 +282,12 @@ fn combined_ref_menu_scopes_actions_to_expanded_tag(cx: &mut gpui::TestAppContex
                 gitcomet_core::domain::Remote {
                     name: "origin".to_string(),
                     url: None,
+                    default_branch: None,
                 },
                 gitcomet_core::domain::Remote {
                     name: "upstream".to_string(),
                     url: None,
+                    default_branch: None,
                 },
             ]));
             repo.remote_tags = Loadable::Ready(Arc::new(vec![gitcomet_core::domain::RemoteTag {
@@ -818,6 +822,7 @@ fn remote_menu_lists_fetch_and_prune_actions(cx: &mut gpui::TestAppContext) {
             repo.remotes = Loadable::Ready(Arc::new(vec![gitcomet_core::domain::Remote {
                 name: remote_name.clone(),
                 url: None,
+                default_branch: None,
             }]));
 
             let state = Arc::new(AppState {
@@ -892,6 +897,7 @@ fn web_remote(name: &str, url: Option<&str>) -> gitcomet_core::domain::Remote {
     gitcomet_core::domain::Remote {
         name: name.to_string(),
         url: url.map(str::to_string),
+        default_branch: None,
     }
 }
 
@@ -2215,6 +2221,7 @@ fn pull_menu_disables_every_pull_mode_without_a_live_upstream(cx: &mut gpui::Tes
                 repo.remotes = Loadable::Ready(Arc::new(vec![gitcomet_core::domain::Remote {
                     name: "origin".to_string(),
                     url: None,
+                    default_branch: None,
                 }]));
                 repo.remote_branches =
                     Loadable::Ready(Arc::new(vec![gitcomet_core::domain::RemoteBranch {

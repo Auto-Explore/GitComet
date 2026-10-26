@@ -315,3 +315,154 @@ fn augment_drops_service_owned_entries_from_the_backend_listing() {
         [PathBuf::from("src"), PathBuf::from("src/main.rs")]
     );
 }
+
+/// A real repository with an ignored file the backend does not list, and its
+/// backend listing.
+fn listed_repository() -> (tempfile::TempDir, PathBuf, Vec<FileEntry>) {
+    use gitcomet_core::services::GitBackend as _;
+    let directory = tempfile::tempdir().unwrap();
+    let root = gitcomet_core::path_utils::canonicalize_or_original(directory.path().into());
+    let output = gitcomet_core::test_support::git_fixture::git_command()
+        .arg("init")
+        .arg("-q")
+        .arg(&root)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    for (path, text) in [
+        (".gitignore", "ignored/\n"),
+        ("a.txt", "a"),
+        ("B.txt", "b"),
+        ("b/z.txt", "z"),
+        ("b/a/x.txt", "x"),
+        ("c/d/e.txt", "e"),
+        ("ignored/deep/file.txt", "ignored"),
+    ] {
+        std::fs::create_dir_all(root.join(path).parent().unwrap()).unwrap();
+        std::fs::write(root.join(path), text).unwrap();
+    }
+    let base = gitcomet_git_gix::GixBackend
+        .open(&root)
+        .unwrap()
+        .list_worktree_files()
+        .unwrap();
+    assert!(
+        !base.iter().any(|entry| entry.path.starts_with("ignored")),
+        "the backend does not list ignored paths"
+    );
+    (directory, root, base)
+}
+
+fn revealing(path: &str) -> Options {
+    Options {
+        revealed: [PathBuf::from(path)].into(),
+        ..Options::default()
+    }
+}
+
+/// `augment` returns the backend listing untouched when every revealed path is
+/// listed; that is only the same result if rebuilding keeps the backend order.
+#[test]
+fn rebuilt_listings_keep_the_backend_order() {
+    let (_directory, root, base) = listed_repository();
+    let rebuilt = augment(
+        &root,
+        base.clone(),
+        revealing("ignored/deep/file.txt"),
+        &CancellationToken::new(),
+    )
+    .unwrap();
+    let listed: Vec<PathBuf> = rebuilt
+        .iter()
+        .filter(|entry| !entry.ignored)
+        .map(|entry| (*entry.path).clone())
+        .collect();
+    let backend: Vec<PathBuf> = base.iter().map(|entry| (*entry.path).clone()).collect();
+    assert_eq!(listed, backend);
+    assert!(
+        rebuilt.iter().any(
+            |entry| entry.ignored && entry.path.as_path() == Path::new("ignored/deep/file.txt")
+        )
+    );
+    let unchanged = augment(
+        &root,
+        base.clone(),
+        revealing("b/a/x.txt"),
+        &CancellationToken::new(),
+    )
+    .unwrap();
+    assert_eq!(unchanged, base);
+}
+
+/// Revealing reads only the revealed path's ancestors. It used to walk every
+/// listed directory on each Files refresh (137 ms per refresh on bun's 21.6k
+/// entries), here failing on a listed directory it cannot read.
+#[cfg(unix)]
+#[test]
+fn revealing_reads_only_the_revealed_path_ancestors() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let (_directory, root, base) = listed_repository();
+    let unrelated = root.join("c");
+    std::fs::set_permissions(&unrelated, std::fs::Permissions::from_mode(0o000)).unwrap();
+    let listed = augment(
+        &root,
+        base,
+        revealing("ignored/deep/file.txt"),
+        &CancellationToken::new(),
+    );
+    std::fs::set_permissions(&unrelated, std::fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(
+        listed
+            .unwrap()
+            .iter()
+            .any(|entry| entry.path.as_path() == Path::new("ignored/deep/file.txt"))
+    );
+}
+
+/// `GITCOMET_PROBE_REPO=<worktree> cargo test -p gitcomet-state --lib
+/// timing_explorer_listing -- --ignored --nocapture`: a Files refresh with one
+/// listed file revealed, against the real backend listing.
+#[test]
+#[ignore = "timing probe"]
+fn timing_explorer_listing_with_a_revealed_listed_file() {
+    use gitcomet_core::services::GitBackend as _;
+    let root = PathBuf::from(
+        std::env::var_os("GITCOMET_PROBE_REPO").expect("set GITCOMET_PROBE_REPO to a worktree"),
+    );
+    let repo = gitcomet_git_gix::GixBackend.open(&root).unwrap();
+    let base = repo.list_worktree_files().unwrap();
+    let revealed = base
+        .iter()
+        .rev()
+        .find(|entry| entry.kind == FileEntryKind::File)
+        .unwrap()
+        .path
+        .clone();
+    for (label, options) in [
+        ("nothing_revealed", Options::default()),
+        (
+            "one_listed_file_revealed",
+            Options {
+                revealed: [(*revealed).clone()].into(),
+                ..Options::default()
+            },
+        ),
+    ] {
+        let mut samples = Vec::new();
+        for _ in 0..11 {
+            let entries = base.clone();
+            let started = std::time::Instant::now();
+            let listed =
+                augment(&root, entries, options.clone(), &CancellationToken::new()).unwrap();
+            samples.push(started.elapsed());
+            assert_eq!(listed.len(), base.len());
+        }
+        samples.sort();
+        println!(
+            "timing explorer_listing {label} entries {} p50 {:?} min {:?}",
+            base.len(),
+            samples[5],
+            samples[0]
+        );
+    }
+}

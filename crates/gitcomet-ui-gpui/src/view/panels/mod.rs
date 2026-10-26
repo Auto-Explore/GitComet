@@ -238,6 +238,11 @@ pub(in crate::view) enum ContextMenuAction {
     OpenRepo {
         path: std::path::PathBuf,
     },
+    /// Opens the Add-worktree dialog with these fields filled in.
+    OpenWorktreeAddPrompt {
+        repo_id: RepoId,
+        prefill: WorktreeAddPrefill,
+    },
     ActivateRepo {
         repo_id: RepoId,
     },
@@ -770,8 +775,6 @@ impl ContextMenuModel {
         None
     }
 }
-
-// HistoryColResizeDragGhost moved to view/mod.rs for accessibility from panes::HistoryView.
 
 mod action_bar;
 pub(in crate::view) mod bar_items;

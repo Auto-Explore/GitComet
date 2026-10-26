@@ -64,6 +64,51 @@ pub(super) fn model(
     ContextMenuModel::new(items)
 }
 
+/// The worktrees on one history row, each opening in a tab.
+pub(super) fn commit_model(
+    this: &PopoverHost,
+    repo_id: RepoId,
+    commit_id: &CommitId,
+) -> ContextMenuModel {
+    let sha = commit_id.as_ref();
+    let mut model = ContextMenuModel::new(vec![
+        ContextMenuItem::Header(format!("Worktrees on {}", sha.get(..8).unwrap_or(sha)).into()),
+        ContextMenuItem::Separator,
+    ]);
+    let Some(repo) = this.state.repos.iter().find(|repo| repo.id == repo_id) else {
+        return model;
+    };
+    let Loadable::Ready(worktrees) = &repo.worktrees else {
+        return model;
+    };
+    let dirty = match &repo.worktree_dirty {
+        Loadable::Ready(dirty) => dirty.as_slice(),
+        _ => &[],
+    };
+    let chips = crate::view::caches::history_commit_worktree_chips(
+        &crate::view::caches::history_worktree_chips_by_head(worktrees, &repo.spec.workdir),
+        commit_id,
+        dirty,
+    );
+    for (chip_ix, chip) in chips.into_iter().enumerate() {
+        let index = model.items.len();
+        model
+            .entry_tooltips
+            .insert(index, chip.path.display().to_string().into());
+        model
+            .entry_debug_selectors
+            .insert(index, format!("history_worktree_menu_{chip_ix}").into());
+        model.items.push(ContextMenuItem::Entry {
+            label: chip.label,
+            icon: Some("icons/git_worktree.svg".into()),
+            shortcut: None,
+            disabled: false,
+            action: Box::new(ContextMenuAction::OpenRepo { path: chip.path }),
+        });
+    }
+    model
+}
+
 impl PopoverHost {
     /// Snapshot availability once per menu opening, away from the UI thread.
     /// A stat on an offline network share may never return; the menu remains

@@ -1718,6 +1718,67 @@ pub(super) struct HistoryStashIdsCache {
     pub(super) ids: Arc<FxHashSet<CommitId>>,
 }
 
+/// Another worktree, marked on the commit it has checked out.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(in crate::view) struct HistoryWorktreeChip {
+    pub(in crate::view) path: std::path::PathBuf,
+    pub(in crate::view) label: SharedString,
+}
+
+pub(in crate::view) type HistoryWorktreeChipsByHead =
+    FxHashMap<CommitId, SmallVec<[HistoryWorktreeChip; 1]>>;
+
+/// Every other worktree with a HEAD, grouped by that commit in list order.
+pub(in crate::view) fn history_worktree_chips_by_head(
+    worktrees: &[gitcomet_core::domain::Worktree],
+    own_workdir: &std::path::Path,
+) -> HistoryWorktreeChipsByHead {
+    let mut chips = HistoryWorktreeChipsByHead::default();
+    for worktree in worktrees {
+        if worktree.path == own_workdir {
+            continue;
+        }
+        let Some(head) = &worktree.head else {
+            continue;
+        };
+        chips
+            .entry(head.clone())
+            .or_default()
+            .push(HistoryWorktreeChip {
+                path: worktree.path.clone(),
+                label: super::rows::sidebar::worktree_origin_label(
+                    worktree.branch.as_deref(),
+                    worktree.detached,
+                    &worktree.path,
+                ),
+            });
+    }
+    chips
+}
+
+/// The chips a commit's row shows. Dirty worktrees are left out: their chips
+/// sit on their changes rows.
+pub(in crate::view) fn history_commit_worktree_chips(
+    chips: &HistoryWorktreeChipsByHead,
+    commit_id: &CommitId,
+    dirty: &[gitcomet_core::domain::WorktreeDirtySummary],
+) -> SmallVec<[HistoryWorktreeChip; 1]> {
+    chips
+        .get(commit_id)
+        .into_iter()
+        .flatten()
+        .filter(|chip| !dirty.iter().any(|summary| summary.path == chip.path))
+        .cloned()
+        .collect()
+}
+
+#[derive(Clone, Debug)]
+pub(super) struct HistoryWorktreeChipsCache {
+    pub(super) repo_id: RepoId,
+    pub(super) worktrees_rev: u64,
+    pub(super) chips: Arc<HistoryWorktreeChipsByHead>,
+}
+
 impl GitCometView {
     #[cfg(any(test, feature = "benchmarks"))]
     pub(super) fn branch_sidebar_rows(repo: &RepoState) -> Vec<BranchSidebarRow> {

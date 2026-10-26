@@ -1161,3 +1161,35 @@ fn syntax_pair_is_none_outside_any_pair() {
         "the caret before `fn` is inside nothing"
     );
 }
+
+/// `cargo test -p gitcomet-syntax --lib timing_live_markdown_keystroke --
+/// --ignored --nocapture`: one typed character in a long Markdown document,
+/// unbounded, so the time covers every layer the keystroke reparses.
+#[test]
+#[ignore = "timing probe"]
+fn timing_live_markdown_keystroke() {
+    for paragraphs in [300usize, 3_000] {
+        let mut text = String::new();
+        for ix in 0..paragraphs {
+            text.push_str(&format!(
+                "Paragraph {ix} has *emphasis*, `code` and a [link](https://example.com/{ix}).\n\n"
+            ));
+        }
+        let mut doc = document_in(DiffSyntaxLanguage::Markdown, &text, Vec::new());
+        let mut samples = Vec::new();
+        for key in 0..21 {
+            let at = text.len() / 2 + key;
+            text.insert(at, 'x');
+            let rope = Rope::from_text(&text);
+            let started = std::time::Instant::now();
+            let outcome = doc.sync(rope, Vec::new().into(), Some((at..at, at..at + 1)), None);
+            samples.push(started.elapsed());
+            assert_eq!(outcome, LiveSyntaxSyncOutcome::Reparsed);
+        }
+        samples.sort();
+        println!(
+            "timing live_markdown_keystroke paragraphs {paragraphs} p50 {:?} min {:?}",
+            samples[10], samples[0]
+        );
+    }
+}

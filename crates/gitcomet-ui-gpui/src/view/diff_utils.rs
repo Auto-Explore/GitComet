@@ -1060,7 +1060,9 @@ mod tests {
             std::fs::read_to_string(dir.path().join("run.sh")).unwrap(),
             "echo one\n"
         );
-        assert_eq!(worktree_mode(dir.path()), 0o755, "discard hunk");
+        // Git rewrites the file under the umask, so only the owner's
+        // executable bit is the same on every machine.
+        assert_ne!(worktree_mode(dir.path()) & 0o100, 0, "discard hunk");
     }
 
     /// A removed `-- comment` line reads `--- comment` in the diff. Parsed as a

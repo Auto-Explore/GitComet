@@ -55,7 +55,7 @@ def cases(corpus, suite):
     small = next((n for n in names if n.startswith("history-")), names[0] if names else None)
     if small is None:
         raise ValueError("empty corpus; run prepare first")
-    ui = ["startup", "repo-picker", "history-hover", "history-hover-stationary", "history-scroll", "history-drag", "history-select", "idle"]
+    ui = ["startup", "repo-picker", "history-hover", "history-hover-stationary", "history-scroll", "history-drag", "history-select", "pane-resize", "idle"]
     for scenario in ui:
         yield {"key": f"ui/{small}/{scenario}", "fixture": small, "scenario": scenario, "layer": "ui"}
     if suite == "deep":

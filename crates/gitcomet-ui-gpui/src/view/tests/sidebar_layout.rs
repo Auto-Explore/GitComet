@@ -118,10 +118,12 @@ fn remote_headers_include_remotes_with_no_branches() {
         Remote {
             name: "origin".to_string(),
             url: Some("https://example.com/origin.git".to_string()),
+            default_branch: None,
         },
         Remote {
             name: "upstream".to_string(),
             url: Some("https://example.com/upstream.git".to_string()),
+            default_branch: None,
         },
     ]));
     repo.remote_branches = Loadable::Ready(Arc::new(vec![RemoteBranch {
@@ -336,6 +338,7 @@ fn remote_section_excludes_upstream_without_remote_tracking_ref() {
     repo.remotes = Loadable::Ready(Arc::new(vec![Remote {
         name: "origin".to_string(),
         url: Some("https://example.com/origin.git".to_string()),
+        default_branch: None,
     }]));
     repo.remote_branches = Loadable::Ready(Arc::new(Vec::new()));
 

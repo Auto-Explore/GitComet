@@ -298,7 +298,7 @@ pub(super) struct HistoryColResizeState {
     pub(super) visible_columns: (bool, bool, bool),
 }
 
-pub(super) struct ResizeDragGhost;
+struct ResizeDragGhost;
 
 impl Render for ResizeDragGhost {
     fn render(&mut self, _window: &mut Window, _cx: &mut gpui::Context<Self>) -> impl IntoElement {
@@ -306,7 +306,21 @@ impl Render for ResizeDragGhost {
     }
 }
 
-pub(super) use ResizeDragGhost as HistoryColResizeDragGhost;
+pub(in crate::view) trait ResizeDividerDrag:
+    gpui::StatefulInteractiveElement + Sized
+{
+    /// Starts a divider drag with an invisible preview. The move handler must
+    /// notify the views it resizes: gpui's default redraws every cached view
+    /// on each pointer move, including the panes the divider does not move.
+    fn on_resize_drag<T: 'static>(self, handle: T) -> Self {
+        self.on_drag(handle, |_handle, _offset, _window, cx| {
+            gpui::AppContext::new(cx, |_cx| ResizeDragGhost)
+        })
+        .drag_move_refresh(gpui::DragMoveRefresh::Preview)
+    }
+}
+
+impl<E: gpui::StatefulInteractiveElement> ResizeDividerDrag for E {}
 
 pub(super) fn should_hide_unified_diff_header_line(line: &AnnotatedDiffLine) -> bool {
     matches!(line.kind, gitcomet_core::domain::DiffLineKind::Header)
@@ -612,8 +626,6 @@ impl PaneResizeState {
     }
 }
 
-pub(super) use ResizeDragGhost as PaneResizeDragGhost;
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum DiffSplitResizeHandle {
     Divider,
@@ -626,8 +638,6 @@ pub(super) struct DiffSplitResizeState {
     pub(super) start_ratio: f32,
 }
 
-pub(super) use ResizeDragGhost as DiffSplitResizeDragGhost;
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(in crate::view) enum AnnotateResizeHandle {
     Divider,
@@ -639,8 +649,6 @@ pub(in crate::view) struct AnnotateResizeState {
     pub(in crate::view) start_width: f32,
 }
 
-pub(in crate::view) use ResizeDragGhost as AnnotateResizeDragGhost;
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum ConflictVSplitResizeHandle {
     Divider,
@@ -651,8 +659,6 @@ pub(super) struct ConflictVSplitResizeState {
     pub(super) start_y: Pixels,
     pub(super) start_ratio: f32,
 }
-
-pub(super) use ResizeDragGhost as ConflictVSplitResizeDragGhost;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum StatusSectionResizeHandle {
@@ -667,9 +673,6 @@ pub(super) struct StatusSectionResizeState {
     pub(super) start_height: Pixels,
 }
 
-#[allow(unused_imports)]
-pub(super) use ResizeDragGhost as StatusSectionResizeDragGhost;
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum ConflictHSplitResizeHandle {
     First,
@@ -683,8 +686,6 @@ pub(super) struct ConflictHSplitResizeState {
     pub(super) start_ratios: [f32; 2],
 }
 
-pub(super) use ResizeDragGhost as ConflictHSplitResizeDragGhost;
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum ConflictDiffSplitResizeHandle {
     Divider,
@@ -694,31 +695,6 @@ pub(super) enum ConflictDiffSplitResizeHandle {
 pub(super) struct ConflictDiffSplitResizeState {
     pub(super) start_x: Pixels,
     pub(super) start_ratio: f32,
-}
-
-pub(super) use ResizeDragGhost as ConflictDiffSplitResizeDragGhost;
-
-#[cfg(test)]
-mod resize_drag_ghost_tests {
-    use super::{
-        ConflictDiffSplitResizeDragGhost, ConflictHSplitResizeDragGhost,
-        ConflictVSplitResizeDragGhost, DiffSplitResizeDragGhost, HistoryColResizeDragGhost,
-        PaneResizeDragGhost, ResizeDragGhost, StatusSectionResizeDragGhost,
-    };
-    use std::any::TypeId;
-
-    #[test]
-    fn all_resize_drag_ghost_aliases_use_shared_type() {
-        let shared = TypeId::of::<ResizeDragGhost>();
-
-        assert_eq!(TypeId::of::<HistoryColResizeDragGhost>(), shared);
-        assert_eq!(TypeId::of::<PaneResizeDragGhost>(), shared);
-        assert_eq!(TypeId::of::<DiffSplitResizeDragGhost>(), shared);
-        assert_eq!(TypeId::of::<ConflictVSplitResizeDragGhost>(), shared);
-        assert_eq!(TypeId::of::<StatusSectionResizeDragGhost>(), shared);
-        assert_eq!(TypeId::of::<ConflictHSplitResizeDragGhost>(), shared);
-        assert_eq!(TypeId::of::<ConflictDiffSplitResizeDragGhost>(), shared);
-    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]

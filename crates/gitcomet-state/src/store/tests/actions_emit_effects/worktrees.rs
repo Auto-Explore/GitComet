@@ -22,7 +22,11 @@ fn worktree_commands_reload_worktrees_on_success() {
             repo_id,
             command: RepoCommandKind::AddWorktree {
                 path: PathBuf::from("/tmp/worktree"),
-                reference: None,
+                checkout: gitcomet_core::services::WorktreeCheckout::NewBranch {
+                    name: "wt".to_string(),
+                    start: None,
+                },
+                open_after: false,
             },
             result: Ok(CommandOutput::empty_success(
                 "git worktree add /tmp/worktree",
@@ -92,7 +96,11 @@ fn worktree_commands_keep_sidebar_rows_until_refresh_finishes() {
     for command in [
         RepoCommandKind::AddWorktree {
             path: PathBuf::from("/tmp/new-worktree"),
-            reference: None,
+            checkout: gitcomet_core::services::WorktreeCheckout::NewBranch {
+                name: "wt".to_string(),
+                start: None,
+            },
+            open_after: false,
         },
         RepoCommandKind::RemoveWorktree {
             path: removed_path.clone(),
@@ -206,7 +214,11 @@ fn worktree_command_coalesces_with_an_existing_list_load() {
             repo_id,
             command: RepoCommandKind::AddWorktree {
                 path: "/linked".into(),
-                reference: None,
+                checkout: gitcomet_core::services::WorktreeCheckout::NewBranch {
+                    name: "wt".to_string(),
+                    start: None,
+                },
+                open_after: false,
             },
             result: Ok(CommandOutput::empty_success("git worktree add")),
         }),
@@ -369,5 +381,164 @@ fn apply_worktree_patch_command_finished_reloads_png_diff_preview() {
             .iter()
             .all(|effect| !matches!(effect, Effect::LoadDiffFile { .. })),
         "png reload should request image preview only"
+    );
+}
+
+fn finish_add_worktree(
+    repos: &mut RepositoryRuntimes,
+    id_alloc: &AtomicU64,
+    state: &mut AppState,
+    path: PathBuf,
+    open_after: bool,
+    result: std::result::Result<CommandOutput, gitcomet_core::error::Error>,
+) -> Vec<Effect> {
+    reduce(
+        repos,
+        id_alloc,
+        state,
+        Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
+            repo_id: RepoId(1),
+            command: RepoCommandKind::AddWorktree {
+                path,
+                checkout: gitcomet_core::services::WorktreeCheckout::Existing {
+                    reference: "feature".to_string(),
+                },
+                open_after,
+            },
+            result,
+        }),
+    )
+}
+
+/// A repo at `<tmp>/repo` beside an existing `<tmp>/wt` folder.
+fn state_beside_new_worktree() -> (tempfile::TempDir, AppState, PathBuf) {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let workdir = dir.path().join("repo");
+    let worktree = dir.path().join("wt");
+    std::fs::create_dir_all(&workdir).expect("workdir");
+    std::fs::create_dir_all(&worktree).expect("worktree");
+    let mut state = AppState::test_default();
+    // The repo's own canonicaliser, as repositories are opened: on Windows it
+    // drops the `\\?\` prefix `std::fs::canonicalize` adds.
+    state.repos.push(RepoState::new_opening(
+        RepoId(1),
+        RepoSpec {
+            workdir: gitcomet_core::path_utils::canonicalize_or_original(workdir),
+        },
+    ));
+    state.active_repo = Some(RepoId(1));
+    let worktree = gitcomet_core::path_utils::canonicalize_or_original(worktree);
+    (dir, state, worktree)
+}
+
+#[test]
+fn added_worktree_opens_in_a_tab_when_asked() {
+    let mut repos: RepositoryRuntimes = Default::default();
+    let id_alloc = AtomicU64::new(2);
+    let (_dir, mut state, worktree) = state_beside_new_worktree();
+
+    // Git ran in the workdir, so "../wt" is the sibling folder, not one beside
+    // the process's own working directory.
+    let effects = finish_add_worktree(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        PathBuf::from("../wt"),
+        true,
+        Ok(CommandOutput::empty_success(
+            "git worktree add ../wt feature",
+        )),
+    );
+
+    let opened = state
+        .repos
+        .iter()
+        .find(|repo| repo.spec.workdir == worktree)
+        .expect("the new worktree is opened as a tab");
+    assert_eq!(state.active_repo, Some(opened.id));
+    assert!(effects.iter().any(|effect| matches!(
+        effect,
+        Effect::OpenRepo { repo_id, path } if *repo_id == opened.id && *path == worktree
+    )));
+    assert!(
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::LoadWorktrees { repo_id } if *repo_id == RepoId(1))),
+        "the origin still refreshes its worktree list"
+    );
+}
+
+#[test]
+fn added_worktree_stays_closed_unless_asked() {
+    let mut repos: RepositoryRuntimes = Default::default();
+    let id_alloc = AtomicU64::new(2);
+    let (_dir, mut state, worktree) = state_beside_new_worktree();
+
+    let effects = finish_add_worktree(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        worktree,
+        false,
+        Ok(CommandOutput::empty_success("git worktree add wt feature")),
+    );
+
+    assert_eq!(state.repos.len(), 1);
+    assert_eq!(state.active_repo, Some(RepoId(1)));
+    assert!(
+        !effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::OpenRepo { .. }))
+    );
+}
+
+#[test]
+fn failed_worktree_add_opens_nothing() {
+    let mut repos: RepositoryRuntimes = Default::default();
+    let id_alloc = AtomicU64::new(2);
+    let (_dir, mut state, worktree) = state_beside_new_worktree();
+
+    let effects = finish_add_worktree(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        worktree,
+        true,
+        Err(gitcomet_core::error::Error::new(
+            gitcomet_core::error::ErrorKind::Backend("already exists".into()),
+        )),
+    );
+
+    assert_eq!(state.repos.len(), 1);
+    assert!(
+        !effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::OpenRepo { .. }))
+    );
+}
+
+#[test]
+fn added_worktree_does_not_open_once_its_origin_tab_is_gone() {
+    let mut repos: RepositoryRuntimes = Default::default();
+    let id_alloc = AtomicU64::new(2);
+    let mut state = AppState::test_default();
+
+    // "../wt" was relative to the closed tab's workdir; nothing can resolve it now.
+    let effects = finish_add_worktree(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        PathBuf::from("../wt"),
+        true,
+        Ok(CommandOutput::empty_success(
+            "git worktree add ../wt feature",
+        )),
+    );
+
+    assert!(state.repos.is_empty());
+    assert!(
+        !effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::OpenRepo { .. }))
     );
 }

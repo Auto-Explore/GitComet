@@ -192,6 +192,14 @@ enum Step {
         #[serde(default)]
         wait_for_rows: bool,
     },
+    /// Drags a pane resize handle to and fro, `travel_px` either side of
+    /// where it starts, one pointer move per input.
+    DragPaneResize {
+        handle: ResizeTarget,
+        travel_px: f32,
+        steps: usize,
+        interval_ms: u64,
+    },
     /// Starts through the production store, then returns so subsequent input
     /// runs concurrently with the operation. WaitOperation proves completion.
     StartOperation {
@@ -235,6 +243,16 @@ enum FocusTarget {
 enum ScrollTarget {
     History,
 }
+
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum ResizeTarget {
+    Sidebar,
+    Details,
+}
+
+/// Pointer moves per quarter swing of a `DragPaneResize`.
+const RESIZE_QUARTER_SWING_STEPS: f32 = 15.0;
 
 #[derive(Clone, Copy, Debug, Deserialize)]
 #[serde(tag = "list", rename_all = "snake_case")]
@@ -939,6 +957,89 @@ impl Driver {
                     .map_err(|e| e.to_string())?;
                 result
             }
+            Step::DragPaneResize {
+                handle,
+                travel_px,
+                steps,
+                interval_ms,
+            } => {
+                if *steps == 0 || !travel_px.is_finite() || *travel_px <= 0.0 {
+                    return Err("pane resize needs positive steps and travel".into());
+                }
+                let handle = match handle {
+                    ResizeTarget::Sidebar => PaneResizeHandle::Sidebar,
+                    ResizeTarget::Details => PaneResizeHandle::Details,
+                };
+                let start = self
+                    .window
+                    .update(cx, |_, window, cx| {
+                        pane_resize_handle_center(self.view.read(cx), handle, window)
+                    })
+                    .map_err(|e| e.to_string())?
+                    .ok_or("the pane is collapsed")?;
+                let pressed = self
+                    .window
+                    .update(cx, |_, window, cx| {
+                        window.dispatch_event(
+                            PlatformInput::MouseDown(MouseDownEvent {
+                                button: MouseButton::Left,
+                                position: start,
+                                modifiers: Modifiers::default(),
+                                click_count: 1,
+                                first_mouse: false,
+                            }),
+                            cx,
+                        );
+                        self.view
+                            .read(cx)
+                            .pane_resize
+                            .is_some_and(|state| state.handle == handle)
+                    })
+                    .map_err(|e| e.to_string())?;
+                let position = |ix: usize| {
+                    // A triangle wave: right, back through the start, left, back.
+                    let phase = ((ix + 1) as f32 / RESIZE_QUARTER_SWING_STEPS) % 4.0;
+                    let swing = if phase < 1.0 {
+                        phase
+                    } else if phase < 3.0 {
+                        2.0 - phase
+                    } else {
+                        phase - 4.0
+                    };
+                    point(start.x + px(swing * travel_px), start.y)
+                };
+                let result = if pressed {
+                    self.scheduled(*steps, *interval_ms, None, cx, |ix, window, cx| {
+                        window.dispatch_event(
+                            PlatformInput::MouseMove(MouseMoveEvent {
+                                position: position(ix),
+                                pressed_button: Some(MouseButton::Left),
+                                modifiers: Modifiers::default(),
+                            }),
+                            cx,
+                        );
+                    })
+                    .await
+                } else {
+                    Err(format!(
+                        "the press at {start:?} missed the {handle:?} resize handle"
+                    ))
+                };
+                self.window
+                    .update(cx, |_, window, cx| {
+                        window.dispatch_event(
+                            PlatformInput::MouseUp(MouseUpEvent {
+                                button: MouseButton::Left,
+                                position: position(*steps - 1),
+                                modifiers: Modifiers::default(),
+                                click_count: 1,
+                            }),
+                            cx,
+                        )
+                    })
+                    .map_err(|e| e.to_string())?;
+                result
+            }
             Step::StartOperation {
                 operation,
                 path,
@@ -1530,6 +1631,34 @@ impl Driver {
     }
 }
 
+/// A resize strip's center, from the layout in `splash.rs`: the sidebar's right
+/// edge, or the details pane's left edge inside the card's 1px border, offset
+/// by the client-side frame inset.
+fn pane_resize_handle_center(
+    view: &GitCometView,
+    handle: PaneResizeHandle,
+    window: &Window,
+) -> Option<Point<Pixels>> {
+    let insets = crate::kit::window_chrome::frame_insets(
+        window.window_decorations(),
+        crate::kit::window_chrome::client_side_decoration_inset(view.ui_scale_percent),
+    );
+    let size = window.viewport_size();
+    let x = match handle {
+        PaneResizeHandle::Sidebar if !view.sidebar_collapsed => {
+            insets.left + view.sidebar_render_width
+        }
+        PaneResizeHandle::Details if !view.details_collapsed => {
+            size.width - insets.right - px(1.0) - view.details_render_width
+        }
+        _ => return None,
+    };
+    Some(point(
+        x,
+        insets.top + (size.height - insets.top - insets.bottom) * 0.5,
+    ))
+}
+
 fn canonical(path: &std::path::Path) -> Result<PathBuf, String> {
     std::fs::canonicalize(path).map_err(|e| format!("{}: {e}", path.display()))
 }
@@ -1705,6 +1834,10 @@ mod tests {
             {"do": "move_pointer", "positions": [[0.55, 0.08]], "repeat": 1,
              "interval_ms": 0, "witness": {"kind": "message_hover"}},
             {"do": "drag_history", "to_fraction": 0.8, "steps": 90, "interval_ms": 16},
+            {"do": "drag_pane_resize", "handle": "sidebar", "travel_px": 80, "steps": 600,
+             "interval_ms": 16},
+            {"do": "drag_pane_resize", "handle": "details", "travel_px": 80, "steps": 600,
+             "interval_ms": 16},
             {"do": "start_operation", "operation": "clone", "url": "http://127.0.0.1/remote.git",
              "dest": "/tmp/disposable-clone"},
             {"do": "cancel_operation"},
@@ -1712,7 +1845,7 @@ mod tests {
             {"do": "wait_operation", "timeout_ms": 15000, "cancelled": true}
         ]}))
         .expect("parse performance steps");
-        assert_eq!(scenario.steps.len(), 6);
+        assert_eq!(scenario.steps.len(), 8);
     }
 
     #[test]

@@ -9,7 +9,7 @@ use gitcomet_core::remote_url::RemoteUrlPolicy;
 use gitcomet_core::services::{
     CommandOutput, ConflictSide, ForcePushLease, GitBackend, GitRepository, InteractiveRebaseEntry,
     PullMode, RemoteUrlKind, ResetMode, SafePushAfterCommitContext, SafePushAfterCommitTarget,
-    SubmoduleTrustTarget,
+    SubmoduleTrustTarget, WorktreeCheckout,
 };
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
@@ -228,9 +228,10 @@ fn repo_command_context(command: &RepoCommandKind) -> Option<String> {
             )
         }
         RepoCommandKind::ApplyPatch { patch } => patch.display().to_string(),
-        RepoCommandKind::AddWorktree { path, reference } => reference.as_ref().map_or_else(
-            || path.display().to_string(),
-            |reference| format!("{reference} → {}", path.display()),
+        RepoCommandKind::AddWorktree { path, checkout, .. } => format!(
+            "{} → {}",
+            crate::msg::worktree_checkout_label(checkout),
+            path.display()
         ),
         RepoCommandKind::RemoveWorktree { path }
         | RepoCommandKind::ForceRemoveWorktree { path } => path.display().to_string(),
@@ -732,10 +733,11 @@ fn schedule_add_worktree(
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     path: PathBuf,
-    reference: Option<String>,
+    checkout: WorktreeCheckout,
+    open_after: bool,
 ) {
     let command_path = path.clone();
-    let command_reference = reference.clone();
+    let command_checkout = checkout.clone();
     schedule_repo_command(
         executor,
         repos,
@@ -743,9 +745,10 @@ fn schedule_add_worktree(
         repo_id,
         RepoCommandKind::AddWorktree {
             path: command_path,
-            reference: command_reference,
+            checkout: command_checkout,
+            open_after,
         },
-        move |repo| repo.add_worktree_with_output(&path, reference.as_deref()),
+        move |repo| repo.add_worktree_with_output(&path, &checkout),
     );
 }
 
@@ -2478,8 +2481,9 @@ pub(super) fn schedule(
         RepoCommandEffect::AddWorktree {
             repo_id,
             path,
-            reference,
-        } => schedule_add_worktree(executor, repos, msg_tx, repo_id, path, reference),
+            checkout,
+            open_after,
+        } => schedule_add_worktree(executor, repos, msg_tx, repo_id, path, checkout, open_after),
         RepoCommandEffect::RemoveWorktree { repo_id, path } => {
             schedule_remove_worktree(executor, repos, msg_tx, repo_id, path);
         }
