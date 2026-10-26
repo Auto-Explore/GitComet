@@ -162,7 +162,6 @@ impl SidebarPaneView {
                     move || format!("ref_comparison_{subject}")
                 })
                 .flex_1()
-                .max_w_1_2()
                 .min_w(px(0.0))
                 .overflow_hidden()
                 .text_size(ctx.theme.ui_text(11.0))

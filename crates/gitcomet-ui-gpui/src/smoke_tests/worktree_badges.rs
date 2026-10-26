@@ -227,19 +227,13 @@ fn worktree_branch_and_path_stay_within_one_sidebar_row(cx: &mut gpui::TestAppCo
         .debug_bounds(path_selector)
         .expect("expected worktree path label bounds");
 
-    assert_eq!(
-        path_bounds.center().y,
-        row_bounds.center().y,
-        "expected path label {path_bounds:?} to be centered in row {row_bounds:?}",
-    );
-    assert_eq!(
-        branch_bounds.center().y,
-        row_bounds.center().y,
-        "expected branch badge {branch_bounds:?} to be centered in row {row_bounds:?}",
+    assert!(
+        path_bounds.top() >= row_bounds.top() && branch_bounds.bottom() <= row_bounds.bottom(),
+        "expected path {path_bounds:?} and branch {branch_bounds:?} to fit in row {row_bounds:?}",
     );
     assert!(
-        path_bounds.right() <= branch_bounds.left(),
-        "expected path label {path_bounds:?} to stay to the left of branch badge {branch_bounds:?}",
+        path_bounds.bottom() <= branch_bounds.top(),
+        "expected branch badge {branch_bounds:?} below path label {path_bounds:?}",
     );
     assert!(
         branch_bounds.right() - branch_bounds.left() > px(104.0),

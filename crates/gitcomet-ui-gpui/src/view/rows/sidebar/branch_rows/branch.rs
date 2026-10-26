@@ -183,10 +183,14 @@ impl SidebarPaneView {
             .child(
                 ctx.tree_icon_slot("icons/git_branch.svg", branch_icon_color, 14.0)
                     .debug_selector(move || format!("sidebar_branch_icon_{surface:?}_{ix}")),
-            )
+            );
+        let content = div()
+            .flex_1()
+            .min_w(px(0.0))
+            .flex()
+            .flex_col()
+            .justify_center()
             .child(
-                // Long branch names run into the trailing badges;
-                // fade them into the row instead of slicing a glyph.
                 components::FadingText::new(
                     div()
                         .text_size(theme.ui_text(14.0))
@@ -197,7 +201,7 @@ impl SidebarPaneView {
                             &ctx.filter_query,
                             branch_selected_label_color,
                             theme.colors.accent.foreground,
-                            gpui::rems(0.875).into(),
+                            theme.ui_text(14.0).into(),
                             FontWeight::NORMAL,
                             cx,
                         )),
@@ -208,16 +212,9 @@ impl SidebarPaneView {
                     row_style.resolved_hover_background(row_state),
                 )
                 .render(ctx.ui_scale_percent)
-                .debug_selector(move || format!("branch_comparison_label_{ix}"))
-                .flex_1()
-                .when(has_comparison, |label| {
-                    label.min_w(gpui::rems(
-                        theme.ui_text(14.0).0 * COMPARISON_IDENTITY_MIN_EM,
-                    ))
-                }),
+                .debug_selector(move || format!("branch_comparison_label_{ix}")),
             );
-
-        row = row.children(comparison);
+        let mut secondary = ctx.secondary_line().children(comparison);
 
         let show_branch_badges = divergence_behind.is_some()
             || divergence_ahead.is_some()
@@ -227,10 +224,7 @@ impl SidebarPaneView {
             .ml_auto()
             .flex_none()
             .when(has_comparison, |accessories| {
-                accessories
-                    .flex_initial()
-                    .max_w(gpui::relative(COMPARISON_ACCESSORY_FRACTION))
-                    .min_w(px(0.0))
+                accessories.flex_initial().max_w_1_2().min_w(px(0.0))
             })
             .flex()
             .items_center()
@@ -279,10 +273,15 @@ impl SidebarPaneView {
         }
 
         if show_branch_badges {
-            row = row.child(end_accessories);
+            secondary = secondary.child(end_accessories);
         }
 
         row = row
+            .child(
+                content.when(has_comparison || show_branch_badges, |content| {
+                    content.child(secondary)
+                }),
+            )
             .on_activate(
                 false,
                 controls::ControlActivation::Composite,

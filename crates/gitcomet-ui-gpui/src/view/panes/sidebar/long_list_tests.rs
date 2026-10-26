@@ -237,7 +237,7 @@ fn scoped_popover_rows_share_density_and_keep_search_fixed(cx: &mut gpui::TestAp
                 pane.branch_search_open = true;
                 pane.branch_filter_query = "shared/topic".into();
                 pane.branches_scroll
-                    .scroll_to_item(20, gpui::ScrollStrategy::Top);
+                    .scroll_to_item_strict(20, gpui::ScrollStrategy::Top);
                 cx.notify();
             });
         });
@@ -246,7 +246,7 @@ fn scoped_popover_rows_share_density_and_keep_search_fixed(cx: &mut gpui::TestAp
         cx.update(|_, app| {
             pane.update(app, |pane, cx| {
                 pane.branches_scroll
-                    .scroll_to_item(20, gpui::ScrollStrategy::Top);
+                    .scroll_to_item_strict(20, gpui::ScrollStrategy::Top);
                 cx.notify();
             })
         });
@@ -267,7 +267,7 @@ fn scoped_popover_rows_share_density_and_keep_search_fixed(cx: &mut gpui::TestAp
         let first = cx.debug_bounds("branch_row_81_22").unwrap();
         let second = cx.debug_bounds("branch_row_81_23").unwrap();
         let height = cx.update(|_, app| {
-            sidebar_list_row_height(pane.read(app).theme, ui_scale::current(app).percent)
+            branch_sidebar_row_height(pane.read(app).theme, ui_scale::current(app).percent)
         });
         assert!((second.top() - first.top() - height).abs() < px(0.5));
         cx.update(|_, app| {

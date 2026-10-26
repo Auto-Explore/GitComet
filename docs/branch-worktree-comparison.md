@@ -8,6 +8,8 @@ The default target is the ref named by the locally recorded `refs/remotes/origin
 
 The heading names the target. Row counts are exact ancestry counts: ↑ ahead and ↓ behind. A squash or rebase patch match can leave nonzero counts. Worktrees use their recorded HEAD, including detached checkouts. Tips shared by several branches or worktrees share analysis.
 
+Branch names and checkout paths occupy the first line of each row. Comparison results, upstream counts, branch/worktree badges, and checkout cleanliness sit below in smaller text. The branch sidebar uses taller rows at each density and zoom level; file lists retain their existing row height.
+
 Comparison inputs are captured OIDs. Equal subject and target OIDs establish an immediate up-to-date result after target validation. Other inputs use a shared `rev-list --topo-order --parents --stdin` walk to propagate per-seed reachability, excluding ancestry proven common to every seed. Exact numbers are published only after that walk completes successfully. Shallow, replacement, grafted, missing-object, interrupted, and budget-limited histories cannot establish exact walk results.
 
 ## Scheduling and display

@@ -701,7 +701,7 @@ fn sticky_sidebar_pinned_branch_interactions_highlight_only_the_clicked_copy(
             });
         })
     });
-    cx.simulate_resize(gpui::size(px(1100.0), px(1100.0)));
+    cx.simulate_resize(gpui::size(px(1100.0), px(1800.0)));
     test_support::redraw(cx);
     let theme = cx.update(|_, app| pane.read(app).theme);
     let selected_bg = crate::view::selected_branch_row_bg(theme).into();
@@ -1215,7 +1215,7 @@ fn sticky_groups_navigate_at_edges_and_toggle_at_their_natural_position(
                 let handle = pane.branches_scroll.0.borrow();
                 let offset = handle.base_handle.offset().y;
                 assert_ne!(offset, px(-1_000.0));
-                let row_height = sidebar_list_row_height(pane.theme, scale);
+                let row_height = branch_sidebar_row_height(pane.theme, scale);
                 let natural_top = handle.base_handle.bounds().top() + offset + row_height * ix;
                 (offset, natural_top)
             });
@@ -1291,7 +1291,7 @@ fn sticky_groups_navigate_at_edges_and_toggle_at_their_natural_position(
             .item
             .height;
         window.viewport_size().height - viewport_height
-            + sidebar_list_row_height(pane.theme, ui_scale::current(app).percent) * 7.25
+            + branch_sidebar_row_height(pane.theme, ui_scale::current(app).percent) * 7.25
     });
     cx.simulate_resize(gpui::size(px(1000.0), compact_height));
     test_support::redraw(cx);
@@ -1550,7 +1550,7 @@ fn sticky_sidebar_short_viewports_and_resizing_keep_content_accessible(
         window.viewport_size().height - size.item.height
     });
     let h = cx.update(|_, app| {
-        sidebar_list_row_height(pane.read(app).theme, ui_scale::current(app).percent)
+        branch_sidebar_row_height(pane.read(app).theme, ui_scale::current(app).percent)
     });
     for (slots, expected) in [(6.25, 5), (5.5, 0), (12.0, 6)] {
         cx.simulate_resize(gpui::size(px(1000.0), chrome + h * slots));
@@ -1723,7 +1723,7 @@ fn sticky_sidebar_surfaces_and_pin_alignment_follow_theme_density_and_scale(
             });
         })
     });
-    cx.simulate_resize(gpui::size(px(1100.0), px(1100.0)));
+    cx.simulate_resize(gpui::size(px(1100.0), px(1800.0)));
     for key in [
         "gitcomet_light",
         "gitcomet_dark",
@@ -1745,6 +1745,9 @@ fn sticky_sidebar_surfaces_and_pin_alignment_follow_theme_density_and_scale(
                     view.notify_font_preferences_changed(cx);
                     view.set_theme(AppTheme::from_key(key).unwrap(), cx);
                 });
+                pane.read(app)
+                    .branches_scroll
+                    .scroll_to_item_strict(0, gpui::ScrollStrategy::Top);
             });
             test_support::redraw(cx);
             let theme = cx.update(|_, app| pane.read(app).theme);
@@ -1755,7 +1758,7 @@ fn sticky_sidebar_surfaces_and_pin_alignment_follow_theme_density_and_scale(
             );
             let mut saw_top_stuck = false;
             let mut saw_bottom_stuck = false;
-            for offset in [px(0.0), sidebar_list_row_height(theme, scale) * 6] {
+            for offset in [px(0.0), branch_sidebar_row_height(theme, scale) * 6] {
                 cx.update(|_, app| {
                     pane.read(app)
                         .branches_scroll

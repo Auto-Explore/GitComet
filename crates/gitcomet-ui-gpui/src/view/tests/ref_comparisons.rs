@@ -126,7 +126,7 @@ fn comparison_state() -> (AppState, Arc<ComparisonMemory>) {
 }
 
 #[gpui::test]
-fn comparison_badges_preserve_branch_and_checkout_identity_at_narrow_widths(
+fn comparison_details_render_below_branch_and_checkout_identity_at_narrow_widths(
     cx: &mut gpui::TestAppContext,
 ) {
     let (state, _memory) = comparison_state();
@@ -198,10 +198,6 @@ fn comparison_badges_preserve_branch_and_checkout_identity_at_narrow_widths(
                 let bounds = cx
                     .debug_bounds(Box::leak(selector.clone().into_boxed_str()))
                     .unwrap_or_else(|| panic!("missing {selector}"));
-                assert!(
-                    bounds.size.width >= px(42.0 * percent as f32 / 100.0),
-                    "{selector} lost its readable identity at scale {percent}: {bounds:?}"
-                );
                 let row_selector =
                     if matches!(row, branch_sidebar::BranchSidebarRow::WorktreeItem { .. }) {
                         format!("worktree_row_1_{index}")
@@ -211,6 +207,11 @@ fn comparison_badges_preserve_branch_and_checkout_identity_at_narrow_widths(
                 let row_bounds = cx
                     .debug_bounds(Box::leak(row_selector.into_boxed_str()))
                     .unwrap();
+                assert!(
+                    bounds.size.width >= row_bounds.size.width * 0.6
+                        && row_bounds.right() - bounds.right() <= px(12.0 * percent as f32 / 100.0),
+                    "{selector} must use the available first-line width at scale {percent}: {bounds:?}, {row_bounds:?}"
+                );
                 assert!(
                     bounds.left() >= row_bounds.left() && bounds.right() <= row_bounds.right(),
                     "{selector} escaped its row: {bounds:?}, {row_bounds:?}"
@@ -223,8 +224,8 @@ fn comparison_badges_preserve_branch_and_checkout_identity_at_narrow_widths(
                             ))
                             .unwrap();
                         assert!(
-                            bounds.right() <= badge.left(),
-                            "checkout path overlaps its branch badge"
+                            bounds.bottom() <= badge.top(),
+                            "checkout branch badge must sit below its path"
                         );
                         state.repos[0]
                             .ref_comparisons
@@ -246,11 +247,13 @@ fn comparison_badges_preserve_branch_and_checkout_identity_at_narrow_widths(
                     ))
                     .unwrap();
                 assert!(
-                    bounds.right() <= comparison.left(),
-                    "identity overlaps comparison evidence"
+                    bounds.bottom() <= comparison.top(),
+                    "comparison evidence must sit below the identity"
                 );
                 assert!(
-                    comparison.right() <= row_bounds.right(),
+                    comparison.left() >= bounds.left()
+                        && comparison.right() <= row_bounds.right()
+                        && comparison.bottom() <= row_bounds.bottom(),
                     "comparison evidence escaped its row"
                 );
                 if matches!(row, branch_sidebar::BranchSidebarRow::Branch { name, .. } if name.as_ref().starts_with("b-merged"))

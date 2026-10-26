@@ -32,7 +32,9 @@ pub(in crate::view) use explorer_operations::ExplorerAction;
 mod file_browser_status;
 use file_browser_status::FileBrowserStatusCache;
 // File rows borrow the branch tree's row height: one rhythm for both lists.
-use crate::view::rows::sidebar::{sidebar_list_row_height, sidebar_list_row_height_px};
+use crate::view::rows::sidebar::{
+    branch_sidebar_row_height, sidebar_list_row_height, sidebar_list_row_height_px,
+};
 
 type FileBrowserRowsCache = std::cell::RefCell<
     Option<(
@@ -1915,7 +1917,7 @@ impl SidebarPaneView {
         });
         let list = restrict_scroll_to_vertical_axis(list);
         let view = cx.entity();
-        let row_height = sidebar_list_row_height(theme, ui_scale_percent);
+        let row_height = branch_sidebar_row_height(theme, ui_scale_percent);
         let list = div()
             .relative()
             .h_full()

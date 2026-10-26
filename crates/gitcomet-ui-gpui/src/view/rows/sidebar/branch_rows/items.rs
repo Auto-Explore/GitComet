@@ -133,7 +133,6 @@ impl SidebarPaneView {
         let comparison = this.active_repo().and_then(|repo| {
             this.comparison_badge(ctx, repo.ref_comparisons.projections.worktrees.get(&path))
         });
-        let has_comparison = comparison.is_some();
         let cleanliness = this.worktree_cleanliness_badge(ctx, &path, head.as_ref(), is_active);
         let context_menu_invoker_for_right_click = context_menu_invoker.clone();
         let row_group: SharedString = format!("worktree_row_{}_{}", repo_id.0, ix).into();
@@ -163,25 +162,15 @@ impl SidebarPaneView {
             .child(
                 div()
                     .flex_1()
-                    .when(has_comparison, |identity| {
-                        identity.flex_grow(COMPARISON_WORKTREE_IDENTITY_WEIGHT)
-                    })
                     .min_w(px(0.0))
                     .text_size(theme.ui_text(14.0))
                     .flex()
-                    .items_center()
-                    .overflow_hidden()
-                    .gap(ctx.px(5.0))
+                    .flex_col()
+                    .justify_center()
                     .child(
                         div()
                             .debug_selector(move || format!("worktree_path_label_{ix}"))
-                            .flex_1()
                             .min_w(px(0.0))
-                            .when(has_comparison, |label| {
-                                label.min_w(gpui::rems(
-                                    theme.ui_text(14.0).0 * COMPARISON_IDENTITY_MIN_EM,
-                                ))
-                            })
                             .overflow_hidden()
                             .child(
                                 components::TruncatedText::path(
@@ -204,72 +193,66 @@ impl SidebarPaneView {
                                 .render(cx),
                             ),
                     )
-                    .when_some(branch_badge_label.clone(), |row, badge_label| {
-                        row.child(
-                            div()
-                                .flex()
-                                .items_center()
-                                .gap(ctx.px(3.0))
-                                .px(ctx.px(6.0))
-                                .h(worktree_badge_height(
-                                    ui_scale::UiScale::from_percent(ctx.ui_scale_percent)
-                                        .with_appearance(theme.metrics),
-                                ))
-                                // Same control radius as the branch
-                                // rows' worktree badge; the two are
-                                // the same chip in two lists.
-                                .rounded(px(theme.radii.control))
-                                .border_1()
-                                .border_color(branch_badge_colors.border)
-                                .bg(branch_badge_colors.bg)
-                                .text_size(theme.ui_text(11.0))
-                                .text_color(branch_badge_colors.text)
-                                .id(("worktree_branch_badge", ix))
-                                .debug_selector(move || format!("worktree_branch_badge_{ix}"))
-                                .max_w_1_2()
-                                .when(has_comparison, |badge| {
-                                    badge.max_w(gpui::relative(COMPARISON_ACCESSORY_FRACTION))
-                                })
-                                .min_w(px(0.0))
-                                .overflow_hidden()
-                                .child(ctx.svg_icon(
-                                    "icons/git_branch.svg",
-                                    branch_badge_colors.icon,
-                                    9.0,
-                                ))
-                                .child(
+                    .child(
+                        ctx.secondary_line()
+                            .when_some(branch_badge_label.clone(), |row, badge_label| {
+                                row.child(
                                     div()
+                                        .flex()
+                                        .items_center()
+                                        .gap(ctx.px(3.0))
+                                        .px(ctx.px(6.0))
+                                        .h(worktree_badge_height(
+                                            ui_scale::UiScale::from_percent(ctx.ui_scale_percent)
+                                                .with_appearance(theme.metrics),
+                                        ))
+                                        .rounded(px(theme.radii.control))
+                                        .border_1()
+                                        .border_color(branch_badge_colors.border)
+                                        .bg(branch_badge_colors.bg)
+                                        .text_size(theme.ui_text(11.0))
+                                        .text_color(branch_badge_colors.text)
+                                        .id(("worktree_branch_badge", ix))
                                         .debug_selector(move || {
-                                            format!("worktree_branch_badge_label_{ix}")
+                                            format!("worktree_branch_badge_{ix}")
                                         })
+                                        .max_w_1_2()
                                         .min_w(px(0.0))
                                         .overflow_hidden()
+                                        .child(ctx.svg_icon(
+                                            "icons/git_branch.svg",
+                                            branch_badge_colors.icon,
+                                            9.0,
+                                        ))
                                         .child(
-                                            components::TruncatedText::new(
-                                                badge_label.clone(),
-                                                theme.ui_text(11.0),
-                                            )
-                                            .id(("worktree_branch_badge_text", ix))
-                                            .highlights(search_label_highlights(
-                                                &ctx.filter_query,
-                                                &badge_label,
-                                                theme.colors.accent.foreground,
-                                            ))
-                                            // Explicit color: TruncatedText resolves an
-                                            // unset color from the ambient text style in
-                                            // a deferred measure closure that misses the
-                                            // pill's `.text_color`, rendering near-black
-                                            // in the collapsed popover.
-                                            .text_color(branch_badge_colors.text)
-                                            .full_text_tooltip(this.tooltip_host.clone())
-                                            .render(cx),
+                                            div()
+                                                .debug_selector(move || {
+                                                    format!("worktree_branch_badge_label_{ix}")
+                                                })
+                                                .min_w(px(0.0))
+                                                .overflow_hidden()
+                                                .child(
+                                                    components::TruncatedText::new(
+                                                        badge_label.clone(),
+                                                        theme.ui_text(11.0),
+                                                    )
+                                                    .id(("worktree_branch_badge_text", ix))
+                                                    .highlights(search_label_highlights(
+                                                        &ctx.filter_query,
+                                                        &badge_label,
+                                                        theme.colors.accent.foreground,
+                                                    ))
+                                                    .text_color(branch_badge_colors.text)
+                                                    .full_text_tooltip(this.tooltip_host.clone())
+                                                    .render(cx),
+                                                ),
                                         ),
-                                ),
-                        )
-                    }),
+                                )
+                            })
+                            .children(comparison)
+                            .child(cleanliness),
+                    ),
             )
-            .children(comparison)
-            .child(cleanliness)
             .on_activate(
                 false,
                 controls::ControlActivation::Composite,

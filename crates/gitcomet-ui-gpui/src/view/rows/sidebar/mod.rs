@@ -42,13 +42,25 @@ pub(in crate::view) fn sidebar_row_background(
     }
 }
 
-/// Row height of every continuous list in the sidebar. The tabs swap lists in
-/// place, so a differing rhythm would make the rows jump.
 const SIDEBAR_TREE_ROW_HEIGHT_PX: f32 = 24.0;
 const SIDEBAR_TREE_COMFORTABLE_ROW_HEIGHT_PX: f32 = 32.0;
+const BRANCH_SIDEBAR_LINE_HEIGHT_PX: f32 = 22.0;
+const BRANCH_SIDEBAR_COMFORTABLE_LINE_HEIGHT_PX: f32 = 25.0;
 
-/// Unscaled height shared by both sidebar modes. Round the density ramp before
-/// scaling so natural rows and sticky overlays use the same slot geometry.
+pub(in crate::view) fn branch_sidebar_row_height(
+    theme: AppTheme,
+    ui_scale_percent: u32,
+) -> gpui::Pixels {
+    ui_scale::design_px_from_percent(
+        (2.0 * theme.metrics.row_height(
+            BRANCH_SIDEBAR_LINE_HEIGHT_PX,
+            BRANCH_SIDEBAR_COMFORTABLE_LINE_HEIGHT_PX,
+        ))
+        .round(),
+        ui_scale_percent,
+    )
+}
+
 pub(in crate::view) fn sidebar_list_row_height_px(theme: AppTheme) -> f32 {
     theme
         .metrics

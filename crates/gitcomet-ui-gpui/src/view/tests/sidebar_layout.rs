@@ -1775,10 +1775,8 @@ fn active_branch_locate_button_expands_scrolls_and_selects_like_its_row(
     cx.run_until_parked();
 }
 
-/// The two sidebar lists swap in place, so a row in one must be exactly as tall
-/// as a row in the other -- at either density.
 #[gpui::test]
-fn the_file_explorer_and_the_branch_tree_share_one_row_height(cx: &mut gpui::TestAppContext) {
+fn branch_rows_allow_two_lines_while_file_rows_keep_their_density(cx: &mut gpui::TestAppContext) {
     use crate::appearance::{Appearance, UiDensity};
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_view = store.clone();
@@ -1828,7 +1826,11 @@ fn the_file_explorer_and_the_branch_tree_share_one_row_height(cx: &mut gpui::Tes
             .height
     };
 
-    for density in UiDensity::ALL {
+    for (density, file_height, branch_height) in [
+        (UiDensity::Compact, 24.0, 44.0),
+        (UiDensity::Comfortable, 32.0, 50.0),
+        (UiDensity::Spacious, 37.0, 54.0),
+    ] {
         let file_row = height_of(
             gitcomet_state::model::SidebarMode::Files,
             &["file_browser_row_0"],
@@ -1841,10 +1843,8 @@ fn the_file_explorer_and_the_branch_tree_share_one_row_height(cx: &mut gpui::Tes
             density,
         );
 
-        assert_eq!(
-            file_row, branch_row,
-            "a file row and a branch row must match at {density:?} density"
-        );
+        assert_eq!(file_row, px(file_height), "file row at {density:?}");
+        assert_eq!(branch_row, px(branch_height), "branch row at {density:?}");
     }
 }
 
@@ -2218,7 +2218,7 @@ fn right_clicking_a_branch_group_row_opens_the_group_context_menu(cx: &mut gpui:
         group_row.size.height,
         cx.update(|_window, app| {
             let root = view.read(app);
-            rows::sidebar::sidebar_list_row_height(root.theme, root.ui_scale_percent)
+            rows::sidebar::branch_sidebar_row_height(root.theme, root.ui_scale_percent)
         }),
         "branch hierarchy rows must follow the selected density"
     );

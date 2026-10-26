@@ -22,9 +22,6 @@ const BRANCH_BADGE_GAP_PX: f32 = 3.0;
 /// narrow enough that the pill always fits the pane — which is what
 /// keeps every row's badge on one right edge.
 const BRANCH_WORKTREE_BADGE_MAX_W_PX: f32 = 140.0;
-const COMPARISON_ACCESSORY_FRACTION: f32 = 1.0 / 3.0;
-const COMPARISON_WORKTREE_IDENTITY_WEIGHT: f32 = 2.0;
-const COMPARISON_IDENTITY_MIN_EM: f32 = 3.0;
 /// Gap between a row's trailing badge and the row's right edge, shared
 /// by every row (headers included) so the badges land on one edge.
 /// The expanded sidebar adds its content inset here so full-width
@@ -121,7 +118,17 @@ impl SidebarRowContext {
     }
 
     fn row_height(&self) -> Pixels {
-        sidebar_list_row_height(self.theme, self.ui_scale_percent)
+        branch_sidebar_row_height(self.theme, self.ui_scale_percent)
+    }
+
+    fn secondary_line(&self) -> gpui::Div {
+        div()
+            .flex()
+            .items_center()
+            .min_w(px(0.0))
+            .gap(self.px(BRANCH_TREE_GAP_PX))
+            .text_size(self.theme.ui_text(11.0))
+            .text_color(self.theme.colors.foreground.secondary)
     }
 
     fn trailing_pad(&self) -> Pixels {
@@ -235,7 +242,7 @@ impl SidebarRowContext {
             .when(constrained, |badge| badge.flex_1().min_w(px(0.0)))
             .items_center()
             .gap_1()
-            .text_size(theme.ui_text(12.0))
+            .text_size(theme.ui_text(11.0))
             .font_weight(FontWeight::MEDIUM)
             .text_color(color)
             .child(self.svg_icon(icon_path, color, 11.0))
