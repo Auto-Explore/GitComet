@@ -526,7 +526,7 @@ impl DiffRenderer {
         self.file_editor_dirty()
     }
 
-    /// Whether the toolbar shows Save and Discard for the editor: always
+    /// Whether the action bar shows Cancel and Save for the editor: always
     /// without auto-save, and with it while the buffer cannot be written.
     pub(in crate::view) fn file_editor_shows_save_controls(&self) -> bool {
         !self.auto_save_file_edits
