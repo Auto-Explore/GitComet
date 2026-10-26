@@ -54,6 +54,7 @@ mod tests {
                     "view/panels/repo_tabs_bar.rs",
                     "view/panes/details.rs",
                     "view/panes/file_history.rs",
+                    "view/panes/diff/hosted_cards.rs",
                     "view/panes/history/history_panel.rs",
                     "view/panes/reflog/columns.rs",
                     "view/rows/conflict_resolver.rs",
