@@ -11,6 +11,8 @@ use std::sync::{Arc, RwLock, mpsc};
 use std::thread;
 use std::time::Instant;
 
+mod auto_fetch;
+mod auto_fetch_admission;
 mod effects;
 mod executor;
 mod mutation_gate;
@@ -165,6 +167,7 @@ fn is_control_command(command: &StoreWorkerCommand) -> bool {
     match command {
         StoreWorkerCommand::Msg(msg) | StoreWorkerCommand::Traced(msg, _) => is_control_msg(msg),
         StoreWorkerCommand::Shutdown => true,
+        StoreWorkerCommand::SetAutoFetchAllowed(_) => true,
         StoreWorkerCommand::Repository { .. } => true,
         StoreWorkerCommand::ActivationRefresh(_) => false,
         #[cfg(any(test, feature = "test-support"))]
@@ -286,6 +289,40 @@ struct WorkerLoopContext<'a> {
 }
 
 impl WorkerLoopContext<'_> {
+    fn sync_auto_fetch(&self, repos: &RepositoryRuntimes) {
+        let (registrations, settings) = {
+            let state = self
+                .thread_state
+                .read()
+                .unwrap_or_else(|error| error.into_inner());
+            let mut settings = state.remote_settings;
+            settings.auto_fetch.enabled &= state.git_runtime.is_available();
+            let registrations = if self
+                .thread_msg_tx
+                .auto_fetch_allowed
+                .load(Ordering::Acquire)
+            {
+                state
+                    .repos
+                    .iter()
+                    .filter(|repo| !repo.is_provisional_external_drop_open())
+                    .map(|repo| auto_fetch::Registration {
+                        repo_id: repo.id,
+                        lifetime: repo.lifetime_id(),
+                        workdir: repo.spec.workdir.clone(),
+                        common_dir: repo.common_dir.as_ref().map(|path| path.to_path_buf()),
+                        repository: repos.repository(&repo.id).cloned(),
+                    })
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            (registrations, settings)
+        };
+        self.thread_msg_tx
+            .sync_auto_fetch(registrations, settings, self.backend);
+    }
+
     /// Runs one reducer under the write lock, records its pass, and dispatches
     /// its effects.
     ///
@@ -369,6 +406,7 @@ impl WorkerLoopContext<'_> {
     where
         I: IntoIterator<Item = crate::msg::Effect>,
     {
+        self.sync_auto_fetch(repos);
         let active_value = self
             .thread_state
             .read()
@@ -627,6 +665,14 @@ impl Clone for AppStore {
 }
 
 impl AppStore {
+    pub fn shutdown_background_fetches() {
+        auto_fetch::AutoFetchCoordinator::shared().shutdown();
+    }
+
+    pub fn set_auto_fetch_allowed(&self, allowed: bool) {
+        self.msg_tx.set_auto_fetch_allowed(allowed);
+    }
+
     /// Acknowledge queued reductions and return their publication sequence.
     /// Effects scheduled by those reductions can still finish afterwards.
     #[cfg(any(test, feature = "test-support"))]
@@ -652,6 +698,7 @@ impl AppStore {
             backend,
             AppState::default(),
             repository_preferences::PreferenceHub::shared(),
+            auto_fetch::AutoFetchCoordinator::shared(),
             FilesystemScope::Process,
         )
     }
@@ -664,6 +711,7 @@ impl AppStore {
             repository_preferences::PreferenceHub::new(
                 crate::session::default_session_file_path_for_effect(),
             ),
+            auto_fetch::AutoFetchCoordinator::new(),
             FilesystemScope::Store,
         )
     }
@@ -677,6 +725,7 @@ impl AppStore {
             backend,
             AppState::test_default(),
             Arc::clone(&other.msg_tx.preferences),
+            Arc::clone(&other.msg_tx.auto_fetch),
             FilesystemScope::Store,
         )
     }
@@ -685,6 +734,7 @@ impl AppStore {
         backend: Arc<dyn GitBackend>,
         initial: AppState,
         preferences: Arc<repository_preferences::PreferenceHub>,
+        auto_fetch: Arc<auto_fetch::AutoFetchCoordinator>,
         scope: FilesystemScope,
     ) -> (Self, smol::channel::Receiver<StoreEvent>) {
         let discovery_backend = Arc::clone(&backend);
@@ -697,6 +747,7 @@ impl AppStore {
             Arc::clone(&store_alive),
             store_id,
             preferences,
+            auto_fetch,
             scope.engine(),
         );
         // Coalesced "state changed" notifications: at most one pending.
@@ -757,6 +808,11 @@ impl AppStore {
             while let Ok(command) = recv_next_worker_command(&command_rx, &mut deferred_commands) {
                 let (mut msg, stamp) = match command {
                     StoreWorkerCommand::Msg(msg) => (*msg, None),
+                    StoreWorkerCommand::SetAutoFetchAllowed(allowed) => {
+                        thread_msg_tx.auto_fetch_allowed.store(allowed, Ordering::Release);
+                        let settings = thread_state.read().unwrap_or_else(|error| error.into_inner()).remote_settings;
+                        (Msg::SetRemoteSettings(settings), None)
+                    }
                     StoreWorkerCommand::Traced(msg, stamp) => (*msg, Some(stamp)),
                     StoreWorkerCommand::ActivationRefresh(refresh) => {
                         let state = thread_state.read().unwrap_or_else(|e| e.into_inner());

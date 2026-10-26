@@ -89,6 +89,8 @@ impl SettingsWindowView {
             default_history_mode: Some(self.default_history_mode),
             default_tag_type: Some(self.default_tag_type),
             fetch_prune_deleted_remote_branches: Some(self.prune_deleted_remote_branches_on_fetch),
+            auto_fetch_enabled: Some(self.auto_fetch.enabled),
+            auto_fetch_interval_minutes: Some(self.auto_fetch.interval),
             annex_hide_bookkeeping_refs: Some(self.large_file_settings.hide_annex_refs),
             annex_pull_push_on_adjusted: Some(self.large_file_settings.annex_pull_push),
             annex_sync_content: Some(self.large_file_settings.annex_sync_content),
@@ -1149,6 +1151,50 @@ impl SettingsWindowView {
         self.recommend_repo_maintenance = enabled;
         self.persist_preferences(cx);
         self.broadcast_preference(PreferenceChange::MaintenanceRecommendations(enabled), cx);
+        cx.notify();
+    }
+
+    pub(super) fn set_auto_fetch_enabled(&mut self, enabled: bool, cx: &mut gpui::Context<Self>) {
+        if self.auto_fetch.enabled == enabled {
+            return;
+        }
+        self.auto_fetch.enabled = enabled;
+        self.persist_preferences(cx);
+        self.broadcast_preference(PreferenceChange::AutoFetch(self.auto_fetch), cx);
+        cx.notify();
+    }
+
+    pub(super) fn commit_auto_fetch_interval(&mut self, cx: &mut gpui::Context<Self>) {
+        let interval = self
+            .auto_fetch_interval_input
+            .read(cx)
+            .text()
+            .trim()
+            .parse::<u16>()
+            .ok()
+            .and_then(AutoFetchInterval::new);
+        let Some(interval) = interval else {
+            self.auto_fetch_interval_error = Some("Enter a whole number from 1 to 1,440 minutes.");
+            cx.notify();
+            return;
+        };
+        let changed = self.auto_fetch.interval != interval;
+        self.auto_fetch.interval = interval;
+        self.reset_auto_fetch_interval_input(cx);
+        if changed {
+            self.persist_preferences(cx);
+            self.broadcast_preference(PreferenceChange::AutoFetch(self.auto_fetch), cx);
+        }
+    }
+
+    pub(super) fn reset_auto_fetch_interval_input(&mut self, cx: &mut gpui::Context<Self>) {
+        self.auto_fetch_interval_error = None;
+        let value = self.auto_fetch.interval.minutes().to_string();
+        self.auto_fetch_interval_input.update(cx, |input, cx| {
+            if input.text() != value {
+                input.set_text(value, cx);
+            }
+        });
         cx.notify();
     }
 }

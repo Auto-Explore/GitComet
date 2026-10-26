@@ -183,6 +183,7 @@ fn selecting_the_working_tree_preserves_a_file_preview_when_following(
         // any ClearDiffSelection, so observing it makes the assertion stable.
         store.dispatch(Msg::SetRemoteSettings(RemoteSettings {
             prune_deleted_remote_branches_on_fetch: false,
+            ..RemoteSettings::default()
         }));
         wait_until(cx, "working-tree selection", |_| {
             !store

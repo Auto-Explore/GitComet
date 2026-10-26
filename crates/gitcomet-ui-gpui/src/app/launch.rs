@@ -523,6 +523,7 @@ pub(super) fn run_windowed_app(
         cx.set_global(GitCometBackendGlobal(Arc::clone(&backend)));
         configure_filesystem_journal_storage();
         cx.on_app_quit(|_| {
+            AppStore::shutdown_background_fetches();
             // GPUI only waits 200 ms for returned futures. Journal directories
             // can be large, so finish cleanup before that timeout starts.
             gitcomet_core::filesystem::cleanup_on_shutdown();

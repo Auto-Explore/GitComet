@@ -309,7 +309,10 @@ impl GitCometView {
                     repo_id: next_repo.id,
                     entry: entry.clone(),
                 });
-                if entry.command.starts_with("telemetry.") || entry.handled_by_auth_prompt {
+                if entry.source == gitcomet_state::model::CommandSource::Background
+                    || entry.command.starts_with("telemetry.")
+                    || entry.handled_by_auth_prompt
+                {
                     continue;
                 }
 

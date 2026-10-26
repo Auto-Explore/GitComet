@@ -266,12 +266,14 @@ pub(super) struct RepositoryPreferences {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct RemotePreferences {
     pub(super) prune_deleted_remote_branches_on_fetch: bool,
+    pub(super) auto_fetch: gitcomet_state::model::AutoFetchSettings,
 }
 
 impl Default for RemotePreferences {
     fn default() -> Self {
         Self {
             prune_deleted_remote_branches_on_fetch: true,
+            auto_fetch: Default::default(),
         }
     }
 }
@@ -450,6 +452,10 @@ impl UiPreferences {
                 prune_deleted_remote_branches_on_fetch: session
                     .fetch_prune_deleted_remote_branches
                     .unwrap_or(true),
+                auto_fetch: gitcomet_state::model::AutoFetchSettings {
+                    enabled: session.auto_fetch_enabled.unwrap_or(false),
+                    interval: session.auto_fetch_interval_minutes.unwrap_or_default(),
+                },
             },
             maintenance: MaintenancePreferences {
                 recommend: session.recommend_repo_maintenance.unwrap_or(true),
@@ -513,6 +519,8 @@ mod tests {
         );
         assert!(preferences.merge_tool.view_three_way);
         assert!(preferences.remotes.prune_deleted_remote_branches_on_fetch);
+        assert!(!preferences.remotes.auto_fetch.enabled);
+        assert_eq!(preferences.remotes.auto_fetch.interval.minutes(), 30);
         assert_eq!(
             preferences.maintenance.recommend,
             gitcomet_state::model::MaintenanceSettings::default().recommend

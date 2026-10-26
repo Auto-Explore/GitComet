@@ -34,6 +34,7 @@ impl StoreWorkerCommand {
 
 pub(super) enum StoreWorkerCommand {
     Msg(Box<Msg>),
+    SetAutoFetchAllowed(bool),
     /// A message sent while operation tracing is on, carrying the sender's
     /// operation and enqueue time. Handled exactly like [`Self::Msg`].
     Traced(Box<Msg>, op_trace::Stamp),
@@ -69,6 +70,8 @@ enum StoreWorkerSenderInner {
 pub(super) struct StoreWorkerSender {
     inner: StoreWorkerSenderInner,
     pub(super) preferences: Arc<super::repository_preferences::PreferenceHub>,
+    pub(super) auto_fetch: Arc<super::auto_fetch::AutoFetchCoordinator>,
+    pub(super) auto_fetch_allowed: Arc<AtomicBool>,
     pub(super) filesystem: &'static std::sync::Mutex<gitcomet_core::filesystem::Filesystem>,
     alive: Arc<AtomicBool>,
     store_id: StoreInstanceId,
@@ -85,6 +88,67 @@ struct RepoLoadGuard {
 }
 
 impl StoreWorkerSender {
+    pub(super) fn set_auto_fetch_allowed(&self, allowed: bool) {
+        match &self.inner {
+            StoreWorkerSenderInner::Command(tx) => {
+                let _ = tx.send(StoreWorkerCommand::SetAutoFetchAllowed(allowed));
+            }
+            #[cfg(test)]
+            StoreWorkerSenderInner::MsgForTest(_) => {}
+        }
+    }
+
+    pub(super) fn sync_auto_fetch(
+        &self,
+        registrations: Vec<super::auto_fetch::Registration>,
+        settings: crate::model::RemoteSettings,
+        backend: &Arc<dyn gitcomet_core::services::GitBackend>,
+    ) {
+        if !self.is_alive() {
+            self.auto_fetch.unsubscribe(self.store_id.get());
+            return;
+        }
+        let inner = self.inner.clone();
+        let alive = Arc::downgrade(&self.alive);
+        let sink = Arc::new(move |event| {
+            if !alive
+                .upgrade()
+                .is_some_and(|alive| alive.load(Ordering::Acquire))
+            {
+                return;
+            }
+            let message = match event {
+                super::auto_fetch::Event::Updated {
+                    repo_id,
+                    lifetime,
+                    revision,
+                    snapshot,
+                    result,
+                } => crate::msg::InternalMsg::AutoFetchUpdated {
+                    repo_id,
+                    lifetime,
+                    revision,
+                    snapshot,
+                    result,
+                },
+                super::auto_fetch::Event::Refresh { repo_id, lifetime } => {
+                    crate::msg::InternalMsg::AutoFetchRefresh { repo_id, lifetime }
+                }
+            };
+            match &inner {
+                StoreWorkerSenderInner::Command(tx) => {
+                    let _ = tx.send(StoreWorkerCommand::Msg(Box::new(Msg::Internal(message))));
+                }
+                #[cfg(test)]
+                StoreWorkerSenderInner::MsgForTest(tx) => {
+                    let _ = tx.send(Msg::Internal(message));
+                }
+            }
+        });
+        self.auto_fetch
+            .sync(self.store_id.get(), registrations, settings, backend, sink);
+    }
+
     pub(super) fn repository(
         &self,
         repo_id: RepoId,
@@ -114,6 +178,7 @@ impl StoreWorkerSender {
         alive: Arc<AtomicBool>,
         store_id: StoreInstanceId,
         preferences: Arc<super::repository_preferences::PreferenceHub>,
+        auto_fetch: Arc<super::auto_fetch::AutoFetchCoordinator>,
         filesystem: &'static std::sync::Mutex<gitcomet_core::filesystem::Filesystem>,
     ) -> Self {
         let subscriber_tx = tx.clone();
@@ -133,6 +198,8 @@ impl StoreWorkerSender {
         );
         Self {
             preferences,
+            auto_fetch,
+            auto_fetch_allowed: Arc::new(AtomicBool::new(true)),
             filesystem,
             inner: StoreWorkerSenderInner::Command(tx),
             alive,
@@ -149,6 +216,8 @@ impl StoreWorkerSender {
         Self {
             inner: StoreWorkerSenderInner::MsgForTest(tx),
             preferences: super::repository_preferences::PreferenceHub::new(None),
+            auto_fetch: super::auto_fetch::AutoFetchCoordinator::new(),
+            auto_fetch_allowed: Arc::new(AtomicBool::new(true)),
             filesystem: super::isolated_filesystem(),
             alive: Arc::new(AtomicBool::new(true)),
             store_id: StoreInstanceId(0),
@@ -333,6 +402,7 @@ impl StoreWorkerSender {
             return;
         }
         self.preferences.unsubscribe(self.store_id.get());
+        self.auto_fetch.unsubscribe(self.store_id.get());
 
         match &self.inner {
             StoreWorkerSenderInner::Command(tx) => {

@@ -33,7 +33,7 @@ mod large_file;
 mod local_file_link;
 mod mergetool_settings;
 mod previous_commit_messages;
-mod pull;
+pub(super) mod pull;
 mod push;
 mod reflog_entry;
 mod remote;

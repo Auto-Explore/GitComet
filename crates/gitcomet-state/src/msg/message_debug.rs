@@ -3,6 +3,24 @@ use super::message::InternalMsg;
 impl std::fmt::Debug for InternalMsg {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            InternalMsg::AutoFetchUpdated {
+                repo_id,
+                lifetime,
+                revision,
+                snapshot,
+                ..
+            } => f
+                .debug_struct("AutoFetchUpdated")
+                .field("repo_id", repo_id)
+                .field("lifetime", lifetime)
+                .field("revision", revision)
+                .field("snapshot", snapshot)
+                .finish_non_exhaustive(),
+            InternalMsg::AutoFetchRefresh { repo_id, lifetime } => f
+                .debug_struct("AutoFetchRefresh")
+                .field("repo_id", repo_id)
+                .field("lifetime", lifetime)
+                .finish(),
             InternalMsg::AuthPromptValidated {
                 generation, result, ..
             } => f

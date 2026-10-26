@@ -211,6 +211,29 @@ pub enum RepoCommandKind {
 }
 
 impl RepoCommandKind {
+    pub(crate) fn blocks_auto_fetch(&self) -> bool {
+        self.fetches_objects()
+            || matches!(
+                self,
+                Self::RunMaintenance
+                    | Self::PruneLocalTags
+                    | Self::Push
+                    | Self::PushWithTags { .. }
+                    | Self::PushAfterCommit { .. }
+                    | Self::ForcePush
+                    | Self::ForcePushWithLease { .. }
+                    | Self::PushSetUpstream { .. }
+                    | Self::PushTag { .. }
+                    | Self::DeleteRemoteTag { .. }
+                    | Self::DeleteRemoteBranch { .. }
+                    | Self::DeleteRemoteBranches { .. }
+                    | Self::AddRemote { .. }
+                    | Self::RemoveRemote { .. }
+                    | Self::SetRemoteUrl { .. }
+            )
+            || matches!(self, Self::LargeFile { command } if command.pulls() || command.pushes())
+    }
+
     pub(crate) fn finished(
         self,
         repo_id: crate::model::RepoId,

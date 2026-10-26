@@ -49,6 +49,7 @@ fn timing_state_clone_with_full_repository_logs() {
                 message: format!("diagnostic {ix} for repository {id}"),
             });
             repo.feedback_mut().command_log.push(CommandLogEntry {
+                source: crate::model::CommandSource::User,
                 time: std::time::SystemTime::UNIX_EPOCH,
                 ok: true,
                 command: format!("git fetch origin refs/heads/feature-{ix}"),

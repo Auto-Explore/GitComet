@@ -3,6 +3,7 @@ use crate::store::reducer::prepared::ReducerInputs;
 use crate::store::repository_runtime::RepositoryRuntimes;
 mod actions_emit_effects;
 mod auth;
+mod auto_fetch;
 mod branch_exists_prompt;
 #[cfg(test)]
 mod comparison_tests;
@@ -889,6 +890,16 @@ fn reduce_inner(
             secret,
         } => auth::submit_auth_prompt(inputs, repos, id_alloc, state, generation, username, secret),
         Msg::CancelAuthPrompt => auth::cancel_auth_prompt(state),
+        Msg::Internal(crate::msg::InternalMsg::AutoFetchUpdated {
+            repo_id,
+            lifetime,
+            revision,
+            snapshot,
+            result,
+        }) => auto_fetch::updated(inputs, state, repo_id, lifetime, revision, snapshot, result),
+        Msg::Internal(crate::msg::InternalMsg::AutoFetchRefresh { repo_id, lifetime }) => {
+            auto_fetch::refresh(state, repo_id, lifetime)
+        }
         Msg::Internal(crate::msg::InternalMsg::AuthPromptValidated {
             generation,
             result,

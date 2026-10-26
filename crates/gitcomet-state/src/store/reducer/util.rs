@@ -1105,6 +1105,7 @@ pub(super) fn push_command_log(
     mark_auth_prompt_hook_operation(repo_state, handled_by_auth_prompt);
 
     let entry = CommandLogEntry {
+        source: crate::model::CommandSource::User,
         time: inputs.now(),
         ok,
         command: command_text,
@@ -1139,6 +1140,7 @@ pub(super) fn push_action_log(
 ) {
     mark_auth_prompt_hook_operation(repo_state, handled_by_auth_prompt);
     let entry = CommandLogEntry {
+        source: crate::model::CommandSource::User,
         time: inputs.now(),
         ok,
         command,

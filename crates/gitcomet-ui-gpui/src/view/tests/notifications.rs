@@ -481,6 +481,7 @@ fn apply_state_snapshot_routes_command_errors_into_error_toasts(cx: &mut gpui::T
             handled_by_auth_prompt: false,
             failure_id: None,
             hook_operation_id: None,
+            source: gitcomet_state::model::CommandSource::User,
         });
     next.active_repo = Some(repo_id);
     next.repos.push(repo);
@@ -528,7 +529,68 @@ fn announced_command(summary: &str) -> gitcomet_state::model::CommandLogEntry {
         handled_by_auth_prompt: false,
         failure_id: None,
         hook_operation_id: None,
+        source: gitcomet_state::model::CommandSource::User,
     }
+}
+
+#[gpui::test]
+fn automatic_fetch_results_are_reported_to_consumers_without_notifications(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    cx.run_until_parked();
+    let observed = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let _subscription = cx.update(|_, app| {
+        let observed = std::rc::Rc::clone(&observed);
+        app.subscribe(&view, move |_, event: &CommandResultShown, _| {
+            observed.borrow_mut().push(event.entry.clone());
+        })
+    });
+    let mut repo = open_repo_state_with_workdir("/tmp/quiet-automatic-fetch");
+    repo.feedback_mut().last_error = Some("Earlier manual error".into());
+    let mut success = announced_command("Fetch: Synchronized");
+    success.command = "git fetch --all".into();
+    success.source = gitcomet_state::model::CommandSource::Background;
+    repo.feedback_mut().push_command_result(success.clone());
+    let mut failure = success;
+    failure.ok = false;
+    failure.summary = "Fetch failed: offline".into();
+    failure.stderr = "offline".into();
+    repo.feedback_mut().push_command_result(failure);
+    let mut state = AppState {
+        active_repo: Some(repo.id),
+        repos: vec![repo],
+        ..AppState::test_default()
+    };
+    apply_notification_snapshot(cx, &view, &state);
+    assert!(all_toasts(cx, &view).is_empty());
+    assert!(error_toasts(cx, &view).is_empty());
+    let entries = observed.borrow();
+    assert_eq!(entries.len(), 2);
+    assert_eq!(entries[1].stderr.as_ref(), "offline");
+    drop(entries);
+    cx.update(|_, app| {
+        let view = view.read(app);
+        assert!(view.state.auth_prompt.is_none());
+        assert_eq!(
+            view.state.repos[0].feedback.last_error.as_deref(),
+            Some("Earlier manual error")
+        );
+    });
+
+    state.repos[0]
+        .feedback_mut()
+        .push_command_result(announced_command("Manual push completed"));
+    apply_notification_snapshot(cx, &view, &state);
+    assert_eq!(
+        all_toasts(cx, &view)
+            .into_iter()
+            .map(|(_, message)| message)
+            .collect::<Vec<_>>(),
+        ["Manual push completed"]
+    );
 }
 
 fn warning(message: &str) -> gitcomet_state::model::AppNotification {
@@ -712,6 +774,7 @@ fn auth_pull_attempt(kind: AuthPromptKind) -> gitcomet_state::model::CommandLogE
         handled_by_auth_prompt: true,
         failure_id: None,
         hook_operation_id: None,
+        source: gitcomet_state::model::CommandSource::User,
     }
 }
 

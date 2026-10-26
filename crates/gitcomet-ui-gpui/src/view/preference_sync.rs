@@ -951,6 +951,26 @@ impl GitCometView {
         });
         self.store.dispatch(Msg::SetRemoteSettings(RemoteSettings {
             prune_deleted_remote_branches_on_fetch: enabled,
+            auto_fetch: self.ui_model.read(cx).preferences.remotes.auto_fetch,
+        }));
+    }
+
+    pub(in crate::view) fn set_auto_fetch_preference(
+        &mut self,
+        settings: gitcomet_state::model::AutoFetchSettings,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.update_ui_preferences(cx, move |preferences| {
+            preferences.remotes.auto_fetch = settings;
+        });
+        self.store.dispatch(Msg::SetRemoteSettings(RemoteSettings {
+            prune_deleted_remote_branches_on_fetch: self
+                .ui_model
+                .read(cx)
+                .preferences
+                .remotes
+                .prune_deleted_remote_branches_on_fetch,
+            auto_fetch: settings,
         }));
     }
 
@@ -1072,6 +1092,7 @@ impl GitCometView {
                 self.set_large_file_settings_preference(settings, cx)
             }
             PreferenceChange::RemotePrune(enabled) => self.set_remote_prune_preference(enabled, cx),
+            PreferenceChange::AutoFetch(settings) => self.set_auto_fetch_preference(settings, cx),
             PreferenceChange::MaintenanceRecommendations(enabled) => {
                 self.set_maintenance_recommendation_preference(enabled, cx)
             }

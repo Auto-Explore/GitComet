@@ -119,6 +119,7 @@ mod tests {
             handled_by_auth_prompt: false,
             failure_id: None,
             hook_operation_id: None,
+            source: gitcomet_state::model::CommandSource::User,
         }
     }
 

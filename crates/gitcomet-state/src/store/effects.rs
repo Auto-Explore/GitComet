@@ -20,7 +20,7 @@ mod util;
 pub(super) mod worktree_list;
 
 /// Releases one runtime's ownership without disturbing other stores or tabs.
-pub(super) use repo_load::release_worktree_scan_handles;
+pub(super) use repo_load::{release_all_worktree_scan_handles, release_worktree_scan_handles};
 
 use crate::model::AppState;
 use crate::msg::{Effect, Msg};

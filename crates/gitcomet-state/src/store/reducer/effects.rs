@@ -1842,14 +1842,17 @@ pub(super) fn branches_loaded(
 ) -> Vec<Effect> {
     let mut effects = Vec::new();
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
-        let branches = match result {
-            Ok(v) => Loadable::Ready(v),
-            Err(e) => {
-                push_diagnostic(inputs, repo_state, DiagnosticKind::Error, e.to_string());
-                Loadable::Error(e.to_string())
-            }
-        };
-        repo_state.set_branches(branches);
+        let background = repo_state.loads_in_flight.is_background(LoadKind::Branches);
+        if !super::auto_fetch::has_quiet_failure(inputs, repo_state, background, &result) {
+            let branches = match result {
+                Ok(v) => Loadable::Ready(v),
+                Err(e) => {
+                    push_diagnostic(inputs, repo_state, DiagnosticKind::Error, e.to_string());
+                    Loadable::Error(e.to_string())
+                }
+            };
+            repo_state.set_branches(branches);
+        }
         if repo_state.loads_in_flight.finish(LoadKind::Branches) {
             effects.push(Effect::References(ReferenceEffect::LoadBranches {
                 repo_id,
@@ -1867,14 +1870,17 @@ pub(super) fn remotes_loaded(
 ) -> Vec<Effect> {
     let mut effects = Vec::new();
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
-        let remotes = match result {
-            Ok(v) => Loadable::Ready(v),
-            Err(e) => {
-                push_diagnostic(inputs, repo_state, DiagnosticKind::Error, e.to_string());
-                Loadable::Error(e.to_string())
-            }
-        };
-        repo_state.set_remotes(remotes);
+        let background = repo_state.loads_in_flight.is_background(LoadKind::Remotes);
+        if !super::auto_fetch::has_quiet_failure(inputs, repo_state, background, &result) {
+            let remotes = match result {
+                Ok(v) => Loadable::Ready(v),
+                Err(e) => {
+                    push_diagnostic(inputs, repo_state, DiagnosticKind::Error, e.to_string());
+                    Loadable::Error(e.to_string())
+                }
+            };
+            repo_state.set_remotes(remotes);
+        }
         if repo_state.loads_in_flight.finish(LoadKind::Remotes) {
             effects.push(Effect::References(ReferenceEffect::LoadRemotes { repo_id }));
         }
@@ -1890,6 +1896,9 @@ pub(super) fn remote_branches_loaded(
 ) -> Vec<Effect> {
     let mut effects = Vec::new();
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
+        let background = repo_state
+            .loads_in_flight
+            .is_background(LoadKind::RemoteBranches);
         let refresh_pending = repo_state.loads_in_flight.finish(LoadKind::RemoteBranches);
         let remote_mutation_in_flight =
             repo_state.pull_in_flight > 0 || repo_state.push_in_flight > 0;
@@ -1907,14 +1916,16 @@ pub(super) fn remote_branches_loaded(
             return effects;
         }
 
-        let branches = match result {
-            Ok(v) => Loadable::Ready(v),
-            Err(e) => {
-                push_diagnostic(inputs, repo_state, DiagnosticKind::Error, e.to_string());
-                Loadable::Error(e.to_string())
-            }
-        };
-        repo_state.set_remote_branches(branches);
+        if !super::auto_fetch::has_quiet_failure(inputs, repo_state, background, &result) {
+            let branches = match result {
+                Ok(v) => Loadable::Ready(v),
+                Err(e) => {
+                    push_diagnostic(inputs, repo_state, DiagnosticKind::Error, e.to_string());
+                    Loadable::Error(e.to_string())
+                }
+            };
+            repo_state.set_remote_branches(branches);
+        }
     }
     effects
 }
@@ -2302,14 +2313,19 @@ pub(super) fn upstream_divergence_loaded(
 ) -> Vec<Effect> {
     let mut effects = Vec::new();
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
-        let value = match result {
-            Ok(v) => Loadable::Ready(v),
-            Err(e) => {
-                push_diagnostic(inputs, repo_state, DiagnosticKind::Error, e.to_string());
-                Loadable::Error(e.to_string())
-            }
-        };
-        repo_state.set_upstream_divergence(value);
+        let background = repo_state
+            .loads_in_flight
+            .is_background(LoadKind::UpstreamDivergence);
+        if !super::auto_fetch::has_quiet_failure(inputs, repo_state, background, &result) {
+            let value = match result {
+                Ok(v) => Loadable::Ready(v),
+                Err(e) => {
+                    push_diagnostic(inputs, repo_state, DiagnosticKind::Error, e.to_string());
+                    Loadable::Error(e.to_string())
+                }
+            };
+            repo_state.set_upstream_divergence(value);
+        }
         if repo_state
             .loads_in_flight
             .finish(LoadKind::UpstreamDivergence)
@@ -2328,22 +2344,34 @@ pub(super) fn tags_loaded(
     repo_id: RepoId,
     result: std::result::Result<Vec<Tag>, Error>,
 ) -> Vec<Effect> {
+    let result = match result {
+        Err(error)
+            if matches!(
+                error.kind(),
+                gitcomet_core::error::ErrorKind::Unsupported(_)
+            ) =>
+        {
+            Ok(Vec::new())
+        }
+        result => result,
+    };
     let mut effects = Vec::new();
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
-        let tags = match result {
-            Ok(v) => Loadable::Ready(v),
-            Err(e) => {
-                if matches!(e.kind(), gitcomet_core::error::ErrorKind::Unsupported(_)) {
-                    Loadable::Ready(Vec::new())
-                } else if matches!(e.kind(), gitcomet_core::error::ErrorKind::Cancelled) {
-                    Loadable::NotLoaded
-                } else {
-                    push_diagnostic(inputs, repo_state, DiagnosticKind::Error, e.to_string());
-                    Loadable::Error(e.to_string())
+        let background = repo_state.loads_in_flight.is_background(LoadKind::Tags);
+        if !super::auto_fetch::has_quiet_failure(inputs, repo_state, background, &result) {
+            let tags = match result {
+                Ok(v) => Loadable::Ready(v),
+                Err(e) => {
+                    if matches!(e.kind(), gitcomet_core::error::ErrorKind::Cancelled) {
+                        Loadable::NotLoaded
+                    } else {
+                        push_diagnostic(inputs, repo_state, DiagnosticKind::Error, e.to_string());
+                        Loadable::Error(e.to_string())
+                    }
                 }
-            }
-        };
-        repo_state.set_tags(tags);
+            };
+            repo_state.set_tags(tags);
+        }
         if repo_state.loads_in_flight.finish(LoadKind::Tags) {
             effects.push(Effect::References(ReferenceEffect::LoadTags { repo_id }));
         }

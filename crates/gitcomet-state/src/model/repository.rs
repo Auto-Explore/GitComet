@@ -87,6 +87,8 @@ pub struct RepoState {
     pub common_dir: Option<Arc<std::path::Path>>,
     pub shared_preferences: Option<super::RepositoryPreferencesSnapshot>,
     pub maintenance: RepoMaintenanceState,
+    pub auto_fetch: super::RepoAutoFetchState,
+    pub(crate) auto_fetch_revision: u64,
 
     pub open: Loadable<()>,
     pub history_state: HistoryState,
@@ -345,6 +347,8 @@ impl RepoState {
             common_dir: None,
             shared_preferences: None,
             maintenance: RepoMaintenanceState::default(),
+            auto_fetch: super::RepoAutoFetchState::default(),
+            auto_fetch_revision: 0,
             open: Loadable::Loading,
             history_state: HistoryState::default(),
             head_branch: Loadable::NotLoaded,

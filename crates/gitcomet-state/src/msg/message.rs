@@ -1312,6 +1312,18 @@ pub enum Msg {
 
 #[derive(strum::IntoStaticStr)]
 pub enum InternalMsg {
+    AutoFetchUpdated {
+        repo_id: RepoId,
+        lifetime: crate::model::RepoLifetime,
+        revision: u64,
+        snapshot: crate::model::RepoAutoFetchState,
+        result:
+            Option<Arc<gitcomet_core::services::Result<gitcomet_core::services::CommandOutput>>>,
+    },
+    AutoFetchRefresh {
+        repo_id: RepoId,
+        lifetime: crate::model::RepoLifetime,
+    },
     AuthPromptValidated {
         generation: u64,
         result: gitcomet_core::auth::PassphraseValidation,

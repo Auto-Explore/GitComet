@@ -1791,6 +1791,46 @@ impl SettingsWindowView {
             .card("settings_window_remotes_card", "Remotes", theme)
             .child(
                 self.toggle_row(
+                    "settings_window_auto_fetch_enabled",
+                    "Automatically fetch repositories",
+                    self.auto_fetch.enabled,
+                    theme,
+                )
+                .on_activate(false, controls::ControlActivation::Action, cx.listener(
+                    |this, _e: &ClickEvent, _window, cx| {
+                        this.set_auto_fetch_enabled(!this.auto_fetch.enabled, cx);
+                    },
+                )),
+            )
+            .child(self.info_row(
+                "settings_window_auto_fetch_interval",
+                "Fetch interval (minutes)",
+                div()
+                    .w(ui_scale::design_px(AUTO_FETCH_INTERVAL_INPUT_WIDTH_PX, cx))
+                    .child(self.auto_fetch_interval_input.clone()),
+                theme,
+            ))
+            .when_some(self.auto_fetch_interval_error, |card, error| {
+                card.child(
+                    div()
+                        .debug_selector(|| "settings_window_auto_fetch_interval_error".to_string())
+                        .px_2()
+                        .pb_1()
+                        .text_size(theme.ui_text(12.0))
+                        .text_color(theme.colors.status.danger.foreground)
+                        .child(error),
+                )
+            })
+            .child(
+                div()
+                    .px_2()
+                    .pb_2()
+                    .text_size(theme.ui_text(12.0))
+                    .text_color(theme.colors.foreground.secondary)
+                    .child(format!("Fetch all remotes when repositories open, then at this interval while {} is running. Applies to every open workspace without automatically pulling.", crate::view::product_name())),
+            )
+            .child(
+                self.toggle_row(
                     "settings_window_prune_deleted_remote_branches",
                     "Automatically prune deleted remote branches on every fetch",
                     self.prune_deleted_remote_branches_on_fetch,

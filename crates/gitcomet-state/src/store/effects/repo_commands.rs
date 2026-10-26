@@ -298,6 +298,17 @@ fn schedule_repo_command_task<F>(
 ) where
     F: FnOnce(Arc<dyn GitRepository>) -> Result<CommandOutput, Error> + Send + 'static,
 {
+    let auto_fetch = Arc::clone(&msg_tx.auto_fetch);
+    let foreground = if command.blocks_auto_fetch() {
+        repos.repository(&repo_id).map(|repo| {
+            auto_fetch
+                .admission()
+                .reserve(super::super::auto_fetch::repository_key(repo.as_ref()))
+        })
+    } else {
+        None
+    };
+    let resets_auto_fetch = matches!(command, RepoCommandKind::FetchAll);
     let label = command.hook_activity_label();
     let context = context_override.or_else(|| repo_command_context(&command));
     // The reducer counted the command in flight and only its completion
@@ -317,16 +328,26 @@ fn schedule_repo_command_task<F>(
                 command.shows_progress(),
                 &msg_tx,
             );
-            let result = {
-                let _scope = operation.attach();
-                run(Arc::clone(&repo))
-            };
+            let result = foreground
+                .as_ref()
+                .map_or(Ok(()), |reservation| {
+                    reservation.wait(operation.cancellation())
+                })
+                .and_then(|()| {
+                    let _scope = operation.attach();
+                    run(Arc::clone(&repo))
+                });
             if fetches_objects {
                 // The refresh this command triggers should read the new packs
                 // through a fresh store, and old packs must not stay mapped.
                 repo.release_object_store();
                 super::repo_load::release_all_worktree_scan_handles();
             }
+            if resets_auto_fetch && result.is_ok() {
+                auto_fetch
+                    .manual_fetch_succeeded(&repo.spec().workdir, std::time::SystemTime::now());
+            }
+            drop(foreground);
             let outcome = GitOperationTask::outcome(&result);
             if let RepoCommandKind::ApplyFileChange { commit_retry, .. } = &mut command
                 && let Err(error) = &result
