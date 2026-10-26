@@ -27,7 +27,7 @@ pub(super) fn stash_summary_from_log_summary(summary: &str) -> Option<&str> {
 
 pub(super) fn resolve_history_head_target<'a>(
     history_scope: LogScope,
-    history_solo: &gitcomet_core::domain::HistorySoloSet,
+    history_focus: &gitcomet_core::domain::HistoryFocusSet,
     detached_head_commit: Option<&'a CommitId>,
     head_branch: Option<&'a str>,
     branches: &'a [Branch],
@@ -36,7 +36,7 @@ pub(super) fn resolve_history_head_target<'a>(
 ) -> Option<&'a str> {
     match head_branch {
         Some("HEAD") => detached_head_commit.map(AsRef::as_ref).or_else(|| {
-            history_solo
+            history_focus
                 .head_is_first(history_scope)
                 .then(|| {
                     visible_indices
@@ -70,7 +70,7 @@ pub(super) fn build_history_base_cache(
     let visible_indices = build_history_visible_indices(&page.commits, &stash_helper_ids);
     let head_target = resolve_history_head_target(
         request.history_scope,
-        &request.history_solo,
+        &request.history_focus,
         request.detached_head_commit.as_ref(),
         head_branch,
         branches,
@@ -182,7 +182,7 @@ pub(super) fn build_history_decoration_cache(
 ) -> HistoryDecorationCache {
     let head_target = resolve_history_head_target(
         request.base_request.history_scope,
-        &request.base_request.history_solo,
+        &request.base_request.history_focus,
         request.detached_head_commit.as_ref(),
         head_branch,
         branches,

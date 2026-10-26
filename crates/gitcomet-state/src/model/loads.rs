@@ -142,8 +142,8 @@ struct LineStatsLoads {
 pub struct PendingLogLoad {
     pub scope: LogScope,
     pub author: Option<String>,
-    /// The refs the walk is soloed on, empty for the normal seed.
-    pub solo: gitcomet_core::domain::HistorySoloSet,
+    /// The refs the walk is focused on, empty for the normal seed.
+    pub focus: gitcomet_core::domain::HistoryFocusSet,
     pub limit: usize,
     pub cursor: Option<LogCursor>,
 }
@@ -279,7 +279,7 @@ impl RepoLoadsInFlight {
         }
     }
 
-    /// A changed scope, author or solo supersedes the current walk immediately.
+    /// A changed scope, author or focus supersedes the current walk immediately.
     /// Otherwise one request is queued, with refresh taking priority over pagination.
     pub fn request_log(&mut self, next: PendingLogLoad) -> Option<LogLoadSeq> {
         self.log.request(next)
@@ -320,7 +320,7 @@ impl LogLoads {
         self.active.as_ref().is_none_or(|active| {
             active.request.scope != next.scope
                 || active.request.author != next.author
-                || active.request.solo != next.solo
+                || active.request.focus != next.focus
         })
     }
 
@@ -420,7 +420,7 @@ mod tests {
     fn promoted_log_bookkeeping_matches_the_prepared_effect_request() {
         let mut loads = RepoLoadsInFlight::default();
         let request = PendingLogLoad {
-            solo: Default::default(),
+            focus: Default::default(),
             scope: LogScope::FullReachable,
             author: None,
             limit: 20,

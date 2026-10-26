@@ -119,15 +119,15 @@ impl HistoryMode {
 
 pub type LogScope = HistoryMode;
 
-/// A "solo" history filter: the walk is seeded from one ref — or from one
+/// A "focus" history filter: the walk is seeded from one ref — or from one
 /// remote's branches — instead of from HEAD or from every ref.
 ///
-/// Solo is orthogonal to [`HistoryMode`]: the mode still decides *how* the walk
-/// runs (first-parent, no merges, …), solo decides *where it starts*. A soloed
+/// Focus is orthogonal to [`HistoryMode`]: the mode still decides *how* the walk
+/// runs (first-parent, no merges, …), focus decides *where it starts*. A focused
 /// walk therefore shows exactly the commits reachable from the chosen ref, which
 /// is what makes one branch's line of development readable in a busy repository.
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Hash)]
-pub enum HistorySolo {
+pub enum HistoryFocus {
     /// `refs/heads/<name>`.
     LocalBranch { name: Arc<str> },
     /// `refs/remotes/<remote>/<branch>`.
@@ -136,7 +136,7 @@ pub enum HistorySolo {
     Remote { name: Arc<str> },
 }
 
-impl HistorySolo {
+impl HistoryFocus {
     pub fn local_branch(name: impl AsRef<str>) -> Self {
         Self::LocalBranch {
             name: Arc::from(name.as_ref()),
@@ -165,7 +165,7 @@ impl HistorySolo {
         }
     }
 
-    /// The full ref name a single-ref solo names, or `None` for a whole remote,
+    /// The full ref name a single-ref focus names, or `None` for a whole remote,
     /// which has no one ref.
     pub fn ref_name(&self) -> Option<String> {
         match self {
@@ -178,19 +178,19 @@ impl HistorySolo {
     }
 }
 
-/// The set of refs the history is soloed on, empty when it is not soloed.
+/// The set of refs the history is focused on, empty when it is not focused.
 ///
-/// Solo is a set rather than a single ref because the gesture is a per-ref
-/// toggle: soloing two branches seeds the walk from both and shows the union of
+/// Focus is a set rather than a single ref because the gesture is a per-ref
+/// toggle: focusing two branches seeds the walk from both and shows the union of
 /// what they reach, which is how you compare two lines of development without
 /// the rest of the repository in the way.
 ///
 /// Kept sorted and deduplicated so two sets built in different orders are the
 /// same value — walk caches and snapshots are keyed on it.
 #[derive(Clone, Debug, Default, Eq, PartialEq, Hash)]
-pub struct HistorySoloSet(Arc<[HistorySolo]>);
+pub struct HistoryFocusSet(Arc<[HistoryFocus]>);
 
-impl HistorySoloSet {
+impl HistoryFocusSet {
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
@@ -199,66 +199,128 @@ impl HistorySoloSet {
         self.0.len()
     }
 
-    pub fn contains(&self, target: &HistorySolo) -> bool {
+    pub fn contains(&self, target: &HistoryFocus) -> bool {
         self.0.contains(target)
     }
 
-    pub fn iter(&self) -> impl ExactSizeIterator<Item = &HistorySolo> {
+    pub fn iter(&self) -> impl ExactSizeIterator<Item = &HistoryFocus> {
         self.0.iter()
     }
 
-    pub fn as_slice(&self) -> &[HistorySolo] {
+    pub fn as_slice(&self) -> &[HistoryFocus] {
         &self.0
     }
 
-    /// The one target, when exactly one is soloed.
-    pub fn single(&self) -> Option<&HistorySolo> {
+    /// The one target, when exactly one is focused.
+    pub fn single(&self) -> Option<&HistoryFocus> {
         match self.0.as_ref() {
             [only] => Some(only),
             _ => None,
         }
     }
 
-    /// This set with `target` added, or removed when it is already in it. The
-    /// menu entry is a toggle, and this is that toggle.
-    pub fn toggled(&self, target: &HistorySolo) -> Self {
-        if self.contains(target) {
-            Self::from_iter(self.iter().filter(|held| *held != target).cloned())
-        } else {
-            Self::from_iter(self.iter().cloned().chain(std::iter::once(target.clone())))
+    /// Whether the walk this set seeds includes `target`: held outright, or — for
+    /// a remote branch — held through its whole remote. This, not
+    /// [`Self::contains`], is what "is this ref focused" means to the user.
+    pub fn covers(&self, target: &HistoryFocus) -> bool {
+        match target {
+            HistoryFocus::LocalBranch { name } => self.covers_local_branch(name),
+            HistoryFocus::RemoteBranch { remote, branch } => {
+                self.covers_remote_branch(remote, branch)
+            }
+            HistoryFocus::Remote { .. } => self.contains(target),
         }
+    }
+
+    /// [`Self::covers`] for `refs/heads/<name>`, without building a target.
+    /// The sidebar asks this for every row it paints.
+    pub fn covers_local_branch(&self, name: &str) -> bool {
+        self.iter().any(|held| {
+            matches!(held, HistoryFocus::LocalBranch { name: held } if held.as_ref() == name)
+        })
+    }
+
+    /// [`Self::covers`] for `refs/remotes/<remote>/<branch>`, without building
+    /// a target.
+    pub fn covers_remote_branch(&self, remote: &str, branch: &str) -> bool {
+        self.iter().any(|held| match held {
+            HistoryFocus::RemoteBranch {
+                remote: held_remote,
+                branch: held_branch,
+            } => held_remote.as_ref() == remote && held_branch.as_ref() == branch,
+            HistoryFocus::Remote { name } => name.as_ref() == remote,
+            HistoryFocus::LocalBranch { .. } => false,
+        })
+    }
+
+    /// This set with every one of `targets` focused, or with every one of them
+    /// unfocused. Per-ref toggles, group entries and the sidebar's eyes all go
+    /// through this.
+    ///
+    /// Unfocusing a remote branch that is only focused because its whole remote
+    /// is has no entry of its own to drop. The remote's entry is swapped for its
+    /// other branches instead, as listed by `remote_branches`, so the rest of that
+    /// remote stays in view.
+    pub fn with_refs_focused(
+        &self,
+        targets: &[HistoryFocus],
+        focused: bool,
+        remote_branches: impl Fn(&str) -> Vec<String>,
+    ) -> Self {
+        if focused {
+            return Self::from_iter(
+                self.iter().cloned().chain(
+                    targets
+                        .iter()
+                        .filter(|target| !self.covers(target))
+                        .cloned(),
+                ),
+            );
+        }
+        let mut kept = Vec::with_capacity(self.len());
+        for held in self.iter() {
+            if targets.contains(held) {
+                continue;
+            }
+            if let HistoryFocus::Remote { name } = held {
+                let loses_a_branch = targets.iter().any(|target| {
+                    matches!(target, HistoryFocus::RemoteBranch { remote, .. } if remote == name)
+                });
+                if loses_a_branch {
+                    kept.extend(
+                        remote_branches(name)
+                            .into_iter()
+                            .map(|branch| HistoryFocus::remote_branch(name, branch))
+                            .filter(|branch| !targets.contains(branch)),
+                    );
+                    continue;
+                }
+            }
+            kept.push(held.clone());
+        }
+        Self::from_iter(kept)
     }
 
     /// This set without the targets `keep` rejects. Used to drop refs that have
-    /// been deleted while leaving the rest of the solo intact.
-    pub fn retaining(&self, keep: impl FnMut(&HistorySolo) -> bool) -> Self {
+    /// been deleted while leaving the rest of the focus intact.
+    pub fn retaining(&self, keep: impl FnMut(&HistoryFocus) -> bool) -> Self {
         let mut keep = keep;
         Self::from_iter(self.iter().filter(|target| keep(target)).cloned())
-    }
-
-    /// What the header shows: the ref's own label when one is soloed, a count
-    /// when several are.
-    pub fn label(&self) -> Option<String> {
-        match self.0.as_ref() {
-            [] => None,
-            [only] => Some(only.label()),
-            many => Some(format!("{} refs", many.len())),
-        }
     }
 
     /// Whether a walk in `mode`, seeded by this set, is guaranteed to have HEAD
     /// as its first commit.
     ///
-    /// The guarantee belongs to the mode and the seed together: a soloed walk
-    /// starts at the soloed refs, so its first row says nothing about HEAD even
+    /// The guarantee belongs to the mode and the seed together: a focused walk
+    /// starts at the focused refs, so its first row says nothing about HEAD even
     /// under a mode that would otherwise promise it.
     pub fn head_is_first(&self, mode: HistoryMode) -> bool {
         self.is_empty() && mode.guarantees_head_visibility()
     }
 }
 
-impl FromIterator<HistorySolo> for HistorySoloSet {
-    fn from_iter<T: IntoIterator<Item = HistorySolo>>(iter: T) -> Self {
+impl FromIterator<HistoryFocus> for HistoryFocusSet {
+    fn from_iter<T: IntoIterator<Item = HistoryFocus>>(iter: T) -> Self {
         let mut targets: Vec<_> = iter.into_iter().collect();
         targets.sort();
         targets.dedup();
@@ -2875,38 +2937,38 @@ mod file_status_count_tests {
 }
 
 #[cfg(test)]
-mod history_solo_tests {
+mod history_focus_tests {
     use super::*;
 
     #[test]
-    fn history_solo_names_the_ref_it_seeds_from() {
+    fn history_focus_names_the_ref_it_seeds_from() {
         assert_eq!(
-            HistorySolo::local_branch("feature").ref_name().as_deref(),
+            HistoryFocus::local_branch("feature").ref_name().as_deref(),
             Some("refs/heads/feature")
         );
         assert_eq!(
-            HistorySolo::remote_branch("origin", "feature/awesome")
+            HistoryFocus::remote_branch("origin", "feature/awesome")
                 .ref_name()
                 .as_deref(),
             Some("refs/remotes/origin/feature/awesome")
         );
         // A whole remote is many refs, so it names none of them.
-        assert_eq!(HistorySolo::remote("origin").ref_name(), None);
+        assert_eq!(HistoryFocus::remote("origin").ref_name(), None);
 
-        assert_eq!(HistorySolo::local_branch("feature").label(), "feature");
+        assert_eq!(HistoryFocus::local_branch("feature").label(), "feature");
         assert_eq!(
-            HistorySolo::remote_branch("origin", "feature").label(),
+            HistoryFocus::remote_branch("origin", "feature").label(),
             "origin/feature"
         );
-        assert_eq!(HistorySolo::remote("origin").label(), "origin");
+        assert_eq!(HistoryFocus::remote("origin").label(), "origin");
     }
 
     /// The modes that promise HEAD is the first commit only promise it for a
-    /// walk seeded from HEAD; a solo seeds it somewhere else.
+    /// walk seeded from HEAD; a focus seeds it somewhere else.
     #[test]
-    fn a_solo_withdraws_the_head_is_first_guarantee() {
-        let empty = HistorySoloSet::default();
-        let soloed = HistorySoloSet::from_iter([HistorySolo::local_branch("feature")]);
+    fn a_focus_withdraws_the_head_is_first_guarantee() {
+        let empty = HistoryFocusSet::default();
+        let focused = HistoryFocusSet::from_iter([HistoryFocus::local_branch("feature")]);
         for mode in [
             HistoryMode::FullReachable,
             HistoryMode::FirstParent,
@@ -2917,63 +2979,122 @@ mod history_solo_tests {
             assert_eq!(
                 empty.head_is_first(mode),
                 mode.guarantees_head_visibility(),
-                "an unsoloed walk keeps whatever the mode promises"
+                "an unfocused walk keeps whatever the mode promises"
             );
             assert!(
-                !soloed.head_is_first(mode),
-                "a soloed walk promises nothing about HEAD under {mode:?}"
+                !focused.head_is_first(mode),
+                "a focused walk promises nothing about HEAD under {mode:?}"
             );
         }
     }
 
-    /// The menu entry is a per-ref toggle, so the set has to add and remove one
-    /// target at a time without disturbing the others.
-    #[test]
-    fn toggling_adds_and_removes_one_target_at_a_time() {
-        let main = HistorySolo::local_branch("main");
-        let feature = HistorySolo::local_branch("feature");
-        let origin = HistorySolo::remote("origin");
+    fn no_remote_branches(_: &str) -> Vec<String> {
+        Vec::new()
+    }
 
-        let set = HistorySoloSet::default().toggled(&main).toggled(&feature);
+    /// Per-ref toggles and group entries add and remove targets in bulk without
+    /// disturbing the others.
+    #[test]
+    fn focusing_and_unfocusing_refs_leaves_the_others_alone() {
+        let main = HistoryFocus::local_branch("main");
+        let feature = HistoryFocus::local_branch("feature");
+        let origin = HistoryFocus::remote("origin");
+
+        let set = HistoryFocusSet::default().with_refs_focused(
+            &[main.clone(), feature.clone()],
+            true,
+            no_remote_branches,
+        );
         assert_eq!(set.len(), 2);
         assert!(set.contains(&main) && set.contains(&feature));
         assert!(!set.contains(&origin));
 
-        let set = set.toggled(&main);
-        assert_eq!(set.len(), 1, "toggling a held target removes just that one");
+        let set = set.with_refs_focused(std::slice::from_ref(&main), false, no_remote_branches);
+        assert_eq!(set.len(), 1, "unfocusing one target removes just that one");
         assert!(set.contains(&feature));
 
-        assert!(set.toggled(&feature).is_empty());
+        assert!(
+            set.with_refs_focused(std::slice::from_ref(&feature), false, no_remote_branches)
+                .is_empty()
+        );
+    }
+
+    /// A whole remote focuses every branch under it, so those branches read as
+    /// focused even though the set holds no entry for them.
+    #[test]
+    fn a_focused_remote_covers_its_branches_only() {
+        let set = HistoryFocusSet::from_iter([
+            HistoryFocus::remote("origin"),
+            HistoryFocus::local_branch("main"),
+        ]);
+        assert!(set.covers(&HistoryFocus::remote_branch("origin", "feature")));
+        assert!(set.covers_remote_branch("origin", "feature"));
+        assert!(!set.covers_remote_branch("upstream", "feature"));
+        assert!(set.covers_local_branch("main"));
+        assert!(
+            !set.covers_local_branch("origin"),
+            "a remote never covers a local branch that shares its name"
+        );
+        assert!(!set.covers(&HistoryFocus::remote("upstream")));
+    }
+
+    /// Focusing a branch its remote already covers adds nothing: the set stays
+    /// the same value, so the walk is not restarted for no reason.
+    #[test]
+    fn focusing_an_already_covered_branch_changes_nothing() {
+        let set = HistoryFocusSet::from_iter([HistoryFocus::remote("origin")]);
+        assert_eq!(
+            set.with_refs_focused(
+                &[HistoryFocus::remote_branch("origin", "feature")],
+                true,
+                no_remote_branches,
+            ),
+            set
+        );
+    }
+
+    /// Unfocusing one branch of a focused remote keeps the rest of the remote in
+    /// view: the remote's entry becomes its remaining branches.
+    #[test]
+    fn unfocusing_a_branch_under_a_focused_remote_keeps_its_siblings() {
+        let set = HistoryFocusSet::from_iter([
+            HistoryFocus::remote("origin"),
+            HistoryFocus::remote("upstream"),
+        ]);
+        let origin_branches = |remote: &str| -> Vec<String> {
+            assert_eq!(
+                remote, "origin",
+                "only the remote losing a branch is listed"
+            );
+            vec!["main".into(), "feat/a".into(), "feat/b".into()]
+        };
+
+        let set = set.with_refs_focused(
+            &[
+                HistoryFocus::remote_branch("origin", "feat/a"),
+                HistoryFocus::remote_branch("origin", "feat/b"),
+            ],
+            false,
+            origin_branches,
+        );
+        assert_eq!(
+            set,
+            HistoryFocusSet::from_iter([
+                HistoryFocus::remote_branch("origin", "main"),
+                HistoryFocus::remote("upstream"),
+            ])
+        );
     }
 
     /// Two sets built in different orders are the same value; walk caches and
     /// snapshots are keyed on it, so a reorder must not look like a change.
     #[test]
     fn set_identity_ignores_insertion_order_and_duplicates() {
-        let a = HistorySolo::local_branch("a");
-        let b = HistorySolo::local_branch("b");
+        let a = HistoryFocus::local_branch("a");
+        let b = HistoryFocus::local_branch("b");
         assert_eq!(
-            HistorySoloSet::from_iter([a.clone(), b.clone()]),
-            HistorySoloSet::from_iter([b.clone(), a.clone(), a.clone()])
-        );
-    }
-
-    /// The header names the ref when one is soloed and counts them when several
-    /// are, because a list of names does not fit the chip.
-    #[test]
-    fn set_label_names_one_ref_and_counts_many() {
-        assert_eq!(HistorySoloSet::default().label(), None);
-        assert_eq!(
-            HistorySoloSet::from_iter([HistorySolo::remote_branch("origin", "main")]).label(),
-            Some("origin/main".to_string())
-        );
-        assert_eq!(
-            HistorySoloSet::from_iter([
-                HistorySolo::local_branch("a"),
-                HistorySolo::local_branch("b"),
-            ])
-            .label(),
-            Some("2 refs".to_string())
+            HistoryFocusSet::from_iter([a.clone(), b.clone()]),
+            HistoryFocusSet::from_iter([b.clone(), a.clone(), a.clone()])
         );
     }
 }

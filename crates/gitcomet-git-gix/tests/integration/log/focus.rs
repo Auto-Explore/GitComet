@@ -1,12 +1,12 @@
 use super::*;
-use gitcomet_core::domain::{HistorySolo, HistorySoloSet};
+use gitcomet_core::domain::{HistoryFocus, HistoryFocusSet};
 use gitcomet_core::services::{
     CancellationToken, GitRepository, HistoryReadRequest, HistoryReadResult,
 };
 
 /// `master` carries `base` then `on-master`; `feature`, branched off `base`,
 /// carries `on-feature`. No branch reaches the other's tip commit, which is
-/// what makes a solo observable.
+/// what makes a focus observable.
 fn forked_repo() -> tempfile::TempDir {
     let dir = tempfile::tempdir().unwrap();
     run_git(dir.path(), &["init", "-q", "-b", "master"]);
@@ -23,12 +23,12 @@ fn forked_repo() -> tempfile::TempDir {
     dir
 }
 
-fn summaries(repo: &dyn GitRepository, mode: HistoryMode, solo: &HistorySoloSet) -> Vec<String> {
+fn summaries(repo: &dyn GitRepository, mode: HistoryMode, focus: &HistoryFocusSet) -> Vec<String> {
     let result = repo
         .read_history(
             mode,
             None,
-            solo,
+            focus,
             &HistoryReadRequest::Page {
                 limit: 100,
                 cursor: None,
@@ -48,7 +48,7 @@ fn summaries(repo: &dyn GitRepository, mode: HistoryMode, solo: &HistorySoloSet)
 }
 
 #[test]
-fn soloing_a_local_branch_walks_only_that_branch() {
+fn focusing_a_local_branch_walks_only_that_branch() {
     let dir = forked_repo();
     let repo = GixBackend.open(dir.path()).unwrap();
 
@@ -56,31 +56,31 @@ fn soloing_a_local_branch_walks_only_that_branch() {
     let everything = summaries(
         repo.as_ref(),
         HistoryMode::AllBranches,
-        &HistorySoloSet::default(),
+        &HistoryFocusSet::default(),
     );
     assert!(everything.contains(&"on-master".to_string()));
     assert!(everything.contains(&"on-feature".to_string()));
 
-    let soloed = summaries(
+    let focused = summaries(
         repo.as_ref(),
         HistoryMode::AllBranches,
-        &HistorySoloSet::from_iter([HistorySolo::local_branch("feature")]),
+        &HistoryFocusSet::from_iter([HistoryFocus::local_branch("feature")]),
     );
-    assert_eq!(soloed, vec!["on-feature".to_string(), "base".to_string()]);
+    assert_eq!(focused, vec!["on-feature".to_string(), "base".to_string()]);
 }
 
 #[test]
-fn solo_survives_a_history_mode_that_would_otherwise_seed_head() {
+fn focus_survives_a_history_mode_that_would_otherwise_seed_head() {
     let dir = forked_repo();
     let repo = GixBackend.open(dir.path()).unwrap();
 
-    // HEAD is `master`, so an unsoloed first-parent walk never reaches
-    // `on-feature`. Solo reseeds the walk without changing how it runs.
+    // HEAD is `master`, so an unfocused first-parent walk never reaches
+    // `on-feature`. Focus reseeds the walk without changing how it runs.
     assert!(
         !summaries(
             repo.as_ref(),
             HistoryMode::FirstParent,
-            &HistorySoloSet::default()
+            &HistoryFocusSet::default()
         )
         .contains(&"on-feature".to_string())
     );
@@ -88,14 +88,14 @@ fn solo_survives_a_history_mode_that_would_otherwise_seed_head() {
         summaries(
             repo.as_ref(),
             HistoryMode::FirstParent,
-            &HistorySoloSet::from_iter([HistorySolo::local_branch("feature")]),
+            &HistoryFocusSet::from_iter([HistoryFocus::local_branch("feature")]),
         ),
         vec!["on-feature".to_string(), "base".to_string()],
     );
 }
 
 #[test]
-fn soloing_a_remote_branch_and_a_whole_remote_seed_the_matching_refs() {
+fn focusing_a_remote_branch_and_a_whole_remote_seed_the_matching_refs() {
     let origin = forked_repo();
     let clone_dir = tempfile::tempdir().unwrap();
     let workdir = clone_dir.path().join("clone");
@@ -118,7 +118,7 @@ fn soloing_a_remote_branch_and_a_whole_remote_seed_the_matching_refs() {
     let remote_branch = summaries(
         repo.as_ref(),
         HistoryMode::AllBranches,
-        &HistorySoloSet::from_iter([HistorySolo::remote_branch("origin", "feature")]),
+        &HistoryFocusSet::from_iter([HistoryFocus::remote_branch("origin", "feature")]),
     );
     assert_eq!(
         remote_branch,
@@ -130,7 +130,7 @@ fn soloing_a_remote_branch_and_a_whole_remote_seed_the_matching_refs() {
     let whole_remote = summaries(
         repo.as_ref(),
         HistoryMode::AllBranches,
-        &HistorySoloSet::from_iter([HistorySolo::remote("origin")]),
+        &HistoryFocusSet::from_iter([HistoryFocus::remote("origin")]),
     );
     assert!(whole_remote.contains(&"on-master".to_string()));
     assert!(whole_remote.contains(&"on-feature".to_string()));
@@ -138,34 +138,34 @@ fn soloing_a_remote_branch_and_a_whole_remote_seed_the_matching_refs() {
 }
 
 #[test]
-fn a_solo_on_a_missing_ref_walks_nothing() {
+fn a_focus_on_a_missing_ref_walks_nothing() {
     let dir = forked_repo();
     let repo = GixBackend.open(dir.path()).unwrap();
 
-    // A branch deleted after the solo was set must not fail the load: the
-    // state layer clears the solo once the branch list confirms it is gone.
+    // A branch deleted after the focus was set must not fail the load: the
+    // state layer clears the focus once the branch list confirms it is gone.
     assert!(
         summaries(
             repo.as_ref(),
             HistoryMode::AllBranches,
-            &HistorySoloSet::from_iter([HistorySolo::local_branch("does-not-exist")]),
+            &HistoryFocusSet::from_iter([HistoryFocus::local_branch("does-not-exist")]),
         )
         .is_empty()
     );
 }
 
 #[test]
-fn solo_targets_that_share_a_tip_still_get_their_own_snapshot() {
+fn focus_targets_that_share_a_tip_still_get_their_own_snapshot() {
     let dir = forked_repo();
     run_git(dir.path(), &["branch", "alias", "feature"]);
     let repo = GixBackend.open(dir.path()).unwrap();
 
-    let snapshot_for = |solo: &HistorySoloSet| {
+    let snapshot_for = |focus: &HistoryFocusSet| {
         let result = repo
             .read_history(
                 HistoryMode::AllBranches,
                 None,
-                solo,
+                focus,
                 &HistoryReadRequest::Page {
                     limit: 100,
                     cursor: None,
@@ -184,28 +184,28 @@ fn solo_targets_that_share_a_tip_still_get_their_own_snapshot() {
     // `alias` and `feature` point at the same commit, so only naming the target
     // keeps a refresh under one from being served the other's snapshot.
     assert_ne!(
-        snapshot_for(&HistorySoloSet::from_iter([HistorySolo::local_branch(
+        snapshot_for(&HistoryFocusSet::from_iter([HistoryFocus::local_branch(
             "feature"
         )])),
-        snapshot_for(&HistorySoloSet::from_iter([HistorySolo::local_branch(
+        snapshot_for(&HistoryFocusSet::from_iter([HistoryFocus::local_branch(
             "alias"
         )])),
     );
 }
 
-/// Soloing two branches seeds the walk from both, so the page is the union of
-/// what they reach -- that is what makes soloing a pair a comparison.
+/// Focusing two branches seeds the walk from both, so the page is the union of
+/// what they reach -- that is what makes focusing a pair a comparison.
 #[test]
-fn soloing_two_branches_shows_the_union_of_what_they_reach() {
+fn focusing_two_branches_shows_the_union_of_what_they_reach() {
     let dir = forked_repo();
     let repo = GixBackend.open(dir.path()).unwrap();
 
     let both = summaries(
         repo.as_ref(),
         HistoryMode::AllBranches,
-        &HistorySoloSet::from_iter([
-            HistorySolo::local_branch("feature"),
-            HistorySolo::local_branch("master"),
+        &HistoryFocusSet::from_iter([
+            HistoryFocus::local_branch("feature"),
+            HistoryFocus::local_branch("master"),
         ]),
     );
     assert!(both.contains(&"on-feature".to_string()));
@@ -216,31 +216,31 @@ fn soloing_two_branches_shows_the_union_of_what_they_reach() {
     let feature_only = summaries(
         repo.as_ref(),
         HistoryMode::AllBranches,
-        &HistorySoloSet::from_iter([HistorySolo::local_branch("feature")]),
+        &HistoryFocusSet::from_iter([HistoryFocus::local_branch("feature")]),
     );
     assert!(!feature_only.contains(&"on-master".to_string()));
 }
 
-/// A solo set whose refs have all been deleted walks nothing, but one live ref
+/// A focus set whose refs have all been deleted walks nothing, but one live ref
 /// among dead ones still seeds its own history.
 #[test]
-fn a_partly_missing_solo_set_still_walks_its_live_refs() {
+fn a_partly_missing_focus_set_still_walks_its_live_refs() {
     let dir = forked_repo();
     let repo = GixBackend.open(dir.path()).unwrap();
 
     let mixed = summaries(
         repo.as_ref(),
         HistoryMode::AllBranches,
-        &HistorySoloSet::from_iter([
-            HistorySolo::local_branch("feature"),
-            HistorySolo::local_branch("does-not-exist"),
+        &HistoryFocusSet::from_iter([
+            HistoryFocus::local_branch("feature"),
+            HistoryFocus::local_branch("does-not-exist"),
         ]),
     );
     assert_eq!(mixed, vec!["on-feature".to_string(), "base".to_string()]);
 }
 
 #[test]
-fn solo_history_indexes_and_authors_follow_the_selected_refs() {
+fn focus_history_indexes_and_authors_follow_the_selected_refs() {
     let dir = forked_repo();
     run_git(dir.path(), &["checkout", "-q", "feature"]);
     run_git(
@@ -265,12 +265,12 @@ fn solo_history_indexes_and_authors_follow_the_selected_refs() {
         ("master", "on-master", vec!["You"]),
         ("alias", "on-feature", vec!["Feature Author", "You"]),
     ] {
-        let solo = HistorySoloSet::from_iter([HistorySolo::local_branch(branch)]);
+        let focus = HistoryFocusSet::from_iter([HistoryFocus::local_branch(branch)]);
         let index = repo
             .build_history_index(
                 HistoryMode::FirstParent,
                 None,
-                &solo,
+                &focus,
                 &cancellation,
                 &mut |_| {},
             )
@@ -282,7 +282,7 @@ fn solo_history_indexes_and_authors_follow_the_selected_refs() {
             .unwrap();
         assert_eq!(range.commits[0].summary.as_ref(), expected_summary);
         let mut authors = repo
-            .history_authors(HistoryMode::FirstParent, &solo, &cancellation)
+            .history_authors(HistoryMode::FirstParent, &focus, &cancellation)
             .unwrap()
             .iter()
             .map(|author| author.to_string())

@@ -643,7 +643,7 @@ fn history_update_retires_inactive_walks_until_activation() {
     let seq = repo
         .loads_in_flight
         .request_log(crate::model::PendingLogLoad {
-            solo: Default::default(),
+            focus: Default::default(),
             scope: HistoryMode::default(),
             author: None,
             limit: 100,

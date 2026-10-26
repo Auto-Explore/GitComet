@@ -1,17 +1,17 @@
 use super::*;
 
 #[test]
-fn a_soloed_walk_does_not_infer_detached_head_from_its_first_commit() {
-    use gitcomet_core::domain::{HistorySolo, HistorySoloSet};
+fn a_focused_walk_does_not_infer_detached_head_from_its_first_commit() {
+    use gitcomet_core::domain::{HistoryFocus, HistoryFocusSet};
 
     let commits = vec![commit("feature", &["base"], "feature tip")];
     let visible = build_history_visible_indices(&commits, &FxHashSet::default());
-    let solo = HistorySoloSet::from_iter([HistorySolo::local_branch("feature")]);
+    let focus = HistoryFocusSet::from_iter([HistoryFocus::local_branch("feature")]);
     let head = CommitId("actual-head".into());
     assert_eq!(
         resolve_history_head_target(
             LogScope::FirstParent,
-            &solo,
+            &focus,
             None,
             Some("HEAD"),
             &[],
@@ -23,7 +23,7 @@ fn a_soloed_walk_does_not_infer_detached_head_from_its_first_commit() {
     assert_eq!(
         resolve_history_head_target(
             LogScope::FirstParent,
-            &solo,
+            &focus,
             Some(&head),
             Some("HEAD"),
             &[],
@@ -38,7 +38,7 @@ fn author_run_base(commits: Vec<Commit>) -> (HistoryBaseCache, LogPage) {
     let page = log_page(commits, None);
     let base = build_history_base_cache(
         HistoryBaseCacheRequest {
-            history_solo: Default::default(),
+            history_focus: Default::default(),
             repo_id: RepoId(1),
             history_scope: LogScope::AllBranches,
             log_source: 0,
@@ -206,7 +206,7 @@ fn the_base_cache_indexes_every_visible_commit_by_id() {
             history_scope: LogScope::AllBranches,
             log_source: 0,
             history_author_filter: None,
-            history_solo: Default::default(),
+            history_focus: Default::default(),
             head_branch_rev: 0,
             detached_head_commit: None,
             head_branch_target: None,

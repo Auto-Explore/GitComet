@@ -2792,7 +2792,7 @@ fn review_ancestor_collapse_during_search_preserves_saved_collapse(cx: &mut gpui
 
 /// Builds a repo whose branch list is `main`, `feat/a`, `feat/b/c` and
 /// `features/x`, plus `origin/feat/a`, then returns the group menu's model.
-fn branch_group_menu_model(
+pub(super) fn branch_group_menu_model(
     cx: &mut gpui::TestAppContext,
     section: BranchSection,
     remote: Option<&str>,

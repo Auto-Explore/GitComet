@@ -62,8 +62,8 @@ pub enum Effect {
         scope: LogScope,
         /// Case-insensitive author filter, or `None` for all authors.
         author: Option<String>,
-        /// The refs the walk is soloed on, empty for the normal seed.
-        solo: HistorySoloSet,
+        /// The refs the walk is focused on, empty for the normal seed.
+        focus: HistoryFocusSet,
         limit: usize,
         cursor: Option<LogCursor>,
     },

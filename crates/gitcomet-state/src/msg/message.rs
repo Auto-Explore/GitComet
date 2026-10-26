@@ -431,17 +431,25 @@ pub enum Msg {
         repo_id: RepoId,
         author: Option<String>,
     },
-    /// Solos the history on a set of refs: the walk is reseeded from them, so
-    /// only the commits they reach remain. An empty set clears the solo.
-    SetHistorySolo {
+    /// Focuses the history on a set of refs: the walk is reseeded from them, so
+    /// only the commits they reach remain. An empty set clears the focus.
+    SetHistoryFocus {
         repo_id: RepoId,
-        solo: HistorySoloSet,
+        focus: HistoryFocusSet,
     },
-    /// Adds `target` to the solo set, or removes it when it is already there.
-    /// The per-ref menu entry is a toggle, and this is what it sends.
-    ToggleHistorySolo {
+    /// Focuses `target`, or unfocuses it when the focus already covers it. The
+    /// per-ref menu entry and the sidebar's eye are toggles, and this is what
+    /// they send.
+    ToggleHistoryFocus {
         repo_id: RepoId,
-        target: HistorySolo,
+        target: HistoryFocus,
+    },
+    /// Focuses every one of `targets`, or unfocuses every one of them. A branch
+    /// group's menu entries and eye send this with the group's members.
+    FocusHistoryRefs {
+        repo_id: RepoId,
+        targets: Vec<HistoryFocus>,
+        focused: bool,
     },
     LoadMoreHistory {
         repo_id: RepoId,

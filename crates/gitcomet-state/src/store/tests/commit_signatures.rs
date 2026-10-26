@@ -158,7 +158,7 @@ impl Fixture {
             .request_log(crate::model::PendingLogLoad {
                 scope: LogScope::AllBranches,
                 author: None,
-                solo: Default::default(),
+                focus: Default::default(),
                 limit: 200,
                 cursor: None,
             })

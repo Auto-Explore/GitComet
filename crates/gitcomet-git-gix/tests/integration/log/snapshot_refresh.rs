@@ -1,5 +1,5 @@
 use super::*;
-use gitcomet_core::domain::{HistorySoloSet, LogPage};
+use gitcomet_core::domain::{HistoryFocusSet, LogPage};
 use gitcomet_core::services::{
     CancellationToken, GitRepository, HistoryReadRequest, HistoryReadResult, HistorySnapshot,
 };
@@ -17,20 +17,20 @@ fn read(
     author: Option<&str>,
     request: HistoryReadRequest,
 ) -> HistoryReadResult {
-    read_soloed(repo, mode, author, &Default::default(), request)
+    read_focused(repo, mode, author, &Default::default(), request)
 }
 
-fn read_soloed(
+fn read_focused(
     repo: &dyn GitRepository,
     mode: HistoryMode,
     author: Option<&str>,
-    solo: &HistorySoloSet,
+    focus: &HistoryFocusSet,
     request: HistoryReadRequest,
 ) -> HistoryReadResult {
     repo.read_history(
         mode,
         author,
-        solo,
+        focus,
         &request,
         &CancellationToken::new(),
         &mut |_| {},

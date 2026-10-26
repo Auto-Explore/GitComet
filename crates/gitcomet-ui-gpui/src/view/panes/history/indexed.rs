@@ -235,7 +235,7 @@ impl HistoryView {
             history_scope: repo.history_state.history_scope,
             log_source: Arc::as_ptr(index) as usize,
             history_author_filter: repo.history_state.history_author_filter.clone(),
-            history_solo: repo.history_state.history_solo.clone(),
+            history_focus: repo.history_state.history_focus.clone(),
             head_branch_rev: repo.head_branch_rev,
             detached_head_commit: repo.detached_head_commit.clone(),
             head_branch_target: Self::attached_head_target_for_repo(repo),
@@ -256,7 +256,7 @@ impl HistoryView {
             shown.key.repo_id != repo_id
                 || shown.key.history_scope != repo.history_state.history_scope
                 || shown.key.history_author_filter != repo.history_state.history_author_filter
-                || shown.key.history_solo != repo.history_state.history_solo
+                || shown.key.history_focus != repo.history_state.history_focus
         }) {
             self.indexed = Default::default();
             self.scroll_interaction.borrow_mut().logical = None;
@@ -323,7 +323,7 @@ impl HistoryView {
                 .or_else(|| {
                     // Row 0 is HEAD only when the walk was seeded from HEAD.
                     repo.history_state
-                        .history_solo
+                        .history_focus
                         .head_is_first(index.mode)
                         .then(|| index.commit_id(0))
                         .flatten()
@@ -1617,7 +1617,7 @@ mod cache_regressions {
             history_scope: LogScope::AllBranches,
             log_source: 0,
             history_author_filter: None,
-            history_solo: Default::default(),
+            history_focus: Default::default(),
             head_branch_rev: 1,
             detached_head_commit: None,
             head_branch_target: Some(head.clone()),

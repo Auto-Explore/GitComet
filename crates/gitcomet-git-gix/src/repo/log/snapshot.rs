@@ -6,7 +6,7 @@ impl GixRepo {
         &self,
         mode: HistoryMode,
         author: Option<&str>,
-        solo: &HistorySoloSet,
+        focus: &HistoryFocusSet,
         request: &HistoryReadRequest,
         cancellation: &CancellationToken,
         on_chunk: &mut dyn FnMut(LogChunk),
@@ -20,7 +20,7 @@ impl GixRepo {
             shared.common.id,
             mode,
             author,
-            solo,
+            focus,
             cancellation,
         )?;
         let snapshot = shared.snapshot(&query);
@@ -47,7 +47,7 @@ impl GixRepo {
         let _scope = gitcomet_core::git_ops_trace::scope(
             gitcomet_core::git_ops_trace::GitOpTraceKind::LogWalk,
         );
-        let seed = if !solo.is_empty() || mode == HistoryMode::AllBranches {
+        let seed = if !focus.is_empty() || mode == HistoryMode::AllBranches {
             super::LogPageSeed::Tips(Arc::clone(&tips))
         } else {
             super::LogPageSeed::Head(tips.first().copied())

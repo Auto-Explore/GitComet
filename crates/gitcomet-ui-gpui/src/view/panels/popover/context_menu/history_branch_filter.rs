@@ -5,16 +5,16 @@ pub(super) fn model(host: &PopoverHost, repo_id: RepoId) -> ContextMenuModel {
     let current_scope = repo
         .map(|repo| repo.history_state.history_scope)
         .unwrap_or_default();
-    let solo = repo
-        .map(|repo| repo.history_state.history_solo.clone())
-        .unwrap_or_default();
-    model_for_scope(repo_id, current_scope, solo)
+    let focused_refs = repo
+        .filter(|repo| !repo.history_state.history_focus.is_empty())
+        .map(|repo| crate::view::history_focus::history_focus_count(repo).focused);
+    model_for_scope(repo_id, current_scope, focused_refs)
 }
 
 fn model_for_scope(
     repo_id: RepoId,
     current_scope: gitcomet_core::domain::LogScope,
-    solo: gitcomet_core::domain::HistorySoloSet,
+    focused_refs: Option<usize>,
 ) -> ContextMenuModel {
     let mut items = vec![
         ContextMenuItem::Header("History mode".into()),
@@ -34,23 +34,27 @@ fn model_for_scope(
                 }),
             }),
     );
-    // Solo is set from a ref's own menu in the sidebar, but it has to be
+    // Focus is set from a ref's own menu in the sidebar, but it has to be
     // clearable from the header too: the ref it was set on can be scrolled out
-    // of view, collapsed, or deleted outright.
-    if !solo.is_empty() {
+    // of view, collapsed, or deleted outright. The section counts the refs
+    // rather than naming them; a long list of names is noise in this menu.
+    if let Some(focused_refs) = focused_refs {
         items.push(ContextMenuItem::Separator);
-        items.push(ContextMenuItem::Header("Solo".into()));
-        for target in solo.iter() {
-            items.push(ContextMenuItem::Label(target.label().into()));
-        }
+        items.push(ContextMenuItem::Header(
+            format!(
+                "Focus: {}",
+                crate::view::history_focus::refs_label(focused_refs)
+            )
+            .into(),
+        ));
         items.push(ContextMenuItem::Entry {
-            label: "Stop soloing".into(),
-            icon: Some("icons/generic_close.svg".into()),
+            label: "Stop focus".into(),
+            icon: Some("icons/eye_off.svg".into()),
             shortcut: None,
             disabled: false,
-            action: Box::new(ContextMenuAction::SetHistorySolo {
+            action: Box::new(ContextMenuAction::SetHistoryFocus {
                 repo_id,
-                solo: gitcomet_core::domain::HistorySoloSet::default(),
+                focus: gitcomet_core::domain::HistoryFocusSet::default(),
             }),
         });
     }
@@ -66,7 +70,7 @@ mod tests {
         let model = super::model_for_scope(
             RepoId(11),
             gitcomet_core::domain::LogScope::MergesOnly,
-            Default::default(),
+            None,
         );
 
         assert!(model.items.iter().any(|item| {
@@ -79,5 +83,51 @@ mod tests {
                             .is_some_and(|icon| icon.as_ref() == "icons/check.svg")
             )
         }));
+    }
+
+    /// The focus section counts the refs instead of listing them, and offers
+    /// the one way out.
+    #[test]
+    fn model_counts_focused_refs_without_naming_them() {
+        let model = super::model_for_scope(
+            RepoId(11),
+            gitcomet_core::domain::LogScope::FullReachable,
+            Some(8),
+        );
+
+        assert!(model.items.iter().any(|item| matches!(
+            item,
+            ContextMenuItem::Header(text) if text.as_ref() == "Focus: 8 refs"
+        )));
+        assert!(
+            !model
+                .items
+                .iter()
+                .any(|item| matches!(item, ContextMenuItem::Label(_))),
+            "the focused refs must not be listed by name"
+        );
+        assert!(model.items.iter().any(|item| matches!(
+            item,
+            ContextMenuItem::Entry { label, action, .. }
+                if label.as_ref() == "Stop focus"
+                    && matches!(
+                        **action,
+                        ContextMenuAction::SetHistoryFocus { ref focus, .. } if focus.is_empty()
+                    )
+        )));
+    }
+
+    #[test]
+    fn model_has_no_focus_section_while_nothing_is_focused() {
+        let model = super::model_for_scope(
+            RepoId(11),
+            gitcomet_core::domain::LogScope::FullReachable,
+            None,
+        );
+
+        assert!(!model.items.iter().any(|item| matches!(
+            item,
+            ContextMenuItem::Entry { label, .. } if label.as_ref() == "Stop focus"
+        )));
     }
 }

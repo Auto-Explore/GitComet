@@ -44,8 +44,8 @@ fn commit_file(path: &Path, text: &str, message: &str) -> CommitId {
 }
 
 #[test]
-fn reftable_solo_reads_local_branches_remote_branches_and_remotes() {
-    use gitcomet_core::domain::{HistorySolo, HistorySoloSet};
+fn reftable_focus_reads_local_branches_remote_branches_and_remotes() {
+    use gitcomet_core::domain::{HistoryFocus, HistoryFocusSet};
     use gitcomet_core::services::{HistoryReadRequest, HistoryReadResult};
 
     if !formats::reftable_available() {
@@ -63,15 +63,15 @@ fn reftable_solo_reads_local_branches_remote_branches_and_remotes() {
         let repo = GixBackend.open(dir.path()).unwrap();
 
         for target in [
-            HistorySolo::local_branch("side"),
-            HistorySolo::remote_branch("fork", "side"),
-            HistorySolo::remote("fork"),
+            HistoryFocus::local_branch("side"),
+            HistoryFocus::remote_branch("fork", "side"),
+            HistoryFocus::remote("fork"),
         ] {
             let result = repo
                 .read_history(
                     HistoryMode::FirstParent,
                     None,
-                    &HistorySoloSet::from_iter([target]),
+                    &HistoryFocusSet::from_iter([target]),
                     &HistoryReadRequest::Page {
                         limit: 100,
                         cursor: None,
@@ -82,7 +82,7 @@ fn reftable_solo_reads_local_branches_remote_branches_and_remotes() {
                 )
                 .unwrap();
             let HistoryReadResult::Page { page, .. } = result else {
-                panic!("expected a soloed history page");
+                panic!("expected a focused history page");
             };
             assert_eq!(page.commits.len(), 1);
             assert_eq!(page.commits[0].id, root);

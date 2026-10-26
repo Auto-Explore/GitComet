@@ -527,7 +527,7 @@ fn file_status(path: &str, kind: FileStatusKind) -> FileStatus {
 
 fn log_request(scope: LogScope, author: Option<&str>, cursor: Option<LogCursor>) -> PendingLogLoad {
     PendingLogLoad {
-        solo: Default::default(),
+        focus: Default::default(),
         scope,
         author: author.map(str::to_owned),
         limit: 20,
@@ -540,16 +540,16 @@ fn test_log_request() -> PendingLogLoad {
 }
 
 #[test]
-fn a_solo_change_supersedes_the_current_walk_and_pending_pagination() {
+fn a_focus_change_supersedes_the_current_walk_and_pending_pagination() {
     let mut loads = RepoLoadsInFlight::default();
     let initial = test_log_request();
     let first = loads.request_log(initial.clone()).unwrap();
     let mut pagination = initial.clone();
     pagination.cursor = Some(test_cursor("next"));
     assert!(loads.request_log(pagination).is_none());
-    let mut soloed = initial;
-    soloed.solo = HistorySoloSet::from_iter([HistorySolo::local_branch("feature")]);
-    let replacement = loads.request_log(soloed).unwrap();
+    let mut focused = initial;
+    focused.focus = HistoryFocusSet::from_iter([HistoryFocus::local_branch("feature")]);
+    let replacement = loads.request_log(focused).unwrap();
     assert_ne!(replacement, first);
     assert!(!loads.is_active_log_reply(first));
     assert!(loads.is_active_log_reply(replacement));

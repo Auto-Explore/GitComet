@@ -50,7 +50,7 @@ pub struct HistoryState {
     /// authors. Matches the author name shown in the UI.
     pub history_author_filter: Option<String>,
     /// The refs the history walk starts from, empty for the normal walk.
-    pub history_solo: HistorySoloSet,
+    pub history_focus: HistoryFocusSet,
     pub log: Loadable<Shared<LogPage>>,
     pub retained_log_while_loading: Option<Shared<LogPage>>,
     pub log_loading_more: bool,
@@ -205,7 +205,7 @@ impl Default for HistoryState {
             find: Default::default(),
             history_scope: LogScope::default(),
             history_author_filter: None,
-            history_solo: HistorySoloSet::default(),
+            history_focus: HistoryFocusSet::default(),
             log: Loadable::NotLoaded,
             retained_log_while_loading: None,
             log_loading_more: false,
@@ -551,12 +551,12 @@ impl RepoState {
         self.bump_log_revs();
     }
 
-    pub(crate) fn set_history_solo(&mut self, solo: HistorySoloSet) {
-        if self.history_state.history_solo == solo {
+    pub(crate) fn set_history_focus(&mut self, focus: HistoryFocusSet) {
+        if self.history_state.history_focus == focus {
             return;
         }
         self.history_state.indexed.reset_query();
-        self.history_state.history_solo = solo;
+        self.history_state.history_focus = focus;
         self.history_state.authors.cancellation.cancel();
         self.bump_log_revs();
     }

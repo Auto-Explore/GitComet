@@ -489,8 +489,8 @@ fn open_repo_with_mode(
             .get(&workdir_key)
             .cloned()
             .flatten();
-        repo_state.history_state.history_solo = session_preferences
-            .repo_history_solos
+        repo_state.history_state.history_focus = session_preferences
+            .repo_history_focus
             .get(&workdir_key)
             .cloned()
             .unwrap_or_default();
@@ -589,8 +589,8 @@ pub(super) fn restore_session(
                 .get(&workdir_key)
                 .cloned()
                 .flatten();
-            repo_state.history_state.history_solo = session_preferences
-                .repo_history_solos
+            repo_state.history_state.history_focus = session_preferences
+                .repo_history_focus
                 .get(&workdir_key)
                 .cloned()
                 .unwrap_or_default();

@@ -10,7 +10,7 @@ impl GixRepo {
     pub(in super::super) fn history_authors_impl(
         &self,
         mode: HistoryMode,
-        solo: &HistorySoloSet,
+        focus: &HistoryFocusSet,
         cancellation: &CancellationToken,
     ) -> Result<Arc<[Arc<str>]>> {
         cancellation.check_cancelled()?;
@@ -23,7 +23,7 @@ impl GixRepo {
             shared.common.id,
             mode,
             None,
-            solo,
+            focus,
             cancellation,
         )?;
         let snapshot = query.snapshot();

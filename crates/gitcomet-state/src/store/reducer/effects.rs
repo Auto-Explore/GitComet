@@ -1856,10 +1856,10 @@ pub(super) fn branches_loaded(
             }));
         }
     }
-    effects.extend(super::external_and_history::clear_missing_history_solo(
+    effects.extend(super::external_and_history::clear_missing_history_focus(
         state,
         repo_id,
-        super::external_and_history::SoloRefList::LocalBranches,
+        super::external_and_history::FocusRefList::LocalBranches,
     ));
     effects
 }
@@ -1884,10 +1884,10 @@ pub(super) fn remotes_loaded(
             effects.push(Effect::References(ReferenceEffect::LoadRemotes { repo_id }));
         }
     }
-    effects.extend(super::external_and_history::clear_missing_history_solo(
+    effects.extend(super::external_and_history::clear_missing_history_focus(
         state,
         repo_id,
-        super::external_and_history::SoloRefList::Remotes,
+        super::external_and_history::FocusRefList::Remotes,
     ));
     effects
 }
@@ -1926,10 +1926,10 @@ pub(super) fn remote_branches_loaded(
         };
         repo_state.set_remote_branches(branches);
     }
-    effects.extend(super::external_and_history::clear_missing_history_solo(
+    effects.extend(super::external_and_history::clear_missing_history_focus(
         state,
         repo_id,
-        super::external_and_history::SoloRefList::RemoteBranches,
+        super::external_and_history::FocusRefList::RemoteBranches,
     ));
     effects
 }
@@ -2273,7 +2273,7 @@ pub(super) fn head_branch_loaded(
                     if repo_state.detached_head_commit.is_none()
                         && repo_state
                             .history_state
-                            .history_solo
+                            .history_focus
                             .head_is_first(repo_state.history_state.history_scope)
                         && let Loadable::Ready(page) = &repo_state.log
                     {

@@ -627,15 +627,15 @@ pub trait GitRepository: Send + Sync {
     /// Distinct author names across the complete, unfiltered history scope.
     /// Called on demand, independently of the visible commit metadata cache.
     ///
-    /// `solo` narrows the walk the way [`Self::read_history`] does, so the
+    /// `focus` narrows the walk the way [`Self::read_history`] does, so the
     /// catalog offers the authors of the commits actually on screen.
     fn history_authors(
         &self,
         mode: HistoryMode,
-        solo: &HistorySoloSet,
+        focus: &HistoryFocusSet,
         cancellation: &CancellationToken,
     ) -> Result<Arc<[Arc<str>]>> {
-        let _ = solo;
+        let _ = focus;
         let mut authors = Vec::new();
         let mut seen = std::collections::HashSet::new();
         let mut cursor = None;
@@ -663,7 +663,7 @@ pub trait GitRepository: Send + Sync {
         &self,
         _mode: HistoryMode,
         _author: Option<&str>,
-        _solo: &HistorySoloSet,
+        _focus: &HistoryFocusSet,
         cancellation: &CancellationToken,
         _on_progress: &mut dyn FnMut(crate::history_index::HistoryIndexProgress),
     ) -> Result<Option<crate::history_index::HistoryIndexHandle>> {
@@ -698,20 +698,20 @@ pub trait GitRepository: Send + Sync {
     /// Read or refresh a history snapshot. Backends without snapshot support
     /// conservatively rebuild and never claim an unchanged result.
     ///
-    /// A non-empty `solo` replaces the walk's tips with the refs it names, so
+    /// A non-empty `focus` replaces the walk's tips with the refs it names, so
     /// the page holds only the commits those refs reach. The default
     /// implementation has no way to reseed the paged reader and ignores it, the
-    /// same way it ignores `author`; backends that support solo override this.
+    /// same way it ignores `author`; backends that support focus override this.
     fn read_history(
         &self,
         mode: HistoryMode,
         author: Option<&str>,
-        solo: &HistorySoloSet,
+        focus: &HistoryFocusSet,
         request: &HistoryReadRequest,
         cancellation: &CancellationToken,
         on_chunk: &mut dyn FnMut(LogChunk),
     ) -> Result<HistoryReadResult> {
-        let _ = solo;
+        let _ = focus;
         let page = match request {
             HistoryReadRequest::Page {
                 limit,

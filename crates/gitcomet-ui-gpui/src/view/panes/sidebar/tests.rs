@@ -465,37 +465,40 @@ fn collapsed_popover_search_stays_within_the_open_section() {
     assert!(branch_names(&filter_rows("release", CollapsedSidebarSection::Local)).is_empty());
 }
 
-/// The mustard row colours and the "Soloing x/y" banner are computed while
-/// rendering, not stored in the cached rows, so without this the sidebar
-/// keeps painting the pre-solo colours until something else happens to
-/// repaint it.
+/// The accent row colours, the eye column and the "Focusing x/y" banner are
+/// computed while rendering, not stored in the cached rows, so without this
+/// the sidebar keeps painting the pre-focus rows until something else happens
+/// to repaint it.
 #[test]
-fn sidebar_notify_fingerprint_tracks_the_history_solo() {
-    use gitcomet_core::domain::{HistorySolo, HistorySoloSet};
+fn sidebar_notify_fingerprint_tracks_the_history_focus() {
+    use gitcomet_core::domain::{HistoryFocus, HistoryFocusSet};
 
     let mut state = AppState {
         repos: vec![repo_state(RepoId(1), "/tmp/repo")],
         active_repo: Some(RepoId(1)),
         ..AppState::default()
     };
-    let unsoloed = SidebarNotifyFingerprint::from_state(&state);
+    let unfocused = SidebarNotifyFingerprint::from_state(&state);
 
-    state.repos[0].history_state.history_solo =
-        HistorySoloSet::from_iter([HistorySolo::local_branch("feature")]);
-    let soloed = SidebarNotifyFingerprint::from_state(&state);
-    assert_ne!(soloed, unsoloed, "soloing a ref must repaint the sidebar");
+    state.repos[0].history_state.history_focus =
+        HistoryFocusSet::from_iter([HistoryFocus::local_branch("feature")]);
+    let focused = SidebarNotifyFingerprint::from_state(&state);
+    assert_ne!(
+        focused, unfocused,
+        "focusing a ref must repaint the sidebar"
+    );
 
     // Adding a second ref is also a repaint: the banner's count changes.
-    state.repos[0].history_state.history_solo = HistorySoloSet::from_iter([
-        HistorySolo::local_branch("feature"),
-        HistorySolo::local_branch("main"),
+    state.repos[0].history_state.history_focus = HistoryFocusSet::from_iter([
+        HistoryFocus::local_branch("feature"),
+        HistoryFocus::local_branch("main"),
     ]);
-    assert_ne!(SidebarNotifyFingerprint::from_state(&state), soloed);
+    assert_ne!(SidebarNotifyFingerprint::from_state(&state), focused);
 
-    state.repos[0].history_state.history_solo = HistorySoloSet::default();
+    state.repos[0].history_state.history_focus = HistoryFocusSet::default();
     assert_eq!(
         SidebarNotifyFingerprint::from_state(&state),
-        unsoloed,
-        "clearing the solo returns the sidebar to its unsoloed painting"
+        unfocused,
+        "clearing the focus returns the sidebar to its unfocused painting"
     );
 }

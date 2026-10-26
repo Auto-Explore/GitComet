@@ -9,6 +9,11 @@ use std::{
     num::NonZeroU32,
 };
 
+mod group_members;
+pub(in crate::view) use group_members::{
+    for_each_group_member, group_focus_state, group_focus_targets,
+};
+
 const PINNED_LOCAL_SECTION_KEY: &str = "section:pinned/local";
 const PINNED_REMOTE_SECTION_KEY: &str = "section:pinned/remote";
 const LOCAL_SECTION_KEY: &str = "section:branches/local";

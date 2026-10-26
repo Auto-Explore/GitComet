@@ -1926,7 +1926,7 @@ fn load_log_effect_uses_history_mode_api() {
         &mut repos,
         msg_tx,
         Effect::LoadLog {
-            solo: Default::default(),
+            focus: Default::default(),
             repo_id,
             seq: crate::model::LogLoadSeq(1),
             scope: LogScope::NoMerges,
@@ -2008,7 +2008,7 @@ fn log_effect_streams_only_while_replacing_a_loading_page() {
             state,
             tx,
             Effect::LoadLog {
-                solo: Default::default(),
+                focus: Default::default(),
                 repo_id,
                 seq: crate::model::LogLoadSeq(1),
                 scope: LogScope::NoMerges,
@@ -2291,7 +2291,7 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
         ),
         (
             Effect::LoadLog {
-                solo: Default::default(),
+                focus: Default::default(),
                 repo_id,
                 seq: crate::model::LogLoadSeq(1),
                 scope: LogScope::CurrentBranch,
@@ -2303,7 +2303,7 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
         ),
         (
             Effect::LoadLog {
-                solo: Default::default(),
+                focus: Default::default(),
                 repo_id,
                 seq: crate::model::LogLoadSeq(2),
                 scope: LogScope::AllBranches,

@@ -114,7 +114,7 @@ pub(super) fn reduce(state: &mut AppState, event: Event) -> Vec<Effect> {
                     seq: history.seq,
                     mode: repo.history_state.history_scope,
                     author: repo.history_state.history_author_filter.clone(),
-                    solo: repo.history_state.history_solo.clone(),
+                    focus: repo.history_state.history_focus.clone(),
                     cancellation: history.cancellation.clone(),
                 })];
             }

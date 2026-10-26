@@ -768,14 +768,14 @@ impl HistoryView {
                 .to_string()
             })
             .into();
-        // A soloed walk shows one ref's commits and nothing else, which is
+        // A focused walk shows one ref's commits and nothing else, which is
         // drastic enough that the header has to say so rather than leave the
         // mode name explaining a graph it no longer describes.
-        let solo_label: Option<String> = self
+        let history_focus_label: Option<String> = self
             .active_repo()
-            .and_then(|r| r.history_state.history_solo.label());
-        let scope_label: SharedString = match &solo_label {
-            Some(solo) => format!("Solo: {solo}").into(),
+            .and_then(crate::view::history_focus::history_focus_label);
+        let scope_label: SharedString = match &history_focus_label {
+            Some(focused_on) => format!("Focus: {focused_on}").into(),
             None => history_mode_label.clone(),
         };
         let scope_repo_id = self.active_repo_id();
@@ -998,11 +998,11 @@ impl HistoryView {
                     })
                     .gitcomet_tooltip(
                         theme,
-                        match &solo_label {
-                            Some(solo) => {
-                                format!("Soloed on {solo} · History mode: {history_mode_label}")
-                                    .into()
-                            }
+                        match &history_focus_label {
+                            Some(focused_on) => format!(
+                                "Focused on {focused_on} · History mode: {history_mode_label}"
+                            )
+                            .into(),
                             None => format!("History mode: {history_mode_label}").into(),
                         },
                     ),

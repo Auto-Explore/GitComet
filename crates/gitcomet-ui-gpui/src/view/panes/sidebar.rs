@@ -426,11 +426,12 @@ struct SidebarNotifyFingerprint {
     /// has to repaint when it changes — nothing else in this fingerprint moves
     /// when the user opens a different file.
     diff_target_rev: u64,
-    /// The soloed refs. The sidebar draws them in mustard and puts a banner
-    /// above the branch list, and neither is part of the cached row data — both
-    /// are computed at render time — so the pane has to be told to repaint when
-    /// the set changes. Hashed because this fingerprint is `Copy`.
-    history_solo_hash: u64,
+    /// The focused refs. The sidebar draws them in the accent colour, gives
+    /// every branch row an eye toggle and puts a banner above the branch list,
+    /// and none of that is part of the cached row data — it is all computed at
+    /// render time — so the pane has to be told to repaint when the set
+    /// changes. Hashed because this fingerprint is `Copy`.
+    history_focus_hash: u64,
     status_revs: (u64, u64),
     selected_commit: Option<CommitId>,
 }
@@ -454,10 +455,10 @@ impl SidebarNotifyFingerprint {
         let status_revs = repo
             .map(|r| (r.worktree_status_cache_rev(), r.staged_status_cache_rev()))
             .unwrap_or_default();
-        let history_solo_hash = repo
+        let history_focus_hash = repo
             .map(|r| {
                 let mut hasher = FxHasher::default();
-                r.history_state.history_solo.hash(&mut hasher);
+                r.history_state.history_focus.hash(&mut hasher);
                 hasher.finish()
             })
             .unwrap_or(0);
@@ -471,7 +472,7 @@ impl SidebarNotifyFingerprint {
             active_worktree_badges_hash,
             file_browser_rev,
             diff_target_rev,
-            history_solo_hash,
+            history_focus_hash,
             status_revs,
             selected_commit: repo.and_then(|repo| repo.history_state.selected_commit.clone()),
         }
@@ -1844,13 +1845,13 @@ impl SidebarPaneView {
         cx.notify();
     }
 
-    /// The mustard banner above the branch list, shown only while the history is
-    /// soloed.
+    /// The accent banner above the branch list, shown only while the history is
+    /// focused.
     ///
-    /// The sidebar is where solo is switched on, one ref at a time, so it is
+    /// The sidebar is where focus is switched on, one ref at a time, so it is
     /// also where the way out belongs: the banner says how much of the
     /// repository is currently in view and clears the whole set in one click.
-    fn render_solo_banner(
+    fn render_focus_banner(
         &mut self,
         theme: AppTheme,
         cx: &mut gpui::Context<Self>,
@@ -1859,21 +1860,21 @@ impl SidebarPaneView {
         let scaled_px = ui_scale::scaler(ui_scale_percent);
         let repo = self.active_repo()?;
         let repo_id = repo.id;
-        let soloed = repo.history_state.history_solo.len();
-        if soloed == 0 {
+        if repo.history_state.history_focus.is_empty() {
             return None;
         }
-        // The denominator is the repository's local branches: the banner answers
-        // "how much of my work am I looking at", not "how many refs exist".
-        let local_branches = repo.branches.ready().map_or(0, |branches| branches.len());
-        let mustard = theme.colors.status.warning.foreground;
+        // Both sides count branch refs, local and remote: remote branches can
+        // be focused too, so leaving them out of the total would let the count
+        // read "3/2".
+        let count = crate::view::history_focus::history_focus_count(repo);
+        let accent = theme.colors.accent;
         let store = self.store.clone();
 
         Some(
             div().px(scaled_px(8.0)).pb(scaled_px(6.0)).child(
                 div()
-                    .id("branch_sidebar_solo_banner")
-                    .debug_selector(|| "branch_sidebar_solo_banner".to_string())
+                    .id("branch_sidebar_focus_banner")
+                    .debug_selector(|| "branch_sidebar_focus_banner".to_string())
                     .flex()
                     .flex_row()
                     .items_center()
@@ -1882,28 +1883,28 @@ impl SidebarPaneView {
                     .py(scaled_px(4.0))
                     .rounded(px(theme.radii.control))
                     .border_1()
-                    .border_color(mustard)
-                    .bg(with_alpha(mustard, if theme.is_dark { 0.18 } else { 0.22 }))
+                    .border_color(accent.foreground)
+                    .bg(accent.subtle_background)
                     .text_size(theme.ui_text(12.0))
                     .font_weight(FontWeight::MEDIUM)
-                    .text_color(mustard)
+                    .text_color(accent.foreground)
                     .child(
                         div()
                             .flex_1()
                             .min_w(px(0.0))
                             .whitespace_nowrap()
                             .overflow_hidden()
-                            .debug_selector(|| "branch_sidebar_solo_banner_count".to_string())
-                            .child(format!("Soloing {soloed}/{local_branches}")),
+                            .debug_selector(|| "branch_sidebar_focus_banner_count".to_string())
+                            .child(format!("Focusing {}/{}", count.focused, count.total)),
                     )
                     .child(
-                        components::Button::new("branch_sidebar_solo_banner_stop", "Stop Soloing")
+                        components::Button::new("branch_sidebar_focus_banner_stop", "Stop focus")
                             .borderless()
                             .style(components::ButtonStyle::Subtle)
                             .on_click(theme, cx, move |_this, _e, _w, _cx| {
-                                store.dispatch(Msg::SetHistorySolo {
+                                store.dispatch(Msg::SetHistoryFocus {
                                     repo_id,
-                                    solo: gitcomet_core::domain::HistorySoloSet::default(),
+                                    focus: gitcomet_core::domain::HistoryFocusSet::default(),
                                 });
                             }),
                     ),
@@ -1960,7 +1961,7 @@ impl SidebarPaneView {
         let filter_bar = self
             .branch_search_open
             .then(|| self.render_branch_filter_bar(theme, cx));
-        let solo_banner = self.render_solo_banner(theme, cx);
+        let focus_banner = self.render_focus_banner(theme, cx);
         let Some(presentation) = self.branch_sidebar_presentation_cached() else {
             return div()
                 .flex()
@@ -2077,7 +2078,7 @@ impl SidebarPaneView {
             .h_full()
             .min_h(px(0.0))
             .children(filter_bar)
-            .children(solo_banner)
+            .children(focus_banner)
             .child(
                 div()
                     .id("sidebar_branches_body")

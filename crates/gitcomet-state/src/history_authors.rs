@@ -1,6 +1,6 @@
 //! On-demand author discovery, independent of history paging and author filters.
 use crate::model::{Loadable, RepoId, RepoLoadEpoch, RepoState};
-use gitcomet_core::domain::{HistoryMode, HistorySoloSet};
+use gitcomet_core::domain::{HistoryFocusSet, HistoryMode};
 use gitcomet_core::services::{CancellationToken, HistorySnapshot, Result};
 use std::sync::Arc;
 
@@ -75,9 +75,9 @@ pub struct HistoryAuthorsEffect {
     pub repo_id: RepoId,
     pub seq: u64,
     pub mode: HistoryMode,
-    /// The solo the catalog is scoped to, so the authors offered are those of
+    /// The focus the catalog is scoped to, so the authors offered are those of
     /// the commits actually on screen.
-    pub solo: HistorySoloSet,
+    pub focus: HistoryFocusSet,
     pub cancellation: CancellationToken,
 }
 

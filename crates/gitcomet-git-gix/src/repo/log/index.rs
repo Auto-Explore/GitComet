@@ -12,7 +12,7 @@ pub(in super::super) struct HistoryQuery {
     pub generation: u64,
     pub mode: HistoryMode,
     pub author: Option<AuthorFilter>,
-    pub solo: HistorySoloSet,
+    pub focus: HistoryFocusSet,
     pub exclusions: gitcomet_core::services::HistoryRefFilter,
     pub tips: Arc<[gix::ObjectId]>,
     pub shallow: ShallowSnapshot,
@@ -29,7 +29,7 @@ impl GixRepo {
         &self,
         mode: HistoryMode,
         author: Option<&str>,
-        solo: &HistorySoloSet,
+        focus: &HistoryFocusSet,
         cancellation: &CancellationToken,
         on_progress: &mut dyn FnMut(HistoryIndexProgress),
     ) -> Result<Option<HistoryIndexHandle>> {
@@ -41,7 +41,7 @@ impl GixRepo {
             shared.common.id,
             mode,
             author,
-            solo,
+            focus,
             cancellation,
         )?;
         shared
@@ -56,17 +56,17 @@ impl GixRepo {
         common: u64,
         mode: HistoryMode,
         author: Option<&str>,
-        solo: &HistorySoloSet,
+        focus: &HistoryFocusSet,
         cancellation: &CancellationToken,
     ) -> Result<HistoryQuery> {
         let shallow = shallow_snapshot(repo)?;
-        let tips = self.history_tips(repo, mode, solo, Some(cancellation))?;
+        let tips = self.history_tips(repo, mode, focus, Some(cancellation))?;
         Ok(HistoryQuery {
             common,
             generation,
             mode,
             author: AuthorFilter::new(author),
-            solo: solo.clone(),
+            focus: focus.clone(),
             exclusions: self.history_ref_filter.clone(),
             tips,
             shallow,

@@ -79,6 +79,7 @@ fn context_menu_icon_path_accepts_direct_svg_paths() {
         "icons/copy_plus.svg",
         "icons/redo.svg",
         "icons/eye_off.svg",
+        "icons/eye.svg",
     ];
 
     for path in paths {
@@ -215,6 +216,7 @@ fn context_menu_icon_path_covers_all_context_menu_svg_icons() {
         "icons/copy_plus.svg",
         "icons/redo.svg",
         "icons/eye_off.svg",
+        "icons/eye.svg",
     ];
     for path in paths {
         assert_eq!(

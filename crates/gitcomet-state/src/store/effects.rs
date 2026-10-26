@@ -294,7 +294,7 @@ pub(super) fn schedule_effect(
             seq,
             scope,
             author,
-            solo,
+            focus,
             limit,
             cursor,
         } => load_tokens::load_log(
@@ -306,7 +306,7 @@ pub(super) fn schedule_effect(
             seq,
             scope,
             author,
-            solo,
+            focus,
             limit,
             cursor,
         ),

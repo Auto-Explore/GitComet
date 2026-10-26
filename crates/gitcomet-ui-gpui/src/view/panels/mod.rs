@@ -201,6 +201,15 @@ pub(in crate::view) enum ContextMenuAction {
         path: String,
         group_label: String,
     },
+    /// Focus the history on every branch in a group, or stop focusing them.
+    /// Like the delete above, the members are resolved on activation.
+    SetBranchGroupFocus {
+        repo_id: RepoId,
+        section: BranchSection,
+        remote: Option<String>,
+        path: String,
+        focused: bool,
+    },
     /// Open or close a folder together with every directory beneath it.
     SetFileBrowserDirExpandedRecursive {
         repo_id: RepoId,
@@ -377,15 +386,15 @@ pub(in crate::view) enum ContextMenuAction {
         repo_id: RepoId,
         scope: gitcomet_core::domain::LogScope,
     },
-    /// Adds a ref to the history solo set, or removes it when already there.
-    ToggleHistorySolo {
+    /// Adds a ref to the history focus set, or removes it when already there.
+    ToggleHistoryFocus {
         repo_id: RepoId,
-        target: gitcomet_core::domain::HistorySolo,
+        target: gitcomet_core::domain::HistoryFocus,
     },
-    /// Replaces the history solo set outright; an empty set clears the solo.
-    SetHistorySolo {
+    /// Replaces the history focus set outright; an empty set clears the focus.
+    SetHistoryFocus {
         repo_id: RepoId,
-        solo: gitcomet_core::domain::HistorySoloSet,
+        focus: gitcomet_core::domain::HistoryFocusSet,
     },
     SetCommitFileSort {
         list: crate::view::rows::FileListId,

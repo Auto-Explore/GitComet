@@ -829,7 +829,7 @@ fn cancelled_maintenance_refresh(status: Option<FileStatusKind>) {
         assert!(
             repo.loads_in_flight
                 .request_log(crate::model::PendingLogLoad {
-                    solo: Default::default(),
+                    focus: Default::default(),
                     scope: repo.history_state.history_scope,
                     author: repo.history_state.history_author_filter.clone(),
                     limit: 200,
@@ -1009,7 +1009,7 @@ fn cancelled_action_uses_its_inner_log_refresh_without_an_extra_head_query() {
             assert!(
                 repo.loads_in_flight
                     .request_log(crate::model::PendingLogLoad {
-                        solo: Default::default(),
+                        focus: Default::default(),
                         scope,
                         author: None,
                         limit: 200,

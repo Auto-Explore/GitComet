@@ -3,8 +3,8 @@ use crate::util::git_workdir_cmd_for as util_git_workdir_cmd_for;
 use gitcomet_core::conflict_session::ConflictSession;
 use gitcomet_core::domain::{
     Branch, Commit, CommitDetails, CommitId, CommitSignature, Diff, DiffArea, DiffPreviewTextFile,
-    DiffPreviewTextSide, DiffTarget, FileDiffImage, FileDiffText, FileEntry, HistoryMode,
-    HistorySoloSet, LogCursor, LogPage, RecentCommitMessage, RefMetadata, ReflogEntry, Remote,
+    DiffPreviewTextSide, DiffTarget, FileDiffImage, FileDiffText, FileEntry, HistoryFocusSet,
+    HistoryMode, LogCursor, LogPage, RecentCommitMessage, RefMetadata, ReflogEntry, Remote,
     RemoteBranch, RemoteTag, RepoSpec, RepoStatus, StashEntry, Submodule, SubmoduleDiffSummary,
     Tag, Upstream, UpstreamDivergence, Worktree,
 };
@@ -684,10 +684,10 @@ impl GitRepository for GixRepo {
     fn history_authors(
         &self,
         mode: HistoryMode,
-        solo: &HistorySoloSet,
+        focus: &HistoryFocusSet,
         cancellation: &CancellationToken,
     ) -> Result<Arc<[Arc<str>]>> {
-        self.with_store_retry(|| self.history_authors_impl(mode, solo, cancellation))
+        self.with_store_retry(|| self.history_authors_impl(mode, focus, cancellation))
     }
     fn spec(&self) -> &RepoSpec {
         &self.spec
@@ -714,12 +714,12 @@ impl GitRepository for GixRepo {
         &self,
         mode: HistoryMode,
         author: Option<&str>,
-        solo: &HistorySoloSet,
+        focus: &HistoryFocusSet,
         cancellation: &CancellationToken,
         on_progress: &mut dyn FnMut(gitcomet_core::history_index::HistoryIndexProgress),
     ) -> Result<Option<gitcomet_core::history_index::HistoryIndexHandle>> {
         self.with_store_retry(|| {
-            self.build_history_index_impl(mode, author, solo, cancellation, &mut *on_progress)
+            self.build_history_index_impl(mode, author, focus, cancellation, &mut *on_progress)
         })
     }
 
@@ -745,13 +745,13 @@ impl GitRepository for GixRepo {
         &self,
         mode: HistoryMode,
         author: Option<&str>,
-        solo: &HistorySoloSet,
+        focus: &HistoryFocusSet,
         request: &gitcomet_core::services::HistoryReadRequest,
         cancellation: &CancellationToken,
         on_chunk: &mut dyn FnMut(gitcomet_core::services::LogChunk),
     ) -> Result<gitcomet_core::services::HistoryReadResult> {
         self.with_store_retry(|| {
-            self.read_history_impl(mode, author, solo, request, cancellation, &mut *on_chunk)
+            self.read_history_impl(mode, author, focus, request, cancellation, &mut *on_chunk)
         })
     }
 

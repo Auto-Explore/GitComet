@@ -228,6 +228,23 @@ impl PopoverHost {
                     pane.unpin_all_branches(repo_id, section, cx);
                 });
             }
+            ContextMenuAction::SetBranchGroupFocus {
+                repo_id,
+                section,
+                remote,
+                path,
+                focused,
+            } => {
+                let targets =
+                    branch_group::focus_targets(self, repo_id, section, remote.as_deref(), &path);
+                if !targets.is_empty() {
+                    self.store.dispatch(Msg::FocusHistoryRefs {
+                        repo_id,
+                        targets,
+                        focused,
+                    });
+                }
+            }
             ContextMenuAction::ConfirmDeleteBranchGroup {
                 repo_id,
                 section,
@@ -654,12 +671,12 @@ impl PopoverHost {
             ContextMenuAction::SetHistoryScope { repo_id, scope } => {
                 self.store.dispatch(Msg::SetHistoryScope { repo_id, scope });
             }
-            ContextMenuAction::ToggleHistorySolo { repo_id, target } => {
+            ContextMenuAction::ToggleHistoryFocus { repo_id, target } => {
                 self.store
-                    .dispatch(Msg::ToggleHistorySolo { repo_id, target });
+                    .dispatch(Msg::ToggleHistoryFocus { repo_id, target });
             }
-            ContextMenuAction::SetHistorySolo { repo_id, solo } => {
-                self.store.dispatch(Msg::SetHistorySolo { repo_id, solo });
+            ContextMenuAction::SetHistoryFocus { repo_id, focus } => {
+                self.store.dispatch(Msg::SetHistoryFocus { repo_id, focus });
             }
             ContextMenuAction::SetCommitFileSort { list, sort } => {
                 self.details_pane.update(cx, |pane, cx| {

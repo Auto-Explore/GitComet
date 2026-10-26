@@ -1,5 +1,5 @@
 use crate::model::RepoId;
-use gitcomet_core::domain::{HistoryMode, HistorySoloSet};
+use gitcomet_core::domain::{HistoryFocusSet, HistoryMode};
 use std::path::PathBuf;
 
 #[derive(Clone, Debug, strum::IntoStaticStr)]
@@ -35,10 +35,10 @@ pub enum PersistenceEffect {
         author: Option<String>,
         action: &'static str,
     },
-    PersistRepoHistorySolo {
+    PersistRepoHistoryFocus {
         repo_id: Option<RepoId>,
         workdir: PathBuf,
-        solo: HistorySoloSet,
+        focus: HistoryFocusSet,
         action: &'static str,
     },
     PersistRepoMaintenanceSnooze {

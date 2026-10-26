@@ -54,12 +54,12 @@ pub(super) fn model(this: &PopoverHost, repo_id: RepoId, name: &str) -> ContextM
         action: Box::new(ContextMenuAction::PruneLocalTags { repo_id }),
     });
     items.push(ContextMenuItem::Separator);
-    // Soloing a remote seeds the walk from every branch it tracks, so the graph
+    // Focusing a remote seeds the walk from every branch it tracks, so the graph
     // shows that remote's work and nothing else.
-    items.push(super::solo::entry(
+    items.push(super::focus::entry(
         this,
         repo_id,
-        gitcomet_core::domain::HistorySolo::remote(name),
+        gitcomet_core::domain::HistoryFocus::remote(name),
     ));
     items.push(ContextMenuItem::Separator);
 

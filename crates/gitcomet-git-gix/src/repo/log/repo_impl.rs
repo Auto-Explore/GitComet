@@ -737,18 +737,18 @@ impl GixRepo {
 
     /// The commits a history walk starts from.
     ///
-    /// Solo replaces the seed, not the mode: a soloed first-parent walk still
-    /// follows first parents, it just starts at the soloed refs' tips instead of
-    /// HEAD. That is what makes solo compose with every history mode.
+    /// Focus replaces the seed, not the mode: a focused first-parent walk still
+    /// follows first parents, it just starts at the focused refs' tips instead of
+    /// HEAD. That is what makes focus compose with every history mode.
     pub(super) fn history_tips(
         &self,
         repo: &gix::Repository,
         mode: HistoryMode,
-        solo: &HistorySoloSet,
+        focus: &HistoryFocusSet,
         cancellation: Option<&CancellationToken>,
     ) -> Result<Arc<[gix::ObjectId]>> {
-        if !solo.is_empty() {
-            return solo_tips(repo, solo, cancellation);
+        if !focus.is_empty() {
+            return focus_tips(repo, focus, cancellation);
         }
         if mode == HistoryMode::AllBranches {
             return self.all_branches_tips(repo, cancellation);
@@ -1227,43 +1227,43 @@ fn find_commit_by_id<'repo>(
         .map_err(|e| Error::new(ErrorKind::Backend(format!("gix peel commit {spec}: {e}"))))
 }
 
-/// Resolves a solo set to the union of the tips its walk is seeded from.
+/// Resolves a focus set to the union of the tips its walk is seeded from.
 ///
 /// A target that no longer resolves contributes no tips rather than failing: a
-/// soloed branch can be deleted, renamed or pruned between the moment it is
+/// focused branch can be deleted, renamed or pruned between the moment it is
 /// picked and the moment the walk runs, and an empty history the user can clear
 /// from the header is a better answer than a failed load.
-pub(super) fn solo_tips(
+pub(super) fn focus_tips(
     repo: &gix::Repository,
-    solo: &HistorySoloSet,
+    focus: &HistoryFocusSet,
     cancellation: Option<&CancellationToken>,
 ) -> Result<Arc<[gix::ObjectId]>> {
     let refs =
         crate::refs::view_cancellable(repo, cancellation.unwrap_or(&CancellationToken::new()))?;
     let mut tips = Vec::new();
     let mut seen = FxHashSet::default();
-    for target in solo.iter() {
+    for target in focus.iter() {
         if let Some(cancellation) = cancellation {
             cancellation.check_cancelled()?;
         }
-        append_solo_target_tips(&refs, target, cancellation, &mut tips, &mut seen)?;
+        append_focus_target_tips(&refs, target, cancellation, &mut tips, &mut seen)?;
     }
     tips.sort_unstable();
     Ok(Arc::from(tips))
 }
 
-fn append_solo_target_tips(
+fn append_focus_target_tips(
     refs: &crate::refs::RefsView<'_>,
-    solo: &HistorySolo,
+    focus: &HistoryFocus,
     cancellation: Option<&CancellationToken>,
     tips: &mut Vec<gix::ObjectId>,
     seen: &mut FxHashSet<gix::ObjectId>,
 ) -> Result<()> {
-    match solo {
-        HistorySolo::LocalBranch { .. } | HistorySolo::RemoteBranch { .. } => {
-            let name = solo
+    match focus {
+        HistoryFocus::LocalBranch { .. } | HistoryFocus::RemoteBranch { .. } => {
+            let name = focus
                 .ref_name()
-                .expect("a single-ref solo always names one ref");
+                .expect("a single-ref focus always names one ref");
             let reference = refs.find(name.as_bytes())?;
             if let Some(reference) = reference
                 && let Some(id) = reference_commit_id(reference)?
@@ -1272,7 +1272,7 @@ fn append_solo_target_tips(
                 tips.push(id);
             }
         }
-        HistorySolo::Remote { name } => {
+        HistoryFocus::Remote { name } => {
             let prefix = format!("refs/remotes/{name}/");
             let iter = refs.prefixed(prefix.as_bytes())?;
             for reference in iter {

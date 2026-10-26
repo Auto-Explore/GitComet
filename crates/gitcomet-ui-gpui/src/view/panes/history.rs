@@ -1110,7 +1110,7 @@ impl HistoryView {
             // while this key is live. A mutation must copy a shared page first.
             log_source: std::ptr::from_ref(page) as usize,
             history_author_filter: repo.history_state.history_author_filter.clone(),
-            history_solo: repo.history_state.history_solo.clone(),
+            history_focus: repo.history_state.history_focus.clone(),
             head_branch_rev: repo.head_branch_rev,
             detached_head_commit: repo.detached_head_commit.clone(),
             head_branch_target: Self::attached_head_target_for_repo(repo),

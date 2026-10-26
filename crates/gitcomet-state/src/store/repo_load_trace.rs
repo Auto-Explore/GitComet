@@ -175,7 +175,7 @@ pub(super) fn effect_repo_id(effect: &Effect) -> Option<RepoId> {
         Effect::Persistence(PersistenceEffect::PersistRepoHistoryAuthorFilter {
             repo_id, ..
         })
-        | Effect::Persistence(PersistenceEffect::PersistRepoHistorySolo { repo_id, .. }) => {
+        | Effect::Persistence(PersistenceEffect::PersistRepoHistoryFocus { repo_id, .. }) => {
             *repo_id
         }
         _ => None,

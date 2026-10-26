@@ -406,11 +406,11 @@ impl SidebarPaneView {
         let theme = ctx.theme;
         let repo_id = ctx.repo_id;
         let is_collapsed_popover = ctx.is_collapsed_popover;
-        let remote_color = if ctx
-            .history_solo
-            .contains(&gitcomet_core::domain::HistorySolo::remote(name.as_ref()))
-        {
-            theme.colors.status.warning.foreground
+        let remote_in_history_focus = ctx
+            .history_focus
+            .contains(&gitcomet_core::domain::HistoryFocus::remote(name.as_ref()));
+        let remote_color = if remote_in_history_focus {
+            theme.colors.accent.foreground
         } else {
             ctx.branch_tree_color(BranchSection::Remote)
         };
@@ -424,6 +424,46 @@ impl SidebarPaneView {
         let row_group: SharedString =
             format!("remote_header_row_{}_{}", repo_id.0, remote_name).into();
         let row_state = components::InteractiveRowState::default().open(context_menu_active);
+        // The eye toggles the whole remote, like its menu entry. It reads as
+        // partly open while only some of the remote's branches are focused.
+        let focus_eye = ctx
+            .focus_eye_slot(if remote_in_history_focus {
+                FocusEyeState::Focused
+            } else if ctx.history_focus.iter().any(|target| {
+                matches!(
+                    target,
+                    gitcomet_core::domain::HistoryFocus::RemoteBranch { remote, .. }
+                        if remote.as_ref() == name.as_ref()
+                )
+            }) {
+                FocusEyeState::Partly
+            } else {
+                FocusEyeState::Unfocused
+            })
+            .map(|eye| {
+                let focus_target = gitcomet_core::domain::HistoryFocus::remote(name.as_ref());
+                eye.id(("sidebar_focus_eye", ix))
+                    .debug_selector(move || format!("sidebar_focus_eye_{ix}"))
+                    .gitcomet_tooltip(
+                        theme,
+                        if remote_in_history_focus {
+                            "Stop focus"
+                        } else {
+                            "Focus"
+                        }
+                        .into(),
+                    )
+                    .on_activate(
+                        false,
+                        controls::ControlActivation::Nested,
+                        cx.listener(move |this, _, _, _| {
+                            this.store.dispatch(Msg::ToggleHistoryFocus {
+                                repo_id,
+                                target: focus_target.clone(),
+                            });
+                        }),
+                    )
+            });
 
         div()
             .id(collapse_key.clone())
@@ -440,6 +480,7 @@ impl SidebarPaneView {
             .text_size(theme.ui_text(14.0))
             .font_weight(FontWeight::MEDIUM)
             .text_color(remote_color)
+            .children(focus_eye)
             .child(if is_collapsed_popover {
                 ctx.tree_toggle_slot(Some(collapsed)).into_any_element()
             } else {
@@ -571,10 +612,87 @@ impl SidebarPaneView {
         };
         let menu_kind_for_right_click = menu_kind.clone();
         let row_state = components::InteractiveRowState::default().open(context_menu_active);
+        // The eye acts on the members the row is showing, like the group's menu:
+        // it focuses them all unless every one already is, then unfocuses them.
+        let focus_eye = ctx
+            .focus_eyes
+            .then(|| {
+                this.active_repo().map(|repo| {
+                    branch_sidebar::group_focus_state(
+                        repo,
+                        &ctx.filter_query,
+                        section,
+                        remote.as_deref(),
+                        &path,
+                    )
+                })
+            })
+            .flatten()
+            .filter(|state| state.members > 0)
+            .and_then(|state| {
+                let eye_state = if state.all_focused() {
+                    FocusEyeState::Focused
+                } else if state.focused > 0 {
+                    FocusEyeState::Partly
+                } else {
+                    FocusEyeState::Unfocused
+                };
+                ctx.focus_eye_slot(eye_state)
+                    .map(|eye| (eye, state.all_focused()))
+            })
+            .map(|(eye, all_focused)| {
+                let search = ctx.filter_query.clone();
+                let remote = remote.as_ref().map(|remote| remote.to_string());
+                let path = path.to_string();
+                eye.id(("sidebar_focus_eye", ix))
+                    .debug_selector(move || format!("{prefix}sidebar_focus_eye_{ix}"))
+                    .gitcomet_tooltip(
+                        theme,
+                        if all_focused {
+                            "Stop focusing group"
+                        } else {
+                            "Focus group"
+                        }
+                        .into(),
+                    )
+                    .on_activate(
+                        false,
+                        controls::ControlActivation::Nested,
+                        cx.listener(move |this, _, _, _| {
+                            let Some(repo) = this.active_repo() else {
+                                return;
+                            };
+                            // Re-read at click time: the focus may have moved
+                            // since this row was painted.
+                            let state = branch_sidebar::group_focus_state(
+                                repo,
+                                &search,
+                                section,
+                                remote.as_deref(),
+                                &path,
+                            );
+                            let targets = branch_sidebar::group_focus_targets(
+                                repo,
+                                &search,
+                                section,
+                                remote.as_deref(),
+                                &path,
+                            );
+                            if !targets.is_empty() {
+                                this.store.dispatch(Msg::FocusHistoryRefs {
+                                    repo_id,
+                                    targets,
+                                    focused: !state.all_focused(),
+                                });
+                            }
+                        }),
+                    )
+            });
 
         div()
             .id(("branch_group", ix))
             .debug_selector(move || format!("{prefix}branch_group_{ix}"))
+            .relative()
             .h(ctx.row_height())
             .w_full()
             .pl(ctx.indent_px(usize::from(depth)))
@@ -591,6 +709,7 @@ impl SidebarPaneView {
             } else {
                 theme.colors.foreground.secondary
             })
+            .children(focus_eye)
             .child(if is_collapsed_popover {
                 ctx.tree_toggle_slot(Some(collapsed)).into_any_element()
             } else {

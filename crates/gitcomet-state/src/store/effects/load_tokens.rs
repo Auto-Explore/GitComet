@@ -98,7 +98,7 @@ pub(super) fn load_log(
     seq: LogLoadSeq,
     scope: LogScope,
     author: Option<String>,
-    solo: gitcomet_core::domain::HistorySoloSet,
+    focus: gitcomet_core::domain::HistoryFocusSet,
     limit: usize,
     cursor: Option<LogCursor>,
 ) {
@@ -135,7 +135,7 @@ pub(super) fn load_log(
             seq,
             scope,
             author,
-            solo,
+            focus,
             cursor,
             request,
             cancellation,
