@@ -1041,6 +1041,13 @@ pub trait GitRepository: Send + Sync {
     fn head_path_is_gitlink(&self, _path: &Path) -> Result<bool> {
         Ok(false)
     }
+    fn head_tracking(&self, cancellation: &CancellationToken) -> Result<HeadTracking> {
+        cancellation.check_cancelled()?;
+        Err(Error::new(ErrorKind::Unsupported(
+            "head tracking is not implemented for this backend",
+        )))
+    }
+
     fn upstream_divergence(
         &self,
         cancellation: &CancellationToken,

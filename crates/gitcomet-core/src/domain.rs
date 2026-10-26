@@ -415,16 +415,38 @@ pub struct RemoteTag {
     pub target: CommitId,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct Upstream {
     pub remote: String,
     pub branch: String,
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash)]
 pub struct UpstreamDivergence {
     pub ahead: usize,
     pub behind: usize,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+pub enum HeadTracking {
+    Detached,
+    Untracked {
+        branch: String,
+    },
+    Tracking {
+        branch: String,
+        upstream: Upstream,
+        divergence: Option<UpstreamDivergence>,
+    },
+}
+
+impl HeadTracking {
+    pub fn divergence(&self) -> Option<UpstreamDivergence> {
+        match self {
+            Self::Tracking { divergence, .. } => *divergence,
+            Self::Detached | Self::Untracked { .. } => None,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

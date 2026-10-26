@@ -130,12 +130,15 @@ pub(super) fn tracking_refs_for_remote_branch(
 }
 
 pub(super) fn configured_upstream_of(reference: &crate::refs::Reference<'_>) -> Option<Upstream> {
-    let local_branch = reference
-        .name()
-        .as_bstr()
-        .strip_prefix(b"refs/heads/")?
-        .as_bstr();
-    let config = reference.repo.config_snapshot();
+    configured_upstream_for(reference.repo, reference.name().as_bstr())
+}
+
+pub(super) fn configured_upstream_for(
+    repo: &gix::Repository,
+    full_name: &[u8],
+) -> Option<Upstream> {
+    let local_branch = full_name.strip_prefix(b"refs/heads/")?.as_bstr();
+    let config = repo.config_snapshot();
     // Subsection-indexed lookups avoid scanning every branch section for
     // each local branch during refresh. Merge is multi-valued: Git uses its
     // first entry, while remote uses the last value across matching sections.
@@ -153,7 +156,7 @@ pub(super) fn configured_upstream_of(reference: &crate::refs::Reference<'_>) -> 
         .next()?;
     // A branch remote may also be `.` or a URL. Only a named, configured
     // remote can own one of the remote-tracking branches this API exposes.
-    reference.repo.find_remote(remote.as_str()).ok()?;
+    repo.find_remote(remote.as_str()).ok()?;
     let branch = configured_merge
         .as_bstr()
         .strip_prefix(b"refs/heads/")

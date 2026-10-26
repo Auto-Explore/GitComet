@@ -1002,6 +1002,17 @@ impl GitRepository for GixRepo {
         self.head_path_is_gitlink_impl(path)
     }
 
+    fn head_tracking(
+        &self,
+        cancellation: &CancellationToken,
+    ) -> Result<gitcomet_core::domain::HeadTracking> {
+        cancellation.check_cancelled()?;
+        let repo = self.reopen_repo()?;
+        let tracking = git_ops::head_tracking(&repo, &self.divergence_cache, cancellation)?;
+        cancellation.check_cancelled()?;
+        Ok(tracking)
+    }
+
     fn upstream_divergence(
         &self,
         cancellation: &CancellationToken,
