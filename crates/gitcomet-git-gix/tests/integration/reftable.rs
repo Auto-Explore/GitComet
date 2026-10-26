@@ -55,6 +55,12 @@ fn reftable_focus_reads_local_branches_remote_branches_and_remotes() {
         let dir = fixture(hash, "reftable");
         let root = commit_file(dir.path(), "root\n", "root");
         git(dir.path(), &["branch", "side"]);
+        // A configured remote: focus resolves remote targets through its
+        // fetch refspecs, as the sidebar lists them.
+        git(
+            dir.path(),
+            &["remote", "add", "fork", "https://example.invalid/fork.git"],
+        );
         git(
             dir.path(),
             &["update-ref", "refs/remotes/fork/side", root.as_ref()],

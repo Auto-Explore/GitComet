@@ -592,11 +592,13 @@ impl GixRepo {
         // walk has to be rebuilt. A first-parent cursor carries `resume_from`,
         // which names the next commit outright, so that walk restarts there;
         // anything else restarts at the tips and skips forward to `last_seen`.
-        // Only first-parent walks may read it: on any other mode the commit it
-        // names is one of many at that depth, and starting there would drop
-        // every branch beside it.
+        // Only a single-tip first-parent walk may read it: anywhere else the
+        // commit it names is one of several frontiers — another mode's sibling
+        // at that depth, or another focused branch's chain — and starting there
+        // would drop every one beside it.
+        let single_chain = mode == HistoryMode::FirstParent && tips.len() == 1;
         let resume_tip = cursor
-            .filter(|_| mode == HistoryMode::FirstParent)
+            .filter(|_| single_chain)
             .and_then(|cursor| cursor.resume_from.as_ref())
             .and_then(|id| object_id_from_commit_id(id, tips[0].kind()));
         let (mut walk_state, mut cursor_gate) = match (cached_walk_state, resume_tip) {
@@ -656,7 +658,7 @@ impl GixRepo {
             commits,
             next_cursor,
         };
-        if mode == HistoryMode::FirstParent {
+        if single_chain {
             // A second way back into the history, for when the token is gone.
             apply_first_parent_resume_hint(&mut page);
         }
@@ -1249,61 +1251,65 @@ pub(super) fn focus_tips(
     focus: &HistoryFocusSet,
     cancellation: Option<&CancellationToken>,
 ) -> Result<Arc<[gix::ObjectId]>> {
-    let refs =
-        crate::refs::view_cancellable(repo, cancellation.unwrap_or(&CancellationToken::new()))?;
+    let uncancelled = CancellationToken::new();
+    let cancellation_token = cancellation.unwrap_or(&uncancelled);
+    let refs = crate::refs::view_cancellable(repo, cancellation_token)?;
     let mut tips = Vec::new();
     let mut seen = FxHashSet::default();
     for target in focus.iter() {
-        if let Some(cancellation) = cancellation {
-            cancellation.check_cancelled()?;
-        }
-        append_focus_target_tips(&refs, target, cancellation, &mut tips, &mut seen)?;
+        cancellation_token.check_cancelled()?;
+        append_focus_target_tips(
+            repo,
+            &refs,
+            target,
+            cancellation_token,
+            &mut tips,
+            &mut seen,
+        )?;
     }
     tips.sort_unstable();
     Ok(Arc::from(tips))
 }
 
+/// Remote targets resolve through the remote's fetch refspecs, the way the
+/// sidebar lists them: a remote that maps its branches somewhere other than
+/// `refs/remotes/<remote>/` still has its focused branches found.
 fn append_focus_target_tips(
+    repo: &gix::Repository,
     refs: &crate::refs::RefsView<'_>,
     focus: &HistoryFocus,
-    cancellation: Option<&CancellationToken>,
+    cancellation: &CancellationToken,
     tips: &mut Vec<gix::ObjectId>,
     seen: &mut FxHashSet<gix::ObjectId>,
 ) -> Result<()> {
-    match focus {
-        HistoryFocus::LocalBranch { .. } | HistoryFocus::RemoteBranch { .. } => {
-            let name = focus
-                .ref_name()
-                .expect("a single-ref focus always names one ref");
-            let reference = refs.find(name.as_bytes())?;
-            if let Some(reference) = reference
-                && let Some(id) = reference_commit_id(reference)?
-                && seen.insert(id)
-            {
-                tips.push(id);
-            }
+    let ref_names: Vec<String> = match focus {
+        HistoryFocus::LocalBranch { name } => vec![format!("refs/heads/{name}")],
+        // A remote that is no longer configured has no refspecs to map
+        // through, so its branch contributes no tips, like a deleted one.
+        HistoryFocus::RemoteBranch { remote, branch } => {
+            crate::repo::remotes::tracking_refs_for_remote_branch(
+                repo,
+                &gitcomet_core::domain::Upstream {
+                    remote: remote.to_string(),
+                    branch: branch.to_string(),
+                },
+            )
+            .unwrap_or_default()
         }
         HistoryFocus::Remote { name } => {
-            let prefix = format!("refs/remotes/{name}/");
-            let iter = refs.prefixed(prefix.as_bytes())?;
-            for reference in iter {
-                if let Some(cancellation) = cancellation {
-                    cancellation.check_cancelled()?;
-                }
-                let reference = reference
-                    .map_err(|e| Error::new(ErrorKind::Backend(format!("gix ref iter: {e}"))))?;
-                // `origin/HEAD` is a symbolic alias for a branch already in this
-                // prefix; following it would only duplicate that tip.
-                if reference.name().as_bstr().ends_with(b"/HEAD") {
-                    continue;
-                }
-                let Some(id) = reference_commit_id(reference)? else {
-                    continue;
-                };
-                if seen.insert(id) {
-                    tips.push(id);
-                }
-            }
+            crate::repo::remotes::tracking_refs_of_remote(repo, refs, name, cancellation)?
+                .into_iter()
+                .map(|name| name.as_bstr().to_str_lossy().into_owned())
+                .collect()
+        }
+    };
+    for ref_name in ref_names {
+        cancellation.check_cancelled()?;
+        if let Some(reference) = refs.find(ref_name.as_bytes())?
+            && let Some(id) = reference_commit_id(reference)?
+            && seen.insert(id)
+        {
+            tips.push(id);
         }
     }
     Ok(())

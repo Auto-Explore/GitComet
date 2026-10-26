@@ -2681,6 +2681,53 @@ fn tracking_ref_owners(
     Ok(owners)
 }
 
+/// Every ref under `refs/remotes/`, paired with a null target for
+/// [`tracking_ref_owners`]: refspecs map by name, so the target is unused.
+fn remote_tracking_ref_names(
+    repo: &gix::Repository,
+    refs: &crate::refs::RefsView<'_>,
+    cancellation: &CancellationToken,
+) -> Result<Vec<(gix::refs::FullName, gix::ObjectId)>> {
+    let iter = refs.remote_branches().map_err(|e| {
+        Error::new(ErrorKind::Backend(format!("gix remote_branches: {e}"))).with_source(e)
+    })?;
+    let mut tracking_refs = Vec::new();
+    for reference in iter {
+        cancellation.check_cancelled()?;
+        let reference = reference.map_err(|e| {
+            Error::new(ErrorKind::Backend(format!("gix ref iter: {e}"))).with_source(e)
+        })?;
+        tracking_refs.push((
+            reference.name().to_owned(),
+            gix::ObjectId::null(repo.object_hash()),
+        ));
+    }
+    Ok(tracking_refs)
+}
+
+/// The remote-tracking refs `remote` writes through its fetch refspecs: the
+/// refs the sidebar lists under that remote, wherever the refspecs put them.
+/// Its `HEAD` alias names a branch already in the list and is left out.
+pub(super) fn tracking_refs_of_remote(
+    repo: &gix::Repository,
+    refs: &crate::refs::RefsView<'_>,
+    remote: &str,
+    cancellation: &CancellationToken,
+) -> Result<Vec<gix::refs::FullName>> {
+    let tracking_refs = remote_tracking_ref_names(repo, refs, cancellation)?;
+    let mut owned = vec![false; tracking_refs.len()];
+    for owner in tracking_ref_owners(repo, &tracking_refs, cancellation)? {
+        if owner.remote == remote && owner.source != "refs/heads/HEAD" {
+            owned[owner.tracking_ix] = true;
+        }
+    }
+    Ok(tracking_refs
+        .into_iter()
+        .zip(owned)
+        .filter_map(|((name, _), owned)| owned.then_some(name))
+        .collect())
+}
+
 /// The remote-tracking refs that belong only to `hidden_remotes`: refs a shown
 /// remote also writes, or that no remote writes, stay in the walk.
 pub(super) fn hidden_remote_tracking_refs(
@@ -2692,21 +2739,7 @@ pub(super) fn hidden_remote_tracking_refs(
     if hidden_remotes.is_empty() {
         return Ok(FxHashSet::default());
     }
-    let iter = refs.remote_branches().map_err(|e| {
-        Error::new(ErrorKind::Backend(format!("gix remote_branches: {e}"))).with_source(e)
-    })?;
-    let mut tracking_refs = Vec::new();
-    for reference in iter {
-        cancellation.check_cancelled()?;
-        let reference = reference.map_err(|e| {
-            Error::new(ErrorKind::Backend(format!("gix ref iter: {e}"))).with_source(e)
-        })?;
-        // Refspecs map by name; the target is unused.
-        tracking_refs.push((
-            reference.name().to_owned(),
-            gix::ObjectId::null(repo.object_hash()),
-        ));
-    }
+    let tracking_refs = remote_tracking_ref_names(repo, refs, cancellation)?;
     let mut hidden = vec![false; tracking_refs.len()];
     let mut shown = vec![false; tracking_refs.len()];
     for owner in tracking_ref_owners(repo, &tracking_refs, cancellation)? {

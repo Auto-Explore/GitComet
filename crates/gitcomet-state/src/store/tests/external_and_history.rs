@@ -5297,8 +5297,7 @@ fn a_failed_branch_load_leaves_the_focus_alone() {
 }
 
 /// The bug this guards: a repository finishing its startup loads dropped the
-/// user's focus on its own. Only the list that governs a target may retire it,
-/// and only when that list is loaded and non-empty.
+/// user's focus on its own. Only the list that governs a target may retire it.
 #[test]
 fn other_ref_lists_loading_never_clear_a_focus() {
     let mut repos = RepositoryRuntimes::default();
@@ -5334,26 +5333,53 @@ fn other_ref_lists_loading_never_clear_a_focus() {
     assert_eq!(state.repos[0].history_state.history_focus, focus);
 }
 
-/// An empty branch list is a repository that has not finished loading, not one
-/// whose branches were all deleted.
+/// A successful empty list is a real answer: removing the last remote, or
+/// pruning the last remote-tracking branch, leaves exactly that. Focus on what
+/// it lost would otherwise hold the history empty until cleared by hand.
 #[test]
-fn an_empty_branch_list_never_clears_a_focus() {
+fn a_successful_empty_list_clears_the_focus_it_governs() {
+    use gitcomet_core::domain::HistoryFocus;
+
     let mut repos = RepositoryRuntimes::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = repo_state_for_focus_tests();
-    let focus =
-        HistoryFocusSet::from_iter([gitcomet_core::domain::HistoryFocus::local_branch("feature")]);
-    state.repos[0].history_state.history_focus = focus.clone();
+    let feature = HistoryFocus::local_branch("feature");
+    state.repos[0].history_state.history_focus = HistoryFocusSet::from_iter([
+        feature.clone(),
+        HistoryFocus::remote("origin"),
+        HistoryFocus::remote_branch("upstream", "main"),
+    ]);
 
     reduce(
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::Internal(crate::msg::InternalMsg::BranchesLoaded {
+        Msg::Internal(crate::msg::InternalMsg::RemotesLoaded {
             repo_id: RepoId(1),
             result: Ok(Vec::new()),
         }),
     );
+    assert_eq!(
+        state.repos[0].history_state.history_focus,
+        HistoryFocusSet::from_iter([
+            feature.clone(),
+            HistoryFocus::remote_branch("upstream", "main"),
+        ]),
+        "an empty remote list retires the focused remote, and only that"
+    );
 
-    assert_eq!(state.repos[0].history_state.history_focus, focus);
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::RemoteBranchesLoaded {
+            repo_id: RepoId(1),
+            result: Ok(Vec::new()),
+        }),
+    );
+    assert_eq!(
+        state.repos[0].history_state.history_focus,
+        HistoryFocusSet::from_iter([feature]),
+        "an empty remote-branch list retires the focused remote branch"
+    );
 }

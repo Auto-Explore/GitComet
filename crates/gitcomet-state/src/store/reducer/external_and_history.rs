@@ -553,9 +553,11 @@ pub(super) enum FocusRefList {
 ///
 /// - the list that just loaded is the one that governs the target, so a remote
 ///   list arriving says nothing about a local branch; and
-/// - that list is `Ready` and non-empty. A list still loading, one that failed,
-///   or one momentarily empty during a repository's startup would otherwise
-///   read as "every ref was deleted" and silently drop the whole focus.
+/// - that list loaded successfully. A list still loading or one that failed says
+///   nothing, but a successful empty list does: removing the last remote or
+///   pruning the last remote-tracking branch leaves exactly that. Reloads go
+///   through `Loading`, and a remote-branch list caught mid-fetch is held back
+///   before it gets here, so an empty `Ready` is never a transient.
 pub(super) fn clear_missing_history_focus(
     state: &mut AppState,
     repo_id: crate::model::RepoId,
@@ -570,11 +572,9 @@ pub(super) fn clear_missing_history_focus(
     if focus.is_empty() {
         return Vec::new();
     }
-    /// `Some(list)` only when it is loaded and has entries; see above.
+    /// `Some(list)` only when it loaded successfully; see above.
     fn conclusive<T>(list: &Loadable<std::sync::Arc<Vec<T>>>) -> Option<&[T]> {
-        list.ready()
-            .map(|list| list.as_slice())
-            .filter(|list| !list.is_empty())
+        list.ready().map(|list| list.as_slice())
     }
     let kept = focus.retaining(|target| match (target, loaded) {
         (HistoryFocus::LocalBranch { name }, FocusRefList::LocalBranches) => {
