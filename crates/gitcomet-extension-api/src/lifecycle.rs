@@ -106,6 +106,7 @@ pub enum ShellEvent {
     StateChanged,
     ThemeChanged,
     ViewChanged,
+    MainViewChanged,
     WindowClosed,
 }
 

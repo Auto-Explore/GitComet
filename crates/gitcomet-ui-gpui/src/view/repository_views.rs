@@ -811,6 +811,9 @@ impl GitCometView {
         self.sync_extension_navigation(cx);
         if let Some(extension) = &self.extension_window {
             extension.emit(gitcomet_extension_api::ShellEvent::ViewChanged, cx);
+            if matches!(area, RoutedArea::Main) {
+                extension.emit(gitcomet_extension_api::ShellEvent::MainViewChanged, cx);
+            }
         }
         cx.notify();
     }

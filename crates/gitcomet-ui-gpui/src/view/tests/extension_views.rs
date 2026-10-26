@@ -43,6 +43,75 @@ fn open_view<'a>(
     (view, cx)
 }
 
+struct ViewEvents(Rc<Cell<(usize, usize)>>);
+
+impl Extension for ViewEvents {
+    fn id(&self) -> ExtensionId {
+        ExtensionId::new("com.example.view-events").unwrap()
+    }
+
+    fn register(&self, _: &mut Registrar) {}
+
+    fn window_opened(
+        &self,
+        _: WindowHost,
+        _: &mut Window,
+        _: &mut App,
+    ) -> Option<Box<dyn WindowExtension>> {
+        Some(Box::new(Self(self.0.clone())))
+    }
+}
+
+impl WindowExtension for ViewEvents {
+    fn on_event(&mut self, event: &ShellEvent, _: &WindowHost, _: &mut App) {
+        let (main, all) = self.0.get();
+        match event {
+            ShellEvent::MainViewChanged => self.0.set((main + 1, all)),
+            ShellEvent::ViewChanged => self.0.set((main, all + 1)),
+            _ => {}
+        }
+    }
+}
+
+#[gpui::test]
+fn main_view_events_exclude_details_and_sidebar_switches(cx: &mut gpui::TestAppContext) {
+    use crate::view::repository_views::RoutedArea;
+    let events = Rc::new(Cell::new((0, 0)));
+    let registry = Registry::build(vec![
+        Box::new(super::extension_view_panels::Panels),
+        Box::new(ViewEvents(events.clone())),
+    ])
+    .unwrap();
+    let (view, cx) = open_view(cx, registry, Path::new("/tmp/extension-view-events"));
+    cx.update(|_, app| extension_host::window_opened(&view, app));
+    cx.run_until_parked();
+    cx.update(|window, app| {
+        view.update(app, |view, cx| {
+            view.select_routed_view(RoutedArea::Main, Some(0), window, cx)
+        })
+    });
+    cx.run_until_parked();
+    assert_eq!(events.get().0, 1);
+    let before = events.get().1;
+    for area in [RoutedArea::Details, RoutedArea::Sidebar] {
+        cx.update(|window, app| {
+            view.update(app, |view, cx| {
+                view.select_routed_view(area, Some(1), window, cx)
+            })
+        });
+        cx.run_until_parked();
+        assert_eq!(events.get().0, 1);
+    }
+    assert_eq!(events.get().1, before + 2);
+    cx.update(|window, app| {
+        view.update(app, |view, cx| {
+            view.select_routed_view(RoutedArea::Main, None, window, cx)
+        })
+    });
+    cx.run_until_parked();
+    assert_eq!(events.get().0, 2);
+}
+
 #[gpui::test]
 fn a_selected_view_brings_its_own_action_bar_context(cx: &mut gpui::TestAppContext) {
     let workdir = Path::new("/tmp/extension-action-bar");
