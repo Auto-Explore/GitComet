@@ -290,6 +290,45 @@ impl DiffInset {
     }
 }
 
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct DiffInlineCard {
+    pub id: SharedString,
+    pub range: DiffLineRange,
+    pub title: SharedString,
+    pub text: SharedString,
+    pub pending: bool,
+    pub actions: Vec<crate::HostedAction>,
+}
+
+impl DiffInlineCard {
+    pub fn new(
+        id: impl Into<SharedString>,
+        range: DiffLineRange,
+        title: impl Into<SharedString>,
+        text: impl Into<SharedString>,
+    ) -> Self {
+        Self {
+            id: id.into(),
+            range,
+            title: title.into(),
+            text: text.into(),
+            pending: false,
+            actions: Vec::new(),
+        }
+    }
+
+    pub fn pending(mut self, pending: bool) -> Self {
+        self.pending = pending;
+        self
+    }
+
+    pub fn with_action(mut self, action: crate::HostedAction) -> Self {
+        self.actions.push(action);
+        self
+    }
+}
+
 /// The presentation of the two sides; changing it preserves file-line anchors.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[non_exhaustive]
@@ -336,6 +375,7 @@ pub struct DiffPaneOptions {
     /// annotation. Both need [`DiffPanePolicy::line_action`].
     pub on_annotation_click: Option<DiffGutterAction>,
     pub selection_actions: Vec<DiffSelectionAction>,
+    pub context_actions: Vec<DiffSelectionAction>,
     /// The bottom bar's place in the owner's list and its buttons.
     pub bar: DiffBar,
 }
@@ -474,8 +514,11 @@ pub trait DiffPaneImpl {
     fn set_legend(&self, legend: Vec<DiffLegendItem>, cx: &mut App);
     /// Replaces the pane's insets; each shows after its line on its side.
     fn set_insets(&self, insets: Vec<DiffInset>, cx: &mut App);
+    fn set_inline_cards(&self, cards: Vec<DiffInlineCard>, cx: &mut App);
     /// The selected file lines' text, one line each; insets never included.
     fn selected_text(&self, cx: &App) -> Option<String>;
+    fn text_for_range(&self, range: DiffLineRange, cx: &App) -> Option<String>;
+    fn set_context_actions(&self, actions: Vec<DiffSelectionAction>, cx: &mut App);
     /// Original file bytes for the selected whole lines, including line endings.
     fn selected_bytes(&self, cx: &App) -> Option<Arc<[u8]>>;
     fn set_policy(&self, policy: DiffPanePolicy, cx: &mut App);
@@ -501,6 +544,16 @@ pub trait DiffPaneImpl {
 pub struct DiffPane(Rc<dyn DiffPaneImpl>);
 
 impl DiffPane {
+    pub fn set_inline_cards(&self, cards: Vec<DiffInlineCard>, cx: &mut App) {
+        self.0.set_inline_cards(cards, cx)
+    }
+    pub fn text_for_range(&self, range: DiffLineRange, cx: &App) -> Option<String> {
+        self.0.text_for_range(range, cx)
+    }
+
+    pub fn set_context_actions(&self, actions: Vec<DiffSelectionAction>, cx: &mut App) {
+        self.0.set_context_actions(actions, cx)
+    }
     #[doc(hidden)]
     pub fn new(pane: Rc<dyn DiffPaneImpl>) -> Self {
         Self(pane)
@@ -616,6 +669,8 @@ pub enum FileListMode {
 /// Called when the user picks a file, with its diff target.
 pub type FileSelected = Rc<dyn Fn(&CommitFileChange, DiffTarget, &mut App)>;
 
+pub type FileListHeaderItem = gitcomet_ui_kit::components::ActionButton<()>;
+
 /// What the host implements behind a [`FileList`].
 #[doc(hidden)]
 pub trait FileListImpl {
@@ -633,6 +688,7 @@ pub trait FileListImpl {
     fn set_kind_filter(&self, filter: crate::FileListFilter, cx: &mut App);
     fn set_marks(&self, marks: crate::FileListMarks, cx: &mut App);
     fn set_filter_chips(&self, chips: Vec<crate::FileListFilterChip>, cx: &mut App);
+    fn set_header_items(&self, items: Vec<FileListHeaderItem>, cx: &mut App);
     fn set_groups(&self, groups: Option<crate::FileListGroups>, cx: &mut App);
     fn set_visible(&self, visible: Option<crate::FileListVisible>, cx: &mut App);
     /// Shows only files whose path contains `query` (case-insensitive).
@@ -658,6 +714,9 @@ pub trait FileListImpl {
 pub struct FileList(Rc<dyn FileListImpl>);
 
 impl FileList {
+    pub fn set_header_items(&self, items: Vec<FileListHeaderItem>, cx: &mut App) {
+        self.0.set_header_items(items, cx)
+    }
     /// Observe list changes, including the user's sort, layout and filters.
     pub fn observe(
         &self,

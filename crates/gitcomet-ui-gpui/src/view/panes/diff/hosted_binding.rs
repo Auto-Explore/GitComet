@@ -1,7 +1,7 @@
 //! Hosted controls and list-boundary projection for the shared diff renderer.
 use super::*;
 use gitcomet_extension_api::{
-    DiffAnnotations, DiffInset, DiffLineRange, DiffLineSide, DiffPaneOptions,
+    DiffAnnotations, DiffInlineCard, DiffInset, DiffLineRange, DiffLineSide, DiffPaneOptions,
 };
 use palette::IntoColor;
 
@@ -9,6 +9,7 @@ use palette::IntoColor;
 enum DisplayRow {
     Document(usize),
     Inset { inset: usize, line: usize },
+    Card { card: usize, row: usize },
 }
 
 #[derive(Default)]
@@ -17,8 +18,12 @@ pub(in crate::view) struct HostedDiffDecor {
     pub options: DiffPaneOptions,
     pub annotations: Arc<DiffAnnotations>,
     pub insets: Arc<[DiffInset]>,
+    pub cards: Arc<[DiffInlineCard]>,
+    pub(super) row_height: Pixels,
+    pub(super) card_layouts: Vec<super::hosted_cards::CardLayout>,
+    pub(super) card_layout_key: Option<super::hosted_cards::LayoutKey>,
     pub file_cache: Option<Arc<diff_cache::SharedFileDiffCache>>,
-    key: Option<(u64, u64, u64, usize, DiffViewMode, usize)>,
+    pub(super) key: Option<(u64, u64, u64, usize, DiffViewMode, usize)>,
     display: Vec<DisplayRow>,
     document: Vec<usize>,
     selection_anchor: Option<usize>,
@@ -29,12 +34,90 @@ pub(in crate::view) struct HostedDiffDecor {
 }
 
 impl DiffRenderer {
+    pub(in crate::view) fn hosted_context_actions(
+        &self,
+        visible: usize,
+        region: DiffTextRegion,
+        cx: &gpui::Context<Self>,
+    ) -> Vec<gitcomet_extension_api::HostedAction> {
+        let Some(decor) = &self.hosted_decor else {
+            return Vec::new();
+        };
+        let (old, new) = self.hosted_line_numbers(visible);
+        let clicked = match region {
+            DiffTextRegion::SplitLeft => old.map(|line| (DiffLineSide::Old, line)),
+            DiffTextRegion::SplitRight => new.map(|line| (DiffLineSide::New, line)),
+            DiffTextRegion::Inline if self.inline_row_draws_old(visible) => {
+                old.map(|line| (DiffLineSide::Old, line))
+            }
+            DiffTextRegion::Inline => new
+                .map(|line| (DiffLineSide::New, line))
+                .or_else(|| old.map(|line| (DiffLineSide::Old, line))),
+        };
+        let Some((side, line)) = clicked else {
+            return Vec::new();
+        };
+        let range = self
+            .hosted_selection()
+            .filter(|range| range.contains(side, line))
+            .unwrap_or(DiffLineRange {
+                side,
+                start: line,
+                end: line,
+            });
+        let revision = (
+            self.rendered_patch_diff_rev(),
+            self.rendered_file_diff_rev(),
+        );
+        let target = self.rendered_diff_target().cloned();
+        decor
+            .options
+            .context_actions
+            .iter()
+            .map(|action| {
+                let pane = cx.weak_entity();
+                let run = action.run.clone();
+                let target = target.clone();
+                gitcomet_extension_api::HostedAction::new(action.label.clone(), move |cx| {
+                    let current = pane
+                        .update(cx, |pane, _| {
+                            (
+                                pane.rendered_patch_diff_rev(),
+                                pane.rendered_file_diff_rev(),
+                            ) == revision
+                                && pane.rendered_diff_target() == target.as_ref()
+                                && pane.hosted_decor.as_ref().is_some_and(|decor| {
+                                    decor
+                                        .options
+                                        .context_actions
+                                        .iter()
+                                        .any(|action| std::rc::Rc::ptr_eq(&action.run, &run))
+                                })
+                        })
+                        .unwrap_or(false);
+                    if current {
+                        run(range, cx);
+                    }
+                })
+            })
+            .collect()
+    }
+
     /// Whether the hosted rows are file-diff rows rather than patch rows.
     fn hosted_rows_are_file_rows(&self) -> bool {
         self.wants_file_diff_view(false) || self.is_collapsed_diff_projection_active()
     }
 
     pub(in crate::view) fn hosted_selected_text(&self, range: DiffLineRange) -> String {
+        self.hosted_range_text(range).0
+    }
+
+    pub(in crate::view) fn hosted_text_for_range(&self, range: DiffLineRange) -> Option<String> {
+        let (text, complete) = self.hosted_range_text(range);
+        complete.then_some(text)
+    }
+
+    fn hosted_range_text(&self, range: DiffLineRange) -> (String, bool) {
         let full = self.hosted_rows_are_file_rows();
         let count = if full {
             self.file_diff_inline_row_len()
@@ -42,6 +125,9 @@ impl DiffRenderer {
             self.patch_diff_row_len()
         };
         let mut text = String::new();
+        let mut first = true;
+        let mut next = u64::from(range.start);
+        let mut complete = true;
         for index in 0..count {
             let row = if full {
                 self.file_diff_inline_row(index)
@@ -55,10 +141,13 @@ impl DiffRenderer {
                 DiffLineSide::Old => row.old_line,
                 DiffLineSide::New => row.new_line,
             };
-            if line.is_some_and(|line| range.contains(range.side, line)) {
-                if !text.is_empty() {
+            if let Some(line) = line.filter(|line| range.contains(range.side, *line)) {
+                complete &= u64::from(line) == next;
+                next = u64::from(line) + 1;
+                if !first {
                     text.push('\n');
                 }
+                first = false;
                 // A one-row Difftastic pair draws one side; read the side asked for.
                 let side_text = full
                     .then_some(self.file_diff_inline_row_provider.as_ref())
@@ -71,7 +160,7 @@ impl DiffRenderer {
                 }
             }
         }
-        text
+        (text, complete && next == u64::from(range.end) + 1)
     }
 
     fn inline_row_draws_old(&self, visible: usize) -> bool {
@@ -172,7 +261,9 @@ impl DiffRenderer {
             let side = match a.region {
                 DiffTextRegion::SplitLeft => DiffLineSide::Old,
                 DiffTextRegion::Inline
-                    if self
+                    if self.inline_row_draws_old(
+                        self.diff_visual_ix_for_source_visible_ix(a.source_visible_ix),
+                    ) || self
                         .hosted_line_numbers(
                             self.diff_visual_ix_for_source_visible_ix(a.source_visible_ix),
                         )
@@ -193,7 +284,9 @@ impl DiffRenderer {
                 .diff_selection_range
                 .or_else(|| self.diff_selection_anchor.map(|i| (i, i)))?;
             let (old, new) = self.hosted_line_numbers(a);
-            let side = if new.is_none() && old.is_some() {
+            let side = if (new.is_none() && old.is_some())
+                || (self.diff_view == DiffViewMode::Inline && self.inline_row_draws_old(a))
+            {
                 DiffLineSide::Old
             } else {
                 DiffLineSide::New
@@ -219,17 +312,11 @@ impl DiffRenderer {
     pub(in crate::view) fn hosted_scroll_anchor(
         &self,
     ) -> Option<gitcomet_extension_api::DiffScrollAnchor> {
-        let display = self
-            .diff_scroll
-            .0
-            .borrow()
-            .base_handle
-            .logical_scroll_top()
-            .0;
+        let display = self.hosted_scroll_top(&self.diff_scroll);
         let document = self
             .hosted_decor
             .as_ref()
-            .filter(|d| !d.insets.is_empty())
+            .filter(|d| !d.insets.is_empty() || !d.cards.is_empty())
             .and_then(|d| d.display.get(display..))
             .and_then(|rows| {
                 rows.iter().find_map(|row| match row {
@@ -249,6 +336,18 @@ impl DiffRenderer {
                 line,
             })
         })
+    }
+
+    fn hosted_scroll_top(&self, handle: &UniformListScrollHandle) -> usize {
+        let height = self
+            .hosted_decor
+            .as_ref()
+            .map_or(px(0.0), |decor| decor.row_height);
+        if height <= px(0.0) {
+            return 0;
+        }
+        let offset = handle.0.borrow().base_handle.offset().y;
+        (-offset / height).floor().max(0.0) as usize
     }
 
     pub(in crate::view) fn hosted_reveal_at(
@@ -282,18 +381,19 @@ impl DiffRenderer {
         options: DiffPaneOptions,
         annotations: Arc<DiffAnnotations>,
         insets: Arc<[DiffInset]>,
+        cards: Arc<[DiffInlineCard]>,
     ) {
         self.store.set_policy(options.policy);
         self.diff_show_line_numbers = options.policy.line_numbers;
-        let reset = self
-            .hosted_decor
-            .as_ref()
-            .is_none_or(|decor| !Arc::ptr_eq(&decor.insets, &insets));
+        let reset = self.hosted_decor.as_ref().is_none_or(|decor| {
+            !Arc::ptr_eq(&decor.insets, &insets) || !Arc::ptr_eq(&decor.cards, &cards)
+        });
         let decor = self.hosted_decor.get_or_insert_with(Default::default);
         decor.view_id = view_id;
         decor.options = options;
         decor.annotations = annotations;
         decor.insets = insets;
+        decor.cards = cards;
         if reset {
             decor.key = None;
         }
@@ -306,7 +406,11 @@ impl DiffRenderer {
         let Some(decor) = &self.hosted_decor else {
             return;
         };
-        if decor.insets.is_empty() && decor.annotations.is_empty() {
+        if decor.insets.is_empty()
+            && decor.cards.is_empty()
+            && decor.annotations.is_empty()
+            && decor.display.is_empty()
+        {
             return;
         }
         let key = (
@@ -320,7 +424,7 @@ impl DiffRenderer {
         if decor.key == Some(key) {
             return;
         }
-        let mut after = FxHashMap::<usize, Vec<usize>>::default();
+        let mut after = FxHashMap::<usize, Vec<DisplayRow>>::default();
         let mut anchors = FxHashMap::default();
         for row in 0..self.diff_visible_len() {
             let (old, new) = self.hosted_line_numbers(row);
@@ -332,21 +436,55 @@ impl DiffRenderer {
         }
         for (ix, inset) in decor.insets.iter().enumerate() {
             if let Some(row) = anchors.get(&(inset.side, inset.line)) {
-                after.entry(*row).or_default().push(ix);
+                after.entry(*row).or_default().extend(
+                    (0..inset.lines.len()).map(|line| DisplayRow::Inset { inset: ix, line }),
+                );
+            }
+        }
+        for (ix, card) in decor.cards.iter().enumerate() {
+            if let Some(row) = anchors.get(&(card.range.side, card.range.end))
+                && let Some(layout) = decor.card_layouts.get(ix)
+            {
+                after
+                    .entry(*row)
+                    .or_default()
+                    .extend((0..layout.rows(card)).map(|row| DisplayRow::Card { card: ix, row }));
             }
         }
         let len = self.diff_visible_len();
+        let saved = [&self.diff_scroll, &self.diff_split_right_scroll].map(|handle| {
+            let top = self.hosted_scroll_top(handle);
+            let anchor = decor.display.get(top).copied();
+            let following = decor.display.get(top..).and_then(|rows| {
+                rows.iter().find_map(|row| match row {
+                    DisplayRow::Document(index) => Some(*index),
+                    _ => None,
+                })
+            });
+            (handle.clone(), top, anchor, following)
+        });
         let decor = self.hosted_decor.as_mut().unwrap();
         decor.display.clear();
         decor.document.clear();
         for row in 0..len {
             decor.document.push(decor.display.len());
             decor.display.push(DisplayRow::Document(row));
-            for inset in after.remove(&row).unwrap_or_default() {
-                decor.display.extend(
-                    (0..decor.insets[inset].lines.len())
-                        .map(|line| DisplayRow::Inset { inset, line }),
-                );
+            decor.display.extend(after.remove(&row).unwrap_or_default());
+        }
+        for (handle, top, anchor, following) in saved {
+            let Some(anchor) = anchor else { continue };
+            let restored = decor
+                .display
+                .iter()
+                .position(|row| *row == anchor)
+                .or_else(|| following.and_then(|row| decor.document.get(row).copied()));
+            if let Some(restored) = restored.filter(|restored| *restored != top) {
+                let scroll = handle.0.borrow();
+                if scroll.deferred_scroll_to_item.is_none() {
+                    let mut offset = scroll.base_handle.offset();
+                    offset.y += decor.row_height * (top as f32 - restored as f32);
+                    scroll.base_handle.set_offset(offset);
+                }
             }
         }
         #[cfg(test)]
@@ -383,14 +521,14 @@ impl DiffRenderer {
         self.prepare_hosted_projection();
         self.hosted_decor
             .as_ref()
-            .filter(|d| !d.insets.is_empty())
+            .filter(|d| !d.insets.is_empty() || !d.cards.is_empty())
             .map_or_else(|| self.diff_visible_len(), |d| d.display.len())
     }
 
     pub(in crate::view) fn diff_list_index(&self, document: usize) -> usize {
         self.hosted_decor
             .as_ref()
-            .filter(|d| !d.insets.is_empty())
+            .filter(|d| !d.insets.is_empty() || !d.cards.is_empty())
             .and_then(|d| d.document.get(document))
             .copied()
             .unwrap_or(document)
@@ -453,7 +591,7 @@ impl DiffRenderer {
                 match this
                     .hosted_decor
                     .as_ref()
-                    .filter(|d| !d.insets.is_empty())
+                    .filter(|d| !d.insets.is_empty() || !d.cards.is_empty())
                     .and_then(|d| d.display.get(display))
                     .copied()
                     .unwrap_or(DisplayRow::Document(display))
@@ -484,11 +622,14 @@ impl DiffRenderer {
                 let row = this
                     .hosted_decor
                     .as_ref()
-                    .filter(|d| !d.insets.is_empty())
+                    .filter(|d| !d.insets.is_empty() || !d.cards.is_empty())
                     .and_then(|d| d.display.get(display))
                     .copied()
                     .unwrap_or(DisplayRow::Document(display));
                 match row {
+                    DisplayRow::Card { card, row } => {
+                        this.render_hosted_card_row(card, row, side, display, window, cx)
+                    }
                     DisplayRow::Inset { inset, line } => {
                         use crate::kit::interaction::ControlInteractionExt as _;
                         let inset = &this.hosted_decor.as_ref().unwrap().insets[inset];

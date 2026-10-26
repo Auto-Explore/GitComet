@@ -1180,6 +1180,7 @@ fn file_and_diff_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::Te
             &view,
             app,
             PopoverKind::DiffEditorMenu {
+                context_actions: Vec::new(),
                 repo_id: Some(repo_id),
                 area: DiffArea::Unstaged,
                 path: Some(unstaged_path.clone()),
@@ -1223,6 +1224,7 @@ fn file_and_diff_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::Te
             &view,
             app,
             PopoverKind::DiffEditorMenu {
+                context_actions: Vec::new(),
                 repo_id: Some(repo_id),
                 area: DiffArea::Staged,
                 path: Some(staged_path.clone()),

@@ -15,6 +15,7 @@ mod file_disk;
 pub(in crate::view) mod file_editor;
 pub(in crate::view) mod helpers;
 mod hosted_binding;
+mod hosted_cards;
 pub(in crate::view) mod input;
 mod markdown_state;
 mod media;
@@ -107,6 +108,7 @@ impl Render for DiffRenderer {
                         }
                 )
             );
+        self.prepare_hosted_cards(window, cx);
         if !bare_working_file && self.annotate_enabled && self.rendered_diff_target().is_some() {
             self.request_blame_for_current_target(false, cx);
         }

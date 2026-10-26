@@ -6,8 +6,8 @@ use crate::view::panes::diff::{DiffBody, DiffRendererInit};
 use gitcomet_core::domain::DiffTarget;
 use gitcomet_core::text_format::TextEncoding;
 use gitcomet_extension_api::{
-    DiffAnnotations, DiffInset, DiffLayout, DiffLegendItem, DiffLineRange, DiffLineSide,
-    DiffPaneEvent, DiffPaneOptions, DiffPanePolicy, DiffScrollAnchor, DiffSnapshot,
+    DiffAnnotations, DiffInlineCard, DiffInset, DiffLayout, DiffLegendItem, DiffLineRange,
+    DiffLineSide, DiffPaneEvent, DiffPaneOptions, DiffPanePolicy, DiffScrollAnchor, DiffSnapshot,
     RepositoryHandle, StateSubscription, WindowHost, panes::DiffPaneImpl,
 };
 use gitcomet_state::diff_session::{DiffSession, DiffSessionMsg, DiffViewId};
@@ -55,6 +55,7 @@ pub(crate) struct DiffPaneView {
     /// when its body is the patch.
     patch_error: Option<SharedString>,
     insets: Arc<[DiffInset]>,
+    cards: Arc<[DiffInlineCard]>,
     annotations: Arc<DiffAnnotations>,
     legend: Vec<DiffLegendItem>,
     selection: Option<DiffLineRange>,
@@ -108,6 +109,7 @@ impl DiffPaneView {
             error: None,
             patch_error: None,
             insets: Arc::from([]),
+            cards: Arc::from([]),
             annotations: Arc::default(),
             legend: Vec::new(),
             selection: None,
@@ -272,6 +274,7 @@ impl DiffPaneView {
                     self.options.clone(),
                     self.annotations.clone(),
                     self.insets.clone(),
+                    self.cards.clone(),
                 );
                 pane.hosted_decor.as_mut().unwrap().file_cache = self.file_cache.clone();
                 pane.annotate_enabled = self.options.policy.blame;
@@ -388,6 +391,7 @@ impl DiffPaneView {
     }
 
     fn reset(&mut self) {
+        self.cards = Arc::from([]);
         self.engaged = next_engaged();
         self.revision = self.revision.wrapping_add(1);
         if let Some(cache) = self.file_cache.take() {
@@ -654,6 +658,7 @@ impl DiffPaneView {
                     self.options.clone(),
                     self.annotations.clone(),
                     self.insets.clone(),
+                    self.cards.clone(),
                 );
                 cx.notify();
             });
@@ -831,6 +836,9 @@ impl DiffPaneView {
 impl Render for DiffPaneView {
     fn render(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
         self.prepare_renderer(window, cx);
+        if let Some(renderer) = &self.renderer {
+            renderer.update(cx, |pane, cx| pane.prepare_hosted_cards(window, cx));
+        }
         let theme = self.host.theme(cx);
         let ui_scale = ui_scale::UiScale::current(cx);
         let pane_id = self.view_id.0;
@@ -1088,11 +1096,42 @@ impl DiffPaneImpl for HostedDiffPane {
         self.entity
             .update(cx, |pane, cx| pane.set_insets(insets, cx));
     }
+    fn set_inline_cards(&self, cards: Vec<DiffInlineCard>, cx: &mut App) {
+        self.entity.update(cx, |pane, cx| {
+            if pane.cards.as_ref() == cards.as_slice() {
+                return;
+            }
+            pane.cards = cards.into();
+            pane.sync_decor(cx);
+            cx.notify();
+        });
+    }
 
     fn selected_text(&self, cx: &App) -> Option<String> {
         let pane = self.entity.read(cx);
         let range = self.selection(cx)?;
         Some(pane.renderer.as_ref()?.read(cx).hosted_selected_text(range))
+    }
+    fn text_for_range(&self, range: DiffLineRange, cx: &App) -> Option<String> {
+        if range.start == 0 || range.end < range.start {
+            return None;
+        }
+        let pane = self.entity.read(cx);
+        pane.renderer
+            .as_ref()?
+            .read(cx)
+            .hosted_text_for_range(range)
+    }
+    fn set_context_actions(
+        &self,
+        actions: Vec<gitcomet_extension_api::DiffSelectionAction>,
+        cx: &mut App,
+    ) {
+        self.entity.update(cx, |pane, cx| {
+            pane.options.context_actions = actions;
+            pane.sync_decor(cx);
+            cx.notify();
+        });
     }
     fn selected_bytes(&self, cx: &App) -> Option<Arc<[u8]>> {
         let range = self.selection(cx)?;
