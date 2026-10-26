@@ -103,9 +103,7 @@ impl DiffRenderer {
                 self.annotate_resize.is_some(),
                 None,
             ))
-            .on_drag(AnnotateResizeHandle::Divider, |_h, _o, _w, cx| {
-                cx.new(|_cx| AnnotateResizeDragGhost)
-            })
+            .on_resize_drag(AnnotateResizeHandle::Divider)
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |this, e: &MouseDownEvent, _w, cx| {

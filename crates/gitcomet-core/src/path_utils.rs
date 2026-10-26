@@ -56,15 +56,35 @@ pub const OPERATION_AREA_PREFIX: &str = ".gitcomet-operation-";
 /// Name prefix of an editor save's temporary file beside its target.
 pub const SAVE_STAGING_PREFIX: &str = ".gitcomet-save-";
 
+const SERVICE_OWNED_PREFIXES: [&str; 2] = [OPERATION_AREA_PREFIX, SAVE_STAGING_PREFIX];
+
 /// A staging entry the filesystem service owns; never user content.
 pub fn is_service_owned_name(name: &[u8]) -> bool {
-    name.starts_with(OPERATION_AREA_PREFIX.as_bytes())
-        || name.starts_with(SAVE_STAGING_PREFIX.as_bytes())
+    SERVICE_OWNED_PREFIXES
+        .iter()
+        .any(|prefix| name.starts_with(prefix.as_bytes()))
+}
+
+/// Whether a service prefix occurs anywhere in `bytes`. A service-owned
+/// component puts one there, and walking the components of the many paths
+/// without one is the cost.
+fn mentions_service_prefix(bytes: &[u8]) -> bool {
+    static FINDERS: std::sync::LazyLock<[memchr::memmem::Finder<'static>; 2]> =
+        std::sync::LazyLock::new(|| SERVICE_OWNED_PREFIXES.map(memchr::memmem::Finder::new));
+    FINDERS.iter().any(|finder| finder.find(bytes).is_some())
 }
 
 pub fn has_service_owned_component(path: &Path) -> bool {
-    path.components()
-        .any(|component| is_service_owned_name(component.as_os_str().as_encoded_bytes()))
+    mentions_service_prefix(path.as_os_str().as_encoded_bytes())
+        && path
+            .components()
+            .any(|component| is_service_owned_name(component.as_os_str().as_encoded_bytes()))
+}
+
+/// [`has_service_owned_component`] for a repository-relative Git path, whose
+/// separator is always `/`.
+pub fn has_service_owned_git_component(path: &[u8]) -> bool {
+    mentions_service_prefix(path) && path.split(|byte| *byte == b'/').any(is_service_owned_name)
 }
 
 /// The Git directory of `workdir`: its `.git` directory, or the directory a
@@ -181,8 +201,8 @@ pub fn symlink_free_write_target(workdir: &Path, relative: &Path) -> io::Result<
 mod tests {
     use super::{
         canonicalize_or_original, git_dir_for_workdir, has_service_owned_component,
-        is_service_owned_name, resolved_git_dir, symlink_free_write_target,
-        validated_repo_relative_path,
+        has_service_owned_git_component, is_service_owned_name, resolved_git_dir,
+        symlink_free_write_target, validated_repo_relative_path,
     };
     use std::fs;
     use std::path::Path;
@@ -201,6 +221,18 @@ mod tests {
         assert!(!has_service_owned_component(Path::new(
             "src/gitcomet-operation-x/item"
         )));
+        // The prefix inside a component name is not a service-owned component.
+        assert!(!has_service_owned_component(Path::new(
+            "src/x.gitcomet-save-y/item"
+        )));
+        assert!(has_service_owned_git_component(
+            b"src/.gitcomet-save-y/item"
+        ));
+        assert!(has_service_owned_git_component(b".gitcomet-operation-x"));
+        assert!(!has_service_owned_git_component(
+            b"src/x.gitcomet-save-y/item"
+        ));
+        assert!(!has_service_owned_git_component(b"src/main.rs"));
     }
 
     #[test]

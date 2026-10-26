@@ -1,6 +1,7 @@
 use super::state::*;
 use super::wrap::line_display_columns;
 use super::*;
+use gitcomet_text::rope::Rope;
 
 pub(super) enum EditSelection {
     AfterInsertion,
@@ -18,38 +19,137 @@ pub fn utf8_edit_delta_between_texts(
     old_text: &str,
     new_text: &str,
 ) -> Option<(Range<usize>, Range<usize>)> {
-    if old_text == new_text {
+    edit_delta(old_text, new_text)
+}
+
+/// [`utf8_edit_delta_between_texts`] over two snapshots. Neither text is
+/// flattened, and chunks the two ropes share are skipped without comparing
+/// their bytes.
+fn edit_delta_between_snapshots(
+    old: &TextModelSnapshot,
+    new: &TextModelSnapshot,
+) -> Option<(Range<usize>, Range<usize>)> {
+    edit_delta(&old.rope(), &new.rope())
+}
+
+/// Text read as a sequence of chunks: a rope's, or a string's single one.
+trait ChunkedText {
+    fn len(&self) -> usize;
+    fn chunks(&self) -> impl Iterator<Item = &str>;
+    /// The text from `start`, back to front.
+    fn reversed_chunks_from(&self, start: usize) -> impl Iterator<Item = &str>;
+    fn is_char_boundary(&self, offset: usize) -> bool;
+}
+
+impl ChunkedText for str {
+    fn len(&self) -> usize {
+        str::len(self)
+    }
+    fn chunks(&self) -> impl Iterator<Item = &str> {
+        std::iter::once(self)
+    }
+    fn reversed_chunks_from(&self, start: usize) -> impl Iterator<Item = &str> {
+        std::iter::once(&self[start..])
+    }
+    fn is_char_boundary(&self, offset: usize) -> bool {
+        str::is_char_boundary(self, offset)
+    }
+}
+
+impl ChunkedText for Rope {
+    fn len(&self) -> usize {
+        Rope::len(self)
+    }
+    fn chunks(&self) -> impl Iterator<Item = &str> {
+        Rope::chunks(self)
+    }
+    fn reversed_chunks_from(&self, start: usize) -> impl Iterator<Item = &str> {
+        self.reversed_chunks_in_range(start..Rope::len(self))
+    }
+    fn is_char_boundary(&self, offset: usize) -> bool {
+        Rope::is_char_boundary(self, offset)
+    }
+}
+
+fn edit_delta<T: ChunkedText + ?Sized>(old: &T, new: &T) -> Option<(Range<usize>, Range<usize>)> {
+    let (old_len, new_len) = (old.len(), new.len());
+    let mut prefix = common_len(old.chunks(), new.chunks(), false);
+    if prefix == old_len && old_len == new_len {
         return None;
     }
-
-    let old = old_text.as_bytes();
-    let new = new_text.as_bytes();
-    let mut prefix = 0usize;
-    while prefix < old.len().min(new.len()) && old[prefix] == new[prefix] {
-        prefix += 1;
-    }
-    while prefix > 0 && (!old_text.is_char_boundary(prefix) || !new_text.is_char_boundary(prefix)) {
+    while prefix > 0 && (!old.is_char_boundary(prefix) || !new.is_char_boundary(prefix)) {
         prefix -= 1;
     }
-
-    let mut suffix = 0usize;
-    while suffix < old.len().saturating_sub(prefix)
-        && suffix < new.len().saturating_sub(prefix)
-        && old[old.len() - 1 - suffix] == new[new.len() - 1 - suffix]
-    {
-        suffix += 1;
-    }
+    let mut suffix = common_len(
+        old.reversed_chunks_from(prefix),
+        new.reversed_chunks_from(prefix),
+        true,
+    );
     while suffix > 0
-        && (!old_text.is_char_boundary(old.len().saturating_sub(suffix))
-            || !new_text.is_char_boundary(new.len().saturating_sub(suffix)))
+        && (!old.is_char_boundary(old_len - suffix) || !new.is_char_boundary(new_len - suffix))
     {
         suffix -= 1;
     }
+    Some((prefix..old_len - suffix, prefix..new_len - suffix))
+}
 
-    Some((
-        prefix..old.len().saturating_sub(suffix),
-        prefix..new.len().saturating_sub(suffix),
-    ))
+/// The length of the common prefix of two chunk streams, or of their common
+/// suffix when the chunks arrive back to front.
+fn common_len<'a>(
+    mut old: impl Iterator<Item = &'a str>,
+    mut new: impl Iterator<Item = &'a str>,
+    reversed: bool,
+) -> usize {
+    let (mut a, mut b): (&[u8], &[u8]) = (&[], &[]);
+    let mut total = 0;
+    loop {
+        if a.is_empty() {
+            match old.next() {
+                Some(chunk) => a = chunk.as_bytes(),
+                None => return total,
+            }
+            continue;
+        }
+        if b.is_empty() {
+            match new.next() {
+                Some(chunk) => b = chunk.as_bytes(),
+                None => return total,
+            }
+            continue;
+        }
+        let n = a.len().min(b.len());
+        let (a_part, b_part) = if reversed {
+            (&a[a.len() - n..], &b[b.len() - n..])
+        } else {
+            (&a[..n], &b[..n])
+        };
+        if std::ptr::eq(a_part, b_part) || a_part == b_part {
+            total += n;
+            if reversed {
+                a = &a[..a.len() - n];
+                b = &b[..b.len() - n];
+            } else {
+                a = &a[n..];
+                b = &b[n..];
+            }
+            continue;
+        }
+        let same = if reversed {
+            a_part
+                .iter()
+                .rev()
+                .zip(b_part.iter().rev())
+                .take_while(|(x, y)| x == y)
+                .count()
+        } else {
+            a_part
+                .iter()
+                .zip(b_part)
+                .take_while(|(x, y)| x == y)
+                .count()
+        };
+        return total + same;
+    }
 }
 
 impl TextInput {
@@ -261,30 +361,46 @@ impl TextInput {
         self.probe_action = crate::ui_probe::begin_action("typing");
         // Snapshotting is an `Arc` bump, and it is the only way to read the
         // pre-edit row layout after `replace_range` has already moved on.
-        let track_lines = self.content_width_cache.is_some() || (self.multiline && self.soft_wrap);
-        let old_affected =
-            track_lines.then(|| Self::affected_lines(&self.content.snapshot(), range.clone()));
-        let inserted = self.content.replace_range(range, new_text);
+        let previous = self.content.snapshot();
+        let inserted = self.content.replace_range(range.clone(), new_text);
         self.emit_content_changed(cx);
-        let Some(old_affected) = old_affected else {
-            return inserted;
-        };
+        self.note_lines_replaced(&previous, range, inserted.clone());
+        inserted
+    }
 
-        let content = self.content.snapshot();
-        let tab_size = self.tab_size;
-        let new_affected = Self::affected_lines(&content, inserted.clone());
-        self.mark_wrap_dirty_from_edit(old_affected.clone(), new_affected.clone());
-        if self.content_width_cache.is_none() {
-            return inserted;
+    /// Line bookkeeping after `old` in `previous` became `new` in the content:
+    /// wrap rows and cached widths of the edited lines only.
+    fn note_lines_replaced(
+        &mut self,
+        previous: &TextModelSnapshot,
+        old: Range<usize>,
+        new: Range<usize>,
+    ) {
+        if self.content_width_cache.is_none() && !(self.multiline && self.soft_wrap) {
+            return;
         }
+        let content = self.content.snapshot();
+        let old_lines = Self::affected_lines(previous, old);
+        let new_lines = Self::affected_lines(&content, new);
+        self.mark_wrap_dirty_from_edit(old_lines.clone(), new_lines.clone());
+        self.update_content_width_cache(&content, old_lines, new_lines);
+    }
+
+    /// Replace the cached widths of the edited lines, `old_affected` in the
+    /// previous text, with those of `new_affected` in `content`.
+    fn update_content_width_cache(
+        &mut self,
+        content: &TextModelSnapshot,
+        old_affected: Range<usize>,
+        new_affected: Range<usize>,
+    ) {
+        let tab_size = self.tab_size;
+        let Some(cache) = self.content_width_cache.as_mut() else {
+            return;
+        };
         let replacement_units = new_affected
-            .clone()
-            .map(|line_ix| Self::content_width_line_units(&content, line_ix, tab_size))
+            .map(|line_ix| Self::content_width_line_units(content, line_ix, tab_size))
             .collect::<Vec<_>>();
-        let cache = self
-            .content_width_cache
-            .as_mut()
-            .expect("content-width cache was present before edit");
         for &units in cache
             .line_units
             .get(old_affected.clone())
@@ -304,7 +420,6 @@ impl TextInput {
             *cache.unit_counts.entry(units).or_default() += 1;
         }
         debug_assert_eq!(cache.line_units.len(), content.line_count().max(1));
-        inserted
     }
 
     pub(super) fn content_width_max_units(&self) -> usize {
@@ -688,25 +803,16 @@ impl TextInput {
         cx: &mut Context<Self>,
     ) {
         self.probe_action = crate::ui_probe::begin_action("typing");
-        let text_edit_delta =
-            utf8_edit_delta_between_texts(self.content.as_ref(), snapshot.content.as_ref());
-        let old_lines = text_edit_delta
-            .as_ref()
-            .map(|(old, _)| Self::affected_lines(&self.content.snapshot(), old.clone()));
+        let previous = self.content.snapshot();
+        let text_edit_delta = edit_delta_between_snapshots(&previous, &snapshot.content);
         self.content = snapshot.content.into();
-        if text_edit_delta.is_some() {
+        if let Some((old, new)) = &text_edit_delta {
             self.emit_content_changed(cx);
-        }
-        if let Some(old_lines) = old_lines
-            && let Some((_, new)) = &text_edit_delta
-        {
-            let new_lines = Self::affected_lines(&self.content.snapshot(), new.clone());
-            self.mark_wrap_dirty_from_edit(old_lines, new_lines);
+            self.note_lines_replaced(&previous, old.clone(), new.clone());
         }
         // The spans described the buffer this snapshot just replaced; the owner
         // republishes them for the restored one.
         self.protected_ranges = Arc::from([]);
-        self.rebuild_content_width_cache_if_present();
         self.selection.range = snapshot.selected_range;
         self.selection.reversed = snapshot.selection_reversed;
         self.selection.marked_range = None;

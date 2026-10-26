@@ -936,9 +936,7 @@ impl GitCometView {
                 dragging,
                 idle_line.then_some(theme.colors.stroke.subtle),
             ))
-            .on_drag(handle, |_handle, _offset, _window, cx| {
-                cx.new(|_cx| PaneResizeDragGhost)
-            })
+            .on_resize_drag(handle)
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |this, e: &MouseDownEvent, _w, cx| {

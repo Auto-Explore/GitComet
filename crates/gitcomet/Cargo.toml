@@ -42,7 +42,7 @@ rustix = { workspace = true }
 gitcomet-core = { workspace = true, features = ["test-support"] }
 
 [target.'cfg(target_os = "windows")'.build-dependencies]
-embed-resource = "3"
+embed-resource = { workspace = true }
 
 [[bin]]
 name = "perf-app-launch"

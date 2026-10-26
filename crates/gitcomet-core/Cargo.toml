@@ -31,8 +31,6 @@ percent-encoding = { workspace = true }
 process-wrap = { workspace = true }
 regex = { workspace = true }
 rustc-hash = { workspace = true }
-serde = { workspace = true }
-sysinfo = { workspace = true }
 smallvec = { workspace = true }
 strsim = { workspace = true }
 tempfile = { workspace = true }
@@ -43,9 +41,9 @@ rustix = { workspace = true, features = ["fs"] }
 
 [dev-dependencies]
 # Make the shared fixture helpers available to this crate's integration tests.
-gitcomet-core = { path = ".", features = ["test-support"] }
+gitcomet-core = { workspace = true, features = ["test-support"] }
 serde_json = { workspace = true }
 tempfile = { workspace = true }
 
 [target.'cfg(any(windows, target_os = "macos"))'.dependencies]
-gitcomet-filesystem-native = { path = "../gitcomet-filesystem-native" }
+gitcomet-filesystem-native = { workspace = true }

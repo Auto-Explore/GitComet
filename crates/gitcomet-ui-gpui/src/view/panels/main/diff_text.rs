@@ -1,7 +1,7 @@
 use super::{
-    AppTheme, DiffContentMode, DiffRenderer, DiffSplitResizeDragGhost, DiffSplitResizeHandle,
-    DiffSplitResizeState, DiffTextEmptySpaceDecoration, DiffTextRegion, DiffViewMode, Loadable,
-    PANE_RESIZE_HANDLE_PX, components, diff_split_column_widths, diff_split_drag_params,
+    AppTheme, DiffContentMode, DiffRenderer, DiffSplitResizeHandle, DiffSplitResizeState,
+    DiffTextEmptySpaceDecoration, DiffTextRegion, DiffViewMode, Loadable, PANE_RESIZE_HANDLE_PX,
+    ResizeDividerDrag, components, diff_split_column_widths, diff_split_drag_params,
     empty_diff_text_document, next_diff_split_drag_ratio,
 };
 use crate::view::panes::diff::DiffBody;
@@ -277,12 +277,7 @@ impl DiffRenderer {
                                 split_dragging,
                                 Some(theme.colors.stroke.default),
                             ))
-                            .on_drag(
-                                DiffSplitResizeHandle::Divider,
-                                |_handle, _offset, _window, cx| {
-                                    cx.new(|_cx| DiffSplitResizeDragGhost)
-                                },
-                            )
+                            .on_resize_drag(DiffSplitResizeHandle::Divider)
                             .on_mouse_down(
                                 MouseButton::Left,
                                 cx.listener(move |this, e: &MouseDownEvent, _w, cx| {

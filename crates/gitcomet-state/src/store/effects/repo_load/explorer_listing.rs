@@ -35,6 +35,22 @@ impl From<&FileBrowserState> for Options {
     }
 }
 
+/// Whether the backend listing already holds every revealed path. It lists each
+/// listed path's ancestors, in the order `augment`'s walk would rebuild.
+fn lists_all(base: &[FileEntry], revealed: &BTreeSet<PathBuf>) -> bool {
+    let mut missing: Vec<&Path> = revealed.iter().map(PathBuf::as_path).collect();
+    for entry in base {
+        if missing.is_empty() {
+            break;
+        }
+        // File names first: comparing whole paths walks their components.
+        missing.retain(|path| {
+            path.file_name() != entry.path.file_name() || *path != entry.path.as_path()
+        });
+    }
+    missing.is_empty()
+}
+
 pub(super) fn augment(
     root: &Path,
     mut base: Vec<FileEntry>,
@@ -43,7 +59,7 @@ pub(super) fn augment(
 ) -> Result<Vec<FileEntry>> {
     // Staging areas left in a worktree are the filesystem service's, not the user's.
     base.retain(|entry| !gitcomet_core::path_utils::has_service_owned_component(&entry.path));
-    if !options.ignored && options.revealed.is_empty() {
+    if !options.ignored && lists_all(&base, &options.revealed) {
         return Ok(base);
     }
     let mut entries: BTreeMap<PathBuf, FileEntryKind> = base
@@ -93,11 +109,13 @@ pub(super) fn augment(
                     },
                 );
             }
+            // Without ignored entries only a revealed path's ancestors can hold
+            // anything the backend did not list.
             if kind.is_dir()
-                && (original.contains(&path)
-                    || revealed
+                && (revealed
                     || (options.ignored
-                        && (options.expanded.contains(&path)
+                        && (original.contains(&path)
+                            || options.expanded.contains(&path)
                             || options.search
                             || options.recursive.iter().any(|root| path.starts_with(root)))))
             {
