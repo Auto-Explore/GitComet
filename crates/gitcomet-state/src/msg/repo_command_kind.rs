@@ -211,6 +211,29 @@ pub enum RepoCommandKind {
 }
 
 impl RepoCommandKind {
+    pub(crate) fn changes_tracking(&self) -> bool {
+        self.blocks_auto_fetch()
+            || matches!(
+                self,
+                Self::SetUpstreamBranch { .. }
+                    | Self::UnsetUpstreamBranch { .. }
+                    | Self::MergeRef { .. }
+                    | Self::SquashRef { .. }
+                    | Self::Reset { .. }
+                    | Self::SquashCommits { .. }
+                    | Self::Rebase { .. }
+                    | Self::RebaseContinue
+                    | Self::RebaseAbort
+                    | Self::InteractiveRebase { .. }
+                    | Self::InteractiveCherryPick { .. }
+                    | Self::CherryPick { .. }
+                    | Self::Revert { .. }
+                    | Self::ApplyFileChange { commit: true, .. }
+                    | Self::MergeAbort
+                    | Self::LargeFile { .. }
+            )
+    }
+
     pub(crate) fn blocks_auto_fetch(&self) -> bool {
         self.fetches_objects()
             || matches!(

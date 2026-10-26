@@ -93,6 +93,22 @@ pub enum BranchExistsChoice {
 }
 
 impl RepoActionKind {
+    pub(crate) fn changes_tracking(self) -> bool {
+        matches!(
+            self,
+            Self::CheckoutBranch
+                | Self::CheckoutRemoteBranch
+                | Self::CheckoutCommit
+                | Self::CherryPickCommit
+                | Self::CreateBranch
+                | Self::CreateBranchAndCheckout
+                | Self::RenameBranch
+                | Self::DeleteBranch
+                | Self::ForceDeleteBranch
+                | Self::DeleteBranches
+        )
+    }
+
     pub(crate) fn status_diff_area(self) -> Option<DiffArea> {
         match self {
             Self::StagePath | Self::StagePaths => Some(DiffArea::Unstaged),
@@ -1430,6 +1446,10 @@ pub enum InternalMsg {
     UpstreamDivergenceLoaded {
         repo_id: RepoId,
         result: Result<Option<UpstreamDivergence>, Error>,
+    },
+    HeadTrackingLoaded {
+        repo_id: RepoId,
+        result: Result<gitcomet_core::domain::HeadTracking, Error>,
     },
     LogLoaded {
         repo_id: RepoId,

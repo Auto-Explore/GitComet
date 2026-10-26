@@ -2,6 +2,8 @@ use super::*;
 use gitcomet_core::test_support::UnconfiguredRepository;
 use std::time::{Duration, UNIX_EPOCH};
 
+mod incoming;
+
 #[test]
 fn opening_fetches_immediately_and_completion_sets_the_next_interval() {
     let interval = AutoFetchInterval::new(30).unwrap();
@@ -186,7 +188,11 @@ fn manual_success_clears_failure_and_an_older_automatic_result_cannot_replace_it
     )
     .unwrap();
     let manual = started + Duration::from_secs(5);
-    coordinator.manual_fetch_succeeded(Path::new("/repo"), manual);
+    coordinator.manual_fetch_finished(
+        Path::new("/repo"),
+        manual,
+        &Ok(CommandOutput::empty_success("git fetch --all")),
+    );
     let mut state = coordinator.inner.state.lock().unwrap();
     finish(
         &mut state,

@@ -17,6 +17,7 @@ use gitcomet_core::error::{Error, ErrorKind};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+mod incoming;
 mod worktrees;
 
 fn file_browser_loaded(
@@ -1921,6 +1922,12 @@ fn loaded_handlers_reschedule_when_pending() {
         Loadable::Ready(_)
     ));
 
+    repo_mut(&mut state, repo_id).set_upstream_divergence(Loadable::Ready(Some(
+        UpstreamDivergence {
+            ahead: 3,
+            behind: 4,
+        },
+    )));
     mark_pending(&mut state, repo_id, LoadKind::UpstreamDivergence);
     let effects = upstream_divergence_loaded(
         &crate::store::reducer::test_inputs::clock(),
@@ -1936,10 +1943,33 @@ fn loaded_handlers_reschedule_when_pending() {
         effects[0],
         Effect::References(ReferenceEffect::LoadUpstreamDivergence { repo_id: rid }) if rid == repo_id
     ));
-    assert!(matches!(
+    assert_eq!(
         repo_mut(&mut state, repo_id).upstream_divergence,
-        Loadable::Ready(_)
-    ));
+        Loadable::Ready(Some(UpstreamDivergence {
+            ahead: 3,
+            behind: 4,
+        }))
+    );
+    assert!(
+        upstream_divergence_loaded(
+            &crate::store::reducer::test_inputs::clock(),
+            &mut state,
+            repo_id,
+            Ok(Some(UpstreamDivergence {
+                ahead: 0,
+                behind: 0,
+            }))
+        )
+        .is_empty(),
+        "the promoted latest load should finish without another refresh"
+    );
+    assert_eq!(
+        repo_mut(&mut state, repo_id).upstream_divergence,
+        Loadable::Ready(Some(UpstreamDivergence {
+            ahead: 0,
+            behind: 0,
+        }))
+    );
 
     mark_pending(&mut state, repo_id, LoadKind::Stashes);
     let effects = stashes_loaded(

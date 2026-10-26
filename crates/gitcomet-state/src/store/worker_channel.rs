@@ -88,6 +88,15 @@ struct RepoLoadGuard {
 }
 
 impl StoreWorkerSender {
+    pub(super) fn refresh_other_tracking(&self, repo_id: RepoId, repo: &dyn GitRepository) {
+        self.auto_fetch.refresh_other_subscribers(
+            self.store_id.get(),
+            repo_id,
+            &repo.spec().workdir,
+            &super::auto_fetch::repository_key(repo),
+        );
+    }
+
     pub(super) fn set_auto_fetch_allowed(&self, allowed: bool) {
         match &self.inner {
             StoreWorkerSenderInner::Command(tx) => {

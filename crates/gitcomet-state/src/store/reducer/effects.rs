@@ -2305,37 +2305,93 @@ pub(super) fn head_branch_loaded(
     effects
 }
 
+pub(super) fn head_tracking_loaded(
+    inputs: &ReducerInputs,
+    state: &mut AppState,
+    repo_id: RepoId,
+    result: std::result::Result<gitcomet_core::domain::HeadTracking, Error>,
+) -> Vec<Effect> {
+    let Some(repo) = state.repos.iter_mut().find(|repo| repo.id == repo_id) else {
+        return Vec::new();
+    };
+    let background = repo
+        .loads_in_flight
+        .is_background(LoadKind::UpstreamDivergence);
+    if let Some(effect) = finish_upstream_refresh(repo, repo_id) {
+        return vec![effect];
+    }
+    match result {
+        Ok(tracking) => {
+            let divergence = tracking.divergence();
+            let snapshot = crate::model::RepoIncomingSnapshot {
+                tracking,
+                checked_at: inputs.now(),
+            };
+            repo.incoming = if matches!(
+                repo.auto_fetch.status,
+                crate::model::AutoFetchStatus::Running
+                    | crate::model::AutoFetchStatus::Failed { .. }
+            ) {
+                crate::model::RepoIncomingState::Stale(snapshot)
+            } else {
+                crate::model::RepoIncomingState::Current(snapshot)
+            };
+            repo.set_upstream_divergence(Loadable::Ready(divergence));
+        }
+        Err(error) => {
+            repo.incoming.mark_stale();
+            apply_upstream_divergence_result(inputs, repo, background, Err(error));
+        }
+    }
+    Vec::new()
+}
+
 pub(super) fn upstream_divergence_loaded(
     inputs: &ReducerInputs,
     state: &mut AppState,
     repo_id: RepoId,
     result: std::result::Result<Option<UpstreamDivergence>, Error>,
 ) -> Vec<Effect> {
-    let mut effects = Vec::new();
-    if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
-        let background = repo_state
-            .loads_in_flight
-            .is_background(LoadKind::UpstreamDivergence);
-        if !super::auto_fetch::has_quiet_failure(inputs, repo_state, background, &result) {
-            let value = match result {
-                Ok(v) => Loadable::Ready(v),
-                Err(e) => {
-                    push_diagnostic(inputs, repo_state, DiagnosticKind::Error, e.to_string());
-                    Loadable::Error(e.to_string())
-                }
-            };
-            repo_state.set_upstream_divergence(value);
-        }
-        if repo_state
-            .loads_in_flight
-            .finish(LoadKind::UpstreamDivergence)
-        {
-            effects.push(Effect::References(
-                ReferenceEffect::LoadUpstreamDivergence { repo_id },
-            ));
-        }
+    let Some(repo) = state.repos.iter_mut().find(|repo| repo.id == repo_id) else {
+        return Vec::new();
+    };
+    let background = repo
+        .loads_in_flight
+        .is_background(LoadKind::UpstreamDivergence);
+    if let Some(effect) = finish_upstream_refresh(repo, repo_id) {
+        return vec![effect];
     }
-    effects
+    repo.incoming = crate::model::RepoIncomingState::Unknown;
+    apply_upstream_divergence_result(inputs, repo, background, result);
+    Vec::new()
+}
+
+fn finish_upstream_refresh(repo: &mut crate::model::RepoState, repo_id: RepoId) -> Option<Effect> {
+    repo.loads_in_flight
+        .finish(LoadKind::UpstreamDivergence)
+        .then(|| {
+            repo.incoming.mark_stale();
+            Effect::References(ReferenceEffect::LoadUpstreamDivergence { repo_id })
+        })
+}
+
+fn apply_upstream_divergence_result(
+    inputs: &ReducerInputs,
+    repo: &mut crate::model::RepoState,
+    background: bool,
+    result: std::result::Result<Option<UpstreamDivergence>, Error>,
+) {
+    if super::auto_fetch::has_quiet_failure(inputs, repo, background, &result) {
+        return;
+    }
+    let value = match result {
+        Ok(value) => Loadable::Ready(value),
+        Err(error) => {
+            push_diagnostic(inputs, repo, DiagnosticKind::Error, error.to_string());
+            Loadable::Error(error.to_string())
+        }
+    };
+    repo.set_upstream_divergence(value);
 }
 
 pub(super) fn tags_loaded(

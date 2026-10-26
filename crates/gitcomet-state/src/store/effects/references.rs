@@ -5,7 +5,8 @@ use crate::store::{
     executor::{StoreExecutorPool, TaskExecutor},
     worker_channel::StoreWorkerSender,
 };
-use gitcomet_core::services::{CancellationToken, GitRepository};
+use gitcomet_core::error::ErrorKind;
+use gitcomet_core::services::{CancellationToken, GitBackend, GitRepository};
 use std::sync::{Arc, RwLock};
 
 use super::load_tokens::repo_load_context;
@@ -15,6 +16,7 @@ pub(super) fn schedule(
     repo_load_executor: &TaskExecutor,
     metadata_executor: &TaskExecutor,
     thread_state: &Arc<RwLock<Arc<AppState>>>,
+    backend: &Arc<dyn GitBackend>,
     repos: &mut RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     work: ReferenceEffect,
@@ -46,6 +48,38 @@ pub(super) fn schedule(
         ),
         ReferenceEffect::LoadRefMetadata { .. } => (metadata_executor, "load-ref-metadata"),
     };
+    if matches!(work, ReferenceEffect::LoadUpstreamDivergence { .. })
+        && repos.repository(&repo_id).is_none()
+    {
+        let workdir = thread_state
+            .read()
+            .unwrap_or_else(|error| error.into_inner())
+            .repos
+            .iter()
+            .find(|repo| repo.id == repo_id)
+            .map(|repo| repo.spec.workdir.clone());
+        let Some(workdir) = workdir else {
+            return;
+        };
+        let backend = Arc::clone(backend);
+        executor.spawn(move || {
+            if msg_tx.is_cancelled() {
+                return;
+            }
+            let message = match backend.open_cancellable(&workdir, &cancellation) {
+                Ok(repo) => {
+                    let message = run(work, repo.as_ref(), &cancellation);
+                    let common_dir = super::super::auto_fetch::repository_key(repo.as_ref());
+                    repo.release_object_store();
+                    backend.release_object_stores(&common_dir);
+                    message
+                }
+                Err(error) => work.failed(error),
+            };
+            send_or_log(&msg_tx, Msg::Internal(message));
+        });
+        return;
+    }
     let run = move |repo: Arc<dyn GitRepository>, msg_tx: StoreWorkerSender| {
         send_or_log(
             &msg_tx,
@@ -84,9 +118,14 @@ fn run(
             result: repo.current_branch(cancellation),
         },
         ReferenceEffect::LoadUpstreamDivergence { repo_id } => {
-            InternalMsg::UpstreamDivergenceLoaded {
-                repo_id,
-                result: repo.upstream_divergence(cancellation),
+            match repo.head_tracking(cancellation) {
+                Err(error) if matches!(error.kind(), ErrorKind::Unsupported(_)) => {
+                    InternalMsg::UpstreamDivergenceLoaded {
+                        repo_id,
+                        result: repo.upstream_divergence(cancellation),
+                    }
+                }
+                result => InternalMsg::HeadTrackingLoaded { repo_id, result },
             }
         }
         ReferenceEffect::LoadTags { repo_id } => InternalMsg::TagsLoaded {
@@ -110,6 +149,23 @@ mod tests {
     use crate::model::{RepoId, RepoState};
     use gitcomet_core::domain::RepoSpec;
     use std::{sync::mpsc, time::Duration};
+
+    #[test]
+    fn incoming_tracking_unsupported_capability_keeps_the_scalar_read_path() {
+        let repo = gitcomet_core::test_support::UnconfiguredRepository::new("/repo");
+        let reply = run(
+            ReferenceEffect::LoadUpstreamDivergence { repo_id: RepoId(1) },
+            &repo,
+            &CancellationToken::new(),
+        );
+        assert!(matches!(
+            reply,
+            InternalMsg::UpstreamDivergenceLoaded {
+                repo_id: RepoId(1),
+                result: Ok(None)
+            }
+        ));
+    }
 
     #[test]
     fn blocked_remote_discovery_does_not_hold_up_local_tags() {
@@ -155,7 +211,15 @@ mod tests {
             ReferenceEffect::LoadRemoteTags { repo_id },
             ReferenceEffect::LoadTags { repo_id },
         ] {
-            schedule(&local, &local, &state, &mut repos, sender.clone(), work);
+            schedule(
+                &local,
+                &local,
+                &state,
+                &(Arc::new(gitcomet_git_gix::GixBackend) as Arc<dyn GitBackend>),
+                &mut repos,
+                sender.clone(),
+                work,
+            );
         }
 
         let first = rx.recv_timeout(Duration::from_secs(5));

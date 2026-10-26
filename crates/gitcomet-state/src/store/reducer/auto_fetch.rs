@@ -28,6 +28,12 @@ pub(super) fn updated(
     }
     repo.auto_fetch_revision = revision;
     repo.auto_fetch = snapshot;
+    if matches!(
+        repo.auto_fetch.status,
+        crate::model::AutoFetchStatus::Failed { .. }
+    ) {
+        repo.incoming.mark_stale();
+    }
     if let Some(result) = result {
         match result.as_ref() {
             Ok(output) => push_command_log(
@@ -70,10 +76,19 @@ pub(super) fn refresh(
     else {
         return Vec::new();
     };
-    if !matches!(repo.open, Loadable::Ready(())) {
-        return Vec::new();
-    }
     let mut effects = Vec::new();
+    repo.incoming.mark_stale();
+    if repo
+        .loads_in_flight
+        .request_background(LoadKind::UpstreamDivergence)
+    {
+        effects.push(Effect::References(
+            ReferenceEffect::LoadUpstreamDivergence { repo_id },
+        ));
+    }
+    if !matches!(repo.open, Loadable::Ready(())) {
+        return effects;
+    }
     for (kind, effect) in [
         (
             LoadKind::Branches,
@@ -84,10 +99,6 @@ pub(super) fn refresh(
             ReferenceEffect::LoadRemoteBranches { repo_id },
         ),
         (LoadKind::Remotes, ReferenceEffect::LoadRemotes { repo_id }),
-        (
-            LoadKind::UpstreamDivergence,
-            ReferenceEffect::LoadUpstreamDivergence { repo_id },
-        ),
     ] {
         if repo.loads_in_flight.request_background(kind) {
             effects.push(Effect::References(effect));
@@ -249,7 +260,13 @@ mod tests {
         let mut state = state();
         state.repos[0].set_open(Loadable::NotLoaded);
         let lifetime = state.repos[0].lifetime_id();
-        assert!(refresh(&mut state, RepoId(1), lifetime).is_empty());
+        let effects = refresh(&mut state, RepoId(1), lifetime);
+        assert!(matches!(
+            effects.as_slice(),
+            [Effect::References(
+                ReferenceEffect::LoadUpstreamDivergence { repo_id: RepoId(1) }
+            )]
+        ));
         assert!(matches!(state.repos[0].open, Loadable::NotLoaded));
         assert!(matches!(
             state.repos[0].history_state.log,

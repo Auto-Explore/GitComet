@@ -2205,6 +2205,9 @@ fn reduce_inner(
         Msg::Internal(crate::msg::InternalMsg::UpstreamDivergenceLoaded { repo_id, result }) => {
             effects::upstream_divergence_loaded(inputs, state, repo_id, result)
         }
+        Msg::Internal(crate::msg::InternalMsg::HeadTrackingLoaded { repo_id, result }) => {
+            effects::head_tracking_loaded(inputs, state, repo_id, result)
+        }
         Msg::IndexedHistory(event) => indexed_history::reduce(state, event),
         Msg::DiffSession(event) => diff_session::reduce(state, event),
         Msg::HistoryAuthors(event) => history_authors::reduce(state, event),

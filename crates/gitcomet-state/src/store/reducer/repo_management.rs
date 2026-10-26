@@ -143,6 +143,12 @@ fn clear_loading<T>(loadable: &mut Loadable<T>) -> bool {
 }
 
 fn clear_cancelled_repo_loading(repo_state: &mut RepoState) {
+    if repo_state
+        .loads_in_flight
+        .is_in_flight(LoadKind::UpstreamDivergence)
+    {
+        repo_state.incoming.mark_stale();
+    }
     repo_state.loads_in_flight.clear();
     // A dropped reply would otherwise leave a dialog waiting on it forever.
     for lookup in [

@@ -312,7 +312,20 @@ impl AutoFetchCoordinator {
         self.inner.admission.changed.notify_all();
     }
 
-    pub(super) fn manual_fetch_succeeded(&self, workdir: &Path, now: SystemTime) {
+    pub(super) fn manual_fetch_finished(
+        &self,
+        workdir: &Path,
+        now: SystemTime,
+        result: &Result<CommandOutput>,
+    ) {
+        let status = match result {
+            Ok(_) => AutoFetchStatus::Succeeded { at: now },
+            Err(error) if matches!(error.kind(), ErrorKind::Cancelled) => return,
+            Err(error) => AutoFetchStatus::Failed {
+                at: now,
+                error: error.clone(),
+            },
+        };
         let key = canonicalize_or_original(workdir.to_path_buf());
         let mut state = self
             .inner
@@ -322,14 +335,45 @@ impl AutoFetchCoordinator {
         state.revision += 1;
         let revision = state.revision;
         if let Some(entry) = state.entries.get_mut(&key) {
-            entry.schedule.finish(now);
+            if result.is_ok() {
+                entry.schedule.finish(now);
+                entry.snapshot.last_success_at = Some(now);
+            }
             entry.request = None;
-            entry.snapshot.last_success_at = Some(now);
-            entry.snapshot.status = AutoFetchStatus::Succeeded { at: now };
+            entry.snapshot.status = status;
             entry.revision = revision;
             entry.publish(None);
         }
         self.inner.admission.changed.notify_all();
+    }
+
+    pub(super) fn refresh_other_subscribers(
+        &self,
+        store_id: u64,
+        repo_id: RepoId,
+        workdir: &Path,
+        common_dir: &Path,
+    ) {
+        let workdir = canonicalize_or_original(workdir.to_path_buf());
+        let state = self
+            .inner
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        for (key, entry) in &state.entries {
+            if key != &workdir && entry.common_dir.as_deref() != Some(common_dir) {
+                continue;
+            }
+            for subscriber in entry.subscribers.values() {
+                if subscriber.store_id == store_id && subscriber.repo_id == repo_id {
+                    continue;
+                }
+                (subscriber.sink)(Event::Refresh {
+                    repo_id: subscriber.repo_id,
+                    lifetime: subscriber.lifetime,
+                });
+            }
+        }
     }
 
     pub(super) fn shutdown(&self) {

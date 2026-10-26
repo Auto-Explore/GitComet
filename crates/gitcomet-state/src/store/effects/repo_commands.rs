@@ -308,7 +308,7 @@ fn schedule_repo_command_task<F>(
     } else {
         None
     };
-    let resets_auto_fetch = matches!(command, RepoCommandKind::FetchAll);
+    let is_manual_fetch = matches!(command, RepoCommandKind::FetchAll);
     let label = command.hook_activity_label();
     let context = context_override.or_else(|| repo_command_context(&command));
     // The reducer counted the command in flight and only its completion
@@ -321,6 +321,7 @@ fn schedule_repo_command_task<F>(
         msg_tx,
         move |repo, msg_tx| {
             let fetches_objects = command.fetches_objects();
+            let changes_tracking = command.changes_tracking();
             let operation = GitOperationTask::start_with_progress_lane(
                 repo_id,
                 label,
@@ -343,11 +344,17 @@ fn schedule_repo_command_task<F>(
                 repo.release_object_store();
                 super::repo_load::release_all_worktree_scan_handles();
             }
-            if resets_auto_fetch && result.is_ok() {
-                auto_fetch
-                    .manual_fetch_succeeded(&repo.spec().workdir, std::time::SystemTime::now());
+            if is_manual_fetch {
+                auto_fetch.manual_fetch_finished(
+                    &repo.spec().workdir,
+                    std::time::SystemTime::now(),
+                    &result,
+                );
             }
             drop(foreground);
+            if changes_tracking {
+                msg_tx.refresh_other_tracking(repo_id, repo.as_ref());
+            }
             let outcome = GitOperationTask::outcome(&result);
             if let RepoCommandKind::ApplyFileChange { commit_retry, .. } = &mut command
                 && let Err(error) = &result

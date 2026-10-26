@@ -170,6 +170,7 @@ pub(super) fn schedule_effect(
             repo_load_executor,
             metadata_executor,
             thread_state,
+            backend,
             repos,
             msg_tx,
             work,

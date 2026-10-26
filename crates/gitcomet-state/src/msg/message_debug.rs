@@ -179,6 +179,11 @@ impl std::fmt::Debug for InternalMsg {
                 .field("repo_id", repo_id)
                 .field("result", result)
                 .finish(),
+            InternalMsg::HeadTrackingLoaded { repo_id, result } => f
+                .debug_struct("HeadTrackingLoaded")
+                .field("repo_id", repo_id)
+                .field("result", result)
+                .finish(),
             InternalMsg::UpstreamDivergenceLoaded { repo_id, result } => f
                 .debug_struct("UpstreamDivergenceLoaded")
                 .field("repo_id", repo_id)

@@ -35,7 +35,12 @@ fn spawn_repo_action(
         move |repo, msg_tx| {
             let gate = super::super::mutation_gate::for_repo(repo.as_ref());
             let _mutation = gate.read().unwrap_or_else(|error| error.into_inner());
+            let tracking_repo = action.changes_tracking().then(|| Arc::clone(&repo));
+            let tracking_sender = msg_tx.clone();
             task(repo, msg_tx);
+            if let Some(repo) = tracking_repo {
+                tracking_sender.refresh_other_tracking(repo_id, repo.as_ref());
+            }
         },
         move |msg_tx| {
             send_or_log(
@@ -116,8 +121,9 @@ fn schedule_repo_action_with_result<T, F, M>(
         let operation = GitOperationTask::start(repo_id, label, context, &msg_tx);
         let result = {
             let _scope = operation.attach();
-            run(repo)
+            run(Arc::clone(&repo))
         };
+        msg_tx.refresh_other_tracking(repo_id, repo.as_ref());
         let outcome = GitOperationTask::outcome(&result);
         let message = finish(repo_id, result);
         operation.finish(outcome, message);

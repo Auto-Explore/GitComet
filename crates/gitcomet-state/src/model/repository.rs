@@ -89,6 +89,7 @@ pub struct RepoState {
     pub maintenance: RepoMaintenanceState,
     pub auto_fetch: super::RepoAutoFetchState,
     pub(crate) auto_fetch_revision: u64,
+    pub incoming: super::RepoIncomingState,
 
     pub open: Loadable<()>,
     pub history_state: HistoryState,
@@ -349,6 +350,7 @@ impl RepoState {
             maintenance: RepoMaintenanceState::default(),
             auto_fetch: super::RepoAutoFetchState::default(),
             auto_fetch_revision: 0,
+            incoming: super::RepoIncomingState::default(),
             open: Loadable::Loading,
             history_state: HistoryState::default(),
             head_branch: Loadable::NotLoaded,
@@ -1086,6 +1088,17 @@ impl RepoState {
     pub(crate) fn set_upstream_divergence(&mut self, v: Loadable<Option<UpstreamDivergence>>) {
         self.upstream_divergence = v;
         self.upstream_divergence_rev = self.upstream_divergence_rev.wrapping_add(1);
+    }
+
+    pub fn incoming_is_stale(&self) -> bool {
+        matches!(self.incoming, super::RepoIncomingState::Stale(_))
+            || self
+                .loads_in_flight
+                .is_in_flight(super::LoadKind::UpstreamDivergence)
+            || matches!(
+                self.auto_fetch.status,
+                super::AutoFetchStatus::Running | super::AutoFetchStatus::Failed { .. }
+            )
     }
 
     pub(crate) fn set_open(&mut self, v: Loadable<()>) {
