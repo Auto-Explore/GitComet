@@ -54,8 +54,8 @@ fn inline_card_visual_capture() {
                     pane.set_inline_cards(vec![
                         DiffInlineCard::new("answer", DiffLineRange { side: DiffLineSide::New, start: 2, end: 2 }, "AI explanation · line 2", "The function now returns true for every call. Check that its callers need this unconditional result and that the relevant tests cover the changed behaviour.\n\nMixed direction: עברית and English remain readable.")
                             .pending(true)
-                            .with_action(gitcomet_extension_api::HostedAction::new("Stop", |_| {}))
-                            .with_action(gitcomet_extension_api::HostedAction::new("Dismiss", |_| {})),
+                            .with_header_action(gitcomet_extension_api::HostedAction::new("Stop", |_| {}), "icons/generic_maximize.svg")
+                            .with_header_action(gitcomet_extension_api::HostedAction::new("Close", |_| {}), "icons/generic_close.svg"),
                     ], app);
                     app.new(|_| CardPreview { _owner: owner, pane })
                 }).unwrap();
