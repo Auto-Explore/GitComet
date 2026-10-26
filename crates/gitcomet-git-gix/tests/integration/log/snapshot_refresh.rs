@@ -28,7 +28,7 @@ fn read_focused(
     request: HistoryReadRequest,
 ) -> HistoryReadResult {
     repo.read_history(
-        mode,
+        &mode.into(),
         author,
         focus,
         &request,
@@ -311,7 +311,7 @@ fn assert_index_matches(repo: &dyn GitRepository, mode: HistoryMode, author: Opt
     let cancellation = CancellationToken::new();
     let index = repo
         .build_history_index(
-            mode,
+            &mode.into(),
             author,
             &Default::default(),
             &cancellation,
@@ -411,7 +411,7 @@ fn indexed_history_matches_queries_and_retains_immutable_ranges() {
     let cancellation = CancellationToken::new();
     let index = repo
         .build_history_index(
-            HistoryMode::AllBranches,
+            &HistoryMode::AllBranches.into(),
             None,
             &Default::default(),
             &cancellation,
@@ -508,7 +508,7 @@ fn indexed_history_large_repository_benchmark() {
     let started = Instant::now();
     let index = repo
         .build_history_index(
-            HistoryMode::AllBranches,
+            &HistoryMode::AllBranches.into(),
             None,
             &Default::default(),
             &cancellation,
@@ -609,7 +609,13 @@ fn indexed_history_reads_headers_only_when_needed_and_decodes_ranges_once() {
                 let _capture = capture();
                 let cancel = CancellationToken::new();
                 let index = repo
-                    .build_history_index(mode, author, &Default::default(), &cancel, &mut |_| {})
+                    .build_history_index(
+                        &mode.into(),
+                        author,
+                        &Default::default(),
+                        &cancel,
+                        &mut |_| {},
+                    )
                     .unwrap()
                     .unwrap();
                 if author.is_none() {
@@ -637,7 +643,7 @@ fn indexed_range_reads_reopen_their_object_store_every_sixty_four_blocks() {
     let cancel = CancellationToken::new();
     let index = repo
         .build_history_index(
-            HistoryMode::FullReachable,
+            &HistoryMode::FullReachable.into(),
             None,
             &Default::default(),
             &cancel,
@@ -701,7 +707,7 @@ fn indexed_history_stash_topology_rejects_misleading_merge_messages() {
         for author in [None, Some("Alice")] {
             let index = repo
                 .build_history_index(
-                    HistoryMode::AllBranches,
+                    &HistoryMode::AllBranches.into(),
                     author,
                     &Default::default(),
                     &CancellationToken::new(),

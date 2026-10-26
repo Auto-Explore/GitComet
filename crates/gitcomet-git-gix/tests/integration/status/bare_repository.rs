@@ -56,7 +56,7 @@ fn bare_repository_status_refreshes_are_empty_and_history_remains_readable() {
             .unwrap();
         let index = repo
             .build_history_index(
-                HistoryMode::AllBranches,
+                &HistoryMode::AllBranches.into(),
                 None,
                 &Default::default(),
                 &cancel,

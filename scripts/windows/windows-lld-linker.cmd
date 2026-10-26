@@ -74,7 +74,11 @@ if not defined MSVC_VER (
 set "MSVC_ROOT=%MSVC_TOOLS%\%MSVC_VER%"
 
 rem ── Locate Rust's bundled LLD ─────────────────────────────────────────────
-rem Cargo supplies RUSTC; otherwise use the active rustup toolchain.
+rem Cargo supplies RUSTC for builds, but not for rustdoc's linker invocations.
+rem Prefer the compiler next to Cargo: rustc may not be on the linker's PATH.
+if not defined RUSTC if defined CARGO (
+  for %%I in ("%CARGO%") do if exist "%%~dpIrustc.exe" set "RUSTC=%%~dpIrustc.exe"
+)
 rem Without --target, target-libdir identifies the host toolchain, including
 rem when linking for another architecture. The linker must run on the host.
 if not defined RUSTC set "RUSTC=rustc"

@@ -172,7 +172,7 @@ fn dangling_symrefs_are_left_out_of_every_listing() {
     assert_eq!(
         opened
             .build_history_index(
-                HistoryMode::AllBranches,
+                &HistoryMode::AllBranches.into(),
                 None,
                 &Default::default(),
                 &cancellation,

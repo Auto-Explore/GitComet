@@ -156,7 +156,7 @@ impl Fixture {
         let seq = self.state.repos[0]
             .loads_in_flight
             .request_log(crate::model::PendingLogLoad {
-                scope: LogScope::AllBranches,
+                walk: LogScope::AllBranches.into(),
                 author: None,
                 focus: Default::default(),
                 limit: 200,

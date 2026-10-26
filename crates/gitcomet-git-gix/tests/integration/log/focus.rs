@@ -26,7 +26,7 @@ fn forked_repo() -> tempfile::TempDir {
 fn summaries(repo: &dyn GitRepository, mode: HistoryMode, focus: &HistoryFocusSet) -> Vec<String> {
     let result = repo
         .read_history(
-            mode,
+            &mode.into(),
             None,
             focus,
             &HistoryReadRequest::Page {
@@ -163,7 +163,7 @@ fn focus_targets_that_share_a_tip_still_get_their_own_snapshot() {
     let snapshot_for = |focus: &HistoryFocusSet| {
         let result = repo
             .read_history(
-                HistoryMode::AllBranches,
+                &HistoryMode::AllBranches.into(),
                 None,
                 focus,
                 &HistoryReadRequest::Page {
@@ -268,7 +268,7 @@ fn focus_history_indexes_and_authors_follow_the_selected_refs() {
         let focus = HistoryFocusSet::from_iter([HistoryFocus::local_branch(branch)]);
         let index = repo
             .build_history_index(
-                HistoryMode::FirstParent,
+                &HistoryMode::FirstParent.into(),
                 None,
                 &focus,
                 &cancellation,
@@ -282,7 +282,7 @@ fn focus_history_indexes_and_authors_follow_the_selected_refs() {
             .unwrap();
         assert_eq!(range.commits[0].summary.as_ref(), expected_summary);
         let mut authors = repo
-            .history_authors(HistoryMode::FirstParent, &focus, &cancellation)
+            .history_authors(&HistoryMode::FirstParent.into(), &focus, &cancellation)
             .unwrap()
             .iter()
             .map(|author| author.to_string())

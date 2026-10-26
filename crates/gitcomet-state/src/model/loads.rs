@@ -1,6 +1,6 @@
 //! Per-repository load coalescing and log-walk sequencing.
 
-use gitcomet_core::domain::{LogCursor, LogScope};
+use gitcomet_core::domain::LogCursor;
 use std::path::{Path, PathBuf};
 
 /// Loads that coalesce repeated requests into one pending refresh.
@@ -140,7 +140,7 @@ struct LineStatsLoads {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PendingLogLoad {
-    pub scope: LogScope,
+    pub walk: gitcomet_core::services::HistoryWalk,
     pub author: Option<String>,
     /// The refs the walk is focused on, empty for the normal seed.
     pub focus: gitcomet_core::domain::HistoryFocusSet,
@@ -279,7 +279,7 @@ impl RepoLoadsInFlight {
         }
     }
 
-    /// A changed scope, author or focus supersedes the current walk immediately.
+    /// A changed walk, author or focus supersedes the current walk immediately.
     /// Otherwise one request is queued, with refresh taking priority over pagination.
     pub fn request_log(&mut self, next: PendingLogLoad) -> Option<LogLoadSeq> {
         self.log.request(next)
@@ -318,7 +318,7 @@ impl RepoLoadsInFlight {
 impl LogLoads {
     fn request_starts(&self, next: &PendingLogLoad) -> bool {
         self.active.as_ref().is_none_or(|active| {
-            active.request.scope != next.scope
+            active.request.walk != next.walk
                 || active.request.author != next.author
                 || active.request.focus != next.focus
         })
@@ -394,6 +394,7 @@ impl LineStatsLoads {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gitcomet_core::domain::LogScope;
 
     #[test]
     fn remote_tags_stay_tracked_without_delaying_local_readiness() {
@@ -421,7 +422,7 @@ mod tests {
         let mut loads = RepoLoadsInFlight::default();
         let request = PendingLogLoad {
             focus: Default::default(),
-            scope: LogScope::FullReachable,
+            walk: LogScope::FullReachable.into(),
             author: None,
             limit: 20,
             cursor: None,

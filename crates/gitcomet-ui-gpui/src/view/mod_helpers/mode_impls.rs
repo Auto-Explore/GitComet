@@ -970,6 +970,9 @@ pub(crate) struct TerminalInstance {
     pub(crate) viewport: Entity<TerminalViewportView>,
     pub(crate) session_seq: u64,
     pub(crate) title: String,
+    /// What an extension asked to type once the tab first prints: typed
+    /// any earlier, it would race the shell's start.
+    pub(crate) pending_input: Option<String>,
 }
 
 pub(crate) struct RepoTerminalSession {

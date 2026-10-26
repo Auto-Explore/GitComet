@@ -7,7 +7,7 @@ use crate::model::{AppState, Loadable, LogLoadSeq, RepoId};
 use crate::store::executor::{LatestTaskSlot, TaskExecutor};
 use crate::store::repository_runtime::{RepoTaskScope, RepositoryRuntimes};
 use crate::store::worker_channel::StoreWorkerSender;
-use gitcomet_core::domain::{DiffPreviewTextSide, LogCursor, LogScope};
+use gitcomet_core::domain::{DiffPreviewTextSide, LogCursor};
 use gitcomet_core::services::CancellationToken;
 use std::sync::{Arc, RwLock};
 
@@ -96,7 +96,7 @@ pub(super) fn load_log(
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     seq: LogLoadSeq,
-    scope: LogScope,
+    walk: gitcomet_core::services::HistoryWalk,
     author: Option<String>,
     focus: gitcomet_core::domain::HistoryFocusSet,
     limit: usize,
@@ -133,7 +133,7 @@ pub(super) fn load_log(
             msg_tx,
             repo_id,
             seq,
-            scope,
+            walk,
             author,
             focus,
             cursor,

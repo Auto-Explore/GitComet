@@ -69,7 +69,7 @@ fn reftable_focus_reads_local_branches_remote_branches_and_remotes() {
         ] {
             let result = repo
                 .read_history(
-                    HistoryMode::FirstParent,
+                    &HistoryMode::FirstParent.into(),
                     None,
                     &HistoryFocusSet::from_iter([target]),
                     &HistoryReadRequest::Page {
@@ -213,7 +213,7 @@ fn files_and_reftable_twins_have_the_same_refs_status_history_and_reflogs() {
             );
             assert_eq!(
                 repo.build_history_index(
-                    HistoryMode::AllBranches,
+                    &HistoryMode::AllBranches.into(),
                     None,
                     &Default::default(),
                     &CancellationToken::new(),

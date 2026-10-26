@@ -25,7 +25,7 @@ fn indexed_history_scans_headers_once_and_reuses_bootstrap_topology() {
     // resumed pages and filtered views must all reuse the same topology.
     let index = repo
         .build_history_index(
-            HistoryMode::FullReachable,
+            &HistoryMode::FullReachable.into(),
             None,
             &Default::default(),
             &cancel,
@@ -47,7 +47,7 @@ fn indexed_history_scans_headers_once_and_reuses_bootstrap_topology() {
     assert_eq!(&rows.commits[20..], second.commits.as_slice());
     let filtered = repo
         .build_history_index(
-            HistoryMode::NoMerges,
+            &HistoryMode::NoMerges.into(),
             Some("You"),
             &Default::default(),
             &cancel,
@@ -63,7 +63,7 @@ fn indexed_history_scans_headers_once_and_reuses_bootstrap_topology() {
     run_git(dir.path(), &["reset", "-q", "--hard", "HEAD~100"]);
     let changed = repo
         .build_history_index(
-            HistoryMode::FullReachable,
+            &HistoryMode::FullReachable.into(),
             None,
             &Default::default(),
             &cancel,
@@ -144,7 +144,7 @@ fn indexed_history_compact_order_matches_gix_with_skew_ties_and_redundant_tips()
         let cancel = CancellationToken::new();
         let index = repo
             .build_history_index(
-                HistoryMode::AllBranches,
+                &HistoryMode::AllBranches.into(),
                 None,
                 &Default::default(),
                 &cancel,
@@ -217,7 +217,7 @@ fn indexed_history_honors_replacement_refs_like_git_and_bypasses_the_commit_grap
         );
         let index = opened
             .build_history_index(
-                HistoryMode::FullReachable,
+                &HistoryMode::FullReachable.into(),
                 None,
                 &Default::default(),
                 &cancel,

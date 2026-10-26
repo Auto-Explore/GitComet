@@ -1019,7 +1019,7 @@ fn finish_log_load(
         vec![Effect::LoadLog {
             repo_id: repo_state.id,
             seq,
-            scope: next.scope,
+            walk: next.walk,
             author: next.author,
             focus: next.focus,
             limit: next.limit,

@@ -740,18 +740,21 @@ impl GixRepo {
     /// Focus replaces the seed, not the mode: a focused first-parent walk still
     /// follows first parents, it just starts at the focused refs' tips instead of
     /// HEAD. That is what makes focus compose with every history mode.
+    ///
+    /// Hidden remotes only thin out the all-branches seed. A focus names its
+    /// refs outright, so a focused ref is walked even when its remote is hidden.
     pub(super) fn history_tips(
         &self,
         repo: &gix::Repository,
-        mode: HistoryMode,
+        walk: &gitcomet_core::services::HistoryWalk,
         focus: &HistoryFocusSet,
         cancellation: Option<&CancellationToken>,
     ) -> Result<Arc<[gix::ObjectId]>> {
         if !focus.is_empty() {
             return focus_tips(repo, focus, cancellation);
         }
-        if mode == HistoryMode::AllBranches {
-            return self.all_branches_tips(repo, cancellation);
+        if walk.mode() == HistoryMode::AllBranches {
+            return self.all_branches_tips(repo, walk.hidden_remotes(), cancellation);
         }
         Ok(Arc::from(
             gix_head_id_or_none(repo)?.into_iter().collect::<Vec<_>>(),
@@ -761,23 +764,31 @@ impl GixRepo {
     pub(super) fn all_branches_tips(
         &self,
         repo: &gix::Repository,
+        hidden_remotes: &[Arc<str>],
         cancellation: Option<&CancellationToken>,
     ) -> Result<Arc<[gix::ObjectId]>> {
         use rustc_hash::FxHasher;
         use std::hash::{Hash as _, Hasher as _};
 
-        let refs =
-            crate::refs::view_cancellable(repo, cancellation.unwrap_or(&CancellationToken::new()))
-                .map_err(|e| {
-                    Error::new(ErrorKind::Backend(format!("gix references: {e}"))).with_source(e)
-                })?;
+        let uncancelled = CancellationToken::new();
+        let cancellation_token = cancellation.unwrap_or(&uncancelled);
+        let refs = crate::refs::view_cancellable(repo, cancellation_token).map_err(|e| {
+            Error::new(ErrorKind::Backend(format!("gix references: {e}"))).with_source(e)
+        })?;
+        let hidden_refs = crate::repo::remotes::hidden_remote_tracking_refs(
+            repo,
+            &refs,
+            hidden_remotes,
+            cancellation_token,
+        )?;
 
-        // Refs the product leaves out of History. Every all-branches reader
-        // (pages, authors, the index, snapshots) starts from these tips, so
-        // excluding here reaches all of them and their caches.
+        // Refs left out of History. Every all-branches reader (pages, authors,
+        // the index, snapshots) starts from these tips, so excluding here
+        // reaches all of them and their caches.
         let filter = &self.history_ref_filter;
         let excluded = |reference: &crate::refs::Reference<'_>| {
-            !filter.is_empty() && filter.excludes(&reference.name().as_bstr().to_string())
+            hidden_refs.contains(reference.name())
+                || !filter.is_empty() && filter.excludes(&reference.name().as_bstr().to_string())
         };
 
         // Fingerprint pass: names, raw targets and followed symbolic chains
@@ -904,7 +915,7 @@ impl GixRepo {
 
         let repo = self.repo();
         let shallow = shallow_snapshot(&repo)?;
-        let tips = self.all_branches_tips(&repo, cancellation)?;
+        let tips = self.all_branches_tips(&repo, &[], cancellation)?;
 
         let cache_key = self.log_page_cache_key(
             HistoryMode::AllBranches,

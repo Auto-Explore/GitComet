@@ -170,7 +170,7 @@ fn main() {
             "history",
             || {
                 repo.read_history(
-                    mode,
+                    &mode.into(),
                     None,
                     &Default::default(),
                     &history,

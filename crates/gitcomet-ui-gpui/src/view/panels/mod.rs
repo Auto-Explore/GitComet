@@ -428,6 +428,11 @@ pub(in crate::view) enum ContextMenuAction {
         hidden: Option<bool>,
         ignored: Option<bool>,
     },
+    SetRemoteHistoryVisibility {
+        repo_id: RepoId,
+        remote: String,
+        hidden: bool,
+    },
     SetChangeTrackingView {
         view: ChangeTrackingView,
     },

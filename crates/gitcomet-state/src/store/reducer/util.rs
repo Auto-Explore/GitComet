@@ -798,10 +798,10 @@ pub(super) fn refresh_primary_effects(repo_state: &mut RepoState) -> Vec<Effect>
 }
 
 /// The request for a fresh first page of `repo_state`'s history, under whatever
-/// scope and author filter it currently has.
+/// walk and author filter it currently has.
 pub(super) fn first_page_log_request(repo_state: &RepoState) -> crate::model::PendingLogLoad {
     crate::model::PendingLogLoad {
-        scope: repo_state.history_state.history_scope,
+        walk: repo_state.history_walk(),
         author: repo_state.history_state.history_author_filter.clone(),
         focus: repo_state.history_state.history_focus.clone(),
         limit: DEFAULT_LOG_PAGE_SIZE,
@@ -836,7 +836,7 @@ pub(super) fn request_log_effect(
     let repo_id = repo_state.id;
     let seq = repo_state.loads_in_flight.request_log(load.clone())?;
     let crate::model::PendingLogLoad {
-        scope,
+        walk,
         author,
         focus,
         limit,
@@ -845,7 +845,7 @@ pub(super) fn request_log_effect(
     Some(Effect::LoadLog {
         repo_id,
         seq,
-        scope,
+        walk,
         author,
         focus,
         limit,
@@ -878,7 +878,7 @@ pub(super) fn append_refresh_primary_effects(
         effects.push_effect(Effect::LoadLog {
             repo_id,
             seq,
-            scope: log_request.scope,
+            walk: log_request.walk,
             author: log_request.author,
             focus: log_request.focus,
             limit: log_request.limit,
