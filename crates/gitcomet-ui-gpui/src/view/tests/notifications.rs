@@ -308,7 +308,10 @@ fn removed_repo_tab_tooltip_does_not_reappear_after_hover_target_disappears(
             .first()
             .map(|r| r.spec.workdir.clone())
             .unwrap_or_else(|| PathBuf::from("/tmp/splash-tooltip-clear-test"));
-        path_display::path_display_string(&workdir)
+        format!(
+            "{}\nIncoming commits unknown.",
+            path_display::path_display_string(&workdir)
+        )
     };
     assert_eq!(
         test_support::tooltip_text(cx, &view).map(|text| text.to_string()),

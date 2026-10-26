@@ -39,6 +39,18 @@ GitComet exits.
 
 ## Status and authentication
 
+Repository tabs show **↓N** when their current branch is behind its configured
+remote upstream, including inactive and restored tabs that have not been
+selected. Hover the tab to see the branch, upstream and incoming commit count.
+Selecting a tab keeps the indicator; it clears when the branch has no incoming
+commits. Changes on unrelated remote branches do not add an indicator.
+
+A **?** after the count marks last-known tracking information that may be out
+of date, including while refreshing or after a failed check. The tab tooltip
+explains its freshness. Unknown counts, detached HEAD and branches without a
+remote upstream have no incoming indicator. These indicators also reflect
+manual fetches and refreshes when automatic fetching is off.
+
 Open the **Pull** dropdown to see the automatic-fetch result and the last
 successful fetch time. A failure includes its reason in the menu; hover a
 truncated reason to read it in full. Existing data stays visible when the remote

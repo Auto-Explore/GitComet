@@ -359,6 +359,7 @@ mod hosted_panes;
 mod invalidation;
 mod notifications;
 mod previews;
+mod repo_tab_incoming;
 mod routing_palette;
 mod selection;
 mod sidebar_file_history_tab;
