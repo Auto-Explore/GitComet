@@ -86,6 +86,9 @@ pub(crate) fn push_literal_pathspec_file(cmd: &mut Command, pathspec_file: &Path
 
 pub(crate) fn git_workdir_cmd_for(workdir: &Path) -> Command {
     let mut cmd = git_command();
+    if super::background::background_git_enabled() {
+        credentials_without_prompts(&mut cmd);
+    }
     #[cfg(any(test, feature = "test-support"))]
     crate::test_support::apply_git_command_environment(&mut cmd);
     cmd.arg("-C").arg(workdir);
@@ -321,6 +324,7 @@ pub(super) fn command_cancellation_requested(
 ) -> bool {
     cancellation.is_some_and(CancellationToken::is_cancelled)
         || operation_cancellation.is_some_and(CancellationToken::is_cancelled)
+        || super::background::background_git_cancelled()
 }
 
 pub(super) fn reject_cancelled_command(

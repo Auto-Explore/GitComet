@@ -1508,6 +1508,15 @@ pub trait GitRepository: Send + Sync {
     }
 
     fn fetch_all(&self, _prune: bool) -> Result<CommandOutput>;
+    fn fetch_all_background(
+        &self,
+        _prune: bool,
+        _cancellation: &CancellationToken,
+    ) -> Result<CommandOutput> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "background fetching is not implemented for this backend",
+        )))
+    }
     fn pull(&self, mode: PullMode, _prune: bool) -> Result<CommandOutput>;
     fn push(&self) -> Result<()>;
 

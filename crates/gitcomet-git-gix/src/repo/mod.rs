@@ -1251,6 +1251,16 @@ impl GitRepository for GixRepo {
         self.fetch_all_with_output_impl(prune)
     }
 
+    fn fetch_all_background(
+        &self,
+        prune: bool,
+        cancellation: &CancellationToken,
+    ) -> Result<CommandOutput> {
+        crate::util::background::with_background_git(cancellation, || {
+            self.fetch_all_with_output_impl(prune)
+        })
+    }
+
     fn fetch_refspecs_with_output(
         &self,
         remote: &str,
