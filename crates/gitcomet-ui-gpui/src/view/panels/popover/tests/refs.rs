@@ -364,6 +364,7 @@ fn tag_ref_menu_requests_remote_tags_when_not_loaded(cx: &mut gpui::TestAppConte
         },
     );
     repo.open = Loadable::Ready(());
+    repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
     repo.tags = Loadable::Ready(Arc::new(vec![gitcomet_core::domain::Tag {
         name: "release".to_string(),
         target: commit_id.clone(),

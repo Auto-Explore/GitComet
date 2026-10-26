@@ -288,7 +288,7 @@ impl GixRepo {
 
         let nested_workdir = repo_workdir_for_submodule_trust(&repo).join(path);
         let nested_status_repo =
-            GixRepo::new(nested_workdir.clone(), nested_repo.clone().into_sync());
+            GixRepo::new(nested_workdir.clone(), nested_repo.clone().into_sync())?;
         let nested_status = nested_status_repo.status_impl()?;
         if !nested_status.staged.is_empty() || !nested_status.unstaged.is_empty() {
             return Err(Error::new(ErrorKind::Backend(format!(
@@ -448,9 +448,13 @@ fn nested_failure_prunes_subtree(kind: &ErrorKind) -> bool {
         ErrorKind::Backend(_)
         | ErrorKind::Unsupported(_)
         | ErrorKind::NotARepository
+        | ErrorKind::BareUnsupported
+        | ErrorKind::BareConversionRefused(_)
         | ErrorKind::Io(_)
         | ErrorKind::Git(_) => true,
-        ErrorKind::Cancelled => false,
+        ErrorKind::Cancelled
+        | ErrorKind::RepositoryChanged
+        | ErrorKind::BareConversionRecovery { .. } => false,
     }
 }
 
@@ -1014,7 +1018,7 @@ fn submodule_live_inner_changes(
     let nested_status_repo = GixRepo::new(
         nested_workdir.to_path_buf(),
         nested_repo.clone().into_sync(),
-    );
+    )?;
     let RepoStatus { staged, unstaged } =
         nested_status_repo.status_cancellable_impl(cancellation)?;
     let staged_counts = git_numstat_counts(nested_workdir, true, cancellation)?;

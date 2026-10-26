@@ -855,6 +855,7 @@ impl KeyboardStageUnstageToggleFixture {
         let mut repo = build_synthetic_repo_state(20, 40, 2, 0, 0, 0, &commits);
         seed_repo_status_entries(&mut repo, entries.clone(), entries);
         repo.open = Loadable::Ready(());
+        repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
         repo.diff_state.diff_target = Some(DiffTarget::working_tree(
             paths[0].clone(),
             DiffArea::Unstaged,

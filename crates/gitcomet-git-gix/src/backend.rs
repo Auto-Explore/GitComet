@@ -19,11 +19,12 @@ fn reuse_or_register(repo: GixRepo) -> Arc<GixRepo> {
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     open.retain(|repo| repo.strong_count() > 0);
-    if let Some(existing) = open
-        .iter()
-        .filter_map(Weak::upgrade)
-        .find(|existing| existing.identity == repo.identity && existing.options == repo.options)
-    {
+    if let Some(existing) = open.iter().filter_map(Weak::upgrade).find(|existing| {
+        existing.identity == repo.identity
+            && existing.options == repo.options
+            && existing.has_same_opened_mode(&repo)
+            && existing.ensure_current().is_ok()
+    }) {
         return existing;
     }
     let repo = Arc::new(repo);
@@ -50,6 +51,24 @@ pub(crate) fn refresh_common_stores(origin: &GixRepo, common: u64) -> Result<()>
     result
 }
 
+pub(crate) fn release_conversion_stores(origin: &GixRepo) -> Result<()> {
+    let common = origin.common_identity();
+    let open = OPEN_REPOS
+        .lock()
+        .expect("open repositories")
+        .iter()
+        .filter_map(Weak::upgrade)
+        .filter(|repo| repo.common_identity() == common)
+        .collect::<Vec<_>>();
+    origin.release_conversion_store()?;
+    for repo in open {
+        if !std::ptr::eq(origin, &*repo) {
+            repo.release_conversion_store()?;
+        }
+    }
+    Ok(())
+}
+
 impl Default for GixBackend {
     fn default() -> Self {
         Self
@@ -67,6 +86,7 @@ impl GixBackend {
             cancellation.check_cancelled()?;
         }
 
+        crate::repo::bare::recover_before_open(workdir, cancellation)?;
         let workdir = strip_windows_verbatim_prefix(workdir.canonicalize().map_err(|error| {
             Error::from(error).with_context("canonicalize repository", Some(workdir))
         })?);
@@ -76,6 +96,7 @@ impl GixBackend {
 
         let repo = crate::open::open_worktree_repo(&workdir)
             .map_err(|e| crate::open::map_open_error(e, "gix open", &workdir))?;
+        let _discovery = crate::repo::bare::discovery_lock(repo.common_dir())?;
         crate::refs::validate_open(&repo, cancellation)?;
         if let Some(cancellation) = cancellation {
             cancellation.check_cancelled()?;
@@ -86,7 +107,7 @@ impl GixBackend {
             workdir,
             repo.into_sync(),
             options.clone(),
-        ));
+        )?);
         Ok(repo)
     }
 }
@@ -131,6 +152,9 @@ impl GitBackend for GixBackend {
         let mut released = std::collections::HashSet::new();
         for repo in open {
             if repo.common_dir_impl() == common_dir && released.insert(repo.common_identity()) {
+                let Ok(_operation) = repo.operation_lease() else {
+                    continue;
+                };
                 let _ = repo.reopen_object_store();
             }
         }

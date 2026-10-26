@@ -436,6 +436,7 @@ pub(super) fn shortcut_fixture_repo(
         },
     );
     repo.open = Loadable::Ready(());
+    repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
     repo.head_branch = Loadable::Ready("main".into());
     repo.status = Loadable::Ready(gitcomet_core::domain::RepoStatus::default().into());
     repo.log = Loadable::Ready(

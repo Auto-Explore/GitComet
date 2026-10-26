@@ -606,6 +606,16 @@ impl GitCometView {
 
         #[cfg(target_os = "macos")]
         if self.view_mode == GitCometViewMode::Normal {
+            let next_mode = next
+                .repos
+                .iter()
+                .find(|repo| Some(repo.id) == next.active_repo)
+                .and_then(|repo| repo.repository_mode);
+            if self.state.active_repo != next.active_repo
+                || self.active_repo().and_then(|repo| repo.repository_mode) != next_mode
+            {
+                cx.defer(crate::app::refresh_macos_app_menus);
+            }
             for path in newly_opened_repo_paths(&self.state, next.as_ref()) {
                 cx.add_recent_document(&path);
             }
@@ -615,7 +625,7 @@ impl GitCometView {
                 && self.recent_repos_menu_fingerprint != loaded.recent_repos
             {
                 self.recent_repos_menu_fingerprint = loaded.recent_repos;
-                crate::app::refresh_macos_app_menus(cx);
+                cx.defer(crate::app::refresh_macos_app_menus);
             }
         }
 
@@ -920,6 +930,7 @@ mod tests {
         );
         if ready {
             repo.open = Loadable::Ready(());
+            repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
         }
         repo
     }

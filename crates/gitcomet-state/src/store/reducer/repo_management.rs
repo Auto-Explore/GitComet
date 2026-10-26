@@ -1356,6 +1356,8 @@ pub(super) fn repo_opened_ok(
     spec: RepoSpec,
     repo: Arc<dyn GitRepository>,
     preferences: Option<crate::model::RepositoryPreferencesSnapshot>,
+    repository_mode: gitcomet_core::domain::RepositoryMode,
+    head_commit: Option<gitcomet_core::domain::CommitId>,
 ) -> Vec<Effect> {
     let Some(lifetime) = state
         .repos
@@ -1376,6 +1378,21 @@ pub(super) fn repo_opened_ok(
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
         repo_state.set_spec(spec);
         repo_state.common_dir = common_dir;
+        repo_state.repository_mode = Some(repository_mode);
+        repo_state.head_commit = head_commit;
+        if !matches!(
+            repo_state.bare_mode_conversion,
+            crate::model::BareModeConversionState::Failed(_)
+        ) {
+            repo_state.bare_mode_conversion = crate::model::BareModeConversionState::Idle;
+        }
+        if repo_state.is_bare() {
+            if let Some(source) = repo_state.live_file_source() {
+                super::effects::retarget_file_browser(repo_state, source);
+            } else {
+                repo_state.file_browser.entries = Loadable::Ready(Arc::new(Vec::new()));
+            }
+        }
         if let Some(snapshot) = preferences {
             repo_state.history_state.history_scope = snapshot.preferences.history_mode;
             repo_state.file_browser.show_hidden = snapshot.preferences.show_hidden_files;

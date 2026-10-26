@@ -228,6 +228,73 @@ pub enum RepoCommandKind {
 }
 
 impl RepoCommandKind {
+    pub fn repository_requirement(&self) -> gitcomet_core::domain::RepositoryRequirement {
+        use gitcomet_core::domain::RepositoryRequirement::{Repository, WorkingTree};
+        match self {
+            Self::FetchAll
+            | Self::FetchRefspecs { .. }
+            | Self::PruneMergedBranches
+            | Self::PruneLocalTags
+            | Self::RunMaintenance
+            | Self::Push
+            | Self::PushWithTags { .. }
+            | Self::PushAfterCommit { .. }
+            | Self::ForcePush
+            | Self::ForcePushWithLease { .. }
+            | Self::PushSetUpstream { .. }
+            | Self::SetUpstreamBranch { .. }
+            | Self::UnsetUpstreamBranch { .. }
+            | Self::DeleteRemoteBranch { .. }
+            | Self::DeleteRemoteBranches { .. }
+            | Self::SquashCommits { .. }
+            | Self::CreateTag { .. }
+            | Self::DeleteTag { .. }
+            | Self::PushTag { .. }
+            | Self::DeleteRemoteTag { .. }
+            | Self::AddRemote { .. }
+            | Self::RemoveRemote { .. }
+            | Self::SetRemoteUrl { .. }
+            | Self::ExportPatch { .. }
+            | Self::AddWorktree { .. }
+            | Self::RemoveWorktree { .. }
+            | Self::ForceRemoveWorktree { .. } => Repository,
+            Self::Reset { mode, .. } => match mode {
+                ResetMode::Soft => Repository,
+                ResetMode::Mixed | ResetMode::Hard => WorkingTree,
+            },
+            Self::LargeFile { command } => command.repository_requirement(),
+            Self::Pull { .. }
+            | Self::PullBranch { .. }
+            | Self::MergeRef { .. }
+            | Self::SquashRef { .. }
+            | Self::Rebase { .. }
+            | Self::RebaseContinue
+            | Self::RebaseAbort
+            | Self::InteractiveRebase { .. }
+            | Self::InteractiveCherryPick { .. }
+            | Self::CherryPick { .. }
+            | Self::Revert { .. }
+            | Self::ApplyFileChange { .. }
+            | Self::MergeAbort
+            | Self::CheckoutConflict { .. }
+            | Self::AcceptConflictDeletion { .. }
+            | Self::CheckoutConflictBase { .. }
+            | Self::LaunchMergetool { .. }
+            | Self::SaveWorktreeFile { .. }
+            | Self::AppendGitignorePatterns { .. }
+            | Self::AppendGitattributesRule { .. }
+            | Self::ApplyPatch { .. }
+            | Self::AddSubmodule { .. }
+            | Self::UpdateSubmodules { .. }
+            | Self::LoadSubmodule { .. }
+            | Self::ChangeSubmodulePointer { .. }
+            | Self::RemoveSubmodule { .. }
+            | Self::StageHunk
+            | Self::UnstageHunk
+            | Self::ApplyWorktreePatch { .. } => WorkingTree,
+        }
+    }
+
     pub(crate) fn finished(
         self,
         repo_id: crate::model::RepoId,

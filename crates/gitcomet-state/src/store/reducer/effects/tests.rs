@@ -1205,6 +1205,7 @@ fn worktree_refresh_retains_badge_data_until_results_arrive() {
     let mut state = new_state_with_repo(repo_id);
     mark_repo_open_ready(&mut state, repo_id);
     let old_worktree = Worktree {
+        bare: false,
         path: PathBuf::from("/tmp/worktree"),
         head: None,
         branch: Some("dev".into()),

@@ -558,6 +558,8 @@ pub(crate) enum PopoverKind {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum RepoPopoverKind {
+    RepositoryModeMenu,
+    DisableBareModeConfirm,
     Remote(RemotePopoverKind),
     Worktree(WorktreePopoverKind),
     Submodule(SubmodulePopoverKind),

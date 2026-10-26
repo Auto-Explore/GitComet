@@ -11,6 +11,7 @@ const FEATURE: &str = "/tmp/ws/feature";
 
 fn worktree(path: &str, branch: Option<&str>) -> Worktree {
     Worktree {
+        bare: false,
         path: PathBuf::from(path),
         head: Some(CommitId(Arc::from(
             "399f41d0000000000000000000000000000000aa",

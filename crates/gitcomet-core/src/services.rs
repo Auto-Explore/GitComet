@@ -9,6 +9,24 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 pub type Result<T> = std::result::Result<T, Error>;
 
+pub struct RepositoryOperationLease {
+    _guard: Box<dyn Send>,
+}
+
+impl RepositoryOperationLease {
+    pub fn new(guard: impl Send + 'static) -> Self {
+        Self {
+            _guard: Box::new(guard),
+        }
+    }
+}
+
+impl Default for RepositoryOperationLease {
+    fn default() -> Self {
+        Self::new(())
+    }
+}
+
 /// Which commit a comparison measures its newer side against.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash)]
 pub enum ComparisonBase {
@@ -580,6 +598,35 @@ pub enum SafePushAfterCommitDecision {
 /// result; a caller without a cancellable task can pass a fresh token. Keep the
 /// same token when delegating so cancellation reaches the underlying work.
 pub trait GitRepository: Send + Sync {
+    fn acquire_operation_lease(&self) -> Result<RepositoryOperationLease> {
+        Ok(RepositoryOperationLease::default())
+    }
+
+    fn repository_mode(&self) -> Result<RepositoryMode> {
+        Ok(RepositoryMode::WorkingTree)
+    }
+
+    fn preview_disable_bare_mode(&self) -> Result<BareConversionPreview> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "bare mode conversion is not implemented for this backend",
+        )))
+    }
+
+    fn disable_bare_mode(&self, _preview: &BareConversionPreview) -> Result<BareModeDisabled> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "bare mode conversion is not implemented for this backend",
+        )))
+    }
+
+    fn disable_bare_mode_cancellable(
+        &self,
+        preview: &BareConversionPreview,
+        cancellation: &CancellationToken,
+    ) -> Result<BareModeDisabled> {
+        cancellation.check_cancelled()?;
+        self.disable_bare_mode(preview)
+    }
+
     fn rebase_range_with_output(&self, _range: &RebaseRange) -> Result<CommandOutput> {
         Err(Error::new(ErrorKind::Unsupported(
             "explicit-range rebase is not implemented",

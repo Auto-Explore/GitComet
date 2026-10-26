@@ -337,7 +337,7 @@ pub(super) struct AttributeSources {
 }
 
 fn tracked_attribute_sources(
-    index: &gix::worktree::Index,
+    index: &gix::index::State,
 ) -> impl Iterator<Item = (PathBuf, gix::ObjectId)> + '_ {
     index.entries().iter().filter_map(move |entry| {
         let path = entry.path(index);
@@ -402,6 +402,21 @@ fn scan_lfs_attributes(
     cache: Option<&Mutex<Option<AttributeSources>>>,
     found: impl FnMut(Option<LfsTrackedPattern>, bool) -> bool,
 ) -> Result<bool> {
+    if repo.workdir().is_none() {
+        if crate::refs::head_oid(repo)?.is_none() {
+            return scan_lfs_attribute_sources(repo, cancellation, std::iter::empty(), found);
+        }
+        let tree = crate::refs::head_tree_id_or_empty(repo)?;
+        let index = repo
+            .index_from_tree(&tree)
+            .map_err(|error| backend_error("read committed LFS patterns", error))?;
+        return scan_lfs_attribute_sources(
+            repo,
+            cancellation,
+            tracked_attribute_sources(&index).map(|(path, id)| (path, Some(id))),
+            found,
+        );
+    }
     let index = repo
         .index_or_empty()
         .map_err(|e| backend_error("read index for LFS patterns", e))?;
@@ -429,12 +444,12 @@ fn scan_lfs_attribute_sources(
     sources: impl Iterator<Item = (PathBuf, Option<gix::ObjectId>)>,
     mut found: impl FnMut(Option<LfsTrackedPattern>, bool) -> bool,
 ) -> Result<bool> {
-    let workdir = repo.workdir().unwrap_or(repo.common_dir());
-    // Include the untracked root and the local attribute overrides too.
-    let sources = sources.chain([
-        (PathBuf::from(".gitattributes"), None),
-        (PathBuf::from(".git/info/attributes"), None),
-    ]);
+    let sources = sources
+        .chain(
+            repo.workdir()
+                .map(|_| (PathBuf::from(".gitattributes"), None)),
+        )
+        .chain([(PathBuf::from(".git/info/attributes"), None)]);
     let mut saw_root = false;
     for (source, id) in sources {
         cancellation.check_cancelled()?;
@@ -445,12 +460,12 @@ fn scan_lfs_attribute_sources(
             saw_root = true;
         }
         let full = if source == Path::new(".git/info/attributes") {
-            repo.common_dir().join("info/attributes")
+            Some(repo.common_dir().join("info/attributes"))
         } else {
-            workdir.join(&source)
+            repo.workdir().map(|workdir| workdir.join(&source))
         };
-        let bytes = std::fs::read(full)
-            .ok()
+        let bytes = full
+            .and_then(|path| std::fs::read(path).ok())
             .or_else(|| repo.find_object(id?).ok().map(|object| object.data.clone()));
         let Some(bytes) = bytes else {
             continue;

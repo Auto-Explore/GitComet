@@ -12,7 +12,7 @@ pub(in crate::view) fn listed_worktree_paths_by_branch(
 
     let mut worktree_paths = FxHashMap::default();
     for worktree in worktrees.iter() {
-        if worktree.path == repo.spec.workdir {
+        if worktree.bare || worktree.path == repo.spec.workdir {
             continue;
         }
 
@@ -40,7 +40,9 @@ pub(in crate::view) fn branch_held_elsewhere(
     worktrees
         .iter()
         .find(|worktree| {
-            worktree.path != repo.spec.workdir && worktree.branch.as_deref() == Some(branch)
+            !worktree.bare
+                && worktree.path != repo.spec.workdir
+                && worktree.branch.as_deref() == Some(branch)
         })
         .map(|worktree| worktree.path.clone())
 }
@@ -51,7 +53,9 @@ pub(in crate::view) fn branch_checked_out_at(
     branch: &str,
 ) -> Option<std::path::PathBuf> {
     // A detached HEAD reads "HEAD", which is no branch to hold.
-    if matches!(&repo.head_branch, Loadable::Ready(head) if head == branch && head != "HEAD") {
+    if !repo.is_bare()
+        && matches!(&repo.head_branch, Loadable::Ready(head) if head == branch && head != "HEAD")
+    {
         return Some(repo.spec.workdir.clone());
     }
     branch_held_elsewhere(repo, branch)
@@ -77,13 +81,16 @@ pub(in crate::view) fn active_worktree_paths_by_branch(
     // Preserve the first open repository for a path, as the former linear
     // lookup did, while avoiding a worktrees × open-repositories scan.
     let mut open_by_path = FxHashMap::default();
-    for open_repo in open_repos {
+    for open_repo in open_repos.iter().filter(|repo| !repo.is_bare()) {
         open_by_path
             .entry(&open_repo.spec.workdir)
             .or_insert(open_repo);
     }
     let mut active_worktrees = FxHashMap::default();
     for worktree in worktrees.iter() {
+        if worktree.bare {
+            continue;
+        }
         let Some(open_repo) = open_by_path.get(&worktree.path) else {
             continue;
         };

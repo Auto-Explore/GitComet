@@ -22,6 +22,7 @@ pub(super) fn mount(
         },
     );
     repo.open = Loadable::Ready(());
+    repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
     repo.history_state.history_scope = LogScope::AllBranches;
     repo.log = Loadable::Ready(Arc::clone(&page));
     repo.history_state.log = Loadable::Ready(page);

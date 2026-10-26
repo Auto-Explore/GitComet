@@ -93,6 +93,31 @@ pub enum BranchExistsChoice {
 }
 
 impl RepoActionKind {
+    pub fn repository_requirement(self) -> RepositoryRequirement {
+        match self {
+            Self::CreateBranch
+            | Self::RenameBranch
+            | Self::DeleteBranch
+            | Self::ForceDeleteBranch
+            | Self::DeleteBranches => RepositoryRequirement::Repository,
+            Self::CheckoutBranch
+            | Self::CheckoutRemoteBranch
+            | Self::CheckoutCommit
+            | Self::CherryPickCommit
+            | Self::CreateBranchAndCheckout
+            | Self::StagePath
+            | Self::StagePaths
+            | Self::UnstagePath
+            | Self::UnstagePaths
+            | Self::DiscardWorktreeChangesPath
+            | Self::DiscardWorktreeChangesPaths
+            | Self::Stash
+            | Self::ApplyStash
+            | Self::PopStash
+            | Self::DropStash => RepositoryRequirement::WorkingTree,
+        }
+    }
+
     pub(crate) fn status_diff_area(self) -> Option<DiffArea> {
         match self {
             Self::StagePath | Self::StagePaths => Some(DiffArea::Unstaged),
@@ -377,6 +402,16 @@ pub enum Msg {
         insert_before: Option<RepoId>,
     },
     ReloadRepo {
+        repo_id: RepoId,
+    },
+    PreviewDisableBareMode {
+        repo_id: RepoId,
+    },
+    DisableBareMode {
+        repo_id: RepoId,
+        preview: Arc<BareConversionPreview>,
+    },
+    ClearBareConversionPreview {
         repo_id: RepoId,
     },
     RepoActivated {
@@ -1334,6 +1369,23 @@ pub enum Msg {
 
 #[derive(strum::IntoStaticStr)]
 pub enum InternalMsg {
+    QuiesceRepository {
+        common_dir: PathBuf,
+        cancellation: gitcomet_core::services::CancellationToken,
+        reply: std::sync::mpsc::Sender<()>,
+    },
+    RepositoryModeLoaded {
+        repo_id: RepoId,
+        result: Result<(RepositoryMode, Option<CommitId>), Error>,
+    },
+    BareConversionPreviewLoaded {
+        repo_id: RepoId,
+        result: Result<BareConversionPreview, Error>,
+    },
+    BareModeDisabled {
+        common_dir: PathBuf,
+        result: Result<BareModeDisabled, Error>,
+    },
     AuthPromptValidated {
         generation: u64,
         result: gitcomet_core::auth::PassphraseValidation,
@@ -1388,6 +1440,8 @@ pub enum InternalMsg {
         message: Box<InternalMsg>,
     },
     RepoOpenedOk {
+        repository_mode: RepositoryMode,
+        head_commit: Option<CommitId>,
         preferences: Option<crate::model::RepositoryPreferencesSnapshot>,
         repo_id: RepoId,
         spec: RepoSpec,

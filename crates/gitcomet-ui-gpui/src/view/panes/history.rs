@@ -758,6 +758,7 @@ impl HistoryView {
         if let Some(repo_id) = state.active_repo
             && let Some(repo) = state.repos.iter().find(|r| r.id == repo_id)
         {
+            repo.repository_mode.hash(&mut hasher);
             repo.log_rev.hash(&mut hasher);
             repo.history_state.log_rev.hash(&mut hasher);
             repo.history_state.history_scope.hash(&mut hasher);
@@ -2060,6 +2061,9 @@ impl HistoryView {
                 return Action::Clear;
             }
 
+            if repo.is_bare() {
+                return Action::Clear;
+            }
             let worktree_status_rev = repo.worktree_status_cache_rev();
             let staged_status_rev = repo.staged_status_cache_rev();
 

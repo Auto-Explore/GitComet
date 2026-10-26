@@ -402,6 +402,11 @@ fn run_large_file_command_with_auth(
     command: gitcomet_core::large_files::LargeFileCommand,
     auth: Option<StagedGitAuth>,
 ) -> Vec<Effect> {
+    if command.repository_requirement() == gitcomet_core::domain::RepositoryRequirement::WorkingTree
+        && super::refuse_bare_worktree_action(state, repo_id)
+    {
+        return Vec::new();
+    }
     let pulls = command.pulls();
     let pushes = command.pushes();
     if let Some(repo) = state.repos.iter_mut().find(|repo| repo.id == repo_id)

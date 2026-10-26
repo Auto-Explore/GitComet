@@ -166,6 +166,8 @@ fn assert_open_repo_history_mode_resolution(
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::RepoOpenedOk {
+            repository_mode: gitcomet_core::domain::RepositoryMode::WorkingTree,
+            head_commit: None,
             preferences: None,
             repo_id: RepoId(1),
             spec,

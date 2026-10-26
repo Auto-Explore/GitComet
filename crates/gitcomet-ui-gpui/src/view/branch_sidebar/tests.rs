@@ -534,12 +534,14 @@ fn populated_repo() -> RepoState {
     repo.remote_branches_rev = 1;
     repo.worktrees = Loadable::Ready(Arc::new(vec![
         Worktree {
+            bare: false,
             path: PathBuf::from("/tmp/repo"),
             head: Some(commit_id("aaaaaaaa")),
             branch: Some("main".to_string()),
             detached: false,
         },
         Worktree {
+            bare: false,
             path: PathBuf::from("/tmp/repo-linked"),
             head: Some(commit_id("bbbbbbbb")),
             branch: Some("feature/topic".to_string()),
@@ -653,12 +655,14 @@ fn source_fingerprint_reuses_unchanged_partitions_when_worktrees_change() {
 
     repo.worktrees = Loadable::Ready(Arc::new(vec![
         Worktree {
+            bare: false,
             path: PathBuf::from("/tmp/repo"),
             head: Some(commit_id("aaaaaaaa")),
             branch: Some("main".to_string()),
             detached: false,
         },
         Worktree {
+            bare: false,
             path: PathBuf::from("/tmp/repo-linked"),
             head: Some(commit_id("eeeeeeee")),
             branch: None,

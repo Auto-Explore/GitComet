@@ -266,6 +266,20 @@ fn macos_file_menu_hides_unconfigured_external_editor_action() {
     }));
 }
 
+#[cfg(target_os = "macos")]
+#[test]
+fn macos_apply_patch_menu_is_disabled_for_bare_repositories() {
+    for bare in [false, true] {
+        let menus = macos_app_menus_with_options(true, true, bare);
+        let file = menus
+            .iter()
+            .find(|menu| menu.name.as_ref() == "File")
+            .unwrap();
+        let patch = file.items.iter().find(|item| matches!(item, MenuItem::Action { action, .. } if action.name() == ApplyPatch.name())).unwrap();
+        assert_eq!(patch.is_disabled(), bare);
+    }
+}
+
 fn seed_worktree_repo(
     cx: &mut gpui::VisualTestContext,
     store: &AppStore,

@@ -157,6 +157,7 @@ fn selecting_the_working_tree_preserves_a_file_preview_when_following(
             },
         );
         repo.open = Loadable::Ready(());
+        repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
         repo.history_state.selected_commit = Some(commit_id.clone());
         repo.file_browser.active = active;
         repo.file_browser.source = FileSource::Commit(commit_id);
@@ -1540,6 +1541,7 @@ fn history_row_click_and_drag(cx: &mut gpui::TestAppContext, cached: bool) {
     // Everything the panes read is already loaded, so rendering never has
     // to ask the store (and its worker threads) for data.
     repo.open = Loadable::Ready(());
+    repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
     repo.history_state.history_scope = LogScope::AllBranches;
     repo.branches = Loadable::Ready(Arc::new(vec![branch("feature", "c00")]));
     repo.branches_rev = 1;
@@ -1670,6 +1672,7 @@ fn history_rows_ignore_overlay_clicks(cx: &mut gpui::TestAppContext, cached: boo
     // Everything the sidebar reads is already loaded, so opening a section
     // popover never has to ask the store (and its worker threads) for data.
     repo.open = Loadable::Ready(());
+    repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
     repo.history_state.history_scope = LogScope::AllBranches;
     repo.branches = Loadable::Ready(Arc::new(vec![branch("feature", "c00")]));
     repo.branches_rev = 1;

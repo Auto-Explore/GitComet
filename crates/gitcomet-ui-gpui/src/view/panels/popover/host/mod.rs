@@ -221,6 +221,8 @@ impl PopoverHost {
                     .map(|repo| repo.feedback.hook_activity_rev)
             });
             this.state = next_state;
+            this.sync_bare_mode_confirmation(cx);
+            this.close_working_tree_prompt_in_bare_mode(cx);
             if let Some(selected_action) = selected_action
                 && let Some(model) = this
                     .popover
@@ -1344,6 +1346,14 @@ impl PopoverHost {
     }
 
     fn close_popover_with_resolution(&mut self, resolved: bool, cx: &mut gpui::Context<Self>) {
+        if let Some(PopoverKind::Repo {
+            repo_id,
+            kind: RepoPopoverKind::DisableBareModeConfirm,
+        }) = self.popover.as_ref()
+        {
+            self.store
+                .dispatch(Msg::ClearBareConversionPreview { repo_id: *repo_id });
+        }
         self.prepare_worktree_menu_location(None, cx);
         let application_close = match self.popover.as_ref() {
             Some(PopoverKind::UnsavedFileEditsConfirm(prompt)) => {
@@ -1749,6 +1759,17 @@ impl PopoverHost {
             new_source,
             markdown_image_approval,
         } = kind.into();
+        if let Some(repo_id) = kind.working_tree_repository(self.active_repo_id())
+            && self
+                .state
+                .repos
+                .iter()
+                .find(|repo| repo.id == repo_id)
+                .is_some_and(RepoState::is_bare)
+        {
+            self.explain_working_tree_required(cx);
+            return;
+        }
         self.focus_return = focus_return;
         self.markdown_image_approval = markdown_image_approval;
         // Branch-collision prompts are also held in shared state. Replacing one
@@ -1978,12 +1999,18 @@ impl PopoverHost {
                         upstream_picker::initial_selected_index(self, *repo_id, branch);
                 }
                 PopoverKind::CreateBranchFromRefPrompt {
+                    repo_id,
                     source_selectable,
                     target,
                     name_prefix,
                     ..
                 } => {
-                    self.create_branch_checkout_enabled = true;
+                    self.create_branch_checkout_enabled = !self
+                        .state
+                        .repos
+                        .iter()
+                        .find(|repo| repo.id == *repo_id)
+                        .is_some_and(RepoState::is_bare);
                     self.create_branch_source_target = target.clone();
                     if *source_selectable {
                         let _ = self.ensure_branch_picker_search_input(window, cx);

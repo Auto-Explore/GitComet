@@ -11,6 +11,7 @@ use std::sync::{Arc, RwLock, mpsc};
 use std::thread;
 use std::time::Instant;
 
+mod bare_conversion;
 mod effects;
 mod executor;
 mod mutation_gate;
@@ -19,6 +20,8 @@ mod reducer_diagnostics;
 mod repo_load_trace;
 mod repo_monitor;
 mod repository_preferences;
+mod repository_registry;
+mod repository_requirement;
 mod repository_runtime;
 mod send_diagnostics;
 #[cfg(any(test, feature = "test-support"))]
@@ -173,6 +176,8 @@ fn is_control_command(command: &StoreWorkerCommand) -> bool {
         StoreWorkerCommand::DisableRepoMonitorsForTest => true,
         #[cfg(any(test, feature = "test-support"))]
         StoreWorkerCommand::BarrierForTest(_) => false,
+        #[cfg(test)]
+        StoreWorkerCommand::RepoMonitorBarrierForTest { .. } => false,
     }
 }
 
@@ -309,6 +314,11 @@ impl WorkerLoopContext<'_> {
                 reduce_prepared(&inputs, repos, id_alloc, mutable, acknowledgement);
             }
             let effects = reduce_with(mutable, repos, id_alloc);
+            repository_registry::update_repositories(
+                self.thread_msg_tx.store_id().get(),
+                mutable,
+                repos,
+            );
             let reduce_duration = reduce_started.elapsed();
             reducer_diagnostics::record_reducer_pass(reduce_duration);
             // Bumped under the write lock, so a reader holding the read lock
@@ -409,9 +419,10 @@ impl WorkerLoopContext<'_> {
         };
 
         for repo_id in self.repo_monitors.running_repo_ids() {
-            if !watched
-                .iter()
-                .any(|(watched_id, _, _)| *watched_id == repo_id)
+            if !repos.has_repository(&repo_id)
+                || !watched
+                    .iter()
+                    .any(|(watched_id, _, _)| *watched_id == repo_id)
             {
                 self.repo_monitors.stop(repo_id);
             }
@@ -435,11 +446,23 @@ impl WorkerLoopContext<'_> {
                 .thread_state
                 .read()
                 .unwrap_or_else(|error| error.into_inner());
-            let mut wanted: Vec<_> = state.worktree_watch_leases.keys().cloned().collect();
+            let mut wanted: Vec<_> = state
+                .worktree_watch_leases
+                .keys()
+                .filter(|(id, lifetime, _)| {
+                    repos.has_repository(id)
+                        && state
+                            .repos
+                            .iter()
+                            .any(|repo| repo.id == *id && repo.lifetime() == *lifetime)
+                })
+                .cloned()
+                .collect();
             if let Some(repo) = state
                 .repos
                 .iter()
                 .find(|repo| state.active_repo == Some(repo.id))
+                && repos.has_repository(&repo.id)
                 && let Some(path) = &repo.history_state.worktree_selection
                 && path != &repo.spec.workdir
             {
@@ -810,6 +833,11 @@ impl AppStore {
                         let _ = reply.send(thread_publication.load(Ordering::Acquire));
                         continue;
                     }
+                    #[cfg(test)]
+                    StoreWorkerCommand::RepoMonitorBarrierForTest { repo_id, reply } => {
+                        repo_monitors.barrier_for_test(repo_id, reply);
+                        continue;
+                    }
                 };
 
                 if !thread_msg_tx.is_alive() {
@@ -1067,6 +1095,7 @@ impl AppStore {
                             &id_alloc,
                             |app_state, repos, id| {
                                 let mut effects = reduce_prepared(&inputs, repos, id, app_state, message);
+                                effects.push(crate::msg::Effect::Control(crate::msg::ControlEffect::RefreshRepositoryMode { repo_id }));
                                 // A day-long session gets its daily check on
                                 // focus; the reducer throttles it hourly.
                                 effects.extend(reducer::maintenance::request_check(

@@ -1,6 +1,57 @@
 use super::*;
 use crate::view::test_support::TestBackend;
 
+#[gpui::test]
+fn a_detached_document_outside_the_active_bare_repository_still_saves(
+    cx: &mut gpui::TestAppContext,
+) {
+    use gitcomet_core::domain::{RepoSpec, RepositoryMode};
+    use gitcomet_state::model::{AppState, Loadable, RepoId, RepoState};
+    let repository = tempfile::tempdir().unwrap();
+    let document_directory = tempfile::tempdir().unwrap();
+    let path = document_directory.path().join("notes.txt");
+    std::fs::write(&path, "original").unwrap();
+    let (store, events) = AppStore::new_test(Arc::new(StandaloneBackend));
+    let mut repo = RepoState::new_opening(
+        RepoId(1),
+        RepoSpec {
+            workdir: repository.path().to_path_buf(),
+        },
+    );
+    repo.open = Loadable::Ready(());
+    repo.repository_mode = Some(RepositoryMode::Bare);
+    store.replace_snapshot_for_test(Arc::new(AppState {
+        active_repo: Some(repo.id),
+        repos: vec![repo],
+        ..AppState::test_default()
+    }));
+    let (root, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let docs = cx.update(|_, app| root.read(app).documents.clone());
+    cx.update(|_, app| docs.update(app, |docs, cx| docs.open(path.clone(), true, cx)));
+    drain(&root, cx);
+    let buffer = cx.update(|_, app| {
+        let docs = docs.read(app);
+        docs.buffers[&docs.active.unwrap()].clone()
+    });
+    cx.update(|_, app| {
+        buffer.update(app, |buffer, cx| {
+            buffer.editing = true;
+            buffer.input.update(cx, |input, cx| {
+                input.set_read_only(false, cx);
+                input.set_text("saved outside the bare repository", cx);
+            });
+        })
+    });
+    cx.run_until_parked();
+    cx.update(|_, app| buffer.update(app, |buffer, cx| buffer.save(None, false, cx)));
+    drain(&root, cx);
+    assert_eq!(
+        std::fs::read_to_string(path).unwrap(),
+        "saved outside the bare repository"
+    );
+}
+
 fn adopt_edit(
     docs: &mut DocumentsView,
     identity: DocumentIdentity,
@@ -1240,6 +1291,7 @@ fn repository_windows_keep_their_panes_around_documents_until_the_repository_nav
         },
     );
     repo.open = Loadable::Ready(());
+    repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
     let mut state = gitcomet_state::model::AppState {
         repos: vec![repo],
         active_repo: Some(repo_id),

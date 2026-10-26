@@ -1685,6 +1685,7 @@ fn open_repo_effect_emits_repo_opened_ok() {
             repo_id: got_repo_id,
             spec,
             repo,
+            ..
         }) => {
             assert_eq!(
                 preferences.key,
@@ -2283,7 +2284,7 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
         (Effect::Status(StatusEffect::LoadStatus { repo_id }), 1),
         (
             Effect::References(ReferenceEffect::LoadHeadBranch { repo_id }),
-            1,
+            2,
         ),
         (
             Effect::References(ReferenceEffect::LoadUpstreamDivergence { repo_id }),
@@ -2950,6 +2951,10 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
     };
     for (effect, expected_messages) in effect_specs {
         let kind: &'static str = (&effect).into();
+        let expects_mode_refresh = matches!(
+            effect,
+            Effect::References(ReferenceEffect::LoadHeadBranch { .. })
+        );
         let mut effect_state = state.clone();
         if let Effect::LoadCommitDetails { commit_id, .. } = &effect {
             // A detail load is useful only while its commit is selected.
@@ -2969,6 +2974,7 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
         // Every task owns a sender clone, so disconnection means this effect's
         // work is done and no message can leak into the next effect's count.
         let mut received = 0;
+        let mut refreshed_mode = false;
         loop {
             match msg_rx.recv_timeout(Duration::from_secs(10)) {
                 // The Git-operation envelope, skipped as in `recv_effect_message`.
@@ -2976,6 +2982,19 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
                     crate::msg::InternalMsg::GitOperationStarted { .. }
                     | crate::msg::InternalMsg::GitOperationEvent { .. },
                 )) => {}
+                Ok(Msg::Internal(crate::msg::InternalMsg::RepositoryModeLoaded {
+                    repo_id: completed_repo,
+                    result,
+                })) => {
+                    assert_eq!(completed_repo, repo_id);
+                    assert!(matches!(
+                        result,
+                        Ok((gitcomet_core::domain::RepositoryMode::WorkingTree, None))
+                    ));
+                    assert!(!refreshed_mode, "{kind}: duplicate mode refresh");
+                    refreshed_mode = true;
+                    received += 1;
+                }
                 Ok(_) => received += 1,
                 Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
                 Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
@@ -2984,6 +3003,7 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
             }
         }
         assert_eq!(received, expected_messages, "{kind}");
+        assert_eq!(refreshed_mode, expects_mode_refresh, "{kind}");
     }
     // Workers still running while the process exits crashed the macOS runner
     // with SIGSEGV after this test had passed.
@@ -3058,30 +3078,45 @@ fn linked_worktree_scan_does_not_block_foreground_repository_loads() {
             effect,
         );
     }
-    let first = recv_effect_message(&rx, Duration::from_secs(3));
-    let listing = recv_effect_message(&rx, Duration::from_secs(3));
+    let foreground_replies = [
+        recv_effect_message(&rx, Duration::from_secs(3)),
+        recv_effect_message(&rx, Duration::from_secs(3)),
+        recv_effect_message(&rx, Duration::from_secs(3)),
+    ];
     let premature = rx.try_recv();
     release_tx.send(()).unwrap();
-    assert!(
-        matches!(
-            listing,
-            Ok(Msg::Internal(crate::msg::InternalMsg::WorktreesLoaded {
-                result: Ok(_),
-                ..
-            }))
-        ),
-        "reload must load the list while the scan worker is blocked: {listing:?}"
-    );
-    assert!(
-        matches!(
-            first,
+    let (mut head, mut listing, mut mode) = (false, false, false);
+    for reply in foreground_replies {
+        match reply {
             Ok(Msg::Internal(crate::msg::InternalMsg::HeadBranchLoaded {
+                repo_id: completed_repo,
+                result: Ok(_),
+            })) => {
+                assert_eq!(completed_repo, repo_id);
+                assert!(!head, "duplicate foreground HEAD completion");
+                head = true;
+            }
+            Ok(Msg::Internal(crate::msg::InternalMsg::WorktreesLoaded {
+                repo_id: completed_repo,
                 result: Ok(_),
                 ..
-            }))
-        ),
-        "foreground must finish while scans are blocked: {first:?}"
-    );
+            })) => {
+                assert_eq!(completed_repo, repo_id);
+                assert!(!listing, "duplicate foreground worktree listing");
+                listing = true;
+            }
+            Ok(Msg::Internal(crate::msg::InternalMsg::RepositoryModeLoaded {
+                repo_id: completed_repo,
+                result: Ok((gitcomet_core::domain::RepositoryMode::WorkingTree, None)),
+            })) => {
+                assert_eq!(completed_repo, repo_id);
+                assert!(!mode, "duplicate foreground repository mode");
+                mode = true;
+            }
+            other => panic!("foreground loads must finish while scans are blocked: {other:?}"),
+        }
+    }
+    assert_eq!((head, listing, mode), (true, true, true));
     assert!(
         matches!(premature, Err(std::sync::mpsc::TryRecvError::Empty)),
         "scan must stay on its own pool: {premature:?}"

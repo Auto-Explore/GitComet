@@ -277,6 +277,8 @@ fn external_worktree_change_refreshes_status_and_selected_diff() {
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::RepoOpenedOk {
+            repository_mode: gitcomet_core::domain::RepositoryMode::WorkingTree,
+            head_commit: None,
             preferences: None,
             repo_id: RepoId(1),
             spec: RepoSpec {
@@ -423,6 +425,8 @@ fn external_changes_reload_the_selected_diff_only_when_they_can_alter_it() {
             &id_alloc,
             &mut state,
             Msg::Internal(crate::msg::InternalMsg::RepoOpenedOk {
+                repository_mode: gitcomet_core::domain::RepositoryMode::WorkingTree,
+                head_commit: None,
                 preferences: None,
                 repo_id: RepoId(1),
                 spec: RepoSpec {
@@ -482,6 +486,8 @@ fn external_index_change_refreshes_both_staged_and_unstaged_lanes() {
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::RepoOpenedOk {
+            repository_mode: gitcomet_core::domain::RepositoryMode::WorkingTree,
+            head_commit: None,
             preferences: None,
             repo_id,
             spec: RepoSpec {
@@ -548,6 +554,8 @@ fn external_index_change_reloads_open_working_tree_diff() {
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::RepoOpenedOk {
+            repository_mode: gitcomet_core::domain::RepositoryMode::WorkingTree,
+            head_commit: None,
             preferences: None,
             repo_id,
             spec: RepoSpec {
@@ -632,6 +640,8 @@ fn external_index_change_must_not_refresh_only_the_staged_lane() {
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::RepoOpenedOk {
+            repository_mode: gitcomet_core::domain::RepositoryMode::WorkingTree,
+            head_commit: None,
             preferences: None,
             repo_id,
             spec: RepoSpec {
@@ -743,6 +753,8 @@ fn external_git_state_change_refreshes_history_and_selected_diff() {
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::RepoOpenedOk {
+            repository_mode: gitcomet_core::domain::RepositoryMode::WorkingTree,
+            head_commit: None,
             preferences: None,
             repo_id: RepoId(1),
             spec: RepoSpec {
@@ -4180,6 +4192,8 @@ fn an_index_only_change_does_not_rescan_the_other_worktrees() {
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::RepoOpenedOk {
+            repository_mode: gitcomet_core::domain::RepositoryMode::WorkingTree,
+            head_commit: None,
             preferences: None,
             repo_id,
             spec: RepoSpec {
@@ -4559,6 +4573,8 @@ fn open_repo_showing_working_tree_file() -> (RepositoryRuntimes, AtomicU64, AppS
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::RepoOpenedOk {
+            repository_mode: gitcomet_core::domain::RepositoryMode::WorkingTree,
+            head_commit: None,
             preferences: None,
             repo_id: RepoId(1),
             spec: RepoSpec {

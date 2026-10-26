@@ -32,6 +32,9 @@ Preserve the actual authors and co-authors of contributions. Ask maintainers for
 Questions about contribution permissions or signing records: info@gitcomet.dev. Do not include private signing details in public issue comments.
 <!-- gitcomet-cla:end -->
 
+### AI tools
+
+You may use AI tools for your contribution. The [AI policy](AI_POLICY.md) sets what that requires, starting with your own review of every line before you submit it.
 
 ### Workspace layout
 

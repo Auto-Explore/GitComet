@@ -10,6 +10,7 @@ mod annex_prompt;
 mod app_menu;
 mod apply_file_change_confirm;
 mod author_filter;
+pub(in crate::view) mod bare_mode;
 mod branch_exists_prompt;
 mod branch_picker;
 mod checkout_remote_branch_prompt;
@@ -51,6 +52,7 @@ mod remote_edit_url_prompt;
 mod remote_remove_confirm;
 mod rename_branch_prompt;
 mod repo_picker;
+mod repository_requirements;
 mod reset_prompt;
 mod revert_commit_confirm;
 pub(in crate::view) mod rows_cache;
@@ -598,6 +600,10 @@ fn popover_is_context_menu(kind: &PopoverKind) -> bool {
     matches!(
         kind,
         PopoverKind::Hosted { menu: true, .. }
+            | PopoverKind::Repo {
+                kind: RepoPopoverKind::RepositoryModeMenu,
+                ..
+            }
             | PopoverKind::AppMenu
             | PopoverKind::AddRepoMenu
             | PopoverKind::PullPicker
@@ -679,6 +685,10 @@ fn popover_is_confirm_dialog(kind: &PopoverKind) -> bool {
     matches!(
         kind,
         PopoverKind::StashDropConfirm { .. }
+            | PopoverKind::Repo {
+                kind: RepoPopoverKind::DisableBareModeConfirm,
+                ..
+            }
             | PopoverKind::ErrorDetails { .. }
             | PopoverKind::ForcePushConfirm { .. }
             | PopoverKind::CherryPickCommitConfirm { .. }
@@ -1065,6 +1075,14 @@ fn popover_anchor_corner(kind: &PopoverKind) -> Anchor {
 
 pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<PopoverWidthSpec> {
     match kind {
+        PopoverKind::Repo {
+            kind: RepoPopoverKind::RepositoryModeMenu,
+            ..
+        } => Some(DEFAULT_CONTEXT_MENU_WIDTH),
+        PopoverKind::Repo {
+            kind: RepoPopoverKind::DisableBareModeConfirm,
+            ..
+        } => Some(DIALOG_540_WIDTH),
         PopoverKind::RepoPicker { .. }
         | PopoverKind::BranchPicker {
             purpose: BranchPickerPurpose::Delete | BranchPickerPurpose::RebaseOnto,

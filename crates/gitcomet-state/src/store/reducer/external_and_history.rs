@@ -281,7 +281,7 @@ pub(super) fn repo_externally_changed(
             // between the staged and unstaged sections; refreshing only the staged lane would
             // leave the file lingering (stale) in the unstaged section (or vice-versa).
             append_requested_status_refresh_effects(repo_state, &mut effects);
-        } else if change.worktree {
+        } else if change.worktree && !repo_state.is_bare() {
             repo_state.loads_in_flight.invalidate_line_stats();
             if repo_state.loads_in_flight.request(LoadKind::WorktreeStatus) {
                 effects.push(Effect::Status(StatusEffect::LoadWorktreeStatus { repo_id }));

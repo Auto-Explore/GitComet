@@ -580,7 +580,11 @@ impl PopoverHost {
         kind: &PopoverKind,
         cx: &gpui::Context<Self>,
     ) -> Option<ContextMenuModel> {
-        match kind {
+        let model = match kind {
+            PopoverKind::Repo {
+                repo_id,
+                kind: RepoPopoverKind::RepositoryModeMenu,
+            } => Some(bare_mode::menu(self, *repo_id)),
             PopoverKind::Hosted { id, menu: true } => self
                 .extension_dialog
                 .as_ref()
@@ -934,7 +938,8 @@ impl PopoverHost {
                 context,
             } => Some(terminal::model(*repo_id, *session_seq, *context, cx)),
             _ => None,
-        }
+        }?;
+        Some(self.gate_bare_menu(model))
     }
 
     /// What an "Add to .gitignore" action on `path` would cover, or `None` when

@@ -10,13 +10,18 @@ pub(super) fn notify_fingerprint(
     binding: Option<crate::view::pane_store::DiffBinding>,
 ) -> u64 {
     let mut hasher = FxHasher::default();
-    binding
+    let active_repository = binding
         .map(|binding| binding.repo_id)
         .or(state.active_repo)
-        .and_then(|id| state.repos.iter().find(|repo| repo.id == id))
+        .and_then(|id| state.repos.iter().find(|repo| repo.id == id));
+    active_repository
         .and_then(|repo| repo.shared_preferences.as_ref())
         .map(|snapshot| snapshot.revision)
         .hash(&mut hasher);
+    if let Some(repo) = repo_for_popover(state, popover, binding).or(active_repository) {
+        repo.repository_mode.hash(&mut hasher);
+        std::mem::discriminant(&repo.bare_mode_conversion).hash(&mut hasher);
+    }
     hash_popover_kind(popover, &mut hasher);
     if matches!(popover, PopoverKind::CommitMenu { .. }) {
         state.git_log_settings.show_history_tags.hash(&mut hasher);
@@ -607,6 +612,19 @@ fn hash_repo_for_popover<H: Hasher>(
         | PopoverKind::ErrorDetails { .. }
         | PopoverKind::Hosted { .. }
         | PopoverKind::CommitPrompt { .. } => {}
+        PopoverKind::Repo {
+            kind: RepoPopoverKind::RepositoryModeMenu | RepoPopoverKind::DisableBareModeConfirm,
+            ..
+        } => {
+            match &repo.bare_mode_conversion {
+                gitcomet_state::model::BareModeConversionState::AwaitingConfirmation(preview) => Arc::as_ptr(preview).hash(hasher),
+                gitcomet_state::model::BareModeConversionState::Failed(error) => Arc::as_ptr(error).hash(hasher),
+                gitcomet_state::model::BareModeConversionState::Idle
+                | gitcomet_state::model::BareModeConversionState::Previewing
+                | gitcomet_state::model::BareModeConversionState::Converting
+                | gitcomet_state::model::BareModeConversionState::Reopening => {}
+            }
+        }
     }
 }
 
@@ -1189,6 +1207,10 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
 
 fn hash_repo_popover_kind<H: Hasher>(repo_id: RepoId, kind: &RepoPopoverKind, hasher: &mut H) {
     match kind {
+        RepoPopoverKind::RepositoryModeMenu | RepoPopoverKind::DisableBareModeConfirm => {
+            std::mem::discriminant(kind).hash(hasher);
+            repo_id.hash(hasher);
+        }
         RepoPopoverKind::Remote(remote_kind) => match remote_kind {
             RemotePopoverKind::AddPrompt => {
                 9u8.hash(hasher);

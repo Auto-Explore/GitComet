@@ -86,6 +86,8 @@ fn repo_opened_ok_sets_loading_and_emits_refresh_effects() {
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::RepoOpenedOk {
+            repository_mode: gitcomet_core::domain::RepositoryMode::WorkingTree,
+            head_commit: None,
             preferences: None,
             repo_id: RepoId(1),
             spec: RepoSpec {
@@ -225,6 +227,8 @@ fn repo_opened_ok_auto_loads_tags_when_enabled() {
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::RepoOpenedOk {
+            repository_mode: gitcomet_core::domain::RepositoryMode::WorkingTree,
+            head_commit: None,
             preferences: None,
             repo_id: RepoId(1),
             spec: RepoSpec {
@@ -276,6 +280,8 @@ fn repo_opened_ok_for_closed_repo_is_ignored() {
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::RepoOpenedOk {
+            repository_mode: gitcomet_core::domain::RepositoryMode::WorkingTree,
+            head_commit: None,
             preferences: None,
             repo_id: RepoId(1),
             spec: RepoSpec {
@@ -1305,6 +1311,8 @@ fn repo_opened_ok_loads_file_browser_for_active_repo_in_files_mode() {
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::RepoOpenedOk {
+            repository_mode: gitcomet_core::domain::RepositoryMode::WorkingTree,
+            head_commit: None,
             preferences: None,
             repo_id: repo1,
             spec,

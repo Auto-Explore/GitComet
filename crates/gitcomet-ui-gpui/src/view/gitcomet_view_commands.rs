@@ -53,6 +53,17 @@ impl GitCometView {
         if !self.shell_action_allowed(action) {
             return;
         }
+        if let Some(entry) = command_palette::COMMANDS
+            .iter()
+            .find(|entry| entry.id == command.id())
+            && let Some(reason) = command_palette::command_unavailable_reason(
+                entry,
+                &self.command_palette_context(cx),
+            )
+        {
+            self.push_toast(components::ToastKind::Warning, reason.to_owned(), cx);
+            return;
+        }
         match command {
             Command::NewWindow => cx.defer(|cx| cx.dispatch_action(&NewWindow)),
             Command::OpenSettings => cx.defer(crate::view::open_settings_window),

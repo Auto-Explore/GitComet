@@ -516,6 +516,7 @@ mod tests {
 
     fn worktree(path: &str, branch: &str) -> Worktree {
         Worktree {
+            bare: false,
             path: PathBuf::from(path),
             head: None,
             branch: Some(branch.to_string()),

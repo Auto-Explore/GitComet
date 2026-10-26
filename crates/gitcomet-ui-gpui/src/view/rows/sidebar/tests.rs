@@ -291,18 +291,21 @@ fn listed_worktree_paths_by_branch_includes_closed_worktrees() {
     );
     repo.worktrees = Loadable::Ready(Arc::new(vec![
         Worktree {
+            bare: false,
             path: std::path::PathBuf::from("/tmp/repo"),
             head: None,
             branch: Some("main".to_string()),
             detached: false,
         },
         Worktree {
+            bare: false,
             path: std::path::PathBuf::from("/tmp/repo-feature"),
             head: None,
             branch: Some("feature".to_string()),
             detached: false,
         },
         Worktree {
+            bare: false,
             path: std::path::PathBuf::from("/tmp/repo-detached"),
             head: None,
             branch: None,
@@ -321,6 +324,50 @@ fn listed_worktree_paths_by_branch_includes_closed_worktrees() {
 }
 
 #[test]
+fn bare_head_is_not_a_checked_out_branch_and_linked_checkouts_remain_listed() {
+    let mut repo = RepoState::new_opening(
+        RepoId(1),
+        RepoSpec {
+            workdir: "/tmp/bare-branch-lookup".into(),
+        },
+    );
+    repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::Bare);
+    repo.head_branch = Loadable::Ready("main".into());
+    repo.worktrees = Loadable::Ready(Arc::new(vec![
+        Worktree {
+            bare: true,
+            path: repo.spec.workdir.clone(),
+            head: None,
+            branch: Some("main".into()),
+            detached: false,
+        },
+        Worktree {
+            bare: false,
+            path: "/tmp/linked-branch-lookup".into(),
+            head: None,
+            branch: Some("topic".into()),
+            detached: false,
+        },
+    ]));
+    assert_eq!(branch_checked_out_at(&repo, "main"), None);
+    assert!(active_worktree_paths_by_branch(&repo, &[repo.clone()]).is_empty());
+    assert_eq!(
+        branch_checked_out_at(&repo, "topic"),
+        Some("/tmp/linked-branch-lookup".into())
+    );
+    assert_eq!(listed_worktree_paths_by_branch(&repo).len(), 1);
+    let mut linked = RepoState::new_opening(
+        RepoId(2),
+        RepoSpec {
+            workdir: "/tmp/linked-branch-lookup".into(),
+        },
+    );
+    linked.worktrees = repo.worktrees.clone();
+    assert_eq!(branch_held_elsewhere(&linked, "main"), None);
+    assert!(listed_worktree_paths_by_branch(&linked).is_empty());
+}
+
+#[test]
 fn listed_worktree_paths_by_branch_prefers_first_branch_match() {
     let mut repo = RepoState::new_opening(
         RepoId(1),
@@ -330,12 +377,14 @@ fn listed_worktree_paths_by_branch_prefers_first_branch_match() {
     );
     repo.worktrees = Loadable::Ready(Arc::new(vec![
         Worktree {
+            bare: false,
             path: std::path::PathBuf::from("/tmp/repo-feature-a"),
             head: None,
             branch: Some("feature/shared".to_string()),
             detached: false,
         },
         Worktree {
+            bare: false,
             path: std::path::PathBuf::from("/tmp/repo-feature-b"),
             head: None,
             branch: Some("feature/shared".to_string()),
@@ -421,18 +470,21 @@ fn active_worktree_paths_by_branch_only_includes_open_worktrees() {
     );
     repo.worktrees = Loadable::Ready(Arc::new(vec![
         Worktree {
+            bare: false,
             path: std::path::PathBuf::from("/tmp/repo"),
             head: None,
             branch: Some("main".to_string()),
             detached: false,
         },
         Worktree {
+            bare: false,
             path: std::path::PathBuf::from("/tmp/repo-feature"),
             head: None,
             branch: Some("feature".to_string()),
             detached: false,
         },
         Worktree {
+            bare: false,
             path: std::path::PathBuf::from("/tmp/repo-detached"),
             head: None,
             branch: None,
@@ -477,6 +529,7 @@ fn active_worktree_paths_by_branch_skips_closed_worktrees() {
         },
     );
     repo.worktrees = Loadable::Ready(Arc::new(vec![Worktree {
+        bare: false,
         path: std::path::PathBuf::from("/tmp/repo-feature"),
         head: None,
         branch: Some("feature".to_string()),
@@ -497,6 +550,7 @@ fn active_worktree_paths_by_branch_uses_open_repo_head_branch_for_live_updates()
         },
     );
     repo.worktrees = Loadable::Ready(Arc::new(vec![Worktree {
+        bare: false,
         path: std::path::PathBuf::from("/tmp/repo-feature"),
         head: None,
         branch: Some("feature/old".to_string()),
@@ -530,6 +584,7 @@ fn active_worktree_paths_by_branch_falls_back_to_listed_branch_while_head_is_loa
         },
     );
     repo.worktrees = Loadable::Ready(Arc::new(vec![Worktree {
+        bare: false,
         path: std::path::PathBuf::from("/tmp/repo-feature"),
         head: None,
         branch: Some("feature/listed".to_string()),
@@ -560,6 +615,7 @@ fn active_worktree_paths_by_branch_hides_detached_open_worktrees() {
         },
     );
     repo.worktrees = Loadable::Ready(Arc::new(vec![Worktree {
+        bare: false,
         path: std::path::PathBuf::from("/tmp/repo-feature"),
         head: None,
         branch: Some("feature/old".to_string()),
@@ -591,12 +647,14 @@ fn active_worktree_paths_by_branch_keeps_first_listed_worktree_for_branch() {
     );
     repo.worktrees = Loadable::Ready(Arc::new(vec![
         Worktree {
+            bare: false,
             path: std::path::PathBuf::from("/tmp/repo-feature-a"),
             head: None,
             branch: Some("feature/shared".to_string()),
             detached: false,
         },
         Worktree {
+            bare: false,
             path: std::path::PathBuf::from("/tmp/repo-feature-b"),
             head: None,
             branch: Some("feature/shared".to_string()),
@@ -725,6 +783,7 @@ fn active_worktree_paths_matches_open_repo_by_workdir_path() {
         },
     );
     repo.worktrees = Loadable::Ready(Arc::new(vec![Worktree {
+        bare: false,
         path: std::path::PathBuf::from("/tmp/repo-feature"),
         head: None,
         branch: Some("feature/listed".to_string()),
@@ -1048,12 +1107,14 @@ fn branch_badges_are_static_and_worktree_badge_remains_interactive(cx: &mut gpui
         read: gitcomet_state::msg::WorktreeListRead::observation_for_test(),
         result: Ok(std::sync::Arc::new(vec![
             Worktree {
+                bare: false,
                 path: repo_path,
                 head: None,
                 branch: Some("main".to_string()),
                 detached: false,
             },
             Worktree {
+                bare: false,
                 path: feature_path.clone(),
                 head: None,
                 branch: Some("feature".to_string()),

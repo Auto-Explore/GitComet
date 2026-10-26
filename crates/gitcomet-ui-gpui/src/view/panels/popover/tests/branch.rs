@@ -3838,6 +3838,7 @@ fn rename_collision_dialog_checkout_existing_checks_out_target(cx: &mut gpui::Te
 #[gpui::test]
 fn branch_exists_dialog_notes_worktree_holding_the_branch(cx: &mut gpui::TestAppContext) {
     let worktrees = vec![gitcomet_core::domain::Worktree {
+        bare: false,
         path: PathBuf::from("/tmp/gitcomet-ui-other-worktree"),
         head: None,
         branch: Some("main".to_string()),

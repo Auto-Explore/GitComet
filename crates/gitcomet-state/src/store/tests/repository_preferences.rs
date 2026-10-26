@@ -939,6 +939,8 @@ fn an_opened_repository_walks_without_its_hidden_remotes_from_the_first_load() {
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::RepoOpenedOk {
+            repository_mode: gitcomet_core::domain::RepositoryMode::WorkingTree,
+            head_commit: None,
             preferences: Some(RepositoryPreferencesSnapshot {
                 key: RepositoryKey::Worktree(path.clone()),
                 revision: 1,

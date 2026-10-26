@@ -71,6 +71,7 @@ fn structural_selection_maps_collapsed_rows_and_never_expands_a_block(
             let workdir = std::env::temp_dir().join("gitcomet-structural-selection");
             let mut repo = gitcomet_state::model::RepoState::new_opening(RepoId(811), gitcomet_core::domain::RepoSpec { workdir: workdir.clone() });
             repo.open = Loadable::Ready(());
+            repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
             repo.diff_state.diff_target = Some(target.clone());
             repo.diff_state.diff_rev = 1;
             repo.diff_state.diff_file_rev = 1;
@@ -315,6 +316,7 @@ fn show_structural_rows(pane: &mut DiffRenderer, old: &str, new: &str, diff: Str
         },
     );
     repo.open = Loadable::Ready(());
+    repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
     repo.diff_state.diff_target = Some(target.clone());
     repo.diff_state.diff_file_rev = 1;
     repo.diff_state.diff_file = Loadable::Ready(Some(Arc::new(FileDiffText::new(

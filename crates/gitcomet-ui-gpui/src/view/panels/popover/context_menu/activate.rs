@@ -16,10 +16,27 @@ impl PopoverHost {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
+        if self.bare_action_reason(&action).is_some() {
+            self.explain_working_tree_required(cx);
+            return;
+        }
         let mut close_after_action = true;
         let mut restore_diff_panel_focus_after_action = false;
         let mut restore_invoker_focus_after_action = true;
         match action {
+            ContextMenuAction::PreviewDisableBareMode { repo_id } => {
+                self.store.dispatch(Msg::PreviewDisableBareMode { repo_id });
+                self.open_popover(
+                    PopoverKind::Repo {
+                        repo_id,
+                        kind: crate::view::RepoPopoverKind::DisableBareModeConfirm,
+                    },
+                    super::super::PopoverAnchor::Centered,
+                    window,
+                    cx,
+                );
+                return;
+            }
             ContextMenuAction::Explorer {
                 repo_id,
                 path,

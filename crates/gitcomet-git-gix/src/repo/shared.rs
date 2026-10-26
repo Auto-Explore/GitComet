@@ -138,6 +138,7 @@ impl StoreKey {
 
 pub(super) struct CommonRepository {
     pub id: u64,
+    pub lifecycle: Arc<super::bare_lifecycle::RepositoryLifecycle>,
     identity: Identity,
     stores: Mutex<Vec<Weak<SharedStore>>>,
     pub maintenance: Mutex<()>,
@@ -159,6 +160,7 @@ impl CommonRepository {
         }
         let common = Arc::new(Self {
             id: next_id(),
+            lifecycle: Default::default(),
             identity,
             stores: Mutex::new(Vec::new()),
             maintenance: Mutex::new(()),
@@ -523,10 +525,13 @@ mod tests {
     fn requesters_cancel_independently_before_the_shared_build_queue() {
         for cancel_all in [false, true] {
             let dir = tempfile::tempdir().unwrap();
-            let repo = Arc::new(GixRepo::new(
-                dir.path().into(),
-                gix::init(dir.path()).unwrap().into_sync(),
-            ));
+            let repo = Arc::new(
+                GixRepo::new(
+                    dir.path().into(),
+                    gix::init(dir.path()).unwrap().into_sync(),
+                )
+                .unwrap(),
+            );
             let shared = repo.shared_store();
             let tokens: Vec<_> = (0..4).map(|_| CancellationToken::new()).collect();
             std::thread::scope(|scope| {

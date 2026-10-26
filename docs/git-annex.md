@@ -19,6 +19,8 @@ Showing what is annexed never runs git-annex: file rows, presence and the sideba
 
 ## Commands
 
+[Bare repositories](bare-repositories.md#large-files) support key-based and all-versions content operations. Working-file actions stay unavailable.
+
 | Command | Where |
 | --- | --- |
 | Get content, Drop local content, Copy to *remote*, Move to *remote*, Unlock, Lock | Changed-file row menu, for annexed files |
