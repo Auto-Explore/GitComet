@@ -299,6 +299,7 @@ pub struct DiffInlineCard {
     pub text: SharedString,
     pub pending: bool,
     pub actions: Vec<crate::HostedAction>,
+    pub header_actions: Vec<(crate::HostedAction, SharedString)>,
 }
 
 impl DiffInlineCard {
@@ -315,6 +316,7 @@ impl DiffInlineCard {
             text: text.into(),
             pending: false,
             actions: Vec::new(),
+            header_actions: Vec::new(),
         }
     }
 
@@ -325,6 +327,15 @@ impl DiffInlineCard {
 
     pub fn with_action(mut self, action: crate::HostedAction) -> Self {
         self.actions.push(action);
+        self
+    }
+
+    pub fn with_header_action(
+        mut self,
+        action: crate::HostedAction,
+        icon: impl Into<SharedString>,
+    ) -> Self {
+        self.header_actions.push((action, icon.into()));
         self
     }
 }

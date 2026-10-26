@@ -25,6 +25,7 @@ pub(in crate::view) struct HostedDiffDecor {
     pub file_cache: Option<Arc<diff_cache::SharedFileDiffCache>>,
     pub(super) key: Option<(u64, u64, u64, usize, DiffViewMode, usize)>,
     display: Vec<DisplayRow>,
+    projected_card_ids: Vec<SharedString>,
     document: Vec<usize>,
     selection_anchor: Option<usize>,
     markers: Arc<Vec<(f32, gpui::Hsla)>>,
@@ -34,6 +35,17 @@ pub(in crate::view) struct HostedDiffDecor {
 }
 
 impl DiffRenderer {
+    #[cfg(test)]
+    pub(in crate::view) fn hosted_card_row_index(&mut self, id: &str, row: usize) -> Option<usize> {
+        self.prepare_hosted_projection();
+        let decor = self.hosted_decor.as_ref()?;
+        let card = decor.cards.iter().position(|card| card.id == id)?;
+        decor
+            .display
+            .iter()
+            .position(|item| *item == DisplayRow::Card { card, row })
+    }
+
     pub(in crate::view) fn hosted_context_actions(
         &self,
         visible: usize,
@@ -454,7 +466,18 @@ impl DiffRenderer {
         let len = self.diff_visible_len();
         let saved = [&self.diff_scroll, &self.diff_split_right_scroll].map(|handle| {
             let top = self.hosted_scroll_top(handle);
-            let anchor = decor.display.get(top).copied();
+            let anchor = decor
+                .display
+                .get(top)
+                .copied()
+                .and_then(|anchor| match anchor {
+                    DisplayRow::Card { card, row } => {
+                        let id = decor.projected_card_ids.get(card)?;
+                        let card = decor.cards.iter().position(|card| &card.id == id)?;
+                        Some(DisplayRow::Card { card, row })
+                    }
+                    anchor => Some(anchor),
+                });
             let following = decor.display.get(top..).and_then(|rows| {
                 rows.iter().find_map(|row| match row {
                     DisplayRow::Document(index) => Some(*index),
@@ -465,6 +488,7 @@ impl DiffRenderer {
         });
         let decor = self.hosted_decor.as_mut().unwrap();
         decor.display.clear();
+        decor.projected_card_ids = decor.cards.iter().map(|card| card.id.clone()).collect();
         decor.document.clear();
         for row in 0..len {
             decor.document.push(decor.display.len());
@@ -472,11 +496,8 @@ impl DiffRenderer {
             decor.display.extend(after.remove(&row).unwrap_or_default());
         }
         for (handle, top, anchor, following) in saved {
-            let Some(anchor) = anchor else { continue };
-            let restored = decor
-                .display
-                .iter()
-                .position(|row| *row == anchor)
+            let restored = anchor
+                .and_then(|anchor| decor.display.iter().position(|row| *row == anchor))
                 .or_else(|| following.and_then(|row| decor.document.get(row).copied()));
             if let Some(restored) = restored.filter(|restored| *restored != top) {
                 let scroll = handle.0.borrow();

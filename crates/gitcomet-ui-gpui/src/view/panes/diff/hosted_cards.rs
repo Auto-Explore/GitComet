@@ -1,9 +1,11 @@
 use super::*;
 use gitcomet_extension_api::{DiffInlineCard, DiffLineSide};
+use gitcomet_ui_kit::tooltip::GitCometTooltipExt;
 use palette::IntoColor;
 
 const CARD_TEXT_SIZE: f32 = 12.0;
 const CARD_PADDING: f32 = 8.0;
+const CARD_MARGIN: f32 = 12.0;
 
 #[derive(PartialEq)]
 pub(super) struct LayoutKey {
@@ -19,11 +21,16 @@ pub(super) struct CardLayout {
     body: Vec<Arc<gpui::InlineLayout>>,
     row_height: Pixels,
     padding: Pixels,
+    stacked_header: bool,
 }
 
 impl CardLayout {
     pub(super) fn rows(&self, card: &DiffInlineCard) -> usize {
-        1 + self.body.len() + card.actions.len()
+        self.body_start() + self.body.len() + card.actions.len() + 1
+    }
+
+    fn body_start(&self) -> usize {
+        2 + usize::from(self.stacked_header)
     }
 }
 
@@ -88,9 +95,10 @@ impl DiffRenderer {
             .hosted_content_width
             .unwrap_or(window.viewport_size().width);
         let padding = scale.px(CARD_PADDING);
+        let margin = scale.px(CARD_MARGIN);
         let widths = self
             .hosted_card_widths(width)
-            .map(|width| (width - padding * 2.0).max(px(1.0)));
+            .map(|width| (width - (padding + margin) * 2.0 - px(2.0)).max(px(1.0)));
         let decor = self.hosted_decor.as_ref().expect("hosted renderer");
         let font_size = self
             .theme
@@ -116,6 +124,21 @@ impl DiffRenderer {
                 let mut run = run.clone();
                 run.len = card.text.len();
                 let width = widths[usize::from(card.range.side == DiffLineSide::New)];
+                let mut title_run = run.clone();
+                title_run.len = card.title.len();
+                title_run.font.weight = gpui::FontWeight::SEMIBOLD;
+                let title = window
+                    .text_system()
+                    .shape_text(card.title.clone(), font_size, &[title_run], None, None)
+                    .expect("a card title's run covers its UTF-8 source");
+                let action_width = (row_height + scale.px(4.0)) * card.header_actions.len() as f32;
+                let pending_width = if card.pending {
+                    scale.px(16.0)
+                } else {
+                    px(0.0)
+                };
+                let stacked_header = !card.header_actions.is_empty()
+                    && title.layout.width + action_width + pending_width > width;
                 let body = window
                     .text_system()
                     .shape_text(card.text.clone(), font_size, &[run], Some(width), None)
@@ -124,6 +147,7 @@ impl DiffRenderer {
                     body: paint_rows(&body, row_height),
                     row_height,
                     padding,
+                    stacked_header,
                 }
             })
             .collect();
@@ -149,18 +173,23 @@ impl DiffRenderer {
         let id = card.id.clone();
         let row_height = layout.row_height;
         let theme = self.theme;
+        let scale = ui_scale::UiScale::current(cx);
         let own_side = side.is_none_or(|side| side == card.range.side);
         let frame = div()
             .id(("hosted_card_row", display))
             .h(row_height)
             .w_full()
+            .px(scale.px(CARD_MARGIN))
             .overflow_hidden();
         if !own_side {
             return frame.into_any_element();
         }
         let frame = frame
             .debug_selector(move || format!("hosted_diff_{pane_id}_card_{id}_row_{row}"))
-            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation());
+        let surface = div()
+            .w_full()
+            .h_full()
             .font_family(
                 decor
                     .card_layout_key
@@ -172,13 +201,56 @@ impl DiffRenderer {
             )
             .bg(theme.colors.surface.raised)
             .border_color(theme.colors.stroke.subtle)
-            .when(row == 0, |frame| frame.border_t_1())
-            .when(row + 1 == layout.rows(card), |frame| frame.border_b_1())
+            .border_l_1()
+            .border_r_1()
             .px(layout.padding)
             .text_size(theme.ui_text(CARD_TEXT_SIZE))
             .text_color(theme.colors.foreground.primary);
         if row == 0 {
             return frame
+                .child(
+                    surface
+                        .mt(row_height / 2.0)
+                        .h(row_height / 2.0)
+                        .border_t_1()
+                        .rounded_t(px(theme.radii.panel)),
+                )
+                .into_any_element();
+        }
+        if row + 1 == layout.rows(card) {
+            return frame
+                .child(
+                    surface
+                        .h(row_height / 2.0)
+                        .border_b_1()
+                        .rounded_b(px(theme.radii.panel)),
+                )
+                .into_any_element();
+        }
+        let controls = || {
+            card.header_actions
+                .iter()
+                .enumerate()
+                .map(|(index, (action, icon))| {
+                    let id = format!(
+                        "hosted_diff_{pane_id}_card_{}_header_action_{index}",
+                        card.id
+                    );
+                    let action = action.clone();
+                    let label = action.label().clone();
+                    crate::kit::components::BarButton::new(id.clone(), "")
+                        .icon(icon.clone())
+                        .into_button(theme, scale)
+                        .on_click_handler(theme, scale, move |_, _, cx| action.invoke(cx))
+                        .size(row_height)
+                        .min_w(row_height)
+                        .p_0()
+                        .debug_selector(move || id.clone())
+                        .gitcomet_tooltip(theme, label)
+                })
+        };
+        if row == 1 {
+            let header = surface
                 .flex()
                 .items_center()
                 .gap_1()
@@ -191,44 +263,68 @@ impl DiffRenderer {
                 }))
                 .child(
                     div()
+                        .id(("hosted_card_title", card_index))
+                        .debug_selector({
+                            let id = card.id.clone();
+                            move || format!("hosted_diff_{pane_id}_card_{id}_title")
+                        })
                         .min_w_0()
                         .flex_1()
                         .truncate()
                         .font_weight(gpui::FontWeight::SEMIBOLD)
                         .child(card.title.clone()),
                 )
-                .into_any_element();
+                .when(!layout.stacked_header, |header| header.children(controls()));
+            return frame.child(header).into_any_element();
         }
-        if row > card.actions.len() {
-            let body_row = row - card.actions.len() - 1;
-            let body = layout.body[body_row].clone();
+        if row == 2 && layout.stacked_header {
             return frame
                 .child(
-                    gpui::canvas(
-                        |_, _, _| {},
-                        move |bounds, _, window, cx| {
-                            let _ = body.paint(bounds.origin, window, cx);
-                        },
-                    )
-                    .w_full()
-                    .h(row_height),
+                    surface
+                        .flex()
+                        .items_center()
+                        .justify_end()
+                        .gap_1()
+                        .children(controls()),
                 )
                 .into_any_element();
         }
-        let action = card.actions[row - 1].clone();
-        let id = format!("hosted_diff_{pane_id}_card_{}_action_{}", card.id, row - 1);
+        if row < layout.body.len() + layout.body_start() {
+            let body_row = row - layout.body_start();
+            let body = layout.body[body_row].clone();
+            return frame
+                .child(
+                    surface.child(
+                        gpui::canvas(
+                            |_, _, _| {},
+                            move |bounds, _, window, cx| {
+                                let _ = body.paint(bounds.origin, window, cx);
+                            },
+                        )
+                        .w_full()
+                        .h(row_height),
+                    ),
+                )
+                .into_any_element();
+        }
+        let action_index = row - layout.body.len() - layout.body_start();
+        let action = card.actions[action_index].clone();
+        let id = format!(
+            "hosted_diff_{pane_id}_card_{}_action_{action_index}",
+            card.id
+        );
         frame
-            .flex()
-            .items_center()
             .child(
-                crate::kit::components::BarButton::new(id.clone(), action.label().clone())
-                    .into_button(theme, ui_scale::UiScale::current(cx))
-                    .on_click_handler(theme, ui_scale::UiScale::current(cx), move |_, _, cx| {
-                        action.invoke(cx)
-                    })
-                    .h_full()
-                    .py_0()
-                    .debug_selector(move || id.clone()),
+                surface.flex().items_center().child(
+                    crate::kit::components::BarButton::new(id.clone(), action.label().clone())
+                        .into_button(theme, ui_scale::UiScale::current(cx))
+                        .on_click_handler(theme, ui_scale::UiScale::current(cx), move |_, _, cx| {
+                            action.invoke(cx)
+                        })
+                        .h_full()
+                        .py_0()
+                        .debug_selector(move || id.clone()),
+                ),
             )
             .into_any_element()
     }

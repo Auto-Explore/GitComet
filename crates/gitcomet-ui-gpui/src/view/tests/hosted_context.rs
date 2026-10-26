@@ -279,6 +279,92 @@ fn inline_cards_wrap_with_the_pane_and_keep_notes_and_source_rows(cx: &mut gpui:
 }
 
 #[gpui::test]
+fn inline_card_scroll_follows_identity_when_an_earlier_card_is_hidden(
+    cx: &mut gpui::TestAppContext,
+) {
+    gitcomet_ui_kit::test_support::use_real_text_backend(cx);
+    let (_dir, store, view, app_cx) = open_repository(cx);
+    let pane = app_cx.update(|_, app| {
+        let host = view.read(app).extension_window.as_ref().unwrap().host();
+        host.create_snapshot_pane(
+            DiffSnapshot::new(
+                "notes.txt",
+                numbered("line", 100, None),
+                numbered("line", 100, Some(1)),
+            ),
+            DiffPaneOptions {
+                layout: DiffLayout::Inline,
+                ..Default::default()
+            },
+            app,
+        )
+        .unwrap()
+    });
+    settle(app_cx, &view, &store, "card snapshot", |cx| {
+        cx.update(|_, app| !pane.is_loading(app))
+    });
+    let comment = DiffInlineCard::new(
+        "note",
+        DiffLineRange {
+            side: DiffLineSide::New,
+            start: 2,
+            end: 2,
+        },
+        "Note",
+        "A comment above the answer",
+    );
+    let answer = DiffInlineCard::new(
+        "answer",
+        DiffLineRange {
+            side: DiffLineSide::New,
+            start: 4,
+            end: 4,
+        },
+        "AI explanation",
+        "The answer continues.\n".repeat(40),
+    );
+    app_cx.update(|_, app| pane.set_inline_cards(vec![comment.clone(), answer.clone()], app));
+    let renderer = hosted_renderer(app_cx, &pane);
+    let mounted = pane.view();
+    let (_, cx) = cx.add_window_view(move |_, _| PaneHolder(mounted));
+    let draw = |cx: &mut gpui::VisualTestContext| {
+        for _ in 0..3 {
+            cx.update(|window, app| {
+                let _ = window.draw(app);
+            });
+            cx.run_until_parked();
+        }
+    };
+    draw(cx);
+    cx.update(|_, app| {
+        renderer.update(app, |renderer, cx| {
+            let index = renderer.hosted_card_row_index("answer", 8).unwrap();
+            let height = renderer.theme.editor_row_height(100);
+            renderer
+                .diff_scroll
+                .0
+                .borrow()
+                .base_handle
+                .set_offset(gpui::point(px(0.0), -height * (index as f32 + 0.25)));
+            cx.notify();
+        })
+    });
+    draw(cx);
+    for cards in [vec![answer.clone()], vec![answer.clone(), comment]] {
+        cx.update(|_, app| pane.set_inline_cards(cards, app));
+        draw(cx);
+        cx.update(|_, app| {
+            renderer.update(app, |renderer, _| {
+                let index = renderer.hosted_card_row_index("answer", 8).unwrap();
+                let height = renderer.theme.editor_row_height(100);
+                let offset = renderer.diff_scroll.0.borrow().base_handle.offset().y;
+                assert_eq!(offset, -height * (index as f32 + 0.25));
+            })
+        });
+    }
+}
+
+#[gpui::test]
 fn inline_card_actions_stay_on_their_side_and_streaming_preserves_the_source_scroll(
     cx: &mut gpui::TestAppContext,
 ) {
@@ -313,9 +399,10 @@ fn inline_card_actions_stay_on_their_side_and_streaming_preserves_the_source_scr
     };
     let mut card = DiffInlineCard::new("answer", range, "Explanation", "Waiting for response…")
         .pending(true)
-        .with_action(HostedAction::new("Stop", move |_| {
-            record.set(record.get() + 1)
-        }));
+        .with_header_action(
+            HostedAction::new("Stop", move |_| record.set(record.get() + 1)),
+            "icons/generic_maximize.svg",
+        );
     app_cx.update(|_, app| pane.set_inline_cards(vec![card.clone()], app));
     let entity = pane
         .view()
@@ -341,7 +428,7 @@ fn inline_card_actions_stay_on_their_side_and_streaming_preserves_the_source_scr
         }
     };
     draw(cx);
-    let action = selector(format!("hosted_diff_{id}_card_answer_action_0"));
+    let action = selector(format!("hosted_diff_{id}_card_answer_header_action_0"));
     let bounds = cx.debug_bounds(action).unwrap();
     let row_bounds = cx
         .debug_bounds(selector(format!("hosted_diff_{id}_card_answer_row_1")))
@@ -465,4 +552,15 @@ fn inline_card_actions_stay_on_their_side_and_streaming_preserves_the_source_scr
             "wrapped glyphs fit inside the list beside its visible scrollbar"
         );
     });
+    cx.update(|_, app| pane.set_content_width(Some(180.0), app));
+    draw(cx);
+    let title = cx
+        .debug_bounds(selector(format!("hosted_diff_{id}_card_answer_title")))
+        .unwrap();
+    let control = cx.debug_bounds(action).unwrap();
+    assert!(title.size.width > px(0.0));
+    assert!(
+        title.bottom() <= control.top(),
+        "narrow headers keep the title above the icons"
+    );
 }
