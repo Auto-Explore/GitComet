@@ -1,4 +1,94 @@
 use super::*;
+
+#[test]
+fn execution_journal_records_actual_command_and_captured_streams() {
+    use gitcomet_core::git_execution_log::{
+        ExecutionKind, ExecutionState, GitExecutionLog, RepoLogKey,
+    };
+    let root = tempfile::tempdir().unwrap();
+    let key = RepoLogKey::new(root.path());
+    let mut command = git_workdir_cmd_for(root.path());
+    command.arg("--version");
+    let output = run_git_capture(command, "version probe").unwrap();
+    let entries = GitExecutionLog::global().snapshot(&key);
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].kind, ExecutionKind::Git);
+    assert!(entries[0].command.contains("--version"));
+    assert!(entries[0].stdout.text.contains(output.trim()));
+    assert!(matches!(entries[0].state, ExecutionState::Finished { .. }));
+    assert_eq!(entries[0].exit_code, Some(0));
+}
+
+#[test]
+fn execution_journal_taps_stdin_and_parsed_output_without_changing_results() {
+    use gitcomet_core::git_execution_log::{GitExecutionLog, RepoLogKey};
+    let root = tempfile::tempdir().unwrap();
+    let key = RepoLogKey::new(root.path());
+    let mut command = git_workdir_cmd_for(root.path());
+    command.args(["hash-object", "--stdin"]);
+    let hash = run_git_with_stdin_capture(
+        command,
+        b"hello\n".to_vec(),
+        "hash stdin",
+        Duration::from_secs(5),
+        None,
+    )
+    .unwrap();
+    assert_eq!(hash, b"ce013625030ba8dba906f756967f9e9ca394464a\n");
+    let mut command = git_workdir_cmd_for(root.path());
+    command.arg("--version");
+    let parsed = run_git_parsed_stdout(command, "parsed version", false, |mut reader| {
+        let mut bytes = Vec::new();
+        reader.read_to_end(&mut bytes).map_err(Error::from)?;
+        Ok(bytes)
+    })
+    .unwrap();
+    let entries = GitExecutionLog::global().snapshot(&key);
+    assert_eq!(entries.len(), 2);
+    assert_eq!(entries[0].stdout.text.as_bytes(), parsed);
+    assert_eq!(entries[1].stdout.text.as_bytes(), hash);
+    assert!(!entries[1].details().contains("hello"));
+}
+
+#[test]
+fn execution_journal_preserves_accepted_nonzero_exit_and_spawn_failure() {
+    use gitcomet_core::git_execution_log::{
+        ExecutionOutcome, ExecutionState, GitExecutionLog, RepoLogKey,
+    };
+    let root = tempfile::tempdir().unwrap();
+    let key = RepoLogKey::new(root.path());
+    std::fs::write(root.path().join("a"), "before\n").unwrap();
+    std::fs::write(root.path().join("b"), "after\n").unwrap();
+    let mut command = git_workdir_cmd_for(root.path());
+    command.args(["diff", "--no-index", "--", "a", "b"]);
+    let patch = run_git_parsed_stdout(command, "diff", true, |mut reader| {
+        let mut patch = String::new();
+        reader.read_to_string(&mut patch).map_err(Error::from)?;
+        Ok(patch)
+    })
+    .unwrap();
+    assert!(patch.contains("-before"));
+    assert!(patch.contains("+after"));
+    let entry = GitExecutionLog::global().snapshot(&key).remove(0);
+    assert_eq!(entry.exit_code, Some(1));
+    assert!(matches!(
+        entry.state,
+        ExecutionState::Finished {
+            outcome: ExecutionOutcome::Success,
+            ..
+        }
+    ));
+    let mut command = Command::new(root.path().join("missing-git-executable"));
+    command.current_dir(root.path());
+    assert!(run_git_raw_output(command, "missing Git").is_err());
+    assert!(matches!(
+        GitExecutionLog::global().snapshot(&key)[0].state,
+        ExecutionState::Finished {
+            outcome: ExecutionOutcome::Failed(_),
+            ..
+        }
+    ));
+}
 use crate::test_support::git_success;
 
 #[cfg(windows)]

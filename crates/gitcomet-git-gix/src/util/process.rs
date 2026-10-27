@@ -1,6 +1,7 @@
 //! Running git: command setup, auth, timeouts, cancellation, and process-tree cleanup.
 
 use super::*;
+use gitcomet_core::git_execution_log::{ExecutionGuard, OutputCapture};
 
 /// Poll cadence for a child wait: tight right after spawn so short commands
 /// return promptly, capped afterwards, never past the silence budget left.
@@ -303,6 +304,7 @@ impl LivenessClock {
 pub(crate) struct ActivityReader<R> {
     inner: R,
     liveness: LivenessClock,
+    output: Option<OutputCapture>,
 }
 
 impl<R: Read> Read for ActivityReader<R> {
@@ -310,6 +312,9 @@ impl<R: Read> Read for ActivityReader<R> {
         let read = self.inner.read(buf)?;
         if read > 0 {
             self.liveness.touch();
+            if let Some(output) = &self.output {
+                output.append(GitOutputStream::Stdout, &buf[..read]);
+            }
         }
         Ok(read)
     }
@@ -663,127 +668,138 @@ fn run_command_with_timeout_auth_activity(
         cancellation,
         operation.as_ref().map(GitOperationContext::cancellation),
     )?;
-    let liveness = LivenessClock::new();
-    let activity = match activity {
-        CommandActivity::Report => operation.as_ref(),
-        CommandActivity::Silent => None,
-    };
-    let trace2 = Trace2Monitor::start(&mut cmd, activity, &liveness);
-    let lfs_progress = LfsProgressMonitor::start(&mut cmd, activity, &liveness);
-    let askpass_context = if command_may_require_auth(&cmd) {
-        let auth = if allow_auth { command_git_auth() } else { None };
-        let script = create_askpass_script()
-            .map_err(|error| Error::from(error).with_context("create Git askpass helper", None))?;
-        configure_git_auth_prompt(&mut cmd, auth.as_ref(), &script);
-        Some((script, auth))
-    } else {
-        None
-    };
-    cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
-    // Meters stream to the operation's progress; the captured stderr reads as
-    // it would without them.
-    let strip_progress = cmd.get_args().any(|arg| arg == "--progress");
+    let execution = ExecutionGuard::command(&cmd, label);
+    execution.run(|execution| {
+        let liveness = LivenessClock::new();
+        let activity = match activity {
+            CommandActivity::Report => operation.as_ref(),
+            CommandActivity::Silent => None,
+        };
+        let trace2 = Trace2Monitor::start(&mut cmd, activity, &liveness);
+        let lfs_progress = LfsProgressMonitor::start(&mut cmd, activity, &liveness);
+        let askpass_context = if command_may_require_auth(&cmd) {
+            let auth = if allow_auth { command_git_auth() } else { None };
+            let script = create_askpass_script().map_err(|error| {
+                Error::from(error).with_context("create Git askpass helper", None)
+            })?;
+            configure_git_auth_prompt(&mut cmd, auth.as_ref(), &script);
+            Some((script, auth))
+        } else {
+            None
+        };
+        cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+        // Meters stream to the operation's progress; the captured stderr reads as
+        // it would without them.
+        let strip_progress = cmd.get_args().any(|arg| arg == "--progress");
 
-    timing.stage("prepare");
-    let mut child = cmd.spawn().map_err(|error| {
-        Error::from(error).with_context(label, Some(Path::new(cmd.get_program())))
-    })?;
-    timing.stage("spawn");
+        timing.stage("prepare");
+        let mut child = cmd.spawn().map_err(|error| {
+            Error::from(error).with_context(label, Some(Path::new(cmd.get_program())))
+        })?;
+        timing.stage("spawn");
 
-    let (activity_sender, activity_handle) = start_activity_output_aggregator(activity);
-    let stdout_handle = spawn_read_pipe(
-        child.stdout.take(),
-        activity_sender
-            .as_ref()
-            .map(|sender| (sender.clone(), GitOutputStream::Stdout)),
-        liveness.clone(),
-    );
-    let stderr_handle = spawn_read_pipe(
-        child.stderr.take(),
-        activity_sender
-            .as_ref()
-            .map(|sender| (sender.clone(), GitOutputStream::Stderr)),
-        liveness.clone(),
-    );
-    drop(activity_sender);
+        let (activity_sender, activity_handle) = start_activity_output_aggregator(activity);
+        let stdout_handle = spawn_read_pipe(
+            child.stdout.take(),
+            activity_sender
+                .as_ref()
+                .map(|sender| (sender.clone(), GitOutputStream::Stdout)),
+            liveness.clone(),
+            execution
+                .output()
+                .map(|output| (output, GitOutputStream::Stdout)),
+        );
+        let stderr_handle = spawn_read_pipe(
+            child.stderr.take(),
+            activity_sender
+                .as_ref()
+                .map(|sender| (sender.clone(), GitOutputStream::Stderr)),
+            liveness.clone(),
+            execution
+                .output()
+                .map(|output| (output, GitOutputStream::Stderr)),
+        );
+        drop(activity_sender);
 
-    timing.stage("workers-start");
-    let ChildWaitOutcome {
-        status,
-        mut cancelled,
-        mut timed_out,
-    } = wait_for_child_with_timeout(
-        &mut child,
-        timeout,
-        &liveness,
-        cancellation,
-        operation.as_ref().map(GitOperationContext::cancellation),
-    )?;
-
-    timing.stage("child-wait");
-    let drain = wait_for_output_workers(
-        &mut child,
-        || stdout_handle.is_finished() && stderr_handle.is_finished(),
-        &liveness,
-        timeout,
-        cancellation,
-        operation.as_ref().map(GitOperationContext::cancellation),
-    )?;
-    timing.stage("output-drain");
-    cancelled |= drain.cancelled;
-    timed_out |= drain.timed_out;
-
-    let stdout = stdout_handle.join().unwrap_or_default();
-    let mut stderr = stderr_handle.join().unwrap_or_default();
-    if strip_progress && let Ok(text) = std::str::from_utf8(&stderr) {
-        stderr = gitcomet_core::git_progress::strip_progress(text).into_bytes();
-    }
-    timing.stage("workers-join");
-    join_activity_output_aggregator(activity_handle);
-    timing.stage("activity-finish");
-    if let Some(trace2) = trace2 {
-        trace2.finish();
-    }
-    // Drain the last progress line before reporting the result.
-    drop(lfs_progress);
-    timing.stage("trace-finish");
-
-    let auth_outcome = askpass_context
-        .as_ref()
-        .map_or(AuthOutcome::NotRequested, |(script, auth)| {
-            resolve_auth_outcome(auth.as_ref(), script, &stderr, status.success())
-        });
-    if let Some((askpass_script, _)) = askpass_context.as_ref() {
-        append_host_prompt_to_stderr(&mut stderr, askpass_script);
-        // The trailer explains a request for a passphrase. On a failure with
-        // another cause, such as a pull refused for local changes, it misleads.
-        if matches!(
-            auth_outcome,
-            AuthOutcome::NeedsInput(_) | AuthOutcome::Rejected(_)
-        ) {
-            append_passphrase_prompt_to_stderr(&mut stderr, askpass_script);
-        }
-    }
-
-    if cancelled {
-        return Err(Error::new(ErrorKind::Cancelled));
-    }
-
-    if timed_out {
-        return Err(git_timeout_error(
-            label,
+        timing.stage("workers-start");
+        let ChildWaitOutcome {
+            status,
+            mut cancelled,
+            mut timed_out,
+        } = wait_for_child_with_timeout(
+            &mut child,
             timeout,
-            status.code(),
+            &liveness,
+            cancellation,
+            operation.as_ref().map(GitOperationContext::cancellation),
+        )?;
+
+        execution.exited(status, false);
+        timing.stage("child-wait");
+        let drain = wait_for_output_workers(
+            &mut child,
+            || stdout_handle.is_finished() && stderr_handle.is_finished(),
+            &liveness,
+            timeout,
+            cancellation,
+            operation.as_ref().map(GitOperationContext::cancellation),
+        )?;
+        timing.stage("output-drain");
+        cancelled |= drain.cancelled;
+        timed_out |= drain.timed_out;
+
+        let stdout = stdout_handle.join().unwrap_or_default();
+        let mut stderr = stderr_handle.join().unwrap_or_default();
+        if strip_progress && let Ok(text) = std::str::from_utf8(&stderr) {
+            stderr = gitcomet_core::git_progress::strip_progress(text).into_bytes();
+        }
+        timing.stage("workers-join");
+        join_activity_output_aggregator(activity_handle);
+        timing.stage("activity-finish");
+        if let Some(trace2) = trace2 {
+            trace2.finish();
+        }
+        // Drain the last progress line before reporting the result.
+        drop(lfs_progress);
+        timing.stage("trace-finish");
+
+        let auth_outcome = askpass_context
+            .as_ref()
+            .map_or(AuthOutcome::NotRequested, |(script, auth)| {
+                resolve_auth_outcome(auth.as_ref(), script, &stderr, status.success())
+            });
+        if let Some((askpass_script, _)) = askpass_context.as_ref() {
+            append_host_prompt_to_stderr(&mut stderr, askpass_script);
+            // The trailer explains a request for a passphrase. On a failure with
+            // another cause, such as a pull refused for local changes, it misleads.
+            if matches!(
+                auth_outcome,
+                AuthOutcome::NeedsInput(_) | AuthOutcome::Rejected(_)
+            ) {
+                append_passphrase_prompt_to_stderr(&mut stderr, askpass_script);
+            }
+        }
+
+        if cancelled {
+            return Err(Error::new(ErrorKind::Cancelled));
+        }
+
+        if timed_out {
+            return Err(git_timeout_error(
+                label,
+                timeout,
+                status.code(),
+                stdout,
+                stderr,
+            ));
+        }
+
+        Ok(GitOutput {
+            status,
             stdout,
             stderr,
-        ));
-    }
-
-    Ok(GitOutput {
-        status,
-        stdout,
-        stderr,
-        auth_outcome,
+            auth_outcome,
+        })
     })
 }
 
@@ -832,106 +848,117 @@ pub(crate) fn run_git_with_stdin_capture(
         cancellation,
         operation.as_ref().map(GitOperationContext::cancellation),
     )?;
-    let liveness = LivenessClock::new();
-    let trace2 = Trace2Monitor::start(&mut cmd, operation.as_ref(), &liveness);
-    cmd.env("GIT_TERMINAL_PROMPT", "0");
-    cmd.stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+    let execution = ExecutionGuard::command(&cmd, label);
+    execution.run(|execution| {
+        let liveness = LivenessClock::new();
+        let trace2 = Trace2Monitor::start(&mut cmd, operation.as_ref(), &liveness);
+        cmd.env("GIT_TERMINAL_PROMPT", "0");
+        cmd.stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
 
-    timing.stage("prepare");
-    let mut child = cmd.spawn().map_err(|error| {
-        Error::from(error).with_context(label, Some(Path::new(cmd.get_program())))
-    })?;
-    timing.stage("spawn");
+        timing.stage("prepare");
+        let mut child = cmd.spawn().map_err(|error| {
+            Error::from(error).with_context(label, Some(Path::new(cmd.get_program())))
+        })?;
+        timing.stage("spawn");
 
-    let stdin = child.stdin.take();
-    let writer = thread::spawn(move || {
-        if let Some(mut stdin) = stdin {
-            let _ = stdin.write_all(&input);
-            // Dropping `stdin` here closes the pipe so git sees EOF.
-        }
-    });
-    let (activity_sender, activity_handle) = start_activity_output_aggregator(operation.as_ref());
-    let stdout_handle = spawn_read_pipe(
-        child.stdout.take(),
-        activity_sender
-            .as_ref()
-            .map(|sender| (sender.clone(), GitOutputStream::Stdout)),
-        liveness.clone(),
-    );
-    let stderr_handle = spawn_read_pipe(
-        child.stderr.take(),
-        activity_sender
-            .as_ref()
-            .map(|sender| (sender.clone(), GitOutputStream::Stderr)),
-        liveness.clone(),
-    );
-    drop(activity_sender);
+        let stdin = child.stdin.take();
+        let writer = thread::spawn(move || {
+            if let Some(mut stdin) = stdin {
+                let _ = stdin.write_all(&input);
+                // Dropping `stdin` here closes the pipe so git sees EOF.
+            }
+        });
+        let (activity_sender, activity_handle) =
+            start_activity_output_aggregator(operation.as_ref());
+        let stdout_handle = spawn_read_pipe(
+            child.stdout.take(),
+            activity_sender
+                .as_ref()
+                .map(|sender| (sender.clone(), GitOutputStream::Stdout)),
+            liveness.clone(),
+            execution
+                .output()
+                .map(|output| (output, GitOutputStream::Stdout)),
+        );
+        let stderr_handle = spawn_read_pipe(
+            child.stderr.take(),
+            activity_sender
+                .as_ref()
+                .map(|sender| (sender.clone(), GitOutputStream::Stderr)),
+            liveness.clone(),
+            execution
+                .output()
+                .map(|output| (output, GitOutputStream::Stderr)),
+        );
+        drop(activity_sender);
 
-    timing.stage("workers-start");
-    let ChildWaitOutcome {
-        status,
-        mut cancelled,
-        mut timed_out,
-    } = wait_for_child_with_timeout(
-        &mut child,
-        timeout,
-        &liveness,
-        cancellation,
-        operation.as_ref().map(GitOperationContext::cancellation),
-    )?;
-
-    timing.stage("child-wait");
-    let drain = wait_for_output_workers(
-        &mut child,
-        || writer.is_finished() && stdout_handle.is_finished() && stderr_handle.is_finished(),
-        &liveness,
-        timeout,
-        cancellation,
-        operation.as_ref().map(GitOperationContext::cancellation),
-    )?;
-    timing.stage("output-drain");
-    cancelled |= drain.cancelled;
-    timed_out |= drain.timed_out;
-
-    let _ = writer.join();
-    let stdout = stdout_handle.join().unwrap_or_default();
-    let stderr = stderr_handle.join().unwrap_or_default();
-    timing.stage("workers-join");
-    join_activity_output_aggregator(activity_handle);
-    timing.stage("activity-finish");
-    if let Some(trace2) = trace2 {
-        trace2.finish();
-    }
-    timing.stage("trace-finish");
-
-    if cancelled {
-        return Err(Error::new(ErrorKind::Cancelled));
-    }
-
-    if timed_out {
-        return Err(git_timeout_error(
-            label,
+        timing.stage("workers-start");
+        let ChildWaitOutcome {
+            status,
+            mut cancelled,
+            mut timed_out,
+        } = wait_for_child_with_timeout(
+            &mut child,
             timeout,
-            status.code(),
-            stdout,
-            stderr,
-        ));
-    }
+            &liveness,
+            cancellation,
+            operation.as_ref().map(GitOperationContext::cancellation),
+        )?;
 
-    if !status.success() {
-        return Err(git_command_failed_error(
-            label,
-            GitOutput {
-                status,
+        execution.exited(status, false);
+        timing.stage("child-wait");
+        let drain = wait_for_output_workers(
+            &mut child,
+            || writer.is_finished() && stdout_handle.is_finished() && stderr_handle.is_finished(),
+            &liveness,
+            timeout,
+            cancellation,
+            operation.as_ref().map(GitOperationContext::cancellation),
+        )?;
+        timing.stage("output-drain");
+        cancelled |= drain.cancelled;
+        timed_out |= drain.timed_out;
+
+        let _ = writer.join();
+        let stdout = stdout_handle.join().unwrap_or_default();
+        let stderr = stderr_handle.join().unwrap_or_default();
+        timing.stage("workers-join");
+        join_activity_output_aggregator(activity_handle);
+        timing.stage("activity-finish");
+        if let Some(trace2) = trace2 {
+            trace2.finish();
+        }
+        timing.stage("trace-finish");
+
+        if cancelled {
+            return Err(Error::new(ErrorKind::Cancelled));
+        }
+
+        if timed_out {
+            return Err(git_timeout_error(
+                label,
+                timeout,
+                status.code(),
                 stdout,
                 stderr,
-                auth_outcome: AuthOutcome::NotRequested,
-            },
-        ));
-    }
-    Ok(stdout)
+            ));
+        }
+
+        if !status.success() {
+            return Err(git_command_failed_error(
+                label,
+                GitOutput {
+                    status,
+                    stdout,
+                    stderr,
+                    auth_outcome: AuthOutcome::NotRequested,
+                },
+            ));
+        }
+        Ok(stdout)
+    })
 }
 
 pub(crate) fn run_git_parsed_stdout<T, F>(
@@ -1010,127 +1037,137 @@ where
         cancellation,
         operation.as_ref().map(GitOperationContext::cancellation),
     )?;
-    let liveness = LivenessClock::new();
-    let trace2 = Trace2Monitor::start(&mut cmd, operation.as_ref(), &liveness);
-    let askpass_context = if command_may_require_auth(&cmd) {
-        let auth = command_git_auth();
-        let script = create_askpass_script()
-            .map_err(|error| Error::from(error).with_context("create Git askpass helper", None))?;
-        configure_git_auth_prompt(&mut cmd, auth.as_ref(), &script);
-        Some((script, auth))
-    } else {
-        None
-    };
-    cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+    let execution = ExecutionGuard::command(&cmd, label);
+    execution.run(|execution| {
+        let liveness = LivenessClock::new();
+        let trace2 = Trace2Monitor::start(&mut cmd, operation.as_ref(), &liveness);
+        let askpass_context = if command_may_require_auth(&cmd) {
+            let auth = command_git_auth();
+            let script = create_askpass_script().map_err(|error| {
+                Error::from(error).with_context("create Git askpass helper", None)
+            })?;
+            configure_git_auth_prompt(&mut cmd, auth.as_ref(), &script);
+            Some((script, auth))
+        } else {
+            None
+        };
+        cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
 
-    timing.stage("prepare");
-    let mut child = cmd.spawn().map_err(|error| {
-        Error::from(error).with_context(label, Some(Path::new(cmd.get_program())))
-    })?;
-    timing.stage("spawn");
-    let stdout = child.stdout.take().ok_or_else(|| {
-        Error::new(ErrorKind::Backend(format!(
-            "{label} did not provide piped stdout"
-        )))
-    })?;
-    let (activity_sender, activity_handle) = start_activity_output_aggregator(operation.as_ref());
-    let stderr_handle = spawn_read_pipe(
-        child.stderr.take(),
-        activity_sender
-            .as_ref()
-            .map(|sender| (sender.clone(), GitOutputStream::Stderr)),
-        liveness.clone(),
-    );
-    drop(activity_sender);
-    let stdout = ActivityReader {
-        inner: stdout,
-        liveness: liveness.clone(),
-    };
-    let stdout_handle = thread::spawn(move || parse_stdout(stdout));
+        timing.stage("prepare");
+        let mut child = cmd.spawn().map_err(|error| {
+            Error::from(error).with_context(label, Some(Path::new(cmd.get_program())))
+        })?;
+        timing.stage("spawn");
+        let stdout = child.stdout.take().ok_or_else(|| {
+            Error::new(ErrorKind::Backend(format!(
+                "{label} did not provide piped stdout"
+            )))
+        })?;
+        let (activity_sender, activity_handle) =
+            start_activity_output_aggregator(operation.as_ref());
+        let stderr_handle = spawn_read_pipe(
+            child.stderr.take(),
+            activity_sender
+                .as_ref()
+                .map(|sender| (sender.clone(), GitOutputStream::Stderr)),
+            liveness.clone(),
+            execution
+                .output()
+                .map(|output| (output, GitOutputStream::Stderr)),
+        );
+        drop(activity_sender);
+        let stdout = ActivityReader {
+            inner: stdout,
+            liveness: liveness.clone(),
+            output: execution.output(),
+        };
+        let stdout_handle = thread::spawn(move || parse_stdout(stdout));
 
-    timing.stage("workers-start");
-    let ChildWaitOutcome {
-        status,
-        mut cancelled,
-        mut timed_out,
-    } = wait_for_child_with_timeout(
-        &mut child,
-        timeout,
-        &liveness,
-        cancellation,
-        operation.as_ref().map(GitOperationContext::cancellation),
-    )?;
-
-    timing.stage("child-wait");
-    let drain = wait_for_output_workers(
-        &mut child,
-        || stdout_handle.is_finished() && stderr_handle.is_finished(),
-        &liveness,
-        timeout,
-        cancellation,
-        operation.as_ref().map(GitOperationContext::cancellation),
-    )?;
-    timing.stage("output-drain");
-    cancelled |= drain.cancelled;
-    timed_out |= drain.timed_out;
-
-    let parsed_result = stdout_handle
-        .join()
-        .unwrap_or_else(|_| Err(Error::new(ErrorKind::Io(io::ErrorKind::Other))));
-    let mut stderr = stderr_handle.join().unwrap_or_default();
-    timing.stage("workers-join");
-    join_activity_output_aggregator(activity_handle);
-    timing.stage("activity-finish");
-    if let Some(trace2) = trace2 {
-        trace2.finish();
-    }
-    timing.stage("trace-finish");
-
-    let auth_outcome = askpass_context
-        .as_ref()
-        .map_or(AuthOutcome::NotRequested, |(script, auth)| {
-            resolve_auth_outcome(auth.as_ref(), script, &stderr, status.success())
-        });
-    if let Some((askpass_script, _)) = askpass_context.as_ref() {
-        append_host_prompt_to_stderr(&mut stderr, askpass_script);
-        // The trailer explains a request for a passphrase. On a failure with
-        // another cause, such as a pull refused for local changes, it misleads.
-        if matches!(
-            auth_outcome,
-            AuthOutcome::NeedsInput(_) | AuthOutcome::Rejected(_)
-        ) {
-            append_passphrase_prompt_to_stderr(&mut stderr, askpass_script);
-        }
-    }
-
-    if cancelled {
-        return Err(Error::new(ErrorKind::Cancelled));
-    }
-
-    if timed_out {
-        return Err(git_timeout_error(
-            label,
+        timing.stage("workers-start");
+        let ChildWaitOutcome {
+            status,
+            mut cancelled,
+            mut timed_out,
+        } = wait_for_child_with_timeout(
+            &mut child,
             timeout,
-            status.code(),
-            Vec::new(),
-            stderr,
-        ));
-    }
+            &liveness,
+            cancellation,
+            operation.as_ref().map(GitOperationContext::cancellation),
+        )?;
 
-    let ok_exit = status.success() || (allow_exit_code_one && status.code() == Some(1));
-    if !ok_exit {
-        return Err(git_command_failed_error(
-            label,
-            GitOutput {
-                status,
-                stdout: Vec::new(),
-                stderr,
+        execution.exited(status, allow_exit_code_one && status.code() == Some(1));
+        timing.stage("child-wait");
+        let drain = wait_for_output_workers(
+            &mut child,
+            || stdout_handle.is_finished() && stderr_handle.is_finished(),
+            &liveness,
+            timeout,
+            cancellation,
+            operation.as_ref().map(GitOperationContext::cancellation),
+        )?;
+        timing.stage("output-drain");
+        cancelled |= drain.cancelled;
+        timed_out |= drain.timed_out;
+
+        let parsed_result = stdout_handle
+            .join()
+            .unwrap_or_else(|_| Err(Error::new(ErrorKind::Io(io::ErrorKind::Other))));
+        let mut stderr = stderr_handle.join().unwrap_or_default();
+        timing.stage("workers-join");
+        join_activity_output_aggregator(activity_handle);
+        timing.stage("activity-finish");
+        if let Some(trace2) = trace2 {
+            trace2.finish();
+        }
+        timing.stage("trace-finish");
+
+        let auth_outcome = askpass_context
+            .as_ref()
+            .map_or(AuthOutcome::NotRequested, |(script, auth)| {
+                resolve_auth_outcome(auth.as_ref(), script, &stderr, status.success())
+            });
+        if let Some((askpass_script, _)) = askpass_context.as_ref() {
+            append_host_prompt_to_stderr(&mut stderr, askpass_script);
+            // The trailer explains a request for a passphrase. On a failure with
+            // another cause, such as a pull refused for local changes, it misleads.
+            if matches!(
                 auth_outcome,
-            },
-        ));
-    }
+                AuthOutcome::NeedsInput(_) | AuthOutcome::Rejected(_)
+            ) {
+                append_passphrase_prompt_to_stderr(&mut stderr, askpass_script);
+            }
+        }
 
-    parsed_result
+        if cancelled {
+            return Err(Error::new(ErrorKind::Cancelled));
+        }
+
+        if timed_out {
+            return Err(git_timeout_error(
+                label,
+                timeout,
+                status.code(),
+                Vec::new(),
+                stderr,
+            ));
+        }
+
+        let ok_exit = status.success() || (allow_exit_code_one && status.code() == Some(1));
+        if !ok_exit {
+            return Err(git_command_failed_error(
+                label,
+                GitOutput {
+                    status,
+                    stdout: Vec::new(),
+                    stderr,
+                    auth_outcome,
+                },
+            ));
+        }
+
+        parsed_result
+    })
 }
 
 pub(super) fn run_git_checked_output(cmd: Command, label: &str) -> Result<GitOutput> {

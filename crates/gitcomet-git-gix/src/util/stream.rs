@@ -6,6 +6,10 @@ pub(super) fn spawn_read_pipe(
     pipe: Option<impl std::io::Read + Send + 'static>,
     activity: Option<(mpsc::Sender<(GitOutputStream, String)>, GitOutputStream)>,
     liveness: LivenessClock,
+    output: Option<(
+        gitcomet_core::git_execution_log::OutputCapture,
+        GitOutputStream,
+    )>,
 ) -> thread::JoinHandle<Vec<u8>> {
     thread::spawn(move || {
         let mut buf = Vec::new();
@@ -17,6 +21,9 @@ pub(super) fn spawn_read_pipe(
                     Ok(0) => break,
                     Ok(read) => {
                         liveness.touch();
+                        if let Some((output, stream)) = &output {
+                            output.append(*stream, &chunk[..read]);
+                        }
                         buf.extend_from_slice(&chunk[..read]);
                         if let Some((sender, stream)) = activity.as_ref() {
                             let text =
