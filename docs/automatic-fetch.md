@@ -39,17 +39,20 @@ GitComet exits.
 
 ## Status and authentication
 
-Repository tabs show **↓N** when their current branch is behind its configured
-remote upstream, including inactive and restored tabs that have not been
-selected. Hover the tab to see the branch, upstream and incoming commit count.
-Selecting a tab keeps the indicator; it clears when the branch has no incoming
-commits. Changes on unrelated remote branches do not add an indicator.
+Repository tabs show **↓N** in place of the repository initials when their
+current branch is behind its configured remote upstream, including inactive and
+restored tabs that have not been selected. Counts above 99 show as **↓99+**.
+Hover the tab to see the branch, upstream and exact incoming commit count. While
+a tab shows its loading spinner or missing-folder warning, that takes the place
+of the count. Selecting a tab keeps the indicator; it clears when the branch has
+no incoming commits. Changes on unrelated remote branches do not add an
+indicator.
 
-A **?** after the count marks last-known tracking information that may be out
-of date, including while refreshing or after a failed check. The tab tooltip
-explains its freshness. Unknown counts, detached HEAD and branches without a
-remote upstream have no incoming indicator. These indicators also reflect
-manual fetches and refreshes when automatic fetching is off.
+A grey count is last-known tracking information that may be out of date, for
+example after a failed check. A fetch in progress leaves the last count as it
+is. The tab tooltip explains its freshness. Unknown counts, detached HEAD and
+branches without a remote upstream have no incoming indicator. These indicators
+also reflect manual fetches and refreshes when automatic fetching is off.
 
 Open the **Pull** dropdown to see the automatic-fetch result and the last
 successful fetch time. A failure includes its reason in the menu; hover a

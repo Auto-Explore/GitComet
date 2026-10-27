@@ -107,13 +107,12 @@ const REPO_TAB_DRAG_SCROLL_MAX_STEP: Duration = Duration::from_millis(50);
 /// size here is fixed: the strip lives in the title bar, which stays outside
 /// the appearance system (see `chrome::chrome_scale`).
 const REPO_TAB_FONT_SIZE_PX: f32 = 15.0;
-const REPO_TAB_INCOMING_FONT_SIZE_PX: f32 = 12.0;
 const REPO_TAB_CONTENT_HEIGHT_PX: f32 = 18.0;
 const REPO_TAB_STATUS_SIZE_PX: f32 = components::REPOSITORY_BADGE_SIZE_PX;
 const REPO_TAB_LABEL_GAP_PX: f32 = 6.0;
 const REPO_TAB_CLOSE_FADE_WIDTH_PX: f32 = 16.0;
-const REPO_TAB_CLOSE_OVERLAY_WIDTH_PX: f32 =
-    REPO_TAB_CLOSE_FADE_WIDTH_PX + components::REMOVE_BUTTON_SIZE_PX;
+/// Counts above this show as `↓99+`; the tooltip keeps the exact number.
+const REPO_TAB_INCOMING_MAX_SHOWN: usize = 99;
 pub(in crate::view) const REPO_TAB_SIDE_PADDING_PX: f32 = 14.0;
 const REPO_TAB_HOVER_BOX_X_OVERHANG_PX: f32 = 4.0;
 const REPO_TAB_HOVER_BOX_Y_OVERHANG_PX: f32 = 3.0;
@@ -148,19 +147,11 @@ fn repo_tab_drag_direction(
     }
 }
 
-fn repo_tab_text_width(
-    label: SharedString,
-    font_size: Pixels,
-    font_weight: Option<FontWeight>,
-    window: &mut Window,
-) -> Pixels {
+fn repo_tab_text_width(label: SharedString, font_size: Pixels, window: &mut Window) -> Pixels {
     if label.is_empty() {
         return px(0.0);
     }
-    let mut style = window.text_style();
-    if let Some(weight) = font_weight {
-        style.font_weight = weight;
-    }
+    let style = window.text_style();
     let run = style.to_run(label.len());
     window
         .text_system()
@@ -395,8 +386,11 @@ impl RepoTabsBarView {
         if divergence.behind == 0 {
             return None;
         }
-        let stale = if repo.incoming_is_stale() { "?" } else { "" };
-        Some(format!("↓{}{stale}", divergence.behind).into())
+        Some(if divergence.behind > REPO_TAB_INCOMING_MAX_SHOWN {
+            format!("↓{REPO_TAB_INCOMING_MAX_SHOWN}+").into()
+        } else {
+            format!("↓{}", divergence.behind).into()
+        })
     }
 
     fn repo_tab_tooltip(repo: &RepoState) -> SharedString {
@@ -900,18 +894,17 @@ impl Render for RepoTabsBarView {
             .iter()
             .map(Self::repo_tab_incoming_text)
             .collect::<Vec<_>>();
-        let incoming_slot_widths = incoming_labels
+        // The count takes the repository mark's place, so it only widens the
+        // tab when it needs more room than the mark's square.
+        let status_slot_widths = incoming_labels
             .iter()
             .map(|label| {
-                label.as_ref().map_or(px(0.0), |label| {
-                    repo_tab_text_width(
-                        label.clone(),
-                        px(REPO_TAB_INCOMING_FONT_SIZE_PX),
-                        Some(FontWeight::BOLD),
+                label.as_ref().map_or(px(REPO_TAB_STATUS_SIZE_PX), |label| {
+                    components::repository_behind_box_width(
+                        label,
+                        crate::view::chrome::chrome_scale(),
                         window,
                     )
-                    .ceil()
-                        + px(REPO_TAB_LABEL_GAP_PX + REPO_TAB_CLOSE_OVERLAY_WIDTH_PX)
                 })
             })
             .collect::<Vec<_>>();
@@ -920,19 +913,17 @@ impl Render for RepoTabsBarView {
             .repos
             .iter()
             .zip(&repo_tab_labels)
-            .zip(&incoming_slot_widths)
-            .map(|((repo, label), incoming_width)| {
+            .zip(&status_slot_widths)
+            .map(|((repo, label), status_width)| {
                 let text_width =
-                    repo_tab_text_width(label.clone(), px(REPO_TAB_FONT_SIZE_PX), None, window);
+                    repo_tab_text_width(label.clone(), px(REPO_TAB_FONT_SIZE_PX), window);
                 let terminal_width = if self.open_terminal_repo_ids.contains(&repo.id) {
                     px(REPO_TAB_LABEL_GAP_PX + REPO_TAB_STATUS_SIZE_PX)
                 } else {
                     px(0.0)
                 };
-                let content_width = px(REPO_TAB_STATUS_SIZE_PX + REPO_TAB_LABEL_GAP_PX)
-                    + text_width
-                    + terminal_width
-                    + *incoming_width;
+                let content_width =
+                    *status_width + px(REPO_TAB_LABEL_GAP_PX) + text_width + terminal_width;
                 components::Tab::natural_width(content_width, tab_horizontal_padding)
             })
             .collect::<Vec<_>>();
@@ -1031,8 +1022,11 @@ impl Render for RepoTabsBarView {
                 tab = tab.end_slot(close_overlay);
             }
 
+            // One status slot, highest priority first: spinner, missing
+            // warning, incoming count, initials.
             let show_missing_warning = Self::repo_tab_shows_missing_warning(repo, show_spinner);
-            let show_initials = !show_spinner && !show_missing_warning;
+            let incoming_label = incoming_label.filter(|_| !show_spinner && !show_missing_warning);
+            let show_initials = !show_spinner && !show_missing_warning && incoming_label.is_none();
             let status_color = with_alpha(
                 theme.colors.foreground.primary,
                 if theme.is_dark { 0.72 } else { 0.62 },
@@ -1050,9 +1044,6 @@ impl Render for RepoTabsBarView {
                 .h(px(REPO_TAB_CONTENT_HEIGHT_PX))
                 .gap(px(REPO_TAB_LABEL_GAP_PX))
                 .min_w(px(0.0))
-                .when(incoming_label.is_some(), |label| {
-                    label.pr(px(REPO_TAB_CLOSE_OVERLAY_WIDTH_PX))
-                })
                 // Idle tabs highlight only their compact content box. The
                 // plate overhang adds breathing room around the initials and
                 // label without changing tab measurement or hit geometry.
@@ -1069,7 +1060,9 @@ impl Render for RepoTabsBarView {
                 )
                 .child(
                     div()
-                        .size(px(REPO_TAB_STATUS_SIZE_PX))
+                        .flex_none()
+                        .h(px(REPO_TAB_STATUS_SIZE_PX))
+                        .w(status_slot_widths[ix])
                         .flex()
                         .items_center()
                         .justify_center()
@@ -1086,6 +1079,18 @@ impl Render for RepoTabsBarView {
                                 theme.colors.status.warning.foreground,
                                 px(12.0),
                             ))
+                        })
+                        .when_some(incoming_label, |d, incoming| {
+                            d.child(
+                                components::repository_behind_box(
+                                    theme,
+                                    crate::view::chrome::chrome_scale(),
+                                    incoming,
+                                    status_slot_widths[ix],
+                                    repo.incoming_is_stale(),
+                                )
+                                .debug_selector(move || format!("repo_tab_incoming_{}", repo_id.0)),
+                            )
                         })
                         .when(show_initials, |d| {
                             d.child(
@@ -1114,23 +1119,6 @@ impl Render for RepoTabsBarView {
                     .debug_selector(move || format!("repo_tab_label_{}", repo_id.0))
                     .flex_1(),
                 )
-                .when_some(incoming_label, |label, incoming| {
-                    label.child(
-                        div()
-                            .debug_selector(move || format!("repo_tab_incoming_{}", repo_id.0))
-                            .flex_none()
-                            .text_size(px(REPO_TAB_INCOMING_FONT_SIZE_PX))
-                            .line_height(px(REPO_TAB_CONTENT_HEIGHT_PX))
-                            .font_weight(FontWeight::BOLD)
-                            .text_color(if repo.incoming_is_stale() {
-                                theme.colors.foreground.secondary
-                            } else {
-                                theme.colors.status.warning.foreground
-                            })
-                            .whitespace_nowrap()
-                            .child(incoming),
-                    )
-                })
                 .when(self.open_terminal_repo_ids.contains(&repo_id), |d| {
                     d.child(
                         div()
@@ -1146,16 +1134,6 @@ impl Render for RepoTabsBarView {
             let tab = tab
                 .child(tab_label)
                 .render(theme)
-                .min_w(components::Tab::natural_width(
-                    px(REPO_TAB_STATUS_SIZE_PX + REPO_TAB_LABEL_GAP_PX)
-                        + incoming_slot_widths[ix]
-                        + if self.open_terminal_repo_ids.contains(&repo_id) {
-                            px(REPO_TAB_LABEL_GAP_PX + REPO_TAB_STATUS_SIZE_PX)
-                        } else {
-                            px(0.0)
-                        },
-                    tab_horizontal_padding,
-                ))
                 .relative()
                 .when(show_inactive_separator, |tab| {
                     tab.child(
@@ -1719,13 +1697,34 @@ mod tests {
             tracking: tracked(3),
             checked_at: UNIX_EPOCH,
         });
+        // Staleness is the badge colour and the tooltip; the text keeps the
+        // badge width stable.
         assert_eq!(
             RepoTabsBarView::repo_tab_incoming_text(&repo).as_deref(),
-            Some("↓3?")
+            Some("↓3")
         );
         assert_eq!(
             RepoTabsBarView::repo_tab_tooltip(&repo).as_ref(),
             "/tmp/repo\nmain is 3 commits behind origin/main.\nLast known tracking information; it may be out of date."
+        );
+    }
+
+    #[test]
+    fn repo_tab_incoming_caps_large_counts_to_fit_the_status_slot() {
+        let mut repo = repo_state("/tmp/repo");
+        for (behind, text) in [(99, "↓99"), (100, "↓99+"), (12345, "↓99+")] {
+            repo.incoming = RepoIncomingState::Current(RepoIncomingSnapshot {
+                tracking: tracked(behind),
+                checked_at: UNIX_EPOCH,
+            });
+            assert_eq!(
+                RepoTabsBarView::repo_tab_incoming_text(&repo).as_deref(),
+                Some(text)
+            );
+        }
+        assert!(
+            RepoTabsBarView::repo_tab_tooltip(&repo).contains("12345 commits behind"),
+            "the tooltip keeps the exact count"
         );
     }
 
@@ -1748,11 +1747,22 @@ mod tests {
         let changed_count = RepoTabsBarView::notify_fingerprint(&state);
         assert_ne!(first, changed_count);
         state.repos[0].auto_fetch.status = gitcomet_state::model::AutoFetchStatus::Running;
-        let refreshing = RepoTabsBarView::notify_fingerprint(&state);
-        assert_ne!(changed_count, refreshing);
+        assert_eq!(
+            changed_count,
+            RepoTabsBarView::notify_fingerprint(&state),
+            "a routine background fetch must not repaint the tab strip"
+        );
+        state.repos[0].auto_fetch.status = gitcomet_state::model::AutoFetchStatus::Failed {
+            at: UNIX_EPOCH,
+            error: gitcomet_core::error::Error::new(gitcomet_core::error::ErrorKind::Backend(
+                "offline".into(),
+            )),
+        };
+        let failed = RepoTabsBarView::notify_fingerprint(&state);
+        assert_ne!(changed_count, failed);
         assert_eq!(
             RepoTabsBarView::repo_tab_incoming_text(&state.repos[0]).as_deref(),
-            Some("↓12?")
+            Some("↓12")
         );
         if let RepoIncomingState::Current(snapshot) = &mut state.repos[0].incoming {
             snapshot.tracking = HeadTracking::Tracking {
@@ -1767,7 +1777,7 @@ mod tests {
                 }),
             };
         }
-        assert_ne!(refreshing, RepoTabsBarView::notify_fingerprint(&state));
+        assert_ne!(failed, RepoTabsBarView::notify_fingerprint(&state));
         assert!(!RepoTabsBarView::repo_tab_tooltip(&state.repos[0]).contains("origin/main"));
     }
 

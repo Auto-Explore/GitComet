@@ -1150,14 +1150,13 @@ impl RepoState {
         self.upstream_divergence_rev = self.upstream_divergence_rev.wrapping_add(1);
     }
 
+    /// Last-known counts stay current while a fetch or reload is merely
+    /// running, so routine background checks don't repaint every tab.
     pub fn incoming_is_stale(&self) -> bool {
         matches!(self.incoming, super::RepoIncomingState::Stale(_))
-            || self
-                .loads_in_flight
-                .is_in_flight(super::LoadKind::UpstreamDivergence)
             || matches!(
                 self.auto_fetch.status,
-                super::AutoFetchStatus::Running | super::AutoFetchStatus::Failed { .. }
+                super::AutoFetchStatus::Failed { .. }
             )
     }
 
