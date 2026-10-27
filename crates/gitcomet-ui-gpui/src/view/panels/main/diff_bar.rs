@@ -160,6 +160,64 @@ impl DiffRenderer {
         .render("diff_bar_stage", (), theme, scale)
     }
 
+    /// Cancel and Save for the buffer on screen, with Save in the primary
+    /// action slot. Auto-save exposes them only when a save has failed.
+    fn file_editor_bar_actions(
+        &self,
+        theme: AppTheme,
+        scale: crate::ui_scale::UiScale,
+        window: &Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> Vec<AnyElement> {
+        // Edit mode can remain set while a submodule summary or directory
+        // notice covers the buffer. Only offer actions for the visible editor.
+        if !self.diff_surface().file_editor || !self.file_editor_shows_save_controls() {
+            return Vec::new();
+        }
+        let pane = cx.entity().downgrade();
+        let handle = window.window_handle();
+        let cancel = components::ActionButton::new("cancel", "Cancel", move |(), cx| {
+            let _ = handle.update(cx, |_, window, cx| {
+                let _ = pane.update(cx, |pane, cx| {
+                    pane.discard_file_editor_buffer_and_exit(window, cx);
+                });
+            });
+        })
+        .with_tooltip(if self.file_editor_is_dirty() {
+            "Cancel editing, discard unsaved changes, and return to the previous view"
+        } else {
+            "Stop editing and return to the previous view"
+        })
+        .render("file_editor_cancel", (), theme, scale);
+
+        let pane = cx.entity().downgrade();
+        let is_bare = self.active_repo().is_some_and(RepoState::is_bare);
+        let save = components::ActionButton::new("save", "Save", move |(), cx| {
+            let _ = handle.update(cx, |_, window, cx| {
+                let _ = pane.update(cx, |pane, cx| {
+                    pane.save_file_editor_buffer_and_exit(window, cx);
+                });
+            });
+        })
+        .enabled(
+            !is_bare
+                && self.file_editor_is_dirty()
+                && !self.file_editor_loading()
+                && self.file_editor_key().is_some(),
+        )
+        .with_icon("icons/disk.svg")
+        .with_shortcut("secondary-s")
+        .with_tooltip(if is_bare {
+            gitcomet_core::domain::WORKING_TREE_REQUIRED_MESSAGE
+        } else {
+            "Save the file and return"
+        })
+        .framed()
+        .render("file_editor_save", (), theme, scale);
+
+        vec![cancel, save]
+    }
+
     /// Uses the same action renderer as the built-in toolbar. Owner-built
     /// controls can extend the bar without adding another host API.
     fn hosted_bar_items(
@@ -214,7 +272,11 @@ impl DiffRenderer {
         if let Some(action) = repo_id.and_then(|repo_id| self.stage_action(repo_id, cx)) {
             actions.push(self.stage_button(action, theme, scale, window, cx));
         }
-        actions.extend(self.conflict_save_bar_actions(theme, scale, cx));
+        if self.diff_surface().file_editor {
+            actions.extend(self.file_editor_bar_actions(theme, scale, window, cx));
+        } else {
+            actions.extend(self.conflict_save_bar_actions(theme, scale, cx));
+        }
         if nav.is_none()
             && viewer_nav.is_none()
             && stats.is_none()

@@ -1,7 +1,7 @@
 use super::authors::HistoryAuthorsCache;
 use super::decode::AuthorFilter;
 use super::topology::TopologyWalk;
-use super::walk::{CancellableLogWalkFind, LogWalkCancellation};
+use super::walk::{CancellableLogWalkFind, FirstParentChains, LogWalkCancellation};
 use crate::repo::ShallowSnapshot;
 use gitcomet_core::domain::{Commit, CommitId, HistoryMode, LogPage};
 use gitcomet_core::services::Result;
@@ -111,11 +111,25 @@ pub(super) enum LogPagedWalk {
     CommitTime(gix::traverse::commit::Simple<gix::OdbHandleArc, LogPagedWalkFilter>),
     DateOrder(gix::traverse::commit::Topo<CancellableLogWalkFind, LogPagedWalkFilter>),
     CachedDateOrder(TopologyWalk),
+    /// `DateOrder` along first parents, for a first-parent walk from several
+    /// tips. gix's topo walk follows only first parents in that mode but still
+    /// reports every parent; `next` trims them, so the page and its graph see
+    /// the history the walk actually took.
+    FirstParentDateOrder(gix::traverse::commit::Topo<CancellableLogWalkFind, LogPagedWalkFilter>),
+    /// The same order where the topo walk cannot be built: a shallow boundary.
+    FirstParentChains(FirstParentChains),
 }
 
 impl LogPagedWalk {
+    /// Walks that hold state proportional to the history they cover.
     pub(super) fn is_date_order(&self) -> bool {
-        matches!(self, Self::DateOrder(_) | Self::CachedDateOrder(_))
+        matches!(
+            self,
+            Self::DateOrder(_)
+                | Self::CachedDateOrder(_)
+                | Self::FirstParentDateOrder(_)
+                | Self::FirstParentChains(_)
+        )
     }
 }
 
@@ -130,6 +144,14 @@ impl Iterator for LogPagedWalk {
             Self::CommitTime(walk) => walk.next().map(|info| info.map_err(Into::into)),
             Self::DateOrder(walk) => walk.next().map(|info| info.map_err(Into::into)),
             Self::CachedDateOrder(walk) => walk.next().map(Ok),
+            Self::FirstParentDateOrder(walk) => walk.next().map(|info| {
+                info.map(|mut info| {
+                    info.parent_ids.truncate(1);
+                    info
+                })
+                .map_err(Into::into)
+            }),
+            Self::FirstParentChains(walk) => walk.next().map(Ok),
         }
     }
 }

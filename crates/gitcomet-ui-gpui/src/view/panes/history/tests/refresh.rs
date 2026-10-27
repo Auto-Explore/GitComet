@@ -390,8 +390,9 @@ fn activation_through_store_to_render_preserves_the_oldest_commit(cx: &mut gpui:
     let repo = gitcomet_git_gix::GixBackend.open(dir.path()).unwrap();
     let HistoryReadResult::Page { page, snapshot } = repo
         .read_history(
-            LogScope::AllBranches,
+            &LogScope::AllBranches.into(),
             None,
+            &Default::default(),
             &HistoryReadRequest::Page {
                 limit: 6_000,
                 cursor: None,
@@ -1855,4 +1856,42 @@ fn indexed_history_rows_tile_without_gaps_at_a_fractional_row_height(
             }
         }
     }
+}
+
+#[gpui::test]
+fn indexed_history_drops_the_labels_of_a_hidden_remote(cx: &mut gpui::TestAppContext) {
+    let (index, commits) = indexed_fixture(10);
+    let (view, cx, mut state, store) = mount(cx, Arc::new(log_page(commits.clone(), None)));
+    state.repos[0].remote_branches = Loadable::Ready(Arc::new(
+        ["origin", "upstream"]
+            .map(|remote| remote_branch(remote, "main", commits[0].id.as_ref()))
+            .to_vec(),
+    ));
+    state.repos[0].remote_branches_rev += 1;
+    install_index(&mut state, index);
+    let labels = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|_, app| {
+            let history = view.read(app).main_pane.read(app).history_view.read(app);
+            history
+                .indexed
+                .window
+                .as_ref()
+                .and_then(|window| window.cache.decorations.row_vms.first())
+                .map(|row| row.branches_text.as_ref().to_owned())
+        })
+    };
+    store.replace_snapshot_for_test(Arc::new(state.clone()));
+    set_history_view_state_for_tests(cx, &view, Arc::new(state.clone()));
+    wait_until(cx, "both remotes label the tip", |cx| {
+        labels(cx)
+            .is_some_and(|text| text.contains("origin/main") && text.contains("upstream/main"))
+    });
+
+    crate::view::test_support::hide_remotes_in_history(&mut state.repos[0], &["upstream"]);
+    store.replace_snapshot_for_test(Arc::new(state.clone()));
+    set_history_view_state_for_tests(cx, &view, Arc::new(state));
+    wait_until(cx, "the hidden remote's label is gone", |cx| {
+        labels(cx)
+            .is_some_and(|text| text.contains("origin/main") && !text.contains("upstream/main"))
+    });
 }

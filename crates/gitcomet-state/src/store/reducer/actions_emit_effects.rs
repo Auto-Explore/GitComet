@@ -1275,6 +1275,8 @@ fn command_may_change_large_file_support(command: &RepoCommandKind) -> bool {
         | RepoCommandKind::StageHunk
         | RepoCommandKind::UnstageHunk
         | RepoCommandKind::ApplyWorktreePatch { .. }
+        // Rewording keeps every tree as it was.
+        | RepoCommandKind::RewordCommit { .. }
         | RepoCommandKind::RunMaintenance => false,
     }
 }
@@ -1286,6 +1288,7 @@ fn tracks_local_actions_in_flight(command: &RepoCommandKind) -> bool {
             | RepoCommandKind::SquashRef { .. }
             | RepoCommandKind::Reset { .. }
             | RepoCommandKind::SquashCommits { .. }
+            | RepoCommandKind::RewordCommit { .. }
             | RepoCommandKind::Rebase { .. }
             | RepoCommandKind::RebaseContinue
             | RepoCommandKind::RebaseAbort
@@ -1330,6 +1333,7 @@ pub(super) fn command_touches_sequencer_state(command: &RepoCommandKind) -> bool
         RepoCommandKind::MergeRef { .. }
             | RepoCommandKind::SquashRef { .. }
             | RepoCommandKind::SquashCommits { .. }
+            | RepoCommandKind::RewordCommit { .. }
             | RepoCommandKind::Reset { .. }
             | RepoCommandKind::Rebase { .. }
             | RepoCommandKind::RebaseContinue
@@ -1357,6 +1361,7 @@ fn command_clears_pending_force_push_lease(command: &RepoCommandKind) -> bool {
             | RepoCommandKind::ForcePushWithLease { .. }
             | RepoCommandKind::PushSetUpstream { .. }
             | RepoCommandKind::Reset { .. }
+            | RepoCommandKind::RewordCommit { .. }
             | RepoCommandKind::Rebase { .. }
             | RepoCommandKind::RebaseContinue
             | RepoCommandKind::RebaseAbort
@@ -1374,6 +1379,7 @@ pub(super) fn command_clears_diff_selection(command: &RepoCommandKind) -> bool {
         command,
         RepoCommandKind::Reset { .. }
             | RepoCommandKind::SquashCommits { .. }
+            | RepoCommandKind::RewordCommit { .. }
             | RepoCommandKind::Rebase { .. }
             | RepoCommandKind::RebaseContinue
             | RepoCommandKind::RebaseAbort
@@ -1481,6 +1487,7 @@ pub(super) fn repo_command_finished(
     }
 
     let mut extra_effects = Vec::new();
+    let mut reselect = None;
     if let RepoCommandKind::LargeFile { command } = &command {
         if command.pulls() {
             repo_state.pull_in_flight = repo_state.pull_in_flight.saturating_sub(1);
@@ -1541,6 +1548,9 @@ pub(super) fn repo_command_finished(
             repo_state.sequencer_actions_in_flight.saturating_sub(1);
         repo_state.bump_ops_rev();
     }
+    if command_succeeded && matches!(command, RepoCommandKind::RebaseAbort) {
+        repo_state.reword.clear_continuation();
+    }
 
     if matches!(&command, RepoCommandKind::AddSubmodule { .. }) {
         repo_state.submodule_add_in_flight = None;
@@ -1575,6 +1585,29 @@ pub(super) fn repo_command_finished(
                 repo_state.set_commit_details(Loadable::NotLoaded);
                 repo_state.history_state.squash_preview_pending = None;
                 repo_state.set_squash_preview(Loadable::NotLoaded);
+            }
+            if let RepoCommandKind::RewordCommit {
+                commit_id,
+                rewritten_id,
+                ..
+            } = &command
+            {
+                // A refresh started while signing was paused may still return
+                // the old history. Supersede it before selecting the rewritten
+                // id, or that stale page can prune the new selection.
+                repo_state.loads_in_flight.invalidate_log();
+                // Index builds also use the old snapshot until the fresh log
+                // arrives; they must not reconcile against rewritten selection.
+                repo_state.history_state.log_snapshot = None;
+                // The reworded commit and its descendants have new ids. Follow
+                // the reworded commit when it is the one being shown; another
+                // selection is left to the log reload, which prunes it if
+                // the rewrite took it away.
+                if repo_state.history_state.selected_commit.as_ref() == Some(commit_id) {
+                    repo_state.set_selected_commit(None);
+                    repo_state.set_commit_details(Loadable::NotLoaded);
+                    reselect = rewritten_id.clone();
+                }
             }
             push_command_log(inputs, repo_state, true, &command, &output, None, false);
         }
@@ -1747,6 +1780,18 @@ pub(super) fn repo_command_finished(
     }
     let mut effects = refresh_full_effects(repo_state, state.git_log_settings);
     effects.extend(extra_effects);
+    if let Some(commit_id) = reselect {
+        effects.extend(super::effects::select_commit(state, repo_id, commit_id));
+        if let Some(repo) = state.repos.iter_mut().find(|repo| repo.id == repo_id) {
+            // This id has no row in the old history. Clear its row hints before
+            // the detail load captures the selection revision; the fresh page
+            // must not change that revision merely by clearing stale hints.
+            let mut selection = repo.history_state.multi_selection.clone();
+            selection.anchor_index = None;
+            selection.anchor_log_rev = None;
+            repo.set_commit_multi_selection(selection);
+        }
+    }
     effects
 }
 

@@ -357,6 +357,10 @@ impl PopoverHost {
             | ContextMenuAction::ToggleBranchPin { .. }
             | ContextMenuAction::ToggleBranchGroupPin { .. }
             | ContextMenuAction::SetHistoryScope { .. }
+            | ContextMenuAction::SetBranchGroupFocus { .. }
+            | ContextMenuAction::ToggleHistoryFocus { .. }
+            | ContextMenuAction::SetHistoryFocus { .. }
+            | ContextMenuAction::SetRemoteHistoryVisibility { .. }
             | ContextMenuAction::SetCommitFileSort { .. }
             | ContextMenuAction::SetFileListLayout { .. }
             | ContextMenuAction::SetDiffContentMode { .. }

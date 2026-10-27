@@ -25,6 +25,7 @@ mod scroll;
 mod signatures;
 mod viewport;
 
+pub(in crate::view) use cache_build::build_history_page_graph;
 use cache_build::*;
 pub(in crate::view) use columns::*;
 
@@ -765,6 +766,7 @@ impl HistoryView {
             repo.detached_head_commit.hash(&mut hasher);
             repo.branches_rev.hash(&mut hasher);
             repo.remote_branches_rev.hash(&mut hasher);
+            repo.history_hidden_remotes().hash(&mut hasher);
             if show_history_tags {
                 repo.tags_rev.hash(&mut hasher);
             }
@@ -1111,6 +1113,7 @@ impl HistoryView {
             // while this key is live. A mutation must copy a shared page first.
             log_source: std::ptr::from_ref(page) as usize,
             history_author_filter: repo.history_state.history_author_filter.clone(),
+            history_focus: repo.history_state.history_focus.clone(),
             head_branch_rev: repo.head_branch_rev,
             detached_head_commit: repo.detached_head_commit.clone(),
             head_branch_target: Self::attached_head_target_for_repo(repo),
@@ -1119,10 +1122,10 @@ impl HistoryView {
             } else {
                 repo.branches_rev
             },
-            remote_branches_rev: if repo.history_state.history_scope.is_current_branch_mode() {
-                0
+            remote_branches: if repo.history_state.history_scope.is_current_branch_mode() {
+                HistoryRemoteBranchesKey::default()
             } else {
-                repo.remote_branches_rev
+                HistoryRemoteBranchesKey::of(repo)
             },
             stashes_rev: repo.stashes_rev,
         }
@@ -1162,7 +1165,7 @@ impl HistoryView {
             head_branch_rev: repo.head_branch_rev,
             detached_head_commit: repo.detached_head_commit.clone(),
             branches_rev: repo.branches_rev,
-            remote_branches_rev: repo.remote_branches_rev,
+            remote_branches: HistoryRemoteBranchesKey::of(repo),
             tags_rev: if self.history_show_tags {
                 repo.tags_rev
             } else {
@@ -2265,10 +2268,7 @@ impl HistoryView {
             Loadable::Ready(b) => Arc::clone(b),
             _ => Arc::new(Vec::new()),
         };
-        let remote_branches = match &repo.remote_branches {
-            Loadable::Ready(b) => Arc::clone(b),
-            _ => Arc::new(Vec::new()),
-        };
+        let remote_branches = repo.history_remote_branches();
         let tags = if self.history_show_tags {
             match &repo.tags {
                 Loadable::Ready(t) => Arc::clone(t),

@@ -425,8 +425,9 @@ fn repo_monitor_active_repo_activation_coalesces_with_in_flight_refresh() {
         let mut state = active_ready_repo_state(repo_id, workdir.clone());
         let loads_in_flight = &mut state.repos[0].loads_in_flight;
         loads_in_flight.request_primary_refresh_batch(crate::model::PendingLogLoad {
-            scope: gitcomet_core::domain::HistoryMode::FullReachable,
+            walk: gitcomet_core::domain::HistoryMode::FullReachable.into(),
             author: None,
+            focus: Default::default(),
             limit: 200,
             cursor: None,
         });

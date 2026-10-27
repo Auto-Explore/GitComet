@@ -299,6 +299,7 @@ mod tests {
             )]),
             show_hidden_files: false,
             show_ignored_files: true,
+            history_hidden_remotes: BTreeSet::from(["upstream".into()]),
         };
         persist_repository_preference_updates(
             &path,

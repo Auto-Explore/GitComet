@@ -58,7 +58,13 @@ fn bare_repository_status_refreshes_are_empty_and_history_remains_readable() {
             .log_all_branches_page(20, None, &gitcomet_core::services::CancellationToken::new())
             .unwrap();
         let index = repo
-            .build_history_index(HistoryMode::AllBranches, None, &cancel, &mut |_| {})
+            .build_history_index(
+                &HistoryMode::AllBranches.into(),
+                None,
+                &Default::default(),
+                &cancel,
+                &mut |_| {},
+            )
             .unwrap()
             .unwrap();
         assert_eq!(page.commits.len(), if populated { 2 } else { 0 });

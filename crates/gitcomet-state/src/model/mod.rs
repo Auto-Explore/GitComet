@@ -10,6 +10,7 @@ mod navigation;
 mod operations;
 mod repository;
 mod repository_preferences;
+mod reword;
 mod signature_map;
 
 pub use app::*;
@@ -22,6 +23,7 @@ pub use navigation::*;
 pub use operations::*;
 pub use repository::*;
 pub use repository_preferences::*;
+pub use reword::*;
 pub use signature_map::CommitSignatureMap;
 
 pub type Shared<T> = Arc<T>;

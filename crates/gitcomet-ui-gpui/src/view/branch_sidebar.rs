@@ -9,6 +9,11 @@ use std::{
     num::NonZeroU32,
 };
 
+mod group_members;
+pub(in crate::view) use group_members::{
+    for_each_group_member, group_focus_state, group_focus_targets,
+};
+
 const PINNED_LOCAL_SECTION_KEY: &str = "section:pinned/local";
 const PINNED_REMOTE_SECTION_KEY: &str = "section:pinned/remote";
 const LOCAL_SECTION_KEY: &str = "section:branches/local";
@@ -266,6 +271,7 @@ pub(super) enum BranchSidebarRow {
         name: SharedString,
         collapsed: bool,
         collapse_key: SharedString,
+        hidden_in_history: bool,
     },
     GroupHeader {
         label: SharedString,
@@ -487,6 +493,7 @@ pub(in crate::view) struct BranchSidebarSourceFingerprintParts {
     remote_revs: (u64, u64, u64, u64),
     remote_hash: u64,
     remote_reuse_key: u64,
+    history_hidden_remotes: BTreeSet<String>,
     worktree_rev: u64,
     worktree_hash: u64,
     worktree_reuse_identity: fingerprint::LoadableArcIdentity,
@@ -545,6 +552,7 @@ impl BranchSidebarSourceFingerprintParts {
                 ),
             remote_revs,
             remote_reuse_key,
+            history_hidden_remotes: repo.history_hidden_remotes().clone(),
             remote_hash: reuse
                 .filter(|parts| {
                     parts.remote_revs == remote_revs || parts.remote_reuse_key == remote_reuse_key
@@ -603,6 +611,8 @@ impl BranchSidebarSourceFingerprintParts {
         self.stash_hash.hash(&mut hasher);
         5u8.hash(&mut hasher);
         self.annex_hash.hash(&mut hasher);
+        6u8.hash(&mut hasher);
+        self.history_hidden_remotes.hash(&mut hasher);
         BranchSidebarSourceFingerprint(hasher.finish())
     }
 }
@@ -646,6 +656,9 @@ pub(in crate::view) fn branch_sidebar_source_matches_cached(
     if cached.remote_revs != remote_revs
         && cached.remote_reuse_key != branch_sidebar_remote_reuse_key(repo)
     {
+        return false;
+    }
+    if cached.history_hidden_remotes != *repo.history_hidden_remotes() {
         return false;
     }
 
@@ -1258,6 +1271,7 @@ fn sidebar_rows(
                     remotes.sort_unstable_by(|left, right| left.name.cmp(right.name));
                 }
 
+                let hidden_in_history = repo.history_hidden_remotes();
                 for remote in remotes {
                     push_remote_branch_sidebar_rows(
                         remote.name,
@@ -1265,6 +1279,7 @@ fn sidebar_rows(
                         &mut rows,
                         head_upstream_full.as_deref(),
                         collapsed_items,
+                        hidden_in_history.contains(remote.name),
                     );
                 }
             }
@@ -1775,6 +1790,7 @@ fn push_remote_branch_sidebar_rows(
     out: &mut Vec<BranchSidebarRow>,
     upstream_full: Option<&str>,
     collapsed_items: &BTreeSet<String>,
+    hidden_in_history: bool,
 ) {
     let remote_collapse_key = remote_header_storage_key(remote);
     let remote_is_collapsed = is_collapsed(collapsed_items, &remote_collapse_key);
@@ -1782,6 +1798,7 @@ fn push_remote_branch_sidebar_rows(
         name: SharedString::new(remote),
         collapsed: remote_is_collapsed,
         collapse_key: remote_collapse_key.into(),
+        hidden_in_history,
     });
     if branches.is_empty() || remote_is_collapsed {
         return;

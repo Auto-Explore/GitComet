@@ -181,3 +181,146 @@ fn start_cherry_pick_asks_whether_to_commit(cx: &mut gpui::TestAppContext) {
         "Start asks before picking"
     );
 }
+
+fn cherry_pick_colours(
+    cx: &mut gpui::TestAppContext,
+    scope: gitcomet_core::domain::LogScope,
+    commits: &[(&str, &[&str], &str)],
+    branches: &[(&str, &str)],
+    stash: Option<&str>,
+    picked: [&str; 2],
+) -> Vec<(String, u8)> {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let repo_id = RepoId(31);
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = RepoState::new_opening(
+                repo_id,
+                gitcomet_core::domain::RepoSpec {
+                    workdir: std::env::temp_dir().join("gitcomet_ui_test_cherry_pick_colours"),
+                },
+            );
+            repo.history_state.history_scope = scope;
+            repo.head_branch = Loadable::Ready("main".into());
+            repo.branches = Loadable::Ready(Arc::new(
+                branches
+                    .iter()
+                    .map(|(name, target)| gitcomet_core::domain::Branch {
+                        name: (*name).into(),
+                        target: CommitId((*target).into()),
+                        upstream: None,
+                        divergence: None,
+                    })
+                    .collect(),
+            ));
+            repo.stashes = Loadable::Ready(Arc::new(
+                stash
+                    .map(|id| gitcomet_core::domain::StashEntry {
+                        index: 0,
+                        id: CommitId(id.into()),
+                        message: "WIP on main: work".into(),
+                        created_at: None,
+                    })
+                    .into_iter()
+                    .collect(),
+            ));
+            repo.log = Loadable::Ready(Arc::new(gitcomet_core::domain::LogPage {
+                commits: commits
+                    .iter()
+                    .map(|(id, parents, summary)| gitcomet_core::domain::Commit {
+                        id: CommitId((*id).into()),
+                        parent_ids: parents.iter().map(|p| CommitId((*p).into())).collect(),
+                        summary: (*summary).into(),
+                        author: "a".into(),
+                        time: std::time::SystemTime::UNIX_EPOCH,
+                    })
+                    .collect(),
+                next_cursor: None,
+            }));
+            repo.history_state.multi_selection.commits =
+                Arc::new(picked.map(|id| CommitId(id.into())).to_vec());
+            let state = Arc::new(AppState {
+                repos: vec![repo],
+                active_repo: Some(repo_id),
+                ..AppState::test_default()
+            });
+            this.state = Arc::clone(&state);
+            this.ui_model
+                .update(cx, |model, cx| model.set_state(state, cx));
+        });
+    });
+    cx.update(|_window, app| {
+        let model = view
+            .update(app, |this, cx| {
+                this.popover_host.update(cx, |host, cx| {
+                    host.context_menu_model(
+                        &PopoverKind::CommitMenu {
+                            repo_id,
+                            commit_id: CommitId(picked[0].into()),
+                        },
+                        cx,
+                    )
+                })
+            })
+            .expect("expected a commit menu");
+        model
+            .items
+            .iter()
+            .find_map(|item| match item {
+                ContextMenuItem::Entry { action, .. } => match action.as_ref() {
+                    ContextMenuAction::OpenInteractiveCherryPickSetup { source_colors, .. } => {
+                        Some(source_colors.clone())
+                    }
+                    _ => None,
+                },
+                _ => None,
+            })
+            .expect("expected Cherry-pick 2 commits")
+    })
+}
+
+#[gpui::test]
+fn multi_cherry_pick_colours_match_a_head_only_graph(cx: &mut gpui::TestAppContext) {
+    // `topic` sits on the merged side; a HEAD-only graph draws no branch
+    // heads, so it does not change that commit's colour.
+    let colours = cherry_pick_colours(
+        cx,
+        gitcomet_core::domain::LogScope::FullReachable,
+        &[
+            ("m", &["a", "b"], "m"),
+            ("b", &["base"], "b"),
+            ("a", &["base"], "a"),
+            ("base", &["root"], "base"),
+            ("root", &[], "root"),
+        ],
+        &[("main", "m"), ("topic", "b")],
+        None,
+        ["b", "a"],
+    );
+    assert_eq!(colours, [("a".to_string(), 0), ("b".to_string(), 1)]);
+}
+
+#[gpui::test]
+fn multi_cherry_pick_colours_skip_stash_helper_commits(cx: &mut gpui::TestAppContext) {
+    // The list leaves the stash's index commit out of the graph; counting its
+    // lane would shift the colour of every lane that starts below it.
+    let colours = cherry_pick_colours(
+        cx,
+        gitcomet_core::domain::LogScope::AllBranches,
+        &[
+            ("s", &["m", "i"], "WIP on main: work"),
+            ("i", &["m"], "index on main: work"),
+            ("t", &["base"], "t"),
+            ("m", &["base"], "m"),
+            ("u", &["base"], "u"),
+            ("base", &["root"], "base"),
+            ("root", &[], "root"),
+        ],
+        &[("main", "m"), ("topic", "t"), ("other", "u")],
+        Some("s"),
+        ["t", "u"],
+    );
+    assert_eq!(colours, [("u".to_string(), 3), ("t".to_string(), 2)]);
+}

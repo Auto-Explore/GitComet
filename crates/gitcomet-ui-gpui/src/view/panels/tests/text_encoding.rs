@@ -1432,7 +1432,7 @@ async fn save_button_stays_in_editor_when_the_text_cannot_be_encoded(
 }
 
 #[gpui::test]
-async fn escape_with_auto_save_stays_and_offers_discard_when_encoding_fails(
+async fn escape_with_auto_save_stays_and_offers_cancel_when_encoding_fails(
     cx: &mut gpui::TestAppContext,
 ) {
     let (view, cx) = open_window(cx);
@@ -1446,7 +1446,7 @@ async fn escape_with_auto_save_stays_and_offers_discard_when_encoding_fails(
             pane.auto_save_file_edits = true;
             assert!(
                 !pane.file_editor_shows_save_controls(),
-                "auto-save hides Save/Discard while it can write"
+                "auto-save hides Cancel/Save while it can write"
             );
         });
     });
@@ -1467,8 +1467,16 @@ async fn escape_with_auto_save_stays_and_offers_discard_when_encoding_fails(
     assert!(dirty);
     assert!(
         save_controls,
-        "Discard must be reachable while auto-save cannot write"
+        "Cancel must be reachable while auto-save cannot write"
     );
+    draw_and_drain_test_window(cx);
+    for selector in ["file_editor_cancel", "file_editor_save"] {
+        let button = cx
+            .debug_bounds(selector)
+            .expect("failed autosave offers editor actions");
+        let bar = cx.debug_bounds("diff_bottom_bar").unwrap();
+        assert!(bar.contains(&button.center()));
+    }
     assert_eq!(std::fs::read(workdir.join(FILE)).unwrap(), original);
 
     // Auto-save off keeps today's way out: the edits are kept and the editor closes.

@@ -521,6 +521,14 @@ pub struct CommitOperationOutcome {
     pub post_head: Option<CommitId>,
 }
 
+/// What [`GitRepository::reword_commit_with_output`] did.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct RewordCommitOutcome {
+    pub output: CommandOutput,
+    /// The rewritten commit's new id, when the backend could tell it.
+    pub rewritten_id: Option<CommitId>,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SafePushAfterCommitContext {
     pub amend: bool,
@@ -671,13 +679,21 @@ pub trait GitRepository: Send + Sync {
     /// packs written since become visible; later reads reopen the store.
     fn release_object_store(&self) {}
 
-    /// Distinct author names across the complete, unfiltered history scope.
-    /// Called on demand, independently of the visible commit metadata cache.
+    /// Distinct author names across the walk's complete history, without an
+    /// author filter. Called on demand, independently of the visible commit
+    /// metadata cache.
+    ///
+    /// `focus` narrows the walk the way [`Self::read_history`] does, so the
+    /// catalog offers the authors of the commits actually on screen.
     fn history_authors(
         &self,
-        mode: HistoryMode,
+        walk: &HistoryWalk,
+        focus: &HistoryFocusSet,
         cancellation: &CancellationToken,
     ) -> Result<Arc<[Arc<str>]>> {
+        let _ = focus;
+        refuse_hidden_remotes(walk)?;
+        let mode = walk.mode();
         let mut authors = Vec::new();
         let mut seen = std::collections::HashSet::new();
         let mut cursor = None;
@@ -703,8 +719,9 @@ pub trait GitRepository: Send + Sync {
     /// from the branch tip to the requested offset.
     fn build_history_index(
         &self,
-        _mode: HistoryMode,
+        _walk: &HistoryWalk,
         _author: Option<&str>,
+        _focus: &HistoryFocusSet,
         cancellation: &CancellationToken,
         _on_progress: &mut dyn FnMut(crate::history_index::HistoryIndexProgress),
     ) -> Result<Option<crate::history_index::HistoryIndexHandle>> {
@@ -738,14 +755,23 @@ pub trait GitRepository: Send + Sync {
 
     /// Read or refresh a history snapshot. Backends without snapshot support
     /// conservatively rebuild and never claim an unchanged result.
+    ///
+    /// A non-empty `focus` replaces the walk's tips with the refs it names, so
+    /// the page holds only the commits those refs reach. The default
+    /// implementation has no way to reseed the paged reader and ignores it, the
+    /// same way it ignores `author`; backends that support focus override this.
     fn read_history(
         &self,
-        mode: HistoryMode,
+        walk: &HistoryWalk,
         author: Option<&str>,
+        focus: &HistoryFocusSet,
         request: &HistoryReadRequest,
         cancellation: &CancellationToken,
         on_chunk: &mut dyn FnMut(LogChunk),
     ) -> Result<HistoryReadResult> {
+        let _ = focus;
+        refuse_hidden_remotes(walk)?;
+        let mode = walk.mode();
         let page = match request {
             HistoryReadRequest::Page {
                 limit,
@@ -1439,6 +1465,36 @@ pub trait GitRepository: Send + Sync {
         Err(Error::new(ErrorKind::Unsupported(
             "git rebase -i is not implemented for this backend",
         )))
+    }
+    /// Replaces the message of `commit_id`, which must be HEAD or a commit on
+    /// HEAD's linear first-parent history. Trees are unchanged: HEAD is
+    /// amended without its staged changes, and an older commit is reworded
+    /// by replaying its descendants on top of it.
+    fn reword_commit_with_output(
+        &self,
+        _commit_id: &CommitId,
+        _message: &str,
+    ) -> Result<RewordCommitOutcome> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "rewording a commit is not implemented for this backend",
+        )))
+    }
+    /// Continue a paused message edit only when its persisted rebase belongs
+    /// to this target and message. This retains the rewritten target's identity
+    /// across signing retries, unlike a generic rebase continuation.
+    fn continue_reword_commit_with_output(
+        &self,
+        _commit_id: &CommitId,
+        _message: &str,
+    ) -> Result<RewordCommitOutcome> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "continuing a commit message edit is not implemented for this backend",
+        )))
+    }
+    /// Whether the paused operation is the message edit identified by these
+    /// arguments. An unrelated rebase must never be resumed as a signing retry.
+    fn reword_commit_in_progress(&self, _commit_id: &CommitId, _message: &str) -> Result<bool> {
+        Ok(false)
     }
     /// Picks `entries` in order. Without `commit` every pick only merges into
     /// the index and worktree, and reword/squash/fixup steps are refused.
@@ -2193,6 +2249,51 @@ impl HistoryRefFilter {
     }
 }
 
+/// What a history walk starts from: its mode, and the remotes an all-branches
+/// walk leaves out. A hidden remote's refs are the remote-tracking refs its
+/// fetch refspecs write, unless a shown remote's refspecs write them too.
+/// Other modes walk only HEAD, so they hide nothing.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Hash)]
+pub struct HistoryWalk {
+    mode: HistoryMode,
+    hidden_remotes: Arc<[Arc<str>]>,
+}
+
+impl HistoryWalk {
+    pub fn new<I, S>(mode: HistoryMode, hidden_remotes: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<Arc<str>>,
+    {
+        let mut hidden: Vec<Arc<str>> = if mode.is_all_branches() {
+            hidden_remotes.into_iter().map(Into::into).collect()
+        } else {
+            Vec::new()
+        };
+        hidden.sort();
+        hidden.dedup();
+        Self {
+            mode,
+            hidden_remotes: hidden.into(),
+        }
+    }
+
+    pub fn mode(&self) -> HistoryMode {
+        self.mode
+    }
+
+    /// Sorted remote names.
+    pub fn hidden_remotes(&self) -> &[Arc<str>] {
+        &self.hidden_remotes
+    }
+}
+
+impl From<HistoryMode> for HistoryWalk {
+    fn from(mode: HistoryMode) -> Self {
+        Self::new(mode, std::iter::empty::<Arc<str>>())
+    }
+}
+
 fn ref_pattern_matches(pattern: &str, name: &str) -> bool {
     if !pattern.contains('*') {
         let pattern = pattern.trim_end_matches('/');
@@ -2253,6 +2354,15 @@ impl RepositoryOptions {
     pub fn is_default(&self) -> bool {
         *self == Self::default()
     }
+}
+
+fn refuse_hidden_remotes(walk: &HistoryWalk) -> Result<()> {
+    if !walk.hidden_remotes().is_empty() {
+        return Err(Error::new(ErrorKind::Unsupported(
+            "hiding remotes from history is not supported by this backend",
+        )));
+    }
+    Ok(())
 }
 
 fn unsupported_repository_options() -> Error {

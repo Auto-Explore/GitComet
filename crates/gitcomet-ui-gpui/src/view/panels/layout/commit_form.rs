@@ -95,6 +95,9 @@ impl DetailsPaneView {
         window: &Window,
         cx: &mut gpui::Context<Self>,
     ) -> bool {
+        if self.handle_commit_reword_submit_shortcut(window, cx) {
+            return true;
+        }
         if !self
             .commit_message_input
             .read(cx)

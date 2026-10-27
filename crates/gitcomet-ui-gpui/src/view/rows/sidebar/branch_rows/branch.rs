@@ -108,7 +108,11 @@ impl SidebarPaneView {
             format!("branch_row_{}_{}", repo_id.0, ix).into()
         };
         let row_debug_selector = row_group.as_ref().to_owned();
-        let branch_text_color = if surface == SidebarRowSurface::Pins {
+        let in_history_focus = branch_in_history_focus(&ctx.history_focus, &target);
+        let history_focus_color = theme.colors.accent.foreground;
+        let branch_text_color = if in_history_focus {
+            history_focus_color
+        } else if surface == SidebarRowSurface::Pins {
             theme.colors.foreground.primary
         } else if muted {
             theme.colors.foreground.secondary
@@ -116,7 +120,9 @@ impl SidebarPaneView {
             ctx.branch_tree_color(section)
         };
         let branch_selected_bg = selected_branch_row_bg(theme);
-        let branch_selected_label_color = if branch_selected {
+        let branch_selected_label_color = if in_history_focus {
+            history_focus_color
+        } else if branch_selected {
             selected_branch_label_color(theme)
         } else {
             branch_text_color
@@ -128,6 +134,36 @@ impl SidebarPaneView {
         } else {
             ctx.icon_primary
         };
+        let focus_eye = ctx
+            .focus_eye_slot(if in_history_focus {
+                FocusEyeState::Focused
+            } else {
+                FocusEyeState::Unfocused
+            })
+            .map(|eye| {
+                let focus_target = focus_target_for_branch(&target);
+                eye.id(("sidebar_focus_eye", ix))
+                    .debug_selector(move || format!("sidebar_focus_eye_{ix}"))
+                    .gitcomet_tooltip(
+                        theme,
+                        if in_history_focus {
+                            "Stop focus"
+                        } else {
+                            "Focus"
+                        }
+                        .into(),
+                    )
+                    .on_activate(
+                        false,
+                        controls::ControlActivation::Nested,
+                        cx.listener(move |this, _, _, _| {
+                            this.store.dispatch(Msg::ToggleHistoryFocus {
+                                repo_id,
+                                target: focus_target.clone(),
+                            });
+                        }),
+                    )
+            });
         let badge_gap_px = ctx.px(BRANCH_BADGE_GAP_PX);
         let head_highlight = with_alpha(
             theme.colors.accent.foreground,
@@ -162,6 +198,7 @@ impl SidebarPaneView {
                 row.row_accent(theme.colors.accent.foreground)
             })
             .text_color(branch_text_color)
+            .children(focus_eye)
             .child(ctx.tree_toggle_slot(None).when(
                 surface == SidebarRowSurface::Pins && depth == 0,
                 |slot| {

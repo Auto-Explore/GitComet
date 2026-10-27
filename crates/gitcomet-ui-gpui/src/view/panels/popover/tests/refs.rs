@@ -2398,3 +2398,144 @@ fn local_branch_menu_excludes_pull_merge_and_squash_for_current_branch(
         assert!(delete_disabled, "expected delete entry to be disabled");
     });
 }
+
+#[gpui::test]
+fn remote_menu_offers_to_hide_shown_remotes_and_show_hidden_ones(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let repo_id = RepoId(23);
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = RepoState::new_opening(
+                repo_id,
+                gitcomet_core::domain::RepoSpec {
+                    workdir: std::env::temp_dir().join("gitcomet_ui_test_remote_history_menu"),
+                },
+            );
+            repo.remotes = Loadable::Ready(Arc::new(vec![
+                web_remote("origin", None),
+                web_remote("upstream", None),
+            ]));
+            crate::view::test_support::hide_remotes_in_history(&mut repo, &["upstream"]);
+            let state = Arc::new(AppState {
+                repos: vec![repo],
+                active_repo: Some(repo_id),
+                ..AppState::test_default()
+            });
+            this.state = Arc::clone(&state);
+            this.ui_model
+                .update(cx, |model, cx| model.set_state(state, cx));
+        });
+    });
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.popover_host.update(cx, |host, cx| {
+                for (name, shown, label, eye) in [
+                    (
+                        "origin",
+                        true,
+                        "Hide from history graph",
+                        "icons/eye_off.svg",
+                    ),
+                    ("upstream", false, "Show in history graph", "icons/eye.svg"),
+                ] {
+                    let model = host
+                        .context_menu_model(
+                            &PopoverKind::remote(
+                                repo_id,
+                                RemotePopoverKind::Menu {
+                                    name: name.to_string(),
+                                },
+                            ),
+                            cx,
+                        )
+                        .expect("expected a remote menu");
+                    let ix = entry_ix(&model, label);
+                    let ContextMenuItem::Entry { icon, action, .. } = &model.items[ix] else {
+                        unreachable!();
+                    };
+                    assert_eq!(icon.as_ref().map(|icon| icon.as_ref()), Some(eye), "{name}");
+                    assert!(
+                        matches!(
+                            action.as_ref(),
+                            ContextMenuAction::SetRemoteHistoryVisibility {
+                                repo_id: rid,
+                                remote,
+                                hidden,
+                            } if *rid == repo_id && remote == name && *hidden == shown
+                        ),
+                        "{name}: choosing it flips the remote's visibility"
+                    );
+                }
+            })
+        })
+    });
+}
+
+#[gpui::test]
+fn commit_menu_leaves_out_branches_of_remotes_hidden_from_history(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let repo_id = RepoId(24);
+    let commit_id = CommitId("0123456789abcdef".into());
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = RepoState::new_opening(
+                repo_id,
+                gitcomet_core::domain::RepoSpec {
+                    workdir: std::env::temp_dir().join("gitcomet_ui_test_hidden_remote_refs"),
+                },
+            );
+            repo.tags = Loadable::Ready(Arc::new(Vec::new()));
+            repo.remote_branches = Loadable::Ready(Arc::new(
+                ["origin", "upstream"]
+                    .map(|remote| gitcomet_core::domain::RemoteBranch {
+                        remote: remote.to_string(),
+                        name: "main".to_string(),
+                        target: commit_id.clone(),
+                    })
+                    .to_vec(),
+            ));
+            crate::view::test_support::hide_remotes_in_history(&mut repo, &["upstream"]);
+            let state = Arc::new(AppState {
+                repos: vec![repo],
+                active_repo: Some(repo_id),
+                ..AppState::test_default()
+            });
+            this.state = Arc::clone(&state);
+            this.ui_model
+                .update(cx, |model, cx| model.set_state(state, cx));
+        });
+    });
+    let labels = cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.popover_host.update(cx, |host, cx| {
+                host.context_menu_model(
+                    &PopoverKind::CommitMenu {
+                        repo_id,
+                        commit_id: commit_id.clone(),
+                    },
+                    cx,
+                )
+            })
+        })
+        .expect("expected a commit menu")
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            ContextMenuItem::Entry { label, .. } => Some(label.as_ref().to_owned()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+    });
+    assert!(
+        labels.contains(&"Remote branch origin/main".to_string()),
+        "{labels:?}"
+    );
+    assert!(
+        !labels.iter().any(|label| label.contains("upstream/main")),
+        "{labels:?}"
+    );
+}

@@ -115,8 +115,9 @@ pub(super) fn refresh(
             effects.push(Effect::LoadLog {
                 repo_id,
                 seq,
-                scope: request.scope,
+                walk: request.walk,
                 author: request.author,
+                focus: request.focus,
                 limit: request.limit,
                 cursor: request.cursor,
             });

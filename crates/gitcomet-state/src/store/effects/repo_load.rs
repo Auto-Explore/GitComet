@@ -2,8 +2,8 @@ use crate::model::{AppState, RepoLifetime, WorktreeDirtyScope};
 use crate::msg::{Msg, WorktreeListRead};
 use crate::store::repository_runtime::RepositoryRuntimes;
 use gitcomet_core::domain::{
-    DiffPreviewTextSide, DiffTarget, LogCursor, LogScope, RepoStatus, Worktree,
-    WorktreeDirtySummary, count_file_statuses,
+    DiffPreviewTextSide, DiffTarget, LogCursor, RepoStatus, Worktree, WorktreeDirtySummary,
+    count_file_statuses,
 };
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::path_utils::canonicalize_or_original;
@@ -118,13 +118,15 @@ pub(super) fn schedule_load_log(
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     seq: crate::model::LogLoadSeq,
-    scope: LogScope,
+    walk: gitcomet_core::services::HistoryWalk,
     author: Option<String>,
+    focus: gitcomet_core::domain::HistoryFocusSet,
     cursor: Option<LogCursor>,
     request: gitcomet_core::services::HistoryReadRequest,
     cancellation: CancellationToken,
 ) {
     let cursor_on_missing = cursor.clone();
+    let scope = walk.mode();
     spawn_detached_with_repo_or_else(
         executor,
         "load-log",
@@ -144,8 +146,9 @@ pub(super) fn schedule_load_log(
                 );
             };
             let result = repo.read_history(
-                scope,
+                &walk,
                 author.as_deref(),
+                &focus,
                 &request,
                 &cancellation,
                 &mut on_chunk,

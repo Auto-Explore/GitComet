@@ -36,6 +36,7 @@ pub(super) mod prepared;
 mod repo_management;
 mod repo_watch;
 mod repository_preferences;
+mod reword;
 mod settings;
 mod submodule_trust;
 #[cfg(test)]
@@ -166,6 +167,7 @@ fn sequencer_effect_repo(effect: &Effect) -> Option<RepoId> {
         Effect::RepoCommand(RepoCommandEffect::MergeRef { repo_id, .. })
         | Effect::RepoCommand(RepoCommandEffect::SquashRef { repo_id, .. })
         | Effect::RepoCommand(RepoCommandEffect::SquashCommits { repo_id, .. })
+        | Effect::RepoCommand(RepoCommandEffect::RewordCommit { repo_id, .. })
         | Effect::RepoCommand(RepoCommandEffect::Reset { repo_id, .. })
         | Effect::RepoCommand(RepoCommandEffect::Rebase { repo_id, .. })
         | Effect::RepoCommand(RepoCommandEffect::RebaseContinue { repo_id, .. })
@@ -247,6 +249,9 @@ pub(crate) fn msg_requires_available_git(msg: &Msg) -> bool {
             | Msg::RepoExternallyChanged { .. }
             | Msg::SetHistoryScope { .. }
             | Msg::SetHistoryAuthorFilter { .. }
+            | Msg::SetHistoryFocus { .. }
+            | Msg::ToggleHistoryFocus { .. }
+            | Msg::FocusHistoryRefs { .. }
             | Msg::LoadMoreHistory { .. }
             | Msg::SelectCommit { .. }
             | Msg::CompareCommitRange { .. }
@@ -348,6 +353,8 @@ pub(crate) fn msg_requires_available_git(msg: &Msg) -> bool {
             | Msg::Reset { .. }
             | Msg::PrepareSquash { .. }
             | Msg::SquashCommits { .. }
+            | Msg::RewordCommit { .. }
+            | Msg::ContinueRewordCommit { .. }
             | Msg::Rebase { .. }
             | Msg::RebaseContinue { .. }
             | Msg::RebaseAbort { .. }
@@ -569,54 +576,8 @@ pub(super) fn reduce_prepared(
     state: &mut AppState,
     msg: Msg,
 ) -> Vec<Effect> {
-    if let Some((repo_id, requirement)) = msg.repository_requirement() {
-        if msg_requires_available_git(&msg)
-            && state
-                .repos
-                .iter()
-                .find(|repo| repo.id == repo_id)
-                .is_some_and(|repo| {
-                    matches!(
-                        repo.bare_mode_conversion,
-                        crate::model::BareModeConversionState::Converting
-                            | crate::model::BareModeConversionState::Reopening
-                    )
-                })
-        {
-            if let Msg::SaveWorktreeFile {
-                completion: Some(completion),
-                ..
-            } = msg
-            {
-                let _ = completion.try_send(false);
-            }
-            return Vec::new();
-        }
-        let annex_routes_pull = matches!(msg, Msg::Pull { .. })
-            && state
-                .repos
-                .iter()
-                .find(|repo| repo.id == repo_id)
-                .is_some_and(|repo| repo.annex_takes_over_pull_push(&state.large_file_settings));
-        if !annex_routes_pull
-            && requirement == gitcomet_core::domain::RepositoryRequirement::WorkingTree
-            && refuse_bare_worktree_action(state, repo_id)
-        {
-            report_error(
-                inputs,
-                state,
-                Some(repo_id),
-                gitcomet_core::domain::WORKING_TREE_REQUIRED_MESSAGE.to_string(),
-            );
-            if let Msg::SaveWorktreeFile {
-                completion: Some(completion),
-                ..
-            } = msg
-            {
-                let _ = completion.try_send(false);
-            }
-            return Vec::new();
-        }
+    if refuse_for_repository_requirement(inputs, state, &msg) {
+        return Vec::new();
     }
     // History shows the repository's own worktree; a linked worktree's file
     // belongs to a hosted session, never to History's selection.
@@ -679,6 +640,61 @@ pub(super) fn reduce_prepared(
     effects
 }
 
+/// Whether `msg` must be dropped because its repository cannot serve it: Git
+/// waits out a bare-mode conversion, and a bare repository has no working
+/// tree. Authentication replay checks this too, since it skips
+/// `reduce_prepared`.
+fn refuse_for_repository_requirement(
+    inputs: &ReducerInputs,
+    state: &mut AppState,
+    msg: &Msg,
+) -> bool {
+    let Some((repo_id, requirement)) = msg.repository_requirement() else {
+        return false;
+    };
+    let converting = msg_requires_available_git(msg)
+        && state
+            .repos
+            .iter()
+            .find(|repo| repo.id == repo_id)
+            .is_some_and(|repo| {
+                matches!(
+                    repo.bare_mode_conversion,
+                    crate::model::BareModeConversionState::Converting
+                        | crate::model::BareModeConversionState::Reopening
+                )
+            });
+    let refused = converting || {
+        let annex_routes_pull = matches!(msg, Msg::Pull { .. })
+            && state
+                .repos
+                .iter()
+                .find(|repo| repo.id == repo_id)
+                .is_some_and(|repo| repo.annex_takes_over_pull_push(&state.large_file_settings));
+        let refused = !annex_routes_pull
+            && requirement == gitcomet_core::domain::RepositoryRequirement::WorkingTree
+            && refuse_bare_worktree_action(state, repo_id);
+        if refused {
+            report_error(
+                inputs,
+                state,
+                Some(repo_id),
+                gitcomet_core::domain::WORKING_TREE_REQUIRED_MESSAGE.to_string(),
+            );
+        }
+        refused
+    };
+    if refused
+        && let Msg::SaveWorktreeFile {
+            completion: Some(completion),
+            ..
+        } = msg
+    {
+        let _ = completion.try_send(false);
+    }
+    refused
+}
+
 fn refuse_bare_worktree_action(state: &mut AppState, repo_id: RepoId) -> bool {
     let Some(repo) = state.repos.iter_mut().find(|repo| repo.id == repo_id) else {
         return false;
@@ -711,6 +727,7 @@ fn finalize_reduced_state(state: &mut AppState, nav_push: Option<bool>) {
     effects::retire_orphaned_worktree_diffs(state);
     for repo in &mut state.repos {
         repo.prepare_history_squash_plan();
+        repo.prepare_commit_reword_position();
     }
     // A closed repository's leases go with it; releasing them later is a
     // no-op. Free when nothing is leased.
@@ -807,7 +824,15 @@ fn reduce_inner(
     state: &mut AppState,
     msg: Msg,
 ) -> Vec<Effect> {
-    if msg_requires_available_git(&msg) && !state.git_runtime.is_available() {
+    if msg_requires_available_git(&msg)
+        && !state.git_runtime.is_available()
+        && !matches!(
+            msg,
+            Msg::RewordCommit { .. }
+                | Msg::ContinueRewordCommit { .. }
+                | Msg::RebaseContinue { .. }
+        )
+    {
         return Vec::new();
     }
 
@@ -1133,6 +1158,17 @@ fn reduce_inner(
         Msg::SetHistoryScope { repo_id, scope } => {
             external_and_history::set_history_scope(state, repo_id, scope)
         }
+        Msg::SetHistoryFocus { repo_id, focus } => {
+            external_and_history::set_history_focus(state, repo_id, focus)
+        }
+        Msg::ToggleHistoryFocus { repo_id, target } => {
+            external_and_history::toggle_history_focus(state, repo_id, target)
+        }
+        Msg::FocusHistoryRefs {
+            repo_id,
+            targets,
+            focused,
+        } => external_and_history::focus_history_refs(state, repo_id, &targets, focused),
         Msg::SetHistoryAuthorFilter { repo_id, author } => {
             external_and_history::set_history_author_filter(state, repo_id, author)
         }
@@ -1961,11 +1997,41 @@ fn reduce_inner(
             message,
             count,
         ),
+        Msg::RewordCommit {
+            repo_id,
+            request_id,
+            commit_id,
+            message,
+        } => reword::start(inputs, state, repo_id, request_id, commit_id, message),
+        Msg::ContinueRewordCommit {
+            repo_id,
+            request_id,
+        } => reword::resume(inputs, state, repo_id, request_id),
+        Msg::DismissRewordCommit {
+            repo_id,
+            request_id,
+        } => {
+            if let Some(repo) = state.repos.iter_mut().find(|repo| repo.id == repo_id) {
+                repo.reword.dismiss(request_id);
+            }
+            Vec::new()
+        }
         Msg::Rebase { repo_id, onto } => {
             begin_local_action(state, repo_id);
             actions_emit_effects::rebase(repo_id, onto)
         }
         Msg::RebaseContinue { repo_id } => {
+            if let Some(request_id) = state
+                .repos
+                .iter()
+                .find(|repo| repo.id == repo_id)
+                .and_then(|repo| repo.reword.continuation)
+            {
+                return reword::resume(inputs, state, repo_id, request_id);
+            }
+            if !state.git_runtime.is_available() {
+                return Vec::new();
+            }
             if sequencer_step_blocked(inputs, state, repo_id) {
                 return Vec::new();
             }

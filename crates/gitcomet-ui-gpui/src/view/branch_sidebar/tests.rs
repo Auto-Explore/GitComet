@@ -854,3 +854,63 @@ fn branch_tooltip_only_appends_upstream_note_when_requested() {
         "Branch: origin/main (upstream for current branch)"
     );
 }
+
+#[test]
+fn a_remote_hidden_from_history_marks_its_header_and_changes_the_cache_source() {
+    let mut repo = RepoState::new_opening(
+        RepoId(1),
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    );
+    repo.remotes = Loadable::Ready(Arc::new(
+        ["origin", "upstream"]
+            .map(|name| Remote {
+                name: name.into(),
+                url: None,
+                default_branch: None,
+            })
+            .to_vec(),
+    ));
+    let hidden_headers = |repo: &RepoState| {
+        branch_sidebar_rows(repo, &BTreeSet::new(), &BTreeSet::new(), "")
+            .into_iter()
+            .filter_map(|row| match row {
+                BranchSidebarRow::RemoteHeader {
+                    name,
+                    hidden_in_history,
+                    ..
+                } => Some((name.to_string(), hidden_in_history)),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        hidden_headers(&repo),
+        [
+            ("origin".to_string(), false),
+            ("upstream".to_string(), false)
+        ]
+    );
+    let (shown_source, cached) = branch_sidebar_source_fingerprint(&repo, None);
+
+    crate::view::test_support::hide_remotes_in_history(&mut repo, &["upstream"]);
+    assert_eq!(
+        hidden_headers(&repo),
+        [
+            ("origin".to_string(), false),
+            ("upstream".to_string(), true)
+        ]
+    );
+    assert!(!branch_sidebar_source_matches_cached(&repo, &cached));
+    let (hidden_source, parts) = branch_sidebar_source_fingerprint(&repo, Some(&cached));
+    assert_eq!(
+        hidden_source,
+        branch_sidebar_source_fingerprint(&repo, None).0
+    );
+    assert_ne!(
+        shown_source, hidden_source,
+        "cached rows must not be reused"
+    );
+    assert!(branch_sidebar_source_matches_cached(&repo, &parts));
+}
