@@ -367,6 +367,7 @@ fn branch_sidebar_defaults_secondary_sections_to_collapsed() {
         },
     );
     repo.worktrees = Loadable::Ready(Arc::new(vec![Worktree {
+        bare: false,
         path: PathBuf::from("linked-worktree"),
         head: None,
         branch: Some("main".to_string()),
@@ -565,6 +566,7 @@ fn branch_sidebar_collapses_branch_sections_without_hiding_other_sections() {
         target: CommitId("deadbeef".into()),
     }]));
     repo.worktrees = Loadable::Ready(Arc::new(vec![Worktree {
+        bare: false,
         path: PathBuf::from("linked-worktree"),
         head: None,
         branch: Some("main".to_string()),
@@ -2125,6 +2127,7 @@ fn sidebar_worktree_badges_share_one_right_edge_near_the_pane_edge(cx: &mut gpui
         divergence: None,
     };
     let worktree = |path: &str, branch: &str| gitcomet_core::domain::Worktree {
+        bare: false,
         path: PathBuf::from(path),
         head: None,
         branch: Some(branch.to_string()),
@@ -2283,6 +2286,7 @@ fn native_file_drop_moves_before_acknowledgement_and_can_be_undone(cx: &mut gpui
     }]));
     state.repos[0].file_browser.bump_rev();
     store.replace_snapshot_for_test(Arc::new(state));
+    test_support::install_working_tree_repositories(&store);
     sync_view_snapshot(cx, &view);
     let position = cx.debug_bounds("file_browser_row_0").unwrap().center();
     dispatch_file_drop(
@@ -2631,6 +2635,7 @@ fn explorer_chevron_click_keeps_the_selection_and_keyboard_paste_uses_focused_fo
     ]));
     state.repos[0].file_browser.bump_rev();
     store.replace_snapshot_for_test(Arc::new(state));
+    test_support::install_working_tree_repositories(&store);
     sync_view_snapshot(cx, &view);
     let primary = gpui::Modifiers {
         control: !cfg!(target_os = "macos"),
@@ -2804,6 +2809,7 @@ fn explorer_folder_row_click_selects_focuses_and_toggles(cx: &mut gpui::TestAppC
     ]));
     state.repos[0].file_browser.bump_rev();
     store.replace_snapshot_for_test(Arc::new(state));
+    test_support::install_working_tree_repositories(&store);
     sync_view_snapshot(cx, &view);
     let primary = gpui::Modifiers {
         control: !cfg!(target_os = "macos"),
@@ -2900,35 +2906,39 @@ fn explorer_external_drop_writes_to_highlighted_folder_in_sidebar_and_popup(
     let external = tempfile::tempdir().unwrap();
     std::fs::create_dir(directory.path().join("destination")).unwrap();
     std::fs::write(directory.path().join("destination/keep.txt"), "keep").unwrap();
+    // Built once: a fresh repo lifetime per pass would leave the first pass's
+    // handle installed, and the store retires it as stale before the drop.
+    let mut seeded = view_state_with_active_ready_repo(RepoId(1));
+    seeded.repos[0].spec.workdir = directory.path().to_path_buf();
+    seeded.sidebar_mode = gitcomet_state::model::SidebarMode::Files;
+    seeded.repos[0].file_browser.entries = Loadable::Ready(Arc::new(vec![
+        FileEntry {
+            name: "destination".into(),
+            path: Arc::new("destination".into()),
+            kind: FileEntryKind::Directory,
+            depth: 0,
+            ignored: false,
+        },
+        FileEntry {
+            name: "keep.txt".into(),
+            path: Arc::new("destination/keep.txt".into()),
+            kind: FileEntryKind::File,
+            depth: 1,
+            ignored: false,
+        },
+    ]));
+    seeded.repos[0]
+        .file_browser
+        .expanded_dirs
+        .insert(Arc::new(PathBuf::from("destination")));
     for popup in [false, true] {
         let name = if popup { "popup.txt" } else { "sidebar.txt" };
         let source = external.path().join(name);
         std::fs::write(&source, "dropped content").unwrap();
-        let mut state = view_state_with_active_ready_repo(RepoId(1));
-        state.repos[0].spec.workdir = directory.path().to_path_buf();
-        state.sidebar_mode = gitcomet_state::model::SidebarMode::Files;
-        state.repos[0].file_browser.entries = Loadable::Ready(Arc::new(vec![
-            FileEntry {
-                name: "destination".into(),
-                path: Arc::new("destination".into()),
-                kind: FileEntryKind::Directory,
-                depth: 0,
-                ignored: false,
-            },
-            FileEntry {
-                name: "keep.txt".into(),
-                path: Arc::new("destination/keep.txt".into()),
-                kind: FileEntryKind::File,
-                depth: 1,
-                ignored: false,
-            },
-        ]));
-        state.repos[0]
-            .file_browser
-            .expanded_dirs
-            .insert(Arc::new(PathBuf::from("destination")));
+        let mut state = seeded.clone();
         state.repos[0].file_browser.bump_rev();
         store.replace_snapshot_for_test(Arc::new(state));
+        test_support::install_working_tree_repositories(&store);
         sync_view_snapshot(cx, &view);
         if popup {
             cx.update(|_, app| {

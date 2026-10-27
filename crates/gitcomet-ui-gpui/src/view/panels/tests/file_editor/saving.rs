@@ -672,44 +672,91 @@ async fn review_regression_moving_a_repository_prompts_before_detaching_dirty_ed
 }
 
 #[gpui::test]
-async fn discarding_from_the_toolbar_returns_to_the_read_only_view(cx: &mut gpui::TestAppContext) {
+fn cancel_from_the_action_bar_preserves_worktree_changes_and_exits(cx: &mut gpui::TestAppContext) {
+    cancel_editor_from_action_bar(cx, true, DiffArea::Unstaged);
+}
+
+#[gpui::test]
+fn cancel_from_the_action_bar_exits_a_clean_buffer(cx: &mut gpui::TestAppContext) {
+    cancel_editor_from_action_bar(cx, false, DiffArea::Staged);
+}
+
+fn cancel_editor_from_action_bar(
+    cx: &mut gpui::TestAppContext,
+    dirty: bool,
+    origin_area: DiffArea,
+) {
+    gitcomet_ui_kit::test_support::use_real_text_backend(cx);
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
 
     let repo_id = gitcomet_state::model::RepoId(964);
-    let workdir = unique_workdir("file_editor_discard_exits");
-    let file_rel = std::path::PathBuf::from("main.rs");
-    std::fs::write(workdir.join(&file_rel), "fn main() {}\n").expect("write fixture");
+    let workdir = unique_workdir("file_editor_cancel_exits");
+    let file_rel = std::path::PathBuf::from("notes.md");
+    let saved_contents = "# Existing working-tree change\n";
+    std::fs::write(workdir.join(&file_rel), saved_contents).expect("write fixture");
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            push_test_state(this, editor_state(repo_id, &workdir, &file_rel), cx);
-            this.diff_renderer
-                .update(cx, |pane, cx| pane.ensure_file_editor_loaded(cx));
+            let mut state = editor_state(repo_id, &workdir, &file_rel);
+            let repo = &mut Arc::make_mut(&mut state).repos[0];
+            set_test_file_status(
+                repo,
+                file_rel.clone(),
+                FileStatusKind::Modified,
+                origin_area,
+            );
+            repo.diff_state.edit_return_view = Some(gitcomet_state::model::FileEditReturnView {
+                target: repo.diff_state.diff_target.clone().unwrap(),
+                content_preview: false,
+            });
+            repo.diff_state.diff_target = Some(DiffTarget::working_tree(
+                file_rel.clone(),
+                DiffArea::Unstaged,
+            ));
+            push_test_state(this, state, cx);
+            this.diff_renderer.update(cx, |pane, cx| {
+                pane.auto_save_file_edits = false;
+                pane.ensure_file_editor_loaded(cx);
+            });
         });
     });
     cx.run_until_parked();
 
     let diff_renderer = cx.update(|_window, app| view.read(app).diff_renderer.clone());
-    cx.update(|_window, app| {
-        diff_renderer.update(app, |pane, cx| {
-            pane.file_editor_input.update(cx, |input, cx| {
-                input.replace_utf8_range(0..0, "// scratch\n", cx);
+    if dirty {
+        cx.update(|_window, app| {
+            diff_renderer.update(app, |pane, cx| {
+                pane.file_editor_input.update(cx, |input, cx| {
+                    input.replace_utf8_range(0..0, "Unsaved scratch text\n", cx);
+                });
             });
         });
-    });
-    cx.run_until_parked();
+    }
+    draw_and_drain_test_window(cx);
     cx.update(|_window, app| {
-        assert!(diff_renderer.read(app).file_editor_is_dirty());
+        assert_eq!(diff_renderer.read(app).file_editor_is_dirty(), dirty);
     });
-
-    cx.update(|window, app| {
-        diff_renderer.update(app, |pane, cx| {
-            pane.discard_file_editor_buffer_and_exit(window, cx);
-        });
-    });
+    assert!(cx.debug_bounds("file_editor_discard").is_none());
+    assert!(cx.debug_bounds("diff_bar_stage").is_none());
+    let cancel = cx
+        .debug_bounds("file_editor_cancel")
+        .expect("Cancel while editing");
+    let save = cx
+        .debug_bounds("file_editor_save_frame")
+        .expect("framed Save beside Cancel");
+    let bar = cx.debug_bounds("diff_bottom_bar").unwrap();
+    assert!(bar.contains(&cancel.center()) && bar.contains(&save.center()));
+    assert!(cancel.right() <= save.left());
+    if !dirty {
+        let button = cx.debug_bounds("file_editor_save").unwrap();
+        cx.simulate_click(button.center(), gpui::Modifiers::default());
+        cx.run_until_parked();
+        cx.update(|_, app| assert!(diff_renderer.read(app).is_file_editor_active()));
+    }
+    cx.simulate_click(cancel.center(), gpui::Modifiers::default());
     cx.run_until_parked();
     // The exit goes through the store, so wait for its worker to reduce it and
     // pull that snapshot back into the view the way a real frame would.
@@ -733,14 +780,23 @@ async fn discarding_from_the_toolbar_returns_to_the_read_only_view(cx: &mut gpui
         );
         assert!(
             !pane.is_file_editor_active(),
-            "discarding leaves the editor for the read-only view"
+            "Cancel leaves the editor for the previous view"
+        );
+        assert_eq!(
+            pane.rendered_diff_target(),
+            Some(&DiffTarget::working_tree(file_rel.clone(), origin_area)),
+            "Cancel restores the originating staged or unstaged diff"
         );
         assert_eq!(
             std::fs::read_to_string(workdir.join(&file_rel)).expect("file still on disk"),
-            "fn main() {}\n",
-            "and the file on disk was never written"
+            saved_contents,
+            "Cancel must preserve pre-existing working-tree changes"
         );
     });
+    draw_and_drain_test_window(cx);
+    assert!(cx.debug_bounds("file_editor_cancel").is_none());
+    assert!(cx.debug_bounds("file_editor_save").is_none());
+    assert!(cx.debug_bounds("diff_bar_stage").is_some());
 
     let _ = std::fs::remove_dir_all(&workdir);
 }
@@ -844,7 +900,8 @@ fn file_editor_saves_stay_paused_until_rename_retargets_the_unsaved_buffer(
 }
 
 #[gpui::test]
-async fn saving_from_the_toolbar_exits_the_editor(cx: &mut gpui::TestAppContext) {
+async fn saving_from_the_action_bar_exits_the_editor(cx: &mut gpui::TestAppContext) {
+    gitcomet_ui_kit::test_support::use_real_text_backend(cx);
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
@@ -864,8 +921,10 @@ async fn saving_from_the_toolbar_exits_the_editor(cx: &mut gpui::TestAppContext)
                     workdir.clone(),
                 )),
             );
-            this.diff_renderer
-                .update(cx, |pane, cx| pane.ensure_file_editor_loaded(cx));
+            this.diff_renderer.update(cx, |pane, cx| {
+                pane.auto_save_file_edits = false;
+                pane.ensure_file_editor_loaded(cx);
+            });
         });
     });
     cx.run_until_parked();
@@ -880,11 +939,55 @@ async fn saving_from_the_toolbar_exits_the_editor(cx: &mut gpui::TestAppContext)
     });
     cx.run_until_parked();
 
-    cx.update(|window, app| {
-        diff_renderer.update(app, |pane, cx| {
-            pane.save_file_editor_buffer_and_exit(window, cx);
-        });
-    });
+    cx.update(|_, app| crate::view::test_support::dismiss_error_toasts(&view, app));
+    for theme in [
+        AppTheme::from_key(crate::theme::DEFAULT_DARK_THEME_KEY).unwrap(),
+        AppTheme::gitcomet_light(),
+    ] {
+        cx.update(|_, app| diff_renderer.update(app, |pane, cx| pane.set_theme(theme, cx)));
+        for width in [1280.0, 760.0] {
+            cx.simulate_resize(gpui::size(px(width), px(800.0)));
+            draw_and_drain_test_window(cx);
+            let bar = cx.debug_bounds("diff_bottom_bar").unwrap();
+            let header = cx.debug_bounds("diff_file_header").unwrap();
+            let actions = cx.debug_bounds("diff_bar_actions").unwrap();
+            let cancel = cx.debug_bounds("file_editor_cancel").unwrap();
+            let save = cx.debug_bounds("file_editor_save_frame").unwrap();
+            assert!(cancel.right() <= save.left(), "Cancel precedes Save");
+            for button in [cancel, save] {
+                assert!(
+                    button.left() >= actions.left() && button.right() <= actions.right(),
+                    "editor action fits its slot at {width}px: {button:?} {actions:?}"
+                );
+                assert!(bar.contains(&button.center()));
+                assert!(!header.contains(&button.center()));
+            }
+            assert!(actions.right() <= bar.right());
+            assert!(
+                bar.right() - save.right() <= px(12.0),
+                "Save stays rightmost"
+            );
+            if let Some(format) = cx.debug_bounds("text_format_strip") {
+                assert!(!format.intersects(&cancel) && !format.intersects(&save));
+            }
+        }
+    }
+    let save = cx
+        .debug_bounds("file_editor_save")
+        .expect("Save in the action bar");
+    cx.simulate_mouse_move(save.center(), None, gpui::Modifiers::default());
+    crate::view::test_support::wait_for_native_tooltip(cx);
+    assert_eq!(
+        crate::view::test_support::tooltip_text(cx, &view).as_deref(),
+        Some(
+            format!(
+                "Save the file and return ({})",
+                crate::kit::components::secondary_shortcut("S")
+            )
+            .as_str()
+        )
+    );
+    cx.simulate_click(save.center(), gpui::Modifiers::default());
     cx.run_until_parked();
     // The write runs on the filesystem worker; wait for its confirmation.
     finish_editor_saves(&view, cx);
@@ -900,9 +1003,16 @@ async fn saving_from_the_toolbar_exits_the_editor(cx: &mut gpui::TestAppContext)
         assert!(!pane.file_editor_is_dirty());
         assert!(
             !pane.is_file_editor_active(),
-            "the toolbar Save action should close edit mode after dispatching the write"
+            "the action-bar Save should close edit mode after dispatching the write"
         );
     });
+    assert_eq!(
+        std::fs::read_to_string(workdir.join(&file_rel)).unwrap(),
+        "// saved\nfn main() {}\n"
+    );
+    draw_and_drain_test_window(cx);
+    assert!(cx.debug_bounds("file_editor_save").is_none());
+    assert!(cx.debug_bounds("file_editor_cancel").is_none());
 
     let _ = std::fs::remove_dir_all(&workdir);
 }

@@ -119,6 +119,9 @@ macro_rules! require_annex {
     };
 }
 
+#[path = "annex_bare.rs"]
+mod bare;
+
 #[test]
 fn support_lists_repositories_special_remotes_and_numcopies() {
     require_annex!();

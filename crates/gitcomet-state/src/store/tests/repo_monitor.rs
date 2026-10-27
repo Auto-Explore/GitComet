@@ -169,6 +169,7 @@ impl GitRepository for RepoActivationRecordingRepo {
                 .worktree_lists
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             Ok(vec![gitcomet_core::domain::Worktree {
+                bare: false,
                 path: self.spec.workdir.clone(),
                 head: None,
                 branch: Some("main".into()),
@@ -424,8 +425,9 @@ fn repo_monitor_active_repo_activation_coalesces_with_in_flight_refresh() {
         let mut state = active_ready_repo_state(repo_id, workdir.clone());
         let loads_in_flight = &mut state.repos[0].loads_in_flight;
         loads_in_flight.request_primary_refresh_batch(crate::model::PendingLogLoad {
-            scope: gitcomet_core::domain::HistoryMode::FullReachable,
+            walk: gitcomet_core::domain::HistoryMode::FullReachable.into(),
             author: None,
+            focus: Default::default(),
             limit: 200,
             cursor: None,
         });
@@ -573,6 +575,7 @@ fn checked_activation_skips_only_the_settled_single_checkout_listing() {
         repo.sequencer_state = Loadable::Ready(Default::default());
         repo.merge_commit_message = Loadable::Ready(None);
         let own = Worktree {
+            bare: false,
             path: workdir.clone(),
             head: None,
             branch: Some("main".into()),
@@ -584,6 +587,7 @@ fn checked_activation_skips_only_the_settled_single_checkout_listing() {
             "linked checkout" => repo.set_worktrees(Loadable::Ready(vec![
                 own,
                 Worktree {
+                    bare: false,
                     path: workdir.join("linked"),
                     head: None,
                     branch: Some("linked".into()),

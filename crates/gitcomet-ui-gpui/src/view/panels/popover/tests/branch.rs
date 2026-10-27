@@ -2787,7 +2787,7 @@ fn review_ancestor_collapse_during_search_preserves_saved_collapse(cx: &mut gpui
 
 /// Builds a repo whose branch list is `main`, `feat/a`, `feat/b/c` and
 /// `features/x`, plus `origin/feat/a`, then returns the group menu's model.
-fn branch_group_menu_model(
+pub(super) fn branch_group_menu_model(
     cx: &mut gpui::TestAppContext,
     section: BranchSection,
     remote: Option<&str>,
@@ -3833,6 +3833,7 @@ fn rename_collision_dialog_checkout_existing_checks_out_target(cx: &mut gpui::Te
 #[gpui::test]
 fn branch_exists_dialog_notes_worktree_holding_the_branch(cx: &mut gpui::TestAppContext) {
     let worktrees = vec![gitcomet_core::domain::Worktree {
+        bare: false,
         path: PathBuf::from("/tmp/gitcomet-ui-other-worktree"),
         head: None,
         branch: Some("main".to_string()),

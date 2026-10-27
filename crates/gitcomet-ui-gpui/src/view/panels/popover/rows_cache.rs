@@ -303,6 +303,7 @@ mod tests {
             },
         );
         repo.open = Loadable::Ready(());
+        repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
         repo.head_branch = Loadable::Ready("main".to_string());
         repo
     }

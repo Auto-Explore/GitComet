@@ -129,7 +129,10 @@ fn palette_rows(registry: &Registry) -> &'static [CommandEntry] {
                 category: leak(command.category.as_ref()),
                 requires_repo: command.requires_repository,
                 keywords: leak(command.keywords.as_ref()),
-                needs: Needs::Nothing,
+                needs: match command.repository_requirement {
+                    gitcomet_core::domain::RepositoryRequirement::Repository => Needs::Nothing,
+                    gitcomet_core::domain::RepositoryRequirement::WorkingTree => Needs::WorkingTree,
+                },
             }
         })
         .collect();
@@ -197,6 +200,7 @@ pub(in crate::view) struct ExtensionMenuEntry {
     pub(in crate::view) id: SharedString,
     pub(in crate::view) label: SharedString,
     pub(in crate::view) requires_repository: bool,
+    pub(in crate::view) repository_requirement: gitcomet_core::domain::RepositoryRequirement,
 }
 
 /// The extension entries of `location`, in registration order; none while
@@ -217,6 +221,7 @@ pub(in crate::view) fn menu_entries(location: MenuLocation, cx: &App) -> Rc<[Ext
                 id: item.command.to_string().into(),
                 label: command.label.clone(),
                 requires_repository: command.requires_repository,
+                repository_requirement: command.repository_requirement,
             })
         })
         .collect()
@@ -224,7 +229,7 @@ pub(in crate::view) fn menu_entries(location: MenuLocation, cx: &App) -> Rc<[Ext
 
 /// The macOS menu-bar items for [`MenuLocation::Application`].
 #[cfg(target_os = "macos")]
-pub(crate) fn macos_menu_items(cx: &App) -> Vec<gpui::MenuItem> {
+pub(crate) fn macos_menu_items(bare: bool, cx: &App) -> Vec<gpui::MenuItem> {
     menu_entries(MenuLocation::Application, cx)
         .iter()
         .map(|entry| {
@@ -233,6 +238,10 @@ pub(crate) fn macos_menu_items(cx: &App) -> Vec<gpui::MenuItem> {
                 RunExtensionCommand {
                     id: entry.id.to_string(),
                 },
+            )
+            .disabled(
+                bare && entry.repository_requirement
+                    == gitcomet_core::domain::RepositoryRequirement::WorkingTree,
             )
         })
         .collect()
@@ -277,6 +286,7 @@ struct HostWindow {
     external_editor:
         Rc<std::cell::RefCell<Option<gitcomet_state::session::ExternalCodeEditorSetting>>>,
     terminals: SharedTerminals,
+    terminal_target: Rc<std::cell::Cell<super::TerminalButtonTarget>>,
 }
 
 /// One open terminal tab, as only the view knows it; the host adds its
@@ -915,6 +925,40 @@ impl WindowHostImpl for HostWindow {
         });
         Ok(())
     }
+    fn open_terminal(
+        &self,
+        repository: &RepositoryHandle,
+        cwd: &std::path::Path,
+        command: Option<&str>,
+        cx: &mut App,
+    ) -> Result<(), HostError> {
+        self.live()?;
+        if let Some(command) = command {
+            if self.terminal_target.get() == super::TerminalButtonTarget::External {
+                return Err(HostError::Unsupported);
+            }
+            // One line, and nothing a terminal would read as a key of its own.
+            if command.chars().any(char::is_control) {
+                return Err(HostError::InvalidRequest(
+                    "A terminal command is one line without control characters".into(),
+                ));
+            }
+        }
+        let cwd = if cwd.is_absolute() {
+            cwd.to_owned()
+        } else {
+            repository.workdir().join(cwd)
+        };
+        let view = self.view.clone();
+        let repository = repository.clone();
+        let command = command.map(str::to_owned);
+        cx.defer(move |cx| {
+            let _ = view.update(cx, |root, cx| {
+                root.open_terminal_at(&repository, cwd, command, cx)
+            });
+        });
+        Ok(())
+    }
     fn reveal_commit(
         &self,
         repository: &RepositoryHandle,
@@ -1206,6 +1250,7 @@ pub(in crate::view) struct ExtensionWindow {
     external_editor:
         Rc<std::cell::RefCell<Option<gitcomet_state::session::ExternalCodeEditorSetting>>>,
     terminals: SharedTerminals,
+    terminal_target: Rc<std::cell::Cell<super::TerminalButtonTarget>>,
 }
 
 impl ExtensionWindow {
@@ -1226,6 +1271,7 @@ impl ExtensionWindow {
         })?;
         let external_editor = Rc::default();
         let terminals: SharedTerminals = Rc::default();
+        let terminal_target = Rc::new(std::cell::Cell::new(super::TerminalButtonTarget::default()));
         let diff_panes: SharedDiffPanes = Rc::default();
         let bottom_panels = Rc::new(std::cell::RefCell::new(
             super::extension_panels::BottomPanels::new(registry.bottom_panels()),
@@ -1275,6 +1321,7 @@ impl ExtensionWindow {
             diff_environment,
             external_editor: Rc::clone(&external_editor),
             terminals: Rc::clone(&terminals),
+            terminal_target: Rc::clone(&terminal_target),
         });
         *observers.host.borrow_mut() = Some(Rc::downgrade(&host_window));
         let closing_host = Rc::downgrade(&host_window);
@@ -1314,6 +1361,7 @@ impl ExtensionWindow {
             diff_panes,
             external_editor,
             terminals,
+            terminal_target,
         })
     }
 
@@ -1404,6 +1452,11 @@ impl ExtensionWindow {
     /// Publishes each repository's open terminal tabs to extension handles.
     pub(in crate::view) fn set_terminals(&self, tabs: FxHashMap<RepoId, Vec<OpenTerminal>>) {
         *self.terminals.borrow_mut() = tabs;
+    }
+
+    /// Publishes where the user's terminal button opens a terminal.
+    pub(in crate::view) fn set_terminal_target(&self, target: super::TerminalButtonTarget) {
+        self.terminal_target.set(target);
     }
 
     pub(in crate::view) fn set_theme(&self, theme: AppTheme, cx: &mut App) {
@@ -1618,6 +1671,8 @@ impl GitCometView {
         };
         let run = Rc::clone(&command.run);
         let requires_repository = command.requires_repository;
+        let requirement = command.repository_requirement;
+        let store = Arc::clone(&self.store);
         let window_handle = self.window_handle;
         let window_id = window_handle.window_id();
         let target = match target {
@@ -1644,6 +1699,25 @@ impl GitCometView {
                 };
                 if requires_repository && repository.is_none() {
                     return;
+                }
+                if requirement == gitcomet_core::domain::RepositoryRequirement::WorkingTree {
+                    let has_working_tree = repository.as_ref().is_some_and(|repository| {
+                        store
+                            .snapshot()
+                            .repos
+                            .iter()
+                            .find(|repo| repo.id == repository.repo_id())
+                            .is_some_and(RepoState::has_working_tree)
+                    });
+                    if !has_working_tree {
+                        let _ = host.toast(
+                            gitcomet_extension_api::NotificationKind::Warning,
+                            gitcomet_core::domain::WORKING_TREE_REQUIRED_MESSAGE,
+                            Vec::new(),
+                            cx,
+                        );
+                        return;
+                    }
                 }
                 crate::view::perf::extension_dispatch();
                 run(

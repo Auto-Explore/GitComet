@@ -6,6 +6,7 @@
 
 use super::*;
 use crate::kit::click::PointerClickExt as _;
+use crate::view::panes::diff::services::DiffCommand;
 
 pub(super) use conflict_resolver::CONFLICT_BOTTOM_OVERSCROLL_ROWS;
 
@@ -398,13 +399,19 @@ impl DiffRenderer {
             return Vec::new();
         }
         let check = self.conflict_save_check(cx);
-        let blocked = match check.unresolved_blocks {
-            0 if check.has_conflict_markers => Some(SharedString::from(
-                "Disabled: conflict markers remain in the output",
-            )),
-            0 => None,
-            1 => Some("Disabled: 1 conflict is still unresolved".into()),
-            n => Some(format!("Disabled: {n} conflicts are still unresolved").into()),
+        let blocked = if self.active_repo().is_some_and(RepoState::is_bare) {
+            Some(SharedString::from(
+                gitcomet_core::domain::WORKING_TREE_REQUIRED_MESSAGE,
+            ))
+        } else {
+            match check.unresolved_blocks {
+                0 if check.has_conflict_markers => Some(SharedString::from(
+                    "Disabled: conflict markers remain in the output",
+                )),
+                0 => None,
+                1 => Some("Disabled: 1 conflict is still unresolved".into()),
+                n => Some(format!("Disabled: {n} conflicts are still unresolved").into()),
+            }
         };
         let pane = cx.entity().downgrade();
         ConflictSave::for_view_mode(self.view_mode)
@@ -479,6 +486,16 @@ impl DiffRenderer {
     /// Writes the resolved output to the conflict on screen, unless the
     /// output is not ready to save.
     fn save_conflict_resolver_output(&mut self, save: ConflictSave, cx: &mut gpui::Context<Self>) {
+        if self.active_repo().is_some_and(RepoState::is_bare) {
+            self.commands.send(
+                DiffCommand::Toast(
+                    components::ToastKind::Warning,
+                    gitcomet_core::domain::WORKING_TREE_REQUIRED_MESSAGE.into(),
+                ),
+                cx,
+            );
+            return;
+        }
         let Some((repo_id, path)) = self.text_conflict_save_target() else {
             return;
         };
@@ -1002,9 +1019,7 @@ impl DiffRenderer {
                                             dragging,
                                             Some(theme.colors.stroke.default),
                                         ))
-                                        .on_drag(which, |_handle, _offset, _window, cx| {
-                                            cx.new(|_cx| ConflictHSplitResizeDragGhost)
-                                        })
+                                        .on_resize_drag(which)
                                         .on_mouse_down(
                                             MouseButton::Left,
                                             cx.listener(move |this, e: &MouseDownEvent, _w, cx| {
@@ -1122,12 +1137,7 @@ impl DiffRenderer {
                                         conflict_diff_split_dragging,
                                         Some(theme.colors.stroke.default),
                                     ))
-                                    .on_drag(
-                                        ConflictDiffSplitResizeHandle::Divider,
-                                        |_, _, _, cx| {
-                                            cx.new(|_| ConflictDiffSplitResizeDragGhost)
-                                        },
-                                    )
+                                    .on_resize_drag(ConflictDiffSplitResizeHandle::Divider)
                                     .on_mouse_down(
                                         MouseButton::Left,
                                         cx.listener(|this, e: &MouseDownEvent, _w, cx| {
@@ -1891,12 +1901,7 @@ impl DiffRenderer {
                                     self.conflict_resolver_vsplit_resize.is_some(),
                                     Some(theme.colors.stroke.default),
                                 ))
-                                .on_drag(
-                                    ConflictVSplitResizeHandle::Divider,
-                                    |_handle, _offset, _window, cx| {
-                                        cx.new(|_cx| ConflictVSplitResizeDragGhost)
-                                    },
-                                )
+                                .on_resize_drag(ConflictVSplitResizeHandle::Divider)
                                 .on_mouse_down(
                                     MouseButton::Left,
                                     cx.listener(move |this, e: &MouseDownEvent, _w, cx| {

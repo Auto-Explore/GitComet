@@ -2,7 +2,7 @@
 //! the credentials the user then enters.
 
 use super::{
-    actions_emit_effects, begin_commit_action, external_and_history, maintenance, reduce_prepared,
+    actions_emit_effects, begin_commit_action, external_and_history, maintenance,
     refresh_selected_head_gitlink, repo_management, util,
 };
 use crate::model::{AppState, AuthPromptState, AuthRetryOperation, PendingCommitRetry, RepoId};
@@ -149,6 +149,9 @@ fn auth_operation_repo_id(operation: &AuthRetryOperation) -> Option<RepoId> {
 
 fn discard_auth_prompt_if(state: &mut AppState, stale: impl FnOnce(&AuthPromptState) -> bool) {
     if state.auth_prompt.as_ref().is_some_and(stale) {
+        if let Some(prompt) = state.auth_prompt.as_ref() {
+            super::reword::cancel_auth(state, &prompt.operation.clone());
+        }
         cancel_auth_validation(state);
         state.auth_prompt = None;
     }
@@ -159,6 +162,22 @@ fn discard_auth_prompt_if(state: &mut AppState, stale: impl FnOnce(&AuthPromptSt
 pub(super) fn discard_auth_prompt_for_repo(state: &mut AppState, repo_id: RepoId) {
     discard_auth_prompt_if(state, |prompt| {
         auth_operation_repo_id(&prompt.operation) == Some(repo_id)
+    });
+}
+
+pub(super) fn discard_reword_auth_prompt(
+    state: &mut AppState,
+    repo_id: RepoId,
+    request_id: crate::model::RewordRequestId,
+) {
+    discard_auth_prompt_if(state, |prompt| {
+        matches!(
+            &prompt.operation,
+            AuthRetryOperation::RepoCommand {
+                repo_id: pending_repo,
+                command: RepoCommandKind::RewordCommit { request_id: pending_request, .. },
+            } if *pending_repo == repo_id && *pending_request == request_id
+        )
     });
 }
 
@@ -365,6 +384,29 @@ fn retry_msg_for_repo_command(repo_id: RepoId, command: RepoCommandKind) -> Opti
             expected_head,
             message,
             count,
+        },
+        // An older commit is reworded by a rebase, which a signing failure
+        // leaves paused with the new message persisted: continue it like the
+        // interactive rebase below. A failure that left nothing behind (an
+        // amend of HEAD, or a rebase that never started) replays whole.
+        RepoCommandKind::RewordCommit {
+            request_id,
+            rebase_paused: true,
+            ..
+        } => Msg::ContinueRewordCommit {
+            repo_id,
+            request_id,
+        },
+        RepoCommandKind::RewordCommit {
+            request_id,
+            commit_id,
+            message,
+            ..
+        } => Msg::RewordCommit {
+            repo_id,
+            request_id,
+            commit_id,
+            message,
         },
         RepoCommandKind::Rebase { onto } => Msg::Rebase { repo_id, onto },
         RepoCommandKind::RebaseContinue => Msg::RebaseContinue { repo_id },
@@ -662,7 +704,13 @@ fn replay_auth_prompt(
     match retry_msg_for_auth_operation(prompt.operation) {
         Some(mut msg) => {
             inputs.normalize_auth_retry(state, &mut msg);
-            let effects = reduce_prepared(inputs, repos, id_alloc, state, msg);
+            // The enclosing auth message finalizes and counts these effects.
+            // Re-entering reduce_prepared here counted sequencer work twice,
+            // so only its repository gate runs again.
+            if super::refuse_for_repository_requirement(inputs, state, &msg) {
+                return Vec::new();
+            }
+            let effects = super::reduce_inner(inputs, repos, id_alloc, state, msg);
             if let Some((repo_id, before)) = queued_before
                 && let Some(repo) = state.repos.iter_mut().find(|repo| repo.id == repo_id)
                 && repo.pending.large_file_commands.len() > before
@@ -680,6 +728,9 @@ fn replay_auth_prompt(
 
 pub(super) fn cancel_auth_prompt(state: &mut AppState) -> Vec<Effect> {
     cancel_auth_validation(state);
+    if let Some(prompt) = state.auth_prompt.as_ref() {
+        super::reword::cancel_auth(state, &prompt.operation.clone());
+    }
     if let Some(AuthPromptState {
         operation: AuthRetryOperation::Clone { dest, .. },
         ..
@@ -869,6 +920,26 @@ pub(super) fn repo_command_finished(
         .err()
         .and_then(|error| auth_prompt_for_repo_command(repo_id, &command, error))
         .filter(|prompt| may_install_auth_prompt(state, prompt));
+    if !super::reword::finished(
+        state,
+        repo_id,
+        &command,
+        result.is_ok(),
+        auth_prompt.is_some(),
+    ) {
+        return Vec::new();
+    }
+    if result.is_ok() && matches!(command, RepoCommandKind::RebaseAbort) {
+        discard_auth_prompt_if(state, |prompt| {
+            matches!(
+                &prompt.operation,
+                AuthRetryOperation::RepoCommand {
+                    repo_id: prompt_repo,
+                    command: RepoCommandKind::RewordCommit { .. },
+                } if *prompt_repo == repo_id
+            )
+        });
+    }
     // The same command succeeded another way, e.g. an agent unlocked the key,
     // so its pending prompt no longer asks for anything.
     if result.is_ok() {

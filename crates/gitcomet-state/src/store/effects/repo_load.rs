@@ -2,8 +2,8 @@ use crate::model::{AppState, RepoLifetime, WorktreeDirtyScope};
 use crate::msg::{Msg, WorktreeListRead};
 use crate::store::repository_runtime::RepositoryRuntimes;
 use gitcomet_core::domain::{
-    DiffPreviewTextSide, DiffTarget, LogCursor, LogScope, RepoStatus, Worktree,
-    WorktreeDirtySummary, count_file_statuses,
+    DiffPreviewTextSide, DiffTarget, LogCursor, RepoStatus, Worktree, WorktreeDirtySummary,
+    count_file_statuses,
 };
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::path_utils::canonicalize_or_original;
@@ -118,13 +118,15 @@ pub(super) fn schedule_load_log(
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     seq: crate::model::LogLoadSeq,
-    scope: LogScope,
+    walk: gitcomet_core::services::HistoryWalk,
     author: Option<String>,
+    focus: gitcomet_core::domain::HistoryFocusSet,
     cursor: Option<LogCursor>,
     request: gitcomet_core::services::HistoryReadRequest,
     cancellation: CancellationToken,
 ) {
     let cursor_on_missing = cursor.clone();
+    let scope = walk.mode();
     spawn_detached_with_repo_or_else(
         executor,
         "load-log",
@@ -144,8 +146,9 @@ pub(super) fn schedule_load_log(
                 );
             };
             let result = repo.read_history(
-                scope,
+                &walk,
                 author.as_deref(),
+                &focus,
                 &request,
                 &cancellation,
                 &mut on_chunk,
@@ -382,7 +385,7 @@ pub(super) fn schedule_load_worktree_dirty(
                             if cancellation.is_cancelled() {
                                 return Err(Error::new(ErrorKind::Cancelled));
                             }
-                            if is_own_worktree(&worktree.path, &own_workdir) {
+                            if worktree.bare || is_own_worktree(&worktree.path, &own_workdir) {
                                 continue;
                             }
                             scanned.push(worktree.path.clone());
@@ -487,6 +490,7 @@ pub(super) fn schedule_load_worktree_dirty(
                                     observations.push(WorktreeObservation::Unknown {
                                         worktree: Worktree {
                                             path: path.clone(),
+                                            bare: false,
                                             head: None,
                                             branch: None,
                                             detached: false,
@@ -1014,7 +1018,12 @@ pub(super) fn schedule_load_file_browser(
         move |repo, msg_tx| {
             let result = match &source {
                 gitcomet_core::domain::FileSource::WorkingDirectory => {
-                    repo.list_worktree_files().and_then(|entries| {
+                    super::super::repository_requirement::check(
+                        repo.as_ref(),
+                        gitcomet_core::domain::RepositoryRequirement::WorkingTree,
+                    )
+                    .and_then(|()| repo.list_worktree_files())
+                    .and_then(|entries| {
                         explorer_listing::augment(
                             &repo.spec().workdir,
                             entries,

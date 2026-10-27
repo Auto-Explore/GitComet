@@ -495,6 +495,33 @@ fn operation_context_reports_real_hooks_output_and_exit_codes() {
 }
 
 #[test]
+fn metadata_output_keeps_status_and_bytes_without_operation_events() {
+    let (sender, receiver) = mpsc::channel();
+    let operation = GitOperationContext::new("metadata", move |_, event| {
+        sender.send(event).unwrap();
+    });
+    let _scope = git_operation::attach(&operation);
+    let output = run_git_metadata_output(failing_command_with_streams(), "git metadata").unwrap();
+    assert_eq!(output.status.code(), Some(7));
+    assert_eq!(output.stdout, b"out");
+    assert_eq!(output.stderr, b"err");
+    assert!(receiver.try_iter().next().is_none());
+}
+
+#[test]
+fn metadata_output_observes_attached_cancellation_before_spawn() {
+    let operation = GitOperationContext::new("metadata", |_, _| {});
+    let _scope = git_operation::attach(&operation);
+    assert!(git_operation::cancel(operation.id()));
+    let error = run_git_metadata_output(
+        Command::new("gitcomet-command-that-must-not-be-spawned"),
+        "git metadata",
+    )
+    .unwrap_err();
+    assert!(matches!(error.kind(), ErrorKind::Cancelled));
+}
+
+#[test]
 fn run_git_with_output_failure_preserves_structured_details() {
     let err = run_git_with_output(failing_command_with_streams(), "git synthetic")
         .expect_err("expected failing command");

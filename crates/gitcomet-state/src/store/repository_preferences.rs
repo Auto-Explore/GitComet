@@ -16,11 +16,13 @@ struct State {
     records: HashMap<RepositoryKey, RepositoryPreferencesSnapshot>,
     subscribers: HashMap<u64, Subscriber>,
     unpersisted_updates: HashMap<RepositoryKey, Vec<RepositoryPreferenceUpdate>>,
+    rekeyed: HashMap<RepositoryKey, RepositoryKey>,
 }
 
 pub(super) struct PreferenceHub {
     pub(super) session_path: Option<PathBuf>,
     state: Mutex<State>,
+    persistence: Mutex<()>,
 }
 
 impl PreferenceHub {
@@ -28,6 +30,7 @@ impl PreferenceHub {
         Arc::new(Self {
             session_path,
             state: Mutex::new(State::default()),
+            persistence: Mutex::new(()),
         })
     }
 
@@ -59,12 +62,68 @@ impl PreferenceHub {
     }
 
     pub(super) fn latest(&self, key: &RepositoryKey) -> Option<RepositoryPreferencesSnapshot> {
-        self.state
+        let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let key = state.rekeyed.get(key).unwrap_or(key);
+        state.records.get(key).cloned()
+    }
+
+    pub(super) fn rekey(&self, old: &Path, new: &Path) -> std::io::Result<()> {
+        let _persistence = self
+            .persistence
             .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .records
-            .get(key)
-            .cloned()
+            .unwrap_or_else(|error| error.into_inner());
+        let old = RepositoryKey::CommonDir(old.to_path_buf());
+        let new = RepositoryKey::CommonDir(new.to_path_buf());
+        if old == new {
+            return Ok(());
+        }
+        let (preferences, updates) = {
+            let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+            for key in state.rekeyed.values_mut() {
+                if *key == old {
+                    *key = new.clone();
+                }
+            }
+            state.rekeyed.insert(old.clone(), new.clone());
+            if let Some(mut snapshot) = state.records.remove(&old) {
+                snapshot.key = new.clone();
+                snapshot.revision += 1;
+                state.records.insert(new.clone(), snapshot);
+            }
+            if let Some(updates) = state.unpersisted_updates.remove(&old) {
+                state
+                    .unpersisted_updates
+                    .entry(new.clone())
+                    .or_default()
+                    .extend(updates);
+            }
+            (
+                state
+                    .records
+                    .get(&new)
+                    .map(|snapshot| Arc::clone(&snapshot.preferences)),
+                state
+                    .unpersisted_updates
+                    .get(&new)
+                    .cloned()
+                    .unwrap_or_default(),
+            )
+        };
+        if let Some(path) = &self.session_path {
+            crate::session::rekey_repository_preferences(
+                path,
+                &old,
+                &new,
+                &updates,
+                preferences.as_deref(),
+            )?;
+            self.state
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .unpersisted_updates
+                .remove(&new);
+        }
+        Ok(())
     }
 
     pub(super) fn initialize(
@@ -73,6 +132,10 @@ impl PreferenceHub {
         workdir: &Path,
         repo: &dyn GitRepository,
     ) -> (RepositoryPreferencesSnapshot, std::io::Result<()>) {
+        let _persistence = self
+            .persistence
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
         if let Some(snapshot) = self.latest(&key) {
             return (snapshot, Ok(()));
         }
@@ -99,12 +162,19 @@ impl PreferenceHub {
     /// writes have the same order across windows. Subscribers never rebroadcast.
     pub(super) fn update(
         &self,
-        key: RepositoryKey,
+        mut key: RepositoryKey,
         update: &RepositoryPreferenceUpdate,
     ) -> std::io::Result<()> {
+        let _persistence = self
+            .persistence
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
         let (preferences, updates) =
             {
                 let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+                if let Some(current) = state.rekeyed.get(&key) {
+                    key = current.clone();
+                }
                 let current = state.records.entry(key.clone()).or_insert_with(|| {
                     RepositoryPreferencesSnapshot {
                         key: key.clone(),
@@ -161,6 +231,70 @@ mod tests {
     use gitcomet_core::test_support::UnconfiguredRepository;
     use std::collections::BTreeSet;
     use std::fs;
+
+    #[test]
+    fn rekey_preserves_preferences_and_routes_queued_old_key_updates() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("session.json");
+        let root = dir.path().join("repository");
+        let old = RepositoryKey::CommonDir(root.clone());
+        let new = RepositoryKey::CommonDir(root.join(".git"));
+        let hub = PreferenceHub::new(Some(path.clone()));
+        let repo = UnconfiguredRepository::new(&root);
+        hub.initialize(old.clone(), &root, &repo).1.unwrap();
+        hub.update(
+            old.clone(),
+            &RepositoryPreferenceUpdate::Pin {
+                key: "local:main".into(),
+                pinned: true,
+            },
+        )
+        .unwrap();
+        let saved = dir.path().join("saved.json");
+        fs::rename(&path, &saved).unwrap();
+        fs::create_dir(&path).unwrap();
+        assert!(
+            hub.update(
+                old.clone(),
+                &RepositoryPreferenceUpdate::Pin {
+                    key: "local:pending".into(),
+                    pinned: true,
+                },
+            )
+            .is_err()
+        );
+        fs::remove_dir(&path).unwrap();
+        fs::rename(&saved, &path).unwrap();
+        hub.rekey(&root, &root.join(".git")).unwrap();
+        hub.update(
+            old.clone(),
+            &RepositoryPreferenceUpdate::Pin {
+                key: "local:next".into(),
+                pinned: true,
+            },
+        )
+        .unwrap();
+        let snapshot = hub.latest(&new).unwrap();
+        assert_eq!(
+            snapshot.preferences.pinned_items,
+            BTreeSet::from([
+                "local:main".into(),
+                "local:next".into(),
+                "local:pending".into()
+            ])
+        );
+        assert_eq!(hub.latest(&old).unwrap().key, new);
+        let stored: serde_json::Value = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
+        assert!(
+            stored["repository_preferences"]
+                .get(old.storage_key())
+                .is_none()
+        );
+        assert_eq!(
+            stored["repository_preferences"][new.storage_key()]["pinned_items"],
+            serde_json::json!(["local:main", "local:next", "local:pending"])
+        );
+    }
 
     #[test]
     fn failed_writes_retry_ordered_deltas_and_preserve_unrelated_disk_changes() {

@@ -96,6 +96,8 @@ impl DiffRenderer {
         if let (Some(repo), Some(diff), Some(state)) =
             (input.repository(), input.diff(), input.repository_state())
         {
+            repo.repository_mode.hash(&mut hasher);
+            std::mem::discriminant(&repo.bare_mode_conversion).hash(&mut hasher);
             repo.shared_preferences
                 .as_ref()
                 .map(|snapshot| snapshot.revision)

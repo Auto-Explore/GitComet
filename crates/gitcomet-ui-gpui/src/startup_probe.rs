@@ -324,6 +324,7 @@ mod tests {
             },
         );
         ready.open = Loadable::Ready(());
+        ready.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
         state.repos.push(ready);
         state.repos.push(RepoState::new_opening(
             RepoId(2),
@@ -381,6 +382,7 @@ mod tests {
         );
         state.active_repo = Some(repo.id);
         repo.open = Loadable::Ready(());
+        repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
         state.repos.push(repo);
         assert!(
             !active_repo_ready(&state),
@@ -414,6 +416,7 @@ mod tests {
         ));
         let repo = &mut state.repos[0];
         repo.open = Loadable::Ready(());
+        repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
         repo.status = Loadable::Ready(Default::default());
         repo.log = Loadable::Ready(
             gitcomet_core::domain::LogPage {

@@ -63,6 +63,7 @@ fn descriptor_revisions_and_slot_notifications_are_independent(cx: &mut gpui::Te
         },
     );
     repo.open = Loadable::Ready(());
+    repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
     let commit = gitcomet_core::domain::Commit {
         id: CommitId("1111222233334444555566667777888899990000".into()),
         parent_ids: Default::default(),

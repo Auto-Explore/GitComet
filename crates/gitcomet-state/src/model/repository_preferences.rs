@@ -58,6 +58,8 @@ pub struct SharedRepositoryPreferences {
     pub show_hidden_files: bool,
     pub show_ignored_files: bool,
     pub comparison_ref: Option<String>,
+    /// Remotes whose branches the history graph leaves out.
+    pub history_hidden_remotes: BTreeSet<String>,
 }
 
 impl Default for SharedRepositoryPreferences {
@@ -70,6 +72,7 @@ impl Default for SharedRepositoryPreferences {
             show_hidden_files: true,
             show_ignored_files: false,
             comparison_ref: None,
+            history_hidden_remotes: BTreeSet::new(),
         }
     }
 }
@@ -96,6 +99,10 @@ pub enum RepositoryPreferenceUpdate {
     ExplorerVisibility {
         hidden: Option<bool>,
         ignored: Option<bool>,
+    },
+    RemoteHistoryVisibility {
+        remote: String,
+        hidden: bool,
     },
 }
 
@@ -129,6 +136,13 @@ impl SharedRepositoryPreferences {
                 }
                 if let Some(ignored) = ignored {
                     self.show_ignored_files = *ignored;
+                }
+            }
+            RepositoryPreferenceUpdate::RemoteHistoryVisibility { remote, hidden } => {
+                if *hidden {
+                    self.history_hidden_remotes.insert(remote.clone());
+                } else {
+                    self.history_hidden_remotes.remove(remote);
                 }
             }
         }

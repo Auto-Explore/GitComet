@@ -1590,3 +1590,33 @@ fn auto_resolve_regex_invalid_pattern_noops() {
     assert_eq!(auto_resolve_segments_regex(&mut segments, &options), 0);
     assert_eq!(resolved_conflict_count(&segments), 0);
 }
+
+/// `cargo test -p gitcomet-conflict-resolver --lib timing_stage_safety --
+/// --ignored --nocapture`: the save bar's check, run on each diff-bar render.
+#[test]
+#[ignore = "timing probe"]
+fn timing_stage_safety_check_with_many_conflicts() {
+    for conflicts in [200usize, 2_000] {
+        let mut input = String::new();
+        for ix in 0..conflicts {
+            input.push_str(&format!(
+                "line {ix}\n<<<<<<< HEAD\nours {ix}\n=======\ntheirs {ix}\n>>>>>>> branch\n"
+            ));
+        }
+        let segments = parse_conflict_markers(&input);
+        let output_text = generate_resolved_text(&segments);
+        let block_map = ResolvedOutputBlockMap::from_segments(&segments);
+        let mut samples = Vec::new();
+        for _ in 0..11 {
+            let started = std::time::Instant::now();
+            let safety = conflict_stage_safety_check(&output_text, &segments, &block_map);
+            samples.push(started.elapsed());
+            assert_eq!(safety.unresolved_blocks, conflicts);
+        }
+        samples.sort();
+        println!(
+            "timing stage_safety conflicts {conflicts} p50 {:?} min {:?}",
+            samples[5], samples[0]
+        );
+    }
+}

@@ -62,7 +62,7 @@ pub(in super::super) struct NativeMemory {
 }
 
 impl NativeMemory {
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub fn for_test(owner: Arc<ComparisonMemory>, limit: usize) -> Self {
         Self { owner, limit }
     }

@@ -1,8 +1,8 @@
 use fontdb::{Database, Family, Query, Stretch, Style, Weight};
 use once_cell::sync::Lazy;
+use skrifa::prelude::{FontRef, GlyphId, LocationRef, MetadataProvider, Size};
 use std::collections::HashMap;
 use std::sync::Mutex;
-use ttf_parser::{Face, GlyphId};
 
 use crate::unicode_width::{Cluster, consume_cluster, is_cjk_wide_char};
 
@@ -136,8 +136,11 @@ impl TextMeasurer {
         let mut loaded: Option<FontFace> = None;
         self.db.with_face_data(id, |data, index| {
             let bytes = data.to_vec();
-            if let Ok(face) = Face::parse(&bytes, index) {
-                let units_per_em = face.units_per_em().max(1);
+            if let Ok(font) = FontRef::from_index(&bytes, index) {
+                let units_per_em = font
+                    .metrics(Size::unscaled(), LocationRef::default())
+                    .units_per_em
+                    .max(1);
                 loaded = Some(FontFace::new(bytes, index, units_per_em));
             }
         });
@@ -150,18 +153,20 @@ struct FontFace {
     index: u32,
     units_per_em: u16,
     ascii_advances: Option<[u16; 128]>,
-    glyph_cache: HashMap<char, Option<u16>>,
-    advance_cache: HashMap<u16, u16>,
+    glyph_cache: HashMap<char, Option<GlyphId>>,
+    advance_cache: HashMap<GlyphId, u16>,
 }
 
 impl FontFace {
     fn new(data: Vec<u8>, index: u32, units_per_em: u16) -> Self {
-        let ascii_advances = Face::parse(&data, index).ok().map(|parsed| {
+        let ascii_advances = FontRef::from_index(&data, index).ok().map(|font| {
+            let charmap = font.charmap();
+            let metrics = font.glyph_metrics(Size::unscaled(), LocationRef::default());
             let mut advances = [0u16; 128];
             for byte in 0u8..=127 {
                 let ch = byte as char;
-                if let Some(glyph_id) = parsed.glyph_index(ch) {
-                    advances[byte as usize] = parsed.glyph_hor_advance(glyph_id).unwrap_or(0);
+                if let Some(glyph_id) = charmap.map(ch) {
+                    advances[byte as usize] = advance_units(&metrics, glyph_id);
                 }
             }
             advances
@@ -198,7 +203,9 @@ impl FontFace {
             return Some(width.max(0.0));
         }
 
-        let face = Face::parse(&self.data, self.index).ok()?;
+        let font = FontRef::from_index(&self.data, self.index).ok()?;
+        let charmap = font.charmap();
+        let metrics = font.glyph_metrics(Size::unscaled(), LocationRef::default());
         let scale = font_size / self.units_per_em as f32;
         let mut width = 0.0f32;
         let chars: Vec<char> = text.chars().collect();
@@ -229,7 +236,7 @@ impl FontFace {
             let glyph = if let Some(cached) = self.glyph_cache.get(&ch) {
                 *cached
             } else {
-                let glyph = face.glyph_index(ch).map(|id| id.0);
+                let glyph = charmap.map(ch);
                 self.glyph_cache.insert(ch, glyph);
                 glyph
             };
@@ -238,7 +245,7 @@ impl FontFace {
                 let advance = if let Some(value) = self.advance_cache.get(&glyph_id) {
                     *value
                 } else {
-                    let value = face.glyph_hor_advance(GlyphId(glyph_id)).unwrap_or(0);
+                    let value = advance_units(&metrics, glyph_id);
                     self.advance_cache.insert(glyph_id, value);
                     value
                 };
@@ -253,6 +260,11 @@ impl FontFace {
 
         Some(width.max(0.0))
     }
+}
+
+// Unscaled at the default instance, so the advance is whole font units.
+fn advance_units(metrics: &skrifa::metrics::GlyphMetrics<'_>, glyph_id: GlyphId) -> u16 {
+    metrics.advance_width(glyph_id).unwrap_or(0.0) as u16
 }
 
 fn canonical_family_name(db: &Database, raw: &str) -> Option<String> {

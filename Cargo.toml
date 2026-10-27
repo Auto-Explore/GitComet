@@ -27,11 +27,12 @@ members = [
   # Upstream source, a member so its grammars resolve to the workspace crates.
   # See vendor/README.md.
   "vendor/difftastic",
+  # Upstream source, a member so its dependencies are the workspace's versions.
+  "vendor/mermaid-rs-renderer",
 ]
 exclude = [
   "vendor/block",
   "vendor/block/test_utils",
-  "vendor/mermaid-rs-renderer",
   "crates/gitcomet-filesystem-native",
   "crates/win32-window-utils",
   "vendor/tree-sitter-asm",
@@ -119,6 +120,9 @@ gitcomet-difftastic = { path = "crates/gitcomet-difftastic" }
 gitcomet-diagrams = { path = "crates/gitcomet-diagrams" }
 gitcomet-fonts = { path = "crates/gitcomet-fonts" }
 gitcomet-extension-api = { path = "crates/gitcomet-extension-api" }
+gitcomet-extension-example = { path = "crates/gitcomet-extension-example" }
+gitcomet-filesystem-native = { path = "crates/gitcomet-filesystem-native" }
+gitcomet-fs-watch = { path = "crates/gitcomet-fs-watch" }
 gitcomet-git-gix = { path = "crates/gitcomet-git-gix" }
 gitcomet-markdown = { path = "crates/gitcomet-markdown" }
 gitcomet-perf = { path = "crates/gitcomet-perf" }
@@ -130,10 +134,12 @@ gitcomet-ui-gpui = { path = "crates/gitcomet-ui-gpui", default-features = false 
 gitcomet-ui-kit = { path = "crates/gitcomet-ui-kit" }
 gitcomet-ui-media = { path = "crates/gitcomet-ui-media" }
 gitcomet-ui-terminal = { path = "crates/gitcomet-ui-terminal" }
+gitcomet-win32-window-utils = { path = "crates/win32-window-utils" }
 
 # External crates
 alacritty_terminal = "0.26"
 anyhow = "1"
+bumpalo = "3.20.3"
 # `string`: the command's name and version come from the product identity.
 clap = { version = "4.6.7", features = ["derive", "string"] }
 criterion = "0.8.2"
@@ -151,6 +157,8 @@ ctor = "1.0.13"
 dekobon-tree-sitter-groovy = "0.3.0"
 # Vendored as a library; see vendor/README.md.
 difftastic = { path = "vendor/difftastic" }
+dispatch2 = "0.3.1"
+embed-resource = "3"
 # Already in the tree via gix-filter; decodes and encodes non-UTF-8 file text.
 encoding_rs = { version = "0.8.42", default-features = false, features = ["alloc", "fast-legacy-encode"] }
 faster-hex = { version = "1.0.0", default-features = false, features = ["std"] }
@@ -158,7 +166,6 @@ faster-hex = { version = "1.0.0", default-features = false, features = ["std"] }
 filetime = "0.2.29"
 fnv = "1.0.7"
 fontdb = "0.24.0"
-fs2 = "0.4.3"
 futures = "0.3.34"
 gix = { version = "0.90.0", default-features = false, features = ["max-performance", "zlib-sirocco", "comfort", "basic", "status", "blame", "sha1", "sha256"] }
 # Already in the tree via gix; Git-compatible quoting for attribute patterns.
@@ -166,18 +173,26 @@ gix-quote = "0.10.1"
 # Git's ref-name rules for branch names the UI is about to hand to git. Already
 # in the graph through gix, so this adds no new compilation.
 gix-validate = "0.13.1"
-gpui = { package = "gpui-ce", git = "https://github.com/Havunen/gpui-ce.git", rev = "81b1e374d98a356f6dcdd38d4466739edde6b866" }
-gpui_platform = { package = "gpui_ce_platform", git = "https://github.com/Havunen/gpui-ce.git", rev = "81b1e374d98a356f6dcdd38d4466739edde6b866", features = ["font-kit"] }
-gpui_wgpu = { package = "gpui_ce_wgpu", git = "https://github.com/Havunen/gpui-ce.git", rev = "81b1e374d98a356f6dcdd38d4466739edde6b866" }
-gpui_parley = { package = "gpui_ce_parley", git = "https://github.com/Havunen/gpui-ce.git", rev = "81b1e374d98a356f6dcdd38d4466739edde6b866", default-features = false }
-gpui_shared_string = { package = "gpui_ce_shared_string", git = "https://github.com/Havunen/gpui-ce.git", rev = "81b1e374d98a356f6dcdd38d4466739edde6b866" }
-gpui_sum_tree = { package = "gpui_ce_sum_tree", git = "https://github.com/Havunen/gpui-ce.git", rev = "81b1e374d98a356f6dcdd38d4466739edde6b866" }
+glob = "0.3.4"
+gpui = { package = "gpui-ce", git = "https://github.com/Havunen/gpui-ce.git", rev = "a2beb9ccf3f5a4816a07055af6b2044a5d170e18" }
+gpui_platform = { package = "gpui_ce_platform", git = "https://github.com/Havunen/gpui-ce.git", rev = "a2beb9ccf3f5a4816a07055af6b2044a5d170e18", features = ["font-kit"] }
+gpui_wgpu = { package = "gpui_ce_wgpu", git = "https://github.com/Havunen/gpui-ce.git", rev = "a2beb9ccf3f5a4816a07055af6b2044a5d170e18" }
+gpui_parley = { package = "gpui_ce_parley", git = "https://github.com/Havunen/gpui-ce.git", rev = "a2beb9ccf3f5a4816a07055af6b2044a5d170e18", default-features = false }
+gpui_shared_string = { package = "gpui_ce_shared_string", git = "https://github.com/Havunen/gpui-ce.git", rev = "a2beb9ccf3f5a4816a07055af6b2044a5d170e18" }
+gpui_sum_tree = { package = "gpui_ce_sum_tree", git = "https://github.com/Havunen/gpui-ce.git", rev = "a2beb9ccf3f5a4816a07055af6b2044a5d170e18" }
+hashbrown = "0.17.1"
+humansize = "2.1.3"
 image = "0.25.10"
+imara-diff = { version = "0.2.0", default-features = false }
 fast_image_resize = { version = "6.1.0", features = ["image"] }
 # Already in the dependency graph; merges sorted reference streams lazily.
 itertools = "0.15.0"
 # Already in the tree via gix-date; used directly for system-timezone lookups.
 jiff = "0.2"
+json5 = "1.3"
+lazy_static = "1.5.1"
+libc = "0.2"
+line-numbers = "0.4.0"
 log = "0.4.34"
 lru = "0.19"
 mermaid-rs-renderer = { path = "vendor/mermaid-rs-renderer", version = "0.3.1", default-features = false }
@@ -185,14 +200,22 @@ roxmltree = "0.21"
 # git-annex object paths are hashed with MD5 (not for security).
 md-5 = "0.11"
 memchr = "2.8.3"
+metal = "0.33"
 pulldown-cmark = { version = "0.13", default-features = false, features = ["simd"] }
 notify = "9.0.0-rc.6"
+objc2-core-foundation = { version = "0.3.2", default-features = false }
+objc2-core-services = { version = "0.3.2", default-features = false }
+once_cell = "1.21.4"
 palette = "0.7.7"
 percent-encoding = "2.3.2"
+pretty_assertions = "1.4.1"
 process-wrap = { version = "10.0.1", default-features = false, features = ["std", "creation-flags", "job-object", "process-group"] }
+radix-heap = "0.4.2"
 raw-window-handle = "0.6"
 regex = "1.13.1"
 resvg = { version = "0.49.0", default-features = false, features = ["text", "system-fonts", "raster-images"] }
+# Match resvg's usvg version for the vendored Mermaid renderer's PNG output.
+usvg = { version = "0.49.0", default-features = false }
 strum = { version = "0.28", default-features = false, features = ["derive"] }
 rustc-hash = "2.1.3"
 rustfs-mimalloc = "0.7.2"
@@ -205,14 +228,21 @@ schemars = "1.2.3"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 signal-hook = "0.4.5"
+shlex = "2"
+# Already in the tree via gpui-ce; glyph advances for the vendored Mermaid
+# renderer's text measurement.
+skrifa = "0.48"
 smallvec = "1.16.4"
 smol = "2.0.2"
 stats_alloc = { version = "0.1.10", features = ["nightly"] }
+streaming-iterator = "0.1.9"
 strsim = "0.11.1"
+syn = "3"
 sysinfo = { version = "0.39", default-features = false, features = ["system"] }
 tempfile = "3.27.0"
 thiserror = "2.0"
 tree-sitter = "0.27.1"
+typed-arena = "2.0.2"
 uuid = { version = "1.29.0", features = ["serde", "v4"] }
 # Fifteen of the grammars below are `path = "vendor/..."` purely to shrink the
 # release binary: they are upstream's source, regenerated with a larger
@@ -374,7 +404,10 @@ unicode-segmentation = "1.13.3"
 ureq = { version = "3.5.0", default-features = false, features = ["rustls", "gzip"] }
 url = "2.5.8"
 wayland-client = "0.31.15"
+winapi-util = "0.1.11"
+windows-sys = "0.61.2"
 x11-clipboard = "0.9.3"
+yaml-rust2 = { version = "0.13.0", default-features = false }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

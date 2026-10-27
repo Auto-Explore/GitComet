@@ -101,7 +101,7 @@ impl SidebarRowGeometry {
         Self { classes, metrics }
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "benchmarks"))]
     pub(super) fn uniform_for_test(rows: usize, height: f32) -> Self {
         Self::new(
             Rc::new(SidebarRowClasses {

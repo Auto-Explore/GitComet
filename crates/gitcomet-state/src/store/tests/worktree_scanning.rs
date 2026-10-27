@@ -75,6 +75,7 @@ fn loaded(paths: &[&str], result: Result<Vec<WorktreeDirtySummary>>) -> Msg {
             {
                 observations.push(WorktreeObservation::Clean(Worktree {
                     path: path.into(),
+                    bare: false,
                     head: Some(CommitId("tip".into())),
                     branch: None,
                     detached: false,
@@ -112,6 +113,7 @@ fn observed(scope: WorktreeDirtyScope, result: WorktreeScan) -> Msg {
 fn clean(path: &str) -> WorktreeObservation {
     WorktreeObservation::Clean(Worktree {
         path: path.into(),
+        bare: false,
         head: Some(CommitId("tip".into())),
         branch: None,
         detached: false,
@@ -144,6 +146,7 @@ fn explicit_unknown_preserves_dirty_files_and_selection_until_a_clean_observatio
     let scan = WorktreeScan::new(Ok(vec![WorktreeObservation::Unknown {
         worktree: Worktree {
             path: "/wt/b".into(),
+            bare: false,
             head: Some(CommitId("tip".into())),
             branch: None,
             detached: true,

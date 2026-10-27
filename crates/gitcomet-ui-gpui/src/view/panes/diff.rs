@@ -96,10 +96,29 @@ impl Render for DiffRenderer {
         self.diff_surface_frame = self.diff_surface_frame.wrapping_add(1);
         self.last_window_size = window.viewport_size();
         self.sync_layout_snapshot(cx);
-        if self.annotate_enabled && self.rendered_diff_target().is_some() {
+        let bare_working_file = self.active_repo().is_some_and(RepoState::is_bare)
+            && matches!(
+                self.rendered_diff_target(),
+                Some(
+                    DiffTarget::WorkingTree { worktree: None, .. }
+                        | DiffTarget::CommitRange {
+                            to_commit_id: None,
+                            ..
+                        }
+                )
+            );
+        if !bare_working_file && self.annotate_enabled && self.rendered_diff_target().is_some() {
             self.request_blame_for_current_target(false, cx);
         }
-        let inner = if self.rendered_diff_target().is_some() {
+        let inner = if bare_working_file {
+            components::empty_state(
+                self.theme,
+                "No working tree in bare mode",
+                gitcomet_core::domain::WORKING_TREE_REQUIRED_MESSAGE,
+            )
+            .debug_selector(|| "bare_mode_diff".to_owned())
+            .into_any_element()
+        } else if self.rendered_diff_target().is_some() {
             self.diff_view(window, cx).into_any_element()
         } else {
             div().into_any_element()

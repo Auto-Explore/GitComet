@@ -11,6 +11,7 @@ fn ref_repo() -> RepoState {
         },
     );
     repo.open = Loadable::Ready(());
+    repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
     repo.head_branch = Loadable::Ready("main".into());
     repo.branches = Loadable::Ready(Arc::new(vec![
         Branch {

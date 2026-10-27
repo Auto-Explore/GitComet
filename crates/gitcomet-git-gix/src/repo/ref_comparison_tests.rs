@@ -849,11 +849,11 @@ fn repository_replacement_cannot_reuse_cached_confirmation_at_the_same_path() {
     init_test_repo(&dir);
     write_file(&dir, "file", "replacement\n");
     commit_all(&dir, "replacement");
-    let batch = repo.analyze_ref_comparisons(&request, &token).unwrap();
-    assert_eq!(
-        batch.results[0].counts,
-        RefComparisonCounts::Unavailable(RefComparisonReason::IncompleteHistory)
-    );
+    // The old handle's operation lease refuses the replaced repository.
+    assert!(matches!(
+        repo.analyze_ref_comparisons(&request, &token),
+        Err(error) if matches!(error.kind(), ErrorKind::RepositoryChanged)
+    ));
 }
 
 #[test]

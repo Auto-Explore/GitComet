@@ -123,6 +123,102 @@ commands! {
     AnnexInit => "annex-init",
 }
 
+impl Command {
+    pub(crate) fn repository_requirement(self) -> gitcomet_core::domain::RepositoryRequirement {
+        use gitcomet_core::domain::RepositoryRequirement::{Repository, WorkingTree};
+        match self {
+            Self::Commit
+            | Self::StageAll
+            | Self::UnstageAll
+            | Self::CheckoutBranch
+            | Self::Rebase
+            | Self::AbortMerge
+            | Self::ContinueRebase
+            | Self::AbortRebase
+            | Self::Pull
+            | Self::Stash
+            | Self::StashPop
+            | Self::StashApply
+            | Self::StashDrop
+            | Self::ApplyPatch
+            | Self::AddSubmodule
+            | Self::UpdateSubmodules
+            | Self::LfsDownloadAll
+            | Self::AnnexAdjustUnlocked
+            | Self::AnnexLeaveAdjusted
+            | Self::AnnexWebapp => WorkingTree,
+            Self::CreateBranch
+            | Self::DeleteBranch
+            | Self::RenameBranch
+            | Self::PruneMergedBranches
+            | Self::Push
+            | Self::ForcePush
+            | Self::PushWithAnnotatedTags
+            | Self::PushWithAllTags
+            | Self::OpenRepository
+            | Self::SwitchRepository
+            | Self::CloneRepository
+            | Self::InitializeRepository
+            | Self::CloseRepoTab
+            | Self::ReloadRepository
+            | Self::FetchRef
+            | Self::FetchAll
+            | Self::OpenInCodeEditor
+            | Self::OpenExternalTerminal
+            | Self::ToggleSidebar
+            | Self::ToggleDetails
+            | Self::ToggleDiffView
+            | Self::ToggleDiffWordWrap
+            | Self::ToggleLineNumbers
+            | Self::ToggleWhitespaceChars
+            | Self::ToggleTerminal
+            | Self::PreviousRepoTab
+            | Self::NextRepoTab
+            | Self::LocateFileInExplorer
+            | Self::RevealCommit
+            | Self::OpenActiveViewSearch
+            | Self::Back
+            | Self::Forward
+            | Self::CreateTag
+            | Self::PruneLocalTags
+            | Self::NewWindow
+            | Self::OpenWorkspace
+            | Self::OpenSettings
+            | Self::Quit
+            | Self::MinimizeWindow
+            | Self::Hide
+            | Self::HideOthers
+            | Self::ZoomWindow
+            | Self::ToggleFullscreen
+            | Self::IncreaseUiScale
+            | Self::DecreaseUiScale
+            | Self::ResetUiScale
+            | Self::CloseWindow
+            | Self::CheckForUpdates
+            | Self::InstallDesktopIntegration
+            | Self::AddRemote
+            | Self::OpenRemoteInBrowser
+            | Self::AddWorktree
+            | Self::Blame
+            | Self::ShowReflog
+            | Self::FileHistory
+            | Self::LfsFetchAll
+            | Self::LfsPrune
+            | Self::LfsFsck
+            | Self::LfsRefreshLocks
+            | Self::LfsInstall
+            | Self::AnnexSync
+            | Self::AnnexPull
+            | Self::AnnexPush
+            | Self::AnnexGetAll
+            | Self::AnnexFsck
+            | Self::AnnexUnused
+            | Self::AnnexRestage
+            | Self::AnnexInit => Repository,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::Command;

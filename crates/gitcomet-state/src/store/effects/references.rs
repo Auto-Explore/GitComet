@@ -47,6 +47,15 @@ pub(super) fn schedule(
         ReferenceEffect::LoadRefMetadata { .. } => (metadata_executor, "load-ref-metadata"),
     };
     let run = move |repo: Arc<dyn GitRepository>, msg_tx: StoreWorkerSender| {
+        if matches!(work, ReferenceEffect::LoadHeadBranch { .. }) {
+            send_or_log(
+                &msg_tx,
+                Msg::Internal(InternalMsg::RepositoryModeLoaded {
+                    repo_id,
+                    result: super::bare_conversion::mode_result(repo.as_ref()),
+                }),
+            );
+        }
         send_or_log(
             &msg_tx,
             Msg::Internal(run(work, repo.as_ref(), &cancellation)),

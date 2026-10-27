@@ -98,6 +98,7 @@ fn the_tab_hides_while_another_repository_is_active(cx: &mut gpui::TestAppContex
             },
         );
         other.open = Loadable::Ready(());
+        other.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
         state.repos.push(other);
         state.active_repo = Some(RepoId(2));
     });

@@ -53,7 +53,7 @@ gpui_platform = { workspace = true }
 x11-clipboard = { workspace = true }
 
 [target.'cfg(target_os = "windows")'.dependencies]
-gitcomet-win32-window-utils = { path = "../win32-window-utils" }
+gitcomet-win32-window-utils = { workspace = true }
 raw-window-handle = { workspace = true }
 
 [dev-dependencies]

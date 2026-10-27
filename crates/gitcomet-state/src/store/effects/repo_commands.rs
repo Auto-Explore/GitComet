@@ -41,6 +41,13 @@ fn large_file_command_context(command: &gitcomet_core::large_files::LargeFileCom
         [path] => path.display().to_string(),
         many => format!("{} files", many.len()),
     };
+    let annex_paths = |items: &[PathBuf]| {
+        if items.is_empty() {
+            "all versions".to_string()
+        } else {
+            paths(items)
+        }
+    };
     match command {
         C::LfsPull { paths: p } | C::LfsLock { paths: p } => paths(p),
         C::LfsFetchForDiff { target } => match target {
@@ -59,15 +66,15 @@ fn large_file_command_context(command: &gitcomet_core::large_files::LargeFileCom
         C::LfsFetchAll => "all refs".to_string(),
         C::LfsPrune | C::LfsFsck | C::LfsInstall => "this repository".to_string(),
         C::AnnexGet { paths: p, from } | C::AnnexDrop { paths: p, from, .. } => match from {
-            Some(from) => format!("{} · {from}", paths(p)),
-            None => paths(p),
+            Some(from) => format!("{} · {from}", annex_paths(p)),
+            None => annex_paths(p),
         },
         C::AnnexGetKeys { keys } => match keys.as_slice() {
             [key] => key.clone(),
             many => format!("{} versions", many.len()),
         },
         C::AnnexCopy { paths: p, to } | C::AnnexMove { paths: p, to } => {
-            format!("{} · to {to}", paths(p))
+            format!("{} · to {to}", annex_paths(p))
         }
         C::AnnexUnlock { paths: p } | C::AnnexLock { paths: p } | C::AnnexAdd { paths: p } => {
             paths(p)
@@ -156,6 +163,12 @@ fn repo_command_context(command: &RepoCommandKind) -> Option<String> {
         RepoCommandKind::SquashCommits { message, count, .. } => {
             let subject = message_subject(message).unwrap_or_else(|| "No commit message".into());
             format!("{count} commits · {subject}")
+        }
+        RepoCommandKind::RewordCommit {
+            commit_id, message, ..
+        } => {
+            let subject = message_subject(message).unwrap_or_else(|| "No commit message".into());
+            format!("{} · {subject}", short_commit_id(commit_id.as_ref()))
         }
         RepoCommandKind::Rebase { onto } => format!("Current branch onto {onto}"),
         RepoCommandKind::RebaseContinue => "Current rebase".to_string(),
@@ -271,6 +284,7 @@ fn schedule_repo_command_with_context<F>(
     F: FnOnce(Arc<dyn GitRepository>) -> Result<CommandOutput, Error> + Send + 'static,
 {
     let gated = command.holds_mutation_gate();
+    let requirement = command.repository_requirement();
     schedule_repo_command_task(
         executor,
         repos,
@@ -278,16 +292,20 @@ fn schedule_repo_command_with_context<F>(
         repo_id,
         command,
         context_override,
-        move |repo| {
+        move |repo, _command| {
             let gate = gated.then(|| super::super::mutation_gate::for_repo(repo.as_ref()));
             let _mutation = gate
                 .as_ref()
                 .map(|gate| gate.read().unwrap_or_else(|error| error.into_inner()));
+            let _operation = repo.acquire_operation_lease()?;
+            super::super::repository_requirement::check(repo.as_ref(), requirement)?;
             run(repo)
         },
     );
 }
 
+/// `run` may record what the command did in its [`RepoCommandKind`] before
+/// the completion reports it.
 fn schedule_repo_command_task<F>(
     executor: &TaskExecutor,
     repos: &RepositoryRuntimes,
@@ -297,7 +315,9 @@ fn schedule_repo_command_task<F>(
     context_override: Option<String>,
     run: F,
 ) where
-    F: FnOnce(Arc<dyn GitRepository>) -> Result<CommandOutput, Error> + Send + 'static,
+    F: FnOnce(Arc<dyn GitRepository>, &mut RepoCommandKind) -> Result<CommandOutput, Error>
+        + Send
+        + 'static,
 {
     let label = command.hook_activity_label();
     let context = context_override.or_else(|| repo_command_context(&command));
@@ -320,7 +340,7 @@ fn schedule_repo_command_task<F>(
             );
             let result = {
                 let _scope = operation.attach();
-                run(Arc::clone(&repo))
+                run(Arc::clone(&repo), &mut command)
             };
             if fetches_objects {
                 // The refresh this command triggers should read the new packs
@@ -459,6 +479,24 @@ struct SaveWorktreeFileRequest {
     completion: Option<smol::channel::Sender<bool>>,
 }
 
+struct SaveCompletion(Option<smol::channel::Sender<bool>>);
+
+impl SaveCompletion {
+    fn finish(mut self, succeeded: bool) {
+        if let Some(sender) = self.0.take() {
+            let _ = sender.try_send(succeeded);
+        }
+    }
+}
+
+impl Drop for SaveCompletion {
+    fn drop(&mut self) {
+        if let Some(sender) = self.0.take() {
+            let _ = sender.try_send(false);
+        }
+    }
+}
+
 fn schedule_save_worktree_file(
     executor: &TaskExecutor,
     repos: &RepositoryRuntimes,
@@ -473,6 +511,7 @@ fn schedule_save_worktree_file(
         stage,
         completion,
     } = request;
+    let completion = SaveCompletion(completion);
     let command_path = path.clone();
     let engine = msg_tx.filesystem;
     schedule_repo_command(
@@ -510,9 +549,7 @@ fn schedule_save_worktree_file(
                     exit_code: Some(0),
                 })
             })();
-            if let Some(completion) = completion {
-                let _ = completion.try_send(result.is_ok());
-            }
+            completion.finish(result.is_ok());
             result
         },
     );
@@ -1622,6 +1659,61 @@ fn schedule_squash_commits(
     });
 }
 
+fn schedule_reword_commit(
+    executor: &TaskExecutor,
+    repos: &RepositoryRuntimes,
+    msg_tx: StoreWorkerSender,
+    repo_id: RepoId,
+    request_id: crate::model::RewordRequestId,
+    commit_id: gitcomet_core::domain::CommitId,
+    message: String,
+    resume: bool,
+    auth: Option<StagedGitAuth>,
+) {
+    let command = RepoCommandKind::RewordCommit {
+        request_id,
+        commit_id: commit_id.clone(),
+        message: message.clone(),
+        rebase_paused: resume,
+        rewritten_id: None,
+    };
+    schedule_repo_command_task(
+        executor,
+        repos,
+        msg_tx,
+        repo_id,
+        command,
+        None,
+        move |repo, command| {
+            let gate = super::super::mutation_gate::for_repo(repo.as_ref());
+            let _mutation = gate.read().unwrap_or_else(|error| error.into_inner());
+            let result = run_with_git_auth(auth, || {
+                if resume {
+                    repo.continue_reword_commit_with_output(&commit_id, &message)
+                } else {
+                    repo.reword_commit_with_output(&commit_id, &message)
+                }
+            });
+            if let RepoCommandKind::RewordCommit {
+                rewritten_id,
+                rebase_paused,
+                ..
+            } = command
+            {
+                match &result {
+                    Ok(outcome) => *rewritten_id = outcome.rewritten_id.clone(),
+                    Err(_) => {
+                        *rebase_paused = repo
+                            .reword_commit_in_progress(&commit_id, &message)
+                            .unwrap_or(resume);
+                    }
+                }
+            }
+            result.map(|outcome| outcome.output)
+        },
+    );
+}
+
 fn schedule_rebase(
     executor: &TaskExecutor,
     repos: &RepositoryRuntimes,
@@ -2638,7 +2730,7 @@ pub(super) fn schedule(
                 repo_id,
                 command,
                 None,
-                move |repo| {
+                move |repo, _command| {
                     let gate = super::super::mutation_gate::for_repo(repo.as_ref());
                     let _mutation = match gate.try_write() {
                         Ok(guard) => guard,
@@ -2650,6 +2742,11 @@ pub(super) fn schedule(
                             )));
                         }
                     };
+                    let _operation = repo.acquire_operation_lease()?;
+                    super::super::repository_requirement::check(
+                        repo.as_ref(),
+                        gitcomet_core::domain::RepositoryRequirement::WorkingTree,
+                    )?;
                     let _filesystem = match filesystem.try_lock() {
                         Ok(guard) => guard,
                         Err(std::sync::TryLockError::Poisoned(error)) => error.into_inner(),
@@ -2851,6 +2948,16 @@ pub(super) fn schedule(
             expected_head,
             message,
             count,
+        ),
+        RepoCommandEffect::RewordCommit {
+            repo_id,
+            request_id,
+            commit_id,
+            message,
+            resume,
+            auth,
+        } => schedule_reword_commit(
+            executor, repos, msg_tx, repo_id, request_id, commit_id, message, resume, auth,
         ),
         RepoCommandEffect::Rebase { repo_id, onto } => {
             schedule_rebase(executor, repos, msg_tx, repo_id, onto)

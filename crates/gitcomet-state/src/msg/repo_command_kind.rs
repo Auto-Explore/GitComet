@@ -87,6 +87,20 @@ pub enum RepoCommandKind {
         message: String,
         count: usize,
     },
+    RewordCommit {
+        request_id: crate::model::RewordRequestId,
+        commit_id: CommitId,
+        message: String,
+        /// Whether the failure left the reword's rebase paused, as a signing
+        /// failure at its reword step does: a retry then continues that
+        /// rebase, which kept the new message. Otherwise it replays whole.
+        /// Read from the repository after the failure, not guessed from
+        /// which path the target should take.
+        rebase_paused: bool,
+        /// The reworded commit's new id once the command succeeded, so the
+        /// selection can follow it.
+        rewritten_id: Option<CommitId>,
+    },
     Rebase {
         onto: String,
     },
@@ -228,6 +242,74 @@ pub enum RepoCommandKind {
 }
 
 impl RepoCommandKind {
+    pub fn repository_requirement(&self) -> gitcomet_core::domain::RepositoryRequirement {
+        use gitcomet_core::domain::RepositoryRequirement::{Repository, WorkingTree};
+        match self {
+            Self::FetchAll
+            | Self::FetchRefspecs { .. }
+            | Self::PruneMergedBranches
+            | Self::PruneLocalTags
+            | Self::RunMaintenance
+            | Self::Push
+            | Self::PushWithTags { .. }
+            | Self::PushAfterCommit { .. }
+            | Self::ForcePush
+            | Self::ForcePushWithLease { .. }
+            | Self::PushSetUpstream { .. }
+            | Self::SetUpstreamBranch { .. }
+            | Self::UnsetUpstreamBranch { .. }
+            | Self::DeleteRemoteBranch { .. }
+            | Self::DeleteRemoteBranches { .. }
+            | Self::SquashCommits { .. }
+            | Self::CreateTag { .. }
+            | Self::DeleteTag { .. }
+            | Self::PushTag { .. }
+            | Self::DeleteRemoteTag { .. }
+            | Self::AddRemote { .. }
+            | Self::RemoveRemote { .. }
+            | Self::SetRemoteUrl { .. }
+            | Self::ExportPatch { .. }
+            | Self::AddWorktree { .. }
+            | Self::RemoveWorktree { .. }
+            | Self::ForceRemoveWorktree { .. } => Repository,
+            Self::Reset { mode, .. } => match mode {
+                ResetMode::Soft => Repository,
+                ResetMode::Mixed | ResetMode::Hard => WorkingTree,
+            },
+            Self::LargeFile { command } => command.repository_requirement(),
+            Self::Pull { .. }
+            | Self::PullBranch { .. }
+            | Self::MergeRef { .. }
+            | Self::SquashRef { .. }
+            | Self::Rebase { .. }
+            | Self::RebaseContinue
+            | Self::RebaseAbort
+            | Self::InteractiveRebase { .. }
+            | Self::RewordCommit { .. }
+            | Self::InteractiveCherryPick { .. }
+            | Self::CherryPick { .. }
+            | Self::Revert { .. }
+            | Self::ApplyFileChange { .. }
+            | Self::MergeAbort
+            | Self::CheckoutConflict { .. }
+            | Self::AcceptConflictDeletion { .. }
+            | Self::CheckoutConflictBase { .. }
+            | Self::LaunchMergetool { .. }
+            | Self::SaveWorktreeFile { .. }
+            | Self::AppendGitignorePatterns { .. }
+            | Self::AppendGitattributesRule { .. }
+            | Self::ApplyPatch { .. }
+            | Self::AddSubmodule { .. }
+            | Self::UpdateSubmodules { .. }
+            | Self::LoadSubmodule { .. }
+            | Self::ChangeSubmodulePointer { .. }
+            | Self::RemoveSubmodule { .. }
+            | Self::StageHunk
+            | Self::UnstageHunk
+            | Self::ApplyWorktreePatch { .. } => WorkingTree,
+        }
+    }
+
     pub(crate) fn finished(
         self,
         repo_id: crate::model::RepoId,
@@ -251,6 +333,7 @@ impl RepoCommandKind {
             | Self::SquashRef { .. }
             | Self::Reset { .. }
             | Self::SquashCommits { .. }
+            | Self::RewordCommit { .. }
             | Self::Rebase { .. }
             | Self::RebaseContinue
             | Self::RebaseAbort
@@ -354,6 +437,7 @@ impl RepoCommandKind {
             | Self::SquashRef { .. }
             | Self::Reset { .. }
             | Self::SquashCommits { .. }
+            | Self::RewordCommit { .. }
             | Self::Rebase { .. }
             | Self::RebaseContinue
             | Self::RebaseAbort
@@ -422,6 +506,7 @@ impl RepoCommandKind {
             Self::Pull { .. } | Self::PullBranch { .. } => "Pull",
             Self::MergeRef { .. } => "Merge",
             Self::SquashRef { .. } | Self::SquashCommits { .. } => "Squash",
+            Self::RewordCommit { .. } => "Edit commit message",
             Self::Push | Self::PushAfterCommit { .. } => "Push",
             Self::PushWithTags { request } => request.mode.label(),
             Self::ForcePush | Self::ForcePushWithLease { .. } => "Force push",

@@ -94,7 +94,8 @@ impl SidebarPaneView {
             .active_repo()
             .is_some_and(|r| r.browsing_commit().is_some());
         let accepts_drops = self.active_repo().is_some_and(|repo| {
-            repo.file_browser.source == gitcomet_core::domain::FileSource::WorkingDirectory
+            !repo.is_bare()
+                && repo.file_browser.source == gitcomet_core::domain::FileSource::WorkingDirectory
         });
         div()
             .id("explorer_focus_scope")

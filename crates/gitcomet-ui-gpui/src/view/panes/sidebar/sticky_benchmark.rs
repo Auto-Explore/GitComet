@@ -38,6 +38,7 @@ impl SidebarStickyFrameFixture {
             &build_synthetic_commits(1),
         );
         repo.open = Loadable::Ready(());
+        repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
         let mut pinned = BTreeSet::new();
         if let Loadable::Ready(branches) = &repo.branches {
             for branch in branches.iter().take(pins / 2) {
@@ -171,16 +172,22 @@ impl SidebarStickyFrameFixture {
             .unwrap()
     }
 
-    /// Arithmetic only: no view update, row construction, or heap allocation.
+    /// Arithmetic only: no view update, row construction, or heap allocation
+    /// once the thread's fixed layout exists.
     pub fn geometry_step(scroll: f32) -> f32 {
-        let headers = [0, 1, 25, 1_200, 1_201, 3_000, 9_000, 18_000];
-        headers
-            .into_iter()
-            .enumerate()
-            .map(|(rank, row)| {
-                crate::view::sidebar_sticky::row_y(row, rank, headers.len(), scroll, 640.0, 24.0)
-            })
-            .sum()
+        use crate::view::{sidebar_row_geometry::SidebarRowGeometry, sidebar_sticky::StickyLayout};
+        thread_local! {
+            static LAYOUT: (StickyLayout, SidebarRowGeometry) = {
+                let geometry = SidebarRowGeometry::uniform_for_test(18_001, 24.0);
+                let headers = [0, 1, 25, 1_200, 1_201, 3_000, 9_000, 18_000];
+                (StickyLayout::from_rows(&headers, &geometry), geometry)
+            };
+        }
+        LAYOUT.with(|(layout, geometry)| {
+            (0..layout.slots.len())
+                .map(|rank| layout.row_y(rank, scroll, 640.0, geometry))
+                .sum()
+        })
     }
 
     fn draw(&mut self) {

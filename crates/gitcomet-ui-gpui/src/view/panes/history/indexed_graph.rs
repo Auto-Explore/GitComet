@@ -617,11 +617,12 @@ mod tests {
                 history_scope: LogScope::AllBranches,
                 log_source: 0,
                 history_author_filter: None,
+                history_focus: Default::default(),
                 head_branch_rev: 0,
                 detached_head_commit: None,
                 head_branch_target: Some(commits[0].id.clone()),
                 branches_rev: 0,
-                remote_branches_rev: 0,
+                remote_branches: Default::default(),
                 stashes_rev: 0,
             };
             let page = LogPage {
@@ -644,7 +645,7 @@ mod tests {
                     head_branch_rev: 0,
                     detached_head_commit: None,
                     branches_rev: 0,
-                    remote_branches_rev: 0,
+                    remote_branches: Default::default(),
                     tags_rev: 0,
                 },
                 &page,

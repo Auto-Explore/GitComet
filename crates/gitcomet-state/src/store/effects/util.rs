@@ -140,6 +140,10 @@ impl GitOperationTask {
         git_operation::attach(&self.context)
     }
 
+    pub(super) fn cancellation(&self) -> &gitcomet_core::services::CancellationToken {
+        self.context.cancellation()
+    }
+
     pub(super) fn outcome<T>(result: &Result<T, Error>) -> GitOperationOuterOutcome {
         outer_outcome(result)
     }

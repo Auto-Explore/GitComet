@@ -35,6 +35,7 @@ fn branch_worktree_badge_aligns_to_edge_and_branch_menu_opens_on_right_click(
         &store_for_test,
         repo_id,
         vec![Worktree {
+            bare: false,
             path: base.join("repo-feature"),
             head: None,
             branch: Some("feature/workspace".to_string()),
@@ -131,6 +132,7 @@ fn worktree_branch_badge_shows_full_tooltip_when_truncated(cx: &mut gpui::TestAp
         &store_for_test,
         repo_id,
         vec![Worktree {
+            bare: false,
             path: linked_repo,
             head: None,
             branch: Some(branch.clone()),
@@ -193,6 +195,7 @@ fn worktree_branch_and_path_stay_within_one_sidebar_row(cx: &mut gpui::TestAppCo
         &store_for_test,
         repo_id,
         vec![Worktree {
+            bare: false,
             path: worktree_root.join("agent4"),
             head: None,
             branch: Some(branch.clone()),
@@ -287,6 +290,7 @@ fn worktree_badge_appears_when_worktree_added_for_branch(cx: &mut gpui::TestAppC
         &store_for_test,
         repo_id,
         vec![Worktree {
+            bare: false,
             path: base.join("repo-feature"),
             head: None,
             branch: Some("feature/workspace".to_string()),
@@ -335,6 +339,7 @@ fn worktree_badge_disappears_when_worktree_removed(cx: &mut gpui::TestAppContext
         &store_for_test,
         repo_id,
         vec![Worktree {
+            bare: false,
             path: base.join("repo-feature"),
             head: None,
             branch: Some("feature/workspace".to_string()),
@@ -405,6 +410,7 @@ fn worktree_badge_disappears_when_worktree_detaches(cx: &mut gpui::TestAppContex
         &store_for_test,
         repo_id,
         vec![Worktree {
+            bare: false,
             path: base.join("repo-feature"),
             head: None,
             branch: Some("feature/workspace".to_string()),
@@ -423,6 +429,7 @@ fn worktree_badge_disappears_when_worktree_detaches(cx: &mut gpui::TestAppContex
         &store_for_test,
         repo_id,
         vec![Worktree {
+            bare: false,
             path: base.join("repo-feature"),
             head: None,
             branch: None,
@@ -492,6 +499,7 @@ fn worktree_badge_moves_when_worktree_branch_renames(cx: &mut gpui::TestAppConte
         &store_for_test,
         repo_id,
         vec![Worktree {
+            bare: false,
             path: base.join("repo-feature"),
             head: None,
             branch: Some("feature/old".to_string()),
@@ -510,6 +518,7 @@ fn worktree_badge_moves_when_worktree_branch_renames(cx: &mut gpui::TestAppConte
         &store_for_test,
         repo_id,
         vec![Worktree {
+            bare: false,
             path: base.join("repo-feature"),
             head: None,
             branch: Some("feature/new".to_string()),
@@ -560,6 +569,7 @@ fn worktree_branch_badge_hidden_for_detached_worktree_item(cx: &mut gpui::TestAp
         &store_for_test,
         repo_id,
         vec![Worktree {
+            bare: false,
             path: base.join("repo-detached"),
             head: None,
             branch: None,
@@ -616,6 +626,7 @@ fn worktree_badge_survives_reload_repo_and_manual_worktree_resupply(cx: &mut gpu
         &store_for_test,
         repo_id,
         vec![Worktree {
+            bare: false,
             path: base.join("repo-feature"),
             head: None,
             branch: Some("feature/workspace".to_string()),
@@ -661,6 +672,7 @@ fn worktree_badge_survives_reload_repo_and_manual_worktree_resupply(cx: &mut gpu
         &store_for_test,
         repo_id,
         vec![Worktree {
+            bare: false,
             path: base.join("repo-feature"),
             head: None,
             branch: Some("feature/workspace".to_string()),
@@ -709,6 +721,7 @@ fn worktree_badge_reappears_after_sidebar_data_request_cycle(cx: &mut gpui::Test
         &store_for_test,
         repo_id,
         vec![Worktree {
+            bare: false,
             path: base.join("repo-feature"),
             head: None,
             branch: Some("feature/workspace".to_string()),

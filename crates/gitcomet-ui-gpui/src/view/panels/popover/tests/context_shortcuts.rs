@@ -45,6 +45,7 @@ fn context_menu_default_actions_do_not_render_enter_shortcuts(cx: &mut gpui::Tes
         view.update(app, |this, cx| {
             let mut repo = RepoState::new_opening(repo_id, RepoSpec { workdir });
             repo.open = Loadable::Ready(());
+            repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
             repo.head_branch = Loadable::Ready("main".into());
             repo.status = Loadable::Ready(RepoStatus::default().into());
 

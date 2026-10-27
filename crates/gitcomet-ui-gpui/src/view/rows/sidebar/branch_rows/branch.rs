@@ -108,7 +108,11 @@ impl SidebarPaneView {
             format!("branch_row_{}_{}", repo_id.0, ix).into()
         };
         let row_debug_selector = row_group.as_ref().to_owned();
-        let branch_text_color = if surface == SidebarRowSurface::Pins {
+        let in_history_focus = branch_in_history_focus(&ctx.history_focus, &target);
+        let history_focus_color = theme.colors.accent.foreground;
+        let branch_text_color = if in_history_focus {
+            history_focus_color
+        } else if surface == SidebarRowSurface::Pins {
             theme.colors.foreground.primary
         } else if muted {
             theme.colors.foreground.secondary
@@ -116,7 +120,9 @@ impl SidebarPaneView {
             ctx.branch_tree_color(section)
         };
         let branch_selected_bg = selected_branch_row_bg(theme);
-        let branch_selected_label_color = if branch_selected {
+        let branch_selected_label_color = if in_history_focus {
+            history_focus_color
+        } else if branch_selected {
             selected_branch_label_color(theme)
         } else {
             branch_text_color
@@ -128,6 +134,36 @@ impl SidebarPaneView {
         } else {
             ctx.icon_primary
         };
+        let focus_eye = ctx
+            .focus_eye_slot(if in_history_focus {
+                FocusEyeState::Focused
+            } else {
+                FocusEyeState::Unfocused
+            })
+            .map(|eye| {
+                let focus_target = focus_target_for_branch(&target);
+                eye.id(("sidebar_focus_eye", ix))
+                    .debug_selector(move || format!("sidebar_focus_eye_{ix}"))
+                    .gitcomet_tooltip(
+                        theme,
+                        if in_history_focus {
+                            "Stop focus"
+                        } else {
+                            "Focus"
+                        }
+                        .into(),
+                    )
+                    .on_activate(
+                        false,
+                        controls::ControlActivation::Nested,
+                        cx.listener(move |this, _, _, _| {
+                            this.store.dispatch(Msg::ToggleHistoryFocus {
+                                repo_id,
+                                target: focus_target.clone(),
+                            });
+                        }),
+                    )
+            });
         let badge_gap_px = ctx.px(BRANCH_BADGE_GAP_PX);
         let head_highlight = with_alpha(
             theme.colors.accent.foreground,
@@ -197,6 +233,13 @@ impl SidebarPaneView {
                 row.row_accent(theme.colors.accent.foreground)
             })
             .text_color(branch_text_color)
+            .children(focus_eye.map(|eye| {
+                if tall {
+                    eye.h(ctx.name_line_height())
+                } else {
+                    eye
+                }
+            }))
             .child(line_slot(ctx.tree_toggle_slot(None)).when(
                 surface == SidebarRowSurface::Pins && depth == 0,
                 |slot| {
@@ -239,44 +282,56 @@ impl SidebarPaneView {
         )
         .child(div().flex_1().min_w(px(0.0)).child(label));
 
-        // Badges keep their size; only the worktree pill truncates, and only
-        // when the status beside it leaves too little room.
-        let mut end_accessories = div()
-            .ml_auto()
-            .flex_initial()
-            .min_w(px(0.0))
-            .flex()
-            .items_center()
-            .gap(badge_gap_px);
+        // Badges keep their size. Short of room, the worktree pill truncates
+        // first, then the status.
+        let mut badges = Vec::new();
         if divergence_behind.is_some() || divergence_ahead.is_some() {
             // A cloud marks the tracking branch, so these arrows never read
             // like the comparison counts beside them.
-            end_accessories =
-                end_accessories.child(ctx.svg_icon("icons/cloud.svg", ctx.icon_muted, 11.0));
+            badges.push(
+                ctx.svg_icon("icons/cloud.svg", ctx.icon_muted, 11.0)
+                    .into_any_element(),
+            );
             if let Some(behind) = divergence_behind {
-                end_accessories = end_accessories.child(ctx.divergence_badge(
-                    UpstreamDirection::Behind,
-                    behind,
-                    Some(format!("branch_pull_badge_{ix}")),
-                ));
+                badges.push(
+                    ctx.divergence_badge(
+                        UpstreamDirection::Behind,
+                        behind,
+                        Some(format!("branch_pull_badge_{ix}")),
+                    )
+                    .into_any_element(),
+                );
             }
             if let Some(ahead) = divergence_ahead {
-                end_accessories = end_accessories.child(ctx.divergence_badge(
-                    UpstreamDirection::Ahead,
-                    ahead,
-                    Some(format!("branch_push_badge_{ix}")),
-                ));
+                badges.push(
+                    ctx.divergence_badge(
+                        UpstreamDirection::Ahead,
+                        ahead,
+                        Some(format!("branch_push_badge_{ix}")),
+                    )
+                    .into_any_element(),
+                );
             }
         }
         if is_upstream && section == BranchSection::Remote {
-            end_accessories = end_accessories
-                .child(ctx.upstream_badge(Some(format!("branch_upstream_badge_{ix}"))));
+            badges.push(
+                ctx.upstream_badge(Some(format!("branch_upstream_badge_{ix}")))
+                    .into_any_element(),
+            );
         }
-        if show_worktree_badge {
+        let badges = (!badges.is_empty()).then(|| {
+            div()
+                .flex()
+                .flex_none()
+                .items_center()
+                .gap(badge_gap_px)
+                .children(badges)
+        });
+        let worktree_badge = show_worktree_badge.then(|| {
             let Some(worktree_badge_path) = worktree_badge_path.clone() else {
                 unreachable!("workspace badge requires a worktree path");
             };
-            let worktree_badge = Self::sidebar_branch_worktree_badge(
+            Self::sidebar_branch_worktree_badge(
                 ctx,
                 ix,
                 &name,
@@ -285,13 +340,8 @@ impl SidebarPaneView {
                 has_active_worktree,
                 worktree_menu_active,
                 cx,
-            );
-            end_accessories = end_accessories.child(worktree_badge);
-        }
-        let show_branch_badges = divergence_behind.is_some()
-            || divergence_ahead.is_some()
-            || (is_upstream && section == BranchSection::Remote)
-            || show_worktree_badge;
+            )
+        });
 
         let age = ctx
             .age_slot(committed_at)
@@ -299,16 +349,38 @@ impl SidebarPaneView {
         let content = div().flex_1().min_w(px(0.0)).flex().flex_col();
         row = if tall {
             name_line = name_line.child(age);
+            // Siblings, not one run: a run would not shrink below the pill's
+            // full width, squeezing the status first.
+            let pushed_right = badges.is_some();
             let details = ctx
                 .secondary_line()
                 .h(ctx.secondary_line_height())
-                .children(status)
-                .when(show_branch_badges, |line| line.child(end_accessories));
+                .gap(badge_gap_px)
+                .children(status.map(|status| {
+                    status
+                        .flex_shrink(1.0)
+                        .mr(ctx.px(BRANCH_TREE_GAP_PX - BRANCH_BADGE_GAP_PX))
+                }))
+                .children(badges.map(|badges| badges.ml_auto()))
+                .children(worktree_badge.map(|badge| {
+                    badge
+                        .flex_shrink(BRANCH_WORKTREE_BADGE_SHRINK)
+                        .when(!pushed_right, |badge| badge.ml_auto())
+                }));
             row.child(content.child(name_line).child(details))
         } else {
-            name_line = name_line
-                .when(show_branch_badges, |line| line.child(end_accessories))
-                .child(age);
+            let end_accessories = (badges.is_some() || worktree_badge.is_some()).then(|| {
+                div()
+                    .ml_auto()
+                    .flex_initial()
+                    .min_w(px(0.0))
+                    .flex()
+                    .items_center()
+                    .gap(badge_gap_px)
+                    .children(badges)
+                    .children(worktree_badge)
+            });
+            name_line = name_line.children(end_accessories).child(age);
             row.child(content.child(name_line))
         };
         let tooltip: SharedString = match tip_tooltip {
@@ -361,6 +433,10 @@ impl SidebarPaneView {
                                 badge_worktree_path.as_deref(),
                             ) {
                                 LocalBranchDoubleClickAction::CheckoutBranch { name } => {
+                                    if this.active_repo().is_some_and(RepoState::is_bare) {
+                                        this.explain_working_tree_required(cx);
+                                        return;
+                                    }
                                     this.store.dispatch(Msg::CheckoutBranch { repo_id, name });
                                     this.rebuild_diff_cache(cx);
                                     cx.notify();

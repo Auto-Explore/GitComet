@@ -81,12 +81,14 @@ fn worktree_commands_keep_sidebar_rows_until_refresh_finishes() {
     let removed_path = PathBuf::from("/tmp/worktree");
     let existing = vec![
         gitcomet_core::domain::Worktree {
+            bare: false,
             path: PathBuf::from("/tmp/repo"),
             head: Some(CommitId("a".into())),
             branch: Some("main".into()),
             detached: false,
         },
         gitcomet_core::domain::Worktree {
+            bare: false,
             path: removed_path.clone(),
             head: Some(CommitId("b".into())),
             branch: Some("feature".into()),

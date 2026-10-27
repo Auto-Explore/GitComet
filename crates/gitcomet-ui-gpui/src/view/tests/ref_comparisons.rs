@@ -100,6 +100,7 @@ fn comparison_state() -> (AppState, Arc<ComparisonMemory>) {
         });
         gitcomet_core::domain::Worktree {
             path,
+            bare: false,
             head: Some(oid),
             branch: (index != 2).then(|| names[index + 1].to_string()),
             detached: index == 2,

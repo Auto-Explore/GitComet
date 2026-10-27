@@ -131,6 +131,7 @@ fn unchanged_refresh_waits_for_the_worktree_snapshot_without_starting_comparison
     let mut state = fixture();
     state.repos[0].set_worktrees(Loadable::Ready(vec![gitcomet_core::domain::Worktree {
         path: "/linked".into(),
+        bare: false,
         head: Some(CommitId("c".repeat(40).into())),
         branch: None,
         detached: true,
@@ -348,4 +349,23 @@ fn a_verification_context_only_event_restarts_comparisons_without_waiting_for_re
             .get(&work.projections.subjects[0])
             .is_none()
     );
+}
+
+#[test]
+fn bare_conversion_reopen_restarts_comparisons_under_the_new_lifetime() {
+    let _guard = crate::ref_comparisons::MEMORY_TESTS.lock().unwrap();
+    let mut state = fixture();
+    let work = start(&mut state);
+    resolve(&mut state, &work);
+    publish(&mut state, &work);
+    let rev = state.repos[0].ref_comparisons.rev;
+
+    state.repos[0].retire_repository_lifetime();
+    assert_ne!(state.repos[0].ref_comparisons.rev, rev);
+    // The reopened handle brings its own memory; the refs reload unchanged.
+    state.repos[0].ref_comparisons.memory = Some(Arc::new(
+        gitcomet_core::ref_comparison_memory::ComparisonMemory::default(),
+    ));
+    let next = start(&mut state);
+    assert_ne!(next.lifetime, work.lifetime);
 }

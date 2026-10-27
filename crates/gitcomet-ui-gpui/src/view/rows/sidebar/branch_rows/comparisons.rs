@@ -148,12 +148,13 @@ impl SidebarPaneView {
     }
 
     /// The left side of a tall row's details line: whether the subject is
-    /// in the comparison target, and if not, by how many commits.
+    /// in the comparison target, and if not, by how many commits. Keeps its
+    /// width unless the caller lets it shrink; its text then ends in "…".
     pub(super) fn comparison_status(
         &self,
         ctx: &SidebarRowContext,
         subject: Option<&CommitId>,
-    ) -> Option<AnyElement> {
+    ) -> Option<gpui::Stateful<gpui::Div>> {
         let repo = self.active_repo()?;
         let subject = subject?;
         let (status, tooltip) = comparison_summary(&repo.ref_comparisons, subject)?;
@@ -167,36 +168,43 @@ impl SidebarPaneView {
             })
             .flex()
             .flex_none()
+            .min_w(px(0.0))
+            .overflow_hidden()
             .items_center()
             .gap(ctx.px(3.0))
             .whitespace_nowrap()
+            .text_ellipsis()
             .text_size(theme.ui_text(11.0))
             .text_color(theme.colors.foreground.secondary);
         let cell = match status {
             RowStatus::UpToDate => cell
                 .child(ctx.svg_icon("icons/check.svg", ctx.icon_muted, 11.0))
-                .child("Up to date"),
+                .child(shrinkable_text("Up to date")),
             RowStatus::Integrated(evidence) => {
                 let color = theme.colors.status.success.foreground;
                 cell.text_color(color)
                     .child(ctx.svg_icon("icons/git_merge.svg", color, 11.0))
-                    .child(integrated_label(evidence))
+                    .child(shrinkable_text(integrated_label(evidence)))
             }
             RowStatus::Unmerged { ahead, behind } => cell
                 .child(
-                    div()
+                    shrinkable_text(format!("↑{ahead}"))
                         .font_weight(FontWeight::MEDIUM)
-                        .text_color(theme.colors.status.warning.foreground)
-                        .child(format!("↑{ahead}")),
+                        .text_color(theme.colors.status.warning.foreground),
                 )
-                .when(behind > 0, |cell| cell.child(format!("↓{behind}"))),
-            RowStatus::NotChecked => cell.child("Not checked"),
+                .when(behind > 0, |cell| {
+                    cell.child(shrinkable_text(format!("↓{behind}")))
+                }),
+            RowStatus::NotChecked => cell.child(shrinkable_text("Not checked")),
         };
-        Some(
-            cell.gitcomet_tooltip(theme, tooltip.into())
-                .into_any_element(),
-        )
+        Some(cell.gitcomet_tooltip(theme, tooltip.into()))
     }
+}
+
+/// Text that a shrinking status cell can truncate; a bare string keeps its
+/// full width.
+fn shrinkable_text(text: impl IntoElement) -> gpui::Div {
+    div().min_w(px(0.0)).overflow_hidden().child(text)
 }
 
 /// What a row says about its subject against the comparison target.

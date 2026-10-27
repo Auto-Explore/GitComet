@@ -803,6 +803,15 @@ pub(super) fn select_worktree_uncommitted(
     repo_id: RepoId,
     path: PathBuf,
 ) -> Vec<Effect> {
+    if let Some(target_id) = state
+        .repos
+        .iter()
+        .find(|repo| repo.spec.workdir == path)
+        .map(|repo| repo.id)
+        && super::refuse_bare_worktree_action(state, target_id)
+    {
+        return Vec::new();
+    }
     let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
         return Vec::new();
     };
@@ -1492,6 +1501,15 @@ pub(super) fn request_file_browser_load(repo_state: &mut RepoState) -> Option<Ef
     if !matches!(repo_state.open, Loadable::Ready(())) {
         return None;
     }
+    if repo_state.is_bare() && repo_state.file_browser.source == FileSource::WorkingDirectory {
+        let Some(source) = repo_state.live_file_source() else {
+            repo_state.file_browser.entries = Loadable::Ready(Arc::new(Vec::new()));
+            repo_state.file_browser.stale = false;
+            repo_state.file_browser.bump_rev();
+            return None;
+        };
+        retarget_file_browser(repo_state, source);
+    }
     repo_state
         .loads_in_flight
         .request(LoadKind::FileBrowser)
@@ -1534,11 +1552,21 @@ pub(super) fn set_file_browser_source(
     let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
         return Vec::new();
     };
+    let browsing = matches!(source, FileSource::Commit(_));
+    let source = if repo_state.is_bare() && source == FileSource::WorkingDirectory {
+        let Some(source) = repo_state.live_file_source() else {
+            repo_state.file_browser.entries = Loadable::Ready(Arc::new(Vec::new()));
+            repo_state.file_browser.stale = false;
+            repo_state.file_browser.bump_rev();
+            return Vec::new();
+        };
+        source
+    } else {
+        source
+    };
     // An explicit choice of browse point acknowledges the current selection:
     // following must not undo it until the selection next moves.
-    repo_state
-        .file_browser
-        .set_active(matches!(source, FileSource::Commit(_)));
+    repo_state.file_browser.set_active(browsing);
     repo_state.file_browser.followed_selection_rev =
         Some(repo_state.history_state.selected_commit_rev);
     if !retarget_file_browser(repo_state, source) {
@@ -1557,7 +1585,10 @@ pub(super) fn sync_file_browser_to_selection(
     follow: bool,
     sidebar_mode: SidebarMode,
 ) -> bool {
-    if !repo_state.file_browser.active || !follow || sidebar_mode != SidebarMode::Files {
+    if (!repo_state.file_browser.active && !repo_state.is_bare())
+        || !follow
+        || sidebar_mode != SidebarMode::Files
+    {
         return false;
     }
     let rev = repo_state.history_state.selected_commit_rev;
@@ -1570,7 +1601,10 @@ pub(super) fn sync_file_browser_to_selection(
         .selected_commit
         .clone()
         .map(FileSource::Commit)
-        .unwrap_or(FileSource::WorkingDirectory);
+        .or_else(|| repo_state.live_file_source());
+    let Some(want) = want else {
+        return false;
+    };
     retarget_file_browser(repo_state, want)
 }
 
@@ -1835,6 +1869,11 @@ pub(super) fn branches_loaded(
         effects.extend(reload_wanted_ref_metadata(repo_state));
         effects.extend(super::ref_comparisons::ensure(repo_state, false));
     }
+    effects.extend(super::external_and_history::clear_missing_history_focus(
+        state,
+        repo_id,
+        super::external_and_history::FocusRefList::LocalBranches,
+    ));
     effects
 }
 
@@ -1846,6 +1885,9 @@ pub(super) fn remotes_loaded(
 ) -> Vec<Effect> {
     let mut effects = Vec::new();
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
+        if let Ok(remotes) = &result {
+            effects.extend(forget_hidden_remotes_that_were_removed(repo_state, remotes));
+        }
         let remotes = match result {
             Ok(v) => Loadable::Ready(v),
             Err(e) => {
@@ -1859,7 +1901,36 @@ pub(super) fn remotes_loaded(
         }
         effects.extend(super::ref_comparisons::ensure(repo_state, false));
     }
+    effects.extend(super::external_and_history::clear_missing_history_focus(
+        state,
+        repo_id,
+        super::external_and_history::FocusRefList::Remotes,
+    ));
     effects
+}
+
+/// A remote added back under a removed one's name starts out shown. Only a
+/// remote the replaced listing held counts as removed, since another window
+/// may have added and hidden one this load predates; a Reload or a failed
+/// load starts the comparison over.
+fn forget_hidden_remotes_that_were_removed(repo: &RepoState, loaded: &[Remote]) -> Vec<Effect> {
+    let Loadable::Ready(previous) = &repo.remotes else {
+        return Vec::new();
+    };
+    let listed = |remotes: &[Remote], name: &str| remotes.iter().any(|remote| remote.name == name);
+    repo.history_hidden_remotes()
+        .iter()
+        .filter(|hidden| listed(previous, hidden) && !listed(loaded, hidden))
+        .filter_map(|gone| {
+            super::repository_preferences::update_effect(
+                repo,
+                crate::model::RepositoryPreferenceUpdate::RemoteHistoryVisibility {
+                    remote: gone.clone(),
+                    hidden: false,
+                },
+            )
+        })
+        .collect()
 }
 
 pub(super) fn remote_branches_loaded(
@@ -1898,6 +1969,11 @@ pub(super) fn remote_branches_loaded(
         effects.extend(reload_wanted_ref_metadata(repo_state));
         effects.extend(super::ref_comparisons::ensure(repo_state, false));
     }
+    effects.extend(super::external_and_history::clear_missing_history_focus(
+        state,
+        repo_id,
+        super::external_and_history::FocusRefList::RemoteBranches,
+    ));
     effects
 }
 
@@ -2240,8 +2316,8 @@ pub(super) fn head_branch_loaded(
                     if repo_state.detached_head_commit.is_none()
                         && repo_state
                             .history_state
-                            .history_scope
-                            .guarantees_head_visibility()
+                            .history_focus
+                            .head_is_first(repo_state.history_state.history_scope)
                         && let Loadable::Ready(page) = &repo_state.log
                     {
                         repo_state

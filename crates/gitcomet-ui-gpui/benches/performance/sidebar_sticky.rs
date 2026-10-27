@@ -28,6 +28,8 @@ pub(crate) fn bench_sidebar_sticky(c: &mut Criterion) {
     group.bench_function("geometry", |b| {
         b.iter(|| SidebarStickyFrameFixture::geometry_step(std::hint::black_box(48_321.25)))
     });
+    // Builds the fixed layout even when a filter skipped the timed run.
+    SidebarStickyFrameFixture::geometry_step(0.0);
     let (_, allocations) = gitcomet_ui_gpui::perf_alloc::measure_allocations(|| {
         SidebarStickyFrameFixture::geometry_step(std::hint::black_box(48_321.25))
     });

@@ -145,7 +145,6 @@ core-graphics2	0.6.1	MIT OR Apache-2.0
 core-text	22.0.0	MIT OR Apache-2.0
 core-video	0.6.1	MIT OR Apache-2.0
 core_detect	1.0.0	MIT/Apache-2.0
-core_maths	0.1.1	MIT
 cpufeatures	0.2.17	MIT OR Apache-2.0
 cpufeatures	0.3.1	MIT OR Apache-2.0
 crc32fast	1.5.3	MIT OR Apache-2.0
@@ -227,7 +226,6 @@ foldhash	0.2.0	Zlib
 font-kit	0.14.3-1	MIT OR Apache-2.0
 font-types	0.12.7	MIT OR Apache-2.0
 fontconfig-parser	0.5.8	MIT
-fontdb	0.23.0	MIT
 fontdb	0.24.0	MIT
 fontique	0.12.0	Apache-2.0 OR MIT
 foreign-types	0.5.0	MIT/Apache-2.0
@@ -235,7 +233,6 @@ foreign-types-macros	0.2.4	MIT/Apache-2.0
 foreign-types-shared	0.3.1	MIT/Apache-2.0
 form_urlencoded	1.2.2	MIT OR Apache-2.0
 freetype-sys	0.23.0	MIT
-fs2	0.4.3	MIT/Apache-2.0
 futures	0.3.34	MIT OR Apache-2.0
 futures-channel	0.3.34	MIT OR Apache-2.0
 futures-concurrency	7.7.1	MIT OR Apache-2.0
@@ -424,7 +421,6 @@ litrs	1.0.1	MIT OR Apache-2.0
 lock_api	0.4.14	MIT OR Apache-2.0
 log	0.4.34	MIT OR Apache-2.0
 loop9	0.1.5	MIT
-lru	0.18.5	MIT
 lru	0.19.0	MIT
 lyon	1.0.19	MIT OR Apache-2.0
 lyon_algorithms	1.0.22	MIT OR Apache-2.0
@@ -807,7 +803,6 @@ tree-sitter-wat	0.1.0	Apache-2.0 WITH LLVM-exception
 tree-sitter-xml	0.7.0	MIT
 tree-sitter-yaml	0.7.2	MIT
 tree-sitter-zig	1.1.2	MIT
-ttf-parser	0.25.1	MIT OR Apache-2.0
 typed-arena	2.0.2	MIT
 typeid	1.0.3	MIT OR Apache-2.0
 typenum	1.20.1	MIT OR Apache-2.0

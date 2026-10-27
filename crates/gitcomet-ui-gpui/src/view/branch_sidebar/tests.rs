@@ -534,12 +534,14 @@ fn populated_repo() -> RepoState {
     repo.remote_branches_rev = 1;
     repo.worktrees = Loadable::Ready(Arc::new(vec![
         Worktree {
+            bare: false,
             path: PathBuf::from("/tmp/repo"),
             head: Some(commit_id("aaaaaaaa")),
             branch: Some("main".to_string()),
             detached: false,
         },
         Worktree {
+            bare: false,
             path: PathBuf::from("/tmp/repo-linked"),
             head: Some(commit_id("bbbbbbbb")),
             branch: Some("feature/topic".to_string()),
@@ -651,6 +653,7 @@ fn worktree_head_movement_rebuilds_its_recorded_row_input() {
     let mut repo = populated_repo();
     repo.worktrees = Loadable::Ready(Arc::new(vec![Worktree {
         path: "/tmp/linked".into(),
+        bare: false,
         head: Some(commit_id("old")),
         branch: None,
         detached: true,
@@ -671,12 +674,14 @@ fn source_fingerprint_reuses_unchanged_partitions_when_worktrees_change() {
 
     repo.worktrees = Loadable::Ready(Arc::new(vec![
         Worktree {
+            bare: false,
             path: PathBuf::from("/tmp/repo"),
             head: Some(commit_id("aaaaaaaa")),
             branch: Some("main".to_string()),
             detached: false,
         },
         Worktree {
+            bare: false,
             path: PathBuf::from("/tmp/repo-linked"),
             head: Some(commit_id("eeeeeeee")),
             branch: None,
@@ -867,4 +872,83 @@ fn branch_tooltip_only_appends_upstream_note_when_requested() {
         branch_sidebar_branch_tooltip("origin/main", true).as_ref(),
         "Branch: origin/main (upstream for current branch)"
     );
+}
+
+#[test]
+fn a_remote_hidden_from_history_marks_its_header_and_changes_the_cache_source() {
+    let mut repo = RepoState::new_opening(
+        RepoId(1),
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    );
+    repo.remotes = Loadable::Ready(Arc::new(
+        ["origin", "upstream"]
+            .map(|name| Remote {
+                name: name.into(),
+                url: None,
+                default_branch: None,
+            })
+            .to_vec(),
+    ));
+    let hidden_headers = |repo: &RepoState| {
+        branch_sidebar_rows(repo, &BTreeSet::new(), &BTreeSet::new(), "")
+            .into_iter()
+            .filter_map(|row| match row {
+                BranchSidebarRow::RemoteHeader {
+                    name,
+                    hidden_in_history,
+                    ..
+                } => Some((name.to_string(), hidden_in_history)),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        hidden_headers(&repo),
+        [
+            ("origin".to_string(), false),
+            ("upstream".to_string(), false)
+        ]
+    );
+    let (shown_source, cached) = branch_sidebar_source_fingerprint(&repo, None);
+
+    crate::view::test_support::hide_remotes_in_history(&mut repo, &["upstream"]);
+    assert_eq!(
+        hidden_headers(&repo),
+        [
+            ("origin".to_string(), false),
+            ("upstream".to_string(), true)
+        ]
+    );
+    assert!(!branch_sidebar_source_matches_cached(&repo, &cached));
+    let (hidden_source, parts) = branch_sidebar_source_fingerprint(&repo, Some(&cached));
+    assert_eq!(
+        hidden_source,
+        branch_sidebar_source_fingerprint(&repo, None).0
+    );
+    assert_ne!(
+        shown_source, hidden_source,
+        "cached rows must not be reused"
+    );
+    assert!(branch_sidebar_source_matches_cached(&repo, &parts));
+}
+
+#[test]
+fn divergence_labels_stay_within_four_characters_and_round_down() {
+    let label = |count| branch_sidebar_divergence_label(std::num::NonZeroU32::new(count).unwrap());
+    for (count, expected) in [
+        (1, "1"),
+        (999, "999"),
+        (1_000, "1k"),
+        (1_999, "1.9k"),
+        (9_999, "9.9k"),
+        (10_999, "10k"),
+        (999_999, "999k"),
+        (1_000_000, "1M"),
+        (1_050_000, "1M"),
+        (u32::MAX, "4.2B"),
+    ] {
+        assert_eq!(label(count).as_ref(), expected, "{count}");
+    }
 }

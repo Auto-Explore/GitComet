@@ -492,10 +492,14 @@ pub(in crate::view) fn hash_branch_sidebar_rows(rows: &[BranchSidebarRow]) -> u6
                 message.len().hash(&mut h);
             }
             BranchSidebarRow::RemoteHeader {
-                name, collapsed, ..
+                name,
+                collapsed,
+                hidden_in_history,
+                ..
             } => {
                 name.len().hash(&mut h);
                 collapsed.hash(&mut h);
+                hidden_in_history.hash(&mut h);
             }
             BranchSidebarRow::GroupHeader {
                 label,
@@ -1104,14 +1108,14 @@ fn hash_repo_switch_outcome(state: &AppState, effects: &[Effect]) -> u64 {
             }
             Effect::LoadLog {
                 repo_id,
-                scope,
+                walk,
                 author,
                 limit,
                 cursor,
                 ..
             } => {
                 repo_id.0.hash(&mut h);
-                std::mem::discriminant(scope).hash(&mut h);
+                walk.hash(&mut h);
                 author.hash(&mut h);
                 limit.hash(&mut h);
                 cursor.is_some().hash(&mut h);
@@ -2033,8 +2037,9 @@ impl HistoryLoadMoreAppendFixture {
         let seq = state.repos[0]
             .loads_in_flight
             .request_log(gitcomet_state::model::PendingLogLoad {
-                scope: self.scope,
+                walk: self.scope.into(),
                 author: None,
+                focus: Default::default(),
                 limit: self.existing_commits.len(),
                 cursor: None,
             })
@@ -2094,8 +2099,9 @@ impl HistoryLoadMoreAppendFixture {
         let seq = repo.loads_in_flight.active_log_seq().unwrap_or_else(|| {
             repo.loads_in_flight
                 .request_log(gitcomet_state::model::PendingLogLoad {
-                    scope: self.scope,
+                    walk: self.scope.into(),
                     author: None,
+                    focus: Default::default(),
                     limit: page.commits.len(),
                     cursor: cursor.clone(),
                 })

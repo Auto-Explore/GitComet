@@ -1177,6 +1177,7 @@ mod tests {
             );
             repo.set_open(Loadable::Ready(()));
             repo.set_worktrees(Loadable::Ready(vec![Worktree {
+                bare: false,
                 path: repo.spec.workdir.clone(),
                 head: None,
                 branch: Some("main".into()),

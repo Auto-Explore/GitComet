@@ -82,7 +82,7 @@ impl StickyLayout {
             .min(below.max(above))
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "benchmarks"))]
     pub(super) fn from_rows(rows: &[usize], g: &SidebarRowGeometry) -> Self {
         Self::new(rows.iter().copied().map(StickySlot::Row).collect(), g)
     }
@@ -546,10 +546,10 @@ mod tests {
                 for step in 0..1200 {
                     let scroll = step as f32 * 0.25 * short;
                     let mut bottom = 0.0_f32;
-                    for rank in 0..headers.len() {
+                    for (rank, row) in headers.iter().enumerate() {
                         let y = layout.row_y(rank, scroll, height, &g);
                         assert!(y >= bottom - 0.001, "overlap at rank {rank}");
-                        bottom = y + g.height(headers[rank]);
+                        bottom = y + g.height(*row);
                         assert!(bottom <= height + 0.001);
                     }
                     let fitted = fit_pins(&[], &pins, Some(320), scroll, height, &g);
