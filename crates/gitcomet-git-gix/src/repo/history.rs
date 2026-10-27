@@ -1173,9 +1173,16 @@ impl GixRepo {
 
     /// Whether the index records exactly HEAD's tree, gitlinks included.
     fn index_matches_head(&self) -> Result<bool> {
+        self.index_matches(None)
+    }
+
+    /// Whether the index records exactly `commit`'s tree, or HEAD's when
+    /// `None`, gitlinks included.
+    fn index_matches(&self, commit: Option<&str>) -> Result<bool> {
         let label = "git diff --cached --quiet --ignore-submodules=none";
         let mut cmd = self.git_workdir_cmd();
         cmd.args(["diff", "--cached", "--quiet", "--ignore-submodules=none"]);
+        cmd.args(commit);
         let output = run_git_raw_output(cmd, label)?;
         match output.status.code() {
             Some(0) => Ok(true),
@@ -1902,6 +1909,7 @@ impl GixRepo {
                 Err(error) => return self.finish_reword_rebase(Err(error), &owner, &identity),
             }
         } else {
+            self.discard_rescheduled_pick_result()?;
             None
         };
         let result =
@@ -1912,6 +1920,35 @@ impl GixRepo {
                 CommandOutput::combine("git rebase --continue", &[amended, outcome.output]);
         }
         Ok(outcome)
+    }
+
+    /// Git before 2.56 reschedules a pick whose commit failed (a signing
+    /// challenge) but leaves its result staged without `rebase-merge/message`,
+    /// so `--continue` refuses. Unstage exactly that result so the pick replays.
+    fn discard_rescheduled_pick_result(&self) -> Result<()> {
+        let state = self.repo().path().join("rebase-merge");
+        if state.join("message").exists() {
+            return Ok(());
+        }
+        let todo = fs::read_to_string(state.join("git-rebase-todo")).unwrap_or_default();
+        let mut words = todo.lines().next().unwrap_or_default().split_whitespace();
+        let (Some(action), Some(id)) = (words.next(), words.next()) else {
+            return Ok(());
+        };
+        if InteractiveRebaseAction::from_todo_word(action) != Some(InteractiveRebaseAction::Pick)
+            || !id.bytes().all(|b| b.is_ascii_hexdigit())
+        {
+            return Ok(());
+        }
+        // A reword replays every descendant onto an identical tree, so the
+        // staged result is the picked commit's tree; extra staged edits are
+        // left for Git to report.
+        if !self.index_matches(Some(id))? {
+            return Ok(());
+        }
+        let mut cmd = self.git_workdir_cmd();
+        cmd.args(["read-tree", "-m", "-u", "HEAD"]);
+        run_git_with_output(cmd, "git read-tree -m -u HEAD").map(|_| ())
     }
 
     /// A signing stop keeps its owned rebase. Every other stop rolls back,
