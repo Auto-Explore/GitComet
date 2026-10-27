@@ -844,6 +844,23 @@ impl DetailsPaneView {
         cx.notify();
     }
 
+    /// Copy a commit id and say so, since the badge shows it shortened.
+    pub(in super::super) fn copy_commit_id(
+        &mut self,
+        commit_id: CommitId,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let message = crate::view::commit_copy_message(commit_id.as_ref());
+        crate::clipboard::write_text(
+            cx,
+            commit_id.as_ref().to_string(),
+            crate::clipboard::CopySource::CommitSha,
+        );
+        let _ = self.root_view.update(cx, |root, cx| {
+            root.push_toast(components::ToastKind::Success, message, cx);
+        });
+    }
+
     /// Toggle amend from the commit box and keep the rest of the window (the
     /// popover host mirrors the flag) in step.
     pub(in super::super) fn toggle_commit_amend(&mut self, cx: &mut gpui::Context<Self>) {

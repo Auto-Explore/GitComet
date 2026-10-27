@@ -615,6 +615,10 @@ pub(in crate::view) enum ContextMenuAction {
     CopyText {
         text: String,
     },
+    /// Copy a commit id and say so, because the id is usually shown shortened.
+    CopyCommitId {
+        commit_id: CommitId,
+    },
     /// Copy a link's destination, and say so.
     ///
     /// Separate from [`ContextMenuAction::CopyText`] because a link's address

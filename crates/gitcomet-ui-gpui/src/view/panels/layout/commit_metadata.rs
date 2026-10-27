@@ -23,88 +23,11 @@ pub(super) fn commit_details_author_display_name(
     }
 }
 
-/// Author identity block: avatar + name + muted email, with the authored date
-/// as a relative label (absolute date lives in the "Commit date" row below).
-/// `name_matches` are history find matches in the shown name.
-pub(super) fn commit_details_author_row(
-    theme: AppTheme,
-    ui_scale: crate::ui_scale::UiScale,
-    details: &gitcomet_core::domain::CommitDetails,
-    signature: Option<&gitcomet_core::domain::CommitSignature>,
-    name_matches: &[std::ops::Range<usize>],
-) -> Option<Div> {
-    if details.author_name.is_empty() && details.author_email.is_empty() {
-        return None;
-    }
-    let display_name = commit_details_author_display_name(details).to_owned();
-    let wash = crate::view::rows::query_highlight_style(theme);
-    let mut name_highlights: TextHighlights = name_matches
-        .iter()
-        .map(|range| (range.clone(), wash))
-        .collect();
-    crate::text_runs::sanitize_highlights(&display_name, &mut name_highlights);
-    let authored_relative = (details.authored_at_unix != 0).then(|| {
-        crate::view::date_time::format_relative_time(
-            details.authored_at_unix,
-            std::time::SystemTime::now(),
-        )
-    });
-
-    Some(
-        div()
-            .flex()
-            .items_center()
-            .gap_2()
-            .w_full()
-            .min_w(px(0.0))
-            .child(components::author_avatar(theme, ui_scale, &display_name))
-            .child(
-                div()
-                    .flex_1()
-                    .min_w(px(0.0))
-                    .flex()
-                    .flex_col()
-                    .child(
-                        div()
-                            .text_size(theme.ui_text(14.0))
-                            .line_clamp(1)
-                            .whitespace_nowrap()
-                            .child(
-                                gpui::StyledText::new(display_name)
-                                    .with_highlights(name_highlights),
-                            ),
-                    )
-                    .when(!details.author_email.is_empty(), |column| {
-                        column.child(
-                            div()
-                                .text_size(theme.ui_text(12.0))
-                                .text_color(theme.colors.foreground.secondary)
-                                .line_clamp(1)
-                                .whitespace_nowrap()
-                                .child(details.author_email.clone()),
-                        )
-                    }),
-            )
-            .when_some(signature, |row, signature| {
-                row.child(commit_details_signature_badge(theme, signature))
-            })
-            .when_some(authored_relative, |row, relative| {
-                row.child(
-                    div()
-                        .flex_none()
-                        .text_size(theme.ui_text(12.0))
-                        .text_color(theme.colors.foreground.secondary)
-                        .child(relative),
-                )
-            }),
-    )
-}
-
 /// The signature chip shown beside the commit author.
 ///
 /// Needs its own `.id()`: a stateless div computes the hover style and throws
 /// it away, and the tooltip would never attach.
-fn commit_details_signature_badge(
+pub(super) fn commit_details_signature_badge(
     theme: AppTheme,
     signature: &gitcomet_core::domain::CommitSignature,
 ) -> gpui::Stateful<Div> {
@@ -137,25 +60,6 @@ fn commit_details_signature_badge(
                 .child(badge.label),
         )
         .gitcomet_tooltip(theme, badge.tooltip)
-}
-
-pub(super) fn commit_details_selectable_row(
-    theme: AppTheme,
-    key: &'static str,
-    value: AnyElement,
-) -> Div {
-    components::selectable_field(theme, key, value)
-}
-
-pub(super) fn commit_details_monospace_value(input: Entity<components::TextInput>) -> AnyElement {
-    commit_details_monospace_element(input.into_any_element())
-}
-
-pub(super) fn commit_details_monospace_element(value: AnyElement) -> AnyElement {
-    div()
-        .font_family(crate::view::UI_MONOSPACE_FONT_FAMILY)
-        .child(value)
-        .into_any_element()
 }
 
 fn commit_message_link_highlights(
@@ -214,46 +118,6 @@ fn commit_sha_field_highlights(value: &str, theme: AppTheme) -> TextHighlights {
     } else {
         vec![(0..value.len(), commit_link_style(theme))]
     }
-}
-
-/// The "Commit SHA" value, followed by the abbreviation the history find query
-/// matched, if it was one, so the typed short form can be seen in the full id.
-pub(super) fn commit_details_sha_value(
-    theme: AppTheme,
-    sha_field: AnyElement,
-    sha: &str,
-    find: &CommitDetailsFindHighlights,
-) -> AnyElement {
-    let short = find
-        .short_sha_len
-        .and_then(|len| sha.get(..len))
-        .filter(|short| !short.is_empty());
-    let Some(short) = short else {
-        return commit_details_monospace_element(sha_field);
-    };
-    let label = format!("({short})");
-    let wash = vec![(
-        1..1 + short.len(),
-        crate::view::rows::query_highlight_style(theme),
-    )];
-    commit_details_monospace_element(
-        div()
-            .flex()
-            .items_center()
-            .gap_2()
-            .w_full()
-            .min_w(px(0.0))
-            .child(div().flex_1().min_w(px(0.0)).child(sha_field))
-            .child(
-                div()
-                    .debug_selector(|| "commit_details_sha_find_short".to_string())
-                    .flex_none()
-                    .whitespace_nowrap()
-                    .text_color(theme.colors.foreground.secondary)
-                    .child(gpui::StyledText::new(label).with_highlights(wash)),
-            )
-            .into_any_element(),
-    )
 }
 
 impl DetailsPaneView {

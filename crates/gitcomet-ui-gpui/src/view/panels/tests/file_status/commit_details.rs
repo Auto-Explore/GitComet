@@ -216,7 +216,7 @@ fn blur_still_works_after_a_stale_overlay_flag(cx: &mut gpui::TestAppContext) {
         view.read(app)
             .details_pane
             .read(app)
-            .commit_details_sha_input
+            .commit_details_message_input
             .clone()
     });
 
@@ -1198,30 +1198,9 @@ fn commit_details_parent_sha_click_menu_navigate_reveals_referenced_commit(
         let _ = window.draw(app);
     });
     let parent_bounds = cx
-        .debug_bounds("commit_details_parent_link_menu")
-        .expect("expected parent sha link target");
-    let popover = click_commit_details_link(
-        cx,
-        &view,
-        point(parent_bounds.left() + px(4.0), parent_bounds.center().y),
-        1,
-    );
-    assert!(
-        matches!(
-            popover,
-            Some(PopoverKind::CommitShaLinkMenu {
-                ref commit_id,
-                allow_navigate: true,
-                ..
-            }) if commit_id.as_ref() == parent_sha
-        ),
-        "clicking the parent id should open its menu, got {popover:?}"
-    );
-
-    let reveal_bounds = cx
-        .debug_bounds("context_menu_reveal_commit")
-        .expect("expected parent reveal commit entry");
-    simulate_counted_click(cx, reveal_bounds.center(), 1);
+        .debug_bounds("commit_card_parent")
+        .expect("expected the parent chip in the commit card");
+    simulate_counted_click(cx, parent_bounds.center(), 1);
     cx.run_until_parked();
     wait_for_store_selected_commit(cx, &view, repo_id, parent_sha);
     cx.update(|window, app| {
@@ -1297,19 +1276,9 @@ fn commit_details_parent_sha_dash_has_no_link_menu(cx: &mut gpui::TestAppContext
     cx.update(|window, app| {
         let _ = window.draw(app);
     });
-    let parent_bounds = cx
-        .debug_bounds("commit_details_parent_link_menu")
-        .expect("expected parent sha link target");
-    let popover = click_commit_details_link(
-        cx,
-        &view,
-        point(parent_bounds.left() + px(4.0), parent_bounds.center().y),
-        1,
-    );
-
     assert!(
-        popover.is_none(),
-        "expected placeholder parent value to stay non-interactive, got {popover:?}"
+        cx.debug_bounds("commit_card_parent").is_none(),
+        "a root commit has no parent chip to click"
     );
 }
 
@@ -1323,7 +1292,7 @@ fn clicking_outside_a_focused_input_blurs_it(cx: &mut gpui::TestAppContext) {
         view.read(app)
             .details_pane
             .read(app)
-            .commit_details_sha_input
+            .commit_details_message_input
             .clone()
     });
     cx.update(|window, app| {

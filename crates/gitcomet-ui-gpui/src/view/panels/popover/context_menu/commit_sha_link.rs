@@ -45,6 +45,16 @@ fn model_for_commit_sha_link(
         }),
     });
 
+    items.push(ContextMenuItem::Entry {
+        label: "Copy to clipboard".into(),
+        icon: Some("icons/copy.svg".into()),
+        shortcut: None,
+        disabled: false,
+        action: Box::new(ContextMenuAction::CopyCommitId {
+            commit_id: commit_id.clone(),
+        }),
+    });
+
     ContextMenuModel::new(items)
 }
 
@@ -70,7 +80,7 @@ mod tests {
 
         assert_eq!(
             entry_labels(&model),
-            vec!["Reveal commit", "Start file browsing"]
+            vec!["Reveal commit", "Start file browsing", "Copy to clipboard"]
         );
         // The id is shown so a reference in prose can be checked before acting.
         assert!(model.items.iter().any(|item| matches!(
@@ -84,7 +94,10 @@ mod tests {
         let commit_id = CommitId("deadbeef".into());
         let model = model_for_commit_sha_link(RepoId(3), &commit_id, false);
 
-        assert_eq!(entry_labels(&model), vec!["Start file browsing"]);
+        assert_eq!(
+            entry_labels(&model),
+            vec!["Start file browsing", "Copy to clipboard"]
+        );
     }
 
     #[test]

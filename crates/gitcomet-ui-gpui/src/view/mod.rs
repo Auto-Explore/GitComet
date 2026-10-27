@@ -636,6 +636,13 @@ fn stable_cached_view<V: Render>(view: Entity<V>, style: StyleRefinement) -> Any
     }
 }
 
+/// The toast shown after a commit id is copied, naming the short form the
+/// reader sees on screen.
+pub(crate) fn commit_copy_message(commit_id: &str) -> String {
+    let short = commit_id.get(..8).unwrap_or(commit_id);
+    format!("Commit {short} copied to clipboard")
+}
+
 fn stable_cached_fill_view<V: Render>(view: Entity<V>) -> AnyElement {
     stable_cached_view(view, StyleRefinement::default().size_full())
 }

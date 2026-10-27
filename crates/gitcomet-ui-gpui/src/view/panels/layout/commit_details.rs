@@ -214,13 +214,24 @@ impl DetailsPaneView {
                     } else {
                         self.commit_details_message_view(theme, repo_id)
                     };
+                    let card = self.commit_details_card(
+                        details,
+                        commit_signatures.get(&details.id),
+                        &find.author,
+                        find.sha,
+                        repo_id,
+                        current,
+                        cx,
+                    );
 
                     div()
                         .flex()
                         .flex_col()
+                        .gap_2()
                         .flex_1()
                         .h_full()
                         .min_h(px(0.0))
+                        .child(card)
                         .child(
                             div()
                                 .flex()
@@ -230,71 +241,6 @@ impl DetailsPaneView {
                                 .min_w(px(0.0))
                                 .pb_2()
                                 .child(message),
-                        )
-                        .children(
-                            commit_details_author_row(
-                                theme,
-                                ui_scale,
-                                details,
-                                commit_signatures.get(&details.id),
-                                &find.author,
-                            )
-                            .map(|row| {
-                                row.border_t_1()
-                                    .border_color(theme.colors.stroke.default)
-                                    .pt_2()
-                                    .pb_2()
-                            }),
-                        )
-                        .child(
-                            div()
-                                .flex()
-                                .flex_col()
-                                .gap_2()
-                                .w_full()
-                                .min_w(px(0.0))
-                                .border_t_1()
-                                .border_color(theme.colors.stroke.default)
-                                .pt_2()
-                                .pb_2()
-                                .child(commit_details_selectable_row(
-                                    theme,
-                                    "Commit SHA",
-                                    commit_details_sha_value(
-                                        theme,
-                                        if current {
-                                            self.commit_details_sha_link_menu
-                                                .clone()
-                                                .into_any_element()
-                                        } else {
-                                            self.commit_details_sha_input.clone().into_any_element()
-                                        },
-                                        details.id.as_ref(),
-                                        &find,
-                                    ),
-                                ))
-                                .child(commit_details_selectable_row(
-                                    theme,
-                                    "Commit date",
-                                    commit_details_monospace_value(
-                                        self.commit_details_date_input.clone(),
-                                    ),
-                                ))
-                                .child(commit_details_selectable_row(
-                                    theme,
-                                    "Parent commit SHA",
-                                    if current {
-                                        commit_details_monospace_element(
-                                            self.commit_details_parent_link_menu
-                                                .clone()
-                                                .into_any_element(),
-                                        )
-                                    } else {
-                                        commit_details_monospace_value(
-                                            self.commit_details_parent_input.clone(),
-                                        )
-                                    },
-                                )),
                         )
                         .child(self.commit_files_section(repo_id, commit_details_rev, details, cx))
                         .into_any_element()

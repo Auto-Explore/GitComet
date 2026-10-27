@@ -1113,14 +1113,10 @@ fn details_find_washes(
 }
 
 /// The details pane follows the find bar: the summary match, the whole SHA
-/// for an abbreviation (shown beside it) or the full id, and nothing once the
-/// bar closes.
+/// for an abbreviation or the full id, and nothing once the bar closes.
 #[gpui::test]
 fn history_find_highlights_the_selected_commit_details(cx: &mut gpui::TestAppContext) {
     let (view, cx, id) = mount_details_find_fixture(cx);
-    let short_shown = |cx: &mut gpui::VisualTestContext| {
-        cx.debug_bounds("commit_details_sha_find_short").is_some()
-    };
     assert!(details_find_washes(cx, &view, false).is_empty());
     assert!(details_find_washes(cx, &view, true).is_empty());
 
@@ -1132,7 +1128,6 @@ fn history_find_highlights_the_selected_commit_details(cx: &mut gpui::TestAppCon
         "the summary match, not the body's"
     );
     assert!(details_find_washes(cx, &view, true).is_empty());
-    assert!(!short_shown(cx));
 
     retype_query(cx, "AAAA0000");
     assert_eq!(
@@ -1141,11 +1136,9 @@ fn history_find_highlights_the_selected_commit_details(cx: &mut gpui::TestAppCon
         "an abbreviation washes the whole id"
     );
     assert!(details_find_washes(cx, &view, false).is_empty());
-    assert!(short_shown(cx), "the abbreviation shows beside the full id");
 
     retype_query(cx, &id);
     assert_eq!(details_find_washes(cx, &view, true), vec![0..40]);
-    assert!(!short_shown(cx), "the full id needs no short form");
 
     cx.simulate_keystrokes("escape");
     draw_and_park(cx);
@@ -1154,7 +1147,6 @@ fn history_find_highlights_the_selected_commit_details(cx: &mut gpui::TestAppCon
         details_find_washes(cx, &view, true).is_empty(),
         "closing the bar clears the wash"
     );
-    assert!(!short_shown(cx));
 }
 
 // ---------------------------------------------------------------------------

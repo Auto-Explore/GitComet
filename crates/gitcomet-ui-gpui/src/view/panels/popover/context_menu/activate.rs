@@ -1294,6 +1294,16 @@ impl PopoverHost {
                 window.activate();
                 crate::clipboard::write_text(cx, text, crate::clipboard::CopySource::ContextMenu);
             }
+            ContextMenuAction::CopyCommitId { commit_id } => {
+                window.activate();
+                let message = crate::view::commit_copy_message(commit_id.as_ref());
+                crate::clipboard::write_text(
+                    cx,
+                    commit_id.as_ref().to_string(),
+                    crate::clipboard::CopySource::CommitSha,
+                );
+                self.push_toast(components::ToastKind::Success, message, cx);
+            }
             ContextMenuAction::CopyLinkAddress { url } => {
                 window.activate();
                 crate::clipboard::write_text(cx, url, crate::clipboard::CopySource::ContextMenu);
