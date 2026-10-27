@@ -196,8 +196,8 @@ pub(super) fn add_git_failure_hint(mut detail: String) -> String {
     detail
 }
 
-/// Recognise Git LFS failures, which arrive as filter or hook stderr on an
-/// otherwise ordinary command, so the UI can say what to do next.
+/// Recognise failures the UI can offer a next step for: local overwrites,
+/// refused worktree removals, and Git LFS filter or hook errors.
 pub(super) fn classify_git_failure(stderr: &str) -> GitFailureId {
     let lower = stderr.to_ascii_lowercase();
     // One line must name git-lfs as the program that is missing: a present
@@ -217,6 +217,10 @@ pub(super) fn classify_git_failure(stderr: &str) -> GitFailureId {
         || lower.contains("the following untracked working tree files would be overwritten")
     {
         GitFailureId::WorktreeWouldBeOverwritten
+    } else if lower.contains("contains modified or untracked files, use --force to delete it") {
+        GitFailureId::WorktreeRemovalBlocked(WorktreeRemovalBlocker::Changes)
+    } else if lower.contains("working trees containing submodules cannot be moved or removed") {
+        GitFailureId::WorktreeRemovalBlocked(WorktreeRemovalBlocker::Submodules)
     } else if lfs_binary_missing {
         GitFailureId::LfsNotInstalled
     } else if lower.contains("unable to push locked files")

@@ -94,7 +94,7 @@ impl PopoverKind {
             | Self::PushSetUpstreamPrompt { .. }
             | Self::ForcePushConfirm { .. }
             | Self::ForceDeleteBranchConfirm { .. }
-            | Self::ForceRemoveWorktreeConfirm { .. }
+            | Self::ForceRemoveWorktreeConfirm(_)
             | Self::PullPicker
             | Self::PushPicker
             | Self::CommitOptionsMenu { .. }

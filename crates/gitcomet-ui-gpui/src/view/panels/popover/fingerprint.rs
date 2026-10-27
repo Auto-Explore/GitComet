@@ -241,7 +241,7 @@ fn repo_for_popover<'a>(
         | PopoverKind::MergeAbortConfirm { repo_id }
         | PopoverKind::BranchExistsPrompt { repo_id, .. }
         | PopoverKind::ForceDeleteBranchConfirm { repo_id, .. }
-        | PopoverKind::ForceRemoveWorktreeConfirm { repo_id, .. }
+        | PopoverKind::ForceRemoveWorktreeConfirm(ForceRemoveWorktreePrompt { repo_id, .. })
         | PopoverKind::DiscardChangesConfirm { repo_id, .. }
         | PopoverKind::DiscardFolderChangesConfirm { repo_id, .. }
         | PopoverKind::FileListFolderMenu { repo_id, .. }
@@ -569,7 +569,7 @@ fn hash_repo_for_popover<H: Hasher>(
         | PopoverKind::ResetPrompt { .. }
         | PopoverKind::CheckoutRemoteBranchPrompt { .. }
         | PopoverKind::CreateTagPrompt { .. }
-        | PopoverKind::ForceRemoveWorktreeConfirm { .. }
+        | PopoverKind::ForceRemoveWorktreeConfirm(_)
         // Its member list is resolved when it opens and carried on the kind, so
         // it must not change under the user mid-confirmation.
         | PopoverKind::DeleteBranchesConfirm { .. }
@@ -834,15 +834,7 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
             repo_id.hash(hasher);
             name.hash(hasher);
         }
-        PopoverKind::ForceRemoveWorktreeConfirm {
-            repo_id,
-            path,
-            branch,
-        } => {
-            repo_id.hash(hasher);
-            path.hash(hasher);
-            branch.hash(hasher);
-        }
+        PopoverKind::ForceRemoveWorktreeConfirm(prompt) => prompt.hash(hasher),
         PopoverKind::DiscardChangesConfirm {
             repo_id,
             area,

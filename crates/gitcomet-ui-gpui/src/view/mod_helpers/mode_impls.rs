@@ -103,6 +103,16 @@ pub(crate) enum TextFormatMenuSection {
     TabSize,
 }
 
+/// A plain `git worktree remove` that Git refused for a reason `--force` overrides.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub(in crate::view) struct ForceRemoveWorktreePrompt {
+    pub(in crate::view) repo_id: RepoId,
+    pub(in crate::view) path: std::path::PathBuf,
+    /// The local branch to delete once the worktree is gone.
+    pub(in crate::view) branch: Option<String>,
+    pub(in crate::view) blocker: gitcomet_core::error::WorktreeRemovalBlocker,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum PopoverKind {
     /// A dialog an extension opened; its content lives on the popover host.
@@ -253,11 +263,7 @@ pub(crate) enum PopoverKind {
         repo_id: RepoId,
         name: String,
     },
-    ForceRemoveWorktreeConfirm {
-        repo_id: RepoId,
-        path: std::path::PathBuf,
-        branch: Option<String>,
-    },
+    ForceRemoveWorktreeConfirm(ForceRemoveWorktreePrompt),
     DiscardChangesConfirm {
         repo_id: RepoId,
         area: DiffArea,

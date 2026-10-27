@@ -1131,8 +1131,7 @@ pub struct GitCometView {
     pub(super) pending_branch_exists_prompt: Option<BranchExistsPromptState>,
     pub(super) pending_force_delete_branch_prompt: Option<(RepoId, String)>,
     pub(super) pending_force_delete_branch_centered: bool,
-    pub(super) pending_force_remove_worktree_prompt:
-        Option<(RepoId, std::path::PathBuf, Option<String>)>,
+    pub(super) pending_force_remove_worktree_prompt: Option<ForceRemoveWorktreePrompt>,
     pub(super) pending_submodule_trust_prompt:
         Option<gitcomet_state::model::SubmoduleTrustPromptState>,
     pub(super) pending_submodule_trust_check:

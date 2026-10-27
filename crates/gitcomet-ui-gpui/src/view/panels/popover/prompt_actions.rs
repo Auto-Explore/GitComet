@@ -249,11 +249,9 @@ impl PopoverHost {
             PopoverKind::ForceDeleteBranchConfirm { repo_id, name } => {
                 force_delete_branch_confirm::panel(self, repo_id, name, cx)
             }
-            PopoverKind::ForceRemoveWorktreeConfirm {
-                repo_id,
-                path,
-                branch,
-            } => force_remove_worktree_confirm::panel(self, repo_id, path, branch, cx),
+            PopoverKind::ForceRemoveWorktreeConfirm(prompt) => {
+                force_remove_worktree_confirm::panel(self, prompt, cx)
+            }
             PopoverKind::DiscardChangesConfirm {
                 repo_id,
                 area,

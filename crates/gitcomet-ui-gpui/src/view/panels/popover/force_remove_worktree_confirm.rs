@@ -1,26 +1,37 @@
 use super::*;
+use gitcomet_core::error::WorktreeRemovalBlocker;
 
 pub(super) fn panel(
     this: &mut PopoverHost,
-    repo_id: RepoId,
-    path: std::path::PathBuf,
-    branch: Option<String>,
+    prompt: ForceRemoveWorktreePrompt,
     cx: &mut gpui::Context<PopoverHost>,
 ) -> gpui::Div {
     let theme = this.theme;
+    let ForceRemoveWorktreePrompt {
+        repo_id,
+        path,
+        branch,
+        blocker,
+    } = prompt;
     let remove_branch = branch.clone();
     let header: SharedString = if branch.is_some() {
         "Delete worktree and branch anyway?".into()
     } else {
         "Delete worktree anyway?".into()
     };
+    let reason = match blocker {
+        WorktreeRemovalBlocker::Changes => "This worktree has modified or untracked files.",
+        WorktreeRemovalBlocker::Submodules => {
+            "This worktree has initialized submodules, so Git removes it only when forced. Uncommitted changes and any submodule commits that exist only in this worktree are lost."
+        }
+    };
     let description: SharedString = match branch.as_ref() {
         Some(branch) => format!(
-            "This worktree has modified or untracked files. {} will force-remove it, then delete the local branch '{branch}'.",
+            "{reason} {} will force-remove it, then delete the local branch '{branch}'.",
             crate::view::product_name()
         )
         .into(),
-        None => "This worktree has modified or untracked files.".into(),
+        None => reason.into(),
     };
 
     ConfirmDialog::new(header, DIALOG_460_WIDTH)

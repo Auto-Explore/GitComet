@@ -127,6 +127,16 @@ pub enum GitFailureId {
     LfsLocked,
     /// The pre-push hook could not upload LFS objects.
     LfsUploadFailed,
+    /// `git worktree remove` refused for a reason `--force` overrides.
+    WorktreeRemovalBlocked(WorktreeRemovalBlocker),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum WorktreeRemovalBlocker {
+    /// Modified or untracked files.
+    Changes,
+    /// Initialized submodules, which Git never removes without `--force`.
+    Submodules,
 }
 
 /// Git refused for a local reason (working-tree changes, merge or branch
