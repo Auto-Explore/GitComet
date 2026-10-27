@@ -1,11 +1,13 @@
 //! Per-repository load coalescing and log-walk sequencing.
 
 use gitcomet_core::domain::{LogCursor, LogScope};
+use gitcomet_core::git_execution_log::context::{self, ExecutionContext};
+use rustc_hash::FxHashMap;
 use std::path::{Path, PathBuf};
 
 /// Loads that coalesce repeated requests into one pending refresh.
 /// Log walks, linked-checkout scans, and line statistics have separate protocols.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum LoadKind {
     HeadBranch,
     UpstreamDivergence,
@@ -104,9 +106,16 @@ impl WorktreeDirtyScope {
 pub struct RepoLoadsInFlight {
     in_flight: u32,
     pending: u32,
+    contexts: FxHashMap<LoadKind, LoadContexts>,
     log: LogLoads,
     worktree_dirty: WorktreeDirtyLoads,
     line_stats: LineStatsLoads,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+struct LoadContexts {
+    active: Option<ExecutionContext>,
+    pending: Option<ExecutionContext>,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -120,6 +129,8 @@ struct ActiveLogLoad {
     seq: LogLoadSeq,
     request: PendingLogLoad,
     pending: Option<PendingLogLoad>,
+    context: Option<ExecutionContext>,
+    pending_context: Option<ExecutionContext>,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -128,6 +139,8 @@ enum WorktreeDirtyLoads {
     Idle,
     Running {
         pending: Option<WorktreeDirtyScope>,
+        context: Option<ExecutionContext>,
+        pending_context: Option<ExecutionContext>,
     },
 }
 
@@ -136,6 +149,8 @@ struct LineStatsLoads {
     generation: LineStatsGeneration,
     active: Option<LineStatsGeneration>,
     requested: bool,
+    active_context: Option<ExecutionContext>,
+    requested_context: Option<ExecutionContext>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -147,6 +162,36 @@ pub struct PendingLogLoad {
 }
 
 impl RepoLoadsInFlight {
+    pub(crate) fn active_context(&self, kind: LoadKind) -> Option<ExecutionContext> {
+        self.contexts
+            .get(&kind)
+            .and_then(|contexts| contexts.active.clone())
+    }
+
+    pub(crate) fn log_context(&self, seq: LogLoadSeq) -> Option<ExecutionContext> {
+        self.log
+            .active
+            .as_ref()
+            .filter(|active| active.seq == seq)
+            .and_then(|active| active.context.clone())
+    }
+
+    pub(crate) fn worktree_context(&self) -> Option<ExecutionContext> {
+        match &self.worktree_dirty {
+            WorktreeDirtyLoads::Idle => None,
+            WorktreeDirtyLoads::Running { context, .. } => context.clone(),
+        }
+    }
+
+    pub(crate) fn line_stats_context(
+        &self,
+        generation: LineStatsGeneration,
+    ) -> Option<ExecutionContext> {
+        (self.line_stats.active == Some(generation))
+            .then(|| self.line_stats.active_context.clone())
+            .flatten()
+    }
+
     const PRIMARY_REFRESH_FLAGS: u32 = LoadKind::HeadBranch.mask()
         | LoadKind::UpstreamDivergence.mask()
         | LoadKind::RebaseState.mask()
@@ -188,11 +233,14 @@ impl RepoLoadsInFlight {
     pub fn clear(&mut self) {
         self.in_flight = 0;
         self.pending = 0;
+        self.contexts.clear();
         self.log.active = None;
         self.worktree_dirty = WorktreeDirtyLoads::Idle;
         self.line_stats.invalidate();
         self.line_stats.active = None;
         self.line_stats.requested = false;
+        self.line_stats.active_context = None;
+        self.line_stats.requested_context = None;
     }
 
     pub(crate) fn invalidate_line_stats(&mut self) {
@@ -225,6 +273,22 @@ impl RepoLoadsInFlight {
             return None;
         }
         self.in_flight |= Self::PRIMARY_REFRESH_FLAGS;
+        for kind in [
+            LoadKind::HeadBranch,
+            LoadKind::UpstreamDivergence,
+            LoadKind::RebaseState,
+            LoadKind::MergeCommitMessage,
+            LoadKind::WorktreeStatus,
+            LoadKind::StagedStatus,
+        ] {
+            self.contexts.insert(
+                kind,
+                LoadContexts {
+                    active: context::current(),
+                    pending: None,
+                },
+            );
+        }
         Some(self.log.start(log))
     }
 
@@ -232,9 +296,17 @@ impl RepoLoadsInFlight {
     pub fn request(&mut self, kind: LoadKind) -> bool {
         if self.is_in_flight(kind) {
             self.pending |= kind.mask();
+            self.contexts.entry(kind).or_default().pending = context::current();
             false
         } else {
             self.in_flight |= kind.mask();
+            self.contexts.insert(
+                kind,
+                LoadContexts {
+                    active: context::current(),
+                    pending: None,
+                },
+            );
             true
         }
     }
@@ -242,10 +314,19 @@ impl RepoLoadsInFlight {
     pub fn request_worktree_dirty(&mut self, scope: WorktreeDirtyScope) -> bool {
         match &mut self.worktree_dirty {
             WorktreeDirtyLoads::Idle => {
-                self.worktree_dirty = WorktreeDirtyLoads::Running { pending: None };
+                self.worktree_dirty = WorktreeDirtyLoads::Running {
+                    pending: None,
+                    context: context::current(),
+                    pending_context: None,
+                };
                 true
             }
-            WorktreeDirtyLoads::Running { pending } => {
+            WorktreeDirtyLoads::Running {
+                pending,
+                pending_context,
+                ..
+            } => {
+                *pending_context = context::current();
                 match pending {
                     Some(pending) => pending.merge(scope),
                     None => *pending = Some(scope),
@@ -257,7 +338,14 @@ impl RepoLoadsInFlight {
 
     pub(crate) fn finish_worktree_dirty(&mut self) -> Option<WorktreeDirtyScope> {
         match &mut self.worktree_dirty {
-            WorktreeDirtyLoads::Running { pending } if pending.is_some() => pending.take(),
+            WorktreeDirtyLoads::Running {
+                pending,
+                context,
+                pending_context,
+            } if pending.is_some() => {
+                *context = pending_context.take();
+                pending.take()
+            }
             WorktreeDirtyLoads::Idle | WorktreeDirtyLoads::Running { .. } => {
                 self.worktree_dirty = WorktreeDirtyLoads::Idle;
                 None
@@ -271,8 +359,12 @@ impl RepoLoadsInFlight {
         if (self.pending & kind.mask()) != 0 {
             self.pending &= !kind.mask();
             self.in_flight |= kind.mask();
+            if let Some(contexts) = self.contexts.get_mut(&kind) {
+                contexts.active = contexts.pending.take();
+            }
             true
         } else {
+            self.contexts.remove(&kind);
             false
         }
     }
@@ -326,6 +418,8 @@ impl LogLoads {
             seq: self.last_seq,
             request,
             pending: None,
+            context: context::current(),
+            pending_context: None,
         });
         self.last_seq
     }
@@ -340,7 +434,10 @@ impl LogLoads {
             .expect("coalesced log request has an active walk");
         match &active.pending {
             Some(existing) if existing.cursor.is_none() && next.cursor.is_some() => {}
-            _ => active.pending = Some(next),
+            _ => {
+                active.pending = Some(next);
+                active.pending_context = context::current();
+            }
         }
         None
     }
@@ -353,9 +450,14 @@ impl LogLoads {
         if self.active.as_ref().is_none_or(|active| active.seq != seq) {
             return None;
         }
-        let mut next = self.active.take()?.pending?;
+        let active = self.active.take()?;
+        let mut next = active.pending?;
         prepare(&mut next);
         let seq = self.start(next.clone());
+        self.active
+            .as_mut()
+            .expect("promoted log request is active")
+            .context = active.pending_context;
         Some((seq, next))
     }
 }
@@ -364,6 +466,7 @@ impl LineStatsLoads {
     fn invalidate(&mut self) {
         self.generation = LineStatsGeneration(self.generation.0.wrapping_add(1));
         self.requested = true;
+        self.requested_context = context::current();
     }
 
     fn start(&mut self, status_ready: bool) -> Option<LineStatsGeneration> {
@@ -375,6 +478,7 @@ impl LineStatsLoads {
             return None;
         }
         self.active = Some(self.generation);
+        self.active_context = self.requested_context.take();
         Some(self.generation)
     }
 
@@ -383,6 +487,7 @@ impl LineStatsLoads {
             return false;
         }
         self.active = None;
+        self.active_context = None;
         generation == self.generation
     }
 }
@@ -390,6 +495,95 @@ impl LineStatsLoads {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn coalesced_loads_preserve_active_and_pending_action_contexts() {
+        use gitcomet_core::git_execution_log::context::{ExecutionContext, UiSurface};
+        let mut loads = RepoLoadsInFlight::default();
+        let a = ExecutionContext::ui(UiSurface::Button, "a");
+        let b = ExecutionContext::ui(UiSurface::CommandPalette, "b");
+        let c = ExecutionContext::ui(UiSurface::Menu, "c");
+        {
+            let _scope = a.attach();
+            assert!(loads.request(LoadKind::WorktreeStatus));
+        }
+        {
+            let _scope = b.attach();
+            assert!(!loads.request(LoadKind::WorktreeStatus));
+        }
+        assert_eq!(loads.active_context(LoadKind::WorktreeStatus), Some(a));
+        assert!(loads.finish(LoadKind::WorktreeStatus));
+        let scheduled = loads.active_context(LoadKind::WorktreeStatus);
+        {
+            let _scope = c.attach();
+            assert!(!loads.request(LoadKind::WorktreeStatus));
+        }
+        assert_eq!(scheduled, Some(b.clone()));
+        assert_eq!(loads.active_context(LoadKind::WorktreeStatus), Some(b));
+        assert!(loads.finish(LoadKind::WorktreeStatus));
+        assert_eq!(loads.active_context(LoadKind::WorktreeStatus), Some(c));
+    }
+
+    #[test]
+    fn queued_history_refresh_keeps_its_context_when_pagination_is_rejected() {
+        use gitcomet_core::git_execution_log::context::{ExecutionContext, UiSurface};
+        let mut loads = RepoLoadsInFlight::default();
+        let a = ExecutionContext::ui(UiSurface::Button, "a");
+        let b = ExecutionContext::ui(UiSurface::Button, "b");
+        let c = ExecutionContext::ui(UiSurface::Button, "c");
+        let refresh = PendingLogLoad {
+            scope: LogScope::FullReachable,
+            author: None,
+            limit: 20,
+            cursor: None,
+        };
+        let first = {
+            let _scope = a.attach();
+            loads.request_log(refresh.clone()).unwrap()
+        };
+        {
+            let _scope = b.attach();
+            assert!(loads.request_log(refresh.clone()).is_none());
+        }
+        let page = PendingLogLoad {
+            cursor: Some(LogCursor {
+                last_seen: gitcomet_core::domain::CommitId("a".repeat(40).into()),
+                resume_from: None,
+                resume_token: None,
+            }),
+            ..refresh
+        };
+        {
+            let _scope = c.attach();
+            assert!(loads.request_log(page).is_none());
+        }
+        assert_eq!(loads.log_context(first), Some(a));
+        let (next, _) = loads.finish_log(first, |_| {}).unwrap();
+        assert_eq!(loads.log_context(next), Some(b));
+        assert!(loads.log_context(first).is_none());
+    }
+
+    #[test]
+    fn line_statistics_keep_the_requested_generations_context() {
+        use gitcomet_core::git_execution_log::context::{ExecutionContext, UiSurface};
+        let mut loads = RepoLoadsInFlight::default();
+        let a = ExecutionContext::ui(UiSurface::Button, "a");
+        let b = ExecutionContext::ui(UiSurface::Button, "b");
+        {
+            let _scope = a.attach();
+            loads.invalidate_line_stats();
+        }
+        let first = loads.start_line_stats(true).unwrap();
+        {
+            let _scope = b.attach();
+            loads.invalidate_line_stats();
+        }
+        assert_eq!(loads.line_stats_context(first), Some(a));
+        assert!(!loads.finish_line_stats(first));
+        let second = loads.start_line_stats(true).unwrap();
+        assert_eq!(loads.line_stats_context(second), Some(b));
+        assert!(loads.line_stats_context(first).is_none());
+    }
 
     #[test]
     fn remote_tags_stay_tracked_without_delaying_local_readiness() {

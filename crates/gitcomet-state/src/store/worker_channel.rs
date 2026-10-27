@@ -1,4 +1,7 @@
 use crate::msg::Msg;
+use gitcomet_core::git_execution_log::context::{
+    self as execution_context, ExecutionContext, Origin, SystemOrigin, UiSurface,
+};
 use gitcomet_core::op_trace;
 use gitcomet_core::services::CancellationToken;
 use gitcomet_core::services::GitRepository;
@@ -24,19 +27,57 @@ impl StoreInstanceId {
 }
 
 impl StoreWorkerCommand {
+    pub(super) fn message(message: Msg) -> Self {
+        let context = execution_context::current().unwrap_or_else(|| {
+            let origin = match &message {
+                Msg::RepoExternallyChanged { .. } => {
+                    Origin::System(SystemOrigin::RepositoryWatcher)
+                }
+                Msg::RepoActivated { .. } => Origin::System(SystemOrigin::Activation),
+                Msg::OpenRepo(_) => Origin::System(SystemOrigin::Startup),
+                Msg::Internal(_) | Msg::ApplyRepositoryPreferences(_) => {
+                    Origin::System(SystemOrigin::AutomaticRefresh)
+                }
+                message => Origin::Ui {
+                    surface: UiSurface::Action,
+                    action: <&'static str>::from(message).into(),
+                },
+            };
+            ExecutionContext::new(origin)
+        });
+        let trace = op_trace::Stamp::capture();
+        if let Some(stamp) = &trace {
+            op_trace::record(
+                op_trace::Stage::Dispatch,
+                stamp.op,
+                repo_load_trace::stage_label(&message),
+                0,
+                0,
+            );
+        }
+        Self::Msg(Box::new(QueuedMessage {
+            message,
+            context,
+            trace,
+        }))
+    }
+
     pub(super) fn msg(&self) -> Option<&Msg> {
         match self {
-            Self::Msg(msg) | Self::Traced(msg, _) => Some(msg),
+            Self::Msg(msg) => Some(&msg.message),
             _ => None,
         }
     }
 }
 
+pub(super) struct QueuedMessage {
+    pub(super) message: Msg,
+    pub(super) context: ExecutionContext,
+    pub(super) trace: Option<op_trace::Stamp>,
+}
+
 pub(super) enum StoreWorkerCommand {
-    Msg(Box<Msg>),
-    /// A message sent while operation tracing is on, carrying the sender's
-    /// operation and enqueue time. Handled exactly like [`Self::Msg`].
-    Traced(Box<Msg>, op_trace::Stamp),
+    Msg(Box<QueuedMessage>),
     ActivationRefresh(Box<super::repo_monitor::CheckedActivation>),
     Shutdown,
     Repository {
@@ -131,9 +172,9 @@ impl StoreWorkerSender {
                     .upgrade()
                     .is_some_and(|alive| alive.load(Ordering::Acquire))
                     && subscriber_tx
-                        .send(StoreWorkerCommand::Msg(Box::new(
+                        .send(StoreWorkerCommand::message(
                             Msg::ApplyRepositoryPreferences(snapshot),
-                        )))
+                        ))
                         .is_ok()
             }),
         );
@@ -317,14 +358,7 @@ impl StoreWorkerSender {
 
         match &self.inner {
             StoreWorkerSenderInner::Command(tx) => {
-                let command = match op_trace::Stamp::capture() {
-                    Some(stamp) => {
-                        let name = repo_load_trace::stage_label(&msg);
-                        op_trace::record(op_trace::Stage::Dispatch, stamp.op, name, 0, 0);
-                        StoreWorkerCommand::Traced(Box::new(msg), stamp)
-                    }
-                    None => StoreWorkerCommand::Msg(Box::new(msg)),
-                };
+                let command = StoreWorkerCommand::message(msg);
                 send_diagnostics::send_or_log(tx, command, kind, context)
             }
             #[cfg(test)]

@@ -634,8 +634,7 @@ fn concurrent_last_app_store_drops_shutdown_worker_once() {
         super::worker_channel::StoreWorkerCommand::ActivationRefresh(_) => {
             panic!("expected shutdown command, got checked repository activation")
         }
-        super::worker_channel::StoreWorkerCommand::Msg(_)
-        | super::worker_channel::StoreWorkerCommand::Traced(..) => {
+        super::worker_channel::StoreWorkerCommand::Msg(_) => {
             panic!("expected shutdown command, got message command")
         }
         #[cfg(any(test, feature = "test-support"))]

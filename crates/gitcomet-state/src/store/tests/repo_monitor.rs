@@ -761,7 +761,10 @@ fn reducer_effect_handling_does_not_wait_for_stopped_repo_monitor() {
         filesystem_executor: &crate::store::executor::FILESYSTEM_QUEUE,
         deferred_acknowledgements: &mut Vec::new(),
     }
-    .handle_effects(&mut repos, std::iter::empty::<Effect>());
+    .handle_effects(
+        &mut repos,
+        std::iter::empty::<crate::store::execution_context::ScheduledEffect>(),
+    );
     let elapsed = started.elapsed();
 
     assert!(
@@ -956,7 +959,10 @@ fn a_watch_lease_keeps_a_background_repositorys_monitor_running() {
             filesystem_executor: &crate::store::executor::FILESYSTEM_QUEUE,
             deferred_acknowledgements: &mut Vec::new(),
         }
-        .handle_effects(&mut repos, std::iter::empty::<Effect>());
+        .handle_effects(
+            &mut repos,
+            std::iter::empty::<crate::store::execution_context::ScheduledEffect>(),
+        );
     };
     handle(&mut repo_monitors);
     let mut running = repo_monitors.running_repo_ids();

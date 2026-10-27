@@ -72,10 +72,9 @@ fn apply_explorer_visibility(
         }
         repo.file_browser.stale = true;
         repo.file_browser.bump_rev();
-        return vec![Effect::LoadFileBrowser {
-            repo_id,
-            source: repo.file_browser.source.clone(),
-        }];
+        return super::effects::request_file_browser_load(repo)
+            .into_iter()
+            .collect();
     }
     vec![]
 }

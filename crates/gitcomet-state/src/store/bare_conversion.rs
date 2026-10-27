@@ -16,13 +16,13 @@ pub(super) fn quiesce(
     for (_, sender) in subscribers() {
         let (reply, acknowledgement) = mpsc::channel();
         if sender
-            .send(StoreWorkerCommand::Msg(Box::new(Msg::Internal(
+            .send(StoreWorkerCommand::message(Msg::Internal(
                 InternalMsg::QuiesceRepository {
                     common_dir: common_dir.to_path_buf(),
                     cancellation: request_cancellation.clone(),
                     reply,
                 },
-            ))))
+            )))
             .is_ok()
         {
             acknowledgements.push(acknowledgement);
@@ -54,11 +54,11 @@ pub(super) fn finished(
         if id == source_store {
             continue;
         }
-        let _ = sender.send(StoreWorkerCommand::Msg(Box::new(Msg::Internal(
+        let _ = sender.send(StoreWorkerCommand::message(Msg::Internal(
             InternalMsg::BareModeDisabled {
                 common_dir: common_dir.to_path_buf(),
                 result: result.clone(),
             },
-        ))));
+        )));
     }
 }

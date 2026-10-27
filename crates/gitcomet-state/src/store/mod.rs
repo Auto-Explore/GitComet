@@ -13,6 +13,7 @@ use std::time::Instant;
 
 mod bare_conversion;
 mod effects;
+mod execution_context;
 mod executor;
 mod mutation_gate;
 mod reducer;
@@ -166,7 +167,7 @@ fn is_control_msg(msg: &Msg) -> bool {
 
 fn is_control_command(command: &StoreWorkerCommand) -> bool {
     match command {
-        StoreWorkerCommand::Msg(msg) | StoreWorkerCommand::Traced(msg, _) => is_control_msg(msg),
+        StoreWorkerCommand::Msg(msg) => is_control_msg(&msg.message),
         StoreWorkerCommand::Shutdown => true,
         StoreWorkerCommand::Repository { .. } => true,
         StoreWorkerCommand::ActivationRefresh(_) => false,
@@ -313,7 +314,10 @@ impl WorkerLoopContext<'_> {
             for (acknowledgement, inputs) in self.deferred_acknowledgements.drain(..) {
                 reduce_prepared(&inputs, repos, id_alloc, mutable, acknowledgement);
             }
-            let effects = reduce_with(mutable, repos, id_alloc);
+            let effects: Vec<_> = reduce_with(mutable, repos, id_alloc)
+                .into_iter()
+                .map(|effect| execution_context::ScheduledEffect::capture(mutable, effect))
+                .collect();
             repository_registry::update_repositories(
                 self.thread_msg_tx.store_id().get(),
                 mutable,
@@ -377,7 +381,7 @@ impl WorkerLoopContext<'_> {
 
     fn handle_effects<I>(&mut self, repos: &mut RepositoryRuntimes, effects: I)
     where
-        I: IntoIterator<Item = crate::msg::Effect>,
+        I: IntoIterator<Item = execution_context::ScheduledEffect>,
     {
         let active_value = self
             .thread_state
@@ -480,7 +484,10 @@ impl WorkerLoopContext<'_> {
             Arc::clone(self.backend),
         );
 
-        for mut effect in effects {
+        for scheduled in effects {
+            let _execution_context =
+                gitcomet_core::git_execution_log::context::attach(scheduled.context.as_ref());
+            let mut effect = scheduled.effect;
             if let crate::msg::Effect::Commit {
                 repo_id, identity, ..
             }
@@ -778,10 +785,12 @@ impl AppStore {
             let mut deferred_acknowledgements = Vec::new();
 
             while let Ok(command) = recv_next_worker_command(&command_rx, &mut deferred_commands) {
-                let (mut msg, stamp) = match command {
-                    StoreWorkerCommand::Msg(msg) => (*msg, None),
-                    StoreWorkerCommand::Traced(msg, stamp) => (*msg, Some(stamp)),
+                let (mut msg, stamp, execution_context) = match command {
+                    StoreWorkerCommand::Msg(msg) => (msg.message, msg.trace, msg.context),
                     StoreWorkerCommand::ActivationRefresh(refresh) => {
+                        let execution_context = gitcomet_core::git_execution_log::context::ExecutionContext::new(
+                            gitcomet_core::git_execution_log::context::Origin::System(gitcomet_core::git_execution_log::context::SystemOrigin::Activation));
+                        let _scope = execution_context.attach();
                         let state = thread_state.read().unwrap_or_else(|e| e.into_inner());
                         let repo_id = refresh.repo_id;
                         let Some(repo) = state.repos.iter().find(|repo| repo.id == repo_id) else {
@@ -791,11 +800,11 @@ impl AppStore {
                             continue;
                         };
                         if refresh.refresh_worktree_dirty && state.active_repo == Some(repo_id) {
-                            deferred_commands.push_front(StoreWorkerCommand::Msg(Box::new(
+                            deferred_commands.push_front(StoreWorkerCommand::message(
                                 Msg::LoadWorktreeDirty { repo_id },
-                            )));
+                            ));
                         }
-                        (Msg::RepoExternallyChanged { repo_id, change: refresh.change }, None)
+                        (Msg::RepoExternallyChanged { repo_id, change: refresh.change }, None, execution_context)
                     }
                     StoreWorkerCommand::Shutdown => break,
                     StoreWorkerCommand::Repository {
@@ -839,6 +848,8 @@ impl AppStore {
                         continue;
                     }
                 };
+
+                let _execution_scope = execution_context.attach();
 
                 if !thread_msg_tx.is_alive() {
                     continue;

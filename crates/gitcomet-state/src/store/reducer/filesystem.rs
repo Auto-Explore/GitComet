@@ -1,6 +1,5 @@
 use crate::model::{AppState, Loadable, RepoState};
 use crate::msg::Effect;
-use crate::msg::StatusEffect;
 use crate::store::reducer::prepared::ReducerInputs;
 use gitcomet_core::domain::{DiffArea, DiffTarget, FileSource};
 use gitcomet_core::filesystem::PathChange;
@@ -144,14 +143,9 @@ pub(super) fn paths_changed(
             }
         }
         if !matches!(repo.file_browser.entries, Loadable::NotLoaded) {
-            effects.push(Effect::LoadFileBrowser {
-                repo_id: repo.id,
-                source: repo.file_browser.source.clone(),
-            });
+            effects.extend(super::effects::request_file_browser_load(repo));
         }
-        effects.push(Effect::Status(StatusEffect::LoadStatus {
-            repo_id: repo.id,
-        }));
+        super::util::append_requested_status_refresh_effects(repo, &mut effects);
     }
     effects
 }

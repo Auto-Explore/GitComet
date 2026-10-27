@@ -138,7 +138,9 @@ impl TaskExecutor {
         let task = super::test_support::track_task(task);
         // Traced at request time: a replacement also replaces the operation
         // the running task is attributed to.
-        let task = op_trace::wrap_task(self.name, task);
+        let task = gitcomet_core::git_execution_log::context::wrap_task(op_trace::wrap_task(
+            self.name, task,
+        ));
         let task: Task = Box::new(move || {
             let _trace = context.as_ref().map(mergetool_trace::attach_capture);
             task();
@@ -275,6 +277,7 @@ impl TaskExecutor {
     }
 
     fn try_spawn_untraced(&self, task: impl FnOnce() + Send + 'static) -> bool {
+        let task = gitcomet_core::git_execution_log::context::wrap_task(task);
         #[cfg(any(test, feature = "test-support"))]
         let task = super::test_support::track_task(task);
         let mergetool_trace_context = mergetool_trace::current_capture_context();
@@ -342,6 +345,38 @@ mod tests {
         assert_eq!(done_rx.recv_timeout(Duration::from_secs(5)).unwrap(), 99);
         assert_eq!(done_rx.recv_timeout(Duration::from_secs(5)).unwrap(), 100);
         assert!(done_rx.recv_timeout(Duration::from_secs(5)).is_err());
+    }
+
+    #[test]
+    fn replacement_tasks_keep_their_own_context_and_workers_restore_it() {
+        use gitcomet_core::git_execution_log::context::{self, ExecutionContext, UiSurface};
+        let executor = TaskExecutor::new(1);
+        let (release, held) = mpsc::channel();
+        executor.spawn(move || {
+            held.recv().unwrap();
+        });
+        let slot = LatestTaskSlot::default();
+        let (done, received) = mpsc::channel();
+        let a = ExecutionContext::ui(UiSurface::Button, "a");
+        let b = ExecutionContext::ui(UiSurface::CommandPalette, "b");
+        {
+            let _scope = a.attach();
+            executor.spawn_latest(&slot, || panic!("replaced task ran"));
+        }
+        {
+            let _scope = b.attach();
+            let done = done.clone();
+            executor.spawn_latest(&slot, move || {
+                done.send(context::current()).unwrap();
+            });
+        }
+        executor.spawn(move || {
+            done.send(context::current()).unwrap();
+        });
+        release.send(()).unwrap();
+        assert_eq!(received.recv().unwrap(), Some(b));
+        assert_eq!(received.recv().unwrap(), None);
+        executor.join();
     }
 
     #[test]
