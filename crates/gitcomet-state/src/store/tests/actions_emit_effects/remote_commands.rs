@@ -465,7 +465,7 @@ fn a_refspec_fetch_is_a_fetch_in_flight_and_refreshes_remote_branches_when_done(
 }
 
 #[test]
-fn pull_variants_snapshot_the_global_remote_prune_setting() {
+fn pull_variants_are_independent_of_the_fetch_prune_setting() {
     let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
@@ -493,7 +493,6 @@ fn pull_variants_snapshot_the_global_remote_prune_setting() {
         [Effect::RepoCommand(RepoCommandEffect::Pull {
             repo_id: RepoId(1),
             mode: PullMode::Rebase,
-            prune: false,
             ..
         })]
     ));
@@ -515,7 +514,6 @@ fn pull_variants_snapshot_the_global_remote_prune_setting() {
             repo_id: RepoId(1),
             remote,
             branch,
-            prune: true,
             ..
         })] if remote == "origin" && branch == "feature"
     ));

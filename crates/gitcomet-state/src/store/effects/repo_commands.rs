@@ -1239,7 +1239,6 @@ fn schedule_pull(
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     mode: PullMode,
-    prune: bool,
     tracking: Option<(String, String)>,
     auth: Option<StagedGitAuth>,
 ) {
@@ -1257,7 +1256,7 @@ fn schedule_pull(
         repo_id,
         command,
         context,
-        move |repo| run_with_git_auth(auth, || repo.pull(mode, prune)),
+        move |repo| run_with_git_auth(auth, || repo.pull(mode)),
     );
 }
 
@@ -1268,7 +1267,6 @@ fn schedule_pull_branch(
     repo_id: RepoId,
     remote: String,
     branch: String,
-    prune: bool,
     local_branch: Option<String>,
     auth: Option<StagedGitAuth>,
 ) {
@@ -1285,11 +1283,7 @@ fn schedule_pull_branch(
             branch: command_branch,
         },
         context,
-        move |repo| {
-            run_with_git_auth(auth, || {
-                repo.pull_branch_with_output(&remote, &branch, prune)
-            })
-        },
+        move |repo| run_with_git_auth(auth, || repo.pull_branch_with_output(&remote, &branch)),
     );
 }
 
@@ -2757,7 +2751,6 @@ pub(super) fn schedule(
         RepoCommandEffect::Pull {
             repo_id,
             mode,
-            prune,
             auth,
         } => schedule_pull(
             executor,
@@ -2765,7 +2758,6 @@ pub(super) fn schedule(
             msg_tx,
             repo_id,
             mode,
-            prune,
             tracking_branch_context(thread_state, repo_id),
             auth,
         ),
@@ -2773,7 +2765,6 @@ pub(super) fn schedule(
             repo_id,
             remote,
             branch,
-            prune,
             auth,
         } => schedule_pull_branch(
             executor,
@@ -2782,7 +2773,6 @@ pub(super) fn schedule(
             repo_id,
             remote,
             branch,
-            prune,
             current_branch_context(thread_state, repo_id),
             auth,
         ),

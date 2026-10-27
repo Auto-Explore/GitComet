@@ -366,7 +366,6 @@ fn a_running_pull_refuses_a_reviewed_apply_but_a_fetch_does_not() {
             crate::msg::RepoCommandEffect::Pull {
                 repo_id,
                 mode: PullMode::Default,
-                prune: false,
                 auth: None,
             },
             true,

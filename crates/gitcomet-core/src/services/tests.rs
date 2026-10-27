@@ -206,7 +206,7 @@ fn provided_trait_methods_use_unsupported_fallback_behavior() {
         crate::remote_url::RemoteUrlPolicy::default(),
     ));
     assert_unsupported(repo.fetch_all(true));
-    assert_unsupported(repo.pull(PullMode::FastForwardOnly, true));
+    assert_unsupported(repo.pull(PullMode::FastForwardOnly));
     assert_unsupported(repo.push_with_output());
     assert_unsupported(repo.push_after_commit_with_output(&safe_push_target));
     assert_unsupported(repo.push_after_commit_set_upstream_with_output(&safe_push_target));
@@ -224,7 +224,7 @@ fn provided_trait_methods_use_unsupported_fallback_behavior() {
     assert_unsupported(repo.unset_upstream_branch_with_output("main"));
     assert_unsupported(repo.delete_remote_branch_with_output("origin", "main"));
     assert_unsupported(repo.commit_amend_with_output("message"));
-    assert_unsupported(repo.pull_branch_with_output("origin", "main", false));
+    assert_unsupported(repo.pull_branch_with_output("origin", "main"));
     assert_unsupported(repo.merge_ref_with_output("origin/main"));
     assert_unsupported(repo.squash_ref_with_output("origin/main"));
     assert_unsupported(repo.reset_with_output("HEAD~1", ResetMode::Mixed));
@@ -473,7 +473,7 @@ impl GitRepository for RecordingHistoryModeRepo {
         result.map(|()| CommandOutput::empty_success("git fetch --all"))
     }
 
-    fn pull(&self, _mode: super::PullMode, _prune: bool) -> super::Result<CommandOutput> {
+    fn pull(&self, _mode: super::PullMode) -> super::Result<CommandOutput> {
         let result: super::Result<()> = { unsupported() };
         result.map(|()| CommandOutput::empty_success("git pull"))
     }

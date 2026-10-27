@@ -1456,7 +1456,6 @@ impl GitRepository for IndexedFindRepo {
     fn pull(
         &self,
         _mode: gitcomet_core::services::PullMode,
-        _prune: bool,
     ) -> Result<gitcomet_core::services::CommandOutput> {
         Err(Error::new(ErrorKind::Unsupported(
             "not needed by the history find tests",

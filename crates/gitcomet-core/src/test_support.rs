@@ -172,7 +172,7 @@ impl GitRepository for UnconfiguredRepository {
         unsupported()
     }
 
-    fn pull(&self, _mode: PullMode, _prune: bool) -> Result<crate::services::CommandOutput> {
+    fn pull(&self, _mode: PullMode) -> Result<crate::services::CommandOutput> {
         unsupported()
     }
 

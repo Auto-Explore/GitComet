@@ -184,14 +184,12 @@ pub enum RepoCommandEffect {
     Pull {
         repo_id: RepoId,
         mode: PullMode,
-        prune: bool,
         auth: Option<StagedGitAuth>,
     },
     PullBranch {
         repo_id: RepoId,
         remote: String,
         branch: String,
-        prune: bool,
         auth: Option<StagedGitAuth>,
     },
     MergeRef {

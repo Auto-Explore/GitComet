@@ -943,8 +943,8 @@ fn filesystem_repository_lease_lives_through_the_actual_write() {
         fn fetch_all(&self, prune: bool) -> Result<CommandOutput> {
             self.inner.fetch_all(prune)
         }
-        fn pull(&self, mode: PullMode, prune: bool) -> Result<CommandOutput> {
-            self.inner.pull(mode, prune)
+        fn pull(&self, mode: PullMode) -> Result<CommandOutput> {
+            self.inner.pull(mode)
         }
         fn push(&self) -> Result<()> {
             self.inner.push()

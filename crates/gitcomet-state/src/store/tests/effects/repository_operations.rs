@@ -887,11 +887,7 @@ fn save_worktree_file_effect_writes_and_can_stage() {
         fn fetch_all(&self, _prune: bool) -> Result<gitcomet_core::services::CommandOutput> {
             unimplemented!()
         }
-        fn pull(
-            &self,
-            _mode: PullMode,
-            _prune: bool,
-        ) -> Result<gitcomet_core::services::CommandOutput> {
+        fn pull(&self, _mode: PullMode) -> Result<gitcomet_core::services::CommandOutput> {
             unimplemented!()
         }
         fn push(&self) -> Result<()> {
@@ -1158,11 +1154,7 @@ fn append_gitignore_patterns_effect_creates_appends_and_dedupes() {
         fn fetch_all(&self, _prune: bool) -> Result<gitcomet_core::services::CommandOutput> {
             unimplemented!()
         }
-        fn pull(
-            &self,
-            _mode: PullMode,
-            _prune: bool,
-        ) -> Result<gitcomet_core::services::CommandOutput> {
+        fn pull(&self, _mode: PullMode) -> Result<gitcomet_core::services::CommandOutput> {
             unimplemented!()
         }
         fn push(&self) -> Result<()> {
@@ -1386,11 +1378,7 @@ fn checkout_conflict_base_effect_calls_repo_and_emits_finished() {
         fn fetch_all(&self, _prune: bool) -> Result<gitcomet_core::services::CommandOutput> {
             unimplemented!()
         }
-        fn pull(
-            &self,
-            _mode: PullMode,
-            _prune: bool,
-        ) -> Result<gitcomet_core::services::CommandOutput> {
+        fn pull(&self, _mode: PullMode) -> Result<gitcomet_core::services::CommandOutput> {
             unimplemented!()
         }
         fn push(&self) -> Result<()> {
@@ -1579,11 +1567,7 @@ fn accept_conflict_deletion_effect_calls_repo_and_emits_finished() {
         fn fetch_all(&self, _prune: bool) -> Result<gitcomet_core::services::CommandOutput> {
             unimplemented!()
         }
-        fn pull(
-            &self,
-            _mode: PullMode,
-            _prune: bool,
-        ) -> Result<gitcomet_core::services::CommandOutput> {
+        fn pull(&self, _mode: PullMode) -> Result<gitcomet_core::services::CommandOutput> {
             unimplemented!()
         }
         fn push(&self) -> Result<()> {
@@ -1778,11 +1762,7 @@ fn load_stashes_effect_truncates_results_to_limit() {
         fn fetch_all(&self, _prune: bool) -> Result<gitcomet_core::services::CommandOutput> {
             unimplemented!()
         }
-        fn pull(
-            &self,
-            _mode: PullMode,
-            _prune: bool,
-        ) -> Result<gitcomet_core::services::CommandOutput> {
+        fn pull(&self, _mode: PullMode) -> Result<gitcomet_core::services::CommandOutput> {
             unimplemented!()
         }
         fn push(&self) -> Result<()> {
@@ -1979,11 +1959,7 @@ fn stash_effect_requests_stash_reload_on_success() {
         fn fetch_all(&self, _prune: bool) -> Result<gitcomet_core::services::CommandOutput> {
             unimplemented!()
         }
-        fn pull(
-            &self,
-            _mode: PullMode,
-            _prune: bool,
-        ) -> Result<gitcomet_core::services::CommandOutput> {
+        fn pull(&self, _mode: PullMode) -> Result<gitcomet_core::services::CommandOutput> {
             unimplemented!()
         }
         fn push(&self) -> Result<()> {
@@ -2178,11 +2154,7 @@ fn pop_stash_effect_applies_and_drops_then_requests_stash_reload() {
         fn fetch_all(&self, _prune: bool) -> Result<gitcomet_core::services::CommandOutput> {
             unimplemented!()
         }
-        fn pull(
-            &self,
-            _mode: PullMode,
-            _prune: bool,
-        ) -> Result<gitcomet_core::services::CommandOutput> {
+        fn pull(&self, _mode: PullMode) -> Result<gitcomet_core::services::CommandOutput> {
             unimplemented!()
         }
         fn push(&self) -> Result<()> {
@@ -2376,11 +2348,7 @@ fn pop_stash_effect_propagates_apply_error_without_drop_or_reload() {
         fn fetch_all(&self, _prune: bool) -> Result<gitcomet_core::services::CommandOutput> {
             unimplemented!()
         }
-        fn pull(
-            &self,
-            _mode: PullMode,
-            _prune: bool,
-        ) -> Result<gitcomet_core::services::CommandOutput> {
+        fn pull(&self, _mode: PullMode) -> Result<gitcomet_core::services::CommandOutput> {
             unimplemented!()
         }
         fn push(&self) -> Result<()> {
@@ -2572,11 +2540,7 @@ fn drop_stash_effect_requests_stash_reload_on_success() {
         fn fetch_all(&self, _prune: bool) -> Result<gitcomet_core::services::CommandOutput> {
             unimplemented!()
         }
-        fn pull(
-            &self,
-            _mode: PullMode,
-            _prune: bool,
-        ) -> Result<gitcomet_core::services::CommandOutput> {
+        fn pull(&self, _mode: PullMode) -> Result<gitcomet_core::services::CommandOutput> {
             unimplemented!()
         }
         fn push(&self) -> Result<()> {
@@ -2766,11 +2730,7 @@ fn drop_stash_effect_requests_stash_reload_on_error() {
         fn fetch_all(&self, _prune: bool) -> Result<gitcomet_core::services::CommandOutput> {
             unimplemented!()
         }
-        fn pull(
-            &self,
-            _mode: PullMode,
-            _prune: bool,
-        ) -> Result<gitcomet_core::services::CommandOutput> {
+        fn pull(&self, _mode: PullMode) -> Result<gitcomet_core::services::CommandOutput> {
             unimplemented!()
         }
         fn push(&self) -> Result<()> {
@@ -3876,11 +3836,7 @@ fn pull_releases_the_object_store_before_its_refresh() {
         fn fetch_all(&self, _prune: bool) -> Result<gitcomet_core::services::CommandOutput> {
             unimplemented!()
         }
-        fn pull(
-            &self,
-            _mode: PullMode,
-            _prune: bool,
-        ) -> Result<gitcomet_core::services::CommandOutput> {
+        fn pull(&self, _mode: PullMode) -> Result<gitcomet_core::services::CommandOutput> {
             let result: Result<()> = {
                 self.calls.lock().unwrap().push("pull");
                 Ok(())
@@ -3926,7 +3882,6 @@ fn pull_releases_the_object_store_before_its_refresh() {
         Effect::RepoCommand(RepoCommandEffect::Pull {
             repo_id: RepoId(1),
             mode: PullMode::Default,
-            prune: false,
             auth: None,
         }),
     );

@@ -534,7 +534,6 @@ pub(super) fn pull(
     vec![Effect::RepoCommand(RepoCommandEffect::Pull {
         repo_id,
         mode,
-        prune: state.remote_settings.prune_deleted_remote_branches_on_fetch,
         auth: None,
     })]
 }
@@ -551,7 +550,6 @@ pub(super) fn pull_branch(
         repo_id,
         remote,
         branch,
-        prune: state.remote_settings.prune_deleted_remote_branches_on_fetch,
         auth: None,
     })]
 }
