@@ -267,8 +267,10 @@ pub enum RepoCommandEffect {
     },
     RewordCommit {
         repo_id: RepoId,
+        request_id: crate::model::RewordRequestId,
         commit_id: CommitId,
         message: String,
+        resume: bool,
         /// Signing auth staged when a failed reword is replayed.
         auth: Option<StagedGitAuth>,
     },
@@ -771,14 +773,17 @@ impl RepoCommandEffect {
             ),
             RepoCommandEffect::RewordCommit {
                 repo_id,
+                request_id,
                 commit_id,
                 message,
+                resume,
                 ..
             } => Some(
                 RepoCommandKind::RewordCommit {
+                    request_id,
                     commit_id,
                     message,
-                    rebase_paused: false,
+                    rebase_paused: resume,
                     rewritten_id: None,
                 }
                 .finished(repo_id, Err(error)),

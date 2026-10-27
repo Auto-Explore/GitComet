@@ -3,7 +3,7 @@ use super::patch::write_pathspec_file;
 use crate::util::{
     bytes_to_text_preserving_utf8, describe_path_list, git_command_failed_error,
     push_literal_pathspec_file, run_git_capture, run_git_capture_bytes, run_git_raw_output,
-    run_git_with_output, validate_hex_commit_id, validate_ref_like_arg,
+    run_git_with_output, validate_hex_commit_id, validate_ref_like_arg, with_shared_git_auth,
 };
 use gitcomet_core::domain::{CommitId, short_commit_id};
 use gitcomet_core::error::{Error, ErrorKind, GitFailure, GitFailureId};
@@ -29,6 +29,7 @@ const MAX_SQUASH_CHAIN: usize = 10_000;
 const PERSISTED_REWORD_DIR: &str = "gitcomet-reword";
 const PERSISTED_REWORD_STAGING_DIR: &str = "gitcomet-reword.staging";
 const PERSISTED_PLAN_NAME: &str = "planned-todo";
+const PERSISTED_REWORD_OWNER: &str = "commit-message-owner.json";
 const PERSISTED_CHERRY_PICK_MAINLINE: &str = "gitcomet-cherry-pick-mainline";
 const PERSISTED_CHERRY_PICK_MAINLINE_STAGING: &str = "gitcomet-cherry-pick-mainline.staging";
 
@@ -88,6 +89,165 @@ fn first_parent_chain_to(
 
 fn reword_error(message: &str) -> Error {
     Error::new(ErrorKind::Backend(format!("reword: {message}")))
+}
+
+/// Keep the original failure classification and captured output, including
+/// authentication, while making recovery failures visible in the command log.
+fn reword_error_with_diagnostic(error: Error, diagnostic: &str) -> Error {
+    match error.kind() {
+        ErrorKind::Git(failure) => {
+            let detail = format!(
+                "{}\n\n{diagnostic}",
+                failure.detail().unwrap_or("Git command failed")
+            );
+            let mut stderr = failure.stderr().to_vec();
+            stderr.extend_from_slice(format!("\n{diagnostic}\n").as_bytes());
+            let mut combined = GitFailure::new(
+                failure.command(),
+                failure.id(),
+                failure.exit_code(),
+                failure.stdout().to_vec(),
+                stderr,
+                Some(detail),
+            );
+            if let Some(outcome) = failure.auth_outcome() {
+                combined = combined.with_auth_outcome(outcome.clone());
+            }
+            Error::new(ErrorKind::Git(combined)).with_source(error)
+        }
+        _ => reword_error(&format!("{error}\n{diagnostic}")).with_source(error),
+    }
+}
+
+/// Kept inside Git's own rebase state, so aborting or completing the rebase
+/// invalidates ownership automatically. Generic interactive rebases do not
+/// have this record, even if they happen to reword the same commit.
+struct RewordCommitOwner {
+    original_head: String,
+    target: String,
+    parent: String,
+    message: String,
+    distance: usize,
+}
+
+impl RewordCommitOwner {
+    fn matches_rebase(&self, git_dir: &Path) -> bool {
+        let state = git_dir.join("rebase-merge");
+        [("orig-head", &self.original_head), ("onto", &self.parent)]
+            .iter()
+            .all(|(name, expected)| {
+                fs::read_to_string(state.join(name))
+                    .is_ok_and(|actual| actual.trim() == expected.as_str())
+            })
+    }
+
+    fn persist(&self, git_dir: &Path) -> Result<()> {
+        let PersistedReword::Ready { messages, .. } = persisted_reword_state(git_dir) else {
+            return Err(reword_error(
+                "could not preserve the paused reword's message plan",
+            ));
+        };
+        if !self.matches_rebase(git_dir)
+            || fs::read(messages.join(&self.target)).ok().as_deref()
+                != Some(self.message.as_bytes())
+        {
+            return Err(reword_error(
+                "the paused rebase no longer matches the message edit",
+            ));
+        }
+        let record = serde_json::json!({
+            "original_head": self.original_head,
+            "target": self.target,
+            "parent": self.parent,
+            "message": self.message,
+            "distance": self.distance,
+        });
+        fs::write(
+            git_dir.join("rebase-merge").join(PERSISTED_REWORD_OWNER),
+            record.to_string(),
+        )
+        .map_err(|error| {
+            Error::from(error).with_context("preserve the paused commit message edit", None)
+        })
+    }
+
+    fn load(git_dir: &Path, target: &CommitId, message: &str) -> Option<Self> {
+        let bytes = fs::read(git_dir.join("rebase-merge").join(PERSISTED_REWORD_OWNER)).ok()?;
+        let record: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
+        let owner = Self {
+            original_head: record.get("original_head")?.as_str()?.into(),
+            target: record.get("target")?.as_str()?.into(),
+            parent: record.get("parent")?.as_str()?.into(),
+            message: record.get("message")?.as_str()?.into(),
+            distance: record.get("distance")?.as_u64()?.try_into().ok()?,
+        };
+        let PersistedReword::Ready { messages, .. } = persisted_reword_state(git_dir) else {
+            return None;
+        };
+        (owner.target.eq_ignore_ascii_case(target.as_ref())
+            && owner.message == message
+            && owner.matches_rebase(git_dir)
+            && fs::read(messages.join(&owner.target)).ok().as_deref() == Some(message.as_bytes()))
+        .then_some(owner)
+    }
+}
+
+/// Immutable commit content captured before rewriting. All lookup failures
+/// after a successful Git command are optional selection metadata failures.
+struct RewordCommitIdentity {
+    original: gix::ObjectId,
+    parents: Vec<gix::ObjectId>,
+    tree: gix::ObjectId,
+}
+
+impl RewordCommitIdentity {
+    fn from_commit(commit: &gix::Commit<'_>) -> Result<Self> {
+        Ok(Self {
+            original: commit.id,
+            parents: commit.parent_ids().map(|id| id.detach()).collect(),
+            tree: commit
+                .tree_id()
+                .map_err(|error| reword_error(&format!("cannot read the commit's tree: {error}")))?
+                .detach(),
+        })
+    }
+
+    fn matches(&self, commit: &gix::Commit<'_>) -> bool {
+        commit.id != self.original
+            && commit
+                .parent_ids()
+                .map(|id| id.detach())
+                .eq(self.parents.iter().copied())
+            && commit.tree_id().is_ok_and(|id| id.detach() == self.tree)
+    }
+}
+
+/// Compare messages using Git's whitespace cleanup: trim line endings,
+/// collapse blank runs, and drop surrounding blank lines. Do not strip
+/// comments: the reword editors preserve intentional comment-prefixed lines.
+/// Applying this to both sides also supports `commit.cleanup=verbatim`.
+fn normalized_reword_message(message: &[u8]) -> Vec<u8> {
+    let mut normalized = Vec::with_capacity(message.len());
+    let mut blank = false;
+    for mut line in message.split(|byte| *byte == b'\n') {
+        while line
+            .last()
+            .is_some_and(|byte| matches!(*byte, b' ' | b'\t' | b'\r' | b'\n'))
+        {
+            line = &line[..line.len() - 1];
+        }
+        if line.is_empty() {
+            blank = !normalized.is_empty();
+            continue;
+        }
+        if blank {
+            normalized.push(b'\n');
+        }
+        normalized.extend_from_slice(line);
+        normalized.push(b'\n');
+        blank = false;
+    }
+    normalized
 }
 
 /// Whether a failed reword rebase stopped for credentials the auth prompt
@@ -1037,6 +1197,31 @@ impl GixRepo {
             cmd.arg("am").arg("--continue");
             return run_git_with_output(cmd, "git am --continue");
         }
+        let cmd = self.rebase_continue_command()?;
+        match self.run_rebase_step_output(cmd, "git rebase --continue") {
+            Ok(output) => Ok(output),
+            Err(rebase_error) => {
+                let mut cherry_pick_cmd = self.git_workdir_cmd();
+                cherry_pick_cmd.arg("cherry-pick").arg("--continue");
+                match self
+                    .run_cherry_pick_step_output(cherry_pick_cmd, "git cherry-pick --continue")
+                {
+                    Ok(output) => Ok(output),
+                    // A cherry-pick genuinely in progress owns this continue:
+                    // its failure (unresolved files, a failed hook) is the
+                    // actionable one, not "no rebase in progress".
+                    Err(cherry_pick_error) if self.cherry_pick_in_progress_impl()? => {
+                        Err(cherry_pick_error)
+                    }
+                    Err(_) => Err(rebase_error),
+                }
+            }
+        }
+    }
+
+    /// Shared message-editor setup. Dedicated rewords run this command
+    /// directly, without the generic Continue action's other sequencer fallbacks.
+    fn rebase_continue_command(&self) -> Result<Command> {
         let mut cmd = self.git_workdir_cmd();
         let repo = self.repo();
         match persisted_reword_state(repo.path()) {
@@ -1091,25 +1276,7 @@ impl GixRepo {
             }
         }
         cmd.arg("rebase").arg("--continue");
-        match self.run_rebase_step_output(cmd, "git rebase --continue") {
-            Ok(output) => Ok(output),
-            Err(rebase_error) => {
-                let mut cherry_pick_cmd = self.git_workdir_cmd();
-                cherry_pick_cmd.arg("cherry-pick").arg("--continue");
-                match self
-                    .run_cherry_pick_step_output(cherry_pick_cmd, "git cherry-pick --continue")
-                {
-                    Ok(output) => Ok(output),
-                    // A cherry-pick genuinely in progress owns this continue:
-                    // its failure (unresolved files, a failed hook) is the
-                    // actionable one, not "no rebase in progress".
-                    Err(cherry_pick_error) if self.cherry_pick_in_progress_impl()? => {
-                        Err(cherry_pick_error)
-                    }
-                    Err(_) => Err(rebase_error),
-                }
-            }
-        }
+        Ok(cmd)
     }
 
     /// Run a rebase step (`rebase -i` / `rebase --continue`). A non-zero exit
@@ -1139,6 +1306,18 @@ impl GixRepo {
                 (Some(before), Some(after)) => after > before,
                 (_, None) => false,
             };
+        // A continue may advance and then need a different signing key.
+        // Keep that challenge as an error even though the sequencer moved:
+        // callers must ask for credentials, not mistake it for a conflict.
+        if paused_after_progress
+            && matches!(
+                output.auth_outcome,
+                gitcomet_core::auth::AuthOutcome::NeedsInput(_)
+                    | gitcomet_core::auth::AuthOutcome::Rejected(_)
+            )
+        {
+            return Err(git_command_failed_error(label, output));
+        }
         if output.status.success() || paused_after_progress {
             Ok(CommandOutput {
                 command: label.to_string(),
@@ -1554,6 +1733,14 @@ impl GixRepo {
         commit_id: &CommitId,
         message: &str,
     ) -> Result<RewordCommitOutcome> {
+        with_shared_git_auth(|| self.reword_commit_with_output_inner(commit_id, message))
+    }
+
+    fn reword_commit_with_output_inner(
+        &self,
+        commit_id: &CommitId,
+        message: &str,
+    ) -> Result<RewordCommitOutcome> {
         validate_hex_commit_id(commit_id)?;
         if message.trim().is_empty() {
             return Err(reword_error("the commit message must not be empty"));
@@ -1563,14 +1750,16 @@ impl GixRepo {
         // against the live repository.
         let repo = self.reopen_repo()?;
         let head = gix_head_id_or_none(&repo)?.ok_or_else(|| reword_error("HEAD is unborn"))?;
-        let target = peel_commit(&repo, commit_id.as_ref())?.id;
+        let target_commit = peel_commit(&repo, commit_id.as_ref())?;
+        let target = target_commit.id;
+        let identity = RewordCommitIdentity::from_commit(&target_commit)?;
         if let Some(operation) = self.operation_in_progress_label()? {
             return Err(reword_error(&format!(
                 "{operation} is in progress; finish or abort it first"
             )));
         }
         if target == head {
-            return self.reword_head_commit(message);
+            return self.reword_head_commit(message, &identity);
         }
 
         let short = short_commit_id(commit_id.as_ref());
@@ -1622,43 +1811,171 @@ impl GixRepo {
         }
 
         let label = format!("git rebase -i {} (reword {short})", short_commit_id(&base));
-        let output = match self.run_planned_rebase(&entries, &base, &label) {
-            Ok(output) => output,
-            Err(error) => {
-                // A signing prompt is retried by continuing the paused rebase,
-                // which kept the new message. Any other stop, such as a
-                // `commit-msg` hook rejecting it, is rolled back so the
-                // repository is as it was before the reword.
-                if !reword_stop_resumes_after_auth(&error) && self.rebase_in_progress_impl()? {
-                    self.abort_reword_rebase()?;
+        let owner = RewordCommitOwner {
+            original_head: head.to_string(),
+            target: target_hex,
+            parent: base.clone(),
+            message: message.to_string(),
+            distance,
+        };
+        let result = self.run_planned_rebase(&entries, &base, &label);
+        self.finish_reword_rebase(result, &owner, &identity)
+    }
+
+    pub(super) fn reword_commit_in_progress_impl(
+        &self,
+        commit_id: &CommitId,
+        message: &str,
+    ) -> Result<bool> {
+        validate_hex_commit_id(commit_id)?;
+        Ok(RewordCommitOwner::load(self.repo().path(), commit_id, message).is_some())
+    }
+
+    pub(super) fn continue_reword_commit_with_output_impl(
+        &self,
+        commit_id: &CommitId,
+        message: &str,
+    ) -> Result<RewordCommitOutcome> {
+        with_shared_git_auth(|| self.continue_reword_commit_with_output_inner(commit_id, message))
+    }
+
+    fn continue_reword_commit_with_output_inner(
+        &self,
+        commit_id: &CommitId,
+        message: &str,
+    ) -> Result<RewordCommitOutcome> {
+        validate_hex_commit_id(commit_id)?;
+        let owner =
+            RewordCommitOwner::load(self.repo().path(), commit_id, message).ok_or_else(|| {
+                reword_error("the paused rebase does not belong to this message edit")
+            })?;
+        let repo = self.reopen_repo()?;
+        let target = peel_commit(&repo, commit_id.as_ref())?;
+        let identity = RewordCommitIdentity::from_commit(&target)?;
+        // Edits made while a signing prompt is open are not part of this
+        // operation, and must not be discarded by a failed retry's rollback.
+        let mut check = self.git_workdir_cmd();
+        check.args(["diff", "--quiet", "--ignore-submodules=none"]);
+        let label = "git diff --quiet --ignore-submodules=none";
+        let output = run_git_raw_output(check, label)?;
+        match output.status.code() {
+            Some(0) => {}
+            Some(1) => {
+                return Err(reword_error(
+                    "stash your worktree changes before retrying this message edit",
+                ));
+            }
+            _ => return Err(git_command_failed_error(label, output)),
+        }
+        let amended = if gix_head_id_or_none(&repo)? == Some(target.id) {
+            // A failed reword amend has no staged diff. Git's --continue
+            // skips it, leaving the original message in place, unless we
+            // retry the amend Git explicitly asks the user to perform.
+            let state = repo.path().join("rebase-merge");
+            let stopped_at_target = ["amend", "stopped-sha"].iter().all(|name| {
+                fs::read_to_string(state.join(name)).is_ok_and(|id| id.trim() == owner.target)
+            });
+            let is_reword_step = fs::read_to_string(state.join("done")).is_ok_and(|done| {
+                done.lines().next_back().is_some_and(|line| {
+                    let mut words = line.split_whitespace();
+                    words
+                        .next()
+                        .and_then(InteractiveRebaseAction::from_todo_word)
+                        == Some(InteractiveRebaseAction::Reword)
+                        && words.next().is_some_and(|id| owner.target.starts_with(id))
+                })
+            });
+            if !stopped_at_target || !is_reword_step {
+                return Err(reword_error(
+                    "the paused rebase no longer has this message edit pending",
+                ));
+            }
+            if !self.index_matches_head()? {
+                return Err(reword_error(
+                    "unstage your changes before retrying this message edit",
+                ));
+            }
+            match self.reword_head_commit(message, &identity) {
+                Ok(outcome) => Some(outcome.output),
+                Err(error) => return self.finish_reword_rebase(Err(error), &owner, &identity),
+            }
+        } else {
+            None
+        };
+        let result =
+            self.run_rebase_step_output(self.rebase_continue_command()?, "git rebase --continue");
+        let mut outcome = self.finish_reword_rebase(result, &owner, &identity)?;
+        if let Some(amended) = amended {
+            outcome.output =
+                CommandOutput::combine("git rebase --continue", &[amended, outcome.output]);
+        }
+        Ok(outcome)
+    }
+
+    /// A signing stop keeps its owned rebase. Every other stop rolls back,
+    /// including one reached by a retry after signing was unlocked.
+    fn finish_reword_rebase(
+        &self,
+        result: Result<CommandOutput>,
+        owner: &RewordCommitOwner,
+        identity: &RewordCommitIdentity,
+    ) -> Result<RewordCommitOutcome> {
+        let repo = self.repo();
+        let paused = owner.matches_rebase(repo.path());
+        let output = match result {
+            Ok(output) if !paused && output.exit_code == Some(0) => output,
+            Ok(output) => {
+                let error = reword_error(&format!(
+                    "the replay stopped before finishing\n{}",
+                    output.stderr.trim()
+                ));
+                return Err(if paused {
+                    self.rollback_reword_rebase(error)
+                } else {
+                    error
+                });
+            }
+            Err(error) if paused && reword_stop_resumes_after_auth(&error) => {
+                if let Err(persist_error) = owner.persist(repo.path()) {
+                    return Err(self.rollback_reword_rebase(reword_error_with_diagnostic(
+                        error,
+                        &format!("{persist_error}; the message edit cannot be resumed safely"),
+                    )));
                 }
                 return Err(error);
             }
+            Err(error) if paused => return Err(self.rollback_reword_rebase(error)),
+            Err(error) => return Err(error),
         };
-        if self.rebase_in_progress_impl()? {
-            // Trees are unchanged, so a stop that still reported success is
-            // not one a continue could finish meaningfully either.
-            self.abort_reword_rebase()?;
-            return Err(reword_error(&format!(
-                "the replay stopped before finishing; the rebase was aborted\n{}",
-                output.stderr.trim()
-            )));
-        }
-        // A HEAD that moved meanwhile no longer has the reworded commit at
-        // `distance`.
-        let rewritten_id = {
-            let repo = self.reopen_repo()?;
-            let reworded = peel_commit(&repo, &format!("HEAD~{distance}"))?;
-            let same_parent = reworded
-                .parent_ids()
-                .next()
-                .is_some_and(|id| id.detach() == parent);
-            same_parent.then(|| CommitId(reworded.id.to_string().into()))
-        };
+        let rewritten_id = self.reworded_commit_id(owner.distance, identity, &owner.message);
         Ok(RewordCommitOutcome {
             output,
             rewritten_id,
         })
+    }
+
+    fn reworded_commit_id(
+        &self,
+        distance: usize,
+        identity: &RewordCommitIdentity,
+        message: &str,
+    ) -> Option<CommitId> {
+        let repo = self.reopen_repo().ok()?;
+        let reworded = peel_commit(&repo, &format!("HEAD~{distance}")).ok()?;
+        let actual_message = reworded.message_raw().ok()?;
+        (identity.matches(&reworded)
+            && normalized_reword_message(actual_message.as_ref())
+                == normalized_reword_message(message.as_bytes()))
+        .then(|| CommitId(reworded.id.to_string().into()))
+    }
+
+    fn rollback_reword_rebase(&self, error: Error) -> Error {
+        match self.abort_reword_rebase() {
+            Ok(()) => error,
+            Err(cleanup) => {
+                reword_error_with_diagnostic(error, &format!("Rollback also failed: {cleanup}"))
+            }
+        }
     }
 
     fn abort_reword_rebase(&self) -> Result<()> {
@@ -1673,7 +1990,11 @@ impl GixRepo {
     /// rewordable. A merge HEAD keeps its parents. Lines starting with the
     /// comment character survive a `commit.cleanup=strip` here as they do on
     /// the rebase path.
-    fn reword_head_commit(&self, message: &str) -> Result<RewordCommitOutcome> {
+    fn reword_head_commit(
+        &self,
+        message: &str,
+        identity: &RewordCommitIdentity,
+    ) -> Result<RewordCommitOutcome> {
         self.refuse_amending_annex_adjustment()?;
         let label = "git commit --amend --only";
         let comment_char = comment_char_override(
@@ -1687,8 +2008,7 @@ impl GixRepo {
         cmd.args(["commit", "--amend", "--only", "--allow-empty", "-m"])
             .arg(message);
         let output = run_git_with_output(cmd, label)?;
-        let repo = self.reopen_repo()?;
-        let rewritten_id = gix_head_id_or_none(&repo)?.map(|id| CommitId(id.to_string().into()));
+        let rewritten_id = self.reworded_commit_id(0, identity, message);
         Ok(RewordCommitOutcome {
             output,
             rewritten_id,
@@ -1750,8 +2070,8 @@ impl GixRepo {
         cmd.arg("--").arg(upstream);
 
         let mut result = self.run_rebase_step_output(cmd, label);
-        if self.rebase_in_progress_impl()? {
-            let repo = self.repo();
+        let repo = self.repo();
+        if repo.path().join("rebase-merge").is_dir() {
             // The rebase started and git's state is still on disk — whether
             // paused at a conflict (Ok) or stopped by a non-conflict failure
             // (Err, e.g. a broken signer): keep the planned messages with
@@ -2603,6 +2923,18 @@ mod tests {
         assert_eq!(
             continue_command(Some(b';')),
             "git -c 'core.commentChar=;' rebase --continue"
+        );
+    }
+
+    #[test]
+    fn reword_message_comparison_matches_git_stripspace_whitespace() {
+        assert_eq!(
+            super::normalized_reword_message(b" \t\r\nSubject\x0b\x0c \t\r\n\n \t\n# Body\t\r\n\n"),
+            b"Subject\x0b\x0c\n\n# Body\n"
+        );
+        assert_ne!(
+            super::normalized_reword_message(b"Subject\nBody"),
+            super::normalized_reword_message(b"Subject\nDifferent body")
         );
     }
 

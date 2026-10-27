@@ -88,6 +88,7 @@ pub enum RepoCommandKind {
         count: usize,
     },
     RewordCommit {
+        request_id: crate::model::RewordRequestId,
         commit_id: CommitId,
         message: String,
         /// Whether the failure left the reword's rebase paused, as a signing

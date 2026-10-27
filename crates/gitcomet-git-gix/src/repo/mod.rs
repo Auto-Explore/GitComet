@@ -1358,6 +1358,18 @@ impl GitRepository for GixRepo {
         self.reword_commit_with_output_impl(commit_id, message)
     }
 
+    fn continue_reword_commit_with_output(
+        &self,
+        commit_id: &CommitId,
+        message: &str,
+    ) -> Result<RewordCommitOutcome> {
+        self.continue_reword_commit_with_output_impl(commit_id, message)
+    }
+
+    fn reword_commit_in_progress(&self, commit_id: &CommitId, message: &str) -> Result<bool> {
+        self.reword_commit_in_progress_impl(commit_id, message)
+    }
+
     fn interactive_cherry_pick_with_output(
         &self,
         entries: &[InteractiveRebaseEntry],

@@ -1407,6 +1407,23 @@ pub trait GitRepository: Send + Sync {
             "rewording a commit is not implemented for this backend",
         )))
     }
+    /// Continue a paused message edit only when its persisted rebase belongs
+    /// to this target and message. This retains the rewritten target's identity
+    /// across signing retries, unlike a generic rebase continuation.
+    fn continue_reword_commit_with_output(
+        &self,
+        _commit_id: &CommitId,
+        _message: &str,
+    ) -> Result<RewordCommitOutcome> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "continuing a commit message edit is not implemented for this backend",
+        )))
+    }
+    /// Whether the paused operation is the message edit identified by these
+    /// arguments. An unrelated rebase must never be resumed as a signing retry.
+    fn reword_commit_in_progress(&self, _commit_id: &CommitId, _message: &str) -> Result<bool> {
+        Ok(false)
+    }
     /// Picks `entries` in order. Without `commit` every pick only merges into
     /// the index and worktree, and reword/squash/fixup steps are refused.
     fn interactive_cherry_pick_with_output(

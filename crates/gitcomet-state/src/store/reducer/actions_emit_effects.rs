@@ -776,43 +776,6 @@ pub(super) fn squash_commits(
     }]
 }
 
-pub(super) fn reword_commit(
-    inputs: &ReducerInputs,
-    state: &mut AppState,
-    repo_id: RepoId,
-    commit_id: gitcomet_core::domain::CommitId,
-    message: String,
-) -> Vec<Effect> {
-    let Some(repo_state) = state.repos.iter().find(|r| r.id == repo_id) else {
-        return Vec::new();
-    };
-    // Rewording rewrites history like a rebase, so it waits for any running
-    // history operation; this also drops a second submit of the same edit.
-    let refusal = if repo_state.history_rewrite_busy() {
-        Some("Wait for the running Git operation to finish, then edit the commit message.")
-    } else if message.trim().is_empty() {
-        Some("Enter the new commit message first.")
-    } else {
-        None
-    };
-    if let Some(refusal) = refusal {
-        super::util::push_notification(
-            inputs,
-            state,
-            crate::model::AppNotificationKind::Warning,
-            refusal.to_string(),
-        );
-        return Vec::new();
-    }
-    super::begin_local_action(state, repo_id);
-    vec![Effect::RepoCommand(RepoCommandEffect::RewordCommit {
-        repo_id,
-        commit_id,
-        message,
-        auth: None,
-    })]
-}
-
 pub(super) fn rebase(repo_id: RepoId, onto: String) -> Vec<Effect> {
     vec![Effect::RepoCommand(RepoCommandEffect::Rebase {
         repo_id,
@@ -1580,6 +1543,9 @@ pub(super) fn repo_command_finished(
             repo_state.sequencer_actions_in_flight.saturating_sub(1);
         repo_state.bump_ops_rev();
     }
+    if command_succeeded && matches!(command, RepoCommandKind::RebaseAbort) {
+        repo_state.reword.clear_continuation();
+    }
 
     if matches!(&command, RepoCommandKind::AddSubmodule { .. }) {
         repo_state.submodule_add_in_flight = None;
@@ -1621,6 +1587,13 @@ pub(super) fn repo_command_finished(
                 ..
             } = &command
             {
+                // A refresh started while signing was paused may still return
+                // the old history. Supersede it before selecting the rewritten
+                // id, or that stale page can prune the new selection.
+                repo_state.loads_in_flight.invalidate_log();
+                // Index builds also use the old snapshot until the fresh log
+                // arrives; they must not reconcile against rewritten selection.
+                repo_state.history_state.log_snapshot = None;
                 // The reworded commit and its descendants have new ids. Follow
                 // the reworded commit when it is the one being shown; another
                 // selection is left to the log reload, which prunes it if
@@ -1804,6 +1777,15 @@ pub(super) fn repo_command_finished(
     effects.extend(extra_effects);
     if let Some(commit_id) = reselect {
         effects.extend(super::effects::select_commit(state, repo_id, commit_id));
+        if let Some(repo) = state.repos.iter_mut().find(|repo| repo.id == repo_id) {
+            // This id has no row in the old history. Clear its row hints before
+            // the detail load captures the selection revision; the fresh page
+            // must not change that revision merely by clearing stale hints.
+            let mut selection = repo.history_state.multi_selection.clone();
+            selection.anchor_index = None;
+            selection.anchor_log_rev = None;
+            repo.set_commit_multi_selection(selection);
+        }
     }
     effects
 }

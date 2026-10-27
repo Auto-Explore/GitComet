@@ -751,8 +751,10 @@ fn reword_commit_emits_effect_and_counts_as_a_sequencer_command() {
     ));
     state.active_repo = Some(repo_id);
 
+    let request_id = crate::model::RewordRequestId::new();
     let reword = |message: &str| Msg::RewordCommit {
         repo_id,
+        request_id,
         commit_id: target.clone(),
         message: message.into(),
     };
@@ -764,8 +766,10 @@ fn reword_commit_emits_effect_and_counts_as_a_sequencer_command() {
                 repo_id: RepoId(1),
                 commit_id,
                 message,
+                resume: false,
                 auth: None,
-            })] if *commit_id == target && message == "New message"
+                request_id: actual_request,
+            })] if *commit_id == target && message == "New message" && *actual_request == request_id
         ),
         "{effects:?}"
     );
@@ -784,6 +788,7 @@ fn reword_commit_emits_effect_and_counts_as_a_sequencer_command() {
         Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
             repo_id,
             command: RepoCommandKind::RewordCommit {
+                request_id,
                 commit_id: target.clone(),
                 message: "New message".into(),
                 rebase_paused: false,
@@ -805,7 +810,17 @@ fn reword_commit_emits_effect_and_counts_as_a_sequencer_command() {
     );
 
     // A blank message never reaches the backend.
-    let effects = reduce(&mut repos, &id_alloc, &mut state, reword("  \n"));
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::RewordCommit {
+            repo_id,
+            request_id: crate::model::RewordRequestId::new(),
+            commit_id: target,
+            message: "  \n".into(),
+        },
+    );
     assert!(effects.is_empty(), "{effects:?}");
     assert_eq!(state.repos[0].local_actions_in_flight, 0);
 }
@@ -832,6 +847,7 @@ fn reword_commit_waits_for_a_running_history_operation() {
         &mut state,
         Msg::RewordCommit {
             repo_id,
+            request_id: crate::model::RewordRequestId::new(),
             commit_id: CommitId("4444444444444444444444444444444444444444".into()),
             message: "New message".into(),
         },
@@ -848,6 +864,22 @@ fn finish_reword(
     commit_id: &CommitId,
     rewritten_id: Option<CommitId>,
 ) -> Vec<Effect> {
+    let request_id = crate::model::RewordRequestId::new();
+    let started = reduce(
+        repos,
+        id_alloc,
+        state,
+        Msg::RewordCommit {
+            repo_id: RepoId(1),
+            request_id,
+            commit_id: commit_id.clone(),
+            message: "New message".into(),
+        },
+    );
+    assert!(matches!(
+        started.as_slice(),
+        [Effect::RepoCommand(RepoCommandEffect::RewordCommit { .. })]
+    ));
     reduce(
         repos,
         id_alloc,
@@ -855,6 +887,7 @@ fn finish_reword(
         Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
             repo_id: RepoId(1),
             command: RepoCommandKind::RewordCommit {
+                request_id,
                 commit_id: commit_id.clone(),
                 message: "New message".into(),
                 rebase_paused: false,
@@ -972,7 +1005,9 @@ fn reword_commit_finished_without_a_new_id_clears_the_reworded_selection() {
 #[test]
 fn reword_commit_retry_continues_a_paused_rebase_or_replays() {
     let commit_id = CommitId("3333333333333333333333333333333333333333".into());
+    let request_id = crate::model::RewordRequestId::new();
     let kind = |rebase_paused| RepoCommandKind::RewordCommit {
+        request_id,
         commit_id: commit_id.clone(),
         message: "New message".into(),
         rebase_paused,
@@ -983,14 +1018,14 @@ fn reword_commit_retry_continues_a_paused_rebase_or_replays() {
     assert!(
         matches!(
             &replay,
-            Some(Msg::RewordCommit { repo_id: RepoId(3), commit_id: id, message })
-                if *id == commit_id && message == "New message"
+            Some(Msg::RewordCommit { repo_id: RepoId(3), request_id: actual, commit_id: id, message })
+                if *id == commit_id && message == "New message" && *actual == request_id
         ),
         "{replay:?}"
     );
     let replay = crate::store::reducer::repo_command_replay_msg_for_test(RepoId(3), kind(true));
     assert!(
-        matches!(&replay, Some(Msg::RebaseContinue { repo_id: RepoId(3) })),
+        matches!(&replay, Some(Msg::ContinueRewordCommit { repo_id: RepoId(3), request_id: actual }) if *actual == request_id),
         "{replay:?}"
     );
 }

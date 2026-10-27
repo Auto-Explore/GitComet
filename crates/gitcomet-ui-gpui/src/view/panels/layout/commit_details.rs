@@ -22,7 +22,7 @@ impl DetailsPaneView {
         // frame or two, and this view has nothing to render without it.
         let has_worktree_selection = self.selected_worktree_summary().is_some();
         if let (Some(repo_id), true) = (active_repo_id, has_worktree_selection) {
-            self.retain_commit_reword_for(None);
+            self.retain_commit_reword_for(None, cx);
             return self.worktree_uncommitted_view(repo_id, cx);
         }
 
@@ -39,7 +39,7 @@ impl DetailsPaneView {
                 )
             });
         if let Some((repo_id, range, count)) = comparison {
-            self.retain_commit_reword_for(None);
+            self.retain_commit_reword_for(None, cx);
             return if range {
                 self.range_comparison_view(repo_id, cx)
             } else {
@@ -48,11 +48,11 @@ impl DetailsPaneView {
         }
 
         if let (Some(repo_id), Some(selected_id)) = (active_repo_id, selected_id) {
-            self.retain_commit_reword_for(Some((repo_id, &selected_id)));
+            self.retain_commit_reword_for(Some((repo_id, &selected_id)), cx);
             return self.single_commit_details_view(repo_id, selected_id, cx);
         }
 
-        self.retain_commit_reword_for(None);
+        self.retain_commit_reword_for(None, cx);
         self.status_sections_view(cx)
     }
 

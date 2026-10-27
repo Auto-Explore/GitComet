@@ -2,6 +2,9 @@
 
 use super::*;
 
+#[path = "commit_reword_lifecycle.rs"]
+mod reword_lifecycle;
+
 /// A window showing one commit's details, with the sha/date/parent fields
 /// populated. Returns the fields' expected text.
 fn commit_details_metadata_fixture(
@@ -1758,14 +1761,16 @@ fn rewordable_repo(
             parent_ids,
             files: vec![],
         }));
+    repo.prepare_commit_reword_position_for_test();
     repo
 }
 
 fn show_rewordable_commit(
     cx: &mut gpui::VisualTestContext,
     view: &gpui::Entity<crate::view::GitCometView>,
-    repo: gitcomet_state::model::RepoState,
+    mut repo: gitcomet_state::model::RepoState,
 ) {
+    repo.prepare_commit_reword_position_for_test();
     let next_state = app_state_with_repo(repo.clone(), repo.id);
     cx.update(|window, app| {
         view.update(app, |this, cx| {
@@ -1811,7 +1816,9 @@ fn commit_reword_blocker_explains_ineligible_commits() {
         _ => unreachable!(),
     };
     let blocker = |repo: &gitcomet_state::model::RepoState| {
-        crate::view::panels::commit_reword_blocker(repo, &details(repo))
+        let mut repo = repo.clone();
+        repo.prepare_commit_reword_position_for_test();
+        crate::view::panels::commit_reword_blocker(&repo, &details(&repo))
     };
 
     // HEAD can be amended over local changes; an older commit needs a clean
@@ -1943,6 +1950,7 @@ fn tracked_rewordable_repo(
         }),
         divergence: Some(gitcomet_core::domain::UpstreamDivergence { ahead, behind: 2 }),
     }]));
+    repo.prepare_commit_reword_position_for_test();
     repo
 }
 
@@ -2283,8 +2291,8 @@ fn updating_a_published_commit_asks_to_confirm_and_submits_once(cx: &mut gpui::T
     });
 }
 
-/// A submitted edit stays submitted while its auth prompt can still retry it,
-/// and is over once its result is in, even with the retry's rebase paused.
+/// Typed request status controls submission, independently of presentation
+/// logs, unrelated operations, and a rebase that remains paused.
 #[gpui::test]
 fn a_submitted_message_edit_waits_for_its_retry_and_not_for_a_paused_rebase(
     cx: &mut gpui::TestAppContext,
@@ -2300,14 +2308,14 @@ fn a_submitted_message_edit_waits_for_its_retry_and_not_for_a_paused_rebase(
         rewordable_repo(repo_id, REWORD_OLDER_SHA, "Older subject", false),
     );
     click_selector(cx, "commit_details_edit_message");
+    let request_id = gitcomet_state::model::RewordRequestId::new();
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.details_pane.update(cx, |pane, _cx| {
+            this.details_pane.update(cx, |pane, cx| {
                 pane.commit_reword.as_mut().unwrap().submitting =
-                    Some(crate::view::CommitRewordSubmission {
-                        log_seq: 0,
-                        logged: false,
-                    });
+                    Some(crate::view::CommitRewordSubmission { request_id });
+                pane.commit_reword_input
+                    .update(cx, |input, cx| input.set_read_only(true, cx));
             });
         });
     });
@@ -2321,47 +2329,30 @@ fn a_submitted_message_edit_waits_for_its_retry_and_not_for_a_paused_rebase(
                 .is_some_and(|draft| draft.submitting.is_some())
         })
     };
-    let failed_with = |prompt: bool| {
+    let failed_with = |status: gitcomet_state::model::RewordStatus| {
         let mut repo = rewordable_repo(repo_id, REWORD_OLDER_SHA, "Older subject", false);
         repo.rebase_in_progress = Loadable::Ready(true);
-        repo.ops_rev = 2;
-        repo.feedback_mut()
-            .push_command_result(gitcomet_state::model::CommandLogEntry {
-                time: std::time::SystemTime::UNIX_EPOCH,
-                ok: false,
-                command: "git rebase -i".into(),
-                summary: "Edit commit message failed:\n\nsigning failed".into(),
-                stdout: "".into(),
-                stderr: "".into(),
-                announce_success: true,
-                handled_by_auth_prompt: prompt,
-                failure_id: None,
-                hook_operation_id: None,
-            });
-        let mut state = (*app_state_with_repo(repo, repo_id)).clone();
-        if prompt {
-            state.auth_prompt = Some(gitcomet_state::model::AuthPromptState {
-                generation: 1,
-                challenge: None,
-                status: gitcomet_state::model::AuthPromptStatus::AwaitingInput,
-                kind: gitcomet_state::model::AuthPromptKind::Passphrase,
-                reason: "Enter the passphrase".into(),
-                operation: gitcomet_state::model::AuthRetryOperation::RepoCommand {
-                    repo_id,
-                    command: gitcomet_state::msg::RepoCommandKind::RewordCommit {
-                        commit_id: reword_commit_id(REWORD_OLDER_SHA),
-                        message: "New".into(),
-                        rebase_paused: true,
-                        rewritten_id: None,
-                    },
-                },
-            });
-        }
-        Arc::new(state)
+        repo.local_actions_in_flight = 1;
+        repo.reword.revision = if status.is_pending() { 1 } else { 2 };
+        Arc::make_mut(&mut repo.reword.requests).insert(
+            request_id,
+            gitcomet_state::model::RewordRequest::new(
+                reword_commit_id(REWORD_OLDER_SHA),
+                "New".into(),
+                status,
+            ),
+        );
+        app_state_with_repo(repo, repo_id)
     };
 
-    for (prompt, still_submitting) in [(true, true), (false, false)] {
-        let state = failed_with(prompt);
+    for (status, still_submitting) in [
+        (
+            gitcomet_state::model::RewordStatus::AwaitingAuthentication,
+            true,
+        ),
+        (gitcomet_state::model::RewordStatus::Failed, false),
+    ] {
+        let state = failed_with(status);
         cx.update(|window, app| {
             view.update(app, |this, cx| push_test_state(this, state, cx));
             let _ = window.draw(app);
@@ -2369,7 +2360,17 @@ fn a_submitted_message_edit_waits_for_its_retry_and_not_for_a_paused_rebase(
         assert_eq!(
             submitting(cx),
             still_submitting,
-            "auth prompt pending: {prompt}"
+            "request status: {status:?}"
+        );
+        assert_eq!(
+            cx.update(|_, app| view
+                .read(app)
+                .details_pane
+                .read(app)
+                .commit_reword_input
+                .read(app)
+                .is_read_only()),
+            still_submitting
         );
     }
     assert!(

@@ -92,6 +92,7 @@ pub struct HistoryState {
     pub multi_selection: CommitMultiSelection,
     selected_ids: Arc<FxHashSet<CommitId>>,
     squash_cache: Option<Arc<HistorySquashCache>>,
+    reword_position_cache: Option<Arc<CommitRewordPositionCache>>,
     /// Active "compare two points" selection: when two commits are selected (or
     /// a mark/compare pair is chosen), this holds the ordered `from`/`to` pair
     /// and the changed-file list between them. `None` when no comparison is
@@ -179,6 +180,25 @@ struct HistorySquashCache {
     plan: Option<gitcomet_core::squash::SquashPlan>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct CommitRewordPositionKey {
+    target: CommitId,
+    head: Option<CommitId>,
+    log_rev: u64,
+    snapshot: Option<gitcomet_core::services::HistorySnapshot>,
+    page: usize,
+    index: usize,
+}
+
+#[derive(Clone, Debug)]
+struct CommitRewordPositionCache {
+    key: CommitRewordPositionKey,
+    // Pin identities used by the key while older snapshots are still visible.
+    _page: Option<Shared<LogPage>>,
+    _index: Option<gitcomet_core::history_index::HistoryIndexHandle>,
+    position: gitcomet_core::squash::FirstParentPosition,
+}
+
 impl HistoryState {
     #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
@@ -231,6 +251,7 @@ impl Default for HistoryState {
             multi_selection: CommitMultiSelection::default(),
             selected_ids: Arc::new(FxHashSet::default()),
             squash_cache: None,
+            reword_position_cache: None,
             range_selection: None,
             worktree_selection: None,
             worktree_selection_rev: 0,
@@ -767,17 +788,89 @@ impl RepoState {
         )
     }
 
-    /// Where `commit_id` sits on HEAD's first-parent history, judged from the
-    /// loaded history like [`Self::history_squash_plan`].
+    fn commit_reword_position_key(&self) -> Option<CommitRewordPositionKey> {
+        Some(CommitRewordPositionKey {
+            target: self.history_state.selected_commit.clone()?,
+            head: self.head_commit_id(),
+            log_rev: self.log_rev,
+            snapshot: self.history_state.log_snapshot.clone(),
+            page: match &self.log {
+                Loadable::Ready(page) => Arc::as_ptr(page) as usize,
+                _ => 0,
+            },
+            index: self
+                .history_state
+                .indexed
+                .index
+                .as_ref()
+                .filter(|index| Some(&index.snapshot) == self.history_state.log_snapshot.as_ref())
+                .map_or(0, |index| Arc::as_ptr(index) as usize),
+        })
+    }
+
+    /// Walk the selected commit's topology on the store worker, once per
+    /// target, HEAD or topology change, before publishing the snapshot.
+    pub(crate) fn prepare_commit_reword_position(&mut self) {
+        let Some(key) = self.commit_reword_position_key() else {
+            self.history_state.reword_position_cache = None;
+            return;
+        };
+        if self
+            .history_state
+            .reword_position_cache
+            .as_ref()
+            .is_some_and(|cache| cache.key == key)
+        {
+            return;
+        }
+        let position = self.compute_commit_reword_position(&key.target, key.head.as_ref());
+        self.history_state.reword_position_cache = Some(Arc::new(CommitRewordPositionCache {
+            key,
+            _page: match &self.log {
+                Loadable::Ready(page) => Some(page.clone()),
+                _ => None,
+            },
+            _index: self.history_state.indexed.index.clone(),
+            position,
+        }));
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn prepare_commit_reword_position_for_test(&mut self) {
+        self.prepare_commit_reword_position();
+    }
+
+    /// The selected commit's prepared first-parent position. Rendering never
+    /// walks history: an absent or stale cache conservatively returns
+    /// `NotFound`, except that HEAD itself needs no topology lookup.
     pub fn first_parent_position_from_head(
         &self,
         commit_id: &CommitId,
     ) -> gitcomet_core::squash::FirstParentPosition {
         use gitcomet_core::squash::FirstParentPosition;
-        let Some(head) = self.head_commit_id() else {
+        if self.head_commit_id().as_ref() == Some(commit_id) {
+            return FirstParentPosition::Linear { distance: 0 };
+        }
+        if let Some(cache) = &self.history_state.reword_position_cache
+            && &cache.key.target == commit_id
+            && self.commit_reword_position_key().as_ref() == Some(&cache.key)
+        {
+            return cache.position;
+        }
+        FirstParentPosition::NotFound
+    }
+
+    fn compute_commit_reword_position(
+        &self,
+        commit_id: &CommitId,
+        head: Option<&CommitId>,
+    ) -> gitcomet_core::squash::FirstParentPosition {
+        use gitcomet_core::squash::FirstParentPosition;
+        let Some(head) = head else {
             return FirstParentPosition::NotFound;
         };
-        if head == *commit_id {
+        if head == commit_id {
             return FirstParentPosition::Linear { distance: 0 };
         }
         if let Some(index) = self
@@ -787,12 +880,12 @@ impl RepoState {
             .as_ref()
             .filter(|index| Some(&index.snapshot) == self.history_state.log_snapshot.as_ref())
         {
-            return gitcomet_core::squash::first_parent_position_indexed(index, &head, commit_id);
+            return gitcomet_core::squash::first_parent_position_indexed(index, head, commit_id);
         }
         let Loadable::Ready(page) = &self.log else {
             return FirstParentPosition::NotFound;
         };
-        gitcomet_core::squash::first_parent_position(&page.commits, &head, commit_id)
+        gitcomet_core::squash::first_parent_position(&page.commits, head, commit_id)
     }
 
     pub(crate) fn set_commit_multi_selection(&mut self, v: CommitMultiSelection) {
@@ -857,3 +950,6 @@ impl RepoState {
             self.history_state.commit_signatures_rev.wrapping_add(1);
     }
 }
+
+#[cfg(test)]
+mod reword_tests;

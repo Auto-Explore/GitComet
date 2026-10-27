@@ -1637,14 +1637,17 @@ fn schedule_reword_commit(
     repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
+    request_id: crate::model::RewordRequestId,
     commit_id: gitcomet_core::domain::CommitId,
     message: String,
+    resume: bool,
     auth: Option<StagedGitAuth>,
 ) {
     let command = RepoCommandKind::RewordCommit {
+        request_id,
         commit_id: commit_id.clone(),
         message: message.clone(),
-        rebase_paused: false,
+        rebase_paused: resume,
         rewritten_id: None,
     };
     schedule_repo_command_task(
@@ -1658,7 +1661,11 @@ fn schedule_reword_commit(
             let gate = super::super::mutation_gate::for_repo(repo.as_ref());
             let _mutation = gate.read().unwrap_or_else(|error| error.into_inner());
             let result = run_with_git_auth(auth, || {
-                repo.reword_commit_with_output(&commit_id, &message)
+                if resume {
+                    repo.continue_reword_commit_with_output(&commit_id, &message)
+                } else {
+                    repo.reword_commit_with_output(&commit_id, &message)
+                }
             });
             if let RepoCommandKind::RewordCommit {
                 rewritten_id,
@@ -1668,18 +1675,10 @@ fn schedule_reword_commit(
             {
                 match &result {
                     Ok(outcome) => *rewritten_id = outcome.rewritten_id.clone(),
-                    // Only a git failure can come from the reword's own
-                    // rebase: refusing to start over another operation is a
-                    // backend error, and the backend aborts every stop but
-                    // one the auth prompt's retry continues. A rebase still
-                    // in progress after a git failure is that one.
-                    Err(error) => {
-                        *rebase_paused = matches!(error.kind(), ErrorKind::Git(_))
-                            && repo
-                                .rebase_in_progress(
-                                    &gitcomet_core::services::CancellationToken::new(),
-                                )
-                                .unwrap_or(false);
+                    Err(_) => {
+                        *rebase_paused = repo
+                            .reword_commit_in_progress(&commit_id, &message)
+                            .unwrap_or(resume);
                     }
                 }
             }
@@ -2920,10 +2919,14 @@ pub(super) fn schedule(
         ),
         RepoCommandEffect::RewordCommit {
             repo_id,
+            request_id,
             commit_id,
             message,
+            resume,
             auth,
-        } => schedule_reword_commit(executor, repos, msg_tx, repo_id, commit_id, message, auth),
+        } => schedule_reword_commit(
+            executor, repos, msg_tx, repo_id, request_id, commit_id, message, resume, auth,
+        ),
         RepoCommandEffect::Rebase { repo_id, onto } => {
             schedule_rebase(executor, repos, msg_tx, repo_id, onto)
         }

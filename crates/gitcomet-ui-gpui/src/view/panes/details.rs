@@ -21,14 +21,13 @@ pub(in super::super) struct CommitRewordDraft {
     /// Set from dispatch until the reword and any retry of it are over, so
     /// it is submitted once.
     pub(in super::super) submitting: Option<CommitRewordSubmission>,
+    /// A paused update can be continued after its authentication prompt closes.
+    pub(in super::super) retained_request: Option<gitcomet_state::model::RewordRequestId>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(in super::super) struct CommitRewordSubmission {
-    /// The repository's `command_log_seq` when the reword was dispatched.
-    pub(in super::super) log_seq: u64,
-    /// Its result has been logged; a retry may still be pending.
-    pub(in super::super) logged: bool,
+    pub(in super::super) request_id: gitcomet_state::model::RewordRequestId,
 }
 
 /// The cached [`WorktreeFileListInputs`] and the scan they were derived from:
@@ -306,13 +305,6 @@ impl DetailsPaneView {
     fn notify_fingerprint(state: &AppState) -> u64 {
         let mut hasher = FxHasher::default();
         state.active_repo.hash(&mut hasher);
-        // A submitted message edit waits on its auth prompt.
-        state
-            .auth_prompt
-            .as_ref()
-            .map(|prompt| prompt.generation)
-            .hash(&mut hasher);
-
         if let Some(repo_id) = state.active_repo
             && let Some(repo) = state.repos.iter().find(|r| r.id == repo_id)
         {
@@ -330,6 +322,7 @@ impl DetailsPaneView {
                 .map(|snapshot| snapshot.revision)
                 .hash(&mut hasher);
             repo.ops_rev.hash(&mut hasher);
+            repo.reword.revision.hash(&mut hasher);
             let history = &repo.history_state;
             history.selected_commit_rev.hash(&mut hasher);
             // Loaded history rows show up only as a comparison's cards.
@@ -2525,9 +2518,7 @@ impl DetailsPaneView {
         });
 
         self.state = next;
-        // Seen here as well as at render, so a logged result is not missed
-        // once the window has acknowledged it.
-        self.advance_commit_reword_submission();
+        self.advance_commit_reword_submission(cx);
         self.commit_message_drafts
             .retain(|repo_id, _| self.state.repos.iter().any(|repo| repo.id == *repo_id));
 

@@ -108,10 +108,6 @@ fn uncommitted_changes_blocker(repo: &RepoState) -> Option<&'static str> {
     dirty.then_some("Commit or stash your changes to edit an older commit's message")
 }
 
-/// How the reword's results start in the command log, for success and failure
-/// alike.
-const COMMIT_REWORD_LOG_LABEL: &str = "Edit commit message";
-
 /// Whether `draft` would change the commit: not blank, and different from
 /// `original` beyond the surrounding whitespace git strips anyway.
 pub(in crate::view) fn commit_reword_submittable(original: &str, draft: &str) -> bool {
@@ -145,26 +141,35 @@ impl DetailsPaneView {
 
     /// Discards the draft unless it belongs to `shown`, the commit the pane
     /// is showing: selecting another commit or repository ends the edit.
-    pub(super) fn retain_commit_reword_for(&mut self, shown: Option<(RepoId, &CommitId)>) {
+    pub(super) fn retain_commit_reword_for(
+        &mut self,
+        shown: Option<(RepoId, &CommitId)>,
+        cx: &mut gpui::Context<Self>,
+    ) {
         if self
             .commit_reword
             .as_ref()
             .is_some_and(|draft| shown != Some((draft.repo_id, &draft.commit_id)))
         {
-            self.commit_reword = None;
+            self.dismiss_commit_reword(cx);
         }
-        self.advance_commit_reword_submission();
+        self.advance_commit_reword_submission(cx);
     }
 
-    /// Follows a submitted reword into the current state. It is over once
-    /// its own result is logged and nothing will retry it: no auth prompt
-    /// waiting to replay or continue it, and no retry running. A rebase the
-    /// retry left paused does not hold it, as the history-busy flag would.
-    pub(in crate::view) fn advance_commit_reword_submission(&mut self) {
+    /// Only this request's terminal status releases the submitted draft.
+    /// A missing record can simply mean dispatch has not reached the store.
+    pub(in crate::view) fn advance_commit_reword_submission(
+        &mut self,
+        cx: &mut gpui::Context<Self>,
+    ) {
         let Some(draft) = self.commit_reword.as_mut() else {
             return;
         };
-        let Some(submission) = draft.submitting.as_mut() else {
+        let Some(submission) = draft.submitting.or_else(|| {
+            draft
+                .retained_request
+                .map(|request_id| CommitRewordSubmission { request_id })
+        }) else {
             return;
         };
         let Some(repo) = self
@@ -175,23 +180,49 @@ impl DetailsPaneView {
         else {
             return;
         };
-        submission.logged |= repo
-            .feedback
-            .command_log_after(submission.log_seq)
-            .iter()
-            .any(|entry| entry.summary.starts_with(COMMIT_REWORD_LOG_LABEL));
-        let retry_pending = self.state.auth_prompt.as_ref().is_some_and(|prompt| {
-            matches!(
-                &prompt.operation,
-                gitcomet_state::model::AuthRetryOperation::RepoCommand {
-                    repo_id,
-                    command: gitcomet_state::msg::RepoCommandKind::RewordCommit { commit_id, .. },
-                } if *repo_id == draft.repo_id && *commit_id == draft.commit_id
-            )
-        });
-        if submission.logged && !retry_pending && repo.local_actions_in_flight == 0 {
-            draft.submitting = None;
+        let Some(request) = repo.reword.requests.get(&submission.request_id) else {
+            return;
+        };
+        if request.status.is_pending() {
+            draft.submitting = Some(submission);
+            self.commit_reword_input.update(cx, |input, cx| {
+                input.set_read_only(true, cx);
+            });
+            return;
         }
+        if request.status == gitcomet_state::model::RewordStatus::Completed {
+            self.dismiss_commit_reword(cx);
+        } else {
+            let resumable = repo.reword.can_resume(submission.request_id);
+            if !resumable {
+                self.store.dispatch(Msg::DismissRewordCommit {
+                    repo_id: draft.repo_id,
+                    request_id: submission.request_id,
+                });
+            }
+            draft.retained_request = resumable.then_some(submission.request_id);
+            draft.submitting = None;
+            self.commit_reword_input.update(cx, |input, cx| {
+                input.set_read_only(resumable, cx);
+            });
+        }
+    }
+
+    fn dismiss_commit_reword(&mut self, cx: &mut gpui::Context<Self>) {
+        if let Some(draft) = self.commit_reword.take()
+            && let Some(request_id) = draft
+                .submitting
+                .map(|submission| submission.request_id)
+                .or(draft.retained_request)
+        {
+            self.store.dispatch(Msg::DismissRewordCommit {
+                repo_id: draft.repo_id,
+                request_id,
+            });
+        }
+        self.commit_reword_input.update(cx, |input, cx| {
+            input.set_read_only(false, cx);
+        });
     }
 
     pub(super) fn commit_reword_is_editing(&self, repo_id: RepoId, commit_id: &CommitId) -> bool {
@@ -224,8 +255,10 @@ impl DetailsPaneView {
             submittable: false,
             confirming: None,
             submitting: None,
+            retained_request: None,
         });
         self.commit_reword_input.update(cx, |input, cx| {
+            input.set_read_only(false, cx);
             input.set_text(message, cx);
         });
         self.commit_reword_scroll
@@ -242,22 +275,31 @@ impl DetailsPaneView {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
-        if self.commit_reword.take().is_none() {
+        if self.commit_reword.is_none() {
             return;
         }
+        self.dismiss_commit_reword(cx);
         self.focus_history_panel(window, cx);
         cx.notify();
     }
 
-    /// Dispatches the reword. The draft stays until the selection moves to
-    /// the rewritten commit, so a failure leaves the edit in place. A
+    /// Dispatches the reword. Success closes the draft; a failure leaves the
+    /// edit in place. A
     /// published commit takes a second submit, after the first turned the
     /// button into "Confirm update"; editing the message withdraws it.
     pub(in crate::view) fn submit_commit_reword(&mut self, cx: &mut gpui::Context<Self>) -> bool {
         let Some(draft) = self.commit_reword.as_ref() else {
             return false;
         };
-        if draft.submitting.is_some() {
+        if draft.submitting.is_some()
+            || draft.retained_request.is_some_and(|request_id| {
+                self.state
+                    .repos
+                    .iter()
+                    .find(|repo| repo.id == draft.repo_id)
+                    .is_some_and(|repo| repo.reword.can_resume(request_id))
+            })
+        {
             return false;
         }
         let message = self.commit_reword_input.read(cx).text().to_string();
@@ -281,17 +323,20 @@ impl DetailsPaneView {
             return true;
         }
         draft.confirming = None;
-        draft.submitting = Some(CommitRewordSubmission {
-            log_seq: self
-                .state
-                .repos
-                .iter()
-                .find(|repo| repo.id == repo_id)
-                .map_or(0, |repo| repo.feedback.command_log_seq),
-            logged: false,
+        if let Some(request_id) = draft.retained_request.take() {
+            self.store.dispatch(Msg::DismissRewordCommit {
+                repo_id,
+                request_id,
+            });
+        }
+        let request_id = gitcomet_state::model::RewordRequestId::new();
+        draft.submitting = Some(CommitRewordSubmission { request_id });
+        self.commit_reword_input.update(cx, |input, cx| {
+            input.set_read_only(true, cx);
         });
         self.store.dispatch(Msg::RewordCommit {
             repo_id,
+            request_id,
             commit_id,
             message: message.trim().to_string(),
         });
@@ -385,6 +430,7 @@ impl DetailsPaneView {
         let draft = self.commit_reword.as_ref();
         let text = self.commit_reword_input.read(cx).text();
         let submitting = draft.is_some_and(|draft| draft.submitting.is_some());
+        let paused = !submitting && draft.is_some_and(|draft| draft.retained_request.is_some());
         let submittable =
             draft.is_some_and(|draft| commit_reword_submittable(&draft.original, text));
         let confirming = published_on.is_some()
@@ -420,13 +466,31 @@ impl DetailsPaneView {
                      history and will need a force push."
                 )))
         });
-        let cancel = components::Button::new("commit_reword_cancel", "Cancel")
-            .style(components::ButtonStyle::Outlined)
-            .on_click(theme, cx, |this, _e, window, cx| {
-                this.cancel_commit_reword(window, cx);
-            })
-            .debug_selector(|| "commit_reword_cancel".to_string())
-            .gitcomet_tooltip_keyed(theme, "Discard the edit".into(), vec!["Esc".into()]);
+        let cancel = components::Button::new(
+            "commit_reword_cancel",
+            if submitting || paused {
+                "Close editor"
+            } else {
+                "Cancel"
+            },
+        )
+        .style(components::ButtonStyle::Outlined)
+        .on_click(theme, cx, |this, _e, window, cx| {
+            this.cancel_commit_reword(window, cx);
+        })
+        .debug_selector(|| "commit_reword_cancel".to_string())
+        .gitcomet_tooltip_keyed(
+            theme,
+            if paused {
+                "Close the editor; the Git operation stays paused"
+            } else if submitting {
+                "Close the editor; the Git operation will continue"
+            } else {
+                "Discard the edit"
+            }
+            .into(),
+            vec!["Esc".into()],
+        );
         let (label, style, tooltip) = if confirming {
             (
                 "Confirm update",
@@ -451,7 +515,7 @@ impl DetailsPaneView {
                 svg_icon("icons/check.svg", icon_color, ui_scale.px(14.0)).into()
             })
             .style(style)
-            .disabled(submitting || blocker.is_some() || !submittable)
+            .disabled(submitting || paused || blocker.is_some() || !submittable)
             .on_click(theme, cx, |this, _e, _w, cx| {
                 let _ = this.submit_commit_reword(cx);
             })
@@ -476,6 +540,14 @@ impl DetailsPaneView {
                 }
             }))
             .child(input)
+            .when(paused, |editor| {
+                editor.child(
+                    div()
+                        .text_size(theme.ui_text(12.0))
+                        .text_color(theme.colors.foreground.secondary)
+                        .child("The update is paused. Continue or abort it before editing."),
+                )
+            })
             .children(warning)
             .child(
                 div()

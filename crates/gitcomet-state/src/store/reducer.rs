@@ -33,6 +33,7 @@ pub(super) mod prepared;
 mod repo_management;
 mod repo_watch;
 mod repository_preferences;
+mod reword;
 mod settings;
 mod submodule_trust;
 #[cfg(test)]
@@ -345,6 +346,7 @@ pub(crate) fn msg_requires_available_git(msg: &Msg) -> bool {
             | Msg::PrepareSquash { .. }
             | Msg::SquashCommits { .. }
             | Msg::RewordCommit { .. }
+            | Msg::ContinueRewordCommit { .. }
             | Msg::Rebase { .. }
             | Msg::RebaseContinue { .. }
             | Msg::RebaseAbort { .. }
@@ -620,6 +622,7 @@ fn finalize_reduced_state(state: &mut AppState, nav_push: Option<bool>) {
     effects::retire_orphaned_worktree_diffs(state);
     for repo in &mut state.repos {
         repo.prepare_history_squash_plan();
+        repo.prepare_commit_reword_position();
     }
     // A closed repository's leases go with it; releasing them later is a
     // no-op. Free when nothing is leased.
@@ -716,7 +719,15 @@ fn reduce_inner(
     state: &mut AppState,
     msg: Msg,
 ) -> Vec<Effect> {
-    if msg_requires_available_git(&msg) && !state.git_runtime.is_available() {
+    if msg_requires_available_git(&msg)
+        && !state.git_runtime.is_available()
+        && !matches!(
+            msg,
+            Msg::RewordCommit { .. }
+                | Msg::ContinueRewordCommit { .. }
+                | Msg::RebaseContinue { .. }
+        )
+    {
         return Vec::new();
     }
 
@@ -1836,14 +1847,39 @@ fn reduce_inner(
         ),
         Msg::RewordCommit {
             repo_id,
+            request_id,
             commit_id,
             message,
-        } => actions_emit_effects::reword_commit(inputs, state, repo_id, commit_id, message),
+        } => reword::start(inputs, state, repo_id, request_id, commit_id, message),
+        Msg::ContinueRewordCommit {
+            repo_id,
+            request_id,
+        } => reword::resume(inputs, state, repo_id, request_id),
+        Msg::DismissRewordCommit {
+            repo_id,
+            request_id,
+        } => {
+            if let Some(repo) = state.repos.iter_mut().find(|repo| repo.id == repo_id) {
+                repo.reword.dismiss(request_id);
+            }
+            Vec::new()
+        }
         Msg::Rebase { repo_id, onto } => {
             begin_local_action(state, repo_id);
             actions_emit_effects::rebase(repo_id, onto)
         }
         Msg::RebaseContinue { repo_id } => {
+            if let Some(request_id) = state
+                .repos
+                .iter()
+                .find(|repo| repo.id == repo_id)
+                .and_then(|repo| repo.reword.continuation)
+            {
+                return reword::resume(inputs, state, repo_id, request_id);
+            }
+            if !state.git_runtime.is_available() {
+                return Vec::new();
+            }
             if sequencer_step_blocked(inputs, state, repo_id) {
                 return Vec::new();
             }

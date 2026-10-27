@@ -500,6 +500,7 @@ pub(super) fn rebase_state_loaded(
     result: std::result::Result<SequencerState, Error>,
 ) -> Vec<Effect> {
     let mut effects = Vec::new();
+    let mut ended_reword = None;
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
         let (sequencer_value, rebase_value) = match result {
             Ok(v) => (
@@ -516,7 +517,22 @@ pub(super) fn rebase_state_loaded(
         repo_state.set_rebase_in_progress(rebase_value);
         if repo_state.loads_in_flight.finish(LoadKind::RebaseState) {
             effects.push(Effect::LoadRebaseState { repo_id });
+        } else if repo_state.sequencer_actions_in_flight == 0
+            && matches!(
+                repo_state.sequencer_state,
+                Loadable::Ready(SequencerState::None)
+            )
+        {
+            // A fresh read can observe an abort/completion performed outside
+            // the app. Do not keep its old editor frozen or its auth prompt
+            // replayable. A queued reload or active command makes this read
+            // too old to retire the continuation.
+            ended_reword = repo_state.reword.continuation;
+            repo_state.reword.clear_continuation();
         }
+    }
+    if let Some(request_id) = ended_reword {
+        super::auth::discard_reword_auth_prompt(state, repo_id, request_id);
     }
     effects
 }
@@ -792,8 +808,16 @@ pub(super) fn log_loaded(
             // quadratic on every reload, and reloads arrive in bursts.
             let page_ids: FxHashSet<&str> = page.commits.iter().map(|c| c.id.as_ref()).collect();
             let reveal_target = repo_state.history_state.reveal_target.clone();
+            let reword_target = repo_state
+                .history_state
+                .selected_commit
+                .as_ref()
+                .filter(|id| repo_state.reword.retains_selected_commit(id))
+                .cloned();
             let survives = |id: &gitcomet_core::domain::CommitId| {
-                reveal_target.as_ref() == Some(id) || page_ids.contains(id.as_ref())
+                reveal_target.as_ref() == Some(id)
+                    || reword_target.as_ref() == Some(id)
+                    || page_ids.contains(id.as_ref())
             };
 
             let mut next = repo_state.history_state.multi_selection.clone();
@@ -814,6 +838,8 @@ pub(super) fn log_loaded(
             // A reveal's target is exempt: it is deliberately selected ahead of
             // the page that will contain it, and a scope switch mid-reveal
             // restarts the log from its first page.
+            // An owned reword's target also survives until continuation settles;
+            // signing a later descendant may pause after replacing that target.
             let focus_gone = repo_state
                 .history_state
                 .selected_commit

@@ -1090,8 +1090,18 @@ pub enum Msg {
     /// linear first-parent history. The backend re-validates the target.
     RewordCommit {
         repo_id: RepoId,
+        request_id: crate::model::RewordRequestId,
         commit_id: CommitId,
         message: String,
+    },
+    ContinueRewordCommit {
+        repo_id: RepoId,
+        request_id: crate::model::RewordRequestId,
+    },
+    /// Releases the editor's acknowledgment; does not cancel Git work.
+    DismissRewordCommit {
+        repo_id: RepoId,
+        request_id: crate::model::RewordRequestId,
     },
     Rebase {
         repo_id: RepoId,

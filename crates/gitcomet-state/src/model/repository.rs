@@ -90,6 +90,7 @@ pub struct RepoState {
 
     pub open: Loadable<()>,
     pub history_state: HistoryState,
+    pub reword: super::RewordState,
     pub head_branch: Loadable<String>,
     pub detached_head_commit: Option<CommitId>,
     pub head_branch_rev: u64,
@@ -347,6 +348,7 @@ impl RepoState {
             maintenance: RepoMaintenanceState::default(),
             open: Loadable::Loading,
             history_state: HistoryState::default(),
+            reword: super::RewordState::default(),
             head_branch: Loadable::NotLoaded,
             detached_head_commit: None,
             head_branch_rev: 0,
