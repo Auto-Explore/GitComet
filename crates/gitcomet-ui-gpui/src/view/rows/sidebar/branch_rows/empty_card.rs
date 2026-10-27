@@ -3,8 +3,8 @@
 //! so the card is drawn as `EMPTY_CARD_ROWS` slices that join into one outline.
 
 use super::*;
-use crate::view::commands::Command;
 use crate::view::branch_sidebar::{EMPTY_CARD_ROWS, EmptySection};
+use crate::view::commands::Command;
 
 const EMPTY_CARD_TOP_GAP_PX: f32 = 8.0;
 

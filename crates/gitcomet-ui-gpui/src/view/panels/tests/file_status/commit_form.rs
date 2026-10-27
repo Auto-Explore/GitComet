@@ -87,8 +87,9 @@ fn cached_commit_form_caret_tracks_wrapped_growth_and_shrink(cx: &mut gpui::Test
         for _ in 0..4 {
             crate::test_support::refresh_and_draw(cx);
         }
-        let mut heights = [px(0.0); 3];
-        let mut two_row_end = 0;
+        // The input starts four rows tall, so growth begins at the fifth row.
+        let mut heights = [px(0.0); 6];
+        let mut five_row_end = 0;
         let message = "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu";
         for (index, word) in message
             .split_whitespace()
@@ -101,27 +102,27 @@ fn cached_commit_form_caret_tracks_wrapped_growth_and_shrink(cx: &mut gpui::Test
             }
             cx.simulate_input(word);
             let rows = draw_and_assert_commit_end_caret(&input, cx);
-            assert!(rows <= 3, "fixture must pass through each row");
+            assert!(rows <= 6, "fixture must pass through each row");
             heights[rows - 1] = scroll.bounds().size.height;
-            if rows == 2 {
-                two_row_end = cx.update(|_, app| input.read(app).text().encode_utf16().count());
+            if rows == 5 {
+                five_row_end = cx.update(|_, app| input.read(app).text().encode_utf16().count());
             }
-            if rows == 3 {
+            if rows == 6 {
                 break;
             }
         }
         assert!(
-            heights[1] > heights[0] && heights[2] > heights[1],
+            heights[3] == heights[0] && heights[4] > heights[3] && heights[5] > heights[4],
             "commit input must grow: {heights:?}"
         );
         cx.update(|window, app| {
             input.update(app, |input, cx| {
                 let end = input.text().encode_utf16().count();
-                input.replace_text_in_range(Some(two_row_end..end), "", window, cx);
+                input.replace_text_in_range(Some(five_row_end..end), "", window, cx);
             })
         });
-        assert_eq!(draw_and_assert_commit_end_caret(&input, cx), 2);
-        assert_eq!(scroll.bounds().size.height, heights[1]);
+        assert_eq!(draw_and_assert_commit_end_caret(&input, cx), 5);
+        assert_eq!(scroll.bounds().size.height, heights[4]);
     }
 }
 

@@ -117,7 +117,16 @@ impl DetailsPaneView {
                     .flex_1()
                     .min_h(px(0.0))
                     .child(status_sections)
-                    .child(div().px_2().py_2().child(self.commit_box(cx)))
+                    .child(
+                        // A rule above the commit box, in the same hairline as
+                        // the pane dividers.
+                        div()
+                            .px_2()
+                            .py_2()
+                            .border_t_1()
+                            .border_color(v.theme.colors.stroke.subtle)
+                            .child(self.commit_box(cx)),
+                    )
                     .into_any_element()
             } else {
                 components::empty_state(v.theme, "Changes", "No repository selected.")
@@ -893,7 +902,7 @@ impl DetailsPaneView {
                 id,
                 components::ResizeGripAxis::Horizontal,
                 dragging,
-                Some(theme.colors.stroke.default),
+                Some(theme.colors.stroke.subtle),
             ))
             .on_mouse_down(
                 MouseButton::Left,

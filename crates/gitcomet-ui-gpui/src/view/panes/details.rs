@@ -415,9 +415,12 @@ impl DetailsPaneView {
         let commit_message_input = cx.new(|cx| {
             let mut input = components::TextInput::new(
                 components::TextInputOptions {
-                    placeholder: "Enter commit message".into(),
+                    placeholder: "What changed and why".into(),
                     multiline: true,
                     soft_wrap: true,
+                    // The commit box draws the card around the input.
+                    chromeless: true,
+                    min_lines: 4,
                     ..Default::default()
                 },
                 window,
@@ -839,6 +842,17 @@ impl DetailsPaneView {
             self.prefill_commit_message_for_amend(cx);
         }
         cx.notify();
+    }
+
+    /// Toggle amend from the commit box and keep the rest of the window (the
+    /// popover host mirrors the flag) in step.
+    pub(in super::super) fn toggle_commit_amend(&mut self, cx: &mut gpui::Context<Self>) {
+        let enabled = !self.commit_amend_enabled;
+        self.set_commit_amend_enabled(enabled, cx);
+        let root_view = self.root_view.clone();
+        cx.defer(move |cx| {
+            let _ = root_view.update(cx, |root, cx| root.set_commit_amend_enabled(enabled, cx));
+        });
     }
 
     fn commit_message_is_empty(&self, cx: &gpui::Context<Self>) -> bool {
