@@ -89,6 +89,116 @@ fn execution_journal_preserves_accepted_nonzero_exit_and_spawn_failure() {
         }
     ));
 }
+
+#[test]
+fn execution_journal_records_native_results_and_initiating_action() {
+    use gitcomet_core::git_execution_log::context::{ExecutionContext, UiSurface};
+    use gitcomet_core::git_execution_log::{ExecutionKind, GitExecutionLog, RepoLogKey};
+    use gitcomet_core::services::GitBackend as _;
+    let root = tempfile::tempdir().unwrap();
+    assert!(
+        git_workdir_cmd_for(root.path())
+            .args(["init", "--quiet"])
+            .status()
+            .unwrap()
+            .success()
+    );
+    let repo = crate::GixBackend.open(root.path()).unwrap();
+    let key = RepoLogKey::new(root.path());
+    GitExecutionLog::global().clear(&key);
+    let cause = ExecutionContext::ui(UiSurface::Button, "toolbar.refresh");
+    let _scope = cause.attach();
+    let cancellation = CancellationToken::new();
+    repo.status(&cancellation).unwrap();
+    repo.list_tags(&cancellation).unwrap();
+    assert!(
+        repo.resolve_commit(&gitcomet_core::domain::CommitId("refs/heads/absent".into()))
+            .is_err()
+    );
+    let entries = GitExecutionLog::global().snapshot(&key);
+    assert_eq!(entries.len(), 3);
+    assert!(entries.iter().all(|entry| entry.kind == ExecutionKind::Gix));
+    assert!(
+        entries
+            .iter()
+            .all(|entry| entry.context.action_id == cause.action_id)
+    );
+    assert!(entries[0].is_failure());
+    assert!(!entries[1].is_failure());
+    assert!(!entries[2].is_failure());
+}
+
+#[test]
+fn execution_journal_preserves_failed_native_parent_through_successful_cli_fallback() {
+    use gitcomet_core::git_execution_log::{self, GitExecutionLog, RepoLogKey};
+    let root = tempfile::tempdir().unwrap();
+    let key = RepoLogKey::new(root.path());
+    let result = git_execution_log::run_native_with_fallback(
+        &key,
+        "Native query",
+        || Err(Error::new(ErrorKind::Backend("native query failed".into()))),
+        |_| {
+            let mut command = git_workdir_cmd_for(root.path());
+            command.arg("--version");
+            run_git_capture(command, "CLI fallback")
+        },
+    )
+    .unwrap();
+    assert!(result.contains("git version"));
+    let entries = GitExecutionLog::global().snapshot(&key);
+    assert_eq!(entries.len(), 2);
+    assert!(!entries[0].is_failure());
+    assert!(entries[1].is_failure());
+    assert_eq!(entries[0].context.action_id, entries[1].context.action_id);
+    assert_eq!(entries[0].context.parent_execution, Some(entries[1].id));
+}
+
+#[test]
+fn execution_journal_records_history_build_on_shared_worker_and_skips_cached_build() {
+    use gitcomet_core::git_execution_log::context::{ExecutionContext, UiSurface};
+    use gitcomet_core::git_execution_log::{GitExecutionLog, RepoLogKey};
+    use gitcomet_core::services::GitBackend as _;
+    let root = tempfile::tempdir().unwrap();
+    assert!(
+        git_workdir_cmd_for(root.path())
+            .args(["init", "--quiet"])
+            .status()
+            .unwrap()
+            .success()
+    );
+    let repo = crate::GixBackend.open(root.path()).unwrap();
+    let key = RepoLogKey::new(root.path());
+    GitExecutionLog::global().clear(&key);
+    let cause = ExecutionContext::ui(UiSurface::CommandPalette, "reload history");
+    let _scope = cause.attach();
+    let token = CancellationToken::new();
+    let first = repo
+        .build_history_index(
+            gitcomet_core::domain::HistoryMode::FullReachable,
+            None,
+            &token,
+            &mut |_| {},
+        )
+        .unwrap()
+        .unwrap();
+    let entries = GitExecutionLog::global().snapshot(&key);
+    assert_eq!(entries.len(), 1);
+    assert!(entries[0].command.contains("Build history index"));
+    assert!(entries[0].thread.contains("shared-history"));
+    assert_eq!(entries[0].context.action_id, cause.action_id);
+    assert!(!entries[0].is_failure());
+    let second = repo
+        .build_history_index(
+            gitcomet_core::domain::HistoryMode::FullReachable,
+            None,
+            &token,
+            &mut |_| {},
+        )
+        .unwrap()
+        .unwrap();
+    assert!(Arc::ptr_eq(&first, &second));
+    assert_eq!(GitExecutionLog::global().snapshot(&key).len(), 1);
+}
 use crate::test_support::git_success;
 
 #[cfg(windows)]

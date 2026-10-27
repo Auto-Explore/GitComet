@@ -327,7 +327,9 @@ impl Drop for Request {
 type Job = Box<dyn FnOnce() + Send>;
 fn queue(job: Job) -> Result<()> {
     static QUEUE: OnceLock<mpsc::Sender<Job>> = OnceLock::new();
-    let job = Box::new(gitcomet_core::op_trace::wrap_task("shared-history", job));
+    let job = Box::new(gitcomet_core::git_execution_log::context::wrap_task(
+        gitcomet_core::op_trace::wrap_task("shared-history", job),
+    ));
     QUEUE
         .get_or_init(|| {
             let (tx, rx) = mpsc::channel::<Job>();

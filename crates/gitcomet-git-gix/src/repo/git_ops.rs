@@ -81,17 +81,22 @@ pub(super) fn head_upstream_divergence(
 impl GixRepo {
     pub(super) fn current_branch_impl(&self) -> Result<String> {
         if crate::refs::backend(&self.repo())? == crate::refs::RefBackend::Reftable {
-            return self.current_branch_gix();
+            return self.record_native("Current branch", || self.current_branch_gix());
         }
-        self.current_branch_gix().or_else(|gix_err| {
-            self.current_branch_cli().map_err(|cli_err| {
-                BranchFallbackError::Current {
-                    gix: gix_err,
-                    cli: cli_err,
-                }
-                .into_error(&self.spec.workdir)
-            })
-        })
+        gitcomet_core::git_execution_log::run_native_with_fallback(
+            &self.execution_log_key,
+            "Current branch",
+            || self.current_branch_gix(),
+            |gix_err| {
+                self.current_branch_cli().map_err(|cli_err| {
+                    BranchFallbackError::Current {
+                        gix: gix_err,
+                        cli: cli_err,
+                    }
+                    .into_error(&self.spec.workdir)
+                })
+            },
+        )
     }
 
     fn branch_tracking_config_present(&self) -> Result<bool> {

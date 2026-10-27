@@ -577,90 +577,92 @@ impl GixRepo {
         author: Option<&AuthorFilter>,
         mut chunks: Option<&mut ChunkEmitter<'_>>,
     ) -> Result<LogPage> {
-        if tips.is_empty() {
-            return Ok(empty_log_page());
-        }
+        self.record_native(&format!("History page ({mode:?}, limit {limit})"), || {
+            if tips.is_empty() {
+                return Ok(empty_log_page());
+            }
 
-        let generation = shared.mapping_id;
-        let cached_walk_state = cursor
-            .and_then(|cursor| cursor.resume_token.as_deref())
-            .and_then(|token| {
-                self.take_log_paged_walk(token, mode, &tips, shallow, author, generation)
-            });
+            let generation = shared.mapping_id;
+            let cached_walk_state = cursor
+                .and_then(|cursor| cursor.resume_token.as_deref())
+                .and_then(|token| {
+                    self.take_log_paged_walk(token, mode, &tips, shallow, author, generation)
+                });
 
-        // Tokens go stale on cache eviction or a change of tips, and then the
-        // walk has to be rebuilt. A first-parent cursor carries `resume_from`,
-        // which names the next commit outright, so that walk restarts there;
-        // anything else restarts at the tips and skips forward to `last_seen`.
-        // Only first-parent walks may read it: on any other mode the commit it
-        // names is one of many at that depth, and starting there would drop
-        // every branch beside it.
-        let resume_tip = cursor
-            .filter(|_| mode == HistoryMode::FirstParent)
-            .and_then(|cursor| cursor.resume_from.as_ref())
-            .and_then(|id| object_id_from_commit_id(id, tips[0].kind()));
-        let (mut walk_state, mut cursor_gate) = match (cached_walk_state, resume_tip) {
-            (Some(walk_state), _) => (walk_state, None),
-            (None, Some(resume_tip)) => (
-                new_log_paged_walk(
-                    store,
-                    [resume_tip],
-                    mode,
-                    shallow,
-                    cancellation,
-                    chunks.as_deref_mut(),
-                    Some((&shared.topology, shared.id)),
-                )?,
-                None,
-            ),
-            (None, None) => (
-                new_log_paged_walk(
-                    store,
-                    tips.iter().copied(),
-                    mode,
-                    shallow,
-                    cancellation,
-                    chunks.as_deref_mut(),
-                    Some((&shared.topology, shared.id)),
-                )?,
-                cursor.map(|cursor| CursorGate::new(Some(cursor))),
-            ),
-        };
-        // A parked walk outlives the request that created it. Rebind the lookup
-        // hook before resuming so an old token cannot poison this page, and so
-        // this page's cancellation reaches work performed inside gix.
-        walk_state.cancellation.replace(cancellation);
-
-        let (commits, has_more) = log_page_from_paged_walk_state(
-            store,
-            &mut walk_state,
-            limit,
-            cursor_gate.as_mut(),
-            cancellation,
-            author,
-            chunks,
-            |info| mode_includes(mode, info.parent_ids.len()),
-        )?;
-
-        let next_cursor = has_more
-            .then(|| commits.last())
-            .flatten()
-            .map(|commit| LogCursor {
-                last_seen: commit.id.clone(),
-                resume_from: None,
-                resume_token: Some(
-                    self.store_log_paged_walk(mode, &tips, shallow, author, walk_state, generation),
+            // Tokens go stale on cache eviction or a change of tips, and then the
+            // walk has to be rebuilt. A first-parent cursor carries `resume_from`,
+            // which names the next commit outright, so that walk restarts there;
+            // anything else restarts at the tips and skips forward to `last_seen`.
+            // Only first-parent walks may read it: on any other mode the commit it
+            // names is one of many at that depth, and starting there would drop
+            // every branch beside it.
+            let resume_tip = cursor
+                .filter(|_| mode == HistoryMode::FirstParent)
+                .and_then(|cursor| cursor.resume_from.as_ref())
+                .and_then(|id| object_id_from_commit_id(id, tips[0].kind()));
+            let (mut walk_state, mut cursor_gate) = match (cached_walk_state, resume_tip) {
+                (Some(walk_state), _) => (walk_state, None),
+                (None, Some(resume_tip)) => (
+                    new_log_paged_walk(
+                        store,
+                        [resume_tip],
+                        mode,
+                        shallow,
+                        cancellation,
+                        chunks.as_deref_mut(),
+                        Some((&shared.topology, shared.id)),
+                    )?,
+                    None,
                 ),
-            });
-        let mut page = LogPage {
-            commits,
-            next_cursor,
-        };
-        if mode == HistoryMode::FirstParent {
-            // A second way back into the history, for when the token is gone.
-            apply_first_parent_resume_hint(&mut page);
-        }
-        Ok(page)
+                (None, None) => (
+                    new_log_paged_walk(
+                        store,
+                        tips.iter().copied(),
+                        mode,
+                        shallow,
+                        cancellation,
+                        chunks.as_deref_mut(),
+                        Some((&shared.topology, shared.id)),
+                    )?,
+                    cursor.map(|cursor| CursorGate::new(Some(cursor))),
+                ),
+            };
+            // A parked walk outlives the request that created it. Rebind the lookup
+            // hook before resuming so an old token cannot poison this page, and so
+            // this page's cancellation reaches work performed inside gix.
+            walk_state.cancellation.replace(cancellation);
+
+            let (commits, has_more) = log_page_from_paged_walk_state(
+                store,
+                &mut walk_state,
+                limit,
+                cursor_gate.as_mut(),
+                cancellation,
+                author,
+                chunks,
+                |info| mode_includes(mode, info.parent_ids.len()),
+            )?;
+
+            let next_cursor = has_more
+                .then(|| commits.last())
+                .flatten()
+                .map(|commit| LogCursor {
+                    last_seen: commit.id.clone(),
+                    resume_from: None,
+                    resume_token: Some(self.store_log_paged_walk(
+                        mode, &tips, shallow, author, walk_state, generation,
+                    )),
+                });
+            let mut page = LogPage {
+                commits,
+                next_cursor,
+            };
+            if mode == HistoryMode::FirstParent {
+                // A second way back into the history, for when the token is gone.
+                apply_first_parent_resume_hint(&mut page);
+            }
+            Ok(page)
+        })
     }
 
     pub(super) fn log_history_mode_page_impl_inner(

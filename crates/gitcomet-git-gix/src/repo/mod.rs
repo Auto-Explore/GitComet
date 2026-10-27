@@ -415,6 +415,7 @@ pub(crate) struct GixRepo {
     private_store_scope: u64,
     pub(crate) options: gitcomet_core::services::RepositoryOptions,
     spec: RepoSpec,
+    execution_log_key: gitcomet_core::git_execution_log::RepoLogKey,
     store: std::sync::RwLock<RepoStore>,
     config_repo: std::sync::Mutex<config::ConfigRepo>,
     gitlink_status_capability: std::sync::Mutex<Option<GitlinkStatusCapabilityCacheEntry>>,
@@ -475,6 +476,7 @@ impl GixRepo {
             conversion_preview: Default::default(),
             private_store_scope,
             options: options.clone(),
+            execution_log_key: gitcomet_core::git_execution_log::RepoLogKey::new(&workdir),
             spec: RepoSpec { workdir },
             store: std::sync::RwLock::new(RepoStore {
                 repo,
@@ -506,6 +508,11 @@ impl GixRepo {
     /// Returns a `Command` pre-configured with `git -C <workdir>`.
     pub(super) fn git_workdir_cmd(&self) -> Command {
         util_git_workdir_cmd_for(&self.spec.workdir)
+    }
+
+    #[track_caller]
+    fn record_native<T>(&self, operation: &str, run: impl FnOnce() -> Result<T>) -> Result<T> {
+        gitcomet_core::git_execution_log::run_native(&self.execution_log_key, operation, run)
     }
 
     /// A thread-local handle for one operation.
@@ -949,8 +956,10 @@ impl GitRepository for GixRepo {
     }
 
     fn commit_details(&self, id: &CommitId) -> Result<CommitDetails> {
-        let _operation = self.operation_lease()?;
-        self.commit_details_impl(id)
+        self.record_native(&format!("Commit details {id}"), || {
+            let _operation = self.operation_lease()?;
+            self.commit_details_impl(id)
+        })
     }
 
     fn verify_commit_signatures(
@@ -964,8 +973,10 @@ impl GitRepository for GixRepo {
     }
 
     fn resolve_commit(&self, reference: &CommitId) -> Result<Commit> {
-        let _operation = self.operation_lease()?;
-        self.resolve_commit_impl(reference)
+        self.record_native(&format!("Resolve commit {reference}"), || {
+            let _operation = self.operation_lease()?;
+            self.resolve_commit_impl(reference)
+        })
     }
 
     fn compare_files(
@@ -975,21 +986,25 @@ impl GitRepository for GixRepo {
         options: &gitcomet_core::services::ComparisonOptions,
         cancellation: &CancellationToken,
     ) -> Result<gitcomet_core::services::Comparison> {
-        let _operation = self.operation_lease()?;
-        if to.is_none() {
-            self.require_working_tree()?;
-        }
-        self.compare_files_impl(from, to, options, cancellation)
+        self.record_native("Compare files", || {
+            let _operation = self.operation_lease()?;
+            if to.is_none() {
+                self.require_working_tree()?;
+            }
+            self.compare_files_impl(from, to, options, cancellation)
+        })
     }
 
     fn uncommitted_line_stats(
         &self,
         cancellation: &CancellationToken,
     ) -> Result<gitcomet_core::domain::UncommittedLineStats> {
-        let _operation = self.operation_lease()?;
-        self.require_working_tree()?;
-        let _scope = git_ops_trace::scope(GitOpTraceKind::Diff);
-        self.uncommitted_line_stats_impl(cancellation)
+        self.record_native("Uncommitted line statistics", || {
+            let _operation = self.operation_lease()?;
+            self.require_working_tree()?;
+            let _scope = git_ops_trace::scope(GitOpTraceKind::Diff);
+            self.uncommitted_line_stats_impl(cancellation)
+        })
     }
 
     fn uncommitted_line_stats_for_status(
@@ -997,18 +1012,22 @@ impl GitRepository for GixRepo {
         status: &RepoStatus,
         cancellation: &CancellationToken,
     ) -> Result<gitcomet_core::domain::UncommittedLineStats> {
-        let _operation = self.operation_lease()?;
-        self.require_working_tree()?;
-        let _scope = git_ops_trace::scope(GitOpTraceKind::Diff);
-        self.line_stats_for_entries_impl(&status.unstaged, cancellation)
+        self.record_native("Uncommitted line statistics", || {
+            let _operation = self.operation_lease()?;
+            self.require_working_tree()?;
+            let _scope = git_ops_trace::scope(GitOpTraceKind::Diff);
+            self.line_stats_for_entries_impl(&status.unstaged, cancellation)
+        })
     }
 
     fn large_file_support(
         &self,
         cancellation: &CancellationToken,
     ) -> Result<gitcomet_core::large_files::LargeFileSupport> {
-        let _operation = self.operation_lease()?;
-        self.large_file_support_impl(cancellation)
+        self.record_native("Large-file support", || {
+            let _operation = self.operation_lease()?;
+            self.large_file_support_impl(cancellation)
+        })
     }
 
     fn uncommitted_large_files_for_status(
@@ -1016,9 +1035,11 @@ impl GitRepository for GixRepo {
         status: &RepoStatus,
         cancellation: &CancellationToken,
     ) -> Result<gitcomet_core::large_files::UncommittedLargeFiles> {
-        let _operation = self.operation_lease()?;
-        self.require_working_tree()?;
-        self.uncommitted_large_files_impl(status, cancellation)
+        self.record_native("Uncommitted large files", || {
+            let _operation = self.operation_lease()?;
+            self.require_working_tree()?;
+            self.uncommitted_large_files_impl(status, cancellation)
+        })
     }
 
     fn run_large_file_command(
@@ -1060,23 +1081,31 @@ impl GitRepository for GixRepo {
     }
 
     fn commit_messages(&self, ids: &[CommitId]) -> Result<Vec<String>> {
-        let _operation = self.operation_lease()?;
-        self.commit_messages_impl(ids)
+        self.record_native("Commit messages", || {
+            let _operation = self.operation_lease()?;
+            self.commit_messages_impl(ids)
+        })
     }
 
     fn topologically_order_commits(&self, ids: &[CommitId]) -> Result<Vec<CommitId>> {
-        let _operation = self.operation_lease()?;
-        self.topologically_order_commits_impl(ids)
+        self.record_native("Order commits", || {
+            let _operation = self.operation_lease()?;
+            self.topologically_order_commits_impl(ids)
+        })
     }
 
     fn recent_commit_messages(&self, limit: usize) -> Result<Vec<RecentCommitMessage>> {
-        let _operation = self.operation_lease()?;
-        self.recent_commit_messages_impl(limit)
+        self.record_native("Recent commit messages", || {
+            let _operation = self.operation_lease()?;
+            self.recent_commit_messages_impl(limit)
+        })
     }
 
     fn reflog_head(&self, limit: usize) -> Result<Vec<ReflogEntry>> {
-        let _operation = self.operation_lease()?;
-        self.reflog_head_impl(limit)
+        self.record_native("Reflog", || {
+            let _operation = self.operation_lease()?;
+            self.reflog_head_impl(limit)
+        })
     }
 
     fn current_branch(&self, cancellation: &CancellationToken) -> Result<String> {
@@ -1088,23 +1117,29 @@ impl GitRepository for GixRepo {
     }
 
     fn head_commit_id(&self) -> Result<Option<CommitId>> {
-        let _operation = self.operation_lease()?;
-        self.head_commit_id_impl()
+        self.record_native("HEAD commit", || {
+            let _operation = self.operation_lease()?;
+            self.head_commit_id_impl()
+        })
     }
 
     fn list_branches(&self, cancellation: &CancellationToken) -> Result<Vec<Branch>> {
-        let _operation = self.operation_lease()?;
-        let _scope = git_ops_trace::scope(GitOpTraceKind::RefEnumerate);
-        cancellation.check_cancelled()?;
-        let branches = self.list_branches_impl()?;
-        cancellation.check_cancelled()?;
-        Ok(branches)
+        self.record_native("List branches", || {
+            let _operation = self.operation_lease()?;
+            let _scope = git_ops_trace::scope(GitOpTraceKind::RefEnumerate);
+            cancellation.check_cancelled()?;
+            let branches = self.list_branches_impl()?;
+            cancellation.check_cancelled()?;
+            Ok(branches)
+        })
     }
 
     fn list_tags(&self, cancellation: &CancellationToken) -> Result<Vec<Tag>> {
-        let _operation = self.operation_lease()?;
-        let _scope = git_ops_trace::scope(GitOpTraceKind::RefEnumerate);
-        self.list_tags_cancellable_impl(cancellation)
+        self.record_native("List tags", || {
+            let _operation = self.operation_lease()?;
+            let _scope = git_ops_trace::scope(GitOpTraceKind::RefEnumerate);
+            self.list_tags_cancellable_impl(cancellation)
+        })
     }
 
     fn list_remote_tags(&self, cancellation: &CancellationToken) -> Result<Vec<RemoteTag>> {
@@ -1114,55 +1149,69 @@ impl GitRepository for GixRepo {
     }
 
     fn list_remotes(&self, cancellation: &CancellationToken) -> Result<Vec<Remote>> {
-        let _operation = self.operation_lease()?;
-        let _scope = git_ops_trace::scope(GitOpTraceKind::RefEnumerate);
-        cancellation.check_cancelled()?;
-        let remotes = self.list_remotes_impl()?;
-        cancellation.check_cancelled()?;
-        Ok(remotes)
+        self.record_native("List remotes", || {
+            let _operation = self.operation_lease()?;
+            let _scope = git_ops_trace::scope(GitOpTraceKind::RefEnumerate);
+            cancellation.check_cancelled()?;
+            let remotes = self.list_remotes_impl()?;
+            cancellation.check_cancelled()?;
+            Ok(remotes)
+        })
     }
 
     fn list_remote_branches(&self, cancellation: &CancellationToken) -> Result<Vec<RemoteBranch>> {
-        let _operation = self.operation_lease()?;
-        let _scope = git_ops_trace::scope(GitOpTraceKind::RefEnumerate);
-        self.list_remote_branches_cancellable_impl(cancellation)
+        self.record_native("List remote branches", || {
+            let _operation = self.operation_lease()?;
+            let _scope = git_ops_trace::scope(GitOpTraceKind::RefEnumerate);
+            self.list_remote_branches_cancellable_impl(cancellation)
+        })
     }
 
     fn worktree_status(
         &self,
         cancellation: &CancellationToken,
     ) -> Result<Vec<gitcomet_core::domain::FileStatus>> {
-        let _operation = self.operation_lease()?;
-        let _scope = git_ops_trace::scope(GitOpTraceKind::Status);
-        self.worktree_status_cancellable_impl(cancellation)
+        self.record_native("Working-tree status", || {
+            let _operation = self.operation_lease()?;
+            let _scope = git_ops_trace::scope(GitOpTraceKind::Status);
+            self.worktree_status_cancellable_impl(cancellation)
+        })
     }
 
     fn staged_status(
         &self,
         cancellation: &CancellationToken,
     ) -> Result<Vec<gitcomet_core::domain::FileStatus>> {
-        let _operation = self.operation_lease()?;
-        let _scope = git_ops_trace::scope(GitOpTraceKind::Status);
-        self.staged_status_cancellable_impl(cancellation)
+        self.record_native("Staged status", || {
+            let _operation = self.operation_lease()?;
+            let _scope = git_ops_trace::scope(GitOpTraceKind::Status);
+            self.staged_status_cancellable_impl(cancellation)
+        })
     }
 
     fn status(&self, cancellation: &CancellationToken) -> Result<RepoStatus> {
-        let _operation = self.operation_lease()?;
-        let _scope = git_ops_trace::scope(GitOpTraceKind::Status);
-        self.status_cancellable_impl(cancellation)
+        self.record_native("Status", || {
+            let _operation = self.operation_lease()?;
+            let _scope = git_ops_trace::scope(GitOpTraceKind::Status);
+            self.status_cancellable_impl(cancellation)
+        })
     }
 
     fn head_path_is_gitlink(&self, path: &Path) -> Result<bool> {
-        let _operation = self.operation_lease()?;
-        self.head_path_is_gitlink_impl(path)
+        self.record_native(&format!("Classify gitlink {}", path.display()), || {
+            let _operation = self.operation_lease()?;
+            self.head_path_is_gitlink_impl(path)
+        })
     }
 
     fn upstream_divergence(
         &self,
         cancellation: &CancellationToken,
     ) -> Result<Option<UpstreamDivergence>> {
-        let _operation = self.operation_lease()?;
-        self.upstream_divergence_cancellable_impl(cancellation)
+        self.record_native("Upstream divergence", || {
+            let _operation = self.operation_lease()?;
+            self.upstream_divergence_cancellable_impl(cancellation)
+        })
     }
 
     fn pull_branch_with_output(
@@ -1229,16 +1278,20 @@ impl GitRepository for GixRepo {
         encoding: Option<gitcomet_core::text_format::TextEncoding>,
         cancellation: &CancellationToken,
     ) -> Result<Option<FileDiffText>> {
-        let _operation = self.operation_lease()?;
-        self.require_diff_target(target)?;
-        let result = self.diff_file_text_decoded_impl(target, encoding, cancellation);
-        cancellation.check_cancelled()?;
-        result
+        self.record_native("Read diff text", || {
+            let _operation = self.operation_lease()?;
+            self.require_diff_target(target)?;
+            let result = self.diff_file_text_decoded_impl(target, encoding, cancellation);
+            cancellation.check_cancelled()?;
+            result
+        })
     }
 
     fn text_attributes(&self, path: &Path) -> Result<gitcomet_core::text_format::TextAttributes> {
-        let _operation = self.operation_lease()?;
-        self.text_attributes_impl(path)
+        self.record_native(&format!("Text attributes {}", path.display()), || {
+            let _operation = self.operation_lease()?;
+            self.text_attributes_impl(path)
+        })
     }
 
     fn diff_file_image(
@@ -1246,11 +1299,13 @@ impl GitRepository for GixRepo {
         target: &DiffTarget,
         cancellation: &CancellationToken,
     ) -> Result<Option<FileDiffImage>> {
-        let _operation = self.operation_lease()?;
-        self.require_diff_target(target)?;
-        let result = self.diff_file_image_impl_cancellable(target, cancellation);
-        cancellation.check_cancelled()?;
-        result
+        self.record_native("Read diff images", || {
+            let _operation = self.operation_lease()?;
+            self.require_diff_target(target)?;
+            let result = self.diff_file_image_impl_cancellable(target, cancellation);
+            cancellation.check_cancelled()?;
+            result
+        })
     }
 
     fn diff_preview_text_file(
@@ -1259,17 +1314,21 @@ impl GitRepository for GixRepo {
         side: DiffPreviewTextSide,
         cancellation: &CancellationToken,
     ) -> Result<Option<DiffPreviewTextFile>> {
-        let _operation = self.operation_lease()?;
-        self.require_diff_target(target)?;
-        let result = self.diff_preview_text_file_impl_cancellable(target, side, cancellation);
-        cancellation.check_cancelled()?;
-        result
+        self.record_native("Read diff preview", || {
+            let _operation = self.operation_lease()?;
+            self.require_diff_target(target)?;
+            let result = self.diff_preview_text_file_impl_cancellable(target, side, cancellation);
+            cancellation.check_cancelled()?;
+            result
+        })
     }
 
     fn conflict_file_stages(&self, path: &Path) -> Result<Option<ConflictFileStages>> {
-        let _operation = self.operation_lease()?;
-        self.require_working_tree()?;
-        self.conflict_file_stages_impl(path)
+        self.record_native(&format!("Conflict stages {}", path.display()), || {
+            let _operation = self.operation_lease()?;
+            self.require_working_tree()?;
+            self.conflict_file_stages_impl(path)
+        })
     }
 
     fn conflict_session(
@@ -1277,14 +1336,18 @@ impl GitRepository for GixRepo {
         path: &Path,
         encoding: Option<gitcomet_core::text_format::TextEncoding>,
     ) -> Result<Option<ConflictSession>> {
-        let _operation = self.operation_lease()?;
-        self.require_working_tree()?;
-        self.conflict_session_with_encoding_impl(path, encoding)
+        self.record_native(&format!("Conflict session {}", path.display()), || {
+            let _operation = self.operation_lease()?;
+            self.require_working_tree()?;
+            self.conflict_session_with_encoding_impl(path, encoding)
+        })
     }
 
     fn create_branch(&self, name: &str, target: &CommitId) -> Result<()> {
-        let _operation = self.operation_lease()?;
-        self.create_branch_impl(name, target)
+        self.record_native(&format!("Create branch {name} at {target}"), || {
+            let _operation = self.operation_lease()?;
+            self.create_branch_impl(name, target)
+        })
     }
 
     fn rename_branch(&self, old_name: &str, new_name: &str) -> Result<()> {
@@ -1298,8 +1361,10 @@ impl GitRepository for GixRepo {
     }
 
     fn branch_checked_out_in_other_worktree(&self, name: &str) -> Result<Option<PathBuf>> {
-        let _operation = self.operation_lease()?;
-        self.branch_checked_out_in_other_worktree_impl(name)
+        self.record_native(&format!("Find branch worktree {name}"), || {
+            let _operation = self.operation_lease()?;
+            self.branch_checked_out_in_other_worktree_impl(name)
+        })
     }
 
     fn delete_branch(&self, name: &str) -> Result<()> {
@@ -1308,8 +1373,10 @@ impl GitRepository for GixRepo {
     }
 
     fn delete_branch_force(&self, name: &str) -> Result<()> {
-        let _operation = self.operation_lease()?;
-        self.delete_branch_force_impl(name)
+        self.record_native(&format!("Delete branch {name}"), || {
+            let _operation = self.operation_lease()?;
+            self.delete_branch_force_impl(name)
+        })
     }
 
     fn checkout_branch(&self, name: &str) -> Result<()> {
@@ -1758,9 +1825,14 @@ impl GitRepository for GixRepo {
     }
 
     fn blame_file(&self, path: &Path, rev: Option<&str>) -> Result<Vec<BlameLine>> {
-        let _operation = self.operation_lease()?;
-        let _scope = git_ops_trace::scope(GitOpTraceKind::Blame);
-        self.blame_file_impl(path, rev)
+        self.record_native(
+            &format!("Blame {} at {}", path.display(), rev.unwrap_or("HEAD")),
+            || {
+                let _operation = self.operation_lease()?;
+                let _scope = git_ops_trace::scope(GitOpTraceKind::Blame);
+                self.blame_file_impl(path, rev)
+            },
+        )
     }
 
     fn blame_worktree_file(&self, path: &Path, area: DiffArea) -> Result<Vec<BlameLine>> {
@@ -1835,22 +1907,26 @@ impl GitRepository for GixRepo {
     }
 
     fn list_worktrees(&self, cancellation: &CancellationToken) -> Result<Vec<Worktree>> {
-        let _operation = self.operation_lease()?;
-        cancellation.check_cancelled()?;
-        let worktrees = self.list_worktrees_cancellable_impl(cancellation)?;
-        cancellation.check_cancelled()?;
-        Ok(worktrees)
+        self.record_native("List worktrees", || {
+            let _operation = self.operation_lease()?;
+            cancellation.check_cancelled()?;
+            let worktrees = self.list_worktrees_cancellable_impl(cancellation)?;
+            cancellation.check_cancelled()?;
+            Ok(worktrees)
+        })
     }
 
     fn list_ref_metadata(
         &self,
         cancellation: &CancellationToken,
     ) -> Result<Arc<rustc_hash::FxHashMap<String, RefMetadata>>> {
-        let _operation = self.operation_lease()?;
-        cancellation.check_cancelled()?;
-        let metadata = self.list_ref_metadata_impl()?;
-        cancellation.check_cancelled()?;
-        Ok(metadata)
+        self.record_native("Reference metadata", || {
+            let _operation = self.operation_lease()?;
+            cancellation.check_cancelled()?;
+            let metadata = self.list_ref_metadata_impl()?;
+            cancellation.check_cancelled()?;
+            Ok(metadata)
+        })
     }
 
     fn add_worktree_with_output(
@@ -1873,23 +1949,30 @@ impl GitRepository for GixRepo {
     }
 
     fn list_submodules(&self, cancellation: &CancellationToken) -> Result<Vec<Submodule>> {
-        let _operation = self.operation_lease()?;
-        cancellation.check_cancelled()?;
-        if bare::native_mode(&self.spec.workdir)? == gitcomet_core::domain::RepositoryMode::Bare {
-            return Ok(Vec::new());
-        }
-        self.list_submodules_cancellable_impl(cancellation)
+        self.record_native("List submodules", || {
+            let _operation = self.operation_lease()?;
+            cancellation.check_cancelled()?;
+            if bare::native_mode(&self.spec.workdir)? == gitcomet_core::domain::RepositoryMode::Bare
+            {
+                return Ok(Vec::new());
+            }
+            self.list_submodules_cancellable_impl(cancellation)
+        })
     }
 
     fn list_worktree_files(&self) -> Result<Vec<FileEntry>> {
-        let _operation = self.operation_lease()?;
-        self.require_working_tree()?;
-        self.list_worktree_files_impl()
+        self.record_native("List working-tree files", || {
+            let _operation = self.operation_lease()?;
+            self.require_working_tree()?;
+            self.list_worktree_files_impl()
+        })
     }
 
     fn list_tree_files_at_commit(&self, commit_id: &CommitId) -> Result<Vec<FileEntry>> {
-        let _operation = self.operation_lease()?;
-        self.list_tree_files_at_commit_impl(commit_id)
+        self.record_native("List commit tree files", || {
+            let _operation = self.operation_lease()?;
+            self.list_tree_files_at_commit_impl(commit_id)
+        })
     }
 
     fn submodule_diff_summary(

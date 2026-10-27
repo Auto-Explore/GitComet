@@ -110,28 +110,30 @@ impl GixRepo {
             let workdir = workdir.clone();
             let remote_name = remote.name;
             let cancellation = cancellation.clone();
-            handles.push(thread::spawn(move || {
-                if cancellation.is_cancelled() {
-                    return None;
-                }
-                let mut cmd = git_workdir_cmd_for(&workdir);
-                cmd.arg("ls-remote")
-                    .arg("--tags")
-                    .arg("--refs")
-                    .arg("--")
-                    .arg(&remote_name);
-                match run_git_capture_cancellable(
-                    cmd,
-                    &format!("git ls-remote --tags --refs {remote_name}"),
-                    &cancellation,
-                ) {
-                    Ok(output) => Some(parse_ls_remote_tags(&output, &remote_name)),
-                    Err(error) if matches!(error.kind(), ErrorKind::Cancelled) => None,
-                    // Remote tag presence is best-effort metadata for UI menus.
-                    // If one remote is unavailable, keep partial results from others.
-                    Err(_) => None,
-                }
-            }));
+            handles.push(thread::spawn(
+                gitcomet_core::git_execution_log::context::wrap_task(move || {
+                    if cancellation.is_cancelled() {
+                        return None;
+                    }
+                    let mut cmd = git_workdir_cmd_for(&workdir);
+                    cmd.arg("ls-remote")
+                        .arg("--tags")
+                        .arg("--refs")
+                        .arg("--")
+                        .arg(&remote_name);
+                    match run_git_capture_cancellable(
+                        cmd,
+                        &format!("git ls-remote --tags --refs {remote_name}"),
+                        &cancellation,
+                    ) {
+                        Ok(output) => Some(parse_ls_remote_tags(&output, &remote_name)),
+                        Err(error) if matches!(error.kind(), ErrorKind::Cancelled) => None,
+                        // Remote tag presence is best-effort metadata for UI menus.
+                        // If one remote is unavailable, keep partial results from others.
+                        Err(_) => None,
+                    }
+                }),
+            ));
         }
 
         let mut remote_tags = Vec::new();

@@ -565,14 +565,42 @@ fn outcome_from_error(error: &Error) -> ExecutionOutcome {
     }
 }
 
+#[track_caller]
 pub fn run_native<T>(
     repository: &RepoLogKey,
     operation: &str,
     run: impl FnOnce() -> Result<T>,
 ) -> Result<T> {
+    let caller = std::panic::Location::caller();
     GitExecutionLog::global()
-        .begin(repository, ExecutionKind::Gix, operation, operation)
+        .begin(
+            repository,
+            ExecutionKind::Gix,
+            operation,
+            &format!("{}:{}", caller.file(), caller.line()),
+        )
         .run(|_| run())
+}
+
+#[track_caller]
+pub fn run_native_with_fallback<T>(
+    repository: &RepoLogKey,
+    operation: &str,
+    native: impl FnOnce() -> Result<T>,
+    fallback: impl FnOnce(Error) -> Result<T>,
+) -> Result<T> {
+    let caller = std::panic::Location::caller();
+    let execution = GitExecutionLog::global().begin(
+        repository,
+        ExecutionKind::Gix,
+        operation,
+        &format!("{}:{}", caller.file(), caller.line()),
+    );
+    let context = execution.context.clone();
+    execution.run(|_| native()).or_else(|error| {
+        let _scope = context.attach();
+        fallback(error)
+    })
 }
 
 #[cfg(test)]

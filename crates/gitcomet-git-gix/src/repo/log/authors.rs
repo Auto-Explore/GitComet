@@ -37,52 +37,54 @@ impl GixRepo {
         {
             return Ok(cached.names.clone());
         }
-        let mut walk = new_log_paged_walk(
-            &store,
-            tips.iter().copied(),
-            mode,
-            &shallow,
-            Some(cancellation),
-            None,
-            Some((&shared.topology, generation)),
-        )?;
-        let mut buffer = Vec::new();
-        let mut seen = FxHashSet::default();
-        let mut names = Vec::new();
-        for info in &mut walk.walk {
-            cancellation.check_cancelled()?;
-            let info = info.map_err(|error| {
-                crate::repo::object_store::gix_error("gix history authors", error)
-            })?;
-            if !mode_includes(mode, info.parent_ids.len()) {
-                continue;
-            }
-            let commit = repo
-                .objects
-                .find_commit(info.id.as_ref(), &mut buffer)
-                .map_err(|error| {
-                    crate::repo::object_store::gix_error("gix history author", error)
+        self.record_native("History authors", || {
+            let mut walk = new_log_paged_walk(
+                &store,
+                tips.iter().copied(),
+                mode,
+                &shallow,
+                Some(cancellation),
+                None,
+                Some((&shared.topology, generation)),
+            )?;
+            let mut buffer = Vec::new();
+            let mut seen = FxHashSet::default();
+            let mut names = Vec::new();
+            for info in &mut walk.walk {
+                cancellation.check_cancelled()?;
+                let info = info.map_err(|error| {
+                    crate::repo::object_store::gix_error("gix history authors", error)
                 })?;
-            let name = commit
-                .author()
-                .ok()
-                .map_or(b"unknown".as_slice(), |author| author.name.as_ref());
-            // Repeated names borrow the decode buffer; allocate once per name.
-            if !seen.contains(name) {
-                seen.insert(name.to_vec());
-                names.push(bstr_to_arc_str(name));
+                if !mode_includes(mode, info.parent_ids.len()) {
+                    continue;
+                }
+                let commit = repo
+                    .objects
+                    .find_commit(info.id.as_ref(), &mut buffer)
+                    .map_err(|error| {
+                        crate::repo::object_store::gix_error("gix history author", error)
+                    })?;
+                let name = commit
+                    .author()
+                    .ok()
+                    .map_or(b"unknown".as_slice(), |author| author.name.as_ref());
+                // Repeated names borrow the decode buffer; allocate once per name.
+                if !seen.contains(name) {
+                    seen.insert(name.to_vec());
+                    names.push(bstr_to_arc_str(name));
+                }
             }
-        }
-        cancellation.check_cancelled()?;
-        let names: Arc<[Arc<str>]> = names.into();
-        *self
-            .history_cache
-            .authors
-            .lock()
-            .expect("history authors cache") = Some(HistoryAuthorsCache {
-            snapshot,
-            names: names.clone(),
-        });
-        Ok(names)
+            cancellation.check_cancelled()?;
+            let names: Arc<[Arc<str>]> = names.into();
+            *self
+                .history_cache
+                .authors
+                .lock()
+                .expect("history authors cache") = Some(HistoryAuthorsCache {
+                snapshot,
+                names: names.clone(),
+            });
+            Ok(names)
+        })
     }
 }

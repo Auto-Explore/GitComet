@@ -86,29 +86,35 @@ impl GixBackend {
             cancellation.check_cancelled()?;
         }
 
-        crate::repo::bare::recover_before_open(workdir, cancellation)?;
-        let workdir = strip_windows_verbatim_prefix(workdir.canonicalize().map_err(|error| {
-            Error::from(error).with_context("canonicalize repository", Some(workdir))
-        })?);
-        if let Some(cancellation) = cancellation {
-            cancellation.check_cancelled()?;
-        }
+        let key = gitcomet_core::git_execution_log::RepoLogKey::new(workdir);
+        gitcomet_core::git_execution_log::run_native(&key, "Open repository", || {
+            crate::repo::bare::recover_before_open(workdir, cancellation)?;
+            let workdir =
+                strip_windows_verbatim_prefix(workdir.canonicalize().map_err(|error| {
+                    Error::from(error).with_context("canonicalize repository", Some(workdir))
+                })?);
+            if let Some(cancellation) = cancellation {
+                cancellation.check_cancelled()?;
+            }
 
-        let repo = crate::open::open_worktree_repo(&workdir)
-            .map_err(|e| crate::open::map_open_error(e, "gix open", &workdir))?;
-        let _discovery = crate::repo::bare::discovery_lock(repo.common_dir())?;
-        crate::refs::validate_open(&repo, cancellation)?;
-        if let Some(cancellation) = cancellation {
-            cancellation.check_cancelled()?;
-        }
+            let repo = crate::open::open_worktree_repo(&workdir)
+                .map_err(|e| crate::open::map_open_error(e, "gix open", &workdir))?;
+            let _discovery = crate::repo::bare::discovery_lock(repo.common_dir())?;
+            crate::refs::validate_open(&repo, cancellation)?;
+            if let Some(cancellation) = cancellation {
+                cancellation.check_cancelled()?;
+            }
 
-        gitcomet_core::history_perf::register_shared_memory_provider(crate::shared_history_memory);
-        let repo = reuse_or_register(GixRepo::new_with_options(
-            workdir,
-            repo.into_sync(),
-            options.clone(),
-        )?);
-        Ok(repo)
+            gitcomet_core::history_perf::register_shared_memory_provider(
+                crate::shared_history_memory,
+            );
+            let repo: Arc<dyn GitRepository> = reuse_or_register(GixRepo::new_with_options(
+                workdir,
+                repo.into_sync(),
+                options.clone(),
+            )?);
+            Ok(repo)
+        })
     }
 }
 
