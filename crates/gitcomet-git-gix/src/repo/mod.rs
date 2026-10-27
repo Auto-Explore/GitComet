@@ -1510,6 +1510,12 @@ impl GitRepository for GixRepo {
         })
     }
 
+    fn remote_refs_fingerprint(&self, cancellation: &CancellationToken) -> Result<u64> {
+        let _operation = self.operation_lease()?;
+        let _scope = git_ops_trace::scope(GitOpTraceKind::RefEnumerate);
+        self.remote_refs_fingerprint_impl(cancellation)
+    }
+
     fn fetch_refspecs_with_output(
         &self,
         remote: &str,

@@ -51,6 +51,47 @@ fn remote_url(path: &Path) -> String {
 }
 
 #[test]
+fn remote_refs_fingerprint_moves_only_when_a_fetch_changes_tracking_refs_or_tags() {
+    let root = tempfile::tempdir().expect("fixture directory");
+    let remote = repository(root.path(), "remote");
+    commit(&remote, "first");
+    git(&remote, &["branch", "doomed"]);
+    let local = repository(root.path(), "local");
+    git(&local, &["remote", "add", "origin", &remote_url(&remote)]);
+    git(&local, &["fetch", "origin"]);
+    let opened = GixBackend.open(&local).expect("open repository");
+    let cancel = CancellationToken::new();
+    let fingerprint = || {
+        opened
+            .remote_refs_fingerprint(&cancel)
+            .expect("fingerprint")
+    };
+    let fetch = || {
+        opened
+            .fetch_all_background(true, &cancel)
+            .expect("background fetch succeeds");
+    };
+
+    let settled = fingerprint();
+    fetch();
+    assert_eq!(fingerprint(), settled, "a no-op fetch moves nothing");
+
+    commit(&remote, "second");
+    fetch();
+    let advanced = fingerprint();
+    assert_ne!(advanced, settled, "a new remote commit");
+
+    git(&remote, &["tag", "v1"]);
+    fetch();
+    let tagged = fingerprint();
+    assert_ne!(tagged, advanced, "a new tag");
+
+    git(&remote, &["branch", "-D", "doomed"]);
+    fetch();
+    assert_ne!(fingerprint(), tagged, "a pruned tracking branch");
+}
+
+#[test]
 fn background_fetch_updates_tracking_refs_without_changing_checkout() {
     let root = tempfile::tempdir().expect("fixture directory");
     let remote = repository(root.path(), "remote");

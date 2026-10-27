@@ -363,6 +363,7 @@ fn incoming_tracking_manual_failure_preserves_deadline_and_rejects_older_auto_re
         Completion::Finished {
             common_dir: Some(PathBuf::from("/repo/.git")),
             result: Err(Error::new(ErrorKind::Cancelled)),
+            refs_changed: true,
         },
         failed_at + Duration::from_secs(2),
     );

@@ -974,6 +974,38 @@ impl GixRepo {
         Ok(remotes)
     }
 
+    pub(super) fn remote_refs_fingerprint_impl(
+        &self,
+        cancellation: &CancellationToken,
+    ) -> Result<u64> {
+        use std::hash::{Hash, Hasher};
+
+        cancellation.check_cancelled()?;
+        // Fetch runs through the Git CLI; reopen so packed-refs is read fresh.
+        let repo = self.reopen_repo()?;
+        let refs = crate::refs::view(&repo).map_err(|e| {
+            Error::new(ErrorKind::Backend(format!("gix references: {e}"))).with_source(e)
+        })?;
+        let mut fingerprint = std::hash::DefaultHasher::new();
+        for references in [refs.remote_branches(), refs.tags()] {
+            let references = references.map_err(|e| {
+                Error::new(ErrorKind::Backend(format!("gix references: {e}"))).with_source(e)
+            })?;
+            for reference in references {
+                cancellation.check_cancelled()?;
+                let reference = reference.map_err(|e| {
+                    Error::new(ErrorKind::Backend(format!("gix ref iter: {e}"))).with_source(e)
+                })?;
+                reference.name().as_bstr().hash(&mut fingerprint);
+                match reference.target() {
+                    gix::refs::TargetRef::Object(id) => id.as_bytes().hash(&mut fingerprint),
+                    gix::refs::TargetRef::Symbolic(name) => name.as_bstr().hash(&mut fingerprint),
+                }
+            }
+        }
+        Ok(fingerprint.finish())
+    }
+
     pub(super) fn list_remote_branches_cancellable_impl(
         &self,
         cancellation: &CancellationToken,

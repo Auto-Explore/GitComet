@@ -49,6 +49,9 @@ struct Subscriber {
     backend: Arc<dyn GitBackend>,
     repository: Option<Arc<dyn GitRepository>>,
     sink: EventSink,
+    /// A new tab loads its first incoming count through a refresh, so it gets
+    /// one even after a fetch that moved nothing.
+    needs_refresh: bool,
 }
 
 impl Subscriber {
@@ -230,6 +233,10 @@ impl AutoFetchCoordinator {
             if registration.common_dir.is_some() {
                 entry.common_dir = registration.common_dir;
             }
+            let needs_refresh = entry
+                .subscribers
+                .get(&registration.lifetime)
+                .is_none_or(|subscriber| subscriber.needs_refresh);
             let subscriber = Subscriber {
                 store_id,
                 repo_id: registration.repo_id,
@@ -239,6 +246,7 @@ impl AutoFetchCoordinator {
                 backend: Arc::clone(backend),
                 repository: registration.repository,
                 sink: Arc::clone(&sink),
+                needs_refresh,
             };
             if entry
                 .subscribers
@@ -427,6 +435,7 @@ enum Completion {
     Finished {
         common_dir: Option<PathBuf>,
         result: Result<CommandOutput>,
+        refs_changed: bool,
     },
 }
 
@@ -489,6 +498,7 @@ fn execute(job: &Job, admission: &Arc<Admission>) -> Completion {
             return Completion::Finished {
                 common_dir: None,
                 result: Err(error),
+                refs_changed: false,
             };
         }
     };
@@ -497,6 +507,7 @@ fn execute(job: &Job, admission: &Arc<Admission>) -> Completion {
     else {
         return Completion::Deferred { common_dir };
     };
+    let refs_before = repo.remote_refs_fingerprint(&job.cancellation).ok();
     let result = job.cancellation.check_cancelled().and_then(|()| {
         repo.fetch_all_background(
             job.subscriber
@@ -505,12 +516,20 @@ fn execute(job: &Job, admission: &Arc<Admission>) -> Completion {
             &job.cancellation,
         )
     });
-    repo.release_object_store();
-    job.subscriber.backend.release_object_stores(&common_dir);
-    super::effects::release_all_worktree_scan_handles();
+    // An unreadable fingerprint counts as a change.
+    let refs_changed = refs_before.is_none()
+        || repo.remote_refs_fingerprint(&job.cancellation).ok() != refs_before;
+    if refs_changed {
+        // Refreshes must read the packs this fetch wrote, and old packs must
+        // not stay mapped. Releasing one handle refreshes every handle that
+        // shares its object store.
+        repo.release_object_store();
+        super::effects::release_all_worktree_scan_handles();
+    }
     Completion::Finished {
         common_dir: Some(common_dir),
         result,
+        refs_changed,
     }
 }
 
@@ -525,7 +544,7 @@ fn finish(state: &mut State, job: &Job, completion: Completion, now: SystemTime)
     state.running = None;
     state.revision += 1;
     let revision = state.revision;
-    let common_dir = match completion {
+    let (common_dir, refs_changed) = match completion {
         Completion::Deferred { common_dir } => {
             if let Some(entry) = state.entries.get_mut(&job.workdir)
                 && entry.request == Some(job.request)
@@ -538,7 +557,11 @@ fn finish(state: &mut State, job: &Job, completion: Completion, now: SystemTime)
             }
             return;
         }
-        Completion::Finished { common_dir, result } => {
+        Completion::Finished {
+            common_dir,
+            result,
+            refs_changed,
+        } => {
             if let Some(entry) = state.entries.get_mut(&job.workdir)
                 && entry.request == Some(job.request)
             {
@@ -561,16 +584,20 @@ fn finish(state: &mut State, job: &Job, completion: Completion, now: SystemTime)
                 entry.revision = revision;
                 entry.publish(Some(Arc::new(result)));
             }
-            common_dir
+            (common_dir, refs_changed)
         }
     };
-    for (workdir, entry) in &state.entries {
+    for (workdir, entry) in &mut state.entries {
         if workdir == &job.workdir
             || common_dir
                 .as_ref()
                 .is_some_and(|common| entry.common_dir.as_ref() == Some(common))
         {
-            for subscriber in entry.subscribers.values() {
+            for subscriber in entry.subscribers.values_mut() {
+                if !refs_changed && !subscriber.needs_refresh {
+                    continue;
+                }
+                subscriber.needs_refresh = false;
                 (subscriber.sink)(Event::Refresh {
                     repo_id: subscriber.repo_id,
                     lifetime: subscriber.lifetime,
@@ -601,6 +628,7 @@ fn run(inner: Arc<Inner>) {
                     "automatic fetch failed: {}",
                     gitcomet_core::panic::payload_message(panic.as_ref())
                 )))),
+                refs_changed: true,
             });
             state = inner
                 .state

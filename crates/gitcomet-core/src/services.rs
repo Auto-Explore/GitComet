@@ -1582,6 +1582,15 @@ pub trait GitRepository: Send + Sync {
             "background fetching is not implemented for this backend",
         )))
     }
+    /// Hash of every remote-tracking branch and tag with its target, read
+    /// fresh from disk. Equal values before and after a fetch mean the fetch
+    /// moved nothing.
+    fn remote_refs_fingerprint(&self, cancellation: &CancellationToken) -> Result<u64> {
+        cancellation.check_cancelled()?;
+        Err(Error::new(ErrorKind::Unsupported(
+            "remote reference fingerprints are not implemented for this backend",
+        )))
+    }
     fn pull(&self, mode: PullMode, _prune: bool) -> Result<CommandOutput>;
     fn push(&self) -> Result<()>;
 

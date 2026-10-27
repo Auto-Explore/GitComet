@@ -1,5 +1,6 @@
 use super::*;
 use gitcomet_core::test_support::UnconfiguredRepository;
+use std::sync::Mutex;
 use std::time::{Duration, UNIX_EPOCH};
 
 mod incoming;
@@ -98,6 +99,7 @@ fn busy_shared_repository_yields_while_worktrees_keep_distinct_schedules() {
         Completion::Finished {
             common_dir: Some(PathBuf::from("/other/.git")),
             result: Ok(CommandOutput::empty_success("git fetch --all")),
+            refs_changed: true,
         },
         UNIX_EPOCH,
     );
@@ -111,6 +113,7 @@ fn busy_shared_repository_yields_while_worktrees_keep_distinct_schedules() {
         Completion::Finished {
             common_dir: Some(PathBuf::from("/repo/.git")),
             result: Ok(CommandOutput::empty_success("git fetch --all")),
+            refs_changed: true,
         },
         UNIX_EPOCH,
     );
@@ -144,6 +147,7 @@ fn disabled_coordinator_parks_and_enabled_deadlines_recompute_from_completion() 
         Completion::Finished {
             common_dir: None,
             result: Err(Error::new(ErrorKind::Unsupported("test offline"))),
+            refs_changed: true,
         },
         now,
     );
@@ -200,6 +204,7 @@ fn manual_success_clears_failure_and_an_older_automatic_result_cannot_replace_it
         Completion::Finished {
             common_dir: Some(PathBuf::from("/repo/.git")),
             result: Err(Error::new(ErrorKind::Cancelled)),
+            refs_changed: true,
         },
         manual + Duration::from_secs(1),
     );
@@ -229,6 +234,7 @@ fn reopening_a_closed_tab_does_not_accept_its_old_fetch_completion() {
         Completion::Finished {
             common_dir: Some(PathBuf::from("/repo/.git")),
             result: Ok(CommandOutput::empty_success("git fetch --all")),
+            refs_changed: true,
         },
         UNIX_EPOCH,
     );
@@ -550,6 +556,71 @@ fn store_messages_that_change_no_registration_skip_the_coordinator_sync() {
         .shutdown_for_test()
         .recv_timeout(Duration::from_secs(10))
         .unwrap();
+}
+
+#[test]
+fn fetches_that_move_no_refs_refresh_only_tabs_that_never_loaded() {
+    let (_temp, source, clone, _latest) = remote_fixture();
+    let coordinator = AutoFetchCoordinator::new();
+    let backend = Arc::new(gitcomet_git_gix::GixBackend) as Arc<dyn GitBackend>;
+    let refreshed = Arc::new(Mutex::new(Vec::new()));
+    let sink: EventSink = {
+        let refreshed = Arc::clone(&refreshed);
+        Arc::new(move |event| {
+            if let Event::Refresh { lifetime, .. } = event {
+                refreshed.lock().unwrap().push(lifetime);
+            }
+        })
+    };
+    let subscribe = |store_id| {
+        let lifetime = RepoLifetime::allocate();
+        coordinator.sync(
+            store_id,
+            vec![Registration {
+                repo_id: RepoId(1),
+                lifetime,
+                workdir: clone.clone(),
+                common_dir: None,
+                repository: None,
+            }],
+            RemoteSettings::default(),
+            &backend,
+            Arc::clone(&sink),
+        );
+        enable(&coordinator);
+        lifetime
+    };
+    let interval = AutoFetchInterval::default().duration();
+    let fetch_at = |round: u32| {
+        let now = UNIX_EPOCH + interval * round;
+        let job = next_job(
+            &mut coordinator.inner.state.lock().unwrap(),
+            coordinator.admission(),
+            now,
+        )
+        .expect("due");
+        let completion = execute(&job, coordinator.admission());
+        finish(
+            &mut coordinator.inner.state.lock().unwrap(),
+            &job,
+            completion,
+            now,
+        );
+        std::mem::take(&mut *refreshed.lock().unwrap())
+    };
+
+    let first = subscribe(1);
+    assert_eq!(fetch_at(0), vec![first], "the behind clone moved");
+    assert_eq!(fetch_at(1), Vec::new(), "nothing moved");
+    let second = subscribe(2);
+    assert_eq!(
+        fetch_at(2),
+        vec![second],
+        "a new window loads its first count even when nothing moved"
+    );
+    std::fs::write(source.join("file"), "third").unwrap();
+    git(&source, &["commit", "-qam", "third"]);
+    assert_eq!(fetch_at(3), vec![first, second]);
 }
 
 /// Cost of one coordinator sync with many tabs open. The store calls it after
