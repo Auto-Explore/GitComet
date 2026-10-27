@@ -20,6 +20,7 @@ fn repo_with_branches(branches: usize) -> RepoState {
         },
     );
     repo.open = Loadable::Ready(());
+    repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
     repo.head_branch = Loadable::Ready("branch-0".into());
     repo.branches = Loadable::Ready(Arc::new(
         (0..branches)

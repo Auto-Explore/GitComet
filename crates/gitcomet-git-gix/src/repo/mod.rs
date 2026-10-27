@@ -3,10 +3,10 @@ use crate::util::git_workdir_cmd_for as util_git_workdir_cmd_for;
 use gitcomet_core::conflict_session::ConflictSession;
 use gitcomet_core::domain::{
     Branch, Commit, CommitDetails, CommitId, CommitSignature, Diff, DiffArea, DiffPreviewTextFile,
-    DiffPreviewTextSide, DiffTarget, FileDiffImage, FileDiffText, FileEntry, HistoryMode,
-    LogCursor, LogPage, RecentCommitMessage, RefMetadata, ReflogEntry, Remote, RemoteBranch,
-    RemoteTag, RepoSpec, RepoStatus, StashEntry, Submodule, SubmoduleDiffSummary, Tag, Upstream,
-    UpstreamDivergence, Worktree,
+    DiffPreviewTextSide, DiffTarget, FileDiffImage, FileDiffText, FileEntry, HistoryFocusSet,
+    HistoryMode, LogCursor, LogPage, RecentCommitMessage, RefMetadata, ReflogEntry, Remote,
+    RemoteBranch, RemoteTag, RepoSpec, RepoStatus, StashEntry, Submodule, SubmoduleDiffSummary,
+    Tag, Upstream, UpstreamDivergence, Worktree,
 };
 use gitcomet_core::git_ops_trace::{self, GitOpTraceKind};
 use gitcomet_core::remote_url::RemoteUrlPolicy;
@@ -52,6 +52,8 @@ pub(super) fn bstr_to_arc_str(bytes: &[u8]) -> Arc<str> {
 
 mod annex;
 mod apply_change;
+pub(crate) mod bare;
+mod bare_lifecycle;
 mod blame;
 mod comparison;
 mod config;
@@ -70,6 +72,7 @@ mod maintenance;
 mod mergetool;
 mod mergetool_builtin;
 pub(crate) mod object_store;
+mod operation_guards;
 mod patch;
 mod patch_action;
 mod porcelain;
@@ -404,6 +407,10 @@ struct RepoStore {
 
 pub(crate) struct GixRepo {
     pub(crate) identity: shared::WorktreeIdentity,
+    lifecycle: Arc<bare_lifecycle::RepositoryLifecycle>,
+    lifecycle_generation: u64,
+    opened_topology: bare_lifecycle::OpenedTopology,
+    conversion_preview: std::sync::Mutex<Option<bare::preflight::Preflight>>,
     /// Stable fallback identity when a store cannot be safely shared.
     private_store_scope: u64,
     pub(crate) options: gitcomet_core::services::RepositoryOptions,
@@ -441,7 +448,7 @@ pub(crate) struct GixRepo {
 }
 
 impl GixRepo {
-    pub(crate) fn new(workdir: PathBuf, repo: gix::ThreadSafeRepository) -> Self {
+    pub(crate) fn new(workdir: PathBuf, repo: gix::ThreadSafeRepository) -> Result<Self> {
         Self::new_with_options(workdir, repo, Default::default())
     }
 
@@ -449,15 +456,23 @@ impl GixRepo {
         workdir: PathBuf,
         repo: gix::ThreadSafeRepository,
         options: gitcomet_core::services::RepositoryOptions,
-    ) -> Self {
+    ) -> Result<Self> {
         let identity = shared::WorktreeIdentity::new(&workdir, &repo.to_thread_local());
+        let opened_topology =
+            bare_lifecycle::OpenedTopology::read(&workdir, &repo.to_thread_local())?;
         let private_store_scope = shared::next_id();
         let common = shared::CommonRepository::get(&repo.to_thread_local(), private_store_scope);
+        let lifecycle = common.lifecycle.clone();
+        let lifecycle_generation = lifecycle.generation();
         let mut repo = repo;
         let shared = common.attach(&mut repo, private_store_scope);
         let config_repo = config::ConfigRepo::new(repo.to_thread_local());
-        Self {
+        Ok(Self {
             identity,
+            opened_topology,
+            lifecycle,
+            lifecycle_generation,
+            conversion_preview: Default::default(),
             private_store_scope,
             options: options.clone(),
             spec: RepoSpec { workdir },
@@ -485,7 +500,7 @@ impl GixRepo {
                 std::num::NonZeroUsize::new(signatures::SIGNATURE_CACHE_LIMIT).unwrap(),
             )),
             history_ref_filter: options.history_ref_filter,
-        }
+        })
     }
 
     /// Returns a `Command` pre-configured with `git -C <workdir>`.
@@ -642,35 +657,121 @@ pub(crate) fn allow_test_repo_local_mergetool_command(workdir: &Path, tool_name:
 }
 
 impl GitRepository for GixRepo {
+    fn acquire_operation_lease(&self) -> Result<gitcomet_core::services::RepositoryOperationLease> {
+        let operation = self.operation_lease()?;
+        Ok(gitcomet_core::services::RepositoryOperationLease::new(
+            operation,
+        ))
+    }
+
+    fn repository_mode(&self) -> Result<gitcomet_core::domain::RepositoryMode> {
+        let _operation = self.operation_lease()?;
+        self.repository_mode_impl()
+    }
+
+    fn preview_disable_bare_mode(&self) -> Result<gitcomet_core::domain::BareConversionPreview> {
+        let _operation = self.operation_lease()?;
+        self.preview_disable_bare_mode_impl()
+    }
+
+    fn disable_bare_mode(
+        &self,
+        preview: &gitcomet_core::domain::BareConversionPreview,
+    ) -> Result<gitcomet_core::domain::BareModeDisabled> {
+        self.disable_bare_mode_impl(preview, &CancellationToken::new())
+    }
+
+    fn disable_bare_mode_cancellable(
+        &self,
+        preview: &gitcomet_core::domain::BareConversionPreview,
+        cancellation: &CancellationToken,
+    ) -> Result<gitcomet_core::domain::BareModeDisabled> {
+        self.disable_bare_mode_impl(preview, cancellation)
+    }
+
     fn diff_action_snapshot(
         &self,
         target: &DiffTarget,
         cancellation: &CancellationToken,
     ) -> Result<gitcomet_core::patch_action::DiffActionSnapshot> {
+        let _operation = self.operation_lease()?;
+        self.require_working_tree()?;
         self.diff_action_snapshot_impl(target, cancellation)
+    }
+
+    fn prepare_diff_patch(
+        &self,
+        target: &DiffTarget,
+        operation: gitcomet_core::patch_action::PatchOperation,
+        selection: &gitcomet_core::patch_action::SourceLineSelection,
+        old: &str,
+        new: &str,
+        cancellation: &CancellationToken,
+    ) -> Result<gitcomet_core::patch_action::PreparedDiffPatch> {
+        let _operation = self.operation_lease()?;
+        self.require_working_tree()?;
+        let snapshot = self.diff_action_snapshot_impl(target, cancellation)?;
+        gitcomet_core::patch_action::prepare(snapshot, operation, selection, old, new).map_err(
+            |error| {
+                gitcomet_core::error::Error::new(gitcomet_core::error::ErrorKind::Backend(
+                    error.to_string(),
+                ))
+            },
+        )
+    }
+
+    fn apply_prepared_diff_patch(
+        &self,
+        prepared: &gitcomet_core::patch_action::PreparedDiffPatch,
+    ) -> Result<CommandOutput> {
+        let _operation = self.operation_lease()?;
+        self.require_working_tree()?;
+        let current =
+            self.diff_action_snapshot_impl(prepared.target(), &CancellationToken::new())?;
+        prepared.validate(&current).map_err(|error| {
+            gitcomet_core::error::Error::new(gitcomet_core::error::ErrorKind::Backend(
+                error.to_string(),
+            ))
+        })?;
+        match prepared.operation() {
+            gitcomet_core::patch_action::PatchOperation::Stage => {
+                self.apply_unified_patch_to_index_with_output_impl(prepared.patch(), false)
+            }
+            gitcomet_core::patch_action::PatchOperation::Unstage => {
+                self.apply_unified_patch_to_index_with_output_impl(prepared.patch(), true)
+            }
+            gitcomet_core::patch_action::PatchOperation::Discard => {
+                self.apply_unified_patch_to_worktree_with_output_impl(prepared.patch(), true)
+            }
+        }
     }
     fn rebase_range_with_output(
         &self,
         range: &gitcomet_core::services::RebaseRange,
     ) -> Result<CommandOutput> {
+        let _operation = self.operation_lease()?;
+        self.require_working_tree()?;
         self.rebase_range_impl(range)
     }
     fn update_refs_with_output(
         &self,
         updates: &[gitcomet_core::services::RefUpdate],
     ) -> Result<CommandOutput> {
+        let _operation = self.operation_lease()?;
         self.update_refs_impl(updates)
     }
     fn apply_branch_updates_with_output(
         &self,
         updates: &[gitcomet_core::services::BranchUpdate],
     ) -> Result<CommandOutput> {
+        let _operation = self.operation_lease()?;
         self.apply_branch_updates_impl(updates, false)
     }
     fn recover_branch_updates_with_output(
         &self,
         updates: &[gitcomet_core::services::BranchUpdate],
     ) -> Result<CommandOutput> {
+        let _operation = self.operation_lease()?;
         self.apply_branch_updates_impl(updates, true)
     }
     fn push_refs_with_lease_with_output(
@@ -679,21 +780,26 @@ impl GitRepository for GixRepo {
         updates: &[gitcomet_core::services::RemoteRefUpdate],
         atomic: bool,
     ) -> Result<CommandOutput> {
+        let _operation = self.operation_lease()?;
         self.push_refs_impl(remote, updates, atomic)
     }
     fn history_authors(
         &self,
-        mode: HistoryMode,
+        walk: &gitcomet_core::services::HistoryWalk,
+        focus: &HistoryFocusSet,
         cancellation: &CancellationToken,
     ) -> Result<Arc<[Arc<str>]>> {
-        self.with_store_retry(|| self.history_authors_impl(mode, cancellation))
+        let _operation = self.operation_lease()?;
+        self.with_store_retry(|| self.history_authors_impl(walk, focus, cancellation))
     }
     fn spec(&self) -> &RepoSpec {
         &self.spec
     }
 
     fn release_object_store(&self) {
-        // A repository that can no longer be opened fails the next read instead.
+        let Ok(_operation) = self.operation_lease() else {
+            return;
+        };
         let _ = self.reopen_object_store();
     }
 
@@ -702,22 +808,26 @@ impl GitRepository for GixRepo {
     }
 
     fn maintenance_needed(&self) -> Result<bool> {
+        let _operation = self.operation_lease()?;
         self.maintenance_needed_impl()
     }
 
     fn run_maintenance_with_output(&self) -> Result<CommandOutput> {
+        let _operation = self.operation_lease()?;
         self.run_maintenance_impl()
     }
 
     fn build_history_index(
         &self,
-        mode: HistoryMode,
+        walk: &gitcomet_core::services::HistoryWalk,
         author: Option<&str>,
+        focus: &HistoryFocusSet,
         cancellation: &CancellationToken,
         on_progress: &mut dyn FnMut(gitcomet_core::history_index::HistoryIndexProgress),
     ) -> Result<Option<gitcomet_core::history_index::HistoryIndexHandle>> {
+        let _operation = self.operation_lease()?;
         self.with_store_retry(|| {
-            self.build_history_index_impl(mode, author, cancellation, &mut *on_progress)
+            self.build_history_index_impl(walk, author, focus, cancellation, &mut *on_progress)
         })
     }
 
@@ -727,6 +837,7 @@ impl GitRepository for GixRepo {
         range: std::ops::Range<usize>,
         cancellation: &CancellationToken,
     ) -> Result<gitcomet_core::history_index::HistoryRange> {
+        let _operation = self.operation_lease()?;
         self.with_store_retry(|| self.read_history_range_impl(index, range.clone(), cancellation))
     }
 
@@ -736,19 +847,22 @@ impl GitRepository for GixRepo {
         range: std::ops::Range<usize>,
         cancellation: &CancellationToken,
     ) -> Result<Arc<gitcomet_core::history_index::HistoryRange>> {
+        let _operation = self.operation_lease()?;
         self.with_store_retry(|| self.read_shared_history_range(index, range.clone(), cancellation))
     }
 
     fn read_history(
         &self,
-        mode: HistoryMode,
+        walk: &gitcomet_core::services::HistoryWalk,
         author: Option<&str>,
+        focus: &HistoryFocusSet,
         request: &gitcomet_core::services::HistoryReadRequest,
         cancellation: &CancellationToken,
         on_chunk: &mut dyn FnMut(gitcomet_core::services::LogChunk),
     ) -> Result<gitcomet_core::services::HistoryReadResult> {
+        let _operation = self.operation_lease()?;
         self.with_store_retry(|| {
-            self.read_history_impl(mode, author, request, cancellation, &mut *on_chunk)
+            self.read_history_impl(walk, author, focus, request, cancellation, &mut *on_chunk)
         })
     }
 
@@ -759,6 +873,7 @@ impl GitRepository for GixRepo {
         cursor: Option<&LogCursor>,
         cancellation: &CancellationToken,
     ) -> Result<std::sync::Arc<LogPage>> {
+        let _operation = self.operation_lease()?;
         let _scope = git_ops_trace::scope(GitOpTraceKind::LogWalk);
         self.log_history_mode_page_cancellable_impl(mode, limit, cursor, cancellation)
     }
@@ -772,6 +887,7 @@ impl GitRepository for GixRepo {
         cancellation: &CancellationToken,
         on_chunk: &mut dyn FnMut(gitcomet_core::services::LogChunk),
     ) -> Result<std::sync::Arc<LogPage>> {
+        let _operation = self.operation_lease()?;
         let _scope = git_ops_trace::scope(GitOpTraceKind::LogWalk);
         self.log_history_mode_page_streaming_impl(
             mode,
@@ -791,6 +907,7 @@ impl GitRepository for GixRepo {
         cursor: Option<&LogCursor>,
         cancellation: &CancellationToken,
     ) -> Result<Arc<LogPage>> {
+        let _operation = self.operation_lease()?;
         let _scope = git_ops_trace::scope(GitOpTraceKind::LogWalk);
         self.log_history_mode_page_filtered_cancellable_impl(
             mode,
@@ -807,6 +924,7 @@ impl GitRepository for GixRepo {
         cursor: Option<&LogCursor>,
         cancellation: &CancellationToken,
     ) -> Result<std::sync::Arc<LogPage>> {
+        let _operation = self.operation_lease()?;
         let _scope = git_ops_trace::scope(GitOpTraceKind::LogWalk);
         self.log_head_page_cancellable_impl(limit, cursor, cancellation)
     }
@@ -817,6 +935,7 @@ impl GitRepository for GixRepo {
         cursor: Option<&LogCursor>,
         cancellation: &CancellationToken,
     ) -> Result<std::sync::Arc<LogPage>> {
+        let _operation = self.operation_lease()?;
         let _scope = git_ops_trace::scope(GitOpTraceKind::LogWalk);
         self.log_all_branches_page_cancellable_impl(limit, cursor, cancellation)
     }
@@ -827,11 +946,13 @@ impl GitRepository for GixRepo {
         limit: usize,
         cursor: Option<&LogCursor>,
     ) -> Result<std::sync::Arc<LogPage>> {
+        let _operation = self.operation_lease()?;
         let _scope = git_ops_trace::scope(GitOpTraceKind::LogWalk);
         self.log_file_page_impl(path, limit, cursor)
     }
 
     fn commit_details(&self, id: &CommitId) -> Result<CommitDetails> {
+        let _operation = self.operation_lease()?;
         self.commit_details_impl(id)
     }
 
@@ -841,10 +962,12 @@ impl GitRepository for GixRepo {
         formats: gitcomet_core::domain::SignatureFormats,
         cancellation: &gitcomet_core::services::CancellationToken,
     ) -> Result<Vec<(CommitId, CommitSignature)>> {
+        let _operation = self.operation_lease()?;
         self.verify_commit_signatures_cancellable_impl(ids, formats, Some(cancellation))
     }
 
     fn resolve_commit(&self, reference: &CommitId) -> Result<Commit> {
+        let _operation = self.operation_lease()?;
         self.resolve_commit_impl(reference)
     }
 
@@ -855,6 +978,10 @@ impl GitRepository for GixRepo {
         options: &gitcomet_core::services::ComparisonOptions,
         cancellation: &CancellationToken,
     ) -> Result<gitcomet_core::services::Comparison> {
+        let _operation = self.operation_lease()?;
+        if to.is_none() {
+            self.require_working_tree()?;
+        }
         self.compare_files_impl(from, to, options, cancellation)
     }
 
@@ -862,6 +989,8 @@ impl GitRepository for GixRepo {
         &self,
         cancellation: &CancellationToken,
     ) -> Result<gitcomet_core::domain::UncommittedLineStats> {
+        let _operation = self.operation_lease()?;
+        self.require_working_tree()?;
         let _scope = git_ops_trace::scope(GitOpTraceKind::Diff);
         self.uncommitted_line_stats_impl(cancellation)
     }
@@ -871,6 +1000,8 @@ impl GitRepository for GixRepo {
         status: &RepoStatus,
         cancellation: &CancellationToken,
     ) -> Result<gitcomet_core::domain::UncommittedLineStats> {
+        let _operation = self.operation_lease()?;
+        self.require_working_tree()?;
         let _scope = git_ops_trace::scope(GitOpTraceKind::Diff);
         self.line_stats_for_entries_impl(&status.unstaged, cancellation)
     }
@@ -879,6 +1010,7 @@ impl GitRepository for GixRepo {
         &self,
         cancellation: &CancellationToken,
     ) -> Result<gitcomet_core::large_files::LargeFileSupport> {
+        let _operation = self.operation_lease()?;
         self.large_file_support_impl(cancellation)
     }
 
@@ -887,6 +1019,8 @@ impl GitRepository for GixRepo {
         status: &RepoStatus,
         cancellation: &CancellationToken,
     ) -> Result<gitcomet_core::large_files::UncommittedLargeFiles> {
+        let _operation = self.operation_lease()?;
+        self.require_working_tree()?;
         self.uncommitted_large_files_impl(status, cancellation)
     }
 
@@ -894,6 +1028,12 @@ impl GitRepository for GixRepo {
         &self,
         command: &gitcomet_core::large_files::LargeFileCommand,
     ) -> Result<CommandOutput> {
+        let _operation = self.operation_lease()?;
+        if command.repository_requirement()
+            == gitcomet_core::domain::RepositoryRequirement::WorkingTree
+        {
+            self.require_working_tree()?;
+        }
         self.run_large_file_command_impl(command)
     }
 
@@ -902,6 +1042,7 @@ impl GitRepository for GixRepo {
         key: &str,
         cancellation: &CancellationToken,
     ) -> Result<gitcomet_core::large_files::AnnexWhereis> {
+        let _operation = self.operation_lease()?;
         self.annex_whereis_impl(key, cancellation)
     }
 
@@ -909,6 +1050,7 @@ impl GitRepository for GixRepo {
         &self,
         cancellation: &CancellationToken,
     ) -> Result<gitcomet_core::large_files::AnnexUnused> {
+        let _operation = self.operation_lease()?;
         self.annex_unused_impl(cancellation)
     }
 
@@ -916,26 +1058,32 @@ impl GitRepository for GixRepo {
         &self,
         cancellation: &CancellationToken,
     ) -> Result<Vec<gitcomet_core::large_files::LfsLock>> {
+        let _operation = self.operation_lease()?;
         self.lfs_locks_impl(cancellation)
     }
 
     fn commit_messages(&self, ids: &[CommitId]) -> Result<Vec<String>> {
+        let _operation = self.operation_lease()?;
         self.commit_messages_impl(ids)
     }
 
     fn topologically_order_commits(&self, ids: &[CommitId]) -> Result<Vec<CommitId>> {
+        let _operation = self.operation_lease()?;
         self.topologically_order_commits_impl(ids)
     }
 
     fn recent_commit_messages(&self, limit: usize) -> Result<Vec<RecentCommitMessage>> {
+        let _operation = self.operation_lease()?;
         self.recent_commit_messages_impl(limit)
     }
 
     fn reflog_head(&self, limit: usize) -> Result<Vec<ReflogEntry>> {
+        let _operation = self.operation_lease()?;
         self.reflog_head_impl(limit)
     }
 
     fn current_branch(&self, cancellation: &CancellationToken) -> Result<String> {
+        let _operation = self.operation_lease()?;
         cancellation.check_cancelled()?;
         let branch = self.current_branch_impl()?;
         cancellation.check_cancelled()?;
@@ -943,10 +1091,12 @@ impl GitRepository for GixRepo {
     }
 
     fn head_commit_id(&self) -> Result<Option<CommitId>> {
+        let _operation = self.operation_lease()?;
         self.head_commit_id_impl()
     }
 
     fn list_branches(&self, cancellation: &CancellationToken) -> Result<Vec<Branch>> {
+        let _operation = self.operation_lease()?;
         let _scope = git_ops_trace::scope(GitOpTraceKind::RefEnumerate);
         cancellation.check_cancelled()?;
         let branches = self.list_branches_impl()?;
@@ -955,16 +1105,19 @@ impl GitRepository for GixRepo {
     }
 
     fn list_tags(&self, cancellation: &CancellationToken) -> Result<Vec<Tag>> {
+        let _operation = self.operation_lease()?;
         let _scope = git_ops_trace::scope(GitOpTraceKind::RefEnumerate);
         self.list_tags_cancellable_impl(cancellation)
     }
 
     fn list_remote_tags(&self, cancellation: &CancellationToken) -> Result<Vec<RemoteTag>> {
+        let _operation = self.operation_lease()?;
         let _scope = git_ops_trace::scope(GitOpTraceKind::RefEnumerate);
         self.list_remote_tags_cancellable_impl(cancellation)
     }
 
     fn list_remotes(&self, cancellation: &CancellationToken) -> Result<Vec<Remote>> {
+        let _operation = self.operation_lease()?;
         let _scope = git_ops_trace::scope(GitOpTraceKind::RefEnumerate);
         cancellation.check_cancelled()?;
         let remotes = self.list_remotes_impl()?;
@@ -973,6 +1126,7 @@ impl GitRepository for GixRepo {
     }
 
     fn list_remote_branches(&self, cancellation: &CancellationToken) -> Result<Vec<RemoteBranch>> {
+        let _operation = self.operation_lease()?;
         let _scope = git_ops_trace::scope(GitOpTraceKind::RefEnumerate);
         self.list_remote_branches_cancellable_impl(cancellation)
     }
@@ -981,6 +1135,7 @@ impl GitRepository for GixRepo {
         &self,
         cancellation: &CancellationToken,
     ) -> Result<Vec<gitcomet_core::domain::FileStatus>> {
+        let _operation = self.operation_lease()?;
         let _scope = git_ops_trace::scope(GitOpTraceKind::Status);
         self.worktree_status_cancellable_impl(cancellation)
     }
@@ -989,16 +1144,19 @@ impl GitRepository for GixRepo {
         &self,
         cancellation: &CancellationToken,
     ) -> Result<Vec<gitcomet_core::domain::FileStatus>> {
+        let _operation = self.operation_lease()?;
         let _scope = git_ops_trace::scope(GitOpTraceKind::Status);
         self.staged_status_cancellable_impl(cancellation)
     }
 
     fn status(&self, cancellation: &CancellationToken) -> Result<RepoStatus> {
+        let _operation = self.operation_lease()?;
         let _scope = git_ops_trace::scope(GitOpTraceKind::Status);
         self.status_cancellable_impl(cancellation)
     }
 
     fn head_path_is_gitlink(&self, path: &Path) -> Result<bool> {
+        let _operation = self.operation_lease()?;
         self.head_path_is_gitlink_impl(path)
     }
 
@@ -1006,6 +1164,7 @@ impl GitRepository for GixRepo {
         &self,
         cancellation: &CancellationToken,
     ) -> Result<Option<UpstreamDivergence>> {
+        let _operation = self.operation_lease()?;
         self.upstream_divergence_cancellable_impl(cancellation)
     }
 
@@ -1015,18 +1174,25 @@ impl GitRepository for GixRepo {
         branch: &str,
         prune: bool,
     ) -> Result<CommandOutput> {
+        let _operation = self.operation_lease()?;
+        self.require_working_tree()?;
         self.pull_branch_with_output_prune_impl(remote, branch, prune)
     }
 
     fn merge_ref_with_output(&self, reference: &str) -> Result<CommandOutput> {
+        let _operation = self.operation_lease()?;
+        self.require_working_tree()?;
         self.merge_ref_with_output_impl(reference)
     }
 
     fn squash_ref_with_output(&self, reference: &str) -> Result<CommandOutput> {
+        let _operation = self.operation_lease()?;
+        self.require_working_tree()?;
         self.squash_ref_with_output_impl(reference)
     }
 
     fn squash_message_preview(&self, oldest: &CommitId, head: &CommitId) -> Result<String> {
+        let _operation = self.operation_lease()?;
         self.squash_message_preview_impl(oldest, head)
     }
 
@@ -1036,10 +1202,14 @@ impl GitRepository for GixRepo {
         expected_head: &CommitId,
         message: &str,
     ) -> Result<CommandOutput> {
+        let _operation = self.operation_lease()?;
+        self.require_bare_head_available()?;
         self.squash_commits_with_output_impl(oldest, expected_head, message)
     }
 
     fn diff_unified(&self, target: &DiffTarget) -> Result<String> {
+        let _operation = self.operation_lease()?;
+        self.require_diff_target(target)?;
         let _scope = git_ops_trace::scope(GitOpTraceKind::Diff);
         self.diff_unified_impl(target)
     }
@@ -1050,6 +1220,8 @@ impl GitRepository for GixRepo {
         encoding: Option<gitcomet_core::text_format::TextEncoding>,
         cancellation: &CancellationToken,
     ) -> Result<Diff> {
+        let _operation = self.operation_lease()?;
+        self.require_diff_target(target)?;
         let _scope = git_ops_trace::scope(GitOpTraceKind::Diff);
         self.diff_parsed_with_encoding_impl(target, encoding, cancellation)
     }
@@ -1060,12 +1232,15 @@ impl GitRepository for GixRepo {
         encoding: Option<gitcomet_core::text_format::TextEncoding>,
         cancellation: &CancellationToken,
     ) -> Result<Option<FileDiffText>> {
+        let _operation = self.operation_lease()?;
+        self.require_diff_target(target)?;
         let result = self.diff_file_text_decoded_impl(target, encoding, cancellation);
         cancellation.check_cancelled()?;
         result
     }
 
     fn text_attributes(&self, path: &Path) -> Result<gitcomet_core::text_format::TextAttributes> {
+        let _operation = self.operation_lease()?;
         self.text_attributes_impl(path)
     }
 
@@ -1074,6 +1249,8 @@ impl GitRepository for GixRepo {
         target: &DiffTarget,
         cancellation: &CancellationToken,
     ) -> Result<Option<FileDiffImage>> {
+        let _operation = self.operation_lease()?;
+        self.require_diff_target(target)?;
         let result = self.diff_file_image_impl_cancellable(target, cancellation);
         cancellation.check_cancelled()?;
         result
@@ -1085,12 +1262,16 @@ impl GitRepository for GixRepo {
         side: DiffPreviewTextSide,
         cancellation: &CancellationToken,
     ) -> Result<Option<DiffPreviewTextFile>> {
+        let _operation = self.operation_lease()?;
+        self.require_diff_target(target)?;
         let result = self.diff_preview_text_file_impl_cancellable(target, side, cancellation);
         cancellation.check_cancelled()?;
         result
     }
 
     fn conflict_file_stages(&self, path: &Path) -> Result<Option<ConflictFileStages>> {
+        let _operation = self.operation_lease()?;
+        self.require_working_tree()?;
         self.conflict_file_stages_impl(path)
     }
 
@@ -1099,38 +1280,50 @@ impl GitRepository for GixRepo {
         path: &Path,
         encoding: Option<gitcomet_core::text_format::TextEncoding>,
     ) -> Result<Option<ConflictSession>> {
+        let _operation = self.operation_lease()?;
+        self.require_working_tree()?;
         self.conflict_session_with_encoding_impl(path, encoding)
     }
 
     fn create_branch(&self, name: &str, target: &CommitId) -> Result<()> {
+        let _operation = self.operation_lease()?;
         self.create_branch_impl(name, target)
     }
 
     fn rename_branch(&self, old_name: &str, new_name: &str) -> Result<()> {
+        let _operation = self.operation_lease()?;
         self.rename_branch_impl(old_name, new_name)
     }
 
     fn rename_branch_force(&self, old_name: &str, new_name: &str) -> Result<()> {
+        let _operation = self.operation_lease()?;
         self.rename_branch_force_impl(old_name, new_name)
     }
 
     fn branch_checked_out_in_other_worktree(&self, name: &str) -> Result<Option<PathBuf>> {
+        let _operation = self.operation_lease()?;
         self.branch_checked_out_in_other_worktree_impl(name)
     }
 
     fn delete_branch(&self, name: &str) -> Result<()> {
+        let _operation = self.operation_lease()?;
         self.delete_branch_impl(name)
     }
 
     fn delete_branch_force(&self, name: &str) -> Result<()> {
+        let _operation = self.operation_lease()?;
         self.delete_branch_force_impl(name)
     }
 
     fn checkout_branch(&self, name: &str) -> Result<()> {
+        let _operation = self.operation_lease()?;
+        self.require_working_tree()?;
         self.checkout_branch_impl(name)
     }
 
     fn create_branch_force_and_checkout(&self, name: &str, target: &CommitId) -> Result<()> {
+        let _operation = self.operation_lease()?;
+        self.require_working_tree()?;
         self.create_branch_force_and_checkout_impl(name, target)
     }
 
@@ -1141,14 +1334,20 @@ impl GitRepository for GixRepo {
         local_branch: &str,
         mode: CheckoutRemoteBranchMode,
     ) -> Result<()> {
+        let _operation = self.operation_lease()?;
+        self.require_working_tree()?;
         self.checkout_remote_branch_impl(remote, branch, local_branch, mode)
     }
 
     fn checkout_commit(&self, id: &CommitId) -> Result<()> {
+        let _operation = self.operation_lease()?;
+        self.require_working_tree()?;
         self.checkout_commit_impl(id)
     }
 
     fn cherry_pick(&self, id: &CommitId) -> Result<()> {
+        let _operation = self.operation_lease()?;
+        self.require_working_tree()?;
         self.cherry_pick_impl(id)
     }
 
@@ -1158,10 +1357,13 @@ impl GitRepository for GixRepo {
         commit: bool,
         mainline: Option<usize>,
     ) -> Result<CommandOutput> {
+        let _operation = self.operation_lease()?;
+        self.require_working_tree()?;
         self.cherry_pick_with_output_impl(id, commit, mainline)
     }
 
     fn commit_message_template(&self) -> Result<Option<String>> {
+        let _operation = self.operation_lease()?;
         self.commit_message_template_impl()
     }
 
@@ -1171,6 +1373,8 @@ impl GitRepository for GixRepo {
         commit: bool,
         mainline: Option<usize>,
     ) -> Result<CommandOutput> {
+        let _operation = self.operation_lease()?;
+        self.require_working_tree()?;
         self.revert_with_output_impl(id, commit, mainline)
     }
 
@@ -1179,6 +1383,8 @@ impl GitRepository for GixRepo {
         target: &gitcomet_core::domain::ApplyChangeTarget,
         commit: bool,
     ) -> Result<CommandOutput> {
+        let _operation = self.operation_lease()?;
+        self.require_working_tree()?;
         self.apply_file_change_with_output_impl(target, commit, None)
     }
 
@@ -1186,14 +1392,19 @@ impl GitRepository for GixRepo {
         &self,
         retry: &gitcomet_core::domain::ApplyFileChangeRetry,
     ) -> Result<CommandOutput> {
+        let _operation = self.operation_lease()?;
+        self.require_working_tree()?;
         self.apply_file_change_with_output_impl(&retry.target, true, Some(retry))
     }
 
     fn stash_create(&self, message: &str, include_untracked: bool) -> Result<()> {
+        let _operation = self.operation_lease()?;
+        self.require_working_tree()?;
         self.stash_create_impl(message, include_untracked)
     }
 
     fn stash_list(&self, cancellation: &CancellationToken) -> Result<Vec<StashEntry>> {
+        let _operation = self.operation_lease()?;
         cancellation.check_cancelled()?;
         let stashes = self.stash_list_impl()?;
         cancellation.check_cancelled()?;
@@ -1201,34 +1412,57 @@ impl GitRepository for GixRepo {
     }
 
     fn stash_apply(&self, index: usize) -> Result<()> {
+        let _operation = self.operation_lease()?;
+        self.require_working_tree()?;
         self.stash_apply_impl(index)
     }
 
     fn stash_drop(&self, index: usize) -> Result<()> {
+        let _operation = self.operation_lease()?;
+        self.require_working_tree()?;
         self.stash_drop_impl(index)
     }
 
     fn stage(&self, paths: &[&Path]) -> Result<()> {
+        let _operation = self.operation_lease()?;
+        self.require_working_tree()?;
         self.stage_impl(paths)
     }
 
     fn unstage(&self, paths: &[&Path]) -> Result<()> {
+        let _operation = self.operation_lease()?;
+        self.require_working_tree()?;
         self.unstage_impl(paths)
     }
 
     fn commit(&self, message: &str) -> Result<()> {
+        let _operation = self.operation_lease()?;
+        self.require_working_tree()?;
         self.commit_impl(message)
     }
 
     fn commit_with_outcome(&self, message: &str) -> Result<CommitOperationOutcome> {
+        let _operation = self.operation_lease()?;
+        self.require_working_tree()?;
         self.commit_with_outcome_impl(message)
     }
 
     fn commit_amend(&self, message: &str) -> Result<()> {
+        let _operation = self.operation_lease()?;
+        self.require_working_tree()?;
         self.commit_amend_impl(message)
     }
 
+    fn commit_amend_with_output(&self, message: &str) -> Result<CommandOutput> {
+        let _operation = self.operation_lease()?;
+        self.require_working_tree()?;
+        self.commit_amend_impl(message)?;
+        Ok(CommandOutput::empty_success("git commit --amend"))
+    }
+
     fn commit_amend_with_outcome(&self, message: &str) -> Result<CommitOperationOutcome> {
+        let _operation = self.operation_lease()?;
+        self.require_working_tree()?;
         self.commit_amend_with_outcome_impl(message)
     }
 
@@ -1237,6 +1471,8 @@ impl GitRepository for GixRepo {
         message: &str,
         identity: Option<&gitcomet_core::commit_identity::CommitIdentity>,
     ) -> Result<CommitOperationOutcome> {
+        let _operation = self.operation_lease()?;
+        self.require_working_tree()?;
         self.commit_with_identity_impl(message, identity, false)
     }
     fn commit_amend_with_identity(
@@ -1244,10 +1480,13 @@ impl GitRepository for GixRepo {
         message: &str,
         identity: Option<&gitcomet_core::commit_identity::CommitIdentity>,
     ) -> Result<CommitOperationOutcome> {
+        let _operation = self.operation_lease()?;
+        self.require_working_tree()?;
         self.commit_with_identity_impl(message, identity, true)
     }
 
     fn fetch_all(&self, prune: bool) -> Result<CommandOutput> {
+        let _operation = self.operation_lease()?;
         self.fetch_all_with_output_impl(prune)
     }
 
@@ -1256,10 +1495,13 @@ impl GitRepository for GixRepo {
         remote: &str,
         refspecs: &[String],
     ) -> Result<CommandOutput> {
+        let _operation = self.operation_lease()?;
         self.fetch_refspecs_with_output_impl(remote, refspecs)
     }
 
     fn pull(&self, mode: PullMode, prune: bool) -> Result<CommandOutput> {
+        let _operation = self.operation_lease()?;
+        self.require_working_tree()?;
         self.pull_with_output_prune_impl(mode, prune)
     }
 
@@ -1267,6 +1509,7 @@ impl GitRepository for GixRepo {
         &self,
         request: &gitcomet_core::tag_push::TagPushRequest,
     ) -> Result<CommandOutput> {
+        let _operation = self.operation_lease()?;
         self.push_with_tags_impl(request)
     }
 
@@ -1275,22 +1518,27 @@ impl GitRepository for GixRepo {
         request: &gitcomet_core::tag_push::TagPushRequest,
         cancellation: &CancellationToken,
     ) -> Result<gitcomet_core::tag_push::TagPushPreview> {
+        let _operation = self.operation_lease()?;
         self.preview_tag_push_impl(request, cancellation)
     }
 
     fn push(&self) -> Result<()> {
+        let _operation = self.operation_lease()?;
         self.push_impl()
     }
 
     fn push_with_output(&self) -> Result<CommandOutput> {
+        let _operation = self.operation_lease()?;
         self.push_with_output_impl()
     }
 
     fn push_force(&self) -> Result<()> {
+        let _operation = self.operation_lease()?;
         self.push_force_impl()
     }
 
     fn push_force_with_output(&self) -> Result<CommandOutput> {
+        let _operation = self.operation_lease()?;
         self.push_force_with_output_impl()
     }
 
@@ -1298,6 +1546,7 @@ impl GitRepository for GixRepo {
         &self,
         context: &SafePushAfterCommitContext,
     ) -> Result<SafePushAfterCommitDecision> {
+        let _operation = self.operation_lease()?;
         self.safe_push_after_commit_impl(context)
     }
 
@@ -1305,6 +1554,7 @@ impl GitRepository for GixRepo {
         &self,
         target: &SafePushAfterCommitTarget,
     ) -> Result<CommandOutput> {
+        let _operation = self.operation_lease()?;
         self.push_after_commit_with_output_impl(target)
     }
 
@@ -1312,26 +1562,39 @@ impl GitRepository for GixRepo {
         &self,
         target: &SafePushAfterCommitTarget,
     ) -> Result<CommandOutput> {
+        let _operation = self.operation_lease()?;
         self.push_after_commit_set_upstream_with_output_impl(target)
     }
 
     fn push_force_with_lease_with_output(&self, lease: &ForcePushLease) -> Result<CommandOutput> {
+        let _operation = self.operation_lease()?;
         self.push_force_with_lease_with_output_impl(lease)
     }
 
     fn reset_with_output(&self, target: &str, mode: ResetMode) -> Result<CommandOutput> {
+        let _operation = self.operation_lease()?;
+        match mode {
+            ResetMode::Soft => self.require_bare_head_available()?,
+            ResetMode::Mixed | ResetMode::Hard => self.require_working_tree()?,
+        }
         self.reset_with_output_impl(target, mode)
     }
 
     fn rebase_with_output(&self, onto: &str) -> Result<CommandOutput> {
+        let _operation = self.operation_lease()?;
+        self.require_working_tree()?;
         self.rebase_with_output_impl(onto)
     }
 
     fn rebase_continue_with_output(&self) -> Result<CommandOutput> {
+        let _operation = self.operation_lease()?;
+        self.require_working_tree()?;
         self.rebase_continue_with_output_impl()
     }
 
     fn rebase_abort_with_output(&self) -> Result<CommandOutput> {
+        let _operation = self.operation_lease()?;
+        self.require_working_tree()?;
         self.rebase_abort_with_output_impl()
     }
 
@@ -1339,6 +1602,7 @@ impl GitRepository for GixRepo {
         &self,
         base: &str,
     ) -> Result<Vec<InteractiveRebaseEntry>> {
+        let _operation = self.operation_lease()?;
         self.list_commits_for_interactive_rebase_impl(base)
     }
 
@@ -1347,6 +1611,8 @@ impl GitRepository for GixRepo {
         base: &str,
         entries: &[InteractiveRebaseEntry],
     ) -> Result<CommandOutput> {
+        let _operation = self.operation_lease()?;
+        self.require_working_tree()?;
         self.interactive_rebase_with_output_impl(base, entries)
     }
 
@@ -1375,14 +1641,19 @@ impl GitRepository for GixRepo {
         entries: &[InteractiveRebaseEntry],
         commit: bool,
     ) -> Result<CommandOutput> {
+        let _operation = self.operation_lease()?;
+        self.require_working_tree()?;
         self.interactive_cherry_pick_with_output_impl(entries, commit)
     }
 
     fn merge_abort_with_output(&self) -> Result<CommandOutput> {
+        let _operation = self.operation_lease()?;
+        self.require_working_tree()?;
         self.merge_abort_with_output_impl()
     }
 
     fn rebase_in_progress(&self, cancellation: &CancellationToken) -> Result<bool> {
+        let _operation = self.operation_lease()?;
         cancellation.check_cancelled()?;
         let in_progress = self.rebase_in_progress_impl()?;
         cancellation.check_cancelled()?;
@@ -1390,6 +1661,7 @@ impl GitRepository for GixRepo {
     }
 
     fn sequencer_state(&self, cancellation: &CancellationToken) -> Result<SequencerState> {
+        let _operation = self.operation_lease()?;
         cancellation.check_cancelled()?;
         let state = self.sequencer_state_impl()?;
         cancellation.check_cancelled()?;
@@ -1397,6 +1669,7 @@ impl GitRepository for GixRepo {
     }
 
     fn merge_commit_message(&self, cancellation: &CancellationToken) -> Result<Option<String>> {
+        let _operation = self.operation_lease()?;
         cancellation.check_cancelled()?;
         let message = self.merge_commit_message_impl()?;
         cancellation.check_cancelled()?;
@@ -1410,26 +1683,32 @@ impl GitRepository for GixRepo {
         message: Option<&str>,
         annotated: bool,
     ) -> Result<CommandOutput> {
+        let _operation = self.operation_lease()?;
         self.create_tag_with_output_impl(name, target, message, annotated)
     }
 
     fn delete_tag_with_output(&self, name: &str) -> Result<CommandOutput> {
+        let _operation = self.operation_lease()?;
         self.delete_tag_with_output_impl(name)
     }
 
     fn prune_merged_branches_with_output(&self) -> Result<CommandOutput> {
+        let _operation = self.operation_lease()?;
         self.prune_merged_branches_with_output_impl()
     }
 
     fn prune_local_tags_with_output(&self) -> Result<CommandOutput> {
+        let _operation = self.operation_lease()?;
         self.prune_local_tags_with_output_impl()
     }
 
     fn push_tag_with_output(&self, remote: &str, name: &str) -> Result<CommandOutput> {
+        let _operation = self.operation_lease()?;
         self.push_tag_with_output_impl(remote, name)
     }
 
     fn delete_remote_tag_with_output(&self, remote: &str, name: &str) -> Result<CommandOutput> {
+        let _operation = self.operation_lease()?;
         self.delete_remote_tag_with_output_impl(remote, name)
     }
 
@@ -1439,10 +1718,12 @@ impl GitRepository for GixRepo {
         url: &str,
         remote_url_policy: RemoteUrlPolicy,
     ) -> Result<CommandOutput> {
+        let _operation = self.operation_lease()?;
         self.add_remote_with_output_impl(name, url, remote_url_policy)
     }
 
     fn remove_remote_with_output(&self, name: &str) -> Result<CommandOutput> {
+        let _operation = self.operation_lease()?;
         self.remove_remote_with_output_impl(name)
     }
 
@@ -1453,14 +1734,17 @@ impl GitRepository for GixRepo {
         kind: RemoteUrlKind,
         remote_url_policy: RemoteUrlPolicy,
     ) -> Result<CommandOutput> {
+        let _operation = self.operation_lease()?;
         self.set_remote_url_with_output_impl(name, url, kind, remote_url_policy)
     }
 
     fn push_set_upstream(&self, remote: &str, branch: &str) -> Result<()> {
+        let _operation = self.operation_lease()?;
         self.push_set_upstream_impl(remote, branch)
     }
 
     fn push_set_upstream_with_output(&self, remote: &str, branch: &str) -> Result<CommandOutput> {
+        let _operation = self.operation_lease()?;
         self.push_set_upstream_with_output_impl(remote, branch)
     }
 
@@ -1469,10 +1753,12 @@ impl GitRepository for GixRepo {
         branch: &str,
         upstream: &Upstream,
     ) -> Result<CommandOutput> {
+        let _operation = self.operation_lease()?;
         self.set_upstream_branch_with_output_impl(branch, upstream)
     }
 
     fn unset_upstream_branch_with_output(&self, branch: &str) -> Result<CommandOutput> {
+        let _operation = self.operation_lease()?;
         self.unset_upstream_branch_with_output_impl(branch)
     }
 
@@ -1481,6 +1767,7 @@ impl GitRepository for GixRepo {
         remote: &str,
         branch: &str,
     ) -> Result<CommandOutput> {
+        let _operation = self.operation_lease()?;
         self.delete_remote_branch_with_output_impl(remote, branch)
     }
 
@@ -1489,15 +1776,19 @@ impl GitRepository for GixRepo {
         remote: &str,
         branches: &[String],
     ) -> Result<CommandOutput> {
+        let _operation = self.operation_lease()?;
         self.delete_remote_branches_with_output_impl(remote, branches)
     }
 
     fn blame_file(&self, path: &Path, rev: Option<&str>) -> Result<Vec<BlameLine>> {
+        let _operation = self.operation_lease()?;
         let _scope = git_ops_trace::scope(GitOpTraceKind::Blame);
         self.blame_file_impl(path, rev)
     }
 
     fn blame_worktree_file(&self, path: &Path, area: DiffArea) -> Result<Vec<BlameLine>> {
+        let _operation = self.operation_lease()?;
+        self.require_working_tree()?;
         let _scope = git_ops_trace::scope(GitOpTraceKind::Blame);
         self.blame_worktree_file_impl(path, area)
     }
@@ -1507,30 +1798,42 @@ impl GitRepository for GixRepo {
         path: &Path,
         commit: &CommitId,
     ) -> Result<Option<PathBuf>> {
+        let _operation = self.operation_lease()?;
         self.resolve_file_path_at_commit_impl(path, commit)
     }
 
     fn checkout_conflict_side(&self, path: &Path, side: ConflictSide) -> Result<CommandOutput> {
+        let _operation = self.operation_lease()?;
+        self.require_working_tree()?;
         self.checkout_conflict_side_impl(path, side)
     }
 
     fn accept_conflict_deletion(&self, path: &Path) -> Result<CommandOutput> {
+        let _operation = self.operation_lease()?;
+        self.require_working_tree()?;
         self.accept_conflict_deletion_impl(path)
     }
 
     fn checkout_conflict_base(&self, path: &Path) -> Result<CommandOutput> {
+        let _operation = self.operation_lease()?;
+        self.require_working_tree()?;
         self.checkout_conflict_base_impl(path)
     }
 
     fn launch_mergetool(&self, path: &Path) -> Result<MergetoolResult> {
+        let _operation = self.operation_lease()?;
+        self.require_working_tree()?;
         self.launch_mergetool_impl(path)
     }
 
     fn export_patch_with_output(&self, commit_id: &CommitId, dest: &Path) -> Result<CommandOutput> {
+        let _operation = self.operation_lease()?;
         self.export_patch_with_output_impl(commit_id, dest)
     }
 
     fn apply_patch_with_output(&self, patch: &Path) -> Result<CommandOutput> {
+        let _operation = self.operation_lease()?;
+        self.require_working_tree()?;
         self.apply_patch_with_output_impl(patch)
     }
 
@@ -1539,6 +1842,8 @@ impl GitRepository for GixRepo {
         patch: &[u8],
         reverse: bool,
     ) -> Result<CommandOutput> {
+        let _operation = self.operation_lease()?;
+        self.require_working_tree()?;
         self.apply_unified_patch_to_index_with_output_impl(patch, reverse)
     }
 
@@ -1547,10 +1852,13 @@ impl GitRepository for GixRepo {
         patch: &[u8],
         reverse: bool,
     ) -> Result<CommandOutput> {
+        let _operation = self.operation_lease()?;
+        self.require_working_tree()?;
         self.apply_unified_patch_to_worktree_with_output_impl(patch, reverse)
     }
 
     fn list_worktrees(&self, cancellation: &CancellationToken) -> Result<Vec<Worktree>> {
+        let _operation = self.operation_lease()?;
         cancellation.check_cancelled()?;
         let worktrees = self.list_worktrees_cancellable_impl(cancellation)?;
         cancellation.check_cancelled()?;
@@ -1561,6 +1869,7 @@ impl GitRepository for GixRepo {
         &self,
         cancellation: &CancellationToken,
     ) -> Result<Arc<rustc_hash::FxHashMap<String, RefMetadata>>> {
+        let _operation = self.operation_lease()?;
         cancellation.check_cancelled()?;
         let metadata = self.list_ref_metadata_impl()?;
         cancellation.check_cancelled()?;
@@ -1572,26 +1881,37 @@ impl GitRepository for GixRepo {
         path: &Path,
         checkout: &WorktreeCheckout,
     ) -> Result<CommandOutput> {
+        let _operation = self.operation_lease()?;
         self.add_worktree_with_output_impl(path, checkout)
     }
 
     fn remove_worktree_with_output(&self, path: &Path) -> Result<CommandOutput> {
+        let _operation = self.operation_lease()?;
         self.remove_worktree_with_output_impl(path)
     }
 
     fn force_remove_worktree_with_output(&self, path: &Path) -> Result<CommandOutput> {
+        let _operation = self.operation_lease()?;
         self.force_remove_worktree_with_output_impl(path)
     }
 
     fn list_submodules(&self, cancellation: &CancellationToken) -> Result<Vec<Submodule>> {
+        let _operation = self.operation_lease()?;
+        cancellation.check_cancelled()?;
+        if bare::native_mode(&self.spec.workdir)? == gitcomet_core::domain::RepositoryMode::Bare {
+            return Ok(Vec::new());
+        }
         self.list_submodules_cancellable_impl(cancellation)
     }
 
     fn list_worktree_files(&self) -> Result<Vec<FileEntry>> {
+        let _operation = self.operation_lease()?;
+        self.require_working_tree()?;
         self.list_worktree_files_impl()
     }
 
     fn list_tree_files_at_commit(&self, commit_id: &CommitId) -> Result<Vec<FileEntry>> {
+        let _operation = self.operation_lease()?;
         self.list_tree_files_at_commit_impl(commit_id)
     }
 
@@ -1600,6 +1920,8 @@ impl GitRepository for GixRepo {
         target: &DiffTarget,
         cancellation: &CancellationToken,
     ) -> Result<SubmoduleDiffSummary> {
+        let _operation = self.operation_lease()?;
+        self.require_diff_target(target)?;
         self.submodule_diff_summary_cancellable_impl(target, cancellation)
     }
 
@@ -1609,6 +1931,8 @@ impl GitRepository for GixRepo {
         path: &Path,
         remote_url_policy: RemoteUrlPolicy,
     ) -> Result<SubmoduleTrustDecision> {
+        let _operation = self.operation_lease()?;
+        self.require_working_tree()?;
         self.check_submodule_add_trust_impl(url, path, remote_url_policy)
     }
 
@@ -1616,6 +1940,8 @@ impl GitRepository for GixRepo {
         &self,
         remote_url_policy: RemoteUrlPolicy,
     ) -> Result<SubmoduleTrustDecision> {
+        let _operation = self.operation_lease()?;
+        self.require_working_tree()?;
         self.check_submodule_update_trust_impl(remote_url_policy)
     }
 
@@ -1624,6 +1950,8 @@ impl GitRepository for GixRepo {
         path: &Path,
         remote_url_policy: RemoteUrlPolicy,
     ) -> Result<SubmoduleTrustDecision> {
+        let _operation = self.operation_lease()?;
+        self.require_working_tree()?;
         self.check_submodule_load_trust_impl(path, remote_url_policy)
     }
 
@@ -1637,6 +1965,8 @@ impl GitRepository for GixRepo {
         approved_sources: &[SubmoduleTrustTarget],
         remote_url_policy: RemoteUrlPolicy,
     ) -> Result<CommandOutput> {
+        let _operation = self.operation_lease()?;
+        self.require_working_tree()?;
         self.add_submodule_with_output_impl(
             url,
             path,
@@ -1653,6 +1983,8 @@ impl GitRepository for GixRepo {
         approved_sources: &[SubmoduleTrustTarget],
         remote_url_policy: RemoteUrlPolicy,
     ) -> Result<CommandOutput> {
+        let _operation = self.operation_lease()?;
+        self.require_working_tree()?;
         self.update_submodules_with_output_impl(approved_sources, remote_url_policy)
     }
 
@@ -1662,6 +1994,8 @@ impl GitRepository for GixRepo {
         approved_sources: &[SubmoduleTrustTarget],
         remote_url_policy: RemoteUrlPolicy,
     ) -> Result<CommandOutput> {
+        let _operation = self.operation_lease()?;
+        self.require_working_tree()?;
         self.load_submodule_with_output_impl(path, approved_sources, remote_url_policy)
     }
 
@@ -1670,14 +2004,20 @@ impl GitRepository for GixRepo {
         path: &Path,
         reference: &str,
     ) -> Result<CommandOutput> {
+        let _operation = self.operation_lease()?;
+        self.require_working_tree()?;
         self.change_submodule_pointer_with_output_impl(path, reference)
     }
 
     fn remove_submodule_with_output(&self, path: &Path) -> Result<CommandOutput> {
+        let _operation = self.operation_lease()?;
+        self.require_working_tree()?;
         self.remove_submodule_with_output_impl(path)
     }
 
     fn discard_worktree_changes(&self, paths: &[&Path]) -> Result<()> {
+        let _operation = self.operation_lease()?;
+        self.require_working_tree()?;
         self.discard_worktree_changes_impl(paths)
     }
 }

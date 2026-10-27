@@ -447,6 +447,68 @@ pub enum LargeFileCommand {
 }
 
 impl LargeFileCommand {
+    pub fn repository_requirement(&self) -> crate::domain::RepositoryRequirement {
+        use crate::domain::{DiffTarget, RepositoryRequirement};
+        match self {
+            Self::LfsFetchAll
+            | Self::LfsPushAll { .. }
+            | Self::LfsPrune
+            | Self::LfsFsck
+            | Self::LfsInstall
+            | Self::AnnexGetKeys { .. }
+            | Self::AnnexPull { .. }
+            | Self::AnnexPush { .. }
+            | Self::AnnexSync { .. }
+            | Self::AnnexInit
+            | Self::AnnexEnableRemote { .. }
+            | Self::AnnexInitRemote { .. }
+            | Self::AnnexTrust { .. }
+            | Self::AnnexDescribe { .. }
+            | Self::AnnexNumcopies { .. }
+            | Self::AnnexFsck
+            | Self::AnnexRestage
+            | Self::AnnexDropUnused { .. } => RepositoryRequirement::Repository,
+            Self::LfsFetchForDiff { target } => match target {
+                DiffTarget::Commit { .. }
+                | DiffTarget::CommitRange {
+                    to_commit_id: Some(_),
+                    ..
+                } => RepositoryRequirement::Repository,
+                DiffTarget::WorkingTree { .. }
+                | DiffTarget::CommitRange {
+                    to_commit_id: None, ..
+                } => RepositoryRequirement::WorkingTree,
+            },
+            Self::LfsUnlock { force, .. } => {
+                if *force {
+                    RepositoryRequirement::Repository
+                } else {
+                    RepositoryRequirement::WorkingTree
+                }
+            }
+            Self::AnnexGet { paths, .. }
+            | Self::AnnexDrop { paths, .. }
+            | Self::AnnexCopy { paths, .. }
+            | Self::AnnexMove { paths, .. } => {
+                if paths.is_empty() {
+                    RepositoryRequirement::Repository
+                } else {
+                    RepositoryRequirement::WorkingTree
+                }
+            }
+            Self::LfsPull { .. }
+            | Self::LfsLock { .. }
+            | Self::LfsTrack { .. }
+            | Self::AnnexUnlock { .. }
+            | Self::AnnexLock { .. }
+            | Self::AnnexAdd { .. }
+            | Self::AnnexAdjust { .. }
+            | Self::AnnexLeaveAdjusted { .. }
+            | Self::AnnexWebapp
+            | Self::AnnexStopAssistant => RepositoryRequirement::WorkingTree,
+        }
+    }
+
     /// Short name for activity rows and the command log.
     pub fn label(&self) -> &'static str {
         match self {
@@ -649,6 +711,165 @@ pub fn lfs_include_pattern(path: &std::path::Path) -> Option<String> {
 mod command_tests {
     use super::*;
     use std::path::Path;
+
+    #[test]
+    fn repository_requirements_preserve_path_and_force_intent() {
+        use crate::domain::RepositoryRequirement::{Repository, WorkingTree};
+        for paths in [Vec::new(), vec![PathBuf::from("movie.mkv")]] {
+            let expected = if paths.is_empty() {
+                Repository
+            } else {
+                WorkingTree
+            };
+            for command in [
+                LargeFileCommand::AnnexGet {
+                    paths: paths.clone(),
+                    from: None,
+                },
+                LargeFileCommand::AnnexDrop {
+                    paths: paths.clone(),
+                    from: None,
+                    force: true,
+                },
+                LargeFileCommand::AnnexCopy {
+                    paths: paths.clone(),
+                    to: "archive".into(),
+                },
+                LargeFileCommand::AnnexMove {
+                    paths: paths.clone(),
+                    to: "archive".into(),
+                },
+            ] {
+                assert_eq!(command.repository_requirement(), expected, "{command:?}");
+            }
+            for force in [false, true] {
+                let command = LargeFileCommand::LfsUnlock {
+                    paths: paths.clone(),
+                    force,
+                };
+                assert_eq!(
+                    command.repository_requirement(),
+                    if force { Repository } else { WorkingTree }
+                );
+            }
+            assert_eq!(
+                LargeFileCommand::LfsPull {
+                    paths: paths.clone()
+                }
+                .repository_requirement(),
+                WorkingTree
+            );
+            assert_eq!(
+                LargeFileCommand::LfsLock {
+                    paths: paths.clone()
+                }
+                .repository_requirement(),
+                WorkingTree
+            );
+            assert_eq!(
+                LargeFileCommand::AnnexAdd {
+                    paths: paths.clone()
+                }
+                .repository_requirement(),
+                WorkingTree
+            );
+            assert_eq!(
+                LargeFileCommand::AnnexUnlock {
+                    paths: paths.clone()
+                }
+                .repository_requirement(),
+                WorkingTree
+            );
+            assert_eq!(
+                LargeFileCommand::AnnexLock { paths }.repository_requirement(),
+                WorkingTree
+            );
+        }
+        for content in [false, true] {
+            for command in [
+                LargeFileCommand::AnnexPull { content },
+                LargeFileCommand::AnnexPush { content },
+                LargeFileCommand::AnnexSync { content },
+            ] {
+                assert_eq!(command.repository_requirement(), Repository, "{command:?}");
+                assert!(command.writes_worktree());
+            }
+        }
+        for command in [
+            LargeFileCommand::LfsFetchAll,
+            LargeFileCommand::LfsPrune,
+            LargeFileCommand::LfsFsck,
+            LargeFileCommand::LfsInstall,
+            LargeFileCommand::AnnexGetKeys {
+                keys: vec!["key".into()],
+            },
+            LargeFileCommand::AnnexInit,
+            LargeFileCommand::AnnexFsck,
+            LargeFileCommand::AnnexRestage,
+        ] {
+            assert_eq!(command.repository_requirement(), Repository, "{command:?}");
+        }
+        for command in [
+            LargeFileCommand::AnnexWebapp,
+            LargeFileCommand::AnnexStopAssistant,
+            LargeFileCommand::AnnexLeaveAdjusted {
+                base: "main".into(),
+            },
+        ] {
+            assert_eq!(command.repository_requirement(), WorkingTree, "{command:?}");
+        }
+    }
+
+    #[test]
+    fn lfs_diff_fetch_requires_committed_targets_in_bare_mode() {
+        use crate::domain::{
+            CommitId, DiffArea, DiffTarget,
+            RepositoryRequirement::{Repository, WorkingTree},
+        };
+        let commit = CommitId("abc".into());
+        let path = PathBuf::from("movie.mkv");
+        for (target, expected) in [
+            (
+                DiffTarget::Commit {
+                    commit_id: commit.clone(),
+                    path: path.clone(),
+                    old_path: None,
+                },
+                Repository,
+            ),
+            (
+                DiffTarget::WorkingTree {
+                    path,
+                    area: DiffArea::Unstaged,
+                    worktree: None,
+                },
+                WorkingTree,
+            ),
+            (
+                DiffTarget::CommitRange {
+                    from_commit_id: commit.clone(),
+                    to_commit_id: Some(commit.clone()),
+                    path: None,
+                    old_path: None,
+                },
+                Repository,
+            ),
+            (
+                DiffTarget::CommitRange {
+                    from_commit_id: commit,
+                    to_commit_id: None,
+                    path: None,
+                    old_path: None,
+                },
+                WorkingTree,
+            ),
+        ] {
+            assert_eq!(
+                LargeFileCommand::LfsFetchForDiff { target }.repository_requirement(),
+                expected
+            );
+        }
+    }
 
     #[test]
     fn include_patterns_anchor_and_escape_paths() {

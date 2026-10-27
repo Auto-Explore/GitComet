@@ -19,11 +19,33 @@ pub fn absolute_identity(path: &Path) -> io::Result<PathBuf> {
     Ok(canonical_path(absolute.parent().ok_or_else(|| invalid("Missing parent"))?)?.join(name))
 }
 
-/// An explicit replacement may recreate deleted parents. Resolve the existing
-/// ancestor first, then create only ordinary directories beneath that identity.
-pub(super) fn save_identity(path: &Path, recreate: bool) -> io::Result<PathBuf> {
+pub(super) struct ResolvedSavePath {
+    pub path: PathBuf,
+    missing_parents_root: Option<PathBuf>,
+}
+
+pub(super) fn resolve_save_worktree(root: &Path, recreate: bool) -> io::Result<PathBuf> {
+    match canonical_path(root) {
+        Ok(root) => return Ok(root),
+        Err(error) if recreate && error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
+    }
+    let root = resolve_save_path(root, true)?.path;
+    match fs::symlink_metadata(&root) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(root),
+        Err(error) => Err(error),
+        Ok(_) => Err(invalid("A save parent is not a regular directory")),
+    }
+}
+
+pub(super) fn resolve_save_path(path: &Path, recreate: bool) -> io::Result<ResolvedSavePath> {
     match absolute_identity(path) {
-        Ok(path) => return Ok(path),
+        Ok(path) => {
+            return Ok(ResolvedSavePath {
+                path,
+                missing_parents_root: None,
+            });
+        }
         Err(error) if recreate && error.kind() == io::ErrorKind::NotFound => {}
         Err(error) => return Err(error),
     }
@@ -50,6 +72,21 @@ pub(super) fn save_identity(path: &Path, recreate: bool) -> io::Result<PathBuf> 
     let root = canonical_path(ancestor)?;
     let target = root.join(&relative);
     protect(&target, false, &Cancellation::default())?;
+    Ok(ResolvedSavePath {
+        path: target,
+        missing_parents_root: Some(root),
+    })
+}
+
+pub(super) fn save_identity(path: &Path, recreate: bool) -> io::Result<PathBuf> {
+    let resolved = resolve_save_path(path, recreate)?;
+    let Some(root) = resolved.missing_parents_root else {
+        return Ok(resolved.path);
+    };
+    let relative = resolved
+        .path
+        .strip_prefix(&root)
+        .map_err(|error| invalid(error.to_string()))?;
     let mut parent = PathBuf::new();
     for component in relative.parent().unwrap().components() {
         parent.push(component.as_os_str());
@@ -63,7 +100,7 @@ pub(super) fn save_identity(path: &Path, recreate: bool) -> io::Result<PathBuf> 
             return Err(invalid("A save parent is not a regular directory"));
         }
     }
-    crate::path_utils::symlink_free_write_target(&root, &relative)
+    crate::path_utils::symlink_free_write_target(&root, relative)
 }
 
 /// Use the same Windows drive/UNC spelling as repository workdirs.

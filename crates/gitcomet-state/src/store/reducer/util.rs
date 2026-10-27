@@ -706,6 +706,17 @@ pub(super) fn append_requested_status_refresh_effects(
     repo_state: &mut RepoState,
     effects: &mut impl EffectAccumulator,
 ) {
+    if repo_state.is_bare() {
+        repo_state.set_status(Loadable::Ready(Arc::new(
+            gitcomet_core::domain::RepoStatus {
+                staged: Arc::new(Vec::new()),
+                unstaged: Arc::new(Vec::new()),
+            },
+        )));
+        repo_state.set_uncommitted_line_stats(Loadable::Ready(Arc::default()));
+        repo_state.set_uncommitted_large_files(Arc::default());
+        return;
+    }
     let repo_id = repo_state.id;
     let load_worktree = repo_state.loads_in_flight.request(LoadKind::WorktreeStatus);
     let load_staged = repo_state.loads_in_flight.request(LoadKind::StagedStatus);
@@ -777,6 +788,12 @@ fn append_requested_rebase_and_merge_refresh_effects(
     repo_state: &mut RepoState,
     effects: &mut impl EffectAccumulator,
 ) {
+    if repo_state.is_bare() {
+        repo_state.set_rebase_in_progress(Loadable::Ready(false));
+        repo_state.set_sequencer_state(Loadable::Ready(Default::default()));
+        repo_state.set_merge_commit_message(Loadable::Ready(None));
+        return;
+    }
     let repo_id = repo_state.id;
     let load_rebase = repo_state.loads_in_flight.request(LoadKind::RebaseState);
     let load_merge_commit_message = repo_state
@@ -798,11 +815,12 @@ pub(super) fn refresh_primary_effects(repo_state: &mut RepoState) -> Vec<Effect>
 }
 
 /// The request for a fresh first page of `repo_state`'s history, under whatever
-/// scope and author filter it currently has.
+/// walk and author filter it currently has.
 pub(super) fn first_page_log_request(repo_state: &RepoState) -> crate::model::PendingLogLoad {
     crate::model::PendingLogLoad {
-        scope: repo_state.history_state.history_scope,
+        walk: repo_state.history_walk(),
         author: repo_state.history_state.history_author_filter.clone(),
+        focus: repo_state.history_state.history_focus.clone(),
         limit: DEFAULT_LOG_PAGE_SIZE,
         cursor: None,
     }
@@ -835,16 +853,18 @@ pub(super) fn request_log_effect(
     let repo_id = repo_state.id;
     let seq = repo_state.loads_in_flight.request_log(load.clone())?;
     let crate::model::PendingLogLoad {
-        scope,
+        walk,
         author,
+        focus,
         limit,
         cursor,
     } = load;
     Some(Effect::LoadLog {
         repo_id,
         seq,
-        scope,
+        walk,
         author,
+        focus,
         limit,
         cursor,
     })
@@ -857,9 +877,10 @@ pub(super) fn append_refresh_primary_effects(
     let repo_id = repo_state.id;
     let log_request = refresh_log_request(repo_state);
 
-    if let Some(seq) = repo_state
-        .loads_in_flight
-        .request_primary_refresh_batch(log_request.clone())
+    if !repo_state.is_bare()
+        && let Some(seq) = repo_state
+            .loads_in_flight
+            .request_primary_refresh_batch(log_request.clone())
     {
         repo_state.set_log_loading_more(false);
         effects.push_effect(Effect::References(ReferenceEffect::LoadHeadBranch {
@@ -875,8 +896,9 @@ pub(super) fn append_refresh_primary_effects(
         effects.push_effect(Effect::LoadLog {
             repo_id,
             seq,
-            scope: log_request.scope,
+            walk: log_request.walk,
             author: log_request.author,
+            focus: log_request.focus,
             limit: log_request.limit,
             cursor: log_request.cursor,
         });

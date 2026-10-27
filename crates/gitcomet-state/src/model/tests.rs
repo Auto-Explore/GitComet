@@ -527,7 +527,8 @@ fn file_status(path: &str, kind: FileStatusKind) -> FileStatus {
 
 fn log_request(scope: LogScope, author: Option<&str>, cursor: Option<LogCursor>) -> PendingLogLoad {
     PendingLogLoad {
-        scope,
+        focus: Default::default(),
+        walk: scope.into(),
         author: author.map(str::to_owned),
         limit: 20,
         cursor,
@@ -536,6 +537,25 @@ fn log_request(scope: LogScope, author: Option<&str>, cursor: Option<LogCursor>)
 
 fn test_log_request() -> PendingLogLoad {
     log_request(LogScope::FullReachable, None, None)
+}
+
+#[test]
+fn a_focus_change_supersedes_the_current_walk_and_pending_pagination() {
+    let mut loads = RepoLoadsInFlight::default();
+    let initial = test_log_request();
+    let first = loads.request_log(initial.clone()).unwrap();
+    let mut pagination = initial.clone();
+    pagination.cursor = Some(test_cursor("next"));
+    assert!(loads.request_log(pagination).is_none());
+    let mut focused = initial;
+    focused.focus = HistoryFocusSet::from_iter([HistoryFocus::local_branch("feature")]);
+    let replacement = loads.request_log(focused).unwrap();
+    assert_ne!(replacement, first);
+    assert!(!loads.is_active_log_reply(first));
+    assert!(loads.is_active_log_reply(replacement));
+    assert!(loads.finish_log(first, |_| {}).is_none());
+    assert!(loads.finish_log(replacement, |_| {}).is_none());
+    assert!(!loads.log_in_flight());
 }
 
 fn test_cursor(id: &str) -> LogCursor {
@@ -1547,4 +1567,44 @@ fn feedback_numbers_from_before_a_restart_count_every_entry_as_new() {
     assert_eq!(messages(feedback.diagnostics_after(6)), ["new"]);
     feedback.acknowledge(6, 6);
     assert_eq!(messages(&feedback.diagnostics), ["new"]);
+}
+
+#[test]
+fn history_remote_branches_leave_out_only_the_hidden_remotes() {
+    let mut repo = RepoState::new_opening(
+        RepoId(1),
+        RepoSpec {
+            workdir: PathBuf::from("/repo"),
+        },
+    );
+    let branch = |remote: &str| RemoteBranch {
+        remote: remote.into(),
+        name: "main".into(),
+        target: CommitId("c".into()),
+    };
+    let loaded = Arc::new(vec![
+        branch("origin"),
+        branch("upstream"),
+        branch("origin2"),
+    ]);
+    repo.remote_branches = Loadable::Ready(Arc::clone(&loaded));
+    assert!(
+        Arc::ptr_eq(&repo.history_remote_branches(), &loaded),
+        "nothing hidden shares the loaded list"
+    );
+
+    repo.shared_preferences = Some(RepositoryPreferencesSnapshot {
+        key: RepositoryKey::Worktree(PathBuf::from("/repo")),
+        revision: 1,
+        preferences: Arc::new(SharedRepositoryPreferences {
+            history_hidden_remotes: ["origin".to_string()].into(),
+            ..Default::default()
+        }),
+    });
+    assert_eq!(
+        *repo.history_remote_branches(),
+        [branch("upstream"), branch("origin2")]
+    );
+    repo.remote_branches = Loadable::Loading;
+    assert!(repo.history_remote_branches().is_empty());
 }

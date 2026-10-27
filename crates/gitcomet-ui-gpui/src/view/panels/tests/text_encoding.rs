@@ -43,6 +43,7 @@ fn file_state_for_path(
     encoding: Option<TextEncoding>,
 ) -> Arc<AppState> {
     let mut repo = opening_repo_state(repo_id, workdir);
+    repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
     repo.diff_state.diff_target = Some(gitcomet_core::domain::DiffTarget::working_tree(
         PathBuf::from(path),
         gitcomet_core::domain::DiffArea::Unstaged,
@@ -1907,10 +1908,10 @@ fn review_detect_encoding_with_edits_is_a_warning(cx: &mut gpui::TestAppContext)
 #[gpui::test]
 fn review_converted_save_keeps_decode_key_while_attributes_load(cx: &mut gpui::TestAppContext) {
     use gitcomet_core::text_format::TextFormat;
-    let (view, cx) = open_window(cx);
-    let workdir = tempfile::tempdir().unwrap();
     let repo_id = RepoId(9695);
     for attribute_encoding in [None, Some(EncodingAttr::from_label("windows-1252"))] {
+        let (view, cx) = open_window(cx);
+        let workdir = tempfile::tempdir().unwrap();
         // Each pass's save really lands, so start every pass from the same bytes.
         std::fs::write(workdir.path().join(FILE), b"caf\xe9\n").unwrap();
         let saved_override = attribute_encoding.as_ref().map(|_| TextEncoding::UTF_8);

@@ -1456,6 +1456,7 @@ mod tests {
         use gitcomet_state::model::{LoadKind, Loadable};
         let mut repo = repo_state("/tmp/remote-tag-loading");
         repo.open = Loadable::Ready(());
+        repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
         repo.loads_in_flight.request(LoadKind::RemoteTags);
         assert!(!RepoTabsBarView::is_repo_busy(&repo));
 
@@ -1472,6 +1473,7 @@ mod tests {
         use gitcomet_state::model::{LoadKind, Loadable};
         let mut repo = repo_state("/tmp/focus-refresh");
         repo.open = Loadable::Ready(());
+        repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
         repo.head_branch = Loadable::Ready("main".into());
         repo.status = Loadable::Ready(std::sync::Arc::new(gitcomet_core::domain::RepoStatus {
             staged: Default::default(),

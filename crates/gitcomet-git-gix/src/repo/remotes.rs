@@ -987,18 +987,6 @@ impl GixRepo {
         let iter = refs.remote_branches().map_err(|e| {
             Error::new(ErrorKind::Backend(format!("gix remote_branches: {e}"))).with_source(e)
         })?;
-        let remotes = repo
-            .remote_names()
-            .into_iter()
-            .map(|name| {
-                repo.find_remote(&name).map_err(|e| {
-                    Error::new(ErrorKind::Backend(format!(
-                        "gix find_remote {}: {e}",
-                        name.to_str_lossy()
-                    )))
-                })
-            })
-            .collect::<Result<Vec<_>>>()?;
 
         let mut tracking_refs = Vec::with_capacity(iter.size_hint().0);
         for reference in iter {
@@ -1022,53 +1010,23 @@ impl GixRepo {
             tracking_refs.push((reference.name().to_owned(), target));
         }
 
-        // Reverse-map the complete tracking-ref set through each remote once.
         // A local ref can legitimately produce more than one row when remote
         // namespaces overlap; the remote and branch boundary remains explicit
         // in every result.
         let mut branches = Vec::with_capacity(tracking_refs.len());
-        for remote in &remotes {
-            cancellation.check_cancelled()?;
-            let Some(remote_name) = remote.name() else {
+        for owner in tracking_ref_owners(&repo, &tracking_refs, cancellation)? {
+            let Some(name) = owner.source.strip_prefix(b"refs/heads/") else {
                 continue;
             };
-            let matches = gix::refspec::MatchGroup::from_fetch_specs(
-                remote
-                    .refspecs(gix::remote::Direction::Fetch)
-                    .iter()
-                    .map(|spec| spec.to_ref()),
-            )
-            .match_rhs(tracking_refs.iter().map(|(name, target)| {
-                gix::refspec::match_group::Item {
-                    full_ref_name: name.as_bstr(),
-                    target: target.as_ref(),
-                    object: None,
-                }
-            }));
-
-            for mapping in matches.mappings {
-                let Some(item_index) = mapping.item_index else {
-                    continue;
-                };
-                let gix::refspec::match_group::SourceRef::FullName(source) = mapping.lhs else {
-                    continue;
-                };
-                let Some(name) = source.as_ref().strip_prefix(b"refs/heads/") else {
-                    continue;
-                };
-                let name = name.to_str_lossy();
-                if name.is_empty() || name == "HEAD" {
-                    continue;
-                }
-                let Some((_, target)) = tracking_refs.get(item_index) else {
-                    continue;
-                };
-                branches.push(RemoteBranch {
-                    remote: remote_name.as_bstr().to_str_lossy().into_owned(),
-                    name: name.into_owned(),
-                    target: CommitId(oid_to_arc_str(target)),
-                });
+            let name = name.to_str_lossy();
+            if name.is_empty() || name == "HEAD" {
+                continue;
             }
+            branches.push(RemoteBranch {
+                remote: owner.remote,
+                name: name.into_owned(),
+                target: CommitId(oid_to_arc_str(&tracking_refs[owner.tracking_ix].1)),
+            });
         }
 
         // Stable sort: dedup keeps the first row, so ties must stay in
@@ -2662,6 +2620,141 @@ impl GixRepo {
             self.unlink_missing_remote_upstreams(UpstreamCleanupScope::Remotes(&remotes.names));
         Ok(append_unlinked_upstreams(output, &unlinked))
     }
+}
+
+/// A remote-tracking ref one remote's fetch refspecs write.
+struct TrackingRefOwner {
+    tracking_ix: usize,
+    remote: String,
+    /// The remote's ref it mirrors, e.g. `refs/heads/main`.
+    source: gix::bstr::BString,
+}
+
+/// Reverse-maps `tracking_refs` through every remote's fetch refspecs once,
+/// in remote order. A ref belongs to several remotes when their namespaces
+/// overlap, and to none when no refspec writes it.
+fn tracking_ref_owners(
+    repo: &gix::Repository,
+    tracking_refs: &[(gix::refs::FullName, gix::ObjectId)],
+    cancellation: &CancellationToken,
+) -> Result<Vec<TrackingRefOwner>> {
+    let mut owners = Vec::with_capacity(tracking_refs.len());
+    for name in repo.remote_names() {
+        cancellation.check_cancelled()?;
+        let remote = repo.find_remote(&name).map_err(|e| {
+            Error::new(ErrorKind::Backend(format!(
+                "gix find_remote {}: {e}",
+                name.to_str_lossy()
+            )))
+        })?;
+        let Some(remote_name) = remote.name() else {
+            continue;
+        };
+        let remote_name = remote_name.as_bstr().to_str_lossy().into_owned();
+        let matches = gix::refspec::MatchGroup::from_fetch_specs(
+            remote
+                .refspecs(gix::remote::Direction::Fetch)
+                .iter()
+                .map(|spec| spec.to_ref()),
+        )
+        .match_rhs(tracking_refs.iter().map(|(name, target)| {
+            gix::refspec::match_group::Item {
+                full_ref_name: name.as_bstr(),
+                target: target.as_ref(),
+                object: None,
+            }
+        }));
+        for mapping in matches.mappings {
+            let Some(tracking_ix) = mapping.item_index else {
+                continue;
+            };
+            let gix::refspec::match_group::SourceRef::FullName(source) = mapping.lhs else {
+                continue;
+            };
+            owners.push(TrackingRefOwner {
+                tracking_ix,
+                remote: remote_name.clone(),
+                source: source.as_ref().to_owned(),
+            });
+        }
+    }
+    Ok(owners)
+}
+
+/// Every ref under `refs/remotes/`, paired with a null target for
+/// [`tracking_ref_owners`]: refspecs map by name, so the target is unused.
+fn remote_tracking_ref_names(
+    repo: &gix::Repository,
+    refs: &crate::refs::RefsView<'_>,
+    cancellation: &CancellationToken,
+) -> Result<Vec<(gix::refs::FullName, gix::ObjectId)>> {
+    let iter = refs.remote_branches().map_err(|e| {
+        Error::new(ErrorKind::Backend(format!("gix remote_branches: {e}"))).with_source(e)
+    })?;
+    let mut tracking_refs = Vec::new();
+    for reference in iter {
+        cancellation.check_cancelled()?;
+        let reference = reference.map_err(|e| {
+            Error::new(ErrorKind::Backend(format!("gix ref iter: {e}"))).with_source(e)
+        })?;
+        tracking_refs.push((
+            reference.name().to_owned(),
+            gix::ObjectId::null(repo.object_hash()),
+        ));
+    }
+    Ok(tracking_refs)
+}
+
+/// The remote-tracking refs `remote` writes through its fetch refspecs: the
+/// refs the sidebar lists under that remote, wherever the refspecs put them.
+/// Its `HEAD` alias names a branch already in the list and is left out.
+pub(super) fn tracking_refs_of_remote(
+    repo: &gix::Repository,
+    refs: &crate::refs::RefsView<'_>,
+    remote: &str,
+    cancellation: &CancellationToken,
+) -> Result<Vec<gix::refs::FullName>> {
+    let tracking_refs = remote_tracking_ref_names(repo, refs, cancellation)?;
+    let mut owned = vec![false; tracking_refs.len()];
+    for owner in tracking_ref_owners(repo, &tracking_refs, cancellation)? {
+        if owner.remote == remote && owner.source != "refs/heads/HEAD" {
+            owned[owner.tracking_ix] = true;
+        }
+    }
+    Ok(tracking_refs
+        .into_iter()
+        .zip(owned)
+        .filter_map(|((name, _), owned)| owned.then_some(name))
+        .collect())
+}
+
+/// The remote-tracking refs that belong only to `hidden_remotes`: refs a shown
+/// remote also writes, or that no remote writes, stay in the walk.
+pub(super) fn hidden_remote_tracking_refs(
+    repo: &gix::Repository,
+    refs: &crate::refs::RefsView<'_>,
+    hidden_remotes: &[std::sync::Arc<str>],
+    cancellation: &CancellationToken,
+) -> Result<FxHashSet<gix::refs::FullName>> {
+    if hidden_remotes.is_empty() {
+        return Ok(FxHashSet::default());
+    }
+    let tracking_refs = remote_tracking_ref_names(repo, refs, cancellation)?;
+    let mut hidden = vec![false; tracking_refs.len()];
+    let mut shown = vec![false; tracking_refs.len()];
+    for owner in tracking_ref_owners(repo, &tracking_refs, cancellation)? {
+        if hidden_remotes.iter().any(|name| **name == *owner.remote) {
+            hidden[owner.tracking_ix] = true;
+        } else {
+            shown[owner.tracking_ix] = true;
+        }
+    }
+    Ok(tracking_refs
+        .into_iter()
+        .enumerate()
+        .filter(|(ix, _)| hidden[*ix] && !shown[*ix])
+        .map(|(_, (name, _))| name)
+        .collect())
 }
 
 #[cfg(test)]

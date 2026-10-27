@@ -5,7 +5,7 @@ use gitcomet_core::domain::Upstream;
 static MERGETOOL_TRACE_TEST_LOCK: std::sync::LazyLock<std::sync::Mutex<()>> =
     std::sync::LazyLock::new(|| std::sync::Mutex::new(()));
 
-fn schedule_effect_with_state_for_test(
+pub(super) fn schedule_effect_with_state_for_test(
     executor: &super::executor::TaskExecutor,
     session_persist_executor: &super::executor::TaskExecutor,
     backend: &Arc<dyn GitBackend>,

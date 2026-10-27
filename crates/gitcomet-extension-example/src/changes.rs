@@ -545,16 +545,36 @@ pub struct ChangesActions {
     context: RepositoryViewContext,
     reviews: Entity<crate::review::Reviews>,
     _observe: Subscription,
+    _state: Option<gitcomet_extension_api::StateSubscription>,
 }
 
 impl ChangesActions {
     pub fn new(context: RepositoryViewContext, cx: &mut Context<Self>) -> Self {
         let reviews = crate::review::reviews(cx);
         let observe = cx.observe(&reviews, |_, _, cx| cx.notify());
+        let view = cx.weak_entity();
+        let repository = context.repository.repo_id();
+        let state = context
+            .window
+            .observe_selected(
+                move |state| {
+                    state
+                        .repos
+                        .iter()
+                        .find(|repo| repo.id == repository)
+                        .and_then(|repo| repo.repository_mode)
+                },
+                move |_, _, cx| {
+                    let _ = view.update(cx, |_, cx| cx.notify());
+                },
+                cx,
+            )
+            .ok();
         Self {
             context,
             reviews,
             _observe: observe,
+            _state: state,
         }
     }
 }
@@ -562,6 +582,13 @@ impl ChangesActions {
 impl Render for ChangesActions {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.context.window.theme(cx);
+        let bare = self.context.window.state(cx).ok().is_some_and(|state| {
+            state
+                .repos
+                .iter()
+                .find(|repo| repo.id == self.context.repository.repo_id())
+                .is_some_and(|repo| repo.is_bare())
+        });
         let count = self
             .reviews
             .read(cx)
@@ -574,7 +601,11 @@ impl Render for ChangesActions {
             .gap_2()
             .text_size(theme.ui_text(12.0))
             .text_color(theme.colors.foreground.secondary)
-            .child("Working tree against HEAD")
+            .child(if bare {
+                "No working tree in bare mode"
+            } else {
+                "Working tree against HEAD"
+            })
             .child(
                 Button::new("example_changes_mark_reviewed", "Mark reviewed").on_click(
                     theme,

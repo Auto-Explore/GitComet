@@ -5,14 +5,14 @@ use std::sync::Arc;
 const ALL_AUTHORS_LABEL: &str = "All authors";
 
 /// What decides the author list: the repository, its loaded log and author
-/// catalog revisions, and the history scope. [`suggestions`] rebuilds the list
+/// catalog revisions, and the history walk. [`suggestions`] rebuilds the list
 /// when it changes, and the cached rows key on it.
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
 struct AuthorListKey {
     repo_id: RepoId,
     log_rev: u64,
     authors_rev: u64,
-    scope: gitcomet_core::domain::HistoryMode,
+    walk: gitcomet_core::services::HistoryWalk,
 }
 
 impl AuthorListKey {
@@ -21,7 +21,7 @@ impl AuthorListKey {
             repo_id: repo.id,
             log_rev: repo.history_state.log_rev,
             authors_rev: repo.history_state.authors.rev,
-            scope: repo.history_state.history_scope,
+            walk: repo.history_walk(),
         }
     }
 }
@@ -88,7 +88,6 @@ pub(super) fn suggestions(this: &mut PopoverHost, repo_id: RepoId) -> Arc<[Share
 
     let key = AuthorListKey::of(repo);
     let catalog = &repo.history_state.authors;
-    let scope = key.scope;
     if let Some(cached) = &this.history_author_suggestions
         && cached.key == key
     {
@@ -99,16 +98,16 @@ pub(super) fn suggestions(this: &mut PopoverHost, repo_id: RepoId) -> Arc<[Share
     let cached_for_repo = this
         .history_author_suggestions
         .as_ref()
-        .filter(|cached| cached.key.repo_id == repo_id && cached.key.scope == scope)
+        .filter(|cached| cached.key.repo_id == repo_id && cached.key.walk == key.walk)
         .map(|cached| cached.names.clone());
 
     // A filtered log only describes the author already selected, so keep the
     // last list instead — unless there is nothing to keep (a filter restored
     // from the session), where a one-name list still beats an empty one.
-    let refreshing_catalog = catalog.matches_scope(scope)
+    let refreshing_catalog = catalog.matches_walk(&key.walk)
         && matches!(catalog.names, Loadable::Loading | Loadable::Error(_));
     let authors = match &catalog.names {
-        Loadable::Ready(names) if catalog.matches_scope(scope) => {
+        Loadable::Ready(names) if catalog.matches_walk(&key.walk) => {
             Arc::from(collect_author_names(names.iter()))
         }
         _ if (filtered || refreshing_catalog) && cached_for_repo.is_some() => {

@@ -56,6 +56,11 @@ pub(super) enum StoreWorkerCommand {
     /// An ordering barrier, never a priority control command.
     #[cfg(any(test, feature = "test-support"))]
     BarrierForTest(mpsc::Sender<u64>),
+    #[cfg(test)]
+    RepoMonitorBarrierForTest {
+        repo_id: RepoId,
+        reply: mpsc::Sender<()>,
+    },
 }
 
 #[derive(Clone)]
@@ -116,6 +121,7 @@ impl StoreWorkerSender {
         preferences: Arc<super::repository_preferences::PreferenceHub>,
         filesystem: &'static std::sync::Mutex<gitcomet_core::filesystem::Filesystem>,
     ) -> Self {
+        super::repository_registry::subscribe(store_id.get(), Arc::downgrade(&alive), tx.clone());
         let subscriber_tx = tx.clone();
         let subscriber_alive = Arc::downgrade(&alive);
         preferences.subscribe(
@@ -333,6 +339,7 @@ impl StoreWorkerSender {
             return;
         }
         self.preferences.unsubscribe(self.store_id.get());
+        super::repository_registry::unsubscribe(self.store_id.get());
 
         match &self.inner {
             StoreWorkerSenderInner::Command(tx) => {
@@ -350,6 +357,17 @@ impl StoreWorkerSender {
             && let StoreWorkerSenderInner::Command(sender) = &self.inner
         {
             let _ = sender.send(StoreWorkerCommand::BarrierForTest(reply));
+        }
+        receive
+    }
+
+    #[cfg(test)]
+    pub(super) fn repo_monitor_barrier_for_test(&self, repo_id: RepoId) -> mpsc::Receiver<()> {
+        let (reply, receive) = mpsc::channel();
+        if self.is_alive()
+            && let StoreWorkerSenderInner::Command(sender) = &self.inner
+        {
+            let _ = sender.send(StoreWorkerCommand::RepoMonitorBarrierForTest { repo_id, reply });
         }
         receive
     }

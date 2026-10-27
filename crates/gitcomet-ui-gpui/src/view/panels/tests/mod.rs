@@ -1257,6 +1257,7 @@ pub(super) fn push_test_state(
     cx: &mut impl gpui::AppContext,
 ) {
     this.store.replace_snapshot_for_test(Arc::clone(&state));
+    crate::view::test_support::install_working_tree_repositories(&this.store);
     this.ui_model.update(cx, |model, cx| {
         model.set_state(state, cx);
     });

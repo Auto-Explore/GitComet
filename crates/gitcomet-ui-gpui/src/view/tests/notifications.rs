@@ -130,6 +130,7 @@ fn worktree_tooltip_includes_branch_name() {
     );
 
     repo.worktrees = Loadable::Ready(Arc::new(vec![Worktree {
+        bare: false,
         path: PathBuf::from("linked-worktree"),
         head: None,
         branch: Some("feature/tooltip".to_string()),

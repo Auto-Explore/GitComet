@@ -1,9 +1,44 @@
 use super::*;
 
+#[test]
+fn a_focused_walk_does_not_infer_detached_head_from_its_first_commit() {
+    use gitcomet_core::domain::{HistoryFocus, HistoryFocusSet};
+
+    let commits = vec![commit("feature", &["base"], "feature tip")];
+    let visible = build_history_visible_indices(&commits, &FxHashSet::default());
+    let focus = HistoryFocusSet::from_iter([HistoryFocus::local_branch("feature")]);
+    let head = CommitId("actual-head".into());
+    assert_eq!(
+        resolve_history_head_target(
+            LogScope::FirstParent,
+            &focus,
+            None,
+            Some("HEAD"),
+            &[],
+            &visible,
+            &commits,
+        ),
+        None,
+    );
+    assert_eq!(
+        resolve_history_head_target(
+            LogScope::FirstParent,
+            &focus,
+            Some(&head),
+            Some("HEAD"),
+            &[],
+            &visible,
+            &commits,
+        ),
+        Some("actual-head"),
+    );
+}
+
 fn author_run_base(commits: Vec<Commit>) -> (HistoryBaseCache, LogPage) {
     let page = log_page(commits, None);
     let base = build_history_base_cache(
         HistoryBaseCacheRequest {
+            history_focus: Default::default(),
             repo_id: RepoId(1),
             history_scope: LogScope::AllBranches,
             log_source: 0,
@@ -12,7 +47,7 @@ fn author_run_base(commits: Vec<Commit>) -> (HistoryBaseCache, LogPage) {
             detached_head_commit: None,
             head_branch_target: None,
             branches_rev: 0,
-            remote_branches_rev: 0,
+            remote_branches: Default::default(),
             stashes_rev: 0,
         },
         &page,
@@ -171,11 +206,12 @@ fn the_base_cache_indexes_every_visible_commit_by_id() {
             history_scope: LogScope::AllBranches,
             log_source: 0,
             history_author_filter: None,
+            history_focus: Default::default(),
             head_branch_rev: 0,
             detached_head_commit: None,
             head_branch_target: None,
             branches_rev: 0,
-            remote_branches_rev: 0,
+            remote_branches: Default::default(),
             stashes_rev: 0,
         },
         &page,

@@ -45,6 +45,7 @@ fn stage_gutter_repo(
     let unified = stage_gutter_unified(&path.to_string_lossy());
     let mut repo = opening_repo_state(repo_id, workdir);
     repo.open = Loadable::Ready(());
+    repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
     repo.head_branch = Loadable::Ready("main".into());
 
     let area = match &target {
@@ -757,6 +758,7 @@ fn open_generated_diff_view_with_status(
     let _ = std::fs::create_dir_all(&workdir);
     let mut repo = opening_repo_state(repo_id, &workdir);
     repo.open = Loadable::Ready(());
+    repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
     repo.head_branch = Loadable::Ready("main".into());
     set_test_file_status(
         &mut repo,

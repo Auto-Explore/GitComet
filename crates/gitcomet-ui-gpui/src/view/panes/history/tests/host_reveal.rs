@@ -33,6 +33,7 @@ fn history_of(
         },
     );
     repo.open = Loadable::Ready(());
+    repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
     repo.history_state.history_scope = scope;
     repo.branches = Loadable::Ready(Arc::new(vec![branch("main", "c000")]));
     repo.branches_rev = 1;

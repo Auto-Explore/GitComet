@@ -315,7 +315,7 @@ impl SidebarPaneView {
         let Some(repo) = self.active_repo() else {
             return;
         };
-        if repo.file_browser.source != FileSource::WorkingDirectory {
+        if repo.is_bare() || repo.file_browser.source != FileSource::WorkingDirectory {
             return;
         }
         let repo_id = repo.id;

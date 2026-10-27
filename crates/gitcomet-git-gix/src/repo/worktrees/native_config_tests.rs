@@ -7,7 +7,7 @@ fn open_config_repo(path: &Path) -> GixRepo {
     let mut permissions = gix::open::Permissions::isolated();
     permissions.config.includes = true;
     let repo = crate::open::open_worktree_repo_with(path, permissions).unwrap();
-    GixRepo::new(path.to_path_buf(), repo.into_sync())
+    GixRepo::new(path.to_path_buf(), repo.into_sync()).unwrap()
 }
 
 fn fixture(linked: bool) -> (tempfile::TempDir, GixRepo, Option<GixRepo>) {
@@ -49,7 +49,26 @@ fn assert_git_fallback(repo: &GixRepo) {
     let (actual, trace) =
         crate::command_trace::capture(|| repo.list_worktrees(&CancellationToken::new()));
     assert_eq!(actual.unwrap(), expected, "full ordered CLI rows");
-    assert_eq!(trace.len(), 1, "unsupported config must use Git: {trace:?}");
+    assert_eq!(
+        trace
+            .iter()
+            .map(|command| command.label.as_str())
+            .collect::<Vec<_>>(),
+        [
+            "git rev-parse --is-bare-repository",
+            "git worktree list --porcelain -z"
+        ]
+    );
+    let (unchanged, trace) =
+        crate::command_trace::capture(|| repo.list_worktrees(&CancellationToken::new()));
+    assert_eq!(unchanged.unwrap(), expected);
+    assert_eq!(
+        trace
+            .iter()
+            .map(|command| command.label.as_str())
+            .collect::<Vec<_>>(),
+        ["git worktree list --porcelain -z"]
+    );
 }
 
 fn unsupported_include(condition: &str, per_worktree: bool, expanded: bool, linked: bool) {

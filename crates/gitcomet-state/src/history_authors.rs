@@ -1,14 +1,14 @@
 //! On-demand author discovery, independent of history paging and author filters.
 use crate::model::{Loadable, RepoId, RepoLoadEpoch, RepoState};
-use gitcomet_core::domain::HistoryMode;
-use gitcomet_core::services::{CancellationToken, HistorySnapshot, Result};
+use gitcomet_core::domain::HistoryFocusSet;
+use gitcomet_core::services::{CancellationToken, HistorySnapshot, HistoryWalk, Result};
 use std::sync::Arc;
 
 #[derive(Clone, Debug)]
 pub struct HistoryAuthorsState {
     pub names: Loadable<Arc<[Arc<str>]>>,
     pub rev: u64,
-    pub(crate) source: Option<(HistoryMode, Option<HistorySnapshot>, RepoLoadEpoch)>,
+    pub(crate) source: Option<(HistoryWalk, Option<HistorySnapshot>, RepoLoadEpoch)>,
     pub(crate) seq: u64,
     pub(crate) cancellation: CancellationToken,
 }
@@ -40,17 +40,15 @@ impl HistoryAuthorsState {
         self.source.as_ref() != Some(&Self::source_for(repo)) || self.cancellation.is_cancelled()
     }
 
-    pub fn matches_scope(&self, scope: HistoryMode) -> bool {
-        self.source
-            .as_ref()
-            .is_some_and(|(mode, ..)| *mode == scope)
+    pub fn matches_walk(&self, walk: &HistoryWalk) -> bool {
+        self.source.as_ref().is_some_and(|(read, ..)| read == walk)
     }
 
     pub(crate) fn source_for(
         repo: &RepoState,
-    ) -> (HistoryMode, Option<HistorySnapshot>, RepoLoadEpoch) {
+    ) -> (HistoryWalk, Option<HistorySnapshot>, RepoLoadEpoch) {
         (
-            repo.history_state.history_scope,
+            repo.history_walk(),
             repo.history_state.log_snapshot.clone(),
             repo.load_epoch,
         )
@@ -74,7 +72,10 @@ pub enum HistoryAuthorsMsg {
 pub struct HistoryAuthorsEffect {
     pub repo_id: RepoId,
     pub seq: u64,
-    pub mode: HistoryMode,
+    pub walk: gitcomet_core::services::HistoryWalk,
+    /// The focus the catalog is scoped to, so the authors offered are those of
+    /// the commits actually on screen.
+    pub focus: HistoryFocusSet,
     pub cancellation: CancellationToken,
 }
 

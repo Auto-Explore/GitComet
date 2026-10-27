@@ -138,6 +138,7 @@ impl DiffRenderer {
             DiffArea::Unstaged => "icons/plus.svg",
             DiffArea::Staged => "icons/minus.svg",
         };
+        let is_bare = self.active_repo().is_some_and(RepoState::is_bare);
         components::ActionButton::new("stage", action.label(), move |(), cx| {
             let _ = handle.update(cx, |_, window, cx| {
                 let _ = pane.update(cx, |pane, cx| {
@@ -148,8 +149,13 @@ impl DiffRenderer {
             });
         })
         .with_icon(icon)
+        .enabled(!is_bare)
         .with_shortcut("space")
-        .with_tooltip(action.tooltip())
+        .with_tooltip(if is_bare {
+            gitcomet_core::domain::WORKING_TREE_REQUIRED_MESSAGE.into()
+        } else {
+            action.tooltip()
+        })
         .framed()
         .render("diff_bar_stage", (), theme, scale)
     }

@@ -174,6 +174,8 @@ fn open_repo_tab(
         id_alloc,
         state,
         Msg::Internal(crate::msg::InternalMsg::RepoOpenedOk {
+            repository_mode: gitcomet_core::domain::RepositoryMode::WorkingTree,
+            head_commit: None,
             preferences: None,
             repo_id,
             spec: spec.clone(),
