@@ -16,6 +16,7 @@ pub mod edit_signature;
 pub mod error;
 pub mod file_diff;
 pub mod filesystem;
+pub mod git_execution_log;
 pub mod git_operation;
 pub mod git_ops_trace;
 pub mod git_progress;
