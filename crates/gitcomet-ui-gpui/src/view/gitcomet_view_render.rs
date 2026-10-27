@@ -119,18 +119,21 @@ impl Render for GitCometView {
             );
         }
 
-        if let Some((repo_id, name)) = self.pending_force_delete_branch_prompt.take()
-            && self.active_repo_id() == Some(repo_id)
+        if self
+            .pending_force_delete_branch_prompt
+            .as_ref()
+            .is_some_and(|prompt| self.active_repo_id() == Some(prompt.repo_id))
+            && let Some(prompt) = self.pending_force_delete_branch_prompt.take()
         {
             if self.pending_force_delete_branch_centered {
                 self.open_popover_centered(
-                    PopoverKind::ForceDeleteBranchConfirm { repo_id, name },
+                    PopoverKind::ForceDeleteBranchConfirm(prompt),
                     window,
                     cx,
                 );
             } else {
                 self.open_popover_at(
-                    PopoverKind::ForceDeleteBranchConfirm { repo_id, name },
+                    PopoverKind::ForceDeleteBranchConfirm(prompt),
                     self.last_mouse_pos,
                     window,
                     cx,
@@ -138,15 +141,14 @@ impl Render for GitCometView {
             }
         }
 
-        if let Some((repo_id, path, branch)) = self.pending_force_remove_worktree_prompt.take()
-            && self.active_repo_id() == Some(repo_id)
+        if self
+            .pending_force_remove_worktree_prompt
+            .as_ref()
+            .is_some_and(|prompt| self.active_repo_id() == Some(prompt.repo_id))
+            && let Some(prompt) = self.pending_force_remove_worktree_prompt.take()
         {
             self.open_popover_at(
-                PopoverKind::ForceRemoveWorktreeConfirm {
-                    repo_id,
-                    path,
-                    branch,
-                },
+                PopoverKind::ForceRemoveWorktreeConfirm(prompt),
                 self.last_mouse_pos,
                 window,
                 cx,

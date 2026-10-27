@@ -1,8 +1,8 @@
 use crate::model::GitLogTagFetchMode;
 use crate::model::{
     BranchExistsPromptState, ConflictFileLoadMode, DefaultTagType, FileBrowserSettings,
-    GitOperationOuterOutcome, MaintenanceSettings, RemoteSettings, RepoId, SidebarDataRequest,
-    SidebarMode,
+    ForceDeleteBranchPrompt, ForceRemoveWorktreePrompt, GitOperationOuterOutcome,
+    MaintenanceSettings, RemoteSettings, RepoId, SidebarDataRequest, SidebarMode,
 };
 use gitcomet_core::auth::StagedGitAuth;
 use gitcomet_core::conflict_session::ConflictSession;
@@ -876,6 +876,9 @@ pub enum Msg {
     ShowBranchExistsPrompt {
         prompt: BranchExistsPromptState,
     },
+    DismissForceDeleteBranchPrompt {
+        prompt: ForceDeleteBranchPrompt,
+    },
     RenameBranch {
         repo_id: RepoId,
         old_name: String,
@@ -928,10 +931,16 @@ pub enum Msg {
     RemoveWorktree {
         repo_id: RepoId,
         path: PathBuf,
+        /// The local branch to delete once the worktree is gone.
+        delete_branch: Option<String>,
     },
     ForceRemoveWorktree {
         repo_id: RepoId,
         path: PathBuf,
+        delete_branch: Option<String>,
+    },
+    DismissForceRemoveWorktreePrompt {
+        prompt: ForceRemoveWorktreePrompt,
     },
     AddSubmodule {
         repo_id: RepoId,
@@ -1819,6 +1828,11 @@ pub enum InternalMsg {
     BranchAlreadyExists {
         action: RepoActionKind,
         prompt: BranchExistsPromptState,
+    },
+    /// `git branch -d` refused `name` because it is not fully merged.
+    BranchNotFullyMerged {
+        repo_id: RepoId,
+        name: String,
     },
     /// The action was carried out in (or redirected to) another worktree that
     /// has the branch checked out; on success that worktree is opened.

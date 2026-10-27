@@ -448,25 +448,6 @@ impl GitCometView {
         });
     }
 
-    pub(in crate::view) fn register_pending_worktree_branch_removal(
-        &mut self,
-        repo_id: RepoId,
-        path: std::path::PathBuf,
-        branch: String,
-    ) {
-        self.pending_worktree_branch_removals
-            .insert((repo_id, path), branch);
-    }
-
-    pub(super) fn take_pending_worktree_branch_removal(
-        &mut self,
-        repo_id: RepoId,
-        path: &std::path::Path,
-    ) -> Option<String> {
-        self.pending_worktree_branch_removals
-            .remove(&(repo_id, path.to_path_buf()))
-    }
-
     #[cfg(test)]
     pub fn new(
         store: AppStore,
@@ -1333,7 +1314,6 @@ impl GitCometView {
             pending_hook_activity_open: None,
             minimized_hook_activity_chains: FxHashSet::default(),
             minimized_hook_activity_repos: FxHashSet::default(),
-            pending_worktree_branch_removals: FxHashMap::default(),
             startup_crash_report,
             #[cfg(target_os = "macos")]
             recent_repos_menu_fingerprint: ui_session.recent_repos.clone(),

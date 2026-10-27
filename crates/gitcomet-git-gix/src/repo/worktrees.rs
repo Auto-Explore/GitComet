@@ -103,6 +103,8 @@ impl GixRepo {
 
     pub(super) fn remove_worktree_with_output_impl(&self, path: &Path) -> Result<CommandOutput> {
         let mut cmd = self.git_workdir_cmd();
+        // The refusals `--force` overrides are recognized by Git's English text.
+        cmd.env("LC_ALL", "C");
         let label = push_worktree_args(&mut cmd, &["remove"], path, None)?;
         run_git_with_output(cmd, &label)
     }
@@ -219,8 +221,7 @@ fn push_worktree_args(
     if let Some(reference) = reference {
         validate_ref_like_arg(reference, "worktree reference")?;
     }
-    // The label is a human-readable summary that the UI also inspects to
-    // recover the worktree path, so `--` stays an argv concern only.
+    // The label is a human-readable summary, so `--` stays an argv concern only.
     cmd.arg("worktree").args(args).arg("--").arg(path);
     let mut label = format!("git worktree {} {}", args.join(" "), path.display());
     if let Some(reference) = reference {

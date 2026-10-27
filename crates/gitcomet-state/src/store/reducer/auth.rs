@@ -2,8 +2,8 @@
 //! the credentials the user then enters.
 
 use super::{
-    actions_emit_effects, begin_commit_action, external_and_history, maintenance,
-    refresh_selected_head_gitlink, repo_management, util,
+    actions_emit_effects, begin_commit_action, begin_local_action, external_and_history,
+    maintenance, refresh_selected_head_gitlink, repo_management, util, worktree_removal,
 };
 use crate::model::{AppState, AuthPromptState, AuthRetryOperation, PendingCommitRetry, RepoId};
 use crate::model::{AuthPromptKind, AuthPromptStatus};
@@ -529,8 +529,22 @@ fn retry_msg_for_repo_command(repo_id: RepoId, command: RepoCommandKind) -> Opti
             checkout,
             open_after,
         },
-        RepoCommandKind::RemoveWorktree { path } => Msg::RemoveWorktree { repo_id, path },
-        RepoCommandKind::ForceRemoveWorktree { path } => Msg::ForceRemoveWorktree { repo_id, path },
+        RepoCommandKind::RemoveWorktree {
+            path,
+            delete_branch,
+        } => Msg::RemoveWorktree {
+            repo_id,
+            path,
+            delete_branch,
+        },
+        RepoCommandKind::ForceRemoveWorktree {
+            path,
+            delete_branch,
+        } => Msg::ForceRemoveWorktree {
+            repo_id,
+            path,
+            delete_branch,
+        },
         RepoCommandKind::AddSubmodule {
             url,
             path,
@@ -954,10 +968,20 @@ pub(super) fn repo_command_finished(
         });
     }
     let removed_worktree_path = match (&command, &result) {
-        (RepoCommandKind::RemoveWorktree { path }, Ok(_)) => Some(path.clone()),
-        (RepoCommandKind::ForceRemoveWorktree { path }, Ok(_)) => Some(path.clone()),
+        (RepoCommandKind::RemoveWorktree { path, .. }, Ok(_)) => Some(path.clone()),
+        (RepoCommandKind::ForceRemoveWorktree { path, .. }, Ok(_)) => Some(path.clone()),
         _ => None,
     };
+    let force_remove_prompt = worktree_removal::force_prompt(
+        state
+            .force_remove_worktree_prompt_generation
+            .wrapping_add(1),
+        repo_id,
+        &command,
+        &result,
+    )
+    .filter(|_| state.repos.iter().any(|repo| repo.id == repo_id));
+    let branch_to_delete = worktree_removal::branch_to_delete(&command, &result);
     // Only the origin tab's workdir resolves the path git was given.
     let opened_worktree_path = result
         .is_ok()
@@ -987,7 +1011,7 @@ pub(super) fn repo_command_finished(
         repo_id,
         command,
         result,
-        auth_prompt.is_some(),
+        auth_prompt.is_some() || force_remove_prompt.is_some(),
     ));
     if maintenance_ended {
         for (deferred_repo, change) in maintenance::finished(state, repo_id) {
@@ -1019,6 +1043,16 @@ pub(super) fn repo_command_finished(
     if let Some(prompt) = auth_prompt {
         clear_staged_git_auth_env();
         install_auth_prompt(state, prompt);
+    }
+    if let Some(prompt) = force_remove_prompt {
+        state.force_remove_worktree_prompt_generation = prompt.generation;
+        state.force_remove_worktree_prompt = Some(prompt);
+    }
+    if let Some(branch) = branch_to_delete
+        && state.repos.iter().any(|repo| repo.id == repo_id)
+    {
+        begin_local_action(state, repo_id);
+        effects.extend(actions_emit_effects::delete_branch(repo_id, branch));
     }
 
     effects

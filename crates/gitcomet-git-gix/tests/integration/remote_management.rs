@@ -1,10 +1,5 @@
 use crate::test_git_env;
 use gitcomet_core::error::{ErrorKind, GitFailureId};
-#[cfg(unix)]
-use gitcomet_core::process::{
-    GitExecutablePreference, current_git_executable_preference, install_git_executable_path,
-    install_git_executable_preference,
-};
 use gitcomet_core::remote_url::{RemoteProtocol, RemoteUrlPolicy};
 use gitcomet_core::services::{GitBackend, PullMode, RemoteUrlKind};
 use gitcomet_core::test_support::git_fixture::{FixtureTimer, append_config, init_repository};
@@ -73,32 +68,6 @@ fn remote_management_test_lock() -> MutexGuard<'static, ()> {
     LOCK.get_or_init(|| Mutex::new(()))
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
-}
-
-#[cfg(unix)]
-struct GitExecutablePreferenceGuard {
-    original: GitExecutablePreference,
-}
-
-#[cfg(unix)]
-impl GitExecutablePreferenceGuard {
-    fn install(path: &Path) -> Self {
-        let original = current_git_executable_preference();
-        let runtime = install_git_executable_path(Some(path.to_path_buf()));
-        assert!(
-            runtime.is_available(),
-            "localized Git test wrapper must be executable: {:?}",
-            runtime.availability
-        );
-        Self { original }
-    }
-}
-
-#[cfg(unix)]
-impl Drop for GitExecutablePreferenceGuard {
-    fn drop(&mut self) {
-        let _ = install_git_executable_preference(self.original.clone());
-    }
 }
 
 fn configure_repo_with_user(repo: &Path) {
@@ -2004,26 +1973,10 @@ fn pull_branch_fetches_a_requested_branch_excluded_by_remote_refspecs() {
     );
 }
 
+/// `feature` is pushed and tracked, but outside the remote's fetch refspec.
 #[cfg(unix)]
-#[test]
-fn pull_branch_preserves_a_localized_missing_remote_ref_error() {
-    const CHILD_ENV: &str = "GITCOMET_LOCALIZED_MISSING_REF_TEST_CHILD";
-    if std::env::var_os(CHILD_ENV).is_none() {
-        let mut child = Command::new(std::env::current_exe().expect("current test executable"));
-        child.env(CHILD_ENV, "1").env("LC_ALL", "POSIX");
-        crate::child_test::run(
-            &mut child,
-            module_path!(),
-            "pull_branch_preserves_a_localized_missing_remote_ref_error",
-        );
-        return;
-    }
-
-    let _guard = remote_management_test_lock();
-    let dir = tempfile::tempdir().expect("create tempdir");
-    let root = dir.path();
+fn feature_outside_the_fetch_refspec(root: &Path) -> (std::path::PathBuf, std::path::PathBuf) {
     let (remote_repo, work_repo) = init_work_repo_with_remote(root, "origin");
-
     run_git(&work_repo, &["checkout", "-b", "feature"]);
     fs::write(work_repo.join("feature.txt"), "feature\n").expect("write feature file");
     run_git(&work_repo, &["add", "feature.txt"]);
@@ -2046,15 +1999,15 @@ fn pull_branch_preserves_a_localized_missing_remote_ref_error() {
             "+refs/heads/main:refs/remotes/origin/main",
         ],
     );
-    run_git(&remote_repo, &["update-ref", "-d", "refs/heads/feature"]);
-    assert!(
-        ref_exists(&work_repo, "refs/remotes/origin/feature"),
-        "the narrow refspec must leave a stale tracking ref for the explicit probe"
-    );
+    (remote_repo, work_repo)
+}
 
-    let wrapper = root.join("localized-git");
-    fs::write(
-        &wrapper,
+#[cfg(unix)]
+#[test]
+fn pull_branch_preserves_a_localized_missing_remote_ref_error() {
+    gitcomet_core::test_support::localized_git::run(
+        module_path!(),
+        "pull_branch_preserves_a_localized_missing_remote_ref_error",
         r#"#!/bin/sh
 saw_pull=false
 saw_feature=false
@@ -2072,35 +2025,36 @@ if [ "$saw_pull" = true ] && [ "$saw_feature" = true ]; then
 fi
 exec git "$@"
 "#,
-    )
-    .expect("write localized Git wrapper");
-    use std::os::unix::fs::PermissionsExt as _;
-    let mut permissions = fs::metadata(&wrapper)
-        .expect("localized Git wrapper metadata")
-        .permissions();
-    permissions.set_mode(0o755);
-    fs::set_permissions(&wrapper, permissions).expect("make localized Git wrapper executable");
-    let _git_executable = GitExecutablePreferenceGuard::install(&wrapper);
+        || {
+            let _guard = remote_management_test_lock();
+            let dir = tempfile::tempdir().expect("create tempdir");
+            let (remote_repo, work_repo) = feature_outside_the_fetch_refspec(dir.path());
+            run_git(&remote_repo, &["update-ref", "-d", "refs/heads/feature"]);
+            assert!(
+                ref_exists(&work_repo, "refs/remotes/origin/feature"),
+                "the narrow refspec must leave a stale tracking ref for the explicit probe"
+            );
 
-    let backend = GixBackend;
-    let opened = backend.open(&work_repo).expect("open work repo");
-    let error = opened
-        .pull_branch_with_output("origin", "feature")
-        .expect_err("the deleted remote branch must not be merged");
+            let opened = GixBackend.open(&work_repo).expect("open work repo");
+            let error = opened
+                .pull_branch_with_output("origin", "feature")
+                .expect_err("the deleted remote branch must not be merged");
 
-    assert!(
-        error
-            .to_string()
-            .contains("kunde inte hitta fjärr-referensen refs/heads/feature"),
-        "localized missing-ref output must remain visible: {error}"
-    );
-    assert!(
-        ref_exists(&work_repo, "refs/remotes/origin/feature"),
-        "a failed Pull must preserve the tracking ref"
-    );
-    assert!(
-        run_git_status(&work_repo, &["config", "--get", "branch.feature.remote"]).success(),
-        "a failed Pull must preserve the configured upstream"
+            assert!(
+                error
+                    .to_string()
+                    .contains("kunde inte hitta fjärr-referensen refs/heads/feature"),
+                "localized missing-ref output must remain visible: {error}"
+            );
+            assert!(
+                ref_exists(&work_repo, "refs/remotes/origin/feature"),
+                "a failed Pull must preserve the tracking ref"
+            );
+            assert!(
+                run_git_status(&work_repo, &["config", "--get", "branch.feature.remote"]).success(),
+                "a failed Pull must preserve the configured upstream"
+            );
+        },
     );
 }
 

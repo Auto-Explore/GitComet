@@ -920,18 +920,13 @@ fn run_git_allow_fail(repo: &Path, args: &[&str], envs: &[(&str, &str)]) {
 /// simulating an interactive rebase planned outside GitComet.
 #[cfg(unix)]
 fn write_external_seq_editor(dir: &Path, todo: &str) -> PathBuf {
-    use std::os::unix::fs::PermissionsExt as _;
     let todo_file = dir.join("external-todo");
     fs::write(&todo_file, todo).expect("write external todo");
     let script = dir.join("external-seq-editor.sh");
-    fs::write(
+    gitcomet_core::test_support::script::write_executable(
         &script,
-        format!("#!/bin/sh\ncp \"{}\" \"$1\"\n", todo_file.display()),
-    )
-    .expect("write seq editor script");
-    let mut permissions = fs::metadata(&script).unwrap().permissions();
-    permissions.set_mode(0o755);
-    fs::set_permissions(&script, permissions).unwrap();
+        &format!("#!/bin/sh\ncp \"{}\" \"$1\"\n", todo_file.display()),
+    );
     script
 }
 

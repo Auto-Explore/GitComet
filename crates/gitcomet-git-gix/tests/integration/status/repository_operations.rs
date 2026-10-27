@@ -1913,17 +1913,7 @@ fn delete_branch_force_removes_unmerged_branch() {
     let err = opened
         .delete_branch("feature")
         .expect_err("safe delete should fail for unmerged branch");
-    match err.kind() {
-        ErrorKind::Git(failure) => {
-            assert_eq!(failure.command(), "git branch -d");
-            let msg = failure.to_string();
-            assert!(
-                msg.contains("not fully merged") || msg.contains("cannot delete branch"),
-                "unexpected delete-branch error: {msg}"
-            );
-        }
-        other => panic!("expected structured git error, got {other:?}"),
-    }
+    assert_git_failure(&err, "git branch -d", GitFailureId::BranchNotFullyMerged);
 
     opened.delete_branch_force("feature").unwrap();
 
@@ -4039,5 +4029,182 @@ fn rename_branch_force_over_branch_held_by_other_worktree_from_main_handle_fails
     assert_eq!(
         run_git_output(&fixture.repo, &["rev-parse", "refs/heads/feature"]),
         fixture.first_commit
+    );
+}
+
+/// `main` with an unmerged `feature` branch.
+fn repo_with_unmerged_feature(repo: &Path) {
+    run_git(repo, &["init", "-b", "main"]);
+    run_git(repo, &["config", "user.email", "you@example.com"]);
+    run_git(repo, &["config", "user.name", "You"]);
+    run_git(repo, &["config", "commit.gpgsign", "false"]);
+    write(repo, "a.txt", "one\n");
+    run_git(repo, &["add", "a.txt"]);
+    run_git(repo, &["commit", "-m", "init"]);
+    run_git(repo, &["checkout", "-b", "feature"]);
+    write(repo, "feature.txt", "feature\n");
+    run_git(repo, &["add", "feature.txt"]);
+    run_git(repo, &["commit", "-m", "feature"]);
+    run_git(repo, &["checkout", "main"]);
+}
+
+#[test]
+fn delete_branch_checked_out_elsewhere_is_not_called_unmerged() {
+    test_git_env::ensure_initialized();
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path().join("repo");
+    fs::create_dir_all(&repo).unwrap();
+    repo_with_unmerged_feature(&repo);
+    let linked = dir.path().join("linked");
+    run_git(
+        &repo,
+        &["worktree", "add", linked.to_str().unwrap(), "feature"],
+    );
+
+    let err = GixBackend
+        .open(&repo)
+        .unwrap()
+        .delete_branch("feature")
+        .expect_err("a checked-out branch is not deleted");
+    assert_git_failure(&err, "git branch -d", GitFailureId::CommandFailed);
+}
+
+#[cfg(unix)]
+#[test]
+fn delete_branch_recognizes_an_unmerged_branch_under_a_localized_git() {
+    gitcomet_core::test_support::localized_git::run(
+        module_path!(),
+        "delete_branch_recognizes_an_unmerged_branch_under_a_localized_git",
+        r#"#!/bin/sh
+previous=
+for argument in "$@"; do
+    if [ "$previous" = branch ] && [ "$argument" = -d ]; then
+        printf '%s\n' "Fehler: Der Branch 'feature' ist nicht vollständig zusammengeführt." >&2
+        exit 1
+    fi
+    previous=$argument
+done
+exec git "$@"
+"#,
+        || {
+            let dir = tempfile::tempdir().unwrap();
+            repo_with_unmerged_feature(dir.path());
+
+            let err = GixBackend
+                .open(dir.path())
+                .unwrap()
+                .delete_branch("feature")
+                .expect_err("an unmerged branch is not deleted");
+            assert_git_failure(&err, "git branch -d", GitFailureId::BranchNotFullyMerged);
+        },
+    );
+}
+
+/// Git holds a branch that a worktree is rebasing, though its HEAD is
+/// detached; that refusal is no "not fully merged".
+#[test]
+fn delete_branch_being_rebased_elsewhere_is_not_called_unmerged() {
+    test_git_env::ensure_initialized();
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path().join("repo");
+    fs::create_dir_all(&repo).unwrap();
+    repo_with_unmerged_feature(&repo);
+    write(&repo, "feature.txt", "main\n");
+    run_git(&repo, &["add", "feature.txt"]);
+    run_git(&repo, &["commit", "-m", "conflicting"]);
+    let linked = dir.path().join("linked");
+    run_git(
+        &repo,
+        &["worktree", "add", linked.to_str().unwrap(), "feature"],
+    );
+    run_git_expect_failure(&linked, &["rebase", "main"]);
+
+    let err = GixBackend
+        .open(&repo)
+        .unwrap()
+        .delete_branch("feature")
+        .expect_err("a branch under rebase is not deleted");
+    assert_git_failure(&err, "git branch -d", GitFailureId::CommandFailed);
+}
+
+/// Git measures a branch against its upstream when it has one: merged into
+/// HEAD is not enough.
+#[test]
+fn delete_branch_missing_from_its_upstream_is_unmerged() {
+    test_git_env::ensure_initialized();
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    repo_with_unmerged_feature(repo);
+    run_git(repo, &["update-ref", "refs/remotes/origin/feature", "main"]);
+    run_git(
+        repo,
+        &[
+            "config",
+            "remote.origin.url",
+            "https://example.invalid/repo.git",
+        ],
+    );
+    run_git(
+        repo,
+        &[
+            "config",
+            "remote.origin.fetch",
+            "+refs/heads/*:refs/remotes/origin/*",
+        ],
+    );
+    run_git(repo, &["config", "branch.feature.remote", "origin"]);
+    run_git(
+        repo,
+        &["config", "branch.feature.merge", "refs/heads/feature"],
+    );
+    run_git(repo, &["merge", "--ff-only", "feature"]);
+
+    let err = GixBackend
+        .open(repo)
+        .unwrap()
+        .delete_branch("feature")
+        .expect_err("a branch its upstream lacks is not deleted");
+    assert_git_failure(&err, "git branch -d", GitFailureId::BranchNotFullyMerged);
+}
+
+/// A worktree mid-rebase of the target holds it with HEAD detached; resetting
+/// it in place would pull the branch out from under the rebase.
+#[test]
+fn rename_branch_force_refuses_a_target_mid_rebase() {
+    test_git_env::ensure_initialized();
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    repo_with_unmerged_feature(repo);
+    run_git(repo, &["branch", "source", "main"]);
+    run_git(repo, &["checkout", "feature"]);
+    run_git(
+        repo,
+        &[
+            "-c",
+            "sequence.editor=sed -i -e 1s/^pick/edit/",
+            "rebase",
+            "-i",
+            "main~0",
+        ],
+    );
+    let feature_before = run_git_output(repo, &["rev-parse", "refs/heads/feature"]);
+
+    let err = GixBackend
+        .open(repo)
+        .unwrap()
+        .rename_branch_force("source", "feature")
+        .expect_err("the branch under rebase is not reset");
+
+    assert!(
+        err.to_string().contains("used by worktree"),
+        "unexpected error: {err}"
+    );
+    assert!(
+        repo.join(".git/rebase-merge").exists(),
+        "the rebase survives"
+    );
+    assert_eq!(
+        run_git_output(repo, &["rev-parse", "refs/heads/feature"]),
+        feature_before
     );
 }

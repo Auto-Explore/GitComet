@@ -766,6 +766,7 @@ fn auth_worktree_retry_prepares_the_path_only_when_git_is_available() {
                 repo_id: RepoId(1),
                 command: RepoCommandKind::RemoveWorktree {
                     path: "linked".into(),
+                    delete_branch: None,
                 },
             },
         });

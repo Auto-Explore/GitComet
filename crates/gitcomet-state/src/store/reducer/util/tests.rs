@@ -40,7 +40,7 @@ fn dummy_log_entry(ix: usize) -> CommandLogEntry {
         stdout: Arc::from(""),
         stderr: Arc::from(""),
         announce_success: true,
-        handled_by_auth_prompt: false,
+        handled_by_prompt: false,
         failure_id: None,
         hook_operation_id: None,
     }

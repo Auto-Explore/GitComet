@@ -298,6 +298,8 @@ impl Msg {
             | Self::ApplyRepositoryPreferences(..)
             | Self::SetSidebarMode { .. }
             | Self::ShowBranchExistsPrompt { .. }
+            | Self::DismissForceDeleteBranchPrompt { .. }
+            | Self::DismissForceRemoveWorktreePrompt { .. }
             | Self::CloneRepo { .. }
             | Self::AbortCloneRepo { .. }
             | Self::ConfirmSubmoduleTrustPrompt

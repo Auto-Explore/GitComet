@@ -700,9 +700,9 @@ fn popover_is_confirm_dialog(kind: &PopoverKind) -> bool {
             | PopoverKind::RebaseOntoConfirm { .. }
             | PopoverKind::RebaseReword { .. }
             | PopoverKind::BranchExistsPrompt { .. }
-            | PopoverKind::ForceDeleteBranchConfirm { .. }
+            | PopoverKind::ForceDeleteBranchConfirm(_)
             | PopoverKind::DeleteBranchesConfirm { .. }
-            | PopoverKind::ForceRemoveWorktreeConfirm { .. }
+            | PopoverKind::ForceRemoveWorktreeConfirm(_)
             | PopoverKind::DiscardChangesConfirm { .. }
             | PopoverKind::DiscardFolderChangesConfirm { .. }
             | PopoverKind::AddToGitignorePrompt { .. }
@@ -926,6 +926,7 @@ impl ConfirmDialog {
             .flex()
             .flex_col()
             .min_w(self.width.preferred_px(ui_scale))
+            .max_w(self.width.max_px(ui_scale))
             .child(popover_title(theme, self.title))
             .child(popover_rule(theme))
             .children(self.sections)
@@ -1049,8 +1050,8 @@ fn popover_anchor_corner(kind: &PopoverKind) -> Anchor {
         | PopoverKind::FilesystemConflict(_)
         | PopoverKind::DeletePermanentlyConfirm(_)
         | PopoverKind::FilesystemUnsavedEditsConfirm(_)
-        | PopoverKind::ForceDeleteBranchConfirm { .. }
-        | PopoverKind::ForceRemoveWorktreeConfirm { .. }
+        | PopoverKind::ForceDeleteBranchConfirm(_)
+        | PopoverKind::ForceRemoveWorktreeConfirm(_)
         | PopoverKind::PullReconcilePrompt { .. }
         | PopoverKind::RebaseOntoConfirm { .. }
         | PopoverKind::RebaseReword { .. }
@@ -1122,7 +1123,7 @@ pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<Popover
             ..
         }
         | PopoverKind::ForcePushConfirm { .. }
-        | PopoverKind::ForceDeleteBranchConfirm { .. }
+        | PopoverKind::ForceDeleteBranchConfirm(_)
         | PopoverKind::DeleteBranchesConfirm { .. }
         | PopoverKind::DiscardChangesConfirm { .. }
         | PopoverKind::DiscardFolderChangesConfirm { .. }
@@ -1139,7 +1140,7 @@ pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<Popover
             Some(DIALOG_540_WIDTH)
         }
         PopoverKind::MergeAbortConfirm { .. } => Some(DIALOG_360_WIDTH),
-        PopoverKind::ForceRemoveWorktreeConfirm { .. } => Some(DIALOG_460_WIDTH),
+        PopoverKind::ForceRemoveWorktreeConfirm(_) => Some(DIALOG_460_WIDTH),
         PopoverKind::PullReconcilePrompt { .. } | PopoverKind::AddToGitignorePrompt { .. } => {
             Some(DIALOG_440_WIDTH)
         }

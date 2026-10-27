@@ -9,17 +9,6 @@ use std::fs;
 use std::path::Path;
 use std::sync::Arc;
 
-#[cfg(unix)]
-fn install_hook(repo: &Path, name: &str, script: &str) {
-    use std::os::unix::fs::PermissionsExt as _;
-
-    let hook = repo.join(".git").join("hooks").join(name);
-    fs::write(&hook, script).expect("write hook");
-    let mut permissions = fs::metadata(&hook).expect("stat hook").permissions();
-    permissions.set_mode(0o755);
-    fs::set_permissions(hook, permissions).expect("make hook executable");
-}
-
 fn git_output(repo: &Path, args: &[&str]) -> std::process::Output {
     let mut cmd = gitcomet_core::test_support::git_fixture::git_command();
     test_git_env::apply(&mut cmd);
@@ -538,8 +527,8 @@ fn replayed_revert_commits_with_the_same_hooks_skipped() {
     open_backend(&repo)
         .revert_with_output(&commit_id(&change), true, None)
         .expect_err("signing failure");
-    install_hook(&repo, "pre-commit", "#!/bin/sh\nexit 1\n");
-    install_hook(&repo, "commit-msg", "#!/bin/sh\nexit 1\n");
+    gitcomet_core::test_support::script::install_hook(&repo, "pre-commit", "#!/bin/sh\nexit 1\n");
+    gitcomet_core::test_support::script::install_hook(&repo, "commit-msg", "#!/bin/sh\nexit 1\n");
     run_git(&repo, &["config", "commit.gpgsign", "false"]);
 
     open_backend(&repo)
@@ -690,8 +679,8 @@ fn failing_pre_commit_hook_does_not_block_revert() {
     let dir = tempfile::tempdir().expect("create tempdir");
     let repo = dir.path().join("repo");
     let change = setup_revertable_repo(&repo);
-    install_hook(&repo, "pre-commit", "#!/bin/sh\nexit 1\n");
-    install_hook(&repo, "commit-msg", "#!/bin/sh\nexit 1\n");
+    gitcomet_core::test_support::script::install_hook(&repo, "pre-commit", "#!/bin/sh\nexit 1\n");
+    gitcomet_core::test_support::script::install_hook(&repo, "commit-msg", "#!/bin/sh\nexit 1\n");
 
     open_backend(&repo)
         .revert_with_output(&commit_id(&change), true, None)
@@ -707,7 +696,11 @@ fn failing_prepare_commit_msg_hook_leaves_a_resumable_revert() {
     let dir = tempfile::tempdir().expect("create tempdir");
     let repo = dir.path().join("repo");
     let change = setup_revertable_repo(&repo);
-    install_hook(&repo, "prepare-commit-msg", "#!/bin/sh\nexit 1\n");
+    gitcomet_core::test_support::script::install_hook(
+        &repo,
+        "prepare-commit-msg",
+        "#!/bin/sh\nexit 1\n",
+    );
 
     open_backend(&repo)
         .revert_with_output(&commit_id(&change), true, None)

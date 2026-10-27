@@ -14,14 +14,11 @@ use gitcomet_git_gix::GixBackend;
 use crate::test_git_env;
 use std::fs;
 use std::io::Write;
+#[cfg(unix)]
+use std::os::unix::fs::symlink;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::OnceLock;
-#[cfg(unix)]
-use std::{
-    fs::Permissions,
-    os::unix::fs::{PermissionsExt, symlink},
-};
 
 fn read_file_diff_text_source(source: Option<&FileDiffTextSource>) -> Option<String> {
     source.map(|source| {
@@ -349,11 +346,6 @@ fn setup_both_added_text_conflict(repo: &Path, path: &str, ours: &str, theirs: &
     );
 
     run_git_expect_failure(repo, &["merge", "feature"]);
-}
-
-#[cfg(unix)]
-fn make_executable(path: &Path) {
-    fs::set_permissions(path, Permissions::from_mode(0o755)).unwrap();
 }
 
 fn set_fixed_mtime(path: &Path) {

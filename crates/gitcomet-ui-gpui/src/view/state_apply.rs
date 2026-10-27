@@ -296,11 +296,6 @@ impl GitCometView {
                 .map(|d| d.message.clone())
                 .collect::<Vec<_>>();
             for msg in new_diag_messages {
-                if self.pending_force_delete_branch_prompt.is_none()
-                    && let Some(name) = parse_force_delete_branch_name(&msg)
-                {
-                    self.pending_force_delete_branch_prompt = Some((next_repo.id, name));
-                }
                 error_reports.push(ErrorReport::message(Some(next_repo.id), msg));
             }
 
@@ -311,39 +306,9 @@ impl GitCometView {
                 });
                 if entry.source == gitcomet_state::model::CommandSource::Background
                     || entry.command.starts_with("telemetry.")
-                    || entry.handled_by_auth_prompt
+                    || entry.handled_by_prompt
                 {
                     continue;
-                }
-
-                let force_remove_worktree_path = if entry.ok {
-                    None
-                } else {
-                    parse_force_remove_worktree_path(&entry.command, &entry.stderr)
-                };
-                if let Some(path) = force_remove_worktree_path.clone() {
-                    if self.pending_force_remove_worktree_prompt.is_none() {
-                        let branch = self.take_pending_worktree_branch_removal(next_repo.id, &path);
-                        self.pending_force_remove_worktree_prompt =
-                            Some((next_repo.id, path, branch));
-                    }
-                    continue;
-                }
-
-                let worktree_remove_path = parse_worktree_remove_path_from_command(&entry.command);
-                if let Some(path) = worktree_remove_path.as_ref() {
-                    if entry.ok {
-                        if let Some(branch) =
-                            self.take_pending_worktree_branch_removal(next_repo.id, path)
-                        {
-                            follow_up_msgs.push(Msg::DeleteBranch {
-                                repo_id: next_repo.id,
-                                name: branch,
-                            });
-                        }
-                    } else {
-                        self.take_pending_worktree_branch_removal(next_repo.id, path);
-                    }
                 }
 
                 if let Some(operation_id) = entry.hook_operation_id {
@@ -379,7 +344,7 @@ impl GitCometView {
                 previous.is_some()
                     && operation.is_reportable()
                     && !operation.status.is_active()
-                    && !operation.handled_by_auth_prompt
+                    && !operation.handled_by_prompt
             }) {
                 let was_completed = previous_repo
                     .and_then(|repo| {
@@ -414,7 +379,7 @@ impl GitCometView {
                 && next.active_repo == Some(next_repo.id)
                 && new_command_entries.iter().any(|entry| {
                     if entry.ok
-                        || entry.handled_by_auth_prompt
+                        || entry.handled_by_prompt
                         || entry.kind != gitcomet_state::model::CommandLogKind::Pull
                         || entry.failure_id == Some(gitcomet_core::error::GitFailureId::Timeout)
                     {
@@ -479,6 +444,8 @@ impl GitCometView {
         let prev_annex_rail = CollapsedSidebarSection::Annex.is_available(self.active_repo());
         let prev_auth_prompt = self.state.auth_prompt.clone();
         let prev_branch_exists_prompt = self.state.branch_exists_prompt.clone();
+        let prev_force_delete_branch_prompt = self.state.force_delete_branch_prompt.clone();
+        let prev_force_remove_worktree_prompt = self.state.force_remove_worktree_prompt.clone();
         let prev_submodule_trust_prompt = self.state.submodule_trust_prompt.clone();
         let prev_submodule_trust_check = self.state.submodule_trust_check_pending;
         let merge_view_active = active_merge_view_target(next.as_ref()).is_some();
@@ -757,6 +724,13 @@ impl GitCometView {
         if prev_branch_exists_prompt != self.state.branch_exists_prompt {
             self.pending_branch_exists_prompt = self.state.branch_exists_prompt.clone();
         }
+        if prev_force_delete_branch_prompt != self.state.force_delete_branch_prompt {
+            self.pending_force_delete_branch_prompt = self.state.force_delete_branch_prompt.clone();
+        }
+        if prev_force_remove_worktree_prompt != self.state.force_remove_worktree_prompt {
+            self.pending_force_remove_worktree_prompt =
+                self.state.force_remove_worktree_prompt.clone();
+        }
         if prev_submodule_trust_prompt != self.state.submodule_trust_prompt {
             self.pending_submodule_trust_prompt = self.state.submodule_trust_prompt.clone();
         }
@@ -794,6 +768,8 @@ impl GitCometView {
             || prev_annex_rail != annex_rail
             || prev_auth_prompt != self.state.auth_prompt
             || prev_branch_exists_prompt != self.state.branch_exists_prompt
+            || prev_force_delete_branch_prompt != self.state.force_delete_branch_prompt
+            || prev_force_remove_worktree_prompt != self.state.force_remove_worktree_prompt
     }
 }
 
@@ -813,55 +789,6 @@ fn newly_opened_repo_paths(prev: &AppState, next: &AppState) -> Vec<std::path::P
             (!was_ready).then(|| next_repo.spec.workdir.clone())
         })
         .collect()
-}
-
-fn parse_force_delete_branch_name(message: &str) -> Option<String> {
-    if !message.contains("git branch -d failed:") {
-        return None;
-    }
-    let needle = "run 'git branch -D ";
-    let start = message.find(needle)? + needle.len();
-    let rest = &message[start..];
-    let end = rest.find('\'')?;
-    let name = rest[..end].trim();
-    (!name.is_empty()).then(|| name.to_string())
-}
-
-fn parse_force_remove_worktree_path(command: &str, stderr: &str) -> Option<std::path::PathBuf> {
-    if !is_force_remove_worktree_required_error(command, stderr) {
-        return None;
-    }
-    parse_worktree_path_from_fatal(stderr)
-        .or_else(|| parse_worktree_remove_path_from_command(command))
-}
-
-fn is_force_remove_worktree_required_error(command: &str, stderr: &str) -> bool {
-    let command = command.trim();
-    let is_worktree_remove = command.starts_with("git worktree remove ")
-        && !command.starts_with("git worktree remove --force ");
-    is_worktree_remove
-        && stderr.contains("contains modified or untracked files")
-        && stderr.contains("use --force to delete it")
-}
-
-fn parse_worktree_path_from_fatal(stderr: &str) -> Option<std::path::PathBuf> {
-    let needle = "fatal: '";
-    let start = stderr.find(needle)? + needle.len();
-    let rest = &stderr[start..];
-    let end = rest.find("' contains modified or untracked files")?;
-    let path = rest[..end].trim();
-    (!path.is_empty()).then(|| std::path::PathBuf::from(path))
-}
-
-fn parse_worktree_remove_path_from_command(command: &str) -> Option<std::path::PathBuf> {
-    let command = command.trim();
-    let rest = command.strip_prefix("git worktree remove ")?;
-    let rest = rest.strip_prefix("--force ").unwrap_or(rest);
-    let path = rest.trim();
-    if path.is_empty() || path.starts_with('-') {
-        return None;
-    }
-    Some(std::path::PathBuf::from(path))
 }
 
 /// Whether the active repository opened a file or a commit between two
@@ -885,6 +812,7 @@ fn repository_navigated(prev: &AppState, next: &AppState) -> bool {
 mod tests {
     use super::*;
     use gitcomet_core::git_operation::{GitOperationId, HookExecutionId};
+    #[cfg(target_os = "macos")]
     use std::path::PathBuf;
     use std::sync::Arc;
     use std::time::{Duration, SystemTime};
@@ -900,7 +828,7 @@ mod tests {
             time: SystemTime::UNIX_EPOCH,
             duration: Some(Duration::from_millis(50)),
             status,
-            handled_by_auth_prompt: false,
+            handled_by_prompt: false,
             hooks: vec![gitcomet_state::model::GitHookRun {
                 id: HookExecutionId {
                     sid: Arc::from("test-session"),
@@ -936,52 +864,6 @@ mod tests {
             repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
         }
         repo
-    }
-
-    #[test]
-    fn parse_force_remove_worktree_path_prefers_fatal_path() {
-        let command = "git worktree remove /tmp/from-command";
-        let stderr = "git worktree remove /tmp/from-command failed: fatal: '/tmp/from-stderr' contains modified or untracked files, use --force to delete it.";
-        assert_eq!(
-            parse_force_remove_worktree_path(command, stderr),
-            Some(PathBuf::from("/tmp/from-stderr"))
-        );
-    }
-
-    #[test]
-    fn parse_force_remove_worktree_path_falls_back_to_command_path() {
-        let command = "git worktree remove /tmp/worktree";
-        let stderr = "contains modified or untracked files, use --force to delete it";
-        assert_eq!(
-            parse_force_remove_worktree_path(command, stderr),
-            Some(PathBuf::from("/tmp/worktree"))
-        );
-    }
-
-    #[test]
-    fn parse_force_remove_worktree_path_ignores_non_matching_errors() {
-        let command = "git worktree remove /tmp/worktree";
-        let stderr = "fatal: '/tmp/worktree' is not a working tree";
-        assert_eq!(parse_force_remove_worktree_path(command, stderr), None);
-    }
-
-    #[test]
-    fn parse_force_remove_worktree_path_ignores_already_forced_command() {
-        let command = "git worktree remove --force /tmp/worktree";
-        let stderr = "contains modified or untracked files, use --force to delete it";
-        assert_eq!(parse_force_remove_worktree_path(command, stderr), None);
-    }
-
-    #[test]
-    fn parse_worktree_remove_path_from_command_supports_forced_and_plain_remove() {
-        assert_eq!(
-            parse_worktree_remove_path_from_command("git worktree remove /tmp/worktree"),
-            Some(PathBuf::from("/tmp/worktree"))
-        );
-        assert_eq!(
-            parse_worktree_remove_path_from_command("git worktree remove --force /tmp/worktree"),
-            Some(PathBuf::from("/tmp/worktree"))
-        );
     }
 
     #[test]

@@ -5,7 +5,7 @@ use gitcomet_core::auth::askpass::{
     resolve_auth_outcome, take_pending_git_auth,
 };
 use gitcomet_core::domain::{Commit, CommitId, CommitParentIds, LogPage};
-use gitcomet_core::error::{Error, ErrorKind, GitFailure, GitFailureId};
+use gitcomet_core::error::{Error, ErrorKind, GitFailure, GitFailureId, WorktreeRemovalBlocker};
 use gitcomet_core::git_operation::{
     self, GitOperationContext, GitOperationEvent, GitOutputChunk, GitOutputStream, HookExecutionId,
 };

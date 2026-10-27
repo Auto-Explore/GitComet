@@ -670,6 +670,26 @@ fn classifies_local_overwrites_independently_of_auth_prompt_diagnostics() {
 }
 
 #[test]
+fn classifies_worktree_removal_refusals() {
+    for (stderr, blocker) in [
+        (
+            "fatal: '/tmp/linked' contains modified or untracked files, use --force to delete it",
+            WorktreeRemovalBlocker::Changes,
+        ),
+        (
+            "fatal: working trees containing submodules cannot be moved or removed",
+            WorktreeRemovalBlocker::Submodules,
+        ),
+    ] {
+        assert_eq!(
+            classify_git_failure(stderr),
+            GitFailureId::WorktreeRemovalBlocked(blocker),
+            "{stderr}"
+        );
+    }
+}
+
+#[test]
 fn parsed_stdout_failure_preserves_authoritative_auth_outcome() {
     let error = run_git_parsed_stdout(
         failing_command_with_streams(),

@@ -167,6 +167,17 @@ pub(crate) fn describe_path_list<P: AsRef<[u8]>>(paths: &[P]) -> String {
 }
 
 pub(crate) fn git_command_failed_error(label: &str, output: GitOutput) -> Error {
+    let id = classify_git_failure(&String::from_utf8_lossy(&output.stderr));
+    git_command_failed_error_with_id(label, output, id)
+}
+
+/// A failure whose kind the caller established from repository state
+/// rather than Git's (translated) message.
+pub(crate) fn git_command_failed_error_with_id(
+    label: &str,
+    output: GitOutput,
+    id: GitFailureId,
+) -> Error {
     let GitOutput {
         status,
         stdout,
@@ -179,7 +190,6 @@ pub(crate) fn git_command_failed_error(label: &str, output: GitOutput) -> Error 
         .map(|text| text.trim().to_string())
         .find(|text| !text.is_empty())
         .map(add_git_failure_hint);
-    let id = classify_git_failure(&String::from_utf8_lossy(&stderr));
     let detail = detail.map(|detail| add_lfs_failure_hint(detail, id));
     Error::new(ErrorKind::Git(
         GitFailure::new(label, id, status.code(), stdout, stderr, detail)
@@ -199,8 +209,8 @@ pub(super) fn add_git_failure_hint(mut detail: String) -> String {
     detail
 }
 
-/// Recognise Git LFS failures, which arrive as filter or hook stderr on an
-/// otherwise ordinary command, so the UI can say what to do next.
+/// Recognise failures the UI can offer a next step for: local overwrites,
+/// refused worktree removals, and Git LFS filter or hook errors.
 pub(super) fn classify_git_failure(stderr: &str) -> GitFailureId {
     let lower = stderr.to_ascii_lowercase();
     // One line must name git-lfs as the program that is missing: a present
@@ -220,6 +230,10 @@ pub(super) fn classify_git_failure(stderr: &str) -> GitFailureId {
         || lower.contains("the following untracked working tree files would be overwritten")
     {
         GitFailureId::WorktreeWouldBeOverwritten
+    } else if lower.contains("contains modified or untracked files, use --force to delete it") {
+        GitFailureId::WorktreeRemovalBlocked(WorktreeRemovalBlocker::Changes)
+    } else if lower.contains("working trees containing submodules cannot be moved or removed") {
+        GitFailureId::WorktreeRemovalBlocked(WorktreeRemovalBlocker::Submodules)
     } else if lfs_binary_missing {
         GitFailureId::LfsNotInstalled
     } else if lower.contains("unable to push locked files")

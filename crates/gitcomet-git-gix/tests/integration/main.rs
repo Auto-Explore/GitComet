@@ -1,10 +1,6 @@
 //! The backend's integration tests in one binary. Each module was a separate
 //! test crate before; nextest still runs every test in its own process.
 
-// Its callers re-run Unix-only tests in a child process.
-#[cfg(unix)]
-#[path = "../support/child_test.rs"]
-mod child_test;
 #[path = "../support/extension_formats.rs"]
 #[allow(dead_code)]
 mod formats;

@@ -1199,6 +1199,31 @@ pub(super) fn repo_action_finished(
     finish_repo_action(inputs, state, repo_id, action, completion)
 }
 
+/// The refusal is answered by the force-delete prompt, not reported as an error.
+pub(super) fn branch_not_fully_merged(
+    inputs: &ReducerInputs,
+    state: &mut AppState,
+    repo_id: RepoId,
+    name: String,
+) -> Vec<Effect> {
+    if state.repos.iter().any(|repo| repo.id == repo_id) {
+        let generation = state.force_delete_branch_prompt_generation.wrapping_add(1);
+        state.force_delete_branch_prompt_generation = generation;
+        state.force_delete_branch_prompt = Some(crate::model::ForceDeleteBranchPrompt {
+            generation,
+            repo_id,
+            name,
+        });
+    }
+    finish_repo_action(
+        inputs,
+        state,
+        repo_id,
+        RepoActionKind::DeleteBranch,
+        RepoActionCompletion::ExpectedNoop,
+    )
+}
+
 pub(super) fn branch_already_exists(
     inputs: &ReducerInputs,
     state: &mut AppState,

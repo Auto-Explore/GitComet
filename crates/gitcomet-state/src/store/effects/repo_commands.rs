@@ -246,8 +246,8 @@ fn repo_command_context(command: &RepoCommandKind) -> Option<String> {
             crate::msg::worktree_checkout_label(checkout),
             path.display()
         ),
-        RepoCommandKind::RemoveWorktree { path }
-        | RepoCommandKind::ForceRemoveWorktree { path } => path.display().to_string(),
+        RepoCommandKind::RemoveWorktree { path, .. }
+        | RepoCommandKind::ForceRemoveWorktree { path, .. } => path.display().to_string(),
         RepoCommandKind::AddSubmodule {
             path, branch, name, ..
         } => {
@@ -823,6 +823,7 @@ fn schedule_remove_worktree(
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     path: PathBuf,
+    delete_branch: Option<String>,
 ) {
     let command_path = path.clone();
     schedule_repo_command(
@@ -830,7 +831,10 @@ fn schedule_remove_worktree(
         repos,
         msg_tx,
         repo_id,
-        RepoCommandKind::RemoveWorktree { path: command_path },
+        RepoCommandKind::RemoveWorktree {
+            path: command_path,
+            delete_branch,
+        },
         move |repo| repo.remove_worktree_with_output(&path),
     );
 }
@@ -841,6 +845,7 @@ fn schedule_force_remove_worktree(
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     path: PathBuf,
+    delete_branch: Option<String>,
 ) {
     let command_path = path.clone();
     schedule_repo_command(
@@ -848,7 +853,10 @@ fn schedule_force_remove_worktree(
         repos,
         msg_tx,
         repo_id,
-        RepoCommandKind::ForceRemoveWorktree { path: command_path },
+        RepoCommandKind::ForceRemoveWorktree {
+            path: command_path,
+            delete_branch,
+        },
         move |repo| repo.force_remove_worktree_with_output(&path),
     );
 }
@@ -2596,11 +2604,19 @@ pub(super) fn schedule(
             checkout,
             open_after,
         } => schedule_add_worktree(executor, repos, msg_tx, repo_id, path, checkout, open_after),
-        RepoCommandEffect::RemoveWorktree { repo_id, path } => {
-            schedule_remove_worktree(executor, repos, msg_tx, repo_id, path);
+        RepoCommandEffect::RemoveWorktree {
+            repo_id,
+            path,
+            delete_branch,
+        } => {
+            schedule_remove_worktree(executor, repos, msg_tx, repo_id, path, delete_branch);
         }
-        RepoCommandEffect::ForceRemoveWorktree { repo_id, path } => {
-            schedule_force_remove_worktree(executor, repos, msg_tx, repo_id, path);
+        RepoCommandEffect::ForceRemoveWorktree {
+            repo_id,
+            path,
+            delete_branch,
+        } => {
+            schedule_force_remove_worktree(executor, repos, msg_tx, repo_id, path, delete_branch);
         }
         RepoCommandEffect::CheckSubmoduleAddTrust {
             repo_id,

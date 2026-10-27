@@ -59,11 +59,6 @@ pub(in crate::view) enum RootRequest {
         prompt_id: u64,
         choice: FilesystemUnsavedEditsChoice,
     },
-    RegisterPendingWorktreeBranchRemoval {
-        repo_id: RepoId,
-        path: PathBuf,
-        branch: String,
-    },
     SetActiveContextMenuInvoker(Option<SharedString>),
     MinimizeHookActivity {
         repo_id: RepoId,
@@ -163,11 +158,6 @@ impl GitCometView {
                 self.set_commit_push_after_enabled(enabled, cx)
             }
             RootRequest::ReportError(report) => self.report_error(report, cx),
-            RootRequest::RegisterPendingWorktreeBranchRemoval {
-                repo_id,
-                path,
-                branch,
-            } => self.register_pending_worktree_branch_removal(repo_id, path, branch),
             RootRequest::SetActiveContextMenuInvoker(next) => {
                 self.set_active_context_menu_invoker(next, cx)
             }

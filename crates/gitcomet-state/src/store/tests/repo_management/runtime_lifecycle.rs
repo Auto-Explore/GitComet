@@ -184,9 +184,15 @@ fn removing_an_open_worktree_cancels_its_running_loads() {
         assert!(!cancellation.is_cancelled(), "the load starts live");
 
         let command = if force {
-            RepoCommandKind::ForceRemoveWorktree { path: removed_path }
+            RepoCommandKind::ForceRemoveWorktree {
+                path: removed_path,
+                delete_branch: None,
+            }
         } else {
-            RepoCommandKind::RemoveWorktree { path: removed_path }
+            RepoCommandKind::RemoveWorktree {
+                path: removed_path,
+                delete_branch: None,
+            }
         };
         store.dispatch(Msg::Internal(
             crate::msg::InternalMsg::RepoCommandFinished {

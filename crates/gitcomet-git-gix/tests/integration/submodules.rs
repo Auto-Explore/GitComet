@@ -1566,6 +1566,10 @@ fn remove_submodule_reads_glob_characters_in_its_path_literally() {
         "keep me\n"
     );
     assert_eq!(git_stdout(&parent_repo, &["ls-files", "--", "z"]), "z");
+    assert!(
+        local_submodule_config_entries(&parent_repo).is_empty(),
+        "`git config --remove-section` cannot name [z]; its section must still go"
+    );
 }
 
 #[test]
@@ -1752,4 +1756,50 @@ fn checked_out_submodules_always_report_checkout_available() {
             submodule.status
         );
     }
+}
+
+#[cfg(unix)]
+#[test]
+fn submodule_trust_retries_config_contention_under_a_localized_git() {
+    gitcomet_core::test_support::localized_git::run(
+        module_path!(),
+        "submodule_trust_retries_config_contention_under_a_localized_git",
+        r#"#!/bin/sh
+marker="$(dirname "$0")/contended"
+for argument in "$@"; do
+    if [ "$argument" = --global ] && [ ! -e "$marker" ]; then
+        : > "$marker"
+        if [ "${LC_ALL-}" = C ]; then
+            printf '%s\n' 'error: could not lock config file .gitconfig: File exists' >&2
+        else
+            printf '%s\n' 'Fehler: Konnte Konfigurationsdatei .gitconfig nicht sperren: Die Datei existiert bereits' >&2
+        fi
+        exit 255
+    fi
+done
+exec git "$@"
+"#,
+        || {
+            let _guard = setup_submodule_test();
+            let dir = tempfile::tempdir().expect("create tempdir");
+            let sub_repo = dir.path().join("sub");
+            let parent_repo = dir.path().join("parent");
+            fs::create_dir_all(&sub_repo).expect("create sub repository directory");
+            fs::create_dir_all(&parent_repo).expect("create parent repository directory");
+            init_repo_with_seed(&sub_repo, "file.txt", "hello\n", "seed submodule");
+            init_repo_with_seed(&parent_repo, "seed.txt", "seed\n", "seed parent");
+
+            let opened = GixBackend
+                .open(&parent_repo)
+                .expect("open parent repository");
+            let trust = opened
+                .check_submodule_add_trust(
+                    sub_repo.to_string_lossy().as_ref(),
+                    Path::new("mods/sub"),
+                    gitcomet_core::remote_url::RemoteUrlPolicy::default(),
+                )
+                .expect("a contended global config read is retried");
+            assert!(matches!(trust, SubmoduleTrustDecision::Prompt { .. }));
+        },
+    );
 }

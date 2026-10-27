@@ -204,9 +204,11 @@ pub enum RepoCommandKind {
     },
     RemoveWorktree {
         path: PathBuf,
+        delete_branch: Option<String>,
     },
     ForceRemoveWorktree {
         path: PathBuf,
+        delete_branch: Option<String>,
     },
     AddSubmodule {
         url: String,

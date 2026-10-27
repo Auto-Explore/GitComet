@@ -227,16 +227,6 @@ fn safe_push_ref_display(remote: &str, branch: &str) -> String {
     format!("{remote}/{branch}")
 }
 
-fn output_mentions_missing_remote_ref(output: &crate::util::GitOutput) -> bool {
-    let mut text = bytes_to_text_preserving_utf8(&output.stderr);
-    text.push('\n');
-    text.push_str(&bytes_to_text_preserving_utf8(&output.stdout));
-    text.contains("couldn't find remote ref")
-        || text.contains("could not find remote ref")
-        || text.contains("couldn't find remote branch")
-        || text.contains("could not find remote branch")
-}
-
 fn run_git_command<S, O>(
     cmd: Command,
     label: &str,
@@ -1454,8 +1444,7 @@ impl GixRepo {
         let remote_ref = format!("refs/heads/{branch}");
         let label = format!("git fetch --no-prune --refmap= {remote} {remote_ref}");
         let mut cmd = self.git_workdir_cmd();
-        cmd.env("LC_ALL", "C")
-            .arg("fetch")
+        cmd.arg("fetch")
             .arg("--no-prune")
             .arg("--no-prune-tags")
             .arg("--no-tags")
@@ -1465,7 +1454,7 @@ impl GixRepo {
             .arg(&remote_ref);
         let output = run_git_raw_output(cmd, &label)?;
         if !output.status.success() {
-            if output_mentions_missing_remote_ref(&output) {
+            if self.remote_confirms_ref_missing(remote, &remote_ref) {
                 return Ok(None);
             }
             return Err(git_command_failed_error(&label, output));
@@ -1495,6 +1484,19 @@ impl GixRepo {
         Ok(Some((tip, fetch_output)))
     }
 
+    /// Exit status 2 is the remote's own answer that it has no such ref; any
+    /// other outcome leaves the failed fetch to speak for itself.
+    fn remote_confirms_ref_missing(&self, remote: &str, remote_ref: &str) -> bool {
+        let label = format!("git ls-remote --exit-code {remote} {remote_ref}");
+        let mut cmd = self.git_workdir_cmd();
+        cmd.arg("ls-remote")
+            .arg("--exit-code")
+            .arg("--")
+            .arg(remote)
+            .arg(remote_ref);
+        run_git_raw_output(cmd, &label).is_ok_and(|output| output.status.code() == Some(2))
+    }
+
     fn fetch_remote_branch_tip_for_safe_push(
         &self,
         remote: &str,
@@ -1505,7 +1507,11 @@ impl GixRepo {
             .map(|(tip, _)| tip))
     }
 
-    fn commit_is_ancestor(&self, ancestor: &CommitId, descendant: &CommitId) -> Result<bool> {
+    pub(super) fn commit_is_ancestor(
+        &self,
+        ancestor: &CommitId,
+        descendant: &CommitId,
+    ) -> Result<bool> {
         validate_hex_commit_id(ancestor)?;
         validate_hex_commit_id(descendant)?;
 

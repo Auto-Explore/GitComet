@@ -26,7 +26,7 @@ fn running_hook_activity(operation_id: u64) -> GitHookOperation {
         time: std::time::SystemTime::UNIX_EPOCH + Duration::from_secs(operation_id),
         duration: None,
         status: GitHookOperationStatus::Running,
-        handled_by_auth_prompt: false,
+        handled_by_prompt: false,
         hooks: vec![gitcomet_state::model::GitHookRun {
             id: gitcomet_core::git_operation::HookExecutionId {
                 sid: Arc::from("ui-test"),
@@ -1303,7 +1303,7 @@ fn running_fetch(operation_id: u64, percent: Option<u8>) -> GitHookOperation {
         time: std::time::SystemTime::UNIX_EPOCH,
         duration: None,
         status: GitHookOperationStatus::Running,
-        handled_by_auth_prompt: false,
+        handled_by_prompt: false,
         hooks: Vec::new(),
         output: Default::default(),
         output_bytes: 0,

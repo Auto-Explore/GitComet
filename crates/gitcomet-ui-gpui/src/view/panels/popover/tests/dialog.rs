@@ -524,3 +524,44 @@ fn prompts_use_the_shared_shell_pieces() {
 
     assert!(offenders.is_empty(), "{offenders:#?}");
 }
+
+#[gpui::test]
+fn long_truncated_values_never_widen_their_dialog(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    cx.update(|window, app| {
+        crate::app::bind_text_input_keys_for_test(app);
+        let _ = window.draw(app);
+    });
+    let branch_exists = |target: &str| PopoverKind::BranchExistsPrompt {
+        repo_id: RepoId(1),
+        name: "main".to_string(),
+        target: target.to_string(),
+        operation: gitcomet_state::model::BranchExistsPromptOperation::CreateBranch,
+    };
+    let filesystem_conflict = |destination: &str| {
+        PopoverKind::FilesystemConflict(FilesystemConflictPrompt {
+            prompt_id: 1,
+            destination: std::path::PathBuf::from(destination),
+            can_merge: false,
+            remaining: 0,
+            in_directory_merge: false,
+        })
+    };
+    let long = "a-path-segment-without-spaces/".repeat(40);
+
+    for kind in [branch_exists, filesystem_conflict] {
+        let mut widths = Vec::new();
+        for value in ["short", long.as_str()] {
+            open_popover_and_draw(&view, kind(value), cx);
+            widths.push(
+                cx.debug_bounds("app_popover")
+                    .expect("dialog is drawn")
+                    .size
+                    .width,
+            );
+        }
+        assert_eq!(widths[0], widths[1], "a long value truncates instead");
+    }
+}

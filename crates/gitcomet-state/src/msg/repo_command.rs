@@ -76,10 +76,12 @@ pub enum RepoCommandEffect {
     RemoveWorktree {
         repo_id: RepoId,
         path: PathBuf,
+        delete_branch: Option<String>,
     },
     ForceRemoveWorktree {
         repo_id: RepoId,
         path: PathBuf,
+        delete_branch: Option<String>,
     },
     CheckSubmoduleAddTrust {
         repo_id: RepoId,
@@ -533,12 +535,28 @@ impl RepoCommandEffect {
                 }
                 .finished(repo_id, Err(error)),
             ),
-            RepoCommandEffect::RemoveWorktree { repo_id, path } => {
-                Some(RepoCommandKind::RemoveWorktree { path }.finished(repo_id, Err(error)))
-            }
-            RepoCommandEffect::ForceRemoveWorktree { repo_id, path } => {
-                Some(RepoCommandKind::ForceRemoveWorktree { path }.finished(repo_id, Err(error)))
-            }
+            RepoCommandEffect::RemoveWorktree {
+                repo_id,
+                path,
+                delete_branch,
+            } => Some(
+                RepoCommandKind::RemoveWorktree {
+                    path,
+                    delete_branch,
+                }
+                .finished(repo_id, Err(error)),
+            ),
+            RepoCommandEffect::ForceRemoveWorktree {
+                repo_id,
+                path,
+                delete_branch,
+            } => Some(
+                RepoCommandKind::ForceRemoveWorktree {
+                    path,
+                    delete_branch,
+                }
+                .finished(repo_id, Err(error)),
+            ),
             RepoCommandEffect::CheckSubmoduleAddTrust {
                 repo_id,
                 url,

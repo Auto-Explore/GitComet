@@ -185,16 +185,29 @@ pub(super) fn add_worktree(
     })]
 }
 
-pub(super) fn remove_worktree(repo_id: RepoId, path: PathBuf) -> Vec<Effect> {
+pub(super) fn remove_worktree(
+    repo_id: RepoId,
+    path: PathBuf,
+    delete_branch: Option<String>,
+) -> Vec<Effect> {
     vec![Effect::RepoCommand(RepoCommandEffect::RemoveWorktree {
         repo_id,
         path,
+        delete_branch,
     })]
 }
 
-pub(super) fn force_remove_worktree(repo_id: RepoId, path: PathBuf) -> Vec<Effect> {
+pub(super) fn force_remove_worktree(
+    repo_id: RepoId,
+    path: PathBuf,
+    delete_branch: Option<String>,
+) -> Vec<Effect> {
     vec![Effect::RepoCommand(
-        RepoCommandEffect::ForceRemoveWorktree { repo_id, path },
+        RepoCommandEffect::ForceRemoveWorktree {
+            repo_id,
+            path,
+            delete_branch,
+        },
     )]
 }
 
@@ -1062,7 +1075,7 @@ pub(super) fn commit_finished(
     repo_id: RepoId,
     result: std::result::Result<(), Error>,
     amend: bool,
-    handled_by_auth_prompt: bool,
+    handled_by_prompt: bool,
 ) -> Vec<Effect> {
     let label = if amend { "Amend" } else { "Commit" };
     let mut succeeded = false;
@@ -1100,7 +1113,7 @@ pub(super) fn commit_finished(
         }
         Err(e) => {
             let summary = format_failure_summary(label, &e);
-            if !handled_by_auth_prompt {
+            if !handled_by_prompt {
                 repo_state.feedback_mut().last_error = Some(summary.clone());
             }
             push_action_log(
@@ -1110,7 +1123,7 @@ pub(super) fn commit_finished(
                 label.to_string(),
                 summary,
                 Some(&e),
-                handled_by_auth_prompt,
+                handled_by_prompt,
             );
         }
     }
@@ -1133,7 +1146,7 @@ pub(super) fn safe_push_after_commit_finished(
     repo_id: RepoId,
     auth: Option<StagedGitAuth>,
     result: std::result::Result<gitcomet_core::services::SafePushAfterCommitDecision, Error>,
-    handled_by_auth_prompt: bool,
+    handled_by_prompt: bool,
 ) -> Vec<Effect> {
     match result {
         Ok(gitcomet_core::services::SafePushAfterCommitDecision::Push { target }) => {
@@ -1174,7 +1187,7 @@ pub(super) fn safe_push_after_commit_finished(
             };
             repo_state.pending.force_push_lease = None;
             let summary = format_failure_summary("Push after commit", &e);
-            if !handled_by_auth_prompt {
+            if !handled_by_prompt {
                 repo_state.feedback_mut().last_error = Some(summary.clone());
             }
             push_action_log(
@@ -1184,7 +1197,7 @@ pub(super) fn safe_push_after_commit_finished(
                 "Push after commit".to_string(),
                 summary,
                 Some(&e),
-                handled_by_auth_prompt,
+                handled_by_prompt,
             );
             refresh_full_effects(repo_state, git_log_settings)
         }
@@ -1437,7 +1450,7 @@ pub(super) fn repo_command_finished(
     repo_id: RepoId,
     command: RepoCommandKind,
     result: std::result::Result<CommandOutput, Error>,
-    handled_by_auth_prompt: bool,
+    handled_by_prompt: bool,
 ) -> Vec<Effect> {
     let refresh_worktrees = matches!(
         &command,
@@ -1617,9 +1630,9 @@ pub(super) fn repo_command_finished(
                 &command,
                 &CommandOutput::default(),
                 Some(&e),
-                handled_by_auth_prompt,
+                handled_by_prompt,
             );
-            if !handled_by_auth_prompt {
+            if !handled_by_prompt {
                 repo_state.feedback_mut().last_error = repo_state
                     .feedback
                     .command_log

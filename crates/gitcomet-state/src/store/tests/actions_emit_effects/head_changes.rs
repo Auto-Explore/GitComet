@@ -997,3 +997,113 @@ fn repo_command_finished_reset_clears_diff_state_and_unknown_repo_is_noop() {
     );
     assert!(no_repo_effects.is_empty());
 }
+
+fn refuse_unmerged_delete(
+    repos: &mut RepositoryRuntimes,
+    state: &mut AppState,
+) -> crate::model::ForceDeleteBranchPrompt {
+    reduce(
+        repos,
+        &AtomicU64::new(1),
+        state,
+        Msg::DeleteBranch {
+            repo_id: RepoId(1),
+            name: "feature".to_string(),
+        },
+    );
+    reduce(
+        repos,
+        &AtomicU64::new(1),
+        state,
+        Msg::Internal(crate::msg::InternalMsg::BranchNotFullyMerged {
+            repo_id: RepoId(1),
+            name: "feature".to_string(),
+        }),
+    );
+    state.force_delete_branch_prompt.clone().expect("prompt")
+}
+
+fn state_with_repo() -> AppState {
+    let mut state = AppState::test_default();
+    state.repos.push(RepoState::new_opening(
+        RepoId(1),
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+    state
+}
+
+#[test]
+fn unmerged_branch_refusal_offers_force_delete_instead_of_an_error() {
+    let mut repos: RepositoryRuntimes = Default::default();
+    let mut state = state_with_repo();
+
+    let prompt = refuse_unmerged_delete(&mut repos, &mut state);
+
+    assert_eq!(
+        (prompt.repo_id, prompt.name.as_str()),
+        (RepoId(1), "feature")
+    );
+    assert_eq!(state.repos[0].local_actions_in_flight, 0);
+    assert_eq!(state.repos[0].feedback.last_error, None);
+    assert!(state.repos[0].feedback.diagnostics.is_empty());
+}
+
+#[test]
+fn forcing_the_delete_answers_its_prompt() {
+    let mut repos: RepositoryRuntimes = Default::default();
+    let mut state = state_with_repo();
+    refuse_unmerged_delete(&mut repos, &mut state);
+
+    reduce(
+        &mut repos,
+        &AtomicU64::new(1),
+        &mut state,
+        Msg::ForceDeleteBranch {
+            repo_id: RepoId(1),
+            name: "feature".to_string(),
+        },
+    );
+    assert_eq!(state.force_delete_branch_prompt, None);
+}
+
+#[test]
+fn dismissing_clears_only_the_force_delete_prompt_it_answers() {
+    let mut repos: RepositoryRuntimes = Default::default();
+    let mut state = state_with_repo();
+    let first = refuse_unmerged_delete(&mut repos, &mut state);
+    let second = refuse_unmerged_delete(&mut repos, &mut state);
+    assert_ne!(first, second, "a repeated refusal is a new prompt");
+
+    reduce(
+        &mut repos,
+        &AtomicU64::new(1),
+        &mut state,
+        Msg::DismissForceDeleteBranchPrompt { prompt: first },
+    );
+    assert_eq!(state.force_delete_branch_prompt.as_ref(), Some(&second));
+
+    reduce(
+        &mut repos,
+        &AtomicU64::new(1),
+        &mut state,
+        Msg::DismissForceDeleteBranchPrompt { prompt: second },
+    );
+    assert_eq!(state.force_delete_branch_prompt, None);
+}
+
+#[test]
+fn closing_the_repo_drops_its_force_delete_prompt() {
+    let mut repos: RepositoryRuntimes = Default::default();
+    let mut state = state_with_repo();
+    refuse_unmerged_delete(&mut repos, &mut state);
+
+    reduce(
+        &mut repos,
+        &AtomicU64::new(1),
+        &mut state,
+        Msg::CloseRepo { repo_id: RepoId(1) },
+    );
+    assert_eq!(state.force_delete_branch_prompt, None);
+}

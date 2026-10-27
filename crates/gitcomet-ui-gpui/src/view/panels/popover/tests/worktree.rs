@@ -89,19 +89,6 @@ fn popover_kind(
     })
 }
 
-fn pending_branch_removal(
-    view: &gpui::Entity<GitCometView>,
-    cx: &mut gpui::VisualTestContext,
-    repo_id: RepoId,
-) -> Option<String> {
-    cx.update(|_window, app| {
-        view.read(app)
-            .pending_worktree_branch_removals
-            .get(&(repo_id, PathBuf::from(FEATURE)))
-            .cloned()
-    })
-}
-
 fn remove_confirm(repo_id: RepoId, branch: Option<&str>) -> PopoverKind {
     PopoverKind::worktree(
         repo_id,
@@ -113,57 +100,14 @@ fn remove_confirm(repo_id: RepoId, branch: Option<&str>) -> PopoverKind {
 }
 
 #[gpui::test]
-fn remove_worktree_keeps_its_branch_unless_asked(cx: &mut gpui::TestAppContext) {
+fn remove_worktree_offers_to_delete_its_branch(cx: &mut gpui::TestAppContext) {
     let repo_id = RepoId(1);
-    let (view, cx) = open_view(cx, repo_with_feature_worktree(repo_id), repo_id);
-    open_popover(&view, cx, remove_confirm(repo_id, Some("feat/x")));
+    let (_view, cx) = open_view(cx, repo_with_feature_worktree(repo_id), repo_id);
+    open_popover(&_view, cx, remove_confirm(repo_id, Some("feat/x")));
 
     assert!(
         cx.debug_bounds("worktree_remove_delete_branch").is_some(),
         "a worktree on a branch offers to delete it"
-    );
-    click(cx, "worktree_remove_go");
-
-    assert_eq!(popover_kind(&view, cx), None);
-    assert_eq!(
-        pending_branch_removal(&view, cx, repo_id),
-        None,
-        "the branch survives a plain remove"
-    );
-}
-
-#[gpui::test]
-fn remove_worktree_deletes_the_branch_once_ticked(cx: &mut gpui::TestAppContext) {
-    let repo_id = RepoId(1);
-    let (view, cx) = open_view(cx, repo_with_feature_worktree(repo_id), repo_id);
-    open_popover(&view, cx, remove_confirm(repo_id, Some("feat/x")));
-
-    click(cx, "worktree_remove_delete_branch");
-    click(cx, "worktree_remove_go");
-
-    assert_eq!(popover_kind(&view, cx), None);
-    assert_eq!(
-        pending_branch_removal(&view, cx, repo_id).as_deref(),
-        Some("feat/x")
-    );
-}
-
-#[gpui::test]
-fn remove_worktree_checkbox_resets_when_the_dialog_reopens(cx: &mut gpui::TestAppContext) {
-    let repo_id = RepoId(1);
-    let (view, cx) = open_view(cx, repo_with_feature_worktree(repo_id), repo_id);
-    open_popover(&view, cx, remove_confirm(repo_id, Some("feat/x")));
-    click(cx, "worktree_remove_delete_branch");
-    click(cx, "worktree_remove_cancel");
-    assert_eq!(popover_kind(&view, cx), None);
-
-    open_popover(&view, cx, remove_confirm(repo_id, Some("feat/x")));
-    click(cx, "worktree_remove_go");
-
-    assert_eq!(
-        pending_branch_removal(&view, cx, repo_id),
-        None,
-        "a tick from an earlier dialog must not carry over"
     );
 }
 
@@ -485,5 +429,346 @@ fn browse_opens_at_the_typed_worktree_folder_when_it_exists(cx: &mut gpui::TestA
         browse_start(cx, "worktree_browse"),
         None,
         "a missing folder keeps the platform default"
+    );
+}
+
+#[gpui::test]
+fn force_removal_dialog_wraps_its_explanation_at_the_dialog_width(cx: &mut gpui::TestAppContext) {
+    let repo_id = RepoId(1);
+    let (view, cx) = open_view(cx, repo_with_feature_worktree(repo_id), repo_id);
+    open_popover(
+        &view,
+        cx,
+        PopoverKind::ForceRemoveWorktreeConfirm(gitcomet_state::model::ForceRemoveWorktreePrompt {
+            generation: 1,
+            repo_id,
+            path: PathBuf::from(FEATURE),
+            delete_branch: Some("feat/x".to_string()),
+            blocker: gitcomet_core::error::WorktreeRemovalBlocker::Submodules,
+        }),
+    );
+
+    let cancel = cx
+        .debug_bounds("force_remove_worktree_cancel")
+        .expect("cancel is drawn");
+    let go = cx
+        .debug_bounds("force_remove_worktree_go")
+        .expect("Delete anyway is drawn");
+    let width = cx.update(|_window, app| {
+        DIALOG_460_WIDTH.preferred_px(crate::ui_scale::UiScale::from_percent(
+            crate::ui_scale::current(app).percent,
+        ))
+    });
+    assert!(
+        go.right() - cancel.left() <= width,
+        "the buttons stay within the dialog's {width:?}: {cancel:?} {go:?}"
+    );
+}
+
+// Driven through the real store: the remove dialog dispatches, the tracked
+// repository refuses or removes, and the view shows what the store decided.
+
+fn open_store_view<'a>(
+    cx: &'a mut gpui::TestAppContext,
+    label: &str,
+) -> (
+    gpui::Entity<GitCometView>,
+    &'a mut gpui::VisualTestContext,
+    gitcomet_state::store::AppStore,
+    Arc<super::branch::TrackingRepo>,
+    RepoId,
+    PathBuf,
+) {
+    let (store, events, repo, workdir) = super::branch::create_tracking_store(label);
+    let repo_id = store
+        .snapshot()
+        .active_repo
+        .expect("tracked repo is active");
+    let store_for_view = store.clone();
+    let (view, cx) = cx
+        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+    (view, cx, store, repo, repo_id, workdir)
+}
+
+/// Waits until the repository ran `action` for the `times`th time and the
+/// store finished the worktree command, then shows the result in the view.
+fn settle(
+    view: &gpui::Entity<GitCometView>,
+    cx: &mut gpui::VisualTestContext,
+    store: &gitcomet_state::store::AppStore,
+    repo: &super::branch::TrackingRepo,
+    action: &str,
+    times: usize,
+) {
+    super::branch::wait_until(action, || {
+        repo.actions().iter().filter(|done| *done == action).count() >= times
+            && store
+                .snapshot()
+                .repos
+                .iter()
+                .all(|repo| repo.worktrees_in_flight == 0)
+    });
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            crate::view::test_support::sync_store_snapshot(this, cx)
+        });
+    });
+    redraw(cx);
+}
+
+fn linked_worktree(workdir: &Path, name: &str) -> PathBuf {
+    let path = workdir.join(name);
+    std::fs::create_dir_all(&path).expect("create linked worktree directory");
+    gitcomet_core::path_utils::canonicalize_or_original(path)
+}
+
+fn request_removal(
+    view: &gpui::Entity<GitCometView>,
+    cx: &mut gpui::VisualTestContext,
+    repo_id: RepoId,
+    path: &Path,
+    delete_branch: bool,
+) {
+    open_popover(
+        view,
+        cx,
+        PopoverKind::worktree(
+            repo_id,
+            WorktreePopoverKind::RemoveConfirm {
+                path: path.to_path_buf(),
+                branch: Some("feat/x".to_string()),
+            },
+        ),
+    );
+    if delete_branch {
+        click(cx, "worktree_remove_delete_branch");
+    }
+    click(cx, "worktree_remove_go");
+}
+
+fn force_prompt_path(
+    view: &gpui::Entity<GitCometView>,
+    cx: &mut gpui::VisualTestContext,
+) -> Option<PathBuf> {
+    match popover_kind(view, cx) {
+        Some(PopoverKind::ForceRemoveWorktreeConfirm(prompt)) => Some(prompt.path),
+        _ => None,
+    }
+}
+
+fn error_toast_count(view: &gpui::Entity<GitCometView>, cx: &mut gpui::VisualTestContext) -> usize {
+    cx.update(|_window, app| view.read(app).toast_host.read(app).error_notices().len())
+}
+
+fn force_removal_after_submodule_refusal(cx: &mut gpui::TestAppContext, label: &str, name: &str) {
+    let (view, cx, store, repo, repo_id, workdir) = open_store_view(cx, label);
+    repo.block_worktree_removal(gitcomet_core::error::WorktreeRemovalBlocker::Submodules);
+    let linked = linked_worktree(&workdir, name);
+
+    request_removal(&view, cx, repo_id, &linked, true);
+    settle(
+        &view,
+        cx,
+        &store,
+        &repo,
+        &format!("remove:{}", linked.display()),
+        1,
+    );
+
+    assert_eq!(
+        force_prompt_path(&view, cx),
+        Some(linked.clone()),
+        "the refusal asks to force-remove the worktree the user chose"
+    );
+    assert_eq!(
+        error_toast_count(&view, cx),
+        0,
+        "the prompt replaces the error"
+    );
+
+    click(cx, "force_remove_worktree_go");
+    settle(
+        &view,
+        cx,
+        &store,
+        &repo,
+        &format!("force-remove:{}", linked.display()),
+        1,
+    );
+    super::branch::wait_until("the ticked branch to be deleted", || {
+        repo.actions()
+            .iter()
+            .any(|done| done == "delete-branch:feat/x")
+    });
+}
+
+#[gpui::test]
+fn submodule_refusal_offers_to_force_remove_the_worktree(cx: &mut gpui::TestAppContext) {
+    force_removal_after_submodule_refusal(cx, "worktree-force-remove", "feature");
+}
+
+/// The path travels as data: one ending in a space is still the one removed.
+#[cfg(not(windows))]
+#[gpui::test]
+fn force_removal_keeps_a_path_that_ends_in_whitespace(cx: &mut gpui::TestAppContext) {
+    force_removal_after_submodule_refusal(cx, "worktree-force-remove-space", "feature ");
+}
+
+#[gpui::test]
+fn cancelled_force_removal_removes_nothing_and_asks_again(cx: &mut gpui::TestAppContext) {
+    let (view, cx, store, repo, repo_id, workdir) =
+        open_store_view(cx, "worktree-force-remove-cancel");
+    repo.block_worktree_removal(gitcomet_core::error::WorktreeRemovalBlocker::Changes);
+    let linked = linked_worktree(&workdir, "feature");
+    let removal = format!("remove:{}", linked.display());
+
+    request_removal(&view, cx, repo_id, &linked, false);
+    settle(&view, cx, &store, &repo, &removal, 1);
+    click(cx, "force_remove_worktree_cancel");
+    assert_eq!(popover_kind(&view, cx), None);
+
+    request_removal(&view, cx, repo_id, &linked, false);
+    settle(&view, cx, &store, &repo, &removal, 2);
+    assert_eq!(
+        force_prompt_path(&view, cx),
+        Some(linked.clone()),
+        "a second refusal asks again"
+    );
+    assert!(
+        !repo
+            .actions()
+            .iter()
+            .any(|done| done.starts_with("force-remove:")),
+        "cancelling forces nothing"
+    );
+}
+
+#[gpui::test]
+fn removal_keeps_the_branch_unless_asked(cx: &mut gpui::TestAppContext) {
+    let (view, cx, store, repo, repo_id, workdir) = open_store_view(cx, "worktree-remove-keep");
+    let linked = linked_worktree(&workdir, "feature");
+
+    request_removal(&view, cx, repo_id, &linked, false);
+    settle(
+        &view,
+        cx,
+        &store,
+        &repo,
+        &format!("remove:{}", linked.display()),
+        1,
+    );
+
+    assert!(
+        !repo
+            .actions()
+            .iter()
+            .any(|done| done.starts_with("delete-branch:")),
+        "the branch survives a plain remove"
+    );
+}
+
+#[gpui::test]
+fn removal_deletes_the_ticked_branch_once_the_worktree_is_gone(cx: &mut gpui::TestAppContext) {
+    let (view, cx, store, repo, repo_id, workdir) = open_store_view(cx, "worktree-remove-branch");
+    let linked = linked_worktree(&workdir, "feature");
+
+    request_removal(&view, cx, repo_id, &linked, true);
+    settle(
+        &view,
+        cx,
+        &store,
+        &repo,
+        &format!("remove:{}", linked.display()),
+        1,
+    );
+    super::branch::wait_until("the ticked branch to be deleted", || {
+        repo.actions()
+            .iter()
+            .any(|done| done == "delete-branch:feat/x")
+    });
+}
+
+#[gpui::test]
+fn removal_checkbox_resets_when_the_dialog_reopens(cx: &mut gpui::TestAppContext) {
+    let (view, cx, store, repo, repo_id, workdir) = open_store_view(cx, "worktree-remove-reset");
+    let linked = linked_worktree(&workdir, "feature");
+    open_popover(
+        &view,
+        cx,
+        PopoverKind::worktree(
+            repo_id,
+            WorktreePopoverKind::RemoveConfirm {
+                path: linked.clone(),
+                branch: Some("feat/x".to_string()),
+            },
+        ),
+    );
+    click(cx, "worktree_remove_delete_branch");
+    click(cx, "worktree_remove_cancel");
+
+    request_removal(&view, cx, repo_id, &linked, false);
+    settle(
+        &view,
+        cx,
+        &store,
+        &repo,
+        &format!("remove:{}", linked.display()),
+        1,
+    );
+
+    assert!(
+        !repo
+            .actions()
+            .iter()
+            .any(|done| done.starts_with("delete-branch:")),
+        "a tick from an earlier dialog must not carry over"
+    );
+}
+
+/// A refusal can land while another tab is active; the dialog then waits for
+/// its repository instead of being dropped.
+#[gpui::test]
+fn force_removal_prompt_waits_for_its_repository_tab(cx: &mut gpui::TestAppContext) {
+    let (origin, other) = (RepoId(1), RepoId(2));
+    let (view, cx) = open_view(cx, repo_with_feature_worktree(origin), origin);
+    let prompt = gitcomet_state::model::ForceRemoveWorktreePrompt {
+        generation: 1,
+        repo_id: origin,
+        path: PathBuf::from(FEATURE),
+        delete_branch: None,
+        blocker: gitcomet_core::error::WorktreeRemovalBlocker::Submodules,
+    };
+    let state_with_active = |active: RepoId| {
+        Arc::new(gitcomet_state::model::AppState {
+            repos: vec![
+                repo_with_feature_worktree(origin),
+                opening_repo_state(other, Path::new("/tmp/ws/other")),
+            ],
+            active_repo: Some(active),
+            force_remove_worktree_prompt: Some(prompt.clone()),
+            ..gitcomet_state::model::AppState::test_default()
+        })
+    };
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            push_test_state(this, state_with_active(other), cx)
+        });
+    });
+    redraw(cx);
+    assert_eq!(popover_kind(&view, cx), None, "not over another repository");
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            push_test_state(this, state_with_active(origin), cx)
+        });
+    });
+    redraw(cx);
+    assert_eq!(
+        popover_kind(&view, cx),
+        Some(PopoverKind::ForceRemoveWorktreeConfirm(prompt))
     );
 }

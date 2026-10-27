@@ -194,7 +194,7 @@ fn successful_commit_prompt_submission_clears_draft(cx: &mut gpui::TestAppContex
             stdout: "".into(),
             stderr: "".into(),
             announce_success: true,
-            handled_by_auth_prompt: false,
+            handled_by_prompt: false,
             failure_id: None,
             hook_operation_id: None,
             source: gitcomet_state::model::CommandSource::User,

@@ -58,7 +58,7 @@ fn timing_state_clone_with_full_repository_logs() {
                 stdout: Arc::from(""),
                 stderr: Arc::from(""),
                 announce_success: false,
-                handled_by_auth_prompt: false,
+                handled_by_prompt: false,
                 failure_id: None,
                 hook_operation_id: None,
             });
