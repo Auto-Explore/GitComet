@@ -1,10 +1,5 @@
 use crate::test_git_env;
 use gitcomet_core::error::{ErrorKind, GitFailureId};
-#[cfg(unix)]
-use gitcomet_core::process::{
-    GitExecutablePreference, current_git_executable_preference, install_git_executable_path,
-    install_git_executable_preference,
-};
 use gitcomet_core::remote_url::{RemoteProtocol, RemoteUrlPolicy};
 use gitcomet_core::services::{GitBackend, PullMode, RemoteUrlKind};
 use gitcomet_core::test_support::git_fixture::{FixtureTimer, append_config, init_repository};
@@ -71,32 +66,6 @@ fn remote_management_test_lock() -> MutexGuard<'static, ()> {
     LOCK.get_or_init(|| Mutex::new(()))
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
-}
-
-#[cfg(unix)]
-struct GitExecutablePreferenceGuard {
-    original: GitExecutablePreference,
-}
-
-#[cfg(unix)]
-impl GitExecutablePreferenceGuard {
-    fn install(path: &Path) -> Self {
-        let original = current_git_executable_preference();
-        let runtime = install_git_executable_path(Some(path.to_path_buf()));
-        assert!(
-            runtime.is_available(),
-            "localized Git test wrapper must be executable: {:?}",
-            runtime.availability
-        );
-        Self { original }
-    }
-}
-
-#[cfg(unix)]
-impl Drop for GitExecutablePreferenceGuard {
-    fn drop(&mut self) {
-        let _ = install_git_executable_preference(self.original.clone());
-    }
 }
 
 fn configure_repo_with_user(repo: &Path) {
@@ -2015,23 +1984,32 @@ fn pruning_pull_branch_fetches_a_requested_branch_excluded_by_remote_refspecs() 
 #[cfg(unix)]
 #[test]
 fn pruning_pull_branch_recognizes_a_localized_missing_remote_ref() {
-    const CHILD_ENV: &str = "GITCOMET_LOCALIZED_MISSING_REF_TEST_CHILD";
-    if std::env::var_os(CHILD_ENV).is_none() {
-        let mut child = Command::new(std::env::current_exe().expect("current test executable"));
-        child
-            .env(CHILD_ENV, "1")
-            // The wrapper below emits a localized diagnostic unless the caller
-            // explicitly pins the stable C locale. Running in a child keeps
-            // this process-wide setting isolated from concurrent tests.
-            .env("LC_ALL", "POSIX");
-        crate::child_test::run(
-            &mut child,
-            module_path!(),
-            "pruning_pull_branch_recognizes_a_localized_missing_remote_ref",
-        );
-        return;
-    }
+    crate::localized_git::run(
+        module_path!(),
+        "pruning_pull_branch_recognizes_a_localized_missing_remote_ref",
+        r#"#!/bin/sh
+saw_fetch=false
+saw_feature=false
+for argument in "$@"; do
+    if [ "$argument" = "fetch" ]; then
+        saw_fetch=true
+    fi
+    if [ "$argument" = "refs/heads/feature" ]; then
+        saw_feature=true
+    fi
+done
+if [ "$saw_fetch" = true ] && [ "$saw_feature" = true ] && [ "${LC_ALL-}" != C ]; then
+    printf '%s\n' 'ödesdigert: kunde inte hitta fjärr-referensen refs/heads/feature' >&2
+    exit 128
+fi
+exec git "$@"
+"#,
+        pruning_pull_branch_reports_a_deleted_remote_branch,
+    );
+}
 
+#[cfg(unix)]
+fn pruning_pull_branch_reports_a_deleted_remote_branch() {
     let _guard = remote_management_test_lock();
     let dir = tempfile::tempdir().expect("create tempdir");
     let root = dir.path();
@@ -2064,36 +2042,6 @@ fn pruning_pull_branch_recognizes_a_localized_missing_remote_ref() {
         ref_exists(&work_repo, "refs/remotes/origin/feature"),
         "the narrow refspec must leave a stale tracking ref for the explicit probe"
     );
-
-    let wrapper = root.join("localized-git");
-    fs::write(
-        &wrapper,
-        r#"#!/bin/sh
-saw_fetch=false
-saw_feature=false
-for argument in "$@"; do
-    if [ "$argument" = "fetch" ]; then
-        saw_fetch=true
-    fi
-    if [ "$argument" = "refs/heads/feature" ]; then
-        saw_feature=true
-    fi
-done
-if [ "$saw_fetch" = true ] && [ "$saw_feature" = true ] && [ "${LC_ALL-}" != C ]; then
-    printf '%s\n' 'ödesdigert: kunde inte hitta fjärr-referensen refs/heads/feature' >&2
-    exit 128
-fi
-exec git "$@"
-"#,
-    )
-    .expect("write localized Git wrapper");
-    use std::os::unix::fs::PermissionsExt as _;
-    let mut permissions = fs::metadata(&wrapper)
-        .expect("localized Git wrapper metadata")
-        .permissions();
-    permissions.set_mode(0o755);
-    fs::set_permissions(&wrapper, permissions).expect("make localized Git wrapper executable");
-    let _git_executable = GitExecutablePreferenceGuard::install(&wrapper);
 
     let backend = GixBackend;
     let opened = backend.open(&work_repo).expect("open work repo");

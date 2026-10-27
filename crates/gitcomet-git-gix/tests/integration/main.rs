@@ -8,6 +8,12 @@ mod child_test;
 #[path = "../support/extension_formats.rs"]
 #[allow(dead_code)]
 mod formats;
+#[cfg(unix)]
+#[path = "../support/localized_git.rs"]
+mod localized_git;
+#[cfg(unix)]
+#[path = "../support/script.rs"]
+mod script;
 #[path = "../support/source_audit.rs"]
 mod source_audit;
 #[path = "../support/test_git_env.rs"]
