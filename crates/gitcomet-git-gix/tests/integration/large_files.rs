@@ -2534,15 +2534,12 @@ fn committed_pointer_scans_detect_nested_attributes_without_a_local_store() {
 
 #[cfg(unix)]
 fn with_lfs_shim(name: &str, script: &str, test: impl FnOnce(&Path)) {
-    use std::os::unix::fs::PermissionsExt;
     const CHILD: &str = "GITCOMET_LFS_TEST_ROOT";
     let Some(root) = std::env::var_os(CHILD) else {
         let root = tempfile::tempdir().unwrap();
         let bin = root.path().join("bin");
         fs::create_dir(&bin).unwrap();
-        let shim = bin.join("git-lfs");
-        fs::write(&shim, script).unwrap();
-        fs::set_permissions(&shim, fs::Permissions::from_mode(0o755)).unwrap();
+        crate::script::write_executable(&bin.join("git-lfs"), script);
         let mut paths = vec![bin];
         paths.extend(std::env::split_paths(&std::env::var_os("PATH").unwrap()));
         let mut child = std::process::Command::new(std::env::current_exe().unwrap());

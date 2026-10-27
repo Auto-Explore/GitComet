@@ -1370,16 +1370,6 @@ fn path_with(dir: &Path) -> std::ffi::OsString {
 }
 
 #[cfg(unix)]
-fn write_script(path: &Path, text: &str) {
-    fs::write(path, text).unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-        fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
-    }
-}
-
-#[cfg(unix)]
 /// A `git-annex` that logs each call as `cwd<TAB>args` and, like git-annex
 /// before 10.20230626, has no `pull` or `push`. Returns its directory.
 fn old_git_annex_shim(root: &Path) -> Option<PathBuf> {
@@ -1400,7 +1390,7 @@ fn old_git_annex_shim(root: &Path) -> Option<PathBuf> {
         log = dir.join("calls.log").display(),
         real = real.display(),
     );
-    write_script(&dir.join("git-annex"), &script);
+    crate::script::write_executable(&dir.join("git-annex"), &script);
     Some(dir)
 }
 
@@ -1568,7 +1558,7 @@ fn a_silent_content_transfer_outlives_the_silence_deadline() {
             let root = child_root("silent-transfer");
             let bin = root.join("bin");
             fs::create_dir_all(&bin).unwrap();
-            write_script(
+            crate::script::write_executable(
                 &bin.join("git-annex-remote-slowtest"),
                 &SLOW_REMOTE.replace("@SECS@", "2"),
             );
@@ -1964,7 +1954,7 @@ fn with_annex_shim_env(name: &str, script: &str, env: &[(&str, &str)], test: imp
     let dir = tempfile::tempdir().unwrap();
     let bin = dir.path().join("bin");
     fs::create_dir(&bin).unwrap();
-    write_script(&bin.join("git-annex"), script);
+    crate::script::write_executable(&bin.join("git-annex"), script);
     let mut child_env = vec![
         ("PATH", path_with(&bin)),
         ("GITCOMET_ANNEX_TEST_ROOT", dir.path().as_os_str().into()),
