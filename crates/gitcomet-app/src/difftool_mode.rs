@@ -119,6 +119,10 @@ pub fn run_difftool(config: &DifftoolConfig) -> Result<DifftoolRunResult, String
         .map_err(|e| io_err!("launch `git diff --no-index`", e))?;
 
     let status_code = output.status.code();
+    // `--no-index` exits 1 both when the inputs differ and when it refuses a
+    // path before diffing. A refusal prints no diff and says why on stderr; a
+    // difference prints a diff, or nothing when textconv makes both sides equal.
+    let differs = !output.stdout.is_empty() || output.stderr.is_empty();
     let mut stdout = decode_unified_diff_output(output.stdout);
     let stderr = bytes_to_text_preserving_utf8(&output.stderr);
 
@@ -132,7 +136,7 @@ pub fn run_difftool(config: &DifftoolConfig) -> Result<DifftoolRunResult, String
             stderr,
             exit_code: exit_code::SUCCESS,
         }),
-        Some(1) if !has_git_error_prefix(&stderr) => Ok(DifftoolRunResult {
+        Some(1) if differs => Ok(DifftoolRunResult {
             stdout,
             stderr,
             exit_code: exit_code::SUCCESS,
@@ -613,13 +617,6 @@ fn write_symlink_target(dst: &Path, target: &Path) -> std::io::Result<()> {
     }
 }
 
-fn has_git_error_prefix(stderr: &str) -> bool {
-    stderr
-        .lines()
-        .map(str::trim_start)
-        .any(|line| line.starts_with("error:") || line.starts_with("fatal:"))
-}
-
 fn push_labeled_header_line(out: &mut String, prefix: &str, label: &str, segment: &str) {
     out.push_str(prefix);
     out.push(' ');
@@ -903,6 +900,64 @@ mod tests {
                 || err.contains("Failed to read metadata for local path")
                 || err.contains("failed with exit code"),
             "unexpected error message: {err}"
+        );
+    }
+
+    /// A refused input exits 1 like a difference does, but prints no diff;
+    /// its translated message must not read as one.
+    #[cfg(unix)]
+    #[test]
+    fn run_difftool_reports_a_git_error_in_any_locale() {
+        gitcomet_core::test_support::localized_git::run(
+            module_path!(),
+            "run_difftool_reports_a_git_error_in_any_locale",
+            r#"#!/bin/sh
+for argument in "$@"; do
+    if [ "$argument" = --no-index ]; then
+        printf '%s\n' 'Fehler: konnte right.txt nicht lesen: Keine Berechtigung' >&2
+        exit 1
+    fi
+done
+exec git "$@"
+"#,
+            || {
+                let tmp = tempfile::tempdir().unwrap();
+                let left = tmp.path().join("left.txt");
+                let right = tmp.path().join("right.txt");
+                write_file(&left, "left\n");
+                write_file(&right, "right\n");
+
+                run_difftool(&config(left, right)).expect_err("a Git error is not a diff");
+            },
+        );
+    }
+
+    /// A textconv driver can render two different files alike: Git then exits
+    /// 1 with no diff and no message.
+    #[cfg(unix)]
+    #[test]
+    fn run_difftool_treats_a_silent_exit_1_as_a_difference() {
+        gitcomet_core::test_support::localized_git::run(
+            module_path!(),
+            "run_difftool_treats_a_silent_exit_1_as_a_difference",
+            r#"#!/bin/sh
+for argument in "$@"; do
+    if [ "$argument" = --no-index ]; then
+        exit 1
+    fi
+done
+exec git "$@"
+"#,
+            || {
+                let tmp = tempfile::tempdir().unwrap();
+                let left = tmp.path().join("left.docx");
+                let right = tmp.path().join("right.docx");
+                write_file(&left, "left\n");
+                write_file(&right, "right\n");
+
+                let result = run_difftool(&config(left, right)).expect("not an error");
+                assert_eq!(result.exit_code, exit_code::SUCCESS);
+            },
         );
     }
 
@@ -1214,22 +1269,6 @@ mod tests {
         let got = apply_labels_to_unified_diff_headers(input, "LEFT", "RIGHT");
         assert_eq!(got.matches("--- LEFT").count(), 2);
         assert_eq!(got.matches("+++ RIGHT").count(), 2);
-    }
-
-    #[test]
-    fn has_git_error_prefix_detects_error_and_fatal_diagnostics() {
-        assert!(has_git_error_prefix("error: unable to read file"));
-        assert!(has_git_error_prefix(
-            "warning: context\nfatal: cannot stat '/tmp/missing'"
-        ));
-    }
-
-    #[test]
-    fn has_git_error_prefix_ignores_non_error_output() {
-        assert!(!has_git_error_prefix(
-            "diff --git a/file b/file\nindex 1..2 100644"
-        ));
-        assert!(!has_git_error_prefix("warning: textconv failed"));
     }
 
     // ── Subdirectory invocation ─────────────────────────────────────
