@@ -479,7 +479,7 @@ fn apply_state_snapshot_routes_command_errors_into_error_toasts(cx: &mut gpui::T
             stdout: "".into(),
             stderr: "fatal: test".into(),
             announce_success: true,
-            handled_by_auth_prompt: false,
+            handled_by_prompt: false,
             failure_id: None,
             hook_operation_id: None,
         });
@@ -526,7 +526,7 @@ fn announced_command(summary: &str) -> gitcomet_state::model::CommandLogEntry {
         stdout: "".into(),
         stderr: "".into(),
         announce_success: true,
-        handled_by_auth_prompt: false,
+        handled_by_prompt: false,
         failure_id: None,
         hook_operation_id: None,
     }
@@ -710,7 +710,7 @@ fn auth_pull_attempt(kind: AuthPromptKind) -> gitcomet_state::model::CommandLogE
         stdout: "".into(),
         stderr: challenge.into(),
         announce_success: true,
-        handled_by_auth_prompt: true,
+        handled_by_prompt: true,
         failure_id: None,
         hook_operation_id: None,
     }
@@ -747,7 +747,7 @@ fn successful_pull_attempt() -> gitcomet_state::model::CommandLogEntry {
         summary: "Pull: Fast-forwarded".into(),
         stdout: "Updating 1111111..2222222\nFast-forward\n".into(),
         stderr: "".into(),
-        handled_by_auth_prompt: false,
+        handled_by_prompt: false,
         ..auth_pull_attempt(AuthPromptKind::Passphrase)
     }
 }
@@ -1237,7 +1237,7 @@ fn genuine_retry_failures_still_produce_error_toasts(cx: &mut gpui::TestAppConte
                     command: command.into(),
                     summary: summary.into(),
                     stderr: summary.into(),
-                    handled_by_auth_prompt: false,
+                    handled_by_prompt: false,
                     ..auth_pull_attempt(kind)
                 },
             );
@@ -1269,7 +1269,7 @@ fn pull_blocked_after_authentication_has_one_actionable_failure_and_no_stale_pro
         .push_command_result(gitcomet_state::model::CommandLogEntry {
             summary: "Pull failed".into(),
             stderr: "error: Your local changes to the following files would be overwritten by merge:\n\tREADME.md\nAborting".into(),
-            handled_by_auth_prompt: false,
+            handled_by_prompt: false,
             failure_id: Some(gitcomet_core::error::GitFailureId::WorktreeWouldBeOverwritten),
             ..auth_pull_attempt(AuthPromptKind::Passphrase)
         });
@@ -1311,7 +1311,7 @@ fn authentication_owned_hook_attempts_are_quiet_even_without_the_prompt_snapshot
             time: std::time::SystemTime::UNIX_EPOCH,
             duration: Some(Duration::from_secs(1)),
             status: GitHookOperationStatus::Failed,
-            handled_by_auth_prompt: true,
+            handled_by_prompt: true,
             hooks: vec![gitcomet_state::model::GitHookRun {
                 id: gitcomet_core::git_operation::HookExecutionId {
                     sid: "auth-test".into(),

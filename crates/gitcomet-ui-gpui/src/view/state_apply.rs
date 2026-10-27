@@ -304,7 +304,7 @@ impl GitCometView {
                     repo_id: next_repo.id,
                     entry: entry.clone(),
                 });
-                if entry.command.starts_with("telemetry.") || entry.handled_by_auth_prompt {
+                if entry.command.starts_with("telemetry.") || entry.handled_by_prompt {
                     continue;
                 }
 
@@ -371,7 +371,7 @@ impl GitCometView {
                 previous.is_some()
                     && operation.is_reportable()
                     && !operation.status.is_active()
-                    && !operation.handled_by_auth_prompt
+                    && !operation.handled_by_prompt
             }) {
                 let was_completed = previous_repo
                     .and_then(|repo| {
@@ -876,7 +876,7 @@ mod tests {
             time: SystemTime::UNIX_EPOCH,
             duration: Some(Duration::from_millis(50)),
             status,
-            handled_by_auth_prompt: false,
+            handled_by_prompt: false,
             hooks: vec![gitcomet_state::model::GitHookRun {
                 id: HookExecutionId {
                     sid: Arc::from("test-session"),
@@ -925,7 +925,7 @@ mod tests {
             stdout: "".into(),
             stderr: "".into(),
             announce_success: true,
-            handled_by_auth_prompt: false,
+            handled_by_prompt: false,
             failure_id,
             hook_operation_id: None,
         }

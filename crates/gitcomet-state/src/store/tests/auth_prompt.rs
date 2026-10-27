@@ -16,7 +16,7 @@ fn assert_auth_attempt_is_recoverable(state: &AppState) {
     assert!(feedback.last_error.is_none());
     let entry = feedback.command_log.last().expect("auth attempt logged");
     assert!(!entry.ok);
-    assert!(entry.handled_by_auth_prompt);
+    assert!(entry.handled_by_prompt);
 }
 
 fn assert_terminal_failure(state: &AppState) {
@@ -25,7 +25,7 @@ fn assert_terminal_failure(state: &AppState) {
     assert!(feedback.last_error.is_some());
     let entry = feedback.command_log.last().expect("failed attempt logged");
     assert!(!entry.ok);
-    assert!(!entry.handled_by_auth_prompt);
+    assert!(!entry.handled_by_prompt);
 }
 
 fn auth_error(message: &str) -> Error {

@@ -316,7 +316,7 @@ Please commit your changes or stash them before you merge.\nAborting\n";
         stdout: "Updating abc123..def456\n".into(),
         stderr: output.into(),
         announce_success: true,
-        handled_by_auth_prompt: false,
+        handled_by_prompt: false,
         failure_id: Some(GitFailureId::WorktreeWouldBeOverwritten),
         hook_operation_id: None,
     });

@@ -361,7 +361,7 @@ mod tests {
             stdout: "".into(),
             stderr: "".into(),
             announce_success: true,
-            handled_by_auth_prompt: false,
+            handled_by_prompt: false,
             failure_id: None,
             hook_operation_id: None,
         };
