@@ -1981,13 +1981,10 @@ fn pruning_pull_branch_fetches_a_requested_branch_excluded_by_remote_refspecs() 
     );
 }
 
+/// Answers the explicit branch fetch with a translated failure, so only the
+/// remote's own answer can tell a deleted branch from a failed fetch.
 #[cfg(unix)]
-#[test]
-fn pruning_pull_branch_recognizes_a_localized_missing_remote_ref() {
-    crate::localized_git::run(
-        module_path!(),
-        "pruning_pull_branch_recognizes_a_localized_missing_remote_ref",
-        r#"#!/bin/sh
+const FAILING_BRANCH_FETCH_GIT: &str = r#"#!/bin/sh
 saw_fetch=false
 saw_feature=false
 for argument in "$@"; do
@@ -1998,23 +1995,17 @@ for argument in "$@"; do
         saw_feature=true
     fi
 done
-if [ "$saw_fetch" = true ] && [ "$saw_feature" = true ] && [ "${LC_ALL-}" != C ]; then
+if [ "$saw_fetch" = true ] && [ "$saw_feature" = true ]; then
     printf '%s\n' 'ödesdigert: kunde inte hitta fjärr-referensen refs/heads/feature' >&2
     exit 128
 fi
 exec git "$@"
-"#,
-        pruning_pull_branch_reports_a_deleted_remote_branch,
-    );
-}
+"#;
 
+/// `feature` is pushed and tracked, but outside the remote's fetch refspec.
 #[cfg(unix)]
-fn pruning_pull_branch_reports_a_deleted_remote_branch() {
-    let _guard = remote_management_test_lock();
-    let dir = tempfile::tempdir().expect("create tempdir");
-    let root = dir.path();
+fn feature_outside_the_fetch_refspec(root: &Path) -> (std::path::PathBuf, std::path::PathBuf) {
     let (remote_repo, work_repo) = init_work_repo_with_remote(root, "origin");
-
     run_git(&work_repo, &["checkout", "-b", "feature"]);
     fs::write(work_repo.join("feature.txt"), "feature\n").expect("write feature file");
     run_git(&work_repo, &["add", "feature.txt"]);
@@ -2037,31 +2028,77 @@ fn pruning_pull_branch_reports_a_deleted_remote_branch() {
             "+refs/heads/main:refs/remotes/origin/main",
         ],
     );
-    run_git(&remote_repo, &["update-ref", "-d", "refs/heads/feature"]);
-    assert!(
-        ref_exists(&work_repo, "refs/remotes/origin/feature"),
-        "the narrow refspec must leave a stale tracking ref for the explicit probe"
-    );
+    (remote_repo, work_repo)
+}
 
-    let backend = GixBackend;
-    let opened = backend.open(&work_repo).expect("open work repo");
-    let error = opened
-        .pull_branch_with_output("origin", "feature", true)
-        .expect_err("the deleted remote branch must not be merged");
+#[cfg(unix)]
+#[test]
+fn pruning_pull_branch_recognizes_a_localized_missing_remote_ref() {
+    crate::localized_git::run(
+        module_path!(),
+        "pruning_pull_branch_recognizes_a_localized_missing_remote_ref",
+        FAILING_BRANCH_FETCH_GIT,
+        || {
+            let _guard = remote_management_test_lock();
+            let dir = tempfile::tempdir().expect("create tempdir");
+            let (remote_repo, work_repo) = feature_outside_the_fetch_refspec(dir.path());
+            run_git(&remote_repo, &["update-ref", "-d", "refs/heads/feature"]);
+            assert!(
+                ref_exists(&work_repo, "refs/remotes/origin/feature"),
+                "the narrow refspec must leave a stale tracking ref for the explicit probe"
+            );
 
-    assert!(
-        error
-            .to_string()
-            .contains("origin/feature no longer exists"),
-        "localized missing-ref output must be classified as a deletion: {error}"
+            let opened = GixBackend.open(&work_repo).expect("open work repo");
+            let error = opened
+                .pull_branch_with_output("origin", "feature", true)
+                .expect_err("the deleted remote branch must not be merged");
+
+            assert!(
+                error
+                    .to_string()
+                    .contains("origin/feature no longer exists"),
+                "the remote's answer classifies the failure as a deletion: {error}"
+            );
+            assert!(
+                !ref_exists(&work_repo, "refs/remotes/origin/feature"),
+                "the confirmed-deleted tracking ref must be removed"
+            );
+            assert!(
+                !run_git_status(&work_repo, &["config", "--get", "branch.feature.remote"])
+                    .success(),
+                "the confirmed-deleted upstream must be unlinked"
+            );
+        },
     );
-    assert!(
-        !ref_exists(&work_repo, "refs/remotes/origin/feature"),
-        "the confirmed-deleted tracking ref must be removed"
-    );
-    assert!(
-        !run_git_status(&work_repo, &["config", "--get", "branch.feature.remote"]).success(),
-        "the confirmed-deleted upstream must be unlinked"
+}
+
+#[cfg(unix)]
+#[test]
+fn pruning_pull_branch_keeps_a_branch_the_remote_still_has_when_its_fetch_fails() {
+    crate::localized_git::run(
+        module_path!(),
+        "pruning_pull_branch_keeps_a_branch_the_remote_still_has_when_its_fetch_fails",
+        FAILING_BRANCH_FETCH_GIT,
+        || {
+            let _guard = remote_management_test_lock();
+            let dir = tempfile::tempdir().expect("create tempdir");
+            let (_remote_repo, work_repo) = feature_outside_the_fetch_refspec(dir.path());
+
+            let opened = GixBackend.open(&work_repo).expect("open work repo");
+            let error = opened
+                .pull_branch_with_output("origin", "feature", true)
+                .expect_err("the failed fetch is reported");
+
+            assert!(
+                !error.to_string().contains("no longer exists"),
+                "a branch the remote still has is not a deletion: {error}"
+            );
+            assert!(ref_exists(&work_repo, "refs/remotes/origin/feature"));
+            assert!(
+                run_git_status(&work_repo, &["config", "--get", "branch.feature.remote"]).success(),
+                "the upstream stays linked"
+            );
+        },
     );
 }
 
