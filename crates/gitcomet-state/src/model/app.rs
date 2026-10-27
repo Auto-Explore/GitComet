@@ -159,6 +159,10 @@ pub struct AppState {
     /// Every force-delete prompt has a distinct generation, so a refusal that
     /// repeats the last one is still a new prompt.
     pub force_delete_branch_prompt_generation: u64,
+    pub force_remove_worktree_prompt: Option<ForceRemoveWorktreePrompt>,
+    /// Every force prompt has a distinct generation, so a refusal that
+    /// repeats the last one is still a new prompt.
+    pub force_remove_worktree_prompt_generation: u64,
     pub submodule_trust_prompt: Option<SubmoduleTrustPromptState>,
     /// A submodule trust check is running in the background. Set the moment the
     /// add/update/load is triggered and cleared when the check resolves, so the
@@ -251,6 +255,17 @@ pub struct ForceDeleteBranchPrompt {
     pub generation: u64,
     pub repo_id: RepoId,
     pub name: String,
+}
+
+/// A plain worktree removal Git refused for a reason `--force` overrides.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct ForceRemoveWorktreePrompt {
+    pub generation: u64,
+    pub repo_id: RepoId,
+    pub path: PathBuf,
+    /// The local branch to delete once the worktree is gone.
+    pub delete_branch: Option<String>,
+    pub blocker: gitcomet_core::error::WorktreeRemovalBlocker,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

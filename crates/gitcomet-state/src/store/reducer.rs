@@ -39,6 +39,7 @@ mod submodule_trust;
 #[cfg(test)]
 pub(super) mod test_inputs;
 mod util;
+mod worktree_removal;
 
 use crate::model::{AppState, Loadable, RepoId};
 use crate::msg::{ConflictRegionChoice, Effect, Msg, RepoPath, RepoPathList, WorktreeSaveBaseline};
@@ -1590,7 +1591,11 @@ fn reduce_inner(
             }
             actions_emit_effects::add_worktree(repo_id, path, checkout, open_after)
         }
-        Msg::RemoveWorktree { repo_id, path } => {
+        Msg::RemoveWorktree {
+            repo_id,
+            path,
+            delete_branch,
+        } => {
             let normalized_path = if let Some(repo_state) =
                 state.repos.iter_mut().find(|r| r.id == repo_id)
             {
@@ -1599,9 +1604,21 @@ fn reduce_inner(
             } else {
                 path
             };
-            actions_emit_effects::remove_worktree(repo_id, normalized_path)
+            actions_emit_effects::remove_worktree(repo_id, normalized_path, delete_branch)
         }
-        Msg::ForceRemoveWorktree { repo_id, path } => {
+        Msg::ForceRemoveWorktree {
+            repo_id,
+            path,
+            delete_branch,
+        } => {
+            // Forcing answers the prompt that offered it.
+            if state
+                .force_remove_worktree_prompt
+                .as_ref()
+                .is_some_and(|prompt| prompt.repo_id == repo_id && prompt.path == path)
+            {
+                state.force_remove_worktree_prompt = None;
+            }
             let normalized_path = if let Some(repo_state) =
                 state.repos.iter_mut().find(|r| r.id == repo_id)
             {
@@ -1610,7 +1627,13 @@ fn reduce_inner(
             } else {
                 path
             };
-            actions_emit_effects::force_remove_worktree(repo_id, normalized_path)
+            actions_emit_effects::force_remove_worktree(repo_id, normalized_path, delete_branch)
+        }
+        Msg::DismissForceRemoveWorktreePrompt { prompt } => {
+            if state.force_remove_worktree_prompt.as_ref() == Some(&prompt) {
+                state.force_remove_worktree_prompt = None;
+            }
+            Vec::new()
         }
         Msg::AddSubmodule {
             repo_id,

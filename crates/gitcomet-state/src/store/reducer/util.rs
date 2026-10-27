@@ -1774,10 +1774,10 @@ fn summarize_command(
             path.display(),
             crate::msg::worktree_checkout_label(checkout)
         ),
-        RepoCommandKind::RemoveWorktree { path } => {
+        RepoCommandKind::RemoveWorktree { path, .. } => {
             format!("Worktree removed → {}", path.display())
         }
-        RepoCommandKind::ForceRemoveWorktree { path } => {
+        RepoCommandKind::ForceRemoveWorktree { path, .. } => {
             format!("Worktree force removed → {}", path.display())
         }
         RepoCommandKind::AddSubmodule { path, .. } => {

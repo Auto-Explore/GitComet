@@ -2,7 +2,7 @@ use super::*;
 use gitcomet_core::domain::{
     Branch, CommitDetails, CommitId, LogPage, ReflogEntry, RepoSpec, RepoStatus, StashEntry,
 };
-use gitcomet_core::error::{GitFailure, GitFailureId};
+use gitcomet_core::error::{GitFailure, GitFailureId, WorktreeRemovalBlocker};
 use gitcomet_core::path_utils::canonicalize_or_original;
 use gitcomet_core::services::{CommandOutput, PullMode};
 use gitcomet_state::model::Loadable;
@@ -33,6 +33,7 @@ pub(super) struct TrackingRepo {
     create_attempts: Arc<Mutex<Vec<String>>>,
     actions: Arc<Mutex<Vec<String>>>,
     unmerged_branches: Arc<Mutex<BTreeSet<String>>>,
+    worktree_removal_blocker: Arc<Mutex<Option<WorktreeRemovalBlocker>>>,
 }
 
 impl TrackingRepo {
@@ -45,6 +46,7 @@ impl TrackingRepo {
             create_attempts: Arc::new(Mutex::new(Vec::new())),
             actions: Arc::new(Mutex::new(Vec::new())),
             unmerged_branches: Arc::new(Mutex::new(BTreeSet::new())),
+            worktree_removal_blocker: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -55,6 +57,13 @@ impl TrackingRepo {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .insert(name.to_string());
+    }
+
+    pub(super) fn block_worktree_removal(&self, blocker: WorktreeRemovalBlocker) {
+        *self
+            .worktree_removal_blocker
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(blocker);
     }
 
     fn record(&self, action: String) {
@@ -403,6 +412,35 @@ impl GitRepository for TrackingRepo {
         let result = result?;
         cancellation.check_cancelled()?;
         Ok(result)
+    }
+
+    // Git refuses a plain removal while a blocker is set; labels match the backend's.
+    fn remove_worktree_with_output(&self, path: &Path) -> Result<CommandOutput> {
+        self.record(format!("remove:{}", path.display()));
+        let label = format!("git worktree remove {}", path.display());
+        let blocker = *self
+            .worktree_removal_blocker
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        match blocker {
+            Some(blocker) => Err(Error::new(ErrorKind::Git(GitFailure::new(
+                label,
+                GitFailureId::WorktreeRemovalBlocked(blocker),
+                Some(128),
+                Vec::new(),
+                b"fatal: working trees containing submodules cannot be moved or removed".to_vec(),
+                None,
+            )))),
+            None => Ok(CommandOutput::empty_success(label)),
+        }
+    }
+
+    fn force_remove_worktree_with_output(&self, path: &Path) -> Result<CommandOutput> {
+        self.record(format!("force-remove:{}", path.display()));
+        Ok(CommandOutput::empty_success(format!(
+            "git worktree remove --force {}",
+            path.display()
+        )))
     }
 
     fn cherry_pick(&self, _id: &CommitId) -> Result<()> {

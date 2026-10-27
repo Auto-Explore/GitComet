@@ -1577,6 +1577,11 @@ impl PopoverHost {
     /// A force prompt lives in shared state and must be dismissed there too,
     /// or the same refusal could not offer it again.
     fn dismiss_open_force_prompt(&self) {
+        if let Some(PopoverKind::ForceRemoveWorktreeConfirm(prompt)) = self.popover.as_ref() {
+            self.store.dispatch(Msg::DismissForceRemoveWorktreePrompt {
+                prompt: prompt.clone(),
+            });
+        }
         if let Some(PopoverKind::ForceDeleteBranchConfirm(prompt)) = self.popover.as_ref() {
             self.store.dispatch(Msg::DismissForceDeleteBranchPrompt {
                 prompt: prompt.clone(),

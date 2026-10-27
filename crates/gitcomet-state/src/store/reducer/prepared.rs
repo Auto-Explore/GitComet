@@ -43,8 +43,8 @@ impl ReducerInputs {
         if !state.git_runtime.is_available() {
             return;
         }
-        if let Msg::RemoveWorktree { repo_id, path } | Msg::ForceRemoveWorktree { repo_id, path } =
-            message
+        if let Msg::RemoveWorktree { repo_id, path, .. }
+        | Msg::ForceRemoveWorktree { repo_id, path, .. } = message
             && state.repos.iter().any(|repo| repo.id == *repo_id)
         {
             *path = self
@@ -431,9 +431,8 @@ fn capture_paths(message: &Msg, state: &AppState) -> PathRequests {
                 }
             }
         }
-        Msg::RemoveWorktree { repo_id, path } | Msg::ForceRemoveWorktree { repo_id, path } => {
-            paths.in_workdir(state, *repo_id, path)
-        }
+        Msg::RemoveWorktree { repo_id, path, .. }
+        | Msg::ForceRemoveWorktree { repo_id, path, .. } => paths.in_workdir(state, *repo_id, path),
         Msg::SubmitAuthPrompt {
             username, secret, ..
         } => {
@@ -442,8 +441,8 @@ fn capture_paths(message: &Msg, state: &AppState) -> PathRequests {
                 && super::auth::prepare_staged_git_auth(prompt.kind, username.as_deref(), secret)
                     .is_ok()
                 && let AuthRetryOperation::RepoCommand { repo_id, command } = &prompt.operation
-                && let RepoCommandKind::RemoveWorktree { path }
-                | RepoCommandKind::ForceRemoveWorktree { path } = command
+                && let RepoCommandKind::RemoveWorktree { path, .. }
+                | RepoCommandKind::ForceRemoveWorktree { path, .. } = command
             {
                 paths.in_workdir(state, *repo_id, path)
             }
@@ -1091,7 +1090,7 @@ fn cancelled_selection_refresh(
         } => {
             let removes_selected_repo = result.is_ok()
                 && matches!(command,
-                    RepoCommandKind::RemoveWorktree { path } | RepoCommandKind::ForceRemoveWorktree { path }
+                    RepoCommandKind::RemoveWorktree { path, .. } | RepoCommandKind::ForceRemoveWorktree { path, .. }
                         if *path == repo.spec.workdir
                 );
             if removes_selected_repo
@@ -1208,8 +1207,8 @@ fn capture_command(
         }
     }
     if succeeded
-        && let RepoCommandKind::RemoveWorktree { path }
-        | RepoCommandKind::ForceRemoveWorktree { path } = command
+        && let RepoCommandKind::RemoveWorktree { path, .. }
+        | RepoCommandKind::ForceRemoveWorktree { path, .. } = command
     {
         let mut order: Vec<_> = state.repos.iter().map(|repo| repo.id).collect();
         let mut active = state.active_repo;

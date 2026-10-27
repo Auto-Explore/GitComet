@@ -54,23 +54,12 @@ pub(super) fn panel(
         components::Button::new("worktree_remove_go", "Remove")
             .style(components::ButtonStyle::Danger)
             .on_click(theme, cx, move |this, _e, _w, cx| {
-                if this.worktree_remove_delete_branch
-                    && let Some(branch) = branch.clone()
-                {
-                    let root_view = this.root_view.clone();
-                    let _ = root_view.request(
-                        RootRequest::RegisterPendingWorktreeBranchRemoval {
-                            repo_id,
-                            path: path.clone(),
-                            branch,
-                        },
-                        None,
-                        cx,
-                    );
-                }
                 this.store.dispatch(Msg::RemoveWorktree {
                     repo_id,
                     path: path.clone(),
+                    delete_branch: branch
+                        .clone()
+                        .filter(|_| this.worktree_remove_delete_branch),
                 });
                 this.close_popover(cx);
             }),

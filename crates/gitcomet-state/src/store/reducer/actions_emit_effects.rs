@@ -185,16 +185,29 @@ pub(super) fn add_worktree(
     })]
 }
 
-pub(super) fn remove_worktree(repo_id: RepoId, path: PathBuf) -> Vec<Effect> {
+pub(super) fn remove_worktree(
+    repo_id: RepoId,
+    path: PathBuf,
+    delete_branch: Option<String>,
+) -> Vec<Effect> {
     vec![Effect::RepoCommand(RepoCommandEffect::RemoveWorktree {
         repo_id,
         path,
+        delete_branch,
     })]
 }
 
-pub(super) fn force_remove_worktree(repo_id: RepoId, path: PathBuf) -> Vec<Effect> {
+pub(super) fn force_remove_worktree(
+    repo_id: RepoId,
+    path: PathBuf,
+    delete_branch: Option<String>,
+) -> Vec<Effect> {
     vec![Effect::RepoCommand(
-        RepoCommandEffect::ForceRemoveWorktree { repo_id, path },
+        RepoCommandEffect::ForceRemoveWorktree {
+            repo_id,
+            path,
+            delete_branch,
+        },
     )]
 }
 

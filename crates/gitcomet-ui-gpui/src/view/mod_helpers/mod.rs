@@ -1132,7 +1132,8 @@ pub struct GitCometView {
     pub(super) pending_force_delete_branch_prompt:
         Option<gitcomet_state::model::ForceDeleteBranchPrompt>,
     pub(super) pending_force_delete_branch_centered: bool,
-    pub(super) pending_force_remove_worktree_prompt: Option<ForceRemoveWorktreePrompt>,
+    pub(super) pending_force_remove_worktree_prompt:
+        Option<gitcomet_state::model::ForceRemoveWorktreePrompt>,
     pub(super) pending_submodule_trust_prompt:
         Option<gitcomet_state::model::SubmoduleTrustPromptState>,
     pub(super) pending_submodule_trust_check:
@@ -1149,7 +1150,6 @@ pub struct GitCometView {
     /// suppression above, this remains set across operations until Activity is
     /// opened again and closed with its X button.
     pub(super) minimized_hook_activity_repos: FxHashSet<RepoId>,
-    pub(super) pending_worktree_branch_removals: FxHashMap<(RepoId, std::path::PathBuf), String>,
     pub(super) startup_crash_report: Option<StartupCrashReport>,
     #[cfg(target_os = "macos")]
     pub(super) recent_repos_menu_fingerprint: Vec<std::path::PathBuf>,

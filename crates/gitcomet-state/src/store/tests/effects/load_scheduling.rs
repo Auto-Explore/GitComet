@@ -2540,6 +2540,7 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
             Effect::RepoCommand(RepoCommandEffect::RemoveWorktree {
                 repo_id,
                 path: PathBuf::from("wt"),
+                delete_branch: None,
             }),
             1,
         ),

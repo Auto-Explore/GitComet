@@ -71,9 +71,10 @@ pub struct CommandLogEntry {
     /// a toast per staged line is noise — but they still belong in the log.
     /// Failures are surfaced unless a prompt handles them.
     pub announce_success: bool,
-    /// This failed attempt is recoverable through a prompt. Retain its output
-    /// for diagnostics without announcing a terminal failure, even after the
-    /// prompt has been submitted or dismissed.
+    /// This failed attempt is recoverable through a prompt (authentication, or
+    /// forcing a refused worktree removal). Retain its output for diagnostics
+    /// without announcing a terminal failure, even after the prompt has been
+    /// submitted or dismissed.
     pub handled_by_prompt: bool,
     /// Preserve the failure category for typed recovery actions in the UI.
     pub failure_id: Option<gitcomet_core::error::GitFailureId>,

@@ -244,7 +244,9 @@ fn repo_for_popover<'a>(
             repo_id,
             ..
         })
-        | PopoverKind::ForceRemoveWorktreeConfirm(ForceRemoveWorktreePrompt { repo_id, .. })
+        | PopoverKind::ForceRemoveWorktreeConfirm(
+            gitcomet_state::model::ForceRemoveWorktreePrompt { repo_id, .. },
+        )
         | PopoverKind::DiscardChangesConfirm { repo_id, .. }
         | PopoverKind::DiscardFolderChangesConfirm { repo_id, .. }
         | PopoverKind::FileListFolderMenu { repo_id, .. }

@@ -141,8 +141,11 @@ impl Render for GitCometView {
             }
         }
 
-        if let Some(prompt) = self.pending_force_remove_worktree_prompt.take()
-            && self.active_repo_id() == Some(prompt.repo_id)
+        if self
+            .pending_force_remove_worktree_prompt
+            .as_ref()
+            .is_some_and(|prompt| self.active_repo_id() == Some(prompt.repo_id))
+            && let Some(prompt) = self.pending_force_remove_worktree_prompt.take()
         {
             self.open_popover_at(
                 PopoverKind::ForceRemoveWorktreeConfirm(prompt),

@@ -1,5 +1,6 @@
 use super::*;
 use gitcomet_core::error::WorktreeRemovalBlocker;
+use gitcomet_state::model::ForceRemoveWorktreePrompt;
 
 pub(super) fn panel(
     this: &mut PopoverHost,
@@ -10,11 +11,11 @@ pub(super) fn panel(
     let ForceRemoveWorktreePrompt {
         repo_id,
         path,
-        branch,
+        delete_branch,
         blocker,
+        ..
     } = prompt;
-    let remove_branch = branch.clone();
-    let header: SharedString = if branch.is_some() {
+    let header: SharedString = if delete_branch.is_some() {
         "Delete worktree and branch anyway?".into()
     } else {
         "Delete worktree anyway?".into()
@@ -25,7 +26,7 @@ pub(super) fn panel(
             "This worktree has initialized submodules, so Git removes it only when forced. Uncommitted changes and any submodule commits that exist only in this worktree are lost."
         }
     };
-    let description: SharedString = match branch.as_ref() {
+    let description: SharedString = match delete_branch.as_ref() {
         Some(branch) => format!(
             "{reason} {} will force-remove it, then delete the local branch '{branch}'.",
             crate::view::product_name()
@@ -52,23 +53,12 @@ pub(super) fn panel(
             components::Button::new("force_remove_worktree_go", "Delete anyway")
                 .style(components::ButtonStyle::Danger)
                 .on_click(theme, cx, move |this, _e, _w, cx| {
-                    if let Some(branch) = remove_branch.clone() {
-                        let root_view = this.root_view.clone();
-                        let _ = root_view.request(
-                            RootRequest::RegisterPendingWorktreeBranchRemoval {
-                                repo_id,
-                                path: path.clone(),
-                                branch,
-                            },
-                            None,
-                            cx,
-                        );
-                    }
                     this.store.dispatch(Msg::ForceRemoveWorktree {
                         repo_id,
                         path: path.clone(),
+                        delete_branch: delete_branch.clone(),
                     });
-                    this.close_popover(cx);
+                    this.close_resolved_popover(cx);
                 }),
             cx,
         )

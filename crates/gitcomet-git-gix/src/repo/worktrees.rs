@@ -221,8 +221,7 @@ fn push_worktree_args(
     if let Some(reference) = reference {
         validate_ref_like_arg(reference, "worktree reference")?;
     }
-    // The label is a human-readable summary that the UI also inspects to
-    // recover the worktree path, so `--` stays an argv concern only.
+    // The label is a human-readable summary, so `--` stays an argv concern only.
     cmd.arg("worktree").args(args).arg("--").arg(path);
     let mut label = format!("git worktree {} {}", args.join(" "), path.display());
     if let Some(reference) = reference {

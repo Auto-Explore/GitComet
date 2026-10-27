@@ -1,8 +1,8 @@
 use crate::model::GitLogTagFetchMode;
 use crate::model::{
     BranchExistsPromptState, ConflictFileLoadMode, DefaultTagType, FileBrowserSettings,
-    ForceDeleteBranchPrompt, GitOperationOuterOutcome, MaintenanceSettings, RemoteSettings, RepoId,
-    SidebarDataRequest, SidebarMode,
+    ForceDeleteBranchPrompt, ForceRemoveWorktreePrompt, GitOperationOuterOutcome,
+    MaintenanceSettings, RemoteSettings, RepoId, SidebarDataRequest, SidebarMode,
 };
 use gitcomet_core::auth::StagedGitAuth;
 use gitcomet_core::conflict_session::ConflictSession;
@@ -895,10 +895,16 @@ pub enum Msg {
     RemoveWorktree {
         repo_id: RepoId,
         path: PathBuf,
+        /// The local branch to delete once the worktree is gone.
+        delete_branch: Option<String>,
     },
     ForceRemoveWorktree {
         repo_id: RepoId,
         path: PathBuf,
+        delete_branch: Option<String>,
+    },
+    DismissForceRemoveWorktreePrompt {
+        prompt: ForceRemoveWorktreePrompt,
     },
     AddSubmodule {
         repo_id: RepoId,

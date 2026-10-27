@@ -308,36 +308,6 @@ impl GitCometView {
                     continue;
                 }
 
-                if let Some((path, blocker)) = worktree_removal_blocked(entry) {
-                    if self.pending_force_remove_worktree_prompt.is_none() {
-                        let branch = self.take_pending_worktree_branch_removal(next_repo.id, &path);
-                        self.pending_force_remove_worktree_prompt =
-                            Some(ForceRemoveWorktreePrompt {
-                                repo_id: next_repo.id,
-                                path,
-                                branch,
-                                blocker,
-                            });
-                    }
-                    continue;
-                }
-
-                let worktree_remove_path = parse_worktree_remove_path_from_command(&entry.command);
-                if let Some(path) = worktree_remove_path.as_ref() {
-                    if entry.ok {
-                        if let Some(branch) =
-                            self.take_pending_worktree_branch_removal(next_repo.id, path)
-                        {
-                            follow_up_msgs.push(Msg::DeleteBranch {
-                                repo_id: next_repo.id,
-                                name: branch,
-                            });
-                        }
-                    } else {
-                        self.take_pending_worktree_branch_removal(next_repo.id, path);
-                    }
-                }
-
                 if let Some(operation_id) = entry.hook_operation_id {
                     let outer_failure_after_hooks = !entry.ok
                         && next_repo
@@ -471,6 +441,7 @@ impl GitCometView {
         let prev_auth_prompt = self.state.auth_prompt.clone();
         let prev_branch_exists_prompt = self.state.branch_exists_prompt.clone();
         let prev_force_delete_branch_prompt = self.state.force_delete_branch_prompt.clone();
+        let prev_force_remove_worktree_prompt = self.state.force_remove_worktree_prompt.clone();
         let prev_submodule_trust_prompt = self.state.submodule_trust_prompt.clone();
         let prev_submodule_trust_check = self.state.submodule_trust_check_pending;
         let merge_view_active = active_merge_view_target(next.as_ref()).is_some();
@@ -754,6 +725,10 @@ impl GitCometView {
         if prev_force_delete_branch_prompt != self.state.force_delete_branch_prompt {
             self.pending_force_delete_branch_prompt = self.state.force_delete_branch_prompt.clone();
         }
+        if prev_force_remove_worktree_prompt != self.state.force_remove_worktree_prompt {
+            self.pending_force_remove_worktree_prompt =
+                self.state.force_remove_worktree_prompt.clone();
+        }
         if prev_submodule_trust_prompt != self.state.submodule_trust_prompt {
             self.pending_submodule_trust_prompt = self.state.submodule_trust_prompt.clone();
         }
@@ -792,6 +767,7 @@ impl GitCometView {
             || prev_auth_prompt != self.state.auth_prompt
             || prev_branch_exists_prompt != self.state.branch_exists_prompt
             || prev_force_delete_branch_prompt != self.state.force_delete_branch_prompt
+            || prev_force_remove_worktree_prompt != self.state.force_remove_worktree_prompt
     }
 }
 
@@ -811,33 +787,6 @@ fn newly_opened_repo_paths(prev: &AppState, next: &AppState) -> Vec<std::path::P
             (!was_ready).then(|| next_repo.spec.workdir.clone())
         })
         .collect()
-}
-
-/// A `git worktree remove` that Git refused for a reason `--force` overrides.
-fn worktree_removal_blocked(
-    entry: &gitcomet_state::model::CommandLogEntry,
-) -> Option<(
-    std::path::PathBuf,
-    gitcomet_core::error::WorktreeRemovalBlocker,
-)> {
-    let Some(gitcomet_core::error::GitFailureId::WorktreeRemovalBlocked(blocker)) =
-        entry.failure_id
-    else {
-        return None;
-    };
-    let path = parse_worktree_remove_path_from_command(&entry.command)?;
-    Some((path, blocker))
-}
-
-fn parse_worktree_remove_path_from_command(command: &str) -> Option<std::path::PathBuf> {
-    let command = command.trim();
-    let rest = command.strip_prefix("git worktree remove ")?;
-    let rest = rest.strip_prefix("--force ").unwrap_or(rest);
-    let path = rest.trim();
-    if path.is_empty() || path.starts_with('-') {
-        return None;
-    }
-    Some(std::path::PathBuf::from(path))
 }
 
 /// Whether the active repository opened a file or a commit between two
@@ -861,6 +810,7 @@ fn repository_navigated(prev: &AppState, next: &AppState) -> bool {
 mod tests {
     use super::*;
     use gitcomet_core::git_operation::{GitOperationId, HookExecutionId};
+    #[cfg(target_os = "macos")]
     use std::path::PathBuf;
     use std::sync::Arc;
     use std::time::{Duration, SystemTime};
@@ -911,69 +861,6 @@ mod tests {
             repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
         }
         repo
-    }
-
-    fn failed_command(
-        command: &str,
-        failure_id: Option<gitcomet_core::error::GitFailureId>,
-    ) -> gitcomet_state::model::CommandLogEntry {
-        gitcomet_state::model::CommandLogEntry {
-            time: SystemTime::UNIX_EPOCH,
-            ok: false,
-            command: command.to_string(),
-            summary: "Remove worktree failed".to_string(),
-            stdout: "".into(),
-            stderr: "".into(),
-            announce_success: true,
-            handled_by_prompt: false,
-            failure_id,
-            hook_operation_id: None,
-        }
-    }
-
-    #[test]
-    fn worktree_removal_blocked_offers_force_for_each_blocker() {
-        use gitcomet_core::error::{GitFailureId, WorktreeRemovalBlocker};
-
-        for blocker in [
-            WorktreeRemovalBlocker::Changes,
-            WorktreeRemovalBlocker::Submodules,
-        ] {
-            assert_eq!(
-                worktree_removal_blocked(&failed_command(
-                    "git worktree remove /tmp/worktree",
-                    Some(GitFailureId::WorktreeRemovalBlocked(blocker)),
-                )),
-                Some((PathBuf::from("/tmp/worktree"), blocker))
-            );
-        }
-    }
-
-    #[test]
-    fn worktree_removal_blocked_ignores_other_failures() {
-        use gitcomet_core::error::GitFailureId;
-
-        for failure_id in [None, Some(GitFailureId::CommandFailed)] {
-            assert_eq!(
-                worktree_removal_blocked(&failed_command(
-                    "git worktree remove /tmp/worktree",
-                    failure_id,
-                )),
-                None
-            );
-        }
-    }
-
-    #[test]
-    fn parse_worktree_remove_path_from_command_supports_forced_and_plain_remove() {
-        assert_eq!(
-            parse_worktree_remove_path_from_command("git worktree remove /tmp/worktree"),
-            Some(PathBuf::from("/tmp/worktree"))
-        );
-        assert_eq!(
-            parse_worktree_remove_path_from_command("git worktree remove --force /tmp/worktree"),
-            Some(PathBuf::from("/tmp/worktree"))
-        );
     }
 
     #[test]
