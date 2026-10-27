@@ -104,7 +104,7 @@ const REPO_TAB_DRAG_SCROLL_MAX_STEP: Duration = Duration::from_millis(50);
 /// status glyph, and close button all center on the same title-bar axis. Every
 /// size here is fixed: the strip lives in the title bar, which stays outside
 /// the appearance system (see `chrome::chrome_scale`).
-const REPO_TAB_FONT_SIZE_PX: f32 = 15.0;
+const REPO_TAB_FONT_SIZE_PX: f32 = 13.0;
 const REPO_TAB_CONTENT_HEIGHT_PX: f32 = 18.0;
 const REPO_TAB_STATUS_SIZE_PX: f32 = components::REPOSITORY_BADGE_SIZE_PX;
 const REPO_TAB_LABEL_GAP_PX: f32 = 6.0;
