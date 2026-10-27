@@ -354,6 +354,7 @@ mod tests {
     fn silent_command_completion_needs_a_matching_result() {
         let now = SystemTime::now();
         let mut entry = gitcomet_state::model::CommandLogEntry {
+            kind: gitcomet_state::model::CommandLogKind::Other,
             time: now,
             ok: true,
             command: "git fetch --all".into(),

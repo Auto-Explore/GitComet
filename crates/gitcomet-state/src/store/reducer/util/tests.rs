@@ -31,6 +31,7 @@ fn command_output(command: &str, stdout: &str, stderr: &str) -> CommandOutput {
 
 fn dummy_log_entry(ix: usize) -> CommandLogEntry {
     CommandLogEntry {
+        kind: crate::model::CommandLogKind::Other,
         time: SystemTime::UNIX_EPOCH,
         ok: true,
         command: format!("cmd-{ix}"),
@@ -1323,6 +1324,45 @@ fn error_format_helpers_preserve_backend_operation_and_path() {
         format_failure_summary("Refresh", &error),
         "Refresh failed:\n\nresolve HEAD (repository): reference target unavailable"
     );
+}
+
+#[test]
+fn timeout_summary_bounds_both_streams_without_losing_the_reason() {
+    let command = "git -C /repo pull --rebase --no-prune -- origin refs/heads/main";
+    let reason = "after 300 seconds without output or progress (set GITCOMET_GIT_COMMAND_TIMEOUT_SECS to override)";
+    let stdout = format!(
+        "discarded stdout prefix{}stdout tail\n",
+        "x".repeat(300_000)
+    );
+    let stderr = format!(
+        "discarded stderr prefix{}stderr tail\n",
+        "y".repeat(300_000)
+    );
+    let error = Error::new(ErrorKind::Git(GitFailure::new(
+        command,
+        GitFailureId::Timeout,
+        None,
+        stdout.into_bytes(),
+        stderr.into_bytes(),
+        Some(reason.into()),
+    )));
+    let (actual_command, summary) = summarize_command(
+        &RepoCommandKind::Pull {
+            mode: PullMode::Rebase,
+        },
+        &CommandOutput::default(),
+        false,
+        Some(&error),
+    );
+    assert_eq!(actual_command, command);
+    assert!(summary.starts_with("Pull timed out:"));
+    assert!(summary.contains(reason));
+    assert!(summary.contains("stdout tail"));
+    assert!(summary.contains("stderr tail"));
+    assert!(!summary.contains("discarded stdout prefix"));
+    assert!(!summary.contains("discarded stderr prefix"));
+    assert_eq!(summary.matches("[Earlier output was truncated]").count(), 2);
+    assert!(summary.len() < 2 * 256 * 1024 + 1024);
 }
 
 #[test]

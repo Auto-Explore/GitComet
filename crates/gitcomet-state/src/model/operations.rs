@@ -59,6 +59,7 @@ pub enum CloneOpStatus {
 pub struct CommandLogEntry {
     pub time: SystemTime,
     pub ok: bool,
+    pub kind: CommandLogKind,
     pub command: String,
     pub summary: String,
     /// Shared and capped: the log is deep-copied on every store dispatch
@@ -81,6 +82,12 @@ pub struct CommandLogEntry {
     /// command. When present, the UI does not also show the generic command
     /// completion toast/banner.
     pub hook_operation_id: Option<GitOperationId>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CommandLogKind {
+    Pull,
+    Other,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

@@ -50,5 +50,20 @@ limits.
 **Stop** cancels the active Git operation through its process group. It is
 available in the progress card and details. Each Pull keeps its own progress card
 when hooks or large-file transfers run, including its repository and branch context.
-Cancellation does not undo
-work Git has already completed; inspect the repository state before continuing.
+Cancellation does not undo work Git has already completed; inspect the repository
+state before continuing.
+
+## Timeouts
+
+Git commands time out after 300 seconds without output or progress. Set
+`GITCOMET_GIT_COMMAND_TIMEOUT_SECS` in the environment used to launch the app to
+override this inactivity limit. Output, Git Trace2 activity, and LFS progress keep
+an active command alive; the elapsed-time display does not. A transfer can run
+longer than the limit while it continues making progress.
+
+Timeouts are reported separately from cancellation and ordinary Git failures.
+Error details retain the command, inactivity reason, and captured output. Git
+activity retains the last reported phase and output for diagnosis. A stalled
+transport, credential helper, hook, or large-file transfer can still cause a
+timeout even when only one branch is pulled. Pull does not retry with a broader
+fetch.
