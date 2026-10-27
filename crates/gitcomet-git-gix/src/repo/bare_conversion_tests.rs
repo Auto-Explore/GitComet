@@ -301,7 +301,7 @@ fn inaccessible_linked_checkout_refuses_conversion_without_mutation() {
 fn linked_relocation_config_refuses_metadata_paths_and_preserves_external_paths() {
     for kind in ["relative-worktree", "metadata-hook", "external-path"] {
         let (directory, root) = bare_fixture();
-        let linked = directory.path().join("linked");
+        let linked = root.parent().unwrap().join("linked");
         git_success(
             &root,
             &["worktree", "add", "-b", "linked", linked.to_str().unwrap()],

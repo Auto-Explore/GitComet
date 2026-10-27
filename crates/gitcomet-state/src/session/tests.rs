@@ -5,7 +5,7 @@ use super::repos::SESSION_REPOS_SNAPSHOT_CACHE;
 use super::survey::SurveyPromptSession;
 use super::*;
 use crate::model::{RepoId, RepoState};
-use gitcomet_core::domain::{HistoryMode, LogScope, RepoSpec};
+use gitcomet_core::domain::{HistoryFocus, HistoryFocusSet, HistoryMode, LogScope, RepoSpec};
 
 fn clear_session_repos_snapshot_cache() {
     SESSION_REPOS_SNAPSHOT_CACHE.with(|cache| {
@@ -4171,4 +4171,124 @@ fn repo_maintenance_entries_are_pruned_oldest_first() {
     assert_eq!(entries.len(), 256);
     assert!(!entries.contains_key("/work/repo-000/.git"));
     assert!(entries.contains_key("/work/repo-299/.git"));
+}
+
+#[test]
+fn repo_history_focus_round_trips_and_clears() {
+    let dir = unique_session_test_dir("repo-history-focus");
+    let session_file = dir.join("session.json");
+    let repo = dir.join("repo");
+    let _ = fs::create_dir_all(&repo);
+    let key = path_storage_key(&repo);
+
+    for focus in [
+        HistoryFocusSet::from_iter([HistoryFocus::local_branch("feature")]),
+        HistoryFocusSet::from_iter([HistoryFocus::remote_branch("origin", "feature")]),
+        HistoryFocusSet::from_iter([HistoryFocus::remote("origin")]),
+        // A whole set round-trips, not just its first entry.
+        HistoryFocusSet::from_iter([
+            HistoryFocus::local_branch("feature"),
+            HistoryFocus::local_branch("main"),
+            HistoryFocus::remote("origin"),
+        ]),
+    ] {
+        persist_repo_history_focus_to_path(&repo, &focus, &session_file)
+            .expect("persist history focus");
+        assert_eq!(
+            load_repo_session_preferences_from_path(&session_file)
+                .repo_history_focus
+                .get(&key),
+            Some(&focus),
+        );
+    }
+
+    persist_repo_history_focus_to_path(&repo, &HistoryFocusSet::default(), &session_file)
+        .expect("clear history focus");
+    assert!(
+        !load_repo_session_preferences_from_path(&session_file)
+            .repo_history_focus
+            .contains_key(&key),
+        "clearing the focus must remove the stored entry, not keep a stale one"
+    );
+}
+
+/// The focus map shares a file with the list of open repositories. A value that
+/// will not parse -- the single-object form an earlier build wrote, or outright
+/// garbage -- must cost at most that one entry, never the whole session.
+#[test]
+fn an_unreadable_history_focus_entry_does_not_discard_the_session() {
+    let dir = unique_session_test_dir("repo-history-focus-tolerance");
+    let session_file = dir.join("session.json");
+    let _ = fs::create_dir_all(&dir);
+
+    fs::write(
+        &session_file,
+        serde_json::json!({
+            "version": 3,
+            "open_repos": ["/tmp/kept-repo"],
+            "repo_history_focus": {
+                // The shape an earlier build wrote: one object, not a list.
+                "/tmp/legacy": {"kind": "local_branch", "name": "feature"},
+                // A list, as written now.
+                "/tmp/current": [{"kind": "remote", "name": "origin"}],
+                // Neither: this entry is dropped, the file is not.
+                "/tmp/garbage": 7,
+            },
+        })
+        .to_string(),
+    )
+    .expect("write session file");
+
+    let loaded = load_repo_session_preferences_from_path(&session_file);
+    assert_eq!(
+        loaded.repo_history_focus.get("/tmp/legacy"),
+        Some(&HistoryFocusSet::from_iter([HistoryFocus::local_branch(
+            "feature"
+        )])),
+        "a single stored ref still reads back as a one-element set"
+    );
+    assert_eq!(
+        loaded.repo_history_focus.get("/tmp/current"),
+        Some(&HistoryFocusSet::from_iter([HistoryFocus::remote(
+            "origin"
+        )]))
+    );
+    assert!(!loaded.repo_history_focus.contains_key("/tmp/garbage"));
+
+    clear_session_repos_snapshot_cache();
+    assert_eq!(
+        load_from_path(&session_file).open_repos,
+        vec![PathBuf::from("/tmp/kept-repo")],
+        "the open repositories must survive an unreadable focus entry"
+    );
+}
+
+/// Focus was stored under `repo_history_solos` while the feature was called
+/// "solo"; a session written then must still restore its focus.
+#[test]
+fn a_session_written_under_the_solo_key_still_restores_its_focus() {
+    let dir = unique_session_test_dir("repo-history-focus-solo-alias");
+    let session_file = dir.join("session.json");
+    let _ = fs::create_dir_all(&dir);
+
+    fs::write(
+        &session_file,
+        serde_json::json!({
+            "version": 3,
+            "repo_history_solos": {
+                "/tmp/repo": [{"kind": "local_branch", "name": "feature"}],
+            },
+        })
+        .to_string(),
+    )
+    .expect("write session file");
+
+    assert_eq!(
+        load_repo_session_preferences_from_path(&session_file)
+            .repo_history_focus
+            .get("/tmp/repo"),
+        Some(&HistoryFocusSet::from_iter([HistoryFocus::local_branch(
+            "feature"
+        )])),
+    );
 }

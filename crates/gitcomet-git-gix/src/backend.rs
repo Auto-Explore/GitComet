@@ -61,10 +61,14 @@ pub(crate) fn release_conversion_stores(origin: &GixRepo) -> Result<()> {
         .filter(|repo| repo.common_identity() == common)
         .collect::<Vec<_>>();
     origin.release_conversion_store()?;
-    for repo in open {
-        if !std::ptr::eq(origin, &*repo) {
+    for repo in &open {
+        if !std::ptr::eq(origin, &**repo) {
             repo.release_conversion_store()?;
         }
+    }
+    origin.release_conversion_identities();
+    for repo in open {
+        repo.release_conversion_identities();
     }
     Ok(())
 }

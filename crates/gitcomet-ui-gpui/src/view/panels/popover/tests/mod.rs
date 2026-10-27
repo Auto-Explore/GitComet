@@ -51,6 +51,7 @@ mod context_shortcuts;
 mod dialog;
 mod file_actions;
 mod file_history_file_picker;
+mod focus;
 mod interaction;
 mod layout;
 mod menu_placement;

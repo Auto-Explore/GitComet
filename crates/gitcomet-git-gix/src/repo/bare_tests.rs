@@ -5,13 +5,14 @@ use std::fs;
 
 pub(super) fn bare_fixture() -> (tempfile::TempDir, PathBuf) {
     let directory = tempfile::tempdir().unwrap();
-    let checkout = directory.path().join("checkout");
+    let root = canonical_path(directory.path()).unwrap();
+    let checkout = root.join("checkout");
     fs::create_dir(&checkout).unwrap();
     init_test_repo(&checkout);
     fs::write(checkout.join("tracked.txt"), "original\n").unwrap();
     git_success(&checkout, &["add", "."]);
     git_success(&checkout, &["commit", "-m", "initial"]);
-    let bare = directory.path().join("history.git");
+    let bare = root.join("history.git");
     git_success(
         directory.path(),
         &[
@@ -255,8 +256,8 @@ fn relocation_repairs_linked_worktrees_without_changing_their_files() {
     let result = repo.disable_bare_mode(&preview).unwrap();
     assert!(result.affected_roots.contains(&linked));
     assert_eq!(
-        git_stdout(&linked, &["rev-parse", "--git-common-dir"]),
-        bare.join(".git").to_str().unwrap()
+        PathBuf::from(git_stdout(&linked, &["rev-parse", "--git-common-dir"])),
+        bare.join(".git")
     );
     assert_eq!(
         fs::read_to_string(linked.join("tracked.txt")).unwrap(),

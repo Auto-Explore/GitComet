@@ -735,3 +735,297 @@ fn cherry_pick_setup_never_enables_rewording_after_partial_or_stale_message_load
     assert!(matches!(setup.full_messages, Loadable::Error(_)));
     assert_eq!(setup.entries[0].message, "subject");
 }
+
+#[test]
+fn reword_commit_emits_effect_and_counts_as_a_sequencer_command() {
+    let mut repos: RepositoryRuntimes = Default::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::test_default();
+    let repo_id = RepoId(1);
+    let target = CommitId("4444444444444444444444444444444444444444".into());
+    state.repos.push(RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+    state.active_repo = Some(repo_id);
+
+    let request_id = crate::model::RewordRequestId::new();
+    let reword = |message: &str| Msg::RewordCommit {
+        repo_id,
+        request_id,
+        commit_id: target.clone(),
+        message: message.into(),
+    };
+    let effects = reduce(&mut repos, &id_alloc, &mut state, reword("New message"));
+    assert!(
+        matches!(
+            effects.as_slice(),
+            [Effect::RepoCommand(RepoCommandEffect::RewordCommit {
+                repo_id: RepoId(1),
+                commit_id,
+                message,
+                resume: false,
+                auth: None,
+                request_id: actual_request,
+            })] if *commit_id == target && message == "New message" && *actual_request == request_id
+        ),
+        "{effects:?}"
+    );
+    assert_eq!(state.repos[0].local_actions_in_flight, 1);
+    assert_eq!(state.repos[0].sequencer_actions_in_flight, 1);
+
+    // A second submit while the first runs is refused.
+    let effects = reduce(&mut repos, &id_alloc, &mut state, reword("New message"));
+    assert!(effects.is_empty(), "{effects:?}");
+    assert_eq!(state.repos[0].local_actions_in_flight, 1);
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
+            repo_id,
+            command: RepoCommandKind::RewordCommit {
+                request_id,
+                commit_id: target.clone(),
+                message: "New message".into(),
+                rebase_paused: false,
+                rewritten_id: None,
+            },
+            result: Err(gitcomet_core::error::Error::new(
+                gitcomet_core::error::ErrorKind::Backend("reword: hook failed".into()),
+            )),
+        }),
+    );
+    assert_eq!(state.repos[0].local_actions_in_flight, 0);
+    assert_eq!(state.repos[0].sequencer_actions_in_flight, 0);
+    let last = state.repos[0].feedback.command_log.last().unwrap();
+    assert!(!last.ok, "the failure must be recorded as such");
+    assert!(
+        last.summary.starts_with("Edit commit message failed"),
+        "{}",
+        last.summary
+    );
+
+    // A blank message never reaches the backend.
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::RewordCommit {
+            repo_id,
+            request_id: crate::model::RewordRequestId::new(),
+            commit_id: target,
+            message: "  \n".into(),
+        },
+    );
+    assert!(effects.is_empty(), "{effects:?}");
+    assert_eq!(state.repos[0].local_actions_in_flight, 0);
+}
+
+#[test]
+fn reword_commit_waits_for_a_running_history_operation() {
+    let mut repos: RepositoryRuntimes = Default::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::test_default();
+    let repo_id = RepoId(1);
+    let mut repo_state = RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    );
+    repo_state.rebase_in_progress = Loadable::Ready(true);
+    state.repos.push(repo_state);
+    state.active_repo = Some(repo_id);
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::RewordCommit {
+            repo_id,
+            request_id: crate::model::RewordRequestId::new(),
+            commit_id: CommitId("4444444444444444444444444444444444444444".into()),
+            message: "New message".into(),
+        },
+    );
+    assert!(effects.is_empty(), "{effects:?}");
+    assert_eq!(state.repos[0].local_actions_in_flight, 0);
+    assert_eq!(state.repos[0].sequencer_actions_in_flight, 0);
+}
+
+fn finish_reword(
+    repos: &mut RepositoryRuntimes,
+    id_alloc: &AtomicU64,
+    state: &mut AppState,
+    commit_id: &CommitId,
+    rewritten_id: Option<CommitId>,
+) -> Vec<Effect> {
+    let request_id = crate::model::RewordRequestId::new();
+    let started = reduce(
+        repos,
+        id_alloc,
+        state,
+        Msg::RewordCommit {
+            repo_id: RepoId(1),
+            request_id,
+            commit_id: commit_id.clone(),
+            message: "New message".into(),
+        },
+    );
+    assert!(matches!(
+        started.as_slice(),
+        [Effect::RepoCommand(RepoCommandEffect::RewordCommit { .. })]
+    ));
+    reduce(
+        repos,
+        id_alloc,
+        state,
+        Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
+            repo_id: RepoId(1),
+            command: RepoCommandKind::RewordCommit {
+                request_id,
+                commit_id: commit_id.clone(),
+                message: "New message".into(),
+                rebase_paused: false,
+                rewritten_id,
+            },
+            result: Ok(CommandOutput::empty_success("git commit --amend --only")),
+        }),
+    )
+}
+
+#[test]
+fn reword_commit_finished_follows_the_rewritten_commit() {
+    let mut repos: RepositoryRuntimes = Default::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::test_default();
+    let repo_id = RepoId(1);
+    let old = CommitId("3333333333333333333333333333333333333333".into());
+    let rewritten = CommitId("5555555555555555555555555555555555555555".into());
+    let mut repo_state = repo_with_head_dependent_cached_state(repo_id);
+    repo_state.set_selected_commit(Some(old.clone()));
+    state.repos.push(repo_state);
+    state.active_repo = Some(repo_id);
+
+    let effects = finish_reword(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        &old,
+        Some(rewritten.clone()),
+    );
+
+    let repo_state = &state.repos[0];
+    assert_eq!(
+        repo_state.history_state.selected_commit.as_ref(),
+        Some(&rewritten)
+    );
+    assert!(
+        effects.iter().any(|effect| matches!(
+            effect,
+            Effect::LoadCommitDetails { repo_id: RepoId(1), commit_id } if *commit_id == rewritten
+        )),
+        "the rewritten commit's details must load: {effects:?}"
+    );
+    assert_eq!(repo_state.pending.force_push_lease, None);
+    let last = repo_state.feedback.command_log.last().unwrap();
+    assert!(last.ok);
+    assert_eq!(last.summary, "Edit commit message: Completed");
+}
+
+#[test]
+fn reword_commit_finished_leaves_another_selection_alone() {
+    let mut repos: RepositoryRuntimes = Default::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::test_default();
+    let repo_id = RepoId(1);
+    let reworded = CommitId("3333333333333333333333333333333333333333".into());
+    let other = CommitId("6666666666666666666666666666666666666666".into());
+    let mut repo_state = repo_with_head_dependent_cached_state(repo_id);
+    repo_state.set_selected_commit(Some(other.clone()));
+    state.repos.push(repo_state);
+    state.active_repo = Some(repo_id);
+    let details_rev = state.repos[0].history_state.commit_details_rev;
+
+    let effects = finish_reword(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        &reworded,
+        Some(CommitId("5555555555555555555555555555555555555555".into())),
+    );
+
+    let repo_state = &state.repos[0];
+    assert_eq!(
+        repo_state.history_state.selected_commit.as_ref(),
+        Some(&other)
+    );
+    assert_eq!(repo_state.history_state.commit_details_rev, details_rev);
+    assert!(
+        !effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::LoadCommitDetails { .. })),
+        "{effects:?}"
+    );
+}
+
+#[test]
+fn reword_commit_finished_without_a_new_id_clears_the_reworded_selection() {
+    let mut repos: RepositoryRuntimes = Default::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::test_default();
+    let repo_id = RepoId(1);
+    let old = CommitId("3333333333333333333333333333333333333333".into());
+    let mut repo_state = repo_with_head_dependent_cached_state(repo_id);
+    repo_state.set_selected_commit(Some(old.clone()));
+    state.repos.push(repo_state);
+    state.active_repo = Some(repo_id);
+
+    let effects = finish_reword(&mut repos, &id_alloc, &mut state, &old, None);
+
+    let repo_state = &state.repos[0];
+    assert_eq!(repo_state.history_state.selected_commit, None);
+    assert!(matches!(
+        repo_state.history_state.commit_details,
+        Loadable::NotLoaded
+    ));
+    assert!(
+        !effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::LoadCommitDetails { .. })),
+        "{effects:?}"
+    );
+    assert!(repo_state.feedback.command_log.last().unwrap().ok);
+}
+
+#[test]
+fn reword_commit_retry_continues_a_paused_rebase_or_replays() {
+    let commit_id = CommitId("3333333333333333333333333333333333333333".into());
+    let request_id = crate::model::RewordRequestId::new();
+    let kind = |rebase_paused| RepoCommandKind::RewordCommit {
+        request_id,
+        commit_id: commit_id.clone(),
+        message: "New message".into(),
+        rebase_paused,
+        rewritten_id: None,
+    };
+
+    let replay = crate::store::reducer::repo_command_replay_msg_for_test(RepoId(3), kind(false));
+    assert!(
+        matches!(
+            &replay,
+            Some(Msg::RewordCommit { repo_id: RepoId(3), request_id: actual, commit_id: id, message })
+                if *id == commit_id && message == "New message" && *actual == request_id
+        ),
+        "{replay:?}"
+    );
+    let replay = crate::store::reducer::repo_command_replay_msg_for_test(RepoId(3), kind(true));
+    assert!(
+        matches!(&replay, Some(Msg::ContinueRewordCommit { repo_id: RepoId(3), request_id: actual }) if *actual == request_id),
+        "{replay:?}"
+    );
+}

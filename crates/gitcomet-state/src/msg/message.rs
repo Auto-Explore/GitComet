@@ -466,6 +466,26 @@ pub enum Msg {
         repo_id: RepoId,
         author: Option<String>,
     },
+    /// Focuses the history on a set of refs: the walk is reseeded from them, so
+    /// only the commits they reach remain. An empty set clears the focus.
+    SetHistoryFocus {
+        repo_id: RepoId,
+        focus: HistoryFocusSet,
+    },
+    /// Focuses `target`, or unfocuses it when the focus already covers it. The
+    /// per-ref menu entry and the sidebar's eye are toggles, and this is what
+    /// they send.
+    ToggleHistoryFocus {
+        repo_id: RepoId,
+        target: HistoryFocus,
+    },
+    /// Focuses every one of `targets`, or unfocuses every one of them. A branch
+    /// group's menu entries and eye send this with the group's members.
+    FocusHistoryRefs {
+        repo_id: RepoId,
+        targets: Vec<HistoryFocus>,
+        focused: bool,
+    },
     LoadMoreHistory {
         repo_id: RepoId,
     },
@@ -1120,6 +1140,23 @@ pub enum Msg {
         expected_head: CommitId,
         message: String,
         count: usize,
+    },
+    /// Replaces the message of `commit_id`: HEAD, or a commit on HEAD's
+    /// linear first-parent history. The backend re-validates the target.
+    RewordCommit {
+        repo_id: RepoId,
+        request_id: crate::model::RewordRequestId,
+        commit_id: CommitId,
+        message: String,
+    },
+    ContinueRewordCommit {
+        repo_id: RepoId,
+        request_id: crate::model::RewordRequestId,
+    },
+    /// Releases the editor's acknowledgment; does not cancel Git work.
+    DismissRewordCommit {
+        repo_id: RepoId,
+        request_id: crate::model::RewordRequestId,
     },
     Rebase {
         repo_id: RepoId,

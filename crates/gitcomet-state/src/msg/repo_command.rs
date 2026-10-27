@@ -263,6 +263,15 @@ pub enum RepoCommandEffect {
         message: String,
         count: usize,
     },
+    RewordCommit {
+        repo_id: RepoId,
+        request_id: crate::model::RewordRequestId,
+        commit_id: CommitId,
+        message: String,
+        resume: bool,
+        /// Signing auth staged when a failed reword is replayed.
+        auth: Option<StagedGitAuth>,
+    },
     Rebase {
         repo_id: RepoId,
         onto: String,
@@ -376,6 +385,7 @@ macro_rules! match_git_auth {
             | RepoCommandEffect::DeleteRemoteBranch { auth: $auth, .. }
             | RepoCommandEffect::DeleteRemoteBranches { auth: $auth, .. }
             | RepoCommandEffect::RebaseContinue { auth: $auth, .. }
+            | RepoCommandEffect::RewordCommit { auth: $auth, .. }
             | RepoCommandEffect::PushTag { auth: $auth, .. }
             | RepoCommandEffect::DeleteRemoteTag { auth: $auth, .. } => $then,
             RepoCommandEffect::SaveWorktreeFile { .. }
@@ -756,6 +766,23 @@ impl RepoCommandEffect {
                     expected_head,
                     message,
                     count,
+                }
+                .finished(repo_id, Err(error)),
+            ),
+            RepoCommandEffect::RewordCommit {
+                repo_id,
+                request_id,
+                commit_id,
+                message,
+                resume,
+                ..
+            } => Some(
+                RepoCommandKind::RewordCommit {
+                    request_id,
+                    commit_id,
+                    message,
+                    rebase_paused: resume,
+                    rewritten_id: None,
                 }
                 .finished(repo_id, Err(error)),
             ),

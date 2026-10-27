@@ -770,3 +770,79 @@ fn log_history_mode_page_delegates_current_branch_modes_to_head_log() {
         ]
     );
 }
+
+#[test]
+fn provided_history_readers_refuse_hidden_remotes_they_cannot_apply() {
+    use super::{HistoryReadRequest, HistoryWalk};
+    let repo = RecordingHistoryModeRepo::new();
+    let hidden = HistoryWalk::new(HistoryMode::AllBranches, ["origin"]);
+    let first_page = HistoryReadRequest::Page {
+        limit: 7,
+        cursor: None,
+        snapshot: None,
+    };
+    let cancel = CancellationToken::new();
+
+    let error = repo
+        .read_history(
+            &hidden,
+            None,
+            &Default::default(),
+            &first_page,
+            &cancel,
+            &mut |_| {},
+        )
+        .unwrap_err();
+    assert!(
+        matches!(error.kind(), ErrorKind::Unsupported(_)),
+        "{error:?}"
+    );
+    let error = repo
+        .history_authors(&hidden, &Default::default(), &cancel)
+        .unwrap_err();
+    assert!(
+        matches!(error.kind(), ErrorKind::Unsupported(_)),
+        "{error:?}"
+    );
+    assert!(repo.calls().is_empty(), "{:?}", repo.calls());
+    assert!(
+        repo.build_history_index(&hidden, None, &Default::default(), &cancel, &mut |_| {})
+            .unwrap()
+            .is_none(),
+        "no index still means the paged reader"
+    );
+
+    repo.read_history(
+        &HistoryMode::AllBranches.into(),
+        None,
+        &Default::default(),
+        &first_page,
+        &cancel,
+        &mut |_| {},
+    )
+    .expect("nothing to hide");
+    assert_eq!(repo.calls(), vec![("all", 7, None)]);
+}
+
+#[test]
+fn only_an_all_branches_walk_hides_remotes() {
+    use super::HistoryWalk;
+    let walk = HistoryWalk::new(HistoryMode::AllBranches, ["upstream", "origin", "upstream"]);
+    assert_eq!(
+        walk.hidden_remotes()
+            .iter()
+            .map(AsRef::as_ref)
+            .collect::<Vec<&str>>(),
+        ["origin", "upstream"]
+    );
+    for mode in [
+        HistoryMode::FullReachable,
+        HistoryMode::FirstParent,
+        HistoryMode::NoMerges,
+        HistoryMode::MergesOnly,
+    ] {
+        let walk = HistoryWalk::new(mode, ["origin"]);
+        assert!(walk.hidden_remotes().is_empty(), "{mode:?}");
+        assert_eq!(walk, HistoryWalk::from(mode), "{mode:?}");
+    }
+}

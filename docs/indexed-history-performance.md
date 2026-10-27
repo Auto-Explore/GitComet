@@ -347,12 +347,13 @@ status and working-file caches stay with that working tree.
 
 Each history request resolves its own HEAD, references and configuration. Its
 exact query includes the common identity, object interpretation generation,
-mode, normalized author filter, reference exclusions, resolved tips and shallow
-boundaries. Matching all-branches requests across linked worktrees share an
-index. Different HEAD-based histories and filters stay separate. Registrations
-coalesce before the build queue; each requester receives progress and can leave
-independently. The last requester cancels the underlying build. Completed index
-registrations are weak.
+mode, normalized author filter, resolved tips and shallow boundaries. Excluded
+references are left out before the tips resolve, so requests that start from the
+same commits share results. Matching all-branches requests across linked
+worktrees share an index. Different HEAD-based histories and author filters stay
+separate. Registrations coalesce before the build queue; each requester receives
+progress and can leave independently. The last requester cancels the underlying
+build. Completed index registrations are weak.
 
 `GitRepository::read_history_range_shared` defaults to wrapping the existing
 range method for other backends. The gix backend decodes a matching block once;

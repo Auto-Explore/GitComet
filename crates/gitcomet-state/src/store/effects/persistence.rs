@@ -124,6 +124,20 @@ pub(super) fn schedule(
                 }
             });
         }
+        PersistenceEffect::PersistRepoHistoryFocus { workdir, focus, .. } => {
+            let Some(session_file_path) = session::default_session_file_path_for_effect() else {
+                return;
+            };
+            session_persist_executor.spawn(move || {
+                if let Err(error) = session::persist_repo_history_focus_to_path(
+                    &workdir,
+                    &focus,
+                    &session_file_path,
+                ) {
+                    util::send_or_log(&msg_tx, failure.message(error));
+                }
+            });
+        }
         PersistenceEffect::PersistRepoMaintenanceSnooze { common_dir } => {
             session_persist_executor.spawn(move || {
                 if let Err(error) = session::persist_repo_maintenance_snooze(&common_dir) {
@@ -167,6 +181,9 @@ impl PersistenceEffect {
                 repo_id, action, ..
             }
             | Self::PersistRepoHistoryAuthorFilter {
+                repo_id, action, ..
+            }
+            | Self::PersistRepoHistoryFocus {
                 repo_id, action, ..
             } => PersistenceFailure {
                 repo_id: *repo_id,

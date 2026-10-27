@@ -436,3 +436,340 @@ fn revert_needing_a_signing_passphrase_resumes_when_replayed() {
 
     clear_session_passphrase();
 }
+
+#[test]
+fn reword_head_retries_signing_without_committing_staged_changes() {
+    if !ssh_signing_available() {
+        eprintln!("skipping: ssh-keygen with `-Y sign` is unavailable");
+        return;
+    }
+    let _auth_guard = auth_test_lock();
+    test_git_env::ensure_initialized();
+    clear_staged_git_auth();
+    clear_session_passphrase();
+    let dir = tempfile::tempdir().unwrap();
+    let repo = init_signing_repo(dir.path());
+    run_git(
+        &repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "Original"],
+    );
+    let target = CommitId(git_stdout(&repo, &["rev-parse", "HEAD"]).into());
+    let tree = git_stdout(&repo, &["rev-parse", "HEAD^{tree}"]);
+    let author = git_stdout(&repo, &["log", "-1", "--format=%an|%ae|%aI"]);
+    fs::write(repo.join("staged.txt"), "staged\n").unwrap();
+    run_git(&repo, &["add", "staged.txt"]);
+    fs::write(repo.join("file.txt"), "dirty\n").unwrap();
+    let status = git_stdout(&repo, &["status", "--porcelain"]);
+    let backend = open(&repo);
+    let error = backend
+        .reword_commit_with_output(&target, "Signed message")
+        .unwrap_err();
+    let ErrorKind::Git(failure) = error.kind() else {
+        panic!("expected a signing failure: {error}");
+    };
+    assert!(matches!(
+        failure.auth_outcome(),
+        Some(AuthOutcome::NeedsInput(_))
+    ));
+    assert_eq!(git_stdout(&repo, &["rev-parse", "HEAD"]), target.as_ref());
+    assert!(
+        !backend
+            .reword_commit_in_progress(&target, "Signed message")
+            .unwrap()
+    );
+
+    stage_git_auth_for_current_thread(StagedGitAuth {
+        challenge: None,
+        kind: GitAuthKind::Passphrase,
+        username: None,
+        secret: PASSPHRASE.into(),
+    });
+    let outcome = backend
+        .reword_commit_with_output(&target, "Signed message")
+        .unwrap();
+    clear_staged_git_auth();
+    assert_eq!(
+        outcome.rewritten_id,
+        Some(CommitId(git_stdout(&repo, &["rev-parse", "HEAD"]).into()))
+    );
+    assert_eq!(git_stdout(&repo, &["rev-parse", "HEAD^{tree}"]), tree);
+    assert_eq!(
+        git_stdout(&repo, &["log", "-1", "--format=%an|%ae|%aI"]),
+        author
+    );
+    assert_eq!(git_stdout(&repo, &["status", "--porcelain"]), status);
+    assert_eq!(
+        git_stdout(&repo, &["log", "-1", "--format=%B"]),
+        "Signed message"
+    );
+    assert!(git_stdout(&repo, &["cat-file", "-p", "HEAD"]).contains("gpgsig"));
+    clear_session_passphrase();
+}
+
+#[test]
+fn reword_signing_continuation_keeps_its_target_through_repeated_failures() {
+    if !ssh_signing_available() {
+        eprintln!("skipping: ssh-keygen with `-Y sign` is unavailable");
+        return;
+    }
+    let _auth_guard = auth_test_lock();
+    test_git_env::ensure_initialized();
+    clear_staged_git_auth();
+    clear_session_passphrase();
+    let dir = tempfile::tempdir().unwrap();
+    let repo = init_signing_repo(dir.path());
+    run_git(
+        &repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "Base"],
+    );
+    fs::write(repo.join("file.txt"), "target\n").unwrap();
+    run_git(
+        &repo,
+        &[
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "-am",
+            "Original target",
+        ],
+    );
+    let target = CommitId(git_stdout(&repo, &["rev-parse", "HEAD"]).into());
+    fs::write(repo.join("file.txt"), "descendant\n").unwrap();
+    run_git(
+        &repo,
+        &["-c", "commit.gpgsign=false", "commit", "-am", "Descendant"],
+    );
+    let original_head = CommitId(git_stdout(&repo, &["rev-parse", "HEAD"]).into());
+    let before = git_stdout(&repo, &["log", "--format=%T|%an|%ae|%aI"]);
+    let message = "Signed target\n\n# Message preserved";
+    let backend = open(&repo);
+    let error = backend
+        .reword_commit_with_output(&target, message)
+        .unwrap_err();
+    let ErrorKind::Git(failure) = error.kind() else {
+        panic!("expected a signing failure: {error}");
+    };
+    assert!(matches!(
+        failure.auth_outcome(),
+        Some(AuthOutcome::NeedsInput(_))
+    ));
+    assert!(backend.reword_commit_in_progress(&target, message).unwrap());
+
+    let paused_head = git_stdout(&repo, &["rev-parse", "HEAD"]);
+    for (other_target, other_message) in [(&original_head, message), (&target, "Different message")]
+    {
+        assert!(
+            !backend
+                .reword_commit_in_progress(other_target, other_message)
+                .unwrap()
+        );
+        let error = backend
+            .continue_reword_commit_with_output(other_target, other_message)
+            .unwrap_err();
+        assert!(error.to_string().contains("does not belong"), "{error}");
+        assert_eq!(git_stdout(&repo, &["rev-parse", "HEAD"]), paused_head);
+    }
+
+    fs::write(
+        repo.join("file.txt"),
+        "edit made while the signing prompt is open\n",
+    )
+    .unwrap();
+    let error = backend
+        .continue_reword_commit_with_output(&target, message)
+        .unwrap_err();
+    assert!(
+        error.to_string().contains("stash your worktree changes"),
+        "{error}"
+    );
+    assert_eq!(
+        fs::read_to_string(repo.join("file.txt")).unwrap(),
+        "edit made while the signing prompt is open\n"
+    );
+    assert!(backend.reword_commit_in_progress(&target, message).unwrap());
+    fs::write(repo.join("file.txt"), "target\n").unwrap();
+
+    stage_git_auth_for_current_thread(StagedGitAuth {
+        challenge: None,
+        kind: GitAuthKind::Passphrase,
+        username: None,
+        secret: "wrong passphrase".into(),
+    });
+    let error = backend
+        .continue_reword_commit_with_output(&target, message)
+        .unwrap_err();
+    clear_staged_git_auth();
+    let ErrorKind::Git(failure) = error.kind() else {
+        panic!("expected the repeated signing failure: {error}");
+    };
+    assert!(matches!(
+        failure.auth_outcome(),
+        Some(AuthOutcome::Rejected(_))
+    ));
+    assert!(backend.reword_commit_in_progress(&target, message).unwrap());
+
+    stage_git_auth_for_current_thread(StagedGitAuth {
+        challenge: None,
+        kind: GitAuthKind::Passphrase,
+        username: None,
+        secret: PASSPHRASE.into(),
+    });
+    let outcome = backend
+        .continue_reword_commit_with_output(&target, message)
+        .unwrap();
+    clear_staged_git_auth();
+    let rewritten = CommitId(git_stdout(&repo, &["rev-parse", "HEAD^"]).into());
+    assert_ne!(rewritten, target);
+    assert_eq!(outcome.rewritten_id, Some(rewritten.clone()));
+    assert_eq!(
+        git_stdout(&repo, &["log", "--format=%T|%an|%ae|%aI"]),
+        before
+    );
+    assert_eq!(
+        git_stdout(&repo, &["log", "-1", "--format=%B", "HEAD^"]),
+        message
+    );
+    assert_eq!(
+        git_stdout(&repo, &["log", "-1", "--format=%B"]),
+        "Descendant"
+    );
+    assert!(git_stdout(&repo, &["cat-file", "-p", "HEAD^"]).contains("gpgsig"));
+    assert!(!backend.reword_commit_in_progress(&target, message).unwrap());
+    assert!(git_stdout(&repo, &["status", "--porcelain"]).is_empty());
+
+    // Initially supplied credentials must survive the ancestry/listing
+    // commands that run before the first signing subprocess too.
+    stage_git_auth_for_current_thread(StagedGitAuth {
+        challenge: None,
+        kind: GitAuthKind::Passphrase,
+        username: None,
+        secret: PASSPHRASE.into(),
+    });
+    let second = backend
+        .reword_commit_with_output(&rewritten, "Signed again")
+        .expect("preflight commands must not consume the staged signing answer");
+    clear_staged_git_auth();
+    assert_eq!(
+        second.rewritten_id,
+        Some(CommitId(git_stdout(&repo, &["rev-parse", "HEAD^"]).into()))
+    );
+    assert_eq!(
+        git_stdout(&repo, &["log", "-1", "--format=%B", "HEAD^"]),
+        "Signed again"
+    );
+    clear_session_passphrase();
+}
+
+#[test]
+fn reword_continue_keeps_a_later_signing_challenge_after_making_progress() {
+    if !ssh_signing_available() {
+        eprintln!("skipping: ssh-keygen with `-Y sign` is unavailable");
+        return;
+    }
+    let _auth_guard = auth_test_lock();
+    test_git_env::ensure_initialized();
+    clear_staged_git_auth();
+    clear_session_passphrase();
+    let dir = tempfile::tempdir().unwrap();
+    let repo = init_signing_repo(dir.path());
+    run_git(
+        &repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "Base"],
+    );
+    fs::write(repo.join("file.txt"), "target\n").unwrap();
+    run_git(
+        &repo,
+        &["-c", "commit.gpgsign=false", "commit", "-am", "Target"],
+    );
+    let target = CommitId(git_stdout(&repo, &["rev-parse", "HEAD"]).into());
+    fs::write(repo.join("file.txt"), "descendant\n").unwrap();
+    run_git(
+        &repo,
+        &["-c", "commit.gpgsign=false", "commit", "-am", "Descendant"],
+    );
+    let before = git_stdout(&repo, &["log", "--format=%T"]);
+
+    const SECOND_PASSPHRASE: &str = "another fixture signing passphrase";
+    let second_key = dir.path().join("second-key");
+    assert!(
+        Command::new("ssh-keygen")
+            .args(["-q", "-t", "ed25519", "-N", SECOND_PASSPHRASE, "-f"])
+            .arg(&second_key)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let signer = dir.path().join("signer.sh");
+    let quoted_key = gitcomet_core::text_utils::shell_single_quote(
+        &second_key.to_string_lossy().replace('\\', "/"),
+    );
+    fs::write(&signer, format!(
+        "#!/bin/sh\ncount_file=$(git rev-parse --git-path signing-attempt)\ncount=0\nif [ -f \"$count_file\" ]; then count=$(cat \"$count_file\"); fi\ncount=$((count + 1))\nprintf '%s' \"$count\" >\"$count_file\"\nif [ \"$count\" -lt 3 ]; then exec ssh-keygen \"$@\"; fi\nfor arg in \"$@\"; do input=$arg; done\nexec ssh-keygen -Y sign -n git -f {quoted_key} \"$input\"\n"
+    )).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&signer, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    run_git(
+        &repo,
+        &[
+            "config",
+            "gpg.ssh.program",
+            &signer.to_string_lossy().replace('\\', "/"),
+        ],
+    );
+    let backend = open(&repo);
+    let message = "Reworded target";
+    backend
+        .reword_commit_with_output(&target, message)
+        .expect_err("target needs the first passphrase");
+    assert!(backend.reword_commit_in_progress(&target, message).unwrap());
+    stage_git_auth_for_current_thread(StagedGitAuth {
+        challenge: None,
+        kind: GitAuthKind::Passphrase,
+        username: None,
+        secret: PASSPHRASE.into(),
+    });
+    let error = backend
+        .continue_reword_commit_with_output(&target, message)
+        .expect_err("the descendant requests the second key after the target was committed");
+    clear_staged_git_auth();
+    let ErrorKind::Git(failure) = error.kind() else {
+        panic!("{error}")
+    };
+    assert!(matches!(
+        failure.auth_outcome(),
+        Some(AuthOutcome::NeedsInput(_) | AuthOutcome::Rejected(_))
+    ));
+    assert!(
+        backend.reword_commit_in_progress(&target, message).unwrap(),
+        "the later signing failure must not roll back"
+    );
+    assert_eq!(git_stdout(&repo, &["log", "-1", "--format=%B"]), message);
+
+    stage_git_auth_for_current_thread(StagedGitAuth {
+        challenge: None,
+        kind: GitAuthKind::Passphrase,
+        username: None,
+        secret: SECOND_PASSPHRASE.into(),
+    });
+    let outcome = backend
+        .continue_reword_commit_with_output(&target, message)
+        .unwrap();
+    clear_staged_git_auth();
+    assert_eq!(
+        outcome.rewritten_id,
+        Some(CommitId(git_stdout(&repo, &["rev-parse", "HEAD^"]).into()))
+    );
+    assert_eq!(git_stdout(&repo, &["log", "--format=%T"]), before);
+    assert_eq!(
+        git_stdout(&repo, &["log", "-1", "--format=%B", "HEAD^"]),
+        message
+    );
+    assert_eq!(
+        git_stdout(&repo, &["log", "-1", "--format=%B"]),
+        "Descendant"
+    );
+    clear_session_passphrase();
+}

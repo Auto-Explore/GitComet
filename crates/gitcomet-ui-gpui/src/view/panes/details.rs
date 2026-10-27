@@ -6,6 +6,30 @@ use gitcomet_core::history_find::HistoryFindQuery;
 use rustc_hash::FxHasher;
 use std::hash::{Hash, Hasher};
 
+/// A commit message being edited in the commit details. Kept only while that
+/// commit stays the one shown.
+pub(in super::super) struct CommitRewordDraft {
+    pub(in super::super) repo_id: RepoId,
+    pub(in super::super) commit_id: CommitId,
+    /// The commit's message when editing began.
+    pub(in super::super) original: String,
+    /// Whether the input holds a message "Update commit" would accept, so the
+    /// pane repaints only when that flips rather than on every keystroke.
+    pub(in super::super) submittable: bool,
+    /// The message a first submit asked to confirm, for a published commit.
+    pub(in super::super) confirming: Option<String>,
+    /// Set from dispatch until the reword and any retry of it are over, so
+    /// it is submitted once.
+    pub(in super::super) submitting: Option<CommitRewordSubmission>,
+    /// A paused update can be continued after its authentication prompt closes.
+    pub(in super::super) retained_request: Option<gitcomet_state::model::RewordRequestId>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in super::super) struct CommitRewordSubmission {
+    pub(in super::super) request_id: gitcomet_state::model::RewordRequestId,
+}
+
 /// The cached [`WorktreeFileListInputs`] and the scan they were derived from:
 /// repo, worktree-dirty revision, and the worktree's own path.
 /// One status section's display order, keyed by the projection it was built for.
@@ -55,6 +79,7 @@ pub(in super::super) struct DetailsPaneView {
     pub(in super::super) show_timezone: bool,
     _ui_model_subscription: gpui::Subscription,
     _commit_message_input_subscription: gpui::Subscription,
+    _commit_reword_input_subscription: gpui::Subscription,
     _history_find_subscription: gpui::Subscription,
     /// The history find bar's query, highlighted in the commit details. It
     /// lives on the history view, so this copy is what repaints the pane.
@@ -93,6 +118,10 @@ pub(in super::super) struct DetailsPaneView {
 
     pub(in super::super) commit_message_input: Entity<components::TextInput>,
     pub(in super::super) commit_details_message_input: Entity<components::TextInput>,
+    /// The editable message while [`Self::commit_reword`] is set.
+    pub(in super::super) commit_reword_input: Entity<components::TextInput>,
+    pub(in super::super) commit_reword_scroll: ScrollHandle,
+    pub(in super::super) commit_reword: Option<CommitRewordDraft>,
     pub(in super::super) commit_details_message_link_menu: Entity<components::CommitLinkMenu>,
     pub(in super::super) commit_details_sha_link_menu: Entity<components::CommitLinkMenu>,
     pub(in super::super) commit_details_sha_input: Entity<components::TextInput>,
@@ -276,7 +305,6 @@ impl DetailsPaneView {
     fn notify_fingerprint(state: &AppState) -> u64 {
         let mut hasher = FxHasher::default();
         state.active_repo.hash(&mut hasher);
-
         if let Some(repo_id) = state.active_repo
             && let Some(repo) = state.repos.iter().find(|r| r.id == repo_id)
         {
@@ -295,12 +323,21 @@ impl DetailsPaneView {
                 .map(|snapshot| snapshot.revision)
                 .hash(&mut hasher);
             repo.ops_rev.hash(&mut hasher);
+            repo.reword.revision.hash(&mut hasher);
             let history = &repo.history_state;
             history.selected_commit_rev.hash(&mut hasher);
             // Loaded history rows show up only as a comparison's cards.
             if Self::shows_comparison(repo) {
                 repo.log_rev.hash(&mut hasher);
                 history.indexed.rev.hash(&mut hasher);
+            }
+            // An older commit's place in that history, and HEAD's, decide
+            // whether its message can be edited and whether it is published.
+            if history.selected_commit.is_some() {
+                repo.log_rev.hash(&mut hasher);
+                history.indexed.rev.hash(&mut hasher);
+                repo.detached_head_commit.hash(&mut hasher);
+                repo.upstream_divergence_rev.hash(&mut hasher);
             }
             history.commit_details_rev.hash(&mut hasher);
             repo.stashes_rev.hash(&mut hasher);
@@ -402,6 +439,40 @@ impl DetailsPaneView {
             input.set_vertical_scroll_handle(Some(commit_scroll.clone()));
             input
         });
+        let commit_reword_scroll = ScrollHandle::new();
+        let commit_reword_input = cx.new(|cx| {
+            let mut input = components::TextInput::new(
+                components::TextInputOptions {
+                    placeholder: "Enter commit message".into(),
+                    multiline: true,
+                    soft_wrap: true,
+                    ..Default::default()
+                },
+                window,
+                cx,
+            );
+            input.set_vertical_scroll_handle(Some(commit_reword_scroll.clone()));
+            input
+        });
+        let commit_reword_subscription = cx.observe(&commit_reword_input, |this, input, cx| {
+            let Some(draft) = this.commit_reword.as_mut() else {
+                return;
+            };
+            let text = input.read(cx).text();
+            let submittable = crate::view::panels::commit_reword_submittable(&draft.original, text);
+            // Editing the message withdraws a pending confirmation.
+            let confirm_withdrawn = draft
+                .confirming
+                .as_deref()
+                .is_some_and(|confirmed| confirmed != text);
+            if confirm_withdrawn {
+                draft.confirming = None;
+            }
+            if draft.submittable != submittable || confirm_withdrawn {
+                draft.submittable = submittable;
+                cx.notify();
+            }
+        });
         let commit_details_message_link_menu = cx.new(|_cx| {
             components::CommitLinkMenu::new(
                 commit_details_message_input.clone(),
@@ -482,6 +553,7 @@ impl DetailsPaneView {
             show_timezone,
             _ui_model_subscription: subscription,
             _commit_message_input_subscription: commit_message_subscription,
+            _commit_reword_input_subscription: commit_reword_subscription,
             _history_find_subscription: history_find_subscription,
             history_find_query,
             root_view,
@@ -516,6 +588,9 @@ impl DetailsPaneView {
             commit_scroll,
             commit_message_input,
             commit_details_message_input,
+            commit_reword_input,
+            commit_reword_scroll,
+            commit_reword: None,
             commit_details_message_link_menu,
             commit_details_sha_link_menu,
             commit_details_sha_input,
@@ -2444,6 +2519,7 @@ impl DetailsPaneView {
         });
 
         self.state = next;
+        self.advance_commit_reword_submission(cx);
         self.commit_message_drafts
             .retain(|repo_id, _| self.state.repos.iter().any(|repo| repo.id == *repo_id));
 
@@ -2896,6 +2972,18 @@ impl DetailsPaneView {
     ) {
         let _ = self.root_view.update(cx, |root, cx| {
             let handle = root.diff_renderer.read(cx).diff_panel_focus_handle.clone();
+            window.focus(&handle, cx);
+        });
+    }
+
+    pub(in super::super) fn focus_history_panel(
+        &mut self,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let _ = self.root_view.update(cx, |root, cx| {
+            let history = root.main_pane.read(cx).history_view.clone();
+            let handle = history.read(cx).history_panel_focus_handle.clone();
             window.focus(&handle, cx);
         });
     }

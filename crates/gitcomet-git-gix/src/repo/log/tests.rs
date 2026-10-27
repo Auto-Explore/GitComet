@@ -1342,8 +1342,10 @@ fn all_branches_tips_reuse_cached_tips_until_the_ref_namespace_changes() {
 
     let repo = open_repo(tmp.path());
     let handle = repo.repo();
-    let first = repo.all_branches_tips(&handle, None).expect("tips");
-    let second = repo.all_branches_tips(&handle, None).expect("tips again");
+    let first = repo.all_branches_tips(&handle, &[], None).expect("tips");
+    let second = repo
+        .all_branches_tips(&handle, &[], None)
+        .expect("tips again");
     assert!(
         Arc::ptr_eq(&first, &second),
         "an unchanged ref namespace must serve the cached tips"
@@ -1357,14 +1359,14 @@ fn all_branches_tips_reuse_cached_tips_until_the_ref_namespace_changes() {
     commit_file(tmp.path(), "a.txt", "2\n", "c2");
     let handle = repo.repo();
     let moved = repo
-        .all_branches_tips(&handle, None)
+        .all_branches_tips(&handle, &[], None)
         .expect("tips after commit");
     assert_eq!(moved.len(), 2, "main moved away from topic");
     assert!(!Arc::ptr_eq(&first, &moved));
 
     git_success(tmp.path(), &["tag", "-m", "v2", "v2"]);
     let tagged = repo
-        .all_branches_tips(&handle, None)
+        .all_branches_tips(&handle, &[], None)
         .expect("tips after tag");
     assert!(
         Arc::ptr_eq(&moved, &tagged),
@@ -1373,14 +1375,14 @@ fn all_branches_tips_reuse_cached_tips_until_the_ref_namespace_changes() {
 
     git_success(tmp.path(), &["branch", "-D", "topic"]);
     let deleted = repo
-        .all_branches_tips(&handle, None)
+        .all_branches_tips(&handle, &[], None)
         .expect("tips after delete");
     assert_eq!(deleted.len(), 1);
 
     write_file(tmp.path(), "a.txt", "dirty\n");
     git_success(tmp.path(), &["stash", "-q"]);
     let stashed = repo
-        .all_branches_tips(&handle, None)
+        .all_branches_tips(&handle, &[], None)
         .expect("tips after stash");
     assert!(
         stashed.len() > deleted.len(),
@@ -1404,7 +1406,7 @@ fn all_branches_tips_follow_symbolic_refs_into_the_tag_namespace() {
 
     let repo = open_repo(tmp.path());
     let handle = repo.repo();
-    let first = repo.all_branches_tips(&handle, None).expect("tips");
+    let first = repo.all_branches_tips(&handle, &[], None).expect("tips");
     assert_eq!(
         first.len(),
         1,
@@ -1414,7 +1416,7 @@ fn all_branches_tips_follow_symbolic_refs_into_the_tag_namespace() {
     commit_file(tmp.path(), "a.txt", "2\n", "c2");
     let handle = repo.repo();
     let moved = repo
-        .all_branches_tips(&handle, None)
+        .all_branches_tips(&handle, &[], None)
         .expect("tips after commit");
     assert_eq!(moved.len(), 2, "latest still reaches c1 through the tag");
 
@@ -1422,10 +1424,10 @@ fn all_branches_tips_follow_symbolic_refs_into_the_tag_namespace() {
     // symbolic ref that follows it now seeds a different commit.
     git_success(tmp.path(), &["update-ref", "refs/tags/moving", "HEAD"]);
     let retagged = repo
-        .all_branches_tips(&handle, None)
+        .all_branches_tips(&handle, &[], None)
         .expect("tips after retag");
     let fresh = open_repo(tmp.path())
-        .all_branches_tips(&handle, None)
+        .all_branches_tips(&handle, &[], None)
         .expect("fresh tips");
     assert_eq!(retagged.as_ref(), fresh.as_ref());
     assert_eq!(retagged.len(), 1, "latest now resolves to main's tip");
@@ -1433,7 +1435,7 @@ fn all_branches_tips_follow_symbolic_refs_into_the_tag_namespace() {
     // An annotated tag makes the symbolic chain end at a tag object.
     git_success(tmp.path(), &["tag", "-f", "-m", "old", "moving", "HEAD~1"]);
     let annotated = repo
-        .all_branches_tips(&handle, None)
+        .all_branches_tips(&handle, &[], None)
         .expect("tips after annotated retag");
     assert_eq!(annotated.len(), 2, "latest resolves back to c1");
 }
@@ -2060,8 +2062,9 @@ fn all_branches_history_recovers_after_repack_replaces_loaded_pack_index() {
 
     let result = gitcomet_core::services::GitRepository::read_history(
         &repo,
-        HistoryMode::AllBranches,
+        &HistoryMode::AllBranches.into(),
         None,
+        &Default::default(),
         &gitcomet_core::services::HistoryReadRequest::Page {
             limit: 50,
             cursor: None,
@@ -2091,7 +2094,13 @@ fn indexed_ranges_survive_automatic_and_later_pack_access_retries() {
         let repo = open_repo(workdir);
         let cancel = CancellationToken::new();
         let index = repo
-            .build_history_index(HistoryMode::FullReachable, None, &cancel, &mut |_| {})
+            .build_history_index(
+                &HistoryMode::FullReachable.into(),
+                None,
+                &Default::default(),
+                &cancel,
+                &mut |_| {},
+            )
             .unwrap()
             .unwrap();
         let id = gix::ObjectId::from_bytes_or_panic(index.id_bytes(0).unwrap());
@@ -2150,7 +2159,13 @@ fn indexed_ranges_survive_automatic_and_later_pack_access_retries() {
         assert_eq!(block.snapshot, index.snapshot);
         assert_eq!(block.commits[0].id, index.commit_id(0).unwrap());
         let rebuilt = repo
-            .build_history_index(HistoryMode::FullReachable, None, &cancel, &mut |_| {})
+            .build_history_index(
+                &HistoryMode::FullReachable.into(),
+                None,
+                &Default::default(),
+                &cancel,
+                &mut |_| {},
+            )
             .unwrap()
             .unwrap();
         assert!(Arc::ptr_eq(&index, &rebuilt));
@@ -2163,7 +2178,7 @@ fn peel_failure_reports_underlying_io_error() {
     let (repo, _) = repo_with_unmappable_loaded_pack(tmp.path());
 
     let error = repo
-        .all_branches_tips(&repo.repo(), None)
+        .all_branches_tips(&repo.repo(), &[], None)
         .expect_err("stale store cannot map pack A");
     let message = error.to_string();
     assert!(

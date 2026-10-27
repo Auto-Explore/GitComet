@@ -966,6 +966,7 @@ fn filesystem_repository_lease_lives_through_the_actual_write() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().join("repo");
     fs::create_dir(&root).unwrap();
+    let root = canonicalize_or_original(root);
     let path = root.join("file");
     fs::write(&path, b"original").unwrap();
     let operations = vec![gitcomet_core::filesystem::Operation::Save {
@@ -1119,6 +1120,7 @@ fn bare_directory_conversion_rekeys_preferences_and_rebuilds_watching() {
             root.to_str().unwrap(),
         ],
     );
+    let root = canonicalize_or_original(root);
     let session = directory.path().join("session.json");
     let _session = crate::session::push_test_session_file_path_override(Some(session.clone()));
     let (store, _events) = AppStore::new_test(Arc::new(gitcomet_git_gix::GixBackend));

@@ -7,6 +7,7 @@ use crate::model::{
 use crate::msg::PersistenceEffect;
 use crate::store::repository_runtime::RepositoryRuntimes;
 use gitcomet_core::domain::HistoryMode;
+use gitcomet_core::services::HistoryWalk;
 use std::collections::{BTreeMap, BTreeSet};
 
 fn preferences(store: &AppStore, id: RepoId) -> RepositoryPreferencesSnapshot {
@@ -273,6 +274,18 @@ fn stale_explorer_menus_preserve_independent_toggles_across_windows() {
 #[test]
 fn preferences_sync_across_tabs_and_windows_without_lost_fields_or_clone_leakage() {
     let (dir, main, linked) = repo_with_linked_worktree();
+    // Hidden remotes outlive only the remotes that still exist.
+    for remote in ["origin", "upstream"] {
+        run_git(
+            &main,
+            &[
+                "remote",
+                "add",
+                remote,
+                &format!("https://example.com/{remote}.git"),
+            ],
+        );
+    }
     let path = dir.path().join("session.json");
     let _path_guard = crate::session::push_test_session_file_path_override(Some(path.clone()));
     let backend: Arc<dyn GitBackend> = Arc::new(gitcomet_git_gix::GixBackend);
@@ -344,6 +357,21 @@ fn preferences_sync_across_tabs_and_windows_without_lost_fields_or_clone_leakage
             ignored: Some(true),
         },
     );
+    // One window's own changes stay in order: origin ends up shown.
+    for (store, repo_id, remote, hidden) in [
+        (&first, main_id, "origin", true),
+        (&second, second_id, "upstream", true),
+        (&first, linked_id, "origin", false),
+    ] {
+        update(
+            store,
+            repo_id,
+            RepositoryPreferenceUpdate::RemoteHistoryVisibility {
+                remote: remote.into(),
+                hidden,
+            },
+        );
+    }
     let sorts = BTreeMap::from([
         (RepositoryListKind::CommitFiles, RepositoryFileSort::Edits),
         (
@@ -385,6 +413,7 @@ fn preferences_sync_across_tabs_and_windows_without_lost_fields_or_clone_leakage
         file_sorts: sorts,
         show_hidden_files: false,
         show_ignored_files: true,
+        history_hidden_remotes: BTreeSet::from(["upstream".into()]),
     };
     wait_until("all tabs and windows share all preferences", || {
         [
@@ -643,7 +672,8 @@ fn history_update_retires_inactive_walks_until_activation() {
     let seq = repo
         .loads_in_flight
         .request_log(crate::model::PendingLogLoad {
-            scope: HistoryMode::default(),
+            focus: Default::default(),
+            walk: HistoryMode::default().into(),
             author: None,
             limit: 100,
             cursor: None,
@@ -692,9 +722,303 @@ fn history_update_retires_inactive_walks_until_activation() {
     );
     assert!(effects.iter().any(|effect| matches!(
         effect,
-        Effect::LoadLog {
-            scope: HistoryMode::FirstParent,
-            ..
-        }
+        Effect::LoadLog { walk, .. } if walk.mode() == HistoryMode::FirstParent
     )));
+}
+
+fn hidden_remotes_state(scope: HistoryMode) -> (AppState, RepositoryKey) {
+    let key = RepositoryKey::CommonDir(PathBuf::from("/repo/.git"));
+    let mut repo = RepoState::new_opening(
+        RepoId(1),
+        RepoSpec {
+            workdir: PathBuf::from("/repo"),
+        },
+    );
+    repo.open = Loadable::Ready(());
+    repo.shared_preferences = Some(RepositoryPreferencesSnapshot {
+        key: key.clone(),
+        revision: 1,
+        preferences: Arc::new(SharedRepositoryPreferences {
+            history_mode: scope,
+            ..Default::default()
+        }),
+    });
+    repo.set_log_scope(scope);
+    repo.set_log(Loadable::Ready(Arc::new(LogPage {
+        commits: Vec::new(),
+        next_cursor: None,
+    })));
+    let mut state = AppState::test_default();
+    state.repos.push(repo);
+    state.active_repo = Some(RepoId(1));
+    (state, key)
+}
+
+fn hiding(key: &RepositoryKey, scope: HistoryMode, remotes: &[&str]) -> Msg {
+    Msg::ApplyRepositoryPreferences(RepositoryPreferencesSnapshot {
+        key: key.clone(),
+        revision: 2,
+        preferences: Arc::new(SharedRepositoryPreferences {
+            history_mode: scope,
+            history_hidden_remotes: remotes.iter().map(|remote| remote.to_string()).collect(),
+            ..Default::default()
+        }),
+    })
+}
+
+fn load_log_walk(effects: &[Effect]) -> Option<(crate::model::LogLoadSeq, HistoryWalk)> {
+    effects.iter().find_map(|effect| match effect {
+        Effect::LoadLog { seq, walk, .. } => Some((*seq, walk.clone())),
+        _ => None,
+    })
+}
+
+#[test]
+fn hiding_a_remote_restarts_every_all_branches_reader_without_its_refs() {
+    let (mut state, key) = hidden_remotes_state(HistoryMode::AllBranches);
+    let mut repos = RepositoryRuntimes::default();
+    let id_alloc = std::sync::atomic::AtomicU64::new(2);
+    let running = state.repos[0]
+        .loads_in_flight
+        .request_log(crate::model::PendingLogLoad {
+            focus: Default::default(),
+            walk: HistoryMode::AllBranches.into(),
+            author: None,
+            limit: 100,
+            cursor: None,
+        })
+        .unwrap();
+    let all_authors = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::HistoryAuthors(crate::history_authors::HistoryAuthorsMsg::Ensure {
+            repo_id: RepoId(1),
+            retry: false,
+        }),
+    );
+    let [Effect::HistoryAuthors(all_authors)] = all_authors.as_slice() else {
+        panic!("{all_authors:?}");
+    };
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::HistoryAuthors(crate::history_authors::HistoryAuthorsMsg::Loaded {
+            repo_id: RepoId(1),
+            seq: all_authors.seq,
+            result: Ok(Arc::from([Arc::from("origin-only author")])),
+        }),
+    );
+    let unfiltered = HistoryWalk::from(HistoryMode::AllBranches);
+    assert!(
+        state.repos[0]
+            .history_state
+            .authors
+            .matches_walk(&unfiltered)
+    );
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        hiding(&key, HistoryMode::AllBranches, &["origin"]),
+    );
+    assert!(
+        !state.repos[0]
+            .history_state
+            .authors
+            .matches_walk(&state.repos[0].history_walk()),
+        "the old walk's authors are not offered for the new one"
+    );
+
+    let expected = HistoryWalk::new(HistoryMode::AllBranches, ["origin"]);
+    let (seq, walk) = load_log_walk(&effects).expect("the walk restarts");
+    assert_eq!(walk, expected);
+    assert_ne!(seq, running, "a new walk replaces the running one");
+    assert!(!state.repos[0].loads_in_flight.is_active_log_reply(running));
+    assert!(matches!(state.repos[0].log, Loadable::Loading));
+    assert_eq!(
+        state.repos[0].history_hidden_remotes(),
+        &BTreeSet::from(["origin".to_string()])
+    );
+
+    let snapshot = gitcomet_core::services::HistorySnapshot("hidden-origin".into());
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::LogLoaded {
+            repo_id: RepoId(1),
+            seq,
+            scope: HistoryMode::AllBranches,
+            cursor: None,
+            result: Ok(gitcomet_core::services::HistoryReadResult::Page {
+                page: Arc::new(LogPage {
+                    commits: Vec::new(),
+                    next_cursor: None,
+                }),
+                snapshot: Some(snapshot),
+            }),
+        }),
+    );
+    let index = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::IndexedHistory(crate::indexed_history::IndexedHistoryMsg::Ensure {
+            repo_id: RepoId(1),
+        }),
+    );
+    assert!(
+        matches!(
+            index.as_slice(),
+            [Effect::IndexedHistory(crate::indexed_history::IndexedHistoryEffect::Build { walk, .. })]
+                if *walk == expected
+        ),
+        "{index:?}"
+    );
+    let authors = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::HistoryAuthors(crate::history_authors::HistoryAuthorsMsg::Ensure {
+            repo_id: RepoId(1),
+            retry: false,
+        }),
+    );
+    assert!(
+        matches!(
+            authors.as_slice(),
+            [Effect::HistoryAuthors(work)] if work.walk == expected
+        ),
+        "{authors:?}"
+    );
+}
+
+#[test]
+fn hiding_a_remote_from_a_head_walk_changes_only_the_labels() {
+    let (mut state, key) = hidden_remotes_state(HistoryMode::FirstParent);
+    let log_rev = state.repos[0].log_rev;
+
+    let effects = reduce(
+        &mut RepositoryRuntimes::default(),
+        &std::sync::atomic::AtomicU64::new(2),
+        &mut state,
+        hiding(&key, HistoryMode::FirstParent, &["origin"]),
+    );
+
+    assert!(load_log_walk(&effects).is_none(), "{effects:?}");
+    assert!(matches!(state.repos[0].log, Loadable::Ready(_)));
+    assert_eq!(state.repos[0].log_rev, log_rev);
+    assert_eq!(
+        state.repos[0].history_hidden_remotes(),
+        &BTreeSet::from(["origin".to_string()])
+    );
+    assert_eq!(
+        state.repos[0].history_walk(),
+        HistoryMode::FirstParent.into()
+    );
+}
+
+#[test]
+fn an_opened_repository_walks_without_its_hidden_remotes_from_the_first_load() {
+    let mut repos = RepositoryRuntimes::default();
+    let id_alloc = std::sync::atomic::AtomicU64::new(1);
+    let mut state = AppState::test_default();
+    let path = PathBuf::from("/tmp/hidden-remote-repo");
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenRepoFromExternalDrop(path.clone()),
+    );
+    let spec = state.repos[0].spec.clone();
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::RepoOpenedOk {
+            repository_mode: gitcomet_core::domain::RepositoryMode::WorkingTree,
+            head_commit: None,
+            preferences: Some(RepositoryPreferencesSnapshot {
+                key: RepositoryKey::Worktree(path.clone()),
+                revision: 1,
+                preferences: Arc::new(SharedRepositoryPreferences {
+                    history_mode: HistoryMode::AllBranches,
+                    history_hidden_remotes: BTreeSet::from(["upstream".into()]),
+                    ..Default::default()
+                }),
+            }),
+            repo_id: RepoId(1),
+            spec,
+            repo: Arc::new(DummyRepo::new(path.to_string_lossy().as_ref())),
+        }),
+    );
+
+    let (_, walk) = load_log_walk(&effects).expect("the first walk starts");
+    assert_eq!(
+        walk,
+        HistoryWalk::new(HistoryMode::AllBranches, ["upstream"])
+    );
+}
+
+#[test]
+fn hidden_remotes_leave_the_hidden_set_only_when_removed() {
+    let loaded = |names: &[&str]| {
+        Msg::Internal(crate::msg::InternalMsg::RemotesLoaded {
+            repo_id: RepoId(1),
+            result: Ok(names
+                .iter()
+                .map(|name| gitcomet_core::domain::Remote {
+                    name: name.to_string(),
+                    url: None,
+                    default_branch: None,
+                })
+                .collect()),
+        })
+    };
+    let shown_again = |effects: &[Effect]| {
+        effects
+            .iter()
+            .filter_map(|effect| match effect {
+                Effect::Persistence(PersistenceEffect::UpdateRepositoryPreferences {
+                    update: RepositoryPreferenceUpdate::RemoteHistoryVisibility { remote, hidden },
+                    ..
+                }) => Some((remote.clone(), *hidden)),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    let (mut state, key) = hidden_remotes_state(HistoryMode::FirstParent);
+    let mut repos = RepositoryRuntimes::default();
+    let id_alloc = std::sync::atomic::AtomicU64::new(2);
+    let mut run = |msg| reduce(&mut repos, &id_alloc, &mut state, msg);
+    // `fork` is hidden from another window that has already listed it.
+    run(hiding(
+        &key,
+        HistoryMode::FirstParent,
+        &["origin", "upstream", "fork"],
+    ));
+
+    let first = run(loaded(&["origin", "upstream"]));
+    assert!(
+        shown_again(&first).is_empty(),
+        "a first listing removes nothing: {first:?}"
+    );
+    let failed = run(Msg::Internal(crate::msg::InternalMsg::RemotesLoaded {
+        repo_id: RepoId(1),
+        result: Err(gitcomet_core::error::Error::new(
+            gitcomet_core::error::ErrorKind::Backend("config unreadable".into()),
+        )),
+    }));
+    assert!(shown_again(&failed).is_empty(), "{failed:?}");
+    let still_listed = run(loaded(&["origin", "upstream"]));
+    assert!(shown_again(&still_listed).is_empty(), "{still_listed:?}");
+    let without_upstream = run(loaded(&["origin"]));
+    assert_eq!(
+        shown_again(&without_upstream),
+        [("upstream".to_string(), false)],
+        "this tab listed `upstream` and not `fork`"
+    );
 }
