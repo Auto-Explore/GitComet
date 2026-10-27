@@ -109,3 +109,14 @@ fn backoff_doubles_to_a_cap() {
         assert_eq!(host_block(Failure::Busy, strikes), minutes(delay));
     }
 }
+
+#[test]
+fn quiet_repositories_wait_up_to_four_intervals() {
+    let half_hour = AutoFetchInterval::new(30).unwrap();
+    for (quiet, minutes) in [(0, 30), (1, 60), (2, 120), (3, 120), (40, 120)] {
+        assert_eq!(
+            quiet_delay(half_hour, quiet),
+            Duration::from_secs(minutes * 60)
+        );
+    }
+}

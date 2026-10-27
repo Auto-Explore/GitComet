@@ -2,7 +2,7 @@
 //! waits for the user. Each rule keeps a broken remote from being contacted
 //! again on every interval.
 
-use crate::model::AutoFetchInterval;
+use crate::model::{AUTO_FETCH_QUIET_MAX_MULTIPLIER, AutoFetchInterval};
 use gitcomet_core::error::{Error, ErrorKind, GitFailureId};
 use std::time::Duration;
 
@@ -164,6 +164,14 @@ pub(super) fn retry_delay(interval: AutoFetchInterval, failures: u32) -> Duratio
     interval
         .saturating_mul(1 << failures.min(3))
         .min(interval.max(MAX_RETRY_DELAY))
+}
+
+/// Inactive repositories whose last `quiet` fetches found nothing new wait 2×
+/// and then 4× the interval: most open repositories change rarely.
+pub(super) fn quiet_delay(interval: AutoFetchInterval, quiet: u32) -> Duration {
+    interval
+        .duration()
+        .saturating_mul((1 << quiet.min(31)).min(AUTO_FETCH_QUIET_MAX_MULTIPLIER))
 }
 
 /// How long a host waits after its `strikes`-th consecutive network or busy

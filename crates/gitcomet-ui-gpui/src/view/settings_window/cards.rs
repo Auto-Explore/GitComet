@@ -1828,11 +1828,15 @@ impl SettingsWindowView {
             })
             .child(
                 div()
+                    .debug_selector(|| "settings_window_auto_fetch_help".to_string())
                     .px_2()
                     .pb_2()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
                     .text_size(theme.ui_text(12.0))
                     .text_color(theme.colors.foreground.secondary)
-                    .child(format!("Fetch all remotes when repositories open, then at this interval while {} is running. Applies to every open workspace without automatically pulling.", crate::view::product_name())),
+                    .children(auto_fetch_help()),
             )
             .child(
                 self.toggle_row(
@@ -2323,4 +2327,25 @@ impl SettingsWindowView {
                 ),
             )
     }
+}
+
+/// How automatic fetch schedules itself, and what it does to spare remote
+/// servers. Kept in step with docs/automatic-fetch.md.
+pub(super) fn auto_fetch_help() -> [String; 2] {
+    [
+        format!(
+            "Fetches all remotes at this interval while {} is running, in every open \
+             workspace, without pulling. Repositories fetched within the interval, including \
+             from the command line, wait until it has passed. Worktrees of one repository \
+             share a fetch.",
+            crate::view::product_name()
+        ),
+        format!(
+            "To limit load on remote servers, background tabs that find no new commits wait \
+             up to {}× the interval, fetches to the same server are spaced out, unreachable \
+             servers are retried with growing delays, and a failed sign-in pauses automatic \
+             fetching until you use Fetch all.",
+            gitcomet_state::model::AUTO_FETCH_QUIET_MAX_MULTIPLIER
+        ),
+    ]
 }

@@ -623,7 +623,8 @@ fn fetches_that_move_no_refs_refresh_only_tabs_that_never_loaded() {
                 workdir: clone.clone(),
                 common_dir: None,
                 repository: None,
-                active: false,
+                // Selected, so quiet fetches keep the plain interval.
+                active: true,
             }],
             RemoteSettings::default(),
             &backend,
@@ -1018,6 +1019,81 @@ fn spacing_waits_end_early_when_the_fetch_is_cancelled() {
     let started = Instant::now();
     assert!(sleep_unless_cancelled(Duration::from_secs(10), &cancellation).is_err());
     assert!(started.elapsed() < Duration::from_secs(1));
+}
+
+#[test]
+fn inactive_repositories_that_stay_quiet_wait_up_to_four_intervals() {
+    let coordinator = AutoFetchCoordinator::new();
+    let subscribe = |store, path: &str, active| {
+        set_enabled(&coordinator, false);
+        coordinator.sync(
+            store,
+            vec![Registration {
+                repo_id: RepoId(1),
+                lifetime: RepoLifetime::allocate(),
+                workdir: PathBuf::from(path),
+                common_dir: Some(PathBuf::from(format!("{path}/.git"))),
+                repository: None,
+                active,
+            }],
+            RemoteSettings::default(),
+            &(Arc::new(Backend) as Arc<dyn GitBackend>),
+            Arc::new(|_| {}),
+        );
+        enable(&coordinator);
+    };
+    subscribe(1, "/quiet", false);
+    subscribe(2, "/selected", true);
+    let interval = AutoFetchInterval::default();
+    let fetch = |path: &str, now, refs_changed| {
+        let mut state = coordinator.inner.state.lock().unwrap();
+        let job = next_job(&mut state, coordinator.admission(), now).unwrap();
+        assert_eq!(job.workdir, Path::new(path));
+        finish(
+            &mut state,
+            &job,
+            Completion::Finished {
+                common_dir: None,
+                key: None,
+                remotes: Vec::new(),
+                skipped: Vec::new(),
+                result: Ok(CommandOutput::empty_success("git fetch --all")),
+                refs_changed,
+            },
+            now,
+        );
+        group_of(&state, Path::new(path))
+            .schedule
+            .wait(interval)
+            .as_secs()
+            / interval.duration().as_secs()
+    };
+    let mut now = UNIX_EPOCH;
+    assert_eq!(
+        fetch("/selected", now, false),
+        1,
+        "selected tabs never back off"
+    );
+    assert_eq!(fetch("/quiet", now, false), 2);
+    now += interval.duration() * 2;
+    assert_eq!(fetch("/selected", now, false), 1);
+    assert_eq!(fetch("/quiet", now, false), 4);
+    now += interval.duration() * 4;
+    assert_eq!(fetch("/selected", now, false), 1);
+    assert_eq!(fetch("/quiet", now, false), 4, "four intervals at most");
+    now += interval.duration() * 4;
+    assert_eq!(fetch("/selected", now, false), 1);
+    assert_eq!(fetch("/quiet", now, true), 1, "new commits end the backoff");
+    now += interval.duration();
+    assert_eq!(fetch("/selected", now, false), 1);
+    assert_eq!(fetch("/quiet", now, false), 2);
+    subscribe(1, "/quiet", true);
+    let state = coordinator.inner.state.lock().unwrap();
+    assert_eq!(
+        group_of(&state, Path::new("/quiet")).schedule.quiet,
+        0,
+        "selecting the tab ends it too"
+    );
 }
 
 /// Counts remote contacts: every fetch runs the remote's upload-pack once.

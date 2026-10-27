@@ -95,6 +95,13 @@ struct Entry {
 }
 
 impl Entry {
+    /// The selected tab in some window shows this workdir.
+    fn is_active(&self) -> bool {
+        self.subscribers
+            .values()
+            .any(|subscriber| subscriber.active)
+    }
+
     fn enabled_subscriber(&self) -> Option<&Subscriber> {
         self.subscribers
             .values()
@@ -183,6 +190,7 @@ impl Group {
     /// Clears failure state after a fetch that reached every remote.
     fn recover(&mut self) {
         self.schedule.failures = 0;
+        self.schedule.quiet = 0;
         self.paused.clear();
         self.snapshot.retry_at = None;
         self.snapshot.paused_remotes.clear();
@@ -266,6 +274,12 @@ impl State {
     fn group_waits(&self, group: &Group, now: SystemTime) -> bool {
         !group.remotes.is_empty()
             && self.skipped_remotes(Some(group), &group.remotes, now).len() == group.remotes.len()
+    }
+
+    fn group_is_active(&self, key: &GroupKey) -> bool {
+        self.entries
+            .values()
+            .any(|entry| &entry.group == key && entry.is_active())
     }
 
     fn cancel_inactive_fetch(&self) {
@@ -487,6 +501,17 @@ impl AutoFetchCoordinator {
             .entries
             .retain(|_, entry| !entry.subscribers.is_empty());
         state.retain_groups();
+        // Selecting a tab ends its repository's quiet backoff.
+        let State {
+            entries, groups, ..
+        } = &mut *state;
+        for entry in entries.values() {
+            if entry.is_active()
+                && let Some(group) = groups.get_mut(&entry.group)
+            {
+                group.schedule.quiet = 0;
+            }
+        }
         let enabled: FxHashSet<GroupKey> = state.enabled_groups().into_keys().cloned().collect();
         let toggled: Vec<GroupKey> = state
             .groups
@@ -728,12 +753,7 @@ fn next_job(state: &mut State, admission: &Admission, now: SystemTime) -> Option
     let active: FxHashSet<&GroupKey> = state
         .entries
         .values()
-        .filter(|entry| {
-            entry
-                .subscribers
-                .values()
-                .any(|subscriber| subscriber.active)
-        })
+        .filter(|entry| entry.is_active())
         .map(|entry| &entry.group)
         .collect();
     let last_contact = |group: &Group| {
@@ -1036,6 +1056,7 @@ fn finish(state: &mut State, job: &Job, completion: Completion, now: SystemTime)
         }
         return;
     };
+    let active = state.group_is_active(&group_key);
     let State { groups, hosts, .. } = &mut *state;
     if current && let Some(group) = groups.get_mut(&group_key) {
         group.schedule.finish(now);
@@ -1051,7 +1072,14 @@ fn finish(state: &mut State, job: &Job, completion: Completion, now: SystemTime)
             },
         };
         match &result {
-            Ok(_) => group.reached(hosts, &skipped),
+            Ok(_) => {
+                group.reached(hosts, &skipped);
+                group.schedule.quiet = if refs_changed || active {
+                    0
+                } else {
+                    group.schedule.quiet.saturating_add(1)
+                };
+            }
             Err(error) => group.failed(
                 hosts,
                 error,
@@ -1185,13 +1213,19 @@ struct Schedule {
     completed: Option<SystemTime>,
     /// Consecutive failed fetches; each one stretches the next wait.
     failures: u32,
+    /// Consecutive fetches of an inactive group that moved nothing.
+    quiet: u32,
     /// Launch grace: no fetch before this, whatever `completed` says.
     not_before: Option<SystemTime>,
 }
 
 impl Schedule {
     fn wait(&self, interval: AutoFetchInterval) -> Duration {
-        policy::retry_delay(interval, self.failures)
+        if self.failures > 0 {
+            policy::retry_delay(interval, self.failures)
+        } else {
+            policy::quiet_delay(interval, self.quiet)
+        }
     }
 
     fn is_due(&self, interval: AutoFetchInterval, now: SystemTime) -> bool {

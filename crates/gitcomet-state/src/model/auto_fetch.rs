@@ -46,6 +46,10 @@ impl<'de> Deserialize<'de> for AutoFetchInterval {
     }
 }
 
+/// Inactive tabs whose fetches keep finding nothing new wait up to this many
+/// intervals between fetches.
+pub const AUTO_FETCH_QUIET_MAX_MULTIPLIER: u32 = 4;
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash)]
 pub struct AutoFetchSettings {
     pub enabled: bool,

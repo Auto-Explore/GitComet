@@ -37,7 +37,11 @@ the interval for the others that share its fetch. Manual remote commands and
 repository maintenance take priority over automatic fetching.
 
 The next attempt is scheduled after the previous attempt finishes. A successful
-manual **Fetch all** restarts that interval.
+manual **Fetch all** restarts that interval. Most open repositories change
+rarely, so a repository with no selected tab waits twice the interval after a
+fetch that found nothing new, and four times after the next one. New commits, a
+manual **Fetch all**, or selecting one of its tabs returns it to the interval.
+The selected tab's repository always uses the interval.
 Changing the interval updates the schedule. Returning from sleep causes one
 overdue attempt rather than replaying missed intervals. Switching tabs or
 focusing the app does not request an extra fetch.

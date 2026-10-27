@@ -238,3 +238,28 @@ fn automatic_fetch_is_discoverable_in_settings_search() {
         assert!(SettingsCategory::Remotes.matches_query(query), "{query}");
     }
 }
+
+#[gpui::test]
+fn remotes_settings_explain_the_schedule_and_how_it_limits_remote_load(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (settings, cx) = cx.add_window_view(SettingsWindowView::new);
+    settings.update(cx, |settings, cx| {
+        settings.select_category(SettingsCategory::Remotes, cx);
+    });
+    cx.run_until_parked();
+    let handle = cx.update(|window, _| window.window_handle());
+    let platform_window = cx.test_window(handle);
+    for _ in 0..8 {
+        if !platform_window.simulate_scheduled_frame() {
+            break;
+        }
+        cx.run_until_parked();
+    }
+    assert!(cx.debug_bounds("settings_window_auto_fetch_help").is_some());
+    let [schedule, load] = super::super::cards::auto_fetch_help();
+    assert!(schedule.contains("including from the command line, wait until it has passed"));
+    assert!(schedule.contains("Worktrees of one repository share a fetch."));
+    assert!(load.contains("background tabs that find no new commits wait up to 4× the interval"));
+    assert!(load.contains("a failed sign-in pauses automatic fetching until you use Fetch all."));
+}
