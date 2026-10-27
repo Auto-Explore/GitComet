@@ -55,6 +55,8 @@ pub(crate) enum Needs {
     /// A sequencer operation with every conflict resolved.
     SequencerResolved,
     PushWithTags(TagPushMode),
+    /// Pull's own reason, from `pull_unavailable_reason`.
+    Pull,
     /// A remote whose URL points at a web page.
     RemoteWebPage,
     MacOs,
@@ -76,7 +78,6 @@ pub(crate) enum Needs {
 pub(crate) struct PaletteContext {
     pub(crate) has_active_repo: bool,
     pub(crate) is_bare: bool,
-    pub(crate) annex_takes_over_pull: bool,
     pub(crate) external_editor: bool,
     pub(crate) merging: bool,
     pub(crate) sequencer: bool,
@@ -86,6 +87,8 @@ pub(crate) struct PaletteContext {
     /// Why each tag-push mode is unavailable, indexed by `TagPushMode::index`.
     /// Computed by the push menu's own logic so the two cannot disagree.
     pub(crate) push_with_tags_unavailable: [Option<&'static str>; 2],
+    /// Why Pull is unavailable, from `pull_unavailable_reason` like its button.
+    pub(crate) pull_unavailable: Option<&'static str>,
     /// Why no remote can be opened in a browser, from `remote_web_request`.
     pub(crate) remote_web_page_unavailable: Option<&'static str>,
     /// Git cannot run `git lfs`.
@@ -138,6 +141,7 @@ pub(crate) fn unavailable_reason(needs: Needs, ctx: &PaletteContext) -> Option<&
             }
         }
         Needs::PushWithTags(mode) => ctx.push_with_tags_unavailable[mode.index()],
+        Needs::Pull => ctx.pull_unavailable,
         Needs::RemoteWebPage => ctx.remote_web_page_unavailable,
         Needs::MacOs => (!cfg!(target_os = "macos")).then_some("Only available on macOS"),
         Needs::Linux => (!cfg!(any(target_os = "linux", target_os = "freebsd")))
@@ -174,7 +178,6 @@ pub(crate) fn command_unavailable_reason(
         && Command::from_id(command.id).is_some_and(|command| {
             command.repository_requirement()
                 == gitcomet_core::domain::RepositoryRequirement::WorkingTree
-                && !(command == Command::Pull && ctx.annex_takes_over_pull)
         })
     {
         return Some(gitcomet_core::domain::WORKING_TREE_REQUIRED_MESSAGE);
@@ -298,7 +301,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         category: "Sync",
         keywords: "",
         requires_repo: true,
-        needs: Needs::Nothing,
+        needs: Needs::Pull,
     },
     CommandEntry {
         id: Command::Push.id(),

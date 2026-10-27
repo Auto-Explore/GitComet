@@ -412,7 +412,9 @@ fn tag_push_on_adjusted_branch_can_set_upstream_when_annex_takeover_is_disabled(
 }
 
 #[gpui::test]
-fn pull_controls_leave_adjusted_branch_routing_to_the_store(cx: &mut gpui::TestAppContext) {
+fn pull_controls_on_adjusted_branches_follow_annex_support_and_settings(
+    cx: &mut gpui::TestAppContext,
+) {
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -440,10 +442,23 @@ fn pull_controls_leave_adjusted_branch_routing_to_the_store(cx: &mut gpui::TestA
                 annex_pull_push: takeover,
                 ..Default::default()
             };
-            assert!(pull_enabled(&repo, &settings), "main Pull button");
+            // An adjusted branch has no upstream, so only the annex takeover pulls.
+            let enabled = takeover
+                && match &repo.large_file_support {
+                    Loadable::Ready(support) => support.annex.in_use(),
+                    _ => true,
+                };
+            let pull_enabled =
+                |repo: &RepoState| pull_unavailable_reason(repo, &settings).is_none();
+            assert_eq!(pull_enabled(&repo), enabled, "main Pull button");
             let mut loading = repo.clone();
             loading.remotes = Loadable::Loading;
-            assert!(pull_enabled(&loading, &settings));
+            loading.remote_branches = Loadable::Loading;
+            assert_eq!(
+                pull_enabled(&loading),
+                enabled,
+                "annex takeover does not need loaded remotes"
+            );
             let state = Arc::new(AppState {
                 active_repo: Some(repo.id),
                 repos: vec![repo.clone()],
@@ -469,7 +484,7 @@ fn pull_controls_leave_adjusted_branch_routing_to_the_store(cx: &mut gpui::TestA
                                 _ => None,
                             })
                             .collect();
-                        assert_eq!(modes, vec![true; 4]);
+                        assert_eq!(modes, vec![enabled; 4]);
                     });
                 });
             });

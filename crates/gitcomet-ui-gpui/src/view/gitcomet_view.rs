@@ -196,9 +196,8 @@ impl GitCometView {
         command_palette::PaletteContext {
             has_active_repo: repo.is_some(),
             is_bare: repo.is_some_and(RepoState::is_bare),
-            annex_takes_over_pull: repo.is_some_and(|repo| {
-                repo.annex_takes_over_pull_push(&self.state.large_file_settings)
-            }),
+            pull_unavailable: repo
+                .and_then(|repo| pull_unavailable_reason(repo, &self.state.large_file_settings)),
             external_editor: self.effective_external_editor().is_some(),
             merging: repo.is_some_and(merge_in_progress),
             sequencer: repo.is_some_and(|repo| {

@@ -17,7 +17,7 @@ impl PopoverHost {
             return Some("HEAD is detached — check out a branch first");
         }
         match push_request(repo, &self.state.large_file_settings) {
-            PushRequest::NotReady => Some("The repository is still loading"),
+            PushRequest::NotReady => Some(REPOSITORY_LOADING_REASON),
             PushRequest::NoRemotes => Some("Add a remote to push to first"),
             PushRequest::Push | PushRequest::SetUpstream { .. } => {
                 request(repo, mode, &self.state.large_file_settings)

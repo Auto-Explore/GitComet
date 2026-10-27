@@ -4,15 +4,16 @@ Pull fetches and integrates one upstream branch; Fetch All updates the configure
 
 ## Branch selection
 
-Pull reads the checked-out branch's current `branch.<name>.remote` and
-`branch.<name>.merge` configuration. It passes that repository and full source
-ref explicitly to Git. The local and upstream branch names may differ, and the
-repository may be a named remote, a URL, or `.` for another local branch. A
-missing tracking ref does not change which upstream is pulled.
+Pull is available when the checked-out branch's upstream is a fetched branch on a
+named remote. A branch without an upstream, such as one that was never pushed,
+cannot be pulled, even when the remote has a branch of the same name; set its
+upstream first. After **Create new**, push the branch before pulling it. URL and
+`.` upstreams cannot be pulled from the toolbar, menu, or command palette. When
+Pull is unavailable, its tooltip and palette entry say why.
 
-Pull remains available for a checked-out branch even when tracking refs or named
-remotes are absent. GitComet validates the current configuration when the operation
-starts, including local and URL upstreams.
+Pull reads the checked-out branch's current `branch.<name>.remote` and
+`branch.<name>.merge` configuration when it starts. It passes that repository and
+full source ref explicitly to Git, so the local and upstream branch names may differ.
 
 Pull into current uses its selected repository and `refs/heads/<branch>`.
 Neither action performs a preliminary Fetch All or pruning fetch. Both disable
@@ -24,14 +25,8 @@ Git's tag settings still apply, including `remote.<name>.tagOpt=--no-tags` or
 `--tags`. An explicit tag setting can transfer additional data. Pull does not
 delete local tags.
 
-When neither upstream configuration key exists, Pull uses `origin`, or the first
-configured remote by name, and the current branch's name. Its fetch refspecs must
-map that branch to exactly one tracking destination that no other source or remote
-claims. This check includes positive mappings even when a negative refspec excludes
-their source, matching Git's upstream setup rules. After successful integration,
-Git sets the upstream using that destination, including Git's `branch.autoSetupRebase`
-behavior. Incomplete or ambiguous upstream configuration and detached HEAD fail
-before fetching.
+Incomplete or ambiguous upstream configuration and detached HEAD fail before
+fetching.
 
 The selected merge, rebase, or fast-forward strategy is preserved. Adjusted
 git-annex branches retain their configured git-annex routing; see

@@ -7,7 +7,7 @@ use super::{
     OpenRepository, PopoverKind, PullMode, PushRequest, RemotePopoverKind, RepoPopoverKind,
     ResetUiScale, StashPickerPurpose, SubmodulePopoverKind, ToggleRevealCommit, Window,
     WorktreePopoverKind, command_palette, components, head_branch_has_live_upstream,
-    head_is_detached, pull_enabled, push_request,
+    head_is_detached, push_request,
 };
 
 impl GitCometView {
@@ -391,13 +391,10 @@ impl GitCometView {
                 let Some(repo) = self.active_repo() else {
                     return;
                 };
-                let repo_id = repo.id;
-                if pull_enabled(repo, &self.state.large_file_settings) {
-                    self.store.dispatch(Msg::Pull {
-                        repo_id,
-                        mode: PullMode::Default,
-                    });
-                }
+                self.store.dispatch(Msg::Pull {
+                    repo_id: repo.id,
+                    mode: PullMode::Default,
+                });
             }
             Command::Push => {
                 let Some(repo) = self.active_repo() else {

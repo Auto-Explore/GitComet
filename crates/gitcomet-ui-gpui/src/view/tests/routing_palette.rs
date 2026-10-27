@@ -129,11 +129,13 @@ fn live_upstream_requires_the_exact_loaded_remote_tracking_ref() {
     }]));
 
     assert!(head_branch_has_live_upstream(&repo));
-    assert!(pull_enabled(&repo, &Default::default()));
+    assert_eq!(pull_unavailable_reason(&repo, &Default::default()), None);
 }
 
+/// "Create new" configures an upstream before the branch exists remotely;
+/// pulling it would fail with "couldn't find remote ref".
 #[test]
-fn configured_upstream_is_a_pull_and_push_target_without_a_tracking_ref() {
+fn configured_but_unpushed_upstream_is_a_push_target_without_being_pullable() {
     let mut repo = repo_with_push_state(
         Some(Upstream {
             remote: "origin".to_string(),
@@ -149,7 +151,10 @@ fn configured_upstream_is_a_pull_and_push_target_without_a_tracking_ref() {
 
     assert_eq!(push_request(&repo, &Default::default()), PushRequest::Push);
     assert!(!head_branch_has_live_upstream(&repo));
-    assert!(pull_enabled(&repo, &Default::default()));
+    assert_eq!(
+        pull_unavailable_reason(&repo, &Default::default()),
+        Some("Push this branch to its upstream first")
+    );
 }
 
 #[test]
@@ -294,9 +299,12 @@ fn a_selected_remote_branch_is_invalidated_only_after_a_ready_refresh_omits_it()
     assert!(selected_remote_branch_is_missing(&state, Some(&selected)));
 }
 
+/// Regression: Pull was enabled for a never-pushed branch, and Git failed with
+/// "couldn't find remote ref refs/heads/<branch>". A remote branch of the same
+/// name is not an upstream either.
 #[test]
-fn pull_is_available_for_a_branch_without_an_upstream() {
-    let repo = repo_with_push_state(
+fn pull_is_unavailable_for_a_branch_without_an_upstream() {
+    let mut repo = repo_with_push_state(
         None,
         Loadable::Ready(Arc::new(vec![Remote {
             name: "origin".to_string(),
@@ -304,26 +312,55 @@ fn pull_is_available_for_a_branch_without_an_upstream() {
             default_branch: None,
         }])),
     );
+    repo.remote_branches = Loadable::Ready(Arc::new(vec![RemoteBranch {
+        remote: "origin".to_string(),
+        name: "feature".to_string(),
+        target: CommitId("remote-feature".into()),
+    }]));
 
-    assert!(!head_branch_has_live_upstream(&repo));
-    assert!(pull_enabled(&repo, &Default::default()));
+    assert_eq!(
+        pull_unavailable_reason(&repo, &Default::default()),
+        Some("Set an upstream for this branch first")
+    );
 }
 
 #[test]
-fn pull_needs_a_branch_but_does_not_require_named_remotes() {
-    let mut detached = repo_with_push_state(None, Loadable::Loading);
+fn pull_needs_a_loaded_working_tree_branch_whose_upstream_is_live() {
+    let reason = |repo: &RepoState| pull_unavailable_reason(repo, &Default::default());
+    let mut tracked = repo_with_push_state(
+        Some(Upstream {
+            remote: "origin".to_string(),
+            branch: "feature".to_string(),
+        }),
+        Loadable::Ready(Arc::new(Vec::new())),
+    );
+    tracked.remote_branches = Loadable::Ready(Arc::new(vec![RemoteBranch {
+        remote: "origin".to_string(),
+        name: "feature".to_string(),
+        target: CommitId("remote-feature".into()),
+    }]));
+    assert_eq!(reason(&tracked), None);
+
+    let mut detached = tracked.clone();
     detached.head_branch = Loadable::Ready("HEAD".to_string());
     assert!(head_is_detached(&detached));
-
-    let no_remotes = repo_with_push_state(None, Loadable::Ready(Arc::new(Vec::new())));
-    assert!(pull_enabled(&no_remotes, &Default::default()));
-    assert!(!pull_enabled(&detached, &Default::default()));
-    let mut loading = no_remotes.clone();
-    loading.head_branch = Loadable::Loading;
-    assert!(!pull_enabled(&loading, &Default::default()));
-    let mut bare = no_remotes;
+    assert_eq!(
+        reason(&detached),
+        Some("HEAD is detached — check out a branch first")
+    );
+    let mut loading = [tracked.clone(), tracked.clone(), tracked.clone()];
+    loading[0].head_branch = Loadable::Loading;
+    loading[1].branches = Loadable::Loading;
+    loading[2].remote_branches = Loadable::Loading;
+    for repo in &loading {
+        assert_eq!(reason(repo), Some(REPOSITORY_LOADING_REASON));
+    }
+    let mut bare = tracked;
     bare.repository_mode = Some(gitcomet_core::domain::RepositoryMode::Bare);
-    assert!(!pull_enabled(&bare, &Default::default()));
+    assert_eq!(
+        reason(&bare),
+        Some(gitcomet_core::domain::WORKING_TREE_REQUIRED_MESSAGE)
+    );
 }
 
 #[test]

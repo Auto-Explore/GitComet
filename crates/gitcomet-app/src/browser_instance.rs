@@ -543,14 +543,33 @@ mod tests {
             .expect("find available browser instance ports")
     }
 
+    // Starts the primary on a released reservation. A child spawned by a
+    // concurrent test copies the reservation listeners and keeps them open
+    // until exec, so the whole range can briefly still read as in use.
+    fn start_after_reservation(
+        descriptor_path: &Path,
+        request: BrowserOpenRequest,
+    ) -> io::Result<StartResult> {
+        let deadline = Instant::now() + CLAIM_WAIT_TIMEOUT;
+        loop {
+            match start_or_forward_at(descriptor_path, request.clone(), CLAIM_WAIT_TIMEOUT) {
+                Err(error)
+                    if error.kind() == io::ErrorKind::AddrInUse && Instant::now() < deadline =>
+                {
+                    thread::sleep(Duration::from_millis(10));
+                }
+                result => return result,
+            }
+        }
+    }
+
     #[test]
     fn pr530_broker_rejects_requests_after_ui_receiver_is_dropped() {
         let dir = tempfile::tempdir().unwrap();
         let descriptor = reserve_candidate_ports(dir.path()).0;
-        let StartResult::Primary(mut primary) = start_or_forward_at(
+        let StartResult::Primary(mut primary) = start_after_reservation(
             &descriptor,
             request(PathBuf::from("initial"), BrowserOpenTarget::ExistingWindow),
-            CLAIM_WAIT_TIMEOUT,
         )
         .unwrap() else {
             panic!("expected primary")
@@ -574,10 +593,9 @@ mod tests {
     fn pr530_idle_broker_shuts_down_promptly() {
         let dir = tempfile::tempdir().unwrap();
         let descriptor = reserve_candidate_ports(dir.path()).0;
-        let primary = start_or_forward_at(
+        let primary = start_after_reservation(
             &descriptor,
             request(PathBuf::from("initial"), BrowserOpenTarget::ExistingWindow),
-            CLAIM_WAIT_TIMEOUT,
         )
         .unwrap();
         let started = Instant::now();
@@ -625,10 +643,9 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let descriptor = reserve_candidate_ports(dir.path()).0;
         let path = dir.path().join("repo");
-        let mut primary = match start_or_forward_at(
+        let mut primary = match start_after_reservation(
             &descriptor,
             request(path.clone(), BrowserOpenTarget::ExistingWindow),
-            CLAIM_WAIT_TIMEOUT,
         )
         .expect("start primary")
         {
@@ -659,10 +676,9 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let descriptor = reserve_candidate_ports(dir.path()).0;
         let path = PathBuf::from(std::ffi::OsString::from_vec(b"repo-\xff".to_vec()));
-        let mut primary = match start_or_forward_at(
+        let mut primary = match start_after_reservation(
             &descriptor,
             request(PathBuf::from("initial"), BrowserOpenTarget::ExistingWindow),
-            CLAIM_WAIT_TIMEOUT,
         )
         .expect("start primary")
         {
@@ -701,10 +717,9 @@ mod tests {
             b'o' as u16,
             0xd800,
         ]));
-        let mut primary = match start_or_forward_at(
+        let mut primary = match start_after_reservation(
             &descriptor,
             request(PathBuf::from("initial"), BrowserOpenTarget::ExistingWindow),
-            CLAIM_WAIT_TIMEOUT,
         )
         .expect("start primary")
         {
@@ -796,13 +811,12 @@ mod tests {
         )
         .expect("stale descriptor");
 
-        let primary = match start_or_forward_at(
+        let primary = match start_after_reservation(
             &descriptor_path,
             BrowserOpenRequest {
                 path: None,
                 target: BrowserOpenTarget::ExistingWindow,
             },
-            CLAIM_WAIT_TIMEOUT,
         )
         .expect("replace stale descriptor")
         {
@@ -902,11 +916,11 @@ mod tests {
         assert!(!descriptor_path.exists());
 
         drop(claim);
-        // Not ZERO: a child spawned by a concurrent test inherits the lock fd
-        // until exec, so the released flock can briefly still read contended.
+        // The reclaim waits CLAIM_WAIT_TIMEOUT, not ZERO: a child spawned by a
+        // concurrent test inherits the lock fd until exec, so the released
+        // flock can briefly still read contended.
         let StartResult::Primary(primary) =
-            start_or_forward_at(&descriptor_path, request, CLAIM_WAIT_TIMEOUT)
-                .expect("reclaim released lock")
+            start_after_reservation(&descriptor_path, request).expect("reclaim released lock")
         else {
             panic!("no primary exists to forward to");
         };
@@ -932,10 +946,9 @@ mod tests {
     fn assert_launch_falls_back(case: &str, break_forwarding: impl FnOnce(&Path)) {
         let dir = tempfile::tempdir().expect("tempdir");
         let descriptor_path = reserve_candidate_ports(dir.path()).0;
-        let primary = match start_or_forward_at(
+        let primary = match start_after_reservation(
             &descriptor_path,
             request(PathBuf::from("first"), BrowserOpenTarget::ExistingWindow),
-            CLAIM_WAIT_TIMEOUT,
         )
         .expect("start primary")
         {
@@ -1025,13 +1038,12 @@ mod tests {
         let occupied: Vec<u16> = candidate_ports(&descriptor_path).take(4).collect();
 
         let started = Instant::now();
-        let primary = match start_or_forward_at(
+        let primary = match start_after_reservation(
             &descriptor_path,
             BrowserOpenRequest {
                 path: None,
                 target: BrowserOpenTarget::ExistingWindow,
             },
-            CLAIM_WAIT_TIMEOUT,
         )
         .expect("start primary")
         {
