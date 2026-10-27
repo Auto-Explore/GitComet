@@ -1205,6 +1205,8 @@ fn list_ref_metadata_reports_author_date_and_subject_for_local_and_remote_refs()
 
     let feature = lookup("feature").expect("feature present");
     assert_eq!(feature.summary, "add the feature");
+    let feature_tip = run_git_capture(&work_repo, &["rev-parse", "feature"]);
+    assert_eq!(feature.target.as_ref(), feature_tip.trim());
 
     // Remote-tracking refs are covered by the same call.
     let remote_main = lookup("origin/main").expect("origin/main present");

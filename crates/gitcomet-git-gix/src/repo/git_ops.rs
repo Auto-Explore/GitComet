@@ -8,7 +8,7 @@ use super::{
 use crate::refs::files::{cached_commit_id, try_collect_loose_local_branches_fast};
 use crate::util::GitOutput;
 use crate::util::{bytes_to_text_preserving_utf8, run_git_capture, run_git_raw_output};
-use gitcomet_core::domain::{Branch, RefMetadata, Upstream, UpstreamDivergence};
+use gitcomet_core::domain::{Branch, CommitId, RefMetadata, Upstream, UpstreamDivergence};
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::services::{CancellationToken, Result};
 use gix::bstr::ByteSlice as _;
@@ -287,13 +287,13 @@ impl GixRepo {
         let mut cmd = self.git_workdir_cmd();
         cmd.arg("for-each-ref")
             .arg(
-                "--format=%(refname:short)%00%(authorname)%00%(committerdate:unix)%00%(contents:subject)",
+                "--format=%(refname:short)%00%(objectname)%00%(authorname)%00%(committerdate:unix)%00%(contents:subject)",
             )
             .arg("refs/heads")
             .arg("refs/remotes");
         let output = run_git_capture(
             cmd,
-            "git for-each-ref --format=%(refname:short)%00%(authorname)%00%(committerdate:unix)%00%(contents:subject) refs/heads refs/remotes",
+            "git for-each-ref --format=%(refname:short)%00%(objectname)%00%(authorname)%00%(committerdate:unix)%00%(contents:subject) refs/heads refs/remotes",
         )?;
         Ok(parse_ref_metadata_for_each_ref(&output))
     }
@@ -403,12 +403,13 @@ fn parse_ref_metadata_for_each_ref(output: &str) -> Vec<(String, RefMetadata)> {
         }
 
         // `splitn` so a stray NUL inside the subject cannot shift the fields.
-        let mut fields = line.splitn(4, '\0');
+        let mut fields = line.splitn(5, '\0');
         let name = fields.next().unwrap_or_default();
+        let target = fields.next().unwrap_or_default();
         let author = fields.next().unwrap_or_default();
         let committed_at = fields.next().unwrap_or_default();
         let summary = fields.next().unwrap_or_default();
-        if name.is_empty() {
+        if name.is_empty() || target.is_empty() {
             continue;
         }
         let Ok(committed_at) = committed_at.trim().parse::<i64>() else {
@@ -418,6 +419,7 @@ fn parse_ref_metadata_for_each_ref(output: &str) -> Vec<(String, RefMetadata)> {
         entries.push((
             name.to_owned(),
             RefMetadata {
+                target: CommitId(target.into()),
                 author: author.to_owned(),
                 committed_at,
                 summary: summary.to_owned(),
@@ -710,7 +712,7 @@ mod tests {
         parse_local_branches_for_each_ref, parse_ref_metadata_for_each_ref,
         parse_upstream_identity, parse_upstream_track_divergence,
     };
-    use gitcomet_core::domain::UpstreamDivergence;
+    use gitcomet_core::domain::{CommitId, UpstreamDivergence};
     use gitcomet_core::error::{Error, ErrorKind};
     use rustc_hash::FxHashMap;
     use std::error::Error as _;
@@ -851,11 +853,12 @@ mod tests {
     #[test]
     fn parse_ref_metadata_for_each_ref_parses_local_and_remote_refs() {
         let entries = parse_ref_metadata_for_each_ref(
-            "main\x00Sampo Kivistö\x001754870400\x00improve font loading\norigin/main\x00Roope Airinen\x001754784000\x00made divs draggable\n",
+            "main\x00aaaa\x00Sampo Kivistö\x001754870400\x00improve font loading\norigin/main\x00bbbb\x00Roope Airinen\x001754784000\x00made divs draggable\n",
         );
 
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].0, "main");
+        assert_eq!(entries[0].1.target, CommitId("aaaa".into()));
         assert_eq!(entries[0].1.author, "Sampo Kivistö");
         assert_eq!(entries[0].1.committed_at, 1_754_870_400);
         assert_eq!(entries[0].1.summary, "improve font loading");
@@ -865,9 +868,10 @@ mod tests {
 
     #[test]
     fn parse_ref_metadata_for_each_ref_keeps_nul_bytes_inside_the_subject() {
-        // `splitn(4, ..)` means a stray NUL in the subject cannot shift fields.
-        let entries =
-            parse_ref_metadata_for_each_ref("main\x00Sampo\x001754870400\x00odd\x00subject\n");
+        // `splitn(5, ..)` means a stray NUL in the subject cannot shift fields.
+        let entries = parse_ref_metadata_for_each_ref(
+            "main\x00aaaa\x00Sampo\x001754870400\x00odd\x00subject\n",
+        );
 
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].1.summary, "odd\x00subject");
@@ -876,7 +880,7 @@ mod tests {
     #[test]
     fn parse_ref_metadata_for_each_ref_skips_malformed_rows_without_failing() {
         let entries = parse_ref_metadata_for_each_ref(
-            "\x00Sampo\x001754870400\x00no name\nmain\x00Sampo\x00not-a-timestamp\x00bad date\ntruncated\nkept\x00Sampo\x001754870400\x00fine\n",
+            "\x00aaaa\x00Sampo\x001754870400\x00no name\nmain\x00aaaa\x00Sampo\x00not-a-timestamp\x00bad date\ntruncated\nnotarget\x00\x00Sampo\x001754870400\x00no tip\nkept\x00aaaa\x00Sampo\x001754870400\x00fine\n",
         );
 
         assert_eq!(entries.len(), 1);
@@ -885,7 +889,7 @@ mod tests {
 
     #[test]
     fn parse_ref_metadata_for_each_ref_allows_empty_author_and_subject() {
-        let entries = parse_ref_metadata_for_each_ref("main\x00\x001754870400\x00\n");
+        let entries = parse_ref_metadata_for_each_ref("main\x00aaaa\x00\x001754870400\x00\n");
 
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].1.author, "");

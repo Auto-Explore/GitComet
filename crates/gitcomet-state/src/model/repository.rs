@@ -168,6 +168,12 @@ pub struct RepoState {
     /// remote-branch lists change, so it never outlives the refs it describes.
     pub ref_metadata: Loadable<Arc<FxHashMap<String, RefMetadata>>>,
     pub ref_metadata_rev: u64,
+    /// The last loaded map, kept through invalidation so rows that show tip
+    /// dates do not blank while a reload runs. Read through `tip_metadata`.
+    ref_metadata_last_ready: Option<Arc<FxHashMap<String, RefMetadata>>>,
+    /// Set by the first load. Branch list changes then reload the metadata
+    /// instead of waiting for the next picker open.
+    pub(crate) ref_metadata_wanted: bool,
     pub submodules: Loadable<Arc<Vec<Submodule>>>,
     pub submodules_rev: u64,
     /// Git LFS / git-annex facts; drives whether per-row state is computed.
@@ -408,6 +414,8 @@ impl RepoState {
             worktree_scan_id: 0,
             ref_metadata: Loadable::NotLoaded,
             ref_metadata_rev: 0,
+            ref_metadata_last_ready: None,
+            ref_metadata_wanted: false,
             submodules: Loadable::NotLoaded,
             submodules_rev: 0,
             large_file_support: Loadable::NotLoaded,
@@ -637,8 +645,29 @@ impl RepoState {
         if self.ref_metadata == ref_metadata {
             return;
         }
+        if let Loadable::Ready(metadata) = &ref_metadata {
+            self.ref_metadata_last_ready = Some(Arc::clone(metadata));
+        }
         self.ref_metadata = ref_metadata;
         self.ref_metadata_rev = self.ref_metadata_rev.wrapping_add(1);
+    }
+
+    /// Tip details for `refname`. The current map always matches the refs; a
+    /// copy kept through a reload is used only while it still describes
+    /// `target`, so a moved branch shows nothing rather than a stale date.
+    pub fn tip_metadata(&self, refname: &str, target: Option<&CommitId>) -> Option<&RefMetadata> {
+        if let Loadable::Ready(metadata) = &self.ref_metadata {
+            return metadata.get(refname);
+        }
+        self.ref_metadata_last_ready
+            .as_ref()?
+            .get(refname)
+            .filter(|entry| Some(&entry.target) == target)
+    }
+
+    /// True when a wanted metadata map was invalidated and not yet reloaded.
+    pub(crate) fn ref_metadata_reload_due(&self) -> bool {
+        self.ref_metadata_wanted && matches!(self.ref_metadata, Loadable::NotLoaded)
     }
 
     /// Drops cached ref metadata so the next picker open re-fetches it. Called

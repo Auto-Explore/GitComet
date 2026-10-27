@@ -1908,6 +1908,7 @@ mod checkout_picker {
             (
                 "main".to_string(),
                 RefMetadata {
+                    target: CommitId("tip".into()),
                     author: "Ada Lovelace".to_string(),
                     committed_at: 1_754_870_400,
                     summary: "improve font loading".to_string(),
@@ -1916,6 +1917,7 @@ mod checkout_picker {
             (
                 "origin/main".to_string(),
                 RefMetadata {
+                    target: CommitId("tip".into()),
                     author: "Ada Lovelace".to_string(),
                     committed_at: 1_754_870_400,
                     summary: "improve font loading".to_string(),
@@ -2386,11 +2388,24 @@ mod checkout_picker {
     }
 
     #[gpui::test]
-    fn opening_the_picker_requests_ref_metadata_once(cx: &mut gpui::TestAppContext) {
-        // End-to-end: the badge's picker is what triggers the on-demand load,
-        // and a backend that cannot supply it must not raise an error banner.
+    fn ref_metadata_loads_for_the_sidebar_and_unsupported_backends_stay_silent(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        // End-to-end: the branch sidebar's age column requests tip metadata on
+        // its first draw, and a backend that cannot supply it must raise no
+        // error banner, there or when a picker that shows it opens.
         let (store, events, _repo, _workdir) = create_tracking_store("branch-picker-ref-metadata");
         let repo_id = store.snapshot().active_repo.expect("expected active repo");
+        let diagnostics = |store: &AppStore| {
+            store
+                .snapshot()
+                .repos
+                .iter()
+                .find(|r| r.id == repo_id)
+                .map(|r| r.feedback.diagnostics.len())
+                .unwrap_or(0)
+        };
+        let diagnostics_before = diagnostics(&store);
         let store_for_view = store.clone();
         let (view, cx) = cx.add_window_view(|window, cx| {
             GitCometView::new(store_for_view, events, None, window, cx)
@@ -2400,25 +2415,14 @@ mod checkout_picker {
             crate::app::bind_text_input_keys_for_test(app);
             let _ = window.draw(app);
         });
-
-        let ref_metadata_untouched = |snapshot: &Arc<gitcomet_state::model::AppState>| {
-            snapshot
+        wait_until("the sidebar to request ref metadata", || {
+            store
+                .snapshot()
                 .repos
                 .iter()
                 .find(|r| r.id == repo_id)
-                .is_some_and(|r| matches!(r.ref_metadata, Loadable::NotLoaded))
-        };
-        assert!(
-            ref_metadata_untouched(&store.snapshot()),
-            "metadata should not be fetched until a picker that shows it opens"
-        );
-        let diagnostics_before = store
-            .snapshot()
-            .repos
-            .iter()
-            .find(|r| r.id == repo_id)
-            .map(|r| r.feedback.diagnostics.len())
-            .unwrap_or(0);
+                .is_some_and(|r| !matches!(r.ref_metadata, Loadable::NotLoaded))
+        });
 
         cx.update(|window, app| {
             view.update(app, |this, cx| {
@@ -2434,21 +2438,12 @@ mod checkout_picker {
                 });
             });
         });
-
-        wait_until("ref metadata load to be requested", || {
-            !ref_metadata_untouched(&store.snapshot())
-        });
+        cx.run_until_parked();
 
         // TrackingRepo inherits the trait default (Unsupported), so this lands
         // on the error path — which must stay silent.
-        let after = store.snapshot();
-        let repo_state = after
-            .repos
-            .iter()
-            .find(|r| r.id == repo_id)
-            .expect("repo state");
         assert_eq!(
-            repo_state.feedback.diagnostics.len(),
+            diagnostics(&store),
             diagnostics_before,
             "an unsupported metadata backend must not push a diagnostic"
         );

@@ -503,3 +503,12 @@ strip = "debuginfo"
 inherits = "release"
 debug = 2
 strip = "none"
+
+# TEMPORARY: uncommitted gpui-ce UniformListItemLayout (worktree ~/git/gpui-ce-item-layout).
+[patch."https://github.com/Havunen/gpui-ce.git"]
+gpui-ce = { path = "../gpui-ce-item-layout/crates/gpui" }
+gpui_ce_platform = { path = "../gpui-ce-item-layout/crates/gpui_platform" }
+gpui_ce_wgpu = { path = "../gpui-ce-item-layout/crates/gpui_wgpu" }
+gpui_ce_parley = { path = "../gpui-ce-item-layout/crates/gpui_ce_parley" }
+gpui_ce_shared_string = { path = "../gpui-ce-item-layout/crates/gpui_shared_string" }
+gpui_ce_sum_tree = { path = "../gpui-ce-item-layout/crates/gpui_sum_tree" }

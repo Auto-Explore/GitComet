@@ -207,10 +207,24 @@ fn comparison_details_render_below_branch_and_checkout_identity_at_narrow_widths
                 let row_bounds = cx
                     .debug_bounds(Box::leak(row_selector.into_boxed_str()))
                     .unwrap();
+                // The name fills the first line up to the age column, which
+                // sits on the row's trailing edge.
+                let age_selector =
+                    if matches!(row, branch_sidebar::BranchSidebarRow::WorktreeItem { .. }) {
+                        format!("worktree_age_{index}")
+                    } else {
+                        format!("branch_age_{index}")
+                    };
+                let age = cx
+                    .debug_bounds(Box::leak(age_selector.into_boxed_str()))
+                    .unwrap();
+                let gap = px(12.0 * percent as f32 / 100.0);
                 assert!(
-                    bounds.size.width >= row_bounds.size.width * 0.6
-                        && row_bounds.right() - bounds.right() <= px(12.0 * percent as f32 / 100.0),
-                    "{selector} must use the available first-line width at scale {percent}: {bounds:?}, {row_bounds:?}"
+                    bounds.size.width >= row_bounds.size.width * 0.5
+                        && bounds.right() <= age.left()
+                        && age.left() - bounds.right() <= gap
+                        && row_bounds.right() - age.right() <= gap,
+                    "{selector} must use the first-line width up to the age column at scale {percent}: {bounds:?}, age {age:?}, row {row_bounds:?}"
                 );
                 assert!(
                     bounds.left() >= row_bounds.left() && bounds.right() <= row_bounds.right(),

@@ -359,6 +359,7 @@ pub(crate) mod settings_window;
 mod shell_policy;
 pub(crate) mod shortcut_labels;
 mod sidebar_presentation;
+mod sidebar_row_geometry;
 mod sidebar_search;
 mod sidebar_sticky;
 mod splash;

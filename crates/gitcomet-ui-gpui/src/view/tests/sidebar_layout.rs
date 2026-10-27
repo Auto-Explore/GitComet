@@ -1776,7 +1776,9 @@ fn active_branch_locate_button_expands_scrolls_and_selects_like_its_row(
 }
 
 #[gpui::test]
-fn branch_rows_allow_two_lines_while_file_rows_keep_their_density(cx: &mut gpui::TestAppContext) {
+fn local_branch_rows_are_two_lines_while_file_rows_keep_their_density(
+    cx: &mut gpui::TestAppContext,
+) {
     use crate::appearance::{Appearance, UiDensity};
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_view = store.clone();
@@ -1826,10 +1828,12 @@ fn branch_rows_allow_two_lines_while_file_rows_keep_their_density(cx: &mut gpui:
             .height
     };
 
+    // Tall rows hold a name line over a details line as tall as the worktree
+    // chip. Headers, folders and other rows share the file row height.
     for (density, file_height, branch_height) in [
-        (UiDensity::Compact, 24.0, 44.0),
-        (UiDensity::Comfortable, 32.0, 50.0),
-        (UiDensity::Spacious, 37.0, 54.0),
+        (UiDensity::Compact, 24.0, 42.0),
+        (UiDensity::Comfortable, 32.0, 48.0),
+        (UiDensity::Spacious, 37.0, 52.0),
     ] {
         let file_row = height_of(
             gitcomet_state::model::SidebarMode::Files,
@@ -2218,7 +2222,7 @@ fn right_clicking_a_branch_group_row_opens_the_group_context_menu(cx: &mut gpui:
         group_row.size.height,
         cx.update(|_window, app| {
             let root = view.read(app);
-            rows::sidebar::branch_sidebar_row_height(root.theme, root.ui_scale_percent)
+            rows::sidebar::sidebar_list_row_height(root.theme, root.ui_scale_percent)
         }),
         "branch hierarchy rows must follow the selected density"
     );

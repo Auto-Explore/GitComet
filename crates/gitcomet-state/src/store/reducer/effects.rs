@@ -1251,13 +1251,26 @@ pub(super) fn load_ref_metadata(state: &mut AppState, repo_id: RepoId) -> Vec<Ef
     if !matches!(repo_state.open, Loadable::Ready(())) {
         return Vec::new();
     }
+    repo_state.ref_metadata_wanted = true;
+    request_ref_metadata(repo_state).into_iter().collect()
+}
+
+fn request_ref_metadata(repo_state: &mut RepoState) -> Option<Effect> {
     repo_state.set_ref_metadata(Loadable::Loading);
-    if repo_state.loads_in_flight.request(LoadKind::RefMetadata) {
-        vec![Effect::References(ReferenceEffect::LoadRefMetadata {
-            repo_id,
-        })]
+    repo_state
+        .loads_in_flight
+        .request(LoadKind::RefMetadata)
+        .then_some(Effect::References(ReferenceEffect::LoadRefMetadata {
+            repo_id: repo_state.id,
+        }))
+}
+
+/// Reloads metadata a branch list change invalidated, once something shows it.
+fn reload_wanted_ref_metadata(repo_state: &mut RepoState) -> Option<Effect> {
+    if repo_state.ref_metadata_reload_due() {
+        request_ref_metadata(repo_state)
     } else {
-        Vec::new()
+        None
     }
 }
 
@@ -1819,6 +1832,7 @@ pub(super) fn branches_loaded(
                 repo_id,
             }));
         }
+        effects.extend(reload_wanted_ref_metadata(repo_state));
         effects.extend(super::ref_comparisons::ensure(repo_state, false));
     }
     effects
@@ -1881,6 +1895,7 @@ pub(super) fn remote_branches_loaded(
             }
         };
         repo_state.set_remote_branches(branches);
+        effects.extend(reload_wanted_ref_metadata(repo_state));
         effects.extend(super::ref_comparisons::ensure(repo_state, false));
     }
     effects

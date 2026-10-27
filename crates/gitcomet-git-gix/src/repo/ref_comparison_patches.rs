@@ -310,7 +310,7 @@ mod tests {
             deadline: Instant::now() + Duration::from_secs(5),
             cancellation: &cancellation,
             memory: 64,
-            empty_graph: None,
+            history_overrides: None,
             native: None,
         };
         assert_eq!(
@@ -323,7 +323,7 @@ mod tests {
             deadline: Instant::now() + Duration::from_secs(5),
             cancellation: &cancellation,
             memory: 8 * 1024 * 1024,
-            empty_graph: None,
+            history_overrides: None,
             native: None,
         };
         assert_eq!(
@@ -335,7 +335,7 @@ mod tests {
             deadline: Instant::now() + Duration::from_secs(30),
             cancellation: &cancellation,
             memory: 8 * 1024 * 1024,
-            empty_graph: None,
+            history_overrides: None,
             native: None,
         };
         index

@@ -396,6 +396,9 @@ pub struct Branch {
 /// needed when a picker that displays it is opened.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RefMetadata {
+    /// The tip these details describe, so a stale copy can be matched to a
+    /// branch that has not moved since.
+    pub target: CommitId,
     pub author: String,
     /// Committer date as a Unix timestamp in seconds.
     pub committed_at: i64,

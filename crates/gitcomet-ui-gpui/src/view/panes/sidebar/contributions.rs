@@ -149,10 +149,7 @@ impl SidebarPaneView {
     ) -> AnyElement {
         div()
             .id(("sidebar_contribution_header", section))
-            .h(crate::view::rows::sidebar::branch_sidebar_row_height(
-                self.theme,
-                crate::ui_scale::current(cx).percent,
-            ))
+            .h(self.branch_short_row_height(cx))
             .px_2()
             .flex()
             .items_center()
@@ -204,10 +201,7 @@ impl SidebarPaneView {
         div()
             .id(SharedString::from(id))
             .debug_selector(move || selector.clone())
-            .h(crate::view::rows::sidebar::branch_sidebar_row_height(
-                self.theme,
-                crate::ui_scale::current(cx).percent,
-            ))
+            .h(self.branch_short_row_height(cx))
             .px_2()
             .flex()
             .items_center()

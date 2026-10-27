@@ -36,12 +36,33 @@ const REPOSITORY_ENVIRONMENT: &[&str] = &[
 
 pub(super) type AnalysisResult<T> = Result<T, RefComparisonReason>;
 
+/// Where analysis points `GIT_SHALLOW_FILE` and `GIT_GRAFT_FILE`, so a
+/// shallow or graft file appearing mid-analysis cannot change its history.
+/// The path never exists: an existing file, even an empty one, makes Git
+/// treat the repository as shallow and skip the commit-graph.
+pub(super) struct HistoryOverrides {
+    _dir: tempfile::TempDir,
+    absent: std::path::PathBuf,
+}
+
+impl HistoryOverrides {
+    pub fn new() -> std::io::Result<Self> {
+        let dir = tempfile::tempdir()?;
+        let absent = dir.path().join("absent");
+        Ok(Self { _dir: dir, absent })
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.absent
+    }
+}
+
 pub(super) struct Analysis<'a> {
     pub workdir: &'a Path,
     pub deadline: Instant,
     pub cancellation: &'a CancellationToken,
     pub memory: usize,
-    pub empty_graph: Option<&'a Path>,
+    pub history_overrides: Option<&'a Path>,
     pub native: Option<&'a memory::NativeMemory>,
 }
 
@@ -68,9 +89,9 @@ impl Analysis<'_> {
             .env("GIT_CONFIG_COUNT", "0")
             .args(["--no-optional-locks", "-c", "core.pager=cat"])
             .args(args);
-        if let Some(empty) = self.empty_graph {
-            cmd.env("GIT_SHALLOW_FILE", empty)
-                .env("GIT_GRAFT_FILE", empty);
+        if let Some(absent) = self.history_overrides {
+            cmd.env("GIT_SHALLOW_FILE", absent)
+                .env("GIT_GRAFT_FILE", absent);
         }
         cmd
     }

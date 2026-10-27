@@ -44,19 +44,26 @@ pub(in crate::view) fn sidebar_row_background(
 
 const SIDEBAR_TREE_ROW_HEIGHT_PX: f32 = 24.0;
 const SIDEBAR_TREE_COMFORTABLE_ROW_HEIGHT_PX: f32 = 32.0;
-const BRANCH_SIDEBAR_LINE_HEIGHT_PX: f32 = 22.0;
-const BRANCH_SIDEBAR_COMFORTABLE_LINE_HEIGHT_PX: f32 = 25.0;
+/// A name line (23px) over a details line as tall as the worktree chip, plus
+/// one pixel of air: 42 / 48 / 52 by density.
+const BRANCH_SIDEBAR_TALL_ROW_HEIGHT_PX: f32 = 42.0;
+const BRANCH_SIDEBAR_COMFORTABLE_TALL_ROW_HEIGHT_PX: f32 = 48.0;
 
-pub(in crate::view) fn branch_sidebar_row_height(
+/// Height of two-line branch sidebar rows (local branches and worktrees).
+/// Every other sidebar row uses `sidebar_list_row_height`.
+pub(in crate::view) fn branch_sidebar_tall_row_height(
     theme: AppTheme,
     ui_scale_percent: u32,
 ) -> gpui::Pixels {
+    let metrics = theme.metrics;
+    // `row_height` grows by the font bonus once; both lines grow with it.
+    let second_line_bonus = (metrics.ui_text(20.0) - 20.0).max(0.0);
     ui_scale::design_px_from_percent(
-        (2.0 * theme.metrics.row_height(
-            BRANCH_SIDEBAR_LINE_HEIGHT_PX,
-            BRANCH_SIDEBAR_COMFORTABLE_LINE_HEIGHT_PX,
-        ))
-        .round(),
+        (metrics.row_height(
+            BRANCH_SIDEBAR_TALL_ROW_HEIGHT_PX,
+            BRANCH_SIDEBAR_COMFORTABLE_TALL_ROW_HEIGHT_PX,
+        ) + second_line_bonus)
+            .round(),
         ui_scale_percent,
     )
 }

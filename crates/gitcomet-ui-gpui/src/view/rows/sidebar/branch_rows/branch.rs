@@ -144,26 +144,50 @@ impl SidebarPaneView {
             )
             .open(context_menu_active);
 
-        let comparison = if section == BranchSection::Local {
-            this.active_repo().and_then(|repo| {
-                this.comparison_badge(
-                    ctx,
-                    repo.ref_comparisons.projections.branches.get(name.as_ref()),
-                )
-            })
-        } else {
-            None
+        // Local rows are tall: a name line over a details line that is
+        // always present, so the name never moves when results arrive.
+        let tall = section == BranchSection::Local;
+        let repo = this.active_repo();
+        let subject = repo
+            .filter(|_| tall)
+            .and_then(|repo| repo.ref_comparisons.projections.branches.get(name.as_ref()));
+        let metadata_name = match &target {
+            BranchMenuTarget::Local { name } => name.clone(),
+            BranchMenuTarget::Remote { remote, branch } => format!("{remote}/{branch}"),
         };
-        let has_comparison = comparison.is_some();
+        let tip = repo.and_then(|repo| repo.tip_metadata(&metadata_name, subject));
+        let committed_at = tip.map(|tip| tip.committed_at);
+        let tip_tooltip = tip.map(|tip| {
+            let mut line = format!(
+                "Last commit {}",
+                gitcomet_text::date_time::format_relative_time(tip.committed_at, ctx.now)
+            );
+            if !tip.author.is_empty() {
+                line.push_str(&format!(" by {}", tip.author));
+            }
+            if !tip.summary.is_empty() {
+                line.push_str(&format!(": {}", tip.summary));
+            }
+            line
+        });
+        let status = this.comparison_status(ctx, subject);
+        let line_slot = |slot: gpui::Div| {
+            if tall {
+                slot.h(ctx.name_line_height())
+            } else {
+                slot
+            }
+        };
         let mut row = div()
             .id(("branch_item", ix))
             .debug_selector(move || row_debug_selector.clone())
             .relative()
-            .h(ctx.row_height())
+            .h(ctx.row_height(slot.ix))
             .w_full()
             .group(row_group.clone())
             .flex()
-            .items_center()
+            .when(tall, |row| row.items_start())
+            .when(!tall, |row| row.items_center())
             .gap(ctx.px(BRANCH_TREE_GAP_PX))
             .pl(ctx.indent_px(if full_label { 0 } else { usize::from(depth) }))
             .pr(ctx.trailing_pad())
@@ -173,7 +197,7 @@ impl SidebarPaneView {
                 row.row_accent(theme.colors.accent.foreground)
             })
             .text_color(branch_text_color)
-            .child(ctx.tree_toggle_slot(None).when(
+            .child(line_slot(ctx.tree_toggle_slot(None)).when(
                 surface == SidebarRowSurface::Pins && depth == 0,
                 |slot| {
                     slot.debug_selector(move || format!("sidebar_pin_marker_{ix}"))
@@ -181,62 +205,59 @@ impl SidebarPaneView {
                 },
             ))
             .child(
-                ctx.tree_icon_slot("icons/git_branch.svg", branch_icon_color, 14.0)
+                line_slot(ctx.tree_icon_slot("icons/git_branch.svg", branch_icon_color, 14.0))
                     .debug_selector(move || format!("sidebar_branch_icon_{surface:?}_{ix}")),
             );
-        let content = div()
-            .flex_1()
-            .min_w(px(0.0))
-            .flex()
-            .flex_col()
-            .justify_center()
-            .child(
-                components::FadingText::new(
-                    div()
-                        .text_size(theme.ui_text(14.0))
-                        .text_color(branch_selected_label_color)
-                        .child(filtered_label_element(
-                            label,
-                            Some(&name),
-                            &ctx.filter_query,
-                            branch_selected_label_color,
-                            theme.colors.accent.foreground,
-                            theme.ui_text(14.0).into(),
-                            FontWeight::NORMAL,
-                            cx,
-                        )),
-                    row_style.resolved_background(row_state),
-                )
-                .hover_bg(
-                    row_group.clone(),
-                    row_style.resolved_hover_background(row_state),
-                )
-                .render(ctx.ui_scale_percent)
-                .debug_selector(move || format!("branch_comparison_label_{ix}")),
-            );
-        let mut secondary = ctx.secondary_line().children(comparison);
+        let label = components::FadingText::new(
+            div()
+                .text_size(theme.ui_text(14.0))
+                .text_color(branch_selected_label_color)
+                .child(filtered_label_element(
+                    label,
+                    Some(&name),
+                    &ctx.filter_query,
+                    branch_selected_label_color,
+                    theme.colors.accent.foreground,
+                    theme.ui_text(14.0).into(),
+                    FontWeight::NORMAL,
+                    cx,
+                )),
+            row_style.resolved_background(row_state),
+        )
+        .hover_bg(
+            row_group.clone(),
+            row_style.resolved_hover_background(row_state),
+        )
+        .render(ctx.ui_scale_percent)
+        .debug_selector(move || format!("branch_comparison_label_{ix}"));
+        let mut name_line = line_slot(
+            div()
+                .flex()
+                .items_center()
+                .min_w(px(0.0))
+                .gap(ctx.px(BRANCH_TREE_GAP_PX)),
+        )
+        .child(div().flex_1().min_w(px(0.0)).child(label));
 
-        let show_branch_badges = divergence_behind.is_some()
-            || divergence_ahead.is_some()
-            || (is_upstream && section == BranchSection::Remote)
-            || show_worktree_badge;
+        // Badges keep their size; only the worktree pill truncates, and only
+        // when the status beside it leaves too little room.
         let mut end_accessories = div()
             .ml_auto()
-            .flex_none()
-            .when(has_comparison, |accessories| {
-                accessories.flex_initial().max_w_1_2().min_w(px(0.0))
-            })
+            .flex_initial()
+            .min_w(px(0.0))
             .flex()
             .items_center()
             .gap(badge_gap_px);
-
         if divergence_behind.is_some() || divergence_ahead.is_some() {
+            // A cloud marks the tracking branch, so these arrows never read
+            // like the comparison counts beside them.
+            end_accessories =
+                end_accessories.child(ctx.svg_icon("icons/cloud.svg", ctx.icon_muted, 11.0));
             if let Some(behind) = divergence_behind {
                 end_accessories = end_accessories.child(ctx.divergence_badge(
                     UpstreamDirection::Behind,
                     behind,
                     Some(format!("branch_pull_badge_{ix}")),
-                    has_comparison,
                 ));
             }
             if let Some(ahead) = divergence_ahead {
@@ -244,16 +265,13 @@ impl SidebarPaneView {
                     UpstreamDirection::Ahead,
                     ahead,
                     Some(format!("branch_push_badge_{ix}")),
-                    has_comparison,
                 ));
             }
         }
-
         if is_upstream && section == BranchSection::Remote {
             end_accessories = end_accessories
                 .child(ctx.upstream_badge(Some(format!("branch_upstream_badge_{ix}"))));
         }
-
         if show_worktree_badge {
             let Some(worktree_badge_path) = worktree_badge_path.clone() else {
                 unreachable!("workspace badge requires a worktree path");
@@ -267,21 +285,48 @@ impl SidebarPaneView {
                 has_active_worktree,
                 worktree_menu_active,
                 cx,
-            )
-            .when(has_comparison, |badge| badge.flex_1().min_w(px(0.0)));
+            );
             end_accessories = end_accessories.child(worktree_badge);
         }
+        let show_branch_badges = divergence_behind.is_some()
+            || divergence_ahead.is_some()
+            || (is_upstream && section == BranchSection::Remote)
+            || show_worktree_badge;
 
-        if show_branch_badges {
-            secondary = secondary.child(end_accessories);
-        }
+        let age = ctx
+            .age_slot(committed_at)
+            .debug_selector(move || format!("branch_age_{ix}"));
+        let content = div().flex_1().min_w(px(0.0)).flex().flex_col();
+        row = if tall {
+            name_line = name_line.child(age);
+            let details = ctx
+                .secondary_line()
+                .h(ctx.secondary_line_height())
+                .children(status)
+                .when(show_branch_badges, |line| line.child(end_accessories));
+            row.child(content.child(name_line).child(details))
+        } else {
+            name_line = name_line
+                .when(show_branch_badges, |line| line.child(end_accessories))
+                .child(age);
+            row.child(content.child(name_line))
+        };
+        let tooltip: SharedString = match tip_tooltip {
+            Some(tip) => format!(
+                "{}\n{tip}",
+                crate::view::branch_sidebar::branch_sidebar_branch_tooltip(
+                    full_name_for_tooltip.as_ref(),
+                    is_upstream,
+                )
+            )
+            .into(),
+            None => crate::view::branch_sidebar::branch_sidebar_branch_tooltip(
+                full_name_for_tooltip.as_ref(),
+                is_upstream,
+            ),
+        };
 
         row = row
-            .child(
-                content.when(has_comparison || show_branch_badges, |content| {
-                    content.child(secondary)
-                }),
-            )
             .on_activate(
                 false,
                 controls::ControlActivation::Composite,
@@ -364,13 +409,7 @@ impl SidebarPaneView {
                     );
                 }),
             )
-            .gitcomet_tooltip(
-                theme,
-                crate::view::branch_sidebar::branch_sidebar_branch_tooltip(
-                    full_name_for_tooltip.as_ref(),
-                    is_upstream,
-                ),
-            );
+            .gitcomet_tooltip(theme, tooltip);
 
         row.into_any_element()
     }

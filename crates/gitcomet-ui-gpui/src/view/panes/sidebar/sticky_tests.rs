@@ -433,19 +433,20 @@ fn sticky_sidebar_section_gaps_close_when_headers_stick(cx: &mut gpui::TestAppCo
     });
     cx.simulate_resize(gpui::size(px(1100.0), px(1100.0)));
     test_support::redraw(cx);
-    let (rows, sections, remote, row_height) = cx.update(|_, app| {
-        pane.update(app, |pane, _| {
+    let (rows, sections, remote, g) = cx.update(|_, app| {
+        pane.update(app, |pane, cx| {
+            let g = pane.branch_row_geometry_for_test(cx);
             let p = pane.branch_sidebar_presentation_cached().unwrap();
-            let handle = pane.branches_scroll.0.borrow();
-            let row_height = handle.last_item_size.unwrap().contents.height / p.rows.len() as f32;
             (
                 p.rows.clone(),
                 p.structure.sections.clone(),
                 p.structure.headers[branch_sidebar::remote_section_storage_key()],
-                row_height,
+                g,
             )
         })
     });
+    // Headers and spacers are short rows.
+    let row_height = px(g.metrics().short);
     assert_eq!(sections.len(), 5);
     for section in &sections[1..] {
         assert!(matches!(rows[section - 1], BranchSidebarRow::SectionSpacer));
@@ -476,7 +477,7 @@ fn sticky_sidebar_section_gaps_close_when_headers_stick(cx: &mut gpui::TestAppCo
         let mut painted = Vec::new();
         for ix in decorated.iter().copied() {
             let bounds = cx.debug_bounds(selector(ix)).unwrap();
-            painted.push((ix, bounds, natural + row_height * ix));
+            painted.push((ix, bounds, natural + px(g.top(ix))));
         }
         painted
     };
@@ -530,7 +531,7 @@ fn sticky_sidebar_section_gaps_close_when_headers_stick(cx: &mut gpui::TestAppCo
     // Scrolling along, a section shows one blank slot above its header.
     let last_local = remote - 2;
     assert!(matches!(rows[last_local], BranchSidebarRow::Branch { .. }));
-    set_offset(cx, row_height * remote - px(400.0));
+    set_offset(cx, px(g.top(remote)) - px(400.0));
     let painted = sticky(cx);
     assert_stacks_touch(&painted);
     let (_, header, natural) = *painted.iter().find(|(ix, ..)| *ix == remote).unwrap();
@@ -543,7 +544,7 @@ fn sticky_sidebar_section_gaps_close_when_headers_stick(cx: &mut gpui::TestAppCo
     // Leaving the stack, the gap grows from zero rather than jumping.
     let rank = painted.iter().position(|(ix, ..)| *ix == remote).unwrap();
     for (natural_y, gap) in [(rank as f32 - 0.5, 0.0), (rank as f32 + 0.5, 0.5)] {
-        set_offset(cx, row_height * remote - row_height * natural_y);
+        set_offset(cx, px(g.top(remote)) - row_height * natural_y);
         let painted = sticky(cx);
         assert_eq!(painted[rank].0, remote);
         assert!(
@@ -924,9 +925,11 @@ fn sticky_sidebar_double_click_keeps_the_scrolled_branch_under_the_pointer(
                 matches!(row, BranchSidebarRow::Branch { target: candidate, .. } if candidate == &target)
             }).unwrap();
             let before = pane.sticky_context.as_ref().unwrap().eligible_rows.partition_point(|row| *row < ix);
+            let g = pane.branch_row_geometry_for_test(cx);
             let handle = pane.branches_scroll.0.borrow();
-            let height = handle.last_item_size.unwrap().contents.height / p.rows.len() as f32;
-            handle.base_handle.set_offset(point(px(0.0), -height * (ix - before)));
+            // The headers stacked above the branch are short rows.
+            let offset = g.top(ix) - g.metrics().short * before as f32;
+            handle.base_handle.set_offset(point(px(0.0), -px(offset)));
             cx.notify();
             ix
         })
@@ -1029,30 +1032,29 @@ fn sticky_selected_branches_follow_both_edges_and_survive_compaction(
             })
         });
         test_support::redraw(cx);
-        let (rows, eligible, selected_ix, row_height, viewport, max_offset) =
-            cx.update(|_, app| {
-                pane.update(app, |pane, _| {
-                    let p = pane.branch_sidebar_presentation_cached().unwrap();
-                    let selected_ix = p.rows.iter().position(|row| matches!(row,
+        let (rows, eligible, selected_ix, g, viewport, max_offset) = cx.update(|_, app| {
+            pane.update(app, |pane, cx| {
+                let g = pane.branch_row_geometry_for_test(cx);
+                let p = pane.branch_sidebar_presentation_cached().unwrap();
+                let selected_ix = p.rows.iter().position(|row| matches!(row,
                     BranchSidebarRow::Branch { target: candidate, .. } if candidate == &target
                 )).unwrap();
-                    let handle = pane.branches_scroll.0.borrow();
-                    let row_height =
-                        handle.last_item_size.unwrap().contents.height / p.rows.len() as f32;
-                    (
-                        p.rows,
-                        pane.sticky_context.as_ref().unwrap().eligible_rows.clone(),
-                        selected_ix,
-                        row_height,
-                        handle.base_handle.bounds(),
-                        handle.base_handle.max_offset().y,
-                    )
-                })
-            });
+                let handle = pane.branches_scroll.0.borrow();
+                (
+                    p.rows,
+                    pane.sticky_context.as_ref().unwrap().eligible_rows.clone(),
+                    selected_ix,
+                    g,
+                    handle.base_handle.bounds(),
+                    handle.base_handle.max_offset().y,
+                )
+            })
+        });
         let rank = eligible.iter().position(|ix| *ix == selected_ix).unwrap();
+        let stacked = |rows: &[usize]| px(rows.iter().map(|ix| g.height(*ix)).sum::<f32>());
         for offset in [
             px(0.0),
-            row_height * selected_ix - viewport.size.height / 2.0,
+            px(g.top(selected_ix)) - viewport.size.height / 2.0,
             max_offset,
         ] {
             cx.update(|_, app| {
@@ -1070,12 +1072,9 @@ fn sticky_selected_branches_follow_both_edges_and_survive_compaction(
             assert!(branch.top() >= viewport.top());
             assert!(branch.bottom() <= viewport.bottom());
             if offset == px(0.0) {
-                assert_eq!(
-                    branch.top(),
-                    viewport.bottom() - row_height * (eligible.len() - rank)
-                );
+                assert_eq!(branch.top(), viewport.bottom() - stacked(&eligible[rank..]));
             } else if offset == max_offset {
-                assert_eq!(branch.top(), viewport.top() + row_height * rank);
+                assert_eq!(branch.top(), viewport.top() + stacked(&eligible[..rank]));
             } else {
                 assert!((branch.top() - viewport.center().y).abs() < px(1.0));
             }
@@ -1103,13 +1102,20 @@ fn sticky_selected_branches_follow_both_edges_and_survive_compaction(
             });
         }
         let chrome = cx.update(|window, _| window.viewport_size().height - viewport.size.height);
+        // Budgets count short slots. Every band keeps a tall body row, and a
+        // tall selected branch takes extra slots of its own.
+        let reserve = (g.tall_units() - 1) as f32;
+        let selected = if g.is_tall(selected_ix) { reserve } else { 0.0 };
         for (slots, count, selected_visible) in [
-            (7.25, 6, true),
-            (6.25, 5, false),
-            (5.5, 0, false),
-            (12.0, eligible.len(), true),
+            (7.25 + reserve + selected, 6, true),
+            (6.25 + reserve, 5, false),
+            (5.5 + reserve, 0, false),
+            (12.0 + reserve + selected, eligible.len(), true),
         ] {
-            cx.simulate_resize(gpui::size(px(1000.0), chrome + row_height * slots));
+            cx.simulate_resize(gpui::size(
+                px(1000.0),
+                chrome + px(g.metrics().short) * slots,
+            ));
             test_support::redraw(cx);
             cx.update(|_, app| assert_eq!(pane.read(app).decorated_sidebar_rows().len(), count));
             assert_eq!(
@@ -1206,7 +1212,7 @@ fn sticky_groups_navigate_at_edges_and_toggle_at_their_natural_position(
             // Edge-held group rows navigate, including their chevron. Once
             // back at their natural position the same targets toggle.
             let navigated_offset = cx.update(|_, app| {
-                let scale = ui_scale::current(app).percent;
+                let g = pane.update(app, |pane, cx| pane.branch_row_geometry_for_test(cx));
                 let pane = pane.read(app);
                 assert!(!branch_sidebar::is_collapsed(
                     &pane.collapsed_items_for_test(),
@@ -1215,8 +1221,7 @@ fn sticky_groups_navigate_at_edges_and_toggle_at_their_natural_position(
                 let handle = pane.branches_scroll.0.borrow();
                 let offset = handle.base_handle.offset().y;
                 assert_ne!(offset, px(-1_000.0));
-                let row_height = branch_sidebar_row_height(pane.theme, scale);
-                let natural_top = handle.base_handle.bounds().top() + offset + row_height * ix;
+                let natural_top = handle.base_handle.bounds().top() + offset + px(g.top(ix));
                 (offset, natural_top)
             });
             let row = cx.debug_bounds(selector(ix)).unwrap();
@@ -1281,6 +1286,10 @@ fn sticky_groups_navigate_at_edges_and_toggle_at_their_natural_position(
     });
     test_support::redraw(cx);
     let compact_height = cx.update(|window, app| {
+        let short = px(pane
+            .update(app, |pane, cx| pane.branch_row_geometry_for_test(cx))
+            .metrics()
+            .short);
         let pane = pane.read(app);
         let viewport_height = pane
             .branches_scroll
@@ -1290,8 +1299,8 @@ fn sticky_groups_navigate_at_edges_and_toggle_at_their_natural_position(
             .unwrap()
             .item
             .height;
-        window.viewport_size().height - viewport_height
-            + branch_sidebar_row_height(pane.theme, ui_scale::current(app).percent) * 7.25
+        // Header slots are short; the band also keeps a tall body row.
+        window.viewport_size().height - viewport_height + short * 8.25
     });
     cx.simulate_resize(gpui::size(px(1000.0), compact_height));
     test_support::redraw(cx);
@@ -1550,9 +1559,13 @@ fn sticky_sidebar_short_viewports_and_resizing_keep_content_accessible(
         window.viewport_size().height - size.item.height
     });
     let h = cx.update(|_, app| {
-        branch_sidebar_row_height(pane.read(app).theme, ui_scale::current(app).percent)
+        px(pane
+            .update(app, |pane, cx| pane.branch_row_geometry_for_test(cx))
+            .metrics()
+            .short)
     });
-    for (slots, expected) in [(6.25, 5), (5.5, 0), (12.0, 6)] {
+    // One slot more than with one row height: the band keeps a tall body row.
+    for (slots, expected) in [(7.25, 5), (6.5, 0), (13.0, 6)] {
         cx.simulate_resize(gpui::size(px(1000.0), chrome + h * slots));
         test_support::redraw(cx);
         cx.update(|_, app| assert_eq!(pane.read(app).decorated_sidebar_rows().len(), expected));
@@ -1567,20 +1580,12 @@ fn sticky_sidebar_short_viewports_and_resizing_keep_content_accessible(
     scroll(cx, local.center(), point(px(0.0), px(-1_200.0)));
     test_support::redraw(cx);
     let (anchor, before) = cx.update(|_, app| {
-        pane.update(app, |pane, _| {
+        pane.update(app, |pane, cx| {
+            let g = pane.branch_row_geometry_for_test(cx);
             let p = pane.branch_sidebar_presentation_cached().unwrap();
-            let h = f32::from(
-                pane.branches_scroll
-                    .0
-                    .borrow()
-                    .last_item_size
-                    .unwrap()
-                    .contents
-                    .height,
-            ) / p.rows.len() as f32;
             let scroll = -f32::from(pane.branches_scroll.0.borrow().base_handle.offset().y);
-            let ix = (scroll / h).ceil() as usize + 2;
-            (p.rows[ix].clone(), ix as f32 - scroll / h)
+            let ix = g.first_at_or_after(scroll) + 2;
+            (p.rows[ix].clone(), (g.top(ix) - scroll) / g.metrics().short)
         })
     });
     // A new group ahead of the viewport must not shift the content being read.
@@ -1606,24 +1611,16 @@ fn sticky_sidebar_short_viewports_and_resizing_keep_content_accessible(
         });
         test_support::redraw(cx);
         cx.update(|_, app| {
-            pane.update(app, |pane, _| {
+            pane.update(app, |pane, cx| {
+                let g = pane.branch_row_geometry_for_test(cx);
                 let p = pane.branch_sidebar_presentation_cached().unwrap();
                 let ix = p
                     .rows
                     .iter()
                     .position(|row| crate::view::sidebar_sticky::same_row(row, &anchor))
                     .unwrap();
-                let h = f32::from(
-                    pane.branches_scroll
-                        .0
-                        .borrow()
-                        .last_item_size
-                        .unwrap()
-                        .contents
-                        .height,
-                ) / p.rows.len() as f32;
                 let scroll = -f32::from(pane.branches_scroll.0.borrow().base_handle.offset().y);
-                assert!((ix as f32 - scroll / h - before).abs() < 0.01);
+                assert!(((g.top(ix) - scroll) / g.metrics().short - before).abs() < 0.01);
             })
         });
     }
@@ -1758,7 +1755,10 @@ fn sticky_sidebar_surfaces_and_pin_alignment_follow_theme_density_and_scale(
             );
             let mut saw_top_stuck = false;
             let mut saw_bottom_stuck = false;
-            for offset in [px(0.0), branch_sidebar_row_height(theme, scale) * 6] {
+            let g = cx.update(|_, app| {
+                pane.update(app, |pane, cx| pane.branch_row_geometry_for_test(cx))
+            });
+            for offset in [px(0.0), px(g.top(6))] {
                 cx.update(|_, app| {
                     pane.read(app)
                         .branches_scroll
@@ -1769,7 +1769,8 @@ fn sticky_sidebar_surfaces_and_pin_alignment_follow_theme_density_and_scale(
                 });
                 test_support::redraw(cx);
                 let headers = cx.update(|_, app| {
-                    pane.update(app, |pane, _| {
+                    pane.update(app, |pane, cx| {
+                        let g = pane.branch_row_geometry_for_test(cx);
                         let p = pane.branch_sidebar_presentation_cached().unwrap();
                         pane.sticky_context
                             .as_ref()
@@ -1785,11 +1786,9 @@ fn sticky_sidebar_surfaces_and_pin_alignment_follow_theme_density_and_scale(
                                         | BranchSidebarRow::RemoteHeader { .. }
                                 );
                                 let handle = pane.branches_scroll.0.borrow();
-                                let row_height = handle.last_item_size.unwrap().contents.height
-                                    / p.rows.len() as f32;
                                 let natural_top = handle.base_handle.bounds().top()
                                     + handle.base_handle.offset().y
-                                    + row_height * ix;
+                                    + px(g.top(ix));
                                 Some((ix, group, natural_top))
                             })
                             .collect::<Vec<_>>()

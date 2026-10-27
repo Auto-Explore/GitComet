@@ -427,6 +427,35 @@ pub fn system_time_from_unix(secs: i64) -> std::time::SystemTime {
     }
 }
 
+/// Format a unix timestamp (seconds) as a compact age for narrow columns:
+/// `now`, `5m`, `3h`, `2d`, `3w`, `4mo`, `2y`. Future times read `now`.
+pub fn format_compact_age(unix_secs: i64, now: std::time::SystemTime) -> String {
+    use std::time::UNIX_EPOCH;
+
+    let now_secs = match now.duration_since(UNIX_EPOCH) {
+        Ok(d) => d.as_secs() as i64,
+        Err(e) => -(e.duration().as_secs() as i64),
+    };
+    // An untrusted commit timestamp must not overflow the subtraction.
+    let delta = now_secs.saturating_sub(unix_secs);
+    let days = delta / 86_400;
+    if delta < 60 {
+        "now".to_string()
+    } else if delta < 3_600 {
+        format!("{}m", delta / 60)
+    } else if delta < 86_400 {
+        format!("{}h", delta / 3_600)
+    } else if days < 7 {
+        format!("{days}d")
+    } else if days < 30 {
+        format!("{}w", days / 7)
+    } else if days < 365 {
+        format!("{}mo", days / 30)
+    } else {
+        format!("{}y", days / 365)
+    }
+}
+
 /// Format a unix timestamp (seconds) as a coarse relative duration such as
 /// `just now`, `30 mins ago`, `2 hours ago`, `5 months ago`.
 ///
@@ -619,6 +648,32 @@ mod tests {
                 true
             ),
             "12/31/1969 20:30 UTC\u{2212}3:30".to_string()
+        );
+    }
+
+    #[test]
+    fn format_compact_age_covers_all_breakpoints() {
+        let now_secs = 10_000_000_000_i64;
+        let now = UNIX_EPOCH + Duration::from_secs(now_secs as u64);
+        let at = |secs_ago: i64| format_compact_age(now_secs - secs_ago, now);
+
+        assert_eq!(at(0), "now");
+        assert_eq!(at(59), "now");
+        assert_eq!(at(60), "1m");
+        assert_eq!(at(3_599), "59m");
+        assert_eq!(at(3_600), "1h");
+        assert_eq!(at(86_399), "23h");
+        assert_eq!(at(86_400), "1d");
+        assert_eq!(at(6 * 86_400), "6d");
+        assert_eq!(at(7 * 86_400), "1w");
+        assert_eq!(at(29 * 86_400), "4w");
+        assert_eq!(at(30 * 86_400), "1mo");
+        assert_eq!(at(364 * 86_400), "12mo");
+        assert_eq!(at(365 * 86_400), "1y");
+        assert_eq!(at(-5_000), "now");
+        assert_eq!(
+            format_compact_age(i64::MIN, now),
+            format!("{}y", i64::MAX / 86_400 / 365)
         );
     }
 

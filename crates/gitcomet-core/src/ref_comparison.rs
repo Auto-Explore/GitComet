@@ -23,6 +23,8 @@ pub enum RefComparisonDepth {
 #[derive(Clone, Copy, Debug)]
 pub struct RefComparisonBudget {
     pub elapsed: Duration,
+    /// Application buffers reserved per job. Git processes have their own
+    /// private-memory limit, sized by the repository.
     pub memory_bytes: usize,
     pub history_commits: usize,
 }
@@ -31,7 +33,7 @@ impl RefComparisonBudget {
     pub fn automatic() -> Self {
         Self {
             elapsed: Duration::from_secs(5),
-            memory_bytes: COMPARISON_REPOSITORY_BYTES / 2,
+            memory_bytes: COMPARISON_REPOSITORY_BYTES / 8,
             history_commits: 1_000,
         }
     }

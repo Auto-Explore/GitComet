@@ -1,5 +1,5 @@
 use super::GixRepo;
-use super::ref_comparison_process::memory::JobMemory;
+use super::ref_comparison_process::memory::{self, JobMemory};
 use super::ref_comparison_process::{Analysis, AnalysisResult};
 use gitcomet_core::domain::CommitId;
 use gitcomet_core::error::{Error, ErrorKind};
@@ -10,6 +10,11 @@ use std::io::{BufRead, Read};
 use std::time::Instant;
 
 impl GixRepo {
+    fn comparison_native_limit(&self) -> usize {
+        let commits = self.repo().commit_graph_if_enabled().ok().flatten();
+        memory::native_limit(commits.map(|graph| u64::from(graph.num_commits())))
+    }
+
     pub(super) fn ref_comparison_target_impl(
         &self,
         reference: Option<&str>,
@@ -20,6 +25,7 @@ impl GixRepo {
         let job_memory = JobMemory::reserve(
             &store.common.comparison_memory,
             RefComparisonBudget::automatic().memory_bytes,
+            self.comparison_native_limit(),
         )
         .ok_or_else(|| {
             Error::new(ErrorKind::Backend(
@@ -37,7 +43,7 @@ impl GixRepo {
             cancellation,
             memory: job_memory.buffer_bytes,
             native: Some(&job_memory.native),
-            empty_graph: None,
+            history_overrides: None,
         };
         graph_available(&analysis).map_err(|reason| {
             Error::new(ErrorKind::Backend(format!(
@@ -129,8 +135,11 @@ impl GixRepo {
                 .unwrap_or_else(|error| error.into_inner())
                 .clear();
         }
-        let Some(job_memory) = JobMemory::reserve(&store.common.comparison_memory, memory_bytes)
-        else {
+        let Some(job_memory) = JobMemory::reserve(
+            &store.common.comparison_memory,
+            memory_bytes,
+            self.comparison_native_limit(),
+        ) else {
             return Ok(RefComparisonBatch {
                 target: request.target.clone(),
                 results: subjects
@@ -145,7 +154,8 @@ impl GixRepo {
                 cache_hits: 0,
             });
         };
-        let empty_graph = tempfile::NamedTempFile::new().map_err(Error::from)?;
+        let history_overrides =
+            super::ref_comparison_process::HistoryOverrides::new().map_err(Error::from)?;
         let analysis = Analysis {
             workdir: &self.spec.workdir,
             deadline: Instant::now()
@@ -156,7 +166,7 @@ impl GixRepo {
             cancellation,
             memory: job_memory.buffer_bytes,
             native: Some(&job_memory.native),
-            empty_graph: Some(empty_graph.path()),
+            history_overrides: Some(history_overrides.path()),
         };
         let graph = if self.identity
             == super::shared::WorktreeIdentity::new(&self.spec.workdir, &self.repo())

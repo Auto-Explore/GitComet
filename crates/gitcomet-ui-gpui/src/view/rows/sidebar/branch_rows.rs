@@ -27,6 +27,8 @@ const BRANCH_WORKTREE_BADGE_MAX_W_PX: f32 = 140.0;
 /// The expanded sidebar adds its content inset here so full-width
 /// backgrounds still leave room for the overlay scrollbar.
 const BRANCH_ROW_TRAILING_PAD_PX: f32 = 4.0;
+/// Fits the widest compact age (`11mo`) so ages line up on one right edge.
+const BRANCH_AGE_SLOT_PX: f32 = 30.0;
 
 /// What every row of one `render_sidebar_rows` call shares, built once per
 /// call. Its methods are the shared row pieces (icons, slots, indents).
@@ -51,6 +53,9 @@ struct SidebarRowContext {
     selected_branch_commit_id: Option<CommitId>,
     selected_commit: Option<CommitId>,
     content_inset: f32,
+    geometry: crate::view::sidebar_row_geometry::SidebarRowGeometry,
+    /// Read once per render so every age in a frame agrees.
+    now: std::time::SystemTime,
 }
 
 /// One row's list index and resolved background.
@@ -77,7 +82,10 @@ impl SidebarRowContext {
     ) -> Self {
         let is_collapsed_popover = surface == SidebarRowSurface::Rail;
         let theme = this.theme;
+        let geometry = this.branch_row_geometry(&presentation, ui_scale_percent);
         Self {
+            geometry,
+            now: std::time::SystemTime::now(),
             repo_id,
             surface,
             theme,
@@ -117,8 +125,8 @@ impl SidebarRowContext {
         self.scale.px(value)
     }
 
-    fn row_height(&self) -> Pixels {
-        branch_sidebar_row_height(self.theme, self.ui_scale_percent)
+    fn row_height(&self, ix: usize) -> Pixels {
+        px(self.geometry.height(ix))
     }
 
     fn secondary_line(&self) -> gpui::Div {
@@ -129,6 +137,37 @@ impl SidebarRowContext {
             .gap(self.px(BRANCH_TREE_GAP_PX))
             .text_size(self.theme.ui_text(11.0))
             .text_color(self.theme.colors.foreground.secondary)
+    }
+
+    /// Height of a tall row's name line. Its icons center on this line, not
+    /// on the whole row.
+    fn name_line_height(&self) -> Pixels {
+        px(self.geometry.metrics().tall) - self.secondary_line_height()
+    }
+
+    /// The right-aligned tip age, or an empty slot of the same width.
+    fn age_slot(&self, committed_at: Option<i64>) -> gpui::Div {
+        div()
+            .flex_none()
+            .w(self.px(BRANCH_AGE_SLOT_PX))
+            .flex()
+            .justify_end()
+            .text_size(self.theme.ui_text(11.0))
+            .text_color(self.theme.colors.foreground.secondary)
+            .when_some(committed_at, |slot, committed_at| {
+                slot.child(gitcomet_text::date_time::format_compact_age(
+                    committed_at,
+                    self.now,
+                ))
+            })
+    }
+
+    /// Height of a tall row's details line: the worktree chip it can hold.
+    fn secondary_line_height(&self) -> Pixels {
+        worktree_badge_height(
+            ui_scale::UiScale::from_percent(self.ui_scale_percent)
+                .with_appearance(self.theme.metrics),
+        )
     }
 
     fn trailing_pad(&self) -> Pixels {
@@ -207,7 +246,7 @@ impl SidebarRowContext {
     fn placeholder_row(&self, id: &'static str, ix: usize, message: SharedString) -> AnyElement {
         div()
             .id((id, ix))
-            .h(self.row_height())
+            .h(self.row_height(ix))
             .w_full()
             .px_2()
             .text_size(self.theme.ui_text(14.0))
@@ -221,7 +260,6 @@ impl SidebarRowContext {
         direction: UpstreamDirection,
         count: NonZeroU32,
         debug_selector: Option<String>,
-        constrained: bool,
     ) -> gpui::Stateful<gpui::Div> {
         let theme = self.theme;
         let (icon_path, color, relation) = match direction {
@@ -239,21 +277,13 @@ impl SidebarRowContext {
         let mut badge = div()
             .id(icon_path)
             .flex()
-            .when(constrained, |badge| badge.flex_1().min_w(px(0.0)))
             .items_center()
             .gap_1()
             .text_size(theme.ui_text(11.0))
             .font_weight(FontWeight::MEDIUM)
             .text_color(color)
             .child(self.svg_icon(icon_path, color, 11.0))
-            .child(
-                div()
-                    .min_w(px(0.0))
-                    .when(constrained, |text| {
-                        text.overflow_hidden().whitespace_nowrap().text_ellipsis()
-                    })
-                    .child(crate::view::branch_sidebar::branch_sidebar_divergence_label(count)),
-            )
+            .child(crate::view::branch_sidebar::branch_sidebar_divergence_label(count))
             .gitcomet_tooltip(
                 theme,
                 format!(
@@ -380,6 +410,15 @@ impl SidebarPaneView {
                 });
             }
         }
+        if let Some(repo) = this.active_repo()
+            && matches!(repo.ref_metadata, Loadable::NotLoaded)
+            && this.ref_metadata_request != Some((repo_id, repo.ref_metadata_rev))
+        {
+            // Tip dates for the age column; later branch changes reload them.
+            this.ref_metadata_request = Some((repo_id, repo.ref_metadata_rev));
+            let store = this.store.clone();
+            cx.defer(move |_| store.dispatch(Msg::LoadRefMetadata { repo_id }));
+        }
         let ctx = SidebarRowContext::new(this, repo_id, surface, presentation, ui_scale_percent);
         let decorated: std::rc::Rc<[usize]> = if surface == SidebarRowSurface::Tree {
             this.decorated_sidebar_rows()
@@ -446,7 +485,7 @@ impl SidebarPaneView {
                 // A full slot: uniform_list sizes every row from item 0.
                 BranchSidebarRow::SectionSpacer => div()
                     .id(("branch_section_spacer", slot.ix))
-                    .h(ctx.row_height())
+                    .h(ctx.row_height(slot.ix))
                     .w_full()
                     .into_any_element(),
                 BranchSidebarRow::StashHeader {
@@ -461,8 +500,11 @@ impl SidebarPaneView {
                     index,
                     message,
                     tooltip,
+                    created_at,
                     ..
-                } => Self::sidebar_stash_item_row(this, &ctx, slot, index, message, tooltip, cx),
+                } => Self::sidebar_stash_item_row(
+                    this, &ctx, slot, index, message, tooltip, created_at, cx,
+                ),
                 BranchSidebarRow::Placeholder {
                     section: _,
                     message,

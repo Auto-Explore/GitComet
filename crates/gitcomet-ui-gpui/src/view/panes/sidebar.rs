@@ -33,7 +33,7 @@ mod file_browser_status;
 use file_browser_status::FileBrowserStatusCache;
 // File rows borrow the branch tree's row height: one rhythm for both lists.
 use crate::view::rows::sidebar::{
-    branch_sidebar_row_height, sidebar_list_row_height, sidebar_list_row_height_px,
+    branch_sidebar_tall_row_height, sidebar_list_row_height, sidebar_list_row_height_px,
 };
 
 type FileBrowserRowsCache = std::cell::RefCell<
@@ -363,6 +363,9 @@ pub(in super::super) struct SidebarPaneView {
     branches_scroll: UniformListScrollHandle,
     inactive_branches_scroll: UniformListScrollHandle,
     sticky_context: Option<sticky::StickyContext>,
+    /// Snapped branch row heights from the latest prepaint. Rows read them
+    /// even where no sticky context exists, such as the rail flyout.
+    branch_row_metrics: Option<crate::view::sidebar_row_geometry::SidebarRowMetrics>,
     sidebar_selection_cache: Option<sticky::SelectionCache>,
     pending_sidebar_navigation: Option<sticky::NavigationTarget>,
     sidebar_scroll_animation: Option<sticky::ScrollAnimation>,
@@ -390,6 +393,11 @@ pub(in super::super) struct SidebarPaneView {
     pub(in crate::view) tooltip_host: WeakEntity<TooltipHost>,
     notify_fingerprint: SidebarNotifyFingerprint,
     pub(in crate::view) comparison_priority: Option<(RepoId, Vec<CommitId>)>,
+    /// The metadata revision a load was last requested for, so rendering
+    /// asks once per invalidation rather than every frame.
+    pub(in crate::view) ref_metadata_request: Option<(RepoId, u64)>,
+    /// Re-renders branch rows each minute so their ages stay current.
+    relative_time_tick: Option<gpui::Task<()>>,
     sidebar_request_fingerprint: SidebarRequestFingerprint,
     pub(in super::super) active_context_menu_invoker: Option<SharedString>,
     selected_branch: Option<SelectedBranch>,
@@ -418,6 +426,8 @@ pub(in super::super) struct SidebarPaneView {
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct SidebarNotifyFingerprint {
     comparison_rev: u64,
+    /// Tip dates shown beside branch names.
+    ref_metadata_rev: u64,
     worktree_observations_rev: u64,
     sidebar_mode: SidebarMode,
     active_repo_id: Option<RepoId>,
@@ -456,6 +466,7 @@ impl SidebarNotifyFingerprint {
             .unwrap_or_default();
         Self {
             comparison_rev: repo.map_or(0, |repo| repo.ref_comparisons.rev),
+            ref_metadata_rev: repo.map_or(0, |repo| repo.ref_metadata_rev),
             worktree_observations_rev: repo.map_or(0, |repo| repo.worktree_observations_rev),
             sidebar_mode: state.sidebar_mode,
             active_repo_id,
@@ -473,6 +484,85 @@ impl SidebarNotifyFingerprint {
 }
 
 impl SidebarPaneView {
+    /// Branch row heights for `presentation`, from the latest prepaint or,
+    /// before the first one, the unsnapped design heights.
+    /// Keeps a minute-interval re-render alive while branch rows, which show
+    /// tip ages, are on screen.
+    fn ensure_relative_time_tick(&mut self, cx: &mut gpui::Context<Self>) {
+        if self.state.sidebar_mode != SidebarMode::Branches {
+            self.relative_time_tick = None;
+            return;
+        }
+        // The test scheduler would treat a sleeping loop as forever-pending work.
+        if self.relative_time_tick.is_some()
+            || !crate::ui_runtime::current().uses_live_store_poller()
+        {
+            return;
+        }
+        self.relative_time_tick = Some(cx.spawn(
+            async move |view: WeakEntity<SidebarPaneView>, cx: &mut gpui::AsyncApp| {
+                loop {
+                    smol::Timer::after(std::time::Duration::from_secs(60)).await;
+                    if view.update(cx, |_, cx| cx.notify()).is_err() {
+                        break;
+                    }
+                }
+            },
+        ));
+    }
+
+    /// Branch row heights snapped to this window's device pixels.
+    fn snapped_branch_row_metrics(
+        &self,
+        window: &Window,
+        cx: &mut App,
+    ) -> crate::view::sidebar_row_geometry::SidebarRowMetrics {
+        let percent = ui_scale::current(cx).percent;
+        crate::view::sidebar_row_geometry::SidebarRowMetrics {
+            short: f32::from(window.pixel_snap(sidebar_list_row_height(self.theme, percent))),
+            tall: f32::from(window.pixel_snap(branch_sidebar_tall_row_height(self.theme, percent))),
+        }
+    }
+
+    #[cfg(test)]
+    pub(in crate::view) fn branch_row_geometry_for_test(
+        &mut self,
+        cx: &mut App,
+    ) -> crate::view::sidebar_row_geometry::SidebarRowGeometry {
+        let presentation = self.branch_sidebar_presentation_cached().unwrap();
+        self.branch_row_geometry(&presentation, ui_scale::current(cx).percent)
+    }
+
+    /// The snapped height of one-line branch sidebar rows.
+    pub(in crate::view) fn branch_short_row_height(&self, cx: &mut App) -> Pixels {
+        px(self.branch_row_metrics.map_or_else(
+            || {
+                f32::from(sidebar_list_row_height(
+                    self.theme,
+                    ui_scale::current(cx).percent,
+                ))
+            },
+            |metrics| metrics.short,
+        ))
+    }
+
+    pub(in crate::view) fn branch_row_geometry(
+        &self,
+        presentation: &SidebarPresentation,
+        ui_scale_percent: u32,
+    ) -> crate::view::sidebar_row_geometry::SidebarRowGeometry {
+        let metrics = self.branch_row_metrics.unwrap_or_else(|| {
+            crate::view::sidebar_row_geometry::SidebarRowMetrics {
+                short: f32::from(sidebar_list_row_height(self.theme, ui_scale_percent)),
+                tall: f32::from(branch_sidebar_tall_row_height(self.theme, ui_scale_percent)),
+            }
+        });
+        crate::view::sidebar_row_geometry::SidebarRowGeometry::new(
+            Rc::clone(&presentation.structure.classes),
+            metrics,
+        )
+    }
+
     pub(in super::super) fn new(
         store: Arc<AppStore>,
         ui_model: Entity<AppUiModel>,
@@ -646,6 +736,7 @@ impl SidebarPaneView {
             branches_scroll: UniformListScrollHandle::default(),
             inactive_branches_scroll: UniformListScrollHandle::default(),
             sticky_context: None,
+            branch_row_metrics: None,
             sidebar_selection_cache: None,
             pending_sidebar_navigation: None,
             sidebar_scroll_animation: None,
@@ -674,6 +765,8 @@ impl SidebarPaneView {
             tooltip_host,
             notify_fingerprint: initial_fingerprint,
             comparison_priority: None,
+            ref_metadata_request: None,
+            relative_time_tick: None,
             sidebar_request_fingerprint: SidebarRequestFingerprint::default(),
             active_context_menu_invoker: None,
             selected_branch: None,
@@ -1904,11 +1997,14 @@ impl SidebarPaneView {
         };
 
         let row_count = presentation.rows.len();
+        let geometry = self.branch_row_geometry(&presentation, ui_scale_percent);
+        let metrics = geometry.metrics();
         let list = uniform_list(
             "branch_sidebar",
             row_count,
             cx.processor(Self::render_branch_sidebar_rows),
         )
+        .with_item_layout(geometry)
         .h_full()
         .min_h(px(0.0))
         .track_scroll(&self.branches_scroll)
@@ -1917,7 +2013,6 @@ impl SidebarPaneView {
         });
         let list = restrict_scroll_to_vertical_axis(list);
         let view = cx.entity();
-        let row_height = branch_sidebar_row_height(theme, ui_scale_percent);
         let list = div()
             .relative()
             .h_full()
@@ -1925,11 +2020,9 @@ impl SidebarPaneView {
             .child(
                 gpui::canvas(
                     move |bounds, window, cx| {
-                        // Match the list's device-pixel rounding before it
-                        // measures and renders the first row of this frame.
-                        let row_height = window.pixel_snap(row_height);
+                        // Before the list renders the first row of this frame.
                         view.update(cx, |this, cx| {
-                            this.prepare_sidebar_scroll(bounds, row_height, window, cx)
+                            this.prepare_sidebar_scroll(bounds, metrics, window, cx)
                         });
                     },
                     |_, _, _, _| {},
@@ -2096,6 +2189,8 @@ impl SidebarPaneView {
 
 impl Render for SidebarPaneView {
     fn render(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
+        self.branch_row_metrics = Some(self.snapped_branch_row_metrics(window, cx));
+        self.ensure_relative_time_tick(cx);
         if self
             .explorer_name_edit
             .as_ref()

@@ -4,6 +4,7 @@ use super::*;
 
 impl SidebarPaneView {
     /// One stash entry; double-click applies it.
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn sidebar_stash_item_row(
         this: &Self,
         ctx: &SidebarRowContext,
@@ -11,8 +12,12 @@ impl SidebarPaneView {
         index: usize,
         message: SharedString,
         tooltip: SharedString,
+        created_at: Option<std::time::SystemTime>,
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
+        let created_at = created_at
+            .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+            .and_then(|age| i64::try_from(age.as_secs()).ok());
         let SidebarRowSlot { row_style, .. } = slot;
         let theme = ctx.theme;
         let repo_id = ctx.repo_id;
@@ -37,7 +42,7 @@ impl SidebarPaneView {
             .gap(ctx.px(BRANCH_TREE_GAP_PX))
             .pl(ctx.indent_px(0))
             .pr(ctx.trailing_pad())
-            .h(ctx.row_height())
+            .h(ctx.row_height(slot.ix))
             .w_full()
             .interactive_row(row_style, row_state)
             .child(ctx.tree_toggle_slot(None))
@@ -65,6 +70,7 @@ impl SidebarPaneView {
                 .render(ctx.ui_scale_percent)
                 .flex_1(),
             )
+            .child(ctx.age_slot(created_at))
             .on_activate(
                 false,
                 controls::ControlActivation::Composite,
@@ -130,9 +136,16 @@ impl SidebarPaneView {
             worktree_tab_open,
             context_menu_active,
         );
-        let comparison = this.active_repo().and_then(|repo| {
-            this.comparison_badge(ctx, repo.ref_comparisons.projections.worktrees.get(&path))
-        });
+        let subject = this
+            .active_repo()
+            .and_then(|repo| repo.ref_comparisons.projections.worktrees.get(&path));
+        let comparison = this.comparison_status(ctx, subject);
+        // A checked-out branch's tip is the checkout's HEAD.
+        let committed_at = this
+            .active_repo()
+            .zip(branch.as_ref().filter(|_| !detached))
+            .and_then(|(repo, branch)| repo.tip_metadata(branch, head.as_ref()))
+            .map(|tip| tip.committed_at);
         let cleanliness = this.worktree_cleanliness_badge(ctx, &path, head.as_ref(), is_active);
         let context_menu_invoker_for_right_click = context_menu_invoker.clone();
         let row_group: SharedString = format!("worktree_row_{}_{}", repo_id.0, ix).into();
@@ -149,16 +162,19 @@ impl SidebarPaneView {
             .id(("worktree_item", ix))
             .debug_selector(move || row_debug_selector.clone())
             .relative()
-            .h(ctx.row_height())
+            .h(ctx.row_height(slot.ix))
             .w_full()
             .flex()
-            .items_center()
+            .items_start()
             .gap(ctx.px(BRANCH_TREE_GAP_PX))
             .pl(ctx.indent_px(0))
             .pr(ctx.trailing_pad())
             .interactive_row(row_style, row_state)
-            .child(ctx.tree_toggle_slot(None))
-            .child(ctx.tree_icon_slot(WORKTREE_ICON_PATH, ctx.icon_primary, 14.0))
+            .child(ctx.tree_toggle_slot(None).h(ctx.name_line_height()))
+            .child(
+                ctx.tree_icon_slot(WORKTREE_ICON_PATH, ctx.icon_primary, 14.0)
+                    .h(ctx.name_line_height()),
+            )
             .child(
                 div()
                     .flex_1()
@@ -166,35 +182,48 @@ impl SidebarPaneView {
                     .text_size(theme.ui_text(14.0))
                     .flex()
                     .flex_col()
-                    .justify_center()
                     .child(
                         div()
-                            .debug_selector(move || format!("worktree_path_label_{ix}"))
+                            .h(ctx.name_line_height())
+                            .flex()
+                            .items_center()
+                            .gap(ctx.px(BRANCH_TREE_GAP_PX))
                             .min_w(px(0.0))
-                            .overflow_hidden()
                             .child(
-                                components::TruncatedText::path(
-                                    path_label.clone(),
-                                    theme.ui_text(14.0),
-                                )
-                                .id(("worktree_path_text", ix))
-                                .highlights(search_label_highlights(
-                                    &ctx.filter_query,
-                                    &path_label,
-                                    theme.colors.accent.foreground,
-                                ))
-                                // Set the color explicitly: TruncatedText
-                                // resolves an unset color from the ambient text
-                                // style inside a deferred measure closure, which
-                                // doesn't see ancestor `text_color` — so in the
-                                // collapsed popover it would render near-black.
-                                .text_color(theme.colors.foreground.primary)
-                                .full_text_tooltip(this.tooltip_host.clone())
-                                .render(cx),
+                                div()
+                                    .debug_selector(move || format!("worktree_path_label_{ix}"))
+                                    .flex_1()
+                                    .min_w(px(0.0))
+                                    .overflow_hidden()
+                                    .child(
+                                        components::TruncatedText::path(
+                                            path_label.clone(),
+                                            theme.ui_text(14.0),
+                                        )
+                                        .id(("worktree_path_text", ix))
+                                        .highlights(search_label_highlights(
+                                            &ctx.filter_query,
+                                            &path_label,
+                                            theme.colors.accent.foreground,
+                                        ))
+                                        // Set the color explicitly: TruncatedText
+                                        // resolves an unset color from the ambient text
+                                        // style inside a deferred measure closure, which
+                                        // doesn't see ancestor `text_color` — so in the
+                                        // collapsed popover it would render near-black.
+                                        .text_color(theme.colors.foreground.primary)
+                                        .full_text_tooltip(this.tooltip_host.clone())
+                                        .render(cx),
+                                    ),
+                            )
+                            .child(
+                                ctx.age_slot(committed_at)
+                                    .debug_selector(move || format!("worktree_age_{ix}")),
                             ),
                     )
                     .child(
                         ctx.secondary_line()
+                            .h(ctx.secondary_line_height())
                             .when_some(branch_badge_label.clone(), |row, badge_label| {
                                 row.child(
                                     div()
@@ -250,7 +279,7 @@ impl SidebarPaneView {
                                 )
                             })
                             .children(comparison)
-                            .child(cleanliness),
+                            .children(cleanliness),
                     ),
             )
             .on_activate(
@@ -310,7 +339,7 @@ impl SidebarPaneView {
         let repo_id = ctx.repo_id;
         div()
             .id(("submodule_placeholder", ix))
-            .h(ctx.row_height())
+            .h(ctx.row_height(ix))
             .w_full()
             .pl_2()
             .pr_1()
@@ -409,7 +438,7 @@ impl SidebarPaneView {
         div()
             .id(("submodule_item", ix))
             .relative()
-            .h(ctx.row_height())
+            .h(ctx.row_height(slot.ix))
             .w_full()
             .flex()
             .items_center()

@@ -584,6 +584,7 @@ fn load_ref_metadata_emits_effect_and_result_builds_the_lookup_map() {
             result: Ok(std::sync::Arc::new(rustc_hash::FxHashMap::from_iter([(
                 "main".to_string(),
                 gitcomet_core::domain::RefMetadata {
+                    target: gitcomet_core::domain::CommitId("tip".into()),
                     author: "Ada".to_string(),
                     committed_at: 1_754_870_400,
                     summary: "first".to_string(),
@@ -764,6 +765,81 @@ fn branch_change_during_an_in_flight_metadata_load_schedules_a_refetch() {
         ),
         "expected a refetch to be scheduled, got {effects:?}"
     );
+}
+
+fn opened_repo_state() -> (RepositoryRuntimes, AtomicU64, AppState, RepoId) {
+    let mut repos: RepositoryRuntimes = Default::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::test_default();
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenRepo(PathBuf::from("/tmp/repo")),
+    );
+    let repo_id = RepoId(1);
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::RepoOpenedOk {
+            preferences: None,
+            repo_id,
+            spec: RepoSpec {
+                workdir: PathBuf::from("/tmp/repo"),
+            },
+            repo: Arc::new(DummyRepo::new("/tmp/repo")),
+        }),
+    );
+    (repos, id_alloc, state, repo_id)
+}
+
+fn loads_ref_metadata(effects: &[Effect], repo_id: RepoId) -> bool {
+    effects.iter().any(|effect| {
+        matches!(effect, Effect::References(ReferenceEffect::LoadRefMetadata { repo_id: rid }) if *rid == repo_id)
+    })
+}
+
+/// Once metadata has been shown, a branch change reloads it right away so
+/// tip dates in the sidebar follow commits and fetches.
+#[test]
+fn shown_ref_metadata_reloads_when_the_branch_list_changes() {
+    let (mut repos, id_alloc, mut state, repo_id) = opened_repo_state();
+    let branches = |name: &str| {
+        Msg::Internal(crate::msg::InternalMsg::BranchesLoaded {
+            repo_id,
+            result: Ok(vec![Branch {
+                name: name.to_string(),
+                target: CommitId("tip".into()),
+                upstream: None,
+                divergence: None,
+            }]),
+        })
+    };
+    let effects = reduce(&mut repos, &id_alloc, &mut state, branches("main"));
+    assert!(
+        !loads_ref_metadata(&effects, repo_id),
+        "nothing shows metadata yet"
+    );
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::LoadRefMetadata { repo_id },
+    );
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::RefMetadataLoaded {
+            repo_id,
+            result: Ok(std::sync::Arc::new(rustc_hash::FxHashMap::default())),
+        }),
+    );
+    let effects = reduce(&mut repos, &id_alloc, &mut state, branches("topic"));
+    assert!(loads_ref_metadata(&effects, repo_id), "{effects:?}");
+    assert!(state.repos[0].ref_metadata.is_loading());
 }
 
 #[test]

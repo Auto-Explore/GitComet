@@ -317,6 +317,7 @@ fn build_synthetic_ref_metadata(
         metadata.insert(
             name,
             gitcomet_core::domain::RefMetadata {
+                target: gitcomet_core::domain::CommitId(format!("{ix:040x}").into()),
                 author: format!("Author {}", ix % 32),
                 committed_at: 1_700_000_000 - (ix as i64 * 3_600),
                 summary: format!("Refactor the {ix} thing so the next one lands cleanly"),

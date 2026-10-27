@@ -27,10 +27,10 @@ impl SidebarPaneView {
             BranchSection::Local => ("icons/computer.svg", "Local Branches".into()),
             BranchSection::Remote => ("icons/cloud.svg", "Remote Branches".into()),
         };
-        let (label, tooltip) = if section == BranchSection::Local {
+        let (label, caption, tooltip) = if section == BranchSection::Local {
             this.comparison_heading(&label)
         } else {
-            (label.clone(), label.clone())
+            (label.clone(), None, label.clone())
         };
         let section_key = match section {
             BranchSection::Local => "local",
@@ -46,7 +46,7 @@ impl SidebarPaneView {
         div()
             .id(collapse_key.clone())
             .relative()
-            .h(ctx.row_height())
+            .h(ctx.row_height(slot.ix))
             .w_full()
             .pl(ctx.indent_px(0))
             .pr(ctx.trailing_pad())
@@ -73,6 +73,7 @@ impl SidebarPaneView {
                     .text_color(theme.colors.foreground.primary)
                     .child(label),
             )
+            .children(caption.map(|caption| Self::header_caption(ctx, caption)))
             .gitcomet_tooltip(theme, tooltip.clone())
             .on_activate(
                 false,
@@ -137,7 +138,7 @@ impl SidebarPaneView {
             .id(collapse_key.clone())
             .debug_selector(move || format!("stash_section_{ix}"))
             .relative()
-            .h(ctx.row_height())
+            .h(ctx.row_height(slot.ix))
             .w_full()
             .pl(ctx.indent_px(0))
             .pr(ctx.trailing_pad())
@@ -220,7 +221,7 @@ impl SidebarPaneView {
                 || matches!(r.worktrees, Loadable::Loading)
                 || (!collapsed && matches!(r.worktrees, Loadable::NotLoaded))
         });
-        let (heading, tooltip) = this.comparison_heading("Worktrees");
+        let (heading, caption, tooltip) = this.comparison_heading("Worktrees");
         let context_menu_invoker: SharedString =
             format!("worktrees_section_menu_{}", repo_id.0).into();
         let context_menu_active =
@@ -232,7 +233,7 @@ impl SidebarPaneView {
             .id(collapse_key.clone())
             .debug_selector(move || format!("worktrees_section_{ix}"))
             .relative()
-            .h(ctx.row_height())
+            .h(ctx.row_height(slot.ix))
             .w_full()
             .pl(ctx.indent_px(0))
             .pr(ctx.trailing_pad())
@@ -253,6 +254,7 @@ impl SidebarPaneView {
                     .text_color(theme.colors.foreground.primary)
                     .child(heading),
             )
+            .children(caption.map(|caption| Self::header_caption(ctx, caption)))
             .when(show_worktrees_spinner, |d| {
                 d.child(
                     div()
@@ -328,7 +330,7 @@ impl SidebarPaneView {
             .id(collapse_key.clone())
             .debug_selector(move || format!("submodules_section_{ix}"))
             .relative()
-            .h(ctx.row_height())
+            .h(ctx.row_height(slot.ix))
             .w_full()
             .pl(ctx.indent_px(0))
             .pr(ctx.trailing_pad())
@@ -426,7 +428,7 @@ impl SidebarPaneView {
         div()
             .id(collapse_key.clone())
             .relative()
-            .h(ctx.row_height())
+            .h(ctx.row_height(slot.ix))
             .w_full()
             .pl(ctx.indent_px(0))
             .pr(ctx.trailing_pad())
@@ -573,7 +575,7 @@ impl SidebarPaneView {
         div()
             .id(("branch_group", ix))
             .debug_selector(move || format!("{prefix}branch_group_{ix}"))
-            .h(ctx.row_height())
+            .h(ctx.row_height(slot.ix))
             .w_full()
             .pl(ctx.indent_px(usize::from(depth)))
             .pr(ctx.trailing_pad())

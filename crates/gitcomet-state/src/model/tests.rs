@@ -1260,6 +1260,7 @@ fn set_branches_invalidates_cached_ref_metadata() {
     repo.set_ref_metadata(Loadable::Ready(Arc::new(FxHashMap::from_iter([(
         "main".to_string(),
         RefMetadata {
+            target: CommitId("tip".into()),
             author: "Ada".to_string(),
             committed_at: 1,
             summary: "first".to_string(),
@@ -1272,6 +1273,56 @@ fn set_branches_invalidates_cached_ref_metadata() {
     assert!(
         matches!(repo.ref_metadata, Loadable::NotLoaded),
         "metadata must not outlive the ref list it describes"
+    );
+}
+
+/// Pickers refetch on `NotLoaded`, but sidebar rows keep showing dates for
+/// tips that have not moved while the reload runs.
+#[test]
+fn tip_metadata_outlives_invalidation_only_for_unmoved_tips() {
+    let mut repo = new_repo();
+    let entry = |target: &str| RefMetadata {
+        target: CommitId(target.into()),
+        author: "Ada".to_string(),
+        committed_at: 1,
+        summary: "first".to_string(),
+    };
+    repo.set_ref_metadata(Loadable::Ready(Arc::new(FxHashMap::from_iter([
+        ("main".to_string(), entry("a")),
+        ("topic".to_string(), entry("b")),
+    ]))));
+    repo.set_branches(Loadable::Ready(vec![]));
+    assert!(matches!(repo.ref_metadata, Loadable::NotLoaded));
+
+    assert!(
+        repo.tip_metadata("main", Some(&CommitId("a".into())))
+            .is_some()
+    );
+    assert!(
+        repo.tip_metadata("topic", Some(&CommitId("moved".into())))
+            .is_none()
+    );
+    assert!(
+        repo.tip_metadata("topic", None).is_none(),
+        "unverifiable while stale"
+    );
+    assert!(
+        repo.tip_metadata("missing", Some(&CommitId("a".into())))
+            .is_none()
+    );
+
+    repo.set_ref_metadata(Loadable::Ready(Arc::new(FxHashMap::from_iter([(
+        "main".to_string(),
+        entry("c"),
+    )]))));
+    assert!(
+        repo.tip_metadata("main", None).is_some(),
+        "a current map needs no tip"
+    );
+    assert_eq!(
+        repo.tip_metadata("main", Some(&CommitId("a".into())))
+            .map(|m| &m.target),
+        Some(&CommitId("c".into()))
     );
 }
 

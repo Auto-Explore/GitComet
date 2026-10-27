@@ -1,9 +1,10 @@
 use super::*;
 use crate::view::rows::sidebar::branch_commit_id;
+use crate::view::sidebar_row_geometry::{SidebarRowClasses, SidebarRowGeometry, SidebarRowMetrics};
 use crate::view::sidebar_sticky::{self, SidebarRowSurface};
 
 type StickyLayoutCache =
-    std::cell::RefCell<Option<((f32, f32, f32), sidebar_sticky::StickyLayout)>>;
+    std::cell::RefCell<Option<((f32, SidebarRowMetrics, f32), sidebar_sticky::StickyLayout)>>;
 
 pub(super) struct SelectionCache {
     repo_id: RepoId,
@@ -24,8 +25,11 @@ pub(super) struct StickyContext {
     priority_rows: Rc<[usize]>,
     sections: Rc<[usize]>,
     selected_row: Option<(usize, SharedString)>,
+    /// The first uncovered row and its distance below the viewport top, in
+    /// short rows.
     anchor: Option<(SharedString, f32)>,
-    row_height: Option<f32>,
+    classes: Rc<SidebarRowClasses>,
+    metrics: Option<SidebarRowMetrics>,
     click_guard: Option<StickyClickGuard>,
 }
 
@@ -35,18 +39,22 @@ struct StickyClickGuard {
     bounds: Bounds<Pixels>,
     viewport: Bounds<Pixels>,
     scroll_offset: Point<Pixels>,
-    row_height: Pixels,
+    metrics: SidebarRowMetrics,
     held: bool,
 }
 
 impl StickyContext {
-    fn fitted_rows(&self, height: f32, row_height: f32) -> Option<&Rc<[usize]>> {
+    fn geometry(&self, metrics: SidebarRowMetrics) -> SidebarRowGeometry {
+        SidebarRowGeometry::new(Rc::clone(&self.classes), metrics)
+    }
+
+    fn fitted_rows(&self, height: f32, g: &SidebarRowGeometry) -> Option<&Rc<[usize]>> {
         let fitted = sidebar_sticky::fitted_rows(
             &self.eligible_rows,
             &self.priority_rows,
             &self.sections,
             height,
-            row_height,
+            g,
         );
         if fitted.is_empty() {
             None
@@ -59,15 +67,20 @@ impl StickyContext {
         }
     }
 
-    fn layout(&self, height: f32, row_height: f32, scroll: f32) -> sidebar_sticky::StickyLayout {
-        let key = (height, row_height, scroll);
+    fn layout(
+        &self,
+        height: f32,
+        g: &SidebarRowGeometry,
+        scroll: f32,
+    ) -> sidebar_sticky::StickyLayout {
+        let key = (height, g.metrics(), scroll);
         if let Some((cached, layout)) = self.layout_cache.borrow().as_ref()
             && *cached == key
         {
             return layout.clone();
         }
         let base = self
-            .fitted_rows(height, row_height)
+            .fitted_rows(height, g)
             .map_or(&[][..], |rows| rows.as_ref());
         let layout = sidebar_sticky::fit_pins(
             base,
@@ -78,22 +91,24 @@ impl StickyContext {
                 .map(|(ix, _)| *ix),
             scroll,
             height,
-            row_height,
+            g,
         );
         *self.layout_cache.borrow_mut() = Some((key, layout.clone()));
         layout
     }
 
-    /// Save the first uncovered stable row and its position in slot units so
-    /// asynchronous data updates and density/scale changes retain the context.
+    /// Save the first uncovered stable row and its position in short-row
+    /// units so asynchronous data updates and density/scale changes retain
+    /// the context.
     fn capture_anchor(
         &self,
         scroll_handle: &UniformListScrollHandle,
     ) -> Option<(SharedString, f32)> {
         let handle = scroll_handle.0.borrow();
         let size = handle.last_item_size?;
-        let row_height = self.row_height?;
-        if row_height <= 0.0 {
+        let g = self.geometry(self.metrics?);
+        let short = g.metrics().short;
+        if short <= 0.0 {
             return None;
         }
         let scroll = -f32::from(handle.base_handle.offset().y);
@@ -102,22 +117,19 @@ impl StickyContext {
         if scroll <= 0.0 {
             return None;
         }
-        let layout = self.layout(f32::from(size.item.height), row_height, scroll);
-        let stacked = layout
-            .slots
-            .iter()
-            .enumerate()
-            .take_while(|(rank, slot)| {
-                slot.row() as f32 * row_height - scroll <= *rank as f32 * row_height
+        let layout = self.layout(f32::from(size.item.height), &g, scroll);
+        let stacked = (0..layout.slots.len())
+            .take_while(|rank| {
+                g.top(layout.slots[*rank].row()) - scroll <= layout.stack(0..*rank, &g)
             })
             .count();
-        let start = (scroll / row_height).ceil() as usize + stacked;
+        let start = g.first_at_or_after(scroll + layout.stack(0..stacked, &g));
         self.rows
             .iter()
             .enumerate()
             .skip(start)
             .find(|(_, row)| sidebar_sticky::same_row(row, row))
-            .map(|(ix, _)| (self.row_keys[ix].clone(), ix as f32 - scroll / row_height))
+            .map(|(ix, _)| (self.row_keys[ix].clone(), (g.top(ix) - scroll) / short))
     }
 }
 
@@ -132,7 +144,7 @@ pub(super) struct ScrollAnimation {
     last_offset: f32,
     started: std::time::Instant,
     bounds: Bounds<Pixels>,
-    row_height: f32,
+    metrics: SidebarRowMetrics,
 }
 
 fn animated_scroll_offset(start: f32, target: f32, elapsed: std::time::Duration) -> f32 {
@@ -145,24 +157,12 @@ fn navigation_destination(
     ix: usize,
     center: bool,
     height: f32,
-    row_height: f32,
+    g: &SidebarRowGeometry,
 ) -> f32 {
-    let mut offset = (ix as f32 * row_height).max(0.0);
+    let mut offset = g.top(ix).max(0.0);
     for _ in 0..3 {
-        let layout = context.layout(height, row_height, offset);
-        let headers = layout
-            .slots
-            .iter()
-            .map(sidebar_sticky::StickySlot::row)
-            .collect::<Vec<_>>();
-        offset = sidebar_sticky::navigation_offset(
-            ix,
-            &headers,
-            height,
-            row_height,
-            context.rows.len(),
-            center,
-        );
+        let layout = context.layout(height, g, offset);
+        offset = sidebar_sticky::navigation_offset(ix, &layout, height, g, center);
     }
     offset
 }
@@ -193,18 +193,19 @@ impl SidebarPaneView {
         let Some(context) = &mut self.sticky_context else {
             return;
         };
-        let Some(row_height) = context.row_height.map(px) else {
+        let Some(metrics) = context.metrics else {
             return;
         };
+        let g = context.geometry(metrics);
         let handle = self.branches_scroll.0.borrow();
         let viewport = handle.base_handle.bounds();
         let scroll_offset = handle.base_handle.offset();
         let bounds = Bounds::new(
             point(
                 viewport.left(),
-                viewport.top() + scroll_offset.y + row_height * row,
+                viewport.top() + scroll_offset.y + px(g.top(row)),
             ),
-            gpui::size(viewport.size.width, row_height),
+            gpui::size(viewport.size.width, px(g.height(row))),
         );
         if bounds.contains(&event.position()) {
             context.click_guard = Some(StickyClickGuard {
@@ -212,7 +213,7 @@ impl SidebarPaneView {
                 bounds,
                 viewport,
                 scroll_offset,
-                row_height,
+                metrics,
                 held: false,
             });
         }
@@ -359,7 +360,7 @@ impl SidebarPaneView {
             }
             old.capture_anchor(&self.branches_scroll)
         });
-        let row_height = self.sticky_context.as_ref().and_then(|old| old.row_height);
+        let metrics = self.sticky_context.as_ref().and_then(|old| old.metrics);
         let next = StickyContext {
             rows: Rc::clone(&presentation.rows),
             head,
@@ -373,7 +374,8 @@ impl SidebarPaneView {
             sections: presentation.structure.sections.clone().into(),
             selected_row,
             anchor,
-            row_height,
+            classes: Rc::clone(&presentation.structure.classes),
+            metrics,
             click_guard,
         };
         if let Some(guard) = click_guard
@@ -381,22 +383,21 @@ impl SidebarPaneView {
                 .selected_row
                 .as_ref()
                 .is_some_and(|(ix, _)| *ix == guard.row)
+            && let g = next.geometry(guard.metrics)
             && let layout = next.layout(
                 f32::from(guard.viewport.size.height),
-                f32::from(guard.row_height),
+                &g,
                 -f32::from(guard.scroll_offset.y),
             )
             && let Some(rank) = layout.slots.iter().position(
                 |slot| matches!(slot, sidebar_sticky::StickySlot::Row(ix) if *ix == guard.row),
             )
         {
-            let y = sidebar_sticky::row_y(
-                guard.row,
+            let y = layout.row_y(
                 rank,
-                layout.slots.len(),
                 -f32::from(guard.scroll_offset.y),
                 f32::from(guard.viewport.size.height),
-                f32::from(guard.row_height),
+                &g,
             );
             if (px(y) + guard.viewport.top() - guard.bounds.top()).abs() > px(0.5) {
                 // Cache this decision: waiting for another input must not
@@ -422,13 +423,13 @@ impl SidebarPaneView {
         let Some(size) = handle.last_item_size else {
             return Rc::from([]);
         };
-        let Some(row_height) = context.row_height else {
+        let Some(metrics) = context.metrics else {
             return Rc::from([]);
         };
         context
             .layout(
                 f32::from(size.item.height),
-                row_height,
+                &context.geometry(metrics),
                 -f32::from(handle.base_handle.offset().y),
             )
             .rows
@@ -472,14 +473,15 @@ impl SidebarPaneView {
     pub(super) fn prepare_sidebar_scroll(
         &mut self,
         bounds: Bounds<Pixels>,
-        row_height: Pixels,
+        metrics: SidebarRowMetrics,
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
+        self.branch_row_metrics = Some(metrics);
         if self.sticky_context.as_ref().is_some_and(|context| {
             context
                 .click_guard
-                .is_some_and(|guard| guard.viewport != bounds || guard.row_height != row_height)
+                .is_some_and(|guard| guard.viewport != bounds || guard.metrics != metrics)
         }) {
             self.clear_sidebar_click_target();
         }
@@ -490,11 +492,11 @@ impl SidebarPaneView {
             return;
         };
         let height = f32::from(bounds.size.height);
-        let row_height = f32::from(row_height);
-        if context.anchor.is_none() && context.row_height.is_some_and(|old| old != row_height) {
+        let g = SidebarRowGeometry::new(Rc::clone(&presentation.structure.classes), metrics);
+        if context.anchor.is_none() && context.metrics.is_some_and(|old| old != metrics) {
             context.anchor = context.capture_anchor(&self.branches_scroll);
         }
-        context.row_height = Some(row_height);
+        context.metrics = Some(metrics);
         let navigation = self.pending_sidebar_navigation.take();
         let target = navigation.as_ref().and_then(|target| match target {
             #[cfg(test)]
@@ -513,7 +515,7 @@ impl SidebarPaneView {
         });
         let offset = if let Some((ix, center)) = target {
             context.anchor = None;
-            let offset = navigation_destination(context, ix, center, height, row_height);
+            let offset = navigation_destination(context, ix, center, height, &g);
             let current = -f32::from(self.branches_scroll.0.borrow().base_handle.offset().y);
             self.sidebar_scroll_animation = None;
             if !center
@@ -532,7 +534,7 @@ impl SidebarPaneView {
                     last_offset: current,
                     started: std::time::Instant::now(),
                     bounds,
-                    row_height,
+                    metrics,
                 });
             }
             self.sidebar_scroll_animation.is_none().then_some(offset)
@@ -545,12 +547,7 @@ impl SidebarPaneView {
                     .row_keys
                     .iter()
                     .position(|key| key == &anchor)
-                    .map(|ix| {
-                        ((ix as f32 - y) * row_height).clamp(
-                            0.0,
-                            (presentation.rows.len() as f32 * row_height - height).max(0.0),
-                        )
-                    })
+                    .map(|ix| (g.top(ix) - y * metrics.short).clamp(0.0, g.max_scroll(height)))
             })
         };
         let mut offset = offset;
@@ -559,7 +556,7 @@ impl SidebarPaneView {
             let valid = self.state.active_repo == Some(animation.repo_id)
                 && self.state.sidebar_mode == SidebarMode::Branches
                 && bounds == animation.bounds
-                && row_height == animation.row_height
+                && metrics == animation.metrics
                 && (current - animation.last_offset).abs() <= 0.5;
             if valid {
                 let mut target_exists = true;
@@ -569,8 +566,7 @@ impl SidebarPaneView {
                         .iter()
                         .position(|key| *key == animation.key)
                     {
-                        animation.target =
-                            navigation_destination(context, ix, false, height, row_height);
+                        animation.target = navigation_destination(context, ix, false, height, &g);
                         animation.row_keys = Rc::clone(&presentation.row_keys);
                     } else {
                         target_exists = false;
@@ -579,10 +575,7 @@ impl SidebarPaneView {
                 if target_exists {
                     let elapsed = animation.started.elapsed();
                     let next = animated_scroll_offset(animation.start, animation.target, elapsed)
-                        .clamp(
-                            0.0,
-                            (presentation.rows.len() as f32 * row_height - height).max(0.0),
-                        );
+                        .clamp(0.0, g.max_scroll(height));
                     offset = Some(next);
                     animation.last_offset = next;
                     if elapsed < HEADER_SCROLL_DURATION {
@@ -685,16 +678,19 @@ impl gpui::UniformListDecoration for StickyRows {
             let Some(context) = &mut this.sticky_context else {
                 return div().into_any();
             };
-            // Keep the actual uniform-list measurement. Multiplying it by the
-            // row count and dividing again can lose precision at fractional DPI.
-            context.row_height = Some(f32::from(row_height));
+            // The list places rows with the same geometry, so the band and
+            // the rows below it share every offset.
+            let metrics = context
+                .metrics
+                .unwrap_or_else(|| SidebarRowMetrics::uniform(f32::from(row_height)));
+            let g = context.geometry(metrics);
             let layout = context.layout(
                 f32::from(bounds.size.height),
-                f32::from(row_height),
+                &g,
                 -f32::from(scroll_offset.y),
             );
             let compact = context
-                .fitted_rows(f32::from(bounds.size.height), f32::from(row_height))
+                .fitted_rows(f32::from(bounds.size.height), &g)
                 .is_some_and(|rows| rows.len() < context.eligible_rows.len());
             let elements = Self::render_rows(
                 this,
@@ -703,7 +699,7 @@ impl gpui::UniformListDecoration for StickyRows {
                 compact,
                 bounds,
                 scroll_offset,
-                row_height,
+                &g,
                 window,
                 cx,
             );
@@ -725,23 +721,22 @@ impl StickyRows {
         compact: bool,
         bounds: Bounds<Pixels>,
         scroll_offset: Point<Pixels>,
-        row_height: Pixels,
+        g: &SidebarRowGeometry,
         window: &mut Window,
         cx: &mut gpui::Context<SidebarPaneView>,
     ) -> Vec<AnyElement> {
+        let short = px(g.metrics().short);
         let content_inset = ui_scale::design_px_from_percent(
             components::ROW_HIGHLIGHT_INSET_PX,
             ui_scale::current(cx).percent,
         );
         let position = |rank, ix| {
-            let natural_y = ix as f32 * f32::from(row_height) + f32::from(scroll_offset.y);
-            let y = sidebar_sticky::row_y(
-                ix,
+            let natural_y = g.top(ix) + f32::from(scroll_offset.y);
+            let y = layout.row_y(
                 rank,
-                layout.slots.len(),
                 -f32::from(scroll_offset.y),
                 f32::from(bounds.size.height),
-                f32::from(row_height),
+                g,
             );
             (y, y != natural_y)
         };
@@ -798,7 +793,7 @@ impl StickyRows {
                         .left(-scroll_offset.x)
                         .top(px(y) - scroll_offset.y)
                         .w(bounds.size.width)
-                        .h(row_height)
+                        .h(short)
                         .bg(this.theme.colors.surface.panel)
                         .block_mouse_except_scroll()
                         .flex()
@@ -866,7 +861,7 @@ impl StickyRows {
                     .left(-scroll_offset.x)
                     .top(px(y) - scroll_offset.y)
                     .w(bounds.size.width)
-                    .h(row_height)
+                    .h(px(g.height(ix)))
                     .bg(background)
                     .block_mouse_except_scroll()
                     .child(element);
@@ -889,8 +884,8 @@ impl StickyRows {
                             // even though the row background reaches the edge.
                             .right(content_inset)
                             .top_0()
-                            .w(row_height)
-                            .h(row_height)
+                            .w(short)
+                            .h(short)
                             .bg(background)
                             .flex()
                             .items_center()
@@ -922,7 +917,7 @@ impl StickyRows {
                     );
                 }
                 if is_header && stuck && !this.theme.is_dark {
-                    let natural_y = ix as f32 * f32::from(row_height) + f32::from(scroll_offset.y);
+                    let natural_y = g.top(ix) + f32::from(scroll_offset.y);
                     row = row.child(
                         div()
                             .debug_selector(move || format!("sidebar_sticky_divider_{ix}"))
@@ -1010,7 +1005,12 @@ mod animation_tests {
                         branch_sidebar::stash_section_storage_key().into(),
                         cx,
                     );
-                    pane.prepare_sidebar_scroll(bounds, px(24.0), window, cx);
+                    pane.prepare_sidebar_scroll(
+                        bounds,
+                        SidebarRowMetrics::uniform(24.0),
+                        window,
+                        cx,
+                    );
                     let animation = pane
                         .sidebar_scroll_animation
                         .as_mut()
@@ -1018,7 +1018,12 @@ mod animation_tests {
                     assert!(animation.target > animation.start + 10_000.0);
                     animation.started =
                         std::time::Instant::now() - std::time::Duration::from_millis(50);
-                    pane.prepare_sidebar_scroll(bounds, px(24.0), window, cx);
+                    pane.prepare_sidebar_scroll(
+                        bounds,
+                        SidebarRowMetrics::uniform(24.0),
+                        window,
+                        cx,
+                    );
                     let offset = -f32::from(pane.branches_scroll.0.borrow().base_handle.offset().y);
                     let animation = pane.sidebar_scroll_animation.as_ref().unwrap();
                     assert!(offset > animation.start && offset < animation.target);
@@ -1027,7 +1032,12 @@ mod animation_tests {
                         branch_sidebar::local_section_storage_key().into(),
                         cx,
                     );
-                    pane.prepare_sidebar_scroll(bounds, px(24.0), window, cx);
+                    pane.prepare_sidebar_scroll(
+                        bounds,
+                        SidebarRowMetrics::uniform(24.0),
+                        window,
+                        cx,
+                    );
                     let animation = pane
                         .sidebar_scroll_animation
                         .as_ref()
@@ -1041,7 +1051,12 @@ mod animation_tests {
                         .borrow()
                         .base_handle
                         .set_offset(point(px(0.0), px(-125.0)));
-                    pane.prepare_sidebar_scroll(bounds, px(24.0), window, cx);
+                    pane.prepare_sidebar_scroll(
+                        bounds,
+                        SidebarRowMetrics::uniform(24.0),
+                        window,
+                        cx,
+                    );
                     assert!(pane.sidebar_scroll_animation.is_none());
                     assert_eq!(
                         pane.branches_scroll.0.borrow().base_handle.offset().y,
@@ -1052,11 +1067,21 @@ mod animation_tests {
                         branch_sidebar::stash_section_storage_key().into(),
                         cx,
                     );
-                    pane.prepare_sidebar_scroll(bounds, px(24.0), window, cx);
+                    pane.prepare_sidebar_scroll(
+                        bounds,
+                        SidebarRowMetrics::uniform(24.0),
+                        window,
+                        cx,
+                    );
                     let target = pane.sidebar_scroll_animation.as_ref().unwrap().target;
                     pane.sidebar_scroll_animation.as_mut().unwrap().started =
                         std::time::Instant::now() - std::time::Duration::from_millis(150);
-                    pane.prepare_sidebar_scroll(bounds, px(24.0), window, cx);
+                    pane.prepare_sidebar_scroll(
+                        bounds,
+                        SidebarRowMetrics::uniform(24.0),
+                        window,
+                        cx,
+                    );
                     assert!(pane.sidebar_scroll_animation.is_none());
                     assert_eq!(
                         -f32::from(pane.branches_scroll.0.borrow().base_handle.offset().y),
@@ -1068,7 +1093,7 @@ mod animation_tests {
                     branch_sidebar::local_section_storage_key().into(),
                     cx,
                 );
-                pane.prepare_sidebar_scroll(bounds, px(24.0), window, cx);
+                pane.prepare_sidebar_scroll(bounds, SidebarRowMetrics::uniform(24.0), window, cx);
                 assert!(pane.sidebar_scroll_animation.is_none());
                 assert_eq!(
                     pane.branches_scroll.0.borrow().base_handle.offset().y,
