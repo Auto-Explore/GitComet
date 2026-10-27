@@ -51,6 +51,58 @@ fn remote_url(path: &Path) -> String {
 }
 
 #[test]
+fn worktrees_share_a_fetch_signature_unless_their_own_config_changes_fetching() {
+    let root = tempfile::tempdir().expect("fixture directory");
+    let remote = repository(root.path(), "remote");
+    commit(&remote, "first");
+    let local = repository(root.path(), "local");
+    git(&local, &["remote", "add", "origin", &remote_url(&remote)]);
+    git(&local, &["fetch", "origin"]);
+    git(&local, &["reset", "--hard", "origin/main"]);
+    let worktree = |name: &str| {
+        let path = root.path().join(name);
+        git(
+            &local,
+            &["worktree", "add", "-b", name, path.to_str().unwrap()],
+        );
+        path
+    };
+    let sparse = worktree("sparse");
+    let narrowed = worktree("narrowed");
+    git(&local, &["config", "extensions.worktreeConfig", "true"]);
+    git(
+        &sparse,
+        &["config", "--worktree", "core.sparseCheckout", "true"],
+    );
+    git(
+        &narrowed,
+        &[
+            "config",
+            "--worktree",
+            "remote.origin.fetch",
+            "+refs/heads/main:refs/remotes/origin/main",
+        ],
+    );
+    let signature = |path: &Path| {
+        GixBackend
+            .open(path)
+            .expect("open worktree")
+            .fetch_config_signature()
+            .expect("signature")
+    };
+    assert_eq!(
+        signature(&local),
+        signature(&sparse),
+        "worktree config unrelated to fetching keeps one fetch"
+    );
+    assert_ne!(
+        signature(&local),
+        signature(&narrowed),
+        "a worktree that fetches different refspecs fetches on its own"
+    );
+}
+
+#[test]
 fn remote_refs_fingerprint_moves_only_when_a_fetch_changes_tracking_refs_or_tags() {
     let root = tempfile::tempdir().expect("fixture directory");
     let remote = repository(root.path(), "remote");

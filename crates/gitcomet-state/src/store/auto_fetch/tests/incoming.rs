@@ -362,21 +362,22 @@ fn incoming_tracking_manual_failure_preserves_deadline_and_rejects_older_auto_re
         &job,
         Completion::Finished {
             common_dir: Some(PathBuf::from("/repo/.git")),
+            key: None,
             result: Err(Error::new(ErrorKind::Cancelled)),
             refs_changed: true,
         },
         failed_at + Duration::from_secs(2),
     );
-    let entry = state.entries.get(path).unwrap();
-    assert_eq!(entry.schedule.completed, Some(previous));
-    assert_eq!(entry.snapshot.last_success_at, Some(previous));
-    assert!(matches!(entry.snapshot.status, AutoFetchStatus::Failed { at, .. } if at == failed_at));
+    let group = group_of(&state, path);
+    assert_eq!(group.schedule.completed, Some(previous));
+    assert_eq!(group.snapshot.last_success_at, Some(previous));
+    assert!(matches!(group.snapshot.status, AutoFetchStatus::Failed { at, .. } if at == failed_at));
     drop(state);
     let recovered = failed_at + Duration::from_secs(3);
     coordinator.manual_fetch_finished(path, recovered, &success);
     let state = coordinator.inner.state.lock().unwrap();
-    let entry = state.entries.get(path).unwrap();
-    assert_eq!(entry.schedule.completed, Some(recovered));
-    assert_eq!(entry.snapshot.last_success_at, Some(recovered));
-    assert!(matches!(entry.snapshot.status, AutoFetchStatus::Succeeded { at } if at == recovered));
+    let group = group_of(&state, path);
+    assert_eq!(group.schedule.completed, Some(recovered));
+    assert_eq!(group.snapshot.last_success_at, Some(recovered));
+    assert!(matches!(group.snapshot.status, AutoFetchStatus::Succeeded { at } if at == recovered));
 }

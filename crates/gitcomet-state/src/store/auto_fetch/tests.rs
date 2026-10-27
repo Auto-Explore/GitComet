@@ -52,11 +52,21 @@ fn register(
     lifetime
 }
 
+fn group_of<'a>(state: &'a State, workdir: &Path) -> &'a Group {
+    &state.groups[&state.entries[workdir].group]
+}
+
+/// Enables every subscriber without a sync, so no worker thread starts and
+/// the test drives `next_job` itself.
 fn enable(coordinator: &AutoFetchCoordinator) {
+    set_enabled(coordinator, true);
+}
+
+fn set_enabled(coordinator: &AutoFetchCoordinator, enabled: bool) {
     let mut state = coordinator.inner.state.lock().unwrap();
     for entry in state.entries.values_mut() {
         for subscriber in entry.subscribers.values_mut() {
-            subscriber.settings.auto_fetch.enabled = true;
+            subscriber.settings.auto_fetch.enabled = enabled;
         }
     }
 }
@@ -82,46 +92,65 @@ fn duplicate_window_close_keeps_the_fetch_until_the_last_subscriber_closes() {
 }
 
 #[test]
-fn busy_shared_repository_yields_while_worktrees_keep_distinct_schedules() {
+fn busy_shared_repository_yields_and_its_worktrees_share_one_fetch() {
     let coordinator = AutoFetchCoordinator::new();
     register(&coordinator, 1, "/repo", "/repo/.git");
     register(&coordinator, 2, "/linked", "/repo/.git");
     register(&coordinator, 3, "/other", "/other/.git");
     enable(&coordinator);
+    let store = |common: &str| GroupKey::Store {
+        common_dir: PathBuf::from(common),
+        config: 7,
+    };
+    let fetched = |common: &str| Completion::Finished {
+        common_dir: Some(PathBuf::from(common)),
+        key: Some(store(common)),
+        result: Ok(CommandOutput::empty_success("git fetch --all")),
+        refs_changed: true,
+    };
     let foreground = coordinator.admission().reserve(PathBuf::from("/repo/.git"));
     let mut state = coordinator.inner.state.lock().unwrap();
     assert_eq!(state.entries.len(), 3);
     let job = next_job(&mut state, coordinator.admission(), UNIX_EPOCH).unwrap();
     assert_eq!(job.workdir, Path::new("/other"));
-    finish(
-        &mut state,
-        &job,
-        Completion::Finished {
-            common_dir: Some(PathBuf::from("/other/.git")),
-            result: Ok(CommandOutput::empty_success("git fetch --all")),
-            refs_changed: true,
-        },
-        UNIX_EPOCH,
-    );
+    finish(&mut state, &job, fetched("/other/.git"), UNIX_EPOCH);
     assert!(next_job(&mut state, coordinator.admission(), UNIX_EPOCH).is_none());
     drop(foreground);
     let job = next_job(&mut state, coordinator.admission(), UNIX_EPOCH).unwrap();
     assert_eq!(job.workdir, Path::new("/repo"));
+    finish(&mut state, &job, fetched("/repo/.git"), UNIX_EPOCH);
+    // The linked worktree has not been opened yet; opening it finds the
+    // repository's group fetched and joins it without fetching.
+    let job = next_job(&mut state, coordinator.admission(), UNIX_EPOCH).unwrap();
+    assert_eq!(job.workdir, Path::new("/linked"));
     finish(
         &mut state,
         &job,
-        Completion::Finished {
-            common_dir: Some(PathBuf::from("/repo/.git")),
-            result: Ok(CommandOutput::empty_success("git fetch --all")),
-            refs_changed: true,
+        Completion::Deferred {
+            common_dir: PathBuf::from("/repo/.git"),
+            key: store("/repo/.git"),
         },
         UNIX_EPOCH,
     );
+    assert!(next_job(&mut state, coordinator.admission(), UNIX_EPOCH).is_none());
+    assert_eq!(state.groups.len(), 2);
     assert_eq!(
-        next_job(&mut state, coordinator.admission(), UNIX_EPOCH)
-            .unwrap()
-            .workdir,
-        Path::new("/linked")
+        state.entries[Path::new("/linked")].group,
+        state.entries[Path::new("/repo")].group
+    );
+    let later = UNIX_EPOCH + AutoFetchInterval::default().duration();
+    for _ in 0..2 {
+        let job = next_job(&mut state, coordinator.admission(), later).unwrap();
+        let common = if job.workdir == Path::new("/other") {
+            "/other/.git"
+        } else {
+            "/repo/.git"
+        };
+        finish(&mut state, &job, fetched(common), later);
+    }
+    assert!(
+        next_job(&mut state, coordinator.admission(), later).is_none(),
+        "one fetch per store each interval"
     );
 }
 
@@ -146,6 +175,7 @@ fn disabled_coordinator_parks_and_enabled_deadlines_recompute_from_completion() 
         &job,
         Completion::Finished {
             common_dir: None,
+            key: None,
             result: Err(Error::new(ErrorKind::Unsupported("test offline"))),
             refs_changed: true,
         },
@@ -203,15 +233,16 @@ fn manual_success_clears_failure_and_an_older_automatic_result_cannot_replace_it
         &job,
         Completion::Finished {
             common_dir: Some(PathBuf::from("/repo/.git")),
+            key: None,
             result: Err(Error::new(ErrorKind::Cancelled)),
             refs_changed: true,
         },
         manual + Duration::from_secs(1),
     );
-    let entry = state.entries.get(Path::new("/repo")).unwrap();
-    assert_eq!(entry.snapshot.last_success_at, Some(manual));
-    assert!(matches!(entry.snapshot.status, AutoFetchStatus::Succeeded { at } if at == manual));
-    assert!(!entry.schedule.is_due(AutoFetchInterval::default(), manual));
+    let group = group_of(&state, Path::new("/repo"));
+    assert_eq!(group.snapshot.last_success_at, Some(manual));
+    assert!(matches!(group.snapshot.status, AutoFetchStatus::Succeeded { at } if at == manual));
+    assert!(!group.schedule.is_due(AutoFetchInterval::default(), manual));
 }
 
 #[test]
@@ -233,14 +264,15 @@ fn reopening_a_closed_tab_does_not_accept_its_old_fetch_completion() {
         &job,
         Completion::Finished {
             common_dir: Some(PathBuf::from("/repo/.git")),
+            key: None,
             result: Ok(CommandOutput::empty_success("git fetch --all")),
             refs_changed: true,
         },
         UNIX_EPOCH,
     );
-    let entry = state.entries.get(Path::new("/repo")).unwrap();
-    assert!(entry.snapshot.last_success_at.is_none());
-    assert!(matches!(entry.snapshot.status, AutoFetchStatus::Idle));
+    let group = group_of(&state, Path::new("/repo"));
+    assert!(group.snapshot.last_success_at.is_none());
+    assert!(matches!(group.snapshot.status, AutoFetchStatus::Idle));
 }
 
 #[test]
@@ -574,6 +606,8 @@ fn fetches_that_move_no_refs_refresh_only_tabs_that_never_loaded() {
     };
     let subscribe = |store_id| {
         let lifetime = RepoLifetime::allocate();
+        // A sync that sees an enabled subscriber starts the real worker.
+        set_enabled(&coordinator, false);
         coordinator.sync(
             store_id,
             vec![Registration {
@@ -599,7 +633,7 @@ fn fetches_that_move_no_refs_refresh_only_tabs_that_never_loaded() {
             now,
         )
         .expect("due");
-        let completion = execute(&job, coordinator.admission());
+        let completion = execute(&job, &coordinator.inner);
         finish(
             &mut coordinator.inner.state.lock().unwrap(),
             &job,
@@ -621,6 +655,108 @@ fn fetches_that_move_no_refs_refresh_only_tabs_that_never_loaded() {
     std::fs::write(source.join("file"), "third").unwrap();
     git(&source, &["commit", "-qam", "third"]);
     assert_eq!(fetch_at(3), vec![first, second]);
+}
+
+/// Counts remote contacts: every fetch runs the remote's upload-pack once.
+#[cfg(unix)]
+fn count_upload_packs(root: &Path, clone: &Path) -> PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+
+    let log = root.join("upload-pack.log");
+    let wrapper = root.join("upload-pack.sh");
+    std::fs::write(
+        &wrapper,
+        format!(
+            "#!/bin/sh\necho contact >> '{}'\nexec git upload-pack \"$@\"\n",
+            log.display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755)).unwrap();
+    git(
+        clone,
+        &[
+            "config",
+            "remote.origin.uploadpack",
+            wrapper.to_str().unwrap(),
+        ],
+    );
+    log
+}
+
+#[cfg(unix)]
+#[test]
+fn linked_worktrees_of_one_repository_contact_the_remote_once() {
+    let (temp, _source, clone, _latest) = remote_fixture();
+    let log = count_upload_packs(temp.path(), &clone);
+    let mut workdirs = vec![clone.clone()];
+    for ix in 1..=2 {
+        let linked = temp.path().join(format!("linked-{ix}"));
+        git(
+            &clone,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                "-b",
+                &format!("linked-{ix}"),
+                linked.to_str().unwrap(),
+            ],
+        );
+        workdirs.push(linked);
+    }
+    let succeeded = Arc::new(Mutex::new(Vec::new()));
+    let sink: EventSink = {
+        let succeeded = Arc::clone(&succeeded);
+        Arc::new(move |event| {
+            if let Event::Updated {
+                lifetime, snapshot, ..
+            } = event
+                && matches!(snapshot.status, AutoFetchStatus::Succeeded { .. })
+            {
+                succeeded.lock().unwrap().push(lifetime);
+            }
+        })
+    };
+    let coordinator = AutoFetchCoordinator::new();
+    let registrations: Vec<_> = workdirs
+        .into_iter()
+        .zip(1..)
+        .map(|(workdir, id)| Registration {
+            repo_id: RepoId(id),
+            lifetime: RepoLifetime::allocate(),
+            workdir,
+            common_dir: None,
+            repository: None,
+        })
+        .collect();
+    let lifetimes: Vec<_> = registrations.iter().map(|r| r.lifetime).collect();
+    let mut settings = RemoteSettings::default();
+    settings.auto_fetch.enabled = true;
+    coordinator.sync(
+        1,
+        registrations,
+        settings,
+        &(Arc::new(gitcomet_git_gix::GixBackend) as Arc<dyn GitBackend>),
+        sink,
+    );
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    while !lifetimes
+        .iter()
+        .all(|lifetime| succeeded.lock().unwrap().contains(lifetime))
+    {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "every worktree tab reports the fetch"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    coordinator.shutdown();
+    assert_eq!(
+        std::fs::read_to_string(&log).unwrap().lines().count(),
+        1,
+        "three worktree tabs, one store: one remote contact"
+    );
 }
 
 /// Cost of one coordinator sync with many tabs open. The store calls it after

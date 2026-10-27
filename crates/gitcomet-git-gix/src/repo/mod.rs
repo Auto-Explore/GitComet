@@ -1516,6 +1516,11 @@ impl GitRepository for GixRepo {
         self.remote_refs_fingerprint_impl(cancellation)
     }
 
+    fn fetch_config_signature(&self) -> Result<u64> {
+        let _operation = self.operation_lease()?;
+        self.fetch_config_signature_impl()
+    }
+
     fn fetch_refspecs_with_output(
         &self,
         remote: &str,

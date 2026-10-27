@@ -1006,6 +1006,31 @@ impl GixRepo {
         Ok(fingerprint.finish())
     }
 
+    pub(super) fn fetch_config_signature_impl(&self) -> Result<u64> {
+        use std::hash::{Hash, Hasher};
+
+        let repo = self.repo_with_current_config()?;
+        let config = repo.config_snapshot();
+        let mut signature = std::hash::DefaultHasher::new();
+        for section in config.plumbing().sections() {
+            let header = section.header();
+            let name = header.name();
+            if !["remote", "fetch", "url"]
+                .iter()
+                .any(|fetch_section| name.eq_ignore_ascii_case(fetch_section.as_bytes()))
+            {
+                continue;
+            }
+            name.to_ascii_lowercase().hash(&mut signature);
+            header.subsection_name().hash(&mut signature);
+            for value_name in section.value_names() {
+                value_name.to_ascii_lowercase().hash(&mut signature);
+                section.values(&value_name).hash(&mut signature);
+            }
+        }
+        Ok(signature.finish())
+    }
+
     pub(super) fn list_remote_branches_cancellable_impl(
         &self,
         cancellation: &CancellationToken,

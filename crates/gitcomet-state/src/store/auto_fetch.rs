@@ -55,25 +55,33 @@ struct Subscriber {
 }
 
 impl Subscriber {
-    fn publish(&self, entry: &Entry, result: Option<Arc<Result<CommandOutput>>>) {
+    fn publish(&self, group: &Group, result: Option<Arc<Result<CommandOutput>>>) {
         (self.sink)(Event::Updated {
             repo_id: self.repo_id,
             lifetime: self.lifetime,
-            revision: entry.revision,
-            snapshot: entry.snapshot.clone(),
+            revision: group.revision,
+            snapshot: group.snapshot.clone(),
             result,
         });
     }
 }
 
+/// Worktrees that share an object store and resolve the same fetch
+/// configuration update the same refs, so one fetch serves all of them.
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+enum GroupKey {
+    /// A workdir no fetch has opened yet.
+    Workdir(PathBuf),
+    Store {
+        common_dir: PathBuf,
+        config: u64,
+    },
+}
+
 struct Entry {
     subscribers: BTreeMap<RepoLifetime, Subscriber>,
     common_dir: Option<PathBuf>,
-    schedule: Schedule,
-    snapshot: RepoAutoFetchState,
-    revision: u64,
-    request: Option<u64>,
-    order: u64,
+    group: GroupKey,
 }
 
 impl Entry {
@@ -82,22 +90,37 @@ impl Entry {
             .values()
             .find(|subscriber| subscriber.settings.auto_fetch.enabled)
     }
+}
 
-    fn publish(&self, result: Option<Arc<Result<CommandOutput>>>) {
-        for subscriber in self.subscribers.values() {
-            subscriber.publish(self, result.clone());
+struct Group {
+    schedule: Schedule,
+    snapshot: RepoAutoFetchState,
+    revision: u64,
+    request: Option<u64>,
+    order: u64,
+}
+
+impl Group {
+    fn new(revision: u64, order: u64) -> Self {
+        Self {
+            schedule: Schedule::default(),
+            snapshot: RepoAutoFetchState::default(),
+            revision,
+            request: None,
+            order,
         }
     }
 }
 
 struct Running {
-    workdir: PathBuf,
+    group: GroupKey,
     cancellation: CancellationToken,
 }
 
 #[derive(Default)]
 struct State {
     entries: BTreeMap<PathBuf, Entry>,
+    groups: BTreeMap<GroupKey, Group>,
     running: Option<Running>,
     revision: u64,
     order: u64,
@@ -105,14 +128,78 @@ struct State {
 }
 
 impl State {
+    /// Each group with an enabled subscriber, with its first such member.
+    fn enabled_groups(&self) -> BTreeMap<&GroupKey, (&PathBuf, &Entry, &Subscriber)> {
+        let mut enabled = BTreeMap::new();
+        for (workdir, entry) in &self.entries {
+            if let Some(subscriber) = entry.enabled_subscriber() {
+                enabled
+                    .entry(&entry.group)
+                    .or_insert((workdir, entry, subscriber));
+            }
+        }
+        enabled
+    }
+
+    fn publish(&self, key: &GroupKey, result: Option<Arc<Result<CommandOutput>>>) {
+        let Some(group) = self.groups.get(key) else {
+            return;
+        };
+        for entry in self.entries.values().filter(|entry| &entry.group == key) {
+            for subscriber in entry.subscribers.values() {
+                subscriber.publish(group, result.clone());
+            }
+        }
+    }
+
     fn cancel_inactive_fetch(&self) {
         if let Some(running) = &self.running
-            && self
+            && !self
                 .entries
-                .get(&running.workdir)
-                .is_none_or(|entry| entry.enabled_subscriber().is_none())
+                .values()
+                .any(|entry| entry.group == running.group && entry.enabled_subscriber().is_some())
         {
             running.cancellation.cancel();
+        }
+    }
+
+    fn retain_groups(&mut self) {
+        let Self {
+            entries, groups, ..
+        } = self;
+        let used: FxHashSet<&GroupKey> = entries.values().map(|entry| &entry.group).collect();
+        groups.retain(|key, _| used.contains(key));
+    }
+
+    /// Moves `workdir` into `key`. A new group takes over the schedule and
+    /// status of the one the workdir leaves.
+    fn regroup(&mut self, workdir: &Path, key: GroupKey) {
+        let Some(entry) = self.entries.get_mut(workdir) else {
+            return;
+        };
+        if entry.group == key {
+            return;
+        }
+        let previous = std::mem::replace(&mut entry.group, key.clone());
+        let orphaned = !self.entries.values().any(|entry| entry.group == previous);
+        if !self.groups.contains_key(&key) {
+            let group = if orphaned {
+                self.groups.remove(&previous)
+            } else {
+                self.groups.get(&previous).map(|group| Group {
+                    schedule: group.schedule,
+                    snapshot: group.snapshot.clone(),
+                    revision: group.revision,
+                    request: None,
+                    order: group.order,
+                })
+            };
+            self.groups.insert(
+                key,
+                group.unwrap_or_else(|| Group::new(self.revision, self.order)),
+            );
+        } else if orphaned {
+            self.groups.remove(&previous);
         }
     }
 }
@@ -203,11 +290,8 @@ impl AutoFetchCoordinator {
         }
         state.revision += 1;
         let revision = state.revision;
-        let was_enabled: HashMap<_, _> = state
-            .entries
-            .iter()
-            .map(|(key, entry)| (key.clone(), entry.enabled_subscriber().is_some()))
-            .collect();
+        let was_enabled: FxHashSet<GroupKey> =
+            state.enabled_groups().into_keys().cloned().collect();
         let registered: FxHashSet<(&Path, RepoLifetime)> = registrations
             .iter()
             .map(|(key, registration)| (key.as_path(), registration.lifetime))
@@ -221,14 +305,19 @@ impl AutoFetchCoordinator {
         for (key, registration) in registrations {
             state.order += 1;
             let order = state.order;
-            let entry = state.entries.entry(key.clone()).or_insert_with(|| Entry {
-                subscribers: BTreeMap::new(),
-                common_dir: None,
-                schedule: Schedule::default(),
-                snapshot: RepoAutoFetchState::default(),
-                revision,
-                request: None,
-                order,
+            let State {
+                entries, groups, ..
+            } = &mut *state;
+            let entry = entries.entry(key.clone()).or_insert_with(|| {
+                let group = GroupKey::Workdir(key.clone());
+                groups
+                    .entry(group.clone())
+                    .or_insert_with(|| Group::new(revision, order));
+                Entry {
+                    subscribers: BTreeMap::new(),
+                    common_dir: None,
+                    group,
+                }
             });
             if registration.common_dir.is_some() {
                 entry.common_dir = registration.common_dir;
@@ -259,32 +348,36 @@ impl AutoFetchCoordinator {
         state
             .entries
             .retain(|_, entry| !entry.subscribers.is_empty());
-        for (key, entry) in &mut state.entries {
-            let enabled = entry.enabled_subscriber().is_some();
-            if was_enabled.get(key).copied().unwrap_or(false) != enabled {
-                entry.schedule = Schedule::default();
-                entry.request = None;
-                if matches!(entry.snapshot.status, AutoFetchStatus::Running) {
-                    entry.snapshot.status = AutoFetchStatus::Idle;
+        state.retain_groups();
+        let enabled: FxHashSet<GroupKey> = state.enabled_groups().into_keys().cloned().collect();
+        let toggled: Vec<GroupKey> = state
+            .groups
+            .keys()
+            .filter(|key| was_enabled.contains(*key) != enabled.contains(*key))
+            .cloned()
+            .collect();
+        for key in toggled {
+            if let Some(group) = state.groups.get_mut(&key) {
+                group.schedule = Schedule::default();
+                group.request = None;
+                if matches!(group.snapshot.status, AutoFetchStatus::Running) {
+                    group.snapshot.status = AutoFetchStatus::Idle;
                 }
-                entry.revision = revision;
-                entry.publish(None);
+                group.revision = revision;
             }
+            state.publish(&key, None);
         }
         for (key, lifetime) in added {
             if let Some(entry) = state.entries.get(&key)
                 && let Some(subscriber) = entry.subscribers.get(&lifetime)
+                && let Some(group) = state.groups.get(&entry.group)
             {
-                subscriber.publish(entry, None);
+                subscriber.publish(group, None);
             }
         }
         state.cancel_inactive_fetch();
-        let enabled = state
-            .entries
-            .values()
-            .any(|entry| entry.enabled_subscriber().is_some());
         drop(state);
-        if enabled {
+        if !enabled.is_empty() {
             let mut worker = self
                 .worker
                 .lock()
@@ -325,6 +418,7 @@ impl AutoFetchCoordinator {
         state
             .entries
             .retain(|_, entry| !entry.subscribers.is_empty());
+        state.retain_groups();
         state.cancel_inactive_fetch();
         self.inner.admission.changed.notify_all();
     }
@@ -351,15 +445,17 @@ impl AutoFetchCoordinator {
             .unwrap_or_else(|error| error.into_inner());
         state.revision += 1;
         let revision = state.revision;
-        if let Some(entry) = state.entries.get_mut(&key) {
+        if let Some(group_key) = state.entries.get(&key).map(|entry| entry.group.clone())
+            && let Some(group) = state.groups.get_mut(&group_key)
+        {
             if result.is_ok() {
-                entry.schedule.finish(now);
-                entry.snapshot.last_success_at = Some(now);
+                group.schedule.finish(now);
+                group.snapshot.last_success_at = Some(now);
             }
-            entry.request = None;
-            entry.snapshot.status = status;
-            entry.revision = revision;
-            entry.publish(None);
+            group.request = None;
+            group.snapshot.status = status;
+            group.revision = revision;
+            state.publish(&group_key, None);
         }
         self.inner.admission.changed.notify_all();
     }
@@ -422,66 +518,76 @@ impl Drop for AutoFetchCoordinator {
 }
 
 struct Job {
+    group: GroupKey,
     workdir: PathBuf,
     request: u64,
+    started: SystemTime,
     cancellation: CancellationToken,
     subscriber: Subscriber,
 }
 
 enum Completion {
-    Deferred {
-        common_dir: PathBuf,
-    },
+    /// No fetch ran: a foreground command holds the store, or the workdir
+    /// joined a group whose fetch is not due.
+    Deferred { common_dir: PathBuf, key: GroupKey },
     Finished {
         common_dir: Option<PathBuf>,
+        key: Option<GroupKey>,
         result: Result<CommandOutput>,
         refs_changed: bool,
     },
+}
+
+/// The store a group's fetch would lock, when known.
+fn group_common_dir<'a>(key: &'a GroupKey, member: &'a Entry) -> Option<&'a PathBuf> {
+    match key {
+        GroupKey::Store { common_dir, .. } => Some(common_dir),
+        GroupKey::Workdir(_) => member.common_dir.as_ref(),
+    }
 }
 
 fn next_job(state: &mut State, admission: &Admission, now: SystemTime) -> Option<Job> {
     if state.running.is_some() {
         return None;
     }
-    let workdir = state
-        .entries
-        .iter()
-        .filter(|(_, entry)| {
-            entry.enabled_subscriber().is_some_and(|subscriber| {
-                entry
-                    .schedule
-                    .is_due(subscriber.settings.auto_fetch.interval, now)
-                    && entry
-                        .common_dir
-                        .as_ref()
-                        .is_none_or(|common| !admission.blocked(common))
-            })
+    let (key, workdir) = state
+        .enabled_groups()
+        .into_iter()
+        .filter_map(|(key, (workdir, entry, subscriber))| {
+            let group = state.groups.get(key)?;
+            (group
+                .schedule
+                .is_due(subscriber.settings.auto_fetch.interval, now)
+                && group_common_dir(key, entry).is_none_or(|common| !admission.blocked(common)))
+            .then_some((group.order, key, workdir))
         })
-        .min_by_key(|(_, entry)| entry.order)
-        .map(|(workdir, _)| workdir.clone())?;
+        .min_by_key(|(order, ..)| *order)
+        .map(|(_, key, workdir)| (key.clone(), workdir.clone()))?;
     state.revision += 1;
     state.order += 1;
-    let entry = state.entries.get_mut(&workdir)?;
-    let subscriber = entry.enabled_subscriber()?.clone();
+    let subscriber = state.entries.get(&workdir)?.enabled_subscriber()?.clone();
+    let group = state.groups.get_mut(&key)?;
     let cancellation = CancellationToken::new();
-    entry.order = state.order;
-    entry.request = Some(state.revision);
-    entry.revision = state.revision;
-    entry.snapshot.status = AutoFetchStatus::Running;
-    entry.publish(None);
+    group.order = state.order;
+    group.request = Some(state.revision);
+    group.revision = state.revision;
+    group.snapshot.status = AutoFetchStatus::Running;
+    state.publish(&key, None);
     state.running = Some(Running {
-        workdir: workdir.clone(),
+        group: key.clone(),
         cancellation: cancellation.clone(),
     });
     Some(Job {
+        group: key,
         workdir,
         request: state.revision,
+        started: now,
         cancellation,
         subscriber,
     })
 }
 
-fn execute(job: &Job, admission: &Arc<Admission>) -> Completion {
+fn execute(job: &Job, inner: &Inner) -> Completion {
     let opened = job.cancellation.check_cancelled().and_then(|()| {
         job.subscriber.repository.clone().map_or_else(
             || {
@@ -497,15 +603,42 @@ fn execute(job: &Job, admission: &Arc<Admission>) -> Completion {
         Err(error) => {
             return Completion::Finished {
                 common_dir: None,
+                key: None,
                 result: Err(error),
                 refs_changed: false,
             };
         }
     };
     let common_dir = repository_key(repo.as_ref());
-    let Some(_lease) = admission.try_background(common_dir.clone(), job.cancellation.clone())
+    let key = repo.fetch_config_signature().map_or_else(
+        |_| GroupKey::Workdir(job.workdir.clone()),
+        |config| GroupKey::Store {
+            common_dir: common_dir.clone(),
+            config,
+        },
+    );
+    // A sibling worktree fetched this store recently: join its schedule
+    // instead of contacting the remote again.
+    if key != job.group
+        && inner
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .groups
+            .get(&key)
+            .is_some_and(|group| {
+                !group
+                    .schedule
+                    .is_due(job.subscriber.settings.auto_fetch.interval, job.started)
+            })
+    {
+        return Completion::Deferred { common_dir, key };
+    }
+    let Some(_lease) = inner
+        .admission
+        .try_background(common_dir.clone(), job.cancellation.clone())
     else {
-        return Completion::Deferred { common_dir };
+        return Completion::Deferred { common_dir, key };
     };
     let refs_before = repo.remote_refs_fingerprint(&job.cancellation).ok();
     let result = job.cancellation.check_cancelled().and_then(|()| {
@@ -528,6 +661,7 @@ fn execute(job: &Job, admission: &Arc<Admission>) -> Completion {
     }
     Completion::Finished {
         common_dir: Some(common_dir),
+        key: Some(key),
         result,
         refs_changed,
     }
@@ -544,65 +678,103 @@ fn finish(state: &mut State, job: &Job, completion: Completion, now: SystemTime)
     state.running = None;
     state.revision += 1;
     let revision = state.revision;
-    let (common_dir, refs_changed) = match completion {
-        Completion::Deferred { common_dir } => {
-            if let Some(entry) = state.entries.get_mut(&job.workdir)
-                && entry.request == Some(job.request)
-            {
-                entry.common_dir = Some(common_dir);
-                entry.snapshot.status = AutoFetchStatus::Idle;
-                entry.request = None;
-                entry.revision = revision;
-                entry.publish(None);
-            }
-            return;
+    // A closed tab or a manual fetch since leaves this job nothing to record.
+    let current = state
+        .entries
+        .get(&job.workdir)
+        .is_some_and(|entry| entry.group == job.group)
+        && state
+            .groups
+            .get(&job.group)
+            .is_some_and(|group| group.request == Some(job.request));
+    if current && let Some(group) = state.groups.get_mut(&job.group) {
+        group.request = None;
+        if matches!(group.snapshot.status, AutoFetchStatus::Running) {
+            group.snapshot.status = AutoFetchStatus::Idle;
         }
+    }
+    let (common_dir, key, outcome) = match completion {
+        Completion::Deferred { common_dir, key } => (Some(common_dir), Some(key), None),
         Completion::Finished {
             common_dir,
+            key,
             result,
             refs_changed,
-        } => {
-            if let Some(entry) = state.entries.get_mut(&job.workdir)
-                && entry.request == Some(job.request)
-            {
-                entry.common_dir = common_dir.clone().or_else(|| entry.common_dir.clone());
-                entry.schedule.finish(now);
-                entry.snapshot.status = match &result {
-                    Ok(_) => {
-                        entry.snapshot.last_success_at = Some(now);
-                        AutoFetchStatus::Succeeded { at: now }
-                    }
-                    Err(error) if matches!(error.kind(), ErrorKind::Cancelled) => {
-                        AutoFetchStatus::Idle
-                    }
-                    Err(error) => AutoFetchStatus::Failed {
-                        at: now,
-                        error: error.clone(),
-                    },
-                };
-                entry.request = None;
-                entry.revision = revision;
-                entry.publish(Some(Arc::new(result)));
-            }
-            (common_dir, refs_changed)
-        }
+        } => (common_dir, key, Some((result, refs_changed))),
     };
-    for (workdir, entry) in &mut state.entries {
-        if workdir == &job.workdir
-            || common_dir
-                .as_ref()
-                .is_some_and(|common| entry.common_dir.as_ref() == Some(common))
-        {
-            for subscriber in entry.subscribers.values_mut() {
-                if !refs_changed && !subscriber.needs_refresh {
-                    continue;
-                }
-                subscriber.needs_refresh = false;
-                (subscriber.sink)(Event::Refresh {
-                    repo_id: subscriber.repo_id,
-                    lifetime: subscriber.lifetime,
-                });
+    if current {
+        if let Some(entry) = state.entries.get_mut(&job.workdir) {
+            entry.common_dir = common_dir.clone().or_else(|| entry.common_dir.clone());
+        }
+        if let Some(key) = key {
+            state.regroup(&job.workdir, key);
+        }
+    }
+    let Some(group_key) = state
+        .entries
+        .get(&job.workdir)
+        .map(|entry| entry.group.clone())
+    else {
+        return;
+    };
+    let Some((result, refs_changed)) = outcome else {
+        if current && let Some(group) = state.groups.get_mut(&group_key) {
+            group.revision = revision;
+            state.publish(&group_key, None);
+        }
+        return;
+    };
+    if current && let Some(group) = state.groups.get_mut(&group_key) {
+        group.schedule.finish(now);
+        group.snapshot.status = match &result {
+            Ok(_) => {
+                group.snapshot.last_success_at = Some(now);
+                AutoFetchStatus::Succeeded { at: now }
             }
+            Err(error) if matches!(error.kind(), ErrorKind::Cancelled) => AutoFetchStatus::Idle,
+            Err(error) => AutoFetchStatus::Failed {
+                at: now,
+                error: error.clone(),
+            },
+        };
+        group.revision = revision;
+        state.publish(&group_key, Some(Arc::new(result)));
+    }
+    send_refreshes(
+        state,
+        &job.workdir,
+        &group_key,
+        common_dir.as_ref(),
+        refs_changed,
+    );
+}
+
+/// Refreshes every tab reading the fetched refs: the fetching workdir, its
+/// group and anything else on the same store. Tabs that have loaded once skip
+/// the refresh when the fetch moved nothing.
+fn send_refreshes(
+    state: &mut State,
+    fetched: &Path,
+    group: &GroupKey,
+    common_dir: Option<&PathBuf>,
+    refs_changed: bool,
+) {
+    for (workdir, entry) in &mut state.entries {
+        if workdir != fetched
+            && &entry.group != group
+            && common_dir.is_none_or(|common| entry.common_dir.as_ref() != Some(common))
+        {
+            continue;
+        }
+        for subscriber in entry.subscribers.values_mut() {
+            if !refs_changed && !subscriber.needs_refresh {
+                continue;
+            }
+            subscriber.needs_refresh = false;
+            (subscriber.sink)(Event::Refresh {
+                repo_id: subscriber.repo_id,
+                lifetime: subscriber.lifetime,
+            });
         }
     }
 }
@@ -619,17 +791,17 @@ fn run(inner: Arc<Inner>) {
         let now = SystemTime::now();
         if let Some(job) = next_job(&mut state, &inner.admission, now) {
             drop(state);
-            let completion = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                execute(&job, &inner.admission)
-            }))
-            .unwrap_or_else(|panic| Completion::Finished {
-                common_dir: None,
-                result: Err(Error::new(ErrorKind::Backend(format!(
-                    "automatic fetch failed: {}",
-                    gitcomet_core::panic::payload_message(panic.as_ref())
-                )))),
-                refs_changed: true,
-            });
+            let completion =
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| execute(&job, &inner)))
+                    .unwrap_or_else(|panic| Completion::Finished {
+                        common_dir: None,
+                        key: None,
+                        result: Err(Error::new(ErrorKind::Backend(format!(
+                            "automatic fetch failed: {}",
+                            gitcomet_core::panic::payload_message(panic.as_ref())
+                        )))),
+                        refs_changed: true,
+                    });
             state = inner
                 .state
                 .lock()
@@ -656,27 +828,20 @@ fn run(inner: Arc<Inner>) {
 }
 
 fn wait_duration(state: &State, admission: &Admission, now: SystemTime) -> Option<Duration> {
-    if !state
-        .entries
-        .values()
-        .any(|entry| entry.enabled_subscriber().is_some())
-    {
+    let enabled = state.enabled_groups();
+    if enabled.is_empty() {
         return None;
     }
     Some(
-        state
-            .entries
-            .values()
-            .filter_map(|entry| {
-                let subscriber = entry.enabled_subscriber()?;
-                if entry
-                    .common_dir
-                    .as_ref()
-                    .is_some_and(|common| admission.blocked(common))
-                {
+        enabled
+            .into_iter()
+            .filter_map(|(key, (_, entry, subscriber))| {
+                if group_common_dir(key, entry).is_some_and(|common| admission.blocked(common)) {
                     return None;
                 }
-                entry
+                state
+                    .groups
+                    .get(key)?
                     .schedule
                     .completed
                     .and_then(|completed| {
@@ -690,7 +855,7 @@ fn wait_duration(state: &State, admission: &Admission, now: SystemTime) -> Optio
     )
 }
 
-#[derive(Default)]
+#[derive(Clone, Copy, Default)]
 struct Schedule {
     completed: Option<SystemTime>,
 }

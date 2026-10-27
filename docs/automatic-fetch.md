@@ -23,9 +23,12 @@ rebase, or checkout. The existing pruning safeguards for local branches and tags
 also apply.
 
 Fetches run one repository at a time. Multiple windows showing the same folder
-share one schedule. Linked worktrees keep their own schedules so their Git
-configuration is respected. Manual remote commands and repository maintenance
-take priority over automatic fetching.
+share one schedule. Linked worktrees of one repository share one fetch and one
+schedule, because a fetch from any of them updates the same remote-tracking
+branches. A worktree whose own Git configuration fetches different remotes or
+refspecs keeps its own schedule. A manual **Fetch all** in one worktree restarts
+the interval for the others that share its fetch. Manual remote commands and
+repository maintenance take priority over automatic fetching.
 
 The next attempt is scheduled after the previous attempt finishes, whether it
 succeeded or failed. A successful manual **Fetch all** restarts that interval.

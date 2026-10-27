@@ -1591,6 +1591,14 @@ pub trait GitRepository: Send + Sync {
             "remote reference fingerprints are not implemented for this backend",
         )))
     }
+    /// Hash of the configuration that decides what a fetch from this worktree
+    /// does: remotes, fetch defaults and URL rewrites as this worktree resolves
+    /// them. Worktrees of one repository with equal values fetch the same refs.
+    fn fetch_config_signature(&self) -> Result<u64> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "fetch configuration signatures are not implemented for this backend",
+        )))
+    }
     fn pull(&self, mode: PullMode, _prune: bool) -> Result<CommandOutput>;
     fn push(&self) -> Result<()>;
 
