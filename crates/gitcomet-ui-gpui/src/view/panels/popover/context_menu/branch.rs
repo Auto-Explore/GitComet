@@ -206,6 +206,20 @@ pub(super) fn model(
             });
         }
     }
+    // Focus sits with the other view-shaping entries, above the actions that
+    // change the repository.
+    items.push(super::focus::entry(
+        this,
+        repo_id,
+        match target {
+            BranchMenuTarget::Local { name } => {
+                gitcomet_core::domain::HistoryFocus::local_branch(name)
+            }
+            BranchMenuTarget::Remote { remote, branch } => {
+                gitcomet_core::domain::HistoryFocus::remote_branch(remote, branch)
+            }
+        },
+    ));
     items.push(ContextMenuItem::Entry {
         label: "Copy branch name".into(),
         icon: Some("icons/copy.svg".into()),
@@ -502,6 +516,7 @@ mod tests {
 
     fn worktree(path: &str, branch: &str) -> Worktree {
         Worktree {
+            bare: false,
             path: PathBuf::from(path),
             head: None,
             branch: Some(branch.to_string()),

@@ -1278,8 +1278,11 @@ impl DiffRenderer {
         let blocked_by_kind = path
             .as_ref()
             .is_some_and(|p| self.content_preview_is_picture(p));
-        let disabled = path.is_none() || blocked_by_kind;
-        let tooltip: SharedString = if blocked_by_kind {
+        let is_bare = self.active_repo().is_some_and(RepoState::is_bare);
+        let disabled = is_bare || path.is_none() || blocked_by_kind;
+        let tooltip: SharedString = if is_bare {
+            gitcomet_core::domain::WORKING_TREE_REQUIRED_MESSAGE.into()
+        } else if blocked_by_kind {
             "This file is not text; editing is not supported".into()
         } else if path.is_none() {
             "This view has no working-tree file to edit".into()
@@ -1318,8 +1321,10 @@ impl DiffRenderer {
     /// Alt+E shortcut and the context-menu entries so the three cannot disagree
     /// about what is editable.
     pub(in crate::view) fn can_edit_current_target(&self) -> bool {
-        self.editable_path_for_current_target()
-            .is_some_and(|path| !self.content_preview_is_picture(&path))
+        !self.active_repo().is_some_and(RepoState::is_bare)
+            && self
+                .editable_path_for_current_target()
+                .is_some_and(|path| !self.content_preview_is_picture(&path))
     }
 
     /// Enter or leave the editor for the file on screen.
@@ -1328,6 +1333,16 @@ impl DiffRenderer {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
+        if self.active_repo().is_some_and(RepoState::is_bare) {
+            self.commands.send(
+                DiffCommand::Toast(
+                    components::ToastKind::Warning,
+                    gitcomet_core::domain::WORKING_TREE_REQUIRED_MESSAGE.into(),
+                ),
+                cx,
+            );
+            return;
+        }
         let Some(repo_id) = self.active_repo_id() else {
             return;
         };

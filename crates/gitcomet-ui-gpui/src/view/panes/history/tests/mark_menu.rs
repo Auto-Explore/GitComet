@@ -111,6 +111,7 @@ fn a_right_click_on_a_mark_opens_its_annotators_menu(cx: &mut gpui::TestAppConte
         },
     );
     repo.open = Loadable::Ready(());
+    repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
     repo.history_state.history_scope = LogScope::AllBranches;
     repo.branches = Loadable::Ready(Arc::new(vec![branch("main", "c00")]));
     repo.branches_rev = 1;

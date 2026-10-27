@@ -281,6 +281,7 @@ impl DetailsPaneView {
             && let Some(repo) = state.repos.iter().find(|r| r.id == repo_id)
         {
             repo.worktree_status_cache_rev().hash(&mut hasher);
+            repo.repository_mode.hash(&mut hasher);
             repo.staged_status_cache_rev().hash(&mut hasher);
             // Counts arrive after the list is drawn; without these the pane
             // never repaints for them.

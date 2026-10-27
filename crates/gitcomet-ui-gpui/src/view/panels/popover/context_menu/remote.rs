@@ -1,11 +1,9 @@
 use super::*;
 
 pub(super) fn model(this: &PopoverHost, repo_id: RepoId, name: &str) -> ContextMenuModel {
-    let remote_url = this
-        .state
-        .repos
-        .iter()
-        .find(|repo| repo.id == repo_id)
+    let repo = this.state.repos.iter().find(|repo| repo.id == repo_id);
+    let shown_in_history = !repo.is_some_and(|repo| repo.history_hidden_remotes().contains(name));
+    let remote_url = repo
         .and_then(|repo| repo.remotes.ready())
         .and_then(|remotes| remotes.iter().find(|remote| remote.name == name))
         .and_then(|remote| remote.url.as_deref());
@@ -32,6 +30,23 @@ pub(super) fn model(this: &PopoverHost, repo_id: RepoId, name: &str) -> ContextM
         });
     }
     items.push(ContextMenuItem::Separator);
+    let (history_label, history_icon) = if shown_in_history {
+        ("Hide from history graph", "icons/eye_off.svg")
+    } else {
+        ("Show in history graph", "icons/eye.svg")
+    };
+    items.push(ContextMenuItem::Entry {
+        label: history_label.into(),
+        icon: Some(history_icon.into()),
+        shortcut: None,
+        disabled: false,
+        action: Box::new(ContextMenuAction::SetRemoteHistoryVisibility {
+            repo_id,
+            remote: name.to_owned(),
+            hidden: shown_in_history,
+        }),
+    });
+    items.push(ContextMenuItem::Separator);
     items.push(ContextMenuItem::Entry {
         label: "Fetch all".into(),
         icon: Some("icons/arrow_down.svg".into()),
@@ -53,6 +68,14 @@ pub(super) fn model(this: &PopoverHost, repo_id: RepoId, name: &str) -> ContextM
         disabled: false,
         action: Box::new(ContextMenuAction::PruneLocalTags { repo_id }),
     });
+    items.push(ContextMenuItem::Separator);
+    // Focusing a remote seeds the walk from every branch it tracks, so the graph
+    // shows that remote's work and nothing else.
+    items.push(super::focus::entry(
+        this,
+        repo_id,
+        gitcomet_core::domain::HistoryFocus::remote(name),
+    ));
     items.push(ContextMenuItem::Separator);
 
     let open_in_browser_ix = items.len();

@@ -284,6 +284,7 @@ fn deleted_linked_worktree_files_keep_diff_and_path_actions_without_file_opening
     let repo_id = RepoId(1);
     let mut repo = opening_repo_state(repo_id, Path::new("/tmp/origin-checkout"));
     repo.open = Loadable::Ready(());
+    repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
     repo.history_state.worktree_selection = Some(linked.path().to_path_buf());
     repo.worktree_dirty = Loadable::Ready(Arc::new(vec![
         gitcomet_core::domain::WorktreeDirtySummary {

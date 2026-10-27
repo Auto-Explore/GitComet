@@ -86,6 +86,15 @@ const STAGED_NAMES: StatusSectionNames = StatusSectionNames {
 
 impl DetailsPaneView {
     pub(super) fn status_sections_view(&mut self, cx: &mut gpui::Context<Self>) -> AnyElement {
+        if self.active_repo().is_some_and(RepoState::is_bare) {
+            return components::empty_state(
+                self.theme,
+                "No working tree in bare mode",
+                "Select a commit to browse its files and changes. Fetch and push remain available.",
+            )
+            .debug_selector(|| "bare_mode_status".to_owned())
+            .into_any_element();
+        }
         let v = self.status_view_inputs(cx);
         let status_sections = self.status_sections_column(&v, cx);
 

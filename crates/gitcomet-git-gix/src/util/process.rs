@@ -631,32 +631,45 @@ pub(super) fn run_command_with_timeout_auth(
     cancellation: Option<&CancellationToken>,
     allow_auth: bool,
 ) -> Result<GitOutput> {
-    run_command_with_timeout_auth_stdin(cmd, label, timeout, cancellation, allow_auth, None)
+    run_command_with_timeout_auth_activity(
+        cmd,
+        label,
+        timeout,
+        cancellation,
+        allow_auth,
+        CommandActivity::Report,
+    )
 }
 
-fn run_command_with_timeout_auth_stdin(
+enum CommandActivity {
+    Report,
+    Silent,
+}
+
+fn run_command_with_timeout_auth_activity(
     mut cmd: Command,
     label: &str,
     timeout: Duration,
     cancellation: Option<&CancellationToken>,
     allow_auth: bool,
-    stdin: Option<Stdio>,
+    activity: CommandActivity,
 ) -> Result<GitOutput> {
     let mut timing = crate::command_trace::CommandTimer::new(label);
     configure_background_command(&mut cmd);
     configure_git_process_tree(&mut cmd);
     configure_non_interactive_git(&mut cmd);
-    if let Some(stdin) = stdin {
-        cmd.stdin(stdin);
-    }
     let operation = git_operation::current();
     reject_cancelled_command(
         cancellation,
         operation.as_ref().map(GitOperationContext::cancellation),
     )?;
     let liveness = LivenessClock::new();
-    let trace2 = Trace2Monitor::start(&mut cmd, operation.as_ref(), &liveness);
-    let lfs_progress = LfsProgressMonitor::start(&mut cmd, operation.as_ref(), &liveness);
+    let activity = match activity {
+        CommandActivity::Report => operation.as_ref(),
+        CommandActivity::Silent => None,
+    };
+    let trace2 = Trace2Monitor::start(&mut cmd, activity, &liveness);
+    let lfs_progress = LfsProgressMonitor::start(&mut cmd, activity, &liveness);
     let askpass_context = if command_may_require_auth(&cmd) {
         let auth = if allow_auth { command_git_auth() } else { None };
         let script = create_askpass_script()
@@ -677,7 +690,7 @@ fn run_command_with_timeout_auth_stdin(
     })?;
     timing.stage("spawn");
 
-    let (activity_sender, activity_handle) = start_activity_output_aggregator(operation.as_ref());
+    let (activity_sender, activity_handle) = start_activity_output_aggregator(activity);
     let stdout_handle = spawn_read_pipe(
         child.stdout.take(),
         activity_sender
@@ -776,6 +789,26 @@ fn run_command_with_timeout_auth_stdin(
 
 pub(crate) fn run_git_raw_output(cmd: Command, label: &str) -> Result<GitOutput> {
     run_command_with_timeout(cmd, label, git_command_timeout(), None)
+}
+
+pub(crate) fn run_git_metadata_output(cmd: Command, label: &str) -> Result<GitOutput> {
+    run_command_with_timeout_auth_activity(
+        cmd,
+        label,
+        git_command_timeout(),
+        None,
+        false,
+        CommandActivity::Silent,
+    )
+}
+
+pub(crate) fn run_git_metadata_capture(cmd: Command, label: &str) -> Result<Vec<u8>> {
+    let output = run_git_metadata_output(cmd, label)?;
+    if output.status.success() {
+        Ok(output.stdout)
+    } else {
+        Err(git_command_failed_error(label, output))
+    }
 }
 
 /// Run a local git command, feeding `input` to its stdin and returning captured

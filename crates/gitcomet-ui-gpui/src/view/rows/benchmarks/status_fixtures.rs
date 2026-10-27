@@ -327,6 +327,7 @@ impl StatusSelectDiffOpenFixture {
         let mut repo = build_synthetic_repo_state(20, 40, 2, 0, 0, 0, &commits);
         seed_repo_status_entries(&mut repo, entries, Vec::new());
         repo.open = Loadable::Ready(());
+        repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
 
         Self {
             baseline: bench_app_state(vec![repo], Some(RepoId(1))),
@@ -342,6 +343,7 @@ impl StatusSelectDiffOpenFixture {
         let mut repo = build_synthetic_repo_state(20, 40, 2, 0, 0, 0, &commits);
         seed_repo_status_entries(&mut repo, Vec::new(), entries);
         repo.open = Loadable::Ready(());
+        repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
 
         Self {
             baseline: bench_app_state(vec![repo], Some(RepoId(1))),

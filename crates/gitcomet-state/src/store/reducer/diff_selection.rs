@@ -549,6 +549,28 @@ pub(super) fn fill_select_diff_inline(
     mode: ContentViewMode,
     effects: &mut SelectDiffEffects,
 ) {
+    let working_tree = match &target {
+        DiffTarget::WorkingTree { worktree: None, .. }
+        | DiffTarget::CommitRange {
+            to_commit_id: None, ..
+        } => Some(repo_id),
+        DiffTarget::WorkingTree {
+            worktree: Some(path),
+            ..
+        } => state
+            .repos
+            .iter()
+            .find(|repo| &repo.spec.workdir == path)
+            .map(|repo| repo.id),
+        DiffTarget::Commit { .. }
+        | DiffTarget::CommitRange {
+            to_commit_id: Some(_),
+            ..
+        } => None,
+    };
+    if working_tree.is_some_and(|repo_id| super::refuse_bare_worktree_action(state, repo_id)) {
+        return;
+    }
     // Classify before planning, not at the `SelectDiff` message: every route
     // that puts a working-tree path on screen — plain selection, the file
     // content/editor views, viewer and global back/forward — lands here, and

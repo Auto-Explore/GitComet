@@ -235,11 +235,12 @@ impl HistoryView {
             history_scope: repo.history_state.history_scope,
             log_source: Arc::as_ptr(index) as usize,
             history_author_filter: repo.history_state.history_author_filter.clone(),
+            history_focus: repo.history_state.history_focus.clone(),
             head_branch_rev: repo.head_branch_rev,
             detached_head_commit: repo.detached_head_commit.clone(),
             head_branch_target: Self::attached_head_target_for_repo(repo),
             branches_rev: repo.branches_rev,
-            remote_branches_rev: repo.remote_branches_rev,
+            remote_branches: HistoryRemoteBranchesKey::of(repo),
             stashes_rev: repo.stashes_rev,
         }
     }
@@ -255,6 +256,7 @@ impl HistoryView {
             shown.key.repo_id != repo_id
                 || shown.key.history_scope != repo.history_state.history_scope
                 || shown.key.history_author_filter != repo.history_state.history_author_filter
+                || shown.key.history_focus != repo.history_state.history_focus
         }) {
             self.indexed = Default::default();
             self.scroll_interaction.borrow_mut().logical = None;
@@ -301,10 +303,7 @@ impl HistoryView {
             Loadable::Ready(rows) => rows.clone(),
             _ => Arc::new(Vec::new()),
         };
-        let remotes = match &repo.remote_branches {
-            Loadable::Ready(rows) => rows.clone(),
-            _ => Arc::new(Vec::new()),
-        };
+        let remotes = repo.history_remote_branches();
         let stashes = match &repo.stashes {
             Loadable::Ready(rows) => rows.clone(),
             _ => Arc::new(Vec::new()),
@@ -319,9 +318,10 @@ impl HistoryView {
                 .as_ref()
                 .map(|id| id.as_ref().to_owned())
                 .or_else(|| {
-                    index
-                        .mode
-                        .guarantees_head_visibility()
+                    // Row 0 is HEAD only when the walk was seeded from HEAD.
+                    repo.history_state
+                        .history_focus
+                        .head_is_first(index.mode)
                         .then(|| index.commit_id(0))
                         .flatten()
                         .map(|id| id.as_ref().to_owned())
@@ -1119,7 +1119,7 @@ impl HistoryView {
                                 .as_ref()
                                 .map(|head| CommitId(head.clone().into())),
                             branches_rev: shown.key.branches_rev,
-                            remote_branches_rev: shown.key.remote_branches_rev,
+                            remote_branches: shown.key.remote_branches.clone(),
                             tags_rev: task_key.tags_rev,
                         },
                         row_vms: (start..end)
@@ -1614,11 +1614,15 @@ mod cache_regressions {
             history_scope: LogScope::AllBranches,
             log_source: 0,
             history_author_filter: None,
+            history_focus: Default::default(),
             head_branch_rev: 1,
             detached_head_commit: None,
             head_branch_target: Some(head.clone()),
             branches_rev: 1,
-            remote_branches_rev: 1,
+            remote_branches: HistoryRemoteBranchesKey {
+                rev: 1,
+                hidden: Default::default(),
+            },
             stashes_rev: 1,
         };
         let presentation = Presentation {

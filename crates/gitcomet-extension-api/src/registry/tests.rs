@@ -23,6 +23,7 @@ fn command(label: &'static str) -> CommandDescriptor {
         category: "Example".into(),
         keywords: "".into(),
         requires_repository: false,
+        repository_requirement: gitcomet_core::domain::RepositoryRequirement::Repository,
         run: Rc::new(|_: CommandContext, _: &mut Window, _: &mut App| {}),
     }
 }

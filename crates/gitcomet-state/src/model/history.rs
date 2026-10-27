@@ -2,8 +2,9 @@
 
 use super::{CommitSignatureMap, Loadable, RepoState, Shared};
 use gitcomet_core::domain::*;
+use gitcomet_core::services::HistoryWalk;
 use rustc_hash::FxHashSet;
-use std::collections::VecDeque;
+use std::collections::{BTreeSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -49,6 +50,8 @@ pub struct HistoryState {
     /// Case-insensitive author filter for the history, or `None` for all
     /// authors. Matches the author name shown in the UI.
     pub history_author_filter: Option<String>,
+    /// The refs the history walk starts from, empty for the normal walk.
+    pub history_focus: HistoryFocusSet,
     pub log: Loadable<Shared<LogPage>>,
     pub retained_log_while_loading: Option<Shared<LogPage>>,
     pub log_loading_more: bool,
@@ -203,6 +206,7 @@ impl Default for HistoryState {
             find: Default::default(),
             history_scope: LogScope::default(),
             history_author_filter: None,
+            history_focus: HistoryFocusSet::default(),
             log: Loadable::NotLoaded,
             retained_log_while_loading: None,
             log_loading_more: false,
@@ -529,12 +533,56 @@ impl RepoState {
         self.history_state.log_scan_progress = scanned;
     }
 
+    /// Remotes the history graph leaves out, from the shared repository
+    /// preferences.
+    pub fn history_hidden_remotes(&self) -> &BTreeSet<String> {
+        static NONE: BTreeSet<String> = BTreeSet::new();
+        self.shared_preferences.as_ref().map_or(&NONE, |snapshot| {
+            &snapshot.preferences.history_hidden_remotes
+        })
+    }
+
+    /// The remote branches the history graph shows: the loaded ones, without
+    /// the hidden remotes'.
+    pub fn history_remote_branches_iter(&self) -> impl Iterator<Item = &RemoteBranch> {
+        let hidden = self.history_hidden_remotes();
+        self.remote_branches
+            .ready()
+            .into_iter()
+            .flat_map(|branches| branches.iter())
+            .filter(move |branch| !hidden.contains(&branch.remote))
+    }
+
+    /// [`Self::history_remote_branches_iter`] as an owned list, shared with the
+    /// loaded one while nothing is hidden.
+    pub fn history_remote_branches(&self) -> Shared<Vec<RemoteBranch>> {
+        match &self.remote_branches {
+            Loadable::Ready(branches) if self.history_hidden_remotes().is_empty() => {
+                Shared::clone(branches)
+            }
+            _ => Shared::new(self.history_remote_branches_iter().cloned().collect()),
+        }
+    }
+
+    /// What the history pane walks: its mode, without the hidden remotes.
+    pub fn history_walk(&self) -> HistoryWalk {
+        HistoryWalk::new(
+            self.history_state.history_scope,
+            self.history_hidden_remotes().iter().map(String::as_str),
+        )
+    }
+
     pub(crate) fn set_log_scope(&mut self, scope: LogScope) {
         if self.history_state.history_scope == scope {
             return;
         }
-        self.history_state.indexed.reset_query();
         self.history_state.history_scope = scope;
+        self.reset_history_readers();
+    }
+
+    /// The walk changed: drop the index query and authors read for the old one.
+    pub(crate) fn reset_history_readers(&mut self) {
+        self.history_state.indexed.reset_query();
         self.history_state.authors.cancellation.cancel();
         self.bump_log_revs();
     }
@@ -545,6 +593,16 @@ impl RepoState {
         }
         self.history_state.indexed.reset_query();
         self.history_state.history_author_filter = author;
+        self.bump_log_revs();
+    }
+
+    pub(crate) fn set_history_focus(&mut self, focus: HistoryFocusSet) {
+        if self.history_state.history_focus == focus {
+            return;
+        }
+        self.history_state.indexed.reset_query();
+        self.history_state.history_focus = focus;
+        self.history_state.authors.cancellation.cancel();
         self.bump_log_revs();
     }
 

@@ -305,6 +305,7 @@ fn listed_worktree_badge_double_click_opens_closed_repo_tab(cx: &mut gpui::TestA
         &store_for_test,
         repo_id,
         vec![Worktree {
+            bare: false,
             path: linked_repo.clone(),
             head: None,
             branch: Some("feature/workspace".to_string()),

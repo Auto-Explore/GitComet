@@ -129,7 +129,10 @@ fn palette_rows(registry: &Registry) -> &'static [CommandEntry] {
                 category: leak(command.category.as_ref()),
                 requires_repo: command.requires_repository,
                 keywords: leak(command.keywords.as_ref()),
-                needs: Needs::Nothing,
+                needs: match command.repository_requirement {
+                    gitcomet_core::domain::RepositoryRequirement::Repository => Needs::Nothing,
+                    gitcomet_core::domain::RepositoryRequirement::WorkingTree => Needs::WorkingTree,
+                },
             }
         })
         .collect();
@@ -197,6 +200,7 @@ pub(in crate::view) struct ExtensionMenuEntry {
     pub(in crate::view) id: SharedString,
     pub(in crate::view) label: SharedString,
     pub(in crate::view) requires_repository: bool,
+    pub(in crate::view) repository_requirement: gitcomet_core::domain::RepositoryRequirement,
 }
 
 /// The extension entries of `location`, in registration order; none while
@@ -217,6 +221,7 @@ pub(in crate::view) fn menu_entries(location: MenuLocation, cx: &App) -> Rc<[Ext
                 id: item.command.to_string().into(),
                 label: command.label.clone(),
                 requires_repository: command.requires_repository,
+                repository_requirement: command.repository_requirement,
             })
         })
         .collect()
@@ -224,7 +229,7 @@ pub(in crate::view) fn menu_entries(location: MenuLocation, cx: &App) -> Rc<[Ext
 
 /// The macOS menu-bar items for [`MenuLocation::Application`].
 #[cfg(target_os = "macos")]
-pub(crate) fn macos_menu_items(cx: &App) -> Vec<gpui::MenuItem> {
+pub(crate) fn macos_menu_items(bare: bool, cx: &App) -> Vec<gpui::MenuItem> {
     menu_entries(MenuLocation::Application, cx)
         .iter()
         .map(|entry| {
@@ -233,6 +238,10 @@ pub(crate) fn macos_menu_items(cx: &App) -> Vec<gpui::MenuItem> {
                 RunExtensionCommand {
                     id: entry.id.to_string(),
                 },
+            )
+            .disabled(
+                bare && entry.repository_requirement
+                    == gitcomet_core::domain::RepositoryRequirement::WorkingTree,
             )
         })
         .collect()
@@ -1662,6 +1671,8 @@ impl GitCometView {
         };
         let run = Rc::clone(&command.run);
         let requires_repository = command.requires_repository;
+        let requirement = command.repository_requirement;
+        let store = Arc::clone(&self.store);
         let window_handle = self.window_handle;
         let window_id = window_handle.window_id();
         let target = match target {
@@ -1688,6 +1699,25 @@ impl GitCometView {
                 };
                 if requires_repository && repository.is_none() {
                     return;
+                }
+                if requirement == gitcomet_core::domain::RepositoryRequirement::WorkingTree {
+                    let has_working_tree = repository.as_ref().is_some_and(|repository| {
+                        store
+                            .snapshot()
+                            .repos
+                            .iter()
+                            .find(|repo| repo.id == repository.repo_id())
+                            .is_some_and(RepoState::has_working_tree)
+                    });
+                    if !has_working_tree {
+                        let _ = host.toast(
+                            gitcomet_extension_api::NotificationKind::Warning,
+                            gitcomet_core::domain::WORKING_TREE_REQUIRED_MESSAGE,
+                            Vec::new(),
+                            cx,
+                        );
+                        return;
+                    }
                 }
                 crate::view::perf::extension_dispatch();
                 run(

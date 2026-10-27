@@ -15,6 +15,12 @@ const BRANCH_TREE_DEPTH_STEP_PX: f32 = 14.0;
 const BRANCH_TREE_TOGGLE_SLOT_PX: f32 = 14.0;
 const BRANCH_TREE_ICON_SLOT_PX: f32 = 16.0;
 const BRANCH_TREE_GAP_PX: f32 = 6.0;
+/// Extra indent every row takes while the history is focused, making room for
+/// the eye column on the left. Reserved on every row, not just branch rows, so
+/// the sections keep lining up with each other.
+const BRANCH_TREE_FOCUS_GUTTER_PX: f32 = 16.0;
+/// Where the eye's slot starts inside that gutter.
+const BRANCH_TREE_FOCUS_EYE_LEFT_PX: f32 = 4.0;
 const BRANCH_BADGE_GAP_PX: f32 = 3.0;
 /// Widest a branch row's worktree pill may grow before its label starts
 /// truncating. Wide enough for the folder names worktrees usually carry,
@@ -49,7 +55,21 @@ struct SidebarRowContext {
     icon_muted: gpui::Rgba,
     selected_branch_commit_id: Option<CommitId>,
     selected_commit: Option<CommitId>,
+    history_focus: gitcomet_core::domain::HistoryFocusSet,
+    /// Whether rows carry the eye column: while the history is focused, and
+    /// never in the collapsed rail's popover, which has no room for it.
+    focus_eyes: bool,
     content_inset: f32,
+}
+
+/// What a row's eye shows.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum FocusEyeState {
+    /// The ref is focused, or every member of the group is.
+    Focused,
+    /// Some members of the group are focused, some are not.
+    Partly,
+    Unfocused,
 }
 
 /// One row's list index and resolved background.
@@ -71,6 +91,10 @@ impl SidebarRowContext {
     ) -> Self {
         let is_collapsed_popover = surface == SidebarRowSurface::Rail;
         let theme = this.theme;
+        let history_focus = this
+            .active_repo()
+            .map(|repo| repo.history_state.history_focus.clone())
+            .unwrap_or_default();
         Self {
             repo_id,
             surface,
@@ -99,6 +123,8 @@ impl SidebarRowContext {
             selected_commit: this
                 .active_repo()
                 .and_then(|repo| repo.history_state.selected_commit.clone()),
+            focus_eyes: !history_focus.is_empty() && !is_collapsed_popover,
+            history_focus,
             content_inset: if is_collapsed_popover {
                 0.0
             } else {
@@ -120,9 +146,45 @@ impl SidebarRowContext {
     }
 
     fn indent_px(&self, depth: usize) -> Pixels {
+        let focus_gutter = if self.focus_eyes {
+            BRANCH_TREE_FOCUS_GUTTER_PX
+        } else {
+            0.0
+        };
         self.px(self.content_inset
+            + focus_gutter
             + BRANCH_TREE_BASE_PAD_PX
             + depth as f32 * BRANCH_TREE_DEPTH_STEP_PX)
+    }
+
+    /// The eye toggle for one row, pinned to the left of the focus gutter so
+    /// every eye lands in one column whatever the row's depth. `None` while the
+    /// history is not focused. The caller gives it an id and its click.
+    ///
+    /// Open and in the accent colour when focused, open but dim when only part
+    /// of a group is, crossed out otherwise.
+    fn focus_eye_slot(&self, state: FocusEyeState) -> Option<gpui::Div> {
+        if !self.focus_eyes {
+            return None;
+        }
+        let (path, color) = match state {
+            FocusEyeState::Focused => ("icons/eye.svg", self.theme.colors.accent.foreground),
+            FocusEyeState::Partly => ("icons/eye.svg", self.theme.colors.foreground.secondary),
+            FocusEyeState::Unfocused => ("icons/eye_off.svg", self.icon_muted),
+        };
+        Some(
+            div()
+                .absolute()
+                .top_0()
+                .left(self.px(self.content_inset + BRANCH_TREE_FOCUS_EYE_LEFT_PX))
+                .w(self.px(BRANCH_TREE_ICON_SLOT_PX))
+                .h_full()
+                .flex()
+                .items_center()
+                .justify_center()
+                .cursor_pointer()
+                .child(self.svg_icon(path, color, 12.0)),
+        )
     }
 
     fn svg_icon(&self, path: &'static str, color: gpui::Rgba, size_px: f32) -> gpui::Svg {
@@ -247,6 +309,27 @@ impl SidebarRowContext {
             badge = badge.debug_selector(move || debug_selector.clone());
         }
         badge
+    }
+}
+
+/// Whether the history focus covers this branch row. Asked on every paint, so
+/// it matches names in place rather than building a target to compare.
+fn branch_in_history_focus(
+    focus: &gitcomet_core::domain::HistoryFocusSet,
+    target: &BranchMenuTarget,
+) -> bool {
+    match target {
+        BranchMenuTarget::Local { name } => focus.covers_local_branch(name),
+        BranchMenuTarget::Remote { remote, branch } => focus.covers_remote_branch(remote, branch),
+    }
+}
+
+fn focus_target_for_branch(target: &BranchMenuTarget) -> gitcomet_core::domain::HistoryFocus {
+    match target {
+        BranchMenuTarget::Local { name } => gitcomet_core::domain::HistoryFocus::local_branch(name),
+        BranchMenuTarget::Remote { remote, branch } => {
+            gitcomet_core::domain::HistoryFocus::remote_branch(remote, branch)
+        }
     }
 }
 
@@ -472,6 +555,7 @@ impl SidebarPaneView {
                     name,
                     collapsed,
                     collapse_key,
+                    hidden_in_history,
                 } => Self::sidebar_remote_header_row(
                     this,
                     &ctx,
@@ -479,6 +563,7 @@ impl SidebarPaneView {
                     name,
                     collapsed,
                     collapse_key,
+                    hidden_in_history,
                     cx,
                 ),
                 BranchSidebarRow::GroupHeader {

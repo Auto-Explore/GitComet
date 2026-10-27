@@ -289,6 +289,7 @@ fn exercise_with_failure(
     }
     let mut repo = opening_repo_state(REPO, dir.path());
     repo.open = Loadable::Ready(());
+    repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
     repo.worktree_status = Loadable::Ready(status.unstaged.clone());
     repo.staged_status = Loadable::Ready(status.staged.clone());
     repo.status = Loadable::Ready(Arc::new(status));
@@ -921,6 +922,7 @@ fn status_section_space_after_mouse_selection_advances_and_keeps_list_focus(
                 .unwrap();
             let mut repo = opening_repo_state(REPO, dir.path());
             repo.open = Loadable::Ready(());
+            repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
             repo.worktree_status = Loadable::Ready(status.unstaged.clone());
             repo.staged_status = Loadable::Ready(status.staged.clone());
             repo.status = Loadable::Ready(Arc::new(status));
@@ -1142,6 +1144,7 @@ fn checking_out_a_conflict_side_preserves_an_unrelated_diff(cx: &mut gpui::TestA
     );
     let mut repo = opening_repo_state(REPO, dir.path());
     repo.open = Loadable::Ready(());
+    repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
     repo.worktree_status = Loadable::Ready(status.unstaged.clone());
     repo.staged_status = Loadable::Ready(status.staged.clone());
     repo.status = Loadable::Ready(Arc::new(status));
@@ -1214,6 +1217,7 @@ fn open_text_resolver(
         .unwrap();
     let mut repo = opening_repo_state(REPO, dir.path());
     repo.open = Loadable::Ready(());
+    repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
     repo.worktree_status = Loadable::Ready(status.unstaged.clone());
     repo.staged_status = Loadable::Ready(status.staged.clone());
     repo.status = Loadable::Ready(Arc::new(status));
@@ -1761,6 +1765,7 @@ fn press_editor_keys(cx: &mut gpui::TestAppContext, focus: EditorKeyFocus) {
         .unwrap();
     let mut repo = opening_repo_state(REPO, dir.path());
     repo.open = Loadable::Ready(());
+    repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
     repo.worktree_status = Loadable::Ready(status.unstaged.clone());
     repo.staged_status = Loadable::Ready(status.staged.clone());
     repo.status = Loadable::Ready(Arc::new(status));
@@ -1852,6 +1857,7 @@ fn resolve_button_menu_discards_a_conflict_as_ours(cx: &mut gpui::TestAppContext
         .unwrap();
     let mut repo = opening_repo_state(REPO, dir.path());
     repo.open = Loadable::Ready(());
+    repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
     repo.worktree_status = Loadable::Ready(status.unstaged.clone());
     repo.staged_status = Loadable::Ready(status.staged.clone());
     repo.status = Loadable::Ready(Arc::new(status));

@@ -93,6 +93,31 @@ pub enum BranchExistsChoice {
 }
 
 impl RepoActionKind {
+    pub fn repository_requirement(self) -> RepositoryRequirement {
+        match self {
+            Self::CreateBranch
+            | Self::RenameBranch
+            | Self::DeleteBranch
+            | Self::ForceDeleteBranch
+            | Self::DeleteBranches => RepositoryRequirement::Repository,
+            Self::CheckoutBranch
+            | Self::CheckoutRemoteBranch
+            | Self::CheckoutCommit
+            | Self::CherryPickCommit
+            | Self::CreateBranchAndCheckout
+            | Self::StagePath
+            | Self::StagePaths
+            | Self::UnstagePath
+            | Self::UnstagePaths
+            | Self::DiscardWorktreeChangesPath
+            | Self::DiscardWorktreeChangesPaths
+            | Self::Stash
+            | Self::ApplyStash
+            | Self::PopStash
+            | Self::DropStash => RepositoryRequirement::WorkingTree,
+        }
+    }
+
     pub(crate) fn status_diff_area(self) -> Option<DiffArea> {
         match self {
             Self::StagePath | Self::StagePaths => Some(DiffArea::Unstaged),
@@ -379,6 +404,16 @@ pub enum Msg {
     ReloadRepo {
         repo_id: RepoId,
     },
+    PreviewDisableBareMode {
+        repo_id: RepoId,
+    },
+    DisableBareMode {
+        repo_id: RepoId,
+        preview: Arc<BareConversionPreview>,
+    },
+    ClearBareConversionPreview {
+        repo_id: RepoId,
+    },
     RepoActivated {
         repo_id: RepoId,
     },
@@ -430,6 +465,26 @@ pub enum Msg {
     SetHistoryAuthorFilter {
         repo_id: RepoId,
         author: Option<String>,
+    },
+    /// Focuses the history on a set of refs: the walk is reseeded from them, so
+    /// only the commits they reach remain. An empty set clears the focus.
+    SetHistoryFocus {
+        repo_id: RepoId,
+        focus: HistoryFocusSet,
+    },
+    /// Focuses `target`, or unfocuses it when the focus already covers it. The
+    /// per-ref menu entry and the sidebar's eye are toggles, and this is what
+    /// they send.
+    ToggleHistoryFocus {
+        repo_id: RepoId,
+        target: HistoryFocus,
+    },
+    /// Focuses every one of `targets`, or unfocuses every one of them. A branch
+    /// group's menu entries and eye send this with the group's members.
+    FocusHistoryRefs {
+        repo_id: RepoId,
+        targets: Vec<HistoryFocus>,
+        focused: bool,
     },
     LoadMoreHistory {
         repo_id: RepoId,
@@ -1314,6 +1369,23 @@ pub enum Msg {
 
 #[derive(strum::IntoStaticStr)]
 pub enum InternalMsg {
+    QuiesceRepository {
+        common_dir: PathBuf,
+        cancellation: gitcomet_core::services::CancellationToken,
+        reply: std::sync::mpsc::Sender<()>,
+    },
+    RepositoryModeLoaded {
+        repo_id: RepoId,
+        result: Result<(RepositoryMode, Option<CommitId>), Error>,
+    },
+    BareConversionPreviewLoaded {
+        repo_id: RepoId,
+        result: Result<BareConversionPreview, Error>,
+    },
+    BareModeDisabled {
+        common_dir: PathBuf,
+        result: Result<BareModeDisabled, Error>,
+    },
     AuthPromptValidated {
         generation: u64,
         result: gitcomet_core::auth::PassphraseValidation,
@@ -1368,6 +1440,8 @@ pub enum InternalMsg {
         message: Box<InternalMsg>,
     },
     RepoOpenedOk {
+        repository_mode: RepositoryMode,
+        head_commit: Option<CommitId>,
         preferences: Option<crate::model::RepositoryPreferencesSnapshot>,
         repo_id: RepoId,
         spec: RepoSpec,

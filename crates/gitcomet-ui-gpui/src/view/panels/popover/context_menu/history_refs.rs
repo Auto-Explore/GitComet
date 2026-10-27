@@ -24,16 +24,13 @@ pub(super) fn model(this: &PopoverHost, repo_id: RepoId, commit_id: &CommitId) -
                 .map(|branch| HistoryMenuRef::Branch(BranchMenuTarget::local(&branch.name))),
         );
     }
-    if let Some(branches) = repo.remote_branches.ready() {
-        refs.extend(
-            branches
-                .iter()
-                .filter(|branch| branch.target == *commit_id)
-                .map(|branch| {
-                    HistoryMenuRef::Branch(BranchMenuTarget::remote(&branch.remote, &branch.name))
-                }),
-        );
-    }
+    refs.extend(
+        repo.history_remote_branches_iter()
+            .filter(|branch| branch.target == *commit_id)
+            .map(|branch| {
+                HistoryMenuRef::Branch(BranchMenuTarget::remote(&branch.remote, &branch.name))
+            }),
+    );
     if let Some(tags) = repo.tags.ready() {
         refs.extend(
             tags.iter()

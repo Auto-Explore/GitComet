@@ -318,6 +318,7 @@ mod file_list_controller;
 mod file_operations;
 mod fingerprint;
 mod git_version_notice;
+pub(crate) mod history_focus;
 mod history_graph;
 pub(crate) mod history_mode;
 mod history_refs_hover;
@@ -389,8 +390,8 @@ use caches::{
     HistoryAuthorVm, HistoryBaseCache, HistoryBaseCacheRequest, HistoryBaseRowVm,
     HistoryBranchChipKind, HistoryBranchChipVm, HistoryCache, HistoryCacheBuildRequest,
     HistoryDecorationCache, HistoryDecorationCacheRequest, HistoryDecorationRowVm,
-    HistoryDisplayKey, HistoryRefListItem, HistoryRefListItemKind, HistoryStashIdsCache,
-    HistoryTextVm, HistoryWorktreeSummaryCache,
+    HistoryDisplayKey, HistoryRefListItem, HistoryRefListItemKind, HistoryRemoteBranchesKey,
+    HistoryStashIdsCache, HistoryTextVm, HistoryWorktreeSummaryCache,
 };
 use chrome::TitleBarView;
 use conflict_resolver::{ConflictPickSide, ConflictResolverViewMode};

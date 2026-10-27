@@ -98,7 +98,8 @@ pub(in crate::view) fn pull_enabled(
     repo: &RepoState,
     settings: &gitcomet_state::model::LargeFileSettings,
 ) -> bool {
-    repo.annex_takes_over_pull_push(settings) || head_branch_has_live_upstream(repo)
+    repo.annex_takes_over_pull_push(settings)
+        || (!repo.is_bare() && head_branch_has_live_upstream(repo))
 }
 
 /// Decide whether Pull can run. A configured upstream is actionable only when
@@ -110,6 +111,9 @@ pub(in crate::view) fn pull_request(
     repo: &RepoState,
     settings: &gitcomet_state::model::LargeFileSettings,
 ) -> PullRequest {
+    if repo.is_bare() && !repo.annex_takes_over_pull_push(settings) {
+        return PullRequest::NotReady;
+    }
     if pull_enabled(repo, settings) {
         return PullRequest::Pull;
     }

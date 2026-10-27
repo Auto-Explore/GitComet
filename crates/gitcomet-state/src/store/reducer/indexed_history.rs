@@ -83,6 +83,7 @@ pub(super) fn reduce(state: &mut AppState, event: Event) -> Vec<Effect> {
             let Some(snapshot) = repo.history_state.log_snapshot.clone() else {
                 return Vec::new();
             };
+            let walk = repo.history_walk();
             let history = &mut repo.history_state.indexed;
             if history.requested.as_ref() == Some(&snapshot) && history.epoch == repo.load_epoch {
                 return Vec::new();
@@ -112,8 +113,9 @@ pub(super) fn reduce(state: &mut AppState, event: Event) -> Vec<Effect> {
                 return vec![Effect::IndexedHistory(Work::Build {
                     repo_id,
                     seq: history.seq,
-                    mode: repo.history_state.history_scope,
+                    walk,
                     author: repo.history_state.history_author_filter.clone(),
+                    focus: repo.history_state.history_focus.clone(),
                     cancellation: history.cancellation.clone(),
                 })];
             }

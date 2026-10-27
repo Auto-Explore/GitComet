@@ -168,7 +168,16 @@ fn main() {
         if let Some(HistoryReadResult::Page { page, snapshot }) = measure(
             iteration,
             "history",
-            || repo.read_history(mode, None, &history, &cancellation, &mut |_| {}),
+            || {
+                repo.read_history(
+                    &mode.into(),
+                    None,
+                    &Default::default(),
+                    &history,
+                    &cancellation,
+                    &mut |_| {},
+                )
+            },
             |result| match result {
                 HistoryReadResult::Page { page, .. } => json!({"commits": page.commits.len()}),
                 HistoryReadResult::Unchanged => json!("unchanged"),

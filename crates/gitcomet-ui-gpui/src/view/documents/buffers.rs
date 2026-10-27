@@ -624,7 +624,9 @@ impl DocumentOwner {
                     return false;
                 };
                 let buffer = document.read();
-                buffer.repository == Some(repo_id)
+                repository.has_working_tree()
+                    && !repository.bare_mode_conversion.is_busy()
+                    && buffer.repository == Some(repo_id)
                     && path == &buffer.identity.0
                     && path.starts_with(&repository.spec.workdir)
                     && worktree.as_ref() == Some(&repository.spec.workdir)
@@ -779,6 +781,79 @@ impl DocumentOwner {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[gpui::test]
+    fn repository_document_save_refuses_bare_and_conversion_after_origin_was_captured(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        use gitcomet_core::domain::{RepoSpec, RepositoryMode};
+        use gitcomet_core::filesystem::Operation;
+        use gitcomet_state::model::{AppState, BareModeConversionState, Loadable, RepoState};
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("edited.txt");
+        std::fs::write(&path, "original").unwrap();
+        let (store, _events) =
+            AppStore::new_test(std::sync::Arc::new(crate::view::test_support::TestBackend));
+        let store = std::sync::Arc::new(store);
+        let mut repo = RepoState::new_opening(
+            RepoId(1),
+            RepoSpec {
+                workdir: directory.path().to_path_buf(),
+            },
+        );
+        repo.open = Loadable::Ready(());
+        repo.repository_mode = Some(RepositoryMode::WorkingTree);
+        let origin = SaveOrigin::Repository {
+            repo_id: repo.id,
+            lifetime: repo.lifetime(),
+            session: None,
+        };
+        let base = AppState {
+            active_repo: Some(repo.id),
+            repos: vec![repo],
+            ..AppState::test_default()
+        };
+        store.replace_snapshot_for_test(std::sync::Arc::new(base.clone()));
+        let pane = crate::view::pane_store::PaneStore::from(store.clone());
+        assert!(
+            pane.document_save_origin(RepoId(1), base.repos[0].lifetime())
+                .is_some()
+        );
+        cx.update(|cx| {
+            let owner = DocumentOwner::new(std::sync::Arc::downgrade(&store), cx);
+            let document = owner.create(DocumentIdentity(path.clone()), Some(RepoId(1)));
+            document.seat_text(10, None, cx);
+            document.edit(20, None, cx);
+            document.retain_text("edited".into(), 3, 20);
+            for (mode, conversion) in [
+                (RepositoryMode::Bare, BareModeConversionState::Idle),
+                (
+                    RepositoryMode::WorkingTree,
+                    BareModeConversionState::Converting,
+                ),
+            ] {
+                let mut state = base.clone();
+                state.repos[0].repository_mode = Some(mode);
+                state.repos[0].bare_mode_conversion = conversion;
+                store.replace_snapshot_for_test(std::sync::Arc::new(state));
+                assert!(
+                    pane.document_save_origin(RepoId(1), base.repos[0].lifetime())
+                        .is_none()
+                );
+                let request = Request::new(Operation::Save {
+                    path: path.clone(),
+                    worktree: Some(directory.path().to_path_buf()),
+                    contents: std::sync::Arc::from(b"edited".as_slice()),
+                    expected: None,
+                    overwrite: true,
+                });
+                assert!(!owner.save(&document, origin, request, 20, "edited".into(), cx));
+                assert!(document.read().saving().is_none());
+                assert!(document.read().dirty());
+                assert_eq!(std::fs::read_to_string(&path).unwrap(), "original");
+            }
+        });
+    }
 
     fn start_pending_save(document: &DocumentBuffer, cx: &mut App) {
         document.seat_text(10, None, cx);

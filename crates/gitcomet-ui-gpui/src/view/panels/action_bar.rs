@@ -187,6 +187,7 @@ fn file_browsing_badge(repo: &RepoState) -> Option<(SharedString, SharedString)>
                 format!("commit {sha}"),
             )
         }
+        None if repo.is_bare() => ("HEAD".to_string(), "HEAD (no committed files)".to_string()),
         None => ("Working tree".to_string(), "the working tree".to_string()),
     };
     Some((
@@ -279,6 +280,8 @@ impl ActionBarView {
             && let Some(repo) = state.repos.iter().find(|r| r.id == repo_id)
         {
             repo.open_rev.hash(&mut hasher);
+            repo.repository_mode.hash(&mut hasher);
+            std::mem::discriminant(&repo.bare_mode_conversion).hash(&mut hasher);
             repo.head_branch_rev.hash(&mut hasher);
             repo.branches_rev.hash(&mut hasher);
             repo.remotes_rev.hash(&mut hasher);
@@ -767,14 +770,17 @@ impl BarItemOwner for ActionBarView {
             .active_repo()
             .and_then(|repo| head_branch_tracking_upstream_name(&repo.head_branch, &repo.branches));
         let active_repo_key = self.active_repo_id().map(|id| id.0).unwrap_or(0);
+        let is_bare = self.active_repo().is_some_and(RepoState::is_bare);
         let can_stash = self
             .active_repo()
             .map(|repo| {
-                repo.worktree_status_entries()
-                    .is_some_and(|entries| !entries.is_empty())
-                    || repo
-                        .staged_status_entries()
+                !repo.is_bare()
+                    && (repo
+                        .worktree_status_entries()
                         .is_some_and(|entries| !entries.is_empty())
+                        || repo
+                            .staged_status_entries()
+                            .is_some_and(|entries| !entries.is_empty()))
             })
             .unwrap_or(false);
 
@@ -918,7 +924,9 @@ impl BarItemOwner for ActionBarView {
             let is_active = active_invoker
                 .as_ref()
                 .is_some_and(|id| id.as_ref() == invoker.as_ref());
-            let tooltip: SharedString = if detached {
+            let tooltip: SharedString = if repo.is_bare() {
+                format!("HEAD: {head}\n{}", gitcomet_core::domain::WORKING_TREE_REQUIRED_MESSAGE).into()
+            } else if detached {
                 "Detached HEAD — click to check out a branch".into()
             } else if let Some((base, _)) = adjusted {
                 format!("On git-annex adjusted branch {head}; commits propagate to {base} through git-annex sync, pull and push").into()
@@ -932,6 +940,7 @@ impl BarItemOwner for ActionBarView {
                     .style(components::ButtonStyle::Subtle)
                     .open(is_active)
                     .selected_bg(menu_selected_bg)
+                    .disabled(repo.is_bare())
                     .on_click_with_bounds(theme, cx, move |this, _e, bounds, window, cx| {
                         this.open_popover_for_bounds(
                             (PopoverKind::BranchPicker {
@@ -1093,7 +1102,14 @@ impl BarItemOwner for ActionBarView {
             )
             .gitcomet_tooltip(
                 theme,
-                pull_tooltip_text(pull_count, pull_tracking_branch_name.as_deref()),
+                if self.active_repo().is_some_and(|repo| {
+                    repo.is_bare()
+                        && !repo.annex_takes_over_pull_push(&self.state.large_file_settings)
+                }) {
+                    gitcomet_core::domain::WORKING_TREE_REQUIRED_MESSAGE.into()
+                } else {
+                    pull_tooltip_text(pull_count, pull_tracking_branch_name.as_deref())
+                },
             );
 
         let push_color = if push_count > 0 {
@@ -1211,7 +1227,9 @@ impl BarItemOwner for ActionBarView {
                 })
                 .gitcomet_tooltip(
                     theme,
-                    if can_stash {
+                    if is_bare {
+                        gitcomet_core::domain::WORKING_TREE_REQUIRED_MESSAGE.into()
+                    } else if can_stash {
                         "Create stash".into()
                     } else {
                         "No changes to stash".into()
@@ -1277,6 +1295,50 @@ impl BarItemOwner for ActionBarView {
             .child(push);
 
         items.push(BuiltinBarItem::Navigation, global_nav);
+        if (self.extension_navigation.is_none() || is_bare)
+            && let Some(badge) = worktree_badge
+        {
+            items.push(BuiltinBarItem::Worktree, badge);
+        }
+        if let Some(repo) = self.active_repo().filter(|repo| repo.is_bare()) {
+            let repo_id = repo.id;
+            let busy = repo.bare_mode_conversion.is_busy();
+            let invoker: SharedString = "repository_mode_badge".into();
+            let is_active = active_invoker.as_deref() == Some(invoker.as_ref());
+            items.push(
+                BuiltinBarItem::RepositoryMode,
+                components::Button::new("repository_mode_badge", "Git Bare")
+                    .style(components::ButtonStyle::Subtle)
+                    .open(is_active)
+                    .selected_bg(menu_selected_bg)
+                    .busy(busy)
+                    .on_click_with_bounds(theme, cx, move |this, _, bounds, window, cx| {
+                        let kind = if this
+                            .active_repo()
+                            .is_some_and(|repo| repo.bare_mode_conversion.is_busy())
+                        {
+                            RepoPopoverKind::DisableBareModeConfirm
+                        } else {
+                            RepoPopoverKind::RepositoryModeMenu
+                        };
+                        this.open_popover_for_bounds(
+                            PopoverKind::Repo { repo_id, kind }.invoked_by(invoker.clone()),
+                            bounds,
+                            window,
+                            cx,
+                        );
+                    })
+                    .debug_selector(|| "repository_mode_badge".to_owned())
+                    .gitcomet_tooltip(
+                        theme,
+                        if busy {
+                            "Disabling bare mode; waiting for verified reopening.".into()
+                        } else {
+                            super::popover::bare_mode::BARE_MODE_TOOLTIP.into()
+                        },
+                    ),
+            );
+        }
         // The selected view owns its context and visibility, in either bar.
         if self.extension_navigation.is_some() {
             if let Some(slot) = self.extension_slot.clone() {
@@ -1292,9 +1354,6 @@ impl BarItemOwner for ActionBarView {
                 );
             }
         } else {
-            if let Some(badge) = worktree_badge {
-                items.push(BuiltinBarItem::Worktree, badge);
-            }
             items.push(BuiltinBarItem::Tracking, tracking_actions);
             if let Some(badge) = historical_badge {
                 items.push(BuiltinBarItem::HistoricalBrowse, badge);
@@ -1321,6 +1380,7 @@ impl BarItemOwner for ActionBarView {
                             .child(
                                 components::Button::new("abort_merge", merge_abort_label)
                                     .style(components::ButtonStyle::Danger)
+                                    .disabled(is_bare)
                                     .on_click(theme, cx, |this, e: &ClickEvent, window, cx| {
                                         if let Some(repo_id) = this.active_repo_id() {
                                             this.open_popover_at(
@@ -1330,6 +1390,13 @@ impl BarItemOwner for ActionBarView {
                                                 cx,
                                             );
                                         }
+                                    })
+                                    .when(is_bare, |button| {
+                                        button.gitcomet_tooltip(
+                                            theme,
+                                            gitcomet_core::domain::WORKING_TREE_REQUIRED_MESSAGE
+                                                .into(),
+                                        )
                                     }),
                             ),
                     )
@@ -1351,7 +1418,7 @@ impl BarItemOwner for ActionBarView {
                             .child(
                                 components::Button::new(banner.abort_id, "Abort")
                                     .style(components::ButtonStyle::Danger)
-                                    .disabled(sequencer_step_busy)
+                                    .disabled(is_bare || sequencer_step_busy)
                                     .on_click(theme, cx, |this, e: &ClickEvent, window, cx| {
                                         if let Some(repo_id) = this.active_repo_id() {
                                             this.open_popover_at(
@@ -1362,15 +1429,26 @@ impl BarItemOwner for ActionBarView {
                                             );
                                         }
                                     })
-                                    .when(sequencer_step_busy, |button| {
-                                        button
-                                            .gitcomet_tooltip(theme, SEQUENCER_BUSY_TOOLTIP.into())
+                                    .when(is_bare || sequencer_step_busy, |button| {
+                                        button.gitcomet_tooltip(
+                                            theme,
+                                            if is_bare {
+                                                gitcomet_core::domain::WORKING_TREE_REQUIRED_MESSAGE
+                                                    .into()
+                                            } else {
+                                                SEQUENCER_BUSY_TOOLTIP.into()
+                                            },
+                                        )
                                     }),
                             )
                             .child(
                                 components::Button::new(banner.continue_id, "Continue")
                                     .style(components::ButtonStyle::Outlined)
-                                    .disabled(rebase_has_unstaged_conflicts || sequencer_step_busy)
+                                    .disabled(
+                                        is_bare
+                                            || rebase_has_unstaged_conflicts
+                                            || sequencer_step_busy,
+                                    )
                                     .on_click(theme, cx, |this, _e, _w, _cx| {
                                         if let Some(repo_id) = this.active_repo_id() {
                                             this.store.dispatch(Msg::RebaseContinue { repo_id });
@@ -1378,7 +1456,10 @@ impl BarItemOwner for ActionBarView {
                                     })
                                     .gitcomet_tooltip(
                                         theme,
-                                        if sequencer_step_busy {
+                                        if is_bare {
+                                            gitcomet_core::domain::WORKING_TREE_REQUIRED_MESSAGE
+                                                .into()
+                                        } else if sequencer_step_busy {
                                             SEQUENCER_BUSY_TOOLTIP.into()
                                         } else if rebase_has_unstaged_conflicts {
                                             "Resolve all conflicts before continuing".into()
@@ -1567,6 +1648,13 @@ mod tests {
             file_browsing_badge(&repo).expect("browsing still has an exit control");
         assert_eq!(label, "Working tree");
         assert!(tooltip.contains("Exit file browsing"));
+        repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::Bare);
+        let (label, tooltip) = file_browsing_badge(&repo).unwrap();
+        assert_eq!(label, "HEAD");
+        assert_eq!(
+            tooltip,
+            "Browsing HEAD (no committed files). Click for history or Exit file browsing."
+        );
         repo.file_browser.active = false;
         assert!(file_browsing_badge(&repo).is_none());
     }

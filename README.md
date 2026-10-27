@@ -127,6 +127,7 @@ GitComet started from frustration with existing tools on huge codebases like Chr
   - Full local-first desktop workflow
   - Git remotes, pull/push, staging, commits
   - Worktrees, branching, and full history
+  - Bare repository browsing and conversion ([docs](docs/bare-repositories.md))
   - Multi-repository browsing
   - Inline and side-by-side diffs
   - 2-way and 3-way merge tools
@@ -294,7 +295,7 @@ backtrace.
 
 SourceTree, GitKraken, Zed, GPUI, KDiff3, Meld, Github Desktop, Git, Gix, Rust, Smol, and many more.
 
-This project has been created with the help of AI tools, including OpenAI Codex and Claude Code.
+This project has been created with the help of AI tools, including OpenAI Codex and Claude Code. The [AI policy](AI_POLICY.md) sets how contributors use them.
 
 ### Star History
 

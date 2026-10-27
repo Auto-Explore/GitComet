@@ -12,6 +12,63 @@ use gitcomet_core::domain::DiffTarget;
 use std::sync::Arc;
 
 pub(super) fn reduce(state: &mut AppState, event: Event) -> Vec<Effect> {
+    let requires_worktree = match &event {
+        Event::Open {
+            target:
+                DiffTarget::WorkingTree {
+                    worktree: Some(path),
+                    ..
+                },
+            ..
+        }
+        | Event::OpenChanges {
+            source: crate::diff_session::ChangeSource::LinkedWorktree { path, .. },
+            ..
+        } => state
+            .repos
+            .iter()
+            .find(|repo| &repo.spec.workdir == path)
+            .map(|repo| repo.id),
+        Event::Open {
+            repo_id, target, ..
+        } => matches!(
+            target,
+            DiffTarget::WorkingTree { worktree: None, .. }
+                | DiffTarget::CommitRange {
+                    to_commit_id: None,
+                    ..
+                }
+        )
+        .then_some(*repo_id),
+        Event::OpenEditor { repo_id, .. }
+        | Event::SetContentMode {
+            repo_id,
+            edit: true,
+            ..
+        } => Some(*repo_id),
+        Event::OpenChanges {
+            repo_id, source, ..
+        } => matches!(
+            source,
+            crate::diff_session::ChangeSource::Worktree { .. }
+                | crate::diff_session::ChangeSource::Comparison { to: None, .. }
+        )
+        .then_some(*repo_id),
+        Event::SetEncoding { .. }
+        | Event::SetTextOverride { .. }
+        | Event::SetContentMode { edit: false, .. }
+        | Event::Clear { .. }
+        | Event::ExitEditor { .. }
+        | Event::Reload { .. }
+        | Event::LoadBlame { .. }
+        | Event::Close { .. }
+        | Event::CloseChanges { .. }
+        | Event::ChangesLoaded { .. }
+        | Event::Loaded { .. } => None,
+    };
+    if requires_worktree.is_some_and(|repo_id| super::refuse_bare_worktree_action(state, repo_id)) {
+        return Vec::new();
+    }
     match event {
         Event::Open {
             repo_id,

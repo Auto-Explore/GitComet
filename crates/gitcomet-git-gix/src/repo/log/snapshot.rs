@@ -1,11 +1,14 @@
 use super::*;
-use gitcomet_core::services::{HistoryReadRequest, HistoryReadResult, refresh_history_page};
+use gitcomet_core::services::{
+    HistoryReadRequest, HistoryReadResult, HistoryWalk, refresh_history_page,
+};
 
 impl GixRepo {
     pub(in super::super) fn read_history_impl(
         &self,
-        mode: HistoryMode,
+        walk: &HistoryWalk,
         author: Option<&str>,
+        focus: &HistoryFocusSet,
         request: &HistoryReadRequest,
         cancellation: &CancellationToken,
         on_chunk: &mut dyn FnMut(LogChunk),
@@ -17,10 +20,12 @@ impl GixRepo {
             &repo,
             shared.id,
             shared.common.id,
-            mode,
+            walk,
             author,
+            focus,
             cancellation,
         )?;
+        let mode = walk.mode();
         let snapshot = shared.snapshot(&query);
         let tips = query.tips;
         let shallow = query.shallow;
@@ -45,7 +50,7 @@ impl GixRepo {
         let _scope = gitcomet_core::git_ops_trace::scope(
             gitcomet_core::git_ops_trace::GitOpTraceKind::LogWalk,
         );
-        let seed = if mode == HistoryMode::AllBranches {
+        let seed = if !focus.is_empty() || mode == HistoryMode::AllBranches {
             super::LogPageSeed::Tips(Arc::clone(&tips))
         } else {
             super::LogPageSeed::Head(tips.first().copied())

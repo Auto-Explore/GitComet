@@ -147,6 +147,7 @@ fn open_repository_in(
     let repo_id = RepoId(1);
     let mut repo_state = RepoState::new_opening(repo_id, repo.spec().clone());
     repo_state.open = Loadable::Ready(());
+    repo_state.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
     let state = Arc::new(AppState {
         active_repo: Some(repo_id),
         git_runtime: available_git_runtime_state(),
@@ -456,6 +457,7 @@ fn hosted_parent_saves_keep_their_binding_when_a_nested_repository_is_open(
     let mut state = (*store.snapshot()).clone();
     let mut nested_state = RepoState::new_opening(RepoId(2), nested_repo.spec().clone());
     nested_state.open = Loadable::Ready(());
+    nested_state.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
     state.repos.push(nested_state);
     store.replace_snapshot_for_test(Arc::new(state));
     store.insert_repo_for_test(RepoId(2), nested_repo);
@@ -644,6 +646,7 @@ fn hosted_save_admission_rejects_stale_binding(
     } else {
         let mut replacement = RepoState::new_opening(RepoId(1), current.repos[0].spec.clone());
         replacement.open = Loadable::Ready(());
+        replacement.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
         replacement.diff_sessions = current.repos[0].diff_sessions.clone();
         assert_ne!(replacement.lifetime(), binding.lifetime);
         stale.repos[0] = replacement;

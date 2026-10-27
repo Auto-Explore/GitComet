@@ -251,6 +251,40 @@ impl fmt::Display for GitFailure {
 }
 
 #[derive(Clone, Debug, thiserror::Error)]
+pub enum BareConversionRefusal {
+    #[error("The repository is no longer bare. Refresh it before continuing.")]
+    NotBare,
+    #[error("The repository changed after the preview. Run the preview again.")]
+    StalePreview,
+    #[error("The selected folder does not own a supported Git directory layout: {path}")]
+    UnsupportedLayout { path: PathBuf },
+    #[error("Branch {branch} is checked out at {worktree}. Release that branch before continuing.")]
+    BranchInUse { branch: String, worktree: PathBuf },
+    #[error("Git has an active operation or lock at {path}. Finish it before converting.")]
+    ActiveOperation { path: PathBuf },
+    #[error("HEAD is missing, corrupt, or does not resolve to a commit.")]
+    InvalidHead,
+    #[error("The existing index cannot be safely preserved by this conversion.")]
+    ExistingIndex,
+    #[error("The checkout folder conflicts with core.worktree: {path}")]
+    ConflictingWorktree { path: PathBuf },
+    #[error("The bare directory contains an entry that cannot be relocated safely: {path}")]
+    UnknownEntry { path: PathBuf },
+    #[error(
+        "The repository contains a path collision or symbolic link that cannot be relocated safely: {path}"
+    )]
+    PathCollision { path: PathBuf },
+    #[error(
+        "Configuration {key} depends on the current Git directory. Update it before converting."
+    )]
+    RelocationDependentConfig { key: String },
+    #[error(
+        "Linked worktree {path} is inaccessible or nested inside the repository. Move or repair it before converting."
+    )]
+    InaccessibleWorktree { path: PathBuf },
+}
+
+#[derive(Clone, Debug, thiserror::Error)]
 pub enum ErrorKind {
     #[error("I/O error: {0}")]
     Io(std::io::ErrorKind),
@@ -260,6 +294,16 @@ pub enum ErrorKind {
     Cancelled,
     #[error("Unsupported: {0}")]
     Unsupported(&'static str),
+    #[error("Requires a working tree; this repository is bare.")]
+    BareUnsupported,
+    #[error("The repository changed. Reopen it before continuing.")]
+    RepositoryChanged,
+    #[error("{0}")]
+    BareConversionRefused(BareConversionRefusal),
+    #[error(
+        "Bare conversion recovery needs attention at {path}: {reason}. Review the remaining repository copies before continuing."
+    )]
+    BareConversionRecovery { path: PathBuf, reason: String },
     #[error("{0}")]
     Git(GitFailure),
     #[error("{0}")]
