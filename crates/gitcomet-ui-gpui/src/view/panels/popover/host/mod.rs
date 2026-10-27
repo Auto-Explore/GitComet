@@ -1347,7 +1347,7 @@ impl PopoverHost {
 
     fn close_popover_with_resolution(&mut self, resolved: bool, cx: &mut gpui::Context<Self>) {
         if !resolved {
-            self.dismiss_open_shared_prompt();
+            self.dismiss_open_force_prompt();
         }
         if let Some(PopoverKind::Repo {
             repo_id,
@@ -1574,9 +1574,9 @@ impl PopoverHost {
         cx.stop_propagation();
     }
 
-    /// A prompt that lives in shared state must be dismissed there too, or the
-    /// same refusal could not offer it again.
-    fn dismiss_open_shared_prompt(&self) {
+    /// A force prompt lives in shared state and must be dismissed there too,
+    /// or the same refusal could not offer it again.
+    fn dismiss_open_force_prompt(&self) {
         if let Some(PopoverKind::ForceDeleteBranchConfirm(prompt)) = self.popover.as_ref() {
             self.store.dispatch(Msg::DismissForceDeleteBranchPrompt {
                 prompt: prompt.clone(),
@@ -1790,7 +1790,7 @@ impl PopoverHost {
         // collision cannot emit a fresh prompt later.
         if self.popover.as_ref() != Some(&kind) {
             self.resolve_open_branch_exists_prompt(BranchExistsChoice::Cancel);
-            self.dismiss_open_shared_prompt();
+            self.dismiss_open_force_prompt();
             // An extension's dialog this popover does not show is gone, and
             // its extension is told.
             if self.extension_dialog.as_ref().is_some_and(
