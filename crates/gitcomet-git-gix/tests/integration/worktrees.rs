@@ -217,6 +217,41 @@ fn worktree_remove_classifies_the_refusals_that_force_overrides() {
     assert!(!with_submodule.exists());
 }
 
+#[cfg(unix)]
+#[test]
+fn worktree_remove_classifies_refusals_under_a_localized_git() {
+    // Git translates both refusals that `--force` overrides.
+    crate::localized_git::run(
+        module_path!(),
+        "worktree_remove_classifies_refusals_under_a_localized_git",
+        r#"#!/bin/sh
+for argument in "$@"; do
+    if [ "$argument" = remove ]; then
+        if [ "${LC_ALL-}" = C ]; then
+            printf '%s\n' 'fatal: working trees containing submodules cannot be moved or removed' >&2
+        else
+            printf '%s\n' 'Schwerwiegend: Arbeitsverzeichnisse, die Submodule enthalten, können nicht verschoben oder entfernt werden.' >&2
+        fi
+        exit 128
+    fi
+done
+exec git "$@"
+"#,
+        || {
+            let dir = tempfile::tempdir().expect("create tempdir");
+            let repo = cloned_repo(dir.path());
+            let opened = GixBackend.open(&repo).expect("open repository");
+            let linked = dir.path().join("linked");
+            fs::create_dir_all(&linked).expect("create worktree directory");
+            assert_remove_refused(
+                opened.as_ref(),
+                &linked,
+                GitFailureId::WorktreeRemovalBlocked(WorktreeRemovalBlocker::Submodules),
+            );
+        },
+    );
+}
+
 fn git_stdout(repo: &Path, args: &[&str]) -> Option<String> {
     let output = git_command()
         .arg("-C")

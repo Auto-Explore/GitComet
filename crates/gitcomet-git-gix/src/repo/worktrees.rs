@@ -103,6 +103,8 @@ impl GixRepo {
 
     pub(super) fn remove_worktree_with_output_impl(&self, path: &Path) -> Result<CommandOutput> {
         let mut cmd = self.git_workdir_cmd();
+        // The refusals `--force` overrides are recognized by Git's English text.
+        cmd.env("LC_ALL", "C");
         let label = push_worktree_args(&mut cmd, &["remove"], path, None)?;
         run_git_with_output(cmd, &label)
     }
