@@ -874,23 +874,12 @@ impl GitCometView {
             .preferences
             .history
             .verify_commit_signatures;
+        // The reducer loads whatever tags the new settings need.
         self.store.dispatch(Msg::SetGitLogSettings {
             show_history_tags: show_tags,
             tag_fetch_mode,
             verify_commit_signatures,
         });
-        if show_tags
-            && auto_fetch_tags_on_repo_activation
-            && let Some(repo) = self.diff_renderer.read(cx).active_repo()
-        {
-            if matches!(repo.tags, Loadable::NotLoaded | Loadable::Error(_)) {
-                self.store.dispatch(Msg::LoadTags { repo_id: repo.id });
-            }
-            if matches!(repo.remote_tags, Loadable::NotLoaded | Loadable::Error(_)) {
-                self.store
-                    .dispatch(Msg::LoadRemoteTags { repo_id: repo.id });
-            }
-        }
         self.schedule_ui_settings_persist(cx);
     }
 

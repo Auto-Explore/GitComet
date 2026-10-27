@@ -698,8 +698,35 @@ pub(super) fn refresh_primary_effect_capacity() -> usize {
     PRIMARY_REFRESH_MAX_EFFECTS
 }
 
-fn should_auto_fetch_history_tags(git_log_settings: GitLogSettings) -> bool {
-    git_log_settings.show_history_tags && git_log_settings.auto_fetch_tags_on_repo_activation()
+/// Loads the tags the settings ask for and the repository lacks: local tags
+/// for history, and remote tags, which contact every remote.
+pub(super) fn append_tag_load_effects(
+    repo_state: &mut RepoState,
+    git_log_settings: GitLogSettings,
+    effects: &mut impl EffectAccumulator,
+) {
+    let repo_id = repo_state.id;
+    if git_log_settings.show_history_tags
+        && matches!(repo_state.tags, Loadable::NotLoaded | Loadable::Error(_))
+    {
+        repo_state.set_tags(Loadable::Loading);
+        if repo_state.loads_in_flight.request(LoadKind::Tags) {
+            effects.push_effect(Effect::References(ReferenceEffect::LoadTags { repo_id }));
+        }
+    }
+    if git_log_settings.auto_fetch_tags_on_repo_activation()
+        && matches!(
+            repo_state.remote_tags,
+            Loadable::NotLoaded | Loadable::Error(_)
+        )
+    {
+        repo_state.set_remote_tags(Loadable::Loading);
+        if repo_state.loads_in_flight.request(LoadKind::RemoteTags) {
+            effects.push_effect(Effect::References(ReferenceEffect::LoadRemoteTags {
+                repo_id,
+            }));
+        }
+    }
 }
 
 pub(super) fn append_requested_status_refresh_effects(
@@ -999,26 +1026,7 @@ pub(super) fn append_auto_background_metadata_effects(
     }
 
     let repo_id = repo_state.id;
-    if should_auto_fetch_history_tags(git_log_settings) {
-        if matches!(repo_state.tags, Loadable::NotLoaded | Loadable::Error(_)) {
-            repo_state.set_tags(Loadable::Loading);
-            if repo_state.loads_in_flight.request(LoadKind::Tags) {
-                effects.push_effect(Effect::References(ReferenceEffect::LoadTags { repo_id }));
-            }
-        }
-
-        if matches!(
-            repo_state.remote_tags,
-            Loadable::NotLoaded | Loadable::Error(_)
-        ) {
-            repo_state.set_remote_tags(Loadable::Loading);
-            if repo_state.loads_in_flight.request(LoadKind::RemoteTags) {
-                effects.push_effect(Effect::References(ReferenceEffect::LoadRemoteTags {
-                    repo_id,
-                }));
-            }
-        }
-    }
+    append_tag_load_effects(repo_state, git_log_settings, effects);
 
     if matches!(
         repo_state.submodules,

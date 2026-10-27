@@ -261,5 +261,55 @@ fn remotes_settings_explain_the_schedule_and_how_it_limits_remote_load(
     assert!(schedule.contains("including from the command line, wait until it has passed"));
     assert!(schedule.contains("Worktrees of one repository share a fetch."));
     assert!(load.contains("background tabs that find no new commits wait up to 4× the interval"));
-    assert!(load.contains("a failed sign-in pauses automatic fetching until you use Fetch all."));
+    assert!(load.contains(
+        "a failed sign-in pauses automatic fetching from that server until you use Fetch all."
+    ));
+    assert!(load.contains("Nothing is fetched while a sign-in dialog is open."));
+}
+
+#[gpui::test]
+fn tag_fetching_is_a_remotes_setting_independent_of_history_tags(cx: &mut gpui::TestAppContext) {
+    assert!(SettingsCategory::Remotes.matches_query("fetch tags"));
+    assert!(!SettingsCategory::Tags.matches_query("fetch tags"));
+    let (settings, cx) = cx.add_window_view(SettingsWindowView::new);
+    let draw = |cx: &mut gpui::VisualTestContext| {
+        let handle = cx.update(|window, _| window.window_handle());
+        let platform_window = cx.test_window(handle);
+        cx.run_until_parked();
+        for _ in 0..8 {
+            if !platform_window.simulate_scheduled_frame() {
+                break;
+            }
+            cx.run_until_parked();
+        }
+    };
+    settings.update(cx, |settings, cx| {
+        settings.set_history_show_tags(false, cx);
+        settings.select_category(SettingsCategory::Remotes, cx);
+    });
+    draw(cx);
+    let toggle = cx
+        .debug_bounds("settings_window_auto_fetch_tags")
+        .expect("Remotes lists tag fetching");
+    cx.simulate_click(toggle.center(), Modifiers::default());
+    settings.read_with(cx, |settings, _| {
+        assert_eq!(
+            settings.history_tag_fetch_mode,
+            GitLogTagFetchMode::Disabled
+        );
+        assert!(
+            !settings.history_show_tags,
+            "hidden history tags stay hidden"
+        );
+    });
+
+    settings.update(cx, |settings, cx| {
+        settings.select_category(SettingsCategory::GitLog, cx);
+    });
+    draw(cx);
+    assert!(
+        cx.debug_bounds("settings_window_git_log_show_tags")
+            .is_some()
+    );
+    assert!(cx.debug_bounds("settings_window_auto_fetch_tags").is_none());
 }

@@ -82,11 +82,11 @@ impl Group {
         if failure.blocks_host() {
             for host in failed.iter().filter_map(|remote| remote.host.as_ref()) {
                 let block = hosts.entry(host.clone()).or_insert(HostBlock {
-                    until: now,
+                    until: None,
                     strikes: 0,
                 });
                 block.strikes += 1;
-                block.until = now + policy::host_block(failure, block.strikes);
+                block.until = policy::host_block(failure, block.strikes).map(|wait| now + wait);
             }
         }
         if failure.pauses() {
@@ -108,10 +108,11 @@ impl Group {
     }
 }
 
-/// A host that failed with a network or busy error. No automatic fetch
-/// contacts it until `until`; the first one after that probes it.
+/// A host that failed to sign in, answer or serve. No automatic fetch
+/// contacts it until `until`, or until a manual fetch reaches it when `None`;
+/// the first one after that probes it.
 pub(super) struct HostBlock {
-    pub(super) until: SystemTime,
+    pub(super) until: Option<SystemTime>,
     pub(super) strikes: u32,
 }
 

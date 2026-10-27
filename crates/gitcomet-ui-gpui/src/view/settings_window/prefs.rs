@@ -1026,9 +1026,6 @@ impl SettingsWindowView {
         }
 
         self.history_show_tags = enabled;
-        if !enabled && self.expanded_section == Some(SettingsSection::GitLogTagFetch) {
-            self.expanded_section = None;
-        }
         let tag_fetch_mode = self.history_tag_fetch_mode;
         self.persist_preferences(cx);
         self.broadcast_preference(
@@ -1071,7 +1068,6 @@ impl SettingsWindowView {
         }
 
         self.history_tag_fetch_mode = mode;
-        self.expanded_section = None;
         let show_tags = self.history_show_tags;
         self.persist_preferences(cx);
         self.broadcast_preference(

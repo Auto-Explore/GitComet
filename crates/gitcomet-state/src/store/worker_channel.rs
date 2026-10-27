@@ -116,6 +116,7 @@ impl StoreWorkerSender {
         &self,
         registrations: Vec<super::auto_fetch::Registration>,
         settings: crate::model::RemoteSettings,
+        sign_in_open: bool,
         backend: &Arc<dyn gitcomet_core::services::GitBackend>,
     ) {
         if !self.is_alive() {
@@ -159,6 +160,8 @@ impl StoreWorkerSender {
                 }
             }
         });
+        self.auto_fetch
+            .set_sign_in_open(self.store_id.get(), sign_in_open);
         self.auto_fetch
             .sync(self.store_id.get(), registrations, settings, backend, sink);
     }

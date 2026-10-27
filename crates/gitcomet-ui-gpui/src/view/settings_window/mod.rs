@@ -335,7 +335,6 @@ enum SettingsSection {
     GitLogDefaultMode,
     GitLogColumns,
     GitLogBranchNames,
-    GitLogTagFetch,
     AllowedRemoteProtocols,
     RemoteMarkdownImages,
     WorkspaceTheme,
@@ -364,10 +363,9 @@ impl SettingsSection {
             | Self::Diff
             | Self::DiffViewMode
             | Self::DiffTabSize => SettingsCategory::Diff,
-            Self::GitLogDefaultMode
-            | Self::GitLogColumns
-            | Self::GitLogBranchNames
-            | Self::GitLogTagFetch => SettingsCategory::GitLog,
+            Self::GitLogDefaultMode | Self::GitLogColumns | Self::GitLogBranchNames => {
+                SettingsCategory::GitLog
+            }
             Self::AllowedRemoteProtocols | Self::RemoteMarkdownImages => {
                 SettingsCategory::SecurityPrivacy
             }
@@ -519,13 +517,14 @@ impl SettingsCategory {
                  verify commit signatures verification signing key trust"
             }
             Self::Remotes => {
-                "remotes remote fetch pull prune deleted branches automatically automatic fetch auto fetch background interval minutes ghost"
+                "remotes remote fetch pull prune deleted branches automatically automatic fetch auto fetch background interval minutes ghost \
+                 automatically fetch tags remote tags"
             }
             Self::LargeFiles => {
                 "large files git lfs git-annex annex synced branches adjusted branch pull push \
                  sync content"
             }
-            Self::Tags => "tags automatically fetch tags",
+            Self::Tags => "tags default tag type lightweight annotated",
             Self::Maintenance => {
                 "maintenance recommend repository gc garbage collection repack pack packs \
                  loose objects optimize optimise housekeeping"
@@ -1029,13 +1028,6 @@ fn history_columns_settings_label(
         "None".into()
     } else {
         columns.join(", ").into()
-    }
-}
-
-fn git_log_tag_fetch_mode_label(mode: GitLogTagFetchMode) -> &'static str {
-    match mode {
-        GitLogTagFetchMode::OnRepositoryActivation => "On repository activation",
-        GitLogTagFetchMode::Disabled => "Disabled",
     }
 }
 

@@ -24,6 +24,10 @@ fn failures_that_need_the_user_pause_and_host_failures_block_the_host() {
             Failure::Missing,
         ),
         (
+            "fatal: unable to access 'https://gitlab.com/o/r.git/': The requested URL returned error: 403",
+            Failure::Missing,
+        ),
+        (
             "fatal: '/nowhere' does not appear to be a git repository",
             Failure::Missing,
         ),
@@ -53,6 +57,7 @@ fn failures_that_need_the_user_pause_and_host_failures_block_the_host() {
     assert_eq!(classify(&Error::new(ErrorKind::Cancelled)), None);
     assert!(Failure::SignIn.pauses() && Failure::Missing.pauses());
     assert!(Failure::Network.blocks_host() && Failure::Busy.blocks_host());
+    assert!(Failure::SignIn.blocks_host() && !Failure::Missing.blocks_host());
     assert!(!Failure::Other.pauses() && !Failure::Other.blocks_host());
 }
 
@@ -103,11 +108,16 @@ fn backoff_doubles_to_a_cap() {
         "never shorter than the interval"
     );
     for (strikes, delay) in [(1, 5), (2, 10), (3, 20), (4, 40), (5, 60), (12, 60)] {
-        assert_eq!(host_block(Failure::Network, strikes), minutes(delay));
+        assert_eq!(host_block(Failure::Network, strikes), Some(minutes(delay)));
     }
     for (strikes, delay) in [(1, 15), (2, 30), (3, 60), (4, 60)] {
-        assert_eq!(host_block(Failure::Busy, strikes), minutes(delay));
+        assert_eq!(host_block(Failure::Busy, strikes), Some(minutes(delay)));
     }
+    assert_eq!(
+        host_block(Failure::SignIn, 1),
+        None,
+        "sign-in waits for a manual fetch"
+    );
 }
 
 #[test]

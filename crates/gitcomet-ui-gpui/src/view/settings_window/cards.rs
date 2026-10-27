@@ -1473,35 +1473,12 @@ impl SettingsWindowView {
                 self.history_show_tags,
                 theme,
             )
-            .border_color(if self.history_show_tags {
-                settings_row_separator_color(theme)
-            } else {
-                no_separator
-            })
-            .on_activate(
-                false,
-                controls::ControlActivation::Action,
-                cx.listener(|this, _e: &ClickEvent, _window, cx| {
-                    this.set_history_show_tags(!this.history_show_tags, cx);
-                }),
-            );
-
-        let auto_fetch_tags_row = self
-            .summary_row(
-                "settings_window_git_log_tag_fetch_mode",
-                "Automatically fetch tags",
-                git_log_tag_fetch_mode_label(self.history_tag_fetch_mode).into(),
-                self.expanded_section == Some(SettingsSection::GitLogTagFetch),
-                theme,
-            )
             .border_color(no_separator)
             .on_activate(
                 false,
                 controls::ControlActivation::Action,
                 cx.listener(|this, _e: &ClickEvent, _window, cx| {
-                    if this.history_show_tags {
-                        this.toggle_section(SettingsSection::GitLogTagFetch, cx);
-                    }
+                    this.set_history_show_tags(!this.history_show_tags, cx);
                 }),
             );
 
@@ -1733,61 +1710,7 @@ impl SettingsWindowView {
         git_log_card = git_log_card.child(files_follow_selected_commit_row);
         git_log_card = git_log_card.child(relative_dates_row);
         git_log_card = git_log_card.child(verify_commit_signatures_row);
-        git_log_card = git_log_card.child(show_history_tags_row);
-        if self.history_show_tags {
-            git_log_card = git_log_card.child(auto_fetch_tags_row);
-
-            if self.expanded_section == Some(SettingsSection::GitLogTagFetch) {
-                git_log_card = git_log_card.child(
-                    self.detail_container(
-                        "settings_window_git_log_tag_fetch_container",
-                        theme,
-                    )
-                    .child(
-                        self.option_row(
-                            "settings_window_git_log_tag_fetch_mode_activation",
-                            "On repository activation",
-                            Some(
-                                "Fetch local and remote tags in the background when a repository becomes active."
-                                    .into(),
-                            ),
-                            self.history_tag_fetch_mode
-                                == GitLogTagFetchMode::OnRepositoryActivation,
-                            theme,
-                        )
-                        .on_activate(false, controls::ControlActivation::Action, cx.listener(
-                            |this, _e: &ClickEvent, _window, cx| {
-                                this.set_history_tag_fetch_mode(
-                                    GitLogTagFetchMode::OnRepositoryActivation,
-                                    cx,
-                                );
-                            },
-                        )),
-                    )
-                    .child(
-                        self.option_row(
-                            "settings_window_git_log_tag_fetch_mode_disabled",
-                            "Disabled",
-                            Some(
-                                "Skip automatic tag fetching on repository activation."
-                                    .into(),
-                            ),
-                            self.history_tag_fetch_mode == GitLogTagFetchMode::Disabled,
-                            theme,
-                        )
-                        .on_activate(false, controls::ControlActivation::Action, cx.listener(
-                            |this, _e: &ClickEvent, _window, cx| {
-                                this.set_history_tag_fetch_mode(
-                                    GitLogTagFetchMode::Disabled,
-                                    cx,
-                                );
-                            },
-                        )),
-                    ),
-                );
-            }
-        }
-        git_log_card
+        git_log_card.child(show_history_tags_row)
     }
 
     fn remotes_card(&self, theme: AppTheme, cx: &mut gpui::Context<Self>) -> Stateful<gpui::Div> {
@@ -1863,6 +1786,41 @@ impl SettingsWindowView {
                     .text_color(theme.colors.foreground.secondary)
                     .child(
                         "Also applies to the fetch performed by Pull and Pull into current. Local branches whose fetched upstream was deleted are unlinked, but local branches and tags are never deleted.",
+                    ),
+            )
+            .child(
+                self.toggle_row(
+                    "settings_window_auto_fetch_tags",
+                    "Automatically fetch tags",
+                    self.history_tag_fetch_mode == GitLogTagFetchMode::OnRepositoryActivation,
+                    theme,
+                )
+                .border_color(no_separator)
+                .on_activate(false, controls::ControlActivation::Action, cx.listener(
+                    |this, _e: &ClickEvent, _window, cx| {
+                        this.set_history_tag_fetch_mode(
+                            match this.history_tag_fetch_mode {
+                                GitLogTagFetchMode::OnRepositoryActivation => {
+                                    GitLogTagFetchMode::Disabled
+                                }
+                                GitLogTagFetchMode::Disabled => {
+                                    GitLogTagFetchMode::OnRepositoryActivation
+                                }
+                            },
+                            cx,
+                        );
+                    },
+                )),
+            )
+            .child(
+                div()
+                    .debug_selector(|| "settings_window_auto_fetch_tags_help".to_string())
+                    .px_2()
+                    .pb_2()
+                    .text_size(theme.ui_text(12.0))
+                    .text_color(theme.colors.foreground.secondary)
+                    .child(
+                        "When a repository becomes active, ask each of its remotes which tags it has, so tag menus show whether a tag is pushed. This contacts every remote of the repository.",
                     ),
             )
     }
@@ -2344,7 +2302,8 @@ pub(super) fn auto_fetch_help() -> [String; 2] {
             "To limit load on remote servers, background tabs that find no new commits wait \
              up to {}× the interval, fetches to the same server are spaced out, unreachable \
              servers are retried with growing delays, and a failed sign-in pauses automatic \
-             fetching until you use Fetch all.",
+             fetching from that server until you use Fetch all. Nothing is fetched while a \
+             sign-in dialog is open.",
             gitcomet_state::model::AUTO_FETCH_QUIET_MAX_MULTIPLIER
         ),
     ]

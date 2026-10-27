@@ -13,9 +13,12 @@ const MAX_HOST_BLOCK: Duration = Duration::from_secs(60 * 60);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum Failure {
-    /// Credentials, a passphrase or a host key need the user.
+    /// Credentials, a passphrase or a host key need the user. SSH signs in
+    /// before it picks a repository and Git stores credentials per host, so
+    /// no other repository on the host would get further.
     SignIn,
-    /// The remote repository is gone, or this URL does not lead to it.
+    /// The remote repository is gone, this URL does not lead to it, or these
+    /// credentials may not read it (403).
     Missing,
     /// The host could not be reached.
     Network,
@@ -32,7 +35,7 @@ impl Failure {
 
     /// The host is at fault, so every repository on it waits.
     pub(super) fn blocks_host(self) -> bool {
-        matches!(self, Self::Network | Self::Busy)
+        matches!(self, Self::SignIn | Self::Network | Self::Busy)
     }
 }
 
@@ -42,9 +45,9 @@ const SIGN_IN: &[&str] = &[
     "host key verification failed",
     "invalid username or password",
     "returned error: 401",
-    "returned error: 403",
 ];
 const MISSING: &[&str] = &[
+    "returned error: 403",
     "repository not found",
     "does not appear to be a git repository",
     "returned error: 404",
@@ -174,17 +177,20 @@ pub(super) fn quiet_delay(interval: AutoFetchInterval, quiet: u32) -> Duration {
         .saturating_mul((1 << quiet.min(31)).min(AUTO_FETCH_QUIET_MAX_MULTIPLIER))
 }
 
-/// How long a host waits after its `strikes`-th consecutive network or busy
-/// failure: from 5 minutes (15 when busy), doubling, at most an hour.
-pub(super) fn host_block(failure: Failure, strikes: u32) -> Duration {
-    let first = if failure == Failure::Busy {
-        FIRST_BUSY_BLOCK
-    } else {
-        FIRST_NETWORK_BLOCK
+/// How long a host waits after its `strikes`-th consecutive failure: from 5
+/// minutes (15 when busy), doubling, at most an hour. `None` after a sign-in
+/// failure: until a manual fetch reaches the host.
+pub(super) fn host_block(failure: Failure, strikes: u32) -> Option<Duration> {
+    let first = match failure {
+        Failure::SignIn => return None,
+        Failure::Busy => FIRST_BUSY_BLOCK,
+        _ => FIRST_NETWORK_BLOCK,
     };
-    first
-        .saturating_mul(1 << strikes.saturating_sub(1).min(4))
-        .min(MAX_HOST_BLOCK)
+    Some(
+        first
+            .saturating_mul(1 << strikes.saturating_sub(1).min(4))
+            .min(MAX_HOST_BLOCK),
+    )
 }
 
 #[cfg(test)]

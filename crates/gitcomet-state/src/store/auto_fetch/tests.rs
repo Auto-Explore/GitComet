@@ -703,7 +703,10 @@ fn a_sign_in_failure_pauses_the_remote_until_a_manual_fetch_succeeds() {
     );
     let group = group_of(&state, Path::new("/repo"));
     assert_eq!(group.snapshot.paused_remotes, ["origin"]);
-    assert!(state.hosts.is_empty(), "the host answered");
+    assert!(
+        state.hosts.contains_key("github.com"),
+        "credentials are per host"
+    );
     let much_later = UNIX_EPOCH + Duration::from_secs(30 * 24 * 60 * 60);
     assert!(
         next_job(&mut state, coordinator.admission(), much_later).is_none(),
@@ -724,6 +727,103 @@ fn a_sign_in_failure_pauses_the_remote_until_a_manual_fetch_succeeds() {
     );
     let interval = AutoFetchInterval::default().duration();
     assert!(next_job(&mut state, coordinator.admission(), much_later + interval).is_some());
+}
+
+#[test]
+fn a_sign_in_failure_pauses_every_repository_on_that_host_until_a_manual_fetch() {
+    let coordinator = AutoFetchCoordinator::new();
+    register(&coordinator, 1, "/repo", "/repo/.git");
+    enable(&coordinator);
+    let mut state = coordinator.inner.state.lock().unwrap();
+    let job = next_job(&mut state, coordinator.admission(), UNIX_EPOCH).unwrap();
+    finish(
+        &mut state,
+        &job,
+        failed(
+            origin("github.com"),
+            "git@github.com: Permission denied (publickey).",
+        ),
+        UNIX_EPOCH,
+    );
+    // SSH signs in before choosing a repository: no other one would succeed.
+    let much_later = UNIX_EPOCH + Duration::from_secs(30 * 24 * 60 * 60);
+    assert_eq!(
+        state.skipped_remotes(None, &origin("github.com"), much_later),
+        ["origin"]
+    );
+    assert!(
+        state
+            .skipped_remotes(None, &origin("gitlab.com"), much_later)
+            .is_empty()
+    );
+    drop(state);
+    coordinator.manual_fetch_finished(
+        Path::new("/repo"),
+        much_later,
+        &Ok(CommandOutput::empty_success("git fetch --all")),
+    );
+    let state = coordinator.inner.state.lock().unwrap();
+    assert!(
+        state
+            .skipped_remotes(None, &origin("github.com"), much_later)
+            .is_empty()
+    );
+}
+
+#[test]
+fn an_open_sign_in_dialog_holds_every_automatic_fetch_until_it_closes() {
+    let coordinator = AutoFetchCoordinator::new();
+    register(&coordinator, 1, "/repo", "/repo/.git");
+    enable(&coordinator);
+    coordinator.set_sign_in_open(2, true);
+    coordinator.set_sign_in_open(3, true);
+    let mut state = coordinator.inner.state.lock().unwrap();
+    assert!(
+        next_job(&mut state, coordinator.admission(), UNIX_EPOCH).is_none(),
+        "a window is asking for credentials"
+    );
+    drop(state);
+    coordinator.set_sign_in_open(2, false);
+    // A closed window's dialog holds nothing.
+    coordinator.unsubscribe(3);
+    let mut state = coordinator.inner.state.lock().unwrap();
+    assert!(next_job(&mut state, coordinator.admission(), UNIX_EPOCH).is_some());
+}
+
+#[test]
+fn a_store_reports_its_sign_in_dialog_to_automatic_fetching() {
+    use super::super::AppStore;
+    use crate::msg::{InternalMsg, Msg};
+
+    let temp = tempfile::tempdir().unwrap();
+    let _session = crate::session::push_test_session_file_path_override(Some(
+        temp.path().join("session.json"),
+    ));
+    let (store, _events) = AppStore::new_test(Arc::new(Backend));
+    let signing_in = |store: &AppStore| {
+        store
+            .barrier_for_test()
+            .recv_timeout(Duration::from_secs(10))
+            .unwrap();
+        let state = store.msg_tx.auto_fetch.inner.state.lock().unwrap();
+        !state.signing_in.is_empty()
+    };
+    assert!(!signing_in(&store));
+    store.dispatch(Msg::Internal(InternalMsg::CloneRepoFinished {
+        url: "https://example.com/private/repo.git".into(),
+        dest: temp.path().join("clone"),
+        result: Err(Error::new(ErrorKind::Backend(
+            "fatal: could not read Username for 'https://example.com': terminal prompts disabled"
+                .into(),
+        ))),
+    }));
+    assert!(signing_in(&store), "the dialog holds automatic fetching");
+    store.dispatch(Msg::CancelAuthPrompt);
+    assert!(!signing_in(&store));
+    store
+        .shutdown_for_test()
+        .recv_timeout(Duration::from_secs(10))
+        .unwrap();
 }
 
 #[test]
@@ -877,9 +977,14 @@ fn a_repository_fetched_recently_waits_but_loads_its_last_count_at_once() {
         ],
     );
     assert!(last_fetch_time(&clone).is_some());
-    assert!(last_fetch_time(&linked).is_none(), "its own FETCH_HEAD");
+    // Worktrees share one store, so each sees the other's fetch.
+    assert_eq!(last_fetch_time(&linked), last_fetch_time(&clone));
     git(&linked, &["fetch", "-q"]);
-    assert!(last_fetch_time(&linked).is_some());
+    let linked_fetch = std::fs::metadata(clone.join(".git/worktrees/linked/FETCH_HEAD"))
+        .and_then(|metadata| metadata.modified())
+        .ok();
+    assert!(linked_fetch.is_some());
+    assert_eq!(last_fetch_time(&clone), linked_fetch);
 
     let refreshed = Arc::new(Mutex::new(Vec::new()));
     let sink: EventSink = {
@@ -911,6 +1016,55 @@ fn a_repository_fetched_recently_waits_but_loads_its_last_count_at_once() {
     assert_eq!(*refreshed.lock().unwrap(), [lifetime]);
     let mut state = coordinator.inner.state.lock().unwrap();
     assert!(next_job(&mut state, coordinator.admission(), SystemTime::now()).is_none());
+    let later = SystemTime::now() + AutoFetchInterval::default().duration();
+    assert!(next_job(&mut state, coordinator.admission(), later).is_some());
+    drop(state);
+    coordinator.shutdown();
+}
+
+#[test]
+fn a_store_fetched_through_a_sibling_worktree_waits_at_launch() {
+    let (_temp, _source, clone, _latest) = remote_fixture();
+    let linked = clone.parent().unwrap().join("linked");
+    git(
+        &clone,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "linked",
+            linked.to_str().unwrap(),
+        ],
+    );
+    // A store's fetch runs in one worktree and rewrites only its FETCH_HEAD.
+    git(&clone, &["fetch", "-q"]);
+    let registrations: Vec<_> = [(clone, false), (linked, true)]
+        .into_iter()
+        .zip(1..)
+        .map(|((workdir, active), id)| Registration {
+            repo_id: RepoId(id),
+            lifetime: RepoLifetime::allocate(),
+            workdir,
+            common_dir: None,
+            repository: None,
+            active,
+        })
+        .collect();
+    let coordinator = AutoFetchCoordinator::new();
+    coordinator.sync(
+        1,
+        registrations,
+        RemoteSettings::default(),
+        &(Arc::new(gitcomet_git_gix::GixBackend) as Arc<dyn GitBackend>),
+        Arc::new(|_| {}),
+    );
+    enable(&coordinator);
+    let mut state = coordinator.inner.state.lock().unwrap();
+    assert!(
+        next_job(&mut state, coordinator.admission(), SystemTime::now()).is_none(),
+        "the selected worktree's store was fetched just now"
+    );
     let later = SystemTime::now() + AutoFetchInterval::default().duration();
     assert!(next_job(&mut state, coordinator.admission(), later).is_some());
     drop(state);

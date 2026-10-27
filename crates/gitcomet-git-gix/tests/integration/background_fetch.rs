@@ -413,6 +413,40 @@ mod transport {
     }
 
     #[test]
+    fn remote_tag_lookup_never_opens_an_interactive_credential_flow() {
+        let _guard = crate::auth_test_lock();
+        let root = tempfile::tempdir().expect("fixture directory");
+        let remote = repository(root.path(), "remote");
+        commit(&remote, "first");
+        let local = repository(root.path(), "local");
+        let server = HttpRemote::start(&remote);
+        git(&local, &["remote", "add", "origin", &server.url()]);
+        let popup = root.path().join("popup");
+        let helper_called = root.path().join("helper-called");
+        let helper = format!(
+            "!f() {{ touch {}; if [ \"$GCM_INTERACTIVE\" != Never ] || [ \"$(git config --get credential.interactive)\" != false ]; then touch {}; fi; }}; f",
+            shell_path(&helper_called),
+            shell_path(&popup),
+        );
+        git(&local, &["config", "credential.helper", &helper]);
+        git(&local, &["config", "credential.interactive", "true"]);
+        let opened = GixBackend.open(&local).expect("open repository");
+
+        // Remote tags are best-effort: a refused remote leaves no tags.
+        let tags = opened
+            .list_remote_tags(&CancellationToken::new())
+            .expect("tag lookup");
+
+        assert!(tags.is_empty());
+        assert!(helper_called.exists(), "stored credentials were queried");
+        assert!(
+            !popup.exists(),
+            "the tag lookup must not open an interactive flow"
+        );
+        assert_eq!(server.authenticated_requests.load(Ordering::Acquire), 0);
+    }
+
+    #[test]
     fn background_fetch_reuses_only_verified_cached_ssh_passphrases() {
         use gitcomet_core::auth::{
             AuthChallenge, GitAuthKind, PassphraseValidation, StagedGitAuth,

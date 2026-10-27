@@ -298,7 +298,7 @@ struct WorkerLoopContext<'a> {
 
 impl WorkerLoopContext<'_> {
     fn sync_auto_fetch(&mut self, repos: &RepositoryRuntimes) {
-        let (registrations, settings) = {
+        let (registrations, settings, sign_in_open) = {
             let state = self
                 .thread_state
                 .read()
@@ -315,8 +315,9 @@ impl WorkerLoopContext<'_> {
                 .filter(|repo| allowed && !repo.is_provisional_external_drop_open());
             // This runs after every message and a coordinator sync is
             // O(tabs), so skip it while nothing it reads has changed.
+            let sign_in_open = state.auth_prompt.is_some();
             let mut inputs = rustc_hash::FxHasher::default();
-            (allowed, settings).hash(&mut inputs);
+            (allowed, settings, sign_in_open).hash(&mut inputs);
             for repo in registered.clone() {
                 repo.id.hash(&mut inputs);
                 repo.lifetime_id().hash(&mut inputs);
@@ -343,10 +344,10 @@ impl WorkerLoopContext<'_> {
                     active: state.active_repo == Some(repo.id),
                 })
                 .collect();
-            (registrations, settings)
+            (registrations, settings, sign_in_open)
         };
         self.thread_msg_tx
-            .sync_auto_fetch(registrations, settings, self.backend);
+            .sync_auto_fetch(registrations, settings, sign_in_open, self.backend);
     }
 
     /// Runs one reducer under the write lock, records its pass, and dispatches

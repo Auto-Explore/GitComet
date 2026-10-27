@@ -105,6 +105,9 @@ struct State {
     /// Groups created before this wait until then.
     grace_until: Option<SystemTime>,
     running: Option<Running>,
+    /// Stores whose window asks the user for credentials: a fetch started
+    /// meanwhile could only fail or ask again.
+    signing_in: BTreeSet<u64>,
     revision: u64,
     order: u64,
     stopped: bool,
@@ -148,7 +151,9 @@ impl State {
             .filter(|remote| {
                 group.is_some_and(|group| group.paused.contains(&remote.name))
                     || remote.host.as_ref().is_some_and(|host| {
-                        self.hosts.get(host).is_some_and(|block| block.until > now)
+                        self.hosts
+                            .get(host)
+                            .is_some_and(|block| block.until.is_none_or(|until| until > now))
                     })
             })
             .map(|remote| remote.name.clone())
@@ -471,12 +476,31 @@ impl AutoFetchCoordinator {
         self.inner.admission.changed.notify_all();
     }
 
+    /// Holds every automatic fetch while a store's sign-in dialog is open.
+    pub(super) fn set_sign_in_open(&self, store_id: u64, open: bool) {
+        let mut state = self
+            .inner
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let changed = if open {
+            state.signing_in.insert(store_id)
+        } else {
+            state.signing_in.remove(&store_id)
+        };
+        drop(state);
+        if changed {
+            self.inner.admission.changed.notify_all();
+        }
+    }
+
     pub(super) fn unsubscribe(&self, store_id: u64) {
         let mut state = self
             .inner
             .state
             .lock()
             .unwrap_or_else(|error| error.into_inner());
+        state.signing_in.remove(&store_id);
         for entry in state.entries.values_mut() {
             entry
                 .subscribers
@@ -596,8 +620,9 @@ impl Drop for AutoFetchCoordinator {
     }
 }
 
-/// When git last fetched into `workdir`. Git rewrites FETCH_HEAD on every
-/// fetch, including ones run outside GitComet.
+/// When git last fetched into the store `workdir` uses. Git rewrites
+/// FETCH_HEAD on every fetch, including ones run outside GitComet, but only in
+/// the worktree that ran it, so a store fetched through a sibling counts too.
 fn last_fetch_time(workdir: &Path) -> Option<SystemTime> {
     let dot_git = workdir.join(".git");
     let git_dir = match std::fs::read_to_string(&dot_git) {
@@ -609,10 +634,21 @@ fn last_fetch_time(workdir: &Path) -> Option<SystemTime> {
         Err(_) if dot_git.is_dir() => dot_git,
         Err(_) => workdir.to_path_buf(),
     };
-    std::fs::metadata(git_dir.join("FETCH_HEAD"))
-        .ok()?
-        .modified()
-        .ok()
+    let common_dir = std::fs::read_to_string(git_dir.join("commondir"))
+        .map_or_else(|_| git_dir.clone(), |common| git_dir.join(common.trim()));
+    let linked = std::fs::read_dir(common_dir.join("worktrees"))
+        .into_iter()
+        .flatten()
+        .filter_map(|entry| Some(entry.ok()?.path()));
+    std::iter::once(common_dir)
+        .chain(linked)
+        .filter_map(|dir| {
+            std::fs::metadata(dir.join("FETCH_HEAD"))
+                .ok()?
+                .modified()
+                .ok()
+        })
+        .max()
 }
 
 pub(super) fn repository_key(repo: &dyn GitRepository) -> PathBuf {

@@ -45,7 +45,7 @@ pub(super) fn group_common_dir<'a>(key: &'a GroupKey, member: &'a Entry) -> Opti
 }
 
 pub(super) fn next_job(state: &mut State, admission: &Admission, now: SystemTime) -> Option<Job> {
-    if state.running.is_some() {
+    if state.running.is_some() || !state.signing_in.is_empty() {
         return None;
     }
     let active: FxHashSet<&GroupKey> = state
@@ -451,7 +451,7 @@ pub(super) fn wait_duration(
     now: SystemTime,
 ) -> Option<Duration> {
     let enabled = state.enabled_groups();
-    if enabled.is_empty() {
+    if enabled.is_empty() || !state.signing_in.is_empty() {
         return None;
     }
     Some(
