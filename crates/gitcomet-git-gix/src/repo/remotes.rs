@@ -1782,7 +1782,11 @@ impl GixRepo {
             .map(|(tip, _)| tip))
     }
 
-    fn commit_is_ancestor(&self, ancestor: &CommitId, descendant: &CommitId) -> Result<bool> {
+    pub(super) fn commit_is_ancestor(
+        &self,
+        ancestor: &CommitId,
+        descendant: &CommitId,
+    ) -> Result<bool> {
         validate_hex_commit_id(ancestor)?;
         validate_hex_commit_id(descendant)?;
 

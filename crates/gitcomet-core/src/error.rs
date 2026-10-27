@@ -129,6 +129,9 @@ pub enum GitFailureId {
     LfsUploadFailed,
     /// `git worktree remove` refused for a reason `--force` overrides.
     WorktreeRemovalBlocked(WorktreeRemovalBlocker),
+    /// `git branch -d` refused a branch its upstream, or HEAD without one,
+    /// does not contain.
+    BranchNotFullyMerged,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

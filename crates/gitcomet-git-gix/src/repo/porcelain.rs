@@ -2,9 +2,9 @@ use super::history::gix_head_id_or_none;
 use super::remotes::tracking_refs_for_remote_branch;
 use super::{GixRepo, oid_to_arc_str};
 use crate::util::{
-    bytes_to_text_preserving_utf8, git_workdir_cmd_for, path_buf_from_git_bytes,
-    run_git_raw_output, run_git_simple, run_git_simple_with_paths, validate_hex_commit_id,
-    validate_ref_like_arg,
+    bytes_to_text_preserving_utf8, git_command_failed_error, git_command_failed_error_with_id,
+    git_workdir_cmd_for, path_buf_from_git_bytes, run_git_raw_output, run_git_simple,
+    run_git_simple_with_paths, validate_hex_commit_id, validate_ref_like_arg,
 };
 use gitcomet_core::domain::{CommitId, FileStatusKind, StashEntry, Upstream};
 use gitcomet_core::error::{Error, ErrorKind, GitFailure, GitFailureId};
@@ -665,9 +665,62 @@ impl GixRepo {
     pub(super) fn delete_branch_impl(&self, name: &str) -> Result<()> {
         validate_ref_like_arg(name, "branch name")?;
 
+        let label = "git branch -d";
         let mut cmd = self.git_workdir_cmd();
         cmd.arg("branch").arg("-d").arg("--").arg(name);
-        run_git_simple(cmd, "git branch -d")
+        let output = run_git_raw_output(cmd, label)?;
+        if output.status.success() {
+            return Ok(());
+        }
+        // Git explains the refusal in translated prose; its rule is checkable.
+        if self.branch_is_not_fully_merged(name)? {
+            return Err(git_command_failed_error_with_id(
+                label,
+                output,
+                GitFailureId::BranchNotFullyMerged,
+            ));
+        }
+        Err(git_command_failed_error(label, output))
+    }
+
+    /// Git's rule for `branch -d`: the tip must be in the branch's upstream,
+    /// or in HEAD when it has none. A branch checked out somewhere is refused
+    /// for that instead.
+    fn branch_is_not_fully_merged(&self, name: &str) -> Result<bool> {
+        if branch_in_use_worktree_path(&self.reopen_repo()?, name)?.is_some() {
+            return Ok(false);
+        }
+        let Some(tip) = self.verified_commit(&format!("refs/heads/{name}"))? else {
+            return Ok(false);
+        };
+        let reference = match self.verified_commit(&format!("{name}@{{upstream}}"))? {
+            Some(upstream) => upstream,
+            None => match self.verified_commit("HEAD")? {
+                Some(head) => head,
+                None => return Ok(true),
+            },
+        };
+        Ok(!self.commit_is_ancestor(&tip, &reference)?)
+    }
+
+    /// The commit `rev` names; exit status 1 from `--verify --quiet` means none.
+    fn verified_commit(&self, rev: &str) -> Result<Option<CommitId>> {
+        let label = format!("git rev-parse --verify --quiet {rev}^{{commit}}");
+        let mut cmd = self.git_workdir_cmd();
+        cmd.arg("rev-parse")
+            .arg("--verify")
+            .arg("--quiet")
+            .arg(format!("{rev}^{{commit}}"));
+        let output = run_git_raw_output(cmd, &label)?;
+        match output.status.code() {
+            Some(0) => {
+                let id = CommitId(bytes_to_text_preserving_utf8(&output.stdout).trim().into());
+                validate_hex_commit_id(&id)?;
+                Ok(Some(id))
+            }
+            Some(1) => Ok(None),
+            _ => Err(git_command_failed_error(&label, output)),
+        }
     }
 
     pub(super) fn delete_branch_force_impl(&self, name: &str) -> Result<()> {

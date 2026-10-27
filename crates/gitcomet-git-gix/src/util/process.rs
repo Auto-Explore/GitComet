@@ -164,6 +164,17 @@ pub(crate) fn describe_path_list<P: AsRef<[u8]>>(paths: &[P]) -> String {
 }
 
 pub(crate) fn git_command_failed_error(label: &str, output: GitOutput) -> Error {
+    let id = classify_git_failure(&String::from_utf8_lossy(&output.stderr));
+    git_command_failed_error_with_id(label, output, id)
+}
+
+/// A failure whose kind the caller established from repository state
+/// rather than Git's (translated) message.
+pub(crate) fn git_command_failed_error_with_id(
+    label: &str,
+    output: GitOutput,
+    id: GitFailureId,
+) -> Error {
     let GitOutput {
         status,
         stdout,
@@ -176,7 +187,6 @@ pub(crate) fn git_command_failed_error(label: &str, output: GitOutput) -> Error 
         .map(|text| text.trim().to_string())
         .find(|text| !text.is_empty())
         .map(add_git_failure_hint);
-    let id = classify_git_failure(&String::from_utf8_lossy(&stderr));
     let detail = detail.map(|detail| add_lfs_failure_hint(detail, id));
     Error::new(ErrorKind::Git(
         GitFailure::new(label, id, status.code(), stdout, stderr, detail)
