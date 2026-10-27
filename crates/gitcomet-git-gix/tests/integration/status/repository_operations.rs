@@ -3652,7 +3652,7 @@ fn pull_with_output_fast_forwards_from_remote() {
     let backend = GixBackend;
     let opened_b = backend.open(&repo_b).unwrap();
     opened_b
-        .pull(gitcomet_core::services::PullMode::FastForwardOnly, true)
+        .pull(gitcomet_core::services::PullMode::FastForwardOnly)
         .unwrap();
 
     let head_b = git_command()
@@ -3731,7 +3731,7 @@ fn pull_with_output_fast_forwards_when_possible_even_if_pull_ff_is_disabled() {
     let backend = GixBackend;
     let opened_b = backend.open(&repo_b).unwrap();
     opened_b
-        .pull(gitcomet_core::services::PullMode::Merge, true)
+        .pull(gitcomet_core::services::PullMode::Merge)
         .unwrap();
 
     let head_b = git_command()

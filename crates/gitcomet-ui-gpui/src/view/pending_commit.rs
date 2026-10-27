@@ -109,6 +109,7 @@ mod tests {
 
     fn entry(command: &str, ok: bool, seconds: u64) -> CommandLogEntry {
         CommandLogEntry {
+            kind: gitcomet_state::model::CommandLogKind::Other,
             time: UNIX_EPOCH + Duration::from_secs(seconds),
             ok,
             command: command.to_string(),

@@ -25,12 +25,8 @@ pub(in crate::view) enum PushRequest {
     NotReady,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(in crate::view) enum PullRequest {
-    Pull,
-    NoRemotes,
-    NotReady,
-}
+/// Why an action waits on repository data that has not loaded.
+pub(in crate::view) const REPOSITORY_LOADING_REASON: &str = "The repository is still loading";
 
 /// What opening the repository's remote in a web browser should do.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -47,7 +43,7 @@ impl RemoteWebRequest {
     /// Why nothing can be opened, for a disabled palette or menu row.
     pub(in crate::view) fn unavailable_reason(&self) -> Option<&'static str> {
         match self {
-            Self::NotReady => Some("The repository is still loading"),
+            Self::NotReady => Some(REPOSITORY_LOADING_REASON),
             Self::NoRemotes => Some("Add a remote first"),
             Self::NoWebPage => Some("No remote URL points to a web page"),
             Self::Open(_) | Self::Choose(_) => None,
@@ -69,19 +65,25 @@ pub(in crate::view) fn head_is_detached(repo: &RepoState) -> bool {
     matches!(&repo.head_branch, Loadable::Ready(head) if head.is_empty() || head == "HEAD")
 }
 
+/// The checked-out branch's upstream: a live tracking branch, or one set by
+/// "Create new" before its first push. A detached HEAD has none.
+pub(in crate::view) fn head_branch_upstream<'a>(
+    head_branch: &Loadable<String>,
+    branches: &'a Loadable<Arc<Vec<Branch>>>,
+) -> Option<&'a gitcomet_core::domain::Upstream> {
+    let head = head_branch.ready()?;
+    branches
+        .ready()?
+        .iter()
+        .find(|branch| branch.name == *head)
+        .and_then(|branch| branch.upstream.as_ref())
+}
+
 /// Whether the checked-out branch has a confirmed live remote-tracking
 /// upstream. This remains false until the remote-branch list is loaded, and a
 /// detached HEAD carries no branch to hold one.
 pub(in crate::view) fn head_branch_has_live_upstream(repo: &RepoState) -> bool {
-    let (Loadable::Ready(head), Loadable::Ready(branches)) = (&repo.head_branch, &repo.branches)
-    else {
-        return false;
-    };
-    let Some(upstream) = branches
-        .iter()
-        .find(|branch| branch.name == *head)
-        .and_then(|branch| branch.upstream.as_ref())
-    else {
+    let Some(upstream) = head_branch_upstream(&repo.head_branch, &repo.branches) else {
         return false;
     };
     let Some(remote_branches) = repo.remote_branches.ready() else {
@@ -92,55 +94,32 @@ pub(in crate::view) fn head_branch_has_live_upstream(repo: &RepoState) -> bool {
         .any(|candidate| candidate.remote == upstream.remote && candidate.name == upstream.branch)
 }
 
-/// The toolbar and menu can pull through annex on adjusted branches, or
-/// through Git when the current branch has a live remote-tracking upstream.
-pub(in crate::view) fn pull_enabled(
+/// Why Pull cannot run, or `None` when it can. Pull fetches the checked-out
+/// branch's upstream, so that branch must exist on its remote; otherwise Git
+/// fails with "couldn't find remote ref". git-annex pulls instead on adjusted
+/// branches and in bare annex repositories.
+pub(in crate::view) fn pull_unavailable_reason(
     repo: &RepoState,
     settings: &gitcomet_state::model::LargeFileSettings,
-) -> bool {
-    repo.annex_takes_over_pull_push(settings)
-        || (!repo.is_bare() && head_branch_has_live_upstream(repo))
-}
-
-/// Decide whether Pull can run. A configured upstream is actionable only when
-/// its exact remote-tracking ref exists; a future upstream configured by
-/// "Create new" must be pushed before Pull is offered. For a branch with no
-/// configured upstream, the backend can still use the preferred remote, while
-/// detached HEAD falls back to Git's own diagnostics.
-pub(in crate::view) fn pull_request(
-    repo: &RepoState,
-    settings: &gitcomet_state::model::LargeFileSettings,
-) -> PullRequest {
-    if repo.is_bare() && !repo.annex_takes_over_pull_push(settings) {
-        return PullRequest::NotReady;
-    }
-    if pull_enabled(repo, settings) {
-        return PullRequest::Pull;
-    }
-    let Loadable::Ready(head) = &repo.head_branch else {
-        return PullRequest::NotReady;
-    };
-    if head.is_empty() || head == "HEAD" {
-        return PullRequest::Pull;
-    }
-    let Loadable::Ready(branches) = &repo.branches else {
-        return PullRequest::NotReady;
-    };
-    if branches
-        .iter()
-        .find(|branch| branch.name == *head)
-        .is_some_and(|branch| branch.upstream.is_some())
+) -> Option<&'static str> {
+    if repo.annex_takes_over_pull_push(settings) {
+        None
+    } else if repo.is_bare() {
+        Some(gitcomet_core::domain::WORKING_TREE_REQUIRED_MESSAGE)
+    } else if head_is_detached(repo) {
+        Some("HEAD is detached — check out a branch first")
+    } else if repo.head_branch.ready().is_none()
+        || repo.branches.ready().is_none()
+        || repo.remote_branches.ready().is_none()
     {
-        return PullRequest::NotReady;
+        Some(REPOSITORY_LOADING_REASON)
+    } else if head_branch_upstream(&repo.head_branch, &repo.branches).is_none() {
+        Some("Set an upstream for this branch first")
+    } else if !head_branch_has_live_upstream(repo) {
+        Some("Push this branch to its upstream first")
+    } else {
+        None
     }
-
-    let Loadable::Ready(remotes) = &repo.remotes else {
-        return PullRequest::NotReady;
-    };
-    if remotes.is_empty() {
-        return PullRequest::NoRemotes;
-    }
-    PullRequest::Pull
 }
 
 /// Whether the repository is part-way through a merge.

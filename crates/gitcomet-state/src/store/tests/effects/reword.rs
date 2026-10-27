@@ -133,7 +133,7 @@ impl GitRepository for RecordingRewordRepo {
     fn fetch_all(&self, _: bool) -> Result<CommandOutput> {
         unsupported_repo_result()
     }
-    fn pull(&self, _: PullMode, _: bool) -> Result<CommandOutput> {
+    fn pull(&self, _: PullMode) -> Result<CommandOutput> {
         unsupported_repo_result()
     }
     fn push(&self) -> Result<()> {

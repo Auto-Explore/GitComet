@@ -200,16 +200,7 @@ fn head_branch_tracking_upstream_name(
     head_branch: &Loadable<String>,
     branches: &Loadable<Arc<Vec<Branch>>>,
 ) -> Option<String> {
-    let Loadable::Ready(head) = head_branch else {
-        return None;
-    };
-    let Loadable::Ready(branches) = branches else {
-        return None;
-    };
-    branches
-        .iter()
-        .find(|branch| branch.name == *head)
-        .and_then(|branch| branch.upstream.as_ref())
+    head_branch_upstream(head_branch, branches)
         .map(|upstream| format!("{}/{}", upstream.remote, upstream.branch))
 }
 
@@ -1046,9 +1037,10 @@ impl BarItemOwner for ActionBarView {
             .as_ref()
             .is_some_and(|id| id.as_ref() == pull_picker_invoker.as_ref());
         let pull_tracking_branch_name = tracking_branch_name.clone();
-        let pull_available = self
+        let pull_unavailable = self
             .active_repo()
-            .is_some_and(|repo| pull_enabled(repo, &self.state.large_file_settings));
+            .and_then(|repo| pull_unavailable_reason(repo, &self.state.large_file_settings));
+        let pull_available = self.active_repo().is_some() && pull_unavailable.is_none();
         let pull_menu_icon_color = if pull_picker_active {
             theme.colors.accent.foreground
         } else {
@@ -1070,22 +1062,17 @@ impl BarItemOwner for ActionBarView {
                     pull_menu,
                     theme,
                     cx,
-                    |this, _e, _w, cx| {
+                    |this, _e, _w, _cx| {
                         let Some(repo) = this.active_repo() else {
                             return;
                         };
                         let repo_id = repo.id;
-                        match pull_request(repo, &this.state.large_file_settings) {
-                            PullRequest::Pull => this.store.dispatch(Msg::Pull {
+                        if pull_unavailable_reason(repo, &this.state.large_file_settings).is_none()
+                        {
+                            this.store.dispatch(Msg::Pull {
                                 repo_id,
                                 mode: PullMode::Default,
-                            }),
-                            PullRequest::NoRemotes => this.push_toast(
-                                components::ToastKind::Error,
-                                "Cannot pull: no remotes configured".to_string(),
-                                cx,
-                            ),
-                            PullRequest::NotReady => {}
+                            });
                         }
                     },
                     move |this, _e, bounds, window, cx| {
@@ -1102,13 +1089,9 @@ impl BarItemOwner for ActionBarView {
             )
             .gitcomet_tooltip(
                 theme,
-                if self.active_repo().is_some_and(|repo| {
-                    repo.is_bare()
-                        && !repo.annex_takes_over_pull_push(&self.state.large_file_settings)
-                }) {
-                    gitcomet_core::domain::WORKING_TREE_REQUIRED_MESSAGE.into()
-                } else {
-                    pull_tooltip_text(pull_count, pull_tracking_branch_name.as_deref())
+                match pull_unavailable {
+                    Some(reason) => reason.into(),
+                    None => pull_tooltip_text(pull_count, pull_tracking_branch_name.as_deref()),
                 },
             );
 

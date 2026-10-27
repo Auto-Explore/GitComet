@@ -138,7 +138,7 @@ pub(super) fn git_timeout_error(
             stdout,
             stderr,
             Some(format!(
-                "after {} seconds without output (set {GIT_COMMAND_TIMEOUT_ENV} to override)",
+                "after {} seconds without output or progress (set {GIT_COMMAND_TIMEOUT_ENV} to override)",
                 timeout.as_secs()
             )),
         )

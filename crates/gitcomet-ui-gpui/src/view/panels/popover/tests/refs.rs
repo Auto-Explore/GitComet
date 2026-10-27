@@ -2187,7 +2187,7 @@ fn pull_and_push_picker_headers_include_tracking_branch_name(cx: &mut gpui::Test
 }
 
 #[gpui::test]
-fn pull_menu_disables_every_pull_mode_without_a_live_upstream(cx: &mut gpui::TestAppContext) {
+fn pull_menu_disables_every_pull_mode_without_an_upstream(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -2198,12 +2198,9 @@ fn pull_menu_disables_every_pull_mode_without_a_live_upstream(cx: &mut gpui::Tes
         std::process::id()
     ));
 
-    // Returns every (label, disabled) entry of the Pull menu for a branch with
-    // the given upstream. A remote always exists, so `pull_request` alone would
-    // still offer the preferred-remote pull.
     let pull_entries = |cx: &mut gpui::VisualTestContext,
                         upstream: Option<gitcomet_core::domain::Upstream>|
-     -> Vec<(String, bool)> {
+     -> Vec<(String, bool, Option<String>)> {
         cx.update(|_window, app| {
             view.update(app, |this, cx| {
                 let mut repo = RepoState::new_opening(
@@ -2255,10 +2252,15 @@ fn pull_menu_disables_every_pull_mode_without_a_live_upstream(cx: &mut gpui::Tes
         model
             .items
             .iter()
-            .filter_map(|item| match item {
+            .enumerate()
+            .filter_map(|(ix, item)| match item {
                 ContextMenuItem::Entry {
                     label, disabled, ..
-                } => Some((label.to_string(), *disabled)),
+                } => Some((
+                    label.to_string(),
+                    *disabled,
+                    model.entry_tooltips.get(&ix).map(ToString::to_string),
+                )),
                 _ => None,
             })
             .collect()
@@ -2270,20 +2272,47 @@ fn pull_menu_disables_every_pull_mode_without_a_live_upstream(cx: &mut gpui::Tes
         "Pull (fast-forward only)",
         "Pull (rebase)",
     ];
-    let disabled_labels = |entries: &[(String, bool)], disabled: bool| -> Vec<String> {
+    let disabled_labels =
+        |entries: &[(String, bool, Option<String>)], disabled: bool| -> Vec<String> {
+            entries
+                .iter()
+                .filter(|(_, is_disabled, _)| *is_disabled == disabled)
+                .map(|(label, _, _)| label.clone())
+                .collect()
+        };
+    let pull_tooltips = |entries: &[(String, bool, Option<String>)]| -> Vec<Option<String>> {
         entries
             .iter()
-            .filter(|(_, is_disabled)| *is_disabled == disabled)
-            .map(|(label, _)| label.clone())
+            .filter(|(label, _, _)| pull_modes.contains(&label.as_str()))
+            .map(|(_, _, tooltip)| tooltip.clone())
             .collect()
     };
+    // The command palette's Pull row, which shares the toolbar button's reason.
+    let palette_pull_reason = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|_window, app| {
+            let context = view.read(app).command_palette_context(app);
+            let entry = crate::view::command_palette::COMMANDS
+                .iter()
+                .find(|entry| entry.id == crate::view::commands::Command::Pull.id())
+                .expect("Pull palette entry");
+            crate::view::command_palette::command_unavailable_reason(entry, &context)
+        })
+    };
 
+    // `origin/feature/local` exists, but it is not the branch's upstream.
     let without_upstream = pull_entries(cx, None);
     assert_eq!(
         disabled_labels(&without_upstream, true),
         pull_modes,
-        "every pull mode is disabled while the branch has no tracking branch"
+        "every pull mode is disabled while the branch has no upstream"
     );
+    let reason = "Set an upstream for this branch first";
+    assert_eq!(
+        pull_tooltips(&without_upstream),
+        vec![Some(reason.to_string()); 4],
+        "each disabled pull mode says why"
+    );
+    assert_eq!(palette_pull_reason(cx), Some(reason));
     assert!(
         disabled_labels(&without_upstream, false)
             .iter()
@@ -2303,10 +2332,12 @@ fn pull_menu_disables_every_pull_mode_without_a_live_upstream(cx: &mut gpui::Tes
         Vec::<String>::new(),
         "a live tracking branch enables every pull mode"
     );
+    assert_eq!(pull_tooltips(&with_upstream), vec![None; 4]);
+    assert_eq!(palette_pull_reason(cx), None);
     assert!(
         pull_modes
             .iter()
-            .all(|mode| with_upstream.iter().any(|(label, _)| label == mode))
+            .all(|mode| with_upstream.iter().any(|(label, _, _)| label == mode))
     );
 }
 

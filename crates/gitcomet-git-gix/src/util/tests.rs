@@ -746,6 +746,29 @@ fn run_command_with_timeout_returns_structured_timeout_failure() {
 }
 
 #[test]
+fn git_timeout_reason_survives_nonempty_output() {
+    let error = git_timeout_error(
+        "git -C /repo pull --rebase --no-prune -- origin refs/heads/main",
+        Duration::from_secs(300),
+        None,
+        b"Updating abc123..def456\n".to_vec(),
+        b"Receiving objects: 45%\r".to_vec(),
+    );
+    let ErrorKind::Git(failure) = error.kind() else {
+        panic!("expected structured timeout: {error:?}");
+    };
+    assert_eq!(failure.id(), GitFailureId::Timeout);
+    assert_eq!(
+        failure.detail(),
+        Some(
+            "after 300 seconds without output or progress (set GITCOMET_GIT_COMMAND_TIMEOUT_SECS to override)"
+        )
+    );
+    assert_eq!(failure.stdout(), b"Updating abc123..def456\n");
+    assert_eq!(failure.stderr(), b"Receiving objects: 45%\r");
+}
+
+#[test]
 fn git_command_wait_poll_is_short_for_fast_commands_and_capped_for_slow_ones() {
     assert_eq!(
         git_command_wait_poll(Duration::from_micros(500), Duration::from_secs(1)),

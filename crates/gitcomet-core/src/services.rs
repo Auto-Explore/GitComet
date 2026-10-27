@@ -1670,7 +1670,7 @@ pub trait GitRepository: Send + Sync {
             "fetch configuration signatures are not implemented for this backend",
         )))
     }
-    fn pull(&self, mode: PullMode, _prune: bool) -> Result<CommandOutput>;
+    fn pull(&self, mode: PullMode) -> Result<CommandOutput>;
     fn push(&self) -> Result<()>;
 
     fn push_with_tags(&self, _request: &crate::tag_push::TagPushRequest) -> Result<CommandOutput> {
@@ -1813,12 +1813,7 @@ pub trait GitRepository: Send + Sync {
         Ok(CommandOutput::empty_success("git commit --amend"))
     }
 
-    fn pull_branch_with_output(
-        &self,
-        _remote: &str,
-        _branch: &str,
-        _prune: bool,
-    ) -> Result<CommandOutput> {
+    fn pull_branch_with_output(&self, _remote: &str, _branch: &str) -> Result<CommandOutput> {
         Err(Error::new(ErrorKind::Unsupported(
             "pulling a specific remote branch is not implemented for this backend",
         )))

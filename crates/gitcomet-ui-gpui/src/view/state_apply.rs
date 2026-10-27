@@ -413,10 +413,11 @@ impl GitCometView {
             if self.pending_pull_reconcile_prompt.is_none()
                 && next.active_repo == Some(next_repo.id)
                 && new_command_entries.iter().any(|entry| {
-                    if entry.ok {
-                        return false;
-                    }
-                    if !entry.command.trim_start().starts_with("git pull") {
+                    if entry.ok
+                        || entry.handled_by_auth_prompt
+                        || entry.kind != gitcomet_state::model::CommandLogKind::Pull
+                        || entry.failure_id == Some(gitcomet_core::error::GitFailureId::Timeout)
+                    {
                         return false;
                     }
 
@@ -514,11 +515,9 @@ impl GitCometView {
                 repo.feedback
                     .hook_activity
                     .iter()
-                    // Hook runs and large-file transfers already have their
-                    // own card.
                     .filter(|operation| {
                         operation.progress_lane
-                            && !operation.is_reportable()
+                            && (!operation.is_reportable() || operation.command.is_some())
                             && operation.status.is_active()
                     })
                     .map(move |operation| {
@@ -916,6 +915,7 @@ mod tests {
             output_bytes: 0,
             output_truncated: false,
             latest_line: String::new(),
+            command: None,
             command_started: false,
             transfer: None,
             progress_lane: false,

@@ -269,11 +269,7 @@ impl GitRepository for UnsupportedRepo {
         let result: Result<()> = { unsupported_repo_result() };
         result.map(|()| gitcomet_core::services::CommandOutput::empty_success("git fetch --all"))
     }
-    fn pull(
-        &self,
-        _mode: PullMode,
-        _prune: bool,
-    ) -> Result<gitcomet_core::services::CommandOutput> {
+    fn pull(&self, _mode: PullMode) -> Result<gitcomet_core::services::CommandOutput> {
         let result: Result<()> = { unsupported_repo_result() };
         result.map(|()| gitcomet_core::services::CommandOutput::empty_success("git pull"))
     }
@@ -504,11 +500,7 @@ impl GitRepository for MetadataSchedulingRepo {
         let result: Result<()> = { unsupported_repo_result() };
         result.map(|()| gitcomet_core::services::CommandOutput::empty_success("git fetch --all"))
     }
-    fn pull(
-        &self,
-        _mode: PullMode,
-        _prune: bool,
-    ) -> Result<gitcomet_core::services::CommandOutput> {
+    fn pull(&self, _mode: PullMode) -> Result<gitcomet_core::services::CommandOutput> {
         let result: Result<()> = { unsupported_repo_result() };
         result.map(|()| gitcomet_core::services::CommandOutput::empty_success("git pull"))
     }
@@ -710,11 +702,7 @@ impl GitRepository for SelectedDiffSchedulingRepo {
         let result: Result<()> = { unsupported_repo_result() };
         result.map(|()| gitcomet_core::services::CommandOutput::empty_success("git fetch --all"))
     }
-    fn pull(
-        &self,
-        _mode: PullMode,
-        _prune: bool,
-    ) -> Result<gitcomet_core::services::CommandOutput> {
+    fn pull(&self, _mode: PullMode) -> Result<gitcomet_core::services::CommandOutput> {
         let result: Result<()> = { unsupported_repo_result() };
         result.map(|()| gitcomet_core::services::CommandOutput::empty_success("git pull"))
     }
@@ -933,11 +921,7 @@ impl GitRepository for RecordingLogRepo {
         let result: Result<()> = { unsupported_repo_result() };
         result.map(|()| gitcomet_core::services::CommandOutput::empty_success("git fetch --all"))
     }
-    fn pull(
-        &self,
-        _mode: PullMode,
-        _prune: bool,
-    ) -> Result<gitcomet_core::services::CommandOutput> {
+    fn pull(&self, _mode: PullMode) -> Result<gitcomet_core::services::CommandOutput> {
         let result: Result<()> = { unsupported_repo_result() };
         result.map(|()| gitcomet_core::services::CommandOutput::empty_success("git pull"))
     }
@@ -1206,11 +1190,7 @@ impl GitRepository for RecordingCheckoutRepo {
     fn fetch_all(&self, _prune: bool) -> Result<gitcomet_core::services::CommandOutput> {
         self.remote_call("fetch")
     }
-    fn pull(
-        &self,
-        _mode: PullMode,
-        _prune: bool,
-    ) -> Result<gitcomet_core::services::CommandOutput> {
+    fn pull(&self, _mode: PullMode) -> Result<gitcomet_core::services::CommandOutput> {
         self.remote_call("pull")
     }
     fn push(&self) -> Result<()> {

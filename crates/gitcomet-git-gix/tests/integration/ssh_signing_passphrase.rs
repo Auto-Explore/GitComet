@@ -302,7 +302,7 @@ fn unlocked_ssh_key_survives_pull_refused_for_local_changes() {
     );
 
     let repo = open(&work);
-    let missing = repo.pull(PullMode::Default, true).unwrap_err();
+    let missing = repo.pull(PullMode::Default).unwrap_err();
     let ErrorKind::Git(missing) = missing.kind() else {
         panic!("expected structured failure: {missing:?}");
     };
@@ -322,7 +322,7 @@ fn unlocked_ssh_key_survives_pull_refused_for_local_changes() {
     assert!(remember_verified_passphrase(challenge, &auth));
     stage_git_auth_for_current_thread(auth);
 
-    let refused = repo.pull(PullMode::Default, true).unwrap_err();
+    let refused = repo.pull(PullMode::Default).unwrap_err();
     let ErrorKind::Git(refused) = refused.kind() else {
         panic!("expected structured failure: {refused:?}");
     };
@@ -342,7 +342,7 @@ fn unlocked_ssh_key_survives_pull_refused_for_local_changes() {
     clear_staged_git_auth();
 
     fs::write(work.join("file.txt"), "contents").unwrap();
-    repo.pull(PullMode::Default, true)
+    repo.pull(PullMode::Default)
         .expect("a later pull reuses the unlocked key");
     assert_eq!(
         fs::read_to_string(work.join("file.txt")).unwrap(),
@@ -366,7 +366,7 @@ fn unlocked_ssh_key_survives_pull_refused_for_local_changes() {
             "conflicting edit",
         ],
     );
-    let conflict = repo.pull(PullMode::Default, true).unwrap_err();
+    let conflict = repo.pull(PullMode::Default).unwrap_err();
     let ErrorKind::Git(conflict) = conflict.kind() else {
         panic!("expected structured conflict: {conflict:?}");
     };

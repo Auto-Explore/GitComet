@@ -135,7 +135,6 @@ impl Command {
             | Self::AbortMerge
             | Self::ContinueRebase
             | Self::AbortRebase
-            | Self::Pull
             | Self::Stash
             | Self::StashPop
             | Self::StashApply
@@ -151,6 +150,8 @@ impl Command {
             | Self::DeleteBranch
             | Self::RenameBranch
             | Self::PruneMergedBranches
+            // Bare git-annex repositories pull through git-annex; `Needs::Pull` decides.
+            | Self::Pull
             | Self::Push
             | Self::ForcePush
             | Self::PushWithAnnotatedTags

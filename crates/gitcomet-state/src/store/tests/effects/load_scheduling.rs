@@ -461,11 +461,7 @@ fn load_conflict_file_effect_reads_worktree_and_emits_loaded() {
         fn fetch_all(&self, _prune: bool) -> Result<gitcomet_core::services::CommandOutput> {
             unimplemented!()
         }
-        fn pull(
-            &self,
-            _mode: PullMode,
-            _prune: bool,
-        ) -> Result<gitcomet_core::services::CommandOutput> {
+        fn pull(&self, _mode: PullMode) -> Result<gitcomet_core::services::CommandOutput> {
             unimplemented!()
         }
         fn push(&self) -> Result<()> {
@@ -686,11 +682,7 @@ fn load_conflict_file_effect_reuses_conflict_session_payloads_without_stage_fetc
         fn fetch_all(&self, _prune: bool) -> Result<gitcomet_core::services::CommandOutput> {
             unimplemented!()
         }
-        fn pull(
-            &self,
-            _mode: PullMode,
-            _prune: bool,
-        ) -> Result<gitcomet_core::services::CommandOutput> {
+        fn pull(&self, _mode: PullMode) -> Result<gitcomet_core::services::CommandOutput> {
             unimplemented!()
         }
         fn push(&self) -> Result<()> {
@@ -937,11 +929,7 @@ fn load_conflict_file_effect_preserves_binary_payloads_when_reusing_session() {
         fn fetch_all(&self, _prune: bool) -> Result<gitcomet_core::services::CommandOutput> {
             unimplemented!()
         }
-        fn pull(
-            &self,
-            _mode: PullMode,
-            _prune: bool,
-        ) -> Result<gitcomet_core::services::CommandOutput> {
+        fn pull(&self, _mode: PullMode) -> Result<gitcomet_core::services::CommandOutput> {
             unimplemented!()
         }
         fn push(&self) -> Result<()> {
@@ -1200,11 +1188,7 @@ fn load_conflict_file_effect_reuses_absent_current_payload_without_rereading_wor
         fn fetch_all(&self, _prune: bool) -> Result<gitcomet_core::services::CommandOutput> {
             unimplemented!()
         }
-        fn pull(
-            &self,
-            _mode: PullMode,
-            _prune: bool,
-        ) -> Result<gitcomet_core::services::CommandOutput> {
+        fn pull(&self, _mode: PullMode) -> Result<gitcomet_core::services::CommandOutput> {
             unimplemented!()
         }
         fn push(&self) -> Result<()> {
@@ -1457,11 +1441,7 @@ fn load_conflict_file_effect_records_trace_stages_and_sizes() {
         fn fetch_all(&self, _prune: bool) -> Result<gitcomet_core::services::CommandOutput> {
             unimplemented!()
         }
-        fn pull(
-            &self,
-            _mode: PullMode,
-            _prune: bool,
-        ) -> Result<gitcomet_core::services::CommandOutput> {
+        fn pull(&self, _mode: PullMode) -> Result<gitcomet_core::services::CommandOutput> {
             unimplemented!()
         }
         fn push(&self) -> Result<()> {
@@ -2692,7 +2672,6 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
             Effect::RepoCommand(RepoCommandEffect::Pull {
                 repo_id,
                 mode: PullMode::FastForwardOnly,
-                prune: true,
                 auth: None,
             }),
             1,
@@ -2702,7 +2681,6 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
                 repo_id,
                 remote: "origin".to_string(),
                 branch: "main".to_string(),
-                prune: true,
                 auth: None,
             }),
             1,

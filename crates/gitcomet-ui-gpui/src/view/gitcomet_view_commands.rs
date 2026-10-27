@@ -4,10 +4,10 @@ use super::commands::Command;
 use super::{
     AnnexPopoverKind, AnnexPrompt, BranchPickerPurpose, CloseWindow, DecreaseUiScale, DiffArea,
     DiffViewMode, GitCometView, IncreaseUiScale, Loadable, Msg, NewWindow, OpenActiveViewSearch,
-    OpenRepository, PopoverKind, PullMode, PullRequest, PushRequest, RemotePopoverKind,
-    RepoPopoverKind, ResetUiScale, StashPickerPurpose, SubmodulePopoverKind, ToggleRevealCommit,
-    Window, WorktreePopoverKind, command_palette, components, head_branch_has_live_upstream,
-    head_is_detached, pull_request, push_request,
+    OpenRepository, PopoverKind, PullMode, PushRequest, RemotePopoverKind, RepoPopoverKind,
+    ResetUiScale, StashPickerPurpose, SubmodulePopoverKind, ToggleRevealCommit, Window,
+    WorktreePopoverKind, command_palette, components, head_branch_has_live_upstream,
+    head_is_detached, push_request,
 };
 
 impl GitCometView {
@@ -391,19 +391,10 @@ impl GitCometView {
                 let Some(repo) = self.active_repo() else {
                     return;
                 };
-                let repo_id = repo.id;
-                match pull_request(repo, &self.state.large_file_settings) {
-                    PullRequest::Pull => self.store.dispatch(Msg::Pull {
-                        repo_id,
-                        mode: PullMode::Default,
-                    }),
-                    PullRequest::NoRemotes => self.push_toast(
-                        components::ToastKind::Error,
-                        "Cannot pull: no remotes configured".to_string(),
-                        cx,
-                    ),
-                    PullRequest::NotReady => {}
-                }
+                self.store.dispatch(Msg::Pull {
+                    repo_id: repo.id,
+                    mode: PullMode::Default,
+                });
             }
             Command::Push => {
                 let Some(repo) = self.active_repo() else {

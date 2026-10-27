@@ -475,6 +475,7 @@ fn apply_state_snapshot_routes_command_errors_into_error_toasts(cx: &mut gpui::T
     repo.feedback_mut().last_error = Some(error.clone());
     repo.feedback_mut()
         .push_command_result(gitcomet_state::model::CommandLogEntry {
+            kind: gitcomet_state::model::CommandLogKind::Other,
             time: std::time::SystemTime::now(),
             ok: false,
             command: "git fetch".to_string(),
@@ -523,6 +524,7 @@ const AUTH_PROMPT_KINDS: [AuthPromptKind; 2] =
 
 fn announced_command(summary: &str) -> gitcomet_state::model::CommandLogEntry {
     gitcomet_state::model::CommandLogEntry {
+        kind: gitcomet_state::model::CommandLogKind::Other,
         time: std::time::SystemTime::now(),
         ok: true,
         command: "git push".into(),
@@ -768,9 +770,10 @@ fn auth_rejection(kind: AuthPromptKind) -> &'static str {
 fn auth_pull_attempt(kind: AuthPromptKind) -> gitcomet_state::model::CommandLogEntry {
     let challenge = auth_challenge(kind);
     gitcomet_state::model::CommandLogEntry {
+        kind: gitcomet_state::model::CommandLogKind::Pull,
         time: std::time::SystemTime::UNIX_EPOCH,
         ok: false,
-        command: "git pull --prune".into(),
+        command: "git -c fetch.pruneTags=false pull --no-prune -- origin refs/heads/main".into(),
         summary: format!("Pull failed:\n\n{challenge}"),
         stdout: "".into(),
         stderr: challenge.into(),
@@ -1291,15 +1294,21 @@ fn genuine_retry_failures_still_produce_error_toasts(cx: &mut gpui::TestAppConte
         apply_notification_snapshot(cx, &view, &state);
         state.auth_prompt = None;
 
-        for (command, summary) in [
-            ("git pull --prune", "Pull failed: Connection timed out"),
+        for (command_kind, command, summary) in [
             (
+                gitcomet_state::model::CommandLogKind::Pull,
+                "git pull --no-prune -- origin refs/heads/main",
+                "Pull timed out: Connection timed out",
+            ),
+            (
+                gitcomet_state::model::CommandLogKind::Other,
                 "git push",
                 "Push failed: ! [rejected] main -> main (fetch first)",
             ),
         ] {
             state.repos[0].feedback_mut().push_command_result(
                 gitcomet_state::model::CommandLogEntry {
+                    kind: command_kind,
                     command: command.into(),
                     summary: summary.into(),
                     stderr: summary.into(),
@@ -1314,6 +1323,62 @@ fn genuine_retry_failures_still_produce_error_toasts(cx: &mut gpui::TestAppConte
             );
         }
         assert_eq!(error_toasts(cx, &view).len(), 2);
+    }
+}
+
+#[gpui::test]
+fn pull_reconcile_prompt_recognizes_full_command_arguments(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let mut state = auth_pull_state(AuthPromptKind::Passphrase);
+    state.auth_prompt = None;
+    let entry = &mut state.repos[0].feedback_mut().command_log[0];
+    entry.command = "git -c fetch.pruneTags=false -C /tmp/repo pull --ff-only --no-prune -- origin refs/heads/main".into();
+    entry.handled_by_auth_prompt = false;
+    entry.failure_id = Some(gitcomet_core::error::GitFailureId::CommandFailed);
+    entry.summary = "Pull failed".into();
+    entry.stderr = "fatal: Not possible to fast-forward, aborting.".into();
+    apply_notification_snapshot(cx, &view, &state);
+    test_support::redraw(cx);
+    assert!(cx.debug_bounds("pull_reconcile_merge").is_some());
+    assert!(cx.debug_bounds("pull_reconcile_rebase").is_some());
+}
+
+#[gpui::test]
+fn pull_recovery_ignores_other_commands_and_timeouts(cx: &mut gpui::TestAppContext) {
+    use gitcomet_core::error::GitFailureId;
+    use gitcomet_state::model::CommandLogKind;
+
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let mut state = auth_pull_state(AuthPromptKind::Passphrase);
+    state.auth_prompt = None;
+    let mut entry = auth_pull_attempt(AuthPromptKind::Passphrase);
+    entry.command = "git pull-looking-command".into();
+    entry.handled_by_auth_prompt = false;
+    entry.kind = CommandLogKind::Other;
+    entry.failure_id = Some(GitFailureId::WorktreeWouldBeOverwritten);
+    assert!(
+        ErrorReport::command_failure(RepoId(1), &entry)
+            .actions
+            .is_empty()
+    );
+
+    for (kind, failure_id) in [
+        (CommandLogKind::Other, GitFailureId::CommandFailed),
+        (CommandLogKind::Pull, GitFailureId::Timeout),
+    ] {
+        entry.kind = kind;
+        entry.failure_id = Some(failure_id);
+        entry.stderr = "fatal: Not possible to fast-forward, aborting.".into();
+        state.repos[0]
+            .feedback_mut()
+            .push_command_result(entry.clone());
+        apply_notification_snapshot(cx, &view, &state);
+        test_support::redraw(cx);
+        assert!(cx.debug_bounds("pull_reconcile_merge").is_none());
     }
 }
 
@@ -1365,6 +1430,8 @@ fn authentication_owned_hook_attempts_are_quiet_even_without_the_prompt_snapshot
     let operation_id = GitOperationId(1);
     state.repos[0].feedback_mut().command_log[0].hook_operation_id = Some(operation_id);
     state.repos[0].feedback_mut().command_log[0].command = "git push".into();
+    state.repos[0].feedback_mut().command_log[0].kind =
+        gitcomet_state::model::CommandLogKind::Other;
     state.repos[0].feedback_mut().command_log[0].summary =
         format!("Push failed:\n\n{WINDOWS_SSH_PASSPHRASE_CHALLENGE}");
     state.repos[0]
@@ -1392,6 +1459,7 @@ fn authentication_owned_hook_attempts_are_quiet_even_without_the_prompt_snapshot
             output_bytes: 0,
             output_truncated: false,
             latest_line: String::new(),
+            command: None,
             command_started: true,
             transfer: None,
             progress_lane: false,
