@@ -1962,14 +1962,14 @@ impl PopoverHost {
                     let selected = operation_id
                         .filter(|requested| {
                             operations.iter().any(|operation| {
-                                operation.id == *requested && operation.is_reportable()
+                                operation.id == *requested && operation.has_activity_details()
                             })
                         })
                         .or_else(|| {
                             operations
                                 .iter()
                                 .rev()
-                                .find(|operation| operation.is_reportable())
+                                .find(|operation| operation.has_activity_details())
                                 .map(|operation| operation.id)
                         });
                     self.hook_activity_selected = selected;

@@ -180,6 +180,13 @@ impl GixRepo {
     fn pull_target(&self, target: &PullTarget, mode: PullMode) -> Result<CommandOutput> {
         let command = self.pull_command(target, mode);
         let label = pull_command_label(&command);
+        if let Some(operation) = gitcomet_core::git_operation::current() {
+            operation.emit(
+                gitcomet_core::git_operation::GitOperationEvent::CommandInvocation {
+                    command: label.clone(),
+                },
+            );
+        }
         self.run_integrating_git(command, &label, true)
     }
 

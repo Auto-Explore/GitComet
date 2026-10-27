@@ -7,6 +7,7 @@ pub(super) enum TextSection {
     Header,
     History,
     Detail,
+    Command,
     Hooks,
     Output,
 }
@@ -68,14 +69,14 @@ fn text(
                     components::TextInputOptions {
                         read_only: true,
                         chromeless: true,
-                        multiline: section == TextSection::Output,
-                        soft_wrap: section == TextSection::Output,
+                        multiline: matches!(section, TextSection::Output | TextSection::Command),
+                        soft_wrap: matches!(section, TextSection::Output | TextSection::Command),
                         ..Default::default()
                     },
                     cx,
                 );
                 input.set_display_text(cx);
-                if section != TextSection::Output {
+                if !matches!(section, TextSection::Output | TextSection::Command) {
                     input.set_display_truncation(Some(components::TextTruncationProfile::End), cx);
                 }
                 input
@@ -145,6 +146,7 @@ const HOOK_ACTIVITY_RUN_ROW_HEIGHT_PX: f32 = 48.0;
 const HOOK_ACTIVITY_RUN_ROW_COMFORTABLE_HEIGHT_PX: f32 = 56.0;
 const HOOK_ACTIVITY_HOOK_ROW_HEIGHT_PX: f32 = 24.0;
 const HOOK_ACTIVITY_HOOK_ROW_COMFORTABLE_HEIGHT_PX: f32 = 32.0;
+const HOOK_ACTIVITY_COMMAND_MAX_HEIGHT_PX: f32 = 104.0;
 
 /// Smallest the dialog opens at, and the share of the window it takes when
 /// there is more room than that. Hook output is wide and long, so give it the
@@ -619,7 +621,7 @@ fn operation_detail(
                     .child(text(
                         this,
                         "output_truncation",
-                        "Earlier hook output was truncated.",
+                        "Earlier output was truncated.",
                         TextSection::Output,
                         cx,
                     )),
@@ -629,7 +631,7 @@ fn operation_detail(
             this,
             format!("output_{}", operation_id.0),
             if output.is_empty() {
-                "This hook did not write any output.".to_string()
+                "No output captured yet.".to_string()
             } else {
                 output
             },
@@ -672,7 +674,7 @@ fn operation_detail(
                 .child(text(
                     this,
                     "output_heading",
-                    "Hook output",
+                    "Git output",
                     TextSection::Detail,
                     cx,
                 )),
@@ -714,7 +716,7 @@ fn operation_detail(
         .flex()
         .flex_col()
         .gap_2()
-        .child(hooks_view)
+        .when(operation.has_hooks(), |this| this.child(hooks_view))
         .child(output_view);
 
     let actions = div()
@@ -738,6 +740,23 @@ fn operation_detail(
                 );
             }),
         )
+        .when_some(operation.command.clone(), |actions, command| {
+            actions.child(
+                components::Button::new(
+                    format!("hook_activity_copy_command_{}", operation_id.0),
+                    "Copy command",
+                )
+                .style(components::ButtonStyle::Outlined)
+                .on_click(theme, cx, move |_this, _e, _window, cx| {
+                    crate::clipboard::write_text(
+                        cx,
+                        command.to_string(),
+                        crate::clipboard::CopySource::HookActivity,
+                    );
+                })
+                .debug_selector(move || format!("hook_activity_copy_command_{}", operation_id.0)),
+            )
+        })
         .when(active, |actions| {
             actions.child(
                 components::Button::new(
@@ -860,6 +879,26 @@ fn operation_detail(
                     )
                 }),
         )
+        .when_some(operation.command.clone(), |detail, command| {
+            detail.child(
+                div()
+                    .id(("hook_activity_command", operation_id.0))
+                    .debug_selector(move || format!("hook_activity_command_{}", operation_id.0))
+                    .w_full()
+                    .min_w(px(0.0))
+                    .max_h(ui_scale.px(HOOK_ACTIVITY_COMMAND_MAX_HEIGHT_PX))
+                    .overflow_y_scroll()
+                    .font_family(crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY)
+                    .text_size(theme.ui_text(12.0))
+                    .child(text(
+                        this,
+                        format!("command_{}", operation_id.0),
+                        command,
+                        TextSection::Command,
+                        cx,
+                    )),
+            )
+        })
         .child(main_area)
         .child(actions)
         .into_any_element()
@@ -916,7 +955,7 @@ pub(super) fn panel(
                 repo.feedback
                     .hook_activity
                     .iter()
-                    .filter(|operation| operation.is_reportable())
+                    .filter(|operation| operation.has_activity_details())
                     .rev()
                     .cloned()
                     .collect::<Vec<_>>(),
@@ -929,8 +968,7 @@ pub(super) fn panel(
                 Vec::new(),
             )
         });
-    let header_title: SharedString =
-        format!("Git hook activity — {}", repository_name.as_ref()).into();
+    let header_title: SharedString = format!("Git activity — {}", repository_name.as_ref()).into();
 
     let selected_is_available = this
         .hook_activity_selected
@@ -1034,7 +1072,7 @@ pub(super) fn panel(
             .child(text(
                 this,
                 "empty",
-                "No Git hooks or LFS transfers have run in this repository during this session.",
+                "No Pull operations, Git hooks or LFS transfers have run in this repository during this session.",
                 TextSection::Detail,
                 cx,
             ))

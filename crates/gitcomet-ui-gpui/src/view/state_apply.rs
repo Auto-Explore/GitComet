@@ -511,11 +511,9 @@ impl GitCometView {
                 repo.feedback
                     .hook_activity
                     .iter()
-                    // Hook runs and large-file transfers already have their
-                    // own card.
                     .filter(|operation| {
                         operation.progress_lane
-                            && !operation.is_reportable()
+                            && (!operation.is_reportable() || operation.command.is_some())
                             && operation.status.is_active()
                     })
                     .map(move |operation| {
@@ -913,6 +911,7 @@ mod tests {
             output_bytes: 0,
             output_truncated: false,
             latest_line: String::new(),
+            command: None,
             command_started: false,
             transfer: None,
             progress_lane: false,

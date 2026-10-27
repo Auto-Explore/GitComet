@@ -145,6 +145,7 @@ pub struct GitHookOperation {
     pub output_bytes: usize,
     pub output_truncated: bool,
     pub latest_line: String,
+    pub command: Option<Arc<str>>,
     /// An explicit command requested activity before producing any output.
     pub command_started: bool,
     /// Latest large-file transfer progress, when the operation moved content.
@@ -165,6 +166,10 @@ impl GitHookOperation {
         self.command_started || self.has_hooks() || self.transfer.is_some()
     }
 
+    pub fn has_activity_details(&self) -> bool {
+        self.is_reportable() || self.command.is_some()
+    }
+
     pub fn active_hook_name(&self) -> Option<&str> {
         self.hooks
             .iter()
@@ -176,7 +181,7 @@ impl GitHookOperation {
     pub fn combined_output(&self) -> String {
         let mut output = String::new();
         if self.output_truncated {
-            output.push_str("[Earlier hook output was truncated]\n");
+            output.push_str("[Earlier output was truncated]\n");
         }
         for chunk in self.output.iter() {
             output.push_str(&chunk.text);

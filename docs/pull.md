@@ -32,3 +32,23 @@ before fetching.
 The selected merge, rebase, or fast-forward strategy is preserved. Adjusted
 git-annex branches retain their configured git-annex routing; see
 [Git Annex](git-annex.md).
+
+## Progress and cancellation
+
+Pull shows a progress card immediately, including its repository and branch
+context, elapsed time, the last progress phase Git reported, and the latest output
+line. Percentages describe individual Git phases, not the whole Pull. Silent work
+shows a spinner without an estimated percentage.
+
+**Details** opens the current operation in **Git activity**, where the command
+wraps for reading and can be copied. The displayed command includes the actual
+Git arguments with URL credentials masked; authentication environment variables
+are excluded. Captured output and the completed operation remain available from
+the activity button in the status bar, within the existing history and output
+limits.
+
+**Stop** cancels the active Git operation through its process group. It is
+available in the progress card and details. Each Pull keeps its own progress card
+when hooks or large-file transfers run, including its repository and branch context.
+Cancellation does not undo
+work Git has already completed; inspect the repository state before continuing.

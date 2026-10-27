@@ -1326,6 +1326,7 @@ fn authentication_owned_hook_attempts_are_quiet_even_without_the_prompt_snapshot
             output_bytes: 0,
             output_truncated: false,
             latest_line: String::new(),
+            command: None,
             command_started: true,
             transfer: None,
             progress_lane: false,

@@ -1,6 +1,49 @@
 use super::*;
 
 #[test]
+fn pull_emits_its_safe_command_before_output_and_keeps_it_on_failure() {
+    use gitcomet_core::git_operation::{self, GitOperationContext, GitOperationEvent};
+    use std::sync::Arc;
+
+    let _guard = remote_management_test_lock();
+    let dir = tempfile::tempdir().unwrap();
+    let (remote, work) = init_work_repo_with_remote(dir.path(), "origin");
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let sink = Arc::clone(&events);
+    let context =
+        GitOperationContext::new("Pull", move |_, event| sink.lock().unwrap().push(event));
+    let _scope = git_operation::attach(&context);
+    let opened = GixBackend.open(&work).unwrap();
+
+    let output = opened.pull(PullMode::Rebase).unwrap();
+    {
+        let events = events.lock().unwrap();
+        assert!(
+            matches!(events.first(), Some(GitOperationEvent::CommandInvocation { command }) if command == &output.command)
+        );
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, GitOperationEvent::CommandStarted))
+        );
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, GitOperationEvent::Output { .. }))
+        );
+    }
+    events.lock().unwrap().clear();
+    run_git(&remote, &["update-ref", "-d", "refs/heads/main"]);
+    let error = opened.pull(PullMode::Rebase).unwrap_err();
+    let events = events.lock().unwrap();
+    let Some(GitOperationEvent::CommandInvocation { command }) = events.first() else {
+        panic!("failed Pull must expose its command before output");
+    };
+    assert!(command.ends_with("pull --progress --rebase --no-prune -- origin refs/heads/main"));
+    assert!(error.to_string().contains(command));
+}
+
+#[test]
 fn pull_fetches_only_the_configured_upstream_without_pruning() {
     let _guard = remote_management_test_lock();
     let dir = tempfile::tempdir().unwrap();
