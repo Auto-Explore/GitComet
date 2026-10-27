@@ -149,12 +149,8 @@ impl GitRepository for RecordedGitlinkRepository {
         self.inner.fetch_all(_prune)
     }
 
-    fn pull(
-        &self,
-        _mode: PullMode,
-        _prune: bool,
-    ) -> Result<gitcomet_core::services::CommandOutput> {
-        self.inner.pull(_mode, _prune)
+    fn pull(&self, _mode: PullMode) -> Result<gitcomet_core::services::CommandOutput> {
+        self.inner.pull(_mode)
     }
 
     fn push(&self) -> Result<()> {

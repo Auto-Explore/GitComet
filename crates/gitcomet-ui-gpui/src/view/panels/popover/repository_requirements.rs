@@ -250,13 +250,6 @@ impl PopoverHost {
                 (command.repository_requirement() == RepositoryRequirement::WorkingTree)
                     .then_some(*repo_id)
             }
-            ContextMenuAction::Pull { repo_id, .. } => self
-                .state
-                .repos
-                .iter()
-                .find(|repo| repo.id == *repo_id)
-                .filter(|repo| !repo.annex_takes_over_pull_push(&self.state.large_file_settings))
-                .map(|repo| repo.id),
             ContextMenuAction::OpenPopover { kind } => {
                 kind.working_tree_repository(self.active_repo_id())
             }
@@ -397,7 +390,9 @@ impl PopoverHost {
             | ContextMenuAction::TerminalOpenExternal { .. }
             | ContextMenuAction::DeleteTag { .. }
             | ContextMenuAction::PushTag { .. }
-            | ContextMenuAction::DeleteRemoteTag { .. } => None,
+            | ContextMenuAction::DeleteRemoteTag { .. }
+            // `pull_unavailable_reason` covers bare repositories and annex takeover.
+            | ContextMenuAction::Pull { .. } => None,
         }?;
         self.state
             .repos

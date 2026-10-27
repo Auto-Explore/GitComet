@@ -46,6 +46,7 @@ fn running_hook_activity(operation_id: u64) -> GitHookOperation {
         output_bytes: output.len(),
         output_truncated: false,
         latest_line: "checking file 79".to_string(),
+        command: None,
         command_started: false,
         transfer: None,
         progress_lane: false,
@@ -1308,6 +1309,7 @@ fn running_fetch(operation_id: u64, percent: Option<u8>) -> GitHookOperation {
         output_bytes: 0,
         output_truncated: false,
         latest_line: String::new(),
+        command: None,
         command_started: false,
         transfer: None,
         progress_lane: true,
@@ -1378,6 +1380,171 @@ fn operation_progress_card_shows_git_meter_and_stops_the_operation(cx: &mut gpui
     apply_state(cx, &view, app_state_with_active_repo(repo));
     draw_and_drain_test_window(cx);
     assert!(cx.debug_bounds("operation_progress_toast_731").is_none());
+}
+
+#[gpui::test]
+fn pull_monitor_opens_exact_command_details_and_can_stop_while_silent(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let repo_id = RepoId(751);
+    let mut repo = shortcut_fixture_repo(
+        repo_id,
+        &std::env::temp_dir().join("pull-monitor"),
+        &CommitId("751".into()),
+    );
+    apply_state(cx, &view, app_state_with_active_repo(repo.clone()));
+    let command = "git -C '/work/repository with spaces' pull --progress --rebase --no-prune -- origin refs/heads/feature/long-upstream-branch-name";
+    let mut pull = running_fetch(751, None);
+    pull.label = "Pull".into();
+    pull.context = Some("origin/feature → topic · rebase".into());
+    pull.time = std::time::SystemTime::now();
+    pull.command = Some(Arc::from(command));
+    let mut newer = pull.clone();
+    newer.id = GitOperationId(752);
+    newer.status = GitHookOperationStatus::Succeeded;
+    newer.command = Some(Arc::from("git pull --ff-only -- origin refs/heads/other"));
+    repo.feedback_mut().hook_activity = vec![pull, newer];
+    repo.feedback_mut().hook_activity_rev = 1;
+    apply_state(cx, &view, app_state_with_active_repo(repo));
+    draw_and_drain_test_window(cx);
+
+    assert!(cx.debug_bounds("operation_progress_toast_751").is_some());
+    assert!(cx.debug_bounds("operation_progress_bar_751").is_none());
+    assert!(cx.debug_bounds("hook_activity_panel").is_none());
+    let details = cx
+        .debug_bounds("operation_progress_details_751")
+        .expect("Pull details");
+    cx.simulate_click(details.center(), Modifiers::default());
+    draw_and_drain_test_window(cx);
+
+    assert!(cx.debug_bounds("hook_activity_command_751").is_some());
+    assert!(cx.debug_bounds("hook_activity_command_752").is_none());
+    assert!(cx.debug_bounds("hook_activity_hooks_container").is_none());
+    assert!(cx.debug_bounds("operation_progress_toast_751").is_none());
+    let input = activity_text(cx, &view, "command_751");
+    assert_eq!(
+        cx.update(|_, app| input.read(app).text().to_string()),
+        command
+    );
+    let copy = cx.debug_bounds("hook_activity_copy_command_751").unwrap();
+    cx.simulate_click(copy.center(), Modifiers::default());
+    assert_eq!(
+        cx.read_from_clipboard()
+            .and_then(|item| item.text())
+            .as_deref(),
+        Some(command)
+    );
+
+    let close = cx.debug_bounds("hook_activity_close").unwrap();
+    cx.simulate_click(close.center(), Modifiers::default());
+    draw_and_drain_test_window(cx);
+    assert!(cx.debug_bounds("operation_progress_toast_751").is_some());
+    let details = cx.debug_bounds("operation_progress_details_751").unwrap();
+    cx.simulate_click(details.center(), Modifiers::default());
+    draw_and_drain_test_window(cx);
+
+    let stop = cx
+        .debug_bounds("hook_activity_stop_751")
+        .expect("Stop while Pull is silent");
+    cx.simulate_click(stop.center(), Modifiers::default());
+    sync_store_when(cx, &view, "Pull cancellation", |state| {
+        state.repos[0].feedback.hook_activity[0].status == GitHookOperationStatus::Cancelling
+    });
+    assert_eq!(
+        cx.update(|_, app| view.read(app).state.repos[0].feedback.hook_activity[1].status),
+        GitHookOperationStatus::Succeeded
+    );
+}
+
+#[gpui::test]
+fn pull_keeps_a_direct_stop_control_when_another_repository_starts_hooks(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let repo_id = RepoId(753);
+    let mut repo = shortcut_fixture_repo(
+        repo_id,
+        &std::env::temp_dir().join("pull-hook-monitor"),
+        &CommitId("753".into()),
+    );
+    apply_state(cx, &view, app_state_with_active_repo(repo.clone()));
+    let mut pull = running_hook_activity(753);
+    pull.label = "Pull".into();
+    pull.context = Some("origin/main → topic".into());
+    pull.progress_lane = true;
+    pull.command = Some(Arc::from(
+        "git pull --rebase --no-prune -- origin refs/heads/main",
+    ));
+    repo.feedback_mut().hook_activity = vec![pull];
+    repo.feedback_mut().hook_activity_rev = 1;
+    apply_state(cx, &view, app_state_with_active_repo(repo.clone()));
+    draw_and_drain_test_window(cx);
+    let minimize = cx
+        .debug_bounds("hook_activity_minimize")
+        .expect("hook activity opens");
+    cx.simulate_click(minimize.center(), Modifiers::default());
+    draw_and_drain_test_window(cx);
+    let mut other = shortcut_fixture_repo(
+        RepoId(754),
+        &std::env::temp_dir().join("other-hook-monitor"),
+        &CommitId("754".into()),
+    );
+    let mut other_pull = running_hook_activity(754);
+    other_pull.label = "Pull".into();
+    other_pull.context = Some("upstream/release → release".into());
+    other_pull.progress_lane = true;
+    other_pull.command = Some(Arc::from(
+        "git pull --rebase --no-prune -- upstream refs/heads/release",
+    ));
+    other.feedback_mut().hook_activity = vec![other_pull];
+    other.feedback_mut().hook_activity_rev = 1;
+    apply_state(
+        cx,
+        &view,
+        hook_activity_state_for_two_repos(repo_id, repo, other),
+    );
+    draw_and_drain_test_window(cx);
+    if let Some(minimize) = cx.debug_bounds("hook_activity_minimize") {
+        cx.simulate_click(minimize.center(), Modifiers::default());
+        draw_and_drain_test_window(cx);
+    }
+    assert!(cx.debug_bounds("operation_progress_toast_753").is_some());
+    assert!(cx.debug_bounds("operation_progress_toast_754").is_some());
+    assert!(cx.debug_bounds("operation_progress_stop_754").is_some());
+    let monitors = cx.update(|_, app| {
+        view.read(app)
+            .toast_host
+            .read(app)
+            .operation_progress_for_tests()
+            .to_vec()
+    });
+    assert_eq!(monitors.len(), 2);
+    assert_eq!(
+        monitors[0].subtitle,
+        "pull-hook-monitor · origin/main → topic"
+    );
+    assert_eq!(
+        monitors[1].subtitle,
+        "other-hook-monitor · upstream/release → release"
+    );
+    assert_eq!(monitors[0].phase(), "Running pre-commit hook");
+    assert_eq!(monitors[0].percent_label(), None);
+    let stop = cx
+        .debug_bounds("operation_progress_stop_753")
+        .expect("each Pull retains its own Stop");
+    cx.simulate_click(stop.center(), Modifiers::default());
+    sync_store_when(cx, &view, "Pull hook cancellation", |state| {
+        state.repos[0].feedback.hook_activity[0].status == GitHookOperationStatus::Cancelling
+    });
+    assert_eq!(
+        cx.update(|_, app| view.read(app).state.repos[1].feedback.hook_activity[0].status),
+        GitHookOperationStatus::Running
+    );
 }
 
 #[gpui::test]
@@ -1479,6 +1646,8 @@ fn maintenance_recommendation_stays_until_answered(cx: &mut gpui::TestAppContext
 #[test]
 fn maintenance_progress_card_explains_the_wait() {
     let progress = super::super::operation_progress::OperationProgress {
+        command: None,
+        latest_line: String::new(),
         repo_id: RepoId(1),
         operation_id: GitOperationId(1),
         label: "Maintenance".to_string(),

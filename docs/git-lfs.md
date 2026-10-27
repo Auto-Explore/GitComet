@@ -11,7 +11,7 @@ GitComet works with repositories that store large files in [Git LFS](https://git
 | Changed-file rows | An **LFS** chip. It turns to the warning colour when the content is not downloaded here, and reads **LFS locked** when someone holds a lock on the file. |
 | Commit details | The same chip on files whose committed version is an LFS pointer. |
 | Diff pane | A card with the size and object id of each side. When the content is here, the real diff sits below the card, including images. When it is not, the card replaces the diff and offers **Download content**. |
-| Hook activity | LFS transfer progress (files and bytes) for pushes, pulls, checkouts and LFS commands. |
+| Git activity | LFS transfer progress (files and bytes) for pushes, pulls, checkouts and LFS commands. |
 
 Content above 16 MB stays behind its pointer in the text diff. Images use the normal 64 MB image limit.
 

@@ -247,8 +247,8 @@ impl GitRepository for ControlledRewordRepo {
     fn fetch_all(&self, prune: bool) -> Result<CommandOutput> {
         self.fallback.fetch_all(prune)
     }
-    fn pull(&self, mode: PullMode, prune: bool) -> Result<CommandOutput> {
-        self.fallback.pull(mode, prune)
+    fn pull(&self, mode: PullMode) -> Result<CommandOutput> {
+        self.fallback.pull(mode)
     }
     fn push(&self) -> Result<()> {
         self.fallback.push()

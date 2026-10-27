@@ -218,11 +218,7 @@ impl GitRepository for ReadyOpenRepo {
         let result: Result<()> = { Ok(()) };
         result.map(|()| gitcomet_core::services::CommandOutput::empty_success("git fetch --all"))
     }
-    fn pull(
-        &self,
-        _mode: PullMode,
-        _prune: bool,
-    ) -> Result<gitcomet_core::services::CommandOutput> {
+    fn pull(&self, _mode: PullMode) -> Result<gitcomet_core::services::CommandOutput> {
         let result: Result<()> = { Ok(()) };
         result.map(|()| gitcomet_core::services::CommandOutput::empty_success("git pull"))
     }
@@ -530,11 +526,7 @@ impl GitRepository for BlockingDiffRepo {
         let result: Result<()> = { Ok(()) };
         result.map(|()| gitcomet_core::services::CommandOutput::empty_success("git fetch --all"))
     }
-    fn pull(
-        &self,
-        _mode: PullMode,
-        _prune: bool,
-    ) -> Result<gitcomet_core::services::CommandOutput> {
+    fn pull(&self, _mode: PullMode) -> Result<gitcomet_core::services::CommandOutput> {
         let result: Result<()> = { Ok(()) };
         result.map(|()| gitcomet_core::services::CommandOutput::empty_success("git pull"))
     }

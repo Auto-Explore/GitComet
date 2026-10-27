@@ -1044,6 +1044,25 @@ fn every_pull_and_push_path_on_an_adjusted_branch_avoids_plain_git() {
         )),
         "{effects:?}"
     );
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Pull {
+            repo_id,
+            mode: PullMode::Rebase,
+        },
+    );
+    assert!(
+        effects.iter().any(|effect| matches!(
+            effect,
+            Effect::RepoCommand(RepoCommandEffect::Pull {
+                mode: PullMode::Rebase,
+                ..
+            })
+        )),
+        "{effects:?}"
+    );
 }
 
 /// Without git-annex, the takeover cannot run, and a plain merge into the

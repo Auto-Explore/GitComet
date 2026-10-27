@@ -194,7 +194,7 @@ fn pull_without_upstream_sets_upstream() {
 
     let backend = GixBackend;
     let opened = backend.open(&work_repo).unwrap();
-    opened.pull(PullMode::Default, true).unwrap();
+    opened.pull(PullMode::Default).unwrap();
 
     let upstream_after = run_git_capture(
         &work_repo,

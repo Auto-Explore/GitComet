@@ -442,26 +442,23 @@ fn pull_controls_on_adjusted_branches_follow_annex_support_and_settings(
                 annex_pull_push: takeover,
                 ..Default::default()
             };
+            // An adjusted branch has no upstream, so only the annex takeover pulls.
             let enabled = takeover
                 && match &repo.large_file_support {
                     Loadable::Ready(support) => support.annex.in_use(),
                     _ => true,
                 };
-            assert_eq!(pull_enabled(&repo, &settings), enabled, "main Pull button");
-            if enabled {
-                assert_eq!(
-                    pull_request(&repo, &settings),
-                    PullRequest::Pull,
-                    "the enabled action must dispatch"
-                );
-                let mut loading = repo.clone();
-                loading.remotes = Loadable::Loading;
-                assert_eq!(
-                    pull_request(&loading, &settings),
-                    PullRequest::Pull,
-                    "annex takeover does not require an upstream or a loaded remote list"
-                );
-            }
+            let pull_enabled =
+                |repo: &RepoState| pull_unavailable_reason(repo, &settings).is_none();
+            assert_eq!(pull_enabled(&repo), enabled, "main Pull button");
+            let mut loading = repo.clone();
+            loading.remotes = Loadable::Loading;
+            loading.remote_branches = Loadable::Loading;
+            assert_eq!(
+                pull_enabled(&loading),
+                enabled,
+                "annex takeover does not need loaded remotes"
+            );
             let state = Arc::new(AppState {
                 active_repo: Some(repo.id),
                 repos: vec![repo.clone()],

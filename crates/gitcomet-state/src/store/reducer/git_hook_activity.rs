@@ -41,6 +41,7 @@ pub(super) fn started(
         output_bytes: 0,
         output_truncated: false,
         latest_line: String::new(),
+        command: None,
         command_started: false,
         transfer: None,
         progress_lane,
@@ -63,9 +64,13 @@ pub(super) fn apply_event(
         return;
     };
 
-    let mut started_first_hook = false;
+    let mut became_retained = false;
     match event {
         GitOperationEvent::CommandStarted => operation.command_started = true,
+        GitOperationEvent::CommandInvocation { command } => {
+            became_retained = !operation.has_activity_details();
+            operation.command = Some(Arc::from(sanitize_activity_text(&command)));
+        }
         GitOperationEvent::Output { chunks } => {
             for chunk in chunks {
                 let text = sanitize_activity_text(&chunk.text);
@@ -100,7 +105,7 @@ pub(super) fn apply_event(
             if operation.hooks.iter().any(|hook| hook.id == id) {
                 return;
             }
-            started_first_hook = operation.hooks.is_empty();
+            became_retained = operation.hooks.is_empty();
             operation.hooks.push(GitHookRun {
                 id,
                 name,
@@ -131,7 +136,7 @@ pub(super) fn apply_event(
             }
         }
     }
-    if started_first_hook {
+    if became_retained {
         trim_metadata(repo);
     }
     enforce_repo_output_budget(repo);
@@ -186,7 +191,7 @@ pub(super) fn finished(
         return;
     };
 
-    if !repo.feedback.hook_activity[index].is_reportable() {
+    if !repo.feedback.hook_activity[index].has_activity_details() {
         repo.feedback_mut().hook_activity.remove(index);
         repo.feedback_mut().hook_activity_rev = repo.feedback.hook_activity_rev.wrapping_add(1);
         return;
@@ -238,16 +243,13 @@ fn trim_metadata(repo: &mut RepoState) {
         .feedback
         .hook_activity
         .iter()
-        .filter(|operation| operation.is_reportable())
+        .filter(|operation| operation.has_activity_details())
         .count()
         > MAX_ACTIVITY_ENTRIES
     {
-        let Some(index) = repo
-            .feedback
-            .hook_activity
-            .iter()
-            .position(|operation| operation.is_reportable() && !operation.status.is_active())
-        else {
+        let Some(index) = repo.feedback.hook_activity.iter().position(|operation| {
+            operation.has_activity_details() && !operation.status.is_active()
+        }) else {
             break;
         };
         repo.feedback_mut().hook_activity.remove(index);
@@ -286,7 +288,7 @@ fn enforce_repo_output_budget(repo: &mut RepoState) {
         .feedback
         .hook_activity
         .iter()
-        .filter(|operation| operation.is_reportable())
+        .filter(|operation| operation.has_activity_details())
         .map(|operation| operation.output_bytes)
         .sum::<usize>();
     if total <= MAX_REPO_OUTPUT_BYTES {
@@ -296,7 +298,9 @@ fn enforce_repo_output_budget(repo: &mut RepoState) {
         if total <= MAX_REPO_OUTPUT_BYTES {
             break;
         }
-        if !operation.is_reportable() || operation.status.is_active() || operation.output_bytes == 0
+        if !operation.has_activity_details()
+            || operation.status.is_active()
+            || operation.output_bytes == 0
         {
             continue;
         }
@@ -312,7 +316,7 @@ fn enforce_repo_output_budget(repo: &mut RepoState) {
         if total <= MAX_REPO_OUTPUT_BYTES {
             break;
         }
-        if !operation.is_reportable() {
+        if !operation.has_activity_details() {
             continue;
         }
         let previous = operation.output_bytes;
@@ -415,6 +419,68 @@ mod tests {
             repo.feedback.hook_activity[0].status,
             GitHookOperationStatus::Cancelled
         );
+    }
+
+    #[test]
+    fn pull_command_metadata_retains_cancellable_activity_without_claiming_hook_feedback() {
+        for (outcome, status) in [
+            (
+                GitOperationOuterOutcome::Succeeded,
+                GitHookOperationStatus::Succeeded,
+            ),
+            (
+                GitOperationOuterOutcome::Failed,
+                GitHookOperationStatus::Failed,
+            ),
+            (
+                GitOperationOuterOutcome::TimedOut,
+                GitHookOperationStatus::TimedOut,
+            ),
+            (
+                GitOperationOuterOutcome::Cancelled,
+                GitHookOperationStatus::Cancelled,
+            ),
+        ] {
+            let mut repo = repo_state();
+            let id = GitOperationId(1);
+            started(
+                &mut repo,
+                id,
+                "Pull".into(),
+                Some("origin/main → topic".into()),
+                SystemTime::UNIX_EPOCH,
+                true,
+            );
+            apply_event(
+                &mut repo,
+                id,
+                GitOperationEvent::CommandInvocation {
+                    command: "git pull --rebase --no-prune -- origin refs/heads/main".into(),
+                },
+            );
+            apply_event(
+                &mut repo,
+                id,
+                GitOperationEvent::Output {
+                    chunks: vec![GitOutputChunk {
+                        stream: GitOutputStream::Stderr,
+                        text: "Rebasing (1/2)\n".into(),
+                    }],
+                },
+            );
+            assert!(!repo.feedback.hook_activity[0].is_reportable());
+            assert!(request_cancel(&mut repo, id));
+            finished(&mut repo, id, outcome, Duration::from_secs(5));
+            assert_eq!(repo.feedback.hook_activity.len(), 1);
+            let operation = &repo.feedback.hook_activity[0];
+            assert_eq!(
+                operation.command.as_deref(),
+                Some("git pull --rebase --no-prune -- origin refs/heads/main")
+            );
+            assert_eq!(operation.combined_output(), "Rebasing (1/2)\n");
+            assert_eq!(operation.status, status);
+            assert!(!operation.is_reportable());
+        }
     }
 
     fn hook_id(child_id: u64) -> HookExecutionId {
@@ -684,6 +750,66 @@ mod tests {
 
         assert_eq!(repo.feedback.hook_activity.len(), MAX_ACTIVITY_ENTRIES);
         assert_eq!(repo.feedback.hook_activity[0].id, GitOperationId(2));
+    }
+
+    #[test]
+    fn pull_command_records_share_the_activity_metadata_and_output_budgets() {
+        let mut repo = repo_state();
+        for index in 0..=MAX_ACTIVITY_ENTRIES {
+            let id = GitOperationId(index as u64 + 1);
+            started(
+                &mut repo,
+                id,
+                "Pull".into(),
+                None,
+                SystemTime::UNIX_EPOCH,
+                true,
+            );
+            apply_event(
+                &mut repo,
+                id,
+                GitOperationEvent::CommandInvocation {
+                    command: "git pull --rebase --no-prune -- origin refs/heads/main".into(),
+                },
+            );
+            apply_event(
+                &mut repo,
+                id,
+                GitOperationEvent::Output {
+                    chunks: vec![GitOutputChunk {
+                        stream: GitOutputStream::Stderr,
+                        text: "x".repeat(MAX_OPERATION_OUTPUT_BYTES + 1),
+                    }],
+                },
+            );
+            finished(
+                &mut repo,
+                id,
+                GitOperationOuterOutcome::Succeeded,
+                Duration::from_secs(1),
+            );
+        }
+        assert_eq!(repo.feedback.hook_activity.len(), MAX_ACTIVITY_ENTRIES);
+        assert_eq!(repo.feedback.hook_activity[0].id, GitOperationId(2));
+        assert_eq!(
+            repo.feedback
+                .hook_activity
+                .iter()
+                .map(|operation| operation.output_bytes)
+                .sum::<usize>(),
+            MAX_REPO_OUTPUT_BYTES
+        );
+        assert!(
+            repo.feedback
+                .hook_activity
+                .iter()
+                .all(|operation| operation.has_activity_details() && !operation.is_reportable())
+        );
+        assert!(repo.feedback.hook_activity.last().unwrap().output_truncated);
+        assert_eq!(
+            repo.feedback.hook_activity.last().unwrap().output_bytes,
+            MAX_OPERATION_OUTPUT_BYTES
+        );
     }
 
     #[test]

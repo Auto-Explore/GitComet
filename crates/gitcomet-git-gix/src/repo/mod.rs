@@ -76,6 +76,7 @@ mod operation_guards;
 mod patch;
 mod patch_action;
 mod porcelain;
+mod pull;
 mod remotes;
 mod shared;
 mod shared_ranges;
@@ -1168,15 +1169,10 @@ impl GitRepository for GixRepo {
         self.upstream_divergence_cancellable_impl(cancellation)
     }
 
-    fn pull_branch_with_output(
-        &self,
-        remote: &str,
-        branch: &str,
-        prune: bool,
-    ) -> Result<CommandOutput> {
+    fn pull_branch_with_output(&self, remote: &str, branch: &str) -> Result<CommandOutput> {
         let _operation = self.operation_lease()?;
         self.require_working_tree()?;
-        self.pull_branch_with_output_prune_impl(remote, branch, prune)
+        self.pull_branch_with_output_impl(remote, branch)
     }
 
     fn merge_ref_with_output(&self, reference: &str) -> Result<CommandOutput> {
@@ -1499,10 +1495,10 @@ impl GitRepository for GixRepo {
         self.fetch_refspecs_with_output_impl(remote, refspecs)
     }
 
-    fn pull(&self, mode: PullMode, prune: bool) -> Result<CommandOutput> {
+    fn pull(&self, mode: PullMode) -> Result<CommandOutput> {
         let _operation = self.operation_lease()?;
         self.require_working_tree()?;
-        self.pull_with_output_prune_impl(mode, prune)
+        self.pull_with_output_impl(mode)
     }
 
     fn push_with_tags(

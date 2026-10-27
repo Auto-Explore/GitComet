@@ -966,6 +966,7 @@ fn with_command_result(
     let mut repo = repo.clone();
     repo.feedback_mut()
         .push_command_result(gitcomet_state::model::CommandLogEntry {
+            kind: gitcomet_state::model::CommandLogKind::Other,
             time: std::time::UNIX_EPOCH,
             ok,
             command: command.to_string(),

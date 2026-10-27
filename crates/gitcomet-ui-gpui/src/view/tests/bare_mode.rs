@@ -305,7 +305,6 @@ fn bare_palette_refuses_working_file_actions_but_keeps_repository_and_tool_prere
         Command::UnstageAll,
         Command::CheckoutBranch,
         Command::Rebase,
-        Command::Pull,
         Command::Stash,
         Command::StashPop,
         Command::StashApply,
@@ -344,8 +343,13 @@ fn bare_palette_refuses_working_file_actions_but_keeps_repository_and_tool_prere
     ] {
         assert_eq!(reason(command, &context), None, "{command:?}");
     }
-    context.annex_takes_over_pull = true;
+    // Pull's own reason covers bare repositories and annex takeover.
     assert_eq!(reason(Command::Pull, &context), None);
+    context.pull_unavailable = Some(gitcomet_core::domain::WORKING_TREE_REQUIRED_MESSAGE);
+    assert_eq!(
+        reason(Command::Pull, &context),
+        Some("Requires a working tree; this repository is bare.")
+    );
     context.git_lfs_missing = true;
     assert_eq!(
         reason(Command::LfsFetchAll, &context),

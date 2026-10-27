@@ -1,8 +1,8 @@
 use super::conflict_load::{start_conflict_target_reload, start_current_conflict_target_reload};
 use crate::model::LoadKind;
 use crate::model::{
-    AppNotification, AppNotificationKind, AppState, CommandLogEntry, DiagnosticEntry,
-    DiagnosticKind, GitLogSettings, Loadable, RepoId, RepoState,
+    AppNotification, AppNotificationKind, AppState, CommandLogEntry, CommandLogKind,
+    DiagnosticEntry, DiagnosticKind, GitLogSettings, Loadable, RepoId, RepoState,
 };
 use crate::msg::{ConflictAutosolveMode, ConflictAutosolveStats, Effect, RepoCommandKind};
 use crate::msg::{ReferenceEffect, StatusEffect};
@@ -1129,6 +1129,12 @@ pub(super) fn push_command_log(
     let entry = CommandLogEntry {
         time: inputs.now(),
         ok,
+        kind: match command {
+            RepoCommandKind::Pull { .. } | RepoCommandKind::PullBranch { .. } => {
+                CommandLogKind::Pull
+            }
+            _ => CommandLogKind::Other,
+        },
         command: command_text,
         summary,
         stdout: command_log_text(&output.stdout),
@@ -1163,6 +1169,7 @@ pub(super) fn push_action_log(
     let entry = CommandLogEntry {
         time: inputs.now(),
         ok,
+        kind: CommandLogKind::Other,
         command,
         summary,
         stdout: Arc::from(""),
@@ -1389,10 +1396,15 @@ fn summarize_command(
                 }
             }
         };
+        if error.is_some_and(|error| matches!(error.kind(), ErrorKind::Cancelled)) {
+            return (
+                output.command.clone().if_empty_else(|| label.to_string()),
+                format!("{label} cancelled"),
+            );
+        }
         if let Some(error) = error
             && let Some((git_command, details)) = try_format_git_backend_error(error)
         {
-            // A pull or merge that stopped at conflicts did its job; say so.
             let outcome = match error.kind() {
                 ErrorKind::Git(failure) if failure.id() == GitFailureId::StoppedAtConflicts => {
                     "stopped at conflicts"
@@ -1402,6 +1414,7 @@ fn summarize_command(
                 {
                     "blocked by local changes"
                 }
+                ErrorKind::Git(failure) if failure.id() == GitFailureId::Timeout => "timed out",
                 _ => "failed",
             };
             return (git_command, format!("{label} {outcome}:\n\n{details}"));
@@ -1843,7 +1856,22 @@ fn try_format_structured_git_failure(failure: &GitFailure) -> Option<(String, St
     if !command.starts_with("git ") {
         return None;
     }
-    let rendered = render_command_and_output(&command, failure.detail());
+    let mut rendered = render_command_and_output(&command, failure.detail());
+    if failure.id() == GitFailureId::Timeout {
+        for output in [failure.stdout(), failure.stderr()] {
+            let output = String::from_utf8_lossy(output);
+            let tail = command_log_text(&output);
+            if tail.len() < output.len() {
+                rendered.push_str("\n\n");
+                append_code_block(&mut rendered, "[Earlier output was truncated]");
+            }
+            let output = tail.trim_end_matches(['\r', '\n']);
+            if !output.is_empty() {
+                rendered.push_str("\n\n");
+                append_code_block(&mut rendered, output);
+            }
+        }
+    }
     Some((command, rendered))
 }
 

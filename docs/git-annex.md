@@ -15,7 +15,7 @@ Showing what is annexed never runs git-annex: file rows, presence and the sideba
 | Sidebar | A **git-annex** section with this clone, other repositories and special remotes, their type and trust level, and the numcopies setting or adjusted-branch mode. The section appears only in repositories that use git-annex. With the sidebar collapsed, the same section opens from its icon in the rail. |
 | Branch lists | The `git-annex` and `synced/*` branches are hidden, locally and on remotes: in the sidebar, the branch badge's picker, the delete, rebase-onto and branch-from lists, and the upstream picker. A checked-out bookkeeping branch stays listed. |
 | Branch badge | An adjusted branch reads as its base branch, for example **main · adjusted (unlocked)**. |
-| Hook activity | Transfer progress for get, copy and move. |
+| Git activity | Transfer progress for get, copy and move. |
 
 ## Commands
 

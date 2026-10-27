@@ -309,9 +309,10 @@ error: Your local changes to the following files would be overwritten by merge:\
 \tREADME.md\n\tcrates/app.rs\n\
 Please commit your changes or stash them before you merge.\nAborting\n";
     repo.feedback_mut().push_command_result(CommandLogEntry {
+        kind: gitcomet_state::model::CommandLogKind::Pull,
         time: std::time::SystemTime::UNIX_EPOCH,
         ok: false,
-        command: "git pull --prune".into(),
+        command: "git -c fetch.pruneTags=false -C /tmp/pull-blocked-local-changes pull --no-prune -- origin refs/heads/main".into(),
         summary: "Pull failed".into(),
         stdout: "Updating abc123..def456\n".into(),
         stderr: output.into(),

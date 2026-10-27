@@ -2605,6 +2605,9 @@ fn explorer_chevron_click_keeps_the_selection_and_keyboard_paste_uses_focused_fo
     cx: &mut gpui::TestAppContext,
 ) {
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    // The installed test repository cannot list files, so a watcher reload
+    // swaps the seeded rows for an error. FSEvents replays the setup writes.
+    store.disable_repo_monitors_for_test();
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store.clone(), events, None, window, cx));
     let directory = tempfile::tempdir().unwrap();
@@ -2779,6 +2782,9 @@ fn explorer_chevron_click_keeps_the_selection_and_keyboard_paste_uses_focused_fo
 #[gpui::test]
 fn explorer_folder_row_click_selects_focuses_and_toggles(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    // The installed test repository cannot list files, so a watcher reload
+    // swaps the seeded rows for an error. FSEvents replays the setup writes.
+    store.disable_repo_monitors_for_test();
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store.clone(), events, None, window, cx));
     let directory = tempfile::tempdir().unwrap();

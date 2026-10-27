@@ -125,7 +125,7 @@ GitComet started from frustration with existing tools on huge codebases like Chr
 - **Usage**: Free for personal and commercial use
 - **Includes**:
   - Full local-first desktop workflow
-  - Git remotes, pull/push, staging, commits
+  - Git remotes, [branch-scoped Pull](docs/pull.md), push, staging, commits
   - Worktrees, branching, and full history
   - Bare repository browsing and conversion ([docs](docs/bare-repositories.md))
   - Multi-repository browsing

@@ -153,12 +153,7 @@ pub(super) fn push_copy_path_entries(
 
 fn active_branch_tracking_upstream(host: &PopoverHost) -> Option<&Upstream> {
     let repo = host.active_repo()?;
-    let head = repo.head_branch.ready()?;
-    repo.branches
-        .ready()?
-        .iter()
-        .find(|branch| branch.name == *head)
-        .and_then(|branch| branch.upstream.as_ref())
+    head_branch_upstream(&repo.head_branch, &repo.branches)
 }
 
 fn action_menu_title(base: &'static str, upstream: Option<&Upstream>) -> SharedString {

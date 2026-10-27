@@ -362,6 +362,87 @@ fn pull_error_is_formatted_as_command_and_output() {
 }
 
 #[test]
+fn pull_timeout_preserves_the_reason_command_and_output() {
+    use gitcomet_core::error::{GitFailure, GitFailureId};
+
+    let mut repos: RepositoryRuntimes = Default::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::test_default();
+    let repo_id = RepoId(1);
+    state.repos.push(RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+    let command = "git -c fetch.pruneTags=false -C /tmp/repo pull --progress --rebase --no-prune -- origin refs/heads/main";
+    let reason = "after 300 seconds without output or progress (set GITCOMET_GIT_COMMAND_TIMEOUT_SECS to override)";
+    let error = Error::new(ErrorKind::Git(GitFailure::new(
+        command,
+        GitFailureId::Timeout,
+        None,
+        b"Updating abc123..def456\n".to_vec(),
+        b"Receiving objects: 45% (45/100)\r".to_vec(),
+        Some(reason.into()),
+    )));
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
+            repo_id,
+            command: RepoCommandKind::Pull {
+                mode: PullMode::Rebase,
+            },
+            result: Err(error),
+        }),
+    );
+    let entry = &state.repos[0].feedback.command_log[0];
+    assert!(
+        entry.summary.starts_with("Pull timed out:\n\n"),
+        "{}",
+        entry.summary
+    );
+    assert_eq!(entry.command, command);
+    assert_eq!(entry.kind, crate::model::CommandLogKind::Pull);
+    assert_eq!(entry.failure_id, Some(GitFailureId::Timeout));
+    assert!(entry.summary.contains(reason));
+    assert!(entry.summary.contains("Updating abc123..def456"));
+    assert!(entry.summary.contains("Receiving objects: 45% (45/100)"));
+    assert!(entry.hook_operation_id.is_none());
+}
+
+#[test]
+fn pull_cancellation_is_distinct_from_failure_and_timeout() {
+    let mut repos: RepositoryRuntimes = Default::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::test_default();
+    let repo_id = RepoId(1);
+    state.repos.push(RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
+            repo_id,
+            command: RepoCommandKind::Pull {
+                mode: PullMode::Rebase,
+            },
+            result: Err(Error::new(ErrorKind::Cancelled)),
+        }),
+    );
+    let entry = &state.repos[0].feedback.command_log[0];
+    assert_eq!(entry.summary, "Pull cancelled");
+    assert!(!entry.ok);
+    assert!(entry.failure_id.is_none());
+}
+
+#[test]
 fn fetch_all_emits_effect_with_global_prune_setting() {
     let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
@@ -465,7 +546,7 @@ fn a_refspec_fetch_is_a_fetch_in_flight_and_refreshes_remote_branches_when_done(
 }
 
 #[test]
-fn pull_variants_snapshot_the_global_remote_prune_setting() {
+fn pull_variants_are_independent_of_the_fetch_prune_setting() {
     let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
@@ -493,7 +574,6 @@ fn pull_variants_snapshot_the_global_remote_prune_setting() {
         [Effect::RepoCommand(RepoCommandEffect::Pull {
             repo_id: RepoId(1),
             mode: PullMode::Rebase,
-            prune: false,
             ..
         })]
     ));
@@ -515,7 +595,6 @@ fn pull_variants_snapshot_the_global_remote_prune_setting() {
             repo_id: RepoId(1),
             remote,
             branch,
-            prune: true,
             ..
         })] if remote == "origin" && branch == "feature"
     ));
