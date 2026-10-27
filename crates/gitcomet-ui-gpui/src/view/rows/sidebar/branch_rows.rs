@@ -4,6 +4,7 @@
 use super::*;
 
 mod annex;
+mod empty_card;
 mod branch;
 mod headers;
 mod items;
@@ -11,6 +12,7 @@ mod items;
 const STASH_ICON_PATH: &str = crate::view::icons::STASH_ICON_PATH;
 
 const BRANCH_TREE_BASE_PAD_PX: f32 = 8.0;
+const BRANCH_TREE_HEADER_PAD_PX: f32 = 4.0;
 const BRANCH_TREE_DEPTH_STEP_PX: f32 = 14.0;
 const BRANCH_TREE_TOGGLE_SLOT_PX: f32 = 14.0;
 const BRANCH_TREE_ICON_SLOT_PX: f32 = 16.0;
@@ -187,6 +189,12 @@ impl SidebarRowContext {
         )
     }
 
+    /// Section headers sit close to the left edge; only the folder rows below
+    /// them need the toggle slot's room.
+    fn header_indent_px(&self) -> Pixels {
+        self.px(self.content_inset + BRANCH_TREE_HEADER_PAD_PX)
+    }
+
     fn svg_icon(&self, path: &'static str, color: gpui::Rgba, size_px: f32) -> gpui::Svg {
         crate::view::icons::svg_icon(path, color, self.px(size_px))
     }
@@ -249,17 +257,46 @@ impl SidebarRowContext {
         }
     }
 
-    /// The muted message an empty or unloaded section shows.
-    fn placeholder_row(&self, id: &'static str, ix: usize, message: SharedString) -> AnyElement {
+    /// A small dashed card around the message (and optional action) an empty
+    /// or unloaded section shows.
+    fn placeholder_card(&self, id: &'static str, ix: usize, inner: gpui::Div) -> AnyElement {
         div()
             .id((id, ix))
             .h(self.row_height())
             .w_full()
-            .px_2()
-            .text_size(self.theme.ui_text(14.0))
-            .text_color(self.theme.colors.foreground.secondary)
-            .child(message)
+            .px(self.px(self.content_inset + BRANCH_TREE_BASE_PAD_PX))
+            .pt(self.px(8.0))
+            .pb(self.px(2.0))
+            .child(
+                inner
+                    .size_full()
+                    .px_2()
+                    .flex()
+                    .items_center()
+                    .gap(self.px(6.0))
+                    .border_1()
+                    .border_dashed()
+                    .border_color(self.theme.colors.stroke.default)
+                    .rounded(self.px(6.0))
+                    .text_size(self.theme.ui_text(13.0))
+                    .text_color(self.theme.colors.foreground.secondary),
+            )
             .into_any_element()
+    }
+
+    /// The muted message an empty or unloaded section shows.
+    fn placeholder_row(&self, id: &'static str, ix: usize, message: SharedString) -> AnyElement {
+        self.placeholder_card(
+            id,
+            ix,
+            div().child(
+                div()
+                    .min_w(px(0.0))
+                    .line_clamp(1)
+                    .whitespace_nowrap()
+                    .child(message),
+            ),
+        )
     }
 
     fn divergence_badge(
@@ -440,6 +477,9 @@ impl SidebarPaneView {
                     collapse_key,
                     cx,
                 ),
+                BranchSidebarRow::EmptyCard { section, part } => {
+                    Self::sidebar_empty_card_row(this, &ctx, slot.ix, section, part, cx)
+                }
                 // A full slot: uniform_list sizes every row from item 0.
                 BranchSidebarRow::SectionSpacer => div()
                     .id(("branch_section_spacer", slot.ix))
