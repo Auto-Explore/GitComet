@@ -190,6 +190,20 @@ fn redaction_flush_preserves_utf8_at_its_lookahead_boundary() {
 }
 
 #[test]
+fn contiguous_head_and_tail_preserve_utf8_across_the_preview_boundary() {
+    let log = GitExecutionLog::default();
+    let root = tempfile::tempdir().unwrap();
+    let key = RepoLogKey::new(root.path());
+    let guard = log.begin(&key, ExecutionKind::Git, "unicode", "test");
+    let text = format!("{}é end\n", "a".repeat(4095));
+    guard
+        .output()
+        .unwrap()
+        .append(GitOutputStream::Stdout, text.as_bytes());
+    assert_eq!(log.snapshot(&key)[0].stdout.text, text);
+}
+
+#[test]
 fn direct_completion_and_origins_are_bounded_and_redacted() {
     let log = GitExecutionLog::default();
     let root = tempfile::tempdir().unwrap();

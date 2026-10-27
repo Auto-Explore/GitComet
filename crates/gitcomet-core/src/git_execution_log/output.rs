@@ -107,11 +107,17 @@ impl OutputBuffer {
             };
         }
         let tail: Vec<u8> = retained.tail.iter().copied().collect();
-        let mut text = display_bytes(&retained.head);
-        if omitted > 0 {
-            text.push_str(&format!("\n… {omitted} bytes omitted …\n"));
-        }
-        text.push_str(&display_bytes(&tail));
+        let text = if retained.total <= OUTPUT_LIMIT as u64 {
+            let mut contiguous = retained.head;
+            contiguous.extend_from_slice(&tail);
+            display_bytes(&contiguous)
+        } else {
+            format!(
+                "{}\n… {omitted} source bytes beyond preview limit …\n{}",
+                display_bytes(&retained.head),
+                display_bytes(&tail)
+            )
+        };
         OutputPreview {
             text: bounded_output(&text),
             total_bytes: self.total,
