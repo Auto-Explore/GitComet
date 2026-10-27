@@ -2,7 +2,7 @@ use gitcomet_core::error::Error;
 use serde::{Deserialize, Deserializer, Serialize};
 use std::time::{Duration, SystemTime};
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize)]
 #[serde(transparent)]
 pub struct AutoFetchInterval(u16);
 
@@ -33,7 +33,7 @@ impl<'de> Deserialize<'de> for AutoFetchInterval {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash)]
 pub struct AutoFetchSettings {
     pub enabled: bool,
     pub interval: AutoFetchInterval,

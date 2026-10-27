@@ -66,7 +66,7 @@ impl GitLogSettings {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub struct RemoteSettings {
     pub prune_deleted_remote_branches_on_fetch: bool,
     pub auto_fetch: super::AutoFetchSettings,

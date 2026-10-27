@@ -4,6 +4,7 @@ use gitcomet_core::path_utils::canonicalize_or_original;
 use gitcomet_core::services::{GitBackend, GitRepository};
 use rustc_hash::FxHashMap;
 use std::collections::VecDeque;
+use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
@@ -291,10 +292,12 @@ struct WorkerLoopContext<'a> {
     /// Feedback acknowledgements held for the next reducer pass; see
     /// [`is_feedback_acknowledgement`].
     deferred_acknowledgements: &'a mut Vec<(Msg, reducer::prepared::ReducerInputs)>,
+    /// Hash of what the last automatic-fetch sync read.
+    auto_fetch_inputs: &'a mut Option<u64>,
 }
 
 impl WorkerLoopContext<'_> {
-    fn sync_auto_fetch(&self, repos: &RepositoryRuntimes) {
+    fn sync_auto_fetch(&mut self, repos: &RepositoryRuntimes) {
         let (registrations, settings) = {
             let state = self
                 .thread_state
@@ -302,26 +305,42 @@ impl WorkerLoopContext<'_> {
                 .unwrap_or_else(|error| error.into_inner());
             let mut settings = state.remote_settings;
             settings.auto_fetch.enabled &= state.git_runtime.is_available();
-            let registrations = if self
+            let allowed = self
                 .thread_msg_tx
                 .auto_fetch_allowed
-                .load(Ordering::Acquire)
-            {
-                state
-                    .repos
-                    .iter()
-                    .filter(|repo| !repo.is_provisional_external_drop_open())
-                    .map(|repo| auto_fetch::Registration {
-                        repo_id: repo.id,
-                        lifetime: repo.lifetime_id(),
-                        workdir: repo.spec.workdir.clone(),
-                        common_dir: repo.common_dir.as_ref().map(|path| path.to_path_buf()),
-                        repository: repos.repository(&repo.id).cloned(),
-                    })
-                    .collect()
-            } else {
-                Vec::new()
-            };
+                .load(Ordering::Acquire);
+            let registered = state
+                .repos
+                .iter()
+                .filter(|repo| allowed && !repo.is_provisional_external_drop_open());
+            // This runs after every message and a coordinator sync is
+            // O(tabs), so skip it while nothing it reads has changed.
+            let mut inputs = rustc_hash::FxHasher::default();
+            (allowed, settings).hash(&mut inputs);
+            for repo in registered.clone() {
+                repo.id.hash(&mut inputs);
+                repo.lifetime_id().hash(&mut inputs);
+                repo.spec.workdir.hash(&mut inputs);
+                repo.common_dir.hash(&mut inputs);
+                repos
+                    .repository(&repo.id)
+                    .map(|repository| Arc::as_ptr(repository).cast::<()>())
+                    .hash(&mut inputs);
+            }
+            let inputs = inputs.finish();
+            if *self.auto_fetch_inputs == Some(inputs) && self.thread_msg_tx.is_alive() {
+                return;
+            }
+            *self.auto_fetch_inputs = Some(inputs);
+            let registrations = registered
+                .map(|repo| auto_fetch::Registration {
+                    repo_id: repo.id,
+                    lifetime: repo.lifetime_id(),
+                    workdir: repo.spec.workdir.clone(),
+                    common_dir: repo.common_dir.as_ref().map(|path| path.to_path_buf()),
+                    repository: repos.repository(&repo.id).cloned(),
+                })
+                .collect();
             (registrations, settings)
         };
         self.thread_msg_tx
@@ -827,6 +846,7 @@ impl AppStore {
             let active_repo_id = Arc::new(AtomicU64::new(0));
             let mut deferred_commands = VecDeque::new();
             let mut deferred_acknowledgements = Vec::new();
+            let mut auto_fetch_inputs = None;
 
             while let Ok(command) = recv_next_worker_command(&command_rx, &mut deferred_commands) {
                 let (mut msg, stamp) = match command {
@@ -1021,6 +1041,7 @@ impl AppStore {
                     backend: &backend,
                     publication: &thread_publication,
                     deferred_acknowledgements: &mut deferred_acknowledgements,
+                    auto_fetch_inputs: &mut auto_fetch_inputs,
                 };
 
                 match msg {

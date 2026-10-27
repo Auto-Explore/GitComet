@@ -7,6 +7,7 @@ use gitcomet_core::path_utils::canonicalize_or_original;
 use gitcomet_core::services::{
     CancellationToken, CommandOutput, GitBackend, GitRepository, Result,
 };
+use rustc_hash::FxHashSet;
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -121,6 +122,8 @@ struct Inner {
 pub(super) struct AutoFetchCoordinator {
     inner: Arc<Inner>,
     worker: Mutex<Option<std::thread::JoinHandle<()>>>,
+    #[cfg(test)]
+    syncs: std::sync::atomic::AtomicUsize,
 }
 
 impl AutoFetchCoordinator {
@@ -131,6 +134,8 @@ impl AutoFetchCoordinator {
                 admission: Arc::new(Admission::default()),
             }),
             worker: Mutex::new(None),
+            #[cfg(test)]
+            syncs: Default::default(),
         })
     }
 
@@ -151,6 +156,9 @@ impl AutoFetchCoordinator {
         backend: &Arc<dyn GitBackend>,
         sink: EventSink,
     ) {
+        #[cfg(test)]
+        self.syncs
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let known: HashMap<_, _> = self
             .inner
             .state
@@ -197,12 +205,13 @@ impl AutoFetchCoordinator {
             .iter()
             .map(|(key, entry)| (key.clone(), entry.enabled_subscriber().is_some()))
             .collect();
+        let registered: FxHashSet<(&Path, RepoLifetime)> = registrations
+            .iter()
+            .map(|(key, registration)| (key.as_path(), registration.lifetime))
+            .collect();
         for (key, entry) in &mut state.entries {
             entry.subscribers.retain(|lifetime, subscriber| {
-                subscriber.store_id != store_id
-                    || registrations.iter().any(|(new_key, registration)| {
-                        new_key == key && registration.lifetime == *lifetime
-                    })
+                subscriber.store_id != store_id || registered.contains(&(key.as_path(), *lifetime))
             });
         }
         let mut added = Vec::new();

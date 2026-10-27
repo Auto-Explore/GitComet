@@ -517,3 +517,97 @@ fn utility_window_participation_cannot_be_enabled_by_global_settings() {
 
 #[cfg(unix)]
 mod transport;
+
+#[test]
+fn store_messages_that_change_no_registration_skip_the_coordinator_sync() {
+    use super::super::AppStore;
+    use crate::msg::Msg;
+    use std::sync::atomic::Ordering;
+
+    let (store, _events) = AppStore::new_test(Arc::new(Backend));
+    let settle = || {
+        store
+            .barrier_for_test()
+            .recv_timeout(Duration::from_secs(10))
+            .unwrap();
+    };
+    let syncs = || store.msg_tx.auto_fetch.syncs.load(Ordering::Relaxed);
+    store.dispatch(Msg::SetRemoteSettings(RemoteSettings::default()));
+    settle();
+    let before = syncs();
+    for _ in 0..5 {
+        store.dispatch(Msg::SetRemoteSettings(RemoteSettings::default()));
+    }
+    settle();
+    assert_eq!(syncs(), before, "unchanged inputs must not resync");
+    store.dispatch(Msg::SetRemoteSettings(RemoteSettings {
+        prune_deleted_remote_branches_on_fetch: false,
+        ..RemoteSettings::default()
+    }));
+    settle();
+    assert_eq!(syncs(), before + 1, "a settings change still reaches it");
+    store
+        .shutdown_for_test()
+        .recv_timeout(Duration::from_secs(10))
+        .unwrap();
+}
+
+/// Cost of one coordinator sync with many tabs open. The store calls it after
+/// messages that change registrations; prints rather than asserting. Run with
+/// `-- --ignored --nocapture`.
+#[test]
+#[ignore = "timing probe"]
+fn timing_auto_fetch_sync_with_many_tabs() {
+    let coordinator = AutoFetchCoordinator::new();
+    let backend = Arc::new(Backend) as Arc<dyn GitBackend>;
+    let registrations = |count: usize| {
+        (0..count)
+            .map(|ix| Registration {
+                repo_id: RepoId(ix as u64 + 1),
+                lifetime: RepoLifetime::allocate(),
+                workdir: PathBuf::from(format!("/nonexistent/workspace/repositories/repo-{ix}")),
+                common_dir: Some(PathBuf::from(format!(
+                    "/nonexistent/workspace/repositories/repo-{ix}/.git"
+                ))),
+                repository: None,
+            })
+            .collect::<Vec<_>>()
+    };
+    for count in [100, 1000] {
+        let template = registrations(count);
+        let fresh = || {
+            template
+                .iter()
+                .map(|registration| Registration {
+                    repo_id: registration.repo_id,
+                    lifetime: registration.lifetime,
+                    workdir: registration.workdir.clone(),
+                    common_dir: registration.common_dir.clone(),
+                    repository: None,
+                })
+                .collect::<Vec<_>>()
+        };
+        coordinator.sync(
+            1,
+            fresh(),
+            RemoteSettings::default(),
+            &backend,
+            Arc::new(|_| {}),
+        );
+        let runs = 20;
+        let started = std::time::Instant::now();
+        for _ in 0..runs {
+            coordinator.sync(
+                1,
+                fresh(),
+                RemoteSettings::default(),
+                &backend,
+                Arc::new(|_| {}),
+            );
+        }
+        eprintln!(
+            "auto-fetch sync, {count} tabs: {:?} per sync",
+            started.elapsed() / runs
+        );
+    }
+}
