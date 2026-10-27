@@ -4099,3 +4099,112 @@ exec git "$@"
         },
     );
 }
+
+/// Git holds a branch that a worktree is rebasing, though its HEAD is
+/// detached; that refusal is no "not fully merged".
+#[test]
+fn delete_branch_being_rebased_elsewhere_is_not_called_unmerged() {
+    test_git_env::ensure_initialized();
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path().join("repo");
+    fs::create_dir_all(&repo).unwrap();
+    repo_with_unmerged_feature(&repo);
+    write(&repo, "feature.txt", "main\n");
+    run_git(&repo, &["add", "feature.txt"]);
+    run_git(&repo, &["commit", "-m", "conflicting"]);
+    let linked = dir.path().join("linked");
+    run_git(
+        &repo,
+        &["worktree", "add", linked.to_str().unwrap(), "feature"],
+    );
+    run_git_expect_failure(&linked, &["rebase", "main"]);
+
+    let err = GixBackend
+        .open(&repo)
+        .unwrap()
+        .delete_branch("feature")
+        .expect_err("a branch under rebase is not deleted");
+    assert_git_failure(&err, "git branch -d", GitFailureId::CommandFailed);
+}
+
+/// Git measures a branch against its upstream when it has one: merged into
+/// HEAD is not enough.
+#[test]
+fn delete_branch_missing_from_its_upstream_is_unmerged() {
+    test_git_env::ensure_initialized();
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    repo_with_unmerged_feature(repo);
+    run_git(repo, &["update-ref", "refs/remotes/origin/feature", "main"]);
+    run_git(
+        repo,
+        &[
+            "config",
+            "remote.origin.url",
+            "https://example.invalid/repo.git",
+        ],
+    );
+    run_git(
+        repo,
+        &[
+            "config",
+            "remote.origin.fetch",
+            "+refs/heads/*:refs/remotes/origin/*",
+        ],
+    );
+    run_git(repo, &["config", "branch.feature.remote", "origin"]);
+    run_git(
+        repo,
+        &["config", "branch.feature.merge", "refs/heads/feature"],
+    );
+    run_git(repo, &["merge", "--ff-only", "feature"]);
+
+    let err = GixBackend
+        .open(repo)
+        .unwrap()
+        .delete_branch("feature")
+        .expect_err("a branch its upstream lacks is not deleted");
+    assert_git_failure(&err, "git branch -d", GitFailureId::BranchNotFullyMerged);
+}
+
+/// A worktree mid-rebase of the target holds it with HEAD detached; resetting
+/// it in place would pull the branch out from under the rebase.
+#[test]
+fn rename_branch_force_refuses_a_target_mid_rebase() {
+    test_git_env::ensure_initialized();
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    repo_with_unmerged_feature(repo);
+    run_git(repo, &["branch", "source", "main"]);
+    run_git(repo, &["checkout", "feature"]);
+    run_git(
+        repo,
+        &[
+            "-c",
+            "sequence.editor=sed -i -e 1s/^pick/edit/",
+            "rebase",
+            "-i",
+            "main~0",
+        ],
+    );
+    let feature_before = run_git_output(repo, &["rev-parse", "refs/heads/feature"]);
+
+    let err = GixBackend
+        .open(repo)
+        .unwrap()
+        .rename_branch_force("source", "feature")
+        .expect_err("the branch under rebase is not reset");
+
+    assert!(
+        err.to_string().contains("used by worktree"),
+        "unexpected error: {err}"
+    );
+    assert!(
+        repo.join(".git/rebase-merge").exists(),
+        "the rebase survives"
+    );
+    assert_eq!(
+        run_git_output(repo, &["rev-parse", "refs/heads/feature"]),
+        feature_before
+    );
+}

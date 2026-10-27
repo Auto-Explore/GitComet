@@ -23,14 +23,40 @@ fn local_branch_ref_name(branch: &str) -> String {
     format!("refs/heads/{branch}")
 }
 
-fn head_targets_branch(repo: &gix::Repository, branch_ref_name: &str) -> Result<bool> {
+/// How a worktree holds a local branch.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum BranchHold {
+    Head,
+    /// HEAD is detached while a rebase or bisect started from the branch.
+    Operation,
+}
+
+/// Git's `branch_checked_out` for HEAD, rebase and bisect; branches a
+/// `rebase --update-refs` will rewrite are not counted.
+fn worktree_branch_hold(
+    repo: &gix::Repository,
+    branch_ref_name: &str,
+) -> Result<Option<BranchHold>> {
     let head_name = crate::refs::head_name(repo).map_err(|e| {
         Error::new(ErrorKind::Backend(format!("gix head_name: {e}"))).with_source(e)
     })?;
-    Ok(head_name.is_some_and(|name| name.as_bstr() == branch_ref_name))
+    if head_name.is_some_and(|name| name.as_bstr() == branch_ref_name) {
+        return Ok(Some(BranchHold::Head));
+    }
+    let git_dir = repo.git_dir();
+    let state_names = |path: PathBuf, expected: &str| {
+        std::fs::read_to_string(path).is_ok_and(|text| text.trim() == expected)
+    };
+    let rebasing = ["rebase-merge", "rebase-apply"]
+        .into_iter()
+        .any(|dir| state_names(git_dir.join(dir).join("head-name"), branch_ref_name));
+    let bisecting = branch_ref_name
+        .strip_prefix("refs/heads/")
+        .is_some_and(|branch| state_names(git_dir.join("BISECT_START"), branch));
+    Ok((rebasing || bisecting).then_some(BranchHold::Operation))
 }
 
-/// The worktree whose HEAD is a local branch, straight from worktree metadata.
+/// The worktree holding a local branch, straight from worktree metadata.
 enum WorktreeHoldingBranch {
     /// Working directory; validate with `validated_worktree_workdir` before use.
     Workdir(PathBuf),
@@ -57,7 +83,7 @@ fn branch_in_use_worktree_path(
         .map_err(|e| Error::new(ErrorKind::Backend(format!("gix main_repo: {e}"))))?;
     let branch_ref_name = local_branch_ref_name(branch);
     if let Some(workdir) = owner_repo.workdir()
-        && head_targets_branch(&owner_repo, branch_ref_name.as_str())?
+        && worktree_branch_hold(&owner_repo, branch_ref_name.as_str())?.is_some()
     {
         return Ok(Some(WorktreeHoldingBranch::Workdir(workdir.to_path_buf())));
     }
@@ -75,7 +101,7 @@ fn branch_in_use_worktree_path(
             .map_err(|e| {
                 Error::new(ErrorKind::Backend(format!("gix open linked worktree: {e}")))
             })?;
-        if head_targets_branch(&linked_repo, branch_ref_name.as_str())? {
+        if worktree_branch_hold(&linked_repo, branch_ref_name.as_str())?.is_some() {
             return Ok(Some(worktree));
         }
     }
@@ -630,7 +656,12 @@ impl GixRepo {
                 .arg(new_name);
             return run_git_simple(cmd, "git branch -M");
         };
-        if !matches!(&worktree, WorktreeHoldingBranch::Workdir(path) if self.is_own_workdir(path)) {
+        // Only a branch that is HEAD here can be reset in place; one under a
+        // rebase or bisect must stay as that operation left it.
+        if !matches!(&worktree, WorktreeHoldingBranch::Workdir(path) if self.is_own_workdir(path))
+            || worktree_branch_hold(&repo, &local_branch_ref_name(new_name))?
+                != Some(BranchHold::Head)
+        {
             return Err(cannot_force_update_branch_error(
                 "git branch -M",
                 new_name,
