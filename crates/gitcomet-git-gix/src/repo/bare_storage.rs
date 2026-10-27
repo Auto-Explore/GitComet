@@ -902,7 +902,7 @@ fn sync_staged_file(path: &Path) -> Result<()> {
         let permissions = fs::metadata(path)?.permissions();
         if permissions.readonly() {
             let mut writable = permissions.clone();
-            // Windows-only: clears the read-only attribute, never Unix permission bits.
+            // Windows-only: clears the read-only attribute, no Unix mode bits.
             #[allow(clippy::permissions_set_readonly_false)]
             writable.set_readonly(false);
             fs::set_permissions(path, writable)?;

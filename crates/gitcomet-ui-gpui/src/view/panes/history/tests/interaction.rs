@@ -2694,7 +2694,7 @@ fn current_branch_remote_branch_changes_reuse_base_cache_and_refresh_decorations
             let history = history_view.read(app);
             history.history_cache.as_ref().is_some_and(|cache| {
                 cache.base.request.history_scope == LogScope::CurrentBranch
-                    && cache.base.request.remote_branches_rev == 0
+                    && cache.base.request.remote_branches == Default::default()
                     && cache.decorations.row_vms.len() == 1
                     && cache.decorations.row_vms[0]
                         .branches_text
@@ -2740,8 +2740,8 @@ fn current_branch_remote_branch_changes_reuse_base_cache_and_refresh_decorations
             let history = history_view.read(app);
             history.history_cache.as_ref().is_some_and(|cache| {
                 cache.base.request.history_scope == LogScope::CurrentBranch
-                    && cache.base.request.remote_branches_rev == 0
-                    && cache.decorations.request.remote_branches_rev == 2
+                    && cache.base.request.remote_branches == Default::default()
+                    && cache.decorations.request.remote_branches.rev == 2
                     && cache.decorations.row_vms.len() == 1
                     && cache.decorations.row_vms[0]
                         .branches_text
@@ -2785,6 +2785,84 @@ fn current_branch_remote_branch_changes_reuse_base_cache_and_refresh_decorations
     assert_eq!(after_base_request, before_base_request);
     assert!(after_branches_text.contains("origin/main"));
     assert!(after_branches_text.contains("upstream/main"));
+}
+
+#[gpui::test]
+fn hiding_a_remote_drops_its_branch_labels_from_the_graph(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(BlockingBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+    let repo_id = RepoId(1);
+    let page = Arc::new(log_page(vec![commit("tip", &[], "tip")], None));
+    let mut shown_repo = RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/history-hidden-remote-labels"),
+        },
+    );
+    shown_repo.history_state.history_scope = LogScope::CurrentBranch;
+    shown_repo.head_branch = Loadable::Ready("main".to_string());
+    shown_repo.head_branch_rev = 1;
+    shown_repo.branches = Loadable::Ready(Arc::new(vec![branch("main", "tip")]));
+    shown_repo.branches_rev = 1;
+    shown_repo.remote_branches = Loadable::Ready(Arc::new(vec![
+        remote_branch("origin", "main", "tip"),
+        remote_branch("upstream", "main", "tip"),
+    ]));
+    shown_repo.remote_branches_rev = 1;
+    shown_repo.log = Loadable::Ready(Arc::clone(&page));
+    shown_repo.log_rev = 1;
+    shown_repo.history_state.log = Loadable::Ready(Arc::clone(&page));
+    shown_repo.history_state.log_rev = 1;
+    let mut hidden_repo = shown_repo.clone();
+    crate::view::test_support::hide_remotes_in_history(&mut hidden_repo, &["upstream"]);
+    let state_with = |repo: RepoState| {
+        Arc::new(AppState {
+            repos: vec![repo],
+            active_repo: Some(repo_id),
+            ..AppState::test_default()
+        })
+    };
+    let shown_cache = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|_window, app| {
+            let main_pane = view.read(app).main_pane.clone();
+            let history_view = main_pane.read(app).history_view.clone();
+            history_view
+                .read(app)
+                .history_cache
+                .as_ref()
+                .and_then(|cache| {
+                    let row = cache.decorations.row_vms.first()?;
+                    Some((
+                        Arc::clone(&cache.base.graph_rows),
+                        row.branches_text.as_ref().to_owned(),
+                    ))
+                })
+        })
+    };
+    let branches_text = |cx: &mut gpui::VisualTestContext| shown_cache(cx).map(|(_, text)| text);
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+
+    ensure_history_cache_for_tests(cx, &view, state_with(shown_repo));
+    wait_until(cx, "both remotes label the commit", |cx| {
+        branches_text(cx)
+            .is_some_and(|text| text.contains("origin/main") && text.contains("upstream/main"))
+    });
+    let (graph_before, _) = shown_cache(cx).unwrap();
+
+    ensure_history_cache_for_tests(cx, &view, state_with(hidden_repo));
+    wait_until(cx, "the hidden remote's label is gone", |cx| {
+        branches_text(cx)
+            .is_some_and(|text| text.contains("origin/main") && !text.contains("upstream/main"))
+    });
+    let (graph_after, _) = shown_cache(cx).unwrap();
+    assert!(
+        Arc::ptr_eq(&graph_before, &graph_after),
+        "a HEAD-only graph keeps its rows; only the labels change"
+    );
 }
 
 #[gpui::test]

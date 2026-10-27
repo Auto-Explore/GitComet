@@ -1,6 +1,20 @@
 use super::*;
 use std::time::Duration;
 
+/// Hides `remotes` from the history graph, as the repository's shared
+/// preferences would after the menu toggle.
+pub(crate) fn hide_remotes_in_history(repo: &mut RepoState, remotes: &[&str]) {
+    repo.shared_preferences = Some(gitcomet_state::model::RepositoryPreferencesSnapshot {
+        key: gitcomet_state::model::RepositoryKey::Worktree(repo.spec.workdir.clone()),
+        revision: 1,
+        preferences: Arc::new(gitcomet_state::model::SharedRepositoryPreferences {
+            history_mode: repo.history_state.history_scope,
+            history_hidden_remotes: remotes.iter().map(|remote| remote.to_string()).collect(),
+            ..Default::default()
+        }),
+    });
+}
+
 pub(crate) fn install_working_tree_repositories(store: &AppStore) {
     for repo in &store.snapshot().repos {
         if repo.has_working_tree() && store.repository(repo.id, repo.lifetime()).is_none() {

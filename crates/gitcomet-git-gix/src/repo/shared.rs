@@ -13,13 +13,34 @@ pub(super) fn next_id() -> u64 {
     NEXT.fetch_add(1, Ordering::Relaxed)
 }
 
-/// The open handle prevents filesystem identity reuse while an owner is alive.
-/// Failed identity reads deliberately disable sharing, rather than falling back
-/// to a path that may now name a different repository.
+#[derive(Debug)]
+struct FileIdentity {
+    handle: Mutex<Option<same_file::Handle>>,
+    order: u64,
+}
+
+impl PartialEq for FileIdentity {
+    fn eq(&self, other: &Self) -> bool {
+        if std::ptr::eq(self, other) {
+            return true;
+        }
+        let (first, second) = if self.order < other.order {
+            (self, other)
+        } else {
+            (other, self)
+        };
+        let first = first.handle.lock().expect("filesystem identity");
+        let second = second.handle.lock().expect("filesystem identity");
+        matches!((&*first, &*second), (Some(first), Some(second)) if first == second)
+    }
+}
+
+impl Eq for FileIdentity {}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct Identity {
     path: PathBuf,
-    file: Option<Arc<same_file::Handle>>,
+    file: Option<Arc<FileIdentity>>,
     nonce: u64,
 }
 
@@ -28,14 +49,23 @@ impl Identity {
         Self::read_with_fallback(path, next_id())
     }
 
-    /// Failed reads are private to an owner, but stable for that owner's
-    /// lifetime. A later successful read still changes the identity.
     fn read_with_fallback(path: &Path, private_scope: u64) -> Self {
-        let file = same_file::Handle::from_path(path).ok().map(Arc::new);
+        let file = same_file::Handle::from_path(path).ok().map(|handle| {
+            Arc::new(FileIdentity {
+                handle: Mutex::new(Some(handle)),
+                order: next_id(),
+            })
+        });
         Self {
             path: path.canonicalize().unwrap_or_else(|_| path.to_path_buf()),
             nonce: if file.is_some() { 0 } else { private_scope },
             file,
+        }
+    }
+
+    fn release(&self) {
+        if let Some(file) = &self.file {
+            file.handle.lock().expect("filesystem identity").take();
         }
     }
 }
@@ -53,6 +83,12 @@ impl WorktreeIdentity {
             root: Identity::read(workdir),
             git: Identity::read(repo.git_dir()),
             common: Identity::read(repo.common_dir()),
+        }
+    }
+
+    pub(super) fn release(&self) {
+        for identity in [&self.root, &self.git, &self.common] {
+            identity.release();
         }
     }
 }
@@ -140,6 +176,7 @@ pub(super) struct CommonRepository {
     pub id: u64,
     pub lifecycle: Arc<super::bare_lifecycle::RepositoryLifecycle>,
     identity: Identity,
+    identity_pins: Mutex<Vec<Weak<FileIdentity>>>,
     stores: Mutex<Vec<Weak<SharedStore>>>,
     pub maintenance: Mutex<()>,
 }
@@ -162,6 +199,7 @@ impl CommonRepository {
             id: next_id(),
             lifecycle: Default::default(),
             identity,
+            identity_pins: Mutex::new(Vec::new()),
             stores: Mutex::new(Vec::new()),
             maintenance: Mutex::new(()),
         });
@@ -175,6 +213,16 @@ impl CommonRepository {
         private_scope: u64,
     ) -> Arc<SharedStore> {
         let key = StoreKey::read(&repo.to_thread_local(), private_scope);
+        {
+            let mut pins = self.identity_pins.lock().expect("object store identities");
+            pins.retain(|pin| pin.strong_count() != 0);
+            pins.extend(
+                std::iter::once(&key.objects)
+                    .chain(key.alternates.iter().flatten())
+                    .filter_map(|identity| identity.file.as_ref())
+                    .map(Arc::downgrade),
+            );
+        }
         let mut stores = self.stores.lock().expect("shared object stores");
         stores.retain(|store| store.strong_count() != 0);
         let previous = stores
@@ -212,6 +260,19 @@ impl CommonRepository {
         });
         stores.push(Arc::downgrade(&shared));
         shared
+    }
+
+    pub(super) fn release_conversion_identities(&self) {
+        self.identity.release();
+        for pin in self
+            .identity_pins
+            .lock()
+            .expect("object store identities")
+            .drain(..)
+            .filter_map(|pin| pin.upgrade())
+        {
+            pin.handle.lock().expect("filesystem identity").take();
+        }
     }
 
     /// Drop persistent mappings on the next attachment without invalidating
@@ -481,6 +542,52 @@ mod tests {
     use gitcomet_core::domain::HistoryMode;
 
     #[test]
+    fn released_directory_identities_allow_parent_renames_without_reusing_old_keys() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("repository");
+        std::fs::create_dir_all(root.join("objects")).unwrap();
+        let repository = Identity::read(&root);
+        let objects = Identity::read(&root.join("objects"));
+        assert!(repository.file.is_some());
+        assert!(objects.file.is_some());
+        assert_eq!(repository, Identity::read(&root));
+        assert_eq!(objects, Identity::read(&root.join("objects")));
+
+        let retained = repository.clone();
+        repository.release();
+        objects.release();
+        assert_eq!(repository, retained);
+        assert_ne!(repository, Identity::read(&root));
+        assert_ne!(objects, Identity::read(&root.join("objects")));
+
+        let moved = directory.path().join("moved");
+        std::fs::rename(&root, &moved).unwrap();
+
+        std::fs::create_dir_all(root.join("objects")).unwrap();
+        assert_ne!(repository, Identity::read(&root));
+        assert_ne!(objects, Identity::read(&root.join("objects")));
+    }
+
+    #[test]
+    fn conversion_releases_identity_pins_from_retained_and_refreshed_stores() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut repo = gix::init(directory.path()).unwrap().into_sync();
+        let common = CommonRepository::get(&repo.to_thread_local(), next_id());
+        let retained = common.attach(&mut repo, next_id());
+        common.invalidate();
+        let refreshed = common.attach(&mut repo, next_id());
+        assert_eq!(retained.key.objects, refreshed.key.objects);
+
+        common.release_conversion_identities();
+
+        let repo = repo.to_thread_local();
+        let current = Identity::read(repo.objects.store_ref().path());
+        assert_ne!(retained.key.objects, current);
+        assert_ne!(refreshed.key.objects, current);
+        assert_ne!(common.identity, Identity::read(repo.common_dir()));
+    }
+
+    #[test]
     fn alternate_resolution_errors_are_stable_and_private() {
         let dir = tempfile::tempdir().unwrap();
         let repo = gix::init(dir.path()).unwrap();
@@ -548,8 +655,9 @@ mod tests {
                         scope.spawn(move || {
                             let mut progress = Vec::new();
                             let result = repo.build_history_index_impl(
-                                HistoryMode::AllBranches,
+                                &HistoryMode::AllBranches.into(),
                                 None,
+                                &Default::default(),
                                 token,
                                 &mut |value| progress.push(value),
                             );
@@ -593,8 +701,9 @@ mod tests {
             // A cancelled registration cannot poison a later request.
             assert!(
                 repo.build_history_index_impl(
-                    HistoryMode::AllBranches,
+                    &HistoryMode::AllBranches.into(),
                     None,
+                    &Default::default(),
                     &CancellationToken::new(),
                     &mut |_| {}
                 )

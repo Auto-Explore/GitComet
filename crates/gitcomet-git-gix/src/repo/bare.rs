@@ -97,6 +97,11 @@ impl GixRepo {
         Ok(())
     }
 
+    pub(crate) fn release_conversion_identities(&self) {
+        self.identity.release();
+        self.shared_store().common.release_conversion_identities();
+    }
+
     pub(crate) fn ensure_current(&self) -> Result<()> {
         self.lifecycle.check(self.lifecycle_generation)?;
         self.opened_topology.check_conversion_intent()?;
@@ -157,12 +162,12 @@ impl GixRepo {
             .convert(self.lifecycle_generation, cancellation)?;
         source.revalidate()?;
         cancellation.check_cancelled()?;
+        exclusive.invalidate();
         crate::backend::release_conversion_stores(self)?;
         let result = match source.preview.layout {
             BareConversionLayout::ExistingCheckout => storage::repair_config(&source),
             BareConversionLayout::BareDirectory => storage::relocate(&source, cancellation),
         };
-        exclusive.invalidate();
         result?;
         Ok(BareModeDisabled {
             root: preview.root.clone(),

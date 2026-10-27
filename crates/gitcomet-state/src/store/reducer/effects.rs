@@ -1890,6 +1890,11 @@ pub(super) fn branches_loaded(
             }));
         }
     }
+    effects.extend(super::external_and_history::clear_missing_history_focus(
+        state,
+        repo_id,
+        super::external_and_history::FocusRefList::LocalBranches,
+    ));
     effects
 }
 
@@ -1901,6 +1906,9 @@ pub(super) fn remotes_loaded(
 ) -> Vec<Effect> {
     let mut effects = Vec::new();
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
+        if let Ok(remotes) = &result {
+            effects.extend(forget_hidden_remotes_that_were_removed(repo_state, remotes));
+        }
         let remotes = match result {
             Ok(v) => Loadable::Ready(v),
             Err(e) => {
@@ -1913,7 +1921,36 @@ pub(super) fn remotes_loaded(
             effects.push(Effect::References(ReferenceEffect::LoadRemotes { repo_id }));
         }
     }
+    effects.extend(super::external_and_history::clear_missing_history_focus(
+        state,
+        repo_id,
+        super::external_and_history::FocusRefList::Remotes,
+    ));
     effects
+}
+
+/// A remote added back under a removed one's name starts out shown. Only a
+/// remote the replaced listing held counts as removed, since another window
+/// may have added and hidden one this load predates; a Reload or a failed
+/// load starts the comparison over.
+fn forget_hidden_remotes_that_were_removed(repo: &RepoState, loaded: &[Remote]) -> Vec<Effect> {
+    let Loadable::Ready(previous) = &repo.remotes else {
+        return Vec::new();
+    };
+    let listed = |remotes: &[Remote], name: &str| remotes.iter().any(|remote| remote.name == name);
+    repo.history_hidden_remotes()
+        .iter()
+        .filter(|hidden| listed(previous, hidden) && !listed(loaded, hidden))
+        .filter_map(|gone| {
+            super::repository_preferences::update_effect(
+                repo,
+                crate::model::RepositoryPreferenceUpdate::RemoteHistoryVisibility {
+                    remote: gone.clone(),
+                    hidden: false,
+                },
+            )
+        })
+        .collect()
 }
 
 pub(super) fn remote_branches_loaded(
@@ -1950,6 +1987,11 @@ pub(super) fn remote_branches_loaded(
         };
         repo_state.set_remote_branches(branches);
     }
+    effects.extend(super::external_and_history::clear_missing_history_focus(
+        state,
+        repo_id,
+        super::external_and_history::FocusRefList::RemoteBranches,
+    ));
     effects
 }
 
@@ -2292,8 +2334,8 @@ pub(super) fn head_branch_loaded(
                     if repo_state.detached_head_commit.is_none()
                         && repo_state
                             .history_state
-                            .history_scope
-                            .guarantees_head_visibility()
+                            .history_focus
+                            .head_is_first(repo_state.history_state.history_scope)
                         && let Loadable::Ready(page) = &repo_state.log
                     {
                         repo_state

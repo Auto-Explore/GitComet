@@ -40,7 +40,11 @@ pub(in crate::store) fn repo_with_linked_worktree() -> (tempfile::TempDir, PathB
             "feature",
         ],
     );
-    (dir, repo, canonicalize_or_original(worktree))
+    (
+        dir,
+        canonicalize_or_original(repo),
+        canonicalize_or_original(worktree),
+    )
 }
 
 pub(super) fn wait_until(description: &str, ready: impl Fn() -> bool) {

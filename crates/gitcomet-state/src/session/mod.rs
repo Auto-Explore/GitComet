@@ -1,5 +1,5 @@
 use crate::model::{AppState, DefaultTagType, GitLogTagFetchMode, RepoId};
-use gitcomet_core::domain::{HistoryMode, LogScope};
+use gitcomet_core::domain::{HistoryFocus, HistoryFocusSet, HistoryMode, LogScope};
 use gitcomet_core::platform::dirs;
 use rustc_hash::FxHashSet;
 use serde::{Deserialize, Serialize};
@@ -327,6 +327,14 @@ pub(crate) struct UiSessionFile {
     repo_history_scopes: Option<BTreeMap<String, HistoryScopeSetting>>,
     #[serde(default, deserialize_with = "lenient")]
     repo_history_author_filters: Option<BTreeMap<String, Option<String>>>,
+    // Focus was called "solo" while it was in development; the alias keeps
+    // sessions written by those builds readable.
+    #[serde(
+        default,
+        alias = "repo_history_solos",
+        deserialize_with = "history_mode::deserialize_repo_history_focus"
+    )]
+    repo_history_focus: Option<BTreeMap<String, Vec<HistoryFocusSetting>>>,
     #[serde(skip_serializing, default, deserialize_with = "lenient")]
     repo_fetch_prune_deleted_remote_tracking_branches: Option<BTreeMap<String, bool>>,
     #[serde(default, deserialize_with = "lenient")]
@@ -576,6 +584,7 @@ pub(crate) struct RepoSessionPreferences {
     pub(crate) repo_history_modes: BTreeMap<String, HistoryMode>,
     pub(crate) repo_history_scopes: BTreeMap<String, LogScope>,
     pub(crate) repo_history_author_filters: BTreeMap<String, Option<String>>,
+    pub(crate) repo_history_focus: BTreeMap<String, HistoryFocusSet>,
 }
 
 #[cfg(test)]
@@ -877,7 +886,7 @@ pub use extensions::{
     check_extension_namespace_size, extension_namespace, extension_namespace_from_path,
     persist_extension_namespace, persist_extension_namespace_to_path,
 };
-use history_mode::{HistoryModeSetting, HistoryScopeSetting};
+use history_mode::{HistoryFocusSetting, HistoryModeSetting, HistoryScopeSetting};
 use maintenance::{RepoMaintenanceSession, lenient_repo_maintenance};
 use parse::*;
 use survey::{SurveyPromptSession, current_unix_seconds};

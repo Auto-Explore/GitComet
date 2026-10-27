@@ -365,6 +365,7 @@ mod previews;
 mod routing_palette;
 mod selection;
 mod sidebar_file_history_tab;
+mod sidebar_focus;
 mod sidebar_header;
 mod sidebar_layout;
 mod window_lifecycle;

@@ -1927,9 +1927,10 @@ fn load_log_effect_uses_history_mode_api() {
         &mut repos,
         msg_tx,
         Effect::LoadLog {
+            focus: Default::default(),
             repo_id,
             seq: crate::model::LogLoadSeq(1),
-            scope: LogScope::NoMerges,
+            walk: LogScope::NoMerges.into(),
             author: None,
             limit: 20,
             cursor: Some(cursor.clone()),
@@ -2008,9 +2009,10 @@ fn log_effect_streams_only_while_replacing_a_loading_page() {
             state,
             tx,
             Effect::LoadLog {
+                focus: Default::default(),
                 repo_id,
                 seq: crate::model::LogLoadSeq(1),
-                scope: LogScope::NoMerges,
+                walk: LogScope::NoMerges.into(),
                 author: Some("alice".into()),
                 limit: 800,
                 cursor: None,
@@ -2290,9 +2292,10 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
         ),
         (
             Effect::LoadLog {
+                focus: Default::default(),
                 repo_id,
                 seq: crate::model::LogLoadSeq(1),
-                scope: LogScope::CurrentBranch,
+                walk: LogScope::CurrentBranch.into(),
                 author: None,
                 limit: 20,
                 cursor: None,
@@ -2301,9 +2304,10 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
         ),
         (
             Effect::LoadLog {
+                focus: Default::default(),
                 repo_id,
                 seq: crate::model::LogLoadSeq(2),
-                scope: LogScope::AllBranches,
+                walk: LogScope::AllBranches.into(),
                 author: None,
                 limit: 20,
                 cursor: Some(LogCursor {

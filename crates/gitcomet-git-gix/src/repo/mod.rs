@@ -3,19 +3,19 @@ use crate::util::git_workdir_cmd_for as util_git_workdir_cmd_for;
 use gitcomet_core::conflict_session::ConflictSession;
 use gitcomet_core::domain::{
     Branch, Commit, CommitDetails, CommitId, CommitSignature, Diff, DiffArea, DiffPreviewTextFile,
-    DiffPreviewTextSide, DiffTarget, FileDiffImage, FileDiffText, FileEntry, HistoryMode,
-    LogCursor, LogPage, RecentCommitMessage, RefMetadata, ReflogEntry, Remote, RemoteBranch,
-    RemoteTag, RepoSpec, RepoStatus, StashEntry, Submodule, SubmoduleDiffSummary, Tag, Upstream,
-    UpstreamDivergence, Worktree,
+    DiffPreviewTextSide, DiffTarget, FileDiffImage, FileDiffText, FileEntry, HistoryFocusSet,
+    HistoryMode, LogCursor, LogPage, RecentCommitMessage, RefMetadata, ReflogEntry, Remote,
+    RemoteBranch, RemoteTag, RepoSpec, RepoStatus, StashEntry, Submodule, SubmoduleDiffSummary,
+    Tag, Upstream, UpstreamDivergence, Worktree,
 };
 use gitcomet_core::git_ops_trace::{self, GitOpTraceKind};
 use gitcomet_core::remote_url::RemoteUrlPolicy;
 use gitcomet_core::services::{
     BlameLine, CancellationToken, CheckoutRemoteBranchMode, CommandOutput, CommitOperationOutcome,
     ConflictFileStages, ConflictSide, ForcePushLease, GitRepository, InteractiveRebaseEntry,
-    MergetoolResult, PullMode, RemoteUrlKind, ResetMode, Result, SafePushAfterCommitContext,
-    SafePushAfterCommitDecision, SafePushAfterCommitTarget, SequencerState, SubmoduleTrustDecision,
-    SubmoduleTrustTarget, WorktreeCheckout,
+    MergetoolResult, PullMode, RemoteUrlKind, ResetMode, Result, RewordCommitOutcome,
+    SafePushAfterCommitContext, SafePushAfterCommitDecision, SafePushAfterCommitTarget,
+    SequencerState, SubmoduleTrustDecision, SubmoduleTrustTarget, WorktreeCheckout,
 };
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -785,11 +785,12 @@ impl GitRepository for GixRepo {
     }
     fn history_authors(
         &self,
-        mode: HistoryMode,
+        walk: &gitcomet_core::services::HistoryWalk,
+        focus: &HistoryFocusSet,
         cancellation: &CancellationToken,
     ) -> Result<Arc<[Arc<str>]>> {
         let _operation = self.operation_lease()?;
-        self.with_store_retry(|| self.history_authors_impl(mode, cancellation))
+        self.with_store_retry(|| self.history_authors_impl(walk, focus, cancellation))
     }
     fn spec(&self) -> &RepoSpec {
         &self.spec
@@ -818,14 +819,15 @@ impl GitRepository for GixRepo {
 
     fn build_history_index(
         &self,
-        mode: HistoryMode,
+        walk: &gitcomet_core::services::HistoryWalk,
         author: Option<&str>,
+        focus: &HistoryFocusSet,
         cancellation: &CancellationToken,
         on_progress: &mut dyn FnMut(gitcomet_core::history_index::HistoryIndexProgress),
     ) -> Result<Option<gitcomet_core::history_index::HistoryIndexHandle>> {
         let _operation = self.operation_lease()?;
         self.with_store_retry(|| {
-            self.build_history_index_impl(mode, author, cancellation, &mut *on_progress)
+            self.build_history_index_impl(walk, author, focus, cancellation, &mut *on_progress)
         })
     }
 
@@ -851,15 +853,16 @@ impl GitRepository for GixRepo {
 
     fn read_history(
         &self,
-        mode: HistoryMode,
+        walk: &gitcomet_core::services::HistoryWalk,
         author: Option<&str>,
+        focus: &HistoryFocusSet,
         request: &gitcomet_core::services::HistoryReadRequest,
         cancellation: &CancellationToken,
         on_chunk: &mut dyn FnMut(gitcomet_core::services::LogChunk),
     ) -> Result<gitcomet_core::services::HistoryReadResult> {
         let _operation = self.operation_lease()?;
         self.with_store_retry(|| {
-            self.read_history_impl(mode, author, request, cancellation, &mut *on_chunk)
+            self.read_history_impl(walk, author, focus, request, cancellation, &mut *on_chunk)
         })
     }
 
@@ -1611,6 +1614,31 @@ impl GitRepository for GixRepo {
         let _operation = self.operation_lease()?;
         self.require_working_tree()?;
         self.interactive_rebase_with_output_impl(base, entries)
+    }
+
+    fn reword_commit_with_output(
+        &self,
+        commit_id: &CommitId,
+        message: &str,
+    ) -> Result<RewordCommitOutcome> {
+        let _operation = self.operation_lease()?;
+        self.require_working_tree()?;
+        self.reword_commit_with_output_impl(commit_id, message)
+    }
+
+    fn continue_reword_commit_with_output(
+        &self,
+        commit_id: &CommitId,
+        message: &str,
+    ) -> Result<RewordCommitOutcome> {
+        let _operation = self.operation_lease()?;
+        self.require_working_tree()?;
+        self.continue_reword_commit_with_output_impl(commit_id, message)
+    }
+
+    fn reword_commit_in_progress(&self, commit_id: &CommitId, message: &str) -> Result<bool> {
+        let _operation = self.operation_lease()?;
+        self.reword_commit_in_progress_impl(commit_id, message)
     }
 
     fn interactive_cherry_pick_with_output(

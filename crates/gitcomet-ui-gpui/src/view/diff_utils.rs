@@ -1021,12 +1021,15 @@ mod tests {
             ))
             .expect("UTF-8 ls-files")
         };
-        let worktree_mode = |repo: &std::path::Path| {
+        let worktree_is_executable = |repo: &std::path::Path| {
+            // Git tracks only the owner executable bit. `git apply` recreates
+            // the file with permissions filtered through the process umask.
             std::fs::metadata(repo.join("run.sh"))
                 .expect("worktree file")
                 .permissions()
                 .mode()
-                & 0o777
+                & 0o100
+                != 0
         };
 
         let (dir, opened, diff) = edited_executable();
@@ -1060,9 +1063,25 @@ mod tests {
             std::fs::read_to_string(dir.path().join("run.sh")).unwrap(),
             "echo one\n"
         );
-        // Git rewrites the file under the umask, so only the owner's
-        // executable bit is the same on every machine.
-        assert_ne!(worktree_mode(dir.path()) & 0o100, 0, "discard hunk");
+        assert!(worktree_is_executable(dir.path()), "discard hunk");
+
+        let (dir, opened, diff) = edited_executable();
+        let selected: FxHashSet<usize> = diff
+            .iter()
+            .position(|line| line.text.as_ref() == "+echo two")
+            .into_iter()
+            .collect();
+        let patch =
+            build_unified_patch_for_selected_lines_across_hunks_for_reverse_apply(&diff, &selected)
+                .expect("patch");
+        opened
+            .apply_unified_patch_to_worktree_with_output(&patch, true)
+            .expect("discard line");
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("run.sh")).unwrap(),
+            ""
+        );
+        assert!(worktree_is_executable(dir.path()), "discard line");
     }
 
     /// A removed `-- comment` line reads `--- comment` in the diff. Parsed as a

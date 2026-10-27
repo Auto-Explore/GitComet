@@ -2902,33 +2902,36 @@ fn explorer_external_drop_writes_to_highlighted_folder_in_sidebar_and_popup(
     let external = tempfile::tempdir().unwrap();
     std::fs::create_dir(directory.path().join("destination")).unwrap();
     std::fs::write(directory.path().join("destination/keep.txt"), "keep").unwrap();
+    // Built once: a fresh repo lifetime per pass would leave the first pass's
+    // handle installed, and the store retires it as stale before the drop.
+    let mut seeded = view_state_with_active_ready_repo(RepoId(1));
+    seeded.repos[0].spec.workdir = directory.path().to_path_buf();
+    seeded.sidebar_mode = gitcomet_state::model::SidebarMode::Files;
+    seeded.repos[0].file_browser.entries = Loadable::Ready(Arc::new(vec![
+        FileEntry {
+            name: "destination".into(),
+            path: Arc::new("destination".into()),
+            kind: FileEntryKind::Directory,
+            depth: 0,
+            ignored: false,
+        },
+        FileEntry {
+            name: "keep.txt".into(),
+            path: Arc::new("destination/keep.txt".into()),
+            kind: FileEntryKind::File,
+            depth: 1,
+            ignored: false,
+        },
+    ]));
+    seeded.repos[0]
+        .file_browser
+        .expanded_dirs
+        .insert(Arc::new(PathBuf::from("destination")));
     for popup in [false, true] {
         let name = if popup { "popup.txt" } else { "sidebar.txt" };
         let source = external.path().join(name);
         std::fs::write(&source, "dropped content").unwrap();
-        let mut state = view_state_with_active_ready_repo(RepoId(1));
-        state.repos[0].spec.workdir = directory.path().to_path_buf();
-        state.sidebar_mode = gitcomet_state::model::SidebarMode::Files;
-        state.repos[0].file_browser.entries = Loadable::Ready(Arc::new(vec![
-            FileEntry {
-                name: "destination".into(),
-                path: Arc::new("destination".into()),
-                kind: FileEntryKind::Directory,
-                depth: 0,
-                ignored: false,
-            },
-            FileEntry {
-                name: "keep.txt".into(),
-                path: Arc::new("destination/keep.txt".into()),
-                kind: FileEntryKind::File,
-                depth: 1,
-                ignored: false,
-            },
-        ]));
-        state.repos[0]
-            .file_browser
-            .expanded_dirs
-            .insert(Arc::new(PathBuf::from("destination")));
+        let mut state = seeded.clone();
         state.repos[0].file_browser.bump_rev();
         store.replace_snapshot_for_test(Arc::new(state));
         test_support::install_working_tree_repositories(&store);

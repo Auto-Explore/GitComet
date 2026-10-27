@@ -28,61 +28,13 @@ fn host_menu_presentation_preserves_assets_tones_and_empty_icon_slots() {
 }
 
 #[test]
-fn context_menu_icon_path_accepts_direct_svg_paths() {
-    let paths = [
-        "icons/link.svg",
-        "icons/unlink.svg",
-        "icons/plus.svg",
-        "icons/minus.svg",
-        "icons/question.svg",
-        "icons/warning.svg",
-        "icons/check.svg",
-        "icons/git_branch.svg",
-        "icons/arrow_down.svg",
-        "icons/arrow_up.svg",
-        "icons/arrow_down_to_line.svg",
-        "icons/arrow_up_to_line.svg",
-        "icons/chevron_down.svg",
-        "icons/chevron_right.svg",
-        "icons/broom.svg",
-        "icons/stash.svg",
-        "icons/tag.svg",
-        "icons/trash.svg",
-        "icons/repo_tab_close.svg",
-        "icons/refresh.svg",
-        "icons/open_external.svg",
-        "icons/file.svg",
-        "icons/folder.svg",
-        "icons/copy.svg",
-        "icons/box.svg",
-        "icons/menu.svg",
-        "icons/list_tree.svg",
-        "icons/list_groups.svg",
-        "icons/swap.svg",
-        "icons/squash_arrow.svg",
-        "icons/arrow_right.svg",
-        "icons/infinity.svg",
-        "icons/arrow_left.svg",
-        "icons/undo.svg",
-        "icons/pencil.svg",
-        "icons/cloud.svg",
-        "icons/computer.svg",
-        "icons/pin.svg",
-        "icons/cog.svg",
-        "icons/disk.svg",
-        "icons/generic_close.svg",
-        "icons/git_commit.svg",
-        "icons/file_plus.svg",
-        "icons/folder_plus.svg",
-        "icons/scissors.svg",
-        "icons/clipboard_paste.svg",
-        "icons/copy_plus.svg",
-        "icons/redo.svg",
-        "icons/eye_off.svg",
-    ];
-
-    for path in paths {
-        assert_eq!(context_menu_icon_path(path, "test"), Some(path));
+fn context_menu_icon_path_trims_and_keeps_paths_without_checking_assets() {
+    // Whether the asset exists is `every_icon_path_literal_in_the_crate_loads`'s job.
+    for (icon, path) in [
+        ("  icons/trash.svg ", "icons/trash.svg"),
+        ("icons/not_an_asset.svg", "icons/not_an_asset.svg"),
+    ] {
+        assert_eq!(context_menu_icon_path(icon, "Copy"), Some(path), "{icon}");
     }
 }
 #[test]
@@ -167,60 +119,4 @@ fn context_menu_icon_color_preserves_destructive_and_warning_semantics() {
         context_menu_tone("Add to .gitignore", Some("icons/eye_off.svg")),
         ContextMenuTone::Accent
     );
-}
-#[test]
-fn context_menu_icon_path_covers_all_context_menu_svg_icons() {
-    let paths = [
-        "icons/plus.svg",
-        "icons/check.svg",
-        "icons/git_branch.svg",
-        "icons/arrow_down.svg",
-        "icons/arrow_up.svg",
-        "icons/arrow_down_to_line.svg",
-        "icons/arrow_up_to_line.svg",
-        "icons/chevron_down.svg",
-        "icons/chevron_right.svg",
-        "icons/broom.svg",
-        "icons/stash.svg",
-        "icons/tag.svg",
-        "icons/trash.svg",
-        "icons/repo_tab_close.svg",
-        "icons/refresh.svg",
-        "icons/open_external.svg",
-        "icons/file.svg",
-        "icons/folder.svg",
-        "icons/copy.svg",
-        "icons/box.svg",
-        "icons/infinity.svg",
-        "icons/swap.svg",
-        "icons/squash_arrow.svg",
-        "icons/arrow_right.svg",
-        "icons/arrow_left.svg",
-        "icons/pencil.svg",
-        "icons/link.svg",
-        "icons/unlink.svg",
-        "icons/warning.svg",
-        "icons/minus.svg",
-        "icons/cloud.svg",
-        "icons/computer.svg",
-        "icons/pin.svg",
-        "icons/cog.svg",
-        "icons/disk.svg",
-        "icons/generic_close.svg",
-        "icons/git_commit.svg",
-        "icons/file_plus.svg",
-        "icons/folder_plus.svg",
-        "icons/scissors.svg",
-        "icons/clipboard_paste.svg",
-        "icons/copy_plus.svg",
-        "icons/redo.svg",
-        "icons/eye_off.svg",
-    ];
-    for path in paths {
-        assert_eq!(
-            context_menu_icon_path(path, "test"),
-            Some(path),
-            "missing direct SVG support for context-menu icon path: {path}"
-        );
-    }
 }

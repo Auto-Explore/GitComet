@@ -2,6 +2,9 @@
 
 use super::*;
 
+#[path = "commit_reword_lifecycle.rs"]
+mod reword_lifecycle;
+
 /// A window showing one commit's details, with the sha/date/parent fields
 /// populated. Returns the fields' expected text.
 fn commit_details_metadata_fixture(
@@ -1689,5 +1692,710 @@ fn commit_file_list_with_truncated_paths_ignores_unrelated_frames(cx: &mut gpui:
         render_count(cx),
         before,
         "an unrelated frame re-rendered the details pane; alignment {snapshot:?}"
+    );
+}
+
+const REWORD_HEAD_SHA: &str = "cccccccccccccccccccccccccccccccccccccccc";
+const REWORD_OLDER_SHA: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+const REWORD_ROOT_SHA: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+fn reword_commit_id(sha: &str) -> gitcomet_core::domain::CommitId {
+    gitcomet_core::domain::CommitId(sha.into())
+}
+
+/// A repo whose history is root <- older <- HEAD, showing `selected`'s
+/// details. `dirty` leaves an unstaged change in the worktree.
+fn rewordable_repo(
+    repo_id: gitcomet_state::model::RepoId,
+    selected: &str,
+    message: &str,
+    dirty: bool,
+) -> gitcomet_state::model::RepoState {
+    let commit = |sha: &str, parents: &[&str]| gitcomet_core::domain::Commit {
+        id: reword_commit_id(sha),
+        parent_ids: parents
+            .iter()
+            .map(|parent| reword_commit_id(parent))
+            .collect(),
+        summary: sha[..1].into(),
+        author: "Alice".into(),
+        time: std::time::SystemTime::UNIX_EPOCH,
+    };
+    let commits = vec![
+        commit(REWORD_HEAD_SHA, &[REWORD_OLDER_SHA]),
+        commit(REWORD_OLDER_SHA, &[REWORD_ROOT_SHA]),
+        commit(REWORD_ROOT_SHA, &[]),
+    ];
+    let parent_ids = commits
+        .iter()
+        .find(|commit| commit.id.as_ref() == selected)
+        .map(|commit| commit.parent_ids.iter().cloned().collect())
+        .unwrap_or_default();
+
+    let mut repo = opening_repo_state(repo_id, Path::new("/tmp/repo-commit-reword"));
+    repo.open = Loadable::Ready(());
+    repo.detached_head_commit = Some(reword_commit_id(REWORD_HEAD_SHA));
+    let unstaged = if dirty {
+        vec![gitcomet_core::domain::FileStatus {
+            path: "src/lib.rs".into(),
+            kind: gitcomet_core::domain::FileStatusKind::Modified,
+            conflict: None,
+        }]
+    } else {
+        Vec::new()
+    };
+    repo.status = Loadable::Ready(
+        gitcomet_core::domain::RepoStatus {
+            staged: Arc::new(Vec::new()),
+            unstaged: Arc::new(unstaged),
+        }
+        .into(),
+    );
+    repo.log = Loadable::Ready(Arc::new(gitcomet_core::domain::LogPage {
+        commits,
+        next_cursor: None,
+    }));
+    repo.log_rev = 1;
+    repo.history_state.selected_commit = Some(reword_commit_id(selected));
+    repo.history_state.commit_details =
+        Loadable::Ready(Arc::new(gitcomet_core::domain::CommitDetails {
+            id: reword_commit_id(selected),
+            message: message.to_string(),
+            author_name: "Alice".to_string(),
+            author_email: "alice@example.com".to_string(),
+            authored_at_unix: 0,
+            committed_at: "2026-03-08 12:34:56 +0200".into(),
+            committed_at_unix: 0,
+            parent_ids,
+            files: vec![],
+        }));
+    repo.prepare_commit_reword_position_for_test();
+    repo
+}
+
+fn show_rewordable_commit(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<crate::view::GitCometView>,
+    mut repo: gitcomet_state::model::RepoState,
+) {
+    repo.prepare_commit_reword_position_for_test();
+    let next_state = app_state_with_repo(repo.clone(), repo.id);
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.store
+                .replace_snapshot_for_test(Arc::clone(&next_state));
+            push_test_state(this, next_state, cx);
+        });
+        let _ = window.draw(app);
+    });
+    cx.run_until_parked();
+}
+
+fn click_selector(cx: &mut gpui::VisualTestContext, selector: &'static str) {
+    let center = cx
+        .debug_bounds(selector)
+        .unwrap_or_else(|| panic!("expected {selector} in debug bounds"))
+        .center();
+    simulate_counted_click(cx, center, 1);
+    cx.run_until_parked();
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+}
+
+fn reword_draft_text(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<crate::view::GitCometView>,
+) -> Option<String> {
+    cx.update(|_window, app| {
+        let pane = view.read(app).details_pane.read(app);
+        pane.commit_reword
+            .as_ref()
+            .map(|_| pane.commit_reword_input.read(app).text().to_string())
+    })
+}
+
+#[test]
+fn commit_reword_blocker_explains_ineligible_commits() {
+    let repo_id = gitcomet_state::model::RepoId(61);
+    let details = |repo: &gitcomet_state::model::RepoState| match &repo.history_state.commit_details
+    {
+        Loadable::Ready(details) => Arc::clone(details),
+        _ => unreachable!(),
+    };
+    let blocker = |repo: &gitcomet_state::model::RepoState| {
+        let mut repo = repo.clone();
+        repo.prepare_commit_reword_position_for_test();
+        crate::view::panels::commit_reword_blocker(&repo, &details(&repo))
+    };
+
+    // HEAD can be amended over local changes; an older commit needs a clean
+    // worktree for its rebase.
+    assert_eq!(
+        blocker(&rewordable_repo(repo_id, REWORD_HEAD_SHA, "c", true)),
+        None
+    );
+    assert_eq!(
+        blocker(&rewordable_repo(repo_id, REWORD_OLDER_SHA, "b", false)),
+        None
+    );
+    assert_eq!(
+        blocker(&rewordable_repo(repo_id, REWORD_OLDER_SHA, "b", true)),
+        Some("Commit or stash your changes to edit an older commit's message")
+    );
+    assert_eq!(
+        blocker(&rewordable_repo(repo_id, REWORD_ROOT_SHA, "a", false)),
+        Some("The root commit's message can only be edited while it is HEAD")
+    );
+
+    let mut busy = rewordable_repo(repo_id, REWORD_HEAD_SHA, "c", false);
+    busy.local_actions_in_flight = 1;
+    assert_eq!(
+        blocker(&busy),
+        Some("Finish the running Git operation to edit this commit's message")
+    );
+
+    // Amending and rebasing both need a working tree.
+    let mut bare = rewordable_repo(repo_id, REWORD_HEAD_SHA, "c", false);
+    bare.repository_mode = Some(gitcomet_core::domain::RepositoryMode::Bare);
+    assert_eq!(
+        blocker(&bare),
+        Some(gitcomet_core::domain::WORKING_TREE_REQUIRED_MESSAGE)
+    );
+
+    // HEAD can be amended even as a merge; an older merge cannot be replayed.
+    let with_extra_parent = |mut repo: gitcomet_state::model::RepoState| {
+        if let Loadable::Ready(details) = &mut repo.history_state.commit_details {
+            Arc::make_mut(details)
+                .parent_ids
+                .push(reword_commit_id(REWORD_ROOT_SHA));
+        }
+        repo
+    };
+    assert_eq!(
+        blocker(&with_extra_parent(rewordable_repo(
+            repo_id,
+            REWORD_HEAD_SHA,
+            "c",
+            false
+        ))),
+        None
+    );
+    assert_eq!(
+        blocker(&with_extra_parent(rewordable_repo(
+            repo_id,
+            REWORD_OLDER_SHA,
+            "b",
+            false
+        ))),
+        Some("A merge commit's message can only be edited while it is HEAD")
+    );
+
+    let mut elsewhere = rewordable_repo(repo_id, REWORD_OLDER_SHA, "b", false);
+    elsewhere.detached_head_commit =
+        Some(reword_commit_id("dddddddddddddddddddddddddddddddddddddddd"));
+    assert_eq!(
+        blocker(&elsewhere),
+        Some("Only commits in the current branch's loaded history can be edited")
+    );
+
+    // Untracked files don't stop the rebase; staged changes and an unknown
+    // status do.
+    let with_status = |staged: Vec<gitcomet_core::domain::FileStatus>,
+                       unstaged: Vec<gitcomet_core::domain::FileStatus>| {
+        let mut repo = rewordable_repo(repo_id, REWORD_OLDER_SHA, "b", false);
+        repo.status = Loadable::Ready(
+            gitcomet_core::domain::RepoStatus {
+                staged: Arc::new(staged),
+                unstaged: Arc::new(unstaged),
+            }
+            .into(),
+        );
+        repo
+    };
+    let file = |kind| gitcomet_core::domain::FileStatus {
+        path: "notes.txt".into(),
+        kind,
+        conflict: None,
+    };
+    assert_eq!(
+        blocker(&with_status(
+            vec![],
+            vec![file(gitcomet_core::domain::FileStatusKind::Untracked)]
+        )),
+        None
+    );
+    assert_eq!(
+        blocker(&with_status(
+            vec![file(gitcomet_core::domain::FileStatusKind::Added)],
+            vec![]
+        )),
+        Some("Commit or stash your changes to edit an older commit's message")
+    );
+    let mut unknown = rewordable_repo(repo_id, REWORD_OLDER_SHA, "b", false);
+    unknown.status = Loadable::NotLoaded;
+    assert_eq!(blocker(&unknown), Some("Loading the working tree status…"));
+    let mut failed = rewordable_repo(repo_id, REWORD_OLDER_SHA, "b", false);
+    failed.status = Loadable::Error("status failed".into());
+    assert_eq!(
+        blocker(&failed),
+        Some("The working tree status couldn't be loaded")
+    );
+    // HEAD is amended without touching the worktree, so it needs no status.
+    let mut head_unknown = rewordable_repo(repo_id, REWORD_HEAD_SHA, "c", false);
+    head_unknown.status = Loadable::NotLoaded;
+    assert_eq!(blocker(&head_unknown), None);
+}
+
+/// `rewordable_repo` on branch `main`, tracking `origin/main` with `ahead`
+/// commits the upstream lacks.
+fn tracked_rewordable_repo(
+    repo_id: gitcomet_state::model::RepoId,
+    selected: &str,
+    ahead: usize,
+) -> gitcomet_state::model::RepoState {
+    let mut repo = rewordable_repo(repo_id, selected, "Subject", false);
+    repo.detached_head_commit = None;
+    repo.head_branch = Loadable::Ready("main".into());
+    repo.branches = Loadable::Ready(Arc::new(vec![gitcomet_core::domain::Branch {
+        name: "main".into(),
+        target: reword_commit_id(REWORD_HEAD_SHA),
+        upstream: Some(gitcomet_core::domain::Upstream {
+            remote: "origin".into(),
+            branch: "main".into(),
+        }),
+        divergence: Some(gitcomet_core::domain::UpstreamDivergence { ahead, behind: 2 }),
+    }]));
+    repo.prepare_commit_reword_position_for_test();
+    repo
+}
+
+#[test]
+fn commit_reword_availability_reports_published_commits() {
+    let repo_id = gitcomet_state::model::RepoId(64);
+    let published = |selected: &str, ahead: usize| {
+        let repo = tracked_rewordable_repo(repo_id, selected, ahead);
+        let Loadable::Ready(details) = &repo.history_state.commit_details else {
+            unreachable!()
+        };
+        crate::view::panels::commit_reword_availability(&repo, details).published_on
+    };
+    // HEAD is published once the branch is not ahead, even while behind.
+    assert_eq!(
+        published(REWORD_HEAD_SHA, 0).as_deref(),
+        Some("origin/main")
+    );
+    assert_eq!(published(REWORD_HEAD_SHA, 1), None);
+    // The older commit is one step down: published unless two commits are ahead.
+    assert_eq!(
+        published(REWORD_OLDER_SHA, 1).as_deref(),
+        Some("origin/main")
+    );
+    assert_eq!(published(REWORD_OLDER_SHA, 2), None);
+    // Without an upstream there is nothing to warn about.
+    let repo = rewordable_repo(repo_id, REWORD_HEAD_SHA, "Subject", false);
+    let Loadable::Ready(details) = &repo.history_state.commit_details else {
+        unreachable!()
+    };
+    assert_eq!(
+        crate::view::panels::commit_reword_availability(&repo, details).published_on,
+        None
+    );
+}
+
+#[gpui::test]
+fn editing_a_commit_message_prefills_it_and_cancel_restores_the_view(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    let message = "Older subject\n\nThe body explains it.";
+    show_rewordable_commit(
+        cx,
+        &view,
+        rewordable_repo(
+            gitcomet_state::model::RepoId(62),
+            REWORD_OLDER_SHA,
+            message,
+            false,
+        ),
+    );
+    assert!(cx.debug_bounds("commit_reword_editor").is_none());
+
+    click_selector(cx, "commit_details_edit_message");
+    assert_eq!(reword_draft_text(cx, &view).as_deref(), Some(message));
+    assert!(cx.debug_bounds("commit_reword_editor").is_some());
+    assert!(cx.debug_bounds("commit_reword_update").is_some());
+    cx.update(|window, app| {
+        let pane = view.read(app).details_pane.read(app);
+        assert!(
+            pane.commit_reword_input
+                .read(app)
+                .focus_handle()
+                .is_focused(window),
+            "the editor takes focus"
+        );
+    });
+
+    // Cancel discards the edit and brings the message back.
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.details_pane.update(cx, |pane, cx| {
+                pane.commit_reword_input
+                    .update(cx, |input, cx| input.set_text("Changed".to_string(), cx));
+            });
+        });
+        let _ = window.draw(app);
+    });
+    click_selector(cx, "commit_reword_cancel");
+    assert_eq!(reword_draft_text(cx, &view), None);
+    assert!(cx.debug_bounds("commit_reword_editor").is_none());
+    assert!(
+        cx.debug_bounds("commit_details_message_scroll_surface")
+            .is_some()
+    );
+
+    // Escape in the editor cancels too, and editing again starts over.
+    click_selector(cx, "commit_details_edit_message");
+    assert_eq!(reword_draft_text(cx, &view).as_deref(), Some(message));
+    cx.simulate_keystrokes("escape");
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+    assert_eq!(reword_draft_text(cx, &view), None);
+
+    // Selecting another commit discards the draft.
+    click_selector(cx, "commit_details_edit_message");
+    assert!(reword_draft_text(cx, &view).is_some());
+    show_rewordable_commit(
+        cx,
+        &view,
+        rewordable_repo(
+            gitcomet_state::model::RepoId(62),
+            REWORD_HEAD_SHA,
+            "Head subject",
+            false,
+        ),
+    );
+    assert_eq!(reword_draft_text(cx, &view), None);
+}
+
+#[gpui::test]
+fn updating_a_commit_message_dispatches_the_reword(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    let repo_id = gitcomet_state::model::RepoId(63);
+    show_rewordable_commit(
+        cx,
+        &view,
+        rewordable_repo(repo_id, REWORD_HEAD_SHA, "Head subject", true),
+    );
+    // Test windows start without the app's key bindings.
+    cx.update(|_window, app| {
+        app.clear_key_bindings();
+        crate::app::bind_text_input_keys_for_test(app);
+    });
+    click_selector(cx, "commit_details_edit_message");
+    assert!(
+        cx.debug_bounds("commit_reword_published_warning").is_none(),
+        "a commit without an upstream is not published"
+    );
+
+    // An unchanged message is not submitted.
+    let ops_rev_before = crate::view::test_support::repo_ops_rev(&view, cx, repo_id);
+    cx.simulate_keystrokes("secondary-enter");
+    crate::view::test_support::drain_store_worker(&view, cx);
+    assert_eq!(
+        crate::view::test_support::repo_ops_rev(&view, cx, repo_id),
+        ops_rev_before,
+        "an unchanged message must not dispatch"
+    );
+
+    // Draining ran the store's own loads against a repository the test backend
+    // never opened; put the shown commit back. The draft survives: it is the
+    // same commit.
+    show_rewordable_commit(
+        cx,
+        &view,
+        rewordable_repo(repo_id, REWORD_HEAD_SHA, "Head subject", true),
+    );
+    let ops_rev_before = crate::view::test_support::repo_ops_rev(&view, cx, repo_id);
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.details_pane.update(cx, |pane, cx| {
+                pane.commit_reword_input.update(cx, |input, cx| {
+                    input.set_text("Better subject\n".to_string(), cx)
+                });
+            });
+        });
+        let _ = window.draw(app);
+    });
+    cx.update(|window, app| {
+        let pane = view.read(app).details_pane.read(app);
+        assert!(pane.commit_reword.is_some(), "the draft is kept");
+        assert!(
+            pane.commit_reword_input
+                .read(app)
+                .focus_handle()
+                .is_focused(window),
+            "the editor keeps focus"
+        );
+    });
+    cx.simulate_keystrokes("secondary-enter");
+    crate::view::test_support::drain_store_worker(&view, cx);
+    assert!(
+        crate::view::test_support::repo_ops_rev(&view, cx, repo_id) > ops_rev_before,
+        "secondary-enter in the editor must dispatch the reword"
+    );
+    // The test backend opens no repository, so the command fails at once;
+    // the failure keeps the edit for another try.
+    let summary = cx.update(|_window, app| {
+        view.read(app)
+            .store
+            .snapshot()
+            .repos
+            .iter()
+            .find(|repo| repo.id == repo_id)
+            .and_then(|repo| repo.feedback.command_log.last())
+            .map(|entry| entry.summary.clone())
+    });
+    assert!(
+        summary
+            .as_deref()
+            .is_some_and(|summary| summary.starts_with("Edit commit message failed")),
+        "{summary:?}"
+    );
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            crate::view::test_support::sync_store_snapshot(this, cx);
+        });
+        let _ = window.draw(app);
+    });
+    assert_eq!(
+        reword_draft_text(cx, &view).as_deref(),
+        Some("Better subject\n")
+    );
+}
+
+fn reword_failures_logged(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<crate::view::GitCometView>,
+    repo_id: gitcomet_state::model::RepoId,
+) -> usize {
+    cx.update(|_window, app| {
+        view.read(app)
+            .store
+            .snapshot()
+            .repos
+            .iter()
+            .find(|repo| repo.id == repo_id)
+            .map_or(0, |repo| {
+                repo.feedback
+                    .command_log
+                    .iter()
+                    .filter(|entry| entry.summary.starts_with("Edit commit message failed"))
+                    .count()
+            })
+    })
+}
+
+#[gpui::test]
+fn updating_a_published_commit_asks_to_confirm_and_submits_once(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    let repo_id = gitcomet_state::model::RepoId(65);
+    show_rewordable_commit(
+        cx,
+        &view,
+        tracked_rewordable_repo(repo_id, REWORD_HEAD_SHA, 0),
+    );
+    cx.update(|_window, app| {
+        app.clear_key_bindings();
+        crate::app::bind_text_input_keys_for_test(app);
+    });
+    click_selector(cx, "commit_details_edit_message");
+    assert!(
+        cx.debug_bounds("commit_reword_published_warning").is_some(),
+        "editing a pushed commit warns about the force push"
+    );
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.details_pane.update(cx, |pane, cx| {
+                pane.commit_reword_input.update(cx, |input, cx| {
+                    input.set_text("Better subject".to_string(), cx)
+                });
+            });
+        });
+        let _ = window.draw(app);
+    });
+    let confirming = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|_window, app| {
+            let pane = view.read(app).details_pane.read(app);
+            pane.commit_reword
+                .as_ref()
+                .is_some_and(|draft| draft.confirming.is_some())
+        })
+    };
+
+    // The first submit only asks for confirmation.
+    let ops_rev_before = crate::view::test_support::repo_ops_rev(&view, cx, repo_id);
+    cx.simulate_keystrokes("secondary-enter");
+    crate::view::test_support::drain_store_worker(&view, cx);
+    assert_eq!(
+        crate::view::test_support::repo_ops_rev(&view, cx, repo_id),
+        ops_rev_before,
+        "a published commit must not be rewritten without confirmation"
+    );
+    assert!(confirming(cx));
+
+    // Editing the message withdraws the confirmation.
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.details_pane.update(cx, |pane, cx| {
+                pane.commit_reword_input.update(cx, |input, cx| {
+                    input.set_text("Best subject".to_string(), cx)
+                });
+            });
+        });
+        let _ = window.draw(app);
+    });
+    assert!(!confirming(cx));
+
+    // Asked and confirmed: one dispatch, however often it is submitted.
+    show_rewordable_commit(
+        cx,
+        &view,
+        tracked_rewordable_repo(repo_id, REWORD_HEAD_SHA, 0),
+    );
+    cx.simulate_keystrokes("secondary-enter");
+    assert!(confirming(cx));
+    cx.simulate_keystrokes("secondary-enter");
+    cx.update(|_window, app| {
+        let pane = view.read(app).details_pane.read(app);
+        assert!(
+            pane.commit_reword
+                .as_ref()
+                .is_some_and(|draft| draft.submitting.is_some())
+        );
+    });
+    cx.simulate_keystrokes("secondary-enter");
+    click_selector(cx, "commit_reword_update");
+    crate::view::test_support::drain_store_worker(&view, cx);
+    assert_eq!(reword_failures_logged(cx, &view, repo_id), 1);
+
+    // Once the command has finished the edit can be submitted again.
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            crate::view::test_support::sync_store_snapshot(this, cx);
+        });
+        let _ = window.draw(app);
+    });
+    cx.update(|_window, app| {
+        let pane = view.read(app).details_pane.read(app);
+        let draft = pane
+            .commit_reword
+            .as_ref()
+            .expect("the failure keeps the edit");
+        assert_eq!(draft.submitting, None);
+        assert_eq!(pane.commit_reword_input.read(app).text(), "Best subject");
+    });
+}
+
+/// Typed request status controls submission, independently of presentation
+/// logs, unrelated operations, and a rebase that remains paused.
+#[gpui::test]
+fn a_submitted_message_edit_waits_for_its_retry_and_not_for_a_paused_rebase(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    let repo_id = gitcomet_state::model::RepoId(66);
+    show_rewordable_commit(
+        cx,
+        &view,
+        rewordable_repo(repo_id, REWORD_OLDER_SHA, "Older subject", false),
+    );
+    click_selector(cx, "commit_details_edit_message");
+    let request_id = gitcomet_state::model::RewordRequestId::new();
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.details_pane.update(cx, |pane, cx| {
+                pane.commit_reword.as_mut().unwrap().submitting =
+                    Some(crate::view::CommitRewordSubmission { request_id });
+                pane.commit_reword_input
+                    .update(cx, |input, cx| input.set_read_only(true, cx));
+            });
+        });
+    });
+    let submitting = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|_window, app| {
+            view.read(app)
+                .details_pane
+                .read(app)
+                .commit_reword
+                .as_ref()
+                .is_some_and(|draft| draft.submitting.is_some())
+        })
+    };
+    let failed_with = |status: gitcomet_state::model::RewordStatus| {
+        let mut repo = rewordable_repo(repo_id, REWORD_OLDER_SHA, "Older subject", false);
+        repo.rebase_in_progress = Loadable::Ready(true);
+        repo.local_actions_in_flight = 1;
+        repo.reword.revision = if status.is_pending() { 1 } else { 2 };
+        Arc::make_mut(&mut repo.reword.requests).insert(
+            request_id,
+            gitcomet_state::model::RewordRequest::new(
+                reword_commit_id(REWORD_OLDER_SHA),
+                "New".into(),
+                status,
+            ),
+        );
+        app_state_with_repo(repo, repo_id)
+    };
+
+    for (status, still_submitting) in [
+        (
+            gitcomet_state::model::RewordStatus::AwaitingAuthentication,
+            true,
+        ),
+        (gitcomet_state::model::RewordStatus::Failed, false),
+    ] {
+        let state = failed_with(status);
+        cx.update(|window, app| {
+            view.update(app, |this, cx| push_test_state(this, state, cx));
+            let _ = window.draw(app);
+        });
+        assert_eq!(
+            submitting(cx),
+            still_submitting,
+            "request status: {status:?}"
+        );
+        assert_eq!(
+            cx.update(|_, app| view
+                .read(app)
+                .details_pane
+                .read(app)
+                .commit_reword_input
+                .read(app)
+                .is_read_only()),
+            still_submitting
+        );
+    }
+    assert!(
+        cx.update(|_window, app| view
+            .read(app)
+            .details_pane
+            .read(app)
+            .commit_reword
+            .is_some()),
+        "a failure keeps the edit"
     );
 }

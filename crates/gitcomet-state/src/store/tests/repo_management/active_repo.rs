@@ -171,8 +171,9 @@ fn closing_active_repo_refreshes_open_neighbor_with_cancelled_loads() {
         );
         assert!(repo1_state.loads_in_flight.request(LoadKind::StagedStatus));
         let log_request = crate::model::PendingLogLoad {
-            scope: repo1_state.history_state.history_scope,
+            walk: repo1_state.history_state.history_scope.into(),
             author: None,
+            focus: Default::default(),
             limit: 50,
             cursor: None,
         };

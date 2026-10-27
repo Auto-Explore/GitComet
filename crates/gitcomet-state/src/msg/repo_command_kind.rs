@@ -87,6 +87,20 @@ pub enum RepoCommandKind {
         message: String,
         count: usize,
     },
+    RewordCommit {
+        request_id: crate::model::RewordRequestId,
+        commit_id: CommitId,
+        message: String,
+        /// Whether the failure left the reword's rebase paused, as a signing
+        /// failure at its reword step does: a retry then continues that
+        /// rebase, which kept the new message. Otherwise it replays whole.
+        /// Read from the repository after the failure, not guessed from
+        /// which path the target should take.
+        rebase_paused: bool,
+        /// The reworded commit's new id once the command succeeded, so the
+        /// selection can follow it.
+        rewritten_id: Option<CommitId>,
+    },
     Rebase {
         onto: String,
     },
@@ -273,6 +287,7 @@ impl RepoCommandKind {
             | Self::RebaseContinue
             | Self::RebaseAbort
             | Self::InteractiveRebase { .. }
+            | Self::RewordCommit { .. }
             | Self::InteractiveCherryPick { .. }
             | Self::CherryPick { .. }
             | Self::Revert { .. }
@@ -320,6 +335,7 @@ impl RepoCommandKind {
             | Self::SquashRef { .. }
             | Self::Reset { .. }
             | Self::SquashCommits { .. }
+            | Self::RewordCommit { .. }
             | Self::Rebase { .. }
             | Self::RebaseContinue
             | Self::RebaseAbort
@@ -423,6 +439,7 @@ impl RepoCommandKind {
             | Self::SquashRef { .. }
             | Self::Reset { .. }
             | Self::SquashCommits { .. }
+            | Self::RewordCommit { .. }
             | Self::Rebase { .. }
             | Self::RebaseContinue
             | Self::RebaseAbort
@@ -491,6 +508,7 @@ impl RepoCommandKind {
             Self::Pull { .. } | Self::PullBranch { .. } => "Pull",
             Self::MergeRef { .. } => "Merge",
             Self::SquashRef { .. } | Self::SquashCommits { .. } => "Squash",
+            Self::RewordCommit { .. } => "Edit commit message",
             Self::Push | Self::PushAfterCommit { .. } => "Push",
             Self::PushWithTags { request } => request.mode.label(),
             Self::ForcePush | Self::ForcePushWithLease { .. } => "Force push",

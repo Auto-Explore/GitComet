@@ -136,6 +136,78 @@ pub fn linear_first_parent_distance(
     Some(count)
 }
 
+/// Where a commit sits on HEAD's first-parent history, for operations that
+/// replay `target..head` with a flattening rebase (rewording).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FirstParentPosition {
+    /// `distance` first-parent steps below HEAD, with no merge above it.
+    Linear { distance: usize },
+    /// On the first-parent chain, but below a merge.
+    BelowMerge,
+    /// Not on the first-parent chain within the loaded history.
+    NotFound,
+}
+
+/// [`FirstParentPosition`] of `target` in the loaded log page. Scans with a
+/// resuming cursor like [`linear_first_parent_distance`].
+pub fn first_parent_position(
+    commits: &[Commit],
+    head: &CommitId,
+    target: &CommitId,
+) -> FirstParentPosition {
+    let mut distance = 0;
+    let mut below_merge = false;
+    let mut current = head;
+    let mut cursor = commits.iter();
+    while current != target {
+        let Some(commit) = cursor.find(|c| &c.id == current) else {
+            return FirstParentPosition::NotFound;
+        };
+        let Some(parent) = commit.parent_ids.first() else {
+            return FirstParentPosition::NotFound;
+        };
+        below_merge |= commit.parent_ids.len() > 1;
+        distance += 1;
+        current = parent;
+    }
+    if below_merge {
+        FirstParentPosition::BelowMerge
+    } else {
+        FirstParentPosition::Linear { distance }
+    }
+}
+
+/// [`first_parent_position`] over the full history index.
+pub fn first_parent_position_indexed(
+    index: &crate::history_index::HistoryIndex,
+    head: &CommitId,
+    target: &CommitId,
+) -> FirstParentPosition {
+    let (Some(mut row), Some(target_row)) = (
+        index.position(head.as_ref()),
+        index.position(target.as_ref()),
+    ) else {
+        return FirstParentPosition::NotFound;
+    };
+    let mut below_merge = false;
+    for distance in 0..index.len() {
+        if row == target_row {
+            return if below_merge {
+                FirstParentPosition::BelowMerge
+            } else {
+                FirstParentPosition::Linear { distance }
+            };
+        }
+        let parents = index.parents(row);
+        let Some(&parent) = parents.first() else {
+            return FirstParentPosition::NotFound;
+        };
+        below_merge |= parents.len() > 1;
+        row = parent as usize;
+    }
+    FirstParentPosition::NotFound
+}
+
 /// Splits a commit message into a single-line subject and the remaining body,
 /// following git's convention: the subject is the first line and the body is
 /// everything after the first line break, with a single leading blank-line
@@ -613,6 +685,39 @@ mod tests {
         assert_eq!(
             linear_first_parent_distance(&log, &id("d"), &id("b")),
             Some(2)
+        );
+    }
+
+    #[test]
+    fn first_parent_position_tells_linear_merged_and_missing_apart() {
+        let log = vec![
+            commit("e", &["m"], 0),
+            commit("m", &["c", "x"], 5),
+            commit("c", &["b"], 10),
+            commit("x", &["b"], 11),
+            commit("b", &["a"], 20),
+            commit("a", &[], 30),
+        ];
+        assert_eq!(
+            first_parent_position(&log, &id("e"), &id("e")),
+            FirstParentPosition::Linear { distance: 0 }
+        );
+        assert_eq!(
+            first_parent_position(&log, &id("e"), &id("m")),
+            FirstParentPosition::Linear { distance: 1 }
+        );
+        assert_eq!(
+            first_parent_position(&log, &id("e"), &id("c")),
+            FirstParentPosition::BelowMerge
+        );
+        // Only reachable through the merge's second parent.
+        assert_eq!(
+            first_parent_position(&log, &id("e"), &id("x")),
+            FirstParentPosition::NotFound
+        );
+        assert_eq!(
+            first_parent_position(&log, &id("e"), &id("zzz")),
+            FirstParentPosition::NotFound
         );
     }
 

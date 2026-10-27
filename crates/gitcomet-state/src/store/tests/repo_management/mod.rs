@@ -180,9 +180,9 @@ fn assert_open_repo_history_mode_resolution(
             effect,
             Effect::LoadLog {
                 repo_id,
-                scope,
+                walk,
                 ..
-            } if *repo_id == RepoId(1) && *scope == expected
+            } if *repo_id == RepoId(1) && walk.mode() == expected
         )),
         "expected RepoOpenedOk to request LoadLog({expected:?}), got {effects:?}"
     );

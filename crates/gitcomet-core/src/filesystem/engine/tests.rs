@@ -670,7 +670,7 @@ fn undo_refuses_external_changes_and_remains_retryable() {
 #[test]
 fn checked_undo_keeps_journal_and_files_when_target_is_refused() {
     let temp = tempfile::tempdir().unwrap();
-    let source = temp.path().join("file");
+    let source = canonical_path(temp.path()).unwrap().join("file");
     fs::write(&source, b"original").unwrap();
     let mut filesystem = Filesystem::default();
     success(&run(

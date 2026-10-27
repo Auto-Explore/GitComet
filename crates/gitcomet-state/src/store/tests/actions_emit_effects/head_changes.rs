@@ -342,9 +342,9 @@ fn commit_finished_clears_commit_state_and_requests_primary_refreshes() {
         e,
         Effect::LoadLog {
             repo_id: id,
-            scope,
+            walk,
             ..
-        } if *id == repo_id && *scope == expected_scope
+        } if *id == repo_id && walk.mode() == expected_scope
     )));
 }
 
