@@ -11,9 +11,16 @@ use rustc_hash::FxHashSet;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 
 const RESUME_CHECK: Duration = Duration::from_secs(30);
+/// Repositories restored at launch wait this long, so their fetches do not
+/// compete with opening them.
+const STARTUP_GRACE: Duration = Duration::from_secs(60);
+/// Fetches to one host start at least this far apart, so many repositories on
+/// one server never reach it back to back.
+const HOST_SPACING: Duration = Duration::from_secs(2);
+const SPACING_POLL: Duration = Duration::from_millis(50);
 
 pub(super) type EventSink = Arc<dyn Fn(Event) + Send + Sync>;
 
@@ -37,6 +44,8 @@ pub(super) struct Registration {
     pub(super) workdir: PathBuf,
     pub(super) common_dir: Option<PathBuf>,
     pub(super) repository: Option<Arc<dyn GitRepository>>,
+    /// The tab is the selected one in its window; its repository fetches first.
+    pub(super) active: bool,
 }
 
 #[derive(Clone)]
@@ -52,6 +61,7 @@ struct Subscriber {
     /// A new tab loads its first incoming count through a refresh, so it gets
     /// one even after a fetch that moved nothing.
     needs_refresh: bool,
+    active: bool,
 }
 
 impl Subscriber {
@@ -124,20 +134,11 @@ impl Group {
         }
     }
 
-    fn contacted<'a>(&'a self, skipped: &'a [String]) -> impl Iterator<Item = &'a FetchRemote> {
-        self.remotes
-            .iter()
-            .filter(|remote| !skipped.contains(&remote.name))
-    }
-
     /// A fetch succeeded: the hosts it contacted answer again.
     fn reached(&mut self, hosts: &mut BTreeMap<String, HostBlock>, skipped: &[String]) {
         self.schedule.failures = 0;
         self.snapshot.retry_at = None;
-        for host in self
-            .contacted(skipped)
-            .filter_map(|remote| remote.host.as_ref())
-        {
+        for host in contacted(&self.remotes, skipped).filter_map(|remote| remote.host.as_ref()) {
             hosts.remove(host);
         }
     }
@@ -156,7 +157,7 @@ impl Group {
             return;
         };
         let named = policy::failed_remotes(error);
-        let mut failed: Vec<&FetchRemote> = self.contacted(skipped).collect();
+        let mut failed: Vec<&FetchRemote> = contacted(&self.remotes, skipped).collect();
         if failed.iter().any(|remote| named.contains(&remote.name)) {
             failed.retain(|remote| named.contains(&remote.name));
         }
@@ -205,6 +206,11 @@ struct State {
     entries: BTreeMap<PathBuf, Entry>,
     groups: BTreeMap<GroupKey, Group>,
     hosts: BTreeMap<String, HostBlock>,
+    /// When each host was last contacted, for spacing.
+    contacts: BTreeMap<String, Instant>,
+    startup_grace: Duration,
+    /// Groups created before this wait until then.
+    grace_until: Option<SystemTime>,
     running: Option<Running>,
     revision: u64,
     order: u64,
@@ -329,10 +335,19 @@ pub(super) struct AutoFetchCoordinator {
 }
 
 impl AutoFetchCoordinator {
+    /// A coordinator without launch grace, for tests that drive it directly.
+    #[cfg(any(test, feature = "test-support"))]
     pub(super) fn new() -> Arc<Self> {
+        Self::with_startup_grace(Duration::ZERO)
+    }
+
+    fn with_startup_grace(startup_grace: Duration) -> Arc<Self> {
         Arc::new(Self {
             inner: Arc::new(Inner {
-                state: Mutex::new(State::default()),
+                state: Mutex::new(State {
+                    startup_grace,
+                    ..State::default()
+                }),
                 admission: Arc::new(Admission::default()),
             }),
             worker: Mutex::new(None),
@@ -343,7 +358,7 @@ impl AutoFetchCoordinator {
 
     pub(super) fn shared() -> Arc<Self> {
         static SHARED: OnceLock<Arc<AutoFetchCoordinator>> = OnceLock::new();
-        Arc::clone(SHARED.get_or_init(Self::new))
+        Arc::clone(SHARED.get_or_init(|| Self::with_startup_grace(STARTUP_GRACE)))
     }
 
     pub(super) fn admission(&self) -> &Arc<Admission> {
@@ -413,7 +428,13 @@ impl AutoFetchCoordinator {
                 subscriber.store_id != store_id || registered.contains(&(key.as_path(), *lifetime))
             });
         }
+        let now = SystemTime::now();
+        if !registrations.is_empty() && state.grace_until.is_none() {
+            state.grace_until = Some(now + state.startup_grace);
+        }
+        let not_before = state.grace_until.filter(|until| *until > now);
         let mut added = Vec::new();
+        let mut created = FxHashSet::default();
         for (key, registration) in registrations {
             state.order += 1;
             let order = state.order;
@@ -422,9 +443,13 @@ impl AutoFetchCoordinator {
             } = &mut *state;
             let entry = entries.entry(key.clone()).or_insert_with(|| {
                 let group = GroupKey::Workdir(key.clone());
-                groups
-                    .entry(group.clone())
-                    .or_insert_with(|| Group::new(revision, order));
+                groups.entry(group.clone()).or_insert_with(|| {
+                    created.insert(group.clone());
+                    let mut group = Group::new(revision, order);
+                    group.schedule.completed = last_fetch_time(&key);
+                    group.schedule.not_before = not_before;
+                    group
+                });
                 Entry {
                     subscribers: BTreeMap::new(),
                     common_dir: None,
@@ -448,6 +473,7 @@ impl AutoFetchCoordinator {
                 repository: registration.repository,
                 sink: Arc::clone(&sink),
                 needs_refresh,
+                active: registration.active,
             };
             if entry
                 .subscribers
@@ -465,7 +491,9 @@ impl AutoFetchCoordinator {
         let toggled: Vec<GroupKey> = state
             .groups
             .keys()
-            .filter(|key| was_enabled.contains(*key) != enabled.contains(*key))
+            .filter(|key| {
+                !created.contains(*key) && was_enabled.contains(*key) != enabled.contains(*key)
+            })
             .cloned()
             .collect();
         for key in toggled {
@@ -480,12 +508,28 @@ impl AutoFetchCoordinator {
             }
             state.publish(&key, None);
         }
+        let State {
+            entries, groups, ..
+        } = &mut *state;
         for (key, lifetime) in added {
-            if let Some(entry) = state.entries.get(&key)
-                && let Some(subscriber) = entry.subscribers.get(&lifetime)
-                && let Some(group) = state.groups.get(&entry.group)
+            if let Some(entry) = entries.get_mut(&key)
+                && let Some(group) = groups.get(&entry.group)
+                && let Some(subscriber) = entry.subscribers.get_mut(&lifetime)
             {
                 subscriber.publish(group, None);
+                // A tab whose repository fetched recently, or waits out the
+                // launch, loads its last known count now instead.
+                let settings = subscriber.settings.auto_fetch;
+                if subscriber.needs_refresh
+                    && settings.enabled
+                    && !group.schedule.is_due(settings.interval, now)
+                {
+                    subscriber.needs_refresh = false;
+                    (subscriber.sink)(Event::Refresh {
+                        repo_id: subscriber.repo_id,
+                        lifetime: subscriber.lifetime,
+                    });
+                }
             }
         }
         state.cancel_inactive_fetch();
@@ -681,6 +725,27 @@ fn next_job(state: &mut State, admission: &Admission, now: SystemTime) -> Option
     if state.running.is_some() {
         return None;
     }
+    let active: FxHashSet<&GroupKey> = state
+        .entries
+        .values()
+        .filter(|entry| {
+            entry
+                .subscribers
+                .values()
+                .any(|subscriber| subscriber.active)
+        })
+        .map(|entry| &entry.group)
+        .collect();
+    let last_contact = |group: &Group| {
+        group
+            .remotes
+            .iter()
+            .filter_map(|remote| state.contacts.get(remote.host.as_ref()?))
+            .max()
+            .copied()
+    };
+    // Selected tabs first, then hosts contacted least recently, then the
+    // group that started longest ago.
     let (key, workdir) = state
         .enabled_groups()
         .into_iter()
@@ -691,9 +756,15 @@ fn next_job(state: &mut State, admission: &Admission, now: SystemTime) -> Option
                 .is_due(subscriber.settings.auto_fetch.interval, now)
                 && !state.group_waits(group, now)
                 && group_common_dir(key, entry).is_none_or(|common| !admission.blocked(common)))
-            .then_some((group.order, key, workdir))
+            .then(|| {
+                (
+                    (!active.contains(key), last_contact(group), group.order),
+                    key,
+                    workdir,
+                )
+            })
         })
-        .min_by_key(|(order, ..)| *order)
+        .min_by_key(|(rank, ..)| *rank)
         .map(|(_, key, workdir)| (key.clone(), workdir.clone()))?;
     state.revision += 1;
     state.order += 1;
@@ -760,7 +831,7 @@ fn execute(job: &Job, inner: &Inner) -> Completion {
             name: remote.name,
         })
         .collect();
-    let (joins_fetched_group, skipped) = {
+    let (joins_fetched_group, skipped, spacing) = {
         let state = inner
             .state
             .lock()
@@ -775,16 +846,29 @@ fn execute(job: &Job, inner: &Inner) -> Completion {
                     .is_due(job.subscriber.settings.auto_fetch.interval, job.started)
             });
         let group = joined.or_else(|| state.groups.get(&job.group));
-        (
-            joins_fetched_group,
-            state.skipped_remotes(group, &remotes, job.started),
-        )
+        let skipped = state.skipped_remotes(group, &remotes, job.started);
+        let spacing = contacted(&remotes, &skipped)
+            .filter_map(|remote| state.contacts.get(remote.host.as_ref()?))
+            .map(|contacted| HOST_SPACING.saturating_sub(contacted.elapsed()))
+            .max()
+            .unwrap_or_default();
+        (joins_fetched_group, skipped, spacing)
     };
     if joins_fetched_group || (!remotes.is_empty() && skipped.len() == remotes.len()) {
         return Completion::Deferred {
             common_dir,
             key,
             remotes,
+        };
+    }
+    if let Err(error) = sleep_unless_cancelled(spacing, &job.cancellation) {
+        return Completion::Finished {
+            common_dir: Some(common_dir),
+            key: Some(key),
+            remotes,
+            skipped,
+            result: Err(error),
+            refs_changed: false,
         };
     }
     let Some(_lease) = inner
@@ -797,6 +881,16 @@ fn execute(job: &Job, inner: &Inner) -> Completion {
             remotes,
         };
     };
+    {
+        let mut state = inner
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let now = Instant::now();
+        for host in contacted(&remotes, &skipped).filter_map(|remote| remote.host.clone()) {
+            state.contacts.insert(host, now);
+        }
+    }
     let refs_before = repo.remote_refs_fingerprint(&job.cancellation).ok();
     let result = job.cancellation.check_cancelled().and_then(|()| {
         repo.fetch_all_background_except(
@@ -825,6 +919,47 @@ fn execute(job: &Job, inner: &Inner) -> Completion {
         result,
         refs_changed,
     }
+}
+
+/// The remotes a fetch that leaves out `skipped` contacts.
+fn contacted<'a>(
+    remotes: &'a [FetchRemote],
+    skipped: &'a [String],
+) -> impl Iterator<Item = &'a FetchRemote> {
+    remotes
+        .iter()
+        .filter(|remote| !skipped.contains(&remote.name))
+}
+
+fn sleep_unless_cancelled(duration: Duration, cancellation: &CancellationToken) -> Result<()> {
+    let deadline = Instant::now() + duration;
+    loop {
+        cancellation.check_cancelled()?;
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Ok(());
+        }
+        std::thread::sleep(remaining.min(SPACING_POLL));
+    }
+}
+
+/// When git last fetched into `workdir`. Git rewrites FETCH_HEAD on every
+/// fetch, including ones run outside GitComet.
+fn last_fetch_time(workdir: &Path) -> Option<SystemTime> {
+    let dot_git = workdir.join(".git");
+    let git_dir = match std::fs::read_to_string(&dot_git) {
+        // A linked worktree's `.git` file names its own Git directory.
+        Ok(link) => {
+            let target = Path::new(link.strip_prefix("gitdir:")?.trim());
+            workdir.join(target)
+        }
+        Err(_) if dot_git.is_dir() => dot_git,
+        Err(_) => workdir.to_path_buf(),
+    };
+    std::fs::metadata(git_dir.join("FETCH_HEAD"))
+        .ok()?
+        .modified()
+        .ok()
 }
 
 pub(super) fn repository_key(repo: &dyn GitRepository) -> PathBuf {
@@ -1050,6 +1185,8 @@ struct Schedule {
     completed: Option<SystemTime>,
     /// Consecutive failed fetches; each one stretches the next wait.
     failures: u32,
+    /// Launch grace: no fetch before this, whatever `completed` says.
+    not_before: Option<SystemTime>,
 }
 
 impl Schedule {
@@ -1058,14 +1195,19 @@ impl Schedule {
     }
 
     fn is_due(&self, interval: AutoFetchInterval, now: SystemTime) -> bool {
-        self.completed.is_none_or(|completed| {
-            now.duration_since(completed)
-                .map_or(true, |elapsed| elapsed >= self.wait(interval))
-        })
+        self.not_before.is_none_or(|not_before| now >= not_before)
+            && self.completed.is_none_or(|completed| {
+                now.duration_since(completed)
+                    .map_or(true, |elapsed| elapsed >= self.wait(interval))
+            })
     }
 
     fn due_at(&self, interval: AutoFetchInterval) -> Option<SystemTime> {
-        self.completed?.checked_add(self.wait(interval))
+        let due = self.completed?.checked_add(self.wait(interval))?;
+        Some(
+            self.not_before
+                .map_or(due, |not_before| due.max(not_before)),
+        )
     }
 
     fn finish(&mut self, now: SystemTime) {

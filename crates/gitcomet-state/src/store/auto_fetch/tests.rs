@@ -1,7 +1,7 @@
 use super::*;
 use gitcomet_core::test_support::UnconfiguredRepository;
 use std::sync::Mutex;
-use std::time::{Duration, UNIX_EPOCH};
+use std::time::{Duration, Instant, UNIX_EPOCH};
 
 mod incoming;
 
@@ -44,6 +44,7 @@ fn register(
             workdir: PathBuf::from(path),
             common_dir: Some(PathBuf::from(common)),
             repository: None,
+            active: false,
         }],
         RemoteSettings::default(),
         &(Arc::new(Backend) as Arc<dyn GitBackend>),
@@ -346,6 +347,7 @@ fn shutdown_cancels_and_waits_for_active_backend_cleanup() {
             workdir: PathBuf::from("/gated"),
             common_dir: None,
             repository: None,
+            active: false,
         }],
         settings,
         &backend,
@@ -621,6 +623,7 @@ fn fetches_that_move_no_refs_refresh_only_tabs_that_never_loaded() {
                 workdir: clone.clone(),
                 common_dir: None,
                 repository: None,
+                active: false,
             }],
             RemoteSettings::default(),
             &backend,
@@ -800,6 +803,7 @@ fn an_unreachable_host_is_contacted_once_until_its_block_expires() {
                 workdir: workdir.clone(),
                 common_dir: None,
                 repository: None,
+                active: false,
             }],
             RemoteSettings::default(),
             &backend,
@@ -852,6 +856,168 @@ fn an_unreachable_host_is_contacted_once_until_its_block_expires() {
         run(expired).is_none(),
         "the failed probe blocks the host again"
     );
+}
+
+#[test]
+fn a_repository_fetched_recently_waits_but_loads_its_last_count_at_once() {
+    let (_temp, _source, clone, _latest) = remote_fixture();
+    git(&clone, &["fetch", "-q"]);
+    let linked = clone.parent().unwrap().join("linked");
+    git(
+        &clone,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "linked",
+            linked.to_str().unwrap(),
+        ],
+    );
+    assert!(last_fetch_time(&clone).is_some());
+    assert!(last_fetch_time(&linked).is_none(), "its own FETCH_HEAD");
+    git(&linked, &["fetch", "-q"]);
+    assert!(last_fetch_time(&linked).is_some());
+
+    let refreshed = Arc::new(Mutex::new(Vec::new()));
+    let sink: EventSink = {
+        let refreshed = Arc::clone(&refreshed);
+        Arc::new(move |event| {
+            if let Event::Refresh { lifetime, .. } = event {
+                refreshed.lock().unwrap().push(lifetime);
+            }
+        })
+    };
+    let coordinator = AutoFetchCoordinator::new();
+    let lifetime = RepoLifetime::allocate();
+    let mut settings = RemoteSettings::default();
+    settings.auto_fetch.enabled = true;
+    coordinator.sync(
+        1,
+        vec![Registration {
+            repo_id: RepoId(1),
+            lifetime,
+            workdir: clone.clone(),
+            common_dir: None,
+            repository: None,
+            active: false,
+        }],
+        settings,
+        &(Arc::new(gitcomet_git_gix::GixBackend) as Arc<dyn GitBackend>),
+        sink,
+    );
+    assert_eq!(*refreshed.lock().unwrap(), [lifetime]);
+    let mut state = coordinator.inner.state.lock().unwrap();
+    assert!(next_job(&mut state, coordinator.admission(), SystemTime::now()).is_none());
+    let later = SystemTime::now() + AutoFetchInterval::default().duration();
+    assert!(next_job(&mut state, coordinator.admission(), later).is_some());
+    drop(state);
+    coordinator.shutdown();
+}
+
+#[test]
+fn repositories_restored_at_launch_wait_out_the_grace_period() {
+    let coordinator = AutoFetchCoordinator::with_startup_grace(Duration::from_secs(60));
+    register(&coordinator, 1, "/restored", "/restored/.git");
+    enable(&coordinator);
+    let now = SystemTime::now();
+    let mut state = coordinator.inner.state.lock().unwrap();
+    assert!(next_job(&mut state, coordinator.admission(), now).is_none());
+    // The grace covers launch only: a repository opened afterwards fetches.
+    state.grace_until = Some(UNIX_EPOCH);
+    drop(state);
+    register(&coordinator, 2, "/opened", "/opened/.git");
+    enable(&coordinator);
+    let mut state = coordinator.inner.state.lock().unwrap();
+    let job = next_job(&mut state, coordinator.admission(), now).unwrap();
+    assert_eq!(job.workdir, Path::new("/opened"));
+    finish(
+        &mut state,
+        &job,
+        Completion::Deferred {
+            common_dir: PathBuf::from("/opened/.git"),
+            key: GroupKey::Workdir(PathBuf::from("/opened")),
+            remotes: origin("example.com"),
+        },
+        now,
+    );
+    let after_grace = now + Duration::from_secs(61);
+    let job = next_job(&mut state, coordinator.admission(), after_grace).unwrap();
+    assert_eq!(job.workdir, Path::new("/restored"));
+}
+
+#[test]
+fn selected_tabs_fetch_first_then_the_least_recently_contacted_host() {
+    let coordinator = AutoFetchCoordinator::new();
+    for (store, path) in [(1, "/busy-host"), (2, "/quiet-host"), (3, "/selected")] {
+        let lifetime = RepoLifetime::allocate();
+        coordinator.sync(
+            store,
+            vec![Registration {
+                repo_id: RepoId(1),
+                lifetime,
+                workdir: PathBuf::from(path),
+                common_dir: Some(PathBuf::from(format!("{path}/.git"))),
+                repository: None,
+                active: path == "/selected",
+            }],
+            RemoteSettings::default(),
+            &(Arc::new(Backend) as Arc<dyn GitBackend>),
+            Arc::new(|_| {}),
+        );
+    }
+    enable(&coordinator);
+    let mut state = coordinator.inner.state.lock().unwrap();
+    for (path, host) in [
+        ("/busy-host", "busy.example"),
+        ("/quiet-host", "quiet.example"),
+        ("/selected", "busy.example"),
+    ] {
+        let key = state.entries[Path::new(path)].group.clone();
+        state.groups.get_mut(&key).unwrap().remotes = origin(host);
+    }
+    let earlier = Instant::now();
+    state.contacts.insert("quiet.example".into(), earlier);
+    state
+        .contacts
+        .insert("busy.example".into(), earlier + Duration::from_millis(1));
+    let mut order = Vec::new();
+    while let Some(job) = next_job(&mut state, coordinator.admission(), UNIX_EPOCH) {
+        order.push(job.workdir.clone());
+        finish(
+            &mut state,
+            &job,
+            Completion::Finished {
+                common_dir: None,
+                key: None,
+                remotes: Vec::new(),
+                skipped: Vec::new(),
+                result: Ok(CommandOutput::empty_success("git fetch --all")),
+                refs_changed: false,
+            },
+            UNIX_EPOCH,
+        );
+    }
+    assert_eq!(
+        order,
+        [
+            PathBuf::from("/selected"),
+            PathBuf::from("/quiet-host"),
+            PathBuf::from("/busy-host"),
+        ]
+    );
+}
+
+#[test]
+fn spacing_waits_end_early_when_the_fetch_is_cancelled() {
+    let cancellation = CancellationToken::new();
+    let started = Instant::now();
+    sleep_unless_cancelled(Duration::from_millis(120), &cancellation).unwrap();
+    assert!(started.elapsed() >= Duration::from_millis(120));
+    cancellation.cancel();
+    let started = Instant::now();
+    assert!(sleep_unless_cancelled(Duration::from_secs(10), &cancellation).is_err());
+    assert!(started.elapsed() < Duration::from_secs(1));
 }
 
 /// Counts remote contacts: every fetch runs the remote's upload-pack once.
@@ -925,6 +1091,7 @@ fn linked_worktrees_of_one_repository_contact_the_remote_once() {
             workdir,
             common_dir: None,
             repository: None,
+            active: false,
         })
         .collect();
     let lifetimes: Vec<_> = registrations.iter().map(|r| r.lifetime).collect();
@@ -974,6 +1141,7 @@ fn timing_auto_fetch_sync_with_many_tabs() {
                     "/nonexistent/workspace/repositories/repo-{ix}/.git"
                 ))),
                 repository: None,
+                active: false,
             })
             .collect::<Vec<_>>()
     };
@@ -988,6 +1156,7 @@ fn timing_auto_fetch_sync_with_many_tabs() {
                     workdir: registration.workdir.clone(),
                     common_dir: registration.common_dir.clone(),
                     repository: None,
+                    active: false,
                 })
                 .collect::<Vec<_>>()
         };

@@ -326,6 +326,7 @@ impl WorkerLoopContext<'_> {
                     .repository(&repo.id)
                     .map(|repository| Arc::as_ptr(repository).cast::<()>())
                     .hash(&mut inputs);
+                (state.active_repo == Some(repo.id)).hash(&mut inputs);
             }
             let inputs = inputs.finish();
             if *self.auto_fetch_inputs == Some(inputs) && self.thread_msg_tx.is_alive() {
@@ -339,6 +340,7 @@ impl WorkerLoopContext<'_> {
                     workdir: repo.spec.workdir.clone(),
                     common_dir: repo.common_dir.as_ref().map(|path| path.to_path_buf()),
                     repository: repos.repository(&repo.id).cloned(),
+                    active: state.active_repo == Some(repo.id),
                 })
                 .collect();
             (registrations, settings)

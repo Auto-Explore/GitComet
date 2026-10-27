@@ -1179,7 +1179,7 @@ impl SettingsWindowView {
             .ok()
             .and_then(AutoFetchInterval::new);
         let Some(interval) = interval else {
-            self.auto_fetch_interval_error = Some("Enter a whole number from 1 to 1,440 minutes.");
+            self.auto_fetch_interval_error = Some("Enter a whole number from 5 to 1,440 minutes.");
             cx.notify();
             return;
         };

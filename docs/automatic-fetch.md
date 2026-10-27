@@ -6,14 +6,18 @@ Automatic fetch keeps remote-tracking information current for repositories open 
 
 In **Settings → Remotes**, turn on **Automatically fetch repositories**. It is off
 by default. **Fetch interval (minutes)** starts at **30** and accepts whole numbers
-from **1 to 1,440**. Press Enter or leave the field to save a valid value. Invalid
-input leaves the saved interval unchanged. The interval is remembered while
-automatic fetching is off.
+from **5 to 1,440**. An interval saved below 5 minutes by an earlier version
+becomes 5. Press Enter or leave the field to save a valid value. Invalid input
+leaves the saved interval unchanged. The interval is remembered while automatic
+fetching is off.
 
 The setting applies to every open workspace window. Enabling it queues a fetch
 for repositories already open. Opening or restoring a repository also queues a
-fetch, including tabs that have not been selected. Fetches continue while the
-app is minimized. Saved workspaces whose windows are closed do not participate.
+fetch, including tabs that have not been selected, unless Git fetched it within
+the interval, including from the command line. Such a tab shows its last known
+incoming count instead. Repositories restored when GitComet starts wait a minute
+before their first automatic fetch. Fetches continue while the app is minimized.
+Saved workspaces whose windows are closed do not participate.
 
 ## Fetch behavior
 
@@ -22,7 +26,9 @@ as **Fetch all**. It updates remote information without initiating pull, merge,
 rebase, or checkout. The existing pruning safeguards for local branches and tags
 also apply.
 
-Fetches run one repository at a time. Multiple windows showing the same folder
+Fetches run one repository at a time, the selected tab's repository first.
+Fetches to the same server start at least two seconds apart, and servers that
+were contacted least recently go first. Multiple windows showing the same folder
 share one schedule. Linked worktrees of one repository share one fetch and one
 schedule, because a fetch from any of them updates the same remote-tracking
 branches. A worktree whose own Git configuration fetches different remotes or

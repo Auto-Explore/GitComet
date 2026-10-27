@@ -110,7 +110,7 @@ fn automatic_fetch_interval_commits_on_enter_or_blur_and_rejects_invalid_values(
         })
         .expect("committed interval");
 
-    for invalid in ["0", "1441", "1.5", "", "minutes"] {
+    for invalid in ["0", "4", "1441", "1.5", "", "minutes"] {
         settings
             .update(&mut settings_cx, |settings, window, cx| {
                 settings.auto_fetch_interval_input.update(cx, |input, cx| {
@@ -127,7 +127,7 @@ fn automatic_fetch_interval_commits_on_enter_or_blur_and_rejects_invalid_values(
                 assert_eq!(settings.auto_fetch.interval.minutes(), 7);
                 assert_eq!(
                     settings.auto_fetch_interval_error,
-                    Some("Enter a whole number from 1 to 1,440 minutes.")
+                    Some("Enter a whole number from 5 to 1,440 minutes.")
                 );
                 assert_eq!(
                     settings

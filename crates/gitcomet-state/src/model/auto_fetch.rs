@@ -7,8 +7,15 @@ use std::time::{Duration, SystemTime};
 pub struct AutoFetchInterval(u16);
 
 impl AutoFetchInterval {
+    /// Shorter intervals add little freshness for the remote load they cause
+    /// when many repositories are open.
+    pub const MIN_MINUTES: u16 = 5;
+    pub const MAX_MINUTES: u16 = 1440;
+
     pub fn new(minutes: u16) -> Option<Self> {
-        (1..=1440).contains(&minutes).then_some(Self(minutes))
+        (Self::MIN_MINUTES..=Self::MAX_MINUTES)
+            .contains(&minutes)
+            .then_some(Self(minutes))
     }
 
     pub fn minutes(self) -> u16 {
@@ -29,7 +36,13 @@ impl Default for AutoFetchInterval {
 impl<'de> Deserialize<'de> for AutoFetchInterval {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let minutes = u16::deserialize(deserializer)?;
-        Self::new(minutes).ok_or_else(|| serde::de::Error::custom("expected 1–1440 minutes"))
+        // Intervals saved before the minimum rose keep the closest allowed one.
+        let minutes = if minutes == 0 {
+            minutes
+        } else {
+            minutes.max(Self::MIN_MINUTES)
+        };
+        Self::new(minutes).ok_or_else(|| serde::de::Error::custom("expected 5–1440 minutes"))
     }
 }
 
@@ -83,14 +96,15 @@ mod tests {
                 "{invalid}"
             );
         }
-        for minutes in [1, 30, 1440] {
-            let interval = serde_json::from_str::<AutoFetchInterval>(&minutes.to_string()).unwrap();
+        for (saved, minutes) in [(1, 5), (4, 5), (5, 5), (30, 30), (1440, 1440)] {
+            let interval = serde_json::from_str::<AutoFetchInterval>(&saved.to_string()).unwrap();
             assert_eq!(interval.minutes(), minutes);
             assert_eq!(
                 serde_json::to_string(&interval).unwrap(),
                 minutes.to_string()
             );
         }
+        assert_eq!(AutoFetchInterval::new(4), None);
         assert!(!AutoFetchSettings::default().enabled);
         assert_eq!(AutoFetchSettings::default().interval.minutes(), 30);
     }
