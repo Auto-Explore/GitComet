@@ -27,9 +27,11 @@ fn interpret_initialize_repository_output(
 }
 
 fn initialize_repository(path: &std::path::Path) -> Result<(), String> {
-    let output = initialize_repository_command(path)
-        .output()
-        .map_err(|err| format!("Could not start Git: {err}"))?;
+    let output = gitcomet_core::git_execution_log::command_output(
+        initialize_repository_command(path),
+        "Initialize repository",
+    )
+    .map_err(|err| format!("Could not start Git: {err}"))?;
 
     interpret_initialize_repository_output(
         output.status.success(),

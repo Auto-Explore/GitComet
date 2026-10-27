@@ -983,15 +983,26 @@ impl super::GixRepo {
         cmd.stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null());
+        let mut execution = gitcomet_core::git_execution_log::ExecutionGuard::command_in(
+            &self.execution_log_key,
+            &cmd,
+            "Start git-annex webapp",
+        );
         let mut child = cmd.spawn().map_err(|e| {
-            backend(format!("could not start git annex webapp: {e}"))
+            let error = backend(format!("could not start git annex webapp: {e}"))
                 .with_source(e)
-                .with_context("start git annex webapp", Some(Path::new(cmd.get_program())))
+                .with_context("start git annex webapp", Some(Path::new(cmd.get_program())));
+            execution.finish_result::<()>(&Err(error.clone()));
+            error
         })?;
         std::thread::Builder::new()
             .name("git-annex-webapp".into())
             .spawn(move || {
-                let _ = child.wait();
+                let result = child.wait();
+                if let Ok(status) = &result {
+                    execution.exited(*status, false);
+                }
+                execution.finish_io(&result);
             })
             .map_err(Error::from)?;
         Ok(CommandOutput {

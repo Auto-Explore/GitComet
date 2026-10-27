@@ -9,7 +9,7 @@ use output::{METADATA_LIMIT, OutputBuffer, OutputPreview, bounded_text, sanitize
 use std::collections::{HashMap, VecDeque};
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
-use std::process::{Command, ExitStatus};
+use std::process::{Command, ExitStatus, Output};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock, Mutex, Weak};
 use std::time::{Duration, Instant, SystemTime};
@@ -17,7 +17,7 @@ use std::time::{Duration, Instant, SystemTime};
 const ENTRY_LIMIT: usize = 100;
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
-pub struct RepoLogKey(PathBuf);
+pub struct RepoLogKey(Arc<Path>);
 
 impl RepoLogKey {
     pub fn new(path: &Path) -> Self {
@@ -33,11 +33,16 @@ impl RepoLogKey {
             };
             ancestor = parent;
         }
+        let ancestor = if ancestor.as_os_str().is_empty() {
+            Path::new(".")
+        } else {
+            ancestor
+        };
         let mut root = crate::path_utils::canonicalize_or_original(ancestor.to_path_buf());
         for name in missing.into_iter().rev() {
             root.push(name);
         }
-        Self(root)
+        Self(root.into())
     }
 
     pub fn path(&self) -> &Path {
@@ -418,7 +423,30 @@ impl ExecutionGuard {
         }
         let key = directory
             .as_deref()
-            .map(RepoLogKey::new)
+            .map(|directory| {
+                let directory_key = RepoLogKey::new(directory);
+                let metadata = directory.join("HEAD").is_file()
+                    && (directory.file_name().is_some_and(|name| name == ".git")
+                        || directory.join("commondir").is_file());
+                if metadata {
+                    if let Some(repository) = context::current().and_then(|ctx| ctx.repository) {
+                        let owned_directory =
+                            crate::path_utils::resolved_git_dir(repository.path())
+                                .map(|path| RepoLogKey::new(&path));
+                        if repository == directory_key
+                            || owned_directory.as_ref() == Some(&directory_key)
+                        {
+                            return repository;
+                        }
+                    }
+                    if directory.file_name().is_some_and(|name| name == ".git")
+                        && let Some(parent) = directory.parent()
+                    {
+                        return RepoLogKey::new(parent);
+                    }
+                }
+                directory_key
+            })
             .or_else(|| context::current().and_then(|ctx| ctx.repository));
         match key {
             Some(key) => Self::command_in(&key, command, issuer),
@@ -479,6 +507,21 @@ impl ExecutionGuard {
 
     pub fn output(&self) -> Option<OutputCapture> {
         self.capture.clone()
+    }
+
+    pub fn record_output(&self, output: &Output, accepted: bool) {
+        self.exited(output.status, accepted);
+        if let Some(capture) = &self.capture {
+            capture.append(GitOutputStream::Stdout, &output.stdout);
+            capture.append(GitOutputStream::Stderr, &output.stderr);
+        }
+    }
+
+    pub fn finish_io<T>(&mut self, result: &std::io::Result<T>) {
+        match result {
+            Ok(_) => self.finish_result::<()>(&Ok(())),
+            Err(error) => self.finish(ExecutionOutcome::Failed(error.to_string())),
+        }
     }
 
     pub fn exited(&self, status: ExitStatus, accepted: bool) {
@@ -563,6 +606,46 @@ fn outcome_from_error(error: &Error) -> ExecutionOutcome {
             METADATA_LIMIT / 4,
         )),
     }
+}
+
+pub fn command_output(mut command: Command, issuer: &str) -> std::io::Result<Output> {
+    let execution = ExecutionGuard::command(&command, issuer);
+    collect_command_output(&mut command, execution)
+}
+
+pub fn command_output_in(
+    repository: &RepoLogKey,
+    mut command: Command,
+    issuer: &str,
+) -> std::io::Result<Output> {
+    let execution = ExecutionGuard::command_in(repository, &command, issuer);
+    collect_command_output(&mut command, execution)
+}
+
+fn collect_command_output(
+    command: &mut Command,
+    mut execution: ExecutionGuard,
+) -> std::io::Result<Output> {
+    let result = command.output();
+    if let Ok(output) = &result {
+        execution.record_output(output, false);
+    }
+    execution.finish_io(&result);
+    result
+}
+
+pub fn command_status(
+    mut command: Command,
+    issuer: &str,
+    allow_exit_code_one: bool,
+) -> std::io::Result<ExitStatus> {
+    let mut execution = ExecutionGuard::command(&command, issuer);
+    let result = command.status();
+    if let Ok(status) = &result {
+        execution.exited(*status, allow_exit_code_one && status.code() == Some(1));
+    }
+    execution.finish_io(&result);
+    result
 }
 
 #[track_caller]

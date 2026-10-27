@@ -53,11 +53,12 @@ fn read_git_config_values_at_repo(repo_root: &Path, keys: &[&str]) -> Vec<(Strin
             .collect::<Vec<_>>()
             .join("|")
     );
-    git_command()
+    let mut command = git_command();
+    command
         .arg("-C")
         .arg(repo_root)
-        .args(["config", "--get-regexp", &pattern])
-        .output()
+        .args(["config", "--get-regexp", &pattern]);
+    gitcomet_core::git_execution_log::command_output(command, "Read repository configuration")
         .ok()
         .filter(|o| o.status.success())
         .and_then(|o| decode_git_text_stdout(&o.stdout))
@@ -73,14 +74,63 @@ fn read_git_config_values_at_repo(repo_root: &Path, keys: &[&str]) -> Vec<(Strin
 }
 
 fn git_repo_toplevel_from_probe_dir(probe_dir: &Path) -> Option<PathBuf> {
-    git_command()
+    let mut command = git_command();
+    command
         .arg("-C")
         .arg(probe_dir)
-        .args(["rev-parse", "--show-toplevel"])
-        .output()
+        .args(["rev-parse", "--show-toplevel"]);
+    let absolute_probe =
+        gitcomet_core::path_utils::canonicalize_or_original(probe_dir.to_path_buf());
+    let owner = crate::git_root::find_git_root(&absolute_probe).unwrap_or(absolute_probe);
+    let key = gitcomet_core::git_execution_log::RepoLogKey::new(&owner);
+    gitcomet_core::git_execution_log::command_output_in(&key, command, "Discover repository root")
         .ok()
         .filter(|o| o.status.success())
         .and_then(|o| decode_git_path_stdout(&o.stdout))
+}
+
+#[cfg(test)]
+mod command_log_tests {
+    use super::*;
+
+    #[test]
+    fn relative_discovery_from_the_crate_directory_uses_the_repository_history() {
+        use gitcomet_core::git_execution_log::{GitExecutionLog, RepoLogKey};
+        let discovered = git_repo_toplevel_from_probe_dir(Path::new(".")).unwrap();
+        let key = RepoLogKey::new(&discovered);
+        let entries = GitExecutionLog::global().snapshot(&key);
+        assert!(
+            entries.iter().any(|entry| entry.command.contains("\".\"")
+                && entry.command.contains("--show-toplevel"))
+        );
+        assert_ne!(key, RepoLogKey::new(Path::new(".")));
+    }
+
+    #[test]
+    fn discovery_from_a_subdirectory_uses_the_repository_history() {
+        use gitcomet_core::git_execution_log::{GitExecutionLog, RepoLogKey};
+        let root = tempfile::tempdir().unwrap();
+        assert!(
+            gitcomet_core::test_support::git_fixture::git_command()
+                .current_dir(root.path())
+                .args(["init", "--quiet"])
+                .status()
+                .unwrap()
+                .success()
+        );
+        let child = root.path().join("src/nested");
+        std::fs::create_dir_all(&child).unwrap();
+        let discovered = git_repo_toplevel_from_probe_dir(&child).unwrap();
+        assert_eq!(RepoLogKey::new(&discovered), RepoLogKey::new(root.path()));
+        let entries = GitExecutionLog::global().snapshot(&RepoLogKey::new(root.path()));
+        assert_eq!(entries.len(), 1);
+        assert!(entries[0].command.contains("--show-toplevel"));
+        assert!(
+            GitExecutionLog::global()
+                .snapshot(&RepoLogKey::new(&child))
+                .is_empty()
+        );
+    }
 }
 
 fn resolve_git_repo_root_from_path(path: &Path) -> Option<PathBuf> {

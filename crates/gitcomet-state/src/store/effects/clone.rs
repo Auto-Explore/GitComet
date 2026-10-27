@@ -306,6 +306,8 @@ pub(super) fn schedule_clone_repo(
             .stderr(Stdio::piped())
             .stdin(Stdio::null())
             .env("GIT_TERMINAL_PROMPT", "0");
+        let key = gitcomet_core::git_execution_log::RepoLogKey::new(&dest);
+        let mut execution = gitcomet_core::git_execution_log::ExecutionGuard::command_in(&key, &cmd, "Clone repository");
 
         let (askpass_script, prompt_auth) = match (|| {
             let auth = resolve_git_auth(auth);
@@ -317,6 +319,7 @@ pub(super) fn schedule_clone_repo(
         })() {
             Ok(context) => context,
             Err(err) => {
+                execution.finish_result::<()>(&Err(err.clone()));
                 send_or_log(
                     &msg_tx,
                     Msg::Internal(crate::msg::InternalMsg::CloneRepoFinished {
@@ -336,6 +339,7 @@ pub(super) fn schedule_clone_repo(
             Err(e) => {
                 let err = Error::from(e)
                     .with_context("start git clone", Some(Path::new(cmd.get_program())));
+                execution.finish_result::<()>(&Err(err.clone()));
                 send_or_log(
                     &msg_tx,
                     Msg::Internal(crate::msg::InternalMsg::CloneRepoFinished {
@@ -354,17 +358,20 @@ pub(super) fn schedule_clone_repo(
         // silence, so a clone that keeps reporting progress is never killed.
         let start = Instant::now();
         let last_activity = Arc::new(AtomicU64::new(0));
+        let stdout_capture = execution.output();
         let stdout_handle = std::thread::spawn(move || {
             let mut buf = Vec::new();
             if let Some(mut stdout) = stdout {
                 let _ = stdout.read_to_end(&mut buf);
             }
+            if let Some(capture) = stdout_capture { capture.append(gitcomet_core::git_operation::GitOutputStream::Stdout, &buf); }
             bytes_to_text_preserving_utf8(&buf)
         });
 
         let progress_dest = Arc::new(dest.clone());
         let progress_tx = msg_tx.clone();
         let stderr_activity = Arc::clone(&last_activity);
+        let stderr_capture = execution.output();
         let stderr_handle = std::thread::spawn(move || {
             let mut stderr_bytes = Vec::new();
             let mut pending = Vec::new();
@@ -378,6 +385,7 @@ pub(super) fn schedule_clone_repo(
                                 u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX);
                             stderr_activity.fetch_max(millis, Ordering::Relaxed);
                             let chunk = &buf[..n];
+                            if let Some(capture) = &stderr_capture { capture.append(gitcomet_core::git_operation::GitOutputStream::Stderr, chunk); }
                             stderr_bytes.extend_from_slice(chunk);
                             pending.extend_from_slice(chunk);
                             for line in take_clone_progress_fragments(&mut pending, false) {
@@ -450,6 +458,7 @@ pub(super) fn schedule_clone_repo(
         };
         append_host_prompt_to_stderr(&mut stderr_bytes, &askpass_script);
         let stderr_acc = bytes_to_text_preserving_utf8(&stderr_bytes);
+        if let Ok(status) = &status { execution.exited(*status, false); }
 
         let mut result = match status {
             Ok(status) => {
@@ -497,6 +506,10 @@ pub(super) fn schedule_clone_repo(
             }
 
         let ok = result.is_ok();
+        use gitcomet_core::git_execution_log::ExecutionOutcome;
+        if timed_out { execution.finish(ExecutionOutcome::TimedOut); }
+        else if result.is_err() && active_clone.cancel_requested() { execution.finish(ExecutionOutcome::Cancelled); }
+        else { execution.finish_result(&result); }
         send_or_log(
             &msg_tx,
             Msg::Internal(crate::msg::InternalMsg::CloneRepoFinished {

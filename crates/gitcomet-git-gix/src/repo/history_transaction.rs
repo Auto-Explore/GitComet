@@ -87,6 +87,7 @@ fn valid_updates(updates: &[RefUpdate]) -> Result<String> {
 /// Owns the prepared ref locks. Closing stdin aborts Git's transaction;
 /// every early return also reaps the process before releasing this guard.
 struct RefTransaction {
+    execution: gitcomet_core::git_execution_log::ExecutionGuard,
     child: Option<Child>,
     stdin: Option<ChildStdin>,
     // Git acknowledges commit/abort on stdout. Keep the reader alive until
@@ -101,111 +102,162 @@ impl RefTransaction {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+        let mut execution = gitcomet_core::git_execution_log::ExecutionGuard::command(
+            &command,
+            "Git reference transaction",
+        );
         let child = command.spawn().map_err(|e| {
-            failed(e.to_string()).with_source(e).with_context(
+            let error = failed(e.to_string()).with_source(e).with_context(
                 "start Git reference transaction",
                 Some(Path::new(command.get_program())),
-            )
+            );
+            execution.finish_result::<()>(&Err(error.clone()));
+            error
         })?;
         let mut transaction = Self {
+            execution,
             child: Some(child),
             stdin: None,
             stdout: None,
         };
-        let child = transaction
-            .child
-            .as_mut()
-            .expect("transaction owns its child");
-        transaction.stdin = child.stdin.take();
-        transaction.stdout = Some(BufReader::new(
-            child
-                .stdout
-                .take()
-                .ok_or_else(|| failed("Missing transaction output"))?,
-        ));
-        let stdin = transaction
-            .stdin
-            .as_mut()
-            .ok_or_else(|| failed("Missing transaction input"))?;
-        stdin
-            .write_all(format!("start\n{input}prepare\n").as_bytes())
-            .map_err(|e| {
-                failed(e.to_string())
-                    .with_source(e)
-                    .with_context("write Git reference transaction preparation", None)
-            })?;
-        stdin.flush().map_err(|e| {
-            failed(e.to_string())
-                .with_source(e)
-                .with_context("flush Git reference transaction preparation", None)
-        })?;
-        for expected in ["start: ok", "prepare: ok"] {
-            let mut line = String::new();
-            transaction
-                .stdout
+        let result = (|| {
+            let child = transaction
+                .child
                 .as_mut()
-                .expect("transaction owns stdout")
-                .read_line(&mut line)
+                .expect("transaction owns its child");
+            transaction.stdin = child.stdin.take();
+            transaction.stdout = Some(BufReader::new(
+                child
+                    .stdout
+                    .take()
+                    .ok_or_else(|| failed("Missing transaction output"))?,
+            ));
+            let stdin = transaction
+                .stdin
+                .as_mut()
+                .ok_or_else(|| failed("Missing transaction input"))?;
+            stdin
+                .write_all(format!("start\n{input}prepare\n").as_bytes())
                 .map_err(|e| {
                     failed(e.to_string())
                         .with_source(e)
-                        .with_context("read Git reference transaction acknowledgement", None)
+                        .with_context("write Git reference transaction preparation", None)
                 })?;
-            if line.trim() != expected {
-                transaction.stdin.take();
-                let output = transaction
-                    .child
-                    .take()
-                    .expect("transaction owns its child")
-                    .wait_with_output()
+            stdin.flush().map_err(|e| {
+                failed(e.to_string())
+                    .with_source(e)
+                    .with_context("flush Git reference transaction preparation", None)
+            })?;
+            for expected in ["start: ok", "prepare: ok"] {
+                let mut line = String::new();
+                transaction
+                    .stdout
+                    .as_mut()
+                    .expect("transaction owns stdout")
+                    .read_line(&mut line)
                     .map_err(|e| {
                         failed(e.to_string())
                             .with_source(e)
-                            .with_context("wait for rejected Git reference transaction", None)
+                            .with_context("read Git reference transaction acknowledgement", None)
                     })?;
-                return Err(failed(String::from_utf8_lossy(&output.stderr)));
+                if let Some(capture) = transaction.execution.output() {
+                    capture.append(
+                        gitcomet_core::git_operation::GitOutputStream::Stdout,
+                        line.as_bytes(),
+                    );
+                }
+                if line.trim() != expected {
+                    transaction.stdin.take();
+                    let output = transaction
+                        .child
+                        .take()
+                        .expect("transaction owns its child")
+                        .wait_with_output()
+                        .map_err(|e| {
+                            failed(e.to_string())
+                                .with_source(e)
+                                .with_context("wait for rejected Git reference transaction", None)
+                        })?;
+                    transaction.execution.record_output(&output, false);
+                    let error = failed(String::from_utf8_lossy(&output.stderr));
+                    return Err(error);
+                }
             }
+            Ok(())
+        })();
+        if let Err(error) = result {
+            transaction.reap();
+            transaction
+                .execution
+                .finish_result::<()>(&Err(error.clone()));
+            return Err(error);
         }
         Ok(transaction)
     }
 
     fn commit(mut self) -> Result<()> {
-        self.stdin
-            .as_mut()
-            .expect("prepared transaction has stdin")
-            .write_all(b"commit\n")
-            .map_err(|e| {
-                failed(e.to_string())
-                    .with_source(e)
-                    .with_context("write Git reference transaction commit", None)
-            })?;
-        self.stdin.take();
-        let output = self
-            .child
-            .take()
-            .expect("transaction owns its child")
-            .wait_with_output()
-            .map_err(|e| {
-                failed(e.to_string())
-                    .with_source(e)
-                    .with_context("wait for Git reference transaction commit", None)
-            })?;
-        if !output.status.success() {
-            return Err(failed(format!(
-                "Ref transaction needs recovery: {}",
-                String::from_utf8_lossy(&output.stderr)
-            )));
+        let result = (|| {
+            self.stdin
+                .as_mut()
+                .expect("prepared transaction has stdin")
+                .write_all(b"commit\n")
+                .map_err(|e| {
+                    failed(e.to_string())
+                        .with_source(e)
+                        .with_context("write Git reference transaction commit", None)
+                })?;
+            self.stdin.take();
+            let output = self
+                .child
+                .take()
+                .expect("transaction owns its child")
+                .wait_with_output()
+                .map_err(|e| {
+                    failed(e.to_string())
+                        .with_source(e)
+                        .with_context("wait for Git reference transaction commit", None)
+                })?;
+            self.execution.record_output(&output, false);
+            if output.status.success()
+                && let Some(stdout) = self.stdout.as_mut()
+            {
+                let mut acknowledgement = String::new();
+                let _ = stdout.read_line(&mut acknowledgement);
+                if let Some(capture) = self.execution.output() {
+                    capture.append(
+                        gitcomet_core::git_operation::GitOutputStream::Stdout,
+                        acknowledgement.as_bytes(),
+                    );
+                }
+            }
+            if !output.status.success() {
+                return Err(failed(format!(
+                    "Ref transaction needs recovery: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                )));
+            }
+            Ok(())
+        })();
+        if result.is_err() {
+            self.reap();
         }
-        Ok(())
+        self.execution.finish_result(&result);
+        result
+    }
+
+    fn reap(&mut self) {
+        self.stdin.take();
+        if let Some(mut child) = self.child.take()
+            && let Ok(status) = child.wait()
+        {
+            self.execution.exited(status, false);
+        }
     }
 }
 
 impl Drop for RefTransaction {
     fn drop(&mut self) {
-        self.stdin.take();
-        if let Some(mut child) = self.child.take() {
-            let _ = child.wait();
-        }
+        self.reap();
     }
 }
 
@@ -232,14 +284,17 @@ impl GixRepo {
             range.upstream.as_ref(),
             range.expected_head.as_ref(),
         ]);
-        if !ancestry
-            .status()
-            .map_err(|e| {
-                failed(e.to_string())
-                    .with_source(e)
-                    .with_context("check rebase ancestry", Some(&self.spec.workdir))
-            })?
-            .success()
+        if !gitcomet_core::git_execution_log::command_status(
+            ancestry,
+            "Check rebase ancestry",
+            true,
+        )
+        .map_err(|e| {
+            failed(e.to_string())
+                .with_source(e)
+                .with_context("check rebase ancestry", Some(&self.spec.workdir))
+        })?
+        .success()
         {
             return Err(failed(
                 "The replay boundary is not an ancestor of the prepared head",
@@ -405,14 +460,17 @@ impl GixRepo {
                     ]);
                     let mut untracked = git_workdir_cmd_for(path);
                     untracked.args(["ls-files", "--others", "--exclude-standard"]);
-                    if !tracked
-                        .status()
-                        .map_err(|e| {
-                            failed(e.to_string())
-                                .with_source(e)
-                                .with_context("check worktree recovery changes", Some(path))
-                        })?
-                        .success()
+                    if !gitcomet_core::git_execution_log::command_status(
+                        tracked,
+                        "Check worktree recovery changes",
+                        true,
+                    )
+                    .map_err(|e| {
+                        failed(e.to_string())
+                            .with_source(e)
+                            .with_context("check worktree recovery changes", Some(path))
+                    })?
+                    .success()
                         || !run_git_capture(untracked, "git recovery untracked files")?.is_empty()
                     {
                         return Err(failed("Recovery found unsaved files; files were preserved"));
@@ -612,11 +670,23 @@ mod tests {
         }])
         .unwrap();
         let transaction = RefTransaction::prepare(git_workdir_cmd_for(d.path()), &input).unwrap();
+        let key = gitcomet_core::git_execution_log::RepoLogKey::new(d.path());
+        assert!(matches!(
+            gitcomet_core::git_execution_log::GitExecutionLog::global().snapshot(&key)[0].state,
+            gitcomet_core::git_execution_log::ExecutionState::Running
+        ));
         assert_eq!(
             git(d.path(), &["rev-parse", "refs/heads/main"]),
             old.as_ref()
         );
         drop(transaction);
+        assert!(matches!(
+            gitcomet_core::git_execution_log::GitExecutionLog::global().snapshot(&key)[0].state,
+            gitcomet_core::git_execution_log::ExecutionState::Finished {
+                outcome: gitcomet_core::git_execution_log::ExecutionOutcome::Interrupted,
+                ..
+            }
+        ));
         git(
             d.path(),
             &["update-ref", "refs/heads/main", new.as_ref(), old.as_ref()],
@@ -624,6 +694,42 @@ mod tests {
         assert_eq!(
             git(d.path(), &["rev-parse", "refs/heads/main"]),
             new.as_ref()
+        );
+    }
+
+    #[test]
+    fn execution_journal_completes_reference_transaction_with_real_exit_status() {
+        use gitcomet_core::git_execution_log::{
+            ExecutionOutcome, ExecutionState, GitExecutionLog, RepoLogKey,
+        };
+        let root = fixture();
+        let key = RepoLogKey::new(root.path());
+        let target = id(git(root.path(), &["rev-parse", "HEAD"]));
+        let input = valid_updates(&[RefUpdate {
+            reference: "refs/heads/journal-test".into(),
+            expected: None,
+            new: target.clone(),
+        }])
+        .unwrap();
+        let transaction =
+            RefTransaction::prepare(git_workdir_cmd_for(root.path()), &input).unwrap();
+        transaction.commit().unwrap();
+        let entry = GitExecutionLog::global().snapshot(&key).remove(0);
+        assert_eq!(entry.exit_code, Some(0));
+        assert!(matches!(
+            entry.state,
+            ExecutionState::Finished {
+                outcome: ExecutionOutcome::Success,
+                ..
+            }
+        ));
+        assert!(entry.command.contains("--stdin"));
+        assert!(entry.stdout.text.contains("prepare: ok"));
+        assert!(entry.stdout.text.contains("commit: ok"));
+        assert!(!entry.details().contains("journal-test"));
+        assert_eq!(
+            git(root.path(), &["rev-parse", "refs/heads/journal-test"]),
+            target.as_ref()
         );
     }
 

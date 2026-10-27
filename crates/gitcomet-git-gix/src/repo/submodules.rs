@@ -1550,7 +1550,11 @@ fn remove_local_submodule_config_section_if_present(
         .arg("--local")
         .arg("--remove-section")
         .arg(&section);
-    let output = cmd.output().map_err(Error::from)?;
+    let output = gitcomet_core::git_execution_log::command_output(
+        cmd,
+        "Remove local submodule configuration",
+    )
+    .map_err(Error::from)?;
     if output.status.success() {
         return Ok(());
     }
@@ -1915,7 +1919,9 @@ fn git_config_get_bool_global(trust_root: &Path, key: &str) -> Result<Option<boo
         .arg("--get")
         .arg(key);
 
-    let output = cmd.output().map_err(Error::from)?;
+    let output =
+        gitcomet_core::git_execution_log::command_output(cmd, "Read submodule transport consent")
+            .map_err(Error::from)?;
 
     if output.status.success() {
         let value = bytes_to_text_preserving_utf8(&output.stdout);

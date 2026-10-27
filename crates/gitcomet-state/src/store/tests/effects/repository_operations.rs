@@ -599,6 +599,10 @@ fn safe_push_after_commit_effect_carries_auth_to_finished_message() {
 
 #[test]
 fn clone_repo_effect_clones_local_repo_and_emits_finished_and_open_repo() {
+    use gitcomet_core::git_execution_log::context::{ExecutionContext, UiSurface};
+    use gitcomet_core::git_execution_log::{
+        ExecutionOutcome, ExecutionState, GitExecutionLog, RepoLogKey,
+    };
     struct Backend;
     impl GitBackend for Backend {
         fn open(&self, _path: &Path) -> std::result::Result<Arc<dyn GitRepository>, Error> {
@@ -618,6 +622,9 @@ fn clone_repo_effect_clones_local_repo_and_emits_finished_and_open_repo() {
 
     let src = base.join("src");
     let dest = base.join("dest");
+    let log_key = RepoLogKey::new(&dest);
+    let cause = ExecutionContext::ui(UiSurface::Button, "clone repository");
+    let _execution_scope = cause.attach();
     let _ = std::fs::create_dir_all(&src);
 
     run_git(&src, &["init"]);
@@ -683,6 +690,19 @@ fn clone_repo_effect_clones_local_repo_and_emits_finished_and_open_repo() {
     assert!(saw_finished_ok, "did not observe CloneRepoFinished");
     assert!(saw_open_repo, "did not observe OpenRepo after clone");
     assert!(dest.join(".git").exists(), "expected .git at cloned dest");
+    assert_eq!(RepoLogKey::new(&dest), log_key);
+    let entry = GitExecutionLog::global().snapshot(&log_key).remove(0);
+    assert_eq!(entry.context.action_id, cause.action_id);
+    assert_eq!(entry.exit_code, Some(0));
+    assert!(entry.command.contains("clone"));
+    assert!(entry.stderr.text.contains("Cloning into"));
+    assert!(matches!(
+        entry.state,
+        ExecutionState::Finished {
+            outcome: ExecutionOutcome::Success,
+            ..
+        }
+    ));
 }
 
 #[test]

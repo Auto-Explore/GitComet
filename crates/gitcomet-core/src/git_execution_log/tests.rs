@@ -247,6 +247,117 @@ fn subcommand_options_and_filenames_do_not_change_repository_identity() {
 }
 
 #[test]
+fn metadata_directories_keep_owner_identity_but_nested_worktrees_are_separate() {
+    let root = tempfile::tempdir().unwrap();
+    let key = RepoLogKey::new(root.path());
+    std::fs::create_dir(root.path().join(".git")).unwrap();
+    std::fs::write(root.path().join(".git/HEAD"), "ref: refs/heads/main\n").unwrap();
+    let nested = root.path().join("nested");
+    std::fs::create_dir(&nested).unwrap();
+    let _scope = ExecutionContext::new(Origin::Unknown)
+        .for_repository(key.clone())
+        .attach();
+    let mut metadata = Command::new("git");
+    metadata.arg("-C").arg(root.path().join(".git")).args([
+        "config",
+        "--file",
+        "config",
+        "core.bare",
+    ]);
+    assert_eq!(
+        ExecutionGuard::command(&metadata, "metadata")
+            .context
+            .repository,
+        Some(key)
+    );
+    let mut child = Command::new("git");
+    child.arg("-C").arg(&nested).arg("status");
+    assert_eq!(
+        ExecutionGuard::command(&child, "nested").context.repository,
+        Some(RepoLogKey::new(&nested))
+    );
+}
+
+#[test]
+fn relative_destination_identity_survives_creating_the_directory() {
+    let directory = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
+    let relative = Path::new(directory.path().file_name().unwrap());
+    std::fs::remove_dir(directory.path()).unwrap();
+    let before = RepoLogKey::new(relative);
+    std::fs::create_dir(directory.path()).unwrap();
+    assert_eq!(before, RepoLogKey::new(directory.path()));
+}
+
+#[test]
+fn a_nested_repositorys_metadata_cannot_be_claimed_by_outer_context() {
+    let root = tempfile::tempdir().unwrap();
+    let nested = root.path().join("nested");
+    std::fs::create_dir(&nested).unwrap();
+    for directory in [root.path(), nested.as_path()] {
+        assert!(
+            crate::test_support::git_fixture::git_command()
+                .current_dir(directory)
+                .args(["init", "--quiet"])
+                .status()
+                .unwrap()
+                .success()
+        );
+    }
+    let owner = RepoLogKey::new(root.path());
+    let _scope = ExecutionContext::new(Origin::Unknown)
+        .for_repository(owner)
+        .attach();
+    let mut command = Command::new("git");
+    command
+        .arg("-C")
+        .arg(nested.join(".git"))
+        .args(["config", "--get", "core.bare"]);
+    assert_eq!(
+        ExecutionGuard::command(&command, "nested metadata")
+            .context
+            .repository,
+        Some(RepoLogKey::new(&nested))
+    );
+}
+
+#[test]
+fn direct_process_helpers_keep_captured_bytes_and_accepted_predicate_status() {
+    let root = tempfile::tempdir().unwrap();
+    let key = RepoLogKey::new(root.path());
+    let mut version = crate::test_support::git_fixture::git_command();
+    version.current_dir(root.path()).arg("--version");
+    let output = command_output(version, "direct version").unwrap();
+    assert_eq!(
+        GitExecutionLog::global().snapshot(&key)[0]
+            .stdout
+            .text
+            .as_bytes(),
+        output.stdout
+    );
+    std::fs::write(root.path().join("a"), "before\n").unwrap();
+    std::fs::write(root.path().join("b"), "after\n").unwrap();
+    let mut predicate = crate::test_support::git_fixture::git_command();
+    predicate
+        .current_dir(root.path())
+        .args(["diff", "--no-index", "--quiet", "--", "a", "b"]);
+    assert_eq!(
+        command_status(predicate, "compare predicate", true)
+            .unwrap()
+            .code(),
+        Some(1)
+    );
+    let entry = GitExecutionLog::global().snapshot(&key).remove(0);
+    assert_eq!(entry.exit_code, Some(1));
+    assert!(matches!(
+        entry.state,
+        ExecutionState::Finished {
+            outcome: ExecutionOutcome::Success,
+            ..
+        }
+    ));
+}
+
+#[test]
 fn concurrent_starts_are_ordered_by_their_assigned_sequence() {
     let log = GitExecutionLog::default();
     let root = tempfile::tempdir().unwrap();

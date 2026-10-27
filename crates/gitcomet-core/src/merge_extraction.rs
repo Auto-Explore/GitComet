@@ -492,15 +492,14 @@ fn read_blob_bytes_optional(
 
 fn run_git(repo: &Path, args: &[&str]) -> Result<Output, MergeExtractionError> {
     let mut command = git_command();
-    command
-        .args(args)
-        .current_dir(repo)
-        .output()
-        .map_err(|source| MergeExtractionError::Io {
+    command.args(args).current_dir(repo);
+    crate::git_execution_log::command_output(command, "Extract merge inputs").map_err(|source| {
+        MergeExtractionError::Io {
             action: "run git command in",
             path: repo.to_path_buf(),
             source,
-        })
+        }
+    })
 }
 
 fn write_text_file(path: &Path, contents: &str) -> Result<(), MergeExtractionError> {
