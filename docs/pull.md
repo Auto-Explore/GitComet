@@ -10,6 +10,10 @@ ref explicitly to Git. The local and upstream branch names may differ, and the
 repository may be a named remote, a URL, or `.` for another local branch. A
 missing tracking ref does not change which upstream is pulled.
 
+Pull remains available for a checked-out branch even when tracking refs or named
+remotes are absent. GitComet validates the current configuration when the operation
+starts, including local and URL upstreams.
+
 Pull into current uses its selected repository and `refs/heads/<branch>`.
 Neither action performs a preliminary Fetch All or pruning fetch. Both disable
 pruning even when Git's configuration enables it. Deleted upstreams fail without

@@ -3014,6 +3014,58 @@ fn a_failed_commit_step_offers_the_message() {
 }
 
 #[test]
+fn pull_lifecycle_retains_local_branch_without_tracking_metadata() {
+    let repo_id = RepoId(341);
+    let spec = RepoSpec {
+        workdir: unique_temp_path("gitcomet-pull-context-without-tracking"),
+    };
+    let repo: Arc<dyn GitRepository> = Arc::new(UnsupportedRepo {
+        spec: spec.clone(),
+        delete_branch_calls: None,
+        cancel_delete_branch: None,
+    });
+    let mut repos = RepositoryRuntimes::default();
+    repos.attach_repository_for_test(repo_id, repo);
+    let mut repo_state = RepoState::new_opening(repo_id, spec);
+    repo_state.set_head_branch(Loadable::Ready("topic".into()));
+    let backend: Arc<dyn GitBackend> = Arc::new(PanicOpenBackend);
+    let executor = super::super::executor::TaskExecutor::new(1);
+    let (msg_tx, msg_rx) = std::sync::mpsc::channel::<Msg>();
+    schedule_effect_with_state_for_test(
+        &executor,
+        &executor,
+        &backend,
+        &mut repos,
+        AppState {
+            repos: vec![repo_state],
+            ..AppState::test_default()
+        },
+        msg_tx,
+        Effect::RepoCommand(RepoCommandEffect::Pull {
+            repo_id,
+            mode: gitcomet_core::services::PullMode::Rebase,
+            auth: None,
+        }),
+    );
+    match msg_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("Pull should start its lifecycle")
+    {
+        Msg::Internal(crate::msg::InternalMsg::GitOperationStarted { label, context, .. }) => {
+            assert_eq!(label, "Pull");
+            assert_eq!(context.as_deref(), Some("topic · rebase"));
+        }
+        other => panic!("unexpected first Pull lifecycle message: {other:?}"),
+    }
+    assert!(matches!(
+        msg_rx.recv_timeout(Duration::from_secs(2)),
+        Ok(Msg::Internal(
+            crate::msg::InternalMsg::GitOperationFinished { .. }
+        ))
+    ));
+}
+
+#[test]
 fn push_lifecycle_uses_cached_tracking_branch_context() {
     let repo_id = RepoId(340);
     let spec = RepoSpec {

@@ -2187,7 +2187,7 @@ fn pull_and_push_picker_headers_include_tracking_branch_name(cx: &mut gpui::Test
 }
 
 #[gpui::test]
-fn pull_menu_disables_every_pull_mode_without_a_live_upstream(cx: &mut gpui::TestAppContext) {
+fn pull_menu_offers_every_mode_without_requiring_tracking_metadata(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -2198,9 +2198,6 @@ fn pull_menu_disables_every_pull_mode_without_a_live_upstream(cx: &mut gpui::Tes
         std::process::id()
     ));
 
-    // Returns every (label, disabled) entry of the Pull menu for a branch with
-    // the given upstream. A remote always exists, so `pull_request` alone would
-    // still offer the preferred-remote pull.
     let pull_entries = |cx: &mut gpui::VisualTestContext,
                         upstream: Option<gitcomet_core::domain::Upstream>|
      -> Vec<(String, bool)> {
@@ -2281,8 +2278,8 @@ fn pull_menu_disables_every_pull_mode_without_a_live_upstream(cx: &mut gpui::Tes
     let without_upstream = pull_entries(cx, None);
     assert_eq!(
         disabled_labels(&without_upstream, true),
-        pull_modes,
-        "every pull mode is disabled while the branch has no tracking branch"
+        Vec::<String>::new(),
+        "the backend resolves configured, local, URL, and automatic upstreams"
     );
     assert!(
         disabled_labels(&without_upstream, false)

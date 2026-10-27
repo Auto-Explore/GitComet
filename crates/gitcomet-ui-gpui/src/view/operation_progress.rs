@@ -5,8 +5,6 @@ use gitcomet_state::model::{GitHookOperation, GitHookOperationStatus, RepoId};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
-/// A card appears once git reports a meter, or once the operation has run
-/// this long, so a quick fetch or maintenance never flashes one.
 const SHOW_AFTER: Duration = Duration::from_secs(2);
 
 /// Git recommends maintenance for a repository; its card asks the user.

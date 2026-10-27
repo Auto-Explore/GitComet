@@ -130,11 +130,10 @@ fn live_upstream_requires_the_exact_loaded_remote_tracking_ref() {
 
     assert!(head_branch_has_live_upstream(&repo));
     assert!(pull_enabled(&repo, &Default::default()));
-    assert_eq!(pull_request(&repo, &Default::default()), PullRequest::Pull);
 }
 
 #[test]
-fn configured_but_unpushed_upstream_is_a_push_target_without_being_live() {
+fn configured_upstream_is_a_pull_and_push_target_without_a_tracking_ref() {
     let mut repo = repo_with_push_state(
         Some(Upstream {
             remote: "origin".to_string(),
@@ -150,12 +149,7 @@ fn configured_but_unpushed_upstream_is_a_push_target_without_being_live() {
 
     assert_eq!(push_request(&repo, &Default::default()), PushRequest::Push);
     assert!(!head_branch_has_live_upstream(&repo));
-    assert!(!pull_enabled(&repo, &Default::default()));
-    assert_eq!(
-        pull_request(&repo, &Default::default()),
-        PullRequest::NotReady,
-        "Pull must stay disabled until the configured branch exists remotely"
-    );
+    assert!(pull_enabled(&repo, &Default::default()));
 }
 
 #[test]
@@ -301,7 +295,7 @@ fn a_selected_remote_branch_is_invalidated_only_after_a_ready_refresh_omits_it()
 }
 
 #[test]
-fn pull_request_offers_a_pull_for_a_branch_that_was_never_pushed() {
+fn pull_is_available_for_a_branch_without_an_upstream() {
     let repo = repo_with_push_state(
         None,
         Loadable::Ready(Arc::new(vec![Remote {
@@ -312,29 +306,24 @@ fn pull_request_offers_a_pull_for_a_branch_that_was_never_pushed() {
     );
 
     assert!(!head_branch_has_live_upstream(&repo));
-    assert!(!pull_enabled(&repo, &Default::default()));
-    assert_eq!(
-        pull_request(&repo, &Default::default()),
-        PullRequest::Pull,
-        "the backend pulls from the preferred remote and sets the upstream"
-    );
+    assert!(pull_enabled(&repo, &Default::default()));
 }
 
 #[test]
-fn pull_request_allows_a_detached_head_and_reports_a_repo_without_remotes() {
+fn pull_needs_a_branch_but_does_not_require_named_remotes() {
     let mut detached = repo_with_push_state(None, Loadable::Loading);
     detached.head_branch = Loadable::Ready("HEAD".to_string());
     assert!(head_is_detached(&detached));
-    assert_eq!(
-        pull_request(&detached, &Default::default()),
-        PullRequest::Pull
-    );
 
     let no_remotes = repo_with_push_state(None, Loadable::Ready(Arc::new(Vec::new())));
-    assert_eq!(
-        pull_request(&no_remotes, &Default::default()),
-        PullRequest::NoRemotes
-    );
+    assert!(pull_enabled(&no_remotes, &Default::default()));
+    assert!(!pull_enabled(&detached, &Default::default()));
+    let mut loading = no_remotes.clone();
+    loading.head_branch = Loadable::Loading;
+    assert!(!pull_enabled(&loading, &Default::default()));
+    let mut bare = no_remotes;
+    bare.repository_mode = Some(gitcomet_core::domain::RepositoryMode::Bare);
+    assert!(!pull_enabled(&bare, &Default::default()));
 }
 
 #[test]

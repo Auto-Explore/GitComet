@@ -1239,15 +1239,13 @@ fn schedule_pull(
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     mode: PullMode,
-    tracking: Option<(String, String)>,
+    context: Option<String>,
     auth: Option<StagedGitAuth>,
 ) {
     let command = RepoCommandKind::Pull { mode };
-    let context = tracking.map(|(local, upstream)| {
-        pull_mode_suffix(mode).map_or_else(
-            || format!("{upstream} → {local}"),
-            |mode| format!("{upstream} → {local} · {mode}"),
-        )
+    let context = context.map(|context| match pull_mode_suffix(mode) {
+        Some(mode) => format!("{context} · {mode}"),
+        None => context,
     });
     schedule_repo_command_with_context(
         executor,
@@ -2758,7 +2756,9 @@ pub(super) fn schedule(
             msg_tx,
             repo_id,
             mode,
-            tracking_branch_context(thread_state, repo_id),
+            tracking_branch_context(thread_state, repo_id)
+                .map(|(local, upstream)| format!("{upstream} → {local}"))
+                .or_else(|| current_branch_context(thread_state, repo_id)),
             auth,
         ),
         RepoCommandEffect::PullBranch {

@@ -1070,22 +1070,16 @@ impl BarItemOwner for ActionBarView {
                     pull_menu,
                     theme,
                     cx,
-                    |this, _e, _w, cx| {
+                    |this, _e, _w, _cx| {
                         let Some(repo) = this.active_repo() else {
                             return;
                         };
                         let repo_id = repo.id;
-                        match pull_request(repo, &this.state.large_file_settings) {
-                            PullRequest::Pull => this.store.dispatch(Msg::Pull {
+                        if pull_enabled(repo, &this.state.large_file_settings) {
+                            this.store.dispatch(Msg::Pull {
                                 repo_id,
                                 mode: PullMode::Default,
-                            }),
-                            PullRequest::NoRemotes => this.push_toast(
-                                components::ToastKind::Error,
-                                "Cannot pull: no remotes configured".to_string(),
-                                cx,
-                            ),
-                            PullRequest::NotReady => {}
+                            });
                         }
                     },
                     move |this, _e, bounds, window, cx| {

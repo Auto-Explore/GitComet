@@ -25,13 +25,6 @@ pub(in crate::view) enum PushRequest {
     NotReady,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(in crate::view) enum PullRequest {
-    Pull,
-    NoRemotes,
-    NotReady,
-}
-
 /// What opening the repository's remote in a web browser should do.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(in crate::view) enum RemoteWebRequest {
@@ -92,55 +85,15 @@ pub(in crate::view) fn head_branch_has_live_upstream(repo: &RepoState) -> bool {
         .any(|candidate| candidate.remote == upstream.remote && candidate.name == upstream.branch)
 }
 
-/// The toolbar and menu can pull through annex on adjusted branches, or
-/// through Git when the current branch has a live remote-tracking upstream.
 pub(in crate::view) fn pull_enabled(
     repo: &RepoState,
     settings: &gitcomet_state::model::LargeFileSettings,
 ) -> bool {
-    repo.annex_takes_over_pull_push(settings)
-        || (!repo.is_bare() && head_branch_has_live_upstream(repo))
-}
-
-/// Decide whether Pull can run. A configured upstream is actionable only when
-/// its exact remote-tracking ref exists; a future upstream configured by
-/// "Create new" must be pushed before Pull is offered. For a branch with no
-/// configured upstream, the backend can still use the preferred remote, while
-/// detached HEAD falls back to Git's own diagnostics.
-pub(in crate::view) fn pull_request(
-    repo: &RepoState,
-    settings: &gitcomet_state::model::LargeFileSettings,
-) -> PullRequest {
-    if repo.is_bare() && !repo.annex_takes_over_pull_push(settings) {
-        return PullRequest::NotReady;
+    if repo.annex_takes_over_pull_push(settings) {
+        return true;
     }
-    if pull_enabled(repo, settings) {
-        return PullRequest::Pull;
-    }
-    let Loadable::Ready(head) = &repo.head_branch else {
-        return PullRequest::NotReady;
-    };
-    if head.is_empty() || head == "HEAD" {
-        return PullRequest::Pull;
-    }
-    let Loadable::Ready(branches) = &repo.branches else {
-        return PullRequest::NotReady;
-    };
-    if branches
-        .iter()
-        .find(|branch| branch.name == *head)
-        .is_some_and(|branch| branch.upstream.is_some())
-    {
-        return PullRequest::NotReady;
-    }
-
-    let Loadable::Ready(remotes) = &repo.remotes else {
-        return PullRequest::NotReady;
-    };
-    if remotes.is_empty() {
-        return PullRequest::NoRemotes;
-    }
-    PullRequest::Pull
+    !repo.is_bare()
+        && matches!(&repo.head_branch, Loadable::Ready(head) if !head.is_empty() && head != "HEAD")
 }
 
 /// Whether the repository is part-way through a merge.
