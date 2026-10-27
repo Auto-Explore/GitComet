@@ -142,8 +142,9 @@ impl Fixture {
             let seq = repo.loads_in_flight.active_log_seq().unwrap_or_else(|| {
                 repo.loads_in_flight
                     .request_log(crate::model::PendingLogLoad {
-                        scope,
+                        walk: scope.into(),
                         author: None,
+                        focus: Default::default(),
                         limit: 100,
                         cursor: None,
                     })
@@ -442,7 +443,7 @@ fn reword_success_supersedes_a_paused_rebase_log_refresh_before_reselection() {
         effects
             .iter()
             .find_map(|effect| match effect {
-                Effect::LoadLog { seq, scope, .. } => Some((*seq, *scope)),
+                Effect::LoadLog { seq, walk, .. } => Some((*seq, walk.mode())),
                 _ => None,
             })
             .expect("completion must start a fresh history read")

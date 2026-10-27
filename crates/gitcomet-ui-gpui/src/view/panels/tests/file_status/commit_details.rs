@@ -1855,6 +1855,14 @@ fn commit_reword_blocker_explains_ineligible_commits() {
         Some("Finish the running Git operation to edit this commit's message")
     );
 
+    // Amending and rebasing both need a working tree.
+    let mut bare = rewordable_repo(repo_id, REWORD_HEAD_SHA, "c", false);
+    bare.repository_mode = Some(gitcomet_core::domain::RepositoryMode::Bare);
+    assert_eq!(
+        blocker(&bare),
+        Some(gitcomet_core::domain::WORKING_TREE_REQUIRED_MESSAGE)
+    );
+
     // HEAD can be amended even as a merge; an older merge cannot be replayed.
     let with_extra_parent = |mut repo: gitcomet_state::model::RepoState| {
         if let Loadable::Ready(details) = &mut repo.history_state.commit_details {

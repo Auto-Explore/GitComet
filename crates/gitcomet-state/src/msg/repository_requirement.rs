@@ -63,6 +63,8 @@ impl Msg {
             | Self::RebaseContinue { repo_id, .. }
             | Self::RemoveSubmodule { repo_id, .. }
             | Self::RevertCommit { repo_id, .. }
+            | Self::RewordCommit { repo_id, .. }
+            | Self::ContinueRewordCommit { repo_id, .. }
             | Self::SaveWorktreeFile { repo_id, .. }
             | Self::SelectConflictDiff { repo_id, .. }
             | Self::SquashRef { repo_id, .. }
@@ -85,6 +87,7 @@ impl Msg {
             | Self::MoveRepoOut { repo_id, .. }
             | Self::DismissRepoError { repo_id, .. }
             | Self::CancelGitOperation { repo_id, .. }
+            | Self::DismissRewordCommit { repo_id, .. }
             | Self::SetCommitSignatureTargets { repo_id, .. }
             | Self::SetActiveRepo { repo_id, .. }
             | Self::ReorderRepoTabs { repo_id, .. }

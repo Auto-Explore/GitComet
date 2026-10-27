@@ -705,7 +705,11 @@ fn replay_auth_prompt(
         Some(mut msg) => {
             inputs.normalize_auth_retry(state, &mut msg);
             // The enclosing auth message finalizes and counts these effects.
-            // Re-entering reduce_prepared here counted sequencer work twice.
+            // Re-entering reduce_prepared here counted sequencer work twice,
+            // so only its repository gate runs again.
+            if super::refuse_for_repository_requirement(inputs, state, &msg) {
+                return Vec::new();
+            }
             let effects = super::reduce_inner(inputs, repos, id_alloc, state, msg);
             if let Some((repo_id, before)) = queued_before
                 && let Some(repo) = state.repos.iter_mut().find(|repo| repo.id == repo_id)

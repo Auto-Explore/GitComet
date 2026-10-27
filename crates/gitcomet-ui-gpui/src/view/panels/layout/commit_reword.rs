@@ -23,6 +23,14 @@ pub(in crate::view) fn commit_reword_availability(
     repo: &RepoState,
     details: &CommitDetails,
 ) -> CommitRewordAvailability {
+    // The reducer refuses a bare repository's reword before recording the
+    // request, which would leave the submitted editor waiting.
+    if repo.is_bare() {
+        return CommitRewordAvailability {
+            blocker: Some(gitcomet_core::domain::WORKING_TREE_REQUIRED_MESSAGE),
+            published_on: None,
+        };
+    }
     if repo.history_rewrite_busy() {
         return CommitRewordAvailability {
             blocker: Some("Finish the running Git operation to edit this commit's message"),

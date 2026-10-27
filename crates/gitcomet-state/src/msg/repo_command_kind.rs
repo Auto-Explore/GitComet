@@ -285,6 +285,7 @@ impl RepoCommandKind {
             | Self::RebaseContinue
             | Self::RebaseAbort
             | Self::InteractiveRebase { .. }
+            | Self::RewordCommit { .. }
             | Self::InteractiveCherryPick { .. }
             | Self::CherryPick { .. }
             | Self::Revert { .. }
