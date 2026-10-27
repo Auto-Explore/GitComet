@@ -1,4 +1,5 @@
 use super::*;
+use crate::model::AutoFetchInterval;
 use gitcomet_core::test_support::UnconfiguredRepository;
 use std::sync::Mutex;
 use std::time::{Duration, Instant, UNIX_EPOCH};
