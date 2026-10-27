@@ -1496,7 +1496,7 @@ impl GitRepository for GixRepo {
 
     fn fetch_all(&self, prune: bool) -> Result<CommandOutput> {
         let _operation = self.operation_lease()?;
-        self.fetch_all_with_output_impl(prune)
+        self.fetch_all_with_output_impl(prune, &[])
     }
 
     fn fetch_all_background(
@@ -1504,9 +1504,18 @@ impl GitRepository for GixRepo {
         prune: bool,
         cancellation: &CancellationToken,
     ) -> Result<CommandOutput> {
+        self.fetch_all_background_except(prune, &[], cancellation)
+    }
+
+    fn fetch_all_background_except(
+        &self,
+        prune: bool,
+        skipped: &[String],
+        cancellation: &CancellationToken,
+    ) -> Result<CommandOutput> {
         let _operation = self.operation_lease()?;
         crate::util::background::with_background_git(cancellation, || {
-            self.fetch_all_with_output_impl(prune)
+            self.fetch_all_with_output_impl(prune, skipped)
         })
     }
 

@@ -59,6 +59,24 @@ fn auto_fetch_status_items(
             items.push(ContextMenuItem::Description(hint.into()));
         }
     }
+    if enabled && !state.paused_remotes.is_empty() {
+        items.push(ContextMenuItem::Description(
+            format!(
+                "Paused for {} until Fetch all succeeds.",
+                state.paused_remotes.join(", ")
+            )
+            .into(),
+        ));
+    } else if enabled
+        && matches!(state.status, AutoFetchStatus::Failed { .. })
+        && let Some(at) = state.retry_at
+    {
+        let mut timestamp = String::new();
+        format_datetime_into(&mut timestamp, at, format, timezone, show_timezone);
+        items.push(ContextMenuItem::Label(
+            format!("Next attempt: {timestamp}").into(),
+        ));
+    }
     if let Some(at) = state.last_success_at {
         let mut timestamp = String::new();
         format_datetime_into(&mut timestamp, at, format, timezone, show_timezone);
@@ -179,6 +197,7 @@ mod tests {
                     "fatal: remote unavailable\r\nCheck access.\nRepository was not found.".into(),
                 )),
             },
+            ..RepoAutoFetchState::default()
         };
         let items =
             auto_fetch_status_items(true, &state, DateTimeFormat::YmdHm, Timezone::Utc, false);
@@ -202,6 +221,7 @@ mod tests {
                     "offline".into(),
                 )),
             },
+            ..RepoAutoFetchState::default()
         };
         let labels: Vec<_> =
             auto_fetch_status_items(true, &state, DateTimeFormat::YmdHm, Timezone::Utc, false)
@@ -224,6 +244,52 @@ mod tests {
         assert_eq!(
             auto_fetch_status_text(false, &state),
             "Automatic fetch: Off"
+        );
+    }
+
+    #[test]
+    fn automatic_fetch_failures_show_when_it_retries_or_what_waits_for_fetch_all() {
+        let failed = AutoFetchStatus::Failed {
+            at: std::time::UNIX_EPOCH,
+            error: gitcomet_core::error::Error::new(gitcomet_core::error::ErrorKind::Backend(
+                "offline".into(),
+            )),
+        };
+        let rows = |state: &RepoAutoFetchState| -> Vec<String> {
+            auto_fetch_status_items(true, state, DateTimeFormat::YmdHm, Timezone::Utc, false)
+                .into_iter()
+                .map(|item| match item {
+                    ContextMenuItem::Label(label) | ContextMenuItem::Description(label) => {
+                        label.as_ref().to_owned()
+                    }
+                    _ => panic!("fetch status must be informational"),
+                })
+                .collect()
+        };
+        let retrying = RepoAutoFetchState {
+            status: failed.clone(),
+            retry_at: Some(std::time::UNIX_EPOCH + std::time::Duration::from_secs(3600)),
+            ..RepoAutoFetchState::default()
+        };
+        assert_eq!(
+            rows(&retrying),
+            [
+                "Automatic fetch: Failed",
+                "offline",
+                "Next attempt: 1970-01-01 01:00"
+            ]
+        );
+        let paused = RepoAutoFetchState {
+            paused_remotes: vec!["origin".into(), "fork".into()],
+            ..retrying
+        };
+        assert_eq!(
+            rows(&paused),
+            [
+                "Automatic fetch: Failed",
+                "offline",
+                "Paused for origin, fork until Fetch all succeeds.",
+            ]
         );
     }
 
@@ -251,6 +317,7 @@ mod tests {
                     failure,
                 )),
             },
+            ..RepoAutoFetchState::default()
         };
         let items =
             auto_fetch_status_items(true, &state, DateTimeFormat::YmdHm, Timezone::Utc, false);

@@ -3,6 +3,7 @@ use crate::store::reducer::prepared::ReducerInputs;
 use crate::store::repository_runtime::RepositoryRuntimes;
 mod actions_emit_effects;
 mod auth;
+pub(super) use auth::detect_auth_prompt_kind;
 mod auto_fetch;
 mod bare_conversion;
 mod branch_exists_prompt;

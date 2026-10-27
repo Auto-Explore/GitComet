@@ -8,7 +8,7 @@ use gitcomet_core::services::{
     CancellationToken, CommandOutput, GitBackend, GitRepository, Result,
 };
 use rustc_hash::FxHashSet;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, SystemTime};
@@ -92,12 +92,23 @@ impl Entry {
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct FetchRemote {
+    name: String,
+    /// `None` for a repository on this machine.
+    host: Option<String>,
+}
+
 struct Group {
     schedule: Schedule,
     snapshot: RepoAutoFetchState,
     revision: u64,
     request: Option<u64>,
     order: u64,
+    /// The remotes this group's last fetch saw.
+    remotes: Vec<FetchRemote>,
+    /// Skipped until a manual fetch succeeds: retrying cannot fix them.
+    paused: BTreeSet<String>,
 }
 
 impl Group {
@@ -108,8 +119,80 @@ impl Group {
             revision,
             request: None,
             order,
+            remotes: Vec::new(),
+            paused: BTreeSet::new(),
         }
     }
+
+    fn contacted<'a>(&'a self, skipped: &'a [String]) -> impl Iterator<Item = &'a FetchRemote> {
+        self.remotes
+            .iter()
+            .filter(|remote| !skipped.contains(&remote.name))
+    }
+
+    /// A fetch succeeded: the hosts it contacted answer again.
+    fn reached(&mut self, hosts: &mut BTreeMap<String, HostBlock>, skipped: &[String]) {
+        self.schedule.failures = 0;
+        self.snapshot.retry_at = None;
+        for host in self
+            .contacted(skipped)
+            .filter_map(|remote| remote.host.as_ref())
+        {
+            hosts.remove(host);
+        }
+    }
+
+    /// Charges a failure to the remotes the output names, or to every remote
+    /// the fetch contacted when it names none.
+    fn failed(
+        &mut self,
+        hosts: &mut BTreeMap<String, HostBlock>,
+        error: &Error,
+        skipped: &[String],
+        interval: AutoFetchInterval,
+        now: SystemTime,
+    ) {
+        let Some(failure) = policy::classify(error) else {
+            return;
+        };
+        let named = policy::failed_remotes(error);
+        let mut failed: Vec<&FetchRemote> = self.contacted(skipped).collect();
+        if failed.iter().any(|remote| named.contains(&remote.name)) {
+            failed.retain(|remote| named.contains(&remote.name));
+        }
+        if failure.blocks_host() {
+            for host in failed.iter().filter_map(|remote| remote.host.as_ref()) {
+                let block = hosts.entry(host.clone()).or_insert(HostBlock {
+                    until: now,
+                    strikes: 0,
+                });
+                block.strikes += 1;
+                block.until = now + policy::host_block(failure, block.strikes);
+            }
+        }
+        if failure.pauses() {
+            let failed: Vec<String> = failed.iter().map(|remote| remote.name.clone()).collect();
+            self.paused.extend(failed);
+            self.snapshot.paused_remotes = self.paused.iter().cloned().collect();
+        }
+        self.schedule.failures += 1;
+        self.snapshot.retry_at = self.schedule.due_at(interval);
+    }
+
+    /// Clears failure state after a fetch that reached every remote.
+    fn recover(&mut self) {
+        self.schedule.failures = 0;
+        self.paused.clear();
+        self.snapshot.retry_at = None;
+        self.snapshot.paused_remotes.clear();
+    }
+}
+
+/// A host that failed with a network or busy error. No automatic fetch
+/// contacts it until `until`; the first one after that probes it.
+struct HostBlock {
+    until: SystemTime,
+    strikes: u32,
 }
 
 struct Running {
@@ -121,6 +204,7 @@ struct Running {
 struct State {
     entries: BTreeMap<PathBuf, Entry>,
     groups: BTreeMap<GroupKey, Group>,
+    hosts: BTreeMap<String, HostBlock>,
     running: Option<Running>,
     revision: u64,
     order: u64,
@@ -150,6 +234,32 @@ impl State {
                 subscriber.publish(group, result.clone());
             }
         }
+    }
+
+    /// Remotes a fetch of `group` leaves out: paused ones and those whose host
+    /// is blocked.
+    fn skipped_remotes(
+        &self,
+        group: Option<&Group>,
+        remotes: &[FetchRemote],
+        now: SystemTime,
+    ) -> Vec<String> {
+        remotes
+            .iter()
+            .filter(|remote| {
+                group.is_some_and(|group| group.paused.contains(&remote.name))
+                    || remote.host.as_ref().is_some_and(|host| {
+                        self.hosts.get(host).is_some_and(|block| block.until > now)
+                    })
+            })
+            .map(|remote| remote.name.clone())
+            .collect()
+    }
+
+    /// Every remote the group knows is skipped, so a fetch would contact none.
+    fn group_waits(&self, group: &Group, now: SystemTime) -> bool {
+        !group.remotes.is_empty()
+            && self.skipped_remotes(Some(group), &group.remotes, now).len() == group.remotes.len()
     }
 
     fn cancel_inactive_fetch(&self) {
@@ -192,6 +302,8 @@ impl State {
                     revision: group.revision,
                     request: None,
                     order: group.order,
+                    remotes: Vec::new(),
+                    paused: BTreeSet::new(),
                 })
             };
             self.groups.insert(
@@ -359,6 +471,7 @@ impl AutoFetchCoordinator {
         for key in toggled {
             if let Some(group) = state.groups.get_mut(&key) {
                 group.schedule = Schedule::default();
+                group.recover();
                 group.request = None;
                 if matches!(group.snapshot.status, AutoFetchStatus::Running) {
                     group.snapshot.status = AutoFetchStatus::Idle;
@@ -445,12 +558,24 @@ impl AutoFetchCoordinator {
             .unwrap_or_else(|error| error.into_inner());
         state.revision += 1;
         let revision = state.revision;
-        if let Some(group_key) = state.entries.get(&key).map(|entry| entry.group.clone())
-            && let Some(group) = state.groups.get_mut(&group_key)
+        let group_key = state.entries.get(&key).map(|entry| entry.group.clone());
+        let State { groups, hosts, .. } = &mut *state;
+        if let Some(group_key) = group_key
+            && let Some(group) = groups.get_mut(&group_key)
         {
             if result.is_ok() {
                 group.schedule.finish(now);
                 group.snapshot.last_success_at = Some(now);
+                // A manual fetch reached every remote: their hosts answer and
+                // their credentials work again.
+                group.recover();
+                for host in group
+                    .remotes
+                    .iter()
+                    .filter_map(|remote| remote.host.as_ref())
+                {
+                    hosts.remove(host);
+                }
             }
             group.request = None;
             group.snapshot.status = status;
@@ -527,12 +652,18 @@ struct Job {
 }
 
 enum Completion {
-    /// No fetch ran: a foreground command holds the store, or the workdir
-    /// joined a group whose fetch is not due.
-    Deferred { common_dir: PathBuf, key: GroupKey },
+    /// No fetch ran: a foreground command holds the store, every remote is
+    /// skipped, or the workdir joined a group whose fetch is not due.
+    Deferred {
+        common_dir: PathBuf,
+        key: GroupKey,
+        remotes: Vec<FetchRemote>,
+    },
     Finished {
         common_dir: Option<PathBuf>,
         key: Option<GroupKey>,
+        remotes: Vec<FetchRemote>,
+        skipped: Vec<String>,
         result: Result<CommandOutput>,
         refs_changed: bool,
     },
@@ -558,6 +689,7 @@ fn next_job(state: &mut State, admission: &Admission, now: SystemTime) -> Option
             (group
                 .schedule
                 .is_due(subscriber.settings.auto_fetch.interval, now)
+                && !state.group_waits(group, now)
                 && group_common_dir(key, entry).is_none_or(|common| !admission.blocked(common)))
             .then_some((group.order, key, workdir))
         })
@@ -604,6 +736,8 @@ fn execute(job: &Job, inner: &Inner) -> Completion {
             return Completion::Finished {
                 common_dir: None,
                 key: None,
+                remotes: Vec::new(),
+                skipped: Vec::new(),
                 result: Err(error),
                 refs_changed: false,
             };
@@ -617,35 +751,59 @@ fn execute(job: &Job, inner: &Inner) -> Completion {
             config,
         },
     );
-    // A sibling worktree fetched this store recently: join its schedule
-    // instead of contacting the remote again.
-    if key != job.group
-        && inner
+    let remotes: Vec<FetchRemote> = repo
+        .list_remotes(&job.cancellation)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|remote| FetchRemote {
+            host: remote.url.as_deref().and_then(policy::remote_host),
+            name: remote.name,
+        })
+        .collect();
+    let (joins_fetched_group, skipped) = {
+        let state = inner
             .state
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .groups
-            .get(&key)
-            .is_some_and(|group| {
+            .unwrap_or_else(|error| error.into_inner());
+        let joined = state.groups.get(&key);
+        // A sibling worktree fetched this store recently: join its schedule
+        // instead of contacting the remote again.
+        let joins_fetched_group = key != job.group
+            && joined.is_some_and(|group| {
                 !group
                     .schedule
                     .is_due(job.subscriber.settings.auto_fetch.interval, job.started)
-            })
-    {
-        return Completion::Deferred { common_dir, key };
+            });
+        let group = joined.or_else(|| state.groups.get(&job.group));
+        (
+            joins_fetched_group,
+            state.skipped_remotes(group, &remotes, job.started),
+        )
+    };
+    if joins_fetched_group || (!remotes.is_empty() && skipped.len() == remotes.len()) {
+        return Completion::Deferred {
+            common_dir,
+            key,
+            remotes,
+        };
     }
     let Some(_lease) = inner
         .admission
         .try_background(common_dir.clone(), job.cancellation.clone())
     else {
-        return Completion::Deferred { common_dir, key };
+        return Completion::Deferred {
+            common_dir,
+            key,
+            remotes,
+        };
     };
     let refs_before = repo.remote_refs_fingerprint(&job.cancellation).ok();
     let result = job.cancellation.check_cancelled().and_then(|()| {
-        repo.fetch_all_background(
+        repo.fetch_all_background_except(
             job.subscriber
                 .settings
                 .prune_deleted_remote_branches_on_fetch,
+            &skipped,
             &job.cancellation,
         )
     });
@@ -662,6 +820,8 @@ fn execute(job: &Job, inner: &Inner) -> Completion {
     Completion::Finished {
         common_dir: Some(common_dir),
         key: Some(key),
+        remotes,
+        skipped,
         result,
         refs_changed,
     }
@@ -693,14 +853,25 @@ fn finish(state: &mut State, job: &Job, completion: Completion, now: SystemTime)
             group.snapshot.status = AutoFetchStatus::Idle;
         }
     }
-    let (common_dir, key, outcome) = match completion {
-        Completion::Deferred { common_dir, key } => (Some(common_dir), Some(key), None),
+    let (common_dir, key, remotes, outcome) = match completion {
+        Completion::Deferred {
+            common_dir,
+            key,
+            remotes,
+        } => (Some(common_dir), Some(key), remotes, None),
         Completion::Finished {
             common_dir,
             key,
+            remotes,
+            skipped,
             result,
             refs_changed,
-        } => (common_dir, key, Some((result, refs_changed))),
+        } => (
+            common_dir,
+            key,
+            remotes,
+            Some((result, skipped, refs_changed)),
+        ),
     };
     if current {
         if let Some(entry) = state.entries.get_mut(&job.workdir) {
@@ -717,14 +888,21 @@ fn finish(state: &mut State, job: &Job, completion: Completion, now: SystemTime)
     else {
         return;
     };
-    let Some((result, refs_changed)) = outcome else {
+    if current
+        && !remotes.is_empty()
+        && let Some(group) = state.groups.get_mut(&group_key)
+    {
+        group.remotes = remotes;
+    }
+    let Some((result, skipped, refs_changed)) = outcome else {
         if current && let Some(group) = state.groups.get_mut(&group_key) {
             group.revision = revision;
             state.publish(&group_key, None);
         }
         return;
     };
-    if current && let Some(group) = state.groups.get_mut(&group_key) {
+    let State { groups, hosts, .. } = &mut *state;
+    if current && let Some(group) = groups.get_mut(&group_key) {
         group.schedule.finish(now);
         group.snapshot.status = match &result {
             Ok(_) => {
@@ -737,6 +915,16 @@ fn finish(state: &mut State, job: &Job, completion: Completion, now: SystemTime)
                 error: error.clone(),
             },
         };
+        match &result {
+            Ok(_) => group.reached(hosts, &skipped),
+            Err(error) => group.failed(
+                hosts,
+                error,
+                &skipped,
+                job.subscriber.settings.auto_fetch.interval,
+                now,
+            ),
+        }
         group.revision = revision;
         state.publish(&group_key, Some(Arc::new(result)));
     }
@@ -796,6 +984,8 @@ fn run(inner: Arc<Inner>) {
                     .unwrap_or_else(|panic| Completion::Finished {
                         common_dir: None,
                         key: None,
+                        remotes: Vec::new(),
+                        skipped: Vec::new(),
                         result: Err(Error::new(ErrorKind::Backend(format!(
                             "automatic fetch failed: {}",
                             gitcomet_core::panic::payload_message(panic.as_ref())
@@ -858,20 +1048,32 @@ fn wait_duration(state: &State, admission: &Admission, now: SystemTime) -> Optio
 #[derive(Clone, Copy, Default)]
 struct Schedule {
     completed: Option<SystemTime>,
+    /// Consecutive failed fetches; each one stretches the next wait.
+    failures: u32,
 }
 
 impl Schedule {
+    fn wait(&self, interval: AutoFetchInterval) -> Duration {
+        policy::retry_delay(interval, self.failures)
+    }
+
     fn is_due(&self, interval: AutoFetchInterval, now: SystemTime) -> bool {
         self.completed.is_none_or(|completed| {
             now.duration_since(completed)
-                .map_or(true, |elapsed| elapsed >= interval.duration())
+                .map_or(true, |elapsed| elapsed >= self.wait(interval))
         })
+    }
+
+    fn due_at(&self, interval: AutoFetchInterval) -> Option<SystemTime> {
+        self.completed?.checked_add(self.wait(interval))
     }
 
     fn finish(&mut self, now: SystemTime) {
         self.completed = Some(now);
     }
 }
+
+mod policy;
 
 #[cfg(test)]
 mod tests;

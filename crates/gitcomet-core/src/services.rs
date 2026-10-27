@@ -1582,6 +1582,21 @@ pub trait GitRepository: Send + Sync {
             "background fetching is not implemented for this backend",
         )))
     }
+    /// [`Self::fetch_all_background`] without the `skipped` remotes.
+    fn fetch_all_background_except(
+        &self,
+        prune: bool,
+        skipped: &[String],
+        cancellation: &CancellationToken,
+    ) -> Result<CommandOutput> {
+        if skipped.is_empty() {
+            self.fetch_all_background(prune, cancellation)
+        } else {
+            Err(Error::new(ErrorKind::Unsupported(
+                "skipping remotes in a background fetch is not implemented for this backend",
+            )))
+        }
+    }
     /// Hash of every remote-tracking branch and tag with its target, read
     /// fresh from disk. Equal values before and after a fetch mean the fetch
     /// moved nothing.

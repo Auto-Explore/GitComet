@@ -51,6 +51,31 @@ fn remote_url(path: &Path) -> String {
 }
 
 #[test]
+fn background_fetch_leaves_skipped_remotes_alone() {
+    let root = tempfile::tempdir().expect("fixture directory");
+    let origin = repository(root.path(), "origin");
+    let fork = repository(root.path(), "fork");
+    commit(&origin, "origin first");
+    commit(&fork, "fork first");
+    let local = repository(root.path(), "local");
+    git(&local, &["remote", "add", "origin", &remote_url(&origin)]);
+    git(&local, &["remote", "add", "fork", &remote_url(&fork)]);
+    git(&local, &["fetch", "--all"]);
+    let origin_latest = commit(&origin, "origin second");
+    let fork_before = git(&local, &["rev-parse", "fork/main"]);
+    commit(&fork, "fork second");
+
+    GixBackend
+        .open(&local)
+        .expect("open repository")
+        .fetch_all_background_except(true, &["fork".to_string()], &CancellationToken::new())
+        .expect("background fetch succeeds");
+
+    assert_eq!(git(&local, &["rev-parse", "origin/main"]), origin_latest);
+    assert_eq!(git(&local, &["rev-parse", "fork/main"]), fork_before);
+}
+
+#[test]
 fn worktrees_share_a_fetch_signature_unless_their_own_config_changes_fetching() {
     let root = tempfile::tempdir().expect("fixture directory");
     let remote = repository(root.path(), "remote");

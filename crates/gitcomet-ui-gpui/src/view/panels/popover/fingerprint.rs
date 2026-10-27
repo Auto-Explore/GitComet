@@ -30,6 +30,8 @@ pub(super) fn notify_fingerprint(
         state.remote_settings.auto_fetch.enabled.hash(&mut hasher);
         if let Some(repo) = repo_for_popover(state, popover, binding) {
             repo.auto_fetch.last_success_at.hash(&mut hasher);
+            repo.auto_fetch.retry_at.hash(&mut hasher);
+            repo.auto_fetch.paused_remotes.hash(&mut hasher);
             std::mem::discriminant(&repo.auto_fetch.status).hash(&mut hasher);
             match &repo.auto_fetch.status {
                 gitcomet_state::model::AutoFetchStatus::Failed { at, error } => {
@@ -1642,8 +1644,14 @@ mod tests {
                 )),
             )),
         };
+        let with_auth_hint = notify_fingerprint(&state, &PopoverKind::PullPicker, None);
+        assert_ne!(without_auth_hint, with_auth_hint);
+        state.repos[0].auto_fetch.retry_at = Some(at + std::time::Duration::from_secs(3600));
+        let retrying = notify_fingerprint(&state, &PopoverKind::PullPicker, None);
+        assert_ne!(with_auth_hint, retrying);
+        state.repos[0].auto_fetch.paused_remotes = vec!["origin".into()];
         assert_ne!(
-            without_auth_hint,
+            retrying,
             notify_fingerprint(&state, &PopoverKind::PullPicker, None)
         );
     }

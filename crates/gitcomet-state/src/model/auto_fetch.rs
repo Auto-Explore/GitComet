@@ -57,6 +57,11 @@ pub enum AutoFetchStatus {
 pub struct RepoAutoFetchState {
     pub last_success_at: Option<SystemTime>,
     pub status: AutoFetchStatus,
+    /// When failures pushed the next attempt past the interval.
+    pub retry_at: Option<SystemTime>,
+    /// Remotes skipped until a manual fetch succeeds, after a sign-in or
+    /// missing-repository failure.
+    pub paused_remotes: Vec<String>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]

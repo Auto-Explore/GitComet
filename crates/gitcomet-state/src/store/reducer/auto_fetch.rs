@@ -195,6 +195,7 @@ mod tests {
                     at,
                     error: error.clone(),
                 },
+                ..RepoAutoFetchState::default()
             },
             Some(Arc::new(Err(error))),
         );
@@ -228,6 +229,7 @@ mod tests {
         let success = RepoAutoFetchState {
             last_success_at: Some(UNIX_EPOCH),
             status: AutoFetchStatus::Succeeded { at: UNIX_EPOCH },
+            ..RepoAutoFetchState::default()
         };
         updated(&inputs, &mut state, RepoId(1), lifetime, 10, success, None);
         updated(
@@ -448,6 +450,7 @@ mod tests {
                     at: UNIX_EPOCH,
                     error: Error::new(ErrorKind::Backend("second remote unavailable".into())),
                 },
+                ..RepoAutoFetchState::default()
             },
             None,
         );

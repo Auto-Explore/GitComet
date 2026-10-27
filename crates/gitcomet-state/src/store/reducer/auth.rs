@@ -955,7 +955,7 @@ pub(super) fn repo_command_finished(
 
 // Recognizing auth failures and staging the credentials the user enters.
 
-pub(super) fn detect_auth_prompt_kind(error: &Error) -> Option<AuthPromptKind> {
+pub(in crate::store) fn detect_auth_prompt_kind(error: &Error) -> Option<AuthPromptKind> {
     match error.kind() {
         ErrorKind::Git(failure) => detect_auth_prompt_kind_from_git_failure(failure),
         ErrorKind::Backend(message) => detect_auth_prompt_kind_from_message(message),

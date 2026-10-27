@@ -1217,12 +1217,17 @@ impl GixRepo {
     fn fetch_all_with_optional_output_impl(
         &self,
         prune: bool,
+        skipped: &[String],
         capture_output: bool,
     ) -> Result<CommandOutput> {
         // Only the remotes this fetch contacts are authoritative about their
         // upstreams. A remote it skips can have a configured upstream with no
         // remote-tracking ref for reasons this fetch says nothing about.
-        let remotes = self.fetch_all_remotes()?;
+        let mut remotes = self.fetch_all_remotes()?;
+        if !skipped.is_empty() {
+            remotes.names.retain(|name| !skipped.contains(name));
+            remotes.explicit = true;
+        }
         let tracked_before_fetch = if prune {
             let configured =
                 self.configured_remote_upstreams(UpstreamCleanupScope::Remotes(&remotes.names))?;
@@ -1324,8 +1329,12 @@ impl GixRepo {
         Ok(append_unlinked_upstreams(output, &unlinked))
     }
 
-    pub(super) fn fetch_all_with_output_impl(&self, prune: bool) -> Result<CommandOutput> {
-        self.fetch_all_with_optional_output_impl(prune, true)
+    pub(super) fn fetch_all_with_output_impl(
+        &self,
+        prune: bool,
+        skipped: &[String],
+    ) -> Result<CommandOutput> {
+        self.fetch_all_with_optional_output_impl(prune, skipped, true)
     }
 
     /// Apply the pull mode's integration flags. Being explicit about

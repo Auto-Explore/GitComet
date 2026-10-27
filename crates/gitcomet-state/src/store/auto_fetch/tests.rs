@@ -105,6 +105,8 @@ fn busy_shared_repository_yields_and_its_worktrees_share_one_fetch() {
     let fetched = |common: &str| Completion::Finished {
         common_dir: Some(PathBuf::from(common)),
         key: Some(store(common)),
+        remotes: Vec::new(),
+        skipped: Vec::new(),
         result: Ok(CommandOutput::empty_success("git fetch --all")),
         refs_changed: true,
     };
@@ -129,6 +131,7 @@ fn busy_shared_repository_yields_and_its_worktrees_share_one_fetch() {
         Completion::Deferred {
             common_dir: PathBuf::from("/repo/.git"),
             key: store("/repo/.git"),
+            remotes: Vec::new(),
         },
         UNIX_EPOCH,
     );
@@ -176,6 +179,8 @@ fn disabled_coordinator_parks_and_enabled_deadlines_recompute_from_completion() 
         Completion::Finished {
             common_dir: None,
             key: None,
+            remotes: Vec::new(),
+            skipped: Vec::new(),
             result: Err(Error::new(ErrorKind::Unsupported("test offline"))),
             refs_changed: true,
         },
@@ -198,15 +203,11 @@ fn disabled_coordinator_parks_and_enabled_deadlines_recompute_from_completion() 
         .values_mut()
         .next()
         .unwrap();
-    subscriber.settings.auto_fetch.interval = AutoFetchInterval::new(1).unwrap();
-    assert!(
-        next_job(
-            &mut state,
-            coordinator.admission(),
-            now + Duration::from_secs(60)
-        )
-        .is_some()
-    );
+    subscriber.settings.auto_fetch.interval = AutoFetchInterval::new(5).unwrap();
+    // The failure doubles the new interval as well.
+    let minutes = |minutes: u64| now + Duration::from_secs(minutes * 60);
+    assert!(next_job(&mut state, coordinator.admission(), minutes(9)).is_none());
+    assert!(next_job(&mut state, coordinator.admission(), minutes(10)).is_some());
 }
 
 #[test]
@@ -234,6 +235,8 @@ fn manual_success_clears_failure_and_an_older_automatic_result_cannot_replace_it
         Completion::Finished {
             common_dir: Some(PathBuf::from("/repo/.git")),
             key: None,
+            remotes: Vec::new(),
+            skipped: Vec::new(),
             result: Err(Error::new(ErrorKind::Cancelled)),
             refs_changed: true,
         },
@@ -265,6 +268,8 @@ fn reopening_a_closed_tab_does_not_accept_its_old_fetch_completion() {
         Completion::Finished {
             common_dir: Some(PathBuf::from("/repo/.git")),
             key: None,
+            remotes: Vec::new(),
+            skipped: Vec::new(),
             result: Ok(CommandOutput::empty_success("git fetch --all")),
             refs_changed: true,
         },
@@ -655,6 +660,198 @@ fn fetches_that_move_no_refs_refresh_only_tabs_that_never_loaded() {
     std::fs::write(source.join("file"), "third").unwrap();
     git(&source, &["commit", "-qam", "third"]);
     assert_eq!(fetch_at(3), vec![first, second]);
+}
+
+fn origin(host: &str) -> Vec<FetchRemote> {
+    vec![FetchRemote {
+        name: "origin".into(),
+        host: Some(host.into()),
+    }]
+}
+
+fn failed(remotes: Vec<FetchRemote>, message: &str) -> Completion {
+    Completion::Finished {
+        common_dir: Some(PathBuf::from("/repo/.git")),
+        key: None,
+        remotes,
+        skipped: Vec::new(),
+        result: Err(Error::new(ErrorKind::Backend(message.into()))),
+        refs_changed: false,
+    }
+}
+
+#[test]
+fn a_sign_in_failure_pauses_the_remote_until_a_manual_fetch_succeeds() {
+    let coordinator = AutoFetchCoordinator::new();
+    register(&coordinator, 1, "/repo", "/repo/.git");
+    enable(&coordinator);
+    let mut state = coordinator.inner.state.lock().unwrap();
+    let job = next_job(&mut state, coordinator.admission(), UNIX_EPOCH).unwrap();
+    finish(
+        &mut state,
+        &job,
+        failed(
+            origin("github.com"),
+            "fatal: Authentication failed for 'https://github.com/o/r.git/'",
+        ),
+        UNIX_EPOCH,
+    );
+    let group = group_of(&state, Path::new("/repo"));
+    assert_eq!(group.snapshot.paused_remotes, ["origin"]);
+    assert!(state.hosts.is_empty(), "the host answered");
+    let much_later = UNIX_EPOCH + Duration::from_secs(30 * 24 * 60 * 60);
+    assert!(
+        next_job(&mut state, coordinator.admission(), much_later).is_none(),
+        "credentials do not fix themselves"
+    );
+    drop(state);
+    coordinator.manual_fetch_finished(
+        Path::new("/repo"),
+        much_later,
+        &Ok(CommandOutput::empty_success("git fetch --all")),
+    );
+    let mut state = coordinator.inner.state.lock().unwrap();
+    assert!(
+        group_of(&state, Path::new("/repo"))
+            .snapshot
+            .paused_remotes
+            .is_empty()
+    );
+    let interval = AutoFetchInterval::default().duration();
+    assert!(next_job(&mut state, coordinator.admission(), much_later + interval).is_some());
+}
+
+#[test]
+fn a_failed_remote_blocks_only_its_own_host_and_failures_stretch_the_interval() {
+    let coordinator = AutoFetchCoordinator::new();
+    register(&coordinator, 1, "/repo", "/repo/.git");
+    enable(&coordinator);
+    let mut state = coordinator.inner.state.lock().unwrap();
+    let remotes = vec![
+        FetchRemote {
+            name: "origin".into(),
+            host: Some("github.com".into()),
+        },
+        FetchRemote {
+            name: "fork".into(),
+            host: Some("fork.example".into()),
+        },
+    ];
+    let job = next_job(&mut state, coordinator.admission(), UNIX_EPOCH).unwrap();
+    finish(
+        &mut state,
+        &job,
+        failed(
+            remotes.clone(),
+            "error: could not fetch 'fork' (exit code: 128)
+             fatal: unable to access 'https://fork.example/r.git/': Could not resolve host: fork.example",
+        ),
+        UNIX_EPOCH,
+    );
+    assert_eq!(state.hosts.keys().collect::<Vec<_>>(), ["fork.example"]);
+    let group = group_of(&state, Path::new("/repo"));
+    assert_eq!(
+        state.skipped_remotes(Some(group), &remotes, UNIX_EPOCH),
+        ["fork"]
+    );
+    assert!(
+        !state.group_waits(group, UNIX_EPOCH),
+        "origin still fetches"
+    );
+    let interval = AutoFetchInterval::default().duration();
+    assert_eq!(group.snapshot.retry_at, Some(UNIX_EPOCH + interval * 2));
+    assert!(next_job(&mut state, coordinator.admission(), UNIX_EPOCH + interval).is_none());
+    assert!(
+        next_job(
+            &mut state,
+            coordinator.admission(),
+            UNIX_EPOCH + interval * 2
+        )
+        .is_some()
+    );
+}
+
+/// A local HTTP port nothing listens on: connecting fails at once.
+fn refused_remote_url() -> String {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    drop(listener);
+    format!("http://127.0.0.1:{port}/repository.git")
+}
+
+#[test]
+fn an_unreachable_host_is_contacted_once_until_its_block_expires() {
+    let temp = tempfile::tempdir().unwrap();
+    let url = refused_remote_url();
+    let host = policy::remote_host(&url).unwrap();
+    let coordinator = AutoFetchCoordinator::new();
+    let backend = Arc::new(gitcomet_git_gix::GixBackend) as Arc<dyn GitBackend>;
+    let mut workdirs = Vec::new();
+    for name in ["first", "second"] {
+        let workdir = temp.path().join(name);
+        std::fs::create_dir_all(&workdir).unwrap();
+        git(&workdir, &["init", "-q", "-b", "main"]);
+        git(&workdir, &["remote", "add", "origin", &url]);
+        coordinator.sync(
+            workdirs.len() as u64 + 1,
+            vec![Registration {
+                repo_id: RepoId(1),
+                lifetime: RepoLifetime::allocate(),
+                workdir: workdir.clone(),
+                common_dir: None,
+                repository: None,
+            }],
+            RemoteSettings::default(),
+            &backend,
+            Arc::new(|_| {}),
+        );
+        workdirs.push(workdir);
+    }
+    enable(&coordinator);
+    let strikes = || {
+        coordinator
+            .inner
+            .state
+            .lock()
+            .unwrap()
+            .hosts
+            .get(&host)
+            .map(|block| block.strikes)
+    };
+    let run = |now: SystemTime| {
+        let job = next_job(
+            &mut coordinator.inner.state.lock().unwrap(),
+            coordinator.admission(),
+            now,
+        )?;
+        let completion = execute(&job, &coordinator.inner);
+        finish(
+            &mut coordinator.inner.state.lock().unwrap(),
+            &job,
+            completion,
+            now,
+        );
+        Some(job.workdir)
+    };
+    assert!(run(UNIX_EPOCH).is_some());
+    assert_eq!(strikes(), Some(1));
+    assert!(
+        run(UNIX_EPOCH).is_some(),
+        "the second repository is checked"
+    );
+    assert_eq!(
+        strikes(),
+        Some(1),
+        "but it does not contact the blocked host"
+    );
+    assert!(run(UNIX_EPOCH).is_none());
+    let expired = UNIX_EPOCH + Duration::from_secs(6 * 60);
+    assert!(run(expired).is_some(), "one probe after the block");
+    assert_eq!(strikes(), Some(2));
+    assert!(
+        run(expired).is_none(),
+        "the failed probe blocks the host again"
+    );
 }
 
 /// Counts remote contacts: every fetch runs the remote's upload-pack once.

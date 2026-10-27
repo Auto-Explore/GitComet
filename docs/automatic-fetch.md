@@ -30,8 +30,8 @@ refspecs keeps its own schedule. A manual **Fetch all** in one worktree restarts
 the interval for the others that share its fetch. Manual remote commands and
 repository maintenance take priority over automatic fetching.
 
-The next attempt is scheduled after the previous attempt finishes, whether it
-succeeded or failed. A successful manual **Fetch all** restarts that interval.
+The next attempt is scheduled after the previous attempt finishes. A successful
+manual **Fetch all** restarts that interval.
 Changing the interval updates the schedule. Returning from sleep causes one
 overdue attempt rather than replaying missed intervals. Switching tabs or
 focusing the app does not request an extra fetch.
@@ -64,5 +64,23 @@ is unavailable.
 
 Automatic fetch can use stored credentials and unlocked SSH keys. It does not
 open sign-in dialogs or interrupt the current task with notifications. If
-authentication needs input, use **Fetch all** to complete it. Failed attempts
-retry at the next interval.
+authentication needs input, use **Fetch all** to complete it.
+
+## Failures
+
+Automatic fetch avoids contacting a remote again when retrying cannot help:
+
+- **Sign-in needed or repository missing.** Automatic fetch stops contacting
+  that remote until a manual **Fetch all** succeeds. The Pull menu names the
+  paused remotes. Other remotes of the repository keep fetching.
+- **Server unreachable or busy.** Automatic fetch stops contacting that server
+  for every repository: for 5 minutes after an unreachable server, or 15 after a
+  rate limit or server error, doubling up to an hour. When the wait ends, one
+  repository tries the server before the others do.
+- **Every failure** doubles the repository's next wait, up to 8 times the
+  interval, and never past six hours unless the interval is longer. The Pull
+  menu shows the next attempt.
+
+A successful manual **Fetch all** clears these waits for its repository and its
+servers. So does turning automatic fetching off and on again, or restarting
+GitComet.
