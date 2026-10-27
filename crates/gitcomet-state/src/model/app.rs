@@ -155,6 +155,10 @@ pub struct AppState {
     /// Cancels local key validation; submitted secrets live only in its effect.
     pub auth_validation_cancellation: Option<gitcomet_core::services::CancellationToken>,
     pub branch_exists_prompt: Option<BranchExistsPromptState>,
+    pub force_delete_branch_prompt: Option<ForceDeleteBranchPrompt>,
+    /// Every force-delete prompt has a distinct generation, so a refusal that
+    /// repeats the last one is still a new prompt.
+    pub force_delete_branch_prompt_generation: u64,
     pub submodule_trust_prompt: Option<SubmoduleTrustPromptState>,
     /// A submodule trust check is running in the background. Set the moment the
     /// add/update/load is triggered and cleared when the check resolves, so the
@@ -239,6 +243,14 @@ pub enum BranchExistsPromptOperation {
     CreateBranch,
     CheckoutRemoteBranch { remote: String, branch: String },
     RenameBranch { old_name: String },
+}
+
+/// `git branch -d` refused a branch that is not fully merged.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct ForceDeleteBranchPrompt {
+    pub generation: u64,
+    pub repo_id: RepoId,
+    pub name: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

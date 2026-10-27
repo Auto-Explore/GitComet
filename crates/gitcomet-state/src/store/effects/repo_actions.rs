@@ -253,6 +253,16 @@ fn open_worktree_holding_branch(
     Ok(handle)
 }
 
+fn is_branch_not_fully_merged(result: &Result<(), Error>) -> bool {
+    matches!(
+        result,
+        Err(error) if matches!(
+            error.kind(),
+            ErrorKind::Git(failure) if failure.id() == GitFailureId::BranchNotFullyMerged
+        )
+    )
+}
+
 fn is_branch_already_exists(result: &Result<(), Error>) -> bool {
     matches!(
         result,
@@ -631,6 +641,7 @@ pub(super) fn schedule_delete_branch(
     name: String,
 ) {
     let context = single_line_context(&name);
+    let refused_name = name.clone();
     schedule_repo_action_with_hook(
         executor,
         repos,
@@ -640,7 +651,20 @@ pub(super) fn schedule_delete_branch(
         context,
         move |repo| repo.delete_branch(&name),
         send_refresh_branches_on_success,
-        repo_action_finished(RepoActionKind::DeleteBranch),
+        move |repo_id, result| {
+            if is_branch_not_fully_merged(&result) {
+                InternalMsg::BranchNotFullyMerged {
+                    repo_id,
+                    name: refused_name,
+                }
+            } else {
+                InternalMsg::RepoActionFinished {
+                    repo_id,
+                    action: RepoActionKind::DeleteBranch,
+                    result,
+                }
+            }
+        },
     );
 }
 

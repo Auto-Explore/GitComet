@@ -246,8 +246,8 @@ impl PopoverHost {
             PopoverKind::MergeAbortConfirm { repo_id } => {
                 merge_abort_confirm::panel(self, repo_id, cx)
             }
-            PopoverKind::ForceDeleteBranchConfirm { repo_id, name } => {
-                force_delete_branch_confirm::panel(self, repo_id, name, cx)
+            PopoverKind::ForceDeleteBranchConfirm(prompt) => {
+                force_delete_branch_confirm::panel(self, prompt, cx)
             }
             PopoverKind::ForceRemoveWorktreeConfirm(prompt) => {
                 force_remove_worktree_confirm::panel(self, prompt, cx)

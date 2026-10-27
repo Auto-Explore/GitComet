@@ -259,10 +259,7 @@ pub(crate) enum PopoverKind {
         target: String,
         operation: BranchExistsPromptOperation,
     },
-    ForceDeleteBranchConfirm {
-        repo_id: RepoId,
-        name: String,
-    },
+    ForceDeleteBranchConfirm(gitcomet_state::model::ForceDeleteBranchPrompt),
     ForceRemoveWorktreeConfirm(ForceRemoveWorktreePrompt),
     DiscardChangesConfirm {
         repo_id: RepoId,

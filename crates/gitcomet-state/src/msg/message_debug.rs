@@ -645,6 +645,11 @@ impl std::fmt::Debug for InternalMsg {
                 .field("action", action)
                 .field("prompt", prompt)
                 .finish(),
+            InternalMsg::BranchNotFullyMerged { repo_id, name } => f
+                .debug_struct("BranchNotFullyMerged")
+                .field("repo_id", repo_id)
+                .field("name", name)
+                .finish(),
             InternalMsg::RepoActionFinishedInWorktree {
                 repo_id,
                 action,

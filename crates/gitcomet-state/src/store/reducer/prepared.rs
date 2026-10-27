@@ -591,6 +591,7 @@ fn internal_needs_preparation(message: &InternalMsg) -> bool {
         | InternalMsg::RepoActionFinished { .. }
         | InternalMsg::RepoPathsActionFinished { .. }
         | InternalMsg::BranchAlreadyExists { .. }
+        | InternalMsg::BranchNotFullyMerged { .. }
         | InternalMsg::RepoActionFinishedInWorktree { .. }
         | InternalMsg::RepoCommandFinished { .. }
         | InternalMsg::DiffLoaded { .. }
@@ -903,6 +904,16 @@ fn capture_internal(
                 state.active_repo,
             );
         }
+        InternalMsg::BranchNotFullyMerged { repo_id, .. } => {
+            capture_action(
+                state,
+                repos,
+                inputs,
+                *repo_id,
+                RepoActionKind::DeleteBranch,
+                state.active_repo,
+            );
+        }
         InternalMsg::RepoActionFinishedInWorktree {
             repo_id,
             action,
@@ -1070,6 +1081,9 @@ fn cancelled_selection_refresh(
         InternalMsg::BranchAlreadyExists { prompt, .. } if prompt.repo_id == repo_id => {
             AlreadyHandled
         }
+        InternalMsg::BranchNotFullyMerged {
+            repo_id: completed, ..
+        } if *completed == repo_id => AlreadyHandled,
         InternalMsg::RepoCommandFinished {
             repo_id: completed,
             command,

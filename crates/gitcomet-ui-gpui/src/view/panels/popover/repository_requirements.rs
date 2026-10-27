@@ -93,7 +93,7 @@ impl PopoverKind {
             | Self::FileHistoryCommitMenu { .. }
             | Self::PushSetUpstreamPrompt { .. }
             | Self::ForcePushConfirm { .. }
-            | Self::ForceDeleteBranchConfirm { .. }
+            | Self::ForceDeleteBranchConfirm(_)
             | Self::ForceRemoveWorktreeConfirm(_)
             | Self::PullPicker
             | Self::PushPicker

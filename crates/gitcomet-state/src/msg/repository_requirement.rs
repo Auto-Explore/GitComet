@@ -292,6 +292,7 @@ impl Msg {
             | Self::ApplyRepositoryPreferences(..)
             | Self::SetSidebarMode { .. }
             | Self::ShowBranchExistsPrompt { .. }
+            | Self::DismissForceDeleteBranchPrompt { .. }
             | Self::CloneRepo { .. }
             | Self::AbortCloneRepo { .. }
             | Self::ConfirmSubmoduleTrustPrompt

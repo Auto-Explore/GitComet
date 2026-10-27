@@ -1509,6 +1509,12 @@ fn reduce_inner(
             branch_exists_prompt::resolve(state, prompt, choice)
         }
         Msg::ShowBranchExistsPrompt { prompt } => branch_exists_prompt::show(state, prompt),
+        Msg::DismissForceDeleteBranchPrompt { prompt } => {
+            if state.force_delete_branch_prompt.as_ref() == Some(&prompt) {
+                state.force_delete_branch_prompt = None;
+            }
+            Vec::new()
+        }
         Msg::RenameBranch {
             repo_id,
             old_name,
@@ -1531,6 +1537,14 @@ fn reduce_inner(
             actions_emit_effects::delete_branch(repo_id, name)
         }
         Msg::ForceDeleteBranch { repo_id, name } => {
+            // Forcing answers the prompt that offered it.
+            if state
+                .force_delete_branch_prompt
+                .as_ref()
+                .is_some_and(|prompt| prompt.repo_id == repo_id && prompt.name == name)
+            {
+                state.force_delete_branch_prompt = None;
+            }
             begin_local_action(state, repo_id);
             actions_emit_effects::force_delete_branch(repo_id, name)
         }
@@ -2609,6 +2623,9 @@ fn reduce_inner(
         ),
         Msg::Internal(crate::msg::InternalMsg::BranchAlreadyExists { action, prompt }) => {
             external_and_history::branch_already_exists(inputs, state, action, prompt)
+        }
+        Msg::Internal(crate::msg::InternalMsg::BranchNotFullyMerged { repo_id, name }) => {
+            external_and_history::branch_not_fully_merged(inputs, state, repo_id, name)
         }
         Msg::Internal(crate::msg::InternalMsg::RepoActionFinishedInWorktree {
             repo_id,

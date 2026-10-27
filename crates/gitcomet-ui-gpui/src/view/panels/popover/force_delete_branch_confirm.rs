@@ -2,11 +2,11 @@ use super::*;
 
 pub(super) fn panel(
     this: &mut PopoverHost,
-    repo_id: RepoId,
-    name: String,
+    prompt: gitcomet_state::model::ForceDeleteBranchPrompt,
     cx: &mut gpui::Context<PopoverHost>,
 ) -> gpui::Div {
     let theme = this.theme;
+    let gitcomet_state::model::ForceDeleteBranchPrompt { repo_id, name, .. } = prompt;
 
     ConfirmDialog::new("Delete branch anyway?", DIALOG_420_WIDTH)
         .mono_value(theme, name.clone())
@@ -30,7 +30,7 @@ pub(super) fn panel(
                         repo_id,
                         name: name.clone(),
                     });
-                    this.close_popover(cx);
+                    this.close_resolved_popover(cx);
                 }),
             cx,
         )

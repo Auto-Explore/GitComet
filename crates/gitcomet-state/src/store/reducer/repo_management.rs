@@ -656,6 +656,13 @@ fn remove_repo(
     {
         state.branch_exists_prompt = None;
     }
+    if state
+        .force_delete_branch_prompt
+        .as_ref()
+        .is_some_and(|prompt| prompt.repo_id == repo_id)
+    {
+        state.force_delete_branch_prompt = None;
+    }
     super::auth::discard_auth_prompt_for_repo(state, repo_id);
     let mut effects = Vec::with_capacity(3 + SET_ACTIVE_REPO_INLINE_EFFECT_CAPACITY);
     let Some(removed_repo_ix) = state.repos.iter().position(|repo| repo.id == repo_id) else {

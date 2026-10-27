@@ -1129,7 +1129,8 @@ pub struct GitCometView {
     pub(super) pending_quit_other_views: Vec<gpui::WeakEntity<GitCometView>>,
     pub(super) pending_pull_reconcile_prompt: Option<RepoId>,
     pub(super) pending_branch_exists_prompt: Option<BranchExistsPromptState>,
-    pub(super) pending_force_delete_branch_prompt: Option<(RepoId, String)>,
+    pub(super) pending_force_delete_branch_prompt:
+        Option<gitcomet_state::model::ForceDeleteBranchPrompt>,
     pub(super) pending_force_delete_branch_centered: bool,
     pub(super) pending_force_remove_worktree_prompt: Option<ForceRemoveWorktreePrompt>,
     pub(super) pending_submodule_trust_prompt:

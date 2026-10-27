@@ -296,11 +296,6 @@ impl GitCometView {
                 .map(|d| d.message.clone())
                 .collect::<Vec<_>>();
             for msg in new_diag_messages {
-                if self.pending_force_delete_branch_prompt.is_none()
-                    && let Some(name) = parse_force_delete_branch_name(&msg)
-                {
-                    self.pending_force_delete_branch_prompt = Some((next_repo.id, name));
-                }
                 error_reports.push(ErrorReport::message(Some(next_repo.id), msg));
             }
 
@@ -475,6 +470,7 @@ impl GitCometView {
         let prev_annex_rail = CollapsedSidebarSection::Annex.is_available(self.active_repo());
         let prev_auth_prompt = self.state.auth_prompt.clone();
         let prev_branch_exists_prompt = self.state.branch_exists_prompt.clone();
+        let prev_force_delete_branch_prompt = self.state.force_delete_branch_prompt.clone();
         let prev_submodule_trust_prompt = self.state.submodule_trust_prompt.clone();
         let prev_submodule_trust_check = self.state.submodule_trust_check_pending;
         let merge_view_active = active_merge_view_target(next.as_ref()).is_some();
@@ -755,6 +751,9 @@ impl GitCometView {
         if prev_branch_exists_prompt != self.state.branch_exists_prompt {
             self.pending_branch_exists_prompt = self.state.branch_exists_prompt.clone();
         }
+        if prev_force_delete_branch_prompt != self.state.force_delete_branch_prompt {
+            self.pending_force_delete_branch_prompt = self.state.force_delete_branch_prompt.clone();
+        }
         if prev_submodule_trust_prompt != self.state.submodule_trust_prompt {
             self.pending_submodule_trust_prompt = self.state.submodule_trust_prompt.clone();
         }
@@ -792,6 +791,7 @@ impl GitCometView {
             || prev_annex_rail != annex_rail
             || prev_auth_prompt != self.state.auth_prompt
             || prev_branch_exists_prompt != self.state.branch_exists_prompt
+            || prev_force_delete_branch_prompt != self.state.force_delete_branch_prompt
     }
 }
 
@@ -811,18 +811,6 @@ fn newly_opened_repo_paths(prev: &AppState, next: &AppState) -> Vec<std::path::P
             (!was_ready).then(|| next_repo.spec.workdir.clone())
         })
         .collect()
-}
-
-fn parse_force_delete_branch_name(message: &str) -> Option<String> {
-    if !message.contains("git branch -d failed:") {
-        return None;
-    }
-    let needle = "run 'git branch -D ";
-    let start = message.find(needle)? + needle.len();
-    let rest = &message[start..];
-    let end = rest.find('\'')?;
-    let name = rest[..end].trim();
-    (!name.is_empty()).then(|| name.to_string())
 }
 
 /// A `git worktree remove` that Git refused for a reason `--force` overrides.
