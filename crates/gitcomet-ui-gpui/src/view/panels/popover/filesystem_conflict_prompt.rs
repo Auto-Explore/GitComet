@@ -31,7 +31,6 @@ pub(super) fn panel(
     cx: &mut gpui::Context<PopoverHost>,
 ) -> gpui::Div {
     let theme = this.theme;
-    let dialog_width = DIALOG_540_WIDTH.preferred_px(popover_ui_scale(cx));
     let prompt_id = prompt.prompt_id;
 
     let destination = components::TruncatedText::new(
@@ -60,7 +59,6 @@ pub(super) fn panel(
                 .px_2()
                 .py_1()
                 .min_w(px(0.0))
-                .max_w(dialog_width)
                 .font_family(crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY)
                 .child(destination.render(cx)),
         )

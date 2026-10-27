@@ -926,6 +926,7 @@ impl ConfirmDialog {
             .flex()
             .flex_col()
             .min_w(self.width.preferred_px(ui_scale))
+            .max_w(self.width.max_px(ui_scale))
             .child(popover_title(theme, self.title))
             .child(popover_rule(theme))
             .children(self.sections)

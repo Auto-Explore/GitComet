@@ -487,3 +487,35 @@ fn browse_opens_at_the_typed_worktree_folder_when_it_exists(cx: &mut gpui::TestA
         "a missing folder keeps the platform default"
     );
 }
+
+#[gpui::test]
+fn force_removal_dialog_wraps_its_explanation_at_the_dialog_width(cx: &mut gpui::TestAppContext) {
+    let repo_id = RepoId(1);
+    let (view, cx) = open_view(cx, repo_with_feature_worktree(repo_id), repo_id);
+    open_popover(
+        &view,
+        cx,
+        PopoverKind::ForceRemoveWorktreeConfirm(ForceRemoveWorktreePrompt {
+            repo_id,
+            path: PathBuf::from(FEATURE),
+            branch: Some("feat/x".to_string()),
+            blocker: gitcomet_core::error::WorktreeRemovalBlocker::Submodules,
+        }),
+    );
+
+    let cancel = cx
+        .debug_bounds("force_remove_worktree_cancel")
+        .expect("cancel is drawn");
+    let go = cx
+        .debug_bounds("force_remove_worktree_go")
+        .expect("Delete anyway is drawn");
+    let width = cx.update(|_window, app| {
+        DIALOG_460_WIDTH.preferred_px(crate::ui_scale::UiScale::from_percent(
+            crate::ui_scale::current(app).percent,
+        ))
+    });
+    assert!(
+        go.right() - cancel.left() <= width,
+        "the buttons stay within the dialog's {width:?}: {cancel:?} {go:?}"
+    );
+}
