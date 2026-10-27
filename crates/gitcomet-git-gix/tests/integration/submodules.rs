@@ -1761,7 +1761,7 @@ fn checked_out_submodules_always_report_checkout_available() {
 #[cfg(unix)]
 #[test]
 fn submodule_trust_retries_config_contention_under_a_localized_git() {
-    crate::localized_git::run(
+    gitcomet_core::test_support::localized_git::run(
         module_path!(),
         "submodule_trust_retries_config_contention_under_a_localized_git",
         r#"#!/bin/sh

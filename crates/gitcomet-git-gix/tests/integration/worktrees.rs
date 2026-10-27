@@ -221,7 +221,7 @@ fn worktree_remove_classifies_the_refusals_that_force_overrides() {
 #[test]
 fn worktree_remove_classifies_refusals_under_a_localized_git() {
     // Git translates both refusals that `--force` overrides.
-    crate::localized_git::run(
+    gitcomet_core::test_support::localized_git::run(
         module_path!(),
         "worktree_remove_classifies_refusals_under_a_localized_git",
         r#"#!/bin/sh

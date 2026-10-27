@@ -2034,7 +2034,7 @@ fn feature_outside_the_fetch_refspec(root: &Path) -> (std::path::PathBuf, std::p
 #[cfg(unix)]
 #[test]
 fn pruning_pull_branch_recognizes_a_localized_missing_remote_ref() {
-    crate::localized_git::run(
+    gitcomet_core::test_support::localized_git::run(
         module_path!(),
         "pruning_pull_branch_recognizes_a_localized_missing_remote_ref",
         FAILING_BRANCH_FETCH_GIT,
@@ -2075,7 +2075,7 @@ fn pruning_pull_branch_recognizes_a_localized_missing_remote_ref() {
 #[cfg(unix)]
 #[test]
 fn pruning_pull_branch_keeps_a_branch_the_remote_still_has_when_its_fetch_fails() {
-    crate::localized_git::run(
+    gitcomet_core::test_support::localized_git::run(
         module_path!(),
         "pruning_pull_branch_keeps_a_branch_the_remote_still_has_when_its_fetch_fails",
         FAILING_BRANCH_FETCH_GIT,

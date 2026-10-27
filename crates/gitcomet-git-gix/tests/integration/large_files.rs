@@ -2539,7 +2539,7 @@ fn with_lfs_shim(name: &str, script: &str, test: impl FnOnce(&Path)) {
         let root = tempfile::tempdir().unwrap();
         let bin = root.path().join("bin");
         fs::create_dir(&bin).unwrap();
-        crate::script::write_executable(&bin.join("git-lfs"), script);
+        gitcomet_core::test_support::script::write_executable(&bin.join("git-lfs"), script);
         let mut paths = vec![bin];
         paths.extend(std::env::split_paths(&std::env::var_os("PATH").unwrap()));
         let mut child = std::process::Command::new(std::env::current_exe().unwrap());
@@ -2548,7 +2548,7 @@ fn with_lfs_shim(name: &str, script: &str, test: impl FnOnce(&Path)) {
             .env(CHILD, root.path())
             .env("PATH", std::env::join_paths(paths).unwrap())
             .env("GITCOMET_GIT_COMMAND_TIMEOUT_SECS", "1");
-        crate::child_test::run(&mut child, module_path!(), name);
+        gitcomet_core::test_support::child_test::run(&mut child, module_path!(), name);
         return;
     };
     let repo = PathBuf::from(root).join("repo");

@@ -1480,7 +1480,7 @@ fn launch_mergetool_uses_tool_path_override_without_custom_cmd() {
     setup_both_modified_text_conflict(repo, "a.txt", "ours\n", "theirs\n");
 
     let script_path = repo.join("fake-merge-tool.sh");
-    crate::script::write_executable(
+    gitcomet_core::test_support::script::write_executable(
         &script_path,
         "#!/bin/sh\n# args: local base remote merged\ncat \"$3\" > \"$4\"\n",
     );
@@ -1528,7 +1528,7 @@ fn launch_mergetool_refuses_repo_local_tool_path_without_consent() {
     // could fall back to a trusted path and launch a real GUI mid-test.
     let script_path = repo.join("repo-controlled-tool.sh");
     let marker_path = repo.join("tool-ran");
-    crate::script::write_executable(
+    gitcomet_core::test_support::script::write_executable(
         &script_path,
         &format!(
             "#!/bin/sh\n: > \"{}\"\ncat \"$3\" > \"$4\"\n",
@@ -1578,7 +1578,7 @@ fn launch_mergetool_builtin_tool_gets_merge_mode_arguments() {
     // Stand-in for kdiff3: like the real tool it only merges when an output
     // file is named with `-o`, and otherwise just shows a read-only 3-way diff.
     let script_path = repo.join("fake-kdiff3.sh");
-    crate::script::write_executable(
+    gitcomet_core::test_support::script::write_executable(
         &script_path,
         "#!/bin/sh\n\
          : > \"$PWD/kdiff3-args\"\n\
@@ -1683,7 +1683,7 @@ fn launch_mergetool_prefers_custom_cmd_over_tool_path_override() {
     setup_both_modified_text_conflict(repo, "a.txt", "ours\n", "theirs\n");
 
     let script_path = repo.join("fake-merge-tool.sh");
-    crate::script::write_executable(
+    gitcomet_core::test_support::script::write_executable(
         &script_path,
         "#!/bin/sh\nprintf 'path\\n' > \"$4\"\ntouch \"$PWD/path_invoked\"\n",
     );

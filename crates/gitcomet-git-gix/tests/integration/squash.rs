@@ -923,7 +923,7 @@ fn write_external_seq_editor(dir: &Path, todo: &str) -> PathBuf {
     let todo_file = dir.join("external-todo");
     fs::write(&todo_file, todo).expect("write external todo");
     let script = dir.join("external-seq-editor.sh");
-    crate::script::write_executable(
+    gitcomet_core::test_support::script::write_executable(
         &script,
         &format!("#!/bin/sh\ncp \"{}\" \"$1\"\n", todo_file.display()),
     );

@@ -921,7 +921,7 @@ fn cherry_pick_continue_surfaces_hook_failure_on_later_step() {
             true,
         )
         .expect("first conflict should pause");
-    crate::script::install_hook(
+    gitcomet_core::test_support::script::install_hook(
         &repo,
         "prepare-commit-msg",
         "#!/bin/sh\nif grep -q 'second change' \"$1\"; then\n  echo GITCOMET_PREPARE_HOOK_FAILURE >&2\n  exit 1\nfi\nexit 0\n",

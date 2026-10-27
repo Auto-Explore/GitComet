@@ -260,7 +260,7 @@ fn stale_requests_and_cancelled_previews_never_push() {
 fn preview_skips_hooks_and_signing_but_real_push_runs_hooks() {
     let fixture = Fixture::new();
     fixture.tags();
-    crate::script::install_hook(
+    gitcomet_core::test_support::script::install_hook(
         &fixture.local,
         "pre-push",
         "#!/bin/sh\necho ran > hook-ran\nexit 1\n",

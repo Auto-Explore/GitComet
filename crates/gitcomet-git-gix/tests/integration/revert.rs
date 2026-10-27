@@ -527,8 +527,8 @@ fn replayed_revert_commits_with_the_same_hooks_skipped() {
     open_backend(&repo)
         .revert_with_output(&commit_id(&change), true, None)
         .expect_err("signing failure");
-    crate::script::install_hook(&repo, "pre-commit", "#!/bin/sh\nexit 1\n");
-    crate::script::install_hook(&repo, "commit-msg", "#!/bin/sh\nexit 1\n");
+    gitcomet_core::test_support::script::install_hook(&repo, "pre-commit", "#!/bin/sh\nexit 1\n");
+    gitcomet_core::test_support::script::install_hook(&repo, "commit-msg", "#!/bin/sh\nexit 1\n");
     run_git(&repo, &["config", "commit.gpgsign", "false"]);
 
     open_backend(&repo)
@@ -679,8 +679,8 @@ fn failing_pre_commit_hook_does_not_block_revert() {
     let dir = tempfile::tempdir().expect("create tempdir");
     let repo = dir.path().join("repo");
     let change = setup_revertable_repo(&repo);
-    crate::script::install_hook(&repo, "pre-commit", "#!/bin/sh\nexit 1\n");
-    crate::script::install_hook(&repo, "commit-msg", "#!/bin/sh\nexit 1\n");
+    gitcomet_core::test_support::script::install_hook(&repo, "pre-commit", "#!/bin/sh\nexit 1\n");
+    gitcomet_core::test_support::script::install_hook(&repo, "commit-msg", "#!/bin/sh\nexit 1\n");
 
     open_backend(&repo)
         .revert_with_output(&commit_id(&change), true, None)
@@ -696,7 +696,11 @@ fn failing_prepare_commit_msg_hook_leaves_a_resumable_revert() {
     let dir = tempfile::tempdir().expect("create tempdir");
     let repo = dir.path().join("repo");
     let change = setup_revertable_repo(&repo);
-    crate::script::install_hook(&repo, "prepare-commit-msg", "#!/bin/sh\nexit 1\n");
+    gitcomet_core::test_support::script::install_hook(
+        &repo,
+        "prepare-commit-msg",
+        "#!/bin/sh\nexit 1\n",
+    );
 
     open_backend(&repo)
         .revert_with_output(&commit_id(&change), true, None)
