@@ -2,6 +2,7 @@
 //! actions and resize handles, and the commit box.
 
 use super::*;
+use gitcomet_core::git_execution_log::context::{ExecutionContext, UiSurface};
 
 /// One status section's numbers, as its header and body read them.
 #[derive(Clone, Copy)]
@@ -577,6 +578,7 @@ impl DetailsPaneView {
         .style(components::ButtonStyle::Subtle)
         .disabled(v.local_actions_in_flight)
         .on_click(theme, cx, |this, _e, _w, cx| {
+            let _scope = ExecutionContext::ui(UiSurface::Button, "stage_all").attach();
             let Some(repo_id) = this.active_repo_id() else {
                 return;
             };
@@ -605,6 +607,7 @@ impl DetailsPaneView {
         .style(components::ButtonStyle::Subtle)
         .disabled(v.local_actions_in_flight)
         .on_click(theme, cx, move |this, _e, _w, cx| {
+            let _scope = ExecutionContext::ui(UiSurface::Button, id).attach();
             let Some(repo_id) = this.active_repo_id() else {
                 return;
             };
@@ -669,6 +672,7 @@ impl DetailsPaneView {
         .style(components::ButtonStyle::Subtle)
         .disabled(v.local_actions_in_flight)
         .on_click(theme, cx, move |this, e, window, cx| {
+            let _scope = ExecutionContext::ui(UiSurface::Button, id).attach();
             let Some(repo_id) = this.active_repo_id() else {
                 return;
             };
@@ -710,6 +714,7 @@ impl DetailsPaneView {
         .style(components::ButtonStyle::Subtle)
         .disabled(v.local_actions_in_flight || v.untracked.count == 0)
         .on_click(theme, cx, move |this, _e, _w, cx| {
+            let _scope = ExecutionContext::ui(UiSurface::Button, "stage_all_untracked").attach();
             let Some(repo_id) = this.active_repo_id() else {
                 return;
             };
@@ -744,6 +749,8 @@ impl DetailsPaneView {
         .style(components::ButtonStyle::Subtle)
         .disabled(v.local_actions_in_flight || v.split_unstaged.count == 0)
         .on_click(theme, cx, move |this, _e, _w, cx| {
+            let _scope =
+                ExecutionContext::ui(UiSurface::Button, "stage_all_split_unstaged").attach();
             let Some(repo_id) = this.active_repo_id() else {
                 return;
             };
@@ -775,6 +782,7 @@ impl DetailsPaneView {
         .style(components::ButtonStyle::Subtle)
         .disabled(v.local_actions_in_flight)
         .on_click(theme, cx, |this, _e, _w, cx| {
+            let _scope = ExecutionContext::ui(UiSurface::Button, "unstage_all").attach();
             let Some(repo_id) = this.active_repo_id() else {
                 return;
             };
@@ -804,6 +812,7 @@ impl DetailsPaneView {
         .style(components::ButtonStyle::Subtle)
         .disabled(v.local_actions_in_flight)
         .on_click(theme, cx, |this, _e, _w, cx| {
+            let _scope = ExecutionContext::ui(UiSurface::Button, "unstage_selected").attach();
             let Some(repo_id) = this.active_repo_id() else {
                 return;
             };

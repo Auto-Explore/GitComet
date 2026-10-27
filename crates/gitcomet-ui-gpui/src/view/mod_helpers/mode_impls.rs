@@ -1145,6 +1145,7 @@ pub(crate) struct TerminalPanelResizeState {
 pub(crate) enum BottomPanelTab {
     Terminal,
     Reflog,
+    GitCommandLog,
     /// An extension's panel, by its index in the registry.
     Extension(usize),
 }

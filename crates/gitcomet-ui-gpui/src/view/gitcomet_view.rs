@@ -1,4 +1,5 @@
 use super::*;
+use gitcomet_core::git_execution_log::context::{ExecutionContext, UiSurface};
 
 impl GitCometView {
     fn hook_activity_workflow_repo(kind: &PopoverKind) -> Option<RepoId> {
@@ -242,6 +243,7 @@ impl GitCometView {
     ) {
         self.command_palette_open = false;
         if let Some(command) = command {
+            let _scope = ExecutionContext::ui(UiSurface::CommandPalette, command).attach();
             self.execute_command(command, Some(window), cx);
         }
     }
@@ -857,6 +859,9 @@ impl GitCometView {
             )
         });
 
+        let git_command_log_pane = cx.new(|cx| {
+            GitCommandLogPane::new(ui_model.clone(), initial_theme, weak_view.clone(), cx)
+        });
         let popover_host = cx.new(|cx| {
             PopoverHost::new(
                 Arc::clone(&store),
@@ -1262,6 +1267,7 @@ impl GitCometView {
             terminal_panel_resize: None,
             next_terminal_session_seq: 1,
             reflog_pane,
+            git_command_log_pane,
             file_history_pane,
             bottom_panel_providers: super::bottom_panel_providers::registered(cx),
             active_bottom_panel: FxHashMap::default(),
@@ -1413,6 +1419,8 @@ impl GitCometView {
             .update(cx, |pane, cx| pane.set_theme(theme, cx));
         self.reflog_pane
             .update(cx, |pane, cx| pane.set_theme(theme, cx));
+        self.git_command_log_pane
+            .update(cx, |pane, cx| pane.set_theme(theme, cx));
         self.file_history_pane
             .update(cx, |pane, cx| pane.set_theme(theme, cx));
         self.repo_tabs_bar
@@ -1467,6 +1475,8 @@ impl GitCometView {
             .update(cx, |pane, cx| pane.invalidate_font_metrics(cx));
         self.details_pane.update(cx, |_pane, cx| cx.notify());
         self.reflog_pane.update(cx, |_pane, cx| cx.notify());
+        self.git_command_log_pane
+            .update(cx, |_pane, cx| cx.notify());
         self.repo_tabs_bar.update(cx, |_bar, cx| cx.notify());
         self.action_bar.update(cx, |_bar, cx| cx.notify());
         self.bottom_status_bar.update(cx, |_bar, cx| cx.notify());

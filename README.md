@@ -263,6 +263,10 @@ Built-in themes are embedded in the GitComet binary. Custom themes are loaded fr
 
 The full theme guide, including file locations, schema details, example bundles, and override behavior, now lives in [THEMES.md](docs/themes.md).
 
+### Git Command Log
+
+Open **Git Command Log** from View or the command palette to inspect the latest 100 Git executions and native gix operations per repository. The log stays in memory and includes timing, source, results and retained output. See [the command log guide](docs/git-command-log.md) for filtering, copying and implementation details.
+
 ### Crash logs
 
 GitComet writes panic logs and abnormal-exit recovery state to:

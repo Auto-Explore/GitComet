@@ -31,6 +31,9 @@ pub(in crate::view) enum AppMenuAction {
     ShowReflog {
         repo_id: Option<RepoId>,
     },
+    ShowGitCommandLog {
+        repo_id: Option<RepoId>,
+    },
     #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     InstallDesktopIntegration,
     Quit,

@@ -116,6 +116,17 @@ pub(super) fn model_with_update_checks_disabled(
         AppMenuAction::OpenRemoteInBrowser,
     );
 
+    push_entry(
+        &mut items,
+        &mut debug_selectors,
+        "app_menu_show_git_command_log",
+        "Git Command Log",
+        Shortcut::None,
+        active_repo_id.is_none(),
+        AppMenuAction::ShowGitCommandLog {
+            repo_id: active_repo_id,
+        },
+    );
     // Sits with the other repository-scoped views rather than the app-wide rows
     // above: it opens a panel about *this* repo's history.
     push_entry(
@@ -281,6 +292,14 @@ pub(super) fn activate(
                     .request(RootRequest::OpenInExternalEditor(path), None, cx);
             }
             this.close_popover_and_restore_focus(window, cx);
+        }
+        AppMenuAction::ShowGitCommandLog { repo_id } => {
+            this.close_popover_and_restore_focus(window, cx);
+            if let Some(repo_id) = repo_id {
+                let _ =
+                    this.root_view
+                        .request(RootRequest::OpenGitCommandLogPanel(repo_id), None, cx);
+            }
         }
         AppMenuAction::ShowReflog { repo_id } => {
             this.close_popover_and_restore_focus(window, cx);

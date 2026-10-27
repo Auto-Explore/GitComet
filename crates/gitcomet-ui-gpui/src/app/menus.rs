@@ -179,7 +179,10 @@ pub(super) fn macos_app_menus_with_options(
         },
         Menu {
             name: "View".into(),
-            items: vec![MenuItem::action("Reflog", ShowReflog)],
+            items: vec![
+                MenuItem::action("Reflog", ShowReflog),
+                MenuItem::action("Git Command Log", ShowGitCommandLog),
+            ],
             disabled: false,
         },
         Menu {

@@ -2,6 +2,14 @@
 
 use super::*;
 
+fn defer_git_action(cx: &mut App, run: impl FnOnce(&mut App) + 'static) {
+    let context = gitcomet_core::git_execution_log::context::current();
+    cx.defer(move |cx| {
+        let _scope = gitcomet_core::git_execution_log::context::attach(context.as_ref());
+        run(cx);
+    });
+}
+
 pub(super) fn install_app_actions(cx: &mut App, backend: Arc<dyn GitBackend>) {
     crate::window_focus::observe_tab_navigation(cx).detach();
     install_global_diff_shortcut_fallback(cx);
@@ -10,7 +18,7 @@ pub(super) fn install_app_actions(cx: &mut App, backend: Arc<dyn GitBackend>) {
     let new_window_backend = Arc::clone(&backend);
     cx.on_action(move |_: &NewWindow, cx| {
         let backend = Arc::clone(&new_window_backend);
-        cx.defer(move |cx| {
+        defer_git_action(cx, move |cx| {
             let launch = normal_empty_launch_config(None);
             open_gitcomet_window(cx, backend, &launch);
             cx.activate(true);
@@ -18,13 +26,13 @@ pub(super) fn install_app_actions(cx: &mut App, backend: Arc<dyn GitBackend>) {
     });
 
     cx.on_action(|_: &OpenSettings, cx| {
-        cx.defer(|cx| {
+        defer_git_action(cx, |cx| {
             crate::view::open_settings_window(cx);
         });
     });
 
     cx.on_action(|_: &OpenInCodeEditor, cx| {
-        cx.defer(|cx| {
+        defer_git_action(cx, |cx| {
             let _ = update_active_or_existing_normal_gitcomet_window(cx, |view, cx| {
                 view.open_active_repo_in_external_code_editor(cx);
             });
@@ -34,7 +42,7 @@ pub(super) fn install_app_actions(cx: &mut App, backend: Arc<dyn GitBackend>) {
     let repo_backend = Arc::clone(&backend);
     cx.on_action(move |_: &OpenRepository, cx| {
         let backend = Arc::clone(&repo_backend);
-        cx.defer(move |cx| {
+        defer_git_action(cx, move |cx| {
             if existing_normal_gitcomet_window_blocks_repository_management_actions(cx) {
                 return;
             }
@@ -45,7 +53,7 @@ pub(super) fn install_app_actions(cx: &mut App, backend: Arc<dyn GitBackend>) {
     let recent_picker_backend = Arc::clone(&backend);
     cx.on_action(move |_: &SwitchRepository, cx| {
         let backend = Arc::clone(&recent_picker_backend);
-        cx.defer(move |cx| {
+        defer_git_action(cx, move |cx| {
             if existing_normal_gitcomet_window_blocks_repository_management_actions(cx) {
                 return;
             }
@@ -55,26 +63,37 @@ pub(super) fn install_app_actions(cx: &mut App, backend: Arc<dyn GitBackend>) {
     let workspace_picker_backend = Arc::clone(&backend);
     cx.on_action(move |_: &OpenWorkspace, cx| {
         let backend = Arc::clone(&workspace_picker_backend);
-        cx.defer(move |cx| open_workspace_picker_in_existing_or_new_window(cx, backend));
+        defer_git_action(cx, move |cx| {
+            open_workspace_picker_in_existing_or_new_window(cx, backend)
+        });
     });
     let command_palette_backend = Arc::clone(&backend);
     cx.on_action(move |_: &ToggleCommandPalette, cx| {
         let backend = Arc::clone(&command_palette_backend);
-        cx.defer(move |cx| toggle_command_palette_in_active_existing_or_new_window(cx, backend));
+        defer_git_action(cx, move |cx| {
+            toggle_command_palette_in_active_existing_or_new_window(cx, backend)
+        });
     });
     // Reaches the window even with nothing focused inside it — the same reason
     // the palette needs an app-level handler alongside its window one.
     cx.on_action(|_: &crate::view::ToggleRevealCommit, cx| {
-        cx.defer(toggle_reveal_commit_in_active_window);
+        defer_git_action(cx, toggle_reveal_commit_in_active_window);
     });
     cx.on_action(|_: &LocateFileInExplorer, cx| {
-        cx.defer(locate_file_in_active_or_existing_normal_window);
+        defer_git_action(cx, locate_file_in_active_or_existing_normal_window);
     });
     cx.on_action(|_: &OpenRemoteInBrowser, cx| {
-        cx.defer(open_remote_in_browser_in_active_window);
+        defer_git_action(cx, open_remote_in_browser_in_active_window);
+    });
+    cx.on_action(|_: &ShowGitCommandLog, cx| {
+        defer_git_action(cx, |cx| {
+            let _ = update_active_normal_gitcomet_window(cx, |view, cx| {
+                view.open_git_command_log_for_active_repo(cx)
+            });
+        });
     });
     cx.on_action(|_: &ShowReflog, cx| {
-        cx.defer(|cx| {
+        defer_git_action(cx, |cx| {
             let _ = update_active_normal_gitcomet_window(cx, |view, cx| {
                 view.open_reflog_panel_for_active_repo(cx);
             });
@@ -82,7 +101,7 @@ pub(super) fn install_app_actions(cx: &mut App, backend: Arc<dyn GitBackend>) {
     });
 
     cx.on_action(|_: &Close, cx| {
-        cx.defer(|cx| {
+        defer_git_action(cx, |cx| {
             let handled =
                 update_active_normal_gitcomet_window(cx, |view, cx| view.close_active_repo_tab(cx))
                     .unwrap_or(false);
@@ -92,24 +111,24 @@ pub(super) fn install_app_actions(cx: &mut App, backend: Arc<dyn GitBackend>) {
         });
     });
     cx.on_action(|_: &CloseWindow, cx| {
-        cx.defer(close_active_window_or_warn);
+        defer_git_action(cx, close_active_window_or_warn);
     });
     cx.on_action(|_: &PreviousRepository, cx| {
-        cx.defer(|cx| {
+        defer_git_action(cx, |cx| {
             let _ = update_active_normal_gitcomet_window(cx, |view, cx| {
                 view.activate_previous_repo_tab(cx)
             });
         });
     });
     cx.on_action(|_: &NextRepository, cx| {
-        cx.defer(|cx| {
+        defer_git_action(cx, |cx| {
             let _ = update_active_normal_gitcomet_window(cx, |view, cx| {
                 view.activate_next_repo_tab(cx)
             });
         });
     });
     cx.on_action(|_: &MinimizeWindow, cx| {
-        cx.defer(|cx| {
+        defer_git_action(cx, |cx| {
             if let Some(window) = cx.active_window() {
                 let _ = window.update(cx, |_root, window, _cx| {
                     window.minimize_window();
@@ -118,7 +137,7 @@ pub(super) fn install_app_actions(cx: &mut App, backend: Arc<dyn GitBackend>) {
         });
     });
     cx.on_action(|_: &ZoomWindow, cx| {
-        cx.defer(|cx| {
+        defer_git_action(cx, |cx| {
             if let Some(window) = cx.active_window() {
                 let _ = window.update(cx, |_root, window, _cx| {
                     crate::kit::window_chrome::toggle_window_zoom(window);
@@ -127,7 +146,7 @@ pub(super) fn install_app_actions(cx: &mut App, backend: Arc<dyn GitBackend>) {
         });
     });
     cx.on_action(|_: &ToggleFullScreen, cx| {
-        cx.defer(|cx| {
+        defer_git_action(cx, |cx| {
             if let Some(window) = cx.active_window() {
                 let _ = window.update(cx, |_root, window, _cx| {
                     window.toggle_fullscreen();
@@ -140,23 +159,25 @@ pub(super) fn install_app_actions(cx: &mut App, backend: Arc<dyn GitBackend>) {
     cx.on_action(|_: &DecreaseUiScale, cx| step_window_ui_scale(cx, ui_scale::step_down));
     cx.on_action(|_: &ResetUiScale, cx| {
         if let Some(window_id) = zoom_target_window(cx) {
-            cx.defer(move |cx| set_window_ui_scale_percent(cx, window_id, None));
+            defer_git_action(cx, move |cx| {
+                set_window_ui_scale_percent(cx, window_id, None)
+            });
         }
     });
     cx.on_window_closed(ui_scale::forget_window).detach();
     cx.on_window_closed(crate::theme::forget_window_theme)
         .detach();
-    cx.on_action(|_: &Hide, cx| cx.defer(|cx| cx.hide()));
-    cx.on_action(|_: &HideOthers, cx| cx.defer(|cx| cx.hide_other_apps()));
-    cx.on_action(|_: &ShowAll, cx| cx.defer(|cx| cx.unhide_other_apps()));
-    cx.on_action(|_: &Quit, cx| cx.defer(quit_app_or_warn));
+    cx.on_action(|_: &Hide, cx| defer_git_action(cx, |cx| cx.hide()));
+    cx.on_action(|_: &HideOthers, cx| defer_git_action(cx, |cx| cx.hide_other_apps()));
+    cx.on_action(|_: &ShowAll, cx| defer_git_action(cx, |cx| cx.unhide_other_apps()));
+    cx.on_action(|_: &Quit, cx| defer_git_action(cx, quit_app_or_warn));
 }
 
 fn step_window_ui_scale(cx: &mut App, step: fn(u32) -> u32) {
     let Some(window_id) = zoom_target_window(cx) else {
         return;
     };
-    cx.defer(move |cx| {
+    defer_git_action(cx, move |cx| {
         let next = step(ui_scale::percent_for_window(cx, window_id));
         set_window_ui_scale_percent(cx, window_id, Some(next));
     });
@@ -199,7 +220,7 @@ fn defer_global_diff_navigation(
     let Some(window) = window_id.and_then(|id| normal_gitcomet_window_by_id(cx, id)) else {
         return;
     };
-    cx.defer(move |cx| {
+    defer_git_action(cx, move |cx| {
         let _ = window.view.update(cx, navigate);
     });
 }
@@ -533,4 +554,43 @@ pub(super) fn bind_terminal_keys(cx: &mut App) {
         #[cfg(not(target_os = "macos"))]
         KeyBinding::new("secondary-shift-a", TerminalSelectAll, Some("Terminal")),
     ]);
+}
+
+#[cfg(test)]
+mod execution_context_tests {
+    use super::*;
+    use gitcomet_core::git_execution_log::context::{ExecutionContext, Origin, UiSurface};
+    use gitcomet_core::git_execution_log::{
+        ExecutionKind, ExecutionOutcome, GitExecutionLog, RepoLogKey,
+    };
+
+    #[gpui::test]
+    fn app_action_defer_preserves_the_menu_source_after_the_handler_returns(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let log = GitExecutionLog::default();
+        let key = RepoLogKey::new(std::path::Path::new("/deferred-menu-source-test"));
+        let deferred_log = log.clone();
+        let deferred_key = key.clone();
+        cx.update(|cx| {
+            let _scope = ExecutionContext::ui(UiSurface::Menu, "Open repository").attach();
+            defer_git_action(cx, move |_| {
+                deferred_log
+                    .begin(
+                        &deferred_key,
+                        ExecutionKind::Git,
+                        "git status",
+                        "Deferred action",
+                    )
+                    .finish(ExecutionOutcome::Success);
+            });
+        });
+        cx.run_until_parked();
+        let entries = log.snapshot(&key);
+        assert_eq!(entries.len(), 1);
+        assert!(
+            matches!(&entries[0].context.origin, Origin::Ui { surface: UiSurface::Menu, action } if action.as_ref() == "Open repository")
+        );
+        assert!(gitcomet_core::git_execution_log::context::current().is_none());
+    }
 }

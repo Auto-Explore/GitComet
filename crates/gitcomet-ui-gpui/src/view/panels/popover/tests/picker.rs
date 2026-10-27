@@ -1,4 +1,57 @@
 use super::branch::{create_tracking_store, wait_until};
+
+#[gpui::test]
+fn picker_row_menu_keeps_its_label_through_a_deferred_hosted_action(cx: &mut gpui::TestAppContext) {
+    use gitcomet_core::git_execution_log::context::{Origin, UiSurface};
+    use gitcomet_core::git_execution_log::{
+        ExecutionKind, ExecutionOutcome, GitExecutionLog, RepoLogKey,
+    };
+    let (store, events, _repo, workdir) = create_tracking_store("picker-row-source");
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    open_repo_picker(&view, cx);
+    let log = GitExecutionLog::default();
+    let key = RepoLogKey::new(&workdir);
+    let recorded = log.clone();
+    let recorded_key = key.clone();
+    let action = gitcomet_extension_api::HostedAction::new("Inspect repository", move |_| {
+        recorded
+            .begin(
+                &recorded_key,
+                ExecutionKind::Gix,
+                "Inspect native status",
+                "Hosted action",
+            )
+            .finish(ExecutionOutcome::Success);
+    });
+    cx.update(|window, app| {
+        let host = view.read(app).popover_host.clone();
+        host.update(app, |host, cx| {
+            picker_row_menu::open(
+                host,
+                picker_row_menu::PickerRowMenuTarget::Repo(repo_picker::RepoPickerEntry::Open(
+                    RepoId(1),
+                )),
+                0,
+                gpui::point(px(120.0), px(120.0)),
+                cx,
+            );
+            picker_row_menu::activate(
+                host,
+                ContextMenuAction::Hosted(action),
+                "Inspect repository",
+                window,
+                cx,
+            );
+        });
+    });
+    cx.run_until_parked();
+    let entries = log.snapshot(&key);
+    assert_eq!(entries.len(), 1);
+    assert!(
+        matches!(&entries[0].context.origin, Origin::Ui { surface: UiSurface::Menu, action } if action.as_ref() == "Inspect repository")
+    );
+}
 use super::*;
 use gitcomet_core::domain::{Branch, CommitId};
 
@@ -903,6 +956,7 @@ fn repo_picker_pins_outlive_the_recents_list_subprocess(cx: &mut gpui::TestAppCo
                 ContextMenuAction::PinRepository {
                     path: open_workdir.clone(),
                 },
+                "Repository row action",
                 window,
                 cx,
             );
@@ -1305,7 +1359,7 @@ fn workspace_row_menu_activates_other_workspaces_and_links_to_settings(
                     repo_picker::RepoPickerEntry::Workspace(work_id),
                 );
                 picker_row_menu::open(host, target, 0, gpui::point(px(120.0), px(120.0)), cx);
-                picker_row_menu::activate(host, action, window, cx);
+                picker_row_menu::activate(host, action, "Workspace row action", window, cx);
             });
         });
         cx.run_until_parked();
@@ -1368,6 +1422,7 @@ fn workspace_row_menu_delete_forgets_the_workspace(cx: &mut gpui::TestAppContext
                 ContextMenuAction::DeleteWorkspace {
                     workspace_id: work_id,
                 },
+                "Repository row action",
                 window,
                 cx,
             );
@@ -1676,6 +1731,7 @@ fn repo_picker_close_row_action_promotes_the_recents_cache(cx: &mut gpui::TestAp
                 ContextMenuAction::CloseRepo {
                     repo_id: gitcomet_state::model::RepoId(1),
                 },
+                "Repository row action",
                 window,
                 cx,
             );
@@ -1746,6 +1802,7 @@ fn repo_picker_row_action_says_so_when_the_repository_is_gone(cx: &mut gpui::Tes
                 ContextMenuAction::CloseRepo {
                     repo_id: gitcomet_state::model::RepoId(999),
                 },
+                "Repository row action",
                 window,
                 cx,
             );

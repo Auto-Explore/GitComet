@@ -818,6 +818,15 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         needs: Needs::Nothing,
     },
     CommandEntry {
+        id: Command::ShowGitCommandLog.id(),
+        label: "Show Git Command Log",
+        shortcut: Shortcut::None,
+        category: "History",
+        keywords: "git gix command execution log diagnostics output debug",
+        requires_repo: true,
+        needs: Needs::Nothing,
+    },
+    CommandEntry {
         id: Command::ShowReflog.id(),
         label: "Show Reflog",
         shortcut: Shortcut::None,

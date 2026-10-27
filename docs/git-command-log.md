@@ -2,7 +2,15 @@
 
 The Git command log records the latest 100 Git executions and meaningful gix operations for each repository in memory.
 
-Status: implementation in progress.
+Implementation status: the backend is committed; the UI integration is implemented in the working tree and still needs final verification. See [the continuation handoff](git-command-log-handoff.md).
+
+## Using the log
+
+Open **Git Command Log** from View, the application menu, or **Show Git Command Log** in the command palette. The bottom panel shares space with Terminal and Reflog.
+
+The table shows executions newest first, with command or operation, absolute start time, elapsed milliseconds, status, backend and source, each on one line. Git rows lead with the backend's readable label and dim the full invocation after it. Start times include seconds and use the preferred timezone. Select a row to inspect its issuer, thread, working directory, exit code and correlation identifiers as labelled, selectable values; values that do not apply are left out. The close button beside the tabs hides the details. The stdout and stderr tabs show selectable, bounded previews under a byte count; native gix operations report their result without inventing process output.
+
+Search covers commands, sources, metadata and retained output. The backend control cycles through All, Git and gix; **Failures only** includes failed, cancelled, timed-out and interrupted executions. **Copy entry** copies the selection, **Copy visible** respects the current filters, and **Clear** clears the active repository's shared history. Closing the panel leaves collection enabled.
 
 ## Behavior
 
@@ -32,13 +40,13 @@ GitBackend, GitRepository, Msg and Effect retain their public method/variant con
 
 The journal inserts Running entries at execution start and evicts by start sequence. Completion does not reorder entries, and an evicted or cleared entry cannot be recreated by later output or completion. Guards finalize abandoned executions as interrupted. Process exit status and the caller's interpretation remain separate, including accepted nonzero exits.
 
-## Implementation sequence
+## Integration
 
-1. Build the repository journal, context, previews and subprocess instrumentation, including streamed stdout and direct launch sites.
-2. Carry attribution through UI, deferred callbacks, state messages, workers, completions, coalesced loads and extension commands.
-3. Record meaningful native gix operations and link fallback subprocesses to their native parent.
-4. Add the independent bottom-panel pane, filtering, details, copying and clearing.
-5. Verify retention, concurrency, output bounds, outcomes, provenance, coalescing, native timing and panel integration; run the repository checks.
+Subprocess runners tap output before parsing it. Direct launch paths include repository initialization, discovery and configuration reads, clone, submodule checks, merge extraction, reference transactions and the detached annex webapp reaper. Global runtime/setup probes and arbitrary terminal subprocesses are outside repository history.
+
+UI actions supply their menu label, palette command, button identifier or shortcut. Extension commands supply their contribution identifier. State-generated work identifies startup, repository watching, activation or automatic refresh; callers without an attached cause remain unknown. Deferred callbacks and shared workers transfer owned context and restore it only while synchronous work runs. An extension that starts its own thread can transfer its current cause with `git_execution_log::context::wrap_task` from `gitcomet-core`.
+
+The pane subscribes before taking its initial snapshot, coalesces updates through a bounded channel, and refreshes running durations while visible. Output notifications do not publish AppState or invalidate the whole application. Selection uses execution identifiers, so new entries do not move it to a different command; eviction, filters and Clear remove selections that are no longer visible.
 
 ## Native gix logging
 
@@ -48,4 +56,4 @@ Sources: [gix features](https://github.com/GitoxideLabs/gitoxide/blob/dd39fb66e3
 
 ## Validation
 
-Retention tests cover independent repositories, shared windows, start order, concurrent completion, eviction and Clear. Output tests cover large streams, invalid bytes, redaction and unchanged parser input. Execution tests cover accepted nonzero exits, failures, timeout, cancellation, reference transactions and detached processes. Attribution tests cover deferred UI work, watchers, extension workers, replacement tasks and A/B/C coalescing. Native tests cover complete iterator timing and fallback results. GPUI tests cover tab coexistence, switching, selection, filtering, copying and clearing.
+Retention tests cover independent repositories, shared history, start order, concurrent completion, eviction and Clear. Output tests cover large streams, UTF-8 boundaries, invalid bytes, redaction and unchanged parser input. Execution tests cover accepted nonzero exits, failures, timeout, cancellation, clone and reference transactions. Attribution tests cover deferred UI and hosted actions, watchers, shared workers, replacement tasks and A/B/C coalescing. Native tests cover complete iterator timing and fallback results. GPUI tests cover real journal notifications, pane coexistence, selection, filtering, copying, clearing and hide/show behavior.

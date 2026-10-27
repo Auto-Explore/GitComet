@@ -625,7 +625,7 @@ pub(super) fn nav_targets(
     query: &str,
     cx: &gpui::Context<PopoverHost>,
 ) -> Vec<RepoPickerNavTarget> {
-    if let Some(actions) = picker_row_menu::nav_actions(this, cx) {
+    if let Some(actions) = picker_row_menu::nav_entries(this, cx) {
         return (0..actions.len())
             .map(RepoPickerNavTarget::RowAction)
             .collect();

@@ -20,6 +20,36 @@ fn bottom_panel_tab_bar_height(ui_scale: crate::ui_scale::UiScale) -> gpui::Pixe
 }
 
 impl GitCometView {
+    pub(super) fn on_git_command_log_panel_closed(
+        &mut self,
+        repo: RepoId,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.active_bottom_panel.get(&repo) == Some(&BottomPanelTab::GitCommandLog) {
+            self.active_bottom_panel.remove(&repo);
+        }
+        cx.notify();
+    }
+    pub(super) fn open_git_command_log_panel(
+        &mut self,
+        repo_id: RepoId,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.git_command_log_pane.update(cx, |pane, cx| {
+            pane.set_visible(Some(repo_id));
+            pane.open(repo_id, cx);
+        });
+        self.active_bottom_panel
+            .insert(repo_id, BottomPanelTab::GitCommandLog);
+        cx.notify();
+    }
+
+    pub(crate) fn open_git_command_log_for_active_repo(&mut self, cx: &mut gpui::Context<Self>) {
+        if let Some(repo_id) = self.active_repo_id() {
+            self.open_git_command_log_panel(repo_id, cx);
+        }
+    }
+
     /// Whether the reflog panel is open for `repo_id`. The panel itself owns
     /// that fact (and its filter text, scroll position, and selection); the
     /// root only decides where to put it.
@@ -112,6 +142,8 @@ impl GitCometView {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> Option<AnyElement> {
+        self.git_command_log_pane
+            .update(cx, |pane, _| pane.set_visible(None));
         let repo_id = self.active_repo_id()?;
         let providers = self.bottom_panel_providers.clone();
         let tabs: Vec<BottomPanelTab> = providers
@@ -318,9 +350,11 @@ mod tests {
         });
         cx.update(|_window, app| {
             view.update(app, |this, cx| {
-                this.apply_state_snapshot(Arc::clone(&state), cx);
+                this.store.replace_snapshot_for_test(Arc::clone(&state));
+                crate::view::test_support::push_test_state(this, Arc::clone(&state), cx);
             });
         });
+        cx.run_until_parked();
         (view, repo_id, cx)
     }
 
@@ -379,6 +413,55 @@ mod tests {
                 assert!(this.reflog_panel_is_open(repo_id, cx));
             });
         });
+    }
+
+    #[gpui::test]
+    fn command_log_coexists_with_reflog_and_closing_preserves_history(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        use gitcomet_core::git_execution_log::{
+            ExecutionKind, ExecutionOutcome, GitExecutionLog, RepoLogKey,
+        };
+        let (view, repo_id, cx) = view_with_active_repo(cx);
+        let key = RepoLogKey::new(std::path::Path::new("/tmp/bottom-panel-test"));
+        let mut execution =
+            GitExecutionLog::global().begin(&key, ExecutionKind::Git, "git status", "Test backend");
+        execution.finish(ExecutionOutcome::Success);
+        let execution_id = GitExecutionLog::global().snapshot(&key)[0].id;
+        cx.update(|window, app| {
+            view.update(app, |this, cx| {
+                this.open_reflog_panel(repo_id, cx);
+                this.open_git_command_log_for_active_repo(cx);
+                assert!(this.reflog_panel_is_open(repo_id, cx));
+                assert!(this.git_command_log_pane.read(cx).is_open(repo_id));
+                assert_eq!(
+                    this.active_bottom_panel[&repo_id],
+                    BottomPanelTab::GitCommandLog
+                );
+            });
+            let _ = window.draw(app);
+        });
+        assert!(cx.debug_bounds("bottom_panel_tab_reflog").is_some());
+        assert!(
+            cx.debug_bounds("bottom_panel_tab_git_command_log")
+                .is_some()
+        );
+        cx.update(|window, app| {
+            view.update(app, |this, cx| {
+                this.close_bottom_panel_tab(repo_id, BottomPanelTab::GitCommandLog, cx);
+                assert!(!this.git_command_log_pane.read(cx).is_open(repo_id));
+                assert!(this.reflog_panel_is_open(repo_id, cx));
+                assert!(
+                    GitExecutionLog::global()
+                        .snapshot(&key)
+                        .iter()
+                        .any(|entry| entry.id == execution_id)
+                );
+            });
+            let _ = window.draw(app);
+        });
+        assert!(cx.debug_bounds("git_command_log_panel").is_none());
+        assert!(cx.debug_bounds("reflog_panel_tab").is_some());
     }
 
     #[gpui::test]

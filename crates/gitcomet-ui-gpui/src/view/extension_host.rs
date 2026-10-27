@@ -7,6 +7,7 @@
 use super::command_palette::{CommandEntry, Needs};
 use super::*;
 use crate::kit::components::Shortcut;
+use gitcomet_core::git_execution_log::context::{ExecutionContext, Origin};
 use gitcomet_extension_api::{
     CommandContext, DialogContent, DialogHandle, EntryOrigin, ExtensionId, GateDecision, HostError,
     MenuLocation, Registry, RepositoryEntryRequest, RepositoryHandle, StateObserver, WindowHost,
@@ -1670,6 +1671,7 @@ impl GitCometView {
             return false;
         };
         let run = Rc::clone(&command.run);
+        let execution_context = ExecutionContext::new(Origin::Extension { command: id.into() });
         let requires_repository = command.requires_repository;
         let requirement = command.repository_requirement;
         let store = Arc::clone(&self.store);
@@ -1687,6 +1689,7 @@ impl GitCometView {
         // Deferred: the command reads this window through its host, and the
         // view is borrowed while it updates.
         cx.defer(move |cx| {
+            let _scope = execution_context.attach();
             let _ = window_handle.update(cx, |_, window, cx| {
                 let repository = match target {
                     Some(target) => {

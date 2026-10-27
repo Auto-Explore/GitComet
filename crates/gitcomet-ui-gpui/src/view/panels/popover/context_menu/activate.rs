@@ -8,6 +8,7 @@ use super::{
 };
 use crate::view::WorktreePopoverKind;
 use crate::view::gitcomet_view_requests::{RootRequest, RootRequests as _};
+use gitcomet_core::git_execution_log::context::{ExecutionContext, UiSurface};
 
 impl PopoverHost {
     pub(in crate::view) fn context_menu_activate_action(
@@ -1453,6 +1454,10 @@ impl PopoverHost {
         cx: &mut gpui::Context<Self>,
     ) {
         if let Some(action) = context_menu_entry_action_at(model, ix) {
+            let Some(ContextMenuItem::Entry { label, .. }) = model.items.get(ix) else {
+                return;
+            };
+            let _scope = ExecutionContext::ui(UiSurface::Menu, label.to_string()).attach();
             self.context_menu_activate_action(action, window, cx);
         }
     }

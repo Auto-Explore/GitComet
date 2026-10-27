@@ -444,6 +444,7 @@ use panels::{
     action_bar_density, action_bar_height, bottom_status_bar_height,
 };
 pub(crate) use panes::DiffRenderer;
+use panes::git_command_log::GitCommandLogPane;
 use panes::{
     CollapsedSidebarSection, DetailsPaneInit, DetailsPaneView, DiffRendererInit,
     HistoryPrimarySelection, HistoryView, MainPaneView, ReflogPaneInit, ReflogPaneView,

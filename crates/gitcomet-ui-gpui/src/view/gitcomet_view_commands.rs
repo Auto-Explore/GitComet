@@ -9,6 +9,7 @@ use super::{
     Window, WorktreePopoverKind, command_palette, components, head_branch_has_live_upstream,
     head_is_detached, pull_request, push_request,
 };
+use gitcomet_core::git_execution_log::context::{self, ExecutionContext, UiSurface};
 
 impl GitCometView {
     /// Runs the built-in or extension command with palette id `command_id`.
@@ -18,6 +19,9 @@ impl GitCometView {
         window: Option<&mut Window>,
         cx: &mut gpui::Context<Self>,
     ) {
+        let context = context::current()
+            .unwrap_or_else(|| ExecutionContext::ui(UiSurface::Action, command_id));
+        let _scope = context.attach();
         match Command::from_id(command_id) {
             Some(command) => self.execute_builtin_command(command, window, cx),
             None => {
@@ -599,6 +603,7 @@ impl GitCometView {
             Command::ShowReflog => {
                 self.open_reflog_panel_for_active_repo(cx);
             }
+            Command::ShowGitCommandLog => self.open_git_command_log_for_active_repo(cx),
             Command::FileHistory => {
                 if let Some(repo_id) = self.active_repo_id()
                     && let Some(window) = window

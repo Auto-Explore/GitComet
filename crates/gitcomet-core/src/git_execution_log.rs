@@ -142,7 +142,7 @@ impl ExecutionEntry {
             _ => String::new(),
         };
         format!(
-            "{}\nBackend: {}\nSource: {}\nIssuer: {}\nThread: {}\nRepository: {}\nWorking directory: {}\nStarted: {:?}\nDuration: {:.3} ms\nStatus: {}\nExit code: {:?}\nExecution: {} · Action: {} · Parent: {:?}{error}\n\nstdout ({} bytes, {} omitted):\n{}\n\nstderr ({} bytes, {} omitted):\n{}",
+            "{}\nBackend: {}\nSource: {}\nIssuer: {}\nThread: {}\nRepository: {}\nWorking directory: {}\nStarted: {:?}\nDuration: {:.3} ms\nStatus: {}\nExit code: {:?}\nExecution: {} · Action: {} · Parent: {:?}{error}\n\nstdout ({} bytes captured, {} omitted):\n{}\n\nstderr ({} bytes captured, {} omitted):\n{}",
             self.command,
             self.kind,
             self.context.origin,

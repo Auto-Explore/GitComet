@@ -1,4 +1,5 @@
 use super::*;
+use gitcomet_core::git_execution_log::context::{self, ExecutionContext, UiSurface};
 
 fn initialize_repository_command(path: &std::path::Path) -> std::process::Command {
     let mut command = gitcomet_core::process::git_command();
@@ -558,6 +559,8 @@ impl GitCometView {
 
     pub(crate) fn prompt_open_repo(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) {
         let view = cx.weak_entity();
+        let context = context::current()
+            .unwrap_or_else(|| ExecutionContext::ui(UiSurface::Action, "Open repository"));
 
         let rx = cx.prompt_for_paths(gpui::PathPromptOptions {
             files: false,
@@ -587,13 +590,18 @@ impl GitCometView {
 
                 // Let the backend decide whether the path is a repository.
                 // Frontend checks are brittle across bare repos/worktrees/submodules.
-                let _ = view.update(cx, |this, cx| this.open_repo_path(path, cx));
+                let _ = view.update(cx, |this, cx| {
+                    let _scope = context.attach();
+                    this.open_repo_path(path, cx);
+                });
             })
             .detach();
     }
 
     pub(crate) fn prompt_init_repo(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) {
         let view = cx.weak_entity();
+        let context = context::current()
+            .unwrap_or_else(|| ExecutionContext::ui(UiSurface::Action, "Initialize repository"));
         let rx = cx.prompt_for_paths(gpui::PathPromptOptions {
             files: false,
             directories: true,
@@ -634,19 +642,27 @@ impl GitCometView {
                     return;
                 };
                 let init_path = path.clone();
-                let result = smol::unblock(move || initialize_repository(&init_path)).await;
+                let result = smol::unblock(
+                    context
+                        .clone()
+                        .wrap(move || initialize_repository(&init_path)),
+                )
+                .await;
 
-                let _ = view.update(cx, |this, cx| match result {
-                    Ok(()) => {
-                        this.push_toast(
-                            components::ToastKind::Success,
-                            format!("Initialized repository at {}", path.display()),
-                            cx,
-                        );
-                        this.open_repo_path(path, cx);
-                    }
-                    Err(message) => {
-                        this.push_toast(components::ToastKind::Error, message, cx);
+                let _ = view.update(cx, |this, cx| {
+                    let _scope = context.attach();
+                    match result {
+                        Ok(()) => {
+                            this.push_toast(
+                                components::ToastKind::Success,
+                                format!("Initialized repository at {}", path.display()),
+                                cx,
+                            );
+                            this.open_repo_path(path, cx);
+                        }
+                        Err(message) => {
+                            this.push_toast(components::ToastKind::Error, message, cx);
+                        }
                     }
                 });
             })

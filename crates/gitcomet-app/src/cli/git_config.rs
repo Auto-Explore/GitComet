@@ -94,16 +94,48 @@ mod command_log_tests {
     use super::*;
 
     #[test]
-    fn relative_discovery_from_the_crate_directory_uses_the_repository_history() {
+    fn relative_discovery_from_a_subdirectory_uses_the_repository_history() {
         use gitcomet_core::git_execution_log::{GitExecutionLog, RepoLogKey};
-        let discovered = git_repo_toplevel_from_probe_dir(Path::new(".")).unwrap();
-        let key = RepoLogKey::new(&discovered);
-        let entries = GitExecutionLog::global().snapshot(&key);
+        const ROOT_ENV: &str = "GITCOMET_TEST_COMMAND_LOG_ROOT";
+        if let Some(root) = std::env::var_os(ROOT_ENV) {
+            let discovered = git_repo_toplevel_from_probe_dir(Path::new(".")).unwrap();
+            let key = RepoLogKey::new(Path::new(&root));
+            assert_eq!(RepoLogKey::new(&discovered), key);
+            let entries = GitExecutionLog::global().snapshot(&key);
+            assert_eq!(entries.len(), 1);
+            assert!(entries[0].command.contains("\".\""));
+            assert!(entries[0].command.contains("--show-toplevel"));
+            assert!(
+                GitExecutionLog::global()
+                    .snapshot(&RepoLogKey::new(Path::new(".")))
+                    .is_empty()
+            );
+            return;
+        }
+        let root = tempfile::tempdir().unwrap();
         assert!(
-            entries.iter().any(|entry| entry.command.contains("\".\"")
-                && entry.command.contains("--show-toplevel"))
+            gitcomet_core::test_support::git_fixture::git_command()
+                .current_dir(root.path())
+                .args(["init", "--quiet"])
+                .status()
+                .unwrap()
+                .success()
         );
-        assert_ne!(key, RepoLogKey::new(Path::new(".")));
+        let child = root.path().join("src/nested");
+        std::fs::create_dir_all(&child).unwrap();
+        let result = gitcomet_core::process::background_command(std::env::current_exe().unwrap())
+            .arg("relative_discovery_from_a_subdirectory_uses_the_repository_history")
+            .args(["--test-threads=1", "--nocapture"])
+            .env(ROOT_ENV, root.path())
+            .current_dir(child)
+            .output()
+            .unwrap();
+        assert!(
+            result.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&result.stdout),
+            String::from_utf8_lossy(&result.stderr)
+        );
     }
 
     #[test]

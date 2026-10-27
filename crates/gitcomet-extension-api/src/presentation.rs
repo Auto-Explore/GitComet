@@ -30,7 +30,11 @@ impl HostedAction {
 
     pub fn invoke(&self, cx: &mut App) {
         let run = self.run.clone();
-        cx.defer(move |cx| run(cx));
+        let context = gitcomet_core::git_execution_log::context::current();
+        cx.defer(move |cx| {
+            let _scope = gitcomet_core::git_execution_log::context::attach(context.as_ref());
+            run(cx);
+        });
     }
 }
 

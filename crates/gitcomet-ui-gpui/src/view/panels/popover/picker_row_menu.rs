@@ -14,6 +14,7 @@
 
 use super::*;
 use crate::kit::click::PointerClickExt as _;
+use gitcomet_core::git_execution_log::context::{ExecutionContext, UiSurface};
 
 /// The row whose menu is open, and where to draw it.
 #[derive(Clone)]
@@ -163,7 +164,7 @@ impl PickerRowMenu {
 }
 
 /// Runs the `ix`th entry the arrow keys can reach. Looked up from the same
-/// [`nav_actions`] the selection was made against, in the same frame, so the
+/// [`nav_entries`] the selection was made against, in the same frame, so the
 /// entry that runs is the entry that was highlighted.
 pub(super) fn activate_nth(
     this: &mut PopoverHost,
@@ -171,18 +172,20 @@ pub(super) fn activate_nth(
     window: &mut Window,
     cx: &mut gpui::Context<PopoverHost>,
 ) {
-    let Some(action) = nav_actions(this, cx).and_then(|actions| actions.into_iter().nth(ix)) else {
+    let Some((label, action)) =
+        nav_entries(this, cx).and_then(|actions| actions.into_iter().nth(ix))
+    else {
         return;
     };
-    activate(this, action, window, cx);
+    activate(this, action, &label, window, cx);
 }
 
 /// The entries the arrow keys walk while a menu is open — the enabled ones, from
 /// the same model the menu renders.
-pub(super) fn nav_actions(
+pub(super) fn nav_entries(
     this: &PopoverHost,
     cx: &gpui::Context<PopoverHost>,
-) -> Option<Vec<ContextMenuAction>> {
+) -> Option<Vec<(SharedString, ContextMenuAction)>> {
     let menu = this.picker_row_menu.as_ref()?;
     Some(
         menu.target
@@ -191,8 +194,11 @@ pub(super) fn nav_actions(
             .into_iter()
             .filter_map(|item| match item {
                 ContextMenuItem::Entry {
-                    action, disabled, ..
-                } => (!disabled).then_some(*action),
+                    action,
+                    label,
+                    disabled,
+                    ..
+                } => (!disabled).then_some((label, *action)),
                 _ => None,
             })
             .collect(),
@@ -297,6 +303,7 @@ fn close_for_action(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
 pub(super) fn activate(
     this: &mut PopoverHost,
     action: ContextMenuAction,
+    label: &str,
     window: &mut Window,
     cx: &mut gpui::Context<PopoverHost>,
 ) {
@@ -307,6 +314,7 @@ pub(super) fn activate(
     else {
         return;
     };
+    let _scope = ExecutionContext::ui(UiSurface::Menu, label).attach();
     close_for_action(this, cx);
     // Acting on a row leaves the picker up so the next one can be acted on
     // straight after; the entries that take you somewhere else are the ones that
@@ -403,6 +411,7 @@ pub(super) fn layer(
                 ..
             } => {
                 let selected = !disabled && selected_index == Some(nav_ix);
+                let execution_label = label.clone();
                 if !disabled {
                     nav_ix += 1;
                 }
@@ -421,7 +430,7 @@ pub(super) fn layer(
                     .disabled(disabled)
                     .selected(selected)
                     .on_select(theme, ui_scale_percent, cx, move |this, _e, window, cx| {
-                        activate(this, (*action).clone(), window, cx);
+                        activate(this, (*action).clone(), &execution_label, window, cx);
                     })
                     .debug_selector(move || format!("picker_row_action_{ix}")),
                 );

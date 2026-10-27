@@ -299,6 +299,7 @@ impl PopoverHost {
                 | AppMenuAction::OpenInCodeEditor { .. }
                 | AppMenuAction::CheckForUpdates
                 | AppMenuAction::ShowReflog { .. }
+                | AppMenuAction::ShowGitCommandLog { .. }
                 | AppMenuAction::Quit
                 | AppMenuAction::CloseWindow,
             ) => None,

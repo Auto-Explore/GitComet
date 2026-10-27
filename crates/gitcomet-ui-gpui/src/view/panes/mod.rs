@@ -1,6 +1,7 @@
 mod details;
 pub(in crate::view) mod diff;
 pub(in crate::view) mod file_history;
+pub(in crate::view) mod git_command_log;
 pub(in crate::view) mod history;
 pub(in crate::view) mod main;
 mod reflog;

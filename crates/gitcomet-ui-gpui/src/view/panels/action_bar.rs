@@ -2,6 +2,7 @@ use super::bar_items::{self, BarItemOwner, BarItems, ExtensionBarItem, Relocated
 use super::*;
 use crate::kit::interaction::{self as controls, ControlInteractionExt as _};
 use crate::view::repository_views::{MORE_VIEWS_INVOKER, RoutedArea, ViewTabs};
+use gitcomet_core::git_execution_log::context::{ExecutionContext, UiSurface};
 use gitcomet_extension_api::{BarItemLocation, BuiltinBarItem};
 use rustc_hash::FxHasher;
 use std::cell::RefCell;
@@ -1071,6 +1072,7 @@ impl BarItemOwner for ActionBarView {
                     theme,
                     cx,
                     |this, _e, _w, cx| {
+                        let _scope = ExecutionContext::ui(UiSurface::Button, "pull_main").attach();
                         let Some(repo) = this.active_repo() else {
                             return;
                         };
@@ -1162,6 +1164,7 @@ impl BarItemOwner for ActionBarView {
                     theme,
                     cx,
                     |this, e, window, cx| {
+                        let _scope = ExecutionContext::ui(UiSurface::Button, "push_main").attach();
                         let Some(repo) = this.active_repo() else {
                             return;
                         };

@@ -74,6 +74,7 @@ actions!(
         ApplyPatch,
         CheckForUpdates,
         ShowReflog,
+        ShowGitCommandLog,
         Close,
         CloseWindow,
         PreviousRepository,

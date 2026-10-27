@@ -19,6 +19,7 @@ pub(in crate::view) enum RootRequest {
     LocateOpenFileInExplorer,
     OpenInExternalEditor(PathBuf),
     OpenReflogPanel(RepoId),
+    OpenGitCommandLogPanel(RepoId),
     CheckForUpdates,
     RunExtensionCommand {
         id: String,
@@ -139,6 +140,9 @@ impl GitCometView {
                 self.open_path_in_external_code_editor(path, cx)
             }
             RootRequest::OpenReflogPanel(repo_id) => self.open_reflog_panel(repo_id, cx),
+            RootRequest::OpenGitCommandLogPanel(repo_id) => {
+                self.open_git_command_log_panel(repo_id, cx)
+            }
             RootRequest::CheckForUpdates => self.check_for_updates_manually(cx),
             RootRequest::RunExtensionCommand { id, repo: None } => {
                 self.run_extension_command(&id, cx);

@@ -1,6 +1,7 @@
 //! Repository and workspace routing between windows, and open requests.
 
 use super::*;
+use gitcomet_core::git_execution_log::context::{self, ExecutionContext, UiSurface};
 
 #[cfg(target_os = "macos")]
 pub(super) fn register_macos_open_request_handler(
@@ -372,7 +373,10 @@ pub(crate) fn open_repository_from_view<T>(
 ) where
     T: 'static,
 {
+    let context = context::current()
+        .unwrap_or_else(|| ExecutionContext::ui(UiSurface::Action, "Open repository"));
     cx.defer(move |cx| {
+        let _scope = context.attach();
         let path = normalize_repository_open_path(path);
         if !repository_entry_allowed(
             cx,
@@ -399,7 +403,10 @@ pub(crate) fn open_dropped_repository_from_view<T>(
 ) where
     T: 'static,
 {
+    let context = context::current()
+        .unwrap_or_else(|| ExecutionContext::ui(UiSurface::Action, "Drop repository"));
     cx.defer(move |cx| {
+        let _scope = context.attach();
         let path = normalize_repository_open_path(path);
         if let Some(source) = normal_gitcomet_window_by_id(cx, source_window_id) {
             if entry_contains_repo_path(&source, &path) {
@@ -870,6 +877,8 @@ pub(super) fn handle_browser_open_request_and_activate(
 }
 
 pub(super) fn prompt_open_repository(cx: &mut App, backend: Arc<dyn GitBackend>) {
+    let context = context::current()
+        .unwrap_or_else(|| ExecutionContext::ui(UiSurface::Action, "Open repository"));
     let source_window_id = find_normal_gitcomet_window(cx).map(|entry| entry.handle.window_id());
     let rx = cx.prompt_for_paths(gpui::PathPromptOptions {
         files: false,
@@ -905,6 +914,7 @@ pub(super) fn prompt_open_repository(cx: &mut App, backend: Arc<dyn GitBackend>)
         };
 
         cx.update(move |cx| {
+            let _scope = context.attach();
             let path = normalize_repository_open_path(path);
             if !repository_entry_allowed(
                 cx,

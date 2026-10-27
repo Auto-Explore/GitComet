@@ -103,6 +103,7 @@ commands! {
     AddWorktree => "add-worktree",
     Blame => "blame",
     ShowReflog => "show-reflog",
+    ShowGitCommandLog => "show-git-command-log",
     FileHistory => "file-history",
     LfsDownloadAll => "lfs-download-all",
     LfsFetchAll => "lfs-fetch-all",
@@ -201,6 +202,7 @@ impl Command {
             | Self::AddWorktree
             | Self::Blame
             | Self::ShowReflog
+            | Self::ShowGitCommandLog
             | Self::FileHistory
             | Self::LfsFetchAll
             | Self::LfsPrune

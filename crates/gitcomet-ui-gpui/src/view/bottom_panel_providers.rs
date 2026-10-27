@@ -87,6 +87,39 @@ impl BottomPanelProvider for Reflog {
         root.close_reflog_panel(repo, cx);
     }
 }
+struct GitCommandLog;
+impl BottomPanelProvider for GitCommandLog {
+    fn tab(&self) -> BottomPanelTab {
+        BottomPanelTab::GitCommandLog
+    }
+    fn labels(&self) -> PanelLabels {
+        PanelLabels {
+            id: "bottom_panel_tab_git_command_log".into(),
+            title: "Git Command Log".into(),
+            icon: "icons/history.svg".into(),
+        }
+    }
+    fn is_open(&self, root: &GitCometView, repo: RepoId, cx: &App) -> bool {
+        root.git_command_log_pane.read(cx).is_open(repo)
+    }
+    fn render(
+        &self,
+        root: &mut GitCometView,
+        _: AppTheme,
+        _: &mut Window,
+        cx: &mut gpui::Context<GitCometView>,
+    ) -> Option<AnyElement> {
+        let repo = root.active_repo_id();
+        root.git_command_log_pane
+            .update(cx, |pane, _| pane.set_visible(repo));
+        Some(root.git_command_log_pane.clone().into_any_element())
+    }
+    fn close(&self, root: &mut GitCometView, repo: RepoId, cx: &mut gpui::Context<GitCometView>) {
+        root.git_command_log_pane
+            .update(cx, |pane, cx| pane.close(repo, cx));
+        cx.notify();
+    }
+}
 struct ExtensionPanel {
     index: usize,
     title: SharedString,
@@ -127,7 +160,8 @@ impl BottomPanelProvider for ExtensionPanel {
 
 pub(in crate::view) type Providers = Rc<[Rc<dyn BottomPanelProvider>]>;
 pub(in crate::view) fn registered(cx: &App) -> Providers {
-    let mut panels: Vec<Rc<dyn BottomPanelProvider>> = vec![Rc::new(Terminal), Rc::new(Reflog)];
+    let mut panels: Vec<Rc<dyn BottomPanelProvider>> =
+        vec![Rc::new(Terminal), Rc::new(Reflog), Rc::new(GitCommandLog)];
     if let Some(registry) = super::extension_host::registry(cx) {
         panels.extend(registry.bottom_panels().iter().enumerate().map(
             |(index, (_, descriptor))| {

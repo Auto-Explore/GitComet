@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::view::pending_commit::PendingCommit;
+use gitcomet_core::git_execution_log::context::{ExecutionContext, UiSurface};
 
 pub(super) fn merge_active(repo: Option<&RepoState>) -> bool {
     repo.is_some_and(|r| matches!(&r.merge_commit_message, Loadable::Ready(Some(_))))
@@ -104,6 +105,7 @@ impl DetailsPaneView {
             return false;
         }
 
+        let _scope = ExecutionContext::ui(UiSurface::Shortcut, "Commit").attach();
         let _ = self.submit_commit(cx);
         true
     }
@@ -192,6 +194,8 @@ impl DetailsPaneView {
             |button, cx| {
                 button
                     .on_click(theme, cx, |this, _e, _w, cx| {
+                        let _scope =
+                            ExecutionContext::ui(UiSurface::Button, "commit_button").attach();
                         let _ = this.submit_commit(cx);
                     })
                     .debug_selector(|| "commit_button".to_string())

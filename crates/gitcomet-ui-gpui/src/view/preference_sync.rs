@@ -76,6 +76,9 @@ impl GitCometView {
     ) {
         self.ui_model
             .update(cx, |model, _cx| model.update_preferences(update));
+        let appearance = self.ui_model.read(cx).preferences.appearance.clone();
+        self.git_command_log_pane
+            .update(cx, |pane, cx| pane.set_appearance(appearance, cx));
     }
 
     pub(super) fn sync_cached_pane_widths_from_design(&mut self) {

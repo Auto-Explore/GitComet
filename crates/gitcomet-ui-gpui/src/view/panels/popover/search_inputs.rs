@@ -303,7 +303,7 @@ impl PopoverHost {
                     // edit to the filter dismisses it — the rows underneath are
                     // about to be re-filtered out from under its highlight.
                     picker_row_menu::close_on_query_change(this, query, cx);
-                    if let Some(actions) = picker_row_menu::nav_actions(this, cx) {
+                    if let Some(actions) = picker_row_menu::nav_entries(this, cx) {
                         return Some(
                             (0..actions.len())
                                 .map(branch_picker::BranchPickerNavTarget::RowAction)
@@ -580,7 +580,7 @@ impl PopoverHost {
                         // A menu floating over a row takes the arrow keys, and an
                         // edit to the filter dismisses it.
                         picker_row_menu::close_on_query_change(this, query, cx);
-                        if let Some(actions) = picker_row_menu::nav_actions(this, cx) {
+                        if let Some(actions) = picker_row_menu::nav_entries(this, cx) {
                             return Some(
                                 (0..actions.len())
                                     .map(worktree_badge_picker::WorktreeBadgeRow::RowAction)

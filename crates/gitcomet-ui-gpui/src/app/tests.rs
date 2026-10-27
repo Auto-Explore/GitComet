@@ -1938,6 +1938,7 @@ impl Render for KeyBindingProbe {
             .on_action(record_action_listener!(OpenRepository))
             .on_action(record_action_listener!(SwitchRepository))
             .on_action(record_action_listener!(ShowReflog))
+            .on_action(record_action_listener!(ShowGitCommandLog))
             .on_action(record_action_listener!(Close))
             .on_action(record_action_listener!(CloseWindow))
             .on_action(record_action_listener!(PreviousRepository))
