@@ -61,6 +61,15 @@ pub enum HostRequest {
     Notify(SharedString),
     OpenUrl(String),
     OpenPath(PathBuf),
+    OpenTerminal {
+        repository: RepositoryHandle,
+        cwd: PathBuf,
+        command: Option<String>,
+    },
+    RevealCommit {
+        repository: RepositoryHandle,
+        commit: gitcomet_core::domain::CommitId,
+    },
 }
 
 /// A window host for tests. Pass [`FakeWindowHost::host`] to extension code
@@ -79,6 +88,8 @@ pub struct FakeWindowHost {
     observers: RefCell<Vec<(u64, StateObserver)>>,
     next_observer: Cell<u64>,
     next_repo: Cell<u64>,
+    /// What each menu still open runs once closed.
+    menus_open: RefCell<Vec<crate::OnMenuClosed>>,
 }
 
 impl FakeWindowHost {
@@ -98,6 +109,7 @@ impl FakeWindowHost {
             observers: RefCell::default(),
             next_observer: Cell::new(1),
             next_repo: Cell::new(1),
+            menus_open: RefCell::default(),
         })
     }
 
@@ -132,6 +144,14 @@ impl FakeWindowHost {
     }
 
     /// Everything requested so far, oldest first.
+    /// Closes every menu opened with a close callback, running each.
+    pub fn close_menus(&self, cx: &mut App) {
+        let menus = std::mem::take(&mut *self.menus_open.borrow_mut());
+        for on_closed in menus {
+            on_closed(cx);
+        }
+    }
+
     pub fn requests(&self) -> Vec<HostRequest> {
         self.requests.borrow().clone()
     }
@@ -191,6 +211,19 @@ impl WindowHostImpl for FakeWindowHost {
 
     fn open_settings_at(&self, target: SettingsTarget, _cx: &mut App) -> Result<(), HostError> {
         self.record(HostRequest::OpenSettings(target));
+        Ok(())
+    }
+
+    fn reveal_commit(
+        &self,
+        repository: &RepositoryHandle,
+        commit: &gitcomet_core::domain::CommitId,
+        _cx: &mut App,
+    ) -> Result<(), HostError> {
+        self.record(HostRequest::RevealCommit {
+            repository: repository.clone(),
+            commit: commit.clone(),
+        });
         Ok(())
     }
 
@@ -365,6 +398,18 @@ impl WindowHostImpl for FakeWindowHost {
         Ok(DialogHandle::new(|_| {}))
     }
 
+    fn open_menu_with_on_closed(
+        &self,
+        _anchor: Point<Pixels>,
+        items: Vec<HostedMenuItem>,
+        on_closed: crate::OnMenuClosed,
+        _cx: &mut App,
+    ) -> Result<DialogHandle, HostError> {
+        self.record(HostRequest::Menu { items: items.len() });
+        self.menus_open.borrow_mut().push(on_closed);
+        Ok(DialogHandle::new(|_| {}))
+    }
+
     fn toast(
         &self,
         kind: NotificationKind,
@@ -399,6 +444,21 @@ impl WindowHostImpl for FakeWindowHost {
 
     fn open_path(&self, path: &Path, _cx: &mut App) -> Result<(), HostError> {
         self.record(HostRequest::OpenPath(path.to_path_buf()));
+        Ok(())
+    }
+
+    fn open_terminal(
+        &self,
+        repository: &RepositoryHandle,
+        cwd: &Path,
+        command: Option<&str>,
+        _cx: &mut App,
+    ) -> Result<(), HostError> {
+        self.record(HostRequest::OpenTerminal {
+            repository: repository.clone(),
+            cwd: cwd.to_path_buf(),
+            command: command.map(str::to_owned),
+        });
         Ok(())
     }
 

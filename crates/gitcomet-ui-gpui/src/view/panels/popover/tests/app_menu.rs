@@ -263,6 +263,7 @@ fn app_menu_view_with(
                 },
             );
             repo.open = Loadable::Ready(());
+            repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
             repo.remotes = remotes;
             let state = Arc::new(AppState {
                 repos: vec![repo],
@@ -302,6 +303,7 @@ fn web_remote(name: &str, url: &str) -> gitcomet_core::domain::Remote {
     gitcomet_core::domain::Remote {
         name: name.to_string(),
         url: Some(url.to_string()),
+        default_branch: None,
     }
 }
 

@@ -1220,6 +1220,7 @@ mod tests {
             },
         );
         repo.open = Loadable::Ready(());
+        repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
         repo.feedback_mut()
             .push_diagnostic(gitcomet_state::model::DiagnosticEntry {
                 time: std::time::SystemTime::now(),

@@ -149,6 +149,7 @@ fn start_cherry_pick_asks_whether_to_commit(cx: &mut gpui::TestAppContext) {
         },
     );
     repo.open = Loadable::Ready(());
+    repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
     repo.interactive_cherry_pick_setup = Some(InteractiveCherryPickSetup {
         entries: entries.clone(),
         source_colors: vec![],

@@ -7,6 +7,63 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
+#[gpui::test]
+fn bare_history_omits_stale_root_changes_and_preserves_dirty_linked_rows(
+    cx: &mut gpui::TestAppContext,
+) {
+    use gitcomet_core::domain::{FileStatus, FileStatusKind, RepositoryMode, WorktreeDirtySummary};
+    let commits = vec![commit("c1", &["c0"], "new"), commit("c0", &[], "old")];
+    let (view, cx, mut state, store) = refresh::mount(cx, Arc::new(log_page(commits, None)));
+    let root = tempfile::tempdir().unwrap();
+    let linked = tempfile::tempdir().unwrap();
+    let repo = &mut state.repos[0];
+    repo.spec.workdir = root.path().to_path_buf();
+    repo.repository_mode = Some(RepositoryMode::WorkingTree);
+    repo.worktree_status = Loadable::Ready(Arc::new(vec![FileStatus {
+        path: "stale.txt".into(),
+        kind: FileStatusKind::Modified,
+        conflict: None,
+    }]));
+    repo.worktree_status_rev += 1;
+    repo.worktree_dirty = Loadable::Ready(Arc::new(vec![WorktreeDirtySummary {
+        path: linked.path().to_path_buf(),
+        head: Some(CommitId("c0".into())),
+        branch: Some("topic".into()),
+        detached: false,
+        added: 1,
+        modified: 0,
+        deleted: 0,
+        staged: Vec::new(),
+        unstaged: Vec::new(),
+        line_stats: Default::default(),
+    }]));
+    repo.worktree_dirty_rev += 1;
+    let normal_fingerprint = HistoryView::notify_fingerprint_for(&state, false);
+    store.replace_snapshot_for_test(Arc::new(state.clone()));
+    ensure_history_cache_for_tests(cx, &view, Arc::new(state.clone()));
+    let history = cx.update(|_, app| view.read(app).main_pane.read(app).history_view.clone());
+    cx.update(|_, app| {
+        history.update(app, |history, _| {
+            assert!(history.ensure_history_worktree_summary_cache().0)
+        })
+    });
+    state.repos[0].repository_mode = Some(RepositoryMode::Bare);
+    assert_ne!(
+        normal_fingerprint,
+        HistoryView::notify_fingerprint_for(&state, false)
+    );
+    store.replace_snapshot_for_test(Arc::new(state.clone()));
+    ensure_history_cache_for_tests(cx, &view, Arc::new(state));
+    cx.update(|_, app| {
+        history.update(app, |history, _| {
+            assert!(!history.ensure_history_worktree_summary_cache().0);
+            let plan = history.ensure_history_list_plan();
+            assert!(!plan.show_working_tree_summary_row());
+            assert_eq!(plan.worktree_row_count(), 1);
+        })
+    });
+}
+
 /// The linked-worktree rows live in this table, so the two revs behind them
 /// have to move the fingerprint. Without them a finished scan -- or a row
 /// being selected -- changed nothing the pane hashed, and the rows sat stale
@@ -40,10 +97,17 @@ fn the_history_fingerprint_tracks_the_worktree_revs() {
     );
 
     state.repos[0].history_state.worktree_selection_rev += 1;
+    let after_selection = fingerprint(&state);
     assert_ne!(
-        after_scan,
-        fingerprint(&state),
+        after_scan, after_selection,
         "selecting a worktree row must repaint the row that shows it"
+    );
+
+    state.repos[0].worktrees_rev += 1;
+    assert_ne!(
+        after_selection,
+        fingerprint(&state),
+        "a new worktree list must repaint the clean worktrees' chips"
     );
 }
 
@@ -322,11 +386,14 @@ mod branch_names;
 mod columns;
 mod find;
 mod graph_gradient;
+mod host_reveal;
 mod interaction;
 mod lane_attribution;
+mod mark_menu;
 mod navigation;
 mod refresh;
 mod reveal;
 mod row_tooltips;
 mod selection;
 mod worktree_anchors;
+mod worktree_chips;

@@ -4,6 +4,7 @@ use crate::store::repository_runtime::RepositoryRuntimes;
 mod actions_emit_effects;
 mod auth;
 mod auto_fetch;
+mod bare_conversion;
 mod branch_exists_prompt;
 #[cfg(test)]
 mod comparison_tests;
@@ -236,6 +237,8 @@ pub(crate) fn msg_requires_available_git(msg: &Msg) -> bool {
     matches!(
         msg,
         Msg::OpenRepo(_)
+            | Msg::PreviewDisableBareMode { .. }
+            | Msg::DisableBareMode { .. }
             | Msg::OpenRepoFromExternalDrop(_)
             | Msg::RestoreSession { .. }
             | Msg::ReloadRepo { .. }
@@ -472,6 +475,9 @@ pub(crate) fn fill_stage_path_inline(
     path: std::path::PathBuf,
     effects: &mut SinglePathActionEffects,
 ) {
+    if refuse_bare_worktree_action(state, repo_id) {
+        return;
+    }
     begin_local_action(state, repo_id);
     effects.push(Effect::StagePath { repo_id, path });
 }
@@ -483,6 +489,9 @@ pub(crate) fn fill_stage_paths_inline(
     paths: RepoPathList,
     effects: &mut BatchPathActionEffects,
 ) {
+    if refuse_bare_worktree_action(state, repo_id) {
+        return;
+    }
     begin_local_action(state, repo_id);
     effects.push(Effect::StagePaths { repo_id, paths });
 }
@@ -494,6 +503,9 @@ pub(crate) fn fill_unstage_path_inline(
     path: std::path::PathBuf,
     effects: &mut SinglePathActionEffects,
 ) {
+    if refuse_bare_worktree_action(state, repo_id) {
+        return;
+    }
     begin_local_action(state, repo_id);
     effects.push(Effect::UnstagePath { repo_id, path });
 }
@@ -505,6 +517,9 @@ pub(crate) fn fill_unstage_paths_inline(
     paths: RepoPathList,
     effects: &mut BatchPathActionEffects,
 ) {
+    if refuse_bare_worktree_action(state, repo_id) {
+        return;
+    }
     begin_local_action(state, repo_id);
     effects.push(Effect::UnstagePaths { repo_id, paths });
 }
@@ -517,6 +532,9 @@ pub(crate) fn set_conflict_region_choice_inline(
     region_index: usize,
     choice: ConflictRegionChoice,
 ) {
+    if refuse_bare_worktree_action(state, repo_id) {
+        return;
+    }
     conflict_interactions::set_region_choice_inline(state, repo_id, path, region_index, choice);
 }
 
@@ -526,6 +544,9 @@ pub(crate) fn reset_conflict_resolutions_inline(
     repo_id: RepoId,
     path: RepoPath,
 ) {
+    if refuse_bare_worktree_action(state, repo_id) {
+        return;
+    }
     conflict_interactions::reset_resolutions_inline(state, repo_id, path);
 }
 
@@ -547,6 +568,55 @@ pub(super) fn reduce_prepared(
     state: &mut AppState,
     msg: Msg,
 ) -> Vec<Effect> {
+    if let Some((repo_id, requirement)) = msg.repository_requirement() {
+        if msg_requires_available_git(&msg)
+            && state
+                .repos
+                .iter()
+                .find(|repo| repo.id == repo_id)
+                .is_some_and(|repo| {
+                    matches!(
+                        repo.bare_mode_conversion,
+                        crate::model::BareModeConversionState::Converting
+                            | crate::model::BareModeConversionState::Reopening
+                    )
+                })
+        {
+            if let Msg::SaveWorktreeFile {
+                completion: Some(completion),
+                ..
+            } = msg
+            {
+                let _ = completion.try_send(false);
+            }
+            return Vec::new();
+        }
+        let annex_routes_pull = matches!(msg, Msg::Pull { .. })
+            && state
+                .repos
+                .iter()
+                .find(|repo| repo.id == repo_id)
+                .is_some_and(|repo| repo.annex_takes_over_pull_push(&state.large_file_settings));
+        if !annex_routes_pull
+            && requirement == gitcomet_core::domain::RepositoryRequirement::WorkingTree
+            && refuse_bare_worktree_action(state, repo_id)
+        {
+            report_error(
+                inputs,
+                state,
+                Some(repo_id),
+                gitcomet_core::domain::WORKING_TREE_REQUIRED_MESSAGE.to_string(),
+            );
+            if let Msg::SaveWorktreeFile {
+                completion: Some(completion),
+                ..
+            } = msg
+            {
+                let _ = completion.try_send(false);
+            }
+            return Vec::new();
+        }
+    }
     // History shows the repository's own worktree; a linked worktree's file
     // belongs to a hosted session, never to History's selection.
     if let Msg::SelectDiff { target, .. } = &msg
@@ -606,6 +676,27 @@ pub(super) fn reduce_prepared(
     }
 
     effects
+}
+
+fn refuse_bare_worktree_action(state: &mut AppState, repo_id: RepoId) -> bool {
+    let Some(repo) = state.repos.iter_mut().find(|repo| repo.id == repo_id) else {
+        return false;
+    };
+    if matches!(
+        repo.bare_mode_conversion,
+        crate::model::BareModeConversionState::Converting
+            | crate::model::BareModeConversionState::Reopening
+    ) {
+        repo.feedback_mut().last_error =
+            Some("Wait for bare mode conversion to finish.".to_string());
+        return true;
+    }
+    if !repo.is_bare() {
+        return false;
+    }
+    repo.feedback_mut().last_error =
+        Some(gitcomet_core::domain::WORKING_TREE_REQUIRED_MESSAGE.to_string());
+    true
 }
 
 /// Apply invariants that must hold whenever a reducer mutation is published.
@@ -720,6 +811,32 @@ fn reduce_inner(
     }
 
     match msg {
+        Msg::PreviewDisableBareMode { repo_id } => bare_conversion::preview(state, repo_id),
+        Msg::DisableBareMode { repo_id, preview } => {
+            bare_conversion::disable(state, repo_id, preview)
+        }
+        Msg::ClearBareConversionPreview { repo_id } => bare_conversion::clear(state, repo_id),
+        Msg::Internal(crate::msg::InternalMsg::BareConversionPreviewLoaded { repo_id, result }) => {
+            bare_conversion::preview_loaded(inputs, state, repo_id, result)
+        }
+        Msg::Internal(crate::msg::InternalMsg::QuiesceRepository {
+            common_dir,
+            cancellation,
+            reply,
+        }) => {
+            if cancellation.is_cancelled() {
+                return vec![Effect::Control(
+                    crate::msg::ControlEffect::RepositoryQuiesced { reply },
+                )];
+            }
+            bare_conversion::quiesce(repos, state, &common_dir, reply)
+        }
+        Msg::Internal(crate::msg::InternalMsg::BareModeDisabled { common_dir, result }) => {
+            bare_conversion::finished(inputs, repos, state, &common_dir, result)
+        }
+        Msg::Internal(crate::msg::InternalMsg::RepositoryModeLoaded { repo_id, result }) => {
+            bare_conversion::mode_loaded(inputs, repos, state, repo_id, result)
+        }
         Msg::OpenDocumentRepository { path, activate } => {
             repo_management::open_document_repository(inputs, id_alloc, state, path, activate)
         }
@@ -1462,12 +1579,13 @@ fn reduce_inner(
         Msg::AddWorktree {
             repo_id,
             path,
-            reference,
+            checkout,
+            open_after,
         } => {
             if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
                 repo_state.worktrees_in_flight = repo_state.worktrees_in_flight.saturating_add(1);
             }
-            actions_emit_effects::add_worktree(repo_id, path, reference)
+            actions_emit_effects::add_worktree(repo_id, path, checkout, open_after)
         }
         Msg::RemoveWorktree { repo_id, path } => {
             let normalized_path = if let Some(repo_state) =
@@ -2151,13 +2269,23 @@ fn reduce_inner(
             actions_emit_effects::drop_stash(repo_id, index)
         }
         Msg::Internal(crate::msg::InternalMsg::RepoOpenedOk {
+            repository_mode,
+            head_commit,
             repo_id,
             spec,
             repo,
             preferences,
-        }) => {
-            repo_management::repo_opened_ok(inputs, repos, state, repo_id, spec, repo, preferences)
-        }
+        }) => repo_management::repo_opened_ok(
+            inputs,
+            repos,
+            state,
+            repo_id,
+            spec,
+            repo,
+            preferences,
+            repository_mode,
+            head_commit,
+        ),
         Msg::Internal(crate::msg::InternalMsg::RepoLoadFinished {
             repo_id,
             load_epoch,
@@ -2528,6 +2656,6 @@ fn reduce_inner(
             repo_id,
             command,
             result,
-        }) => auth::repo_command_finished(inputs, repos, state, repo_id, command, result),
+        }) => auth::repo_command_finished(inputs, repos, id_alloc, state, repo_id, command, result),
     }
 }

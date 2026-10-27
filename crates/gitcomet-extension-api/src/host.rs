@@ -352,6 +352,26 @@ pub trait WindowHostImpl {
     fn focus_terminal(&self, _terminal: &TerminalTab, _cx: &mut App) -> Result<(), HostError> {
         Err(HostError::Unsupported)
     }
+    fn reveal_commit(
+        &self,
+        _repository: &RepositoryHandle,
+        _commit: &gitcomet_core::domain::CommitId,
+        _cx: &mut App,
+    ) -> Result<(), HostError> {
+        Err(HostError::Unsupported)
+    }
+
+    /// See [`WindowHost::open_terminal`]; `command`, when given, is typed
+    /// with Enter into an embedded terminal's new tab.
+    fn open_terminal(
+        &self,
+        _repository: &RepositoryHandle,
+        _cwd: &Path,
+        _command: Option<&str>,
+        _cx: &mut App,
+    ) -> Result<(), HostError> {
+        Err(HostError::Unsupported)
+    }
 
     fn dispatch(&self, msg: Msg, cx: &mut App) -> Result<(), HostError>;
 
@@ -390,6 +410,16 @@ pub trait WindowHostImpl {
         items: Vec<crate::HostedMenuItem>,
         cx: &mut App,
     ) -> Result<DialogHandle, HostError>;
+
+    fn open_menu_with_on_closed(
+        &self,
+        _anchor: gitcomet_ui_kit::gpui::Point<gitcomet_ui_kit::gpui::Pixels>,
+        _items: Vec<crate::HostedMenuItem>,
+        _on_closed: OnMenuClosed,
+        _cx: &mut App,
+    ) -> Result<DialogHandle, HostError> {
+        Err(HostError::Unsupported)
+    }
 
     fn toast(
         &self,
@@ -436,6 +466,9 @@ pub type WindowContent = Box<dyn FnOnce(&mut Window, &mut App) -> AnyView>;
 
 /// Runs once when a pop-out window closes, however it closes.
 pub type OnWindowClosed = Box<dyn FnOnce(&mut App)>;
+
+/// Runs once when a menu closes, however it closes.
+pub type OnMenuClosed = Box<dyn FnOnce(&mut App)>;
 
 /// What the host implements behind a [`PopOutWindow`].
 #[doc(hidden)]
@@ -642,6 +675,21 @@ impl WindowHost {
         self.0.focus_terminal(terminal, cx)
     }
 
+    /// Shows `commit` in `repository`'s History once this update ends, as a
+    /// click on a branch in the sidebar shows its tip: switches to History,
+    /// selects the commit and scrolls its row into view. A commit History's
+    /// mode leaves out switches History to all branches, and that mode is
+    /// kept, as the sidebar keeps it.
+    pub fn reveal_commit(
+        &self,
+        repository: &RepositoryHandle,
+        commit: &gitcomet_core::domain::CommitId,
+        cx: &mut App,
+    ) -> Result<(), HostError> {
+        self.check(repository, cx)?;
+        self.0.reveal_commit(repository, commit, cx)
+    }
+
     pub fn set_commit_identity_resolver(
         &self,
         resolver: Option<crate::CommitIdentityResolver>,
@@ -649,6 +697,40 @@ impl WindowHost {
     ) -> Result<(), HostError> {
         self.0.set_commit_identity_resolver(resolver, cx)
     }
+    /// Opens a terminal at `cwd` once this update ends, as the user's
+    /// terminal button would: a new tab of `repository`'s embedded terminal,
+    /// brought to the front and focused, or the external terminal they
+    /// chose. A relative `cwd` is joined to the workdir; one that is not a
+    /// folder opens nothing, and the window says so. The repository's own
+    /// terminal still opens in its workdir.
+    pub fn open_terminal(
+        &self,
+        repository: &RepositoryHandle,
+        cwd: &Path,
+        cx: &mut App,
+    ) -> Result<(), HostError> {
+        self.check(repository, cx)?;
+        self.0.open_terminal(repository, cwd, None, cx)
+    }
+
+    /// Like [`Self::open_terminal`], then types `command` and Enter once the
+    /// new tab first prints, so it runs as the user's own: text for whatever
+    /// shell they use, kept in its history. Quoting what goes into it is the
+    /// caller's. One line only: a command with a control character (a line
+    /// break, an escape) is [`HostError::InvalidRequest`]. Only the embedded
+    /// terminal can be handed a command: [`HostError::Unsupported`] when the
+    /// user's terminal button opens an external one.
+    pub fn open_terminal_with_command(
+        &self,
+        repository: &RepositoryHandle,
+        cwd: &Path,
+        command: &str,
+        cx: &mut App,
+    ) -> Result<(), HostError> {
+        self.check(repository, cx)?;
+        self.0.open_terminal(repository, cwd, Some(command), cx)
+    }
+
     /// Open these repositories together in a new main window, from any host
     /// kind including Settings. Repository entry gates still run normally.
     pub fn open_workspace(
@@ -845,6 +927,23 @@ impl WindowHost {
         cx: &mut App,
     ) -> Result<DialogHandle, HostError> {
         self.0.open_menu(anchor, items, cx)
+    }
+
+    /// Opens a menu as [`Self::open_menu`] does, and runs `on_closed` once
+    /// it has closed, however it closed: an item chosen, Escape, a click
+    /// away, another popover opening in its place, or its window closing.
+    /// It runs on a later turn of the app, never inside the update that
+    /// closed the menu. So an extension can show what the menu was opened
+    /// from as open until then.
+    pub fn open_menu_with_on_closed(
+        &self,
+        anchor: gitcomet_ui_kit::gpui::Point<gitcomet_ui_kit::gpui::Pixels>,
+        items: Vec<crate::HostedMenuItem>,
+        on_closed: impl FnOnce(&mut App) + 'static,
+        cx: &mut App,
+    ) -> Result<DialogHandle, HostError> {
+        self.0
+            .open_menu_with_on_closed(anchor, items, Box::new(on_closed), cx)
     }
 
     pub fn toast(

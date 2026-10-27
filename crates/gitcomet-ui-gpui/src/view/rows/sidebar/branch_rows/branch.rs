@@ -293,6 +293,10 @@ impl SidebarPaneView {
                                 badge_worktree_path.as_deref(),
                             ) {
                                 LocalBranchDoubleClickAction::CheckoutBranch { name } => {
+                                    if this.active_repo().is_some_and(RepoState::is_bare) {
+                                        this.explain_working_tree_required(cx);
+                                        return;
+                                    }
                                     this.store.dispatch(Msg::CheckoutBranch { repo_id, name });
                                     this.rebuild_diff_cache(cx);
                                     cx.notify();

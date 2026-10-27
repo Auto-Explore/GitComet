@@ -3,7 +3,7 @@ use rustc_hash::FxHashMap;
 use super::{
     STAT_REFRESH_MIN_ENTRIES, apply_porcelain_v2_gitlink_status_record, collect_unmerged_conflicts,
     conflict_kind_from_stage_mask, map_directory_entry_status, map_entry_status,
-    map_porcelain_v2_status_char, remove_conflicted_paths_from_staged,
+    map_porcelain_v2_status_char, merge_unmerged_conflicts, remove_conflicted_paths_from_staged,
     should_supplement_unmerged_conflicts, sort_and_dedup_status_entries, tree_id_for_commit,
 };
 use crate::test_support::{
@@ -1487,6 +1487,93 @@ fn timing_worktree_status_after_touch() {
         let clean_cpu = (cpu_ms() - cpu_start) / 20.0;
         println!(
             "timing worktree_status_after_touch files={files} text_auto={attributes} first={first_ms:.2}ms repeat_best={best:.2}ms repeat_cpu={repeat_cpu:.1}ms refreshed_index={clean:.2}ms refreshed_cpu={clean_cpu:.1}ms"
+        );
+    }
+}
+
+#[test]
+fn merge_unmerged_conflicts_marks_the_first_entry_or_appends() {
+    let entry = |path: &str, kind| FileStatus {
+        path: PathBuf::from(path),
+        kind,
+        conflict: None,
+    };
+    let mut unstaged = vec![
+        entry("a.txt", FileStatusKind::Modified),
+        entry("b.txt", FileStatusKind::Deleted),
+        entry("a.txt", FileStatusKind::Untracked),
+    ];
+    merge_unmerged_conflicts(
+        &mut unstaged,
+        vec![
+            (PathBuf::from("a.txt"), FileConflictKind::BothModified),
+            (PathBuf::from("c.txt"), FileConflictKind::AddedByUs),
+            (PathBuf::from("b.txt"), FileConflictKind::DeletedByThem),
+        ],
+    );
+    let summary: Vec<_> = unstaged
+        .iter()
+        .map(|e| (e.path.to_str().unwrap(), e.kind, e.conflict))
+        .collect();
+    assert_eq!(
+        summary,
+        [
+            (
+                "a.txt",
+                FileStatusKind::Conflicted,
+                Some(FileConflictKind::BothModified)
+            ),
+            (
+                "b.txt",
+                FileStatusKind::Conflicted,
+                Some(FileConflictKind::DeletedByThem)
+            ),
+            ("a.txt", FileStatusKind::Untracked, None),
+            (
+                "c.txt",
+                FileStatusKind::Conflicted,
+                Some(FileConflictKind::AddedByUs)
+            ),
+        ]
+    );
+}
+
+/// `cargo test -p gitcomet-git-gix --lib timing_merge_unmerged_conflicts --
+/// --ignored --nocapture`: status refresh during a merge with many conflicts.
+#[test]
+#[ignore = "timing probe"]
+fn timing_merge_unmerged_conflicts() {
+    for (changed, conflicted) in [(2_000usize, 500usize), (20_000, 5_000)] {
+        let unstaged: Vec<FileStatus> = (0..changed)
+            .map(|ix| FileStatus {
+                path: PathBuf::from(format!("src/module_{}/file_{ix}.rs", ix % 97)),
+                kind: FileStatusKind::Modified,
+                conflict: None,
+            })
+            .collect();
+        // Half the conflicts are listed as modified, half are missing.
+        let conflicts: Vec<(PathBuf, FileConflictKind)> = (0..conflicted)
+            .map(|ix| {
+                let listed = ix * 2 < conflicted;
+                let ix = if listed { ix * 3 } else { changed + ix };
+                (
+                    PathBuf::from(format!("src/module_{}/file_{ix}.rs", ix % 97)),
+                    FileConflictKind::BothModified,
+                )
+            })
+            .collect();
+        let mut samples = Vec::new();
+        for _ in 0..5 {
+            let mut entries = unstaged.clone();
+            let started = std::time::Instant::now();
+            merge_unmerged_conflicts(&mut entries, conflicts.clone());
+            samples.push(started.elapsed());
+            assert_eq!(entries.len(), changed + conflicted - conflicted.div_ceil(2));
+        }
+        samples.sort();
+        println!(
+            "timing merge_unmerged_conflicts changed {changed} conflicted {conflicted} p50 {:?}",
+            samples[2]
         );
     }
 }

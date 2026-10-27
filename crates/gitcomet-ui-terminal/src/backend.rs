@@ -151,6 +151,9 @@ pub enum TerminalBackendEvent {
     /// these via the event proxy and relies on us to forward them.
     PtyWrite(String),
     Title(String),
+    /// The program printed: the emulator parsed what it read from the PTY.
+    Output,
+    /// Repaint for anything else, such as the mouse cursor's shape.
     Wakeup,
     Bell,
     Exit,
@@ -169,7 +172,7 @@ impl From<AlacEvent> for TerminalBackendEvent {
             // clipboard, and a clipboard read pushed into the PTY would be
             // unbracketed keystrokes.
             AlacEvent::ClipboardStore(..) | AlacEvent::ClipboardLoad(..) => Self::Wakeup,
-            AlacEvent::Wakeup => Self::Wakeup,
+            AlacEvent::Wakeup => Self::Output,
             AlacEvent::Bell => Self::Bell,
             AlacEvent::Exit => Self::Exit,
             AlacEvent::ChildExit(status) => Self::ChildExit(status.code()),

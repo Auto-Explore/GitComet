@@ -398,19 +398,43 @@ fn finalize_status(
 }
 
 fn apply_unmerged_conflicts(repo: &gix::Repository, unstaged: &mut Vec<FileStatus>) -> Result<()> {
-    for (path, conflict_kind) in gix_unmerged_conflicts(repo)? {
-        if let Some(entry) = unstaged.iter_mut().find(|entry| entry.path == path) {
-            entry.kind = FileStatusKind::Conflicted;
-            entry.conflict = Some(conflict_kind);
-        } else {
-            unstaged.push(FileStatus {
+    merge_unmerged_conflicts(unstaged, gix_unmerged_conflicts(repo)?);
+    Ok(())
+}
+
+/// Marks each conflicted path's first unstaged entry, or adds one.
+fn merge_unmerged_conflicts(
+    unstaged: &mut Vec<FileStatus>,
+    conflicts: Vec<(PathBuf, FileConflictKind)>,
+) {
+    if conflicts.is_empty() {
+        return;
+    }
+    // Conflict paths are distinct, so indexing the entries up front finds the
+    // same entry a scan per conflict did.
+    let targets: Vec<Option<usize>> = {
+        let mut first = FxHashMap::with_capacity_and_hasher(unstaged.len(), Default::default());
+        for (ix, entry) in unstaged.iter().enumerate() {
+            first.entry(entry.path.as_path()).or_insert(ix);
+        }
+        conflicts
+            .iter()
+            .map(|(path, _)| first.get(path.as_path()).copied())
+            .collect()
+    };
+    for ((path, conflict_kind), target) in conflicts.into_iter().zip(targets) {
+        match target {
+            Some(ix) => {
+                unstaged[ix].kind = FileStatusKind::Conflicted;
+                unstaged[ix].conflict = Some(conflict_kind);
+            }
+            None => unstaged.push(FileStatus {
                 path,
                 kind: FileStatusKind::Conflicted,
                 conflict: Some(conflict_kind),
-            });
+            }),
         }
     }
-    Ok(())
 }
 
 pub(super) fn tree_id_for_commit(
@@ -1141,7 +1165,9 @@ fn collect_index_worktree_status_entry<U>(
             entry,
             ..
         } => {
-            if is_service_owned_rela_path(entry.rela_path.as_ref()) {
+            // Staging areas the filesystem service leaves are never user changes.
+            if gitcomet_core::path_utils::has_service_owned_git_component(entry.rela_path.as_ref())
+            {
                 return Ok(());
             }
             let Some(kind) = map_directory_entry_status(entry.status) else {
@@ -1167,7 +1193,9 @@ fn collect_index_worktree_status_entry<U>(
             copy,
             ..
         } => {
-            if is_service_owned_rela_path(dirwalk_entry.rela_path.as_ref()) {
+            if gitcomet_core::path_utils::has_service_owned_git_component(
+                dirwalk_entry.rela_path.as_ref(),
+            ) {
                 return push_rewrite_into_service_area(
                     source.rela_path(),
                     copy,
@@ -1196,13 +1224,6 @@ fn collect_index_worktree_status_entry<U>(
         }
     }
     Ok(())
-}
-
-/// Staging areas the filesystem service may leave in a worktree are never
-/// user changes.
-fn is_service_owned_rela_path(path: &gix::bstr::BStr) -> bool {
-    path.split(|byte| *byte == b'/')
-        .any(gitcomet_core::path_utils::is_service_owned_name)
 }
 
 /// A file parked in a staging area was removed from where it was tracked.

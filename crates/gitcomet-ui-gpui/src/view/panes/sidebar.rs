@@ -416,6 +416,7 @@ pub(in super::super) struct SidebarPaneView {
 struct SidebarNotifyFingerprint {
     sidebar_mode: SidebarMode,
     active_repo_id: Option<RepoId>,
+    repository_mode: Option<gitcomet_core::domain::RepositoryMode>,
     repo_fingerprint: Option<BranchSidebarFingerprint>,
     open_repo_workdirs_count: usize,
     open_repo_workdirs_hash: u64,
@@ -452,6 +453,7 @@ impl SidebarNotifyFingerprint {
         Self {
             sidebar_mode: state.sidebar_mode,
             active_repo_id,
+            repository_mode: repo.and_then(|repo| repo.repository_mode),
             repo_fingerprint,
             open_repo_workdirs_count,
             open_repo_workdirs_hash,
@@ -2028,6 +2030,16 @@ impl SidebarPaneView {
                 pane.rebuild_diff_cache(cx);
                 cx.notify();
             });
+        });
+    }
+
+    pub(in crate::view) fn explain_working_tree_required(&self, cx: &mut gpui::Context<Self>) {
+        let _ = self.root_view.update(cx, |root, cx| {
+            root.push_toast(
+                components::ToastKind::Warning,
+                gitcomet_core::domain::WORKING_TREE_REQUIRED_MESSAGE.to_owned(),
+                cx,
+            );
         });
     }
 

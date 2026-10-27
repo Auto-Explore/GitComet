@@ -40,14 +40,19 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
                     components::Button::new("clone_repo_browse", "Browse")
                         .focus_handle(this.clone_repo_browse_focus_handle.clone())
                         .style(components::ButtonStyle::Outlined)
-                        .on_click(theme, cx, |_this, _e, window, cx| {
+                        .on_click(theme, cx, |this, _e, window, cx| {
                             cx.stop_propagation();
                             let view = cx.weak_entity();
+                            let directory = crate::view::path_prompt::existing_folder(
+                                this.clone_repo_parent_dir_input.read(cx).text(),
+                                None,
+                            );
                             let rx = cx.prompt_for_paths(gpui::PathPromptOptions {
                                 files: false,
                                 directories: true,
                                 multiple: false,
                                 prompt: Some("Clone into folder".into()),
+                                directory,
                             });
 
                             window

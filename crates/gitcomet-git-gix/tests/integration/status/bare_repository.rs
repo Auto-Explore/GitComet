@@ -1,6 +1,9 @@
 use super::*;
 use gitcomet_core::domain::{HistoryMode, RepoStatus};
 
+#[path = "bare_actions.rs"]
+mod actions;
+
 fn init_bare(repo: &Path, populated: bool) {
     run_git(repo, &["init", "--bare", "-b", "main"]);
     if populated {

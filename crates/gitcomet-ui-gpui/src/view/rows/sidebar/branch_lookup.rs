@@ -12,7 +12,7 @@ pub(in crate::view) fn listed_worktree_paths_by_branch(
 
     let mut worktree_paths = FxHashMap::default();
     for worktree in worktrees.iter() {
-        if worktree.path == repo.spec.workdir {
+        if worktree.bare || worktree.path == repo.spec.workdir {
             continue;
         }
 
@@ -26,6 +26,39 @@ pub(in crate::view) fn listed_worktree_paths_by_branch(
     }
 
     worktree_paths
+}
+
+/// The first listed worktree other than this one that has `branch` checked out,
+/// as `listed_worktree_paths_by_branch` would map it.
+pub(in crate::view) fn branch_held_elsewhere(
+    repo: &RepoState,
+    branch: &str,
+) -> Option<std::path::PathBuf> {
+    let Loadable::Ready(worktrees) = &repo.worktrees else {
+        return None;
+    };
+    worktrees
+        .iter()
+        .find(|worktree| {
+            !worktree.bare
+                && worktree.path != repo.spec.workdir
+                && worktree.branch.as_deref() == Some(branch)
+        })
+        .map(|worktree| worktree.path.clone())
+}
+
+/// Where `branch` is checked out: this repository's own HEAD, or a listed worktree.
+pub(in crate::view) fn branch_checked_out_at(
+    repo: &RepoState,
+    branch: &str,
+) -> Option<std::path::PathBuf> {
+    // A detached HEAD reads "HEAD", which is no branch to hold.
+    if !repo.is_bare()
+        && matches!(&repo.head_branch, Loadable::Ready(head) if head == branch && head != "HEAD")
+    {
+        return Some(repo.spec.workdir.clone());
+    }
+    branch_held_elsewhere(repo, branch)
 }
 
 pub(super) fn branch_worktree_badge_path(
@@ -48,13 +81,16 @@ pub(in crate::view) fn active_worktree_paths_by_branch(
     // Preserve the first open repository for a path, as the former linear
     // lookup did, while avoiding a worktrees × open-repositories scan.
     let mut open_by_path = FxHashMap::default();
-    for open_repo in open_repos {
+    for open_repo in open_repos.iter().filter(|repo| !repo.is_bare()) {
         open_by_path
             .entry(&open_repo.spec.workdir)
             .or_insert(open_repo);
     }
     let mut active_worktrees = FxHashMap::default();
     for worktree in worktrees.iter() {
+        if worktree.bare {
+            continue;
+        }
         let Some(open_repo) = open_by_path.get(&worktree.path) else {
             continue;
         };

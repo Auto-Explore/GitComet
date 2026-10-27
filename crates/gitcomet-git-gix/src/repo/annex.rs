@@ -525,7 +525,7 @@ impl super::GixRepo {
                 arg.to_str()
                     .is_some_and(|arg| arg.split('-').all(|n| n.parse::<u64>().is_ok()))
             });
-        let names_targets = by_key || numbered_unused;
+        let names_targets = by_key || numbered_unused || args.iter().any(|arg| arg == "--all");
         if paths.is_empty() && !names_targets {
             return Err(backend(format!("{label}: no paths given")));
         }
@@ -657,12 +657,33 @@ impl super::GixRepo {
         };
         let content = if content { "--content" } else { "--no-content" };
         let label = format!("git annex {verb}");
+        if super::bare::native_mode(&self.spec.workdir)?
+            == gitcomet_core::domain::RepositoryMode::Bare
+        {
+            return self.run_annex_plain(&["sync", other_way, "--no-commit", content], &[], &label);
+        }
         match self.run_annex_plain(&[verb, content], &[], &label) {
             Err(error) if unknown_annex_command(&error, verb) => {
                 self.run_annex_plain(&["sync", other_way, "--no-commit", content], &[], &label)
             }
             result => result,
         }
+    }
+
+    fn run_annex_paths(
+        &self,
+        mut args: Vec<OsString>,
+        paths: &[PathBuf],
+        label: &str,
+    ) -> Result<CommandOutput> {
+        if paths.is_empty()
+            && super::bare::native_mode(&self.spec.workdir)?
+                == gitcomet_core::domain::RepositoryMode::Bare
+        {
+            args.push("--all".into());
+            return self.run_annex_json(&args, paths, &format!("{label} (all versions)"));
+        }
+        self.run_annex_json(&args, paths, label)
     }
 
     pub(super) fn run_annex_command(&self, command: &LargeFileCommand) -> Result<CommandOutput> {
@@ -693,7 +714,7 @@ impl super::GixRepo {
                     validate_name(from, "remote")?;
                     args.push(format!("--from={from}").into());
                 }
-                self.run_annex_json(&args, paths, "git annex get")
+                self.run_annex_paths(args, paths, "git annex get")
             }
             C::AnnexGetKeys { keys } => {
                 for key in keys {
@@ -775,7 +796,7 @@ impl super::GixRepo {
                 if *force {
                     args.push("--force".into());
                 }
-                self.run_annex_json(&args, paths, "git annex drop")
+                self.run_annex_paths(args, paths, "git annex drop")
             }
             C::AnnexCopy { paths, to } | C::AnnexMove { paths, to } => {
                 validate_name(to, "remote")?;
@@ -786,7 +807,7 @@ impl super::GixRepo {
                 };
                 let mut args = os(&[verb, "--json-progress"]);
                 args.push(format!("--to={to}").into());
-                self.run_annex_json(&args, paths, &format!("git annex {verb}"))
+                self.run_annex_paths(args, paths, &format!("git annex {verb}"))
             }
             C::AnnexUnlock { paths } => {
                 self.run_annex_json(&os(&["unlock"]), paths, "git annex unlock")

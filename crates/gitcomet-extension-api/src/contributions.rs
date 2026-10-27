@@ -378,6 +378,7 @@ pub struct CommandDescriptor {
     pub keywords: SharedString,
     /// Hidden while no repository is active.
     pub requires_repository: bool,
+    pub repository_requirement: gitcomet_core::domain::RepositoryRequirement,
     pub run: CommandHandler,
 }
 
@@ -392,6 +393,7 @@ impl CommandDescriptor {
             category: category.into(),
             keywords: SharedString::default(),
             requires_repository: false,
+            repository_requirement: gitcomet_core::domain::RepositoryRequirement::Repository,
             run: Rc::new(run),
         }
     }
@@ -404,6 +406,12 @@ impl CommandDescriptor {
     /// Hides the command while no repository is active.
     pub fn requiring_repository(mut self) -> Self {
         self.requires_repository = true;
+        self
+    }
+
+    pub fn requiring_working_tree(mut self) -> Self {
+        self.requires_repository = true;
+        self.repository_requirement = gitcomet_core::domain::RepositoryRequirement::WorkingTree;
         self
     }
 }

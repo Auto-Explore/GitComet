@@ -83,20 +83,7 @@ impl PickerRowMenuTarget {
             },
             Self::Worktree { repo_id, row } => match row {
                 worktree_badge_picker::WorktreeBadgeRow::Worktree(path) => {
-                    // The sidebar's menu names the branch checked out in the
-                    // worktree, so look it up the same way its rows do.
-                    let branch = this
-                        .state
-                        .repos
-                        .iter()
-                        .find(|repo| repo.id == *repo_id)
-                        .and_then(|repo| match &repo.worktrees {
-                            Loadable::Ready(worktrees) => worktrees
-                                .iter()
-                                .find(|worktree| &worktree.path == path)
-                                .and_then(|worktree| worktree.branch.clone()),
-                            _ => None,
-                        });
+                    let branch = worktree_picker::worktree_branch_for_path(this, *repo_id, path);
                     Some(PopoverKind::worktree(
                         *repo_id,
                         WorktreePopoverKind::Menu {

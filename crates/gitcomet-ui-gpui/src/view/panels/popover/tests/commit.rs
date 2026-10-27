@@ -10,6 +10,7 @@ fn open_repo(repo_id: RepoId, workdir: &str) -> RepoState {
         },
     );
     repo.open = Loadable::Ready(());
+    repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
     repo
 }
 

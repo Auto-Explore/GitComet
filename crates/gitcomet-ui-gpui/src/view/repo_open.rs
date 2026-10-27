@@ -539,6 +539,14 @@ impl GitCometView {
         patch: std::path::PathBuf,
         cx: &mut gpui::Context<Self>,
     ) {
+        if self.active_repo().is_some_and(RepoState::is_bare) {
+            self.push_toast(
+                components::ToastKind::Warning,
+                gitcomet_core::domain::WORKING_TREE_REQUIRED_MESSAGE.into(),
+                cx,
+            );
+            return;
+        }
         let Some(repo_id) = self.state.active_repo else {
             return;
         };
@@ -554,6 +562,7 @@ impl GitCometView {
             directories: true,
             multiple: false,
             prompt: Some("Open Git Repository".into()),
+            directory: None,
         });
 
         window
@@ -588,6 +597,7 @@ impl GitCometView {
             directories: true,
             multiple: false,
             prompt: Some("Initialize Git Repository".into()),
+            directory: None,
         });
 
         window

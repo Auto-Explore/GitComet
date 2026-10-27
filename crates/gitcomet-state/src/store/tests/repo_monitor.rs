@@ -169,6 +169,7 @@ impl GitRepository for RepoActivationRecordingRepo {
                 .worktree_lists
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             Ok(vec![gitcomet_core::domain::Worktree {
+                bare: false,
                 path: self.spec.workdir.clone(),
                 head: None,
                 branch: Some("main".into()),
@@ -573,6 +574,7 @@ fn checked_activation_skips_only_the_settled_single_checkout_listing() {
         repo.sequencer_state = Loadable::Ready(Default::default());
         repo.merge_commit_message = Loadable::Ready(None);
         let own = Worktree {
+            bare: false,
             path: workdir.clone(),
             head: None,
             branch: Some("main".into()),
@@ -584,6 +586,7 @@ fn checked_activation_skips_only_the_settled_single_checkout_listing() {
             "linked checkout" => repo.set_worktrees(Loadable::Ready(vec![
                 own,
                 Worktree {
+                    bare: false,
                     path: workdir.join("linked"),
                     head: None,
                     branch: Some("linked".into()),

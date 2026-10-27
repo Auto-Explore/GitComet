@@ -181,6 +181,29 @@ def lifecycle_cycle(secondary):
             {"do": "wait_ready", "timeout_ms": 60_000}]
 
 
+SOURCE_SUFFIXES = (".rs", ".ts", ".js", ".zig", ".c", ".cpp", ".h", ".py", ".go", ".java", ".cs")
+# Large enough to load the diff view, small enough to stay in its text path.
+RESIZE_DIFF_MAX_LINES = 8000
+
+
+def largest_source_file(repository):
+    """The tracked UTF-8 source file with the most lines, up to RESIZE_DIFF_MAX_LINES."""
+    best = None
+    for path in git(repository, "ls-files", "-z").stdout.decode().split("\0"):
+        if not path.endswith(SOURCE_SUFFIXES):
+            continue
+        try:
+            lines = (Path(repository) / path).read_bytes().decode("utf-8").count("\n")
+        except (OSError, UnicodeDecodeError):
+            continue
+        if lines <= RESIZE_DIFF_MAX_LINES and (best is None or lines > best[0]):
+            best = (lines, path)
+    if best is None:
+        raise ValueError(f"pane-resize-diff needs a tracked UTF-8 source file ({', '.join(SOURCE_SUFFIXES)}) "
+                         f"of at most {RESIZE_DIFF_MAX_LINES} lines")
+    return best[1]
+
+
 def file_text(repository, path):
     """A file's exact contents (line endings included), so writing them back
     changes nothing."""
@@ -341,6 +364,36 @@ def scenario(name, repository, save_file=SAVE_FILE, secondary=None, cycles=100):
     if name == "history-drag":
         return {"version": 1, "steps": ready + [{"do": "phase", "name": "drag"},
                 {"do": "drag_history", "to_fraction": .8, "steps": 90, "interval_ms": 16}]}
+    if name in ("pane-resize", "pane-resize-diff"):
+        # Each pane boundary dragged to and fro, as a user sizing the panes;
+        # the -diff variant first shows a large diff (every line of a big
+        # source file changed) in the main pane.
+        steps = list(ready)
+        if name == "pane-resize-diff":
+            # The first changes row must be the file this scenario edits.
+            if git(repository, "status", "--porcelain").stdout.strip():
+                raise ValueError("pane-resize-diff needs a clean repository; a failed run "
+                                 "leaves its edit behind (git checkout -- . restores it)")
+            target = largest_source_file(repository)
+            original = file_text(repository, target)
+            edited = "".join(f"// {line}" for line in original.splitlines(True))
+            steps += [{"do": "write_files", "paths": [target], "contents": edited, "rounds": 1,
+                       "interval_ms": 0, "keep": True},
+                      # The changes list lays the row out a frame after status shows it.
+                      {"do": "settle", "ms": 1000},
+                      {"do": "click", "target": {"list": "unstaged_row", "index": 0},
+                       "witness": {"kind": "diff_loaded"}},
+                      {"do": "settle", "ms": 2000}]
+        for handle in ("sidebar", "details"):
+            steps += [{"do": "phase", "name": f"{handle}_resize"},
+                      {"do": "drag_pane_resize", "handle": handle, "travel_px": 80,
+                       "steps": 600, "interval_ms": 16},
+                      {"do": "phase", "name": f"{handle}_resize_settle"},
+                      {"do": "settle", "ms": 1000}]
+        if name == "pane-resize-diff":
+            steps.append({"do": "write_files", "paths": [target], "contents": original, "rounds": 1,
+                          "interval_ms": 0, "expect_status": False, "keep": True})
+        return {"version": 1, "steps": steps}
     if name == "lifecycle":
         if not others:
             raise ValueError("lifecycle needs --secondary-repository")
@@ -453,6 +506,7 @@ def scenario(name, repository, save_file=SAVE_FILE, secondary=None, cycles=100):
 
 SCENARIOS = ("startup", "idle", "idle-minimized", "idle-hidden-terminal", "two-windows-idle", "history-select",
              "history-hover", "history-hover-stationary", "history-drag", "history-jump", "history-reopen", "repo-picker",
+             "pane-resize", "pane-resize-diff",
              "history-select-burst", "history-scroll", "status-save", "status-burst", "status-touch",
              "ignored-churn", "repo-tabs", "repo-tabs-edit", "diff-open", "still",
              "diff-search", "terminal-output", "settings", "lifecycle")

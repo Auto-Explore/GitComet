@@ -21,6 +21,25 @@ impl std::fmt::Debug for InternalMsg {
                 .field("repo_id", repo_id)
                 .field("lifetime", lifetime)
                 .finish(),
+            InternalMsg::QuiesceRepository { common_dir, .. } => f
+                .debug_struct("QuiesceRepository")
+                .field("common_dir", common_dir)
+                .finish_non_exhaustive(),
+            InternalMsg::RepositoryModeLoaded { repo_id, result } => f
+                .debug_struct("RepositoryModeLoaded")
+                .field("repo_id", repo_id)
+                .field("result", result)
+                .finish(),
+            InternalMsg::BareConversionPreviewLoaded { repo_id, result } => f
+                .debug_struct("BareConversionPreviewLoaded")
+                .field("repo_id", repo_id)
+                .field("result", result)
+                .finish(),
+            InternalMsg::BareModeDisabled { common_dir, result } => f
+                .debug_struct("BareModeDisabled")
+                .field("common_dir", common_dir)
+                .field("result", result)
+                .finish(),
             InternalMsg::AuthPromptValidated {
                 generation, result, ..
             } => f

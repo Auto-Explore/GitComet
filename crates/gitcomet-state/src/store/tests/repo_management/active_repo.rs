@@ -251,6 +251,8 @@ fn stale_open_result_after_cancel_is_ignored() {
             repo_id: repo1,
             load_epoch: old_epoch,
             message: Box::new(crate::msg::InternalMsg::RepoOpenedOk {
+                repository_mode: gitcomet_core::domain::RepositoryMode::WorkingTree,
+                head_commit: None,
                 preferences: None,
                 repo_id: repo1,
                 spec: RepoSpec {
@@ -342,6 +344,8 @@ fn inactive_open_result_does_not_schedule_refresh_or_tags() {
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::RepoOpenedOk {
+            repository_mode: gitcomet_core::domain::RepositoryMode::WorkingTree,
+            head_commit: None,
             preferences: None,
             repo_id: inactive_repo,
             spec: RepoSpec {
@@ -523,6 +527,8 @@ fn pre_open_worktree_lazy_load_retries_after_repo_opened() {
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::RepoOpenedOk {
+            repository_mode: gitcomet_core::domain::RepositoryMode::WorkingTree,
+            head_commit: None,
             preferences: None,
             repo_id,
             spec: RepoSpec {
@@ -555,6 +561,8 @@ fn load_ref_metadata_emits_effect_and_result_builds_the_lookup_map() {
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::RepoOpenedOk {
+            repository_mode: gitcomet_core::domain::RepositoryMode::WorkingTree,
+            head_commit: None,
             preferences: None,
             repo_id,
             spec: RepoSpec {
@@ -721,6 +729,8 @@ fn branch_change_during_an_in_flight_metadata_load_schedules_a_refetch() {
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::RepoOpenedOk {
+            repository_mode: gitcomet_core::domain::RepositoryMode::WorkingTree,
+            head_commit: None,
             preferences: None,
             repo_id,
             spec: RepoSpec {
@@ -794,6 +804,8 @@ fn pre_open_submodule_load_auto_starts_after_repo_opened() {
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::RepoOpenedOk {
+            repository_mode: gitcomet_core::domain::RepositoryMode::WorkingTree,
+            head_commit: None,
             preferences: None,
             repo_id,
             spec: RepoSpec {
@@ -851,6 +863,8 @@ fn pre_open_stash_lazy_load_can_retry_after_repo_opened() {
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::RepoOpenedOk {
+            repository_mode: gitcomet_core::domain::RepositoryMode::WorkingTree,
+            head_commit: None,
             preferences: None,
             repo_id,
             spec: RepoSpec {
@@ -921,6 +935,8 @@ fn ensure_sidebar_data_retries_requested_sections_after_repo_opened() {
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::RepoOpenedOk {
+            repository_mode: gitcomet_core::domain::RepositoryMode::WorkingTree,
+            head_commit: None,
             preferences: None,
             repo_id,
             spec: RepoSpec {

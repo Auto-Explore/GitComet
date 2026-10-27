@@ -1,4 +1,5 @@
 use super::*;
+use crate::kit::interaction as controls;
 
 pub(super) fn panel(
     this: &mut PopoverHost,
@@ -8,20 +9,38 @@ pub(super) fn panel(
     cx: &mut gpui::Context<PopoverHost>,
 ) -> gpui::Div {
     let theme = this.theme;
-    let remove_branch = branch.clone();
-    let header: SharedString = if branch.is_some() {
-        "Remove worktree and branch".into()
-    } else {
-        "Remove worktree".into()
-    };
+    let delete_branch = this.worktree_remove_delete_branch;
 
-    let mut dialog =
-        ConfirmDialog::new(header, DIALOG_420_WIDTH).text(theme, path.display().to_string());
+    let mut dialog = ConfirmDialog::new("Remove worktree", DIALOG_420_WIDTH)
+        .text(theme, path.display().to_string());
     if let Some(branch) = branch.as_ref() {
-        dialog = dialog.divider(theme).text(
-            theme,
-            format!("This will remove the worktree folder and delete the local branch '{branch}'."),
+        dialog = dialog.divider(theme).section(
+            div().px_1().pb_1().child(
+                checkbox_row(
+                    "worktree_remove_delete_branch",
+                    "worktree_remove_delete_branch",
+                    format!("Also delete local branch '{branch}'"),
+                    delete_branch,
+                    &this.worktree_remove_delete_branch_focus_handle,
+                    theme,
+                    cx,
+                )
+                .on_activate(
+                    false,
+                    controls::ControlActivation::Action,
+                    cx.listener(|this, _e: &ClickEvent, _w, cx| {
+                        this.worktree_remove_delete_branch = !this.worktree_remove_delete_branch;
+                        cx.notify();
+                    }),
+                ),
+            ),
         );
+        if delete_branch {
+            dialog = dialog.note(
+                theme,
+                "The branch is deleted after the worktree. An unmerged branch asks first.",
+            );
+        }
     }
 
     dialog.render(
@@ -35,7 +54,9 @@ pub(super) fn panel(
         components::Button::new("worktree_remove_go", "Remove")
             .style(components::ButtonStyle::Danger)
             .on_click(theme, cx, move |this, _e, _w, cx| {
-                if let Some(branch) = remove_branch.clone() {
+                if this.worktree_remove_delete_branch
+                    && let Some(branch) = branch.clone()
+                {
                     let root_view = this.root_view.clone();
                     let _ = root_view.request(
                         RootRequest::RegisterPendingWorktreeBranchRemoval {

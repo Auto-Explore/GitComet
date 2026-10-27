@@ -16,7 +16,7 @@ use gitcomet_core::services::{
     CheckoutRemoteBranchMode, CommandOutput, CommitOperationOutcome, ConflictSide, ForcePushLease,
     InteractiveRebaseEntry, PullMode, RemoteUrlKind, ResetMode, SafePushAfterCommitContext,
     SafePushAfterCommitDecision, SafePushAfterCommitTarget, SequencerState, SubmoduleTrustDecision,
-    SubmoduleTrustTarget,
+    SubmoduleTrustTarget, WorktreeCheckout,
 };
 use gitcomet_core::signing_tools::SigningToolsState;
 use std::path::PathBuf;
@@ -107,6 +107,31 @@ impl RepoActionKind {
                 | Self::ForceDeleteBranch
                 | Self::DeleteBranches
         )
+    }
+
+    pub fn repository_requirement(self) -> RepositoryRequirement {
+        match self {
+            Self::CreateBranch
+            | Self::RenameBranch
+            | Self::DeleteBranch
+            | Self::ForceDeleteBranch
+            | Self::DeleteBranches => RepositoryRequirement::Repository,
+            Self::CheckoutBranch
+            | Self::CheckoutRemoteBranch
+            | Self::CheckoutCommit
+            | Self::CherryPickCommit
+            | Self::CreateBranchAndCheckout
+            | Self::StagePath
+            | Self::StagePaths
+            | Self::UnstagePath
+            | Self::UnstagePaths
+            | Self::DiscardWorktreeChangesPath
+            | Self::DiscardWorktreeChangesPaths
+            | Self::Stash
+            | Self::ApplyStash
+            | Self::PopStash
+            | Self::DropStash => RepositoryRequirement::WorkingTree,
+        }
     }
 
     pub(crate) fn status_diff_area(self) -> Option<DiffArea> {
@@ -393,6 +418,16 @@ pub enum Msg {
         insert_before: Option<RepoId>,
     },
     ReloadRepo {
+        repo_id: RepoId,
+    },
+    PreviewDisableBareMode {
+        repo_id: RepoId,
+    },
+    DisableBareMode {
+        repo_id: RepoId,
+        preview: Arc<BareConversionPreview>,
+    },
+    ClearBareConversionPreview {
         repo_id: RepoId,
     },
     RepoActivated {
@@ -866,7 +901,9 @@ pub enum Msg {
     AddWorktree {
         repo_id: RepoId,
         path: PathBuf,
-        reference: Option<String>,
+        checkout: WorktreeCheckout,
+        /// Open the new worktree in a tab once git has created it.
+        open_after: bool,
     },
     RemoveWorktree {
         repo_id: RepoId,
@@ -1340,6 +1377,23 @@ pub enum InternalMsg {
         repo_id: RepoId,
         lifetime: crate::model::RepoLifetime,
     },
+    QuiesceRepository {
+        common_dir: PathBuf,
+        cancellation: gitcomet_core::services::CancellationToken,
+        reply: std::sync::mpsc::Sender<()>,
+    },
+    RepositoryModeLoaded {
+        repo_id: RepoId,
+        result: Result<(RepositoryMode, Option<CommitId>), Error>,
+    },
+    BareConversionPreviewLoaded {
+        repo_id: RepoId,
+        result: Result<BareConversionPreview, Error>,
+    },
+    BareModeDisabled {
+        common_dir: PathBuf,
+        result: Result<BareModeDisabled, Error>,
+    },
     AuthPromptValidated {
         generation: u64,
         result: gitcomet_core::auth::PassphraseValidation,
@@ -1394,6 +1448,8 @@ pub enum InternalMsg {
         message: Box<InternalMsg>,
     },
     RepoOpenedOk {
+        repository_mode: RepositoryMode,
+        head_commit: Option<CommitId>,
         preferences: Option<crate::model::RepositoryPreferencesSnapshot>,
         repo_id: RepoId,
         spec: RepoSpec,

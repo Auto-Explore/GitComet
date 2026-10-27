@@ -11,6 +11,7 @@ fn ref_repo() -> RepoState {
         },
     );
     repo.open = Loadable::Ready(());
+    repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
     repo.head_branch = Loadable::Ready("main".into());
     repo.branches = Loadable::Ready(Arc::new(vec![
         Branch {
@@ -39,6 +40,7 @@ fn ref_repo() -> RepoState {
     repo.remotes = Loadable::Ready(Arc::new(vec![Remote {
         name: "origin".into(),
         url: None,
+        default_branch: None,
     }]));
     repo
 }
@@ -293,6 +295,7 @@ fn lfs_push_menu_preserves_the_structured_upstream_remote(cx: &mut gpui::TestApp
                 .map(|name| Remote {
                     name: name.into(),
                     url: None,
+                    default_branch: None,
                 })
                 .into(),
         ));

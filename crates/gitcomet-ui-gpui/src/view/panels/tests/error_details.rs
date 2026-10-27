@@ -174,8 +174,10 @@ fn closing_a_repo_drops_its_errors_only(cx: &mut gpui::TestAppContext) {
     let (first_id, second_id) = (RepoId(9601), RepoId(9602));
     let mut first = opening_repo_state(first_id, Path::new("/tmp/error-repo-a"));
     first.open = Loadable::Ready(());
+    first.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
     let mut second = opening_repo_state(second_id, Path::new("/tmp/error-repo-b"));
     second.open = Loadable::Ready(());
+    second.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
     super::shortcuts::apply_state(
         cx,
         &view,
@@ -300,6 +302,7 @@ fn local_changes_blocking_pull_show_guidance_output_and_a_review_action(
     let repo_id = RepoId(9695);
     let mut repo = opening_repo_state(repo_id, Path::new("/tmp/pull-blocked-local-changes"));
     repo.open = Loadable::Ready(());
+    repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
     repo.history_state.selected_commit = Some(CommitId("abc123".into()));
     let output = "From github.com:example/repo\n * branch dev -> FETCH_HEAD\n\
 error: Your local changes to the following files would be overwritten by merge:\n\

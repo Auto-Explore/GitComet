@@ -31,7 +31,6 @@ benchmarks = [
 
 [dependencies]
 alacritty_terminal = { workspace = true }
-fontdb = { workspace = true }
 futures = { workspace = true }
 gitcomet-conflict-resolver = { workspace = true }
 gitcomet-core = { workspace = true }
@@ -52,13 +51,9 @@ gitcomet-ui-terminal = { workspace = true }
 gpui = { workspace = true, features = ["profiler"] }
 gpui_platform = { workspace = true }
 image = { workspace = true }
-fast_image_resize = { workspace = true }
 jiff = { workspace = true }
-lru = { workspace = true }
 memchr = { workspace = true }
 palette = { workspace = true }
-pulldown-cmark = { workspace = true }
-unicode-normalization = { workspace = true }
 regex = { workspace = true }
 raw-window-handle = { workspace = true }
 rustc-hash = { workspace = true }
@@ -69,13 +64,12 @@ semver = { workspace = true }
 schemars = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-shlex = "2"
+shlex = { workspace = true }
 smallvec = { workspace = true }
 smol = { workspace = true }
 stats_alloc = { workspace = true }
 sysinfo = { workspace = true }
 tempfile = { workspace = true }
-unicode-segmentation = { workspace = true }
 url = { workspace = true }
 ureq = { workspace = true }
 anyhow = { workspace = true }
@@ -89,7 +83,7 @@ gpui_wgpu = { workspace = true }
 x11-clipboard = { workspace = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-metal = "0.33"
+metal = { workspace = true }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 gpui_platform = { workspace = true, features = ["windows-wgpu"] }
@@ -108,7 +102,7 @@ gitcomet-syntax = { workspace = true, features = ["test-support"] }
 # restatement is dead weight, since tests already see every regular dependency.
 gitcomet-core = { workspace = true, features = ["test-support", "benchmarks"] }
 # The example product's extension, run against the real host.
-gitcomet-extension-example = { path = "../gitcomet-extension-example" }
+gitcomet-extension-example = { workspace = true }
 gitcomet-state = { workspace = true, features = ["test-support"] }
 gitcomet-text = { workspace = true, features = ["test-support"] }
 gitcomet-ui-kit = { workspace = true, features = ["test-support"] }

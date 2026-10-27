@@ -409,6 +409,7 @@ fn show_commit_details_message(
         view.update(app, |this, cx| {
             let mut repo = opening_repo_state(repo_id, Path::new(workdir));
             repo.open = Loadable::Ready(());
+            repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
             repo.head_branch = Loadable::Ready("main".into());
             repo.status = Loadable::Ready(gitcomet_core::domain::RepoStatus::default().into());
             repo.log = Loadable::Ready(Arc::new(gitcomet_core::domain::LogPage {
@@ -666,6 +667,7 @@ fn commit_details_message_sha_click_menu_navigate_reveals_referenced_commit(
         view.update(app, |this, cx| {
             let mut repo = opening_repo_state(repo_id, Path::new("/tmp/repo-commit-message-sha"));
             repo.open = Loadable::Ready(());
+            repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
             repo.head_branch = Loadable::Ready("main".into());
             repo.status = Loadable::Ready(gitcomet_core::domain::RepoStatus::default().into());
             repo.log = Loadable::Ready(Arc::new(gitcomet_core::domain::LogPage {
@@ -773,6 +775,7 @@ fn commit_details_message_click_beside_a_sha_opens_no_menu(cx: &mut gpui::TestAp
         view.update(app, |this, cx| {
             let mut repo = opening_repo_state(repo_id, Path::new("/tmp/repo-message-hover-close"));
             repo.open = Loadable::Ready(());
+            repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
             repo.head_branch = Loadable::Ready("main".into());
             repo.status = Loadable::Ready(gitcomet_core::domain::RepoStatus::default().into());
             repo.log = Loadable::Ready(Arc::new(gitcomet_core::domain::LogPage {
@@ -865,6 +868,7 @@ fn commit_details_message_sha_retained_details_are_inert_after_selection_changes
             let mut repo =
                 opening_repo_state(repo_id, Path::new("/tmp/repo-retained-commit-details-sha"));
             repo.open = Loadable::Ready(());
+            repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
             repo.head_branch = Loadable::Ready("main".into());
             repo.status = Loadable::Ready(gitcomet_core::domain::RepoStatus::default().into());
             repo.log = Loadable::Ready(Arc::new(gitcomet_core::domain::LogPage {
@@ -979,6 +983,7 @@ fn commit_details_message_sha_click_opens_the_menu_without_navigating(
             let mut repo =
                 opening_repo_state(repo_id, Path::new("/tmp/repo-commit-message-sha-select"));
             repo.open = Loadable::Ready(());
+            repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
             repo.head_branch = Loadable::Ready("main".into());
             repo.status = Loadable::Ready(gitcomet_core::domain::RepoStatus::default().into());
             repo.log = Loadable::Ready(Arc::new(gitcomet_core::domain::LogPage {
@@ -1064,6 +1069,7 @@ fn commit_details_message_sha_double_click_selects_instead_of_opening_the_menu(
             let mut repo =
                 opening_repo_state(repo_id, Path::new("/tmp/repo-commit-message-sha-focus"));
             repo.open = Loadable::Ready(());
+            repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
             repo.head_branch = Loadable::Ready("main".into());
             repo.status = Loadable::Ready(gitcomet_core::domain::RepoStatus::default().into());
             repo.log = Loadable::Ready(Arc::new(gitcomet_core::domain::LogPage {
@@ -1140,6 +1146,7 @@ fn commit_details_parent_sha_click_menu_navigate_reveals_referenced_commit(
         view.update(app, |this, cx| {
             let mut repo = opening_repo_state(repo_id, Path::new("/tmp/repo-parent-hover-menu"));
             repo.open = Loadable::Ready(());
+            repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
             repo.head_branch = Loadable::Ready("main".into());
             repo.status = Loadable::Ready(gitcomet_core::domain::RepoStatus::default().into());
             repo.log = Loadable::Ready(Arc::new(gitcomet_core::domain::LogPage {
@@ -1248,6 +1255,7 @@ fn commit_details_parent_sha_dash_has_no_link_menu(cx: &mut gpui::TestAppContext
         view.update(app, |this, cx| {
             let mut repo = opening_repo_state(repo_id, Path::new("/tmp/repo-parent-dash-hover"));
             repo.open = Loadable::Ready(());
+            repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
             repo.head_branch = Loadable::Ready("main".into());
             repo.status = Loadable::Ready(gitcomet_core::domain::RepoStatus::default().into());
             repo.log = Loadable::Ready(Arc::new(gitcomet_core::domain::LogPage {

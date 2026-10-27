@@ -332,6 +332,7 @@ impl WatchInputs {
         let backend_discovered = discovered.is_some();
         let info = discovered.unwrap_or_else(|| {
             let mut info = RepositoryWatchInfo::default();
+            info.worktrees.push(workdir.to_path_buf());
             if let Some(root) = root_git {
                 info.cache_dirs.extend(
                     ["objects", "lfs"]

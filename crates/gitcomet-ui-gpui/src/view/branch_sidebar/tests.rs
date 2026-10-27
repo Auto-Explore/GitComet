@@ -523,6 +523,7 @@ fn populated_repo() -> RepoState {
     repo.remotes = Loadable::Ready(Arc::new(vec![Remote {
         name: "origin".to_string(),
         url: Some("https://example.com/origin.git".to_string()),
+        default_branch: None,
     }]));
     repo.remotes_rev = 1;
     repo.remote_branches = Loadable::Ready(Arc::new(vec![RemoteBranch {
@@ -533,12 +534,14 @@ fn populated_repo() -> RepoState {
     repo.remote_branches_rev = 1;
     repo.worktrees = Loadable::Ready(Arc::new(vec![
         Worktree {
+            bare: false,
             path: PathBuf::from("/tmp/repo"),
             head: Some(commit_id("aaaaaaaa")),
             branch: Some("main".to_string()),
             detached: false,
         },
         Worktree {
+            bare: false,
             path: PathBuf::from("/tmp/repo-linked"),
             head: Some(commit_id("bbbbbbbb")),
             branch: Some("feature/topic".to_string()),
@@ -652,12 +655,14 @@ fn source_fingerprint_reuses_unchanged_partitions_when_worktrees_change() {
 
     repo.worktrees = Loadable::Ready(Arc::new(vec![
         Worktree {
+            bare: false,
             path: PathBuf::from("/tmp/repo"),
             head: Some(commit_id("aaaaaaaa")),
             branch: Some("main".to_string()),
             detached: false,
         },
         Worktree {
+            bare: false,
             path: PathBuf::from("/tmp/repo-linked"),
             head: Some(commit_id("eeeeeeee")),
             branch: None,
@@ -720,6 +725,7 @@ fn remote_rows_dedup_upstream_branches_that_also_exist_as_remote_refs() {
     repo.remotes = Loadable::Ready(Arc::new(vec![Remote {
         name: "origin".to_string(),
         url: Some("https://example.com/origin.git".to_string()),
+        default_branch: None,
     }]));
     repo.remotes_rev = 1;
     repo.remote_branches = Loadable::Ready(Arc::new(vec![RemoteBranch {
@@ -768,6 +774,7 @@ fn remote_rows_do_not_recreate_a_missing_upstream_tracking_ref() {
     repo.remotes = Loadable::Ready(Arc::new(vec![Remote {
         name: "origin".to_string(),
         url: Some("https://example.com/origin.git".to_string()),
+        default_branch: None,
     }]));
     repo.remote_branches = Loadable::Ready(Arc::new(Vec::new()));
 

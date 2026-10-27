@@ -322,6 +322,7 @@ mod tests {
         repo.set_remotes(Loadable::Ready(vec![Remote {
             name: "origin".into(),
             url: Some("/remote".into()),
+            default_branch: None,
         }]));
         repo.set_tags(Loadable::Ready(vec![Tag {
             name: "v1".into(),

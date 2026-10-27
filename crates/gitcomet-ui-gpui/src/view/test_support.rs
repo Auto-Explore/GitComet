@@ -1,6 +1,19 @@
 use super::*;
 use std::time::Duration;
 
+pub(crate) fn install_working_tree_repositories(store: &AppStore) {
+    for repo in &store.snapshot().repos {
+        if repo.has_working_tree() && store.repository(repo.id, repo.lifetime()).is_none() {
+            store.insert_repo_for_test(
+                repo.id,
+                Arc::new(gitcomet_core::test_support::UnconfiguredRepository::new(
+                    &repo.spec.workdir,
+                )),
+            );
+        }
+    }
+}
+
 pub(crate) fn push_test_state(
     view: &GitCometView,
     state: Arc<AppState>,

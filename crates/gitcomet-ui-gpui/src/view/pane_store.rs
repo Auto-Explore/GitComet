@@ -146,6 +146,14 @@ impl PaneStore {
         if !self.admits_save(false) {
             return None;
         }
+        let state = self.snapshot()?;
+        let repo = state
+            .repos
+            .iter()
+            .find(|repo| repo.id == repo_id && repo.lifetime() == lifetime)?;
+        if !repo.has_working_tree() || repo.bare_mode_conversion.is_busy() {
+            return None;
+        }
         let session = if let Some(binding) = self.binding {
             if binding.repo_id != repo_id || binding.lifetime != lifetime {
                 return None;

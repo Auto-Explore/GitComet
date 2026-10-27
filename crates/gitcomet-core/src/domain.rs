@@ -21,6 +21,81 @@ pub struct RepoSpec {
     pub workdir: PathBuf,
 }
 
+pub const WORKING_TREE_REQUIRED_MESSAGE: &str = "Requires a working tree; this repository is bare.";
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+pub enum RepositoryMode {
+    WorkingTree,
+    Bare,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+pub enum RepositoryRequirement {
+    Repository,
+    WorkingTree,
+}
+
+impl RepositoryRequirement {
+    pub fn is_satisfied_by(self, mode: RepositoryMode) -> bool {
+        match (self, mode) {
+            (Self::Repository, _) | (Self::WorkingTree, RepositoryMode::WorkingTree) => true,
+            (Self::WorkingTree, RepositoryMode::Bare) => false,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BareConversionLayout {
+    ExistingCheckout,
+    BareDirectory,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum BareConversionHead {
+    Branch {
+        name: String,
+        commit: Option<CommitId>,
+    },
+    Detached {
+        commit: CommitId,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BareConversionPreview {
+    pub root: PathBuf,
+    pub layout: BareConversionLayout,
+    pub head: BareConversionHead,
+    pub affected_roots: Vec<PathBuf>,
+    identity: u64,
+}
+
+impl BareConversionPreview {
+    pub fn new(
+        root: PathBuf,
+        layout: BareConversionLayout,
+        head: BareConversionHead,
+        affected_roots: Vec<PathBuf>,
+    ) -> Self {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        Self {
+            root,
+            layout,
+            head,
+            affected_roots,
+            identity: NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BareModeDisabled {
+    pub root: PathBuf,
+    pub affected_roots: Vec<PathBuf>,
+    pub old_common_dir: PathBuf,
+    pub new_common_dir: PathBuf,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct CommitId(pub Arc<str>);
 
@@ -453,6 +528,8 @@ impl HeadTracking {
 pub struct Remote {
     pub name: String,
     pub url: Option<String>,
+    /// The branch `refs/remotes/<name>/HEAD` points at, when the remote has one.
+    pub default_branch: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -482,6 +559,7 @@ pub struct FileEntry {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Worktree {
     pub path: PathBuf,
+    pub bare: bool,
     pub head: Option<CommitId>,
     pub branch: Option<String>,
     pub detached: bool,

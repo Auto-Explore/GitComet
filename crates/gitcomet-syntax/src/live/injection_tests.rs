@@ -416,8 +416,10 @@ fn deferred_injection_captures_do_not_color_a_new_host_boundary() {
     finish_reparse_and_compare_with_fresh(&mut document, &edited);
 }
 
+/// Only the paragraph the keystroke touched is reparsed, from its own tree;
+/// the others keep their shifted trees, and the result matches a fresh parse.
 #[test]
-fn background_reparse_seeds_every_existing_injection() {
+fn background_reparse_reparses_only_the_edited_injection_seeded() {
     let mut text = "Words `existing` text.\n\n".repeat(300);
     let mut document = document_in(DiffSyntaxLanguage::Markdown, &text, Vec::new());
     let at = text.rfind("existing").unwrap() + 2;
@@ -432,13 +434,12 @@ fn background_reparse_seeds_every_existing_injection() {
     let ((version, tree, injections), parsed) =
         with_parse_control(None, || live_syntax_reparse(request).unwrap());
     assert_eq!(
-        parsed.attempts,
-        document.injections.len(),
-        "the background pass must visit every paragraph"
+        parsed.attempts, 1,
+        "the background pass reparses only the edited paragraph"
     );
     assert_eq!(
         parsed.seeded, parsed.attempts,
-        "every existing layer should seed its background parse"
+        "the edited layer should seed its background parse"
     );
     assert!(document.adopt_background_tree(version, tree, injections));
     let fresh = document_in(DiffSyntaxLanguage::Markdown, &text, Vec::new());
@@ -1480,5 +1481,167 @@ fn query_deadline_never_publishes_an_incomplete_combined_injection() {
             .highlights_for_byte_range(0..text.len()),
         cold.snapshot(SyntaxHighlightPalette::new(theme))
             .highlights_for_byte_range(0..text.len())
+    );
+}
+
+/// A keystroke reparses only the layers it touches. Every paragraph of a
+/// Markdown document is its own inline layer, and reparsing all of them made
+/// each keystroke cost time in proportion to the document.
+#[test]
+fn a_keystroke_reparses_only_the_layers_it_touches() {
+    let mut text = "Words `existing` text.\n\n".repeat(300);
+    let mut document = document_in(DiffSyntaxLanguage::Markdown, &text, Vec::new());
+    let at = text.rfind("existing").unwrap() + 2;
+    text.insert(at, 'a');
+    let (outcome, parsed) = with_parse_control(None, || {
+        document.sync(
+            Rope::from_text(&text),
+            Arc::default(),
+            Some((at..at, at..at + 1)),
+            None,
+        )
+    });
+    assert_eq!(outcome, LiveSyntaxSyncOutcome::Reparsed);
+    assert_eq!(parsed.attempts, 1, "only the edited paragraph reparses");
+    assert!(document.background_reparse_request().is_none());
+}
+
+/// Edits at layer boundaries and edits that change a layer's styling, including
+/// joining two paragraphs, give the highlights of a fresh parse each time.
+#[test]
+fn boundary_edits_match_a_fresh_parse() {
+    let mut text = "First *one* here.\n\nSecond `two` here.\n\nThird [three](x).\n".to_string();
+    let mut document = document_in(DiffSyntaxLanguage::Markdown, &text, Vec::new());
+    let theme = AppTheme::gitcomet_dark();
+    type Edit = fn(&str) -> (Range<usize>, &'static str);
+    fn insert_at(at: usize, text: &'static str) -> (Range<usize>, &'static str) {
+        (at..at, text)
+    }
+    let edits: [Edit; 5] = [
+        // Strong emphasis opened at a paragraph's start, closed at its end.
+        |text| insert_at(text.find("Second").unwrap(), "**"),
+        |text| insert_at(text.find(" here.\n\nThird").unwrap() + " here".len(), "**"),
+        // A link broken in the middle of a paragraph.
+        |text| {
+            let at = text.find("three]").unwrap() + "three".len();
+            (at..at + 1, "")
+        },
+        // The blank line between the first two paragraphs removed.
+        |text| {
+            let at = text.find(".\n\n**Second").unwrap() + 1;
+            (at..at + 1, "")
+        },
+        // Typed at the start of the document.
+        |_| (0..0, "`"),
+    ];
+    for edit in edits {
+        let (replaced, inserted) = edit(&text);
+        text.replace_range(replaced.clone(), inserted);
+        let new_end = replaced.start + inserted.len();
+        let outcome = document.sync(
+            Rope::from_text(&text),
+            Arc::default(),
+            Some((replaced.clone(), replaced.start..new_end)),
+            None,
+        );
+        assert_eq!(outcome, LiveSyntaxSyncOutcome::Reparsed);
+        let fresh = document_in(DiffSyntaxLanguage::Markdown, &text, Vec::new());
+        assert_eq!(
+            document
+                .snapshot(SyntaxHighlightPalette::new(theme))
+                .highlights_for_byte_range(0..text.len()),
+            fresh
+                .snapshot(SyntaxHighlightPalette::new(theme))
+                .highlights_for_byte_range(0..text.len()),
+            "after editing {replaced:?} to {inserted:?}"
+        );
+    }
+}
+
+fn sync_and_compare_with_fresh(
+    document: &mut LiveSyntaxDocument,
+    text: &mut String,
+    replaced: Range<usize>,
+    inserted: &str,
+    mask: Vec<Range<usize>>,
+) -> ParseControl {
+    text.replace_range(replaced.clone(), inserted);
+    let edit = (
+        replaced.clone(),
+        replaced.start..replaced.start + inserted.len(),
+    );
+    let (outcome, parsed) = with_parse_control(None, || {
+        document.sync(Rope::from_text(text), mask.clone().into(), Some(edit), None)
+    });
+    assert_eq!(outcome, LiveSyntaxSyncOutcome::Reparsed);
+    let fresh = document_in(document.language(), text, mask);
+    let theme = AppTheme::gitcomet_dark();
+    assert_eq!(
+        document
+            .snapshot(SyntaxHighlightPalette::new(theme))
+            .highlights_for_byte_range(0..text.len()),
+        fresh
+            .snapshot(SyntaxHighlightPalette::new(theme))
+            .highlights_for_byte_range(0..text.len()),
+        "after editing {replaced:?} to {inserted:?}"
+    );
+    parsed
+}
+
+/// An edit after a template's last HTML byte keeps the combined HTML layer and its
+/// depth-2 script layer without parsing either; an edit in a gap of the
+/// combined layer, between two of its ranges, reparses it.
+#[test]
+fn untouched_nested_layers_are_kept_and_gap_edits_reparse() {
+    let mut text =
+        "<p>{{ name }}</p>\n<script>\nconst answer = 42;\n</script>\n{# trailing note #}"
+            .to_string();
+    let mut document = jinja_document(&text);
+    assert!(document.injections.iter().any(|layer| layer.depth == 2));
+
+    let note = text.find("note").unwrap();
+    let parsed = sync_and_compare_with_fresh(&mut document, &mut text, note..note, "d", Vec::new());
+    assert_eq!(parsed.attempts, 0, "nothing injected was touched");
+
+    let name = text.find("name").unwrap() + "name".len();
+    let parsed = sync_and_compare_with_fresh(&mut document, &mut text, name..name, "s", Vec::new());
+    assert!(
+        parsed.attempts >= 1,
+        "the combined HTML layer spans the gap"
+    );
+}
+
+/// A mask that only moves with the edit leaves untouched layers alone; one that
+/// changes over a layer reparses that layer.
+#[test]
+#[allow(clippy::single_range_in_vec_init)]
+fn mask_changes_reparse_only_the_layers_they_cover() {
+    let mut text = "First `one` here.\n\nSecond `two` here.\n\nThird `six` here.\n".to_string();
+    let masked = |text: &str| {
+        let at = text.find("`two`").unwrap();
+        vec![at..at + "`two`".len()]
+    };
+    let mut document = document_in(DiffSyntaxLanguage::Markdown, &text, masked(&text));
+
+    // Typed above the masked span, which the caller moves along.
+    let at = 1;
+    let mut moved = text.clone();
+    moved.insert(at, 'x');
+    let parsed = sync_and_compare_with_fresh(&mut document, &mut text, at..at, "x", masked(&moved));
+    assert_eq!(parsed.attempts, 1, "only the edited paragraph reparses");
+
+    // The mask grows over the third paragraph, far from the edit.
+    let mut grown = masked(&text);
+    let six = text.find("`six`").unwrap();
+    grown.push(six..six + "`six`".len());
+    let parsed = sync_and_compare_with_fresh(&mut document, &mut text, at..at, "y", {
+        grown.iter_mut().for_each(|range| {
+            *range = range.start + 1..range.end + 1;
+        });
+        grown
+    });
+    assert_eq!(
+        parsed.attempts, 2,
+        "the edited and the newly masked paragraphs"
     );
 }

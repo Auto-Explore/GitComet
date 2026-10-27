@@ -33,6 +33,7 @@ fn explorer_state() -> Arc<AppState> {
         },
     );
     repo.open = Loadable::Ready(());
+    repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
     repo.file_browser.active = true;
     repo.file_browser.entries = Loadable::Ready(Arc::new(vec![
         dir("alpha", "alpha", 0),
@@ -146,6 +147,7 @@ fn long_explorer_state(count: usize) -> Arc<AppState> {
         },
     );
     repo.open = Loadable::Ready(());
+    repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
     repo.file_browser.active = true;
     repo.file_browser.entries = Loadable::Ready(Arc::new(
         (0..count)
@@ -280,6 +282,7 @@ fn collapsed_folder_state() -> Arc<AppState> {
         },
     );
     repo.open = Loadable::Ready(());
+    repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
     repo.file_browser.active = true;
     repo.file_browser.entries = Loadable::Ready(Arc::new(vec![
         dir("alpha", "alpha", 0),
@@ -1006,6 +1009,7 @@ fn explorer_window(
         view.update(app, |view, cx| {
             view.store.replace_snapshot_for_test(Arc::clone(&state));
             test_support::push_test_state(view, state, cx);
+            test_support::install_working_tree_repositories(&view.store);
             view.set_sidebar_collapsed(false, cx);
         })
     });

@@ -9,7 +9,7 @@ use gitcomet_core::remote_url::RemoteUrlPolicy;
 use gitcomet_core::services::{
     CommandOutput, ConflictSide, ForcePushLease, GitBackend, GitRepository, InteractiveRebaseEntry,
     PullMode, RemoteUrlKind, ResetMode, SafePushAfterCommitContext, SafePushAfterCommitTarget,
-    SubmoduleTrustTarget,
+    SubmoduleTrustTarget, WorktreeCheckout,
 };
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
@@ -41,6 +41,13 @@ fn large_file_command_context(command: &gitcomet_core::large_files::LargeFileCom
         [path] => path.display().to_string(),
         many => format!("{} files", many.len()),
     };
+    let annex_paths = |items: &[PathBuf]| {
+        if items.is_empty() {
+            "all versions".to_string()
+        } else {
+            paths(items)
+        }
+    };
     match command {
         C::LfsPull { paths: p } | C::LfsLock { paths: p } => paths(p),
         C::LfsFetchForDiff { target } => match target {
@@ -59,15 +66,15 @@ fn large_file_command_context(command: &gitcomet_core::large_files::LargeFileCom
         C::LfsFetchAll => "all refs".to_string(),
         C::LfsPrune | C::LfsFsck | C::LfsInstall => "this repository".to_string(),
         C::AnnexGet { paths: p, from } | C::AnnexDrop { paths: p, from, .. } => match from {
-            Some(from) => format!("{} · {from}", paths(p)),
-            None => paths(p),
+            Some(from) => format!("{} · {from}", annex_paths(p)),
+            None => annex_paths(p),
         },
         C::AnnexGetKeys { keys } => match keys.as_slice() {
             [key] => key.clone(),
             many => format!("{} versions", many.len()),
         },
         C::AnnexCopy { paths: p, to } | C::AnnexMove { paths: p, to } => {
-            format!("{} · to {to}", paths(p))
+            format!("{} · to {to}", annex_paths(p))
         }
         C::AnnexUnlock { paths: p } | C::AnnexLock { paths: p } | C::AnnexAdd { paths: p } => {
             paths(p)
@@ -228,9 +235,10 @@ fn repo_command_context(command: &RepoCommandKind) -> Option<String> {
             )
         }
         RepoCommandKind::ApplyPatch { patch } => patch.display().to_string(),
-        RepoCommandKind::AddWorktree { path, reference } => reference.as_ref().map_or_else(
-            || path.display().to_string(),
-            |reference| format!("{reference} → {}", path.display()),
+        RepoCommandKind::AddWorktree { path, checkout, .. } => format!(
+            "{} → {}",
+            crate::msg::worktree_checkout_label(checkout),
+            path.display()
         ),
         RepoCommandKind::RemoveWorktree { path }
         | RepoCommandKind::ForceRemoveWorktree { path } => path.display().to_string(),
@@ -270,6 +278,7 @@ fn schedule_repo_command_with_context<F>(
     F: FnOnce(Arc<dyn GitRepository>) -> Result<CommandOutput, Error> + Send + 'static,
 {
     let gated = command.holds_mutation_gate();
+    let requirement = command.repository_requirement();
     schedule_repo_command_task(
         executor,
         repos,
@@ -282,6 +291,8 @@ fn schedule_repo_command_with_context<F>(
             let _mutation = gate
                 .as_ref()
                 .map(|gate| gate.read().unwrap_or_else(|error| error.into_inner()));
+            let _operation = repo.acquire_operation_lease()?;
+            super::super::repository_requirement::check(repo.as_ref(), requirement)?;
             run(repo)
         },
     );
@@ -486,6 +497,24 @@ struct SaveWorktreeFileRequest {
     completion: Option<smol::channel::Sender<bool>>,
 }
 
+struct SaveCompletion(Option<smol::channel::Sender<bool>>);
+
+impl SaveCompletion {
+    fn finish(mut self, succeeded: bool) {
+        if let Some(sender) = self.0.take() {
+            let _ = sender.try_send(succeeded);
+        }
+    }
+}
+
+impl Drop for SaveCompletion {
+    fn drop(&mut self) {
+        if let Some(sender) = self.0.take() {
+            let _ = sender.try_send(false);
+        }
+    }
+}
+
 fn schedule_save_worktree_file(
     executor: &TaskExecutor,
     repos: &RepositoryRuntimes,
@@ -500,6 +529,7 @@ fn schedule_save_worktree_file(
         stage,
         completion,
     } = request;
+    let completion = SaveCompletion(completion);
     let command_path = path.clone();
     let engine = msg_tx.filesystem;
     schedule_repo_command(
@@ -537,9 +567,7 @@ fn schedule_save_worktree_file(
                     exit_code: Some(0),
                 })
             })();
-            if let Some(completion) = completion {
-                let _ = completion.try_send(result.is_ok());
-            }
+            completion.finish(result.is_ok());
             result
         },
     );
@@ -760,10 +788,11 @@ fn schedule_add_worktree(
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     path: PathBuf,
-    reference: Option<String>,
+    checkout: WorktreeCheckout,
+    open_after: bool,
 ) {
     let command_path = path.clone();
-    let command_reference = reference.clone();
+    let command_checkout = checkout.clone();
     schedule_repo_command(
         executor,
         repos,
@@ -771,9 +800,10 @@ fn schedule_add_worktree(
         repo_id,
         RepoCommandKind::AddWorktree {
             path: command_path,
-            reference: command_reference,
+            checkout: command_checkout,
+            open_after,
         },
-        move |repo| repo.add_worktree_with_output(&path, reference.as_deref()),
+        move |repo| repo.add_worktree_with_output(&path, &checkout),
     );
 }
 
@@ -2506,8 +2536,9 @@ pub(super) fn schedule(
         RepoCommandEffect::AddWorktree {
             repo_id,
             path,
-            reference,
-        } => schedule_add_worktree(executor, repos, msg_tx, repo_id, path, reference),
+            checkout,
+            open_after,
+        } => schedule_add_worktree(executor, repos, msg_tx, repo_id, path, checkout, open_after),
         RepoCommandEffect::RemoveWorktree { repo_id, path } => {
             schedule_remove_worktree(executor, repos, msg_tx, repo_id, path);
         }
@@ -2674,6 +2705,11 @@ pub(super) fn schedule(
                             )));
                         }
                     };
+                    let _operation = repo.acquire_operation_lease()?;
+                    super::super::repository_requirement::check(
+                        repo.as_ref(),
+                        gitcomet_core::domain::RepositoryRequirement::WorkingTree,
+                    )?;
                     let _filesystem = match filesystem.try_lock() {
                         Ok(guard) => guard,
                         Err(std::sync::TryLockError::Poisoned(error)) => error.into_inner(),

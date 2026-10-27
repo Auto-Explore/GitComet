@@ -477,10 +477,15 @@ fn retry_msg_for_repo_command(repo_id: RepoId, command: RepoCommandKind) -> Opti
             dest,
         },
         RepoCommandKind::ApplyPatch { patch } => Msg::ApplyPatch { repo_id, patch },
-        RepoCommandKind::AddWorktree { path, reference } => Msg::AddWorktree {
+        RepoCommandKind::AddWorktree {
+            path,
+            checkout,
+            open_after,
+        } => Msg::AddWorktree {
             repo_id,
             path,
-            reference,
+            checkout,
+            open_after,
         },
         RepoCommandKind::RemoveWorktree { path } => Msg::RemoveWorktree { repo_id, path },
         RepoCommandKind::ForceRemoveWorktree { path } => Msg::ForceRemoveWorktree { repo_id, path },
@@ -853,6 +858,7 @@ pub(super) fn safe_push_after_commit_finished(
 pub(super) fn repo_command_finished(
     inputs: &ReducerInputs,
     repos: &mut RepositoryRuntimes,
+    id_alloc: &std::sync::atomic::AtomicU64,
     state: &mut AppState,
     repo_id: RepoId,
     command: RepoCommandKind,
@@ -881,6 +887,12 @@ pub(super) fn repo_command_finished(
         (RepoCommandKind::ForceRemoveWorktree { path }, Ok(_)) => Some(path.clone()),
         _ => None,
     };
+    // Only the origin tab's workdir resolves the path git was given.
+    let opened_worktree_path = result
+        .is_ok()
+        .then(|| command.opens_worktree().cloned())
+        .flatten()
+        .filter(|_| state.repos.iter().any(|repo| repo.id == repo_id));
     // Their start cleared the HEAD gitlink cache; reclassify the
     // retained selection before the completion reloads it.
     if matches!(
@@ -893,14 +905,19 @@ pub(super) fn repo_command_finished(
     }
 
     let maintenance_ended = matches!(command, RepoCommandKind::RunMaintenance);
-    let mut effects = actions_emit_effects::repo_command_finished(
+    // Open first, like an action redirected to a worktree, so the origin tab
+    // is inactive when its refresh runs.
+    let mut effects = opened_worktree_path.map_or_else(Vec::new, |path| {
+        repo_management::open_repo(inputs, id_alloc, state, path)
+    });
+    effects.extend(actions_emit_effects::repo_command_finished(
         inputs,
         state,
         repo_id,
         command,
         result,
         auth_prompt.is_some(),
-    );
+    ));
     if maintenance_ended {
         for (deferred_repo, change) in maintenance::finished(state, repo_id) {
             effects.extend(external_and_history::repo_externally_changed(

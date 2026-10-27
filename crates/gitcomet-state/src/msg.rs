@@ -11,6 +11,7 @@ mod repo_command_kind;
 mod repo_external_change;
 mod repo_path;
 mod repo_path_list;
+mod repository_requirement;
 mod status;
 mod store_event;
 
@@ -30,6 +31,7 @@ pub use message::{
     WorktreeSaveBaseline,
 };
 pub use repo_command_kind::RepoCommandKind;
+pub(crate) use repo_command_kind::worktree_checkout_label;
 pub use repo_external_change::{ChangedPaths, MAX_CHANGED_PATHS, RepoExternalChange};
 pub use repo_path::RepoPath;
 pub use repo_path_list::RepoPathList;

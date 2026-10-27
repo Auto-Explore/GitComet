@@ -875,10 +875,7 @@ impl DiffRenderer {
                 self.diff_split_resize.is_some(),
                 idle_line,
             ))
-            .on_drag(
-                DiffSplitResizeHandle::Divider,
-                |_handle, _offset, _window, cx| cx.new(|_cx| DiffSplitResizeDragGhost),
-            )
+            .on_resize_drag(DiffSplitResizeHandle::Divider)
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, e: &MouseDownEvent, _w, cx| {

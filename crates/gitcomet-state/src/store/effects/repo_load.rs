@@ -390,7 +390,7 @@ pub(super) fn schedule_load_worktree_dirty(
                             if cancellation.is_cancelled() {
                                 return Err(Error::new(ErrorKind::Cancelled));
                             }
-                            if is_own_worktree(&worktree.path, &own_workdir) {
+                            if worktree.bare || is_own_worktree(&worktree.path, &own_workdir) {
                                 continue;
                             }
                             scanned.push(worktree.path.clone());
@@ -975,7 +975,12 @@ pub(super) fn schedule_load_file_browser(
         move |repo, msg_tx| {
             let result = match &source {
                 gitcomet_core::domain::FileSource::WorkingDirectory => {
-                    repo.list_worktree_files().and_then(|entries| {
+                    super::super::repository_requirement::check(
+                        repo.as_ref(),
+                        gitcomet_core::domain::RepositoryRequirement::WorkingTree,
+                    )
+                    .and_then(|()| repo.list_worktree_files())
+                    .and_then(|entries| {
                         explorer_listing::augment(
                             &repo.spec().workdir,
                             entries,

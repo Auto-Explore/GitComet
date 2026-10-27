@@ -63,7 +63,11 @@ impl IgnoreRules {
     ) -> bool {
         self.workdir = Some(workdir.to_path_buf());
         let loaded = (|| {
-            let matcher = backend.worktree_ignore_matcher(workdir)?;
+            let matcher = if info.worktrees.iter().any(|root| root == workdir) {
+                backend.worktree_ignore_matcher(workdir)?
+            } else {
+                None
+            };
             let mut children = Vec::new();
             for child in &info.worktrees {
                 if child != workdir

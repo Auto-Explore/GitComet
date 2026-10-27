@@ -119,13 +119,11 @@ mod tests {
     use super::*;
     use crate::test_support::{git_success, open_gix};
 
-    fn fixture(attributes: &str) -> (tempfile::TempDir, gix::Repository) {
-        let dir = tempfile::tempdir().unwrap();
-        git_success(dir.path(), &["init"]);
-        std::fs::write(dir.path().join("a.bin"), b"asset").unwrap();
-        std::fs::write(dir.path().join(".gitattributes"), attributes).unwrap();
+    /// Stages `path` with the configured LFS filter disabled, so git-lfs need
+    /// not be installed. Index refreshes re-filter racily clean entries too.
+    fn add_without_lfs(workdir: &std::path::Path, path: &str) {
         git_success(
-            dir.path(),
+            workdir,
             &[
                 "-c",
                 "filter.lfs.required=false",
@@ -134,9 +132,17 @@ mod tests {
                 "-c",
                 "filter.lfs.clean=",
                 "add",
-                ".",
+                path,
             ],
         );
+    }
+
+    fn fixture(attributes: &str) -> (tempfile::TempDir, gix::Repository) {
+        let dir = tempfile::tempdir().unwrap();
+        git_success(dir.path(), &["init"]);
+        std::fs::write(dir.path().join("a.bin"), b"asset").unwrap();
+        std::fs::write(dir.path().join(".gitattributes"), attributes).unwrap();
+        add_without_lfs(dir.path(), ".");
         git_success(
             dir.path(),
             &["config", "filter.lfs.process", "git-lfs filter-process"],
@@ -198,7 +204,7 @@ mod tests {
         .unwrap();
         assert_eq!(policy(&repo), Some(bounded_limit()));
 
-        git_success(root, &["add", "nested/.gitattributes"]);
+        add_without_lfs(root, "nested/.gitattributes");
         let repo = open_gix(root);
         std::fs::remove_file(&nested_attributes).unwrap();
         assert_eq!(policy(&repo), Some(bounded_limit()));
@@ -221,19 +227,7 @@ mod tests {
         assert_eq!(policy(&repo), Some(1));
         std::fs::create_dir(dir.path().join("nested")).unwrap();
         std::fs::write(dir.path().join("nested/b.bin"), "asset").unwrap();
-        git_success(
-            dir.path(),
-            &[
-                "-c",
-                "filter.lfs.required=false",
-                "-c",
-                "filter.lfs.process=",
-                "-c",
-                "filter.lfs.clean=",
-                "add",
-                "nested/b.bin",
-            ],
-        );
+        add_without_lfs(dir.path(), "nested/b.bin");
         let repo = open_gix(dir.path());
         assert_eq!(policy(&repo), Some(1));
         std::fs::write(dir.path().join("nested/.gitattributes"), "*.bin -filter\n").unwrap();
@@ -255,5 +249,31 @@ mod tests {
         let token = CancellationToken::new();
         token.cancel();
         assert!(production_limit(&repo, &repo.index_or_empty().unwrap(), &token).is_err());
+    }
+
+    /// `GITCOMET_PROBE_REPO=<worktree> cargo test -p gitcomet-git-gix --lib
+    /// timing_worker_limit -- --ignored --nocapture`: the Windows status
+    /// policy's cost per refresh where `filter.lfs` is configured globally.
+    #[test]
+    #[ignore = "timing probe"]
+    fn timing_worker_limit_policy() {
+        let root = std::path::PathBuf::from(
+            std::env::var_os("GITCOMET_PROBE_REPO").expect("set GITCOMET_PROBE_REPO"),
+        );
+        let repo = open_gix(&root);
+        let index = repo.index_or_empty().unwrap();
+        let mut samples = Vec::new();
+        let mut limit = None;
+        for _ in 0..5 {
+            let started = std::time::Instant::now();
+            limit = production_limit(&repo, &index, &CancellationToken::new()).unwrap();
+            samples.push(started.elapsed());
+        }
+        samples.sort();
+        println!(
+            "timing worker_limit entries {} limit {limit:?} p50 {:?}",
+            index.entries().len(),
+            samples[2]
+        );
     }
 }

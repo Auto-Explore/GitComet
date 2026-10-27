@@ -926,4 +926,5 @@ mod tests;
 mod repository_preferences;
 pub(crate) use repository_preferences::{
     initialize_repository_preferences, persist_repository_preference_updates,
+    rekey_repository_preferences,
 };

@@ -44,6 +44,7 @@ fn find_fixture_repo(commits: Vec<Commit>) -> RepoState {
     // Everything the panes read is already loaded, so rendering never has
     // to ask the store (and its worker threads) for data.
     repo.open = Loadable::Ready(());
+    repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
     repo.history_state.history_scope = LogScope::AllBranches;
     repo.branches = Loadable::Ready(Arc::new(vec![branch("main", "aaaa0000")]));
     repo.branches_rev = 1;

@@ -63,6 +63,7 @@ fn descriptor_revisions_and_slot_notifications_are_independent(cx: &mut gpui::Te
         },
     );
     repo.open = Loadable::Ready(());
+    repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
     let commit = gitcomet_core::domain::Commit {
         id: CommitId("1111222233334444555566667777888899990000".into()),
         parent_ids: Default::default(),
@@ -126,7 +127,7 @@ fn descriptor_revisions_and_slot_notifications_are_independent(cx: &mut gpui::Te
     assert_eq!(history_notifications.get(), 0);
     // History data is cached per commit and provider revision.
     let annotate = |cx: &mut gpui::VisualTestContext| {
-        cx.update(|_, cx| history.read(cx).history_row_annotation(&repo, &commit, cx))
+        cx.update(|_, cx| history.read(cx).history_row(&repo, &commit, cx).annotation)
     };
     assert_eq!(annotate(cx).opacity, 0.5);
     assert_eq!(annotate(cx).opacity, 0.5);

@@ -135,6 +135,34 @@ pub(crate) fn persist_repository_preference_updates(
     })
 }
 
+pub(crate) fn rekey_repository_preferences(
+    path: &Path,
+    old: &RepositoryKey,
+    new: &RepositoryKey,
+    updates: &[RepositoryPreferenceUpdate],
+    preferences: Option<&SharedRepositoryPreferences>,
+) -> io::Result<()> {
+    if old == new {
+        return Ok(());
+    }
+    update_session_file(path, |file| {
+        let Some(mut preferences) = file
+            .repository_preferences
+            .remove(&old.storage_key())
+            .or_else(|| file.repository_preferences.get(&new.storage_key()).cloned())
+            .or_else(|| preferences.cloned())
+        else {
+            return SessionUpdate::Unchanged;
+        };
+        for update in updates {
+            preferences.apply(update);
+        }
+        file.repository_preferences
+            .insert(new.storage_key(), preferences);
+        SessionUpdate::Write
+    })
+}
+
 // Legacy maps can contain the path through which a worktree was opened, such
 // as a symlink. Match those aliases by filesystem identity, while preferring
 // the canonical entry within each worktree's main-first priority.

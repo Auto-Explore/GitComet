@@ -118,10 +118,12 @@ fn remote_headers_include_remotes_with_no_branches() {
         Remote {
             name: "origin".to_string(),
             url: Some("https://example.com/origin.git".to_string()),
+            default_branch: None,
         },
         Remote {
             name: "upstream".to_string(),
             url: Some("https://example.com/upstream.git".to_string()),
+            default_branch: None,
         },
     ]));
     repo.remote_branches = Loadable::Ready(Arc::new(vec![RemoteBranch {
@@ -336,6 +338,7 @@ fn remote_section_excludes_upstream_without_remote_tracking_ref() {
     repo.remotes = Loadable::Ready(Arc::new(vec![Remote {
         name: "origin".to_string(),
         url: Some("https://example.com/origin.git".to_string()),
+        default_branch: None,
     }]));
     repo.remote_branches = Loadable::Ready(Arc::new(Vec::new()));
 
@@ -364,6 +367,7 @@ fn branch_sidebar_defaults_secondary_sections_to_collapsed() {
         },
     );
     repo.worktrees = Loadable::Ready(Arc::new(vec![Worktree {
+        bare: false,
         path: PathBuf::from("linked-worktree"),
         head: None,
         branch: Some("main".to_string()),
@@ -562,6 +566,7 @@ fn branch_sidebar_collapses_branch_sections_without_hiding_other_sections() {
         target: CommitId("deadbeef".into()),
     }]));
     repo.worktrees = Loadable::Ready(Arc::new(vec![Worktree {
+        bare: false,
         path: PathBuf::from("linked-worktree"),
         head: None,
         branch: Some("main".to_string()),
@@ -2118,6 +2123,7 @@ fn sidebar_worktree_badges_share_one_right_edge_near_the_pane_edge(cx: &mut gpui
         divergence: None,
     };
     let worktree = |path: &str, branch: &str| gitcomet_core::domain::Worktree {
+        bare: false,
         path: PathBuf::from(path),
         head: None,
         branch: Some(branch.to_string()),
@@ -2276,6 +2282,7 @@ fn native_file_drop_moves_before_acknowledgement_and_can_be_undone(cx: &mut gpui
     }]));
     state.repos[0].file_browser.bump_rev();
     store.replace_snapshot_for_test(Arc::new(state));
+    test_support::install_working_tree_repositories(&store);
     sync_view_snapshot(cx, &view);
     let position = cx.debug_bounds("file_browser_row_0").unwrap().center();
     dispatch_file_drop(
@@ -2624,6 +2631,7 @@ fn explorer_chevron_click_keeps_the_selection_and_keyboard_paste_uses_focused_fo
     ]));
     state.repos[0].file_browser.bump_rev();
     store.replace_snapshot_for_test(Arc::new(state));
+    test_support::install_working_tree_repositories(&store);
     sync_view_snapshot(cx, &view);
     let primary = gpui::Modifiers {
         control: !cfg!(target_os = "macos"),
@@ -2797,6 +2805,7 @@ fn explorer_folder_row_click_selects_focuses_and_toggles(cx: &mut gpui::TestAppC
     ]));
     state.repos[0].file_browser.bump_rev();
     store.replace_snapshot_for_test(Arc::new(state));
+    test_support::install_working_tree_repositories(&store);
     sync_view_snapshot(cx, &view);
     let primary = gpui::Modifiers {
         control: !cfg!(target_os = "macos"),
@@ -2922,6 +2931,7 @@ fn explorer_external_drop_writes_to_highlighted_folder_in_sidebar_and_popup(
             .insert(Arc::new(PathBuf::from("destination")));
         state.repos[0].file_browser.bump_rev();
         store.replace_snapshot_for_test(Arc::new(state));
+        test_support::install_working_tree_repositories(&store);
         sync_view_snapshot(cx, &view);
         if popup {
             cx.update(|_, app| {

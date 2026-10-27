@@ -294,6 +294,8 @@ impl GixRepo {
             )));
         }
 
+        self.require_bare_head_available()?;
+
         // Atomic compare-and-swap on HEAD (dereferences to the branch ref when
         // attached): fails without side effects if HEAD moved concurrently.
         let mut cmd = self.git_workdir_cmd();

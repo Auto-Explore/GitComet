@@ -1016,6 +1016,18 @@ impl DiffRenderer {
             self.prune_orphaned_file_editor_stash(cx);
             return Ok(false);
         };
+        if self
+            .repositories()
+            .iter()
+            .find(|repo| repo.id == repo_id)
+            .is_some_and(RepoState::is_bare)
+        {
+            buffer.document.set_save_error(
+                Some(gitcomet_core::domain::WORKING_TREE_REQUIRED_MESSAGE.into()),
+                cx,
+            );
+            return Ok(false);
+        }
         let Some(origin) = self.store.document_save_origin(repo_id, lifetime) else {
             return Ok(false);
         };

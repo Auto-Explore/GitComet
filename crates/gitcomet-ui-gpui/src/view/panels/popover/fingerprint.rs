@@ -10,13 +10,18 @@ pub(super) fn notify_fingerprint(
     binding: Option<crate::view::pane_store::DiffBinding>,
 ) -> u64 {
     let mut hasher = FxHasher::default();
-    binding
+    let active_repository = binding
         .map(|binding| binding.repo_id)
         .or(state.active_repo)
-        .and_then(|id| state.repos.iter().find(|repo| repo.id == id))
+        .and_then(|id| state.repos.iter().find(|repo| repo.id == id));
+    active_repository
         .and_then(|repo| repo.shared_preferences.as_ref())
         .map(|snapshot| snapshot.revision)
         .hash(&mut hasher);
+    if let Some(repo) = repo_for_popover(state, popover, binding).or(active_repository) {
+        repo.repository_mode.hash(&mut hasher);
+        std::mem::discriminant(&repo.bare_mode_conversion).hash(&mut hasher);
+    }
     hash_popover_kind(popover, &mut hasher);
     if matches!(popover, PopoverKind::CommitMenu { .. }) {
         state.git_log_settings.show_history_tags.hash(&mut hasher);
@@ -335,6 +340,8 @@ fn hash_repo_for_popover<H: Hasher>(
             // summary on their detail line, so metadata landing while the picker
             // is open has to repaint it — the rows change height, not just text.
             repo.ref_metadata_rev.hash(hasher);
+            // A branch's menu offers its worktree once the worktree list knows it.
+            repo.worktrees_rev.hash(hasher);
         }
 
         // Its toggle label reads `expanded_dirs` and its disabled state reads
@@ -385,6 +392,10 @@ fn hash_repo_for_popover<H: Hasher>(
             // while the picker is open has to repaint it — otherwise the row keeps
             // promising a base the Add dialog will no longer use.
             repo.head_branch_rev.hash(hasher);
+            // The Add dialog refuses a new branch name that already exists.
+            repo.branches_rev.hash(hasher);
+            // A history row's worktree menu leaves out dirty worktrees.
+            repo.worktree_dirty_rev.hash(hasher);
         }
 
         PopoverKind::Repo {
@@ -503,6 +514,7 @@ fn hash_repo_for_popover<H: Hasher>(
             repo.history_state.selected_commit_rev.hash(hasher);
             repo.history_state.log_rev.hash(hasher);
             repo.ops_rev.hash(hasher);
+            repo.worktrees_rev.hash(hasher);
         }
         PopoverKind::FileHistoryCommitMenu { .. } => {
             repo.head_branch_rev.hash(hasher);
@@ -619,6 +631,19 @@ fn hash_repo_for_popover<H: Hasher>(
         | PopoverKind::ErrorDetails { .. }
         | PopoverKind::Hosted { .. }
         | PopoverKind::CommitPrompt { .. } => {}
+        PopoverKind::Repo {
+            kind: RepoPopoverKind::RepositoryModeMenu | RepoPopoverKind::DisableBareModeConfirm,
+            ..
+        } => {
+            match &repo.bare_mode_conversion {
+                gitcomet_state::model::BareModeConversionState::AwaitingConfirmation(preview) => Arc::as_ptr(preview).hash(hasher),
+                gitcomet_state::model::BareModeConversionState::Failed(error) => Arc::as_ptr(error).hash(hasher),
+                gitcomet_state::model::BareModeConversionState::Idle
+                | gitcomet_state::model::BareModeConversionState::Previewing
+                | gitcomet_state::model::BareModeConversionState::Converting
+                | gitcomet_state::model::BareModeConversionState::Reopening => {}
+            }
+        }
     }
 }
 
@@ -1201,6 +1226,10 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
 
 fn hash_repo_popover_kind<H: Hasher>(repo_id: RepoId, kind: &RepoPopoverKind, hasher: &mut H) {
     match kind {
+        RepoPopoverKind::RepositoryModeMenu | RepoPopoverKind::DisableBareModeConfirm => {
+            std::mem::discriminant(kind).hash(hasher);
+            repo_id.hash(hasher);
+        }
         RepoPopoverKind::Remote(remote_kind) => match remote_kind {
             RemotePopoverKind::AddPrompt => {
                 9u8.hash(hasher);
@@ -1265,6 +1294,11 @@ fn hash_repo_popover_kind<H: Hasher>(repo_id: RepoId, kind: &RepoPopoverKind, ha
                 repo_id.hash(hasher);
                 path.hash(hasher);
                 branch.hash(hasher);
+            }
+            WorktreePopoverKind::CommitMenu { commit_id } => {
+                37u8.hash(hasher);
+                repo_id.hash(hasher);
+                commit_id.hash(hasher);
             }
         },
         RepoPopoverKind::Submodule(submodule_kind) => match submodule_kind {
@@ -1462,6 +1496,54 @@ mod tests {
             repo_for_popover(&state, &popover, None).expect("expected repo lookup to work");
 
         assert_eq!(resolved.id, repo_id);
+    }
+
+    /// The branch menus add "Open worktree" once the worktree list names the
+    /// branch; the Add dialog refuses an existing name.
+    #[test]
+    fn worktree_aware_popovers_repaint_when_their_lists_change() {
+        let repo_id = RepoId(9);
+        let mut state = AppState {
+            active_repo: Some(repo_id),
+            ..AppState::test_default()
+        };
+        state.repos.push(RepoState::new_opening(
+            repo_id,
+            gitcomet_core::domain::RepoSpec {
+                workdir: std::env::temp_dir().join("gitcomet_worktree_menu_fingerprint"),
+            },
+        ));
+        let changes = |popover: PopoverKind, bump: fn(&mut RepoState)| {
+            let mut state = state.clone();
+            let before = notify_fingerprint(&state, &popover, None);
+            bump(&mut state.repos[0]);
+            before != notify_fingerprint(&state, &popover, None)
+        };
+        let bump_worktrees: fn(&mut RepoState) =
+            |repo| repo.worktrees_rev = repo.worktrees_rev.wrapping_add(1);
+        let bump_branches: fn(&mut RepoState) =
+            |repo| repo.branches_rev = repo.branches_rev.wrapping_add(1);
+
+        assert!(changes(
+            PopoverKind::BranchMenu {
+                repo_id,
+                target: crate::view::BranchMenuTarget::Local {
+                    name: "main".to_string(),
+                },
+            },
+            bump_worktrees,
+        ));
+        assert!(changes(
+            PopoverKind::CommitMenu {
+                repo_id,
+                commit_id: CommitId("deadbeef".into()),
+            },
+            bump_worktrees,
+        ));
+        assert!(changes(
+            PopoverKind::worktree(repo_id, WorktreePopoverKind::AddPrompt),
+            bump_branches,
+        ));
     }
 
     #[test]

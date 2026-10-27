@@ -35,6 +35,20 @@ fn spawn_repo_action(
         move |repo, msg_tx| {
             let gate = super::super::mutation_gate::for_repo(repo.as_ref());
             let _mutation = gate.read().unwrap_or_else(|error| error.into_inner());
+            if let Err(error) = super::super::repository_requirement::check(
+                repo.as_ref(),
+                action.repository_requirement(),
+            ) {
+                send_or_log(
+                    &msg_tx,
+                    Msg::Internal(InternalMsg::RepoActionFinished {
+                        repo_id,
+                        action,
+                        result: Err(error),
+                    }),
+                );
+                return;
+            }
             let tracking_repo = action.changes_tracking().then(|| Arc::clone(&repo));
             let tracking_sender = msg_tx.clone();
             task(repo, msg_tx);
@@ -121,7 +135,11 @@ fn schedule_repo_action_with_result<T, F, M>(
         let operation = GitOperationTask::start(repo_id, label, context, &msg_tx);
         let result = {
             let _scope = operation.attach();
-            run(Arc::clone(&repo))
+            super::super::repository_requirement::check(
+                repo.as_ref(),
+                gitcomet_core::domain::RepositoryRequirement::WorkingTree,
+            )
+            .and_then(|()| run(Arc::clone(&repo)))
         };
         msg_tx.refresh_other_tracking(repo_id, repo.as_ref());
         let outcome = GitOperationTask::outcome(&result);

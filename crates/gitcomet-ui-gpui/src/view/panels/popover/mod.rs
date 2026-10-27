@@ -10,6 +10,7 @@ mod annex_prompt;
 mod app_menu;
 mod apply_file_change_confirm;
 mod author_filter;
+pub(in crate::view) mod bare_mode;
 mod branch_exists_prompt;
 mod branch_picker;
 mod checkout_remote_branch_prompt;
@@ -28,6 +29,7 @@ mod discard_changes_confirm;
 mod discard_folder_changes_confirm;
 mod error_details;
 mod extension_dialog;
+pub(in crate::view) use extension_dialog::OnClosed;
 mod file_history_file_picker;
 mod filesystem_conflict_prompt;
 mod filesystem_unsaved_edits_confirm;
@@ -50,6 +52,7 @@ mod remote_edit_url_prompt;
 mod remote_remove_confirm;
 mod rename_branch_prompt;
 mod repo_picker;
+mod repository_requirements;
 mod reset_prompt;
 mod revert_commit_confirm;
 pub(in crate::view) mod rows_cache;
@@ -316,10 +319,9 @@ pub(in super::super) struct PopoverHost {
     upstream_picker_selected_index: Option<usize>,
     worktree_picker_selected_index: Option<usize>,
     worktree_badge_picker_selected_index: Option<usize>,
-    /// Path/reference the workspace badge's create row hands to the Add-worktree
-    /// dialog. Consumed (and cleared) when that dialog opens, so a later
-    /// open from elsewhere still starts blank.
-    pending_worktree_add_prefill: Option<(String, String)>,
+    /// What another surface hands the Add-worktree dialog. Consumed when that
+    /// dialog opens, so a later open from elsewhere starts from the defaults.
+    pending_worktree_add_prefill: Option<WorktreeAddPrefill>,
     submodule_picker_selected_index: Option<usize>,
     history_author_filter_selected_index: Option<usize>,
     /// Collected author names survive frames and active author filters.
@@ -398,6 +400,9 @@ pub(in super::super) struct PopoverHost {
     /// "Apply to all remaining" in the open file-collision dialog.
     filesystem_conflict_apply_to_all: bool,
     filesystem_conflict_apply_to_all_focus_handle: FocusHandle,
+    /// "Also delete local branch" in the open Remove-worktree dialog; off on every open.
+    worktree_remove_delete_branch: bool,
+    worktree_remove_delete_branch_focus_handle: FocusHandle,
     checkout_remote_branch_focus: DialogFocus,
     stash_message_input: Entity<components::TextInput>,
     stash_focus: DialogFocus,
@@ -435,6 +440,10 @@ pub(in super::super) struct PopoverHost {
     push_upstream_branch_input: Entity<components::TextInput>,
     worktree_path_input: Entity<components::TextInput>,
     worktree_ref_input: Entity<components::TextInput>,
+    worktree_new_branch_input: Entity<components::TextInput>,
+    worktree_add_create_branch: bool,
+    worktree_add_create_branch_focus_handle: FocusHandle,
+    worktree_add_open_after: bool,
     submodule_url_input: Entity<components::TextInput>,
     submodule_path_input: Entity<components::TextInput>,
     submodule_ref_input: Entity<components::TextInput>,
@@ -591,6 +600,10 @@ fn popover_is_context_menu(kind: &PopoverKind) -> bool {
     matches!(
         kind,
         PopoverKind::Hosted { menu: true, .. }
+            | PopoverKind::Repo {
+                kind: RepoPopoverKind::RepositoryModeMenu,
+                ..
+            }
             | PopoverKind::AppMenu
             | PopoverKind::AddRepoMenu
             | PopoverKind::PullPicker
@@ -636,7 +649,9 @@ fn popover_is_context_menu(kind: &PopoverKind) -> bool {
             | PopoverKind::StashMenu { .. }
             | PopoverKind::Repo {
                 kind: RepoPopoverKind::Worktree(
-                    WorktreePopoverKind::SectionMenu | WorktreePopoverKind::Menu { .. },
+                    WorktreePopoverKind::SectionMenu
+                        | WorktreePopoverKind::Menu { .. }
+                        | WorktreePopoverKind::CommitMenu { .. },
                 ),
                 ..
             }
@@ -670,6 +685,10 @@ fn popover_is_confirm_dialog(kind: &PopoverKind) -> bool {
     matches!(
         kind,
         PopoverKind::StashDropConfirm { .. }
+            | PopoverKind::Repo {
+                kind: RepoPopoverKind::DisableBareModeConfirm,
+                ..
+            }
             | PopoverKind::ErrorDetails { .. }
             | PopoverKind::ForcePushConfirm { .. }
             | PopoverKind::CherryPickCommitConfirm { .. }
@@ -1056,6 +1075,14 @@ fn popover_anchor_corner(kind: &PopoverKind) -> Anchor {
 
 pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<PopoverWidthSpec> {
     match kind {
+        PopoverKind::Repo {
+            kind: RepoPopoverKind::RepositoryModeMenu,
+            ..
+        } => Some(DEFAULT_CONTEXT_MENU_WIDTH),
+        PopoverKind::Repo {
+            kind: RepoPopoverKind::DisableBareModeConfirm,
+            ..
+        } => Some(DIALOG_540_WIDTH),
         PopoverKind::RepoPicker { .. }
         | PopoverKind::BranchPicker {
             purpose: BranchPickerPurpose::Delete | BranchPickerPurpose::RebaseOnto,
@@ -1197,7 +1224,9 @@ pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<Popover
         | PopoverKind::Repo {
             kind:
                 RepoPopoverKind::Worktree(
-                    WorktreePopoverKind::SectionMenu | WorktreePopoverKind::Menu { .. },
+                    WorktreePopoverKind::SectionMenu
+                    | WorktreePopoverKind::Menu { .. }
+                    | WorktreePopoverKind::CommitMenu { .. },
                 ),
             ..
         }

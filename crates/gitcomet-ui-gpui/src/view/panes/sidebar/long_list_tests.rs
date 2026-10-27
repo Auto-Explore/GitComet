@@ -13,11 +13,13 @@ pub(super) fn fixture(count: usize, section: CollapsedSidebarSection) -> Arc<App
         },
     );
     repo.open = Loadable::Ready(());
+    repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
     repo.head_branch = Loadable::Ready("main".into());
     repo.status = Loadable::Ready(Arc::new(RepoStatus::default()));
     repo.worktrees = Loadable::Ready(Arc::new(if section == CollapsedSidebarSection::Worktrees {
         (0..count)
             .map(|ix| Worktree {
+                bare: false,
                 path: PathBuf::from(format!("/tmp/worktree-{ix:06}")),
                 head: None,
                 branch: None,
@@ -171,6 +173,7 @@ pub(super) fn branch_fixture(count: usize) -> Arc<AppState> {
         },
     );
     repo.open = Loadable::Ready(());
+    repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
     repo.head_branch = Loadable::Ready("main".into());
     repo.status = Loadable::Ready(Arc::new(RepoStatus::default()));
     repo.worktrees = Loadable::Ready(Arc::new(Vec::new()));
@@ -189,6 +192,7 @@ pub(super) fn branch_fixture(count: usize) -> Arc<AppState> {
     repo.remotes = Loadable::Ready(Arc::new(vec![gitcomet_core::domain::Remote {
         name: "origin".to_string(),
         url: None,
+        default_branch: None,
     }]));
     repo.remote_branches = Loadable::Ready(Arc::new(
         (0..count)
@@ -355,6 +359,7 @@ pub(super) fn file_fixture(count: usize) -> Arc<AppState> {
         },
     );
     repo.open = Loadable::Ready(());
+    repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
     repo.head_branch = Loadable::Ready("main".into());
     repo.status = Loadable::Ready(Arc::new(RepoStatus::default()));
     repo.worktrees = Loadable::Ready(Arc::new(Vec::new()));

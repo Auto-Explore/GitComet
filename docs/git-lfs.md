@@ -19,6 +19,8 @@ LFS text diffs show changes in the actual content in both Full and Collapsed vie
 
 ## Commands
 
+[Bare repositories](bare-repositories.md#large-files) support object transfers and checks, with separate restrictions on checkout and locking commands.
+
 | Command | Where |
 | --- | --- |
 | Download LFS content | Changed-file row menu (for files that are not downloaded), and the diff card |

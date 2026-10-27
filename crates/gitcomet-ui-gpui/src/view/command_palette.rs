@@ -47,6 +47,7 @@ impl CommandEntry {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Needs {
     Nothing,
+    WorkingTree,
     ExternalEditor,
     Merge,
     /// A rebase, apply, cherry-pick, or revert in progress.
@@ -74,6 +75,8 @@ pub(crate) enum Needs {
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct PaletteContext {
     pub(crate) has_active_repo: bool,
+    pub(crate) is_bare: bool,
+    pub(crate) annex_takes_over_pull: bool,
     pub(crate) external_editor: bool,
     pub(crate) merging: bool,
     pub(crate) sequencer: bool,
@@ -106,6 +109,9 @@ pub(crate) fn unavailable_reason(needs: Needs, ctx: &PaletteContext) -> Option<&
     const SEQUENCER_BUSY: &str = "Wait for the running Git operation to finish";
     match needs {
         Needs::Nothing => None,
+        Needs::WorkingTree => ctx
+            .is_bare
+            .then_some(gitcomet_core::domain::WORKING_TREE_REQUIRED_MESSAGE),
         Needs::ExternalEditor => {
             (!ctx.external_editor).then_some("Choose an external code editor in Settings first")
         }
@@ -158,6 +164,22 @@ pub(crate) fn unavailable_reason(needs: Needs, ctx: &PaletteContext) -> Option<&
             }
         }
     }
+}
+
+pub(crate) fn command_unavailable_reason(
+    command: &CommandEntry,
+    ctx: &PaletteContext,
+) -> Option<&'static str> {
+    if ctx.is_bare
+        && Command::from_id(command.id).is_some_and(|command| {
+            command.repository_requirement()
+                == gitcomet_core::domain::RepositoryRequirement::WorkingTree
+                && !(command == Command::Pull && ctx.annex_takes_over_pull)
+        })
+    {
+        return Some(gitcomet_core::domain::WORKING_TREE_REQUIRED_MESSAGE);
+    }
+    unavailable_reason(command.needs, ctx)
 }
 
 pub(crate) const COMMANDS: &[CommandEntry] = &[
@@ -1178,7 +1200,7 @@ impl CommandPaletteView {
 
     /// Why `command` cannot run right now, if it cannot.
     fn unavailable(&self, command: &CommandEntry) -> Option<&'static str> {
-        unavailable_reason(command.needs, &self.context)
+        command_unavailable_reason(command, &self.context)
     }
 
     pub(crate) fn open(
@@ -1491,6 +1513,12 @@ impl CommandPaletteView {
                         } else {
                             theme.colors.foreground.primary
                         };
+                        let display_label =
+                            if self.context.is_bare && command.id == Command::AnnexGetAll.id() {
+                                format!("{} (all versions)", command.label())
+                            } else {
+                                command.label().into_owned()
+                            };
                         let label = div()
                             .flex()
                             .items_center()
@@ -1499,7 +1527,7 @@ impl CommandPaletteView {
                             .flex_1()
                             .min_w(px(0.0))
                             .child(self.render_label(
-                                &command.label(),
+                                &display_label,
                                 &command.positions,
                                 label_color,
                                 cx,

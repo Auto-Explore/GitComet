@@ -92,11 +92,7 @@ impl gix::dir::walk::Delegate for CollectWorktreePaths {
         };
 
         // Staging areas the filesystem service may leave in a worktree.
-        if entry
-            .rela_path
-            .split(|byte| *byte == b'/')
-            .any(gitcomet_core::path_utils::is_service_owned_name)
-        {
+        if gitcomet_core::path_utils::has_service_owned_git_component(&entry.rela_path) {
             return gix::dir::walk::Action::Continue(());
         }
         let path = entry.rela_path.to_string();

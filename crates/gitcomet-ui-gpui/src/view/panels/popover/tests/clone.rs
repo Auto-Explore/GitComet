@@ -383,3 +383,38 @@ fn clone_repo_popover_clone_button_requires_parent_path(cx: &mut gpui::TestAppCo
         "expected missing parent path to keep Clone disabled"
     );
 }
+
+#[gpui::test]
+fn clone_repo_browse_opens_at_the_typed_parent_folder(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let parent = unique_parent_dir("browse");
+    cx.update(|window, app| {
+        crate::app::bind_text_input_keys_for_test(app);
+        view.update(app, |this, cx| {
+            this.popover_host.update(cx, |host, cx| {
+                host.open_popover_at(
+                    PopoverKind::CloneRepo,
+                    gpui::point(gpui::px(120.0), gpui::px(72.0)),
+                    window,
+                    cx,
+                );
+                host.clone_repo_parent_dir_input.update(cx, |input, cx| {
+                    input.set_text(parent.display().to_string(), cx);
+                });
+            });
+        });
+        let _ = window.draw(app);
+    });
+
+    click_debug_selector(cx, "clone_repo_browse");
+    assert!(cx.did_prompt_for_paths(), "Browse opens a folder dialog");
+    let mut directory = None;
+    cx.simulate_path_prompt_response(|options| {
+        directory = options.directory.clone();
+        None
+    });
+    let _ = std::fs::remove_dir_all(&parent);
+    assert_eq!(directory, Some(parent));
+}

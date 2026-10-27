@@ -41,6 +41,7 @@ pub(super) use crate::view::test_support::TestBackend;
 mod add_repo_menu;
 mod app_menu;
 mod author_filter;
+mod bare_mode;
 mod branch;
 mod browse_history;
 mod cherry_pick;
@@ -61,6 +62,7 @@ mod stash;
 mod status;
 mod submodule;
 mod upstream;
+mod worktree;
 mod worktree_badge;
 
 mod appearance_and_refs;

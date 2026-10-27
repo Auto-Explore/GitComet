@@ -76,10 +76,11 @@ fn head_tracking_preserves_configured_upstream_when_tracking_target_is_missing()
 }
 
 #[test]
-fn head_tracking_checks_cancellation_before_reopening_a_missing_repository() {
+fn head_tracking_checks_cancellation_before_reopening_a_broken_repository() {
     let (_root, _remote, local) = tracking_fixture();
     let repo = open_repo(&local);
-    fs::remove_dir_all(&local).unwrap();
+    // Breaks the reopen but not the operation lease, which comes first.
+    fs::remove_file(local.join(".git/HEAD")).unwrap();
     let cancellation = CancellationToken::new();
     cancellation.cancel();
     let error = repo.head_tracking(&cancellation).unwrap_err();

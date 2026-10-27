@@ -14,6 +14,9 @@ use gitcomet_git_gix::GixBackend;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+#[path = "large_files_bare.rs"]
+mod bare;
+
 const ANNEX_KEY: &str =
     "SHA256E-s5--2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824.bin";
 
@@ -89,6 +92,60 @@ fn status(
         .status(&gitcomet_core::services::CancellationToken::new())
         .unwrap();
     (status, opened)
+}
+
+#[test]
+fn bare_lfs_support_reads_committed_attributes_without_an_index_or_checkout() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = dir.path().join("source");
+    let bare = dir.path().join("bare");
+    init_repo(&source);
+    fs::create_dir(source.join("assets")).unwrap();
+    fs::write(source.join(".gitattributes"), "*.bin filter=lfs\n").unwrap();
+    fs::write(
+        source.join("assets/.gitattributes"),
+        "*.psd filter=lfs lockable\n",
+    )
+    .unwrap();
+    fs::write(source.join("a.bin"), "version https://git-lfs.github.com/spec/v1\noid sha256:2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824\nsize 5\n").unwrap();
+    git(&source, &["add", "."]);
+    git(&source, &["commit", "-qm", "LFS pointers"]);
+    git(&source, &["clone", "--bare", ".", bare.to_str().unwrap()]);
+    fs::write(
+        bare.join(".gitattributes"),
+        "administrative-only filter=lfs\n",
+    )
+    .unwrap();
+
+    let repo = GixBackend.open(&bare).unwrap();
+    let cancel = CancellationToken::new();
+    let support = repo.large_file_support(&cancel).unwrap();
+    assert!(support.lfs.in_use());
+    assert!(support.lfs.has_lockable_patterns);
+    let patterns = support
+        .lfs
+        .tracked_patterns
+        .iter()
+        .map(|pattern| (pattern.source.as_path(), pattern.pattern.as_str()))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        patterns,
+        [
+            (Path::new(".gitattributes"), "*.bin"),
+            (Path::new("assets/.gitattributes"), "*.psd"),
+        ]
+    );
+    let target = DiffTarget::commit(repo.head_commit_id().unwrap().unwrap(), "a.bin".into());
+    let diff = repo
+        .diff_file_text(&target, None, &cancel)
+        .unwrap()
+        .unwrap();
+    assert!(matches!(
+        diff.new_large.unwrap().pointer,
+        LargeFilePointer::Lfs(_)
+    ));
+    assert!(!bare.join("index").exists());
+    assert!(!bare.join("a.bin").exists());
 }
 
 fn row(path: &str, kind: FileStatusKind) -> FileStatus {
@@ -855,6 +912,41 @@ fn configure_lfs_filters(repo: &Path) {
     ] {
         git(repo, &["config", key, value]);
     }
+}
+
+#[test]
+fn bare_conversion_materializes_local_lfs_content_through_required_process_filter() {
+    if !git_lfs_available() {
+        return;
+    }
+    let directory = tempfile::tempdir().unwrap();
+    let source = directory.path().join("source");
+    let root = directory.path().join("bare.git");
+    init_lfs_repo(&source);
+    git(
+        directory.path(),
+        &[
+            "clone",
+            "--bare",
+            source.to_str().unwrap(),
+            root.to_str().unwrap(),
+        ],
+    );
+    configure_lfs_filters(&root);
+    git(&root, &["lfs", "fetch", "--all", "origin"]);
+    git(&root, &["config", "filter.lfs.smudge", "exit 7"]);
+    let repo = GixBackend.open(&root).unwrap();
+    let preview = repo.preview_disable_bare_mode().unwrap();
+    repo.disable_bare_mode(&preview).unwrap();
+    assert_eq!(
+        fs::read(root.join("a.bin")).unwrap(),
+        b"large file contents\n"
+    );
+    assert_eq!(git(&root, &["status", "--porcelain=v1"]), "");
+    assert_eq!(
+        git(&root, &["config", "--get-all", "core.bare"]).trim(),
+        "false"
+    );
 }
 
 /// End to end over a `file://` remote (git-lfs's standalone adapter): push

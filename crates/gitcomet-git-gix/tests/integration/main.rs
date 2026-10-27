@@ -29,6 +29,7 @@ mod large_files;
 mod log;
 mod maintenance;
 mod operation_identity;
+mod operation_lease_guard;
 mod patch;
 mod refs;
 mod refs_api_guard;

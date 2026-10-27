@@ -1,9 +1,25 @@
 use gitcomet_core::domain::{CommitId, Upstream};
 use gitcomet_core::services::{
     ConflictSide, ForcePushLease, InteractiveRebaseEntry, PullMode, RemoteUrlKind, ResetMode,
-    SafePushAfterCommitTarget, SubmoduleTrustTarget,
+    SafePushAfterCommitTarget, SubmoduleTrustTarget, WorktreeCheckout,
 };
 use std::path::PathBuf;
+
+/// How the command log and toasts name what a new worktree checks out.
+pub(crate) fn worktree_checkout_label(checkout: &WorktreeCheckout) -> String {
+    match checkout {
+        WorktreeCheckout::Existing { reference } => reference.clone(),
+        WorktreeCheckout::NewBranch { name, start: None } => format!("new branch {name}"),
+        WorktreeCheckout::NewBranch {
+            name,
+            start: Some(start),
+        } => format!("new branch {name} from {start}"),
+        WorktreeCheckout::TrackRemote { name, upstream } => format!(
+            "new branch {name} tracking {}/{}",
+            upstream.remote, upstream.branch
+        ),
+    }
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum RepoCommandKind {
@@ -169,7 +185,8 @@ pub enum RepoCommandKind {
     },
     AddWorktree {
         path: PathBuf,
-        reference: Option<String>,
+        checkout: WorktreeCheckout,
+        open_after: bool,
     },
     RemoveWorktree {
         path: PathBuf,
@@ -257,6 +274,73 @@ impl RepoCommandKind {
             || matches!(self, Self::LargeFile { command } if command.pulls() || command.pushes())
     }
 
+    pub fn repository_requirement(&self) -> gitcomet_core::domain::RepositoryRequirement {
+        use gitcomet_core::domain::RepositoryRequirement::{Repository, WorkingTree};
+        match self {
+            Self::FetchAll
+            | Self::FetchRefspecs { .. }
+            | Self::PruneMergedBranches
+            | Self::PruneLocalTags
+            | Self::RunMaintenance
+            | Self::Push
+            | Self::PushWithTags { .. }
+            | Self::PushAfterCommit { .. }
+            | Self::ForcePush
+            | Self::ForcePushWithLease { .. }
+            | Self::PushSetUpstream { .. }
+            | Self::SetUpstreamBranch { .. }
+            | Self::UnsetUpstreamBranch { .. }
+            | Self::DeleteRemoteBranch { .. }
+            | Self::DeleteRemoteBranches { .. }
+            | Self::SquashCommits { .. }
+            | Self::CreateTag { .. }
+            | Self::DeleteTag { .. }
+            | Self::PushTag { .. }
+            | Self::DeleteRemoteTag { .. }
+            | Self::AddRemote { .. }
+            | Self::RemoveRemote { .. }
+            | Self::SetRemoteUrl { .. }
+            | Self::ExportPatch { .. }
+            | Self::AddWorktree { .. }
+            | Self::RemoveWorktree { .. }
+            | Self::ForceRemoveWorktree { .. } => Repository,
+            Self::Reset { mode, .. } => match mode {
+                ResetMode::Soft => Repository,
+                ResetMode::Mixed | ResetMode::Hard => WorkingTree,
+            },
+            Self::LargeFile { command } => command.repository_requirement(),
+            Self::Pull { .. }
+            | Self::PullBranch { .. }
+            | Self::MergeRef { .. }
+            | Self::SquashRef { .. }
+            | Self::Rebase { .. }
+            | Self::RebaseContinue
+            | Self::RebaseAbort
+            | Self::InteractiveRebase { .. }
+            | Self::InteractiveCherryPick { .. }
+            | Self::CherryPick { .. }
+            | Self::Revert { .. }
+            | Self::ApplyFileChange { .. }
+            | Self::MergeAbort
+            | Self::CheckoutConflict { .. }
+            | Self::AcceptConflictDeletion { .. }
+            | Self::CheckoutConflictBase { .. }
+            | Self::LaunchMergetool { .. }
+            | Self::SaveWorktreeFile { .. }
+            | Self::AppendGitignorePatterns { .. }
+            | Self::AppendGitattributesRule { .. }
+            | Self::ApplyPatch { .. }
+            | Self::AddSubmodule { .. }
+            | Self::UpdateSubmodules { .. }
+            | Self::LoadSubmodule { .. }
+            | Self::ChangeSubmodulePointer { .. }
+            | Self::RemoveSubmodule { .. }
+            | Self::StageHunk
+            | Self::UnstageHunk
+            | Self::ApplyWorktreePatch { .. } => WorkingTree,
+        }
+    }
+
     pub(crate) fn finished(
         self,
         repo_id: crate::model::RepoId,
@@ -332,6 +416,29 @@ impl RepoCommandKind {
             | Self::StageHunk
             | Self::UnstageHunk => false,
             Self::LargeFile { command } => command.writes_worktree(),
+        }
+    }
+
+    /// The worktree this command opens as a tab once it succeeds.
+    pub(crate) fn opens_worktree(&self) -> Option<&PathBuf> {
+        match self {
+            Self::AddWorktree {
+                path,
+                open_after: true,
+                ..
+            } => Some(path),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn opens_worktree_mut(&mut self) -> Option<&mut PathBuf> {
+        match self {
+            Self::AddWorktree {
+                path,
+                open_after: true,
+                ..
+            } => Some(path),
+            _ => None,
         }
     }
 

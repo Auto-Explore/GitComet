@@ -123,6 +123,14 @@ impl PopoverHost {
                 create_tag_prompt::panel(self, repo_id, target, cx)
             }
             PopoverKind::Repo { repo_id, kind } => match kind {
+                RepoPopoverKind::RepositoryModeMenu => self.context_menu_view(
+                    PopoverKind::Repo {
+                        repo_id,
+                        kind: RepoPopoverKind::RepositoryModeMenu,
+                    },
+                    cx,
+                ),
+                RepoPopoverKind::DisableBareModeConfirm => bare_mode::panel(self, repo_id, cx),
                 RepoPopoverKind::Remote(remote_kind) => match remote_kind {
                     RemotePopoverKind::AddPrompt => remote_add_prompt::panel(self, repo_id, cx),
                     RemotePopoverKind::EditUrlPrompt { name, kind } => {
@@ -150,6 +158,13 @@ impl PopoverHost {
                     ),
                     WorktreePopoverKind::Menu { path, branch } => self.context_menu_view(
                         PopoverKind::worktree(repo_id, WorktreePopoverKind::Menu { path, branch }),
+                        cx,
+                    ),
+                    WorktreePopoverKind::CommitMenu { commit_id } => self.context_menu_view(
+                        PopoverKind::worktree(
+                            repo_id,
+                            WorktreePopoverKind::CommitMenu { commit_id },
+                        ),
                         cx,
                     ),
                     WorktreePopoverKind::AddPrompt => {

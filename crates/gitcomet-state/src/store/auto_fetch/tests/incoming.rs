@@ -209,6 +209,18 @@ fn incoming_tracking_manual_fetch_failure_stays_stale_after_cached_reference_rea
                     })
         });
     }
+    // Auto-fetch opens its own handle, so incoming can be current before the
+    // tab opens (a slow session write delays it); a manual fetch sent then
+    // fails without running git.
+    wait_for_store(&store, &events, |state| {
+        state.repos.iter().any(|repo| {
+            repo.spec.workdir == clone
+                && matches!(repo.open, Loadable::Ready(()))
+                && !repo
+                    .loads_in_flight
+                    .is_in_flight(crate::model::LoadKind::UpstreamDivergence)
+        })
+    });
     let snapshots = [store.snapshot(), other.snapshot()];
     let originals = snapshots
         .iter()
