@@ -449,22 +449,38 @@ fn old_handles_detect_conversion_performed_by_another_process() {
         } else {
             bare
         };
-        let retained = crate::GixBackend.open(&root).unwrap();
-        let output = std::process::Command::new(std::env::current_exe().unwrap())
-            .args(["--exact", TEST_NAME, "--nocapture"])
-            .env(CHILD_ROOT, &root)
-            .output()
-            .unwrap();
+        let before = tree_digest(&root).unwrap();
+        let mut retained = Some(crate::GixBackend.open(&root).unwrap());
+        let run_child = || {
+            std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", TEST_NAME, "--nocapture"])
+                .env(CHILD_ROOT, &root)
+                .output()
+                .unwrap()
+        };
+        let mut output = run_child();
+        if cfg!(windows) && !config_only {
+            assert!(!output.status.success());
+            assert_eq!(
+                retained.as_ref().unwrap().repository_mode().unwrap(),
+                RepositoryMode::Bare
+            );
+            assert_eq!(tree_digest(&root).unwrap(), before);
+            drop(retained.take());
+            output = run_child();
+        }
         assert!(
             output.status.success(),
             "{}\n{}",
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
         );
-        assert!(matches!(
-            retained.repository_mode().unwrap_err().kind(),
-            ErrorKind::RepositoryChanged
-        ));
+        if let Some(retained) = retained {
+            assert!(matches!(
+                retained.repository_mode().unwrap_err().kind(),
+                ErrorKind::RepositoryChanged
+            ));
+        }
         assert_eq!(
             crate::GixBackend
                 .open(&root)

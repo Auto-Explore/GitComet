@@ -452,8 +452,7 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
-    fn replacing_a_directory_with_preserved_creation_time_invalidates_the_handle() {
-        use gitcomet_core::services::GitBackend;
+    fn replacing_a_directory_with_preserved_creation_time_invalidates_topology() {
         use std::os::windows::fs::{FileTimesExt, OpenOptionsExt};
         const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
         let directory = tempfile::tempdir().unwrap();
@@ -463,7 +462,9 @@ mod tests {
         std::fs::create_dir(&replacement).unwrap();
         crate::test_support::init_test_repo(&root);
         crate::test_support::init_test_repo(&replacement);
-        let retained = crate::GixBackend.open(&root).unwrap();
+        let repo = crate::open::open_worktree_repo(&root).unwrap();
+        let retained = OpenedTopology::read(&root, &repo).unwrap();
+        drop(repo);
         let git_dir = root.join(".git");
         let before = DirectoryIdentity::read(&git_dir).unwrap();
         let created = git_dir.metadata().unwrap().created().unwrap();
@@ -480,7 +481,7 @@ mod tests {
         assert_eq!(git_dir.metadata().unwrap().created().unwrap(), created);
         assert_ne!(DirectoryIdentity::read(&git_dir).unwrap(), before);
         assert!(matches!(
-            retained.repository_mode().unwrap_err().kind(),
+            retained.validate(&root).unwrap_err().kind(),
             ErrorKind::RepositoryChanged
         ));
     }

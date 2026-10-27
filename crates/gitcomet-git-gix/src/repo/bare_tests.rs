@@ -5,13 +5,14 @@ use std::fs;
 
 pub(super) fn bare_fixture() -> (tempfile::TempDir, PathBuf) {
     let directory = tempfile::tempdir().unwrap();
-    let checkout = directory.path().join("checkout");
+    let root = canonical_path(directory.path()).unwrap();
+    let checkout = root.join("checkout");
     fs::create_dir(&checkout).unwrap();
     init_test_repo(&checkout);
     fs::write(checkout.join("tracked.txt"), "original\n").unwrap();
     git_success(&checkout, &["add", "."]);
     git_success(&checkout, &["commit", "-m", "initial"]);
-    let bare = directory.path().join("history.git");
+    let bare = root.join("history.git");
     git_success(
         directory.path(),
         &[
