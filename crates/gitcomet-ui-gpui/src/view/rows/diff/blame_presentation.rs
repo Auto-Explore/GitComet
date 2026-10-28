@@ -49,6 +49,17 @@ impl BlameRenderCtx {
     }
 }
 
+/// The avatar's hover text: the author's name and, when it is known, their
+/// email in angle brackets.
+fn author_tip(author: &str, email: &str) -> SharedString {
+    let name = super::blame::author_display_name(author);
+    if email.is_empty() {
+        SharedString::from(name.to_string())
+    } else {
+        SharedString::from(format!("{name} <{email}>"))
+    }
+}
+
 /// Snapshot of blame data needed to render the annotation column for one diff
 /// render pass. Owns its data (an `Arc` clone of the loaded blame plus the
 /// recency range and a single `now` timestamp) so it does not borrow the view.
@@ -226,8 +237,9 @@ fn build_row_blame_paint_inner(
             crate::theme::blame_heat_color(theme.is_dark, t)
         }
     };
-    let (when, author, summary, body) = if !is_run_start {
+    let (when, author, author_tip, summary, body) = if !is_run_start {
         (
+            SharedString::default(),
             SharedString::default(),
             SharedString::default(),
             SharedString::default(),
@@ -236,6 +248,7 @@ fn build_row_blame_paint_inner(
     } else if let BlameGroup::Local(local) = group {
         (
             SharedString::from(local_change_label(local)),
+            SharedString::default(),
             SharedString::default(),
             SharedString::default(),
             None,
@@ -248,6 +261,7 @@ fn build_row_blame_paint_inner(
         (
             when,
             ctx.author_label(&line.author),
+            author_tip(&line.author, &line.author_email),
             // `Arc<str>` -> `SharedString` is a refcount bump, not a byte copy,
             // so this avoids re-allocating the summary/body every render pass.
             SharedString::from(line.summary.clone()),
@@ -259,6 +273,7 @@ fn build_row_blame_paint_inner(
         show_text: is_run_start,
         when,
         author,
+        author_tip,
         summary,
         body,
         commit_id: gitcomet_core::domain::CommitId(line.commit_id.clone()),
@@ -292,6 +307,7 @@ fn removal_blame_paint(
         show_text: is_run_start,
         when,
         author: SharedString::default(),
+        author_tip: SharedString::default(),
         summary: SharedString::default(),
         body: None,
         commit_id: gitcomet_core::domain::CommitId(std::sync::Arc::from("")),

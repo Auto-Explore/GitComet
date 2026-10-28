@@ -92,6 +92,7 @@ mod tests {
         BlameLine {
             commit_id: Arc::from(commit),
             author: Arc::from("Jane Doe"),
+            author_email: Default::default(),
             author_time_unix: ts,
             summary: Arc::from("summary"),
             body: None,

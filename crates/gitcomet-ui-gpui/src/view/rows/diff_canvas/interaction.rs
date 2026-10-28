@@ -176,12 +176,14 @@ pub(super) fn install_blame_annotation_hover_handler(
     hitboxes: &AnnotHitboxes,
     summary: SharedString,
     body: Option<SharedString>,
+    author_tip: SharedString,
     message_enabled: bool,
     prior_enabled: bool,
     browse_enabled: bool,
 ) {
     window.on_mouse_event({
         let view = view.clone();
+        let author = hitboxes.author.clone();
         let message = hitboxes.message.clone();
         let prior_icon = hitboxes.prior_icon.clone();
         let browse_icon = hitboxes.browse_icon.clone();
@@ -191,7 +193,9 @@ pub(super) fn install_blame_annotation_hover_handler(
             }
             // Hover follows the hit test, so a panel painted over the diff hides
             // the annotations underneath instead of highlighting them through it.
-            let area = if message_enabled && message.is_hovered(window) {
+            let area = if !author_tip.is_empty() && author.is_hovered(window) {
+                Some(AnnotArea::Author)
+            } else if message_enabled && message.is_hovered(window) {
                 Some(AnnotArea::Message)
             } else if prior_enabled && prior_icon.is_hovered(window) {
                 Some(AnnotArea::PriorIcon)
@@ -219,6 +223,7 @@ pub(super) fn install_blame_annotation_hover_handler(
                     Some(SharedString::from("View file prior this change"))
                 }
                 Some(AnnotArea::BrowseIcon) => Some(SharedString::from("View file at this commit")),
+                Some(AnnotArea::Author) => Some(author_tip.clone()),
                 None => None,
             };
 

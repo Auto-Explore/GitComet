@@ -378,6 +378,7 @@ fn editor_blame_lines() -> Vec<gitcomet_core::services::BlameLine> {
         gitcomet_core::services::BlameLine {
             commit_id: std::sync::Arc::from("abcdef1"),
             author: "Sampo Kivistö".into(),
+            author_email: Default::default(),
             author_time_unix: Some(1_700_000_000),
             summary: "add main".into(),
             body: None,
@@ -389,6 +390,7 @@ fn editor_blame_lines() -> Vec<gitcomet_core::services::BlameLine> {
         gitcomet_core::services::BlameLine {
             commit_id: std::sync::Arc::from("abcdef2"),
             author: "Sampo Kivistö".into(),
+            author_email: Default::default(),
             author_time_unix: Some(1_700_000_100),
             summary: "add other".into(),
             body: None,

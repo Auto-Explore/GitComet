@@ -1448,6 +1448,7 @@ fn state_with_blamed_unstaged_diff() -> (AppState, RepoId) {
         gitcomet_core::services::BlameLine {
             commit_id: Arc::from("1111111111111111111111111111111111111111"),
             author: Arc::from("Ada"),
+            author_email: Default::default(),
             author_time_unix: Some(1_700_000_000),
             summary: Arc::from("initial"),
             body: None,

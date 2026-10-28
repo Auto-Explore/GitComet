@@ -451,6 +451,7 @@ fn app_state_clone_shares_heavy_repo_fields_via_arc() {
     repo.diff_state.blame = Loadable::Ready(Arc::new(vec![BlameLine {
         commit_id: "c1".into(),
         author: "a".into(),
+        author_email: Default::default(),
         author_time_unix: None,
         summary: "s1".into(),
         body: None,

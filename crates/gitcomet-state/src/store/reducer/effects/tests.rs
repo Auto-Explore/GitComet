@@ -3471,6 +3471,7 @@ fn blame_line(line: &str) -> gitcomet_core::services::BlameLine {
     gitcomet_core::services::BlameLine {
         commit_id: Arc::from("1111111111111111111111111111111111111111"),
         author: Arc::from("Ada"),
+        author_email: Default::default(),
         author_time_unix: Some(1_700_000_000),
         summary: Arc::from("initial"),
         body: None,

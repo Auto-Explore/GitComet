@@ -391,6 +391,7 @@ fn paint_blame_dot(
 /// Hitboxes for annotation sub-column interactive areas.
 #[derive(Clone, Debug)]
 pub(super) struct AnnotHitboxes {
+    pub(super) author: Hitbox,
     pub(super) message: Hitbox,
     pub(super) prior_icon: Hitbox,
     pub(super) browse_icon: Hitbox,
@@ -470,8 +471,9 @@ pub(super) fn render_blame_column(
         cx,
     );
 
+    let author_enabled = !blame.author_tip.is_empty();
     if blame.show_text
-        && (message_enabled || prior_enabled || browse_enabled)
+        && (message_enabled || prior_enabled || browse_enabled || author_enabled)
         && let Some(hb) = annot_hitboxes
     {
         install_blame_annotation_mouse_handler(
@@ -496,6 +498,7 @@ pub(super) fn render_blame_column(
             hb,
             blame.summary.clone(),
             blame.body.clone(),
+            blame.author_tip.clone(),
             message_enabled,
             prior_enabled,
             browse_enabled,
@@ -521,6 +524,7 @@ pub(super) fn build_annot_hitboxes(
     );
     let clip = window.content_mask().bounds;
     Some(AnnotHitboxes {
+        author: window.insert_hitbox(layout.author.intersect(&clip), HitboxBehavior::Normal),
         message: window.insert_hitbox(layout.message.intersect(&clip), HitboxBehavior::Normal),
         prior_icon: window
             .insert_hitbox(layout.prior_icon.intersect(&clip), HitboxBehavior::Normal),

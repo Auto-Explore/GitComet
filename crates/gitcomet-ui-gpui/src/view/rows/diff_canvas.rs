@@ -104,6 +104,8 @@ pub(in crate::view) struct RowBlamePaint {
     pub(in crate::view) when: SharedString,
     /// The author's name (truncated with an ellipsis at paint time).
     pub(in crate::view) author: SharedString,
+    /// Hover text for the avatar: the name and, when known, `<email>`.
+    pub(in crate::view) author_tip: SharedString,
     /// Commit summary (truncated with an ellipsis at paint time).
     pub(in crate::view) summary: SharedString,
     /// Commit message body (everything after the first line), used for tooltips.
@@ -173,6 +175,7 @@ pub(in crate::view) enum AnnotArea {
     Message,
     PriorIcon,
     BrowseIcon,
+    Author,
 }
 
 /// Which column's left gutter a stage/unstage button belongs to. Split views

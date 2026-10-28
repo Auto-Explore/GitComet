@@ -4,6 +4,7 @@ fn uncommitted_blame_line() -> gitcomet_core::services::BlameLine {
     gitcomet_core::services::BlameLine {
         commit_id: std::sync::Arc::from("0000000000000000000000000000000000000000"),
         author: std::sync::Arc::from("Not Committed Yet"),
+        author_email: Default::default(),
         author_time_unix: None,
         summary: std::sync::Arc::from("Not Committed Yet"),
         body: None,
@@ -18,6 +19,7 @@ fn committed_blame_line(sha: &str) -> gitcomet_core::services::BlameLine {
     gitcomet_core::services::BlameLine {
         commit_id: std::sync::Arc::from(sha),
         author: std::sync::Arc::from("Jane Doe"),
+        author_email: Default::default(),
         author_time_unix: Some(1_700_000_000),
         summary: std::sync::Arc::from("a commit"),
         body: None,
