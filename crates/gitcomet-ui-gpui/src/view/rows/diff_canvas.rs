@@ -324,14 +324,27 @@ fn paint_annotation_sidebar(
     window: &mut Window,
     bounds: Bounds<Pixels>,
     annot_w: Pixels,
-    sidebar_bg: gpui::Rgba,
+    theme: AppTheme,
 ) {
     window.paint_quad(
         PaintQuad::new(row_bg_fill_bounds(Bounds::new(
             bounds.origin,
             size(annot_w, bounds.size.height),
         )))
-        .background(sidebar_bg),
+        .background(theme.colors.surface.panel),
+    );
+    // A hairline closing the column on its right. The border colour is
+    // translucent, so composite it over the canvas it borders on the details
+    // pane; over the sidebar fill it would come out darker than that edge.
+    window.paint_quad(
+        PaintQuad::new(Bounds::new(
+            point(bounds.left() + annot_w - px(1.0), bounds.top()),
+            size(px(1.0), bounds.size.height),
+        ))
+        .background(crate::theme::composite_over(
+            theme.colors.surface.canvas,
+            theme.colors.stroke.subtle,
+        )),
     );
 }
 
@@ -343,10 +356,10 @@ fn paint_row_bg_with_annotation(
     bounds: Bounds<Pixels>,
     annot_w: Pixels,
     bg: gpui::Rgba,
-    sidebar_bg: gpui::Rgba,
+    theme: AppTheme,
 ) {
     if annot_w > px(0.0) {
-        paint_annotation_sidebar(window, bounds, annot_w, sidebar_bg);
+        paint_annotation_sidebar(window, bounds, annot_w, theme);
         window.paint_quad(
             PaintQuad::new(row_bg_fill_bounds(inset_left(bounds, annot_w))).background(bg),
         );
@@ -820,13 +833,7 @@ pub(super) fn inline_diff_line_row_canvas(
 
             // Selection must not tint the annotation sidebar: fill it with a
             // neutral panel color and fill the content area with the row bg.
-            paint_row_bg_with_annotation(
-                window,
-                prepaint.bounds,
-                prepaint.annot_w,
-                bg,
-                theme.colors.surface.panel,
-            );
+            paint_row_bg_with_annotation(window, prepaint.bounds, prepaint.annot_w, bg, theme);
 
             if let Some(blame) = &blame {
                 render_blame_column(
@@ -1128,12 +1135,7 @@ pub(super) fn split_diff_line_row_canvas(
             // Neutral panel bg under the annotation column so selection does
             // not tint it.
             if prepaint.annot_w > px(0.0) {
-                paint_annotation_sidebar(
-                    window,
-                    prepaint.bounds,
-                    prepaint.annot_w,
-                    theme.colors.surface.panel,
-                );
+                paint_annotation_sidebar(window, prepaint.bounds, prepaint.annot_w, theme);
             }
             window.paint_quad(
                 PaintQuad::new(row_bg_fill_bounds(prepaint.left_col)).background(left_bg),
@@ -1453,13 +1455,7 @@ pub(super) fn patch_split_column_row_canvas(
 
             // Selection must not tint the annotation sidebar: fill it with a
             // neutral panel color and fill the content area with the row bg.
-            paint_row_bg_with_annotation(
-                window,
-                prepaint.bounds,
-                prepaint.annot_w,
-                bg,
-                theme.colors.surface.panel,
-            );
+            paint_row_bg_with_annotation(window, prepaint.bounds, prepaint.annot_w, bg, theme);
 
             if let Some(blame) = &blame {
                 render_blame_column(
@@ -1742,7 +1738,7 @@ pub(super) fn worktree_preview_row_canvas(
                 bounds,
                 prepaint.annot_w,
                 theme.colors.surface.canvas,
-                theme.colors.surface.panel,
+                theme,
             );
             if let Some(color) = bar_color
                 && prepaint.bar_w > px(0.0)
@@ -2086,6 +2082,25 @@ fn paint_gutter_text_right_aligned(
         window,
         cx,
     );
+}
+
+/// Paints gutter text at `metrics` vertically centred on the line that text at
+/// `reference` metrics would occupy when painted at `y`. Smaller text painted at
+/// the same top edge would otherwise sit high in the row.
+#[allow(clippy::too_many_arguments)]
+fn paint_gutter_text_centered_on(
+    text: &SharedString,
+    x: Pixels,
+    y: Pixels,
+    color: gpui::Rgba,
+    metrics: LineMetrics,
+    reference: LineMetrics,
+    style: &TextStyle,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let y = y + (reference.line_height - metrics.line_height) / 2.0;
+    paint_gutter_text(text, x, y, color, metrics, style, window, cx);
 }
 
 fn paint_gutter_text(

@@ -12,6 +12,7 @@ use super::interaction::install_blame_annotation_hover_handler;
 use super::interaction::install_blame_annotation_mouse_handler;
 use super::paint_centered_svg_icon;
 use super::paint_gutter_text;
+use super::paint_gutter_text_centered_on;
 use gpui::App;
 use gpui::Bounds;
 use gpui::CursorStyle;
@@ -46,7 +47,7 @@ pub(in crate::view) const DIFF_ANNOTATION_BORDER_WIDTH_PX: f32 = 3.0;
 pub(in crate::view) const DIFF_ANNOTATION_GAP_PX: f32 = 6.0;
 
 /// Fixed width of the "X ago" sub-column.
-pub(in crate::view) const DIFF_ANNOTATION_WHEN_WIDTH_PX: f32 = 82.0;
+pub(in crate::view) const DIFF_ANNOTATION_WHEN_WIDTH_PX: f32 = 96.0;
 
 /// Fixed width of the author-initials sub-column.
 pub(in crate::view) const DIFF_ANNOTATION_INITIALS_WIDTH_PX: f32 = 22.0;
@@ -214,12 +215,15 @@ fn paint_blame_annotation(
         return;
     }
 
-    paint_gutter_text(
+    // The time is set smaller than the rest of the row; centre it vertically
+    // on the author and summary line.
+    paint_gutter_text_centered_on(
         &blame.when,
         layout.when_x,
         y,
         text_color,
         when_metrics,
+        metrics,
         style,
         window,
         cx,
