@@ -1,15 +1,15 @@
 use super::*;
 use gitcomet_state::model::{AutoFetchStatus, RepoAutoFetchState};
 
-fn auto_fetch_status_text(enabled: bool, state: &RepoAutoFetchState) -> &'static str {
+fn auto_fetch_status_text(enabled: bool, state: &RepoAutoFetchState) -> Option<&'static str> {
     if !enabled {
-        return "Automatic fetch: Off";
+        return Some("Automatic fetch: Off");
     }
     match &state.status {
-        AutoFetchStatus::Idle => "Automatic fetch: Waiting",
-        AutoFetchStatus::Running => "Fetching automatically…",
-        AutoFetchStatus::Succeeded { .. } => "Automatic fetch: Succeeded",
-        AutoFetchStatus::Failed { .. } => "Automatic fetch: Failed",
+        AutoFetchStatus::Idle => Some("Automatic fetch: Waiting"),
+        AutoFetchStatus::Running => Some("Fetching automatically…"),
+        AutoFetchStatus::Succeeded { .. } => None,
+        AutoFetchStatus::Failed { .. } => Some("Automatic fetch: Failed"),
     }
 }
 
@@ -46,9 +46,10 @@ fn auto_fetch_status_items(
     timezone: Timezone,
     show_timezone: bool,
 ) -> Vec<ContextMenuItem> {
-    let mut items = vec![ContextMenuItem::Label(
-        auto_fetch_status_text(enabled, state).into(),
-    )];
+    let mut items: Vec<_> = auto_fetch_status_text(enabled, state)
+        .into_iter()
+        .map(|text| ContextMenuItem::Label(text.into()))
+        .collect();
     if enabled && let AutoFetchStatus::Failed { error, .. } = &state.status {
         items.push(ContextMenuItem::Description(
             components::ContextMenuText::new(auto_fetch_failure_description(error))
@@ -254,8 +255,24 @@ mod tests {
         );
         assert_eq!(
             auto_fetch_status_text(false, &state),
-            "Automatic fetch: Off"
+            Some("Automatic fetch: Off")
         );
+    }
+
+    #[test]
+    fn automatic_fetch_success_shows_only_the_last_successful_fetch() {
+        let success = std::time::UNIX_EPOCH;
+        let state = RepoAutoFetchState {
+            last_success_at: Some(success),
+            status: AutoFetchStatus::Succeeded { at: success },
+            ..RepoAutoFetchState::default()
+        };
+        let items =
+            auto_fetch_status_items(true, &state, DateTimeFormat::YmdHm, Timezone::Utc, false);
+        let [ContextMenuItem::Label(label)] = items.as_slice() else {
+            panic!("a succeeded fetch should show one row, got {}", items.len());
+        };
+        assert_eq!(label.as_ref(), "Last successful fetch: 1970-01-01 00:00");
     }
 
     #[test]
