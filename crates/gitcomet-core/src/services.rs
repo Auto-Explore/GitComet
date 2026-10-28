@@ -1653,6 +1653,12 @@ pub trait GitRepository: Send + Sync {
             )))
         }
     }
+    /// [`Self::fetch_all`] from `remote` alone.
+    fn fetch_remote(&self, _remote: &str, _prune: bool) -> Result<CommandOutput> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "fetching a single remote is not implemented for this backend",
+        )))
+    }
     /// Hash of every remote-tracking branch and tag with its target, read
     /// fresh from disk. Equal values before and after a fetch mean the fetch
     /// moved nothing.

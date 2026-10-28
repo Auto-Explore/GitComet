@@ -48,11 +48,14 @@ pub(super) fn model(this: &PopoverHost, repo_id: RepoId, name: &str) -> ContextM
     });
     items.push(ContextMenuItem::Separator);
     items.push(ContextMenuItem::Entry {
-        label: "Fetch all".into(),
+        label: "Fetch".into(),
         icon: Some("icons/arrow_down.svg".into()),
         shortcut: Some("F".into()),
         disabled: false,
-        action: Box::new(ContextMenuAction::FetchAll { repo_id }),
+        action: Box::new(ContextMenuAction::FetchRemote {
+            repo_id,
+            remote: name.to_owned(),
+        }),
     });
     items.push(ContextMenuItem::Entry {
         label: "Prune merged branches".into(),

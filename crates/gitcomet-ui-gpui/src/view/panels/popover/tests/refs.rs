@@ -856,14 +856,14 @@ fn remote_menu_lists_fetch_and_prune_actions(cx: &mut gpui::TestAppContext) {
             .expect("expected remote context menu model");
 
         let fetch = model.items.iter().find_map(|item| match item {
-            ContextMenuItem::Entry { label, action, .. } if label.as_ref() == "Fetch all" => {
+            ContextMenuItem::Entry { label, action, .. } if label.as_ref() == "Fetch" => {
                 Some((**action).clone())
             }
             _ => None,
         });
         assert!(matches!(
             fetch,
-            Some(ContextMenuAction::FetchAll { repo_id: rid }) if rid == repo_id
+            Some(ContextMenuAction::FetchRemote { repo_id: rid, remote }) if rid == repo_id && remote == remote_name
         ));
 
         let prune_branches = model.items.iter().find_map(|item| match item {

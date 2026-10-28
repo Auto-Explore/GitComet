@@ -165,6 +165,12 @@ pub enum RepoCommandEffect {
         prune: bool,
         auth: Option<StagedGitAuth>,
     },
+    FetchRemote {
+        repo_id: RepoId,
+        remote: String,
+        prune: bool,
+        auth: Option<StagedGitAuth>,
+    },
     FetchRefspecs {
         repo_id: RepoId,
         remote: String,
@@ -375,6 +381,7 @@ macro_rules! match_git_auth {
             | RepoCommandEffect::LoadSubmodule { auth: $auth, .. }
             | RepoCommandEffect::SafePushAfterCommit { auth: $auth, .. }
             | RepoCommandEffect::FetchAll { auth: $auth, .. }
+            | RepoCommandEffect::FetchRemote { auth: $auth, .. }
             | RepoCommandEffect::FetchRefspecs { auth: $auth, .. }
             | RepoCommandEffect::Pull { auth: $auth, .. }
             | RepoCommandEffect::PullBranch { auth: $auth, .. }
@@ -673,6 +680,9 @@ impl RepoCommandEffect {
             RepoCommandEffect::FetchAll { repo_id, .. } => {
                 Some(RepoCommandKind::FetchAll.finished(repo_id, Err(error)))
             }
+            RepoCommandEffect::FetchRemote {
+                repo_id, remote, ..
+            } => Some(RepoCommandKind::FetchRemote { remote }.finished(repo_id, Err(error))),
             RepoCommandEffect::FetchRefspecs {
                 repo_id,
                 remote,

@@ -104,6 +104,7 @@ fn large_file_command_context(command: &gitcomet_core::large_files::LargeFileCom
 fn repo_command_context(command: &RepoCommandKind) -> Option<String> {
     let context = match command {
         RepoCommandKind::FetchAll => "All remotes".to_string(),
+        RepoCommandKind::FetchRemote { remote } => remote.clone(),
         RepoCommandKind::FetchRefspecs { remote, refspecs } => {
             format!("{remote}: {}", refspecs.join(" "))
         }
@@ -329,7 +330,7 @@ fn schedule_repo_command_task<F>(
     } else {
         None
     };
-    let is_manual_fetch = matches!(command, RepoCommandKind::FetchAll);
+    let is_manual_fetch = command.fetches_every_remote();
     let label = command.hook_activity_label();
     let context = context_override.or_else(|| repo_command_context(&command));
     // The reducer counted the command in flight and only its completion
@@ -1161,6 +1162,23 @@ fn schedule_fetch_all(
         RepoCommandKind::FetchAll,
         move |repo| run_with_git_auth(auth, || repo.fetch_all(prune)),
     );
+}
+
+fn schedule_fetch_remote(
+    executor: &TaskExecutor,
+    repos: &RepositoryRuntimes,
+    msg_tx: StoreWorkerSender,
+    repo_id: RepoId,
+    remote: String,
+    prune: bool,
+    auth: Option<StagedGitAuth>,
+) {
+    let command = RepoCommandKind::FetchRemote {
+        remote: remote.clone(),
+    };
+    schedule_repo_command(executor, repos, msg_tx, repo_id, command, move |repo| {
+        run_with_git_auth(auth, || repo.fetch_remote(&remote, prune))
+    });
 }
 
 fn schedule_fetch_refspecs(
@@ -2837,6 +2855,12 @@ pub(super) fn schedule(
             prune,
             auth,
         } => schedule_fetch_all(executor, repos, msg_tx, repo_id, prune, auth),
+        RepoCommandEffect::FetchRemote {
+            repo_id,
+            remote,
+            prune,
+            auth,
+        } => schedule_fetch_remote(executor, repos, msg_tx, repo_id, remote, prune, auth),
         RepoCommandEffect::FetchRefspecs {
             repo_id,
             remote,

@@ -25,9 +25,9 @@ const PENDING_UPSTREAM_CONFIG_KEY: &str = "gitcometPendingUpstream";
 /// `color.ui` alone loses to a user's `color.diff=always`.
 pub(super) const NO_COLOR_CONFIG: [&str; 4] = ["-c", "color.ui=false", "-c", "color.diff=false"];
 
-struct FetchAllRemotes {
+struct FetchRemotes {
     names: Vec<String>,
-    /// Name the eligible remotes explicitly when --all would contact annex.
+    /// Fetch exactly `names` with --multiple instead of --all.
     explicit: bool,
 }
 
@@ -598,7 +598,7 @@ impl GixRepo {
 
     /// Remotes `git fetch --all` contacts, in Git's own order. A remote it
     /// skips says nothing about whether that remote's branches still exist.
-    fn fetch_all_remotes(&self) -> Result<FetchAllRemotes> {
+    fn fetch_all_remotes(&self) -> Result<FetchRemotes> {
         let repo = self.repo_with_current_config()?;
         let config = repo.config_snapshot();
         let mut names = Vec::new();
@@ -617,7 +617,7 @@ impl GixRepo {
                 names.push(name);
             }
         }
-        Ok(FetchAllRemotes { names, explicit })
+        Ok(FetchRemotes { names, explicit })
     }
 
     /// Configured branch upstreams. `tracking_ref` is populated only when the
@@ -1054,9 +1054,9 @@ impl GixRepo {
         Ok(branches)
     }
 
-    fn fetch_all_command_impl(
+    fn fetch_remotes_command_impl(
         &self,
-        remotes: &FetchAllRemotes,
+        remotes: &FetchRemotes,
         prune: bool,
         capture_output: bool,
     ) -> Result<CommandOutput> {
@@ -1083,21 +1083,21 @@ impl GixRepo {
             }
             cmd.arg("--").args(&remotes.names);
         }
-        run_git_command_with_optional_output(
-            cmd,
-            &format!("git fetch {scope} {prune_arg} --no-prune-tags"),
-            capture_output,
-        )
+        let mut label = format!("git fetch {scope} {prune_arg} --no-prune-tags");
+        if remotes.explicit {
+            label = format!("{label} -- {}", remotes.names.join(" "));
+        }
+        run_git_command_with_optional_output(cmd, &label, capture_output)
     }
 
-    fn fetch_all_command_with_optional_output_impl(
+    fn fetch_remotes_command_with_optional_output_impl(
         &self,
-        remotes: &FetchAllRemotes,
+        remotes: &FetchRemotes,
         prune: bool,
         capture_output: bool,
     ) -> Result<CommandOutput> {
         if !prune {
-            return self.fetch_all_command_impl(remotes, false, capture_output);
+            return self.fetch_remotes_command_impl(remotes, false, capture_output);
         }
 
         // `--prune` deletes every destination the remote's own refspecs map, so
@@ -1111,10 +1111,10 @@ impl GixRepo {
                 .unwrap_or(false)
         });
         if !needs_scoped_prune {
-            return self.fetch_all_command_impl(remotes, true, capture_output);
+            return self.fetch_remotes_command_impl(remotes, true, capture_output);
         }
 
-        let mut outputs = vec![self.fetch_all_command_impl(remotes, false, capture_output)?];
+        let mut outputs = vec![self.fetch_remotes_command_impl(remotes, false, capture_output)?];
         for remote in &remotes.names {
             outputs.push(
                 self.prune_remote_tracking_refs_command_with_optional_output_impl(
@@ -1143,6 +1143,15 @@ impl GixRepo {
             remotes.names.retain(|name| !skipped.contains(name));
             remotes.explicit = true;
         }
+        self.fetch_remotes_with_optional_output_impl(&remotes, prune, capture_output)
+    }
+
+    fn fetch_remotes_with_optional_output_impl(
+        &self,
+        remotes: &FetchRemotes,
+        prune: bool,
+        capture_output: bool,
+    ) -> Result<CommandOutput> {
         let tracked_before_fetch = if prune {
             let configured =
                 self.configured_remote_upstreams(UpstreamCleanupScope::Remotes(&remotes.names))?;
@@ -1150,17 +1159,17 @@ impl GixRepo {
         } else {
             Vec::new()
         };
-        let output =
-            match self.fetch_all_command_with_optional_output_impl(&remotes, prune, capture_output)
-            {
-                Ok(output) => output,
-                Err(error) => {
-                    self.best_effort_unlink_upstreams_pruned_during_failed_fetch(
-                        tracked_before_fetch,
-                    );
-                    return Err(error);
-                }
-            };
+        let output = match self.fetch_remotes_command_with_optional_output_impl(
+            remotes,
+            prune,
+            capture_output,
+        ) {
+            Ok(output) => output,
+            Err(error) => {
+                self.best_effort_unlink_upstreams_pruned_during_failed_fetch(tracked_before_fetch);
+                return Err(error);
+            }
+        };
         if !prune {
             return Ok(output);
         }
@@ -1229,6 +1238,19 @@ impl GixRepo {
         skipped: &[String],
     ) -> Result<CommandOutput> {
         self.fetch_all_with_optional_output_impl(prune, skipped, true)
+    }
+
+    pub(super) fn fetch_remote_with_output_impl(
+        &self,
+        remote: &str,
+        prune: bool,
+    ) -> Result<CommandOutput> {
+        validate_ref_like_arg(remote, "remote name")?;
+        let remotes = FetchRemotes {
+            names: vec![remote.to_owned()],
+            explicit: true,
+        };
+        self.fetch_remotes_with_optional_output_impl(&remotes, prune, true)
     }
 
     fn push_set_upstream_with_optional_output_impl(
@@ -2224,7 +2246,7 @@ impl GixRepo {
         // one of its deletion criteria. Surviving branches are unlinked below.
         let remotes = self.fetch_all_remotes()?;
         let fetch_output =
-            self.fetch_all_command_with_optional_output_impl(&remotes, true, true)?;
+            self.fetch_remotes_command_with_optional_output_impl(&remotes, true, true)?;
 
         let mut merged_cmd = self.git_workdir_cmd();
         merged_cmd

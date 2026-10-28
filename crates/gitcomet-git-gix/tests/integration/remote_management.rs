@@ -908,6 +908,55 @@ fn fetch_all_variants_prune_deleted_remote_tracking_branches() {
     );
 }
 
+#[test]
+fn fetch_remote_fetches_and_prunes_only_the_named_remote() {
+    let _guard = remote_management_test_lock();
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let root = dir.path();
+    let work_repo = root.join("work");
+    fs::create_dir_all(&work_repo).expect("create work repo dir");
+    init_repo_with_user(&work_repo);
+    fs::write(work_repo.join("file.txt"), "base\n").expect("write base file");
+    run_git(&work_repo, &["add", "file.txt"]);
+    run_git(&work_repo, &["commit", "-m", "base"]);
+
+    for remote in ["origin", "fork"] {
+        let remote_repo = root.join(format!("{remote}.git"));
+        fs::create_dir_all(&remote_repo).expect("create remote repo dir");
+        run_git(&remote_repo, &["init", "--bare"]);
+        run_git(
+            &work_repo,
+            &["remote", "add", remote, &git_remote_url(&remote_repo)],
+        );
+        run_git(&work_repo, &["push", remote, "HEAD:refs/heads/stale"]);
+        run_git(&work_repo, &["fetch", remote]);
+        run_git(&remote_repo, &["update-ref", "-d", "refs/heads/stale"]);
+        run_git(&work_repo, &["push", remote, "HEAD:refs/heads/fresh"]);
+        run_git(
+            &work_repo,
+            &["update-ref", "-d", &format!("refs/remotes/{remote}/fresh")],
+        );
+    }
+    let has_ref = |name: &str| {
+        run_git_status(&work_repo, &["show-ref", "--verify", "--quiet", name]).success()
+    };
+
+    let opened = GixBackend.open(&work_repo).expect("open work repo");
+    let output = opened
+        .fetch_remote("origin", true)
+        .expect("fetch origin with pruning");
+
+    assert_eq!(output.exit_code, Some(0));
+    assert_eq!(
+        output.command,
+        "git fetch --multiple --prune --no-prune-tags -- origin"
+    );
+    assert!(has_ref("refs/remotes/origin/fresh"));
+    assert!(!has_ref("refs/remotes/origin/stale"));
+    assert!(!has_ref("refs/remotes/fork/fresh"));
+    assert!(has_ref("refs/remotes/fork/stale"));
+}
+
 // Pointing `origin` at a fork without the branch `origin/HEAD` names makes the
 // pruning fetch leave that symref dangling, exactly as Git does.
 #[test]

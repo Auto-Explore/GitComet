@@ -1521,6 +1521,11 @@ impl GitRepository for GixRepo {
         })
     }
 
+    fn fetch_remote(&self, remote: &str, prune: bool) -> Result<CommandOutput> {
+        let _operation = self.operation_lease()?;
+        self.fetch_remote_with_output_impl(remote, prune)
+    }
+
     fn remote_refs_fingerprint(&self, cancellation: &CancellationToken) -> Result<u64> {
         let _operation = self.operation_lease()?;
         let _scope = git_ops_trace::scope(GitOpTraceKind::RefEnumerate);

@@ -546,6 +546,56 @@ fn a_refspec_fetch_is_a_fetch_in_flight_and_refreshes_remote_branches_when_done(
 }
 
 #[test]
+fn a_single_remote_fetch_follows_the_prune_setting_and_refreshes_remote_branches() {
+    let mut repos: RepositoryRuntimes = Default::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::test_default();
+    state.remote_settings.prune_deleted_remote_branches_on_fetch = true;
+    let repo_id = RepoId(1);
+    repos.attach_repository_for_test(repo_id, Arc::new(DummyRepo::new("/tmp/repo")));
+    state.repos.push(RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Fetch(crate::msg::FetchMsg::Remote {
+            repo_id,
+            remote: "fork".to_string(),
+        }),
+    );
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::RepoCommand(RepoCommandEffect::FetchRemote { remote, prune: true, auth: None, .. })]
+            if remote == "fork"
+    ));
+    assert_eq!(state.repos[0].pull_in_flight, 1);
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
+            repo_id,
+            command: RepoCommandKind::FetchRemote {
+                remote: "fork".to_string(),
+            },
+            result: Ok(CommandOutput::empty_success("git fetch fork")),
+        }),
+    );
+    assert_eq!(state.repos[0].pull_in_flight, 0);
+    assert!(
+        matches!(state.repos[0].remote_branches, Loadable::Loading),
+        "a fetch reloads the remote branches"
+    );
+}
+
+#[test]
 fn pull_variants_are_independent_of_the_fetch_prune_setting() {
     let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);

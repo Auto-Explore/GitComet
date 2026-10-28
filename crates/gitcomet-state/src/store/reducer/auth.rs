@@ -315,6 +315,9 @@ pub(crate) fn repo_command_replay_msg_for_test(
 fn retry_msg_for_repo_command(repo_id: RepoId, command: RepoCommandKind) -> Option<Msg> {
     Some(match command {
         RepoCommandKind::FetchAll => Msg::Fetch(crate::msg::FetchMsg::All { repo_id }),
+        RepoCommandKind::FetchRemote { remote } => {
+            Msg::Fetch(crate::msg::FetchMsg::Remote { repo_id, remote })
+        }
         RepoCommandKind::FetchRefspecs { remote, refspecs } => {
             Msg::Fetch(crate::msg::FetchMsg::Refspecs {
                 repo_id,
