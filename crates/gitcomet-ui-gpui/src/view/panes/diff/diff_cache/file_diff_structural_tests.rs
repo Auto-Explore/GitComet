@@ -288,6 +288,47 @@ fn a_final_newline_change_draws_the_last_line_once() {
     );
 }
 
+#[gpui::test]
+fn file_view_identity_projection_does_not_store_an_index_per_row(cx: &mut gpui::TestAppContext) {
+    use crate::view::test_support::TestBackend;
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (root, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    cx.update(|_, app| {
+        root.read(app).diff_renderer.clone().update(app, |pane, _| {
+            let count = 100_000;
+            let text = "context\n".repeat(count);
+            show_structural_rows(
+                pane,
+                &text,
+                &text,
+                StructuralDiff {
+                    language: "JavaScript".into(),
+                    aligned_lines: (0..count).map(|row| (Some(row), Some(row))).collect(),
+                    old_changes: BTreeMap::new(),
+                    new_changes: BTreeMap::new(),
+                    blocks: Vec::new(),
+                },
+            );
+            for mode in [DiffViewMode::Inline, DiffViewMode::Split] {
+                pane.diff_view = mode;
+                pane.diff_visible_cache_len = usize::MAX;
+                pane.ensure_diff_visible_indices();
+                assert_eq!(pane.diff_visible_len(), count);
+                for row in [0, count / 2, count - 1] {
+                    assert_eq!(pane.diff_mapped_ix_for_visible_ix(row), Some(row));
+                    assert_eq!(pane.diff_source_visible_ix_for_mapped_ix(row), Some(row));
+                }
+                assert_eq!(pane.diff_mapped_ix_for_visible_ix(count), None);
+                assert_eq!(pane.diff_source_visible_ix_for_mapped_ix(count), None);
+                let index_bytes = pane.diff_visible_indices.len() * std::mem::size_of::<usize>();
+                eprintln!("{mode:?}: identity index buffer = {index_bytes} bytes for {count} rows");
+                assert_eq!(index_bytes, 0, "file rows have an identity mapping");
+            }
+        });
+    });
+}
+
 fn show_structural_rows(pane: &mut DiffRenderer, old: &str, new: &str, diff: StructuralDiff) {
     let plan = Arc::new(gitcomet_core::file_diff::structural::plan(&diff, old, new));
     let mut source = StreamedFileDiffSource::new(

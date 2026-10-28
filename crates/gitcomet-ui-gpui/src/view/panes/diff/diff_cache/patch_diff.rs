@@ -640,6 +640,15 @@ pub(in crate::view) struct PatchInlineVisibleMap {
 }
 
 impl PatchInlineVisibleMap {
+    /// Unfiltered file rows map directly to themselves. Keep their length,
+    /// rather than materializing one index (or one run) per source row.
+    pub(in crate::view) fn identity(visible_len: usize) -> Self {
+        Self {
+            visible_len,
+            visible_runs: Arc::from([]),
+        }
+    }
+
     pub(in crate::view) fn from_hidden_flags(hidden_flags: &[bool]) -> Self {
         let mut visible_runs = Vec::new();
         let mut visible_len = 0usize;
@@ -686,6 +695,12 @@ impl PatchInlineVisibleMap {
     }
 
     pub(in crate::view) fn for_each_visible_src_ix(&self, mut visit: impl FnMut(usize, usize)) {
+        if self.visible_runs.is_empty() {
+            for ix in 0..self.visible_len {
+                visit(ix, ix);
+            }
+            return;
+        }
         for run in self.visible_runs.iter() {
             for offset in 0..run.len {
                 visit(run.start_visible_ix + offset, run.start_src_ix + offset);
@@ -696,6 +711,9 @@ impl PatchInlineVisibleMap {
     pub(in crate::view) fn src_ix_for_visible_ix(&self, visible_ix: usize) -> Option<usize> {
         if visible_ix >= self.visible_len {
             return None;
+        }
+        if self.visible_runs.is_empty() {
+            return Some(visible_ix);
         }
 
         let run_ix = self
@@ -708,6 +726,9 @@ impl PatchInlineVisibleMap {
     }
 
     pub(in crate::view) fn visible_ix_for_src_ix(&self, src_ix: usize) -> Option<usize> {
+        if self.visible_runs.is_empty() {
+            return (src_ix < self.visible_len).then_some(src_ix);
+        }
         let run_ix = self
             .visible_runs
             .partition_point(|run| run.start_src_ix <= src_ix)
