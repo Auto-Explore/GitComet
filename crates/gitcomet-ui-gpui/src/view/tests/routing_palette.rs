@@ -268,6 +268,22 @@ fn push_request_distinguishes_no_remotes_from_loading_data() {
         push_request(&loading, &Default::default()),
         PushRequest::NotReady
     );
+    assert_eq!(
+        PushRequest::NoRemotes.unavailable_reason(),
+        Some("Add a remote to push to first")
+    );
+    assert_eq!(
+        PushRequest::NotReady.unavailable_reason(),
+        Some("The repository is still loading")
+    );
+    assert_eq!(PushRequest::Push.unavailable_reason(), None);
+    assert_eq!(
+        PushRequest::SetUpstream {
+            remote: "origin".into()
+        }
+        .unavailable_reason(),
+        None
+    );
 }
 
 #[test]

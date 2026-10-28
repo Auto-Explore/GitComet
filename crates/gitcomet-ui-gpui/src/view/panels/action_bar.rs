@@ -597,17 +597,6 @@ impl ActionBarView {
             root.open_popover_for_bounds(kind, anchor_bounds, window, cx);
         });
     }
-
-    fn push_toast(
-        &mut self,
-        kind: components::ToastKind,
-        message: String,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        let _ = self.root_view.update(cx, |root, cx| {
-            root.push_toast(kind, message, cx);
-        });
-    }
 }
 
 impl BarItemOwner for ActionBarView {
@@ -1117,12 +1106,10 @@ impl BarItemOwner for ActionBarView {
             .as_ref()
             .is_some_and(|id| id.as_ref() == push_picker_invoker.as_ref());
         let push_tracking_branch_name = tracking_branch_name.clone();
-        let push_request_ready = self.active_repo().is_some_and(|repo| {
-            !matches!(
-                push_request(repo, &self.state.large_file_settings),
-                PushRequest::NotReady
-            )
+        let push_unavailable = self.active_repo().and_then(|repo| {
+            push_request(repo, &self.state.large_file_settings).unavailable_reason()
         });
+        let push_available = self.active_repo().is_some() && push_unavailable.is_none();
         let push_menu_icon_color = if push_picker_active {
             theme.colors.accent.foreground
         } else {
@@ -1140,7 +1127,7 @@ impl BarItemOwner for ActionBarView {
             .debug_selector(|| "push".to_string())
             .child(
                 components::SplitButton::action_menu(
-                    push_main.disabled(!push_request_ready),
+                    push_main.disabled(!push_available),
                     push_menu,
                     theme,
                     cx,
@@ -1161,14 +1148,7 @@ impl BarItemOwner for ActionBarView {
                                 window,
                                 cx,
                             ),
-                            PushRequest::NoRemotes => {
-                                this.push_toast(
-                                    components::ToastKind::Error,
-                                    "Cannot push: no remotes configured".to_string(),
-                                    cx,
-                                );
-                            }
-                            PushRequest::NotReady => {}
+                            PushRequest::NoRemotes | PushRequest::NotReady => {}
                         }
                     },
                     move |this, _e, bounds, window, cx| {
@@ -1185,7 +1165,10 @@ impl BarItemOwner for ActionBarView {
             )
             .gitcomet_tooltip(
                 theme,
-                push_tooltip_text(push_count, push_tracking_branch_name.as_deref()),
+                match push_unavailable {
+                    Some(reason) => reason.into(),
+                    None => push_tooltip_text(push_count, push_tracking_branch_name.as_deref()),
+                },
             );
 
         let stash_prompt_invoker: SharedString = "stash_btn".into();

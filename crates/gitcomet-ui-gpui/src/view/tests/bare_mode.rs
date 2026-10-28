@@ -350,6 +350,11 @@ fn bare_palette_refuses_working_file_actions_but_keeps_repository_and_tool_prere
         reason(Command::Pull, &context),
         Some("Requires a working tree; this repository is bare.")
     );
+    context.push_unavailable = Some("Add a remote to push to first");
+    assert_eq!(
+        reason(Command::Push, &context),
+        Some("Add a remote to push to first")
+    );
     context.git_lfs_missing = true;
     assert_eq!(
         reason(Command::LfsFetchAll, &context),

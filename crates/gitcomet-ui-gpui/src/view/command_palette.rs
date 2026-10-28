@@ -57,6 +57,8 @@ pub(crate) enum Needs {
     PushWithTags(TagPushMode),
     /// Pull's own reason, from `pull_unavailable_reason`.
     Pull,
+    /// Push's own reason, from `PushRequest::unavailable_reason`.
+    Push,
     /// A remote whose URL points at a web page.
     RemoteWebPage,
     MacOs,
@@ -89,6 +91,8 @@ pub(crate) struct PaletteContext {
     pub(crate) push_with_tags_unavailable: [Option<&'static str>; 2],
     /// Why Pull is unavailable, from `pull_unavailable_reason` like its button.
     pub(crate) pull_unavailable: Option<&'static str>,
+    /// Why Push is unavailable, from `PushRequest::unavailable_reason` like its button.
+    pub(crate) push_unavailable: Option<&'static str>,
     /// Why no remote can be opened in a browser, from `remote_web_request`.
     pub(crate) remote_web_page_unavailable: Option<&'static str>,
     /// Git cannot run `git lfs`.
@@ -142,6 +146,7 @@ pub(crate) fn unavailable_reason(needs: Needs, ctx: &PaletteContext) -> Option<&
         }
         Needs::PushWithTags(mode) => ctx.push_with_tags_unavailable[mode.index()],
         Needs::Pull => ctx.pull_unavailable,
+        Needs::Push => ctx.push_unavailable,
         Needs::RemoteWebPage => ctx.remote_web_page_unavailable,
         Needs::MacOs => (!cfg!(target_os = "macos")).then_some("Only available on macOS"),
         Needs::Linux => (!cfg!(any(target_os = "linux", target_os = "freebsd")))
@@ -310,7 +315,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         category: "Sync",
         keywords: "",
         requires_repo: true,
-        needs: Needs::Nothing,
+        needs: Needs::Push,
     },
     CommandEntry {
         id: Command::ForcePush.id(),

@@ -25,6 +25,17 @@ pub(in crate::view) enum PushRequest {
     NotReady,
 }
 
+impl PushRequest {
+    /// Why Push cannot start, or `None` when it can.
+    pub(in crate::view) fn unavailable_reason(&self) -> Option<&'static str> {
+        match self {
+            Self::NotReady => Some(REPOSITORY_LOADING_REASON),
+            Self::NoRemotes => Some("Add a remote to push to first"),
+            Self::Push | Self::SetUpstream { .. } => None,
+        }
+    }
+}
+
 /// Why an action waits on repository data that has not loaded.
 pub(in crate::view) const REPOSITORY_LOADING_REASON: &str = "The repository is still loading";
 
