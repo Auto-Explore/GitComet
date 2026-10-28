@@ -66,6 +66,15 @@ impl Subscriber {
             result,
         });
     }
+
+    /// Reloads the tab's incoming count from the refs on disk.
+    fn refresh(&mut self) {
+        self.needs_refresh = false;
+        (self.sink)(Event::Refresh {
+            repo_id: self.repo_id,
+            lifetime: self.lifetime,
+        });
+    }
 }
 
 struct Entry {
@@ -453,11 +462,7 @@ impl AutoFetchCoordinator {
                     && settings.enabled
                     && !group.schedule.is_due(settings.interval, now)
                 {
-                    subscriber.needs_refresh = false;
-                    (subscriber.sink)(Event::Refresh {
-                        repo_id: subscriber.repo_id,
-                        lifetime: subscriber.lifetime,
-                    });
+                    subscriber.refresh();
                 }
             }
         }

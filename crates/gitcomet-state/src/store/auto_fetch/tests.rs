@@ -1530,6 +1530,22 @@ fn subscribe_unopened(
     lifetimes
 }
 
+fn add_worktree(clone: &Path, name: &str) -> PathBuf {
+    let linked = clone.parent().unwrap().join(name);
+    git(
+        clone,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            name,
+            linked.to_str().unwrap(),
+        ],
+    );
+    linked
+}
+
 fn refresh_recorder() -> (EventSink, Arc<Mutex<Vec<RepoLifetime>>>) {
     let refreshed = Arc::new(Mutex::new(Vec::new()));
     let sink: EventSink = {
@@ -1674,6 +1690,34 @@ fn turning_automatic_fetch_off_and_on_clears_a_sign_in_host_block() {
     );
     drop(state);
     coordinator.shutdown();
+}
+
+#[test]
+fn a_worktree_that_joins_a_fetched_group_reloads_its_count() {
+    let (_temp, _source, clone, _latest) = remote_fixture();
+    let linked = add_worktree(&clone, "linked");
+    let coordinator = AutoFetchCoordinator::new();
+    let (sink, refreshed) = refresh_recorder();
+    // Restored tabs never opened: no store is known yet.
+    let lifetimes = subscribe_unopened(&coordinator, &[&clone, &linked], sink);
+    // They loaded their last known count while the launch grace held fetches.
+    for entry in coordinator.inner.state.lock().unwrap().entries.values_mut() {
+        for subscriber in entry.subscribers.values_mut() {
+            subscriber.needs_refresh = false;
+        }
+    }
+    assert_eq!(run_job(&coordinator, UNIX_EPOCH).as_deref(), Some(&*clone));
+    assert_eq!(*refreshed.lock().unwrap(), [lifetimes[0]]);
+    assert_eq!(run_job(&coordinator, UNIX_EPOCH).as_deref(), Some(&*linked));
+    {
+        let state = coordinator.inner.state.lock().unwrap();
+        assert_eq!(state.entries[&clone].group, state.entries[&linked].group);
+    }
+    assert_eq!(
+        *refreshed.lock().unwrap(),
+        lifetimes,
+        "the joining worktree reads the refs its group just fetched"
+    );
 }
 
 #[test]

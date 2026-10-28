@@ -318,6 +318,16 @@ pub(super) fn finish(state: &mut State, job: &Job, completion: Completion, now: 
         if current && let Some(group) = state.groups.get_mut(&group_key) {
             group.revision = revision;
             state.publish(&group_key, None);
+            // A workdir that joins its siblings' group reads the refs their
+            // fetches wrote.
+            let joined = group_key != job.group
+                && state
+                    .entries
+                    .iter()
+                    .any(|(workdir, entry)| *workdir != job.workdir && entry.group == group_key);
+            if joined && let Some(entry) = state.entries.get_mut(&job.workdir) {
+                entry.subscribers.values_mut().for_each(Subscriber::refresh);
+            }
         }
         return;
     };
@@ -389,14 +399,9 @@ pub(super) fn send_refreshes(
             continue;
         }
         for subscriber in entry.subscribers.values_mut() {
-            if !refs_changed && !subscriber.needs_refresh {
-                continue;
+            if refs_changed || subscriber.needs_refresh {
+                subscriber.refresh();
             }
-            subscriber.needs_refresh = false;
-            (subscriber.sink)(Event::Refresh {
-                repo_id: subscriber.repo_id,
-                lifetime: subscriber.lifetime,
-            });
         }
     }
 }
