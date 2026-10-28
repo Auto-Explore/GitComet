@@ -85,7 +85,7 @@ impl GatedStore {
                 "set -eu\n\
                  root={root_path}\n\
                  if mkdir \"$root/first-attempt\" 2>/dev/null; then\n\
-                   group=$(ps -o pgid= -p \"$$\")\n\
+                   group=$(ps -o pgid= -p \"$$\") || {{ printf 'fixture failed: ps exited %s\\n' \"$?\" > \"$root/started\"; exit 1; }}\n\
                    printf '%s\\n' \"$group\" > \"$root/group\"\n\
                    exec 3<&0\n\
                    sh -c 'printf \"%s\\n\" ready > \"$1/started\"; IFS= read -r release < \"$1/release\"; exec git-upload-pack \"$2\"' fixture \"$root\" {remote} <&3 &\n\

@@ -89,7 +89,7 @@ impl PausedFetch {
             .open(&release_path)
             .expect("open fixture release gate");
         let descendant = "set -eu\n\
-            group=$(ps -o pgid= -p \"$$\")\n\
+            group=$(ps -o pgid= -p \"$$\") || { printf 'fixture failed: ps exited %s\\n' \"$?\" > \"$1\"; exit 1; }\n\
             printf '%s %s %s\\n' \"$group\" \"$PPID\" \"$$\" > \"$1\"\n\
             IFS= read -r release < \"$2\"\n\
             touch \"$3\"\n\
@@ -143,7 +143,11 @@ impl PausedFetch {
             .expect("read fixture start handshake");
         let ids: Vec<u32> = line
             .split_whitespace()
-            .map(|value| value.parse().expect("numeric fixture handshake id"))
+            .map(|value| {
+                value
+                    .parse()
+                    .unwrap_or_else(|_| panic!("fixture start handshake: {line:?}"))
+            })
             .collect();
         let [group, transport, descendant] = ids.as_slice() else {
             panic!("expected process group, transport and descendant ids: {line:?}");
