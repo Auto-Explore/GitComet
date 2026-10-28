@@ -102,8 +102,8 @@ pub(in crate::view) struct RowBlamePaint {
     pub(in crate::view) show_text: bool,
     /// Relative time ("3 days ago").
     pub(in crate::view) when: SharedString,
-    /// Author initials.
-    pub(in crate::view) initials: SharedString,
+    /// The author's name (truncated with an ellipsis at paint time).
+    pub(in crate::view) author: SharedString,
     /// Commit summary (truncated with an ellipsis at paint time).
     pub(in crate::view) summary: SharedString,
     /// Commit message body (everything after the first line), used for tooltips.
@@ -138,7 +138,7 @@ pub(in crate::view) struct RowBlamePaint {
 pub(in crate::view) struct BlameColumnLayout {
     pub(in crate::view) border: Bounds<Pixels>,
     pub(in crate::view) when_x: Pixels,
-    pub(in crate::view) initials_x: Pixels,
+    pub(in crate::view) author: Bounds<Pixels>,
     pub(in crate::view) message: Bounds<Pixels>,
     pub(in crate::view) prior_icon: Bounds<Pixels>,
     pub(in crate::view) browse_icon: Bounds<Pixels>,
