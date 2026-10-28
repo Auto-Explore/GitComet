@@ -399,8 +399,10 @@ fn git(path: &Path, args: &[&str]) -> String {
 
 fn remote_fixture() -> (tempfile::TempDir, PathBuf, PathBuf, String) {
     let temp = tempfile::tempdir().unwrap();
-    let source = temp.path().join("source");
-    let clone = temp.path().join("clone");
+    // The store canonicalizes workdirs; macOS temp paths resolve through /private.
+    let root = gitcomet_core::path_utils::canonicalize_or_original(temp.path().to_path_buf());
+    let source = root.join("source");
+    let clone = root.join("clone");
     std::fs::create_dir_all(&source).unwrap();
     git(&source, &["init", "-q", "-b", "main"]);
     git(&source, &["config", "user.name", "Fetch Test"]);
