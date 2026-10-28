@@ -412,9 +412,10 @@ impl AutoFetchCoordinator {
             .cloned()
             .collect();
         for key in toggled {
-            if let Some(group) = state.groups.get_mut(&key) {
+            let State { groups, hosts, .. } = &mut *state;
+            if let Some(group) = groups.get_mut(&key) {
                 group.schedule = Schedule::default();
-                group.recover();
+                group.recover(hosts);
                 group.request = None;
                 if matches!(group.snapshot.status, AutoFetchStatus::Running) {
                     group.snapshot.status = AutoFetchStatus::Idle;
@@ -546,14 +547,7 @@ impl AutoFetchCoordinator {
                 group.snapshot.last_success_at = Some(now);
                 // A manual fetch reached every remote: their hosts answer and
                 // their credentials work again.
-                group.recover();
-                for host in group
-                    .remotes
-                    .iter()
-                    .filter_map(|remote| remote.host.as_ref())
-                {
-                    hosts.remove(host);
-                }
+                group.recover(hosts);
             }
             group.request = None;
             group.snapshot.status = status;

@@ -113,13 +113,21 @@ impl Group {
         self.snapshot.retry_at = self.schedule.due_at(interval);
     }
 
-    /// Clears failure state after a fetch that reached every remote.
-    pub(super) fn recover(&mut self) {
+    /// Clears failure state, and the blocks on the hosts of its remotes,
+    /// after a fetch that reached every remote or when fetching restarts.
+    pub(super) fn recover(&mut self, hosts: &mut BTreeMap<String, HostBlock>) {
         self.schedule.failures = 0;
         self.schedule.quiet = 0;
         self.paused.clear();
         self.snapshot.retry_at = None;
         self.snapshot.paused_remotes.clear();
+        for host in self
+            .remotes
+            .iter()
+            .filter_map(|remote| remote.host.as_ref())
+        {
+            hosts.remove(host);
+        }
     }
 }
 

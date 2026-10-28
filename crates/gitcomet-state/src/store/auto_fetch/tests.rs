@@ -1612,3 +1612,53 @@ fn each_failed_remote_of_one_fetch_is_charged_with_its_own_failure() {
         "an unreachable server is retried on its own"
     );
 }
+
+#[test]
+fn turning_automatic_fetch_off_and_on_clears_a_sign_in_host_block() {
+    let coordinator = AutoFetchCoordinator::new();
+    let lifetime = register(&coordinator, 1, "/repo", "/repo/.git");
+    enable(&coordinator);
+    let mut state = coordinator.inner.state.lock().unwrap();
+    let job = next_job(&mut state, coordinator.admission(), UNIX_EPOCH).unwrap();
+    finish(
+        &mut state,
+        &job,
+        failed(
+            origin("github.com"),
+            "fatal: Authentication failed for 'https://github.com/o/r.git/'",
+        ),
+        UNIX_EPOCH,
+    );
+    assert!(state.group_waits(group_of(&state, Path::new("/repo")), UNIX_EPOCH));
+    drop(state);
+    // A sync with enabled settings starts the real worker; an open sign-in
+    // dialog keeps it from running jobs.
+    coordinator.set_sign_in_open(99, true);
+    for enabled in [false, true] {
+        let mut settings = RemoteSettings::default();
+        settings.auto_fetch.enabled = enabled;
+        coordinator.sync(
+            1,
+            vec![Registration {
+                repo_id: RepoId(1),
+                lifetime,
+                workdir: PathBuf::from("/repo"),
+                common_dir: Some(PathBuf::from("/repo/.git")),
+                repository: None,
+                active: false,
+            }],
+            settings,
+            &(Arc::new(Backend) as Arc<dyn GitBackend>),
+            Arc::new(|_| {}),
+        );
+    }
+    let state = coordinator.inner.state.lock().unwrap();
+    let group = group_of(&state, Path::new("/repo"));
+    assert!(group.snapshot.paused_remotes.is_empty());
+    assert!(
+        !state.group_waits(group, UNIX_EPOCH),
+        "turning it off and on is a documented recovery"
+    );
+    drop(state);
+    coordinator.shutdown();
+}
