@@ -502,7 +502,7 @@ pub fn chevron_icon(expanded: bool) -> &'static str {
     if expanded {
         "icons/chevron_down.svg"
     } else {
-        "icons/arrow_right.svg"
+        "icons/chevron_right.svg"
     }
 }
 

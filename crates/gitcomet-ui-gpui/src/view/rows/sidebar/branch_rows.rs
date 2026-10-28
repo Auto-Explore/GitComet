@@ -211,7 +211,7 @@ impl SidebarRowContext {
     fn svg_collapse(&self, collapsed: bool) -> gpui::Svg {
         self.svg_icon(
             if collapsed {
-                "icons/arrow_right.svg"
+                "icons/chevron_right.svg"
             } else {
                 "icons/chevron_down.svg"
             },
