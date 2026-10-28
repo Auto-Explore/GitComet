@@ -1530,6 +1530,19 @@ fn subscribe_unopened(
     lifetimes
 }
 
+fn refresh_recorder() -> (EventSink, Arc<Mutex<Vec<RepoLifetime>>>) {
+    let refreshed = Arc::new(Mutex::new(Vec::new()));
+    let sink: EventSink = {
+        let refreshed = Arc::clone(&refreshed);
+        Arc::new(move |event| {
+            if let Event::Refresh { lifetime, .. } = event {
+                refreshed.lock().unwrap().push(lifetime);
+            }
+        })
+    };
+    (sink, refreshed)
+}
+
 /// A local HTTP server that answers every request with 401.
 fn sign_in_remote_url() -> String {
     use std::io::{Read, Write};
@@ -1661,4 +1674,49 @@ fn turning_automatic_fetch_off_and_on_clears_a_sign_in_host_block() {
     );
     drop(state);
     coordinator.shutdown();
+}
+
+#[test]
+fn a_successful_fetch_after_a_failure_reloads_counts_it_left_stale() {
+    let (_temp, source, clone, _latest) = remote_fixture();
+    let coordinator = AutoFetchCoordinator::new();
+    let (sink, refreshed) = refresh_recorder();
+    let lifetimes = subscribe_unopened(&coordinator, &[&clone], sink);
+    let take = || std::mem::take(&mut *refreshed.lock().unwrap());
+    let fetch_when_due = || {
+        let due = group_of(&coordinator.inner.state.lock().unwrap(), &clone)
+            .schedule
+            .due_at(AutoFetchInterval::default())
+            .unwrap_or(UNIX_EPOCH);
+        assert!(run_job(&coordinator, due).is_some());
+        due
+    };
+    fetch_when_due();
+    assert_eq!(take(), lifetimes, "the behind clone moved");
+    let set_url = |url: &str| git(&clone, &["remote", "set-url", "origin", url]);
+    set_url(&refused_remote_url());
+    fetch_when_due();
+    assert!(matches!(
+        group_of(&coordinator.inner.state.lock().unwrap(), &clone)
+            .snapshot
+            .status,
+        AutoFetchStatus::Failed { .. }
+    ));
+    assert_eq!(take(), Vec::new(), "the failure moved nothing");
+    set_url(source.to_str().unwrap());
+    fetch_when_due();
+    assert_eq!(
+        take(),
+        lifetimes,
+        "a fetch that moved nothing still clears the failure's grey count"
+    );
+    let now = fetch_when_due();
+    assert_eq!(take(), Vec::new(), "once fresh, unchanged fetches skip it");
+    coordinator.manual_fetch_finished(
+        &clone,
+        now,
+        &Err(Error::new(ErrorKind::Backend("remote unavailable".into()))),
+    );
+    fetch_when_due();
+    assert_eq!(take(), lifetimes, "a failed manual fetch greys it too");
 }

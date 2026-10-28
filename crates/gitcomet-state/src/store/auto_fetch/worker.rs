@@ -322,6 +322,9 @@ pub(super) fn finish(state: &mut State, job: &Job, completion: Completion, now: 
         return;
     };
     let active = state.group_is_active(&group_key);
+    let failed = result
+        .as_ref()
+        .is_err_and(|error| !matches!(error.kind(), ErrorKind::Cancelled));
     let State { groups, hosts, .. } = &mut *state;
     if current && let Some(group) = groups.get_mut(&group_key) {
         group.schedule.finish(now);
@@ -363,10 +366,13 @@ pub(super) fn finish(state: &mut State, job: &Job, completion: Completion, now: 
         common_dir.as_ref(),
         refs_changed,
     );
+    if current && failed {
+        state.mark_stale(&group_key);
+    }
 }
 
 /// Refreshes every tab reading the fetched refs: the fetching workdir, its
-/// group and anything else on the same store. Tabs that have loaded once skip
+/// group and anything else on the same store. Tabs with a current count skip
 /// the refresh when the fetch moved nothing.
 pub(super) fn send_refreshes(
     state: &mut State,

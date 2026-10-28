@@ -50,8 +50,8 @@ struct Subscriber {
     backend: Arc<dyn GitBackend>,
     repository: Option<Arc<dyn GitRepository>>,
     sink: EventSink,
-    /// A new tab loads its first incoming count through a refresh, so it gets
-    /// one even after a fetch that moved nothing.
+    /// The tab's incoming count is unknown or greyed by a failure, so the
+    /// next fetch reloads it even when it moves nothing.
     needs_refresh: bool,
     active: bool,
 }
@@ -164,6 +164,19 @@ impl State {
     fn group_waits(&self, group: &Group, now: SystemTime) -> bool {
         !group.remotes.is_empty()
             && self.skipped_remotes(Some(group), &group.remotes, now).len() == group.remotes.len()
+    }
+
+    /// A failure greys the counts of `key`'s tabs until a fetch reloads them.
+    fn mark_stale(&mut self, key: &GroupKey) {
+        for entry in self
+            .entries
+            .values_mut()
+            .filter(|entry| &entry.group == key)
+        {
+            for subscriber in entry.subscribers.values_mut() {
+                subscriber.needs_refresh = true;
+            }
+        }
     }
 
     fn group_is_active(&self, key: &GroupKey) -> bool {
@@ -553,6 +566,9 @@ impl AutoFetchCoordinator {
             group.snapshot.status = status;
             group.revision = revision;
             state.publish(&group_key, None);
+            if result.is_err() {
+                state.mark_stale(&group_key);
+            }
         }
         self.inner.admission.changed.notify_all();
     }
