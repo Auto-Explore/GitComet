@@ -368,6 +368,7 @@ fn incoming_tracking_manual_failure_preserves_deadline_and_rejects_older_auto_re
             skipped: Vec::new(),
             result: Err(Error::new(ErrorKind::Cancelled)),
             refs_changed: true,
+            regrouped: Vec::new(),
         },
         failed_at + Duration::from_secs(2),
     );

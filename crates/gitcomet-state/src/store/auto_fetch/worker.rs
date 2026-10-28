@@ -16,6 +16,8 @@ pub(super) struct Job {
     pub(super) started: SystemTime,
     pub(super) cancellation: CancellationToken,
     pub(super) subscriber: Subscriber,
+    /// The group's other workdirs, each with one of its subscribers.
+    pub(super) members: Vec<(PathBuf, Subscriber)>,
 }
 
 pub(super) enum Completion {
@@ -33,6 +35,8 @@ pub(super) enum Completion {
         skipped: Vec<String>,
         result: Result<CommandOutput>,
         refs_changed: bool,
+        /// Members whose fetch configuration now puts them in another group.
+        regrouped: Vec<(PathBuf, GroupKey)>,
     },
 }
 
@@ -87,6 +91,14 @@ pub(super) fn next_job(state: &mut State, admission: &Admission, now: SystemTime
     state.revision += 1;
     state.order += 1;
     let subscriber = state.entries.get(&workdir)?.enabled_subscriber()?.clone();
+    let members = state
+        .entries
+        .iter()
+        .filter(|(member, entry)| **member != workdir && entry.group == key)
+        .filter_map(|(member, entry)| {
+            Some((member.clone(), entry.subscribers.values().next()?.clone()))
+        })
+        .collect();
     let group = state.groups.get_mut(&key)?;
     let cancellation = CancellationToken::new();
     group.order = state.order;
@@ -105,21 +117,35 @@ pub(super) fn next_job(state: &mut State, admission: &Admission, now: SystemTime
         started: now,
         cancellation,
         subscriber,
+        members,
     })
 }
 
+fn open_repository(
+    subscriber: &Subscriber,
+    workdir: &Path,
+    cancellation: &CancellationToken,
+) -> Result<Arc<dyn GitRepository>> {
+    cancellation.check_cancelled()?;
+    subscriber.repository.clone().map_or_else(
+        || subscriber.backend.open_cancellable(workdir, cancellation),
+        Ok,
+    )
+}
+
+/// The group whose fetch serves `repo`, the worktree at `workdir`.
+fn fetch_group(repo: &dyn GitRepository, common_dir: &Path, workdir: &Path) -> GroupKey {
+    repo.fetch_config_signature().map_or_else(
+        |_| GroupKey::Workdir(workdir.to_path_buf()),
+        |config| GroupKey::Store {
+            common_dir: common_dir.to_path_buf(),
+            config,
+        },
+    )
+}
+
 pub(super) fn execute(job: &Job, inner: &Inner) -> Completion {
-    let opened = job.cancellation.check_cancelled().and_then(|()| {
-        job.subscriber.repository.clone().map_or_else(
-            || {
-                job.subscriber
-                    .backend
-                    .open_cancellable(&job.workdir, &job.cancellation)
-            },
-            Ok,
-        )
-    });
-    let repo = match opened {
+    let repo = match open_repository(&job.subscriber, &job.workdir, &job.cancellation) {
         Ok(repo) => repo,
         Err(error) => {
             return Completion::Finished {
@@ -129,17 +155,12 @@ pub(super) fn execute(job: &Job, inner: &Inner) -> Completion {
                 skipped: Vec::new(),
                 result: Err(error),
                 refs_changed: false,
+                regrouped: Vec::new(),
             };
         }
     };
     let common_dir = repository_key(repo.as_ref());
-    let key = repo.fetch_config_signature().map_or_else(
-        |_| GroupKey::Workdir(job.workdir.clone()),
-        |config| GroupKey::Store {
-            common_dir: common_dir.clone(),
-            config,
-        },
-    );
+    let key = fetch_group(repo.as_ref(), &common_dir, &job.workdir);
     let remotes: Vec<FetchRemote> = repo
         .list_remotes(&job.cancellation)
         .unwrap_or_default()
@@ -187,6 +208,7 @@ pub(super) fn execute(job: &Job, inner: &Inner) -> Completion {
             skipped,
             result: Err(error),
             refs_changed: false,
+            regrouped: Vec::new(),
         };
     }
     let Some(_lease) = inner
@@ -229,6 +251,16 @@ pub(super) fn execute(job: &Job, inner: &Inner) -> Completion {
         repo.release_object_store();
         crate::store::effects::release_all_worktree_scan_handles();
     }
+    // A worktree's own configuration can change after it joined the group.
+    let regrouped = job
+        .members
+        .iter()
+        .filter_map(|(workdir, member)| {
+            let repo = open_repository(member, workdir, &job.cancellation).ok()?;
+            let key = fetch_group(repo.as_ref(), &repository_key(repo.as_ref()), workdir);
+            (key != job.group).then(|| (workdir.clone(), key))
+        })
+        .collect();
     Completion::Finished {
         common_dir: Some(common_dir),
         key: Some(key),
@@ -236,6 +268,7 @@ pub(super) fn execute(job: &Job, inner: &Inner) -> Completion {
         skipped,
         result,
         refs_changed,
+        regrouped,
     }
 }
 
@@ -273,12 +306,12 @@ pub(super) fn finish(state: &mut State, job: &Job, completion: Completion, now: 
             group.snapshot.status = AutoFetchStatus::Idle;
         }
     }
-    let (common_dir, key, remotes, outcome) = match completion {
+    let (common_dir, key, remotes, outcome, regrouped) = match completion {
         Completion::Deferred {
             common_dir,
             key,
             remotes,
-        } => (Some(common_dir), Some(key), remotes, None),
+        } => (Some(common_dir), Some(key), remotes, None, Vec::new()),
         Completion::Finished {
             common_dir,
             key,
@@ -286,19 +319,34 @@ pub(super) fn finish(state: &mut State, job: &Job, completion: Completion, now: 
             skipped,
             result,
             refs_changed,
+            regrouped,
         } => (
             common_dir,
             key,
             remotes,
             Some((result, skipped, refs_changed)),
+            regrouped,
         ),
     };
+    let mut moved = Vec::new();
     if current {
         if let Some(entry) = state.entries.get_mut(&job.workdir) {
             entry.common_dir = common_dir.clone().or_else(|| entry.common_dir.clone());
         }
         if let Some(key) = key {
             state.regroup(&job.workdir, key);
+        }
+        // Before the schedule records this fetch, so a member that leaves
+        // for a new group is due at once.
+        for (workdir, key) in regrouped {
+            if state
+                .entries
+                .get(&workdir)
+                .is_some_and(|entry| entry.group == job.group)
+            {
+                state.regroup(&workdir, key.clone());
+                moved.push(key);
+            }
         }
     }
     let Some(group_key) = state
@@ -308,6 +356,13 @@ pub(super) fn finish(state: &mut State, job: &Job, completion: Completion, now: 
     else {
         return;
     };
+    // Members that joined `group_key` get its update below.
+    for key in moved.iter().filter(|key| **key != group_key) {
+        if let Some(group) = state.groups.get_mut(key) {
+            group.revision = revision;
+            state.publish(key, None);
+        }
+    }
     if current
         && !remotes.is_empty()
         && let Some(group) = state.groups.get_mut(&group_key)
@@ -430,6 +485,7 @@ pub(super) fn run(inner: Arc<Inner>) {
                             gitcomet_core::panic::payload_message(panic.as_ref())
                         )))),
                         refs_changed: true,
+                        regrouped: Vec::new(),
                     });
             state = inner
                 .state

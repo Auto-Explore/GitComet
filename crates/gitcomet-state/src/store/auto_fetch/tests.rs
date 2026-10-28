@@ -111,6 +111,7 @@ fn busy_shared_repository_yields_and_its_worktrees_share_one_fetch() {
         skipped: Vec::new(),
         result: Ok(CommandOutput::empty_success("git fetch --all")),
         refs_changed: true,
+        regrouped: Vec::new(),
     };
     let foreground = coordinator.admission().reserve(PathBuf::from("/repo/.git"));
     let mut state = coordinator.inner.state.lock().unwrap();
@@ -185,6 +186,7 @@ fn disabled_coordinator_parks_and_enabled_deadlines_recompute_from_completion() 
             skipped: Vec::new(),
             result: Err(Error::new(ErrorKind::Unsupported("test offline"))),
             refs_changed: true,
+            regrouped: Vec::new(),
         },
         now,
     );
@@ -241,6 +243,7 @@ fn manual_success_clears_failure_and_an_older_automatic_result_cannot_replace_it
             skipped: Vec::new(),
             result: Err(Error::new(ErrorKind::Cancelled)),
             refs_changed: true,
+            regrouped: Vec::new(),
         },
         manual + Duration::from_secs(1),
     );
@@ -274,6 +277,7 @@ fn reopening_a_closed_tab_does_not_accept_its_old_fetch_completion() {
             skipped: Vec::new(),
             result: Ok(CommandOutput::empty_success("git fetch --all")),
             refs_changed: true,
+            regrouped: Vec::new(),
         },
         UNIX_EPOCH,
     );
@@ -684,6 +688,7 @@ fn failed(remotes: Vec<FetchRemote>, message: &str) -> Completion {
         skipped: Vec::new(),
         result: Err(Error::new(ErrorKind::Backend(message.into()))),
         refs_changed: false,
+        regrouped: Vec::new(),
     }
 }
 
@@ -1215,6 +1220,7 @@ fn selected_tabs_fetch_first_then_the_least_recently_contacted_host() {
                 skipped: Vec::new(),
                 result: Ok(CommandOutput::empty_success("git fetch --all")),
                 refs_changed: false,
+                regrouped: Vec::new(),
             },
             UNIX_EPOCH,
         );
@@ -1279,6 +1285,7 @@ fn inactive_repositories_that_stay_quiet_wait_up_to_four_intervals() {
                 skipped: Vec::new(),
                 result: Ok(CommandOutput::empty_success("git fetch --all")),
                 refs_changed,
+                regrouped: Vec::new(),
             },
             now,
         );
@@ -1640,6 +1647,70 @@ fn each_failed_remote_of_one_fetch_is_charged_with_its_own_failure() {
         Some(UNIX_EPOCH + Duration::from_secs(5 * 60)),
         "an unreachable server is retried on its own"
     );
+}
+
+#[test]
+fn a_worktree_whose_own_configuration_changes_leaves_the_shared_fetch() {
+    let (_temp, source, clone, _latest) = remote_fixture();
+    let linked = add_worktree(&clone, "linked");
+    let coordinator = AutoFetchCoordinator::new();
+    let statuses = Arc::new(Mutex::new(HashMap::new()));
+    let sink: EventSink = {
+        let statuses = Arc::clone(&statuses);
+        Arc::new(move |event| {
+            if let Event::Updated {
+                lifetime, snapshot, ..
+            } = event
+            {
+                statuses.lock().unwrap().insert(lifetime, snapshot.status);
+            }
+        })
+    };
+    let lifetimes = subscribe_unopened(&coordinator, &[&clone, &linked], sink);
+    while run_job(&coordinator, UNIX_EPOCH).is_some() {}
+    let same_group = || {
+        let state = coordinator.inner.state.lock().unwrap();
+        state.entries[&clone].group == state.entries[&linked].group
+    };
+    assert!(same_group(), "both worktrees fetch the same refs");
+    // Only the linked worktree's own configuration fetches a second remote.
+    git(&clone, &["config", "extensions.worktreeConfig", "true"]);
+    let url = source.to_str().unwrap();
+    git(&linked, &["config", "--worktree", "remote.extra.url", url]);
+    git(
+        &linked,
+        &[
+            "config",
+            "--worktree",
+            "remote.extra.fetch",
+            "+refs/heads/*:refs/remotes/extra/*",
+        ],
+    );
+    let later = UNIX_EPOCH + AutoFetchInterval::default().duration();
+    assert_eq!(run_job(&coordinator, later).as_deref(), Some(&*clone));
+    assert!(
+        !same_group(),
+        "the linked worktree fetches more remotes now"
+    );
+    assert!(
+        !matches!(
+            statuses.lock().unwrap()[&lifetimes[1]],
+            AutoFetchStatus::Running
+        ),
+        "its tab stops showing the shared fetch"
+    );
+    assert_eq!(
+        run_job(&coordinator, later).as_deref(),
+        Some(&*linked),
+        "it fetches at once"
+    );
+    assert!(run_job(&coordinator, later).is_none());
+    let extra = gitcomet_core::test_support::git_fixture::git_command()
+        .current_dir(&linked)
+        .args(["rev-parse", "--verify", "-q", "refs/remotes/extra/main"])
+        .output()
+        .unwrap();
+    assert!(extra.status.success(), "its extra remote was fetched");
 }
 
 #[test]
