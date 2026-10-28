@@ -78,7 +78,8 @@ authentication needs input, use **Fetch all** to complete it.
 
 ## Failures
 
-Automatic fetch avoids contacting a remote again when retrying cannot help:
+Automatic fetch avoids contacting a remote again when retrying cannot help.
+When several remotes fail in one fetch, each is judged by its own error:
 
 - **Sign-in needed or repository missing.** Automatic fetch stops contacting
   that remote until a manual **Fetch all** succeeds. The Pull menu names the

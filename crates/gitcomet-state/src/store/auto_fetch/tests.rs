@@ -850,8 +850,8 @@ fn a_failed_remote_blocks_only_its_own_host_and_failures_stretch_the_interval() 
         &job,
         failed(
             remotes.clone(),
-            "error: could not fetch 'fork' (exit code: 128)
-             fatal: unable to access 'https://fork.example/r.git/': Could not resolve host: fork.example",
+            "fatal: unable to access 'https://fork.example/r.git/': Could not resolve host: fork.example
+             could not fetch 'fork' (exit code: 128)",
         ),
         UNIX_EPOCH,
     );
@@ -876,6 +876,69 @@ fn a_failed_remote_blocks_only_its_own_host_and_failures_stretch_the_interval() 
         )
         .is_some()
     );
+}
+
+#[test]
+fn a_sign_in_failure_on_one_remote_leaves_another_remotes_outage_temporary() {
+    let coordinator = AutoFetchCoordinator::new();
+    register(&coordinator, 1, "/repo", "/repo/.git");
+    enable(&coordinator);
+    let mut state = coordinator.inner.state.lock().unwrap();
+    let remotes = vec![
+        FetchRemote {
+            name: "origin".into(),
+            host: Some("github.com".into()),
+        },
+        FetchRemote {
+            name: "mirror".into(),
+            host: Some("mirror.example".into()),
+        },
+    ];
+    let job = next_job(&mut state, coordinator.admission(), UNIX_EPOCH).unwrap();
+    // `git fetch --multiple` prints each remote's error before naming it.
+    finish(
+        &mut state,
+        &job,
+        failed(
+            remotes,
+            "fatal: Authentication failed for 'https://github.com/o/r.git/'\n\
+             error: could not fetch origin\n\
+             fatal: unable to access 'https://mirror.example/r.git/': Could not resolve host: mirror.example\n\
+             error: could not fetch mirror",
+        ),
+        UNIX_EPOCH,
+    );
+    let group = group_of(&state, Path::new("/repo"));
+    assert_eq!(group.snapshot.paused_remotes, ["origin"]);
+    assert_eq!(state.hosts["github.com"].until, None);
+    assert_eq!(
+        state.hosts["mirror.example"].until,
+        Some(UNIX_EPOCH + Duration::from_secs(5 * 60))
+    );
+}
+
+#[test]
+fn a_host_keeps_the_longest_block_any_of_its_remotes_earned() {
+    let output = "fatal: Authentication failed for 'https://github.com/o/private.git/'\n\
+                  error: could not fetch private\n\
+                  fatal: unable to access 'https://github.com/o/public.git/': \
+                  Could not resolve host: github.com\nerror: could not fetch public";
+    for names in [["private", "public"], ["public", "private"]] {
+        let coordinator = AutoFetchCoordinator::new();
+        register(&coordinator, 1, "/repo", "/repo/.git");
+        enable(&coordinator);
+        let mut state = coordinator.inner.state.lock().unwrap();
+        let remotes = names
+            .map(|name| FetchRemote {
+                name: name.into(),
+                host: Some("github.com".into()),
+            })
+            .to_vec();
+        let job = next_job(&mut state, coordinator.admission(), UNIX_EPOCH).unwrap();
+        finish(&mut state, &job, failed(remotes, output), UNIX_EPOCH);
+        let block = &state.hosts["github.com"];
+        assert_eq!((block.until, block.strikes), (None, 1), "{names:?}");
+    }
 }
 
 /// A local HTTP port nothing listens on: connecting fails at once.
@@ -1416,4 +1479,136 @@ fn timing_auto_fetch_sync_with_many_tabs() {
             started.elapsed() / runs
         );
     }
+}
+
+/// Runs the next due job to completion, as the worker would.
+fn run_job(coordinator: &AutoFetchCoordinator, now: SystemTime) -> Option<PathBuf> {
+    let job = next_job(
+        &mut coordinator.inner.state.lock().unwrap(),
+        coordinator.admission(),
+        now,
+    )?;
+    let completion = execute(&job, &coordinator.inner);
+    finish(
+        &mut coordinator.inner.state.lock().unwrap(),
+        &job,
+        completion,
+        now,
+    );
+    Some(job.workdir)
+}
+
+/// Registers `workdirs` as one window's unopened tabs, without starting the
+/// worker; tests drive jobs with [`run_job`].
+fn subscribe_unopened(
+    coordinator: &AutoFetchCoordinator,
+    workdirs: &[&Path],
+    sink: EventSink,
+) -> Vec<RepoLifetime> {
+    let registrations: Vec<_> = workdirs
+        .iter()
+        .zip(1..)
+        .map(|(workdir, id)| Registration {
+            repo_id: RepoId(id),
+            lifetime: RepoLifetime::allocate(),
+            workdir: workdir.to_path_buf(),
+            common_dir: None,
+            repository: None,
+            active: false,
+        })
+        .collect();
+    let lifetimes = registrations.iter().map(|r| r.lifetime).collect();
+    set_enabled(coordinator, false);
+    coordinator.sync(
+        1,
+        registrations,
+        RemoteSettings::default(),
+        &(Arc::new(gitcomet_git_gix::GixBackend) as Arc<dyn GitBackend>),
+        sink,
+    );
+    enable(coordinator);
+    lifetimes
+}
+
+/// A local HTTP server that answers every request with 401.
+fn sign_in_remote_url() -> String {
+    use std::io::{Read, Write};
+
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else {
+                continue;
+            };
+            let mut request = Vec::new();
+            let mut buffer = [0; 1024];
+            while !request.ends_with(b"\r\n\r\n") {
+                match stream.read(&mut buffer) {
+                    Ok(0) | Err(_) => break,
+                    Ok(read) => request.extend_from_slice(&buffer[..read]),
+                }
+            }
+            let _ = stream.write_all(
+                b"HTTP/1.1 401 Unauthorized\r\nWWW-Authenticate: Basic realm=\"test\"\r\n\
+                  Content-Length: 0\r\nConnection: close\r\n\r\n",
+            );
+        }
+    });
+    format!("http://127.0.0.1:{port}/repository.git")
+}
+
+#[test]
+fn a_background_fetch_that_cannot_ask_for_credentials_pauses_the_remote() {
+    let temp = tempfile::tempdir().unwrap();
+    let workdir = canonicalize_or_original(temp.path().to_path_buf()).join("repo");
+    std::fs::create_dir_all(&workdir).unwrap();
+    git(&workdir, &["init", "-q", "-b", "main"]);
+    let private = sign_in_remote_url();
+    git(&workdir, &["remote", "add", "private", &private]);
+    let coordinator = AutoFetchCoordinator::new();
+    subscribe_unopened(&coordinator, &[&workdir], Arc::new(|_| {}));
+    assert!(run_job(&coordinator, UNIX_EPOCH).is_some());
+    let state = coordinator.inner.state.lock().unwrap();
+    let group = group_of(&state, &workdir);
+    assert_eq!(
+        group.snapshot.paused_remotes,
+        ["private"],
+        "{:?}",
+        group.snapshot.status
+    );
+    assert_eq!(
+        state.hosts[&policy::remote_host(&private).unwrap()].until,
+        None
+    );
+}
+
+#[test]
+fn each_failed_remote_of_one_fetch_is_charged_with_its_own_failure() {
+    let temp = tempfile::tempdir().unwrap();
+    let workdir = canonicalize_or_original(temp.path().to_path_buf()).join("repo");
+    std::fs::create_dir_all(&workdir).unwrap();
+    git(&workdir, &["init", "-q", "-b", "main"]);
+    let private = sign_in_remote_url();
+    let offline = refused_remote_url();
+    git(&workdir, &["remote", "add", "private", &private]);
+    git(&workdir, &["remote", "add", "offline", &offline]);
+    let coordinator = AutoFetchCoordinator::new();
+    subscribe_unopened(&coordinator, &[&workdir], Arc::new(|_| {}));
+    assert!(run_job(&coordinator, UNIX_EPOCH).is_some());
+    let state = coordinator.inner.state.lock().unwrap();
+    let group = group_of(&state, &workdir);
+    assert_eq!(
+        group.snapshot.paused_remotes,
+        ["private"],
+        "an unreachable server needs no sign-in: {:?}",
+        group.snapshot.status
+    );
+    let block = |url: &str| state.hosts[&policy::remote_host(url).unwrap()].until;
+    assert_eq!(block(&private), None, "sign-in waits for the user");
+    assert_eq!(
+        block(&offline),
+        Some(UNIX_EPOCH + Duration::from_secs(5 * 60)),
+        "an unreachable server is retried on its own"
+    );
 }

@@ -62,14 +62,32 @@ fn failures_that_need_the_user_pause_and_host_failures_block_the_host() {
 }
 
 #[test]
-fn multi_remote_output_names_each_failed_remote_once() {
-    let error = Error::new(ErrorKind::Backend(
-        "Fetching origin\nerror: could not fetch 'upstream' (exit code: 128)\n\
-         error: Could not fetch fork\nerror: could not fetch 'upstream'"
-            .into(),
-    ));
-    assert_eq!(failed_remotes(&error), ["upstream", "fork"]);
-    assert!(failed_remotes(&Error::new(ErrorKind::Backend("fatal: offline".into()))).is_empty());
+fn multi_remote_output_classifies_each_failed_remote_by_its_own_lines() {
+    // `fetch.parallel` 1 and above: each remote's errors precede its name.
+    for (sign_in, offline) in [
+        (
+            "error: could not fetch private",
+            "error: Could not fetch offline",
+        ),
+        (
+            "could not fetch 'private' (exit code: 128)",
+            "could not fetch 'offline' (exit code: 128)",
+        ),
+    ] {
+        let error = Error::new(ErrorKind::Backend(format!(
+            "fatal: unable to get password from user\n{sign_in}\n\
+             fatal: unable to access 'http://offline.example/r.git/': Could not resolve host: offline.example\n\
+             {offline}\nerror: could not fetch 'private'"
+        )));
+        assert_eq!(
+            remote_failures(&error),
+            [
+                ("private".to_owned(), Failure::SignIn),
+                ("offline".to_owned(), Failure::Network),
+            ]
+        );
+    }
+    assert!(remote_failures(&Error::new(ErrorKind::Backend("fatal: offline".into()))).is_empty());
 }
 
 #[test]

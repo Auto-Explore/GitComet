@@ -45,6 +45,10 @@ const SIGN_IN: &[&str] = &[
     "host key verification failed",
     "invalid username or password",
     "returned error: 401",
+    // A background fetch may not ask for credentials, so Git gives up.
+    "unable to get password from user",
+    "could not read username",
+    "could not read password",
 ];
 const MISSING: &[&str] = &[
     "returned error: 403",
@@ -88,9 +92,13 @@ pub(super) fn classify(error: &Error) -> Option<Failure> {
     if crate::store::reducer::detect_auth_prompt_kind(error).is_some() {
         return Some(Failure::SignIn);
     }
-    let text = failure_text(error).to_ascii_lowercase();
+    Some(classify_output(&failure_text(error)))
+}
+
+fn classify_output(text: &str) -> Failure {
+    let text = text.to_ascii_lowercase();
     let mentions = |phrases: &[&str]| phrases.iter().any(|phrase| text.contains(phrase));
-    Some(if mentions(SIGN_IN) {
+    if mentions(SIGN_IN) {
         Failure::SignIn
     } else if mentions(MISSING) {
         Failure::Missing
@@ -100,27 +108,37 @@ pub(super) fn classify(error: &Error) -> Option<Failure> {
         Failure::Network
     } else {
         Failure::Other
-    })
+    }
 }
 
 fn failure_text(error: &Error) -> String {
-    let mut text = error.to_string();
-    if let ErrorKind::Git(failure) = error.kind() {
-        for output in [failure.stderr(), failure.stdout()] {
-            text.push('\n');
-            text.push_str(&String::from_utf8_lossy(output));
-        }
+    match error.kind() {
+        ErrorKind::Git(_) => format!("{error}\n{}", git_output(error)),
+        _ => error.to_string(),
     }
-    text
 }
 
-/// Remotes a multi-remote fetch reports as failed (`could not fetch 'name'`);
-/// empty when the output does not say which.
-pub(super) fn failed_remotes(error: &Error) -> Vec<String> {
+/// What Git printed, or the message of an error that did not come from Git.
+fn git_output(error: &Error) -> String {
+    match error.kind() {
+        ErrorKind::Git(failure) => [failure.stderr(), failure.stdout()]
+            .map(String::from_utf8_lossy)
+            .join("\n"),
+        _ => error.to_string(),
+    }
+}
+
+/// Each remote a multi-remote fetch reports as failed (`could not fetch
+/// 'name'`), classified by what Git printed for it just before; empty when
+/// the output names none.
+pub(super) fn remote_failures(error: &Error) -> Vec<(String, Failure)> {
     const MARKER: &str = "could not fetch ";
-    let mut remotes = Vec::new();
-    for line in failure_text(error).lines() {
+    let mut failures: Vec<(String, Failure)> = Vec::new();
+    let mut output = String::new();
+    for line in git_output(error).lines() {
         let Some(at) = line.to_ascii_lowercase().find(MARKER) else {
+            output.push_str(line);
+            output.push('\n');
             continue;
         };
         let rest = line[at + MARKER.len()..].trim();
@@ -129,12 +147,13 @@ pub(super) fn failed_remotes(error: &Error) -> Vec<String> {
             None => rest.split_whitespace().next(),
         };
         if let Some(name) = name.filter(|name| !name.is_empty())
-            && !remotes.iter().any(|known| known == name)
+            && !failures.iter().any(|(known, _)| known == name)
         {
-            remotes.push(name.to_string());
+            failures.push((name.to_string(), classify_output(&output)));
         }
+        output.clear();
     }
-    remotes
+    failures
 }
 
 /// The host a remote URL connects to, or `None` for a repository on this

@@ -1,7 +1,7 @@
 //! Per-group scheduling state: when a group fetches next, which remotes it
 //! skips, and which hosts are waiting out a failure.
 
-use super::policy;
+use super::policy::{self, Failure};
 use crate::model::{AutoFetchInterval, RepoAutoFetchState};
 use gitcomet_core::error::Error;
 use std::collections::{BTreeMap, BTreeSet};
@@ -61,8 +61,8 @@ impl Group {
         }
     }
 
-    /// Charges a failure to the remotes the output names, or to every remote
-    /// the fetch contacted when it names none.
+    /// Charges each remote the output names with its own failure, or every
+    /// remote the fetch contacted with the whole failure when it names none.
     pub(super) fn failed(
         &mut self,
         hosts: &mut BTreeMap<String, HostBlock>,
@@ -74,26 +74,41 @@ impl Group {
         let Some(failure) = policy::classify(error) else {
             return;
         };
-        let named = policy::failed_remotes(error);
-        let mut failed: Vec<&FetchRemote> = contacted(&self.remotes, skipped).collect();
-        if failed.iter().any(|remote| named.contains(&remote.name)) {
-            failed.retain(|remote| named.contains(&remote.name));
+        let named = policy::remote_failures(error);
+        let mut failed: Vec<(&FetchRemote, Failure)> = contacted(&self.remotes, skipped)
+            .filter_map(|remote| {
+                let (_, failure) = named.iter().find(|(name, _)| name == &remote.name)?;
+                Some((remote, *failure))
+            })
+            .collect();
+        if failed.is_empty() {
+            failed = contacted(&self.remotes, skipped)
+                .map(|remote| (remote, failure))
+                .collect();
         }
-        if failure.blocks_host() {
-            for host in failed.iter().filter_map(|remote| remote.host.as_ref()) {
-                let block = hosts.entry(host.clone()).or_insert(HostBlock {
-                    until: None,
-                    strikes: 0,
-                });
-                block.strikes += 1;
-                block.until = policy::host_block(failure, block.strikes).map(|wait| now + wait);
+        // One strike per host, for the longest block any of its remotes earned.
+        let lasts = |failure| policy::host_block(failure, 1).unwrap_or(Duration::MAX);
+        let mut blocking: BTreeMap<&String, Failure> = BTreeMap::new();
+        for &(remote, failure) in &failed {
+            if failure.pauses() {
+                self.paused.insert(remote.name.clone());
+            }
+            if let Some(host) = remote.host.as_ref().filter(|_| failure.blocks_host()) {
+                let kept = blocking.entry(host).or_insert(failure);
+                if lasts(failure) > lasts(*kept) {
+                    *kept = failure;
+                }
             }
         }
-        if failure.pauses() {
-            let failed: Vec<String> = failed.iter().map(|remote| remote.name.clone()).collect();
-            self.paused.extend(failed);
-            self.snapshot.paused_remotes = self.paused.iter().cloned().collect();
+        for (host, failure) in blocking {
+            let block = hosts.entry(host.clone()).or_insert(HostBlock {
+                until: None,
+                strikes: 0,
+            });
+            block.strikes += 1;
+            block.until = policy::host_block(failure, block.strikes).map(|wait| now + wait);
         }
+        self.snapshot.paused_remotes = self.paused.iter().cloned().collect();
         self.schedule.failures += 1;
         self.snapshot.retry_at = self.schedule.due_at(interval);
     }
