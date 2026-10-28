@@ -333,18 +333,14 @@ fn paint_annotation_sidebar(
         )))
         .background(theme.colors.surface.panel),
     );
-    // A hairline closing the column on its right. The border colour is
-    // translucent, so composite it over the canvas it borders on the details
-    // pane; over the sidebar fill it would come out darker than that edge.
+    // A hairline closing the column on its right, in the same colour as the
+    // details pane's left border.
     window.paint_quad(
         PaintQuad::new(Bounds::new(
             point(bounds.left() + annot_w - px(1.0), bounds.top()),
             size(px(1.0), bounds.size.height),
         ))
-        .background(crate::theme::composite_over(
-            theme.colors.surface.canvas,
-            theme.colors.stroke.subtle,
-        )),
+        .background(theme.hairline()),
     );
 }
 

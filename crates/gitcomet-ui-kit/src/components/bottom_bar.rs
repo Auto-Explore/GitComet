@@ -20,7 +20,7 @@ pub fn bottom_bar(theme: AppTheme, scale: UiScale) -> Div {
         .py(scale.px(3.0))
         .bg(crate::theme::content_header_bg(theme))
         .border_t_1()
-        .border_color(theme.colors.stroke.default)
+        .border_color(theme.hairline())
 }
 
 /// A borderless icon button for stepping: previous/next file in the bar,

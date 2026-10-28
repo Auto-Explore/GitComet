@@ -2756,7 +2756,7 @@ impl DiffRenderer {
                         crate::theme::content_header_bg(theme)
                     })
                     .border_b_1()
-                    .border_color(theme.colors.stroke.default),
+                    .border_color(theme.hairline()),
             )
             .when_some(disk_notice, |d, strip| d.child(strip))
             .when_some(engine_notice, |d, strip| d.child(strip))
