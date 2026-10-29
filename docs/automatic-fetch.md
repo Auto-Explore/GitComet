@@ -24,7 +24,9 @@ Saved workspaces whose windows are closed do not participate.
 Automatic fetch uses the same remote selection, refspecs, and pruning preference
 as **Fetch all**. It updates remote information without initiating pull, merge,
 rebase, or checkout. The existing pruning safeguards for local branches and tags
-also apply.
+also apply. A force push overwrites only the remote tip its confirmation showed
+when it opened, so a fetch while the dialog is open cannot add commits to what
+it replaces.
 
 Fetches run one repository at a time, the selected tab's repository first.
 Fetches to the same server start at least two seconds apart, and servers that

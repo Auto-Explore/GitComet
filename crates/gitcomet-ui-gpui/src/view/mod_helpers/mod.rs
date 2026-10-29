@@ -90,6 +90,34 @@ pub(in crate::view) fn head_branch_upstream<'a>(
         .and_then(|branch| branch.upstream.as_ref())
 }
 
+/// The lease a force push confirmed now holds: a pending published-amend
+/// lease, else the upstream tip and HEAD this window shows. Git's implicit
+/// lease would accept whatever tip a background fetch wrote since.
+pub(in crate::view) fn force_push_lease(
+    repo: &RepoState,
+) -> Option<gitcomet_core::services::ForcePushLease> {
+    if let Some(lease) = &repo.pending.force_push_lease {
+        return Some(lease.clone());
+    }
+    let local_branch = repo.head_branch.ready()?;
+    let branch = repo
+        .branches
+        .ready()?
+        .iter()
+        .find(|branch| branch.name == *local_branch)?;
+    let upstream = branch.upstream.as_ref()?;
+    let remote_tip = repo.remote_branches.ready()?.iter().find(|candidate| {
+        candidate.remote == upstream.remote && candidate.name == upstream.branch
+    })?;
+    Some(gitcomet_core::services::ForcePushLease {
+        remote: upstream.remote.clone(),
+        branch: upstream.branch.clone(),
+        expected: remote_tip.target.clone(),
+        local_branch: local_branch.clone(),
+        local_head: branch.target.clone(),
+    })
+}
+
 /// Whether the checked-out branch has a confirmed live remote-tracking
 /// upstream. This remains false until the remote-branch list is loaded, and a
 /// detached HEAD carries no branch to hold one.

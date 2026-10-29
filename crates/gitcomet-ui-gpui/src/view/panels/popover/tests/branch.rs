@@ -37,7 +37,7 @@ pub(super) struct TrackingRepo {
 }
 
 impl TrackingRepo {
-    fn new(workdir: PathBuf) -> Self {
+    pub(super) fn new(workdir: PathBuf) -> Self {
         Self {
             spec: RepoSpec { workdir },
             branches: Arc::new(Mutex::new(vec!["main".to_string()])),
@@ -513,6 +513,24 @@ impl GitRepository for TrackingRepo {
 
     fn push(&self) -> Result<()> {
         Ok(())
+    }
+
+    fn push_force_with_output(&self) -> Result<CommandOutput> {
+        self.record("force-push".to_string());
+        Ok(CommandOutput::empty_success("git push --force-with-lease"))
+    }
+
+    fn push_force_with_lease_with_output(
+        &self,
+        lease: &gitcomet_core::services::ForcePushLease,
+    ) -> Result<CommandOutput> {
+        self.record(format!(
+            "force-push:{}/{}:{}",
+            lease.remote, lease.branch, lease.expected
+        ));
+        Ok(CommandOutput::empty_success(
+            "git push --force-with-lease=…",
+        ))
     }
 
     fn discard_worktree_changes(&self, _paths: &[&Path]) -> Result<()> {

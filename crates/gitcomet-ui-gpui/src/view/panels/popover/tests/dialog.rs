@@ -86,6 +86,83 @@ fn reset_prompt_renders_cancel_hint(cx: &mut gpui::TestAppContext) {
         .expect("expected reset Cancel shortcut hint");
 }
 
+#[gpui::test]
+fn force_push_confirm_overwrites_only_the_remote_tip_it_showed(cx: &mut gpui::TestAppContext) {
+    use gitcomet_core::domain::{Branch, CommitId, RemoteBranch, RepoSpec, Upstream};
+    use gitcomet_state::model::{AppState, Loadable, RepoState};
+
+    let repo_id = RepoId(1);
+    let temp = tempfile::tempdir().expect("test workdir");
+    let workdir = temp.path().to_path_buf();
+    let tracking = Arc::new(super::branch::TrackingRepo::new(workdir.clone()));
+    let oid = |digit: char| CommitId(Arc::from(digit.to_string().repeat(40)));
+    let state = |remote_tip: CommitId| {
+        let mut repo = RepoState::new_opening(
+            repo_id,
+            RepoSpec {
+                workdir: workdir.clone(),
+            },
+        );
+        repo.open = Loadable::Ready(());
+        repo.head_branch = Loadable::Ready("main".to_string());
+        repo.branches = Loadable::Ready(Arc::new(vec![Branch {
+            name: "main".to_string(),
+            target: oid('1'),
+            upstream: Some(Upstream {
+                remote: "origin".to_string(),
+                branch: "main".to_string(),
+            }),
+            divergence: None,
+        }]));
+        repo.remote_branches = Loadable::Ready(Arc::new(vec![RemoteBranch {
+            remote: "origin".to_string(),
+            name: "main".to_string(),
+            target: remote_tip,
+        }]));
+        Arc::new(AppState {
+            repos: vec![repo],
+            active_repo: Some(repo_id),
+            ..AppState::test_default()
+        })
+    };
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let show = |cx: &mut gpui::VisualTestContext, state: Arc<AppState>| {
+        cx.update(|window, app| {
+            view.update(app, |this, cx| {
+                this.store.replace_snapshot_for_test(Arc::clone(&state));
+                crate::view::test_support::push_test_state(this, state, cx);
+            });
+            let _ = window.draw(app);
+        });
+    };
+    show(cx, state(oid('2')));
+    cx.update(|_window, app| {
+        crate::app::bind_text_input_keys_for_test(app);
+        view.read(app)
+            .store
+            .insert_repo_for_test(repo_id, tracking.clone());
+    });
+    open_popover_and_draw(&view, PopoverKind::ForcePushConfirm { repo_id }, cx);
+    // An automatic fetch moves origin/main while the dialog is open.
+    show(cx, state(oid('3')));
+    let center = cx
+        .debug_bounds("force_push_go")
+        .expect("expected the force push button")
+        .center();
+    cx.simulate_mouse_move(center, None, gpui::Modifiers::default());
+    cx.simulate_mouse_down(center, gpui::MouseButton::Left, gpui::Modifiers::default());
+    cx.simulate_mouse_up(center, gpui::MouseButton::Left, gpui::Modifiers::default());
+    cx.run_until_parked();
+    super::branch::wait_until("the force push to run", || !tracking.actions().is_empty());
+    assert_eq!(
+        tracking.actions(),
+        [format!("force-push:origin/main:{}", oid('2'))],
+        "the push must not overwrite a remote commit the dialog never showed"
+    );
+}
+
 // ── Category 2: Esc dismisses popovers ──
 
 #[gpui::test]
