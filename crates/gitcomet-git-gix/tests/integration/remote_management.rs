@@ -949,12 +949,53 @@ fn fetch_remote_fetches_and_prunes_only_the_named_remote() {
     assert_eq!(output.exit_code, Some(0));
     assert_eq!(
         output.command,
-        "git fetch --multiple --prune --no-prune-tags -- origin"
+        "git fetch --prune --no-prune-tags -- origin"
     );
     assert!(has_ref("refs/remotes/origin/fresh"));
     assert!(!has_ref("refs/remotes/origin/stale"));
     assert!(!has_ref("refs/remotes/fork/fresh"));
     assert!(has_ref("refs/remotes/fork/stale"));
+}
+
+#[test]
+fn fetch_remote_fetches_the_remote_even_when_a_group_shares_its_name() {
+    let _guard = remote_management_test_lock();
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let root = dir.path();
+    let work_repo = root.join("work");
+    fs::create_dir_all(&work_repo).expect("create work repo dir");
+    init_repo_with_user(&work_repo);
+    fs::write(work_repo.join("file.txt"), "base\n").expect("write base file");
+    run_git(&work_repo, &["add", "file.txt"]);
+    run_git(&work_repo, &["commit", "-m", "base"]);
+    for remote in ["origin", "fork"] {
+        let remote_repo = root.join(format!("{remote}.git"));
+        fs::create_dir_all(&remote_repo).expect("create remote repo dir");
+        run_git(&remote_repo, &["init", "--bare"]);
+        run_git(
+            &work_repo,
+            &["remote", "add", remote, &git_remote_url(&remote_repo)],
+        );
+        run_git(&work_repo, &["push", remote, "HEAD:refs/heads/main"]);
+        run_git(
+            &work_repo,
+            &["update-ref", "-d", &format!("refs/remotes/{remote}/main")],
+        );
+    }
+    // `git fetch --multiple` resolves a remote group before a remote.
+    run_git(&work_repo, &["config", "remotes.origin", "fork"]);
+    let has_ref = |name: &str| {
+        run_git_status(&work_repo, &["show-ref", "--verify", "--quiet", name]).success()
+    };
+
+    GixBackend
+        .open(&work_repo)
+        .expect("open work repo")
+        .fetch_remote("origin", true)
+        .expect("fetch origin");
+
+    assert!(has_ref("refs/remotes/origin/main"), "origin was fetched");
+    assert!(!has_ref("refs/remotes/fork/main"), "the group was not");
 }
 
 // Pointing `origin` at a fork without the branch `origin/HEAD` names makes the
@@ -2723,7 +2764,7 @@ fn fetch_all_skips_git_annex_special_remotes_without_a_url() {
             panic!("fetch all (prune={prune}) must skip the special remote: {e}")
         });
         assert!(
-            output.command.starts_with("git fetch --multiple "),
+            !output.command.contains("--all") && output.command.ends_with(" -- origin"),
             "{}",
             output.command
         );
@@ -2772,7 +2813,7 @@ fn review_fetch_all_respects_order_of_skip_aliases_for_annex_special_remote() {
         for prune in [false, true] {
             let output = opened.fetch_all(prune).expect("Fetch All must exclude the special remote even when the last skip setting is false");
             assert!(
-                output.command.starts_with("git fetch --multiple "),
+                !output.command.contains("--all") && output.command.ends_with(" -- origin"),
                 "{}",
                 output.command
             );

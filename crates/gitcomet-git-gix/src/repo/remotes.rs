@@ -1078,14 +1078,16 @@ impl GixRepo {
         let mut cmd = self.git_workdir_cmd();
         cmd.arg("fetch").arg("--progress");
         // `--all` would also try a git-annex special remote left without
-        // `skipFetchAll`, and fail. Name the fetchable remotes instead.
-        let scope = if remotes.explicit {
-            "--multiple"
-        } else {
-            "--all"
+        // `skipFetchAll`, and fail. Name the fetchable remotes instead. One
+        // remote goes without `--multiple`, which would expand a remote group
+        // of the same name instead.
+        let scope = match (remotes.explicit, remotes.names.len()) {
+            (false, _) => Some("--all"),
+            (true, 1) => None,
+            (true, _) => Some("--multiple"),
         };
         let prune_arg = if prune { "--prune" } else { "--no-prune" };
-        cmd.arg(scope).arg(prune_arg);
+        cmd.args(scope).arg(prune_arg);
         cmd.arg("--no-prune-tags");
         if remotes.explicit {
             if remotes.names.is_empty() {
@@ -1098,7 +1100,16 @@ impl GixRepo {
             }
             cmd.arg("--").args(&remotes.names);
         }
-        let mut label = format!("git fetch {scope} {prune_arg} --no-prune-tags");
+        let mut label = [
+            "git fetch",
+            scope.unwrap_or_default(),
+            prune_arg,
+            "--no-prune-tags",
+        ]
+        .into_iter()
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ");
         if remotes.explicit {
             label = format!("{label} -- {}", remotes.names.join(" "));
         }
