@@ -1477,8 +1477,22 @@ fn schedule_safe_push_after_commit(
 ) {
     let finish_context = context.clone();
     let follow_up_auth = auth.clone();
+    // The preflight fetches the push target and then reads FETCH_HEAD, which
+    // an automatic fetch beside it would rewrite.
+    let foreground = repos.repository(&repo_id).map(|repo| {
+        msg_tx
+            .auto_fetch
+            .admission()
+            .reserve(super::super::auto_fetch::repository_key(repo.as_ref()))
+    });
     spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
-        let result = run_with_git_auth(auth, || repo.safe_push_after_commit(&context));
+        let result = foreground
+            .as_ref()
+            .map_or(Ok(()), |reservation| {
+                reservation.wait(&gitcomet_core::services::CancellationToken::new())
+            })
+            .and_then(|()| run_with_git_auth(auth, || repo.safe_push_after_commit(&context)));
+        drop(foreground);
         send_or_log(
             &msg_tx,
             Msg::Internal(crate::msg::InternalMsg::SafePushAfterCommitFinished {

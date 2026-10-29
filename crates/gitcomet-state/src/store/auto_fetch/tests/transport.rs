@@ -283,6 +283,33 @@ fn foreground_fetch_reaps_automatic_transport_before_starting_its_own() {
 }
 
 #[test]
+fn commit_and_push_preflight_reaps_automatic_transport_before_fetching_its_target() {
+    let mut fixture = GatedStore::new();
+    let cancellation = fixture.start();
+    let head = gitcomet_core::domain::CommitId(fixture.first.clone().into());
+    fixture.store.dispatch(Msg::SafePushAfterCommit {
+        repo_id: fixture.repo_id,
+        context: gitcomet_core::services::SafePushAfterCommitContext {
+            amend: false,
+            local_branch: Some("main".into()),
+            pre_head: Some(head.clone()),
+            post_head: Some(head),
+        },
+    });
+    // The preflight fetches main and reads FETCH_HEAD, which the automatic
+    // fetch would rewrite.
+    wait_for_store(&fixture.store, &fixture.events, |state| {
+        state.repos[0]
+            .feedback
+            .command_log
+            .iter()
+            .any(|entry| entry.command.contains("Push after commit"))
+    });
+    assert!(cancellation.is_cancelled());
+    fixture.assert_reaped();
+}
+
+#[test]
 fn disabling_automatic_fetch_cancels_and_reaps_active_transport() {
     let mut fixture = GatedStore::new();
     let cancellation = fixture.start();
