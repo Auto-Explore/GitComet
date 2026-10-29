@@ -1234,6 +1234,7 @@ fn command_may_change_large_file_support(command: &RepoCommandKind) -> bool {
                 | C::AnnexSync { .. } | C::AnnexInit | C::AnnexAdjust { .. }
                 | C::AnnexLeaveAdjusted { .. } | C::AnnexEnableRemote { .. }
                 | C::AnnexInitRemote { .. } | C::AnnexTrust { .. }
+                | C::AnnexVerifyRemote { .. }
                 | C::AnnexDescribe { .. } | C::AnnexNumcopies { .. }
                 | C::AnnexWebapp | C::AnnexStopAssistant | C::AnnexRestage => true,
                 C::LfsPushAll { .. } | C::LfsPrune

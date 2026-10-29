@@ -88,7 +88,9 @@ fn large_file_command_context(command: &gitcomet_core::large_files::LargeFileCom
         }
         C::AnnexAdjust { mode } => mode.label().to_string(),
         C::AnnexLeaveAdjusted { base } => base.clone(),
-        C::AnnexEnableRemote { name, .. } | C::AnnexInitRemote { name, .. } => name.clone(),
+        C::AnnexEnableRemote { name, .. }
+        | C::AnnexInitRemote { name, .. }
+        | C::AnnexVerifyRemote { name, .. } => name.clone(),
         C::AnnexTrust { repository, trust } => format!("{repository} · {}", trust.label()),
         C::AnnexDescribe { repository, .. } => repository.clone(),
         C::AnnexNumcopies { copies } => copies.to_string(),

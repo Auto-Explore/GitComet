@@ -1183,6 +1183,11 @@ pub struct GitCometView {
     /// Where the keyboard was before a prompt focused itself (`Some(None)`:
     /// nothing was focused), returned when the prompt goes away.
     pub(super) auth_prompt_focus_return: Option<Option<FocusHandle>>,
+    /// The special remote whose location the user said is not theirs: its
+    /// banner offers removing it.
+    pub(super) annex_remote_rejected: Option<(RepoId, String)>,
+    /// Special remotes put off with Later, by configuration, for this session.
+    pub(super) annex_remote_later: rustc_hash::FxHashSet<(RepoId, String, String)>,
     pub(super) active_context_menu_invoker: Option<SharedString>,
 }
 

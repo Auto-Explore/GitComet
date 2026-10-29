@@ -515,6 +515,23 @@ impl GitRepository for TrackingRepo {
         Ok(())
     }
 
+    fn run_large_file_command(
+        &self,
+        command: &gitcomet_core::large_files::LargeFileCommand,
+    ) -> Result<CommandOutput> {
+        if let gitcomet_core::large_files::LargeFileCommand::AnnexVerifyRemote { name, id } =
+            command
+        {
+            self.record(format!("annex-verifyremote:{name}:{id}"));
+        }
+        Ok(CommandOutput::empty_success("git annex"))
+    }
+
+    fn remove_remote_with_output(&self, name: &str) -> Result<CommandOutput> {
+        self.record(format!("remove-remote:{name}"));
+        Ok(CommandOutput::empty_success("git remote remove"))
+    }
+
     fn push_force_with_output(&self) -> Result<CommandOutput> {
         self.record("force-push".to_string());
         Ok(CommandOutput::empty_success("git push --force-with-lease"))

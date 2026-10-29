@@ -114,6 +114,20 @@ pub struct AnnexRepoInfo {
     pub repositories: Vec<AnnexRepository>,
     /// Desired number of copies, when set.
     pub numcopies: Option<u32>,
+    /// Special remotes someone else configured that git-annex will not use,
+    /// and that block git pushes to every remote, until the user confirms
+    /// their location (git-annex 10.20261026 and later).
+    pub unverified_remotes: Vec<AnnexRemoteCheck>,
+}
+
+/// A special remote waiting for `git annex verifyremote`.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct AnnexRemoteCheck {
+    pub name: String,
+    /// The configuration exactly as git-annex shows it to be confirmed.
+    pub configuration: String,
+    /// The ID `verifyremote --safe` takes for this configuration.
+    pub id: String,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -428,6 +442,12 @@ pub enum LargeFileCommand {
         repository: String,
         description: String,
     },
+    /// Confirm that a special remote someone else configured uses the location
+    /// the user expects (`git annex verifyremote <name> --safe <id>`).
+    AnnexVerifyRemote {
+        name: String,
+        id: String,
+    },
     AnnexNumcopies {
         copies: u32,
     },
@@ -464,6 +484,7 @@ impl LargeFileCommand {
             | Self::AnnexInitRemote { .. }
             | Self::AnnexTrust { .. }
             | Self::AnnexDescribe { .. }
+            | Self::AnnexVerifyRemote { .. }
             | Self::AnnexNumcopies { .. }
             | Self::AnnexFsck
             | Self::AnnexRestage
@@ -538,6 +559,7 @@ impl LargeFileCommand {
             Self::AnnexInitRemote { .. } => "Add special remote",
             Self::AnnexTrust { .. } => "annex trust",
             Self::AnnexDescribe { .. } => "annex describe",
+            Self::AnnexVerifyRemote { .. } => "Confirm special remote",
             Self::AnnexNumcopies { .. } => "annex numcopies",
             Self::AnnexFsck => "annex check",
             Self::AnnexRestage => "Refresh annexed files",
@@ -652,6 +674,7 @@ impl LargeFileCommand {
             | Self::AnnexInitRemote { .. }
             | Self::AnnexTrust { .. }
             | Self::AnnexDescribe { .. }
+            | Self::AnnexVerifyRemote { .. }
             | Self::AnnexNumcopies { .. }
             | Self::AnnexRestage
             | Self::AnnexDropUnused { .. }

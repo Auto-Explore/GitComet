@@ -1328,6 +1328,8 @@ impl GitCometView {
             auth_prompt_submitted_generation: None,
             auth_prompt_input_error: None,
             auth_prompt_focus_return: None,
+            annex_remote_rejected: None,
+            annex_remote_later: Default::default(),
             active_context_menu_invoker: None,
         };
 
