@@ -75,6 +75,145 @@ fn native_mode_is_silent_and_keeps_attached_operation_cancellation() {
 }
 
 #[test]
+fn unchanged_mode_guards_do_not_launch_git_after_open() {
+    let directory = tempfile::tempdir().unwrap();
+    init_test_repo(directory.path());
+    let repo = open_repo(directory.path());
+    let (_, commands) = crate::command_trace::capture(|| {
+        for _ in 0..20 {
+            assert_eq!(repo.repository_mode().unwrap(), RepositoryMode::WorkingTree);
+            repo.require_working_tree().unwrap();
+            repo.require_bare_head_available().unwrap();
+        }
+    });
+    eprintln!(
+        "60 unchanged mode guards launched {} Git commands",
+        commands.len()
+    );
+    assert!(
+        commands.is_empty(),
+        "validated topology already knows the mode"
+    );
+}
+
+#[test]
+fn mode_change_with_preserved_config_size_and_mtime_invalidates_the_handle() {
+    let directory = tempfile::tempdir().unwrap();
+    init_test_repo(directory.path());
+    let repo = open_repo(directory.path());
+    let config = directory.path().join(".git/config");
+    let modified = fs::metadata(&config).unwrap().modified().unwrap();
+    let stamp = crate::repo::repo_file_stamp(&config);
+    let original = fs::read_to_string(&config).unwrap();
+    let changed = original.replacen("bare = false", "bare = true ", 1);
+    assert_ne!(original, changed);
+    assert_eq!(original.len(), changed.len());
+    fs::write(&config, changed).unwrap();
+    fs::File::options()
+        .write(true)
+        .open(&config)
+        .unwrap()
+        .set_times(fs::FileTimes::new().set_modified(modified))
+        .unwrap();
+    assert_eq!(crate::repo::repo_file_stamp(&config), stamp);
+    assert!(matches!(
+        repo.repository_mode().unwrap_err().kind(),
+        ErrorKind::RepositoryChanged
+    ));
+}
+
+#[test]
+fn mode_guards_preserve_attached_operation_cancellation() {
+    use gitcomet_core::git_operation::{self, GitOperationContext};
+
+    let directory = tempfile::tempdir().unwrap();
+    init_test_repo(directory.path());
+    let repo = open_repo(directory.path());
+    let operation = GitOperationContext::new("mode guards", |_, _| {});
+    let _scope = git_operation::attach(&operation);
+    assert!(git_operation::cancel(operation.id()));
+    assert!(matches!(
+        repo.repository_mode().unwrap_err().kind(),
+        ErrorKind::Cancelled
+    ));
+    assert!(matches!(
+        repo.require_working_tree().unwrap_err().kind(),
+        ErrorKind::Cancelled
+    ));
+    assert!(matches!(
+        repo.require_bare_head_available().unwrap_err().kind(),
+        ErrorKind::Cancelled
+    ));
+}
+
+#[test]
+fn unused_nonfile_worktree_config_does_not_prevent_mode_checks() {
+    let directory = tempfile::tempdir().unwrap();
+    init_test_repo(directory.path());
+    fs::create_dir(directory.path().join(".git/config.worktree")).unwrap();
+    let repo = open_repo(directory.path());
+    assert_eq!(repo.repository_mode().unwrap(), RepositoryMode::WorkingTree);
+    repo.require_working_tree().unwrap();
+    repo.require_bare_head_available().unwrap();
+}
+
+#[test]
+fn redirecting_a_worktree_gitfile_invalidates_the_cached_mode() {
+    let (_directory, bare) = bare_fixture();
+    let linked = bare.parent().unwrap().join("linked");
+    git_success(
+        &bare,
+        &["worktree", "add", "-b", "linked", linked.to_str().unwrap()],
+    );
+    let repo = open_repo(&linked);
+    assert_eq!(repo.repository_mode().unwrap(), RepositoryMode::WorkingTree);
+    fs::write(
+        linked.join(".git"),
+        format!("gitdir: {}\n", bare.to_string_lossy().replace('\\', "/")),
+    )
+    .unwrap();
+    assert_eq!(super::native_mode(&linked).unwrap(), RepositoryMode::Bare);
+    assert!(matches!(
+        repo.repository_mode().unwrap_err().kind(),
+        ErrorKind::RepositoryChanged
+    ));
+}
+
+#[test]
+fn a_new_nested_git_directory_invalidates_the_cached_bare_mode() {
+    let (directory, bare) = bare_fixture();
+    let repo = open_repo(&bare);
+    assert_eq!(repo.repository_mode().unwrap(), RepositoryMode::Bare);
+    let nested = directory.path().join("nested-source");
+    fs::create_dir(&nested).unwrap();
+    init_test_repo(&nested);
+    fs::rename(nested.join(".git"), bare.join(".git")).unwrap();
+    assert_eq!(
+        super::native_mode(&bare).unwrap(),
+        RepositoryMode::WorkingTree
+    );
+    assert!(matches!(
+        repo.repository_mode().unwrap_err().kind(),
+        ErrorKind::RepositoryChanged
+    ));
+}
+
+#[test]
+fn removing_a_worktree_common_link_invalidates_the_cached_mode() {
+    let (_directory, bare) = bare_fixture();
+    let linked = bare.parent().unwrap().join("linked");
+    git_success(
+        &bare,
+        &["worktree", "add", "-b", "linked", linked.to_str().unwrap()],
+    );
+    let repo = open_repo(&linked);
+    let git_dir = git_stdout(&linked, &["rev-parse", "--absolute-git-dir"]);
+    fs::remove_file(Path::new(&git_dir).join("commondir")).unwrap();
+    assert!(super::native_mode(&linked).is_err());
+    assert!(repo.repository_mode().is_err());
+}
+
+#[test]
 fn linked_worktree_is_normal_with_shared_core_bare_true() {
     let (_directory, bare) = bare_fixture();
     let linked = bare.parent().unwrap().join("linked");

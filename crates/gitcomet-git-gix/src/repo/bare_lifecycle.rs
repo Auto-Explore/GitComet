@@ -8,8 +8,79 @@ use std::fs::{File, OpenOptions};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Condvar, Mutex};
 
+fn config_input_stamp(path: &Path) -> crate::repo::RepoFileStamp {
+    use std::io::Read as _;
+
+    match path.metadata() {
+        Ok(metadata) if metadata.is_file() => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return crate::repo::RepoFileStamp::default();
+        }
+        _ => return crate::repo::RepoFileStamp::uncacheable(),
+    }
+    let mut file = match File::open(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return crate::repo::RepoFileStamp::default();
+        }
+        Err(_) => return crate::repo::RepoFileStamp::uncacheable(),
+    };
+    // Metadata alone can miss same-size edits with preserved/coalesced mtime.
+    // Hash small config inputs without allocating a whole-file buffer.
+    let mut hash = gix::hash::hasher(gix::hash::Kind::Sha256);
+    let mut buffer = [0u8; 8192];
+    loop {
+        match file.read(&mut buffer) {
+            Ok(0) => break,
+            Ok(count) => {
+                hash.update(&buffer[..count]);
+            }
+            Err(_) => return crate::repo::RepoFileStamp::uncacheable(),
+        }
+    }
+    let Ok(content_id) = hash.try_finalize() else {
+        return crate::repo::RepoFileStamp::uncacheable();
+    };
+    crate::repo::RepoFileStamp {
+        exists: true,
+        content_id: Some(content_id),
+        ..Default::default()
+    }
+}
+
+#[derive(Eq, PartialEq)]
+enum DiscoveryEntry {
+    Missing,
+    Directory(DirectoryIdentity),
+    File(crate::repo::RepoFileStamp),
+}
+
+fn discovery_entry(path: &Path) -> Result<DiscoveryEntry> {
+    let metadata = match path.symlink_metadata() {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(DiscoveryEntry::Missing);
+        }
+        Err(error) => return Err(error.into()),
+    };
+    if metadata.file_type().is_symlink() {
+        return discovery_entry(&canonical_path(path)?);
+    }
+    if metadata.is_dir() {
+        Ok(DiscoveryEntry::Directory(DirectoryIdentity::read(path)?))
+    } else {
+        Ok(DiscoveryEntry::File(config_input_stamp(path)))
+    }
+}
+
 pub(crate) struct OpenedTopology {
     common_dir: PathBuf,
+    git_dir: PathBuf,
+    git_dir_identity: DirectoryIdentity,
+    common_link_path: PathBuf,
+    common_link: crate::repo::RepoFileStamp,
+    discovery_path: PathBuf,
+    discovery_entry: DiscoveryEntry,
     coordination_path: PathBuf,
     intent_path: PathBuf,
     identity: DirectoryIdentity,
@@ -24,6 +95,9 @@ impl OpenedTopology {
 
     pub(crate) fn read(root: &Path, repo: &gix::Repository) -> Result<Self> {
         let common_dir = canonical_path(repo.common_dir())?;
+        let git_dir = canonical_path(repo.git_dir())?;
+        let common_link_path = git_dir.join("commondir");
+        let discovery_path = root.join(".git");
         let mut config_inputs = vec![
             common_dir.join("config"),
             repo.git_dir().join("config.worktree"),
@@ -38,11 +112,17 @@ impl OpenedTopology {
         let config_inputs = config_inputs
             .into_iter()
             .map(|path| {
-                let stamp = crate::repo::repo_file_stamp(&path);
+                let stamp = config_input_stamp(&path);
                 (path, stamp)
             })
             .collect();
         Ok(Self {
+            git_dir_identity: DirectoryIdentity::read(&git_dir)?,
+            common_link: config_input_stamp(&common_link_path),
+            common_link_path,
+            discovery_entry: discovery_entry(&discovery_path)?,
+            discovery_path,
+            git_dir,
             coordination_path: coordination_path(&common_dir)?,
             intent_path: sibling_path(coordination_root(&common_dir), ".bare-conversion.lock")?,
             identity: DirectoryIdentity::read(&common_dir)?,
@@ -64,19 +144,64 @@ impl OpenedTopology {
         if DirectoryIdentity::read(&self.common_dir).ok().as_ref() != Some(&self.identity) {
             return Err(Error::new(ErrorKind::RepositoryChanged));
         }
+        // Cached mode is valid only for the discovery chain we opened. A
+        // rewritten gitfile or a newly nested .git can select another repo
+        // without changing the original common directory's config inputs.
+        if discovery_entry(&self.discovery_path)? != self.discovery_entry
+            || (self.git_dir != self.common_dir
+                && DirectoryIdentity::read(&self.git_dir).ok().as_ref()
+                    != Some(&self.git_dir_identity))
+            || config_input_stamp(&self.common_link_path) != self.common_link
+        {
+            return Err(Error::new(ErrorKind::RepositoryChanged));
+        }
         let mut inputs = self
             .config_inputs
             .lock()
             .expect("repository topology inputs");
         if inputs
             .iter()
-            .any(|(path, stamp)| crate::repo::repo_file_stamp(path) != *stamp)
+            .any(|(path, stamp)| config_input_stamp(path) != *stamp)
         {
+            let before: Vec<_> = inputs
+                .iter()
+                .map(|(path, _)| config_input_stamp(path))
+                .collect();
+            if before.iter().any(|stamp| stamp.uncacheable_nonce.is_some()) {
+                // An unreadable input cannot be memoized. Ask Git for this
+                // operation without serializing other native checks on the
+                // configuration lock; later operations must revalidate too.
+                drop(inputs);
+                return if native_mode(root)? == self.mode {
+                    Ok(())
+                } else {
+                    Err(Error::new(ErrorKind::RepositoryChanged))
+                };
+            }
             if native_mode(root)? != self.mode {
                 return Err(Error::new(ErrorKind::RepositoryChanged));
             }
-            for (path, stamp) in &mut *inputs {
-                *stamp = crate::repo::repo_file_stamp(path);
+            let after: Vec<_> = inputs
+                .iter()
+                .map(|(path, _)| config_input_stamp(path))
+                .collect();
+            if before.iter().zip(&after).any(|(before, after)| {
+                before.uncacheable_nonce.is_none()
+                    && after.uncacheable_nonce.is_none()
+                    && before != after
+            }) {
+                return Err(Error::new(ErrorKind::RepositoryChanged));
+            }
+            for (((_, stamp), before), after) in inputs.iter_mut().zip(before).zip(after) {
+                // Git remains authoritative when an input cannot be read (for
+                // example an unused config.worktree directory). Never memoize
+                // that uncertainty: the next operation must ask Git again.
+                *stamp = if before.uncacheable_nonce.is_some() || after.uncacheable_nonce.is_some()
+                {
+                    crate::repo::RepoFileStamp::uncacheable()
+                } else {
+                    before
+                };
             }
         }
         Ok(())

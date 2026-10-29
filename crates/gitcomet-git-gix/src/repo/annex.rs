@@ -657,9 +657,7 @@ impl super::GixRepo {
         };
         let content = if content { "--content" } else { "--no-content" };
         let label = format!("git annex {verb}");
-        if super::bare::native_mode(&self.spec.workdir)?
-            == gitcomet_core::domain::RepositoryMode::Bare
-        {
+        if self.repository_mode_impl()? == gitcomet_core::domain::RepositoryMode::Bare {
             return self.run_annex_plain(&["sync", other_way, "--no-commit", content], &[], &label);
         }
         match self.run_annex_plain(&[verb, content], &[], &label) {
@@ -677,8 +675,7 @@ impl super::GixRepo {
         label: &str,
     ) -> Result<CommandOutput> {
         if paths.is_empty()
-            && super::bare::native_mode(&self.spec.workdir)?
-                == gitcomet_core::domain::RepositoryMode::Bare
+            && self.repository_mode_impl()? == gitcomet_core::domain::RepositoryMode::Bare
         {
             args.push("--all".into());
             return self.run_annex_json(&args, paths, &format!("{label} (all versions)"));
