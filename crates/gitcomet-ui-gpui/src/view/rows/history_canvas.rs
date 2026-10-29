@@ -1688,12 +1688,23 @@ pub(super) fn history_commit_row_canvas(
             // way to a "+2" counting them. An edge whose annotator offers a
             // menu draws its marks as chips, the one whose menu is open as
             // open, and keeps where each landed for a right-click on it.
+            // Leading marks start after the message border, which stays the
+            // cell's outermost edge.
+            let message_left = summary_bounds.left();
+            let border_lead = if show_graph_color_marker {
+                scaled_px(HISTORY_MESSAGE_BORDER_W_PX)
+            } else {
+                px(0.0)
+            };
+            let mut leading_marks_right = message_left;
             let open_chip = active_context_menu_invoker
                 .as_deref()
                 .and_then(|invoker| history_mark_menu_chip(invoker, repo_id, commit_id.as_ref()));
             let mut mark_chips: SmallVec<[(MarkTarget, usize, Bounds<Pixels>); 4]> =
                 SmallVec::new();
-            let icon_size = xxs_line_height.min(bounds.size.height);
+            // The hosted file list's glyph size, so a review's state icon
+            // reads the same on History as in its changed files.
+            let icon_size = scaled_px(ROW_MARK_ICON_PX).min(bounds.size.height);
             let mark_pad = scaled_px(4.0);
             let mark_gap = scaled_px(3.0);
             let chip_height = scaled_px(theme.metrics.row_height(
@@ -1800,13 +1811,18 @@ pub(super) fn history_commit_row_canvas(
                 // Marks that would not fit the message cell are not drawn
                 // over its neighbours.
                 let inset = scaled_px(4.0);
-                if total <= mark_pad * 2.0 || total + inset > summary_bounds.size.width {
+                let lead = match edge {
+                    MarkEdge::Leading => border_lead + inset,
+                    MarkEdge::Trailing => inset,
+                };
+                if total <= mark_pad * 2.0 || total + lead > summary_bounds.size.width {
                     continue;
                 }
-                let mut x = match edge {
-                    MarkEdge::Leading => summary_bounds.left() + inset,
+                let start = match edge {
+                    MarkEdge::Leading => message_left + lead,
                     MarkEdge::Trailing => summary_bounds.right() - inset - total,
                 };
+                let mut x = start;
                 let chip_y = bounds.top() + (bounds.size.height - chip_height) * 0.5;
                 let more_text = more.get(hidden).cloned().flatten();
                 let pieces = laid[..shown]
@@ -1887,6 +1903,7 @@ pub(super) fn history_commit_row_canvas(
                 }
                 summary_bounds.size.width -= total + inset;
                 if edge == MarkEdge::Leading {
+                    leading_marks_right = start + total;
                     summary_bounds.origin.x += total + inset;
                 }
             }
@@ -1911,7 +1928,7 @@ pub(super) fn history_commit_row_canvas(
             // message read as one unit. Painted before the lanes so the strokes
             // stay crisp on top of it, and a single gradient quad either way.
             //
-            // `graph_bounds.right()` is exactly `summary_bounds.left()`, so the
+            // `graph_bounds.right()` is exactly `message_left`, so the
             // gradient ends where the border begins.
             if show_graph && show_graph_color_marker {
                 super::history_graph_paint::paint_graph_fade(
@@ -1932,7 +1949,7 @@ pub(super) fn history_commit_row_canvas(
                 let border_w = scaled_px(HISTORY_MESSAGE_BORDER_W_PX);
                 window.paint_quad(
                     PaintQuad::new(Bounds::new(
-                        point(summary_bounds.left(), bounds.top()),
+                        point(message_left, bounds.top()),
                         size(border_w, bounds.size.height),
                     ))
                     .background(node_color),
@@ -2048,7 +2065,7 @@ pub(super) fn history_commit_row_canvas(
                     let annotation_bounds = Bounds::new(
                         column_layout.summary.origin,
                         size(
-                            summary_bounds.left() - column_layout.summary.left(),
+                            leading_marks_right - column_layout.summary.left(),
                             bounds.size.height,
                         ),
                     );
