@@ -437,8 +437,7 @@ pub(super) fn diff_row(
     });
 
     if matches!(click_kind, DiffClickKind::FileHeader) {
-        let file =
-            header_display.unwrap_or_else(|| SharedString::from(line.text.as_ref().to_owned()));
+        let file = header_display.unwrap_or_else(|| SharedString::from(line.text.as_ref()));
         let mut row = div()
             .id(("diff_file_hdr", visible_ix))
             .h(diff_file_header_height(theme, ui_scale_percent))
@@ -476,8 +475,7 @@ pub(super) fn diff_row(
     }
 
     if matches!(click_kind, DiffClickKind::HunkHeader) {
-        let display =
-            header_display.unwrap_or_else(|| SharedString::from(line.text.as_ref().to_owned()));
+        let display = header_display.unwrap_or_else(|| SharedString::from(line.text.as_ref()));
 
         let mut row = div()
             .id(("diff_hunk_hdr", visible_ix))
@@ -1096,8 +1094,7 @@ pub(super) fn patch_split_header_row(
 
     match click_kind {
         DiffClickKind::FileHeader => {
-            let display =
-                header_display.unwrap_or_else(|| SharedString::from(line.text.as_ref().to_owned()));
+            let display = header_display.unwrap_or_else(|| SharedString::from(line.text.as_ref()));
             let mut row = div()
                 .id((
                     match column {
@@ -1140,8 +1137,7 @@ pub(super) fn patch_split_header_row(
             row.into_any_element()
         }
         DiffClickKind::HunkHeader => {
-            let display =
-                header_display.unwrap_or_else(|| SharedString::from(line.text.as_ref().to_owned()));
+            let display = header_display.unwrap_or_else(|| SharedString::from(line.text.as_ref()));
 
             let mut row = div()
                 .id((
@@ -1595,7 +1591,7 @@ fn patch_split_meta_row(
             DiffClickKind::Line,
             fg,
             None,
-            SharedString::from(line.text.as_ref().to_owned()),
+            SharedString::from(line.text.as_ref()),
             cx,
         ))
         .on_activate(false, controls::ControlActivation::Composite, on_click);

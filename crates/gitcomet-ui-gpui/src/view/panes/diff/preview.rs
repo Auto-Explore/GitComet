@@ -115,8 +115,8 @@ const NON_UTF8_TEXT_MAX_BYTES: u64 = 64 * 1024 * 1024;
 const BINARY_PREVIEW_MESSAGE: &str = "File looks binary; text preview is not supported.";
 
 #[inline]
-fn packed_preview_line_flags(ascii_only: bool, has_tabs: bool) -> u8 {
-    preview_line_flags_from_bools(ascii_only, has_tabs)
+fn packed_preview_line_flags(ascii_only: bool, has_tabs: bool, trailing_cr: bool) -> u8 {
+    preview_line_flags_from_bools(ascii_only, has_tabs, trailing_cr)
 }
 
 #[inline]
@@ -219,6 +219,7 @@ fn index_text_lines(text: &str) -> (Vec<usize>, Vec<u8>) {
         line_flags.push(packed_preview_line_flags(
             line.is_ascii(),
             memchr::memchr(b'\t', line).is_some(),
+            line.ends_with(b"\r"),
         ));
         start = newline + 1;
         line_starts.push(start);
@@ -227,6 +228,7 @@ fn index_text_lines(text: &str) -> (Vec<usize>, Vec<u8>) {
     line_flags.push(packed_preview_line_flags(
         last.is_ascii(),
         memchr::memchr(b'\t', last).is_some(),
+        last.ends_with(b"\r"),
     ));
     (line_starts, line_flags)
 }
@@ -264,6 +266,7 @@ fn index_worktree_preview_reader(
     let mut source_len = 0usize;
     let mut line_ascii_only = true;
     let mut line_has_tabs = false;
+    let mut line_ends_with_cr = false;
     let mut source_bytes = (source_len_hint <= rows::PREPARED_DIFF_SYNTAX_DOCUMENT_MAX_TEXT_BYTES)
         .then(|| Vec::with_capacity(source_len_hint.min(WORKTREE_PREVIEW_INDEX_SCAN_BUFFER_BYTES)));
 
@@ -298,11 +301,16 @@ fn index_worktree_preview_reader(
 
         for &byte in chunk {
             if byte == b'\n' {
-                line_flags.push(packed_preview_line_flags(line_ascii_only, line_has_tabs));
+                line_flags.push(packed_preview_line_flags(
+                    line_ascii_only,
+                    line_has_tabs,
+                    line_ends_with_cr,
+                ));
                 source_len = source_len.saturating_add(1);
                 line_starts.push(source_len);
                 line_ascii_only = true;
                 line_has_tabs = false;
+                line_ends_with_cr = false;
                 continue;
             }
 
@@ -312,6 +320,7 @@ fn index_worktree_preview_reader(
             if byte == b'\t' {
                 line_has_tabs = true;
             }
+            line_ends_with_cr = byte == b'\r';
             source_len = source_len.saturating_add(1);
         }
     }
@@ -324,7 +333,11 @@ fn index_worktree_preview_reader(
 
     if format.format.is_plain_utf8() && sniff.utf8_valid {
         if source_len > 0 {
-            line_flags.push(packed_preview_line_flags(line_ascii_only, line_has_tabs));
+            line_flags.push(packed_preview_line_flags(
+                line_ascii_only,
+                line_has_tabs,
+                line_ends_with_cr,
+            ));
         }
         let source_text = source_bytes
             .map(String::from_utf8)
@@ -1177,12 +1190,15 @@ impl DiffRenderer {
                 .get(line_ix)
                 .copied()
                 .unwrap_or_default();
-            return Some(gitcomet_core::file_diff::FileDiffLineText::file_slice(
-                source_path,
-                range,
-                preview_line_is_ascii_without_loading(flags),
-                preview_line_has_tabs_without_loading(flags),
-            ));
+            return Some(
+                gitcomet_core::file_diff::FileDiffLineText::file_slice(
+                    source_path,
+                    range,
+                    preview_line_is_ascii_without_loading(flags),
+                    preview_line_has_tabs_without_loading(flags),
+                )
+                .with_known_trailing_cr(preview_line_has_trailing_cr(flags)),
+            );
         }
 
         Some(worktree_preview_materialized_line_raw_text(
@@ -2238,6 +2254,32 @@ mod tests {
     use crate::perf_alloc::measure_allocations;
 
     use super::*;
+
+    #[test]
+    fn crlf_preview_indexes_keep_tail_metadata_across_scan_chunks() {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        let text = format!(
+            "{}\r\nlf\ninterior\rcr\nfinal\r",
+            "x".repeat(WORKTREE_PREVIEW_INDEX_SCAN_BUFFER_BYTES - 1)
+        );
+        std::fs::write(file.path(), &text).unwrap();
+        let request = TextDecodeRequest {
+            kind: gitcomet_core::text_format::SideKind::Worktree,
+            attributes: Arc::default(),
+            encoding: None,
+        };
+        let indexed = index_worktree_preview_file(file.path(), &request).unwrap();
+        let (_, memory_flags) = index_text_lines(&text);
+        for flags in [indexed.line_flags.as_ref(), memory_flags.as_slice()] {
+            assert_eq!(
+                flags
+                    .iter()
+                    .map(|&f| preview_line_has_trailing_cr(f))
+                    .collect::<Vec<_>>(),
+                [true, false, false, true]
+            );
+        }
+    }
 
     #[test]
     fn review_binary_preview_stops_before_indexing_the_file() {

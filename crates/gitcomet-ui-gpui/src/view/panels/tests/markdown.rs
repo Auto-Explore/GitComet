@@ -123,7 +123,12 @@ fn open_rendered_markdown_preview(
     let workdir = directory.path().to_path_buf();
     let file_rel = std::path::PathBuf::from("docs/preview.md");
     let abs_path = workdir.join(&file_rel);
-    let preview_lines = Arc::new(source.lines().map(ToOwned::to_owned).collect::<Vec<_>>());
+    let preview_lines = Arc::new(
+        source
+            .split_terminator('\n')
+            .map(ToOwned::to_owned)
+            .collect::<Vec<_>>(),
+    );
     let target = gitcomet_core::domain::DiffTarget::working_tree(
         file_rel.clone(),
         gitcomet_core::domain::DiffArea::Unstaged,

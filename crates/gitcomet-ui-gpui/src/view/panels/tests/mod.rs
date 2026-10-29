@@ -1539,6 +1539,7 @@ mod commit_file_selection;
 mod comparison;
 mod conflict;
 mod control_interaction;
+mod crlf_selection;
 mod diagrams;
 mod diff_marker_refresh;
 mod diff_stage_gutter;
