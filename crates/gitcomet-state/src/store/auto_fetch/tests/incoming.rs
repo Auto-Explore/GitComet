@@ -387,6 +387,60 @@ fn incoming_tracking_manual_failure_preserves_deadline_and_rejects_older_auto_re
     assert!(matches!(group.snapshot.status, AutoFetchStatus::Succeeded { at } if at == recovered));
 }
 
+#[test]
+fn incoming_tracking_rewording_a_published_tip_updates_other_windows() {
+    let (temp, _source, clone, _) = remote_fixture();
+    git(&clone, &["pull", "-q", "--ff-only"]);
+    let head = git(&clone, &["rev-parse", "HEAD"]);
+    let _session = crate::session::push_test_session_file_path_override(Some(
+        temp.path().join("session.json"),
+    ));
+    let backend: Arc<dyn GitBackend> = Arc::new(gitcomet_git_gix::GixBackend);
+    let (store, events) = AppStore::new_test(Arc::clone(&backend));
+    let (other, other_events) = AppStore::new_test_sharing_preferences(backend, &store);
+    let source = clone.parent().unwrap().join("source");
+    restore(&store, &clone, &source);
+    restore(&other, &source, &clone);
+    for (store, events) in [(&store, &events), (&other, &other_events)] {
+        wait_for_store(store, events, |state| {
+            incoming_count(state, &clone) == Some(0)
+        });
+    }
+    wait_for_store(&store, &events, |state| {
+        state
+            .repos
+            .iter()
+            .any(|repo| repo.spec.workdir == clone && matches!(repo.open, Loadable::Ready(())))
+    });
+    let repo_id = store
+        .snapshot()
+        .repos
+        .iter()
+        .find(|repo| repo.spec.workdir == clone)
+        .unwrap()
+        .id;
+    store.dispatch(Msg::RewordCommit {
+        repo_id,
+        request_id: crate::model::RewordRequestId::new(),
+        commit_id: gitcomet_core::domain::CommitId(head.clone().into()),
+        message: "reworded".into(),
+    });
+    wait_for_store(&store, &events, |state| {
+        incoming_count(state, &clone) == Some(1)
+    });
+    assert_ne!(git(&clone, &["rev-parse", "HEAD"]), head);
+    // The other window's tab is not selected: only a broadcast reloads it.
+    wait_for_store(&other, &other_events, |state| {
+        incoming_count(state, &clone) == Some(1)
+    });
+    for store in [&store, &other] {
+        store
+            .shutdown_for_test()
+            .recv_timeout(Duration::from_secs(10))
+            .unwrap();
+    }
+}
+
 /// Fails opening `path` while `failures` lasts, as a briefly unreadable disk.
 struct FlakyOpens {
     path: PathBuf,

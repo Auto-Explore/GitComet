@@ -257,6 +257,7 @@ impl RepoCommandKind {
                     | Self::SquashRef { .. }
                     | Self::Reset { .. }
                     | Self::SquashCommits { .. }
+                    | Self::RewordCommit { .. }
                     | Self::Rebase { .. }
                     | Self::RebaseContinue
                     | Self::RebaseAbort
