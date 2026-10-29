@@ -36,7 +36,9 @@ mod tests {
                     "view/panels/main/diff_text.rs",
                     "view/panels/main/diff_view.rs",
                 ],
-                context_press: &[],
+                // Propagation only: an extension's view between diff lines
+                // keeps its presses from the diff around it.
+                context_press: &["view/panes/diff/hosted_views.rs"],
                 // Selection, resizing, dragging, focus, and propagation only.
                 // Discrete controls (including hosted group headers) use on_activate.
                 primary_press: &[
@@ -54,6 +56,7 @@ mod tests {
                     "view/panes/details.rs",
                     "view/panes/file_history.rs",
                     "view/panes/diff/hosted_cards.rs",
+                    "view/panes/diff/hosted_views.rs",
                     "view/panes/history/history_panel.rs",
                     "view/rows/conflict_resolver.rs",
                     "view/rows/conflict_resolver/three_way_rows.rs",

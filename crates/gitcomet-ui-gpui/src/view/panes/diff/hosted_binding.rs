@@ -1,8 +1,8 @@
 //! Hosted controls and list-boundary projection for the shared diff renderer.
 use super::*;
 use gitcomet_extension_api::{
-    DiffAnnotations, DiffGlyph, DiffInlineCard, DiffInset, DiffLineRange, DiffLineSide,
-    DiffPaneOptions,
+    DiffAnnotations, DiffGlyph, DiffInlineCard, DiffInlineView, DiffInset, DiffLineRange,
+    DiffLineSide, DiffPaneOptions,
 };
 use palette::IntoColor;
 
@@ -14,6 +14,7 @@ enum DisplayRow {
     Document(usize),
     Inset { inset: usize, line: usize },
     Card { card: usize, row: usize },
+    View { view: usize, row: usize },
 }
 
 #[derive(Default)]
@@ -25,6 +26,7 @@ pub(in crate::view) struct HostedDiffDecor {
     most_people: Option<usize>,
     pub insets: Arc<[DiffInset]>,
     pub cards: Arc<[DiffInlineCard]>,
+    pub(super) views: super::hosted_views::InlineViews,
     pub(super) row_height: Pixels,
     pub(super) card_layouts: Vec<super::hosted_cards::CardLayout>,
     pub(super) card_layout_key: Option<super::hosted_cards::LayoutKey>,
@@ -40,7 +42,20 @@ pub(in crate::view) struct HostedDiffDecor {
     pub(in crate::view) marker_builds: usize,
 }
 
+impl HostedDiffDecor {
+    /// Whether rows other than the document's are listed: then the list's
+    /// rows are the projection's, not the document's.
+    fn projects(&self) -> bool {
+        !self.insets.is_empty() || !self.cards.is_empty() || !self.views.is_empty()
+    }
+}
+
 impl DiffRenderer {
+    /// The hosted decoration when the list's rows are its projection's.
+    fn hosted_projection(&self) -> Option<&HostedDiffDecor> {
+        self.hosted_decor.as_ref().filter(|decor| decor.projects())
+    }
+
     #[cfg(test)]
     pub(in crate::view) fn hosted_card_row_index(&mut self, id: &str, row: usize) -> Option<usize> {
         self.prepare_hosted_projection();
@@ -332,9 +347,7 @@ impl DiffRenderer {
     ) -> Option<gitcomet_extension_api::DiffScrollAnchor> {
         let display = self.hosted_scroll_top(&self.diff_scroll);
         let document = self
-            .hosted_decor
-            .as_ref()
-            .filter(|d| !d.insets.is_empty() || !d.cards.is_empty())
+            .hosted_projection()
             .and_then(|d| d.display.get(display..))
             .and_then(|rows| {
                 rows.iter().find_map(|row| match row {
@@ -400,6 +413,7 @@ impl DiffRenderer {
         annotations: Arc<DiffAnnotations>,
         insets: Arc<[DiffInset]>,
         cards: Arc<[DiffInlineCard]>,
+        views: Arc<[DiffInlineView]>,
     ) {
         self.store.set_policy(options.policy);
         self.diff_show_line_numbers = options.policy.line_numbers;
@@ -419,6 +433,7 @@ impl DiffRenderer {
         decor.annotations = annotations;
         decor.insets = insets;
         decor.cards = cards;
+        let reset = decor.views.set(views) || reset;
         if reset {
             decor.key = None;
         }
@@ -433,6 +448,7 @@ impl DiffRenderer {
         };
         if decor.insets.is_empty()
             && decor.cards.is_empty()
+            && decor.views.is_empty()
             && decor.annotations.is_empty()
             && decor.display.is_empty()
         {
@@ -476,6 +492,14 @@ impl DiffRenderer {
                     .extend((0..layout.rows(card)).map(|row| DisplayRow::Card { card: ix, row }));
             }
         }
+        // After the line's cards.
+        for (ix, view) in decor.views.views().iter().enumerate() {
+            if let Some(row) = anchors.get(&(view.anchor().side, view.anchor().line)) {
+                after.entry(*row).or_default().extend(
+                    (0..decor.views.rows(view)).map(|row| DisplayRow::View { view: ix, row }),
+                );
+            }
+        }
         let len = self.diff_visible_len();
         let saved = [&self.diff_scroll, &self.diff_split_right_scroll].map(|handle| {
             let top = self.hosted_scroll_top(handle);
@@ -488,6 +512,10 @@ impl DiffRenderer {
                         let id = decor.projected_card_ids.get(card)?;
                         let card = decor.cards.iter().position(|card| &card.id == id)?;
                         Some(DisplayRow::Card { card, row })
+                    }
+                    DisplayRow::View { view, row } => {
+                        let view = decor.views.reprojected(view)?;
+                        Some(DisplayRow::View { view, row })
                     }
                     anchor => Some(anchor),
                 });
@@ -502,6 +530,7 @@ impl DiffRenderer {
         let decor = self.hosted_decor.as_mut().unwrap();
         decor.display.clear();
         decor.projected_card_ids = decor.cards.iter().map(|card| card.id.clone()).collect();
+        decor.views.project();
         decor.document.clear();
         for row in 0..len {
             decor.document.push(decor.display.len());
@@ -564,16 +593,12 @@ impl DiffRenderer {
 
     pub(in crate::view) fn diff_list_len(&mut self) -> usize {
         self.prepare_hosted_projection();
-        self.hosted_decor
-            .as_ref()
-            .filter(|d| !d.insets.is_empty() || !d.cards.is_empty())
+        self.hosted_projection()
             .map_or_else(|| self.diff_visible_len(), |d| d.display.len())
     }
 
     pub(in crate::view) fn diff_list_index(&self, document: usize) -> usize {
-        self.hosted_decor
-            .as_ref()
-            .filter(|d| !d.insets.is_empty() || !d.cards.is_empty())
+        self.hosted_projection()
             .and_then(|d| d.document.get(document))
             .copied()
             .unwrap_or(document)
@@ -634,9 +659,7 @@ impl DiffRenderer {
             .clone()
             .filter_map(|display| {
                 match this
-                    .hosted_decor
-                    .as_ref()
-                    .filter(|d| !d.insets.is_empty() || !d.cards.is_empty())
+                    .hosted_projection()
                     .and_then(|d| d.display.get(display))
                     .copied()
                     .unwrap_or(DisplayRow::Document(display))
@@ -662,18 +685,20 @@ impl DiffRenderer {
             start = end;
         }
         this.theme = original_theme;
+        let first = range.start;
         range
             .map(|display| {
                 let row = this
-                    .hosted_decor
-                    .as_ref()
-                    .filter(|d| !d.insets.is_empty() || !d.cards.is_empty())
+                    .hosted_projection()
                     .and_then(|d| d.display.get(display))
                     .copied()
                     .unwrap_or(DisplayRow::Document(display));
                 match row {
                     DisplayRow::Card { card, row } => {
                         this.render_hosted_card_row(card, row, side, display, window, cx)
+                    }
+                    DisplayRow::View { view, row } => {
+                        this.render_hosted_view_row(view, row, side, display == first, window, cx)
                     }
                     DisplayRow::Inset { inset, line } => {
                         use crate::kit::interaction::ControlInteractionExt as _;

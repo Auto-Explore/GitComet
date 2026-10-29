@@ -15,6 +15,49 @@ impl Render for CardPreview {
     }
 }
 
+/// A review thread as an extension would host it between the lines.
+struct ThreadPreview {
+    theme: AppTheme,
+    reply: gpui::Entity<components::TextInput>,
+}
+
+impl Render for ThreadPreview {
+    fn render(&mut self, _: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
+        let theme = self.theme;
+        let scale = ui_scale::UiScale::current(cx);
+        div()
+            .mx(scale.px(12.0))
+            .my(scale.px(4.0))
+            .p(scale.px(8.0))
+            .flex()
+            .flex_col()
+            .gap(scale.px(6.0))
+            .rounded(px(theme.radii.panel))
+            .border_1()
+            .border_color(theme.colors.stroke.subtle)
+            .bg(theme.colors.surface.raised)
+            .text_size(theme.ui_text(12.0))
+            .text_color(theme.colors.foreground.primary)
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(scale.px(6.0))
+                    .child(components::author_avatar(theme, scale, "Grace Hopper"))
+                    .child(
+                        div()
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .child("Grace Hopper"),
+                    ),
+            )
+            .child("Should this stay false for the dry run?")
+            .child(self.reply.clone())
+            .child(div().flex().justify_end().child(
+                components::Button::new("capture_thread_resolve", "Resolve").render(theme, scale),
+            ))
+    }
+}
+
 #[test]
 #[ignore = "renders inline cards with native fonts and a GPU"]
 fn inline_card_visual_capture() {
@@ -71,6 +114,14 @@ fn inline_card_visual_capture() {
                             .pending(true)
                             .with_header_action(gitcomet_extension_api::HostedAction::new("Stop", |_| {}), "icons/generic_maximize.svg")
                             .with_header_action(gitcomet_extension_api::HostedAction::new("Close", |_| {}), "icons/generic_close.svg"),
+                    ], app);
+                    let theme = host.theme(app);
+                    let thread = app.new(|cx| ThreadPreview {
+                        theme,
+                        reply: cx.new(|cx| components::TextInput::new_inert(components::TextInputOptions { placeholder: "Write a reply".into(), ..Default::default() }, cx)),
+                    });
+                    pane.set_inline_views(vec![
+                        gitcomet_extension_api::DiffInlineView::new(gitcomet_extension_api::DiffScrollAnchor { side: DiffLineSide::New, line: 2 }, thread),
                     ], app);
                     app.new(|_| CardPreview { _owner: owner, pane })
                 }).unwrap();

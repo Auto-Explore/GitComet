@@ -13,7 +13,7 @@
 use gitcomet_core::domain::{CommitFileChange, DiffTarget};
 use gitcomet_core::text_format::TextEncoding;
 use gitcomet_state::diff_session::ChangeSource;
-use gitcomet_ui_kit::gpui::{AnyView, App, Hsla, SharedString};
+use gitcomet_ui_kit::gpui::{AnyView, App, Entity, Hsla, Render, SharedString, Subscription};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -385,6 +385,68 @@ impl DiffInlineCard {
     }
 }
 
+/// A view of the extension's own between diff lines, after its anchor's
+/// line on that side; in a split it draws in that side's column only. The
+/// pane reserves whole rows for it, as many as its height needs, and draws a
+/// line's cards before its views. Its entity is what identifies it: a pane
+/// shows an entity once, and keeps its place and height across replacements.
+///
+/// The pane measures the view before it first draws it, and again when the
+/// view notifies, when its column's width changes or when the text style
+/// does. `render` may so run twice in a frame, once to measure and once to
+/// draw, and must have no side effects. A view whose height follows a child
+/// view's should notify along with it. The view keeps its own state while it
+/// is scrolled away.
+#[derive(Clone)]
+#[non_exhaustive]
+pub struct DiffInlineView {
+    anchor: DiffScrollAnchor,
+    view: AnyView,
+    observe: ObserveView,
+}
+
+/// Subscribes a callback to a view's notifies, without its type.
+type ObserveView = Rc<dyn Fn(Box<dyn FnMut(&mut App)>, &mut App) -> Subscription>;
+
+impl DiffInlineView {
+    pub fn new<V: Render>(anchor: DiffScrollAnchor, view: Entity<V>) -> Self {
+        let observed = view.downgrade();
+        Self {
+            anchor,
+            view: view.into(),
+            observe: Rc::new(move |mut on_notify, cx| match observed.upgrade() {
+                Some(view) => cx.observe(&view, move |_, cx| on_notify(cx)),
+                None => Subscription::new(|| {}),
+            }),
+        }
+    }
+
+    /// The line the view shows after.
+    pub fn anchor(&self) -> DiffScrollAnchor {
+        self.anchor
+    }
+
+    pub fn view(&self) -> &AnyView {
+        &self.view
+    }
+
+    /// Runs `on_notify` whenever the view notifies, for as long as the
+    /// subscription is kept.
+    #[doc(hidden)]
+    pub fn observe(&self, on_notify: impl FnMut(&mut App) + 'static, cx: &mut App) -> Subscription {
+        (self.observe)(Box::new(on_notify), cx)
+    }
+}
+
+impl std::fmt::Debug for DiffInlineView {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DiffInlineView")
+            .field("anchor", &self.anchor)
+            .field("view", &self.view.entity_id())
+            .finish()
+    }
+}
+
 /// The presentation of the two sides; changing it preserves file-line anchors.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[non_exhaustive]
@@ -592,6 +654,10 @@ pub trait DiffPaneImpl {
     fn set_bar(&self, bar: DiffBar, cx: &mut App) {
         let _ = (bar, cx);
     }
+    /// Replaces the views shown between lines.
+    fn set_inline_views(&self, views: Vec<DiffInlineView>, cx: &mut App) {
+        let _ = (views, cx);
+    }
 }
 
 /// An owning handle to a hosted diff pane. Mount [`DiffPane::view`] in a view
@@ -602,6 +668,11 @@ pub struct DiffPane(Rc<dyn DiffPaneImpl>);
 impl DiffPane {
     pub fn set_inline_cards(&self, cards: Vec<DiffInlineCard>, cx: &mut App) {
         self.0.set_inline_cards(cards, cx)
+    }
+    /// Replaces the views shown between lines; a view whose entity stays
+    /// keeps its place and its measured height.
+    pub fn set_inline_views(&self, views: Vec<DiffInlineView>, cx: &mut App) {
+        self.0.set_inline_views(views, cx)
     }
     pub fn text_for_range(&self, range: DiffLineRange, cx: &App) -> Option<String> {
         self.0.text_for_range(range, cx)

@@ -11,6 +11,8 @@ use gitcomet_state::msg::WorktreeSaveBaseline;
 
 #[path = "hosted_context.rs"]
 mod context;
+#[path = "hosted_views.rs"]
+mod views;
 
 fn git(dir: &Path, args: &[&str]) {
     crate::test_support::git(dir, args);
@@ -1147,6 +1149,33 @@ fn the_example_changes_view_shows_picks_in_two_panes(cx: &mut gpui::TestAppConte
     click_debug_selector(cx, selector(format!("hosted_diff_{current_id}_row_1")));
     publish(cx, &view, store.snapshot());
     assert!(cx.update(|_window, app| changes.read(app).notes().is_empty()));
+
+    // A discussion of the selected line shows under it in a view of the
+    // example's own; its Close button removes it.
+    click_debug_selector(cx, selector(format!("hosted_diff_{current_id}_row_0")));
+    publish(cx, &view, store.snapshot());
+    click_debug_selector(cx, "diff_bar_discuss");
+    publish(cx, &view, store.snapshot());
+    let discussion = cx.update(|_window, app| {
+        let discussions = changes.read(app).discussions();
+        assert_eq!(discussions.len(), 1);
+        discussions[0].view().entity_id().as_u64()
+    });
+    assert!(
+        cx.debug_bounds(selector(format!(
+            "hosted_diff_{current_id}_view_{discussion}"
+        )))
+        .is_some()
+    );
+    click_debug_selector(cx, "example_1_close");
+    publish(cx, &view, store.snapshot());
+    assert!(cx.update(|_window, app| changes.read(app).discussions().is_empty()));
+    assert!(
+        cx.debug_bounds(selector(format!(
+            "hosted_diff_{current_id}_view_{discussion}"
+        )))
+        .is_none()
+    );
 
     click_debug_selector(
         cx,

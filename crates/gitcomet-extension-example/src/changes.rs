@@ -5,7 +5,9 @@
 //! a line; a file with flagged lines gets a flag in the list and its
 //! "Flagged" chip shows only those files; clicking a flag removes it. A
 //! selection can be given a note shown under it, and clicking the note
-//! removes it; a flag on a noted line shows who wrote the note instead. The
+//! removes it; a flag on a noted line shows who wrote the note instead. A
+//! selection can also be discussed in a view of the example's own under it,
+//! with a reply box and a button closing it. The
 //! current pane can pop out into a window of its own and comes back when
 //! that window closes. Its action-bar context names the comparison and marks
 //! the repository reviewed. When the repository has linked worktrees, the
@@ -14,17 +16,18 @@
 use gitcomet_core::domain::{CommitId, DiffTarget};
 use gitcomet_extension_api::{
     ChangeSource, DiffAnnotation, DiffAnnotations, DiffBar, DiffBarItem, DiffFileNavigation,
-    DiffInset, DiffLegendItem, DiffLineRange, DiffLineSide, DiffPane, DiffPaneOptions,
-    DiffPanePolicy, FileList, FileListFilterChip, FileListGroups, FileListMarks, FileListMode,
-    FileListVisible, HostedAction, PopOutWindow, RepositoryViewContext, RepositoryWatch, RowGlyph,
-    RowMark,
+    DiffInlineView, DiffInset, DiffLegendItem, DiffLineRange, DiffLineSide, DiffPane,
+    DiffPaneOptions, DiffPanePolicy, DiffScrollAnchor, FileList, FileListFilterChip,
+    FileListGroups, FileListMarks, FileListMode, FileListVisible, HostedAction, PopOutWindow,
+    RepositoryViewContext, RepositoryWatch, RowGlyph, RowMark,
 };
-use gitcomet_ui_kit::components::Button;
+use gitcomet_ui_kit::components::{Button, TextInput, TextInputOptions};
 use gitcomet_ui_kit::gpui::prelude::*;
 use gitcomet_ui_kit::gpui::{
     AnyElement, App, Context, Entity, SharedString, Subscription, WeakEntity, Window, div, px,
     rgb_to_hsla,
 };
+use gitcomet_ui_kit::theme::AppTheme;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -67,7 +70,10 @@ pub struct ChangesView {
     flags_revision: u64,
     /// The current pane's notes by id; a new pick clears them.
     notes: Vec<(u64, DiffInset)>,
-    next_note: u64,
+    /// The next note's or discussion's id.
+    next_id: u64,
+    /// The current pane's discussions; a new pick clears them too.
+    discussions: Vec<DiffInlineView>,
     /// The window the current pane is shown in instead of here.
     popped: Option<PopOutWindow>,
     /// The linked worktree the list shows, watched while it does.
@@ -110,7 +116,8 @@ impl ChangesView {
             flags: BTreeMap::new(),
             flags_revision: 0,
             notes: Vec::new(),
-            next_note: 0,
+            next_id: 0,
+            discussions: Vec::new(),
             popped: None,
             linked: None,
         }
@@ -228,16 +235,27 @@ impl ChangesView {
     /// under the selected lines.
     fn current_bar(&self, cx: &mut Context<Self>) -> DiffBar {
         let noted = cx.weak_entity();
-        let bar = DiffBar::new().with_item(
-            DiffBarItem::new("note", "Add note", move |range, cx| {
-                if let Some(range) = range {
-                    add_note(&noted, range, cx);
-                }
-            })
-            .with_icon("icons/pencil.svg")
-            .with_tooltip("Add a note under the selected lines")
-            .enabled_when(Option::is_some),
-        );
+        let discussed = cx.weak_entity();
+        let bar = DiffBar::new()
+            .with_item(
+                DiffBarItem::new("note", "Add note", move |range, cx| {
+                    if let Some(range) = range {
+                        add_note(&noted, range, cx);
+                    }
+                })
+                .with_icon("icons/pencil.svg")
+                .with_tooltip("Add a note under the selected lines")
+                .enabled_when(Option::is_some),
+            )
+            .with_item(
+                DiffBarItem::new("discuss", "Discuss", move |range, cx| {
+                    if let Some(range) = range {
+                        discuss(&discussed, range, cx);
+                    }
+                })
+                .with_tooltip("Discuss the selected lines under them")
+                .enabled_when(Option::is_some),
+            );
         match self.position(cx) {
             Some((index, count)) => bar.with_position(index, count),
             None => bar,
@@ -361,6 +379,17 @@ impl ChangesView {
         self.show_flags(cx);
     }
 
+    /// The current pane's discussions.
+    pub fn discussions(&self) -> &[DiffInlineView] {
+        &self.discussions
+    }
+
+    fn show_discussions(&self, cx: &mut Context<Self>) {
+        if let Some(current) = &self.current {
+            current.set_inline_views(self.discussions.clone(), cx);
+        }
+    }
+
     pub fn current(&self) -> Option<&DiffPane> {
         self.current.as_ref()
     }
@@ -409,8 +438,10 @@ impl ChangesView {
         }
         self.current_path = target.file_path().map(Path::to_path_buf);
         self.notes.clear();
+        self.discussions.clear();
         self.show_flags(cx);
         current.set_insets(Vec::new(), cx);
+        current.set_inline_views(Vec::new(), cx);
         current.set_target(target, cx);
         let bar = self.current_bar(cx);
         current.set_bar(bar, cx);
@@ -435,8 +466,8 @@ fn add_note(view: &WeakEntity<ChangesView>, range: DiffLineRange, cx: &mut App) 
         } else {
             format!("Note on lines {}–{}", range.start, range.end)
         };
-        let id = this.next_note;
-        this.next_note += 1;
+        let id = this.next_id;
+        this.next_id += 1;
         let owner = cx.weak_entity();
         let remove = HostedAction::new("Remove note", move |cx| {
             let _ = owner.update(cx, |this, cx| {
@@ -449,6 +480,90 @@ fn add_note(view: &WeakEntity<ChangesView>, range: DiffLineRange, cx: &mut App) 
         this.notes.push((id, note));
         this.show_notes(cx);
     });
+}
+
+/// Opens a discussion of the selection under its last line.
+fn discuss(view: &WeakEntity<ChangesView>, range: DiffLineRange, cx: &mut App) {
+    let _ = view.update(cx, |this, cx| {
+        let id = this.next_id;
+        this.next_id += 1;
+        let owner = cx.weak_entity();
+        let theme = this.context.window.theme(cx);
+        let title = if range.start == range.end {
+            format!("Discussion of line {}", range.start)
+        } else {
+            format!("Discussion of lines {}–{}", range.start, range.end)
+        };
+        let discussion = cx.new(|cx| {
+            let closed = cx.entity_id();
+            Discussion {
+                id,
+                title: title.into(),
+                reply: cx.new(|cx| {
+                    TextInput::new_inert(
+                        TextInputOptions {
+                            placeholder: "Write a reply".into(),
+                            ..TextInputOptions::default()
+                        },
+                        cx,
+                    )
+                }),
+                close: HostedAction::new("Close", move |cx| {
+                    let _ = owner.update(cx, |this, cx| {
+                        this.discussions
+                            .retain(|view| view.view().entity_id() != closed);
+                        this.show_discussions(cx);
+                    });
+                }),
+                theme,
+            }
+        });
+        let anchor = DiffScrollAnchor {
+            side: range.side,
+            line: range.end,
+        };
+        this.discussions
+            .push(DiffInlineView::new(anchor, discussion));
+        this.show_discussions(cx);
+    });
+}
+
+/// A discussion under some lines: what it is of, a reply box, and a button
+/// closing it.
+struct Discussion {
+    id: u64,
+    title: SharedString,
+    reply: Entity<TextInput>,
+    close: HostedAction,
+    theme: AppTheme,
+}
+
+impl Render for Discussion {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = self.theme;
+        div()
+            .flex()
+            .flex_col()
+            .gap_1()
+            .mx_3()
+            .my_1()
+            .p_2()
+            .rounded(px(theme.radii.panel))
+            .border_1()
+            .border_color(theme.colors.stroke.subtle)
+            .bg(theme.colors.surface.raised)
+            .text_size(theme.ui_text(12.0))
+            .text_color(theme.colors.foreground.primary)
+            .child(self.title.clone())
+            .child(self.reply.clone())
+            .child(div().flex().justify_end().child(
+                Button::new(format!("example_{}_close", self.id), "Close").on_click(
+                    theme,
+                    cx,
+                    |this, _, _, cx| this.close.invoke(cx),
+                ),
+            ))
+    }
 }
 
 fn slot(pane: Option<&DiffPane>, empty: &'static str) -> AnyElement {
