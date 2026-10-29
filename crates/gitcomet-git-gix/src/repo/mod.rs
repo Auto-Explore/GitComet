@@ -94,7 +94,8 @@ struct RepoFileStamp {
     len: u64,
     modified: Option<std::time::SystemTime>,
     /// Content fingerprint of the file, when one is captured (currently only for
-    /// `.git/index`, via its trailing hash). `len`/`modified` are a cheap change
+    /// `.git/index`, via its trailing hash, and repository topology inputs).
+    /// `len`/`modified` are a cheap change
     /// hint, but they are not reliable: an atomic index rewrite can land with an
     /// identical length (same tracked entries) and an unchanged mtime (coarse or
     /// cached filesystem timestamps, e.g. f2fs), which would otherwise let the
@@ -1960,7 +1961,7 @@ impl GitRepository for GixRepo {
     fn list_submodules(&self, cancellation: &CancellationToken) -> Result<Vec<Submodule>> {
         let _operation = self.operation_lease()?;
         cancellation.check_cancelled()?;
-        if bare::native_mode(&self.spec.workdir)? == gitcomet_core::domain::RepositoryMode::Bare {
+        if self.repository_mode_impl()? == gitcomet_core::domain::RepositoryMode::Bare {
             return Ok(Vec::new());
         }
         self.list_submodules_cancellable_impl(cancellation)

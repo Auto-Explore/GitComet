@@ -73,11 +73,11 @@ impl GixRepo {
     }
 
     pub(super) fn repository_mode_impl(&self) -> Result<RepositoryMode> {
-        let mode = native_mode(&self.spec.workdir)?;
-        if mode != self.opened_topology.mode() {
-            return Err(Error::new(ErrorKind::RepositoryChanged));
+        if let Some(operation) = gitcomet_core::git_operation::current() {
+            operation.cancellation().check_cancelled()?;
         }
-        Ok(mode)
+        self.ensure_current()?;
+        Ok(self.opened_topology.mode())
     }
 
     pub(crate) fn release_conversion_store(&self) -> Result<()> {
@@ -116,16 +116,14 @@ impl GixRepo {
     }
 
     pub(super) fn require_working_tree(&self) -> Result<()> {
-        self.ensure_current()?;
-        if native_mode(&self.spec.workdir)? == RepositoryMode::Bare {
+        if self.repository_mode_impl()? == RepositoryMode::Bare {
             return Err(Error::new(ErrorKind::BareUnsupported));
         }
         Ok(())
     }
 
     pub(super) fn require_bare_head_available(&self) -> Result<()> {
-        self.ensure_current()?;
-        if native_mode(&self.spec.workdir)? == RepositoryMode::Bare {
+        if self.repository_mode_impl()? == RepositoryMode::Bare {
             let head = preflight::read_head(&self.spec.workdir)?;
             preflight::check_head_available(&self.spec.workdir, &head)?;
         }
