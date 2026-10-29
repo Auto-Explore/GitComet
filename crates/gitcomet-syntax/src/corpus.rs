@@ -38,6 +38,9 @@ use super::*;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+#[path = "tests/razor_corpus.rs"]
+mod razor;
+
 /// Directories that hold generated output rather than samples.
 const GENERATED_DIRS: &[&str] = &["build", "gallery", "tools", ".git", ".github"];
 
