@@ -17,6 +17,7 @@ pub(in crate::view) mod helpers;
 mod hosted_binding;
 mod hosted_cards;
 mod hosted_people;
+mod hosted_views;
 pub(in crate::view) mod input;
 mod markdown_state;
 mod media;
@@ -43,6 +44,7 @@ pub(in crate::view) use file_disk::{DiskCheckCause, DiskSurface, FileDiskNotice,
 pub(in crate::view) use file_editor::*;
 pub(crate) use helpers::state::DiffRenderer;
 use helpers::*;
+pub(in crate::view) use hosted_views::measure_inline_views;
 use input::{DiffPaneInput, DiffSourceId};
 pub(in crate::view) use markdown_state::*;
 #[cfg(test)]

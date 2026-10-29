@@ -6,9 +6,9 @@ use crate::view::panes::diff::{DiffBody, DiffRendererInit};
 use gitcomet_core::domain::DiffTarget;
 use gitcomet_core::text_format::TextEncoding;
 use gitcomet_extension_api::{
-    DiffAnnotations, DiffInlineCard, DiffInset, DiffLayout, DiffLegendItem, DiffLineRange,
-    DiffLineSide, DiffPaneEvent, DiffPaneOptions, DiffPanePolicy, DiffScrollAnchor, DiffSnapshot,
-    RepositoryHandle, StateSubscription, WindowHost, panes::DiffPaneImpl,
+    DiffAnnotations, DiffInlineCard, DiffInlineView, DiffInset, DiffLayout, DiffLegendItem,
+    DiffLineRange, DiffLineSide, DiffPaneEvent, DiffPaneOptions, DiffPanePolicy, DiffScrollAnchor,
+    DiffSnapshot, RepositoryHandle, StateSubscription, WindowHost, panes::DiffPaneImpl,
 };
 use gitcomet_state::diff_session::{DiffSession, DiffSessionMsg, DiffViewId};
 use std::rc::Rc;
@@ -56,6 +56,9 @@ pub(crate) struct DiffPaneView {
     patch_error: Option<SharedString>,
     insets: Arc<[DiffInset]>,
     cards: Arc<[DiffInlineCard]>,
+    views: Arc<[DiffInlineView]>,
+    /// A view that notifies is measured again before it is next drawn.
+    view_observers: Vec<gpui::Subscription>,
     annotations: Arc<DiffAnnotations>,
     legend: Vec<DiffLegendItem>,
     selection: Option<DiffLineRange>,
@@ -110,6 +113,8 @@ impl DiffPaneView {
             patch_error: None,
             insets: Arc::from([]),
             cards: Arc::from([]),
+            views: Arc::from([]),
+            view_observers: Vec::new(),
             annotations: Arc::default(),
             legend: Vec::new(),
             selection: None,
@@ -275,6 +280,7 @@ impl DiffPaneView {
                     self.annotations.clone(),
                     self.insets.clone(),
                     self.cards.clone(),
+                    self.views.clone(),
                 );
                 pane.hosted_decor.as_mut().unwrap().file_cache = self.file_cache.clone();
                 pane.annotate_enabled = self.options.policy.blame;
@@ -392,6 +398,8 @@ impl DiffPaneView {
 
     fn reset(&mut self) {
         self.cards = Arc::from([]);
+        self.views = Arc::from([]);
+        self.view_observers.clear();
         self.engaged = next_engaged();
         self.revision = self.revision.wrapping_add(1);
         if let Some(cache) = self.file_cache.take() {
@@ -659,6 +667,7 @@ impl DiffPaneView {
                     self.annotations.clone(),
                     self.insets.clone(),
                     self.cards.clone(),
+                    self.views.clone(),
                 );
                 cx.notify();
             });
@@ -836,8 +845,11 @@ impl DiffPaneView {
 impl Render for DiffPaneView {
     fn render(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
         self.prepare_renderer(window, cx);
-        if let Some(renderer) = &self.renderer {
+        if let Some(renderer) = self.renderer.clone() {
             renderer.update(cx, |pane, cx| pane.prepare_hosted_cards(window, cx));
+            // Before the renderer counts its rows, which follow the views'
+            // heights in this frame.
+            crate::view::panes::diff::measure_inline_views(&renderer, window, cx);
         }
         let theme = self.host.theme(cx);
         let ui_scale = ui_scale::UiScale::current(cx);
@@ -1102,6 +1114,50 @@ impl DiffPaneImpl for HostedDiffPane {
                 return;
             }
             pane.cards = cards.into();
+            pane.sync_decor(cx);
+            cx.notify();
+        });
+    }
+
+    fn set_inline_views(&self, views: Vec<DiffInlineView>, cx: &mut App) {
+        /// The same view at the same place; the observer is the entity's.
+        fn same(a: &DiffInlineView, b: &DiffInlineView) -> bool {
+            a.anchor() == b.anchor() && a.view().entity_id() == b.view().entity_id()
+        }
+        self.entity.update(cx, |pane, cx| {
+            // An entity shows once: its first place wins.
+            let mut seen = rustc_hash::FxHashSet::default();
+            let views: Vec<_> = views
+                .into_iter()
+                .filter(|view| seen.insert(view.view().entity_id()))
+                .collect();
+            if pane.views.len() == views.len()
+                && pane.views.iter().zip(&views).all(|(a, b)| same(a, b))
+            {
+                return;
+            }
+            let pane_entity = cx.weak_entity();
+            pane.view_observers = views
+                .iter()
+                .map(|view| {
+                    let id = view.view().entity_id();
+                    let pane_entity = pane_entity.clone();
+                    view.observe(
+                        move |cx| {
+                            let _ = pane_entity.update(cx, |pane, cx| {
+                                if let Some(renderer) = &pane.renderer {
+                                    renderer.update(cx, |renderer, _| {
+                                        renderer.forget_inline_view_height(id)
+                                    });
+                                }
+                                cx.notify();
+                            });
+                        },
+                        cx,
+                    )
+                })
+                .collect();
+            pane.views = views.into();
             pane.sync_decor(cx);
             cx.notify();
         });

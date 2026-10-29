@@ -316,6 +316,11 @@ impl DiffRenderer {
             return false;
         }
 
+        // An extension's view between the lines owns the keys typed in it.
+        if self.hosted_view_focused(window, cx) {
+            return false;
+        }
+
         // When the editable resolved-output pane is focused the user is typing
         // free text: every text-producing keystroke (space, a/b/c/d, etc.)
         // belongs to that editor, not to the diff/conflict shortcut table.

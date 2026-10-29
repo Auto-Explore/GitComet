@@ -50,7 +50,7 @@ impl DiffRenderer {
             .collect()
     }
 
-    fn hosted_card_widths(&self, width: Pixels) -> [Pixels; 2] {
+    pub(super) fn hosted_card_widths(&self, width: Pixels) -> [Pixels; 2] {
         let left_gutter = self.diff_vertical_scrollbar_gutter_for_column(
             DiffHorizontalScrollColumn::Primary,
             self.diff_scroll.clone(),
