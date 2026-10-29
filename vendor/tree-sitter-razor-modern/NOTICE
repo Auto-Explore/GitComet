@@ -1,0 +1,6 @@
+tree-sitter-razor-modern is a fork of tree-sitter-razor
+(https://github.com/tris203/tree-sitter-razor), copyright (c) 2023 Tristan Knight (tris203),
+licensed under the MIT License. See LICENSE for the full license text.
+
+The grammar, scanner, queries, and test corpus derive from that project, which extends the
+tree-sitter-c-sharp grammar (https://github.com/tree-sitter/tree-sitter-c-sharp, MIT).

@@ -2751,6 +2751,7 @@ dependencies = [
  "tree-sitter-qmljs",
  "tree-sitter-r",
  "tree-sitter-racket",
+ "tree-sitter-razor-modern",
  "tree-sitter-regex",
  "tree-sitter-ron",
  "tree-sitter-ruby",
@@ -8670,6 +8671,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "066bd54f4513d35a21b44f733da74bb065bb6734e565db96b516a79dd7c29e5f"
 dependencies = [
  "cc",
+ "tree-sitter-language",
+]
+
+[[package]]
+name = "tree-sitter-razor-modern"
+version = "0.1.2"
+dependencies = [
+ "tree-sitter-build",
  "tree-sitter-language",
 ]
 

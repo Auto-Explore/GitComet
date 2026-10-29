@@ -1,0 +1,185 @@
+=======
+razor attribute values
+=======
+
+    <a @onclick="async () => { pageNo = 1; await Search(); }">First</a>
+    <a @onclick="async () => { pageNo = totalPages; await Search(); }">Last</a>
+---
+
+(compilation_unit
+  (element
+    (razor_html_attribute
+      (razor_attribute_name)
+      (razor_attribute_value
+        (lambda_expression
+          (modifier)
+          (parameter_list)
+          (block
+            (expression_statement
+              (assignment_expression
+                (identifier)
+                (integer_literal)))
+            (expression_statement
+              (await_expression
+                (invocation_expression
+                  (identifier)
+                  (argument_list))))))))
+    (html_text))
+  (element
+    (razor_html_attribute
+      (razor_attribute_name)
+      (razor_attribute_value
+        (lambda_expression
+          (modifier)
+          (parameter_list)
+          (block
+            (expression_statement
+              (assignment_expression
+                (identifier)
+                (identifier)))
+            (expression_statement
+              (await_expression
+                (invocation_expression
+                  (identifier)
+                  (argument_list))))))))
+    (html_text)))
+
+======
+CSharp in HTML attribute - String(Semantic Highlighting does the rest)
+======
+   <GridColumn SortKeySelector="item => item.Integration.Id">
+      </GridColumn>
+----
+
+(compilation_unit
+  (element))
+
+======
+HTML Attribute of empty string
+======
+   <GridColumn Nothing="">
+      </GridColumn>
+----
+
+(compilation_unit
+  (element))
+
+===
+razor section
+===
+@section Scripts {
+     <script type="text/javascript" src="/scripts/main.js"></script>
+}
+---
+
+(compilation_unit
+  (razor_section
+    (identifier)
+    (element)))
+
+======
+form html attribute with value
+======
+<form @onsubmit="SearchAsync" />
+---
+
+(compilation_unit
+  (element
+    (razor_html_attribute
+      (razor_attribute_name)
+      (razor_attribute_value
+        (identifier)))))
+
+======
+form html attribute with modifier
+======
+<form @onclick:preventDefault />
+---
+
+(compilation_unit
+  (element
+    (razor_html_attribute
+      (razor_attribute_name
+        (razor_attribute_modifier)))))
+
+======
+form html attribute with modifier and value
+======
+<form @bind:culture="Culture" />
+---
+
+(compilation_unit
+  (element
+    (razor_html_attribute
+      (razor_attribute_name
+        (razor_attribute_modifier))
+      (razor_attribute_value
+        (identifier)))))
+
+======
+form html attribute case insensitive
+======
+<form @onClick:preventDefault />
+---
+
+(compilation_unit
+  (element
+    (razor_implicit_expression
+      (identifier))))
+
+======
+Mixed text and Razor expression in HTML attribute
+======
+<div class="x @(true ? "y" : "")">Hello</div>
+---
+
+(compilation_unit
+  (element
+    (razor_explicit_expression
+      (parenthesized_expression
+        (conditional_expression
+          (boolean_literal)
+          (string_literal
+            (string_literal_content))
+          (string_literal))))
+    (html_text)))
+
+======
+Directive attribute values with an explicit transition
+======
+<input @bind="@name" @bind:culture="@Culture" />
+<button @onclick="@Save">Save</button>
+<button @onclick="@(e => Select(item))">Pick</button>
+---
+
+(compilation_unit
+  (element
+    (razor_html_attribute
+      (razor_attribute_name)
+      (razor_attribute_value
+        (identifier)))
+    (razor_html_attribute
+      (razor_attribute_name
+        (razor_attribute_modifier))
+      (razor_attribute_value
+        (identifier))))
+  (element
+    (razor_html_attribute
+      (razor_attribute_name)
+      (razor_attribute_value
+        (identifier)))
+    (html_text))
+  (element
+    (razor_html_attribute
+      (razor_attribute_name)
+      (razor_attribute_value
+        (razor_explicit_expression
+          (parenthesized_expression
+            (lambda_expression
+              (implicit_parameter)
+              (invocation_expression
+                (identifier)
+                (argument_list
+                  (argument
+                    (identifier)))))))))
+    (html_text)))

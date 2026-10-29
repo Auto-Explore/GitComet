@@ -64,6 +64,7 @@ exclude = [
   "vendor/tree-sitter-php",
   "vendor/tree-sitter-powershell",
   "vendor/tree-sitter-properties",
+  "vendor/tree-sitter-razor-modern",
   "vendor/tree-sitter-ron",
   "vendor/tree-sitter-ruby",
   "vendor/tree-sitter-rust",
@@ -266,6 +267,7 @@ tree-sitter-bash = "0.25.1"
 tree-sitter-bicep = "1.1.0"
 tree-sitter-c = "0.24.2"
 tree-sitter-c-sharp = { path = "vendor/tree-sitter-c-sharp" }
+tree-sitter-razor-modern = { path = "vendor/tree-sitter-razor-modern" }
 # Clojure grammar. Not `tree-sitter-clojure`: that crate has a normal dependency
 # on `tree-sitter = 0.25.6`, and because tree-sitter declares `links`, cargo will
 # not resolve it alongside 0.26 at any version. `tree-sitter-just` is blocked the
