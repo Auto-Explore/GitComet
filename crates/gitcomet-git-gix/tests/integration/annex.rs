@@ -31,6 +31,29 @@ fn git(repo: &Path, args: &[&str]) -> String {
     String::from_utf8_lossy(&output.stdout).into_owned()
 }
 
+/// Confirms an enabled special remote, as a user answers git-annex 10.20261026+
+/// before it lets anything use a remote someone else configured. Older
+/// git-annex has no `verifyremote` and needs nothing.
+fn verify_special_remote(repo: &Path, name: &str) {
+    let mut cmd = gitcomet_core::test_support::git_fixture::git_command();
+    test_git_env::apply(&mut cmd);
+    let Ok(output) = cmd
+        .arg("-C")
+        .arg(repo)
+        .args(["annex", "verifyremote", name])
+        .output()
+    else {
+        return;
+    };
+    let text = String::from_utf8_lossy(&output.stdout);
+    if let Some(id) = text
+        .split_once("--safe ")
+        .and_then(|(_, rest)| rest.split_whitespace().next())
+    {
+        git(repo, &["annex", "verifyremote", name, "--safe", id]);
+    }
+}
+
 fn git_annex_available() -> bool {
     gitcomet_core::test_support::git_fixture::git_command()
         .args(["annex", "version", "--raw"])
