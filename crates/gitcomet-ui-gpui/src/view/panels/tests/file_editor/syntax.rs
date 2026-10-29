@@ -1,5 +1,124 @@
 use super::*;
 
+#[gpui::test]
+fn razor_view_editor_preserves_embedded_styles_after_live_edits(cx: &mut gpui::TestAppContext) {
+    assert_razor_editor_styles_survive_edits(cx, "Index.cshtml");
+}
+
+#[gpui::test]
+fn razor_component_editor_preserves_embedded_styles_after_live_edits(
+    cx: &mut gpui::TestAppContext,
+) {
+    assert_razor_editor_styles_survive_edits(cx, "Index.razor");
+}
+
+fn assert_razor_editor_styles_survive_edits(cx: &mut gpui::TestAppContext, filename: &str) {
+    let contents = concat!(
+        "@* Razor comment *@\n",
+        "@{ var title = \"server\"; }\n",
+        "<p class=\"card\">plain @title</p>\n",
+        "<script>const label = \"client:@title:suffix\";</script>\n",
+    );
+    let directory = tempfile::tempdir().unwrap();
+    let workdir = directory.path().canonicalize().unwrap();
+    let path = std::path::Path::new(filename);
+    std::fs::write(workdir.join(path), contents).unwrap();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    cx.update(|_, app| {
+        view.update(app, |view, cx| {
+            push_test_state(
+                view,
+                editor_state(gitcomet_state::model::RepoId(999), &workdir, path),
+                cx,
+            );
+            view.diff_renderer.update(cx, |pane, cx| {
+                pane.live_syntax_unbounded_for_tests = true;
+                pane.auto_save_file_edits = false;
+                pane.ensure_file_editor_loaded(cx);
+            });
+        });
+    });
+    cx.run_until_parked();
+    let renderer = cx.update(|_, app| view.read(app).diff_renderer.clone());
+
+    for edited in [false, true] {
+        let expected_text = if edited {
+            contents.replace("plain", "@(42)")
+        } else {
+            contents.to_owned()
+        };
+        if edited {
+            let start = contents.find("plain").unwrap();
+            cx.update(|_, app| {
+                renderer.update(app, |pane, cx| {
+                    pane.file_editor_input.update(cx, |input, cx| {
+                        input.replace_utf8_range(start..start + "plain".len(), "@(42)", cx);
+                        input.set_cursor_offset(expected_text.len(), cx);
+                    });
+                });
+            });
+            cx.run_until_parked();
+        }
+        cx.update(|_, app| {
+            renderer.update(app, |pane, cx| {
+                assert_eq!(
+                    pane.file_editor_language,
+                    Some(rows::DiffSyntaxLanguage::Razor)
+                );
+                assert_eq!(pane.file_editor_input.read(cx).text(), expected_text);
+                let document = pane
+                    .file_editor_live_syntax
+                    .as_ref()
+                    .expect("live Razor document");
+                assert_eq!(document.language(), rows::DiffSyntaxLanguage::Razor);
+                let expected = document
+                    .snapshot(crate::kit::syntax_style::SyntaxHighlightPalette::new(
+                        pane.theme,
+                    ))
+                    .highlights_for_byte_range(0..expected_text.len());
+                let rendered = pane.file_editor_input.update(cx, |input, _| {
+                    input.debug_effective_highlights_for_range(0..expected_text.len())
+                });
+                assert_eq!(
+                    rendered, expected,
+                    "{filename}: provider must preserve engine runs"
+                );
+                for (token, color) in [
+                    ("Razor comment", pane.theme.syntax.comment),
+                    ("var", pane.theme.syntax.keyword),
+                    ("server", pane.theme.syntax.string),
+                    ("p class", pane.theme.syntax.tag),
+                    ("class", pane.theme.syntax.attribute),
+                    ("const", pane.theme.syntax.keyword),
+                    ("client:", pane.theme.syntax.string),
+                    (":suffix", pane.theme.syntax.string),
+                ] {
+                    let offset = expected_text.find(token).unwrap();
+                    let actual = rendered.iter().find(|(range, _)| range.contains(&offset));
+                    assert_eq!(
+                        actual.and_then(|(_, style)| style.color),
+                        Some(color.into_color()),
+                        "{filename}: {token:?} lost its language style after edit={edited}"
+                    );
+                }
+                let token = if edited { "42" } else { "plain" };
+                let offset = expected_text.find(token).unwrap();
+                let color = rendered
+                    .iter()
+                    .find(|(range, _)| range.contains(&offset))
+                    .and_then(|(_, style)| style.color);
+                assert_eq!(
+                    color,
+                    edited.then(|| pane.theme.syntax.number.into_color()),
+                    "the edit must change markup text into a C# expression"
+                );
+            });
+        });
+    }
+}
+
 #[test]
 fn pair_overlay_paints_both_delimiters_over_the_syntax_runs() {
     let text = "fn f() {}";
