@@ -817,27 +817,22 @@ fn init_highlight_spec(language: DiffSyntaxLanguage) -> TreesitterHighlightSpec 
     let injection_query = asset.injections.map(|source| {
         tree_sitter::Query::new(&ts_language, source).expect("injections.scm should compile")
     });
-    let injection_combined_patterns = injection_query
+    let injection_patterns = injection_query
         .as_ref()
-        .map(|injection_query| {
-            (0..injection_query.pattern_count())
-                .map(|pattern_ix| {
-                    injection_query
-                        .property_settings(pattern_ix)
-                        .iter()
-                        .any(|setting| setting.key.as_ref() == "injection.combined")
-                })
-                .collect::<Vec<_>>()
-        })
+        .map(injection_patterns_for_query)
+        .transpose()
+        .expect("injection query properties should be valid")
         .unwrap_or_default();
-    let has_combined_injections = injection_combined_patterns.iter().any(|combined| *combined);
+    let has_combined_injections = injection_patterns
+        .iter()
+        .any(|pattern| matches!(pattern, InjectionPattern::Combined(_)));
     TreesitterHighlightSpec {
         ts_language,
         query,
         capture_kinds,
         discarded_capture,
         injection_query,
-        injection_combined_patterns,
+        injection_patterns,
         has_combined_injections,
     }
 }

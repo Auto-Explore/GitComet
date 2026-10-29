@@ -456,6 +456,7 @@ mod extra_languages;
 mod grammar_compat;
 mod heuristic;
 mod injection_cache;
+mod injection_content;
 mod injections;
 mod isolation;
 mod language;

@@ -13,19 +13,23 @@ use gitcomet_ui_kit::theme::AppTheme;
 /// rest are ours, and each one is a deliberate decision recorded beside it.
 #[test]
 fn combined_injection_declarations_are_exactly_the_known_set() {
+    use InjectionContentMode::WholeNode;
+
     let mut declared = Vec::new();
     for lang in all_supported_languages() {
         let Some(spec) = tree_sitter_highlight_spec(lang) else {
             continue;
         };
-        for (pattern_ix, combined) in spec.injection_combined_patterns.iter().enumerate() {
-            if *combined {
-                declared.push((lang, pattern_ix));
+        for (pattern_ix, pattern) in spec.injection_patterns.iter().enumerate() {
+            if let InjectionPattern::Combined(mode) = pattern {
+                declared.push((lang, pattern_ix, *mode));
             }
         }
         assert_eq!(
             spec.has_combined_injections,
-            spec.injection_combined_patterns.iter().any(|c| *c),
+            spec.injection_patterns
+                .iter()
+                .any(|pattern| matches!(pattern, InjectionPattern::Combined(_))),
             "{lang:?} has a stale has_combined_injections flag"
         );
     }
@@ -33,21 +37,21 @@ fn combined_injection_declarations_are_exactly_the_known_set() {
         declared,
         vec![
             // queries/jinja_injections.scm -- the HTML around the template tags.
-            (DiffSyntaxLanguage::Jinja, 0),
+            (DiffSyntaxLanguage::Jinja, 0, WholeNode),
             // queries/hcl_injections.scm -- shell in `user_data`, JSON in
             // `policy`. Combined for the same reason as Nix: a `${...}`
             // interpolation splits one heredoc into several `template_literal`
             // nodes, and those are one script. The third pattern there, for
             // bodies nested inside a `%{ if }`, is deliberately *not* combined.
-            (DiffSyntaxLanguage::Hcl, 0),
-            (DiffSyntaxLanguage::Hcl, 1),
+            (DiffSyntaxLanguage::Hcl, 0, WholeNode),
+            (DiffSyntaxLanguage::Hcl, 1, WholeNode),
             // queries/nix_injections.scm -- bash in script/hook attributes.
-            (DiffSyntaxLanguage::Nix, 0),
-            (DiffSyntaxLanguage::Nix, 1),
-            (DiffSyntaxLanguage::Nix, 2),
-            (DiffSyntaxLanguage::Nix, 3),
+            (DiffSyntaxLanguage::Nix, 0, WholeNode),
+            (DiffSyntaxLanguage::Nix, 1, WholeNode),
+            (DiffSyntaxLanguage::Nix, 2, WholeNode),
+            (DiffSyntaxLanguage::Nix, 3, WholeNode),
             // Upstream tree_sitter_fsharp::INJECTIONS_QUERY -- `xml_doc` lines.
-            (DiffSyntaxLanguage::FSharp, 3),
+            (DiffSyntaxLanguage::FSharp, 3, WholeNode),
         ],
         "the set of grammars declaring `#set! injection.combined` changed. Every entry \
              here parses all its matches as one document via set_included_ranges, so a new \

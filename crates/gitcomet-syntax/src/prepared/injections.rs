@@ -1,5 +1,74 @@
 use super::*;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum InjectionContentMode {
+    WholeNode,
+    ExcludeNamedChildren,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum InjectionPattern {
+    Single,
+    Combined(InjectionContentMode),
+}
+
+pub(crate) fn injection_patterns_for_query(
+    query: &tree_sitter::Query,
+) -> Result<Vec<InjectionPattern>, &'static str> {
+    (0..query.pattern_count())
+        .map(|pattern_ix| {
+            let settings = query.property_settings(pattern_ix);
+            let combined = settings
+                .iter()
+                .any(|setting| setting.key.as_ref() == "injection.combined");
+            let exclude_named_children = settings
+                .iter()
+                .any(|setting| setting.key.as_ref() == "injection.exclude-named-children");
+            match (combined, exclude_named_children) {
+                (false, false) => Ok(InjectionPattern::Single),
+                (true, false) => Ok(InjectionPattern::Combined(InjectionContentMode::WholeNode)),
+                (true, true) => Ok(InjectionPattern::Combined(
+                    InjectionContentMode::ExcludeNamedChildren,
+                )),
+                (false, true) => {
+                    Err("injection.exclude-named-children requires injection.combined")
+                }
+            }
+        })
+        .collect()
+}
+
+pub(crate) fn append_injection_content_byte_ranges(
+    node: tree_sitter::Node<'_>,
+    input_len: usize,
+    mode: InjectionContentMode,
+    out: &mut Vec<Range<usize>>,
+) {
+    let Some(range) = normalized_injection_content_byte_range(node, input_len) else {
+        return;
+    };
+    if mode == InjectionContentMode::WholeNode {
+        out.push(range);
+        return;
+    }
+    let mut start = range.start;
+    let mut cursor = node.walk();
+    for child in node.named_children(&mut cursor) {
+        let child_start = child.start_byte().clamp(range.start, range.end);
+        let child_end = child.end_byte().clamp(range.start, range.end);
+        if child_start >= child_end {
+            continue;
+        }
+        if start < child_start {
+            out.push(start..child_start);
+        }
+        start = start.max(child_end);
+    }
+    if start < range.end {
+        out.push(start..range.end);
+    }
+}
+
 pub(crate) fn collect_treesitter_injection_matches_for_line_window_at(
     tree: &tree_sitter::Tree,
     highlight: &TreesitterHighlightSpec,
@@ -66,24 +135,26 @@ pub(crate) fn collect_treesitter_injection_matches_for_line_window_at(
                         continue;
                     };
                     let pattern_ix = m.pattern_index;
-                    let is_combined = highlight.is_combined_injection_pattern(pattern_ix);
+                    let combined_mode = highlight.combined_injection_content_mode(pattern_ix);
                     for capture in m
                         .captures()
                         .iter()
                         .filter(|capture| capture.index == injection_content_capture_ix)
                     {
+                        if let Some(mode) = combined_mode {
+                            append_injection_content_byte_ranges(
+                                capture.node,
+                                input.len(),
+                                mode,
+                                combined_ranges.entry((language, pattern_ix)).or_default(),
+                            );
+                            continue;
+                        }
                         let Some(byte_range) =
                             normalized_injection_content_byte_range(capture.node, input.len())
                         else {
                             continue;
                         };
-                        if is_combined {
-                            combined_ranges
-                                .entry((language, pattern_ix))
-                                .or_default()
-                                .push(byte_range);
-                            continue;
-                        }
                         let injection = TreesitterInjectionMatch {
                             document_hash,
                             language,

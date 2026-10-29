@@ -431,16 +431,6 @@ pub(crate) struct TreesitterHighlightSpec {
     /// Lisp `#_` or `#;`), greyed whole. See [`DiscardedForms`].
     pub(crate) discarded_capture: Option<u32>,
     pub(crate) injection_query: Option<tree_sitter::Query>,
-    /// One flag per injection-query pattern: `true` when the pattern carries
-    /// `(#set! injection.combined)`, meaning every match of it belongs to one
-    /// shared layer rather than getting a layer each.
-    ///
-    /// Computed once in `init_highlight_spec` so the hot match loop never has to
-    /// walk `property_settings`.
-    pub(crate) injection_combined_patterns: Vec<bool>,
-    /// `injection_combined_patterns.iter().any(|&c| c)`, hoisted so the whole
-    /// combined path can be skipped with one branch. This is the gate that keeps
-    /// the feature a no-op for every grammar that does not declare it; the ones
-    /// that do are listed in `combined_injection_declarations_are_exactly_the_known_set`.
+    pub(crate) injection_patterns: Vec<InjectionPattern>,
     pub(crate) has_combined_injections: bool,
 }
