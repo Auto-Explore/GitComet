@@ -46,6 +46,7 @@ fn register(
             common_dir: Some(PathBuf::from(common)),
             repository: None,
             active: false,
+            needs_refresh: true,
         }],
         RemoteSettings::default(),
         &(Arc::new(Backend) as Arc<dyn GitBackend>),
@@ -353,6 +354,7 @@ fn shutdown_cancels_and_waits_for_active_backend_cleanup() {
             common_dir: None,
             repository: None,
             active: false,
+            needs_refresh: true,
         }],
         settings,
         &backend,
@@ -632,6 +634,7 @@ fn fetches_that_move_no_refs_refresh_only_tabs_that_never_loaded() {
                 repository: None,
                 // Selected, so quiet fetches keep the plain interval.
                 active: true,
+                needs_refresh: true,
             }],
             RemoteSettings::default(),
             &backend,
@@ -976,6 +979,7 @@ fn an_unreachable_host_is_contacted_once_until_its_block_expires() {
                 common_dir: None,
                 repository: None,
                 active: false,
+                needs_refresh: true,
             }],
             RemoteSettings::default(),
             &backend,
@@ -1078,6 +1082,7 @@ fn a_repository_fetched_recently_waits_but_loads_its_last_count_at_once() {
             common_dir: None,
             repository: None,
             active: false,
+            needs_refresh: true,
         }],
         settings,
         &(Arc::new(gitcomet_git_gix::GixBackend) as Arc<dyn GitBackend>),
@@ -1119,6 +1124,7 @@ fn a_store_fetched_through_a_sibling_worktree_waits_at_launch() {
             common_dir: None,
             repository: None,
             active,
+            needs_refresh: true,
         })
         .collect();
     let coordinator = AutoFetchCoordinator::new();
@@ -1186,6 +1192,7 @@ fn selected_tabs_fetch_first_then_the_least_recently_contacted_host() {
                 common_dir: Some(PathBuf::from(format!("{path}/.git"))),
                 repository: None,
                 active: path == "/selected",
+                needs_refresh: true,
             }],
             RemoteSettings::default(),
             &(Arc::new(Backend) as Arc<dyn GitBackend>),
@@ -1261,6 +1268,7 @@ fn inactive_repositories_that_stay_quiet_wait_up_to_four_intervals() {
                 common_dir: Some(PathBuf::from(format!("{path}/.git"))),
                 repository: None,
                 active,
+                needs_refresh: true,
             }],
             RemoteSettings::default(),
             &(Arc::new(Backend) as Arc<dyn GitBackend>),
@@ -1395,6 +1403,7 @@ fn linked_worktrees_of_one_repository_contact_the_remote_once() {
             common_dir: None,
             repository: None,
             active: false,
+            needs_refresh: true,
         })
         .collect();
     let lifetimes: Vec<_> = registrations.iter().map(|r| r.lifetime).collect();
@@ -1445,6 +1454,7 @@ fn timing_auto_fetch_sync_with_many_tabs() {
                 ))),
                 repository: None,
                 active: false,
+                needs_refresh: true,
             })
             .collect::<Vec<_>>()
     };
@@ -1460,6 +1470,7 @@ fn timing_auto_fetch_sync_with_many_tabs() {
                     common_dir: registration.common_dir.clone(),
                     repository: None,
                     active: false,
+                    needs_refresh: true,
                 })
                 .collect::<Vec<_>>()
         };
@@ -1522,6 +1533,7 @@ fn subscribe_unopened(
             common_dir: None,
             repository: None,
             active: false,
+            needs_refresh: true,
         })
         .collect();
     let lifetimes = registrations.iter().map(|r| r.lifetime).collect();
@@ -1746,6 +1758,7 @@ fn turning_automatic_fetch_off_and_on_clears_a_sign_in_host_block() {
                 common_dir: Some(PathBuf::from("/repo/.git")),
                 repository: None,
                 active: false,
+                needs_refresh: true,
             }],
             settings,
             &(Arc::new(Backend) as Arc<dyn GitBackend>),

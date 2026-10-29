@@ -296,6 +296,15 @@ struct WorkerLoopContext<'a> {
     auto_fetch_inputs: &'a mut Option<u64>,
 }
 
+/// The tab shows no current incoming count and loads none, so automatic fetch
+/// should reload it after its next fetch.
+fn auto_fetch_needs_refresh(repo: &crate::model::RepoState) -> bool {
+    !matches!(repo.incoming, crate::model::RepoIncomingState::Current(_))
+        && !repo
+            .loads_in_flight
+            .is_in_flight(crate::model::LoadKind::UpstreamDivergence)
+}
+
 impl WorkerLoopContext<'_> {
     fn sync_auto_fetch(&mut self, repos: &RepositoryRuntimes) {
         let (registrations, settings, sign_in_open) = {
@@ -328,6 +337,7 @@ impl WorkerLoopContext<'_> {
                     .map(|repository| Arc::as_ptr(repository).cast::<()>())
                     .hash(&mut inputs);
                 (state.active_repo == Some(repo.id)).hash(&mut inputs);
+                auto_fetch_needs_refresh(repo).hash(&mut inputs);
             }
             let inputs = inputs.finish();
             if *self.auto_fetch_inputs == Some(inputs) && self.thread_msg_tx.is_alive() {
@@ -342,6 +352,7 @@ impl WorkerLoopContext<'_> {
                     common_dir: repo.common_dir.as_ref().map(|path| path.to_path_buf()),
                     repository: repos.repository(&repo.id).cloned(),
                     active: state.active_repo == Some(repo.id),
+                    needs_refresh: auto_fetch_needs_refresh(repo),
                 })
                 .collect();
             (registrations, settings, sign_in_open)

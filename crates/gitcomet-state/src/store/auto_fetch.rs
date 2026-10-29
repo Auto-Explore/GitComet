@@ -38,6 +38,8 @@ pub(super) struct Registration {
     pub(super) repository: Option<Arc<dyn GitRepository>>,
     /// The tab is the selected one in its window; its repository fetches first.
     pub(super) active: bool,
+    /// The tab has no current incoming count and is not loading one.
+    pub(super) needs_refresh: bool,
 }
 
 #[derive(Clone)]
@@ -50,8 +52,9 @@ struct Subscriber {
     backend: Arc<dyn GitBackend>,
     repository: Option<Arc<dyn GitRepository>>,
     sink: EventSink,
-    /// The tab's incoming count is unknown or greyed by a failure, so the
-    /// next fetch reloads it even when it moves nothing.
+    /// The tab's incoming count is unknown or greyed, so the next fetch
+    /// reloads it even when it moves nothing. Each sync takes the store's
+    /// word; a sent refresh or a failed fetch updates it in between.
     needs_refresh: bool,
     active: bool,
 }
@@ -385,10 +388,6 @@ impl AutoFetchCoordinator {
             if registration.common_dir.is_some() {
                 entry.common_dir = registration.common_dir;
             }
-            let needs_refresh = entry
-                .subscribers
-                .get(&registration.lifetime)
-                .is_none_or(|subscriber| subscriber.needs_refresh);
             let subscriber = Subscriber {
                 store_id,
                 repo_id: registration.repo_id,
@@ -398,7 +397,7 @@ impl AutoFetchCoordinator {
                 backend: Arc::clone(backend),
                 repository: registration.repository,
                 sink: Arc::clone(&sink),
-                needs_refresh,
+                needs_refresh: registration.needs_refresh,
                 active: registration.active,
             };
             if entry

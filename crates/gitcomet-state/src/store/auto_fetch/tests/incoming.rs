@@ -164,6 +164,7 @@ fn incoming_tracking_broadcast_includes_linked_tabs_in_the_initiating_store() {
                     common_dir: Some(PathBuf::from(common)),
                     repository: None,
                     active: false,
+                    needs_refresh: true,
                 })
                 .collect(),
             RemoteSettings::default(),
@@ -384,4 +385,124 @@ fn incoming_tracking_manual_failure_preserves_deadline_and_rejects_older_auto_re
     assert_eq!(group.schedule.completed, Some(recovered));
     assert_eq!(group.snapshot.last_success_at, Some(recovered));
     assert!(matches!(group.snapshot.status, AutoFetchStatus::Succeeded { at } if at == recovered));
+}
+
+/// Fails opening `path` while `failures` lasts, as a briefly unreadable disk.
+struct FlakyOpens {
+    path: PathBuf,
+    failures: std::sync::atomic::AtomicUsize,
+}
+
+impl FlakyOpens {
+    fn check(&self, path: &Path) -> Result<()> {
+        use std::sync::atomic::Ordering;
+        if canonicalize_or_original(path.to_path_buf()) == self.path
+            && self
+                .failures
+                .try_update(Ordering::SeqCst, Ordering::SeqCst, |left| {
+                    left.checked_sub(1)
+                })
+                .is_ok()
+        {
+            return Err(Error::new(ErrorKind::Backend(
+                "disk briefly unreadable".into(),
+            )));
+        }
+        Ok(())
+    }
+}
+
+impl GitBackend for FlakyOpens {
+    fn open(&self, path: &Path) -> Result<Arc<dyn GitRepository>> {
+        self.check(path)?;
+        gitcomet_git_gix::GixBackend.open(path)
+    }
+
+    fn open_cancellable(
+        &self,
+        path: &Path,
+        cancellation: &CancellationToken,
+    ) -> Result<Arc<dyn GitRepository>> {
+        self.check(path)?;
+        gitcomet_git_gix::GixBackend.open_cancellable(path, cancellation)
+    }
+}
+
+#[test]
+fn incoming_tracking_read_that_fails_is_retried_by_the_next_unchanged_fetch() {
+    use std::sync::atomic::Ordering;
+
+    let (temp, source, clone, _) = remote_fixture();
+    let _session = crate::session::push_test_session_file_path_override(Some(
+        temp.path().join("session.json"),
+    ));
+    let backend = Arc::new(FlakyOpens {
+        path: clone.clone(),
+        failures: Default::default(),
+    });
+    let (store, events) = AppStore::new_test(Arc::clone(&backend) as Arc<dyn GitBackend>);
+    let coordinator = Arc::clone(&store.msg_tx.auto_fetch);
+    // The test runs every fetch itself; this hold keeps the worker idle.
+    const HOLD: u64 = u64::MAX;
+    coordinator.set_sign_in_open(HOLD, true);
+    restore(&store, &source, &clone);
+    wait_for_store(&store, &events, |_| {
+        coordinator.inner.state.lock().unwrap().entries.len() == 2
+    });
+    let run_due = |now: SystemTime, fail_read: bool| {
+        loop {
+            let job = {
+                let mut state = coordinator.inner.state.lock().unwrap();
+                state.signing_in.remove(&HOLD);
+                let job = next_job(&mut state, coordinator.admission(), now);
+                state.signing_in.insert(HOLD);
+                job
+            };
+            let Some(job) = job else {
+                return;
+            };
+            let completion = execute(&job, &coordinator.inner);
+            if fail_read && job.workdir == clone {
+                // The tracking read this fetch triggers fails once.
+                backend.failures.store(1, Ordering::SeqCst);
+            }
+            finish(
+                &mut coordinator.inner.state.lock().unwrap(),
+                &job,
+                completion,
+                now,
+            );
+        }
+    };
+    let settled = |state: &crate::model::AppState| {
+        state.repos.iter().any(|repo| {
+            repo.spec.workdir == clone
+                && matches!(repo.auto_fetch.status, AutoFetchStatus::Failed { .. })
+                && !repo
+                    .loads_in_flight
+                    .is_in_flight(crate::model::LoadKind::UpstreamDivergence)
+        })
+    };
+    let started = SystemTime::now();
+    run_due(started, true);
+    wait_for_store(&store, &events, settled);
+    assert_eq!(
+        backend.failures.load(Ordering::SeqCst),
+        0,
+        "the read failed"
+    );
+    assert_eq!(incoming_count(&store.snapshot(), &clone), None);
+    run_due(started + AutoFetchInterval::default().duration(), false);
+    wait_for_store(&store, &events, |state| {
+        incoming_count(state, &clone) == Some(1)
+            && state
+                .repos
+                .iter()
+                .any(|repo| repo.spec.workdir == clone && !repo.incoming_is_stale())
+    });
+    coordinator.set_sign_in_open(HOLD, false);
+    store
+        .shutdown_for_test()
+        .recv_timeout(Duration::from_secs(10))
+        .unwrap();
 }
