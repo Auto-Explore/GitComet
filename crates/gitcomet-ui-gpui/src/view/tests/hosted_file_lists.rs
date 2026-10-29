@@ -284,6 +284,36 @@ fn mark_glyphs_draw_in_their_own_column(cx: &mut gpui::TestAppContext) {
     );
 }
 
+/// A trailing mark draws after the row's line counts, on its own row only.
+#[gpui::test]
+fn trailing_marks_follow_the_line_counts(cx: &mut gpui::TestAppContext) {
+    let (list, entity, cx) = mount_list(cx, ["a.rs", "b.rs"].map(String::from));
+    let id = list_id(cx, &entity);
+    let trailing = |path: &str| selector(format!("hosted_file_list_{id}_trailing_{path}"));
+    let comments = RowMark::new(gpui::blue())
+        .with_glyph(RowGlyph::Text("C".into()))
+        .with_label("3");
+    cx.update(|_, app| {
+        list.set_marks(
+            FileListMarks::new(1, BTreeMap::new())
+                .with_trailing(BTreeMap::from([(PathBuf::from("a.rs"), comments)])),
+            app,
+        )
+    });
+    draw(cx);
+    let mark = cx
+        .debug_bounds(trailing("a.rs"))
+        .expect("a.rs draws its trailing mark");
+    let row = cx
+        .debug_bounds(selector(format!("hosted_file_list_{id}_file_a.rs")))
+        .unwrap();
+    assert!(
+        mark.origin.x - row.origin.x > row.size.width / 2.0,
+        "it trails the row"
+    );
+    assert!(cx.debug_bounds(trailing("b.rs")).is_none());
+}
+
 /// A Visible chip shows only its paths and clears on a second click; a
 /// replacement of the same label applies while it is active.
 #[gpui::test]

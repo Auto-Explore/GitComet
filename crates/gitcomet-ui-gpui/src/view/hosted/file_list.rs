@@ -440,10 +440,17 @@ impl FileListView {
         let label = mark
             .as_ref()
             .and_then(|mark| Some((mark.label.clone()?, mark.color)));
+        let trailing = self.marks.trailing.get(&change.path).map(|mark| {
+            let path = change.path.clone();
+            super::row_mark(mark, ui_scale::UiScale::current(cx)).debug_selector(move || {
+                format!("hosted_file_list_{list_id}_trailing_{}", path.display())
+            })
+        });
         Some(
             row.when_some(label, |row, (label, color)| {
                 row.child(div().flex_none().text_color(color).child(label))
             })
+            .children(trailing)
             .on_activate(
                 false,
                 controls::ControlActivation::Composite,
@@ -908,8 +915,7 @@ impl FileListImpl for HostedFileList {
     }
     fn set_marks(&self, marks: gitcomet_extension_api::FileListMarks, cx: &mut App) {
         self.entity.update(cx, |list, cx| {
-            if list.marks.revision != marks.revision || !Arc::ptr_eq(&list.marks.rows, &marks.rows)
-            {
+            if list.marks.revision != marks.revision {
                 list.marks_glyphs = marks.rows.values().any(|mark| mark.glyph.is_some());
                 list.marks = marks;
                 cx.notify();

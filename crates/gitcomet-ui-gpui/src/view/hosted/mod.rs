@@ -32,3 +32,23 @@ pub(in crate::view) fn row_glyph(
         _ => gpui::Empty.into_any_element(),
     }
 }
+
+/// A mark drawn whole: its glyph, then its label, in its colour.
+pub(in crate::view) fn row_mark(
+    mark: &gitcomet_extension_api::RowMark,
+    ui_scale: crate::view::ui_scale::UiScale,
+) -> gpui::Div {
+    let color = mark.color;
+    div()
+        .flex()
+        .flex_none()
+        .items_center()
+        .gap(ui_scale.px(4.0))
+        .text_color(color)
+        .children(
+            mark.glyph
+                .as_ref()
+                .map(|glyph| row_glyph(glyph, color, ui_scale.px(12.0))),
+        )
+        .children(mark.label.clone())
+}
