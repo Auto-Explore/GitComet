@@ -1,6 +1,6 @@
-=======
+====================
 Directives
-=======
+====================
 @page "/counter"
 @rendermode InteractiveServer
 @inject blazorapp.components.Counter Counter

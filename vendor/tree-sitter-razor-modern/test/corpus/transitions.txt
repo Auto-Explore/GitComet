@@ -1,6 +1,6 @@
-=======
+====================
 Explicit delimited transition
-=======
+====================
 
 @for (var i = 0; i < people.Length; i++)
 {
@@ -41,9 +41,9 @@ Explicit delimited transition
           (identifier)
           (identifier))))))
 
-=======
+====================
 Explicit Line Transition
-=======
+====================
 
 @for (var i = 0; i < people.Length; i++)
 {
@@ -84,9 +84,9 @@ Explicit Line Transition
             (identifier)
             (identifier)))))))
 
-=======
+====================
 Top level explicit line transition
-=======
+====================
 
 @: hello <em>world</em>
 

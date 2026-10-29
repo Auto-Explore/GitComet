@@ -97,9 +97,9 @@ Implict Razor Expression Mid Line
     (razor_implicit_expression
       (identifier))))
 
-=======
+====================
 Implict Razor Expressions
-=======
+====================
 <p>@DateTime.Now</p>
 <p>@DateTime.IsLeapYear(2016)</p>
 ----
@@ -136,9 +136,9 @@ Implict Expression with spaces - after space is text
         (identifier)))
     (html_text)))
 
-=======
+====================
 Implict Razor Expressions With Generics - Should render Generic as tag
-=======
+====================
 
 
 <p>@GenericMethod<int>()</p>
@@ -149,9 +149,9 @@ Implict Razor Expressions With Generics - Should render Generic as tag
     (razor_implicit_expression (identifier))
     (element (html_text))))
 
-=======
+====================
 Explicit Razor Expressions With Generics
-=======
+====================
 
 
 <p>@(GenericMethod<int>())</p>

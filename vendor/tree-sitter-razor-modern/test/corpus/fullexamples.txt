@@ -1,6 +1,6 @@
-=======
+====================
 Counter Page
-=======
+====================
 
 @page "/counter"
 @rendermode InteractiveServer

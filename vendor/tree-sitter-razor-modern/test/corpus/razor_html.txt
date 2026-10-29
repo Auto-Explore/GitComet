@@ -1,6 +1,6 @@
-=======
+====================
 razor attribute values
-=======
+====================
 
     <a @onclick="async () => { pageNo = 1; await Search(); }">First</a>
     <a @onclick="async () => { pageNo = totalPages; await Search(); }">Last</a>

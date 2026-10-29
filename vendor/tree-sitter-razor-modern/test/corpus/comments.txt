@@ -44,9 +44,9 @@ Comment with @
   (razor_block
     (comment)))
 
-=======
+====================
 Multi-line Comment
-=======
+====================
 @* here is a comment 
 over multiple lines *@
 @{
