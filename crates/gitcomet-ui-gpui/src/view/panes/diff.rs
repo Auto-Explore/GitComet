@@ -16,6 +16,7 @@ pub(in crate::view) mod file_editor;
 pub(in crate::view) mod helpers;
 mod hosted_binding;
 mod hosted_cards;
+mod hosted_people;
 pub(in crate::view) mod input;
 mod markdown_state;
 mod media;

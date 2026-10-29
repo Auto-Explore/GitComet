@@ -437,8 +437,10 @@ impl DiffRenderer {
         } else {
             px(0.0)
         };
+        // A hosted pane's people column sits before each side's rows.
+        let people_column = self.hosted_people_column_width(ui_scale::UiScale::current(cx));
         let inline_columns = diff_wrap_columns_for_width(
-            content_width - annotation_width - inline_text_start - pad,
+            content_width - annotation_width - people_column - inline_text_start - pad,
             char_width,
         );
 
@@ -448,8 +450,13 @@ impl DiffRenderer {
         // narrower of the two. Annotation sits inside the left column only:
         // charging it to whichever column happens to be narrower can leave no
         // room at all and wrap every line to one character.
-        let split_text_width =
-            split_wrap_text_width(left_w, right_w, annotation_width, single_text_start, pad);
+        let split_text_width = split_wrap_text_width(
+            left_w,
+            right_w,
+            annotation_width,
+            single_text_start + people_column,
+            pad,
+        );
         let split_columns = diff_wrap_columns_for_width(split_text_width, char_width);
         (inline_columns, split_columns)
     }
@@ -491,8 +498,9 @@ impl DiffRenderer {
         // it is always subtracted: wrapping a few pixels early is invisible,
         // wrapping late runs the last character under the scrollbar.
         let change_bar = rows::diff_canvas_change_bar_width(ui_scale_percent);
+        let people_column = self.hosted_people_column_width(ui_scale::UiScale::current(cx));
         diff_wrap_columns_for_width(
-            content_width - annotation_width - change_bar - text_start - pad,
+            content_width - annotation_width - people_column - change_bar - text_start - pad,
             char_width,
         )
     }

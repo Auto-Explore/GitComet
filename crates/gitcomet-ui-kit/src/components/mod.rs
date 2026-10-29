@@ -37,8 +37,8 @@ pub use crate::interaction::{
 };
 pub use action_button::{ActionAvailability, ActionButton, ActionButtonStyle, ActionRun};
 pub use avatar::{
-    AVATAR_DIAMETER_PX, AVATAR_FONT_PX, author_avatar, author_color, author_initials,
-    initials_paint_origin_y,
+    AVATAR_DIAMETER_PX, AVATAR_FONT_PX, author_avatar, author_avatar_sized, author_color,
+    author_initials, initials_paint_origin_y,
 };
 pub use bottom_bar::{BarButton, bottom_bar, nav_arrow_button};
 pub use button::{Button, ButtonSlot, ButtonStyle, inline_icon_button};
