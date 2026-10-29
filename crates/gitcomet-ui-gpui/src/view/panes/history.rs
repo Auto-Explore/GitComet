@@ -82,6 +82,8 @@ struct PendingHistoryReveal {
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 struct PendingHistoryRevealDecision {
+    /// The focus hides the commit: clear it before widening the scope.
+    clear_focus: bool,
     set_scope: Option<LogScope>,
     select_commit: Option<CommitId>,
     scroll_to_list_ix: Option<usize>,
@@ -434,6 +436,7 @@ fn decide_pending_history_reveal(
     visible_indices: Option<&HistoryVisibleIndices>,
     plan: &HistoryListPlan,
     _selected_list_index_cache: Option<&HistorySelectedListIndexCache>,
+    focus_active: bool,
 ) -> PendingHistoryRevealDecision {
     let mut decision = PendingHistoryRevealDecision::default();
 
@@ -506,6 +509,12 @@ fn decide_pending_history_reveal(
         None => return decision,
     }
 
+    // A focus reseeds the walk from its refs in every scope, so widening the
+    // scope alone cannot reach a commit it excludes.
+    if pending.fallback_scope.is_some() && focus_active {
+        decision.clear_focus = true;
+        return decision;
+    }
     if let Some(fallback_scope) = pending.fallback_scope
         && current_scope != fallback_scope
     {
@@ -1686,6 +1695,7 @@ impl HistoryView {
                     None,
                     &plan,
                     self.history_selected_list_index_cache.as_ref(),
+                    false,
                 );
                 return self.finish_pending_history_reveal(decision, pending, None, &plan, cx);
             };
@@ -1723,6 +1733,7 @@ impl HistoryView {
                 visible_indices,
                 &plan,
                 self.history_selected_list_index_cache.as_ref(),
+                !repo.history_state.history_focus.is_empty(),
             );
 
             (
@@ -1751,6 +1762,13 @@ impl HistoryView {
         plan: &HistoryListPlan,
         cx: &mut gpui::Context<Self>,
     ) {
+        if decision.clear_focus {
+            self.store.dispatch(Msg::SetHistoryFocus {
+                repo_id: pending.repo_id,
+                focus: Default::default(),
+            });
+            return;
+        }
         if let Some(scope) = decision.set_scope {
             self.store.dispatch(Msg::SetHistoryScope {
                 repo_id: pending.repo_id,

@@ -78,7 +78,8 @@ pub use picker_prompt::{
 };
 pub use quick_search_bar::{QuickSearchBar, QuickSearchStatus, SearchToggles};
 pub use repository_badge::{
-    REPOSITORY_BADGE_SIZE_PX, repository_initials, repository_initials_box,
+    REPOSITORY_BADGE_SIZE_PX, repository_behind_box, repository_behind_box_width,
+    repository_initials, repository_initials_box,
 };
 pub use resize_grip::{ResizeGripAxis, resize_grip, resize_grip_hover_tint};
 pub use segmented_control::{Segment, SegmentedControl};

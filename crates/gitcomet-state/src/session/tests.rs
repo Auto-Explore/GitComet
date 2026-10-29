@@ -2909,6 +2909,85 @@ fn persist_ui_settings_round_trips_fetch_prune_deleted_remote_branches() {
 }
 
 #[test]
+fn automatic_fetch_settings_survive_other_preference_writers() {
+    let dir = unique_session_test_dir("automatic-fetch-preferences");
+    let path = dir.join("session.json");
+    persist_ui_settings_to_path(
+        UiSettings {
+            auto_fetch_enabled: Some(true),
+            auto_fetch_interval_minutes: AutoFetchInterval::new(45),
+            ..Default::default()
+        },
+        &path,
+    )
+    .expect("persist automatic fetch settings");
+    persist_ui_settings_to_path(
+        UiSettings {
+            fetch_prune_deleted_remote_branches: Some(false),
+            theme_mode: Some("light".into()),
+            ..Default::default()
+        },
+        &path,
+    )
+    .expect("persist unrelated settings");
+    let loaded = load_from_path(&path);
+    assert_eq!(loaded.auto_fetch_enabled, Some(true));
+    assert_eq!(
+        loaded
+            .auto_fetch_interval_minutes
+            .map(AutoFetchInterval::minutes),
+        Some(45)
+    );
+    let stored: serde_json::Value =
+        serde_json::from_slice(&fs::read(&path).expect("read saved session"))
+            .expect("parse session");
+    assert_eq!(stored["auto_fetch_enabled"], true);
+    assert_eq!(stored["auto_fetch_interval_minutes"], 45);
+    persist_ui_settings_to_path(
+        UiSettings {
+            auto_fetch_enabled: Some(false),
+            ..Default::default()
+        },
+        &path,
+    )
+    .expect("disable automatic fetching");
+    assert_eq!(
+        load_from_path(&path)
+            .auto_fetch_interval_minutes
+            .map(AutoFetchInterval::minutes),
+        Some(45)
+    );
+}
+
+#[test]
+fn malformed_automatic_fetch_intervals_do_not_discard_the_session() {
+    let dir = unique_session_test_dir("automatic-fetch-invalid-interval");
+    let path = dir.join("session.json");
+    for invalid in [
+        serde_json::json!(0),
+        serde_json::json!(1441),
+        serde_json::json!(-1),
+        serde_json::json!(1.5),
+        serde_json::json!("5"),
+    ] {
+        let stored = serde_json::json!({
+            "version": CURRENT_SESSION_FILE_VERSION,
+            "auto_fetch_enabled": true,
+            "auto_fetch_interval_minutes": invalid,
+            "fetch_prune_deleted_remote_branches": false,
+            "theme_mode": "light"
+        });
+        fs::write(&path, serde_json::to_vec(&stored).expect("encode fixture"))
+            .expect("write session fixture");
+        let loaded = load_from_path(&path);
+        assert_eq!(loaded.auto_fetch_enabled, Some(true));
+        assert_eq!(loaded.auto_fetch_interval_minutes, None);
+        assert_eq!(loaded.fetch_prune_deleted_remote_branches, Some(false));
+        assert_eq!(loaded.theme_mode.as_deref(), Some("light"));
+    }
+}
+
+#[test]
 fn v3_repo_prune_preferences_migrate_to_a_conservative_global_preference() {
     let dir = unique_session_test_dir("legacy-repo-fetch-prune-migration");
     let path = dir.join("session.json");

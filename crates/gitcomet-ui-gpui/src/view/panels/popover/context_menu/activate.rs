@@ -1005,6 +1005,13 @@ impl PopoverHost {
                 self.store
                     .dispatch(Msg::Fetch(gitcomet_state::msg::FetchMsg::All { repo_id }));
             }
+            ContextMenuAction::FetchRemote { repo_id, remote } => {
+                self.store
+                    .dispatch(Msg::Fetch(gitcomet_state::msg::FetchMsg::Remote {
+                        repo_id,
+                        remote,
+                    }));
+            }
             ContextMenuAction::PruneMergedBranches { repo_id } => {
                 self.store.dispatch(Msg::PruneMergedBranches { repo_id });
             }
@@ -1094,12 +1101,7 @@ impl PopoverHost {
                         );
                         return;
                     }
-                    PushRequest::NoRemotes => self.push_toast(
-                        components::ToastKind::Error,
-                        "Cannot push: no remotes configured".to_string(),
-                        cx,
-                    ),
-                    PushRequest::NotReady => {}
+                    PushRequest::NoRemotes | PushRequest::NotReady => {}
                 }
             }
             ContextMenuAction::SetUpstreamBranch {

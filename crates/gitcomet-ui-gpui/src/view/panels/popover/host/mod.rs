@@ -888,6 +888,7 @@ impl PopoverHost {
             error_details_scroll: ScrollHandle::new(),
             error_details_rail_scroll: ScrollHandle::new(),
             commit_mainline: None,
+            force_push_lease: None,
             context_menu_focus_handle,
             menu_invoker_focus: None,
             focus_return: None,
@@ -1832,6 +1833,14 @@ impl PopoverHost {
             self.cached_workspace_id =
                 crate::workspaces::workspace_for_window(cx, window.window_handle().window_id())
                     .map(|group| group.id);
+        }
+        if let PopoverKind::ForcePushConfirm { repo_id } = &kind {
+            self.force_push_lease = self
+                .state
+                .repos
+                .iter()
+                .find(|repo| repo.id == *repo_id)
+                .and_then(crate::view::force_push_lease);
         }
         if let PopoverKind::CherryPickCommitConfirm { repo_id, commit_id }
         | PopoverKind::RevertCommitConfirm { repo_id, commit_id } = &kind

@@ -25,9 +25,9 @@ const PENDING_UPSTREAM_CONFIG_KEY: &str = "gitcometPendingUpstream";
 /// `color.ui` alone loses to a user's `color.diff=always`.
 pub(super) const NO_COLOR_CONFIG: [&str; 4] = ["-c", "color.ui=false", "-c", "color.diff=false"];
 
-struct FetchAllRemotes {
+struct FetchRemotes {
     names: Vec<String>,
-    /// Name the eligible remotes explicitly when --all would contact annex.
+    /// Fetch exactly `names` with --multiple instead of --all.
     explicit: bool,
 }
 
@@ -149,12 +149,15 @@ pub(super) fn tracking_refs_for_remote_branch(
 }
 
 pub(super) fn configured_upstream_of(reference: &crate::refs::Reference<'_>) -> Option<Upstream> {
-    let local_branch = reference
-        .name()
-        .as_bstr()
-        .strip_prefix(b"refs/heads/")?
-        .as_bstr();
-    let config = reference.repo.config_snapshot();
+    configured_upstream_for(reference.repo, reference.name().as_bstr())
+}
+
+pub(super) fn configured_upstream_for(
+    repo: &gix::Repository,
+    full_name: &[u8],
+) -> Option<Upstream> {
+    let local_branch = full_name.strip_prefix(b"refs/heads/")?.as_bstr();
+    let config = repo.config_snapshot();
     // Subsection-indexed lookups avoid scanning every branch section for
     // each local branch during refresh. Merge is multi-valued: Git uses its
     // first entry, while remote uses the last value across matching sections.
@@ -172,7 +175,7 @@ pub(super) fn configured_upstream_of(reference: &crate::refs::Reference<'_>) -> 
         .next()?;
     // A branch remote may also be `.` or a URL. Only a named, configured
     // remote can own one of the remote-tracking branches this API exposes.
-    reference.repo.find_remote(remote.as_str()).ok()?;
+    repo.find_remote(remote.as_str()).ok()?;
     let branch = configured_merge
         .as_bstr()
         .strip_prefix(b"refs/heads/")
@@ -595,7 +598,7 @@ impl GixRepo {
 
     /// Remotes `git fetch --all` contacts, in Git's own order. A remote it
     /// skips says nothing about whether that remote's branches still exist.
-    fn fetch_all_remotes(&self) -> Result<FetchAllRemotes> {
+    fn fetch_all_remotes(&self) -> Result<FetchRemotes> {
         let repo = self.repo_with_current_config()?;
         let config = repo.config_snapshot();
         let mut names = Vec::new();
@@ -614,7 +617,11 @@ impl GixRepo {
                 names.push(name);
             }
         }
-        Ok(FetchAllRemotes { names, explicit })
+        Ok(FetchRemotes { names, explicit })
+    }
+
+    pub(super) fn fetch_all_remote_names_impl(&self) -> Result<Vec<String>> {
+        self.fetch_all_remotes().map(|remotes| remotes.names)
     }
 
     /// Configured branch upstreams. `tracking_ref` is populated only when the
@@ -928,6 +935,103 @@ impl GixRepo {
         Ok(remotes)
     }
 
+    pub(super) fn tracking_stamp_impl(&self, cancellation: &CancellationToken) -> Result<u64> {
+        use std::hash::{Hash, Hasher};
+
+        let mut stamp = std::hash::DefaultHasher::new();
+        self.refs_fingerprint_impl(cancellation)?.hash(&mut stamp);
+        let repo = self.repo_with_current_config()?;
+        let head = crate::refs::head_name(&repo)?;
+        head.as_ref()
+            .map(|name| name.as_bstr().to_vec())
+            .hash(&mut stamp);
+        crate::refs::head_oid(&repo)?
+            .map(|id| id.to_string())
+            .hash(&mut stamp);
+        if let Some(branch) = head
+            .as_ref()
+            .and_then(|name| name.as_bstr().strip_prefix(b"refs/heads/"))
+        {
+            let config = repo.config_snapshot();
+            let branch = branch.to_str_lossy();
+            for key in ["remote", "merge"] {
+                config
+                    .string(format!("branch.{branch}.{key}").as_str())
+                    .map(|value| value.to_vec())
+                    .hash(&mut stamp);
+            }
+        }
+        Ok(stamp.finish())
+    }
+
+    pub(super) fn refs_fingerprint_impl(&self, cancellation: &CancellationToken) -> Result<u64> {
+        use std::hash::{Hash, Hasher};
+
+        cancellation.check_cancelled()?;
+        // Fetch runs through the Git CLI; reopen so packed-refs is read fresh.
+        let repo = self.reopen_repo()?;
+        let refs = crate::refs::view(&repo).map_err(|e| {
+            Error::new(ErrorKind::Backend(format!("gix references: {e}"))).with_source(e)
+        })?;
+        let mut fingerprint = std::hash::DefaultHasher::new();
+        let references = refs.all().map_err(|e| {
+            Error::new(ErrorKind::Backend(format!("gix references: {e}"))).with_source(e)
+        })?;
+        for reference in references {
+            cancellation.check_cancelled()?;
+            let reference = reference.map_err(|e| {
+                Error::new(ErrorKind::Backend(format!("gix ref iter: {e}"))).with_source(e)
+            })?;
+            reference.name().as_bstr().hash(&mut fingerprint);
+            match reference.target() {
+                gix::refs::TargetRef::Object(id) => id.as_bytes().hash(&mut fingerprint),
+                gix::refs::TargetRef::Symbolic(name) => name.as_bstr().hash(&mut fingerprint),
+            }
+        }
+        Ok(fingerprint.finish())
+    }
+
+    pub(super) fn fetch_config_signature_impl(&self) -> Result<u64> {
+        use std::hash::{Hash, Hasher};
+
+        let repo = self.repo_with_current_config()?;
+        let config = repo.config_snapshot();
+        let mut signature = std::hash::DefaultHasher::new();
+        for section in config.plumbing().sections() {
+            let header = section.header();
+            let name = header.name();
+            if !["remote", "fetch", "url"]
+                .iter()
+                .any(|fetch_section| name.eq_ignore_ascii_case(fetch_section.as_bytes()))
+            {
+                continue;
+            }
+            name.to_ascii_lowercase().hash(&mut signature);
+            header.subsection_name().hash(&mut signature);
+            for value_name in section.value_names() {
+                value_name.to_ascii_lowercase().hash(&mut signature);
+                section.values(&value_name).hash(&mut signature);
+            }
+        }
+        // Git resolves a relative path URL from the worktree, so worktrees
+        // sharing `../remote` can fetch different repositories.
+        for name in repo.remote_names() {
+            let Ok(remote) = repo.find_remote(name.as_bstr()) else {
+                continue;
+            };
+            if let Some(url) = remote
+                .url(gix::remote::Direction::Fetch)
+                .filter(|url| url.scheme == gix::url::Scheme::File)
+            {
+                match url.canonicalized(&self.spec.workdir) {
+                    Ok(url) => url.to_bstring().hash(&mut signature),
+                    Err(_) => self.spec.workdir.hash(&mut signature),
+                }
+            }
+        }
+        Ok(signature.finish())
+    }
+
     pub(super) fn list_remote_branches_cancellable_impl(
         &self,
         cancellation: &CancellationToken,
@@ -994,23 +1098,29 @@ impl GixRepo {
         Ok(branches)
     }
 
-    fn fetch_all_command_impl(
+    fn fetch_remotes_command_impl(
         &self,
-        remotes: &FetchAllRemotes,
+        remotes: &FetchRemotes,
         prune: bool,
         capture_output: bool,
     ) -> Result<CommandOutput> {
+        if remotes.explicit && remotes.names.len() > 1 && self.names_a_remote_group(&remotes.names)
+        {
+            return self.fetch_remotes_one_by_one(remotes, prune, capture_output);
+        }
         let mut cmd = self.git_workdir_cmd();
         cmd.arg("fetch").arg("--progress");
         // `--all` would also try a git-annex special remote left without
-        // `skipFetchAll`, and fail. Name the fetchable remotes instead.
-        let scope = if remotes.explicit {
-            "--multiple"
-        } else {
-            "--all"
+        // `skipFetchAll`, and fail. Name the fetchable remotes instead. One
+        // remote goes without `--multiple`, which would expand a remote group
+        // of the same name instead.
+        let scope = match (remotes.explicit, remotes.names.len()) {
+            (false, _) => Some("--all"),
+            (true, 1) => None,
+            (true, _) => Some("--multiple"),
         };
         let prune_arg = if prune { "--prune" } else { "--no-prune" };
-        cmd.arg(scope).arg(prune_arg);
+        cmd.args(scope).arg(prune_arg);
         cmd.arg("--no-prune-tags");
         if remotes.explicit {
             if remotes.names.is_empty() {
@@ -1023,21 +1133,104 @@ impl GixRepo {
             }
             cmd.arg("--").args(&remotes.names);
         }
-        run_git_command_with_optional_output(
-            cmd,
-            &format!("git fetch {scope} {prune_arg} --no-prune-tags"),
-            capture_output,
-        )
+        let mut label = [
+            "git fetch",
+            scope.unwrap_or_default(),
+            prune_arg,
+            "--no-prune-tags",
+        ]
+        .into_iter()
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ");
+        if remotes.explicit {
+            label = format!("{label} -- {}", remotes.names.join(" "));
+        }
+        run_git_command_with_optional_output(cmd, &label, capture_output)
     }
 
-    fn fetch_all_command_with_optional_output_impl(
+    /// `git fetch --multiple` resolves a remote group before a remote of the
+    /// same name, so a list holding one would fetch the group instead.
+    fn names_a_remote_group(&self, names: &[String]) -> bool {
+        self.repo_with_current_config().is_ok_and(|repo| {
+            let config = repo.config_snapshot();
+            names
+                .iter()
+                .any(|name| config.string(format!("remotes.{name}").as_str()).is_some())
+        })
+    }
+
+    /// Fetches each remote by itself. The output keeps Git's own multi-remote
+    /// shape, each failure followed by `error: could not fetch <name>`, so a
+    /// failure can still be traced to its remote.
+    fn fetch_remotes_one_by_one(
         &self,
-        remotes: &FetchAllRemotes,
+        remotes: &FetchRemotes,
+        prune: bool,
+        capture_output: bool,
+    ) -> Result<CommandOutput> {
+        let label = format!(
+            "git fetch {} --no-prune-tags -- {}",
+            if prune { "--prune" } else { "--no-prune" },
+            remotes.names.join(" ")
+        );
+        let mut outputs = Vec::new();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let mut auth = None;
+        let mut failed = false;
+        for name in &remotes.names {
+            let one = FetchRemotes {
+                names: vec![name.clone()],
+                explicit: true,
+            };
+            match self.fetch_remotes_command_impl(&one, prune, capture_output) {
+                Ok(output) => {
+                    stdout.extend_from_slice(output.stdout.as_bytes());
+                    stderr.extend_from_slice(output.stderr.as_bytes());
+                    outputs.push(output);
+                }
+                Err(error) => {
+                    let ErrorKind::Git(failure) = error.kind() else {
+                        return Err(error);
+                    };
+                    failed = true;
+                    stdout.extend_from_slice(failure.stdout());
+                    stderr.extend_from_slice(failure.stderr());
+                    if !stderr.ends_with(b"\n") && !stderr.is_empty() {
+                        stderr.push(b'\n');
+                    }
+                    stderr.extend_from_slice(format!("error: could not fetch {name}\n").as_bytes());
+                    auth = auth.or_else(|| failure.auth_outcome().cloned());
+                }
+            }
+        }
+        if !failed {
+            return Ok(CommandOutput::combine(label, &outputs));
+        }
+        let detail = String::from_utf8_lossy(&stderr).trim().to_string();
+        let mut failure = GitFailure::new(
+            label,
+            GitFailureId::CommandFailed,
+            Some(1),
+            stdout,
+            stderr,
+            Some(detail),
+        );
+        if let Some(auth) = auth {
+            failure = failure.with_auth_outcome(auth);
+        }
+        Err(Error::new(ErrorKind::Git(failure)))
+    }
+
+    fn fetch_remotes_command_with_optional_output_impl(
+        &self,
+        remotes: &FetchRemotes,
         prune: bool,
         capture_output: bool,
     ) -> Result<CommandOutput> {
         if !prune {
-            return self.fetch_all_command_impl(remotes, false, capture_output);
+            return self.fetch_remotes_command_impl(remotes, false, capture_output);
         }
 
         // `--prune` deletes every destination the remote's own refspecs map, so
@@ -1051,10 +1244,10 @@ impl GixRepo {
                 .unwrap_or(false)
         });
         if !needs_scoped_prune {
-            return self.fetch_all_command_impl(remotes, true, capture_output);
+            return self.fetch_remotes_command_impl(remotes, true, capture_output);
         }
 
-        let mut outputs = vec![self.fetch_all_command_impl(remotes, false, capture_output)?];
+        let mut outputs = vec![self.fetch_remotes_command_impl(remotes, false, capture_output)?];
         for remote in &remotes.names {
             outputs.push(
                 self.prune_remote_tracking_refs_command_with_optional_output_impl(
@@ -1072,12 +1265,26 @@ impl GixRepo {
     fn fetch_all_with_optional_output_impl(
         &self,
         prune: bool,
+        skipped: &[String],
         capture_output: bool,
     ) -> Result<CommandOutput> {
         // Only the remotes this fetch contacts are authoritative about their
         // upstreams. A remote it skips can have a configured upstream with no
         // remote-tracking ref for reasons this fetch says nothing about.
-        let remotes = self.fetch_all_remotes()?;
+        let mut remotes = self.fetch_all_remotes()?;
+        if !skipped.is_empty() {
+            remotes.names.retain(|name| !skipped.contains(name));
+            remotes.explicit = true;
+        }
+        self.fetch_remotes_with_optional_output_impl(&remotes, prune, capture_output)
+    }
+
+    fn fetch_remotes_with_optional_output_impl(
+        &self,
+        remotes: &FetchRemotes,
+        prune: bool,
+        capture_output: bool,
+    ) -> Result<CommandOutput> {
         let tracked_before_fetch = if prune {
             let configured =
                 self.configured_remote_upstreams(UpstreamCleanupScope::Remotes(&remotes.names))?;
@@ -1085,17 +1292,17 @@ impl GixRepo {
         } else {
             Vec::new()
         };
-        let output =
-            match self.fetch_all_command_with_optional_output_impl(&remotes, prune, capture_output)
-            {
-                Ok(output) => output,
-                Err(error) => {
-                    self.best_effort_unlink_upstreams_pruned_during_failed_fetch(
-                        tracked_before_fetch,
-                    );
-                    return Err(error);
-                }
-            };
+        let output = match self.fetch_remotes_command_with_optional_output_impl(
+            remotes,
+            prune,
+            capture_output,
+        ) {
+            Ok(output) => output,
+            Err(error) => {
+                self.best_effort_unlink_upstreams_pruned_during_failed_fetch(tracked_before_fetch);
+                return Err(error);
+            }
+        };
         if !prune {
             return Ok(output);
         }
@@ -1158,8 +1365,25 @@ impl GixRepo {
         run_git_command_with_optional_output(cmd, &label, capture_output)
     }
 
-    pub(super) fn fetch_all_with_output_impl(&self, prune: bool) -> Result<CommandOutput> {
-        self.fetch_all_with_optional_output_impl(prune, true)
+    pub(super) fn fetch_all_with_output_impl(
+        &self,
+        prune: bool,
+        skipped: &[String],
+    ) -> Result<CommandOutput> {
+        self.fetch_all_with_optional_output_impl(prune, skipped, true)
+    }
+
+    pub(super) fn fetch_remote_with_output_impl(
+        &self,
+        remote: &str,
+        prune: bool,
+    ) -> Result<CommandOutput> {
+        validate_ref_like_arg(remote, "remote name")?;
+        let remotes = FetchRemotes {
+            names: vec![remote.to_owned()],
+            explicit: true,
+        };
+        self.fetch_remotes_with_optional_output_impl(&remotes, prune, true)
     }
 
     fn push_set_upstream_with_optional_output_impl(
@@ -2155,7 +2379,7 @@ impl GixRepo {
         // one of its deletion criteria. Surviving branches are unlinked below.
         let remotes = self.fetch_all_remotes()?;
         let fetch_output =
-            self.fetch_all_command_with_optional_output_impl(&remotes, true, true)?;
+            self.fetch_remotes_command_with_optional_output_impl(&remotes, true, true)?;
 
         let mut merged_cmd = self.git_workdir_cmd();
         merged_cmd

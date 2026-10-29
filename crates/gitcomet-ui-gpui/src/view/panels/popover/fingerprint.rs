@@ -26,6 +26,27 @@ pub(super) fn notify_fingerprint(
     if matches!(popover, PopoverKind::CommitMenu { .. }) {
         state.git_log_settings.show_history_tags.hash(&mut hasher);
     }
+    if matches!(popover, PopoverKind::PullPicker) {
+        state.remote_settings.auto_fetch.enabled.hash(&mut hasher);
+        if let Some(repo) = repo_for_popover(state, popover, binding) {
+            repo.auto_fetch.last_success_at.hash(&mut hasher);
+            repo.auto_fetch.retry_at.hash(&mut hasher);
+            repo.auto_fetch.paused_remotes.hash(&mut hasher);
+            std::mem::discriminant(&repo.auto_fetch.status).hash(&mut hasher);
+            match &repo.auto_fetch.status {
+                gitcomet_state::model::AutoFetchStatus::Failed { at, error } => {
+                    at.hash(&mut hasher);
+                    super::context_menu::pull::auto_fetch_failure_description(error)
+                        .hash(&mut hasher);
+                    super::context_menu::pull::auto_fetch_auth_recovery_hint(error)
+                        .hash(&mut hasher);
+                }
+                gitcomet_state::model::AutoFetchStatus::Succeeded { at } => at.hash(&mut hasher),
+                gitcomet_state::model::AutoFetchStatus::Idle
+                | gitcomet_state::model::AutoFetchStatus::Running => {}
+            }
+        }
+    }
 
     match popover {
         PopoverKind::CloneRepo => match &state.clone {
@@ -1552,6 +1573,81 @@ mod tests {
         let after = notify_fingerprint(&state, &PopoverKind::PullPicker, None);
 
         assert_ne!(before, after);
+    }
+
+    #[test]
+    fn pull_picker_fingerprint_changes_between_failed_snapshots_without_a_running_snapshot() {
+        use gitcomet_state::model::AutoFetchStatus;
+        let at = std::time::UNIX_EPOCH;
+        let failed = |at, message: &str| AutoFetchStatus::Failed {
+            at,
+            error: gitcomet_core::error::Error::new(gitcomet_core::error::ErrorKind::Backend(
+                message.into(),
+            )),
+        };
+        let repo_id = RepoId(9);
+        let mut repo = RepoState::new_opening(
+            repo_id,
+            gitcomet_core::domain::RepoSpec {
+                workdir: std::env::temp_dir().join("gitcomet_pull_picker_failed_fetch_fingerprint"),
+            },
+        );
+        repo.auto_fetch.last_success_at = Some(at);
+        repo.auto_fetch.status = failed(at, "network disconnected");
+        let mut state = AppState {
+            active_repo: Some(repo_id),
+            repos: vec![repo],
+            ..AppState::test_default()
+        };
+        state.remote_settings.auto_fetch.enabled = true;
+        let first = notify_fingerprint(&state, &PopoverKind::PullPicker, None);
+        state.repos[0].auto_fetch.status = failed(at, "authentication required");
+        let second = notify_fingerprint(&state, &PopoverKind::PullPicker, None);
+        assert_ne!(first, second);
+        state.repos[0].auto_fetch.status = failed(
+            at + std::time::Duration::from_secs(60),
+            "authentication required",
+        );
+        assert_ne!(
+            second,
+            notify_fingerprint(&state, &PopoverKind::PullPicker, None)
+        );
+        let failure = gitcomet_core::error::GitFailure::new(
+            "git fetch --all",
+            gitcomet_core::error::GitFailureId::CommandFailed,
+            Some(128),
+            Vec::new(),
+            Vec::new(),
+            Some("authentication required".into()),
+        );
+        state.repos[0].auto_fetch.status = AutoFetchStatus::Failed {
+            at,
+            error: gitcomet_core::error::Error::new(gitcomet_core::error::ErrorKind::Git(
+                failure.clone(),
+            )),
+        };
+        let without_auth_hint = notify_fingerprint(&state, &PopoverKind::PullPicker, None);
+        state.repos[0].auto_fetch.status = AutoFetchStatus::Failed {
+            at,
+            error: gitcomet_core::error::Error::new(gitcomet_core::error::ErrorKind::Git(
+                failure.with_auth_outcome(gitcomet_core::auth::AuthOutcome::NeedsInput(
+                    gitcomet_core::auth::AuthChallenge::from_prompt(
+                        gitcomet_core::auth::GitAuthKind::UsernamePassword,
+                        "Password for test remote:",
+                    ),
+                )),
+            )),
+        };
+        let with_auth_hint = notify_fingerprint(&state, &PopoverKind::PullPicker, None);
+        assert_ne!(without_auth_hint, with_auth_hint);
+        state.repos[0].auto_fetch.retry_at = Some(at + std::time::Duration::from_secs(3600));
+        let retrying = notify_fingerprint(&state, &PopoverKind::PullPicker, None);
+        assert_ne!(with_auth_hint, retrying);
+        state.repos[0].auto_fetch.paused_remotes = vec!["origin".into()];
+        assert_ne!(
+            retrying,
+            notify_fingerprint(&state, &PopoverKind::PullPicker, None)
+        );
     }
 
     #[test]

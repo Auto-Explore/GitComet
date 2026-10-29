@@ -320,6 +320,7 @@ Please commit your changes or stash them before you merge.\nAborting\n";
         handled_by_prompt: false,
         failure_id: Some(GitFailureId::WorktreeWouldBeOverwritten),
         hook_operation_id: None,
+        source: gitcomet_state::model::CommandSource::User,
     });
     super::shortcuts::apply_state(cx, &view, app_state_with_repo(repo, repo_id));
     draw_and_drain_test_window(cx);

@@ -21,6 +21,7 @@ fn bare_annex_all_versions_commands_transfer_content_without_checkout() {
         params: vec![format!("directory={}", dir.path().join("store").display())],
     })
     .unwrap();
+    verify_special_remote(&bare, "backup");
     let here = || {
         repo.annex_whereis(&key, &CancellationToken::new())
             .unwrap()

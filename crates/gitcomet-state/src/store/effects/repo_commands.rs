@@ -88,7 +88,9 @@ fn large_file_command_context(command: &gitcomet_core::large_files::LargeFileCom
         }
         C::AnnexAdjust { mode } => mode.label().to_string(),
         C::AnnexLeaveAdjusted { base } => base.clone(),
-        C::AnnexEnableRemote { name, .. } | C::AnnexInitRemote { name, .. } => name.clone(),
+        C::AnnexEnableRemote { name, .. }
+        | C::AnnexInitRemote { name, .. }
+        | C::AnnexVerifyRemote { name, .. } => name.clone(),
         C::AnnexTrust { repository, trust } => format!("{repository} · {}", trust.label()),
         C::AnnexDescribe { repository, .. } => repository.clone(),
         C::AnnexNumcopies { copies } => copies.to_string(),
@@ -104,6 +106,7 @@ fn large_file_command_context(command: &gitcomet_core::large_files::LargeFileCom
 fn repo_command_context(command: &RepoCommandKind) -> Option<String> {
     let context = match command {
         RepoCommandKind::FetchAll => "All remotes".to_string(),
+        RepoCommandKind::FetchRemote { remote } => remote.clone(),
         RepoCommandKind::FetchRefspecs { remote, refspecs } => {
             format!("{remote}: {}", refspecs.join(" "))
         }
@@ -319,6 +322,17 @@ fn schedule_repo_command_task<F>(
         + Send
         + 'static,
 {
+    let auto_fetch = Arc::clone(&msg_tx.auto_fetch);
+    let foreground = if command.blocks_auto_fetch() {
+        repos.repository(&repo_id).map(|repo| {
+            auto_fetch
+                .admission()
+                .reserve(super::super::auto_fetch::repository_key(repo.as_ref()))
+        })
+    } else {
+        None
+    };
+    let is_manual_fetch = command.fetches_every_remote();
     let label = command.hook_activity_label();
     let context = context_override.or_else(|| repo_command_context(&command));
     // The reducer counted the command in flight and only its completion
@@ -331,6 +345,7 @@ fn schedule_repo_command_task<F>(
         msg_tx,
         move |repo, msg_tx| {
             let fetches_objects = command.fetches_objects();
+            let changes_tracking = command.changes_tracking();
             let operation = GitOperationTask::start_with_progress_lane(
                 repo_id,
                 label,
@@ -338,15 +353,31 @@ fn schedule_repo_command_task<F>(
                 command.shows_progress(),
                 &msg_tx,
             );
-            let result = {
-                let _scope = operation.attach();
-                run(Arc::clone(&repo), &mut command)
-            };
+            let result = foreground
+                .as_ref()
+                .map_or(Ok(()), |reservation| {
+                    reservation.wait(operation.cancellation())
+                })
+                .and_then(|()| {
+                    let _scope = operation.attach();
+                    run(Arc::clone(&repo), &mut command)
+                });
             if fetches_objects {
                 // The refresh this command triggers should read the new packs
                 // through a fresh store, and old packs must not stay mapped.
                 repo.release_object_store();
                 super::repo_load::release_all_worktree_scan_handles();
+            }
+            if is_manual_fetch {
+                auto_fetch.manual_fetch_finished(
+                    &repo.spec().workdir,
+                    std::time::SystemTime::now(),
+                    &result,
+                );
+            }
+            drop(foreground);
+            if changes_tracking {
+                msg_tx.refresh_other_tracking(repo_id, repo.as_ref());
             }
             let outcome = GitOperationTask::outcome(&result);
             if let RepoCommandKind::ApplyFileChange { commit_retry, .. } = &mut command
@@ -1135,6 +1166,23 @@ fn schedule_fetch_all(
     );
 }
 
+fn schedule_fetch_remote(
+    executor: &TaskExecutor,
+    repos: &RepositoryRuntimes,
+    msg_tx: StoreWorkerSender,
+    repo_id: RepoId,
+    remote: String,
+    prune: bool,
+    auth: Option<StagedGitAuth>,
+) {
+    let command = RepoCommandKind::FetchRemote {
+        remote: remote.clone(),
+    };
+    schedule_repo_command(executor, repos, msg_tx, repo_id, command, move |repo| {
+        run_with_git_auth(auth, || repo.fetch_remote(&remote, prune))
+    });
+}
+
 fn schedule_fetch_refspecs(
     executor: &TaskExecutor,
     repos: &RepositoryRuntimes,
@@ -1431,8 +1479,22 @@ fn schedule_safe_push_after_commit(
 ) {
     let finish_context = context.clone();
     let follow_up_auth = auth.clone();
+    // The preflight fetches the push target and then reads FETCH_HEAD, which
+    // an automatic fetch beside it would rewrite.
+    let foreground = repos.repository(&repo_id).map(|repo| {
+        msg_tx
+            .auto_fetch
+            .admission()
+            .reserve(super::super::auto_fetch::repository_key(repo.as_ref()))
+    });
     spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
-        let result = run_with_git_auth(auth, || repo.safe_push_after_commit(&context));
+        let result = foreground
+            .as_ref()
+            .map_or(Ok(()), |reservation| {
+                reservation.wait(&gitcomet_core::services::CancellationToken::new())
+            })
+            .and_then(|()| run_with_git_auth(auth, || repo.safe_push_after_commit(&context)));
+        drop(foreground);
         send_or_log(
             &msg_tx,
             Msg::Internal(crate::msg::InternalMsg::SafePushAfterCommitFinished {
@@ -2809,6 +2871,12 @@ pub(super) fn schedule(
             prune,
             auth,
         } => schedule_fetch_all(executor, repos, msg_tx, repo_id, prune, auth),
+        RepoCommandEffect::FetchRemote {
+            repo_id,
+            remote,
+            prune,
+            auth,
+        } => schedule_fetch_remote(executor, repos, msg_tx, repo_id, remote, prune, auth),
         RepoCommandEffect::FetchRefspecs {
             repo_id,
             remote,

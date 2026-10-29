@@ -37,7 +37,7 @@ pub(super) struct TrackingRepo {
 }
 
 impl TrackingRepo {
-    fn new(workdir: PathBuf) -> Self {
+    pub(super) fn new(workdir: PathBuf) -> Self {
         Self {
             spec: RepoSpec { workdir },
             branches: Arc::new(Mutex::new(vec!["main".to_string()])),
@@ -513,6 +513,41 @@ impl GitRepository for TrackingRepo {
 
     fn push(&self) -> Result<()> {
         Ok(())
+    }
+
+    fn run_large_file_command(
+        &self,
+        command: &gitcomet_core::large_files::LargeFileCommand,
+    ) -> Result<CommandOutput> {
+        if let gitcomet_core::large_files::LargeFileCommand::AnnexVerifyRemote { name, id } =
+            command
+        {
+            self.record(format!("annex-verifyremote:{name}:{id}"));
+        }
+        Ok(CommandOutput::empty_success("git annex"))
+    }
+
+    fn remove_remote_with_output(&self, name: &str) -> Result<CommandOutput> {
+        self.record(format!("remove-remote:{name}"));
+        Ok(CommandOutput::empty_success("git remote remove"))
+    }
+
+    fn push_force_with_output(&self) -> Result<CommandOutput> {
+        self.record("force-push".to_string());
+        Ok(CommandOutput::empty_success("git push --force-with-lease"))
+    }
+
+    fn push_force_with_lease_with_output(
+        &self,
+        lease: &gitcomet_core::services::ForcePushLease,
+    ) -> Result<CommandOutput> {
+        self.record(format!(
+            "force-push:{}/{}:{}",
+            lease.remote, lease.branch, lease.expected
+        ));
+        Ok(CommandOutput::empty_success(
+            "git push --force-with-lease=…",
+        ))
     }
 
     fn discard_worktree_changes(&self, _paths: &[&Path]) -> Result<()> {

@@ -5,6 +5,8 @@ use crate::test_support::{
 use gitcomet_core::domain::UpstreamDivergence;
 use std::fs;
 
+mod tracking;
+
 /// Runs git in `workdir` with `input` on its stdin; it must succeed.
 fn git_with_stdin(workdir: &Path, args: &[&str], input: &[u8]) {
     use std::io::Write as _;

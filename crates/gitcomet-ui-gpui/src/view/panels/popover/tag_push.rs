@@ -16,15 +16,14 @@ impl PopoverHost {
         if repo.detached_head_commit.is_some() {
             return Some("HEAD is detached — check out a branch first");
         }
-        match push_request(repo, &self.state.large_file_settings) {
-            PushRequest::NotReady => Some(REPOSITORY_LOADING_REASON),
-            PushRequest::NoRemotes => Some("Add a remote to push to first"),
-            PushRequest::Push | PushRequest::SetUpstream { .. } => {
-                request(repo, mode, &self.state.large_file_settings)
-                    .is_none()
-                    .then_some("The current branch cannot be pushed")
-            }
+        if let Some(reason) =
+            push_request(repo, &self.state.large_file_settings).unavailable_reason()
+        {
+            return Some(reason);
         }
+        request(repo, mode, &self.state.large_file_settings)
+            .is_none()
+            .then_some("The current branch cannot be pushed")
     }
 
     /// Starts a push with tags, opening the set-upstream prompt first when the

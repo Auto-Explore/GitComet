@@ -287,9 +287,12 @@ enum Phase {
     OriginalMoved,
     Installed,
     Committed,
+    /// Deleting the verified backup has begun, so what remains of it no
+    /// longer matches its digest.
+    CleaningUp,
 }
 
-#[derive(Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 struct JournalLinkedWorktree {
     root: StoredPath,
@@ -298,7 +301,7 @@ struct JournalLinkedWorktree {
     installed_pointer: Vec<u8>,
 }
 
-#[derive(Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 struct Journal {
     version: u32,
@@ -759,7 +762,7 @@ fn check_copy(path: &Path, identity: &DirectoryIdentity, digest: &str) -> Result
 fn recover_journal(journal: &Journal) -> Result<()> {
     let root = journal.root.path();
     validate_journal_paths(&root, journal)?;
-    if journal.phase == Phase::Committed {
+    if matches!(journal.phase, Phase::Committed | Phase::CleaningUp) {
         return cleanup_committed(journal);
     }
     let backup = journal.backup.path();
@@ -866,7 +869,14 @@ fn cleanup_committed(journal: &Journal) -> Result<()> {
     }
     let backup = journal.backup.path();
     if backup.exists() {
-        check_copy(&backup, &journal.original_identity, &journal.source_digest)?;
+        if journal.phase != Phase::CleaningUp {
+            check_copy(&backup, &journal.original_identity, &journal.source_digest)?;
+            write_journal(&Journal {
+                phase: Phase::CleaningUp,
+                ..journal.clone()
+            })?;
+        }
+        failpoint(Failpoint::CleanupStarted)?;
         fs::remove_dir_all(backup)?;
     }
     remove_journals(&root)?;
@@ -941,6 +951,7 @@ enum Failpoint {
     Installed,
     Repaired,
     Committed,
+    CleanupStarted,
 }
 
 #[cfg(test)]

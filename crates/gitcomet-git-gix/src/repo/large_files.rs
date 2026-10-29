@@ -758,11 +758,13 @@ impl super::GixRepo {
             assistant_running: super::annex::assistant_running(&repo.common_dir().join("annex")),
             repositories: Vec::new(),
             numcopies: None,
+            unverified_remotes: Vec::new(),
         };
         let mut annex = annex;
         if annex.initialized() {
             cancellation.check_cancelled()?;
             (annex.repositories, annex.numcopies) = self.annex_repositories(&repo);
+            annex.unverified_remotes = self.unverified_remotes(&config);
         }
         *self
             .large_file_scan

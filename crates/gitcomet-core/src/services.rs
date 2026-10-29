@@ -1125,6 +1125,13 @@ pub trait GitRepository: Send + Sync {
     fn head_path_is_gitlink(&self, _path: &Path) -> Result<bool> {
         Ok(false)
     }
+    fn head_tracking(&self, cancellation: &CancellationToken) -> Result<HeadTracking> {
+        cancellation.check_cancelled()?;
+        Err(Error::new(ErrorKind::Unsupported(
+            "head tracking is not implemented for this backend",
+        )))
+    }
+
     fn upstream_divergence(
         &self,
         cancellation: &CancellationToken,
@@ -1622,6 +1629,68 @@ pub trait GitRepository: Send + Sync {
     }
 
     fn fetch_all(&self, _prune: bool) -> Result<CommandOutput>;
+    fn fetch_all_background(
+        &self,
+        _prune: bool,
+        _cancellation: &CancellationToken,
+    ) -> Result<CommandOutput> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "background fetching is not implemented for this backend",
+        )))
+    }
+    /// [`Self::fetch_all_background`] without the `skipped` remotes.
+    fn fetch_all_background_except(
+        &self,
+        prune: bool,
+        skipped: &[String],
+        cancellation: &CancellationToken,
+    ) -> Result<CommandOutput> {
+        if skipped.is_empty() {
+            self.fetch_all_background(prune, cancellation)
+        } else {
+            Err(Error::new(ErrorKind::Unsupported(
+                "skipping remotes in a background fetch is not implemented for this backend",
+            )))
+        }
+    }
+    /// [`Self::fetch_all`] from `remote` alone.
+    fn fetch_remote(&self, _remote: &str, _prune: bool) -> Result<CommandOutput> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "fetching a single remote is not implemented for this backend",
+        )))
+    }
+    /// The remotes [`Self::fetch_all`] contacts: every remote except those
+    /// `skipFetchAll` leaves out and git-annex special remotes.
+    fn fetch_all_remote_names(&self) -> Result<Vec<String>> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "listing the remotes a fetch contacts is not implemented for this backend",
+        )))
+    }
+    /// Hash of what decides this worktree's incoming count, without counting:
+    /// HEAD, its branch's upstream configuration and every reference.
+    fn tracking_stamp(&self, cancellation: &CancellationToken) -> Result<u64> {
+        cancellation.check_cancelled()?;
+        Err(Error::new(ErrorKind::Unsupported(
+            "tracking stamps are not implemented for this backend",
+        )))
+    }
+    /// Hash of every reference with its target, read fresh from disk: a
+    /// fetch's refspecs can write any of them, as a mirror writes refs/heads.
+    /// Equal values before and after a fetch mean the fetch moved nothing.
+    fn refs_fingerprint(&self, cancellation: &CancellationToken) -> Result<u64> {
+        cancellation.check_cancelled()?;
+        Err(Error::new(ErrorKind::Unsupported(
+            "reference fingerprints are not implemented for this backend",
+        )))
+    }
+    /// Hash of the configuration that decides what a fetch from this worktree
+    /// does: remotes, fetch defaults and URL rewrites as this worktree resolves
+    /// them. Worktrees of one repository with equal values fetch the same refs.
+    fn fetch_config_signature(&self) -> Result<u64> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "fetch configuration signatures are not implemented for this backend",
+        )))
+    }
     fn pull(&self, mode: PullMode) -> Result<CommandOutput>;
     fn push(&self) -> Result<()>;
 

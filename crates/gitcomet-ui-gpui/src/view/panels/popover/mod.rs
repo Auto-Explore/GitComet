@@ -252,6 +252,9 @@ pub(in super::super) struct PopoverHost {
     /// Explicit 1-based mainline selected in the open merge-commit
     /// cherry-pick or revert confirmation. Reset every time either opens.
     commit_mainline: Option<usize>,
+    /// The lease the open force-push confirmation pushes with, taken when it
+    /// opened so a later fetch cannot move it.
+    force_push_lease: Option<gitcomet_core::services::ForcePushLease>,
     context_menu_focus_handle: FocusHandle,
     /// Focus held by the menu or confirmation's invoker, restored on dismissal.
     menu_invoker_focus: Option<FocusHandle>,

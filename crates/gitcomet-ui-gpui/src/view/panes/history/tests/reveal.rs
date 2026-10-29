@@ -294,11 +294,13 @@ fn pending_history_reveal_visible_target_scrolls_and_clears() {
         Some(&HistoryVisibleIndices::Filtered(vec![0, 2].into())),
         &HistoryListPlan::new(true, Vec::new()),
         None,
+        false,
     );
 
     assert_eq!(
         decision,
         PendingHistoryRevealDecision {
+            clear_focus: false,
             set_scope: None,
             select_commit: Some(CommitId("c".into())),
             scroll_to_list_ix: Some(2),
@@ -332,11 +334,13 @@ fn pending_history_reveal_missing_target_requests_load_more() {
         Some(&HistoryVisibleIndices::all(2)),
         &HistoryListPlan::new(false, Vec::new()),
         None,
+        false,
     );
 
     assert_eq!(
         decision,
         PendingHistoryRevealDecision {
+            clear_focus: false,
             set_scope: None,
             // Selecting is `Msg::RevealCommit`'s job; a target that has not
             // been paged in yet is nobody's cue to touch the selection.
@@ -372,11 +376,13 @@ fn pending_history_reveal_switches_to_fallback_scope_after_exhausting_current_mo
         Some(&HistoryVisibleIndices::all(2)),
         &HistoryListPlan::new(false, Vec::new()),
         None,
+        false,
     );
 
     assert_eq!(
         decision,
         PendingHistoryRevealDecision {
+            clear_focus: false,
             set_scope: Some(LogScope::AllBranches),
             select_commit: None,
             scroll_to_list_ix: None,
@@ -410,11 +416,13 @@ fn pending_history_reveal_missing_target_with_exhausted_history_and_no_fallback_
         Some(&HistoryVisibleIndices::all(2)),
         &HistoryListPlan::new(false, Vec::new()),
         None,
+        false,
     );
 
     assert_eq!(
         decision,
         PendingHistoryRevealDecision {
+            clear_focus: false,
             set_scope: None,
             select_commit: None,
             scroll_to_list_ix: None,
@@ -449,11 +457,13 @@ fn pending_history_reveal_already_selected_commit_still_scrolls() {
         Some(&HistoryVisibleIndices::all(2)),
         &HistoryListPlan::new(false, Vec::new()),
         None,
+        false,
     );
 
     assert_eq!(
         decision,
         PendingHistoryRevealDecision {
+            clear_focus: false,
             set_scope: None,
             select_commit: None,
             scroll_to_list_ix: Some(1),
@@ -492,11 +502,13 @@ fn pending_history_reveal_unique_abbreviated_commit_scrolls_and_selects_full_id(
         Some(&HistoryVisibleIndices::all(2)),
         &HistoryListPlan::new(false, Vec::new()),
         None,
+        false,
     );
 
     assert_eq!(
         decision,
         PendingHistoryRevealDecision {
+            clear_focus: false,
             set_scope: None,
             select_commit: Some(CommitId(full.into())),
             scroll_to_list_ix: Some(1),
@@ -539,11 +551,13 @@ fn pending_history_reveal_abbreviated_commit_takes_a_visible_match_with_pages_le
         Some(&HistoryVisibleIndices::all(2)),
         &HistoryListPlan::new(false, Vec::new()),
         None,
+        false,
     );
 
     assert_eq!(
         decision,
         PendingHistoryRevealDecision {
+            clear_focus: false,
             set_scope: None,
             select_commit: Some(CommitId(full.into())),
             scroll_to_list_ix: Some(1),
@@ -576,11 +590,13 @@ fn pending_history_reveal_abbreviated_commit_waits_for_display_page_before_selec
         None,
         &HistoryListPlan::new(false, Vec::new()),
         None,
+        false,
     );
 
     assert_eq!(
         decision,
         PendingHistoryRevealDecision {
+            clear_focus: false,
             set_scope: None,
             select_commit: None,
             scroll_to_list_ix: None,
@@ -615,11 +631,13 @@ fn pending_history_reveal_abbreviated_commit_waits_for_matching_cache_before_sel
         Some(&HistoryVisibleIndices::all(1)),
         &HistoryListPlan::new(false, Vec::new()),
         None,
+        false,
     );
 
     assert_eq!(
         decision,
         PendingHistoryRevealDecision {
+            clear_focus: false,
             set_scope: None,
             select_commit: None,
             scroll_to_list_ix: None,
@@ -658,11 +676,13 @@ fn pending_history_reveal_uppercase_abbreviated_commit_scrolls_and_selects_full_
         Some(&HistoryVisibleIndices::all(2)),
         &HistoryListPlan::new(false, Vec::new()),
         None,
+        false,
     );
 
     assert_eq!(
         decision,
         PendingHistoryRevealDecision {
+            clear_focus: false,
             set_scope: None,
             select_commit: Some(CommitId(full.into())),
             scroll_to_list_ix: Some(1),
@@ -701,11 +721,13 @@ fn pending_history_reveal_ambiguous_abbreviated_commit_clears_without_selecting(
         Some(&HistoryVisibleIndices::all(2)),
         &HistoryListPlan::new(false, Vec::new()),
         None,
+        false,
     );
 
     assert_eq!(
         decision,
         PendingHistoryRevealDecision {
+            clear_focus: false,
             set_scope: None,
             select_commit: None,
             scroll_to_list_ix: None,
@@ -731,4 +753,44 @@ fn display_log_page_uses_retained_page_while_loading() {
     let display = HistoryView::display_log_page_for_repo(&repo)
         .expect("retained log should remain available while loading");
     assert!(Arc::ptr_eq(&display, &page));
+}
+
+#[test]
+fn pending_history_reveal_clears_a_focus_that_hides_the_commit() {
+    let pending = PendingHistoryReveal {
+        worktree_path: None,
+        repo_id: RepoId(7),
+        commit_id: CommitId("cccccccccccccccccccccccccccccccccccccccc".into()),
+        fallback_scope: Some(LogScope::AllBranches),
+    };
+    let decide = |focus_active| {
+        decide_pending_history_reveal(
+            &pending,
+            Some(RepoId(7)),
+            Some(LogScope::AllBranches),
+            None,
+            1,
+            1,
+            false,
+            Some(&log_page(Vec::new(), None)),
+            Some(false),
+            true,
+            Some(&HistoryVisibleIndices::all(0)),
+            &HistoryListPlan::new(false, Vec::new()),
+            None,
+            focus_active,
+        )
+    };
+    assert_eq!(
+        decide(true),
+        PendingHistoryRevealDecision {
+            clear_focus: true,
+            ..PendingHistoryRevealDecision::default()
+        },
+        "every scope walks only the focused refs"
+    );
+    assert!(
+        decide(false).clear_pending,
+        "without a focus the whole history was searched"
+    );
 }

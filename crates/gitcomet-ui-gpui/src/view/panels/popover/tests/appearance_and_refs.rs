@@ -207,6 +207,56 @@ fn history_ref_submenus_share_the_sidebar_header_surface(cx: &mut gpui::TestAppC
     }
 }
 
+#[gpui::test]
+fn the_push_menu_disables_push_without_remotes_and_says_why(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let with_remote = ref_repo();
+    let mut without_remotes = ref_repo();
+    without_remotes.remotes = Loadable::Ready(Arc::new(Vec::new()));
+
+    for (repo, expected_reason) in [
+        (with_remote, None),
+        (without_remotes, Some("Add a remote to push to first")),
+    ] {
+        let state = Arc::new(AppState {
+            active_repo: Some(repo.id),
+            repos: vec![repo],
+            ..AppState::test_default()
+        });
+        cx.update(|_window, app| {
+            view.update(app, |this, cx| {
+                this.state = state.clone();
+                this.popover_host.update(cx, |host, cx| {
+                    host.state = state;
+                    let model = host
+                        .context_menu_model(&PopoverKind::PushPicker, cx)
+                        .expect("expected a push menu");
+                    let (ix, disabled) = model
+                        .items
+                        .iter()
+                        .enumerate()
+                        .find_map(|(ix, item)| match item {
+                            ContextMenuItem::Entry {
+                                action, disabled, ..
+                            } if matches!(action.as_ref(), ContextMenuAction::Push { .. }) => {
+                                Some((ix, *disabled))
+                            }
+                            _ => None,
+                        })
+                        .expect("expected a Push entry");
+                    assert_eq!(disabled, expected_reason.is_some());
+                    assert_eq!(
+                        model.entry_tooltips.get(&ix).map(|text| text.as_ref()),
+                        expected_reason
+                    );
+                });
+            });
+        });
+    }
+}
+
 /// Force push is the one entry in this menu that rewrites published history, so
 /// it sits last and behind a separator rather than among the ordinary pushes a
 /// cursor is aimed at.

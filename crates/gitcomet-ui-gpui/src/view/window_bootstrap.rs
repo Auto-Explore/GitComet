@@ -249,7 +249,9 @@ impl PreparedWindowBootstrap {
             prune_deleted_remote_branches_on_fetch: ui_preferences
                 .remotes
                 .prune_deleted_remote_branches_on_fetch,
+            auto_fetch: ui_preferences.remotes.auto_fetch,
         };
+        store.set_auto_fetch_allowed(config.view_mode == GitCometViewMode::Normal);
         store.dispatch(Msg::SetRemoteUrlPolicy(
             ui_preferences.security.remote_url_policy,
         ));

@@ -1,8 +1,10 @@
 use std::sync::Arc;
 
 mod app;
+mod auto_fetch;
 mod diff;
 mod history;
+mod incoming;
 mod loads;
 mod navigation;
 mod operations;
@@ -12,8 +14,10 @@ mod reword;
 mod signature_map;
 
 pub use app::*;
+pub use auto_fetch::*;
 pub use diff::*;
 pub use history::*;
+pub use incoming::*;
 pub use loads::*;
 pub use navigation::*;
 pub use operations::*;

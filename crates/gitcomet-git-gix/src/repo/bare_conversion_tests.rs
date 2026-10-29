@@ -709,6 +709,25 @@ fn conversion_waits_for_owned_operation_lease_before_mutating() {
     assert_eq!(native_mode(&root).unwrap(), RepositoryMode::WorkingTree);
 }
 
+/// Background fetch and tracking reads run outside the store's quiesce, so
+/// only the operation lease keeps them off a repository being relocated.
+#[test]
+fn background_fetch_and_tracking_refuse_while_conversion_waits() {
+    let (_directory, root) = bare_fixture();
+    let repo = std::sync::Arc::new(open_repo(&root));
+    let preview = repo.preview_disable_bare_mode().unwrap();
+    let lease = repo.acquire_operation_lease().unwrap();
+    let worker = repo.clone();
+    let thread = std::thread::spawn(move || worker.disable_bare_mode(&preview));
+    wait_until_converting(&repo);
+    let token = CancellationToken::new();
+    let changed = |result: Result<()>| matches!(result, Err(error) if matches!(error.kind(), ErrorKind::RepositoryChanged));
+    assert!(changed(repo.fetch_all_background(false, &token).map(drop)));
+    assert!(changed(repo.head_tracking(&token).map(drop)));
+    drop(lease);
+    thread.join().unwrap().unwrap();
+}
+
 #[test]
 fn cancellation_while_waiting_for_operations_releases_conversion_gate() {
     let (_directory, root) = bare_fixture();

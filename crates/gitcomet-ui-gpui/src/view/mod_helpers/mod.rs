@@ -25,6 +25,17 @@ pub(in crate::view) enum PushRequest {
     NotReady,
 }
 
+impl PushRequest {
+    /// Why Push cannot start, or `None` when it can.
+    pub(in crate::view) fn unavailable_reason(&self) -> Option<&'static str> {
+        match self {
+            Self::NotReady => Some(REPOSITORY_LOADING_REASON),
+            Self::NoRemotes => Some("Add a remote to push to first"),
+            Self::Push | Self::SetUpstream { .. } => None,
+        }
+    }
+}
+
 /// Why an action waits on repository data that has not loaded.
 pub(in crate::view) const REPOSITORY_LOADING_REASON: &str = "The repository is still loading";
 
@@ -77,6 +88,34 @@ pub(in crate::view) fn head_branch_upstream<'a>(
         .iter()
         .find(|branch| branch.name == *head)
         .and_then(|branch| branch.upstream.as_ref())
+}
+
+/// The lease a force push confirmed now holds: a pending published-amend
+/// lease, else the upstream tip and HEAD this window shows. Git's implicit
+/// lease would accept whatever tip a background fetch wrote since.
+pub(in crate::view) fn force_push_lease(
+    repo: &RepoState,
+) -> Option<gitcomet_core::services::ForcePushLease> {
+    if let Some(lease) = &repo.pending.force_push_lease {
+        return Some(lease.clone());
+    }
+    let local_branch = repo.head_branch.ready()?;
+    let branch = repo
+        .branches
+        .ready()?
+        .iter()
+        .find(|branch| branch.name == *local_branch)?;
+    let upstream = branch.upstream.as_ref()?;
+    let remote_tip = repo.remote_branches.ready()?.iter().find(|candidate| {
+        candidate.remote == upstream.remote && candidate.name == upstream.branch
+    })?;
+    Some(gitcomet_core::services::ForcePushLease {
+        remote: upstream.remote.clone(),
+        branch: upstream.branch.clone(),
+        expected: remote_tip.target.clone(),
+        local_branch: local_branch.clone(),
+        local_head: branch.target.clone(),
+    })
 }
 
 /// Whether the checked-out branch has a confirmed live remote-tracking
@@ -1144,6 +1183,11 @@ pub struct GitCometView {
     /// Where the keyboard was before a prompt focused itself (`Some(None)`:
     /// nothing was focused), returned when the prompt goes away.
     pub(super) auth_prompt_focus_return: Option<Option<FocusHandle>>,
+    /// The special remote whose location the user said is not theirs: its
+    /// banner offers removing it.
+    pub(super) annex_remote_rejected: Option<(RepoId, String)>,
+    /// Special remotes put off with Later, by configuration, for this session.
+    pub(super) annex_remote_later: rustc_hash::FxHashSet<(RepoId, String, String)>,
     pub(super) active_context_menu_invoker: Option<SharedString>,
 }
 

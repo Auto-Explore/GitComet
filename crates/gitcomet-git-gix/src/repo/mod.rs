@@ -1161,6 +1161,18 @@ impl GitRepository for GixRepo {
         self.head_path_is_gitlink_impl(path)
     }
 
+    fn head_tracking(
+        &self,
+        cancellation: &CancellationToken,
+    ) -> Result<gitcomet_core::domain::HeadTracking> {
+        let _operation = self.operation_lease()?;
+        cancellation.check_cancelled()?;
+        let repo = self.reopen_repo()?;
+        let tracking = git_ops::head_tracking(&repo, &self.divergence_cache, cancellation)?;
+        cancellation.check_cancelled()?;
+        Ok(tracking)
+    }
+
     fn upstream_divergence(
         &self,
         cancellation: &CancellationToken,
@@ -1483,7 +1495,56 @@ impl GitRepository for GixRepo {
 
     fn fetch_all(&self, prune: bool) -> Result<CommandOutput> {
         let _operation = self.operation_lease()?;
-        self.fetch_all_with_output_impl(prune)
+        self.fetch_all_with_output_impl(prune, &[])
+    }
+
+    fn fetch_all_background(
+        &self,
+        prune: bool,
+        cancellation: &CancellationToken,
+    ) -> Result<CommandOutput> {
+        let _operation = self.operation_lease()?;
+        crate::util::background::with_background_git(cancellation, || {
+            self.fetch_all_with_output_impl(prune, &[])
+        })
+    }
+
+    fn fetch_all_background_except(
+        &self,
+        prune: bool,
+        skipped: &[String],
+        cancellation: &CancellationToken,
+    ) -> Result<CommandOutput> {
+        let _operation = self.operation_lease()?;
+        crate::util::background::with_background_git(cancellation, || {
+            self.fetch_all_with_output_impl(prune, skipped)
+        })
+    }
+
+    fn fetch_remote(&self, remote: &str, prune: bool) -> Result<CommandOutput> {
+        let _operation = self.operation_lease()?;
+        self.fetch_remote_with_output_impl(remote, prune)
+    }
+
+    fn fetch_all_remote_names(&self) -> Result<Vec<String>> {
+        let _operation = self.operation_lease()?;
+        self.fetch_all_remote_names_impl()
+    }
+
+    fn tracking_stamp(&self, cancellation: &CancellationToken) -> Result<u64> {
+        let _operation = self.operation_lease()?;
+        self.tracking_stamp_impl(cancellation)
+    }
+
+    fn refs_fingerprint(&self, cancellation: &CancellationToken) -> Result<u64> {
+        let _operation = self.operation_lease()?;
+        let _scope = git_ops_trace::scope(GitOpTraceKind::RefEnumerate);
+        self.refs_fingerprint_impl(cancellation)
+    }
+
+    fn fetch_config_signature(&self) -> Result<u64> {
+        let _operation = self.operation_lease()?;
+        self.fetch_config_signature_impl()
     }
 
     fn fetch_refspecs_with_output(

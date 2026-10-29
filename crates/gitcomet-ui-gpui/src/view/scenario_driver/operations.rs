@@ -155,7 +155,9 @@ impl Driver {
         let command_results_subscription = cx.update(|cx| {
             let command_results = Rc::clone(&command_results);
             cx.subscribe(&self.view, move |_, event: &CommandResultShown, _| {
-                if event.repo_id == repo_id {
+                if event.repo_id == repo_id
+                    && event.entry.source == gitcomet_state::model::CommandSource::User
+                {
                     command_results.borrow_mut().push(event.entry.clone());
                 }
             })
@@ -331,7 +333,8 @@ fn completion_from_log(
     started: SystemTime,
     cancellation_requested: bool,
 ) -> Option<Result<Option<bool>, String>> {
-    if entry.time < started
+    if entry.source == gitcomet_state::model::CommandSource::Background
+        || entry.time < started
         || !(entry.summary.starts_with(&format!("{label}:"))
             || entry.summary.starts_with(&format!("{label} failed:")))
     {
@@ -365,12 +368,16 @@ mod tests {
             handled_by_prompt: false,
             failure_id: None,
             hook_operation_id: None,
+            source: gitcomet_state::model::CommandSource::User,
         };
         assert_eq!(
             completion_from_log(&entry, "Fetch", now, false),
             Some(Ok(Some(false)))
         );
         assert!(completion_from_log(&entry, "Push", now, false).is_none());
+        entry.source = gitcomet_state::model::CommandSource::Background;
+        assert!(completion_from_log(&entry, "Fetch", now, false).is_none());
+        entry.source = gitcomet_state::model::CommandSource::User;
         assert!(
             completion_from_log(&entry, "Fetch", now + Duration::from_secs(1), false).is_none()
         );

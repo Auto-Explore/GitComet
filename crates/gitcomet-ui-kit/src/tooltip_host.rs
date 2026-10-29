@@ -6,6 +6,7 @@ use std::time::Duration;
 /// How long the pointer has to rest before a truncated-text tooltip appears.
 /// `wait_for_native_tooltip` in the test support advances the clock by this much.
 const TOOLTIP_DELAY: Duration = Duration::from_millis(500);
+const TOOLTIP_WINDOW_MARGIN_PX: f32 = 8.0;
 
 pub struct TooltipHost {
     theme: AppTheme,
@@ -228,7 +229,7 @@ impl TooltipHost {
 }
 
 impl Render for TooltipHost {
-    fn render(&mut self, _window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
         self.sync_tooltip_state(cx);
 
         let theme = self.theme;
@@ -244,6 +245,8 @@ impl Render for TooltipHost {
             let tooltip_text_color = theme.colors.tooltip.foreground;
             let anchor = self.tooltip_visible_pos.unwrap_or(self.last_mouse_pos);
             let pos = point(anchor.x + px(12.0), anchor.y + px(18.0));
+            let max_width =
+                (window.viewport_size().width - px(TOOLTIP_WINDOW_MARGIN_PX * 2.0)).max(px(0.0));
 
             layer = layer.child(
                 anchored()
@@ -252,9 +255,11 @@ impl Render for TooltipHost {
                     .offset(point(px(0.0), px(0.0)))
                     // Rows near a window edge would otherwise push the tooltip
                     // out of view, since it hangs below-right of the pointer.
-                    .snap_to_window_with_margin(px(8.0))
+                    .snap_to_window_with_margin(px(TOOLTIP_WINDOW_MARGIN_PX))
                     .child(
                         div()
+                            .debug_selector(|| "tooltip_content".to_string())
+                            .max_w(max_width)
                             .px_2()
                             .py_1()
                             .bg(tooltip_bg)
@@ -263,6 +268,7 @@ impl Render for TooltipHost {
                             .rounded(px(theme.radii.row))
                             .text_size(theme.ui_text(12.0))
                             .text_color(tooltip_text_color)
+                            .whitespace_normal()
                             .child(text),
                     ),
             );
@@ -271,3 +277,6 @@ impl Render for TooltipHost {
         layer
     }
 }
+
+#[cfg(test)]
+mod tests;

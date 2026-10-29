@@ -888,7 +888,11 @@ pub(super) fn log_loaded(
             }
             Ok(gitcomet_core::services::HistoryReadResult::Invalidated) => {
                 let request = super::util::refresh_log_request(repo_state);
-                repo_state.loads_in_flight.request_log(request);
+                if repo_state.loads_in_flight.log_is_background(seq) {
+                    repo_state.loads_in_flight.request_background_log(request);
+                } else {
+                    repo_state.loads_in_flight.request_log(request);
+                }
                 return finish_log_load(repo_state, seq);
             }
             Ok(gitcomet_core::services::HistoryReadResult::Page { mut page, snapshot }) => {
@@ -920,6 +924,10 @@ pub(super) fn log_loaded(
                 repo_state.history_state.log_snapshot = snapshot;
             }
             Err(e) => {
+                if repo_state.loads_in_flight.log_is_background(seq) {
+                    super::auto_fetch::refresh_failed(inputs, repo_state, e);
+                    return finish_log_load(repo_state, seq);
+                }
                 push_diagnostic(inputs, repo_state, DiagnosticKind::Error, e.to_string());
                 if !matches!(repo_state.log, Loadable::Ready(_)) {
                     repo_state.set_log(Loadable::Error(e.to_string()));

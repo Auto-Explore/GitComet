@@ -57,6 +57,7 @@ pub enum CloneOpStatus {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CommandLogEntry {
+    pub source: super::CommandSource,
     pub time: SystemTime,
     pub ok: bool,
     pub kind: CommandLogKind,
