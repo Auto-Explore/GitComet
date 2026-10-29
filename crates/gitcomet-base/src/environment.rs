@@ -71,7 +71,16 @@ impl SystemDetails {
         static DETAILS: OnceLock<SystemDetails> = OnceLock::new();
         DETAILS
             .get_or_init(|| {
-                let mut system = sysinfo::System::new();
+                let mut details = Self {
+                    operating_system: sysinfo::System::long_os_version()
+                        .or_else(|_| sysinfo::System::name())
+                        .ok(),
+                    kernel: sysinfo::System::kernel_version().ok(),
+                    ..Self::default()
+                };
+                let Ok(mut system) = sysinfo::System::new() else {
+                    return details;
+                };
                 system.refresh_cpu_list(sysinfo::CpuRefreshKind::nothing());
                 system.refresh_memory_specifics(sysinfo::MemoryRefreshKind::nothing().with_ram());
                 let mut models = Vec::new();
@@ -80,15 +89,12 @@ impl SystemDetails {
                         models.push(cpu.brand());
                     }
                 }
-                Self {
-                    operating_system: sysinfo::System::long_os_version()
-                        .or_else(sysinfo::System::name),
-                    kernel: sysinfo::System::kernel_version(),
-                    cpu_model: (!models.is_empty()).then(|| models.join(" / ")),
-                    logical_processors: (!system.cpus().is_empty()).then(|| system.cpus().len()),
-                    total_memory_bytes: (system.total_memory() > 0).then(|| system.total_memory()),
-                    ..Self::default()
-                }
+                details.cpu_model = (!models.is_empty()).then(|| models.join(" / "));
+                details.logical_processors =
+                    (!system.cpus().is_empty()).then(|| system.cpus().len());
+                details.total_memory_bytes =
+                    (system.total_memory() > 0).then(|| system.total_memory());
+                details
             })
             .clone()
     }
