@@ -28,10 +28,18 @@ pub(super) fn updated(
     }
     repo.auto_fetch_revision = revision;
     repo.auto_fetch = snapshot;
-    if matches!(
-        repo.auto_fetch.status,
-        crate::model::AutoFetchStatus::Failed { .. }
-    ) {
+    let unchecked = match &repo.incoming {
+        crate::model::RepoIncomingState::Current(incoming) => {
+            skipped_upstream(repo, &incoming.tracking)
+        }
+        _ => false,
+    };
+    if unchecked
+        || matches!(
+            repo.auto_fetch.status,
+            crate::model::AutoFetchStatus::Failed { .. }
+        )
+    {
         repo.incoming.mark_stale();
     }
     if let Some(result) = result {
@@ -62,6 +70,20 @@ pub(super) fn updated(
         }
     }
     Vec::new()
+}
+
+/// The last automatic fetch left out the remote `tracking` follows, so a
+/// count read since says nothing new about it.
+pub(super) fn skipped_upstream(
+    repo: &crate::model::RepoState,
+    tracking: &gitcomet_core::domain::HeadTracking,
+) -> bool {
+    let gitcomet_core::domain::HeadTracking::Tracking { upstream, .. } = tracking else {
+        return false;
+    };
+    let fetch = &repo.auto_fetch;
+    fetch.skipped_remotes.contains(&upstream.remote)
+        || fetch.paused_remotes.contains(&upstream.remote)
 }
 
 pub(super) fn refresh(
@@ -503,6 +525,77 @@ mod tests {
             }),
         );
         assert!(!state.repos[0].needs_auto_fetch_refresh());
+    }
+
+    #[test]
+    fn a_count_whose_remote_the_fetch_skipped_stays_stale() {
+        use gitcomet_core::domain::{HeadTracking, Upstream, UpstreamDivergence};
+
+        let mut state = state();
+        let lifetime = state.repos[0].lifetime_id();
+        let inputs = super::super::test_inputs::clock();
+        // origin is paused; the fetch reached only the other remote.
+        updated(
+            &inputs,
+            &mut state,
+            RepoId(1),
+            lifetime,
+            1,
+            RepoAutoFetchState {
+                status: AutoFetchStatus::Succeeded { at: UNIX_EPOCH },
+                paused_remotes: vec!["origin".into()],
+                ..RepoAutoFetchState::default()
+            },
+            None,
+        );
+        refresh(&mut state, RepoId(1), lifetime);
+        let tracking = |remote: &str| HeadTracking::Tracking {
+            branch: "main".into(),
+            upstream: Upstream {
+                remote: remote.into(),
+                branch: "main".into(),
+            },
+            divergence: Some(UpstreamDivergence {
+                ahead: 0,
+                behind: 1,
+            }),
+        };
+        super::super::effects::head_tracking_loaded(
+            &inputs,
+            &mut state,
+            RepoId(1),
+            Ok(tracking("origin")),
+        );
+        assert!(
+            state.repos[0].incoming_is_stale(),
+            "nothing checked origin, so its ↓1 may be out of date"
+        );
+        refresh(&mut state, RepoId(1), lifetime);
+        super::super::effects::head_tracking_loaded(
+            &inputs,
+            &mut state,
+            RepoId(1),
+            Ok(tracking("other")),
+        );
+        assert!(!state.repos[0].incoming_is_stale(), "other was fetched");
+        // origin's server waits out a failure, so the next fetch skips it.
+        updated(
+            &inputs,
+            &mut state,
+            RepoId(1),
+            lifetime,
+            2,
+            RepoAutoFetchState {
+                status: AutoFetchStatus::Succeeded { at: UNIX_EPOCH },
+                skipped_remotes: vec!["other".into()],
+                ..RepoAutoFetchState::default()
+            },
+            None,
+        );
+        assert!(
+            state.repos[0].incoming_is_stale(),
+            "the count other's fetch left unchecked greys at once"
+        );
     }
 
     #[test]

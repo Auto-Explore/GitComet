@@ -79,6 +79,9 @@ pub struct RepoAutoFetchState {
     /// Remotes skipped until a manual fetch succeeds, after a sign-in or
     /// missing-repository failure.
     pub paused_remotes: Vec<String>,
+    /// Remotes the last automatic fetch left out: paused ones and those whose
+    /// server is waiting out a failure. A count tracking one stays grey.
+    pub skipped_remotes: Vec<String>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]

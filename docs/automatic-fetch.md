@@ -67,7 +67,9 @@ indicator.
 
 A grey count is last-known tracking information that may be out of date, for
 example after a failed check. The next successful check makes it current again,
-even when it finds nothing new. A fetch in progress leaves the last count as it
+even when it finds nothing new. A count stays grey while automatic fetch skips
+its remote, because the remote is paused or its server is waiting out a failure.
+A fetch in progress leaves the last count as it
 is. The tab tooltip explains its freshness. Unknown counts, detached HEAD and
 branches without a remote upstream have no incoming indicator. These indicators
 also reflect manual fetches and refreshes when automatic fetching is off.

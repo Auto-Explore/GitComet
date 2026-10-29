@@ -1955,3 +1955,46 @@ fn a_worktree_changed_outside_gitcomet_reloads_its_count_after_a_quiet_fetch() {
     fetch_when_due();
     assert_eq!(take(), lifetimes, "the reset clears ↓1 at the next fetch");
 }
+
+#[test]
+fn the_remotes_a_fetch_skipped_reach_the_tabs_until_a_manual_fetch() {
+    let coordinator = AutoFetchCoordinator::new();
+    register(&coordinator, 1, "/repo", "/repo/.git");
+    enable(&coordinator);
+    let mut state = coordinator.inner.state.lock().unwrap();
+    let job = next_job(&mut state, coordinator.admission(), UNIX_EPOCH).unwrap();
+    finish(
+        &mut state,
+        &job,
+        Completion::Finished {
+            common_dir: Some(PathBuf::from("/repo/.git")),
+            key: None,
+            remotes: origin("github.com"),
+            skipped: vec!["origin".into()],
+            result: Ok(CommandOutput::empty_success("git fetch --all")),
+            refs_changed: false,
+            regrouped: Vec::new(),
+            heads: Vec::new(),
+        },
+        UNIX_EPOCH,
+    );
+    assert_eq!(
+        group_of(&state, Path::new("/repo"))
+            .snapshot
+            .skipped_remotes,
+        ["origin"]
+    );
+    drop(state);
+    coordinator.manual_fetch_finished(
+        Path::new("/repo"),
+        UNIX_EPOCH,
+        &Ok(CommandOutput::empty_success("git fetch --all")),
+    );
+    let state = coordinator.inner.state.lock().unwrap();
+    assert!(
+        group_of(&state, Path::new("/repo"))
+            .snapshot
+            .skipped_remotes
+            .is_empty()
+    );
+}

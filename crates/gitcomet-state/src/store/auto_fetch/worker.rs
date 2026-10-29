@@ -426,6 +426,7 @@ pub(super) fn finish(state: &mut State, job: &Job, completion: Completion, now: 
     let State { groups, hosts, .. } = &mut *state;
     if current && let Some(group) = groups.get_mut(&group_key) {
         group.schedule.finish(now);
+        group.snapshot.skipped_remotes = skipped.clone();
         group.snapshot.status = match &result {
             Ok(_) => {
                 group.snapshot.last_success_at = Some(now);

@@ -2407,7 +2407,8 @@ pub(super) fn head_tracking_loaded(
                 repo.auto_fetch.status,
                 crate::model::AutoFetchStatus::Running
                     | crate::model::AutoFetchStatus::Failed { .. }
-            ) {
+            ) || super::auto_fetch::skipped_upstream(repo, &snapshot.tracking)
+            {
                 crate::model::RepoIncomingState::Stale(snapshot)
             } else {
                 crate::model::RepoIncomingState::Current(snapshot)

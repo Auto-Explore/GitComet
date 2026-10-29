@@ -121,6 +121,7 @@ impl Group {
         self.paused.clear();
         self.snapshot.retry_at = None;
         self.snapshot.paused_remotes.clear();
+        self.snapshot.skipped_remotes.clear();
         for host in self
             .remotes
             .iter()
