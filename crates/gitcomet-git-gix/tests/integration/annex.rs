@@ -1208,7 +1208,29 @@ fn assistant_counts_as_running_only_while_its_process_lives() {
     assert!(!running());
     let pid_file = repo.join(".git/annex/daemon.pid");
     fs::write(&pid_file, format!("{}\n", std::process::id())).unwrap();
+    #[cfg(windows)]
+    let held_lock = {
+        use std::os::windows::fs::OpenOptionsExt as _;
+
+        // Windows git-annex tests the assistant's held lock, not its MSYS PID.
+        fs::OpenOptions::new()
+            .create(true)
+            .truncate(true)
+            .read(true)
+            .write(true)
+            .share_mode(0)
+            .open(repo.join(format!(".git/annex/daemon.pid.{}.lck", std::process::id())))
+            .unwrap()
+    };
     assert!(running());
+    #[cfg(windows)]
+    {
+        drop(held_lock);
+        assert!(
+            !running(),
+            "a stale PID without the held lock is not running"
+        );
+    }
     if cfg!(unix) {
         // Left behind by a killed assistant.
         let mut child = Command::new("true").spawn().unwrap();
