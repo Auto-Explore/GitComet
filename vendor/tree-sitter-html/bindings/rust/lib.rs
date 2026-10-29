@@ -23,6 +23,25 @@ pub const HIGHLIGHTS_QUERY: &str = include_str!("../../queries/highlights.scm");
 #[cfg(test)]
 mod tests {
     #[test]
+    fn qualified_component_names_are_single_tag_names() {
+        let source = "<RazorCorpus.Components.SamplePanel Title=\"literal\"></RazorCorpus.Components.SamplePanel>";
+        let mut parser = tree_sitter::Parser::new();
+        parser.set_language(&super::LANGUAGE.into()).unwrap();
+        let tree = parser.parse(source, None).unwrap();
+        assert!(!tree.root_node().has_error());
+        let element = tree.root_node().named_child(0).unwrap();
+        for tag_index in [0, 1] {
+            let tag = element.named_child(tag_index).unwrap();
+            let name = tag.named_child(0).unwrap();
+            assert_eq!(name.kind(), "tag_name");
+            assert_eq!(
+                &source[name.byte_range()],
+                "RazorCorpus.Components.SamplePanel"
+            );
+        }
+    }
+
+    #[test]
     fn test_can_load_grammar() {
         let mut parser = tree_sitter::Parser::new();
         parser
