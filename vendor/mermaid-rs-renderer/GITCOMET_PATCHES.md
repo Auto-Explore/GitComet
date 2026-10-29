@@ -16,8 +16,13 @@ The checked-in source is the published crate, with these focused changes:
   workspace manifest, so the renderer cannot drift onto second copies (it had
   fontdb 0.23 and lru 0.18 beside the workspace's 0.24 and 0.19). Match usvg to
   resvg's version so their SVG tree types agree in the PNG output path.
-  Upstream's unit tests, doc examples and benches are not built: they read fixtures the
-  published crate omits. Two upstream clippy style lints are allowed.
+  Restore the five comparison fixtures used by upstream's unit tests from the
+  published crate's source revision, `2f993bd79a55235eb59a34d807852276ba25bea7`,
+  so unit tests and doc examples build with workspace checks, including
+  `--all-targets`. Two upstream clippy style lints are allowed.
+* Align the upstream parser test with the explicit-header requirement. Check
+  subgraph entry alignment using node centers, independently of edge ports
+  that are deliberately spaced apart for multiple incoming connections.
 
 GitComet uses strict parsing, then configuration, layout and SVG exactly once.
 Font selection, YAML frontmatter and SVG checks live in gitcomet-diagrams.

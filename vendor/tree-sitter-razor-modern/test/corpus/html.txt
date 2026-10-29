@@ -1,0 +1,71 @@
+========
+Simple HTML
+========
+
+<p>Simple HTML</p>
+
+-----
+
+(compilation_unit
+  (element
+    (html_text)))
+
+===========
+HTML with attributes
+===========
+
+<p id="foo" class="bar">HTML with attributes</p>
+----
+
+(compilation_unit
+  (element
+    (html_text)))
+
+===========
+Attribute name with space
+===========
+<p class="foo bar">HTML with attributes</p>
+
+----
+
+(compilation_unit
+  (element
+    (html_text)))
+
+=========
+Self Closing Tag
+=========
+<input type="text" value="foo" />
+----
+
+(compilation_unit
+  (element))
+
+====
+self closing image tag
+====
+<img src="foo.jpg" />
+----
+
+(compilation_unit
+  (element))
+
+===
+HTML boolean attribute
+===
+
+<input type="checkbox" checked />
+---
+
+(compilation_unit
+  (element))
+
+===
+complex html
+===
+<itunes:image>http://www.thisdeveloperslife.com/images/logo_full1400.jpg</itunes:image>
+---
+
+(compilation_unit
+  (element
+    (html_text)))

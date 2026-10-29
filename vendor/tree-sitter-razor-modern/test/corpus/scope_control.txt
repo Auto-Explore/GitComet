@@ -1,0 +1,460 @@
+=========================================
+Code block with a local function and cast
+=========================================
+@{
+    string currentPage = this.ViewContext.RouteData.Values["page"] as string;
+    string CurrentIfPage(string page) => string.Equals(currentPage, page) ? "page" : null;
+}
+
+---
+
+(compilation_unit
+  (razor_block
+    (field_declaration
+      (variable_declaration
+        (predefined_type)
+        (variable_declarator
+          (identifier)
+          (as_expression
+            (element_access_expression
+              (member_access_expression
+                (member_access_expression
+                  (member_access_expression
+                    (identifier))
+                  (identifier))
+                (identifier))
+              (bracketed_argument_list
+                (argument
+                  (string_literal
+                    (string_literal_content)))))
+            (predefined_type)))))
+    (method_declaration
+      (predefined_type)
+      (identifier)
+      (parameter_list
+        (parameter
+          (predefined_type)
+          (identifier)))
+      (arrow_expression_clause
+        (conditional_expression
+          (invocation_expression
+            (member_access_expression
+              (predefined_type)
+              (identifier))
+            (argument_list
+              (argument
+                (identifier))
+              (argument
+                (identifier))))
+          (string_literal
+            (string_literal_content))
+          (null_literal))))))
+
+======================================
+If with else if and else around markup
+======================================
+@if (Model.IsConfigured)
+{
+    <p>Ready</p>
+}
+else if (Model.IsPending)
+{
+    <p>Pending</p>
+}
+else
+{
+    <p>Not configured</p>
+}
+
+---
+
+(compilation_unit
+  (razor_if
+    (razor_condition
+      (member_access_expression
+        (identifier)
+        (identifier)))
+    (element
+      (html_text))
+    (razor_else_if
+      (razor_condition
+        (member_access_expression
+          (identifier)
+          (identifier)))
+      (element
+        (html_text)))
+    (razor_else
+      (element
+        (html_text)))))
+
+========================================
+Foreach over a typed item with nested if
+========================================
+@foreach (AttentionItem item in Model.AttentionItems)
+{
+    <li>
+        <span class="message">@item.Message</span>
+        @if (item.RunId is not null)
+        {
+            <a asp-page="@item.PageRoute">@item.LinkText</a>
+        }
+    </li>
+}
+
+---
+
+(compilation_unit
+  (razor_foreach
+    (identifier)
+    (identifier)
+    (member_access_expression
+      (identifier)
+      (identifier))
+    (element
+      (element
+        (razor_implicit_expression
+          (member_access_expression
+            (identifier)
+            (identifier))))
+      (razor_if
+        (razor_condition
+          (is_pattern_expression
+            (member_access_expression
+              (identifier)
+              (identifier))
+            (negated_pattern
+              (constant_pattern
+                (null_literal)))))
+        (element
+          (razor_implicit_expression
+            (member_access_expression
+              (identifier)
+              (identifier)))
+          (razor_implicit_expression
+            (member_access_expression
+              (identifier)
+              (identifier))))))))
+
+=========================
+For loop with markup body
+=========================
+@for (int i = 0; i < 3; i++)
+{
+    <p>Row @i</p>
+}
+
+---
+
+(compilation_unit
+  (razor_for
+    (variable_declaration
+      (predefined_type)
+      (variable_declarator
+        (identifier)
+        (integer_literal)))
+    (binary_expression
+      (identifier)
+      (integer_literal))
+    (postfix_unary_expression
+      (identifier))
+    (element
+      (html_text)
+      (razor_implicit_expression
+        (identifier)))))
+
+===========================
+While loop with markup body
+===========================
+@while (queue.Count > 0)
+{
+    <p>@queue.Dequeue()</p>
+}
+
+---
+
+(compilation_unit
+  (razor_while
+    (razor_condition
+      (binary_expression
+        (member_access_expression
+          (identifier)
+          (identifier))
+        (integer_literal)))
+    (element
+      (razor_implicit_expression
+        (invocation_expression
+          (member_access_expression
+            (identifier)
+            (identifier))
+          (argument_list))))))
+
+=============================
+Switch with cases and default
+=============================
+@switch (Model.Status)
+{
+    case "queued":
+        <span>Queued</span>
+        break;
+    default:
+        <span>Other</span>
+        break;
+}
+
+---
+
+(compilation_unit
+  (razor_switch
+    (razor_condition
+      (member_access_expression
+        (identifier)
+        (identifier)))
+    (razor_switch_case
+      (razor_case_condition
+        (string_literal
+          (string_literal_content)))
+      (element
+        (html_text))
+      (break_statement))
+    (razor_switch_default
+      (element
+        (html_text))
+      (break_statement))))
+
+==========================
+Try with catch and finally
+==========================
+@try
+{
+    <p>@Model.Load()</p>
+}
+catch (Exception ex)
+{
+    <p>@ex.Message</p>
+}
+finally
+{
+    <p>done</p>
+}
+
+---
+
+(compilation_unit
+  (razor_try
+    (element
+      (razor_implicit_expression
+        (invocation_expression
+          (member_access_expression
+            (identifier)
+            (identifier))
+          (argument_list))))
+    (razor_catch
+      (catch_declaration
+        (identifier)
+        (identifier))
+      (element
+        (razor_implicit_expression
+          (member_access_expression
+            (identifier)
+            (identifier)))))
+    (razor_finally
+      (element
+        (html_text)))))
+
+======================================
+Using statement and lock around markup
+======================================
+@using (var reader = Model.Open())
+{
+    <p>@reader.Name</p>
+}
+@lock (Model.Sync)
+{
+    <p>locked</p>
+}
+
+---
+
+(compilation_unit
+  (razor_compound_using
+    (variable_declaration
+      (implicit_type)
+      (variable_declarator
+        (identifier)
+        (invocation_expression
+          (member_access_expression
+            (identifier)
+            (identifier))
+          (argument_list))))
+    (element
+      (razor_implicit_expression
+        (member_access_expression
+          (identifier)
+          (identifier)))))
+  (razor_lock
+    (member_access_expression
+      (identifier)
+      (identifier))
+    (element
+      (html_text))))
+
+===============================================
+C# control flow with markup inside a code block
+===============================================
+@{
+    foreach (var job in Model.Jobs)
+    {
+        if (job.Status == "queued")
+        {
+            <form method="post"><button type="submit">Cancel</button></form>
+        }
+        else if (job.Status is "succeeded" or "failed")
+        {
+            <span>Done</span>
+        }
+        else
+        {
+            <span>Running</span>
+        }
+    }
+}
+
+---
+
+(compilation_unit
+  (razor_block
+    (foreach_statement
+      (implicit_type)
+      (identifier)
+      (member_access_expression
+        (identifier)
+        (identifier))
+      (block
+        (if_statement
+          (binary_expression
+            (member_access_expression
+              (identifier)
+              (identifier))
+            (string_literal
+              (string_literal_content)))
+          (block
+            (element
+              (element
+                (html_text))))
+          (if_statement
+            (is_pattern_expression
+              (member_access_expression
+                (identifier)
+                (identifier))
+              (or_pattern
+                (constant_pattern
+                  (string_literal
+                    (string_literal_content)))
+                (constant_pattern
+                  (string_literal
+                    (string_literal_content)))))
+            (block
+              (element
+                (html_text)))
+            (block
+              (element
+                (html_text)))))))))
+
+=============================================
+Declarations mixed with markup in a loop body
+=============================================
+@foreach (string column in Model.LiveColumns)
+{
+    bool isChecked = Model.Selected.Contains(column);
+    <li>
+        <input type="checkbox" value="@column" checked="@isChecked" />
+        @column
+    </li>
+}
+
+---
+
+(compilation_unit
+  (razor_foreach
+    (predefined_type)
+    (identifier)
+    (member_access_expression
+      (identifier)
+      (identifier))
+    (local_declaration_statement
+      (variable_declaration
+        (predefined_type)
+        (variable_declarator
+          (identifier)
+          (invocation_expression
+            (member_access_expression
+              (member_access_expression
+                (identifier)
+                (identifier))
+              (identifier))
+            (argument_list
+              (argument
+                (identifier)))))))
+    (element
+      (element
+        (razor_implicit_expression
+          (identifier))
+        (razor_implicit_expression
+          (identifier)))
+      (razor_implicit_expression
+        (identifier)))))
+
+=====================================================
+Multi-line declaration with conditional in an element
+=====================================================
+<td>
+    @{
+        bool rowFailed = Model.FailedObjectId == item.Id;
+        string floorValue = rowFailed
+            ? Model.Input
+            : item.Timestamp?.ToString("yyyy-MM-dd");
+    }
+    <input value="@floorValue" />
+</td>
+
+---
+
+(compilation_unit
+  (element
+    (razor_block
+      (field_declaration
+        (variable_declaration
+          (predefined_type)
+          (variable_declarator
+            (identifier)
+            (binary_expression
+              (member_access_expression
+                (identifier)
+                (identifier))
+              (member_access_expression
+                (identifier)
+                (identifier))))))
+      (local_declaration_statement
+        (variable_declaration
+          (predefined_type)
+          (variable_declarator
+            (identifier)
+            (conditional_expression
+              (identifier)
+              (member_access_expression
+                (identifier)
+                (identifier))
+              (invocation_expression
+                (conditional_access_expression
+                  (member_access_expression
+                    (identifier)
+                    (identifier))
+                  (member_binding_expression
+                    (identifier)))
+                (argument_list
+                  (argument
+                    (string_literal
+                      (string_literal_content))))))))))
+    (element
+      (razor_implicit_expression
+        (identifier)))))

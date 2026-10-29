@@ -1,18 +1,17 @@
 use super::*;
 
 impl TreesitterHighlightSpec {
-    /// Whether match `pattern_ix` belongs to a shared layer.
-    ///
-    /// Reads the hoisted `has_combined_injections` gate first, so a grammar with no
-    /// combined pattern costs one branch. Shared by both collectors, which used to
-    /// inline this and drifted apart.
-    pub(crate) fn is_combined_injection_pattern(&self, pattern_ix: usize) -> bool {
-        self.has_combined_injections
-            && self
-                .injection_combined_patterns
-                .get(pattern_ix)
-                .copied()
-                .unwrap_or(false)
+    pub(crate) fn combined_injection_content_mode(
+        &self,
+        pattern_ix: usize,
+    ) -> Option<InjectionContentMode> {
+        if !self.has_combined_injections {
+            return None;
+        }
+        match self.injection_patterns.get(pattern_ix) {
+            Some(InjectionPattern::Combined(mode)) => Some(*mode),
+            Some(InjectionPattern::Single) | None => None,
+        }
     }
 }
 

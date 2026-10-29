@@ -1,0 +1,403 @@
+====================
+Directives
+====================
+@page "/counter"
+@rendermode InteractiveServer
+@inject blazorapp.components.Counter Counter
+---
+
+(compilation_unit
+  (razor_page_directive
+    (string_literal
+      (string_literal_content)))
+  (razor_rendermode_directive
+    (razor_rendermode
+      (identifier)))
+  (razor_inject_directive
+    (variable_declaration
+      (qualified_name
+        (qualified_name
+          (identifier)
+          (identifier))
+        (identifier))
+      (variable_declarator
+        (identifier)))))
+
+======
+Using directives
+======
+@using System.Net.Http
+@using System.Net.Http.Json
+@using Microsoft.AspNetCore.Components.Forms
+@using Microsoft.AspNetCore.Components.Routing
+@using Microsoft.AspNetCore.Components.Web
+@using static Microsoft.AspNetCore.Components.Web.RenderMode
+@using Microsoft.AspNetCore.Components.Web.Virtualization
+@using Microsoft.JSInterop
+@using BlazorApp
+@using BlazorApp.Components
+-----
+
+(compilation_unit
+  (razor_using_directive
+    (qualified_name
+      (qualified_name
+        (identifier)
+        (identifier))
+      (identifier)))
+  (razor_using_directive
+    (qualified_name
+      (qualified_name
+        (qualified_name
+          (identifier)
+          (identifier))
+        (identifier))
+      (identifier)))
+  (razor_using_directive
+    (qualified_name
+      (qualified_name
+        (qualified_name
+          (identifier)
+          (identifier))
+        (identifier))
+      (identifier)))
+  (razor_using_directive
+    (qualified_name
+      (qualified_name
+        (qualified_name
+          (identifier)
+          (identifier))
+        (identifier))
+      (identifier)))
+  (razor_using_directive
+    (qualified_name
+      (qualified_name
+        (qualified_name
+          (identifier)
+          (identifier))
+        (identifier))
+      (identifier)))
+  (razor_using_directive
+    (qualified_name
+      (qualified_name
+        (qualified_name
+          (qualified_name
+            (identifier)
+            (identifier))
+          (identifier))
+        (identifier))
+      (identifier)))
+  (razor_using_directive
+    (qualified_name
+      (qualified_name
+        (qualified_name
+          (qualified_name
+            (identifier)
+            (identifier))
+          (identifier))
+        (identifier))
+      (identifier)))
+  (razor_using_directive
+    (qualified_name
+      (identifier)
+      (identifier)))
+  (razor_using_directive
+    (identifier))
+  (razor_using_directive
+    (qualified_name
+      (identifier)
+      (identifier))))
+
+===
+Compound Using
+===
+@using (Html.BeginForm())
+{
+  <p>Something</p>
+}
+
+@using (var temporary_culture = new CultureSwapper())
+{
+  <p>Something else</p>
+}
+
+---
+
+(compilation_unit
+  (razor_compound_using
+    (invocation_expression
+      (member_access_expression
+        (identifier)
+        (identifier))
+      (argument_list))
+    (element
+      (html_text)))
+  (razor_compound_using
+    (variable_declaration
+      (implicit_type)
+      (variable_declarator
+        (identifier)
+        (object_creation_expression
+          (identifier)
+          (argument_list))))
+    (element
+      (html_text))))
+
+======
+Injects
+======
+@inject blazorapp.components.Counter Counter
+@inject ILogger<iCounter> Logger
+---
+
+(compilation_unit
+  (razor_inject_directive
+    (variable_declaration
+      (qualified_name
+        (qualified_name
+          (identifier)
+          (identifier))
+        (identifier))
+      (variable_declarator
+        (identifier))))
+  (razor_inject_directive
+    (variable_declaration
+      (generic_name
+        (identifier)
+        (type_argument_list
+          (identifier)))
+      (variable_declarator
+        (identifier)))))
+
+===
+Namespace
+===
+@namespace Your.Namespace.Here
+---
+
+(compilation_unit
+  (razor_namespace_directive
+    (qualified_name
+      (qualified_name
+        (identifier)
+        (identifier))
+      (identifier))))
+
+===
+Model
+===
+@model TypeNameOfModel
+---
+
+(compilation_unit
+  (razor_model_directive
+    (identifier)))
+
+===
+implements
+===
+@implements IDisposable
+@implements IUsesLayout<_Layout, LayoutModel>
+@implements Oqtane.Interfaces.ISettingsControl
+---
+
+(compilation_unit
+  (razor_implements_directive
+    (identifier))
+  (razor_implements_directive
+    (generic_name
+      (identifier)
+      (type_argument_list
+        (identifier)
+        (identifier))))
+  (razor_implements_directive
+    (qualified_name
+      (qualified_name
+        (identifier)
+        (identifier))
+      (identifier))))
+
+===
+preservewhitespace
+===
+@preservewhitespace true
+@preservewhitespace false
+---
+
+(compilation_unit
+  (razor_preservewhitespace_directive
+    (boolean_literal))
+  (razor_preservewhitespace_directive
+    (boolean_literal)))
+
+===
+inherits
+===
+@inherits BasePage
+@inherits StaticRazorPage<IDocument>
+@inherits My.RazorApp.TemplatePage
+---
+
+(compilation_unit
+  (razor_inherits_directive
+    (identifier))
+  (razor_inherits_directive
+    (generic_name
+      (identifier)
+      (type_argument_list
+        (identifier))))
+  (razor_inherits_directive
+    (qualified_name
+      (qualified_name
+        (identifier)
+        (identifier))
+      (identifier))))
+
+===
+type param
+===
+@typeparam IType
+---
+
+(compilation_unit
+  (razor_typeparam_directive
+    (identifier)))
+
+===
+layout
+===
+@layout LoginLayout
+@layout ClientChat.Components.Layout.HomeLayout
+---
+
+(compilation_unit
+  (razor_layout_directive
+    (identifier))
+  (razor_layout_directive
+    (qualified_name
+      (qualified_name
+        (qualified_name
+          (identifier)
+          (identifier))
+        (identifier))
+      (identifier))))
+
+===
+attribute
+===
+@attribute [RazorCompiledItemMetadata("RouteTemplate", Urls.LoginUrl)]
+@attribute [Authorize]
+@attribute [Excubo.Generators.Blazor.GenerateSetParametersAsync(RequireExactMatch = true)]
+@attribute [Authorize()]
+---
+
+(compilation_unit
+  (razor_attribute_directive
+    (attribute_list
+      (attribute
+        (identifier)
+        (attribute_argument_list
+          (attribute_argument
+            (string_literal
+              (string_literal_content)))
+          (attribute_argument
+            (member_access_expression
+              (identifier)
+              (identifier)))))))
+  (razor_attribute_directive
+    (attribute_list
+      (attribute
+        (identifier))))
+  (razor_attribute_directive
+    (attribute_list
+      (attribute
+        (qualified_name
+          (qualified_name
+            (qualified_name
+              (identifier)
+              (identifier))
+            (identifier))
+          (identifier))
+        (attribute_argument_list
+          (attribute_argument
+            (identifier)
+            (boolean_literal))))))
+  (razor_attribute_directive
+    (attribute_list
+      (attribute
+        (identifier)
+        (attribute_argument_list)))))
+
+===
+lock
+===
+@lock (_messages) {
+            foreach (Message msg in _messages) {
+              <p>msg.Text</p>
+            }
+}
+---
+
+(compilation_unit
+  (razor_lock
+    (identifier)
+    (foreach_statement
+      (identifier)
+      (identifier)
+      (identifier)
+      (block
+        (element
+          (html_text))))))
+
+===
+addTagHelper
+===
+@addTagHelper *, Microsoft.AspNetCore.Mvc.TagHelpers
+@addTagHelper "*, Microsoft.AspNetCore.Mvc.TagHelpers"
+@addTagHelper SomeType, MyAssembly
+---
+
+(compilation_unit
+  (razor_addtaghelper_directive
+    (taghelper_wildcard)
+    (qualified_name
+      (qualified_name
+        (qualified_name
+          (identifier)
+          (identifier))
+        (identifier))
+      (identifier)))
+  (razor_addtaghelper_directive
+    (string_literal
+      (string_literal_content)))
+  (razor_addtaghelper_directive
+    (identifier)
+    (identifier)))
+
+===
+removeTagHelper
+===
+@removeTagHelper *, MyAssembly
+@removeTagHelper "*, MyAssembly"
+---
+
+(compilation_unit
+  (razor_removetaghelper_directive
+    (taghelper_wildcard)
+    (identifier))
+  (razor_removetaghelper_directive
+    (string_literal
+      (string_literal_content))))
+
+===
+tagHelperPrefix
+===
+@tagHelperPrefix "th:"
+@tagHelperPrefix th
+---
+
+(compilation_unit
+  (razor_taghelperprefix_directive
+    (string_literal
+      (string_literal_content)))
+  (razor_taghelperprefix_directive))
