@@ -161,10 +161,17 @@ pub(super) fn execute(job: &Job, inner: &Inner) -> Completion {
     };
     let common_dir = repository_key(repo.as_ref());
     let key = fetch_group(repo.as_ref(), &common_dir, &job.workdir);
+    // Only remotes the fetch contacts can fail it or be charged for it.
+    let fetched = repo.fetch_all_remote_names().ok();
     let remotes: Vec<FetchRemote> = repo
         .list_remotes(&job.cancellation)
         .unwrap_or_default()
         .into_iter()
+        .filter(|remote| {
+            fetched
+                .as_ref()
+                .is_none_or(|names| names.contains(&remote.name))
+        })
         .map(|remote| FetchRemote {
             host: remote.url.as_deref().and_then(policy::remote_host),
             name: remote.name,

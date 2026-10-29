@@ -620,6 +620,10 @@ impl GixRepo {
         Ok(FetchRemotes { names, explicit })
     }
 
+    pub(super) fn fetch_all_remote_names_impl(&self) -> Result<Vec<String>> {
+        self.fetch_all_remotes().map(|remotes| remotes.names)
+    }
+
     /// Configured branch upstreams. `tracking_ref` is populated only when the
     /// remote's positive and negative fetch refspecs map this upstream locally.
     fn configured_remote_upstreams(

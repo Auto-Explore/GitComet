@@ -1835,3 +1835,32 @@ fn a_successful_fetch_after_a_failure_reloads_counts_it_left_stale() {
     fetch_when_due();
     assert_eq!(take(), lifetimes, "a failed manual fetch greys it too");
 }
+
+#[test]
+fn a_remote_that_fetch_all_skips_is_never_charged_with_a_failure() {
+    let temp = tempfile::tempdir().unwrap();
+    let workdir = canonicalize_or_original(temp.path().to_path_buf()).join("repo");
+    std::fs::create_dir_all(&workdir).unwrap();
+    git(&workdir, &["init", "-q", "-b", "main"]);
+    git(
+        &workdir,
+        &["remote", "add", "origin", "https://skipped.example/r.git"],
+    );
+    git(&workdir, &["config", "remote.origin.skipFetchAll", "true"]);
+    let offline = refused_remote_url();
+    git(&workdir, &["remote", "add", "offline", &offline]);
+    let coordinator = AutoFetchCoordinator::new();
+    subscribe_unopened(&coordinator, &[&workdir], Arc::new(|_| {}));
+    assert!(run_job(&coordinator, UNIX_EPOCH).is_some());
+    let state = coordinator.inner.state.lock().unwrap();
+    assert!(matches!(
+        group_of(&state, &workdir).snapshot.status,
+        AutoFetchStatus::Failed { .. }
+    ));
+    assert_eq!(
+        state.hosts.keys().collect::<Vec<_>>(),
+        [&policy::remote_host(&offline).unwrap()],
+        "only the remote that was contacted failed"
+    );
+    assert!(!state.contacts.contains_key("skipped.example"));
+}

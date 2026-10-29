@@ -1659,6 +1659,13 @@ pub trait GitRepository: Send + Sync {
             "fetching a single remote is not implemented for this backend",
         )))
     }
+    /// The remotes [`Self::fetch_all`] contacts: every remote except those
+    /// `skipFetchAll` leaves out and git-annex special remotes.
+    fn fetch_all_remote_names(&self) -> Result<Vec<String>> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "listing the remotes a fetch contacts is not implemented for this backend",
+        )))
+    }
     /// Hash of every remote-tracking branch and tag with its target, read
     /// fresh from disk. Equal values before and after a fetch mean the fetch
     /// moved nothing.
