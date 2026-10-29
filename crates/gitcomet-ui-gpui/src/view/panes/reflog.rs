@@ -9,6 +9,9 @@ use rustc_hash::FxHasher;
 use std::hash::{Hash, Hasher};
 use std::time::SystemTime;
 
+mod columns;
+use columns::{ReflogColumn, ReflogColumnResizeState, ReflogColumnWidths};
+
 const REFLOG_ROW_HEIGHT_PX: f32 = 28.0;
 /// Table columns, in UI-font units — see `reflog_column`.
 const REFLOG_MARKER_COLUMN_PX: f32 = 14.0;
@@ -17,6 +20,8 @@ const REFLOG_SHA_COLUMN_PX: f32 = 70.0;
 const REFLOG_AVATAR_COLUMN_PX: f32 = 22.0;
 const REFLOG_DATE_COLUMN_PX: f32 = 260.0;
 const REFLOG_FILTER_WIDTH_PX: f32 = 220.0;
+const REFLOG_CELL_GAP_PX: f32 = 8.0;
+const REFLOG_TABLE_PADDING_PX: f32 = 8.0;
 /// A dense table like the log, so rows take the log's comfortable height.
 const REFLOG_ROW_COMFORTABLE_HEIGHT_PX: f32 = 36.0;
 
@@ -33,7 +38,10 @@ fn reflog_column(ui_scale: UiScale, design_px: f32) -> Pixels {
 pub(in super::super) struct ReflogPanelState {
     query_input: Entity<components::TextInput>,
     _query_input_subscription: gpui::Subscription,
-    selected: Option<CommitId>,
+    selected: Option<SharedString>,
+    column_widths: ReflogColumnWidths,
+    column_resize: Option<ReflogColumnResizeState>,
+    table_width: Option<Pixels>,
     scroll: UniformListScrollHandle,
     /// Trimmed, lowercased mirror of `query_input`'s text, updated only when it
     /// actually changes. `reflog_entry_matches` takes an already-lowercased
@@ -282,6 +290,9 @@ impl ReflogPaneView {
                 query_input,
                 _query_input_subscription: subscription,
                 selected: None,
+                column_widths: ReflogColumnWidths::default(),
+                column_resize: None,
+                table_width: None,
                 scroll: UniformListScrollHandle::default(),
                 query: String::new(),
                 rows: Vec::new(),
@@ -359,7 +370,7 @@ impl ReflogPaneView {
     fn render_reflog_rows(
         this: &mut Self,
         range: std::ops::Range<usize>,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
         let requested = range.len();
@@ -386,15 +397,15 @@ impl ReflogPaneView {
 
         let mut rows = Vec::with_capacity(entries.len());
         for entry in &entries {
-            let is_selected = selected.as_ref() == Some(&entry.new_id);
+            let is_selected = selected.as_deref() == Some(entry.selector.as_ref());
             rows.push(this.render_reflog_row(
                 theme,
                 ui_scale,
                 repo_id,
                 entry,
                 now,
-                entry.index == 0,
                 is_selected,
+                window,
                 cx,
             ));
         }
@@ -402,7 +413,6 @@ impl ReflogPaneView {
         rows
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn render_reflog_row(
         &self,
         theme: AppTheme,
@@ -410,28 +420,42 @@ impl ReflogPaneView {
         repo_id: RepoId,
         entry: &ReflogEntry,
         now: SystemTime,
-        is_current: bool,
         is_selected: bool,
+        window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
+        let is_current = entry.index == 0;
         let sha = entry.new_id.as_ref();
         let short_sha: SharedString = sha.get(0..8).unwrap_or(sha).to_owned().into();
         let selector: SharedString = SharedString::from(entry.selector.as_ref());
-        let message: SharedString = SharedString::from(entry.message.as_ref());
+        let selector_for_selection = selector.clone();
         let date = self.reflog_entry_date_display(entry.time, now);
+        let message = selectable_reflog_text(
+            "reflog_message",
+            repo_id,
+            entry,
+            entry.message.as_ref().into(),
+            window,
+            cx,
+        );
+        let sha = selectable_reflog_text("reflog_sha", repo_id, entry, short_sha, window, cx);
+        let date = selectable_reflog_text("reflog_date", repo_id, entry, date.into(), window, cx);
+        let panel = &self.panels[&repo_id];
+        let widths = panel.column_widths.fitted(panel.table_width, ui_scale);
         let target = entry.new_id.clone();
         let target_for_menu = entry.new_id.clone();
         let selector_for_menu = selector.clone();
 
         div()
             .id(("reflog_row", entry.index))
+            .debug_selector(|| format!("reflog_row-{}", entry.index))
             .flex()
             .items_center()
             .h(ui_scale.row_height(REFLOG_ROW_HEIGHT_PX, REFLOG_ROW_COMFORTABLE_HEIGHT_PX))
             .w_full()
             .flex_none()
-            .px(ui_scale.px(8.0))
-            .gap(ui_scale.px(8.0))
+            .px(ui_scale.px(REFLOG_TABLE_PADDING_PX))
+            .gap(ui_scale.px(REFLOG_CELL_GAP_PX))
             .control_interaction(
                 controls::InteractionStyle::new(theme)
                     .resting_background(theme.colors.surface.canvas),
@@ -453,8 +477,11 @@ impl ReflogPaneView {
             })
             .child(
                 div()
-                    .w(reflog_column(ui_scale, REFLOG_SELECTOR_COLUMN_PX))
+                    .debug_selector(|| format!("reflog_selector-{}", entry.index))
+                    .w(reflog_column(ui_scale, widths.get(ReflogColumn::Selector)))
                     .flex_none()
+                    .overflow_hidden()
+                    .whitespace_nowrap()
                     .text_size(theme.ui_text(12.0))
                     .text_color(theme.colors.foreground.secondary)
                     .child(selector),
@@ -462,13 +489,13 @@ impl ReflogPaneView {
             .child(
                 div()
                     .id(("reflog_row_sha", entry.index))
-                    .w(reflog_column(ui_scale, REFLOG_SHA_COLUMN_PX))
+                    .debug_selector(|| format!("reflog_sha-{}", entry.index))
+                    .w(reflog_column(ui_scale, widths.get(ReflogColumn::Sha)))
                     .flex_none()
                     .text_size(theme.ui_text(12.0))
                     .font_family(UI_MONOSPACE_FONT_FAMILY)
                     .text_color(theme.colors.accent.foreground)
-                    .child(short_sha)
-                    .gitcomet_tooltip(theme, "View this commit in the history log".into()),
+                    .child(sha),
             )
             .child(
                 div()
@@ -482,7 +509,8 @@ impl ReflogPaneView {
             )
             .child(
                 div()
-                    .w(reflog_column(ui_scale, REFLOG_DATE_COLUMN_PX))
+                    .w(reflog_column(ui_scale, widths.get(ReflogColumn::Date)))
+                    .debug_selector(|| format!("reflog_date-{}", entry.index))
                     .flex_none()
                     .text_size(theme.ui_text(12.0))
                     .text_color(theme.colors.foreground.secondary)
@@ -491,7 +519,11 @@ impl ReflogPaneView {
             .child(
                 div()
                     .flex_1()
-                    .min_w(px(0.0))
+                    .debug_selector(|| format!("reflog_message-{}", entry.index))
+                    .min_w(reflog_column(
+                        ui_scale,
+                        columns::REFLOG_MESSAGE_MIN_WIDTH_PX,
+                    ))
                     .overflow_hidden()
                     .whitespace_nowrap()
                     .text_size(theme.ui_text(12.0))
@@ -502,7 +534,7 @@ impl ReflogPaneView {
                 controls::ControlActivation::Composite,
                 cx.listener(move |this, _e: &gpui::ClickEvent, _window, cx| {
                     if let Some(panel) = this.panels.get_mut(&repo_id) {
-                        panel.selected = Some(target.clone());
+                        panel.selected = Some(selector_for_selection.clone());
                     }
                     this.store.dispatch(Msg::SelectCommit {
                         request_id: None,
@@ -517,7 +549,7 @@ impl ReflogPaneView {
                 cx.listener(move |this, e: &MouseDownEvent, window, cx| {
                     cx.stop_propagation();
                     if let Some(panel) = this.panels.get_mut(&repo_id) {
-                        panel.selected = Some(target_for_menu.clone());
+                        panel.selected = Some(selector_for_menu.clone());
                     }
                     this.open_popover_at(
                         PopoverKind::ReflogEntryMenu {
@@ -643,59 +675,6 @@ impl ReflogPaneView {
         UiScale::from_percent(self.ui_scale_percent).with_appearance(theme.metrics)
     }
 
-    fn render_table_header(&self, theme: AppTheme, ui_scale: UiScale) -> AnyElement {
-        div()
-            .flex()
-            .flex_none()
-            .items_center()
-            .px(ui_scale.px(8.0))
-            .py(ui_scale.px(3.0))
-            .gap(ui_scale.px(8.0))
-            .text_size(theme.ui_text(12.0))
-            .text_color(theme.colors.foreground.secondary)
-            .bg(theme.colors.surface.panel)
-            .border_b_1()
-            .border_color(theme.colors.stroke.subtle)
-            .child(
-                div()
-                    .w(reflog_column(ui_scale, REFLOG_MARKER_COLUMN_PX))
-                    .flex_none(),
-            )
-            .child(
-                div()
-                    .w(reflog_column(ui_scale, REFLOG_SELECTOR_COLUMN_PX))
-                    .flex_none()
-                    .child("Selector"),
-            )
-            .child(
-                div()
-                    .w(reflog_column(ui_scale, REFLOG_SHA_COLUMN_PX))
-                    .flex_none()
-                    .child("SHA"),
-            )
-            .child(
-                div()
-                    .w(reflog_column(ui_scale, REFLOG_AVATAR_COLUMN_PX))
-                    .flex_none(),
-            )
-            .child(
-                div()
-                    .w(reflog_column(ui_scale, REFLOG_DATE_COLUMN_PX))
-                    .flex_none()
-                    .child("Date"),
-            )
-            .child(
-                div()
-                    .flex_1()
-                    .min_w(px(0.0))
-                    .pr(components::Scrollbar::gutter(
-                        components::ScrollbarAxis::Vertical,
-                    ))
-                    .child("Message"),
-            )
-            .into_any()
-    }
-
     fn render_rows(
         &mut self,
         theme: AppTheme,
@@ -797,9 +776,33 @@ impl Render for ReflogPaneView {
         };
 
         let header = self.render_header(theme, ui_scale, repo_id, entry_count, cx);
-        let table_header = self.render_table_header(theme, ui_scale);
+        let table_header = self.render_table_header(theme, ui_scale, repo_id, cx);
         container.child(header).child(table_header).child(body)
     }
+}
+
+fn selectable_reflog_text(
+    id: &'static str,
+    repo_id: RepoId,
+    entry: &ReflogEntry,
+    text: SharedString,
+    window: &mut Window,
+    cx: &mut gpui::Context<ReflogPaneView>,
+) -> Entity<components::TextInput> {
+    let key = (
+        gpui::ElementId::from((id, repo_id.0)),
+        SharedString::from(entry.selector.as_ref()),
+    );
+    let input = window.use_keyed_state(key, cx, |_window, cx| {
+        let mut input =
+            components::TextInput::new_inert(components::TextInputOptions::selectable(), cx);
+        input.set_display_text(cx);
+        input.set_display_truncation(Some(components::TextTruncationProfile::End), cx);
+        input.set_suppress_right_click(true);
+        input
+    });
+    input.update(cx, |input, cx| input.set_text(text, cx));
+    input
 }
 
 /// Cheap identity for a filter query, so the row cache can be keyed on it
@@ -966,6 +969,7 @@ mod tests {
 #[cfg(test)]
 mod view_tests {
     use super::*;
+    use crate::test_support::painted_control_quads;
     use crate::view::test_support::NoopBackend;
     use gitcomet_state::model::RepoState;
     use std::cell::Cell;
@@ -1134,6 +1138,232 @@ mod view_tests {
             "the filter box should be flush with the header's trailing edge \
              (gap was {trailing_gap:?})"
         );
+    }
+
+    #[gpui::test]
+    fn selecting_a_reflog_entry_highlights_only_its_selector(cx: &mut gpui::TestAppContext) {
+        let mut entries = reflog_entries(3);
+        entries[1].new_id = entries[0].new_id.clone();
+        let (_pane, _repo_id, cx) = open_pane(cx, entries);
+        crate::test_support::refresh_and_draw(cx);
+        let resting = painted_control_quads(cx, "reflog_row-0");
+        assert!(!resting.is_empty(), "the first row must be painted");
+
+        for selector in ["reflog_row-0", "reflog_row-1"] {
+            let bounds = cx.debug_bounds(selector).expect("row should be visible");
+            cx.simulate_click(
+                point(bounds.left() + px(35.0), bounds.center().y),
+                gpui::Modifiers::default(),
+            );
+            cx.simulate_mouse_move(point(px(1.0), px(1.0)), None, gpui::Modifiers::default());
+            crate::test_support::refresh_and_draw(cx);
+            let other = if selector == "reflog_row-0" {
+                "reflog_row-1"
+            } else {
+                "reflog_row-0"
+            };
+            assert_ne!(painted_control_quads(cx, selector), resting);
+            assert_eq!(
+                painted_control_quads(cx, other),
+                resting,
+                "an entry pointing to the same commit must stay unselected"
+            );
+        }
+    }
+
+    #[gpui::test]
+    fn right_clicking_a_reflog_entry_highlights_only_its_selector(cx: &mut gpui::TestAppContext) {
+        let mut entries = reflog_entries(3);
+        entries[1].new_id = entries[0].new_id.clone();
+        entries[1].time = Some(std::time::UNIX_EPOCH);
+        let (pane, repo_id, cx) = open_pane(cx, entries);
+        crate::test_support::refresh_and_draw(cx);
+        let resting = painted_control_quads(cx, "reflog_row-0");
+        assert!(!resting.is_empty(), "the first row must be painted");
+        for selector in [
+            "reflog_selector-1",
+            "reflog_sha-1",
+            "reflog_date-1",
+            "reflog_message-1",
+        ] {
+            pane.update(cx, |pane, cx| {
+                pane.panels.get_mut(&repo_id).unwrap().selected = None;
+                cx.notify();
+            });
+            crate::test_support::refresh_and_draw(cx);
+            let bounds = cx.debug_bounds(selector).unwrap();
+            let position = point(bounds.left() + px(2.0), bounds.center().y);
+            cx.simulate_mouse_down(position, MouseButton::Right, gpui::Modifiers::default());
+            cx.simulate_mouse_up(position, MouseButton::Right, gpui::Modifiers::default());
+            cx.simulate_mouse_move(point(px(1.0), px(1.0)), None, gpui::Modifiers::default());
+            crate::test_support::refresh_and_draw(cx);
+
+            assert_ne!(
+                painted_control_quads(cx, "reflog_row-1"),
+                resting,
+                "{selector}"
+            );
+            assert_eq!(
+                painted_control_quads(cx, "reflog_row-0"),
+                resting,
+                "{selector}"
+            );
+        }
+    }
+
+    #[gpui::test]
+    fn reflog_message_sha_and_date_can_be_selected_and_copied(cx: &mut gpui::TestAppContext) {
+        let mut entries = reflog_entries(1);
+        entries[0].new_id = CommitId(Arc::from("abcdef1234567890"));
+        entries[0].message = Arc::from("checkout: moving from main to topic");
+        entries[0].time = Some(std::time::UNIX_EPOCH);
+        let (pane, _repo_id, cx) = open_pane(cx, entries);
+        cx.update(|_window, app| {
+            app.bind_keys([
+                gpui::KeyBinding::new("ctrl-a", crate::kit::SelectAll, Some("TextInput")),
+                gpui::KeyBinding::new("ctrl-c", crate::kit::Copy, Some("TextInput")),
+            ]);
+        });
+        crate::test_support::refresh_and_draw(cx);
+
+        for (selector, expected) in [
+            ("reflog_message-0", "checkout: moving from main to topic"),
+            ("reflog_sha-0", "abcdef12"),
+            ("reflog_date-0", "1970-01-01 00:00:00 ("),
+        ] {
+            pane.update(cx, |_, cx| {
+                crate::clipboard::write_text(
+                    cx,
+                    String::new(),
+                    crate::clipboard::CopySource::TextInputShortcut,
+                );
+            });
+            let bounds = cx.debug_bounds(selector).expect("cell must be visible");
+            cx.simulate_click(
+                point(bounds.left() + px(2.0), bounds.center().y),
+                gpui::Modifiers::default(),
+            );
+            cx.simulate_keystrokes("ctrl-a ctrl-c");
+            let copied = pane.update(cx, |_, cx| crate::clipboard::read_text(cx));
+            let copied = copied.expect("selecting and copying a cell must write its text");
+            if selector == "reflog_date-0" {
+                assert!(copied.starts_with(expected), "{copied:?}");
+            } else {
+                assert_eq!(copied, expected);
+            }
+        }
+    }
+
+    #[gpui::test]
+    fn dragging_reflog_column_dividers_resizes_headers_and_rows(cx: &mut gpui::TestAppContext) {
+        let (pane, _repo_id, cx) = open_pane(cx, reflog_entries(8));
+        crate::test_support::refresh_and_draw(cx);
+
+        for (handle, header, cell) in [
+            (
+                "reflog_resize_selector",
+                "reflog_header_selector",
+                "reflog_selector-0",
+            ),
+            ("reflog_resize_sha", "reflog_header_sha", "reflog_sha-0"),
+            ("reflog_resize_date", "reflog_header_date", "reflog_date-0"),
+        ] {
+            let before = cx.debug_bounds(header).unwrap().size.width;
+            let start = cx
+                .debug_bounds(handle)
+                .expect("column must have a resize handle")
+                .center();
+            cx.simulate_mouse_down(start, MouseButton::Left, gpui::Modifiers::default());
+            for delta in [8.0, 24.0] {
+                cx.simulate_mouse_move(
+                    point(start.x + px(delta), start.y),
+                    Some(MouseButton::Left),
+                    gpui::Modifiers::default(),
+                );
+                crate::test_support::refresh_and_draw(cx);
+            }
+            cx.simulate_mouse_up(
+                point(start.x + px(24.0), start.y),
+                MouseButton::Left,
+                gpui::Modifiers::default(),
+            );
+            crate::test_support::refresh_and_draw(cx);
+            let after = cx.debug_bounds(header).unwrap().size.width;
+            assert_eq!(after, before + px(24.0));
+            assert_eq!(cx.debug_bounds(cell).unwrap().size.width, after);
+        }
+
+        let resized = cx.debug_bounds("reflog_header_sha").unwrap().size.width;
+        pane.update(cx, |pane, cx| pane.set_ui_scale_percent(150, cx));
+        crate::test_support::refresh_and_draw(cx);
+        assert_eq!(
+            cx.debug_bounds("reflog_header_sha").unwrap().size.width,
+            resized * 1.5
+        );
+        pane.update(cx, |pane, cx| pane.set_ui_scale_percent(100, cx));
+        crate::test_support::refresh_and_draw(cx);
+
+        for (delta, expected_min) in [(-2000.0, 40.0), (2000.0, 40.0)] {
+            let start = cx.debug_bounds("reflog_resize_sha").unwrap().center();
+            cx.simulate_mouse_down(start, MouseButton::Left, gpui::Modifiers::default());
+            for offset in [delta / 2.0, delta] {
+                cx.simulate_mouse_move(
+                    point(start.x + px(offset), start.y),
+                    Some(MouseButton::Left),
+                    gpui::Modifiers::default(),
+                );
+                crate::test_support::refresh_and_draw(cx);
+            }
+            cx.simulate_mouse_up(
+                point(start.x + px(delta), start.y),
+                MouseButton::Left,
+                gpui::Modifiers::default(),
+            );
+            crate::test_support::refresh_and_draw(cx);
+            assert!(cx.debug_bounds("reflog_header_sha").unwrap().size.width >= px(expected_min));
+            assert!(cx.debug_bounds("reflog_header_message").unwrap().size.width >= px(70.0));
+        }
+    }
+
+    #[gpui::test]
+    fn narrow_reflog_columns_keep_the_message_visible_with_large_text(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        gitcomet_ui_kit::test_support::use_real_text_backend(cx);
+        let (pane, _repo_id, cx) = open_pane(cx, reflog_entries(20));
+        cx.simulate_resize(gpui::size(px(495.0), px(400.0)));
+
+        for font_size in [14, 20, 24] {
+            let metrics = crate::appearance::Appearance {
+                ui_font_size_px: font_size,
+                ..Default::default()
+            };
+            cx.update(|_, app| app.set_global(metrics));
+            pane.update(cx, |pane, cx| {
+                pane.set_theme(AppTheme::gitcomet_dark().with_appearance(metrics), cx)
+            });
+            crate::test_support::refresh_and_draw(cx);
+            crate::test_support::refresh_and_draw(cx);
+            let message = cx.debug_bounds("reflog_message-0").unwrap();
+            let header = cx.debug_bounds("reflog_header_message").unwrap();
+            let scale = UiScale::from_percent(100).with_appearance(metrics);
+            assert!(message.size.width >= reflog_column(scale, 70.0));
+            assert!(
+                message.right() <= px(495.0),
+                "the message must fit inside the narrow pane at font size {font_size}"
+            );
+            assert_eq!(
+                header.size.height,
+                cx.debug_bounds("reflog_header_selector")
+                    .unwrap()
+                    .size
+                    .height
+            );
+            assert_eq!(
+                cx.debug_bounds("reflog_header_sha").unwrap().size.width,
+                cx.debug_bounds("reflog_sha-0").unwrap().size.width
+            );
+        }
     }
 
     /// A focused `TextInput` notifies every 800ms from its caret-blink task.
