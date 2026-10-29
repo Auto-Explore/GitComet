@@ -37,6 +37,9 @@ pub(super) enum Completion {
         refs_changed: bool,
         /// Members whose fetch configuration now puts them in another group.
         regrouped: Vec<(PathBuf, GroupKey)>,
+        /// The HEAD of each workdir the fetch read, to catch a checkout,
+        /// commit or reset no watcher reported.
+        heads: Vec<(PathBuf, u64)>,
     },
 }
 
@@ -156,6 +159,7 @@ pub(super) fn execute(job: &Job, inner: &Inner) -> Completion {
                 result: Err(error),
                 refs_changed: false,
                 regrouped: Vec::new(),
+                heads: Vec::new(),
             };
         }
     };
@@ -216,6 +220,7 @@ pub(super) fn execute(job: &Job, inner: &Inner) -> Completion {
             result: Err(error),
             refs_changed: false,
             regrouped: Vec::new(),
+            heads: Vec::new(),
         };
     }
     let Some(_lease) = inner
@@ -258,16 +263,24 @@ pub(super) fn execute(job: &Job, inner: &Inner) -> Completion {
         repo.release_object_store();
         crate::store::effects::release_all_worktree_scan_handles();
     }
-    // A worktree's own configuration can change after it joined the group.
-    let regrouped = job
-        .members
-        .iter()
-        .filter_map(|(workdir, member)| {
-            let repo = open_repository(member, workdir, &job.cancellation).ok()?;
-            let key = fetch_group(repo.as_ref(), &repository_key(repo.as_ref()), workdir);
-            (key != job.group).then(|| (workdir.clone(), key))
-        })
+    let mut heads: Vec<_> = head_stamp(repo.as_ref(), &job.cancellation)
+        .map(|head| (job.workdir.clone(), head))
+        .into_iter()
         .collect();
+    // A worktree's own configuration can change after it joined the group.
+    let mut regrouped = Vec::new();
+    for (workdir, member) in &job.members {
+        let Ok(repo) = open_repository(member, workdir, &job.cancellation) else {
+            continue;
+        };
+        if let Some(head) = head_stamp(repo.as_ref(), &job.cancellation) {
+            heads.push((workdir.clone(), head));
+        }
+        let key = fetch_group(repo.as_ref(), &repository_key(repo.as_ref()), workdir);
+        if key != job.group {
+            regrouped.push((workdir.clone(), key));
+        }
+    }
     Completion::Finished {
         common_dir: Some(common_dir),
         key: Some(key),
@@ -276,7 +289,19 @@ pub(super) fn execute(job: &Job, inner: &Inner) -> Completion {
         result,
         refs_changed,
         regrouped,
+        heads,
     }
+}
+
+/// The checked-out branch and commit, which decide the incoming count with
+/// the tracking refs.
+fn head_stamp(repo: &dyn GitRepository, cancellation: &CancellationToken) -> Option<u64> {
+    use std::hash::{Hash, Hasher};
+
+    let mut stamp = std::hash::DefaultHasher::new();
+    repo.current_branch(cancellation).ok()?.hash(&mut stamp);
+    repo.head_commit_id().ok()?.hash(&mut stamp);
+    Some(stamp.finish())
 }
 
 pub(super) fn sleep_unless_cancelled(
@@ -327,11 +352,12 @@ pub(super) fn finish(state: &mut State, job: &Job, completion: Completion, now: 
             result,
             refs_changed,
             regrouped,
+            heads,
         } => (
             common_dir,
             key,
             remotes,
-            Some((result, skipped, refs_changed)),
+            Some((result, skipped, refs_changed, heads)),
             regrouped,
         ),
     };
@@ -376,7 +402,7 @@ pub(super) fn finish(state: &mut State, job: &Job, completion: Completion, now: 
     {
         group.remotes = remotes;
     }
-    let Some((result, skipped, refs_changed)) = outcome else {
+    let Some((result, skipped, refs_changed, heads)) = outcome else {
         if current && let Some(group) = state.groups.get_mut(&group_key) {
             group.revision = revision;
             state.publish(&group_key, None);
@@ -437,6 +463,7 @@ pub(super) fn finish(state: &mut State, job: &Job, completion: Completion, now: 
         &group_key,
         common_dir.as_ref(),
         refs_changed,
+        &heads,
     );
     if current && failed {
         state.mark_stale(&group_key);
@@ -445,13 +472,14 @@ pub(super) fn finish(state: &mut State, job: &Job, completion: Completion, now: 
 
 /// Refreshes every tab reading the fetched refs: the fetching workdir, its
 /// group and anything else on the same store. Tabs with a current count skip
-/// the refresh when the fetch moved nothing.
+/// the refresh when the fetch moved nothing and their HEAD did not move.
 pub(super) fn send_refreshes(
     state: &mut State,
     fetched: &Path,
     group: &GroupKey,
     common_dir: Option<&PathBuf>,
     refs_changed: bool,
+    heads: &[(PathBuf, u64)],
 ) {
     for (workdir, entry) in &mut state.entries {
         if workdir != fetched
@@ -460,8 +488,16 @@ pub(super) fn send_refreshes(
         {
             continue;
         }
+        let head = heads
+            .iter()
+            .find(|(path, _)| path == workdir)
+            .map(|(_, head)| *head);
+        let moved = refs_changed || (head.is_some() && head != entry.head_seen);
+        if moved && head.is_some() {
+            entry.head_seen = head;
+        }
         for subscriber in entry.subscribers.values_mut() {
-            if refs_changed || subscriber.needs_refresh {
+            if moved || subscriber.needs_refresh {
                 subscriber.refresh();
             }
         }
@@ -493,6 +529,7 @@ pub(super) fn run(inner: Arc<Inner>) {
                         )))),
                         refs_changed: true,
                         regrouped: Vec::new(),
+                        heads: Vec::new(),
                     });
             state = inner
                 .state

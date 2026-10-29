@@ -84,6 +84,8 @@ struct Entry {
     subscribers: BTreeMap<RepoLifetime, Subscriber>,
     common_dir: Option<PathBuf>,
     group: GroupKey,
+    /// The HEAD this workdir had when its tabs last reloaded their counts.
+    head_seen: Option<u64>,
 }
 
 impl Entry {
@@ -382,6 +384,7 @@ impl AutoFetchCoordinator {
                 Entry {
                     subscribers: BTreeMap::new(),
                     common_dir: None,
+                    head_seen: None,
                     group,
                 }
             });
