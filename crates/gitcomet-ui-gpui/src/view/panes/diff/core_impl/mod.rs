@@ -12,6 +12,7 @@ use std::time::Instant;
 mod engine;
 mod init;
 
+pub(in crate::view) use engine::EngineNotice;
 pub(in crate::view) use init::DiffRendererInit;
 
 /// Resolve the file path and blame source for a diff target, or `None` for

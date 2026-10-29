@@ -5,6 +5,9 @@ use gitcomet_extension_api::{
 };
 use palette::IntoColor;
 
+/// The lane beside each row that draws its annotation or decoration.
+const GUTTER_LANE_WIDTH: f32 = 12.0;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum DisplayRow {
     Document(usize),
@@ -746,13 +749,23 @@ impl DiffRenderer {
                         // The lane draws the annotation, so a click there is on it.
                         let on_annotation =
                             annotation.and(decor.options.on_annotation_click.clone());
-                        let color = annotation
-                            .map(|a| a.color)
-                            .or_else(|| mark.as_ref().and_then(|m| m.tint));
-                        let label = mark
+                        // The annotation's glyph in its colour, or its colour
+                        // filling the lane; with none, the decoration's tint and
+                        // gutter text. The annotation's label is the tooltip.
+                        let (fill, glyph) = match annotation {
+                            Some(a) => match &a.glyph {
+                                Some(glyph) => (None, Some((glyph.clone(), a.color))),
+                                None => (Some(a.color), None),
+                            },
+                            None => (mark.as_ref().and_then(|m| m.tint), None),
+                        };
+                        let text = mark
                             .as_ref()
                             .and_then(|m| m.gutter.clone())
-                            .or_else(|| annotation.and_then(|a| a.label.clone()));
+                            .filter(|_| glyph.is_none());
+                        let tooltip = annotation.and_then(|a| a.label.clone());
+                        let lane_width = ui_scale::UiScale::current(cx).px(GUTTER_LANE_WIDTH);
+                        let theme = this.theme;
                         let action = on_annotation
                             .or_else(|| decor.options.on_gutter_click.clone())
                             .filter(|_| decor.options.policy.line_action);
@@ -770,9 +783,27 @@ impl DiffRenderer {
                                     .left_0()
                                     .top_0()
                                     .bottom_0()
-                                    .w(px(12.0))
-                                    .when_some(color, |lane, color| lane.bg(color))
-                                    .when_some(label, |lane, label| lane.child(label))
+                                    .w(lane_width)
+                                    .when_some(fill, |lane, color| lane.bg(color))
+                                    .when_some(text, |lane, text| lane.child(text))
+                                    .when_some(glyph, |lane, (glyph, color)| {
+                                        lane.flex().items_center().justify_center().child(
+                                            div()
+                                                .debug_selector(move || {
+                                                    format!(
+                                                        "hosted_diff_{pane_id}_gutter_glyph_{display}"
+                                                    )
+                                                })
+                                                .flex()
+                                                .text_size(theme.ui_text(10.0))
+                                                .child(crate::view::hosted::row_glyph(
+                                                    &glyph, color, lane_width,
+                                                )),
+                                        )
+                                    })
+                                    .when_some(tooltip, |lane, tooltip| {
+                                        lane.gitcomet_tooltip(theme, tooltip)
+                                    })
                                     .when_some(action, |lane, action| {
                                         lane.cursor_pointer().on_activate(
                                             false,

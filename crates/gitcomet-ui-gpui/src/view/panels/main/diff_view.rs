@@ -3,7 +3,7 @@ use crate::kit::interaction as controls;
 use crate::view::components::{ControlInteractionExt, InteractionState, InteractionStyle};
 use crate::view::panes::diff::diff_search::DiffSearchOptions;
 use crate::view::panes::diff::services::{DiffCommand, DiffPreference};
-use crate::view::panes::diff::{DiffBody, DiskSurface};
+use crate::view::panes::diff::{DiffBody, DiskSurface, EngineNotice};
 use gpui::Focusable;
 
 struct DiffSearchOverlayLayer {
@@ -1820,6 +1820,7 @@ impl DiffRenderer {
                 || self.rendered_preview_modes.get(RenderedPreviewKind::Svg)
                     == RenderedPreviewMode::Rendered);
 
+        let engine_text = self.diff_engine_notice();
         let engine_notice = if matches!(surface.body, DiffBody::FileDiff | DiffBody::Patch)
             && !inline_submodule_diff_active
             && !surface.markdown_preview
@@ -1827,6 +1828,7 @@ impl DiffRenderer {
             && !is_diagram_preview_view
             && self.effective_diff_engine() == DiffEngine::Difftastic
             && !self.collapsed_difftastic_has_only_text_changes()
+            && (self.store.policy.engine_label || matches!(engine_text, EngineNotice::Explained(_)))
         {
             let mut notice = div()
                 .debug_selector(|| "diff_engine_notice".to_string())
@@ -1838,8 +1840,11 @@ impl DiffRenderer {
                 .gap_2()
                 .px_2()
                 .py_1()
-                .border_b_1()
-                .border_color(theme.colors.stroke.default)
+                .when(self.store.policy.header_divider, |notice| {
+                    notice
+                        .border_b_1()
+                        .border_color(theme.colors.stroke.default)
+                })
                 .child(
                     div()
                         .debug_selector(|| "diff_engine_notice_label".to_string())
@@ -1848,7 +1853,7 @@ impl DiffRenderer {
                         .whitespace_normal()
                         .text_xs()
                         .text_color(theme.colors.foreground.secondary)
-                        .child(self.diff_engine_label()),
+                        .child(engine_text.text()),
                 );
             if matches!(
                 self.diff_engine_status,
@@ -2829,8 +2834,11 @@ impl DiffRenderer {
                     } else {
                         crate::theme::content_header_bg(theme)
                     })
-                    .border_b_1()
-                    .border_color(theme.colors.stroke.default),
+                    .when(self.store.policy.header_divider, |header| {
+                        header
+                            .border_b_1()
+                            .border_color(theme.colors.stroke.default)
+                    }),
             )
             .when_some(disk_notice, |d, strip| d.child(strip))
             .when_some(engine_notice, |d, strip| d.child(strip))

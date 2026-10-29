@@ -248,18 +248,9 @@ fn row_mark(mark: gitcomet_extension_api::RowMark, ui_scale: ui_scale::UiScale) 
         .items_center()
         .gap(ui_scale.px(4.0))
         .text_color(color)
-        .children(mark.glyph.map(|glyph| {
-            match glyph {
-                gitcomet_extension_api::RowGlyph::Icon(path) => gpui::svg()
-                    .path(path)
-                    .size(ui_scale.px(12.0))
-                    .text_color(color)
-                    .into_any_element(),
-                gitcomet_extension_api::RowGlyph::Text(text) => {
-                    div().child(text).into_any_element()
-                }
-                _ => gpui::Empty.into_any_element(),
-            }
-        }))
+        .children(
+            mark.glyph
+                .map(|glyph| crate::view::hosted::row_glyph(&glyph, color, ui_scale.px(12.0))),
+        )
         .children(mark.label)
 }

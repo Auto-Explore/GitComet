@@ -1107,6 +1107,11 @@ fn the_example_changes_view_shows_picks_in_two_panes(cx: &mut gpui::TestAppConte
         cx.debug_bounds(selector(format!("hosted_diff_{current_id}_markers")))
             .is_some()
     );
+    // The flag draws as the example's icon, not as text in the lane.
+    assert!(
+        cx.debug_bounds(selector(format!("hosted_diff_{current_id}_gutter_glyph_0")))
+            .is_some()
+    );
     // The list groups by role and flags the file; its chip shows only it.
     for part in ["group_Code", "glyph_a.rs"] {
         assert!(
