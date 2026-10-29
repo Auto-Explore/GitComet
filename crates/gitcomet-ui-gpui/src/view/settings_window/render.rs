@@ -208,10 +208,60 @@ impl Render for SettingsWindowView {
                 dialog.title.clone(),
                 dialog.content.clone(),
                 dialog.anchor,
+                dialog.menu,
                 dialog.focus.clone(),
             )
         });
-        root.when_some(dialog, |root, (title, view, anchor, focus)| {
+        root.when_some(dialog, |root, (title, view, anchor, menu, focus)| {
+            if let (true, Some(anchor)) = (menu, anchor) {
+                // A menu is a context menu, as in the main window: its view
+                // draws the kit's menu surface, and a click outside it closes it.
+                // The main window's menu surface: raised, bordered, as wide as
+                // its menus, and scrolled when longer than the window.
+                let height = window.viewport_size().height - ui_scale.px(16.0);
+                let menu = components::popover_surface(theme)
+                    .id("settings_hosted_dialog")
+                    .debug_selector(|| "settings_hosted_dialog".to_string())
+                    .track_focus(&focus)
+                    .tab_group()
+                    .tab_stop(false)
+                    .on_key_down(cx.listener(Self::hosted_dialog_key))
+                    .occlude()
+                    .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .on_mouse_down(gpui::MouseButton::Right, |_, _, cx| cx.stop_propagation())
+                    .min_w(ui_scale.px(180.0))
+                    .max_w(ui_scale.px(380.0))
+                    .p_1()
+                    .child(
+                        div()
+                            .id("settings_hosted_menu_scroll")
+                            .max_h(height.max(ui_scale.px(120.0)))
+                            .overflow_y_scroll()
+                            .child(view),
+                    );
+                return root.child(
+                    div()
+                        .id("settings_hosted_menu_backdrop")
+                        .debug_selector(|| "settings_hosted_menu_backdrop".to_string())
+                        .absolute()
+                        .inset_0()
+                        .occlude()
+                        .on_mouse_down(
+                            gpui::MouseButton::Left,
+                            cx.listener(|view, _, window, cx| view.close_hosted_dialog(window, cx)),
+                        )
+                        .on_mouse_down(
+                            gpui::MouseButton::Right,
+                            cx.listener(|view, _, window, cx| view.close_hosted_dialog(window, cx)),
+                        )
+                        .child(
+                            gpui::anchored()
+                                .position(anchor)
+                                .snap_to_window_with_margin(ui_scale.px(8.0))
+                                .child(menu),
+                        ),
+                );
+            }
             let bounds = window.viewport_size();
             // The main window's hosted dialogs use the same kit surfaces: a
             // scrim-backed modal, or a popover at its anchor.
