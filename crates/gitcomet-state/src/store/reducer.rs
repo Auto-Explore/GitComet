@@ -3,6 +3,8 @@ use crate::store::reducer::prepared::ReducerInputs;
 use crate::store::repository_runtime::RepositoryRuntimes;
 mod actions_emit_effects;
 mod auth;
+pub(super) use auth::detect_auth_prompt_kind;
+mod auto_fetch;
 mod bare_conversion;
 mod branch_exists_prompt;
 #[cfg(test)]
@@ -331,6 +333,7 @@ pub(crate) fn msg_requires_available_git(msg: &Msg) -> bool {
             | Msg::CommitAmend { .. }
             | Msg::SafePushAfterCommit { .. }
             | Msg::Fetch(crate::msg::FetchMsg::All { .. })
+            | Msg::Fetch(crate::msg::FetchMsg::Remote { .. })
             | Msg::Fetch(crate::msg::FetchMsg::Refspecs { .. })
             | Msg::PruneMergedBranches { .. }
             | Msg::PruneLocalTags { .. }
@@ -1056,6 +1059,16 @@ fn reduce_inner(
             secret,
         } => auth::submit_auth_prompt(inputs, repos, id_alloc, state, generation, username, secret),
         Msg::CancelAuthPrompt => auth::cancel_auth_prompt(state),
+        Msg::Internal(crate::msg::InternalMsg::AutoFetchUpdated {
+            repo_id,
+            lifetime,
+            revision,
+            snapshot,
+            result,
+        }) => auto_fetch::updated(inputs, state, repo_id, lifetime, revision, snapshot, result),
+        Msg::Internal(crate::msg::InternalMsg::AutoFetchRefresh { repo_id, lifetime }) => {
+            auto_fetch::refresh(state, repo_id, lifetime)
+        }
         Msg::Internal(crate::msg::InternalMsg::AuthPromptValidated {
             generation,
             result,
@@ -1901,6 +1914,9 @@ fn reduce_inner(
         Msg::Fetch(crate::msg::FetchMsg::All { repo_id }) => {
             actions_emit_effects::fetch_all(repos, state, repo_id)
         }
+        Msg::Fetch(crate::msg::FetchMsg::Remote { repo_id, remote }) => {
+            actions_emit_effects::fetch_remote(repos, state, repo_id, remote)
+        }
         Msg::Fetch(crate::msg::FetchMsg::Refspecs {
             repo_id,
             remote,
@@ -2448,6 +2464,9 @@ fn reduce_inner(
         }
         Msg::Internal(crate::msg::InternalMsg::UpstreamDivergenceLoaded { repo_id, result }) => {
             effects::upstream_divergence_loaded(inputs, state, repo_id, result)
+        }
+        Msg::Internal(crate::msg::InternalMsg::HeadTrackingLoaded { repo_id, result }) => {
+            effects::head_tracking_loaded(inputs, state, repo_id, result)
         }
         Msg::IndexedHistory(event) => indexed_history::reduce(state, event),
         Msg::DiffSession(event) => diff_session::reduce(state, event),

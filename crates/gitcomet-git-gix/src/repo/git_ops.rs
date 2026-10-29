@@ -1,5 +1,6 @@
 use super::remotes::{
-    configured_upstream_is_pending, configured_upstream_of, tracking_refs_for_remote_branch,
+    configured_upstream_for, configured_upstream_is_pending, configured_upstream_of,
+    tracking_refs_for_remote_branch,
 };
 use super::{
     BranchTrackingConfigCacheEntry, DIVERGENCE_CACHE_LIMIT, DivergenceCache, GixRepo,
@@ -8,7 +9,7 @@ use super::{
 use crate::refs::files::{cached_commit_id, try_collect_loose_local_branches_fast};
 use crate::util::GitOutput;
 use crate::util::{bytes_to_text_preserving_utf8, run_git_capture, run_git_raw_output};
-use gitcomet_core::domain::{Branch, RefMetadata, Upstream, UpstreamDivergence};
+use gitcomet_core::domain::{Branch, HeadTracking, RefMetadata, Upstream, UpstreamDivergence};
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::services::{CancellationToken, Result};
 use gix::bstr::ByteSlice as _;
@@ -76,6 +77,43 @@ pub(super) fn head_upstream_divergence(
     let (_upstream, divergence) =
         branch_upstream_and_divergence(repo, cache, &branch_ref, local_tip, cancellation)?;
     Ok(divergence)
+}
+
+pub(super) fn head_tracking(
+    repo: &gix::Repository,
+    cache: &DivergenceCache,
+    cancellation: &CancellationToken,
+) -> Result<HeadTracking> {
+    cancellation.check_cancelled()?;
+    let Some(name) = crate::refs::head_name(repo)? else {
+        return Ok(HeadTracking::Detached);
+    };
+    let branch = local_branch_name(name.as_ref());
+    let Some(upstream) = configured_upstream_for(repo, name.as_bstr()) else {
+        return Ok(HeadTracking::Untracked { branch });
+    };
+    let divergence = match crate::refs::find(repo, name.as_bstr())? {
+        Some(mut branch_ref) => match branch_ref.peel_to_id() {
+            Ok(id) => {
+                let (_, divergence) = branch_upstream_and_divergence(
+                    repo,
+                    cache,
+                    &branch_ref,
+                    id.detach(),
+                    Some(cancellation),
+                )?;
+                divergence
+            }
+            Err(_) => None,
+        },
+        None => None,
+    };
+    cancellation.check_cancelled()?;
+    Ok(HeadTracking::Tracking {
+        branch,
+        upstream,
+        divergence,
+    })
 }
 
 impl GixRepo {

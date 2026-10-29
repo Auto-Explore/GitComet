@@ -908,6 +908,173 @@ fn fetch_all_variants_prune_deleted_remote_tracking_branches() {
     );
 }
 
+#[test]
+fn fetch_remote_fetches_and_prunes_only_the_named_remote() {
+    let _guard = remote_management_test_lock();
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let root = dir.path();
+    let work_repo = root.join("work");
+    fs::create_dir_all(&work_repo).expect("create work repo dir");
+    init_repo_with_user(&work_repo);
+    fs::write(work_repo.join("file.txt"), "base\n").expect("write base file");
+    run_git(&work_repo, &["add", "file.txt"]);
+    run_git(&work_repo, &["commit", "-m", "base"]);
+
+    for remote in ["origin", "fork"] {
+        let remote_repo = root.join(format!("{remote}.git"));
+        fs::create_dir_all(&remote_repo).expect("create remote repo dir");
+        run_git(&remote_repo, &["init", "--bare"]);
+        run_git(
+            &work_repo,
+            &["remote", "add", remote, &git_remote_url(&remote_repo)],
+        );
+        run_git(&work_repo, &["push", remote, "HEAD:refs/heads/stale"]);
+        run_git(&work_repo, &["fetch", remote]);
+        run_git(&remote_repo, &["update-ref", "-d", "refs/heads/stale"]);
+        run_git(&work_repo, &["push", remote, "HEAD:refs/heads/fresh"]);
+        run_git(
+            &work_repo,
+            &["update-ref", "-d", &format!("refs/remotes/{remote}/fresh")],
+        );
+    }
+    let has_ref = |name: &str| {
+        run_git_status(&work_repo, &["show-ref", "--verify", "--quiet", name]).success()
+    };
+
+    let opened = GixBackend.open(&work_repo).expect("open work repo");
+    let output = opened
+        .fetch_remote("origin", true)
+        .expect("fetch origin with pruning");
+
+    assert_eq!(output.exit_code, Some(0));
+    assert_eq!(
+        output.command,
+        "git fetch --prune --no-prune-tags -- origin"
+    );
+    assert!(has_ref("refs/remotes/origin/fresh"));
+    assert!(!has_ref("refs/remotes/origin/stale"));
+    assert!(!has_ref("refs/remotes/fork/fresh"));
+    assert!(has_ref("refs/remotes/fork/stale"));
+}
+
+#[test]
+fn fetch_remote_fetches_the_remote_even_when_a_group_shares_its_name() {
+    let _guard = remote_management_test_lock();
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let root = dir.path();
+    let work_repo = root.join("work");
+    fs::create_dir_all(&work_repo).expect("create work repo dir");
+    init_repo_with_user(&work_repo);
+    fs::write(work_repo.join("file.txt"), "base\n").expect("write base file");
+    run_git(&work_repo, &["add", "file.txt"]);
+    run_git(&work_repo, &["commit", "-m", "base"]);
+    for remote in ["origin", "fork"] {
+        let remote_repo = root.join(format!("{remote}.git"));
+        fs::create_dir_all(&remote_repo).expect("create remote repo dir");
+        run_git(&remote_repo, &["init", "--bare"]);
+        run_git(
+            &work_repo,
+            &["remote", "add", remote, &git_remote_url(&remote_repo)],
+        );
+        run_git(&work_repo, &["push", remote, "HEAD:refs/heads/main"]);
+        run_git(
+            &work_repo,
+            &["update-ref", "-d", &format!("refs/remotes/{remote}/main")],
+        );
+    }
+    // `git fetch --multiple` resolves a remote group before a remote.
+    run_git(&work_repo, &["config", "remotes.origin", "fork"]);
+    let has_ref = |name: &str| {
+        run_git_status(&work_repo, &["show-ref", "--verify", "--quiet", name]).success()
+    };
+
+    GixBackend
+        .open(&work_repo)
+        .expect("open work repo")
+        .fetch_remote("origin", true)
+        .expect("fetch origin");
+
+    assert!(has_ref("refs/remotes/origin/main"), "origin was fetched");
+    assert!(!has_ref("refs/remotes/fork/main"), "the group was not");
+}
+
+#[test]
+fn background_fetch_of_several_remotes_never_expands_a_remote_group() {
+    let _guard = remote_management_test_lock();
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let root = dir.path();
+    let work_repo = root.join("work");
+    fs::create_dir_all(&work_repo).expect("create work repo dir");
+    init_repo_with_user(&work_repo);
+    fs::write(work_repo.join("file.txt"), "base\n").expect("write base file");
+    run_git(&work_repo, &["add", "file.txt"]);
+    run_git(&work_repo, &["commit", "-m", "base"]);
+    for remote in ["origin", "second", "paused"] {
+        let remote_repo = root.join(format!("{remote}.git"));
+        fs::create_dir_all(&remote_repo).expect("create remote repo dir");
+        run_git(&remote_repo, &["init", "--bare"]);
+        run_git(
+            &work_repo,
+            &["remote", "add", remote, &git_remote_url(&remote_repo)],
+        );
+        run_git(&work_repo, &["push", remote, "HEAD:refs/heads/main"]);
+        run_git(
+            &work_repo,
+            &["update-ref", "-d", &format!("refs/remotes/{remote}/main")],
+        );
+    }
+    run_git(&work_repo, &["config", "remotes.origin", "paused"]);
+    let has_ref = |name: &str| {
+        run_git_status(&work_repo, &["show-ref", "--verify", "--quiet", name]).success()
+    };
+
+    GixBackend
+        .open(&work_repo)
+        .expect("open work repo")
+        .fetch_all_background_except(
+            false,
+            &["paused".to_string()],
+            &gitcomet_core::services::CancellationToken::new(),
+        )
+        .expect("fetch origin and second");
+
+    assert!(has_ref("refs/remotes/origin/main"), "origin was fetched");
+    assert!(has_ref("refs/remotes/second/main"), "second was fetched");
+    assert!(
+        !has_ref("refs/remotes/paused/main"),
+        "the skipped remote was not"
+    );
+
+    // A failure still names its remote, as `git fetch --multiple` would.
+    run_git(
+        &work_repo,
+        &[
+            "remote",
+            "add",
+            "offline",
+            &git_remote_url(&root.join("missing.git")),
+        ],
+    );
+    let error = GixBackend
+        .open(&work_repo)
+        .expect("open work repo")
+        .fetch_all_background_except(
+            false,
+            &["paused".to_string()],
+            &gitcomet_core::services::CancellationToken::new(),
+        )
+        .expect_err("offline cannot be fetched");
+    let gitcomet_core::error::ErrorKind::Git(failure) = error.kind() else {
+        panic!("{error:?}");
+    };
+    let stderr = String::from_utf8_lossy(failure.stderr());
+    assert!(
+        stderr.contains("error: could not fetch offline"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("could not fetch origin"), "{stderr}");
+}
+
 // Pointing `origin` at a fork without the branch `origin/HEAD` names makes the
 // pruning fetch leave that symref dangling, exactly as Git does.
 #[test]
@@ -2674,7 +2841,7 @@ fn fetch_all_skips_git_annex_special_remotes_without_a_url() {
             panic!("fetch all (prune={prune}) must skip the special remote: {e}")
         });
         assert!(
-            output.command.starts_with("git fetch --multiple "),
+            !output.command.contains("--all") && output.command.ends_with(" -- origin"),
             "{}",
             output.command
         );
@@ -2723,7 +2890,7 @@ fn review_fetch_all_respects_order_of_skip_aliases_for_annex_special_remote() {
         for prune in [false, true] {
             let output = opened.fetch_all(prune).expect("Fetch All must exclude the special remote even when the last skip setting is false");
             assert!(
-                output.command.starts_with("git fetch --multiple "),
+                !output.command.contains("--all") && output.command.ends_with(" -- origin"),
                 "{}",
                 output.command
             );

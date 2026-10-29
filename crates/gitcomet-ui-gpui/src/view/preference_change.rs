@@ -55,6 +55,7 @@ pub(in crate::view) enum PreferenceChange {
     DefaultTagType(DefaultTagType),
     LargeFileSettings(gitcomet_state::model::LargeFileSettings),
     RemotePrune(bool),
+    AutoFetch(gitcomet_state::model::AutoFetchSettings),
     MaintenanceRecommendations(bool),
     ResetHistoryColumnWidths,
     /// A new Git executable was probed; the window's signing probe restarts.

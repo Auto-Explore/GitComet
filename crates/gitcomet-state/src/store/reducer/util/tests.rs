@@ -32,6 +32,7 @@ fn command_output(command: &str, stdout: &str, stderr: &str) -> CommandOutput {
 fn dummy_log_entry(ix: usize) -> CommandLogEntry {
     CommandLogEntry {
         kind: crate::model::CommandLogKind::Other,
+        source: crate::model::CommandSource::User,
         time: SystemTime::UNIX_EPOCH,
         ok: true,
         command: format!("cmd-{ix}"),

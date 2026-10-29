@@ -367,6 +367,7 @@ impl PopoverHost {
             | ContextMenuAction::SetUiScale { .. }
             | ContextMenuAction::LoadLfsLocks { .. }
             | ContextMenuAction::FetchAll { .. }
+            | ContextMenuAction::FetchRemote { .. }
             | ContextMenuAction::PruneMergedBranches { .. }
             | ContextMenuAction::PruneLocalTags { .. }
             | ContextMenuAction::LoadWorktrees { .. }

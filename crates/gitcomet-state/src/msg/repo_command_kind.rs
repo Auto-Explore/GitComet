@@ -24,6 +24,9 @@ pub(crate) fn worktree_checkout_label(checkout: &WorktreeCheckout) -> String {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum RepoCommandKind {
     FetchAll,
+    FetchRemote {
+        remote: String,
+    },
     /// Exactly these refspecs from one remote.
     FetchRefspecs {
         remote: String,
@@ -244,10 +247,63 @@ pub enum RepoCommandKind {
 }
 
 impl RepoCommandKind {
+    pub(crate) fn changes_tracking(&self) -> bool {
+        self.blocks_auto_fetch()
+            || matches!(
+                self,
+                Self::SetUpstreamBranch { .. }
+                    | Self::UnsetUpstreamBranch { .. }
+                    | Self::MergeRef { .. }
+                    | Self::SquashRef { .. }
+                    | Self::Reset { .. }
+                    | Self::SquashCommits { .. }
+                    | Self::RewordCommit { .. }
+                    | Self::Rebase { .. }
+                    | Self::RebaseContinue
+                    | Self::RebaseAbort
+                    | Self::InteractiveRebase { .. }
+                    | Self::InteractiveCherryPick { .. }
+                    | Self::CherryPick { .. }
+                    | Self::Revert { .. }
+                    | Self::ApplyFileChange { commit: true, .. }
+                    | Self::MergeAbort
+                    | Self::LargeFile { .. }
+            )
+    }
+
+    /// A fetch that reached every remote, so automatic fetch may count it.
+    pub(crate) fn fetches_every_remote(&self) -> bool {
+        matches!(self, Self::FetchAll)
+    }
+
+    pub(crate) fn blocks_auto_fetch(&self) -> bool {
+        self.fetches_objects()
+            || matches!(
+                self,
+                Self::RunMaintenance
+                    | Self::PruneLocalTags
+                    | Self::Push
+                    | Self::PushWithTags { .. }
+                    | Self::PushAfterCommit { .. }
+                    | Self::ForcePush
+                    | Self::ForcePushWithLease { .. }
+                    | Self::PushSetUpstream { .. }
+                    | Self::PushTag { .. }
+                    | Self::DeleteRemoteTag { .. }
+                    | Self::DeleteRemoteBranch { .. }
+                    | Self::DeleteRemoteBranches { .. }
+                    | Self::AddRemote { .. }
+                    | Self::RemoveRemote { .. }
+                    | Self::SetRemoteUrl { .. }
+            )
+            || matches!(self, Self::LargeFile { command } if command.pulls() || command.pushes())
+    }
+
     pub fn repository_requirement(&self) -> gitcomet_core::domain::RepositoryRequirement {
         use gitcomet_core::domain::RepositoryRequirement::{Repository, WorkingTree};
         match self {
             Self::FetchAll
+            | Self::FetchRemote { .. }
             | Self::FetchRefspecs { .. }
             | Self::PruneMergedBranches
             | Self::PruneLocalTags
@@ -360,6 +416,7 @@ impl RepoCommandKind {
             | Self::RemoveSubmodule { .. }
             | Self::ApplyWorktreePatch { .. } => true,
             Self::FetchAll
+            | Self::FetchRemote { .. }
             | Self::FetchRefspecs { .. }
             | Self::PruneMergedBranches
             | Self::PruneLocalTags
@@ -421,6 +478,7 @@ impl RepoCommandKind {
     pub(crate) fn holds_mutation_gate(&self) -> bool {
         match self {
             Self::FetchAll
+            | Self::FetchRemote { .. }
             | Self::FetchRefspecs { .. }
             | Self::PruneMergedBranches
             | Self::Push
@@ -487,6 +545,7 @@ impl RepoCommandKind {
         matches!(
             self,
             Self::FetchAll
+                | Self::FetchRemote { .. }
                 | Self::FetchRefspecs { .. }
                 | Self::PruneMergedBranches
                 | Self::Pull { .. }
@@ -501,7 +560,7 @@ impl RepoCommandKind {
 
     pub(crate) fn hook_activity_label(&self) -> &'static str {
         match self {
-            Self::FetchAll | Self::FetchRefspecs { .. } => "Fetch",
+            Self::FetchAll | Self::FetchRemote { .. } | Self::FetchRefspecs { .. } => "Fetch",
             Self::PruneMergedBranches => "Prune branches",
             Self::PruneLocalTags => "Prune tags",
             Self::RunMaintenance => "Maintenance",
@@ -555,5 +614,28 @@ impl RepoCommandKind {
             Self::ApplyWorktreePatch { .. } => "Apply worktree patch",
             Self::LargeFile { command } => command.label(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::RepoCommandKind;
+
+    #[test]
+    fn only_fetch_all_counts_as_fetching_every_remote() {
+        assert!(RepoCommandKind::FetchAll.fetches_every_remote());
+        assert!(
+            !RepoCommandKind::FetchRemote {
+                remote: "origin".to_string()
+            }
+            .fetches_every_remote()
+        );
+        assert!(
+            !RepoCommandKind::FetchRefspecs {
+                remote: "origin".to_string(),
+                refspecs: vec!["refs/heads/main".to_string()],
+            }
+            .fetches_every_remote()
+        );
     }
 }

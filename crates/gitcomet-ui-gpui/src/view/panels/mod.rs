@@ -496,6 +496,10 @@ pub(in crate::view) enum ContextMenuAction {
     FetchAll {
         repo_id: RepoId,
     },
+    FetchRemote {
+        repo_id: RepoId,
+        remote: String,
+    },
     PruneMergedBranches {
         repo_id: RepoId,
     },

@@ -11,7 +11,9 @@ use gitcomet_core::signing_tools::{
     DEFAULT_GPG_PROGRAM, DEFAULT_SSH_KEYGEN_PROGRAM, SigningTool, SigningToolAvailability,
     SigningToolsState,
 };
-use gitcomet_state::model::{DefaultTagType, GitLogTagFetchMode};
+use gitcomet_state::model::{
+    AutoFetchInterval, AutoFetchSettings, DefaultTagType, GitLogTagFetchMode,
+};
 use gitcomet_state::session::ExternalCodeEditorSetting;
 use gpui::{Stateful, TitlebarOptions, WindowBounds, WindowDecorations, WindowOptions};
 use std::path::PathBuf;
@@ -27,6 +29,7 @@ const SETTINGS_DROPDOWN_COMPACT_LIST_EXTRA_HEIGHT_PX: f32 = 20.0;
 const SETTINGS_DROPDOWN_DETAIL_ROW_HEIGHT_PX: f32 = 42.0;
 const SETTINGS_DROPDOWN_DETAIL_LIST_EXTRA_HEIGHT_PX: f32 = 24.0;
 const SETTINGS_DROPDOWN_DENSE_DETAIL_ROW_HEIGHT_PX: f32 = 28.0;
+const AUTO_FETCH_INTERVAL_INPUT_WIDTH_PX: f32 = 80.0;
 
 fn settings_window_title() -> String {
     format!("Settings: {}", crate::view::product_name())
@@ -332,7 +335,6 @@ enum SettingsSection {
     GitLogDefaultMode,
     GitLogColumns,
     GitLogBranchNames,
-    GitLogTagFetch,
     AllowedRemoteProtocols,
     RemoteMarkdownImages,
     WorkspaceTheme,
@@ -361,10 +363,9 @@ impl SettingsSection {
             | Self::Diff
             | Self::DiffViewMode
             | Self::DiffTabSize => SettingsCategory::Diff,
-            Self::GitLogDefaultMode
-            | Self::GitLogColumns
-            | Self::GitLogBranchNames
-            | Self::GitLogTagFetch => SettingsCategory::GitLog,
+            Self::GitLogDefaultMode | Self::GitLogColumns | Self::GitLogBranchNames => {
+                SettingsCategory::GitLog
+            }
             Self::AllowedRemoteProtocols | Self::RemoteMarkdownImages => {
                 SettingsCategory::SecurityPrivacy
             }
@@ -515,12 +516,15 @@ impl SettingsCategory {
                  author sha files tab follows selected commit browse repository file browsing start exit \
                  verify commit signatures verification signing key trust"
             }
-            Self::Remotes => "remotes remote fetch pull prune deleted branches automatically ghost",
+            Self::Remotes => {
+                "remotes remote fetch pull prune deleted branches automatically automatic fetch auto fetch background interval minutes ghost \
+                 automatically fetch tags remote tags"
+            }
             Self::LargeFiles => {
                 "large files git lfs git-annex annex synced branches adjusted branch pull push \
                  sync content"
             }
-            Self::Tags => "tags automatically fetch tags",
+            Self::Tags => "tags default tag type lightweight annotated",
             Self::Maintenance => {
                 "maintenance recommend repository gc garbage collection repack pack packs \
                  loose objects optimize optimise housekeeping"
@@ -682,6 +686,10 @@ pub(crate) struct SettingsWindowView {
     default_history_mode: HistoryMode,
     default_tag_type: DefaultTagType,
     prune_deleted_remote_branches_on_fetch: bool,
+    auto_fetch: AutoFetchSettings,
+    auto_fetch_interval_input: Entity<components::TextInput>,
+    auto_fetch_interval_error: Option<&'static str>,
+    _auto_fetch_interval_subscriptions: Vec<gpui::Subscription>,
     large_file_settings: gitcomet_state::model::LargeFileSettings,
     recommend_repo_maintenance: bool,
     current_view: SettingsView,
@@ -1023,13 +1031,6 @@ fn history_columns_settings_label(
     }
 }
 
-fn git_log_tag_fetch_mode_label(mode: GitLogTagFetchMode) -> &'static str {
-    match mode {
-        GitLogTagFetchMode::OnRepositoryActivation => "On repository activation",
-        GitLogTagFetchMode::Disabled => "Disabled",
-    }
-}
-
 fn applied_git_executable_path(runtime: &GitRuntimeState) -> Option<PathBuf> {
     match &runtime.preference {
         GitExecutablePreference::SystemPath => None,
@@ -1111,6 +1112,7 @@ impl SettingsWindowView {
         let prune_deleted_remote_branches_on_fetch = ui_preferences
             .remotes
             .prune_deleted_remote_branches_on_fetch;
+        let auto_fetch = ui_preferences.remotes.auto_fetch;
         let large_file_settings = ui_preferences.large_files;
         let recommend_repo_maintenance = ui_preferences.maintenance.recommend;
         let external_editor_setting = initial_external_editor_setting(&ui_session);
@@ -1373,6 +1375,32 @@ impl SettingsWindowView {
             })
             .collect();
 
+        let auto_fetch_interval_input = cx.new(|cx| {
+            let mut input =
+                components::TextInput::new(components::TextInputOptions::default(), window, cx);
+            input.set_submit_on_enter(true);
+            input.set_text(auto_fetch.interval.minutes().to_string(), cx);
+            input
+        });
+        let interval_focus = auto_fetch_interval_input.read(cx).focus_handle();
+        let auto_fetch_interval_subscriptions = vec![
+            cx.observe(&auto_fetch_interval_input, |this, input, cx| {
+                let (enter, escape) = input.update(cx, |input, _| {
+                    (input.take_enter_pressed(), input.take_escape_pressed())
+                });
+                if enter {
+                    this.commit_auto_fetch_interval(cx);
+                } else if escape {
+                    this.reset_auto_fetch_interval_input(cx);
+                }
+            }),
+            cx.on_blur(&interval_focus, window, |_this, window, cx| {
+                cx.defer_in(window, |this, _window, cx| {
+                    this.commit_auto_fetch_interval(cx);
+                });
+            }),
+        ];
+
         let selected_workspace = crate::workspaces::active_workspace_id(cx).or_else(|| {
             crate::workspaces::workspaces(cx)
                 .first()
@@ -1470,6 +1498,10 @@ impl SettingsWindowView {
             default_history_mode,
             default_tag_type,
             prune_deleted_remote_branches_on_fetch,
+            auto_fetch,
+            auto_fetch_interval_input,
+            auto_fetch_interval_error: None,
+            _auto_fetch_interval_subscriptions: auto_fetch_interval_subscriptions,
             large_file_settings,
             recommend_repo_maintenance,
             current_view: SettingsView::Root,

@@ -17,6 +17,7 @@ fn interrupt(root: &Path, point: Failpoint) -> Journal {
         Failpoint::OriginalMoved => Phase::OriginalMoved,
         Failpoint::Installed | Failpoint::Repaired => Phase::Installed,
         Failpoint::Committed => Phase::Committed,
+        Failpoint::CleanupStarted => Phase::CleaningUp,
     };
     assert_eq!(journal.phase, expected);
     journal
@@ -49,6 +50,24 @@ fn recovery_reopens_after_every_install_phase() {
         assert!(!journal.backup.path().exists());
         assert!(!journal.staging.path().exists());
     }
+}
+
+/// Deleting the backup can stop partway; the checkout is already converted.
+#[test]
+fn recovery_finishes_a_backup_cleanup_that_stopped_partway() {
+    let (_directory, root) = bare_fixture();
+    let journal = interrupt(&root, Failpoint::CleanupStarted);
+    let backup = journal.backup.path();
+    let first = fs::read_dir(&backup)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .find(|path| path.is_file())
+        .expect("the backup holds a file");
+    fs::remove_file(first).unwrap();
+    let repo = crate::GixBackend.open(&root).unwrap();
+    assert_eq!(repo.repository_mode().unwrap(), RepositoryMode::WorkingTree);
+    assert!(!backup.exists());
+    assert!(!journal_path(&root).unwrap().exists());
 }
 
 #[test]

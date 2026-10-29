@@ -86,6 +86,163 @@ fn reset_prompt_renders_cancel_hint(cx: &mut gpui::TestAppContext) {
         .expect("expected reset Cancel shortcut hint");
 }
 
+#[gpui::test]
+fn force_push_confirm_overwrites_only_the_remote_tip_it_showed(cx: &mut gpui::TestAppContext) {
+    use gitcomet_core::domain::{Branch, CommitId, RemoteBranch, RepoSpec, Upstream};
+    use gitcomet_state::model::{AppState, Loadable, RepoState};
+
+    let repo_id = RepoId(1);
+    let temp = tempfile::tempdir().expect("test workdir");
+    let workdir = temp.path().to_path_buf();
+    let tracking = Arc::new(super::branch::TrackingRepo::new(workdir.clone()));
+    let oid = |digit: char| CommitId(Arc::from(digit.to_string().repeat(40)));
+    let state = |remote_tip: CommitId| {
+        let mut repo = RepoState::new_opening(
+            repo_id,
+            RepoSpec {
+                workdir: workdir.clone(),
+            },
+        );
+        repo.open = Loadable::Ready(());
+        repo.head_branch = Loadable::Ready("main".to_string());
+        repo.branches = Loadable::Ready(Arc::new(vec![Branch {
+            name: "main".to_string(),
+            target: oid('1'),
+            upstream: Some(Upstream {
+                remote: "origin".to_string(),
+                branch: "main".to_string(),
+            }),
+            divergence: None,
+        }]));
+        repo.remote_branches = Loadable::Ready(Arc::new(vec![RemoteBranch {
+            remote: "origin".to_string(),
+            name: "main".to_string(),
+            target: remote_tip,
+        }]));
+        Arc::new(AppState {
+            repos: vec![repo],
+            active_repo: Some(repo_id),
+            ..AppState::test_default()
+        })
+    };
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let show = |cx: &mut gpui::VisualTestContext, state: Arc<AppState>| {
+        cx.update(|window, app| {
+            view.update(app, |this, cx| {
+                this.store.replace_snapshot_for_test(Arc::clone(&state));
+                crate::view::test_support::push_test_state(this, state, cx);
+            });
+            let _ = window.draw(app);
+        });
+    };
+    show(cx, state(oid('2')));
+    cx.update(|_window, app| {
+        crate::app::bind_text_input_keys_for_test(app);
+        view.read(app)
+            .store
+            .insert_repo_for_test(repo_id, tracking.clone());
+    });
+    open_popover_and_draw(&view, PopoverKind::ForcePushConfirm { repo_id }, cx);
+    // An automatic fetch moves origin/main while the dialog is open.
+    show(cx, state(oid('3')));
+    let center = cx
+        .debug_bounds("force_push_go")
+        .expect("expected the force push button")
+        .center();
+    cx.simulate_mouse_move(center, None, gpui::Modifiers::default());
+    cx.simulate_mouse_down(center, gpui::MouseButton::Left, gpui::Modifiers::default());
+    cx.simulate_mouse_up(center, gpui::MouseButton::Left, gpui::Modifiers::default());
+    cx.run_until_parked();
+    super::branch::wait_until("the force push to run", || !tracking.actions().is_empty());
+    assert_eq!(
+        tracking.actions(),
+        [format!("force-push:origin/main:{}", oid('2'))],
+        "the push must not overwrite a remote commit the dialog never showed"
+    );
+}
+
+#[gpui::test]
+fn special_remote_banner_confirms_or_removes_a_remote_someone_else_configured(
+    cx: &mut gpui::TestAppContext,
+) {
+    use gitcomet_core::domain::RepoSpec;
+    use gitcomet_core::large_files::{AnnexRemoteCheck, LargeFileSupport};
+    use gitcomet_state::model::{AppState, Loadable, RepoState};
+
+    let repo_id = RepoId(1);
+    let temp = tempfile::tempdir().expect("test workdir");
+    let tracking = Arc::new(super::branch::TrackingRepo::new(temp.path().to_path_buf()));
+    let mut repo = RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: temp.path().to_path_buf(),
+        },
+    );
+    repo.open = Loadable::Ready(());
+    let mut support = LargeFileSupport::default();
+    support.annex.unverified_remotes = vec![AnnexRemoteCheck {
+        name: "backup".into(),
+        configuration: "type=rsync rsyncurl=elsewhere.example:/files".into(),
+        id: "7".into(),
+    }];
+    repo.large_file_support = Loadable::Ready(Arc::new(support));
+    let state = Arc::new(AppState {
+        repos: vec![repo],
+        active_repo: Some(repo_id),
+        ..AppState::test_default()
+    });
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    cx.update(|window, app| {
+        crate::app::bind_text_input_keys_for_test(app);
+        view.update(app, |this, cx| {
+            this.store.replace_snapshot_for_test(Arc::clone(&state));
+            crate::view::test_support::push_test_state(this, state, cx);
+        });
+        view.read(app)
+            .store
+            .insert_repo_for_test(repo_id, tracking.clone());
+        let _ = window.draw(app);
+    });
+    let click = |cx: &mut gpui::VisualTestContext, selector: &'static str| {
+        let center = cx
+            .debug_bounds(selector)
+            .unwrap_or_else(|| panic!("expected {selector}"))
+            .center();
+        cx.simulate_mouse_move(center, None, gpui::Modifiers::default());
+        cx.simulate_mouse_down(center, gpui::MouseButton::Left, gpui::Modifiers::default());
+        cx.simulate_mouse_up(center, gpui::MouseButton::Left, gpui::Modifiers::default());
+        cx.run_until_parked();
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+    };
+    assert!(cx.debug_bounds("annex_remote_check_details").is_some());
+    click(cx, "annex_remote_check_not_mine");
+    assert!(cx.debug_bounds("annex_remote_check_confirm").is_none());
+    click(cx, "annex_remote_check_back");
+    click(cx, "annex_remote_check_confirm");
+    click(cx, "annex_remote_check_not_mine");
+    click(cx, "annex_remote_check_remove");
+    super::branch::wait_until("both commands to run", || tracking.actions().len() == 2);
+    assert_eq!(
+        tracking.actions(),
+        ["annex-verifyremote:backup:7", "remove-remote:backup"]
+    );
+    assert!(
+        cx.debug_bounds("annex_remote_check_remove").is_none(),
+        "the banner returns to its first question"
+    );
+    click(cx, "annex_remote_check_later");
+    assert!(
+        cx.debug_bounds("annex_remote_check_details").is_none(),
+        "Later hides it for this session"
+    );
+}
+
 // ── Category 2: Esc dismisses popovers ──
 
 #[gpui::test]

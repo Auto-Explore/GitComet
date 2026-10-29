@@ -29,6 +29,7 @@ fn wait_for_store(
 }
 
 mod appearance;
+mod automatic_fetch;
 mod chrome_and_layout;
 mod executables;
 mod extensions;

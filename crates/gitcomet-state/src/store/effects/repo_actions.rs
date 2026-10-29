@@ -49,7 +49,12 @@ fn spawn_repo_action(
                 );
                 return;
             }
+            let tracking_repo = action.changes_tracking().then(|| Arc::clone(&repo));
+            let tracking_sender = msg_tx.clone();
             task(repo, msg_tx);
+            if let Some(repo) = tracking_repo {
+                tracking_sender.refresh_other_tracking(repo_id, repo.as_ref());
+            }
         },
         move |msg_tx| {
             send_or_log(
@@ -134,8 +139,9 @@ fn schedule_repo_action_with_result<T, F, M>(
                 repo.as_ref(),
                 gitcomet_core::domain::RepositoryRequirement::WorkingTree,
             )
-            .and_then(|()| run(repo))
+            .and_then(|()| run(Arc::clone(&repo)))
         };
+        msg_tx.refresh_other_tracking(repo_id, repo.as_ref());
         let outcome = GitOperationTask::outcome(&result);
         let message = finish(repo_id, result);
         operation.finish(outcome, message);

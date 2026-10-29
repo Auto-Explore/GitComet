@@ -104,6 +104,8 @@ impl WorktreeDirtyScope {
 pub struct RepoLoadsInFlight {
     in_flight: u32,
     pending: u32,
+    background: u32,
+    pending_background: u32,
     log: LogLoads,
     worktree_dirty: WorktreeDirtyLoads,
     line_stats: LineStatsLoads,
@@ -120,6 +122,8 @@ struct ActiveLogLoad {
     seq: LogLoadSeq,
     request: PendingLogLoad,
     pending: Option<PendingLogLoad>,
+    background: bool,
+    pending_background: bool,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -175,8 +179,12 @@ impl RepoLoadsInFlight {
     /// Optional remote tag discovery and linked-checkout scans do not keep the
     /// active tab's spinner running after its local contents are available.
     pub fn any_foreground_in_flight(&self) -> bool {
-        (self.in_flight & !LoadKind::RemoteTags.mask()) != 0
-            || self.log_in_flight()
+        (self.in_flight & !self.background & !LoadKind::RemoteTags.mask()) != 0
+            || self
+                .log
+                .active
+                .as_ref()
+                .is_some_and(|active| !active.background)
             || self.line_stats_in_flight()
     }
 
@@ -190,6 +198,8 @@ impl RepoLoadsInFlight {
     pub fn clear(&mut self) {
         self.in_flight = 0;
         self.pending = 0;
+        self.background = 0;
+        self.pending_background = 0;
         self.log.active = None;
         self.worktree_dirty = WorktreeDirtyLoads::Idle;
         self.line_stats.invalidate();
@@ -227,16 +237,38 @@ impl RepoLoadsInFlight {
             return None;
         }
         self.in_flight |= Self::PRIMARY_REFRESH_FLAGS;
-        Some(self.log.start(log))
+        Some(self.log.start(log, false))
     }
 
     /// Starts immediately if idle, otherwise remembers one pending refresh.
     pub fn request(&mut self, kind: LoadKind) -> bool {
+        self.request_with_origin(kind, false)
+    }
+
+    pub(crate) fn request_background(&mut self, kind: LoadKind) -> bool {
+        self.request_with_origin(kind, true)
+    }
+
+    pub(crate) fn is_background(&self, kind: LoadKind) -> bool {
+        self.background & kind.mask() != 0
+    }
+
+    fn request_with_origin(&mut self, kind: LoadKind, background: bool) -> bool {
         if self.is_in_flight(kind) {
+            if !background {
+                self.pending_background &= !kind.mask();
+            } else if self.pending & kind.mask() == 0 {
+                self.pending_background |= kind.mask();
+            }
             self.pending |= kind.mask();
             false
         } else {
             self.in_flight |= kind.mask();
+            if background {
+                self.background |= kind.mask();
+            } else {
+                self.background &= !kind.mask();
+            }
             true
         }
     }
@@ -270,9 +302,12 @@ impl RepoLoadsInFlight {
     /// Finishes a load and indicates whether its pending refresh should start now.
     pub fn finish(&mut self, kind: LoadKind) -> bool {
         self.in_flight &= !kind.mask();
+        self.background &= !kind.mask();
         if (self.pending & kind.mask()) != 0 {
             self.pending &= !kind.mask();
             self.in_flight |= kind.mask();
+            self.background |= self.pending_background & kind.mask();
+            self.pending_background &= !kind.mask();
             true
         } else {
             false
@@ -282,7 +317,18 @@ impl RepoLoadsInFlight {
     /// A changed walk, author or focus supersedes the current walk immediately.
     /// Otherwise one request is queued, with refresh taking priority over pagination.
     pub fn request_log(&mut self, next: PendingLogLoad) -> Option<LogLoadSeq> {
-        self.log.request(next)
+        self.log.request(next, false)
+    }
+
+    pub(crate) fn request_background_log(&mut self, next: PendingLogLoad) -> Option<LogLoadSeq> {
+        self.log.request(next, true)
+    }
+
+    pub(crate) fn log_is_background(&self, seq: LogLoadSeq) -> bool {
+        self.log
+            .active
+            .as_ref()
+            .is_some_and(|active| active.seq == seq && active.background)
     }
 
     pub(crate) fn log_request_starts(&self, next: &PendingLogLoad) -> bool {
@@ -324,28 +370,33 @@ impl LogLoads {
         })
     }
 
-    fn start(&mut self, request: PendingLogLoad) -> LogLoadSeq {
+    fn start(&mut self, request: PendingLogLoad, background: bool) -> LogLoadSeq {
         self.last_seq = LogLoadSeq(self.last_seq.0.wrapping_add(1));
         self.active = Some(ActiveLogLoad {
             seq: self.last_seq,
             request,
             pending: None,
+            background,
+            pending_background: false,
         });
         self.last_seq
     }
 
-    fn request(&mut self, next: PendingLogLoad) -> Option<LogLoadSeq> {
+    fn request(&mut self, next: PendingLogLoad, background: bool) -> Option<LogLoadSeq> {
         if self.request_starts(&next) {
-            return Some(self.start(next));
+            return Some(self.start(next, background));
         }
         let active = self
             .active
             .as_mut()
             .expect("coalesced log request has an active walk");
+        let pending_background =
+            background && (active.pending.is_none() || active.pending_background);
         match &active.pending {
             Some(existing) if existing.cursor.is_none() && next.cursor.is_some() => {}
             _ => active.pending = Some(next),
         }
+        active.pending_background = pending_background;
         None
     }
 
@@ -357,9 +408,10 @@ impl LogLoads {
         if self.active.as_ref().is_none_or(|active| active.seq != seq) {
             return None;
         }
-        let mut next = self.active.take()?.pending?;
+        let active = self.active.take()?;
+        let mut next = active.pending?;
         prepare(&mut next);
-        let seq = self.start(next.clone());
+        let seq = self.start(next.clone(), active.pending_background);
         Some((seq, next))
     }
 }
@@ -395,6 +447,50 @@ impl LineStatsLoads {
 mod tests {
     use super::*;
     use gitcomet_core::domain::LogScope;
+
+    #[test]
+    fn background_reference_refresh_keeps_pending_foreground_origin() {
+        let mut loads = RepoLoadsInFlight::default();
+        assert!(loads.request_background(LoadKind::Branches));
+        assert!(!loads.any_foreground_in_flight());
+        assert!(!loads.request(LoadKind::Branches));
+        assert!(!loads.request_background(LoadKind::Branches));
+        assert!(loads.is_background(LoadKind::Branches));
+        assert!(loads.finish(LoadKind::Branches));
+        assert!(!loads.is_background(LoadKind::Branches));
+        assert!(loads.any_foreground_in_flight());
+        assert!(!loads.request_background(LoadKind::Branches));
+        assert!(loads.finish(LoadKind::Branches));
+        assert!(loads.is_background(LoadKind::Branches));
+        assert!(!loads.any_foreground_in_flight());
+        assert!(!loads.finish(LoadKind::Branches));
+        assert!(!loads.any_in_flight());
+    }
+
+    #[test]
+    fn background_history_refresh_keeps_pending_foreground_origin() {
+        let mut loads = RepoLoadsInFlight::default();
+        let request = PendingLogLoad {
+            focus: Default::default(),
+            walk: LogScope::default().into(),
+            author: None,
+            limit: 100,
+            cursor: None,
+        };
+        let first = loads.request_background_log(request.clone()).unwrap();
+        assert!(loads.log_is_background(first));
+        assert!(!loads.any_foreground_in_flight());
+        assert!(loads.request_log(request.clone()).is_none());
+        assert!(loads.request_background_log(request.clone()).is_none());
+        let (second, _) = loads.finish_log(first, |_| {}).unwrap();
+        assert!(!loads.log_is_background(second));
+        assert!(loads.any_foreground_in_flight());
+        assert!(loads.request_background_log(request).is_none());
+        let (third, _) = loads.finish_log(second, |_| {}).unwrap();
+        assert!(loads.log_is_background(third));
+        assert!(!loads.any_foreground_in_flight());
+        assert!(loads.finish_log(third, |_| {}).is_none());
+    }
 
     #[test]
     fn remote_tags_stay_tracked_without_delaying_local_readiness() {

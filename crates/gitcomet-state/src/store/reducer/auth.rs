@@ -315,6 +315,9 @@ pub(crate) fn repo_command_replay_msg_for_test(
 fn retry_msg_for_repo_command(repo_id: RepoId, command: RepoCommandKind) -> Option<Msg> {
     Some(match command {
         RepoCommandKind::FetchAll => Msg::Fetch(crate::msg::FetchMsg::All { repo_id }),
+        RepoCommandKind::FetchRemote { remote } => {
+            Msg::Fetch(crate::msg::FetchMsg::Remote { repo_id, remote })
+        }
         RepoCommandKind::FetchRefspecs { remote, refspecs } => {
             Msg::Fetch(crate::msg::FetchMsg::Refspecs {
                 repo_id,
@@ -1060,7 +1063,7 @@ pub(super) fn repo_command_finished(
 
 // Recognizing auth failures and staging the credentials the user enters.
 
-pub(super) fn detect_auth_prompt_kind(error: &Error) -> Option<AuthPromptKind> {
+pub(in crate::store) fn detect_auth_prompt_kind(error: &Error) -> Option<AuthPromptKind> {
     match error.kind() {
         ErrorKind::Git(failure) => detect_auth_prompt_kind_from_git_failure(failure),
         ErrorKind::Backend(message) => detect_auth_prompt_kind_from_message(message),

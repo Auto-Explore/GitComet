@@ -2009,6 +2009,96 @@ fn set_active_repo_uses_full_refresh_when_hot_switch_metadata_is_incomplete() {
 }
 
 #[test]
+fn set_active_repo_hot_switch_waits_for_history_tags_when_tag_fetching_is_off() {
+    let mut repos: RepositoryRuntimes = Default::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState {
+        git_log_settings: GitLogSettings {
+            show_history_tags: true,
+            tag_fetch_mode: GitLogTagFetchMode::Disabled,
+            ..GitLogSettings::default()
+        },
+        ..AppState::test_default()
+    };
+
+    open_repo_ready(&mut repos, &id_alloc, &mut state, "/tmp/repo1");
+    open_repo_ready(&mut repos, &id_alloc, &mut state, "/tmp/repo2");
+
+    let repo1 = RepoId(1);
+    let repo1_state = state
+        .repos
+        .iter_mut()
+        .find(|repo| repo.id == repo1)
+        .expect("repo1 exists");
+    mark_repo_switch_secondary_metadata_ready(repo1_state);
+    repo1_state.tags = Loadable::NotLoaded;
+    repo1_state.last_active_at = Some(SystemTime::now());
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::SetActiveRepo { repo_id: repo1 },
+    );
+
+    assert!(
+        has_full_refresh_only_effects(&effects, repo1),
+        "history shows tags, so missing tags force the full refresh path"
+    );
+}
+
+#[test]
+fn tag_settings_load_only_their_own_tags_for_the_active_repo() {
+    for (show_history_tags, tag_fetch_mode) in [
+        (true, GitLogTagFetchMode::Disabled),
+        (false, GitLogTagFetchMode::OnRepositoryActivation),
+    ] {
+        let mut repos: RepositoryRuntimes = Default::default();
+        let id_alloc = AtomicU64::new(1);
+        let mut state = AppState {
+            git_log_settings: GitLogSettings {
+                show_history_tags: false,
+                tag_fetch_mode: GitLogTagFetchMode::Disabled,
+                ..GitLogSettings::default()
+            },
+            ..AppState::test_default()
+        };
+        open_repo_ready(&mut repos, &id_alloc, &mut state, "/tmp/repo1");
+
+        let effects = reduce(
+            &mut repos,
+            &id_alloc,
+            &mut state,
+            Msg::SetGitLogSettings {
+                show_history_tags,
+                tag_fetch_mode,
+                verify_commit_signatures: false,
+            },
+        );
+
+        let loads = (
+            effects.iter().any(|effect| {
+                matches!(effect, Effect::References(ReferenceEffect::LoadTags { .. }))
+            }),
+            effects.iter().any(|effect| {
+                matches!(
+                    effect,
+                    Effect::References(ReferenceEffect::LoadRemoteTags { .. })
+                )
+            }),
+        );
+        assert_eq!(
+            loads,
+            (
+                show_history_tags,
+                tag_fetch_mode == GitLogTagFetchMode::OnRepositoryActivation
+            ),
+            "show_history_tags={show_history_tags} tag_fetch_mode={tag_fetch_mode:?}"
+        );
+    }
+}
+
+#[test]
 fn set_active_repo_uses_full_refresh_when_hot_switch_window_expires() {
     let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);

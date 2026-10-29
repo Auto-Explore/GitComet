@@ -57,9 +57,7 @@ fn repo_switch_secondary_metadata_ready(
     git_log_settings: GitLogSettings,
 ) -> bool {
     matches!(repo_state.branches, Loadable::Ready(_))
-        && (!git_log_settings.show_history_tags
-            || !git_log_settings.auto_fetch_tags_on_repo_activation()
-            || matches!(repo_state.tags, Loadable::Ready(_)))
+        && (!git_log_settings.show_history_tags || matches!(repo_state.tags, Loadable::Ready(_)))
         && matches!(repo_state.remotes, Loadable::Ready(_))
         && matches!(repo_state.remote_branches, Loadable::Ready(_))
         && matches!(repo_state.stashes, Loadable::Ready(_))
@@ -143,6 +141,12 @@ fn clear_loading<T>(loadable: &mut Loadable<T>) -> bool {
 }
 
 fn clear_cancelled_repo_loading(repo_state: &mut RepoState) {
+    if repo_state
+        .loads_in_flight
+        .is_in_flight(LoadKind::UpstreamDivergence)
+    {
+        repo_state.incoming.mark_stale();
+    }
     repo_state.loads_in_flight.clear();
     // A dropped reply would otherwise leave a dialog waiting on it forever.
     for lookup in [

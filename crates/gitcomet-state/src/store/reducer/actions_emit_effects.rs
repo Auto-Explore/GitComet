@@ -499,6 +499,22 @@ pub(super) fn fetch_all(
     })]
 }
 
+pub(super) fn fetch_remote(
+    repos: &RepositoryRuntimes,
+    state: &mut AppState,
+    repo_id: RepoId,
+    remote: String,
+) -> Vec<Effect> {
+    let prune = state.remote_settings.prune_deleted_remote_branches_on_fetch;
+    bump_in_flight(repos, state, repo_id, InFlightKind::Pull);
+    vec![Effect::RepoCommand(RepoCommandEffect::FetchRemote {
+        repo_id,
+        remote,
+        prune,
+        auth: None,
+    })]
+}
+
 pub(super) fn fetch_refspecs(
     repos: &RepositoryRuntimes,
     state: &mut AppState,
@@ -1214,6 +1230,7 @@ fn command_may_change_large_file_support(command: &RepoCommandKind) -> bool {
                 | C::AnnexSync { .. } | C::AnnexInit | C::AnnexAdjust { .. }
                 | C::AnnexLeaveAdjusted { .. } | C::AnnexEnableRemote { .. }
                 | C::AnnexInitRemote { .. } | C::AnnexTrust { .. }
+                | C::AnnexVerifyRemote { .. }
                 | C::AnnexDescribe { .. } | C::AnnexNumcopies { .. }
                 | C::AnnexWebapp | C::AnnexStopAssistant | C::AnnexRestage => true,
                 C::LfsPushAll { .. } | C::LfsPrune
@@ -1248,6 +1265,7 @@ fn command_may_change_large_file_support(command: &RepoCommandKind) -> bool {
         | RepoCommandKind::RemoveRemote { .. }
         | RepoCommandKind::SetRemoteUrl { .. } => true,
         RepoCommandKind::FetchAll
+        | RepoCommandKind::FetchRemote { .. }
         | RepoCommandKind::FetchRefspecs { .. }
         | RepoCommandKind::PruneMergedBranches
         | RepoCommandKind::PruneLocalTags
@@ -1513,6 +1531,7 @@ pub(super) fn repo_command_finished(
     }
     match &command {
         RepoCommandKind::FetchAll
+        | RepoCommandKind::FetchRemote { .. }
         | RepoCommandKind::FetchRefspecs { .. }
         | RepoCommandKind::PruneMergedBranches
         | RepoCommandKind::PruneLocalTags => {

@@ -93,6 +93,22 @@ pub enum BranchExistsChoice {
 }
 
 impl RepoActionKind {
+    pub(crate) fn changes_tracking(self) -> bool {
+        matches!(
+            self,
+            Self::CheckoutBranch
+                | Self::CheckoutRemoteBranch
+                | Self::CheckoutCommit
+                | Self::CherryPickCommit
+                | Self::CreateBranch
+                | Self::CreateBranchAndCheckout
+                | Self::RenameBranch
+                | Self::DeleteBranch
+                | Self::ForceDeleteBranch
+                | Self::DeleteBranches
+        )
+    }
+
     pub fn repository_requirement(self) -> RepositoryRequirement {
         match self {
             Self::CreateBranch
@@ -1395,6 +1411,18 @@ pub enum Msg {
 
 #[derive(strum::IntoStaticStr)]
 pub enum InternalMsg {
+    AutoFetchUpdated {
+        repo_id: RepoId,
+        lifetime: crate::model::RepoLifetime,
+        revision: u64,
+        snapshot: crate::model::RepoAutoFetchState,
+        result:
+            Option<Arc<gitcomet_core::services::Result<gitcomet_core::services::CommandOutput>>>,
+    },
+    AutoFetchRefresh {
+        repo_id: RepoId,
+        lifetime: crate::model::RepoLifetime,
+    },
     QuiesceRepository {
         common_dir: PathBuf,
         cancellation: gitcomet_core::services::CancellationToken,
@@ -1520,6 +1548,10 @@ pub enum InternalMsg {
     UpstreamDivergenceLoaded {
         repo_id: RepoId,
         result: Result<Option<UpstreamDivergence>, Error>,
+    },
+    HeadTrackingLoaded {
+        repo_id: RepoId,
+        result: Result<gitcomet_core::domain::HeadTracking, Error>,
     },
     LogLoaded {
         repo_id: RepoId,

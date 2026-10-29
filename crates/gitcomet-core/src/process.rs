@@ -419,6 +419,15 @@ pub(crate) fn git_command_for_preference(preference: &GitExecutablePreference) -
     // No gc/repack behind a command: GitComet recommends maintenance and runs
     // it only when asked. An explicit `git maintenance run` ignores this.
     command.arg("-c").arg("maintenance.auto=false");
+    // GitComet reads Git's messages, so they must be English; a UTF-8
+    // charset keeps hooks and helpers from failing on non-ASCII text.
+    let inherited: Vec<_> = std::env::vars_os().collect();
+    for (name, value) in git_locale_env(&inherited, utf8_locale) {
+        match value {
+            Some(value) => command.env(name, value),
+            None => command.env_remove(name),
+        };
+    }
     if let GitExecutablePreference::Custom(path) = preference
         && let Some(parent) = path.parent()
         && !parent.as_os_str().is_empty()
@@ -426,6 +435,78 @@ pub(crate) fn git_command_for_preference(preference: &GitExecutablePreference) -
         prepend_command_path(&mut command, parent);
     }
     command
+}
+
+/// Environment changes that make Git print English in a UTF-8 charset, given
+/// the inherited environment. `LANGUAGE` picks the messages even over the
+/// user's `LC_ALL`; numbers, dates and sorting keep the user's locale.
+fn git_locale_env(
+    inherited: &[(OsString, OsString)],
+    utf8_locale: impl FnOnce() -> Option<&'static str>,
+) -> Vec<(OsString, Option<OsString>)> {
+    let var = |name: &str| {
+        inherited
+            .iter()
+            .find(|(key, value)| key == name && !value.is_empty())
+            .map(|(_, value)| value.clone())
+    };
+    let mut changes = vec![("LANGUAGE".into(), Some("en".into()))];
+    let all = var("LC_ALL");
+    let charset = all
+        .clone()
+        .or_else(|| var("LC_CTYPE"))
+        .or_else(|| var("LANG"));
+    let names_utf8 = |locale: &OsStr| {
+        let locale = locale.to_string_lossy().to_ascii_lowercase();
+        locale.contains("utf-8") || locale.contains("utf8")
+    };
+    if charset.as_deref().is_some_and(names_utf8) {
+        return changes;
+    }
+    let Some(utf8) = utf8_locale() else {
+        return changes;
+    };
+    if let Some(all) = all {
+        // LC_ALL would override LC_CTYPE. LANG gives the user's locale to
+        // every other category, which the LC_* variables LC_ALL hid must not
+        // take over.
+        changes.extend(
+            inherited
+                .iter()
+                .filter(|(name, _)| name.to_str().is_some_and(|name| name.starts_with("LC_")))
+                .map(|(name, _)| (name.clone(), None)),
+        );
+        changes.push(("LANG".into(), Some(all)));
+    }
+    changes.push(("LC_CTYPE".into(), Some(utf8.into())));
+    changes
+}
+
+/// A UTF-8 locale this machine has, for when the user's charset is not UTF-8.
+/// Linux installs C.UTF-8 on most systems but not all, and a missing locale
+/// makes Perl and bash hooks print warnings.
+fn utf8_locale() -> Option<&'static str> {
+    if cfg!(windows) {
+        // Git for Windows runs in UTF-8 already.
+        None
+    } else if cfg!(target_os = "macos") {
+        Some("UTF-8")
+    } else {
+        static INSTALLED: OnceLock<bool> = OnceLock::new();
+        INSTALLED
+            .get_or_init(|| {
+                background_command("locale")
+                    .arg("-a")
+                    .output()
+                    .is_ok_and(|output| {
+                        String::from_utf8_lossy(&output.stdout).lines().any(|name| {
+                            name.eq_ignore_ascii_case("C.UTF-8")
+                                || name.eq_ignore_ascii_case("C.utf8")
+                        })
+                    })
+            })
+            .then_some("C.UTF-8")
+    }
 }
 
 fn prepend_command_path(command: &mut Command, path: &Path) {
@@ -569,6 +650,80 @@ mod tests {
     use super::*;
     use std::fs;
     use std::path::Path;
+
+    fn locale_env(
+        inherited: &[(&str, &str)],
+        utf8: Option<&'static str>,
+    ) -> Vec<(String, Option<String>)> {
+        let inherited: Vec<(OsString, OsString)> = inherited
+            .iter()
+            .map(|(name, value)| ((*name).into(), (*value).into()))
+            .collect();
+        git_locale_env(&inherited, || utf8)
+            .into_iter()
+            .map(|(name, value)| {
+                (
+                    name.into_string().unwrap(),
+                    value.map(|value| value.into_string().unwrap()),
+                )
+            })
+            .collect()
+    }
+
+    fn set(name: &str, value: &str) -> (String, Option<String>) {
+        (name.to_string(), Some(value.to_string()))
+    }
+
+    #[test]
+    fn git_speaks_english_and_keeps_a_utf8_locale_the_user_chose() {
+        for user in [
+            &[("LC_ALL", "fi_FI.UTF-8")][..],
+            &[("LANG", "de_DE.utf8"), ("LC_NUMERIC", "fi_FI.UTF-8")],
+            &[("LC_CTYPE", "UTF-8")],
+        ] {
+            assert_eq!(
+                locale_env(user, Some("C.UTF-8")),
+                [set("LANGUAGE", "en")],
+                "{user:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_locale_without_utf8_gets_a_utf8_charset_and_keeps_everything_else() {
+        // A macOS app opened from Finder inherits no locale at all.
+        assert_eq!(
+            locale_env(&[], Some("UTF-8")),
+            [set("LANGUAGE", "en"), set("LC_CTYPE", "UTF-8")]
+        );
+        assert_eq!(
+            locale_env(
+                &[("LANG", "fi_FI.UTF-8"), ("LC_CTYPE", "C")],
+                Some("C.UTF-8")
+            ),
+            [set("LANGUAGE", "en"), set("LC_CTYPE", "C.UTF-8")],
+            "LC_CTYPE outranks LANG"
+        );
+        assert_eq!(
+            locale_env(
+                &[("LC_ALL", "fi_FI.iso88591"), ("LC_TIME", "de_DE.UTF-8")],
+                Some("C.UTF-8")
+            ),
+            [
+                set("LANGUAGE", "en"),
+                ("LC_ALL".to_string(), None),
+                ("LC_TIME".to_string(), None),
+                set("LANG", "fi_FI.iso88591"),
+                set("LC_CTYPE", "C.UTF-8"),
+            ],
+            "LC_ALL hid LC_TIME, so moving LC_ALL into LANG must not expose it"
+        );
+        assert_eq!(
+            locale_env(&[("LANG", "C")], None),
+            [set("LANGUAGE", "en")],
+            "a UTF-8 locale this machine lacks would only add warnings"
+        );
+    }
 
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt as _;

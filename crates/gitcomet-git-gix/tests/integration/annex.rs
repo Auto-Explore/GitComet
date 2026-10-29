@@ -31,6 +31,29 @@ fn git(repo: &Path, args: &[&str]) -> String {
     String::from_utf8_lossy(&output.stdout).into_owned()
 }
 
+/// Confirms an enabled special remote through GitComet, as the user does
+/// before git-annex 10.20261026+ uses a remote someone else configured.
+/// Older git-annex lists none to confirm.
+fn verify_special_remote(repo: &Path, name: &str) {
+    let opened = open(repo);
+    let support = opened
+        .large_file_support(&CancellationToken::new())
+        .unwrap();
+    if let Some(check) = support
+        .annex
+        .unverified_remotes
+        .iter()
+        .find(|check| check.name == name)
+    {
+        opened
+            .run_large_file_command(&LargeFileCommand::AnnexVerifyRemote {
+                name: name.to_string(),
+                id: check.id.clone(),
+            })
+            .unwrap();
+    }
+}
+
 fn git_annex_available() -> bool {
     gitcomet_core::test_support::git_fixture::git_command()
         .args(["annex", "version", "--raw"])
@@ -2404,4 +2427,77 @@ exec sleep 30
             }
         },
     );
+}
+
+#[test]
+fn a_special_remote_someone_else_configured_waits_for_confirmation() {
+    require_annex!();
+    let dir = tempfile::tempdir().unwrap();
+    let source = init_annex_repo(dir.path());
+    git(
+        &source,
+        &["annex", "copy", "-q", "--to", "backup", "big.bin"],
+    );
+    let clone = dir.path().join("clone");
+    git(
+        dir.path(),
+        &[
+            "clone",
+            "-q",
+            source.to_str().unwrap(),
+            clone.to_str().unwrap(),
+        ],
+    );
+    git(&clone, &["config", "user.name", "Test"]);
+    git(&clone, &["config", "user.email", "test@example.com"]);
+    git(&clone, &["annex", "init", "-q", "desktop"]);
+    let store = format!("directory={}", dir.path().join("store").display());
+    git(&clone, &["annex", "enableremote", "backup", &store]);
+    let pending = || {
+        open(&clone)
+            .large_file_support(&CancellationToken::new())
+            .unwrap()
+            .annex
+            .unverified_remotes
+    };
+    let tracked = Command::new("git")
+        .args([
+            "-C",
+            clone.to_str().unwrap(),
+            "config",
+            "remote.backup.annex-verified",
+        ])
+        .output()
+        .unwrap();
+    if !tracked.status.success() {
+        assert!(pending().is_empty(), "older git-annex verifies nothing");
+        return;
+    }
+    let checks = pending();
+    assert_eq!(checks.len(), 1, "{checks:?}");
+    assert_eq!(checks[0].name, "backup");
+    assert_eq!(checks[0].configuration, "type=directory encryption=none");
+    let get = || {
+        run(
+            &clone,
+            LargeFileCommand::AnnexGet {
+                paths: paths("big.bin"),
+                from: Some("backup".into()),
+            },
+        )
+    };
+    assert!(
+        get().is_err(),
+        "git-annex refuses the remote until it is confirmed"
+    );
+    run(
+        &clone,
+        LargeFileCommand::AnnexVerifyRemote {
+            name: "backup".into(),
+            id: checks[0].id.clone(),
+        },
+    )
+    .unwrap();
+    assert!(pending().is_empty());
+    get().unwrap();
 }

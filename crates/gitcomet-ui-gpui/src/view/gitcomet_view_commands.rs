@@ -416,12 +416,7 @@ impl GitCometView {
                             );
                         }
                     }
-                    PushRequest::NoRemotes => self.push_toast(
-                        components::ToastKind::Error,
-                        "Cannot push: no remotes configured".to_string(),
-                        cx,
-                    ),
-                    PushRequest::NotReady => {}
+                    PushRequest::NoRemotes | PushRequest::NotReady => {}
                 }
             }
             Command::ForcePush => {
