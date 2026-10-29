@@ -392,6 +392,10 @@ fn incoming_tracking_manual_failure_preserves_deadline_and_rejects_older_auto_re
 fn incoming_tracking_rewording_a_published_tip_updates_other_windows() {
     let (temp, _source, clone, _) = remote_fixture();
     git(&clone, &["pull", "-q", "--ff-only"]);
+    // Rewording commits; CI runners have no global identity.
+    git(&clone, &["config", "user.name", "Fetch Test"]);
+    git(&clone, &["config", "user.email", "fetch@example.com"]);
+    git(&clone, &["config", "commit.gpgsign", "false"]);
     let head = git(&clone, &["rev-parse", "HEAD"]);
     let _session = crate::session::push_test_session_file_path_override(Some(
         temp.path().join("session.json"),
