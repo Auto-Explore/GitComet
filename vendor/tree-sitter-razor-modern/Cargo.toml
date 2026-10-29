@@ -1,0 +1,24 @@
+# Vendored from alfpricot/tree-sitter-razor-modern at
+# 0f2ac3c7eb05b3cf41ff2370c42d8d2d6f2b4319 (MIT; see LICENSE and NOTICE).
+# GitComet patches Razor boundaries and inherits its vendored C# grammar.
+[package]
+name = "tree-sitter-razor-modern"
+version = "0.1.2"
+description = "Tree-sitter grammar for Razor views and components"
+repository = "https://github.com/alfpricot/tree-sitter-razor-modern"
+license = "MIT"
+edition = "2024"
+publish = false
+build = "bindings/rust/build.rs"
+
+[lib]
+path = "bindings/rust/lib.rs"
+
+[dependencies]
+tree-sitter-language = "0.1"
+
+[build-dependencies]
+tree-sitter-build = { path = "../tree-sitter-build" }
+
+[dev-dependencies]
+tree-sitter = "0.27.0"

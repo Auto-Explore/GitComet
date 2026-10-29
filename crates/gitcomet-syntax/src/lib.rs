@@ -43,6 +43,8 @@ const BASH_HIGHLIGHTS_QUERY: &str = include_str!("queries/bash_highlights.scm");
 const C_HIGHLIGHTS_QUERY: &str = include_str!("queries/c_highlights.scm");
 const C_INJECTIONS_QUERY: &str = include_str!("queries/c_injections.scm");
 const CSHARP_HIGHLIGHTS_QUERY: &str = include_str!("queries/csharp_highlights.scm");
+const RAZOR_HIGHLIGHTS_QUERY: &str = include_str!("queries/razor_highlights.scm");
+const RAZOR_INJECTIONS_QUERY: &str = include_str!("queries/razor_injections.scm");
 const CPP_HIGHLIGHTS_QUERY: &str = include_str!("queries/cpp_highlights.scm");
 const GITCOMMIT_HIGHLIGHTS_QUERY: &str = include_str!("queries/gitcommit_highlights.scm");
 const ASM_HIGHLIGHTS_QUERY: &str = include_str!("queries/asm_highlights.scm");
@@ -301,6 +303,7 @@ pub enum DiffSyntaxLanguage {
     Markdown,
     MarkdownInline,
     Html,
+    Razor,
     Vue,
     Svelte,
     /// Nunjucks, Jinja2, Twig and Django templates. One grammar parses the union
