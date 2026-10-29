@@ -61,7 +61,8 @@ fn git_annex_available() -> bool {
         .is_ok_and(|output| output.status.success())
 }
 
-/// An initialized annex with `big.bin` (locked) and a `backup` directory remote.
+/// An initialized annex with `big.bin` and a `backup` directory remote.
+/// Filesystems without symlinks use unlocked files on an adjusted branch.
 fn init_annex_repo(dir: &Path) -> PathBuf {
     let repo = dir.join("repo");
     fs::create_dir_all(&repo).unwrap();
@@ -229,7 +230,12 @@ fn copy_drop_get_and_refused_drop() {
         },
     )
     .unwrap();
-    assert!(!repo.join("big.bin").is_file(), "locked link now dangles");
+    assert!(
+        git(&repo, &["annex", "find", "--format=${key}", "big.bin"])
+            .trim()
+            .is_empty(),
+        "dropped content is absent from the local store"
+    );
     let files = open(&repo)
         .uncommitted_large_files_for_status(&staged_row("big.bin"), &CancellationToken::new())
         .unwrap();
@@ -258,6 +264,10 @@ fn unlocked_presence_comes_from_git_annex_find() {
     require_annex!();
     let dir = tempfile::tempdir().unwrap();
     let repo = init_annex_repo(dir.path());
+    let was_locked = fs::symlink_metadata(repo.join("big.bin"))
+        .unwrap()
+        .file_type()
+        .is_symlink();
     run(
         &repo,
         LargeFileCommand::AnnexUnlock {
@@ -265,7 +275,9 @@ fn unlocked_presence_comes_from_git_annex_find() {
         },
     )
     .unwrap();
-    git(&repo, &["commit", "-qam", "unlock"]);
+    if was_locked {
+        git(&repo, &["commit", "-qam", "unlock"]);
+    }
     // Touch the index entry so it is a staged row of an unlocked pointer.
     fs::write(repo.join("other.bin"), vec![9u8; 2048]).unwrap();
     git(&repo, &["annex", "add", "-q", "other.bin"]);
@@ -454,7 +466,10 @@ fn adjust_and_leave_adjusted_branch() {
     require_annex!();
     let dir = tempfile::tempdir().unwrap();
     let repo = init_annex_repo(dir.path());
-    let base = git(&repo, &["branch", "--show-current"]).trim().to_string();
+    let branch = git(&repo, &["branch", "--show-current"]);
+    let base = gitcomet_core::annex::adjusted_branch(branch.trim())
+        .map_or(branch.trim(), |(base, _)| base)
+        .to_string();
     run(
         &repo,
         LargeFileCommand::AnnexAdjust {
@@ -498,6 +513,9 @@ fn amending_the_adjustment_commit_is_refused() {
     require_annex!();
     let dir = tempfile::tempdir().unwrap();
     let repo = init_annex_repo(dir.path());
+    // Initialization may already have entered an adjusted branch. Propagate
+    // the fixture's own commit so HEAD is an adjustment commit in either mode.
+    git(&repo, &["annex", "sync", "--no-commit", "--no-content"]);
     run(
         &repo,
         LargeFileCommand::AnnexAdjust {
@@ -528,6 +546,9 @@ fn sync_never_commits_and_describe_trust_apply() {
     require_annex!();
     let dir = tempfile::tempdir().unwrap();
     let repo = init_annex_repo(dir.path());
+    // Settle propagation of fixture commits made on an automatic adjusted
+    // branch before checking that a new uncommitted file stays uncommitted.
+    git(&repo, &["annex", "sync", "--no-commit", "--no-content"]);
     fs::write(repo.join("draft.txt"), "uncommitted\n").unwrap();
     let before = git(&repo, &["rev-parse", "HEAD"]);
     run(&repo, LargeFileCommand::AnnexSync { content: false }).unwrap();
@@ -662,7 +683,11 @@ fn get_by_key_restores_a_dropped_historical_version() {
         },
     )
     .unwrap();
-    assert!(!repo.join("big.bin").is_file());
+    assert!(
+        git(&repo, &["annex", "find", "--format=${key}", "big.bin"])
+            .trim()
+            .is_empty()
+    );
     run(
         &repo,
         LargeFileCommand::AnnexGetKeys {
@@ -670,9 +695,10 @@ fn get_by_key_restores_a_dropped_historical_version() {
         },
     )
     .unwrap();
-    assert!(
-        repo.join("big.bin").is_file(),
-        "the locked link resolves again"
+    assert_eq!(
+        git(&repo, &["annex", "find", "--format=${key}", "big.bin"]).trim(),
+        key.trim(),
+        "the requested key is present again, including with an unlocked pointer"
     );
     assert!(
         run(
@@ -1205,7 +1231,29 @@ fn assistant_counts_as_running_only_while_its_process_lives() {
     assert!(!running());
     let pid_file = repo.join(".git/annex/daemon.pid");
     fs::write(&pid_file, format!("{}\n", std::process::id())).unwrap();
+    #[cfg(windows)]
+    let held_lock = {
+        use std::os::windows::fs::OpenOptionsExt as _;
+
+        // Windows git-annex tests the assistant's held lock, not its MSYS PID.
+        fs::OpenOptions::new()
+            .create(true)
+            .truncate(true)
+            .read(true)
+            .write(true)
+            .share_mode(0)
+            .open(repo.join(format!(".git/annex/daemon.pid.{}.lck", std::process::id())))
+            .unwrap()
+    };
     assert!(running());
+    #[cfg(windows)]
+    {
+        drop(held_lock);
+        assert!(
+            !running(),
+            "a stale PID without the held lock is not running"
+        );
+    }
     if cfg!(unix) {
         // Left behind by a killed assistant.
         let mut child = Command::new("true").spawn().unwrap();
