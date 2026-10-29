@@ -19,6 +19,7 @@ language_registry! {
     DiffSyntaxLanguage::Markdown => ["md", "markdown", "mdown", "mkd", "mkdn", "mdwn", "mdx", "mdc"],
     DiffSyntaxLanguage::MarkdownInline => ["markdown-inline", "markdown_inline"],
     DiffSyntaxLanguage::Html => ["html", "htm"],
+    DiffSyntaxLanguage::Razor => ["cshtml", "razor"],
     DiffSyntaxLanguage::Vue => ["vue"],
     DiffSyntaxLanguage::Svelte => ["svelte"],
     // The first six are the grammar's own declared file-types; `dj` is the
@@ -345,6 +346,14 @@ pub(super) fn tree_sitter_grammar(
         DiffSyntaxLanguage::Html => Some((
             tree_sitter_html::LANGUAGE.into(),
             TreesitterQueryAsset::with_injections(HTML_HIGHLIGHTS_QUERY, HTML_INJECTIONS_QUERY),
+        )),
+        DiffSyntaxLanguage::Razor => Some((
+            tree_sitter_razor_modern::LANGUAGE.into(),
+            TreesitterQueryAsset::with_injections_and_supplement(
+                CSHARP_HIGHLIGHTS_QUERY,
+                RAZOR_INJECTIONS_QUERY,
+                RAZOR_HIGHLIGHTS_QUERY,
+            ),
         )),
         DiffSyntaxLanguage::Jinja => Some((
             tree_sitter_jinja_dialects::LANGUAGE.into(),
@@ -941,6 +950,7 @@ pub(super) fn tree_sitter_highlight_spec(
         DiffSyntaxLanguage::MarkdownInline => highlight_spec_entry!(MarkdownInline),
         DiffSyntaxLanguage::Hcl => highlight_spec_entry!(Hcl),
         DiffSyntaxLanguage::Html => highlight_spec_entry!(Html),
+        DiffSyntaxLanguage::Razor => highlight_spec_entry!(Razor),
         DiffSyntaxLanguage::Vue => highlight_spec_entry!(Vue),
         DiffSyntaxLanguage::Svelte => highlight_spec_entry!(Svelte),
         DiffSyntaxLanguage::Jinja => highlight_spec_entry!(Jinja),

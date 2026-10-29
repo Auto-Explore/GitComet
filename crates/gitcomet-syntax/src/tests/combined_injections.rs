@@ -13,7 +13,7 @@ use gitcomet_ui_kit::theme::AppTheme;
 /// rest are ours, and each one is a deliberate decision recorded beside it.
 #[test]
 fn combined_injection_declarations_are_exactly_the_known_set() {
-    use InjectionContentMode::WholeNode;
+    use InjectionContentMode::{ExcludeNamedChildren, WholeNode};
 
     let mut declared = Vec::new();
     for lang in all_supported_languages() {
@@ -36,6 +36,7 @@ fn combined_injection_declarations_are_exactly_the_known_set() {
     assert_eq!(
         declared,
         vec![
+            (DiffSyntaxLanguage::Razor, 0, ExcludeNamedChildren),
             // queries/jinja_injections.scm -- the HTML around the template tags.
             (DiffSyntaxLanguage::Jinja, 0, WholeNode),
             // queries/hcl_injections.scm -- shell in `user_data`, JSON in

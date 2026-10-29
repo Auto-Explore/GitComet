@@ -331,6 +331,7 @@ fn all_supported_languages() -> Vec<DiffSyntaxLanguage> {
         DiffSyntaxLanguage::Markdown,
         DiffSyntaxLanguage::MarkdownInline,
         DiffSyntaxLanguage::Html,
+        DiffSyntaxLanguage::Razor,
         DiffSyntaxLanguage::Vue,
         DiffSyntaxLanguage::Svelte,
         DiffSyntaxLanguage::Jinja,
@@ -466,4 +467,5 @@ mod occurrences;
 mod pairs;
 mod prepared;
 mod prepared_documents;
+mod razor;
 mod reparse;

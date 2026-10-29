@@ -1538,3 +1538,6 @@ mod tests;
 /// read-only diff panes above it, which have had injections all along.
 #[cfg(test)]
 mod injection_tests;
+
+#[cfg(test)]
+mod razor_tests;
