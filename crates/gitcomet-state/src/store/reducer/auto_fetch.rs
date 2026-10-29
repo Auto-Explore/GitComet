@@ -77,6 +77,7 @@ pub(super) fn refresh(
         return Vec::new();
     };
     let mut effects = Vec::new();
+    repo.refresh_read_failed = false;
     repo.incoming.mark_stale();
     if repo
         .loads_in_flight
@@ -131,6 +132,7 @@ pub(super) fn refresh_failed(
     repo: &mut crate::model::RepoState,
     error: gitcomet_core::error::Error,
 ) {
+    repo.refresh_read_failed = true;
     if !matches!(error.kind(), gitcomet_core::error::ErrorKind::Cancelled) {
         repo.auto_fetch.status = crate::model::AutoFetchStatus::Failed {
             at: inputs.now(),
@@ -430,6 +432,77 @@ mod tests {
         assert!(matches!(&repo.tags, Loadable::Ready(tags) if tags.is_empty()));
         assert!(repo.feedback.diagnostics.is_empty());
         assert!(!repo.loads_in_flight.any_in_flight());
+    }
+
+    #[test]
+    fn a_failed_background_read_keeps_the_tab_due_for_a_reload_after_the_next_fetch() {
+        use gitcomet_core::domain::{HeadTracking, Tag};
+
+        let mut state = state();
+        let repo = &mut state.repos[0];
+        repo.set_open(Loadable::Ready(()));
+        repo.set_tags(Loadable::Ready(vec![Tag {
+            name: "v1".into(),
+            target: gitcomet_core::domain::CommitId("before".into()),
+        }]));
+        let lifetime = repo.lifetime_id();
+        let inputs = super::super::test_inputs::clock();
+        let effects = refresh(&mut state, RepoId(1), lifetime);
+        assert!(
+            effects.iter().any(|effect| matches!(
+                effect,
+                Effect::References(ReferenceEffect::LoadTags { .. })
+            ))
+        );
+        super::super::effects::head_tracking_loaded(
+            &inputs,
+            &mut state,
+            RepoId(1),
+            Ok(HeadTracking::Untracked {
+                branch: "main".into(),
+            }),
+        );
+        super::super::effects::tags_loaded(
+            &inputs,
+            &mut state,
+            RepoId(1),
+            Err(Error::new(ErrorKind::Backend(
+                "disk briefly unreadable".into(),
+            ))),
+        );
+        // The next fetch runs and moves nothing.
+        for (revision, status) in [
+            (1, AutoFetchStatus::Running),
+            (2, AutoFetchStatus::Succeeded { at: UNIX_EPOCH }),
+        ] {
+            updated(
+                &inputs,
+                &mut state,
+                RepoId(1),
+                lifetime,
+                revision,
+                RepoAutoFetchState {
+                    status,
+                    ..RepoAutoFetchState::default()
+                },
+                None,
+            );
+            assert!(
+                state.repos[0].needs_auto_fetch_refresh(),
+                "the failed tags read is retried even though tracking loaded"
+            );
+        }
+        refresh(&mut state, RepoId(1), lifetime);
+        super::super::effects::tags_loaded(&inputs, &mut state, RepoId(1), Ok(Vec::new()));
+        super::super::effects::head_tracking_loaded(
+            &inputs,
+            &mut state,
+            RepoId(1),
+            Ok(HeadTracking::Untracked {
+                branch: "main".into(),
+            }),
+        );
+        assert!(!state.repos[0].needs_auto_fetch_refresh());
     }
 
     #[test]

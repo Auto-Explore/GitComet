@@ -105,6 +105,8 @@ pub struct RepoState {
     pub maintenance: RepoMaintenanceState,
     pub auto_fetch: super::RepoAutoFetchState,
     pub(crate) auto_fetch_revision: u64,
+    /// A read the last automatic-fetch refresh started failed.
+    pub(crate) refresh_read_failed: bool,
     pub incoming: super::RepoIncomingState,
 
     pub open: Loadable<()>,
@@ -370,6 +372,7 @@ impl RepoState {
             maintenance: RepoMaintenanceState::default(),
             auto_fetch: super::RepoAutoFetchState::default(),
             auto_fetch_revision: 0,
+            refresh_read_failed: false,
             incoming: super::RepoIncomingState::default(),
             open: Loadable::Loading,
             repository_mode: None,
@@ -1160,6 +1163,17 @@ impl RepoState {
                 self.auto_fetch.status,
                 super::AutoFetchStatus::Failed { .. }
             )
+    }
+
+    /// The tab shows no current incoming count and loads none, or a refresh
+    /// read failed, so automatic fetch refreshes it after its next fetch even
+    /// when that moves nothing.
+    pub(crate) fn needs_auto_fetch_refresh(&self) -> bool {
+        self.refresh_read_failed
+            || (!matches!(self.incoming, super::RepoIncomingState::Current(_))
+                && !self
+                    .loads_in_flight
+                    .is_in_flight(super::LoadKind::UpstreamDivergence))
     }
 
     pub(crate) fn set_open(&mut self, v: Loadable<()>) {
