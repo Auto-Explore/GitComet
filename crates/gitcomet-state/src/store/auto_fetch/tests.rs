@@ -1877,3 +1877,50 @@ fn a_remote_that_fetch_all_skips_is_never_charged_with_a_failure() {
     );
     assert!(!state.contacts.contains_key("skipped.example"));
 }
+
+/// Git translates the `could not fetch` line that names each failed remote.
+#[cfg(unix)]
+#[test]
+fn a_translated_git_still_shows_which_remote_failed() {
+    gitcomet_core::test_support::localized_git::run(
+        module_path!(),
+        "a_translated_git_still_shows_which_remote_failed",
+        r#"#!/bin/sh
+for argument in "$@"; do
+    if [ "$argument" = fetch ]; then
+        if [ "${LANGUAGE:-}" = en ]; then
+            printf 'fatal: unable to get password from user\nerror: could not fetch private\n' >&2
+        else
+            printf 'Schwerwiegend: unable to get password from user\nFehler: konnte private nicht anfordern\n' >&2
+        fi
+        exit 1
+    fi
+done
+exec git "$@"
+"#,
+        || {
+            let temp = tempfile::tempdir().unwrap();
+            let workdir = canonicalize_or_original(temp.path().to_path_buf()).join("repo");
+            std::fs::create_dir_all(&workdir).unwrap();
+            git(&workdir, &["init", "-q", "-b", "main"]);
+            git(
+                &workdir,
+                &["remote", "add", "origin", "https://public.example/r.git"],
+            );
+            git(
+                &workdir,
+                &["remote", "add", "private", "https://private.example/r.git"],
+            );
+            let coordinator = AutoFetchCoordinator::new();
+            subscribe_unopened(&coordinator, &[&workdir], Arc::new(|_| {}));
+            assert!(run_job(&coordinator, UNIX_EPOCH).is_some());
+            let state = coordinator.inner.state.lock().unwrap();
+            assert_eq!(
+                group_of(&state, &workdir).snapshot.paused_remotes,
+                ["private"],
+                "origin fetched; only private needs a sign-in"
+            );
+            assert!(!state.hosts.contains_key("public.example"));
+        },
+    );
+}
