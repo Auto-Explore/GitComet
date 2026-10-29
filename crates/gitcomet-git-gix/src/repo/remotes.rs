@@ -1075,6 +1075,10 @@ impl GixRepo {
         prune: bool,
         capture_output: bool,
     ) -> Result<CommandOutput> {
+        if remotes.explicit && remotes.names.len() > 1 && self.names_a_remote_group(&remotes.names)
+        {
+            return self.fetch_remotes_one_by_one(remotes, prune, capture_output);
+        }
         let mut cmd = self.git_workdir_cmd();
         cmd.arg("fetch").arg("--progress");
         // `--all` would also try a git-annex special remote left without
@@ -1114,6 +1118,80 @@ impl GixRepo {
             label = format!("{label} -- {}", remotes.names.join(" "));
         }
         run_git_command_with_optional_output(cmd, &label, capture_output)
+    }
+
+    /// `git fetch --multiple` resolves a remote group before a remote of the
+    /// same name, so a list holding one would fetch the group instead.
+    fn names_a_remote_group(&self, names: &[String]) -> bool {
+        self.repo_with_current_config().is_ok_and(|repo| {
+            let config = repo.config_snapshot();
+            names
+                .iter()
+                .any(|name| config.string(format!("remotes.{name}").as_str()).is_some())
+        })
+    }
+
+    /// Fetches each remote by itself. The output keeps Git's own multi-remote
+    /// shape, each failure followed by `error: could not fetch <name>`, so a
+    /// failure can still be traced to its remote.
+    fn fetch_remotes_one_by_one(
+        &self,
+        remotes: &FetchRemotes,
+        prune: bool,
+        capture_output: bool,
+    ) -> Result<CommandOutput> {
+        let label = format!(
+            "git fetch {} --no-prune-tags -- {}",
+            if prune { "--prune" } else { "--no-prune" },
+            remotes.names.join(" ")
+        );
+        let mut outputs = Vec::new();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let mut auth = None;
+        let mut failed = false;
+        for name in &remotes.names {
+            let one = FetchRemotes {
+                names: vec![name.clone()],
+                explicit: true,
+            };
+            match self.fetch_remotes_command_impl(&one, prune, capture_output) {
+                Ok(output) => {
+                    stdout.extend_from_slice(output.stdout.as_bytes());
+                    stderr.extend_from_slice(output.stderr.as_bytes());
+                    outputs.push(output);
+                }
+                Err(error) => {
+                    let ErrorKind::Git(failure) = error.kind() else {
+                        return Err(error);
+                    };
+                    failed = true;
+                    stdout.extend_from_slice(failure.stdout());
+                    stderr.extend_from_slice(failure.stderr());
+                    if !stderr.ends_with(b"\n") && !stderr.is_empty() {
+                        stderr.push(b'\n');
+                    }
+                    stderr.extend_from_slice(format!("error: could not fetch {name}\n").as_bytes());
+                    auth = auth.or_else(|| failure.auth_outcome().cloned());
+                }
+            }
+        }
+        if !failed {
+            return Ok(CommandOutput::combine(label, &outputs));
+        }
+        let detail = String::from_utf8_lossy(&stderr).trim().to_string();
+        let mut failure = GitFailure::new(
+            label,
+            GitFailureId::CommandFailed,
+            Some(1),
+            stdout,
+            stderr,
+            Some(detail),
+        );
+        if let Some(auth) = auth {
+            failure = failure.with_auth_outcome(auth);
+        }
+        Err(Error::new(ErrorKind::Git(failure)))
     }
 
     fn fetch_remotes_command_with_optional_output_impl(
