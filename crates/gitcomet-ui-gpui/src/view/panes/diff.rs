@@ -34,7 +34,7 @@ pub(in crate::view) use text_format::TextEncodingMenuState;
 // The editor's free functions are exercised directly by the panel tests; the
 // pane itself reaches them through `impl DiffRenderer`.
 use crate::view::documents::disk::DiskIdentity;
-pub(in crate::view) use core_impl::DiffRendererInit;
+pub(in crate::view) use core_impl::{DiffRendererInit, EngineNotice};
 #[cfg(test)]
 pub(in crate::view) use diff_text::take_opened_web_links_for_tests;
 pub(in crate::view) use file_disk::{DiskCheckCause, DiskSurface, FileDiskNotice, FileDiskSeen};

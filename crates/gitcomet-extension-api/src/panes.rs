@@ -60,6 +60,11 @@ pub struct DiffPanePolicy {
     pub line_numbers: bool,
     /// Loads blame for the target's newer side and shows it in the gutter.
     pub blame: bool,
+    /// Names the diff engine above the diff. Off, the name alone is not
+    /// shown; a notice that explains a fallback or offers an action still is.
+    pub engine_label: bool,
+    /// Lines under the pane's header and under its engine notice.
+    pub header_divider: bool,
 }
 
 impl Default for DiffPanePolicy {
@@ -76,6 +81,8 @@ impl Default for DiffPanePolicy {
             search: true,
             line_numbers: true,
             blame: false,
+            engine_label: true,
+            header_divider: true,
         }
     }
 }
@@ -149,21 +156,33 @@ impl DiffRowDecor {
 /// Decorations by file line. Asked only for the rows being drawn.
 pub type DiffRowDecorProvider = Rc<dyn Fn(DiffLineSide, u32) -> Option<DiffRowDecor>>;
 
-/// A mark on one file line, drawn beside the row and on the scrollbar.
+/// A mark on one file line, drawn beside the row and on the scrollbar: its
+/// glyph in its colour, or the colour alone filling the lane. The label is
+/// its tooltip.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct DiffAnnotation {
     pub color: Hsla,
     pub label: Option<SharedString>,
+    pub glyph: Option<crate::RowGlyph>,
 }
 
 impl DiffAnnotation {
     pub fn new(color: Hsla) -> Self {
-        Self { color, label: None }
+        Self {
+            color,
+            label: None,
+            glyph: None,
+        }
     }
 
     pub fn with_label(mut self, label: impl Into<SharedString>) -> Self {
         self.label = Some(label.into());
+        self
+    }
+
+    pub fn with_glyph(mut self, glyph: crate::RowGlyph) -> Self {
+        self.glyph = Some(glyph);
         self
     }
 }

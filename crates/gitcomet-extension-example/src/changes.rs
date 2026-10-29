@@ -309,7 +309,9 @@ impl ChangesView {
                     annotations.with(
                         *side,
                         *line,
-                        DiffAnnotation::new(color).with_label("flagged"),
+                        DiffAnnotation::new(color)
+                            .with_glyph(RowGlyph::Icon("icons/pin.svg".into()))
+                            .with_label("Flagged"),
                     )
                 });
         let legend = if self.flags().is_empty() {

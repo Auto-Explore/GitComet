@@ -712,7 +712,6 @@ fn mark_glyph(
     theme: AppTheme,
     ui_scale: ui_scale::UiScale,
 ) -> AnyElement {
-    use gitcomet_extension_api::RowGlyph;
     let slot = div()
         .flex_none()
         .w(ui_scale.px(14.0))
@@ -722,22 +721,10 @@ fn mark_glyph(
     else {
         return slot.into_any_element();
     };
-    let slot = slot.debug_selector(selector).text_color(color);
-    match glyph {
-        RowGlyph::Icon(path) => slot
-            .child(
-                gpui::svg()
-                    .path(path.clone())
-                    .size(ui_scale.px(14.0))
-                    .text_color(color),
-            )
-            .into_any_element(),
-        RowGlyph::Text(text) => slot
-            .text_size(theme.ui_text(11.0))
-            .child(text.clone())
-            .into_any_element(),
-        _ => slot.into_any_element(),
-    }
+    slot.debug_selector(selector)
+        .text_size(theme.ui_text(11.0))
+        .child(super::row_glyph(glyph, color, ui_scale.px(14.0)))
+        .into_any_element()
 }
 
 impl Render for FileListView {

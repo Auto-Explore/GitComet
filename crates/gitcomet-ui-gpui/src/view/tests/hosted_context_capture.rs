@@ -52,6 +52,17 @@ fn inline_card_visual_capture() {
                         DiffSnapshot::new("example.rs", "fn current() -> bool {\n    false\n}\n", "fn current() -> bool {\n    true\n}\n"),
                         DiffPaneOptions { layout, ..Default::default() }, app,
                     ).unwrap();
+                    let marker = |color: gpui::Hsla, icon: &'static str, label: &'static str| {
+                        gitcomet_extension_api::DiffAnnotation::new(color)
+                            .with_glyph(gitcomet_extension_api::RowGlyph::Icon(icon.into()))
+                            .with_label(label)
+                    };
+                    pane.set_annotations(
+                        gitcomet_extension_api::DiffAnnotations::new()
+                            .with(DiffLineSide::New, 1, marker(gpui::blue(), "icons/pin.svg", "Flagged"))
+                            .with(DiffLineSide::New, 3, marker(gpui::green(), "icons/circle_check.svg", "Resolved")),
+                        app,
+                    );
                     pane.set_inline_cards(vec![
                         DiffInlineCard::new("answer", DiffLineRange { side: DiffLineSide::New, start: 2, end: 2 }, "AI explanation · line 2", "The function now returns true for every call. Check that its callers need this unconditional result and that the relevant tests cover the changed behaviour.\n\nMixed direction: עברית and English remain readable.")
                             .pending(true)
@@ -73,6 +84,27 @@ fn inline_card_visual_capture() {
                     .save(directory.join(format!("{layout:?}-{scale}-{width}.png")))
                     .unwrap();
                 if scale == 100 && width == 900.0 && layout == DiffLayout::Inline {
+                    let quiet = handle
+                        .read_with(&cx, |preview, _| preview.pane.clone())
+                        .unwrap();
+                    cx.update(|app| {
+                        let mut policy = gitcomet_extension_api::DiffPanePolicy::default();
+                        policy.engine_label = false;
+                        policy.header_divider = false;
+                        quiet.set_policy(policy, app);
+                    });
+                    for _ in 0..4 {
+                        cx.run_until_parked();
+                        cx.update_window(handle.into(), |_, window, app| {
+                            window.refresh();
+                            let _ = window.draw(app);
+                        })
+                        .unwrap();
+                    }
+                    cx.capture_screenshot(handle.into())
+                        .unwrap()
+                        .save(directory.join("quiet-header.png"))
+                        .unwrap();
                     use gitcomet_extension_api::{HostedAction, HostedMenuItem};
                     let owner = handle
                         .read_with(&cx, |preview, _| preview._owner.clone())
