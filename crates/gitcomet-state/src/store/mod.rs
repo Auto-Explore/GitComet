@@ -1389,6 +1389,12 @@ impl AppStore {
 
     #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
+    pub fn record_planned_one_sided_sides_for_test(state: &mut AppState) {
+        reducer::record_planned_one_sided_sides(state);
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
     pub fn replace_snapshot_for_test(&self, state: Arc<AppState>) {
         let mut current = self.state.write().unwrap_or_else(|e| e.into_inner());
         *current = state;

@@ -330,7 +330,7 @@ impl PreparedReduction {
         Self { message, inputs }
     }
 
-    #[cfg(any(test, feature = "benchmarks"))]
+    #[cfg(any(test, feature = "benchmarks", feature = "test-support"))]
     pub(in crate::store) fn new(
         message: Msg,
         state: &AppState,
@@ -600,6 +600,9 @@ fn internal_needs_preparation(message: &InternalMsg) -> bool {
         | InternalMsg::SubmoduleSummaryLoaded { .. }
         | InternalMsg::TextAttributesLoaded { .. }
         | InternalMsg::CommitDetailsLoaded { .. }
+        | InternalMsg::StatusLoaded { .. }
+        | InternalMsg::WorktreeStatusLoaded { .. }
+        | InternalMsg::StagedStatusLoaded { .. }
         | InternalMsg::LargeFileSupportLoaded { .. }
         | InternalMsg::FileBrowserLoaded { .. } => true,
         _ => false,
@@ -981,6 +984,17 @@ fn capture_internal(
                 && util::selected_conflict_target(repo, selected).is_none()
             {
                 inputs.marker(repo, selected);
+            }
+        }
+        // Landing status can change which side the selected file has, and the
+        // re-plan that follows classifies it against the new entry.
+        InternalMsg::StatusLoaded { repo_id, .. }
+        | InternalMsg::WorktreeStatusLoaded { repo_id, .. }
+        | InternalMsg::StagedStatusLoaded { repo_id, .. } => {
+            if let Some(repo) = state.repos.iter().find(|repo| repo.id == *repo_id)
+                && let Some(DiffTarget::WorkingTree { path, .. }) = &repo.diff_state.diff_target
+            {
+                inputs.queue_marker(repo, path);
             }
         }
         InternalMsg::CommitDetailsLoaded {

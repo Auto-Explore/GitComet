@@ -167,11 +167,20 @@ pub(super) struct DiffTargetPreviewFlags {
     pub is_svg: bool,
 }
 
+impl DiffTargetPreviewFlags {
+    /// Whether the target has text to read: not an image, unless an SVG.
+    pub(super) fn reads_text(self) -> bool {
+        !self.wants_image || self.is_svg
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(super) struct SelectedDiffLoadPlan {
     pub load_patch_diff: bool,
     pub load_file_text: bool,
     pub preview_text_side: Option<gitcomet_core::domain::DiffPreviewTextSide>,
+    /// Recorded whatever loads: an image has no preview text, yet one side.
+    pub one_sided_side: Option<gitcomet_core::domain::DiffPreviewTextSide>,
     pub load_submodule_summary: bool,
     pub load_file_image: bool,
 }
@@ -285,72 +294,33 @@ fn classify_diff_target(
     repo_state: &RepoState,
     target: &DiffTarget,
 ) -> DiffTargetClassification {
-    use gitcomet_core::domain::DiffPreviewTextSide;
-
-    let preview_text_side = match target {
+    let is_submodule = match target {
         DiffTarget::WorkingTree { path, area, .. } => {
-            let mut entries = repo_state
+            let first = repo_state
                 .status_entries_for_area(*area)
                 .into_iter()
                 .flatten()
-                .filter(|entry| entry.path == *path);
-            let first = entries.next();
-            let is_submodule = match worktree_submodule_source_for_entry(repo_state, path, first) {
+                .find(|entry| entry.path == *path);
+            match worktree_submodule_source_for_entry(repo_state, path, first) {
                 WorktreeSubmoduleSource::Known(value) => value,
                 WorktreeSubmoduleSource::Marker => inputs.worktree_marker(repo_state, path),
-            };
-            if is_submodule {
-                return DiffTargetClassification::Submodule;
             }
-            if repo_state.diff_state.content_preview {
-                return DiffTargetClassification::Ordinary(None);
-            }
-            first
-                .into_iter()
-                .chain(entries)
-                .find_map(|entry| match entry.kind {
-                    FileStatusKind::Untracked | FileStatusKind::Added => {
-                        Some(DiffPreviewTextSide::New)
-                    }
-                    FileStatusKind::Deleted => Some(DiffPreviewTextSide::Old),
-                    FileStatusKind::Modified
-                    | FileStatusKind::Renamed
-                    | FileStatusKind::Conflicted => None,
-                })
         }
-        DiffTarget::Commit {
-            commit_id, path, ..
-        } => {
-            let Loadable::Ready(details) = &repo_state.history_state.commit_details else {
-                return DiffTargetClassification::Ordinary(None);
-            };
-            if &details.id != commit_id {
-                return DiffTargetClassification::Ordinary(None);
-            }
-            if details
-                .files
-                .iter()
-                .any(|file| file.path == *path && file.is_submodule)
-            {
-                return DiffTargetClassification::Submodule;
-            }
-            if repo_state.diff_state.content_preview {
-                return DiffTargetClassification::Ordinary(None);
-            }
-            details.files.iter().find_map(|file| {
-                (file.path == *path && !file.is_submodule).then_some(match file.kind {
-                    FileStatusKind::Added => Some(DiffPreviewTextSide::New),
-                    FileStatusKind::Deleted => Some(DiffPreviewTextSide::Old),
-                    FileStatusKind::Modified
-                    | FileStatusKind::Renamed
-                    | FileStatusKind::Conflicted
-                    | FileStatusKind::Untracked => None,
-                })?
-            })
-        }
-        DiffTarget::CommitRange { .. } => None,
+        // A comparison has no submodule summary; its submodule rows keep the
+        // ordinary diff.
+        DiffTarget::Commit { .. } => repo_state
+            .history_state
+            .committed_file_change(target)
+            .is_some_and(|file| file.is_submodule),
+        DiffTarget::CommitRange { .. } => false,
     };
-    DiffTargetClassification::Ordinary(preview_text_side)
+    if is_submodule {
+        return DiffTargetClassification::Submodule;
+    }
+    if repo_state.diff_state.content_preview {
+        return DiffTargetClassification::Ordinary(None);
+    }
+    DiffTargetClassification::Ordinary(repo_state.one_sided_change_side(target))
 }
 
 pub(super) fn selected_diff_load_plan(
@@ -364,6 +334,7 @@ pub(super) fn selected_diff_load_plan(
                 load_patch_diff: false,
                 load_file_text: false,
                 preview_text_side: None,
+                one_sided_side: None,
                 load_submodule_summary: true,
                 load_file_image: false,
             };
@@ -387,7 +358,7 @@ pub(super) fn selected_diff_load_plan(
     };
     let content_preview = repo_state.diff_state.content_preview;
     let preview_only = content_preview || target_preview_text_side.is_some();
-    let preview_text_side = if supports_file && (!preview.wants_image || preview.is_svg) {
+    let preview_text_side = if supports_file && preview.reads_text() {
         if content_preview {
             // Commit content is read from a blob temp file (New side); working-tree
             // content is read straight from disk by the worktree preview and needs
@@ -411,6 +382,7 @@ pub(super) fn selected_diff_load_plan(
         load_file_text: supports_file
             && (preview.is_svg || (!preview.wants_image && !preview_only)),
         preview_text_side,
+        one_sided_side: target_preview_text_side,
         load_submodule_summary: false,
         load_file_image: supports_file && preview.wants_image,
     }
@@ -536,6 +508,7 @@ pub(super) fn apply_selected_diff_load_plan_state_with_reload_mode(
     } else {
         Loadable::NotLoaded
     };
+    repo_state.diff_state.one_sided_side = load_plan.one_sided_side;
     repo_state.diff_state.diff_preview_text_file = if load_plan.preview_text_side.is_some() {
         reloading(&repo_state.diff_state.diff_preview_text_file, mode)
     } else {
@@ -575,21 +548,10 @@ pub(super) fn worktree_submodule_source_for_entry(
     path: &Path,
     entry: Option<&FileStatus>,
 ) -> WorktreeSubmoduleSource {
-    let Some(entry) = entry else {
-        return WorktreeSubmoduleSource::Known(false);
-    };
-    if entry.kind == FileStatusKind::Untracked {
-        return WorktreeSubmoduleSource::Known(false);
+    match repo_state.known_worktree_gitlink(path, entry) {
+        Some(value) => WorktreeSubmoduleSource::Known(value),
+        None => WorktreeSubmoduleSource::Marker,
     }
-    if let Loadable::Ready(submodules) = &repo_state.submodules
-        && submodules.iter().any(|submodule| submodule.path == path)
-    {
-        return WorktreeSubmoduleSource::Known(true);
-    }
-    if entry.kind == FileStatusKind::Deleted {
-        return WorktreeSubmoduleSource::Known(repo_state.head_gitlink_paths.contains(path));
-    }
-    WorktreeSubmoduleSource::Marker
 }
 
 pub(super) fn selected_conflict_target<'a>(
@@ -642,6 +604,43 @@ pub(super) fn diff_reload_effect_count(
 
     debug_assert!(count <= DIFF_RELOAD_MAX_EFFECTS);
     count
+}
+
+/// Re-plans the selected diff when a status, commit-details or comparison
+/// list that just landed changed which side its change has — a file deleted
+/// on disk, say. The diff-session panes follow the same lists.
+pub(super) fn replan_one_sided_change(
+    inputs: &ReducerInputs,
+    repo_state: &mut RepoState,
+) -> Vec<Effect> {
+    let mut effects = super::diff_session::record_one_sided_sides(repo_state);
+    let Some(target) = repo_state.diff_state.diff_target.clone() else {
+        return effects;
+    };
+    if repo_state.diff_state.inline_submodule_diff.is_some()
+        || selected_conflict_target(repo_state, &target).is_some()
+    {
+        return effects;
+    }
+    let listed_side = (!repo_state.diff_state.content_preview)
+        .then(|| repo_state.one_sided_change_side(&target))
+        .flatten();
+    if listed_side == repo_state.diff_state.one_sided_side {
+        return effects;
+    }
+    let plan = selected_diff_load_plan(inputs, repo_state, &target);
+    if plan.one_sided_side == repo_state.diff_state.one_sided_side {
+        return effects;
+    }
+    apply_selected_diff_load_plan_state(repo_state, plan);
+    repo_state.bump_diff_state_rev();
+    effects.extend(diff_reload_effects(
+        inputs,
+        repo_state,
+        repo_state.id,
+        target,
+    ));
+    effects
 }
 
 pub(super) fn diff_reload_effects(

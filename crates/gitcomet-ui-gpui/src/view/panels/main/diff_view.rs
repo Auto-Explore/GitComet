@@ -1275,9 +1275,7 @@ impl DiffRenderer {
         let path = self.editable_path_for_current_target();
         // A view with no working-tree path (a range comparison, a whole-tree
         // diff) has nothing to edit.
-        let blocked_by_kind = path
-            .as_ref()
-            .is_some_and(|p| self.content_preview_is_picture(p));
+        let blocked_by_kind = path.as_ref().is_some_and(|p| self.preview_is_picture(p));
         let is_bare = self.active_repo().is_some_and(RepoState::is_bare);
         let disabled = is_bare || path.is_none() || blocked_by_kind;
         let tooltip: SharedString = if is_bare {
@@ -1324,7 +1322,7 @@ impl DiffRenderer {
         !self.active_repo().is_some_and(RepoState::is_bare)
             && self
                 .editable_path_for_current_target()
-                .is_some_and(|path| !self.content_preview_is_picture(&path))
+                .is_some_and(|path| !self.preview_is_picture(&path))
     }
 
     /// Enter or leave the editor for the file on screen.

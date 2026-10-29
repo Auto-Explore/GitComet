@@ -560,6 +560,30 @@ pub(crate) fn reset_conflict_resolutions_inline(
     conflict_interactions::reset_resolutions_inline(state, repo_id, path);
 }
 
+/// Records each selected diff's one side as planning its load does, for a
+/// state built by hand rather than reduced.
+#[cfg(any(test, feature = "test-support"))]
+pub(super) fn record_planned_one_sided_sides(state: &mut AppState) {
+    let repos = RepositoryRuntimes::default();
+    for ix in 0..state.repos.len() {
+        let Some(target) = state.repos[ix].diff_state.diff_target.clone() else {
+            continue;
+        };
+        // A conflict opens the merge tool, which plans no load and has no side.
+        if util::selected_conflict_target(&state.repos[ix], &target).is_some() {
+            state.repos[ix].diff_state.one_sided_side = None;
+            continue;
+        }
+        let message = Msg::SelectDiff {
+            repo_id: state.repos[ix].id,
+            target: target.clone(),
+        };
+        let (_, inputs) = prepared::PreparedReduction::new(message, state, &repos).into_parts();
+        let side = util::selected_diff_load_plan(&inputs, &state.repos[ix], &target).one_sided_side;
+        state.repos[ix].diff_state.one_sided_side = side;
+    }
+}
+
 #[cfg(any(test, feature = "benchmarks"))]
 pub(super) fn reduce(
     repos: &mut RepositoryRuntimes,

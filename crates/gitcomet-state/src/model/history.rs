@@ -12,6 +12,50 @@ use std::sync::Arc;
 pub struct FileHistoryRequestId(pub(crate) u64);
 
 impl HistoryState {
+    /// The change list on screen for a commit or comparison target, while it
+    /// is that target's: the commit's details, or the comparison's files.
+    pub fn listed_files(&self, target: &DiffTarget) -> Option<&[CommitFileChange]> {
+        match target {
+            DiffTarget::Commit { commit_id, .. } => {
+                let Loadable::Ready(details) = &self.commit_details else {
+                    return None;
+                };
+                (&details.id == commit_id).then_some(details.files.as_slice())
+            }
+            DiffTarget::CommitRange {
+                from_commit_id,
+                to_commit_id,
+                ..
+            } => {
+                let range = self.range_selection.as_ref()?;
+                if range.diff_from() != from_commit_id || &range.to != to_commit_id {
+                    return None;
+                }
+                let Loadable::Ready(files) = &self.range_files else {
+                    return None;
+                };
+                Some(files.as_slice())
+            }
+            DiffTarget::WorkingTree { .. } => None,
+        }
+    }
+
+    /// The listed change a single-file commit or comparison target shows.
+    pub fn committed_file_change(&self, target: &DiffTarget) -> Option<&CommitFileChange> {
+        let path = match target {
+            DiffTarget::Commit { path, .. }
+            | DiffTarget::CommitRange {
+                path: Some(path), ..
+            } => path,
+            DiffTarget::CommitRange { path: None, .. } | DiffTarget::WorkingTree { .. } => {
+                return None;
+            }
+        };
+        self.listed_files(target)?
+            .iter()
+            .find(|file| &file.path == path)
+    }
+
     pub(crate) fn clear_file_history(&mut self) {
         self.file_history_path = None;
         self.file_history = Loadable::NotLoaded;
