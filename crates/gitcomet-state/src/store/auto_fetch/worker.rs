@@ -238,7 +238,7 @@ pub(super) fn execute(job: &Job, inner: &Inner) -> Completion {
             state.contacts.insert(host, now);
         }
     }
-    let refs_before = repo.remote_refs_fingerprint(&job.cancellation).ok();
+    let refs_before = repo.refs_fingerprint(&job.cancellation).ok();
     let result = job.cancellation.check_cancelled().and_then(|()| {
         repo.fetch_all_background_except(
             job.subscriber
@@ -249,8 +249,8 @@ pub(super) fn execute(job: &Job, inner: &Inner) -> Completion {
         )
     });
     // An unreadable fingerprint counts as a change.
-    let refs_changed = refs_before.is_none()
-        || repo.remote_refs_fingerprint(&job.cancellation).ok() != refs_before;
+    let refs_changed =
+        refs_before.is_none() || repo.refs_fingerprint(&job.cancellation).ok() != refs_before;
     if refs_changed {
         // Refreshes must read the packs this fetch wrote, and old packs must
         // not stay mapped. Releasing one handle refreshes every handle that

@@ -128,7 +128,7 @@ fn worktrees_share_a_fetch_signature_unless_their_own_config_changes_fetching() 
 }
 
 #[test]
-fn remote_refs_fingerprint_moves_only_when_a_fetch_changes_tracking_refs_or_tags() {
+fn refs_fingerprint_moves_only_when_a_fetch_changes_tracking_refs_or_tags() {
     let root = tempfile::tempdir().expect("fixture directory");
     let remote = repository(root.path(), "remote");
     commit(&remote, "first");
@@ -138,11 +138,7 @@ fn remote_refs_fingerprint_moves_only_when_a_fetch_changes_tracking_refs_or_tags
     git(&local, &["fetch", "origin"]);
     let opened = GixBackend.open(&local).expect("open repository");
     let cancel = CancellationToken::new();
-    let fingerprint = || {
-        opened
-            .remote_refs_fingerprint(&cancel)
-            .expect("fingerprint")
-    };
+    let fingerprint = || opened.refs_fingerprint(&cancel).expect("fingerprint");
     let fetch = || {
         opened
             .fetch_all_background(true, &cancel)
@@ -166,6 +162,34 @@ fn remote_refs_fingerprint_moves_only_when_a_fetch_changes_tracking_refs_or_tags
     git(&remote, &["branch", "-D", "doomed"]);
     fetch();
     assert_ne!(fingerprint(), tagged, "a pruned tracking branch");
+}
+
+#[test]
+fn refs_fingerprint_moves_when_a_mirror_fetch_updates_its_branches() {
+    let root = tempfile::tempdir().expect("fixture directory");
+    let remote = repository(root.path(), "remote");
+    commit(&remote, "first");
+    let mirror = root.path().join("mirror.git");
+    git(
+        root.path(),
+        &[
+            "clone",
+            "--mirror",
+            &remote_url(&remote),
+            mirror.to_str().unwrap(),
+        ],
+    );
+    let opened = GixBackend.open(&mirror).expect("open mirror");
+    let cancel = CancellationToken::new();
+    let fingerprint = || opened.refs_fingerprint(&cancel).expect("fingerprint");
+    let settled = fingerprint();
+    let latest = commit(&remote, "second");
+    opened
+        .fetch_all_background(true, &cancel)
+        .expect("background fetch succeeds");
+    // A mirror's refspec writes refs/heads, not refs/remotes.
+    assert_eq!(git(&mirror, &["rev-parse", "refs/heads/main"]), latest);
+    assert_ne!(fingerprint(), settled, "the fetch moved main");
 }
 
 #[test]

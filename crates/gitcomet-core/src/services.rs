@@ -1666,13 +1666,13 @@ pub trait GitRepository: Send + Sync {
             "listing the remotes a fetch contacts is not implemented for this backend",
         )))
     }
-    /// Hash of every remote-tracking branch and tag with its target, read
-    /// fresh from disk. Equal values before and after a fetch mean the fetch
-    /// moved nothing.
-    fn remote_refs_fingerprint(&self, cancellation: &CancellationToken) -> Result<u64> {
+    /// Hash of every reference with its target, read fresh from disk: a
+    /// fetch's refspecs can write any of them, as a mirror writes refs/heads.
+    /// Equal values before and after a fetch mean the fetch moved nothing.
+    fn refs_fingerprint(&self, cancellation: &CancellationToken) -> Result<u64> {
         cancellation.check_cancelled()?;
         Err(Error::new(ErrorKind::Unsupported(
-            "remote reference fingerprints are not implemented for this backend",
+            "reference fingerprints are not implemented for this backend",
         )))
     }
     /// Hash of the configuration that decides what a fetch from this worktree
