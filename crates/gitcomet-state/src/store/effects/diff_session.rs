@@ -72,6 +72,7 @@ pub(super) fn schedule(
                     patch,
                     file_text,
                     image,
+                    preview_text_side,
                 } => {
                     if let Some(path) = target.file_path() {
                         send(DiffSessionContent::Attributes(repo.text_attributes(path)));
@@ -101,6 +102,13 @@ pub(super) fn schedule(
                             cancellation
                                 .check_cancelled()
                                 .and_then(|()| repo.diff_file_image(&target, &cancellation)),
+                        ));
+                    }
+                    if let Some(side) = preview_text_side {
+                        send(DiffSessionContent::PreviewText(
+                            cancellation.check_cancelled().and_then(|()| {
+                                repo.diff_preview_text_file(&target, side, &cancellation)
+                            }),
                         ));
                     }
                 }
@@ -203,6 +211,7 @@ mod tests {
                 patch: true,
                 file_text: true,
                 image: true,
+                preview_text_side: Some(gitcomet_core::domain::DiffPreviewTextSide::New),
             },
             cancellation: CancellationToken::new(),
         };
@@ -235,13 +244,20 @@ mod tests {
                     assert!(cancelled(&result));
                     "image"
                 }
+                DiffSessionContent::PreviewText(result) => {
+                    assert!(cancelled(&result));
+                    "preview_text"
+                }
                 DiffSessionContent::Blame(_) => "blame",
             });
-            if parts.len() == 4 {
+            if parts.len() == 5 {
                 break;
             }
         }
-        assert_eq!(parts, ["attributes", "patch", "file_text", "image"]);
+        assert_eq!(
+            parts,
+            ["attributes", "patch", "file_text", "image", "preview_text"]
+        );
     }
 
     /// Work on a path that is not one of the repository's linked worktrees
@@ -276,6 +292,7 @@ mod tests {
                 patch: true,
                 file_text: true,
                 image: false,
+                preview_text_side: None,
             },
             cancellation: CancellationToken::new(),
         };

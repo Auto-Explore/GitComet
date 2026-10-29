@@ -1452,12 +1452,8 @@ pub(super) fn repo_opened_ok(
             repo_state.set_selected_commit(None);
             repo_state.set_commit_details(Loadable::NotLoaded);
             repo_state.set_diff_target(None);
-            repo_state.diff_state.diff = Loadable::NotLoaded;
-            repo_state.diff_state.diff_file = Loadable::NotLoaded;
-            repo_state.diff_state.diff_preview_text_file = Loadable::NotLoaded;
-            repo_state.diff_state.submodule_summary = Loadable::NotLoaded;
+            repo_state.diff_state.clear_loads();
             repo_state.diff_state.inline_submodule_diff = None;
-            repo_state.diff_state.diff_file_image = Loadable::NotLoaded;
             repo_state.bump_diff_state_rev();
             repo_state.feedback_mut().last_error = None;
             // Reopening resets the whole repo view; saved back/forward snapshots

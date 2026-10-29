@@ -635,3 +635,75 @@ fn selecting_commits_on_different_branches_shows_no_merged_diff() {
             .any(|e| matches!(e, Effect::LoadRangeFiles { .. }))
     );
 }
+
+/// The list landing again can change the selected file's change: deleted on
+/// disk while a working-tree comparison shows it, say. The diff then loads
+/// the one side it has left instead of a patch against nothing.
+#[test]
+fn comparison_list_refresh_replans_a_file_that_lost_a_side() {
+    let repo_id = RepoId(1);
+    let mut state = state_with_log(repo_id);
+    let c1 = CommitId("c1".into());
+    let c3 = CommitId("c3".into());
+    select(&mut state, repo_id, "c2", CommitSelectMode::Single);
+    select(&mut state, repo_id, "c3", CommitSelectMode::Toggle);
+    let land = |state: &mut AppState, kind: FileStatusKind| {
+        let request = state.repos[0].begin_range_files_load();
+        dispatch_effects(
+            state,
+            Msg::Internal(crate::msg::InternalMsg::RangeFilesLoaded {
+                repo_id,
+                from: CommitId("c1".into()),
+                to: Some(CommitId("c3".into())),
+                request,
+                result: Ok(gitcomet_core::services::Comparison::new(
+                    CommitId("c1".into()),
+                    vec![CommitFileChange::new(
+                        std::path::PathBuf::from("a.rs"),
+                        kind,
+                    )],
+                )),
+            }),
+        )
+    };
+    land(&mut state, FileStatusKind::Modified);
+    dispatch_effects(
+        &mut state,
+        Msg::SelectDiff {
+            repo_id,
+            target: gitcomet_core::domain::DiffTarget::commit_range(
+                c1,
+                Some(c3),
+                Some(std::path::PathBuf::from("a.rs")),
+            ),
+        },
+    );
+    assert_eq!(repo(&state, repo_id).diff_state.one_sided_side, None);
+
+    let effects = land(&mut state, FileStatusKind::Deleted);
+    let diff_state = &repo(&state, repo_id).diff_state;
+    assert_eq!(
+        diff_state.one_sided_side,
+        Some(gitcomet_core::domain::DiffPreviewTextSide::Old)
+    );
+    assert!(matches!(
+        diff_state.diff_preview_text_file,
+        Loadable::Loading
+    ));
+    assert!(matches!(diff_state.diff, Loadable::NotLoaded));
+    assert!(
+        effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::LoadDiffPreviewTextFile { .. })),
+        "the old side should load: {effects:?}"
+    );
+
+    // The same list again changes nothing, so nothing reloads.
+    let effects = land(&mut state, FileStatusKind::Deleted);
+    assert!(
+        !effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::LoadDiffPreviewTextFile { .. })),
+        "{effects:?}"
+    );
+}

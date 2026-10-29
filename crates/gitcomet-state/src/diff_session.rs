@@ -8,8 +8,8 @@
 
 use crate::model::{Loadable, RepoId, Shared};
 use gitcomet_core::domain::{
-    BlameSource, CommitFileChange, CommitId, Diff, DiffArea, DiffTarget, FileDiffImage,
-    FileDiffText,
+    BlameSource, CommitFileChange, CommitId, Diff, DiffArea, DiffPreviewTextFile,
+    DiffPreviewTextSide, DiffTarget, FileDiffImage, FileDiffText,
 };
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::services::BlameLine;
@@ -118,6 +118,7 @@ impl DiffSession {
         self.pending.patch
             || self.pending.file_text
             || self.pending.image
+            || self.pending.preview_text
             || self.pending.blame
             || self.pending.attributes
     }
@@ -149,6 +150,7 @@ pub(crate) struct DiffSessionLoads {
     pub patch: bool,
     pub file_text: bool,
     pub image: bool,
+    pub preview_text: bool,
     pub blame: bool,
 }
 
@@ -406,6 +408,7 @@ pub enum DiffSessionContent {
     /// enum travels through every session message.
     FileText(Result<Option<Box<FileDiffText>>>),
     Image(Result<Option<FileDiffImage>>),
+    PreviewText(Result<Option<DiffPreviewTextFile>>),
     Blame(Result<Vec<BlameLine>>),
 }
 
@@ -418,6 +421,8 @@ pub enum DiffSessionWork {
         patch: bool,
         file_text: bool,
         image: bool,
+        /// The one side an added or deleted file has, read whole.
+        preview_text_side: Option<DiffPreviewTextSide>,
     },
     Blame {
         path: PathBuf,
@@ -475,6 +480,7 @@ impl DiffSessionEffect {
                 patch,
                 file_text,
                 image,
+                preview_text_side,
                 ..
             } => {
                 let text = error.to_string();
@@ -492,6 +498,9 @@ impl DiffSessionEffect {
                 }
                 if image {
                     replies.push(reply(DiffSessionContent::Image(Err(error()))));
+                }
+                if preview_text_side.is_some() {
+                    replies.push(reply(DiffSessionContent::PreviewText(Err(error()))));
                 }
                 replies
             }
@@ -529,6 +538,7 @@ mod tests {
                 patch: true,
                 file_text: true,
                 image: true,
+                preview_text_side: None,
             },
             cancellation: CancellationToken::new(),
         }

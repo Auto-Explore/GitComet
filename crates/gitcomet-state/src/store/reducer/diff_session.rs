@@ -77,6 +77,9 @@ pub(super) fn reduce(state: &mut AppState, event: Event) -> Vec<Effect> {
             target,
         } => with_repo(state, repo_id, lifetime, |repo| {
             let (repo_id, lifetime) = (repo.id, repo.lifetime());
+            // Opening clears content preview, so the side is known up front
+            // and the first load already reads it.
+            let side = session_side(repo, &target, false);
             let sessions = Arc::make_mut(&mut repo.diff_sessions);
             let session = sessions
                 .entry(view)
@@ -96,6 +99,7 @@ pub(super) fn reduce(state: &mut AppState, event: Event) -> Vec<Effect> {
                     session.blame = Loadable::NotLoaded;
                 })
                 .or_insert_with(|| DiffSession::new(target));
+            session.diff_state.one_sided_side = side;
             load(repo_id, lifetime, view, session)
         }),
         Event::Clear {
@@ -363,6 +367,15 @@ pub(super) fn reduce(state: &mut AppState, event: Event) -> Vec<Effect> {
                         result.map(|image| image.map(Arc::new)),
                     )
                 }
+                DiffSessionContent::PreviewText(result) => {
+                    session.pending.preview_text = false;
+                    session.diff_preview_text_file_rev =
+                        session.diff_preview_text_file_rev.wrapping_add(1);
+                    settle(
+                        &mut session.diff_preview_text_file,
+                        result.map(|file| file.map(Arc::new)),
+                    )
+                }
                 DiffSessionContent::Blame(result) => {
                     session.pending.blame = false;
                     settle(&mut session.blame, result.map(Arc::new))
@@ -538,12 +551,16 @@ fn refresh(
         session.diff_file.clone(),
         session.diff_file_image.clone(),
         session.blame.clone(),
+        session.diff_preview_text_file.clone(),
     );
     let effects = load(repo_id, lifetime, view, session);
     retain_ready(previous.0, &mut session.diff);
     retain_ready(previous.1, &mut session.diff_file);
     retain_ready(previous.2, &mut session.diff_file_image);
     retain_ready(previous.3, &mut session.blame);
+    if session.pending.preview_text {
+        retain_ready(previous.4, &mut session.diff_preview_text_file);
+    }
     effects
 }
 
@@ -590,13 +607,60 @@ fn with_session(
         let session = Arc::make_mut(&mut repo.diff_sessions)
             .get_mut(&view)
             .expect("checked above");
-        f(lifetime, session)
+        let mut effects = f(lifetime, session);
+        effects.extend(record_one_sided_sides(repo));
+        effects
     })
 }
 
+/// The one side a session's change has, classified as the selected diff's.
+/// A linked worktree's changes are not in this repository's status.
+fn session_side(
+    repo: &RepoState,
+    target: &DiffTarget,
+    content_preview: bool,
+) -> Option<gitcomet_core::domain::DiffPreviewTextSide> {
+    if content_preview || target.worktree().is_some() {
+        return None;
+    }
+    repo.one_sided_change_side(target)
+}
+
+/// Re-classifies every session once what that reads (status, commit details,
+/// the comparison list) lands or its target changes, and reloads the ones
+/// whose side changed so they read it.
+pub(super) fn record_one_sided_sides(repo: &mut RepoState) -> Vec<Effect> {
+    let changed: Vec<_> = repo
+        .diff_sessions
+        .iter()
+        .filter_map(|(view, session)| {
+            let side = session_side(repo, &session.target, session.content_preview);
+            (session.diff_state.one_sided_side != side).then_some((*view, side))
+        })
+        .collect();
+    if changed.is_empty() {
+        return Vec::new();
+    }
+    let (repo_id, lifetime) = (repo.id, repo.lifetime());
+    let sessions = Arc::make_mut(&mut repo.diff_sessions);
+    let mut effects = Vec::new();
+    for (view, side) in changed {
+        let Some(session) = sessions.get_mut(&view) else {
+            continue;
+        };
+        session.diff_state.one_sided_side = side;
+        if session.is_loading() {
+            session.queue_refresh();
+        } else {
+            effects.extend(refresh(repo_id, lifetime, view, session));
+        }
+    }
+    effects
+}
+
 /// Starts a new generation and loads what the target shows. The plan is the
-/// selected diff's: a file target reads its patch and text (or image), and a
-/// whole-commit target its patch.
+/// selected diff's: a file target reads its patch and text (or image), plus
+/// the one side an added or deleted file has; a whole-commit target its patch.
 fn load(
     repo_id: RepoId,
     lifetime: u64,
@@ -610,7 +674,8 @@ fn load(
     let preview = util::diff_target_preview_flags(&session.target);
     let has_file = session.target.file_path().is_some();
     let image = has_file && preview.wants_image;
-    let file_text = has_file && (!preview.wants_image || preview.is_svg);
+    let file_text = has_file && preview.reads_text();
+    let preview_text_side = session.diff_state.one_sided_side.filter(|_| file_text);
     session.diff_state_rev = session.rev;
     session.diff_rev = session.diff_rev.wrapping_add(1);
     session.diff_file_rev = session.diff_file_rev.wrapping_add(1);
@@ -625,6 +690,7 @@ fn load(
         patch: true,
         file_text,
         image,
+        preview_text: preview_text_side.is_some(),
         blame: false,
     };
     session.diff = Loadable::Loading;
@@ -634,6 +700,11 @@ fn load(
         Loadable::NotLoaded
     };
     session.diff_file_image = if image {
+        Loadable::Loading
+    } else {
+        Loadable::NotLoaded
+    };
+    session.diff_preview_text_file = if preview_text_side.is_some() {
         Loadable::Loading
     } else {
         Loadable::NotLoaded
@@ -650,6 +721,7 @@ fn load(
             patch: true,
             file_text,
             image,
+            preview_text_side,
         },
         cancellation,
     })];

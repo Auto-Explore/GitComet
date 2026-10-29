@@ -786,11 +786,12 @@ pub(super) fn range_files_loaded(
         }
     };
     repo_state.set_range_files(next);
+    let mut effects = super::util::replan_one_sided_change(inputs, repo_state);
 
     // The worktree moved again while this load was running; run one more so the
     // list ends up describing the final state rather than the state mid-flight.
     if !std::mem::take(&mut repo_state.history_state.range_files_refresh_queued) {
-        return Vec::new();
+        return effects;
     }
     let options = repo_state
         .history_state
@@ -798,13 +799,14 @@ pub(super) fn range_files_loaded(
         .as_ref()
         .map(|range| range.options)
         .unwrap_or_default();
-    vec![Effect::LoadRangeFiles {
+    effects.push(Effect::LoadRangeFiles {
         repo_id,
         from,
         to,
         options,
         request: repo_state.begin_range_files_load(),
-    }]
+    });
+    effects
 }
 
 pub(super) fn select_commit_and_load_details(
@@ -2017,6 +2019,7 @@ pub(super) fn status_loaded(
         }
         StatusLane::Worktree.finish(repo_state, &mut effects);
         StatusLane::Staged.finish(repo_state, &mut effects);
+        effects.extend(super::util::replan_one_sided_change(inputs, repo_state));
     }
     effects
 }
@@ -2043,6 +2046,7 @@ pub(super) fn worktree_status_loaded(
             }
         }
         StatusLane::Worktree.finish(repo_state, &mut effects);
+        effects.extend(super::util::replan_one_sided_change(inputs, repo_state));
     }
     effects
 }
@@ -2260,6 +2264,7 @@ pub(super) fn staged_status_loaded(
             }
         }
         StatusLane::Staged.finish(repo_state, &mut effects);
+        effects.extend(super::util::replan_one_sided_change(inputs, repo_state));
     }
     effects
 }
@@ -2816,6 +2821,7 @@ pub(super) fn commit_details_loaded(
             }
         };
         repo_state.set_commit_details(value);
+        let session_effects = super::diff_session::record_one_sided_sides(repo_state);
 
         // The selected commit is usually a log row, but a reveal or a link menu
         // can select one the loaded page does not contain.
@@ -2826,17 +2832,17 @@ pub(super) fn commit_details_loaded(
             [commit_id.clone()],
         );
 
+        let mut effects = session_effects;
         if let Some(target @ gitcomet_core::domain::DiffTarget::Commit { .. }) = selected_target {
             let next_plan = selected_diff_load_plan(inputs, repo_state, &target);
             if previous_plan != Some(next_plan) {
                 apply_selected_diff_load_plan_state(repo_state, next_plan);
                 repo_state.bump_diff_state_rev();
-                let mut effects = diff_reload_effects(inputs, repo_state, repo_id, target);
-                effects.extend(signature_effect);
-                return effects;
+                effects.extend(diff_reload_effects(inputs, repo_state, repo_id, target));
             }
         }
-        return signature_effect.into_iter().collect();
+        effects.extend(signature_effect);
+        return effects;
     }
     Vec::new()
 }

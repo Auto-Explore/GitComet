@@ -176,29 +176,29 @@ impl DiffRenderer {
     /// Whether a whole-file preview applies to the target: an untracked,
     /// added, or deleted file, or content opened from the file browser.
     fn file_preview_target(&self) -> bool {
+        // Judged by the side's own source: a blob copy has text whatever now
+        // sits at the path in the checkout; only a live source can be a folder.
         let preview_text_file_available = self.active_repo().is_some_and(|repo| {
-            matches!(
-                self.bound_diff_state(repo).diff_preview_text_file,
-                Loadable::Loading | Loadable::Error(_) | Loadable::Ready(Some(_))
-            )
+            match &self.bound_diff_state(repo).diff_preview_text_file {
+                Loadable::Loading | Loadable::Error(_) => true,
+                Loadable::Ready(Some(file)) => !file.path.is_dir(),
+                Loadable::Ready(None) | Loadable::NotLoaded => false,
+            }
         });
-        // An image shows as one, however the file is named.
-        let content_is_image = self.selected_content_is_image();
-        let shows_text = |path: &std::path::Path| {
-            !content_is_image && !crate::view::should_bypass_text_file_preview_for_path(path)
-        };
+        // A picture keeps the image view; an SVG's Code view is its text.
+        let shows_text = |path: &std::path::Path| !self.preview_is_picture(path);
         let has_untracked_preview = self
             .untracked_worktree_preview_path()
             .is_some_and(|p| shows_text(&p) && p.is_file());
-        let has_added_preview = self.added_file_preview_abs_path().is_some_and(|p| {
-            shows_text(&p) && !p.is_dir() && (p.is_file() || preview_text_file_available)
-        });
+        let has_added_preview = self
+            .added_file_preview_abs_path()
+            .is_some_and(|p| shows_text(&p) && (p.is_file() || preview_text_file_available));
         let has_deleted_preview = self
             .deleted_file_preview_abs_path()
-            .is_some_and(|p| shows_text(&p) && !p.is_dir() && preview_text_file_available);
+            .is_some_and(|p| shows_text(&p) && preview_text_file_available);
         // File-browser "open content" forces a full-content preview for any file.
         let has_content_preview = self.content_preview_abs_path().is_some_and(|p| {
-            !self.content_preview_is_picture(&p)
+            !self.preview_is_picture(&p)
                 && !p.is_dir()
                 && (p.is_file() || preview_text_file_available)
         });

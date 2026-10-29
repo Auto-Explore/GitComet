@@ -3,7 +3,7 @@ use crate::msg::{
     ControlEffect, PersistenceEffect, ReferenceEffect, StatusEffect, WorktreeSaveBaseline,
 };
 use crate::store::repository_runtime::RepositoryRuntimes;
-use gitcomet_core::domain::HistoryFocusSet;
+use gitcomet_core::domain::{FileStatus, FileStatusKind, HistoryFocusSet};
 
 #[test]
 fn checkout_and_rename_start_one_worktree_scan_after_cancelling_old_loads() {
@@ -3473,6 +3473,79 @@ fn status_loaded_bumps_status_rev() {
     assert!(
         state.repos[0].status_rev > status_before,
         "status_rev should bump after StatusLoaded"
+    );
+}
+
+/// A file deleted on disk while its diff is open: the status that lands says
+/// so, and the diff reloads the one side it has left.
+#[test]
+fn status_loaded_replans_a_selected_file_that_lost_a_side() {
+    let mut repos: RepositoryRuntimes = Default::default();
+    let id_alloc = AtomicU64::new(2);
+    let mut state = AppState::test_default();
+    let repo_id = RepoId(1);
+    repos.attach_repository_for_test(repo_id, Arc::new(DummyRepo::new("/tmp/repo")));
+    state.repos.push(RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+    state.active_repo = Some(repo_id);
+    let path = PathBuf::from("a.txt");
+    let status = |kind| RepoStatus {
+        staged: Arc::default(),
+        unstaged: Arc::new(vec![FileStatus {
+            path: path.clone(),
+            kind,
+            conflict: None,
+        }]),
+    };
+    let land = |repos: &mut RepositoryRuntimes, state: &mut AppState, kind| {
+        reduce(
+            repos,
+            &id_alloc,
+            state,
+            Msg::Internal(crate::msg::InternalMsg::StatusLoaded {
+                repo_id,
+                result: Ok(status(kind)),
+            }),
+        )
+    };
+    land(&mut repos, &mut state, FileStatusKind::Modified);
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::SelectDiff {
+            repo_id,
+            target: DiffTarget::working_tree(path.clone(), DiffArea::Unstaged),
+        },
+    );
+    assert_eq!(state.repos[0].diff_state.one_sided_side, None);
+
+    let effects = land(&mut repos, &mut state, FileStatusKind::Deleted);
+    assert_eq!(
+        state.repos[0].diff_state.one_sided_side,
+        Some(gitcomet_core::domain::DiffPreviewTextSide::Old)
+    );
+    assert!(matches!(
+        state.repos[0].diff_state.diff_preview_text_file,
+        Loadable::Loading
+    ));
+    assert!(
+        effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::LoadDiffPreviewTextFile { .. })),
+        "the old side should load: {effects:?}"
+    );
+
+    let effects = land(&mut repos, &mut state, FileStatusKind::Deleted);
+    assert!(
+        !effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::LoadDiffPreviewTextFile { .. })),
+        "the same status reloads nothing: {effects:?}"
     );
 }
 

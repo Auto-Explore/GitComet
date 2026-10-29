@@ -1093,12 +1093,8 @@ pub(super) fn commit_finished(
             succeeded = true;
             repo_state.set_recent_commit_messages(Loadable::NotLoaded);
             repo_state.set_diff_target(None);
-            repo_state.diff_state.diff = Loadable::NotLoaded;
-            repo_state.diff_state.diff_file = Loadable::NotLoaded;
-            repo_state.diff_state.diff_preview_text_file = Loadable::NotLoaded;
-            repo_state.diff_state.submodule_summary = Loadable::NotLoaded;
+            repo_state.diff_state.clear_loads();
             repo_state.diff_state.inline_submodule_diff = None;
-            repo_state.diff_state.diff_file_image = Loadable::NotLoaded;
             repo_state.bump_diff_state_rev();
             invalidate_loaded_blame(repo_state);
             push_action_log(
@@ -1576,12 +1572,8 @@ pub(super) fn repo_command_finished(
             repo_state.set_recent_commit_messages(Loadable::NotLoaded);
             if command_clears_diff_selection(&command) {
                 repo_state.set_diff_target(None);
-                repo_state.diff_state.diff = Loadable::NotLoaded;
-                repo_state.diff_state.diff_file = Loadable::NotLoaded;
-                repo_state.diff_state.diff_preview_text_file = Loadable::NotLoaded;
-                repo_state.diff_state.submodule_summary = Loadable::NotLoaded;
+                repo_state.diff_state.clear_loads();
                 repo_state.diff_state.inline_submodule_diff = None;
-                repo_state.diff_state.diff_file_image = Loadable::NotLoaded;
                 repo_state.bump_diff_state_rev();
             }
             if matches!(
@@ -1760,12 +1752,8 @@ pub(super) fn repo_command_finished(
         if let Some(conflict_target) = selected_conflict_target(repo_state, &target) {
             // Blanked, so there is nothing stale left to guard against.
             repo_state.diff_state.diff_reload_in_flight = false;
-            repo_state.diff_state.diff = Loadable::NotLoaded;
-            repo_state.diff_state.diff_file = Loadable::NotLoaded;
-            repo_state.diff_state.diff_preview_text_file = Loadable::NotLoaded;
-            repo_state.diff_state.submodule_summary = Loadable::NotLoaded;
+            repo_state.diff_state.clear_loads();
             repo_state.diff_state.inline_submodule_diff = None;
-            repo_state.diff_state.diff_file_image = Loadable::NotLoaded;
             repo_state.bump_diff_state_rev();
             match conflict_target {
                 SelectedConflictTarget::Current => {

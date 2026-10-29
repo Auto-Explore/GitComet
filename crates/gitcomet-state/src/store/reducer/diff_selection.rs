@@ -59,8 +59,9 @@ fn inline_submodule_selected_diff_load_plan(target: &DiffTarget) -> SelectedDiff
 
     SelectedDiffLoadPlan {
         load_patch_diff: supports_file,
-        load_file_text: supports_file && (!preview.wants_image || preview.is_svg),
+        load_file_text: supports_file && preview.reads_text(),
         preview_text_side: None,
+        one_sided_side: None,
         load_submodule_summary: false,
         load_file_image: supports_file && preview.wants_image,
     }
@@ -593,11 +594,7 @@ pub(super) fn fill_select_diff_inline(
     if !content_preview && let Some(conflict_target) = selected_conflict_target(repo_state, &target)
     {
         repo_state.set_diff_target(Some(target.clone()));
-        repo_state.diff_state.diff = Loadable::NotLoaded;
-        repo_state.diff_state.diff_file = Loadable::NotLoaded;
-        repo_state.diff_state.diff_preview_text_file = Loadable::NotLoaded;
-        repo_state.diff_state.submodule_summary = Loadable::NotLoaded;
-        repo_state.diff_state.diff_file_image = Loadable::NotLoaded;
+        repo_state.diff_state.clear_loads();
         repo_state.bump_diff_state_rev();
         let conflict_effects = match conflict_target {
             SelectedConflictTarget::Current => start_current_conflict_target_reload(repo_state),
@@ -660,11 +657,7 @@ pub(super) fn select_conflict_diff(
 
     let target = DiffTarget::working_tree(path.clone(), DiffArea::Unstaged);
     repo_state.set_diff_target(Some(target));
-    repo_state.diff_state.diff = Loadable::NotLoaded;
-    repo_state.diff_state.diff_file = Loadable::NotLoaded;
-    repo_state.diff_state.diff_preview_text_file = Loadable::NotLoaded;
-    repo_state.diff_state.submodule_summary = Loadable::NotLoaded;
-    repo_state.diff_state.diff_file_image = Loadable::NotLoaded;
+    repo_state.diff_state.clear_loads();
     repo_state.bump_diff_state_rev();
 
     let mut effects = start_conflict_target_reload_with_mode(
@@ -820,11 +813,7 @@ pub(super) fn clear_diff_selection(state: &mut AppState, repo_id: RepoId) -> Vec
     repo_state.diff_state.edit_return_view = None;
 
     repo_state.set_diff_target(None);
-    repo_state.diff_state.diff = Loadable::NotLoaded;
-    repo_state.diff_state.diff_file = Loadable::NotLoaded;
-    repo_state.diff_state.diff_preview_text_file = Loadable::NotLoaded;
-    repo_state.diff_state.submodule_summary = Loadable::NotLoaded;
-    repo_state.diff_state.diff_file_image = Loadable::NotLoaded;
+    repo_state.diff_state.clear_loads();
     repo_state.bump_diff_state_rev();
     Vec::new()
 }

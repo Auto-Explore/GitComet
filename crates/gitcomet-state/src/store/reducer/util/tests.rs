@@ -170,6 +170,7 @@ fn duplicate_worktree_paths_preserve_first_submodule_and_first_eligible_preview(
             SelectedDiffLoadPlan {
                 load_submodule_summary: submodule,
                 preview_text_side: preview_side,
+                one_sided_side: preview_side,
                 ..SelectedDiffLoadPlan::default()
             },
             "status order: {kinds:?}"
@@ -228,6 +229,60 @@ fn content_preview_forces_full_content_preview_plan() {
         )
         .load_patch_diff
     );
+}
+
+#[test]
+fn comparison_added_or_deleted_file_loads_only_its_present_side() {
+    use crate::model::{RangeSelection, Shared};
+    use gitcomet_core::domain::{CommitFileChange, DiffPreviewTextSide};
+
+    let mut repo = repo_state(12);
+    let from = CommitId("base".into());
+    let to = CommitId("tip".into());
+    repo.history_state.range_selection = Some(RangeSelection::new(
+        from.clone(),
+        Some(to.clone()),
+        "base".into(),
+        "tip".into(),
+    ));
+    repo.history_state.range_files = Loadable::Ready(Shared::new(vec![
+        CommitFileChange::new(PathBuf::from("added.txt"), FileStatusKind::Added),
+        CommitFileChange::new(PathBuf::from("deleted.txt"), FileStatusKind::Deleted),
+        CommitFileChange::new(PathBuf::from("modified.txt"), FileStatusKind::Modified),
+    ]));
+    let plan_for = |repo: &RepoState, path: &str| {
+        let target =
+            DiffTarget::commit_range(from.clone(), Some(to.clone()), Some(PathBuf::from(path)));
+        selected_diff_load_plan(
+            &crate::store::reducer::test_inputs::for_target(repo, &target),
+            repo,
+            &target,
+        )
+    };
+
+    let added = plan_for(&repo, "added.txt");
+    assert!(!added.load_patch_diff);
+    assert!(!added.load_file_text);
+    assert_eq!(added.preview_text_side, Some(DiffPreviewTextSide::New));
+
+    let deleted = plan_for(&repo, "deleted.txt");
+    assert!(!deleted.load_patch_diff);
+    assert_eq!(deleted.preview_text_side, Some(DiffPreviewTextSide::Old));
+
+    let modified = plan_for(&repo, "modified.txt");
+    assert!(modified.load_patch_diff);
+    assert_eq!(modified.preview_text_side, None);
+
+    // A list from another comparison says nothing about this one.
+    repo.history_state.range_selection = Some(RangeSelection::new(
+        CommitId("other".into()),
+        Some(to.clone()),
+        "other".into(),
+        "tip".into(),
+    ));
+    let stale = plan_for(&repo, "added.txt");
+    assert!(stale.load_patch_diff);
+    assert_eq!(stale.preview_text_side, None);
 }
 
 #[test]
