@@ -1,7 +1,8 @@
 //! Hosted controls and list-boundary projection for the shared diff renderer.
 use super::*;
 use gitcomet_extension_api::{
-    DiffAnnotations, DiffInlineCard, DiffInset, DiffLineRange, DiffLineSide, DiffPaneOptions,
+    DiffAnnotations, DiffGlyph, DiffInlineCard, DiffInset, DiffLineRange, DiffLineSide,
+    DiffPaneOptions,
 };
 use palette::IntoColor;
 
@@ -20,6 +21,8 @@ pub(in crate::view) struct HostedDiffDecor {
     pub view_id: u64,
     pub options: DiffPaneOptions,
     pub annotations: Arc<DiffAnnotations>,
+    /// The most people one annotation names, which the rows make room for.
+    most_people: Option<usize>,
     pub insets: Arc<[DiffInset]>,
     pub cards: Arc<[DiffInlineCard]>,
     pub(super) row_height: Pixels,
@@ -406,6 +409,13 @@ impl DiffRenderer {
         let decor = self.hosted_decor.get_or_insert_with(Default::default);
         decor.view_id = view_id;
         decor.options = options;
+        decor.most_people = annotations
+            .iter()
+            .filter_map(|(_, _, annotation)| match &annotation.glyph {
+                Some(DiffGlyph::People(people)) if !people.is_empty() => Some(people.len()),
+                _ => None,
+            })
+            .max();
         decor.annotations = annotations;
         decor.insets = insets;
         decor.cards = cards;
@@ -530,6 +540,17 @@ impl DiffRenderer {
                 .collect(),
         );
         decor.key = Some(key);
+    }
+
+    /// The column a hosted pane's rows start past, wide enough for its
+    /// largest group of people; zero in a pane that names none.
+    pub(in crate::view) fn hosted_people_column_width(&self, scale: ui_scale::UiScale) -> Pixels {
+        self.hosted_decor
+            .as_ref()
+            .and_then(|decor| decor.most_people)
+            .map_or(px(0.0), |most| {
+                super::hosted_people::people_column_width(scale, most)
+            })
     }
 
     pub(in crate::view) fn hosted_markers(&mut self) -> Arc<Vec<(f32, gpui::Hsla)>> {
@@ -730,8 +751,11 @@ impl DiffRenderer {
                                 .map(|n| (DiffLineSide::New, n))
                                 .or_else(|| old.map(|n| (DiffLineSide::Old, n))),
                         };
+                        let scale = ui_scale::UiScale::current(cx);
+                        let column = this.hosted_people_column_width(scale);
+                        let lane_width = scale.px(GUTTER_LANE_WIDTH);
                         let Some((side, line)) = anchor else {
-                            return element;
+                            return row_with_lane(element, None, column, lane_width);
                         };
                         let decor = this.hosted_decor.as_ref().unwrap();
                         let mark = decor
@@ -744,82 +768,127 @@ impl DiffRenderer {
                             && annotation.is_none()
                             && decor.options.on_gutter_click.is_none()
                         {
-                            return element;
+                            return row_with_lane(element, None, column, lane_width);
                         }
                         // The lane draws the annotation, so a click there is on it.
                         let on_annotation =
                             annotation.and(decor.options.on_annotation_click.clone());
-                        // The annotation's glyph in its colour, or its colour
-                        // filling the lane; with none, the decoration's tint and
-                        // gutter text. The annotation's label is the tooltip.
-                        let (fill, glyph) = match annotation {
+                        // The annotation's people or glyph in its colour, or its
+                        // colour filling the lane; with none, the decoration's
+                        // tint and gutter text. The annotation's label is the
+                        // tooltip.
+                        let (fill, glyph, people) = match annotation {
                             Some(a) => match &a.glyph {
-                                Some(glyph) => (None, Some((glyph.clone(), a.color))),
-                                None => (Some(a.color), None),
+                                Some(DiffGlyph::Row(glyph)) => {
+                                    (None, Some((glyph.clone(), a.color)), None)
+                                }
+                                Some(DiffGlyph::People(people)) => {
+                                    (None, None, Some((people.clone(), a.color)))
+                                }
+                                // A glyph kind added later draws nothing until
+                                // it is handled here.
+                                Some(_) => (None, None, None),
+                                None => (Some(a.color), None, None),
                             },
-                            None => (mark.as_ref().and_then(|m| m.tint), None),
+                            None => (mark.as_ref().and_then(|m| m.tint), None, None),
                         };
                         let text = mark
                             .as_ref()
                             .and_then(|m| m.gutter.clone())
-                            .filter(|_| glyph.is_none());
+                            .filter(|_| glyph.is_none() && people.is_none());
                         let tooltip = annotation.and_then(|a| a.label.clone());
-                        let lane_width = ui_scale::UiScale::current(cx).px(GUTTER_LANE_WIDTH);
                         let theme = this.theme;
                         let action = on_annotation
                             .or_else(|| decor.options.on_gutter_click.clone())
                             .filter(|_| decor.options.policy.line_action);
 
-                        div()
-                            .relative()
-                            .child(element)
-                            .child(
-                                div()
-                                    .id(("hosted_gutter", display))
-                                    .debug_selector(move || {
-                                        format!("hosted_diff_{pane_id}_gutter_{display}")
-                                    })
-                                    .absolute()
-                                    .left_0()
-                                    .top_0()
-                                    .bottom_0()
-                                    .w(lane_width)
-                                    .when_some(fill, |lane, color| lane.bg(color))
-                                    .when_some(text, |lane, text| lane.child(text))
-                                    .when_some(glyph, |lane, (glyph, color)| {
-                                        lane.flex().items_center().justify_center().child(
-                                            div()
-                                                .debug_selector(move || {
-                                                    format!(
-                                                        "hosted_diff_{pane_id}_gutter_glyph_{display}"
-                                                    )
-                                                })
-                                                .flex()
-                                                .text_size(theme.ui_text(10.0))
-                                                .child(crate::view::hosted::row_glyph(
-                                                    &glyph, color, lane_width,
-                                                )),
-                                        )
-                                    })
-                                    .when_some(tooltip, |lane, tooltip| {
-                                        lane.gitcomet_tooltip(theme, tooltip)
-                                    })
-                                    .when_some(action, |lane, action| {
-                                        lane.cursor_pointer().on_activate(
-                                            false,
-                                            crate::kit::interaction::ControlActivation::Action,
-                                            move |_, _, cx| {
-                                                cx.stop_propagation();
-                                                let action = action.clone();
-                                                cx.defer(move |cx| action(side, line, cx));
-                                            },
-                                        )
-                                    }),
-                            )
-                            .into_any_element()
+                        let lane = div()
+                            .id(("hosted_gutter", display))
+                            .debug_selector(move || {
+                                format!("hosted_diff_{pane_id}_gutter_{display}")
+                            })
+                            .when_some(fill, |lane, color| lane.bg(color))
+                            .when_some(text, |lane, text| lane.child(text))
+                            .when_some(glyph, |lane, (glyph, color)| {
+                                lane.flex().items_center().justify_center().child(
+                                    div()
+                                        .debug_selector(move || {
+                                            format!("hosted_diff_{pane_id}_gutter_glyph_{display}")
+                                        })
+                                        .flex()
+                                        .text_size(theme.ui_text(10.0))
+                                        .child(crate::view::hosted::row_glyph(
+                                            &glyph, color, lane_width,
+                                        )),
+                                )
+                            })
+                            .when_some(people, |lane, (people, color)| {
+                                // From the column's padding, so the circles line
+                                // up from row to row.
+                                lane.flex()
+                                    .items_center()
+                                    .pl(super::hosted_people::people_column_padding(scale))
+                                    .child(
+                                        div()
+                                            .debug_selector(move || {
+                                                format!(
+                                                    "hosted_diff_{pane_id}_gutter_glyph_{display}"
+                                                )
+                                            })
+                                            .flex()
+                                            .child(super::hosted_people::people_glyph(
+                                                &people, color, scale, theme,
+                                            )),
+                                    )
+                            })
+                            .when_some(tooltip, |lane, tooltip| {
+                                lane.gitcomet_tooltip(theme, tooltip)
+                            })
+                            .when_some(action, |lane, action| {
+                                lane.cursor_pointer().on_activate(
+                                    false,
+                                    crate::kit::interaction::ControlActivation::Action,
+                                    move |_, _, cx| {
+                                        cx.stop_propagation();
+                                        let action = action.clone();
+                                        cx.defer(move |cx| action(side, line, cx));
+                                    },
+                                )
+                            });
+                        row_with_lane(element, Some(lane), column, lane_width)
                     }
                 }
             })
             .collect()
     }
+}
+
+/// A row with its lane: in a column of its own before the row when the pane
+/// makes room for people, so the row starts past it; else over the start of
+/// the row's line numbers, where the row does not move.
+fn row_with_lane(
+    element: AnyElement,
+    lane: Option<gpui::Stateful<gpui::Div>>,
+    people_column: Pixels,
+    lane_width: Pixels,
+) -> AnyElement {
+    if people_column > px(0.0) {
+        let lane = match lane {
+            Some(lane) => lane.flex_none().w(people_column).into_any_element(),
+            None => div().flex_none().w(people_column).into_any_element(),
+        };
+        return div()
+            .flex()
+            .child(lane)
+            .child(div().flex_grow(1.0).child(element))
+            .into_any_element();
+    }
+    let Some(lane) = lane else {
+        return element;
+    };
+    div()
+        .relative()
+        .child(element)
+        .child(lane.absolute().left_0().top_0().bottom_0().w(lane_width))
+        .into_any_element()
 }

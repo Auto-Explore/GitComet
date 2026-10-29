@@ -164,7 +164,20 @@ pub type DiffRowDecorProvider = Rc<dyn Fn(DiffLineSide, u32) -> Option<DiffRowDe
 pub struct DiffAnnotation {
     pub color: Hsla,
     pub label: Option<SharedString>,
-    pub glyph: Option<crate::RowGlyph>,
+    pub glyph: Option<DiffGlyph>,
+}
+
+/// What a diff annotation draws in the lane beside its row.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum DiffGlyph {
+    /// A row glyph, as file lists and History draw it.
+    Row(crate::RowGlyph),
+    /// The people behind the mark, by name or login, most relevant first,
+    /// as initials in the diff's comment column: the first two in their own
+    /// colours, the rest as "+k". An empty list draws nothing and reserves
+    /// no column; `with_people` never makes one.
+    People(Arc<[SharedString]>),
 }
 
 impl DiffAnnotation {
@@ -182,7 +195,20 @@ impl DiffAnnotation {
     }
 
     pub fn with_glyph(mut self, glyph: crate::RowGlyph) -> Self {
-        self.glyph = Some(glyph);
+        self.glyph = Some(DiffGlyph::Row(glyph));
+        self
+    }
+
+    /// Shows the people behind the mark as its glyph; with nobody, the glyph
+    /// stays as it was.
+    pub fn with_people(
+        mut self,
+        people: impl IntoIterator<Item = impl Into<SharedString>>,
+    ) -> Self {
+        let people: Arc<[SharedString]> = people.into_iter().map(Into::into).collect();
+        if !people.is_empty() {
+            self.glyph = Some(DiffGlyph::People(people));
+        }
         self
     }
 }
@@ -820,5 +846,26 @@ impl FileList {
 
     pub fn is_loading(&self, cx: &App) -> bool {
         self.0.is_loading(cx)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn nobody_leaves_the_glyph_as_it_was() {
+        let pin = crate::RowGlyph::Icon("icons/pin.svg".into());
+        let annotation = DiffAnnotation::new(Hsla::default())
+            .with_glyph(pin.clone())
+            .with_people(Vec::<String>::new());
+        assert_eq!(annotation.glyph, Some(DiffGlyph::Row(pin)));
+        let annotation = annotation.with_people(["Ada Lovelace"]);
+        assert_eq!(
+            annotation.glyph,
+            Some(DiffGlyph::People(Arc::from([SharedString::from(
+                "Ada Lovelace"
+            )])))
+        );
     }
 }

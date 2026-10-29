@@ -60,6 +60,9 @@ fn inline_card_visual_capture() {
                     pane.set_annotations(
                         gitcomet_extension_api::DiffAnnotations::new()
                             .with(DiffLineSide::New, 1, marker(gpui::blue(), "icons/pin.svg", "Flagged"))
+                            .with(DiffLineSide::New, 2, gitcomet_extension_api::DiffAnnotation::new(gpui::blue())
+                                .with_people(["Ada Lovelace", "Grace Hopper", "Alan Turing"])
+                                .with_label("3 comments"))
                             .with(DiffLineSide::New, 3, marker(gpui::green(), "icons/circle_check.svg", "Resolved")),
                         app,
                     );

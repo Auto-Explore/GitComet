@@ -5,10 +5,11 @@
 //! a line; a file with flagged lines gets a flag in the list and its
 //! "Flagged" chip shows only those files; clicking a flag removes it. A
 //! selection can be given a note shown under it, and clicking the note
-//! removes it. The current pane can pop out into a window of its own and
-//! comes back when that window closes. Its action-bar context names the
-//! comparison and marks the repository reviewed. When the repository has
-//! linked worktrees, the list can show one of them instead (read-only).
+//! removes it; a flag on a noted line shows who wrote the note instead. The
+//! current pane can pop out into a window of its own and comes back when
+//! that window closes. Its action-bar context names the comparison and marks
+//! the repository reviewed. When the repository has linked worktrees, the
+//! list can show one of them instead (read-only).
 
 use gitcomet_core::domain::{CommitId, DiffTarget};
 use gitcomet_extension_api::{
@@ -72,6 +73,9 @@ pub struct ChangesView {
     /// The linked worktree the list shows, watched while it does.
     linked: Option<(PathBuf, Option<RepositoryWatch>)>,
 }
+
+/// Who the example's notes are by: there is one person using it.
+const NOTE_WRITER: &str = "Example User";
 
 /// This view's comparison: the working tree against HEAD.
 fn head_comparison() -> ChangeSource {
@@ -306,13 +310,17 @@ impl ChangesView {
             self.flags()
                 .iter()
                 .fold(DiffAnnotations::new(), |annotations, (side, line)| {
-                    annotations.with(
-                        *side,
-                        *line,
-                        DiffAnnotation::new(color)
-                            .with_glyph(RowGlyph::Icon("icons/pin.svg".into()))
-                            .with_label("Flagged"),
-                    )
+                    let noted = self
+                        .notes
+                        .iter()
+                        .any(|(_, note)| (note.side, note.line) == (*side, *line));
+                    let flag = DiffAnnotation::new(color).with_label("Flagged");
+                    let flag = if noted {
+                        flag.with_people([NOTE_WRITER])
+                    } else {
+                        flag.with_glyph(RowGlyph::Icon("icons/pin.svg".into()))
+                    };
+                    annotations.with(*side, *line, flag)
                 });
         let legend = if self.flags().is_empty() {
             Vec::new()
@@ -350,6 +358,7 @@ impl ChangesView {
         if let Some(current) = &self.current {
             current.set_insets(self.notes(), cx);
         }
+        self.show_flags(cx);
     }
 
     pub fn current(&self) -> Option<&DiffPane> {
