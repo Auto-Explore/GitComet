@@ -1531,6 +1531,11 @@ impl GitRepository for GixRepo {
         self.fetch_all_remote_names_impl()
     }
 
+    fn tracking_stamp(&self, cancellation: &CancellationToken) -> Result<u64> {
+        let _operation = self.operation_lease()?;
+        self.tracking_stamp_impl(cancellation)
+    }
+
     fn refs_fingerprint(&self, cancellation: &CancellationToken) -> Result<u64> {
         let _operation = self.operation_lease()?;
         let _scope = git_ops_trace::scope(GitOpTraceKind::RefEnumerate);

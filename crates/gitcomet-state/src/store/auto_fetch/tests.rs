@@ -113,7 +113,7 @@ fn busy_shared_repository_yields_and_its_worktrees_share_one_fetch() {
         result: Ok(CommandOutput::empty_success("git fetch --all")),
         refs_changed: true,
         regrouped: Vec::new(),
-        heads: Vec::new(),
+        tracking: Vec::new(),
     };
     let foreground = coordinator.admission().reserve(PathBuf::from("/repo/.git"));
     let mut state = coordinator.inner.state.lock().unwrap();
@@ -189,7 +189,7 @@ fn disabled_coordinator_parks_and_enabled_deadlines_recompute_from_completion() 
             result: Err(Error::new(ErrorKind::Unsupported("test offline"))),
             refs_changed: true,
             regrouped: Vec::new(),
-            heads: Vec::new(),
+            tracking: Vec::new(),
         },
         now,
     );
@@ -247,7 +247,7 @@ fn manual_success_clears_failure_and_an_older_automatic_result_cannot_replace_it
             result: Err(Error::new(ErrorKind::Cancelled)),
             refs_changed: true,
             regrouped: Vec::new(),
-            heads: Vec::new(),
+            tracking: Vec::new(),
         },
         manual + Duration::from_secs(1),
     );
@@ -282,7 +282,7 @@ fn reopening_a_closed_tab_does_not_accept_its_old_fetch_completion() {
             result: Ok(CommandOutput::empty_success("git fetch --all")),
             refs_changed: true,
             regrouped: Vec::new(),
-            heads: Vec::new(),
+            tracking: Vec::new(),
         },
         UNIX_EPOCH,
     );
@@ -696,7 +696,7 @@ fn failed(remotes: Vec<FetchRemote>, message: &str) -> Completion {
         result: Err(Error::new(ErrorKind::Backend(message.into()))),
         refs_changed: false,
         regrouped: Vec::new(),
-        heads: Vec::new(),
+        tracking: Vec::new(),
     }
 }
 
@@ -1233,7 +1233,7 @@ fn selected_tabs_fetch_first_then_the_least_recently_contacted_host() {
                 result: Ok(CommandOutput::empty_success("git fetch --all")),
                 refs_changed: false,
                 regrouped: Vec::new(),
-                heads: Vec::new(),
+                tracking: Vec::new(),
             },
             UNIX_EPOCH,
         );
@@ -1300,7 +1300,7 @@ fn inactive_repositories_that_stay_quiet_wait_up_to_four_intervals() {
                 result: Ok(CommandOutput::empty_success("git fetch --all")),
                 refs_changed,
                 regrouped: Vec::new(),
-                heads: Vec::new(),
+                tracking: Vec::new(),
             },
             now,
         );
@@ -1974,7 +1974,7 @@ fn the_remotes_a_fetch_skipped_reach_the_tabs_until_a_manual_fetch() {
             result: Ok(CommandOutput::empty_success("git fetch --all")),
             refs_changed: false,
             regrouped: Vec::new(),
-            heads: Vec::new(),
+            tracking: Vec::new(),
         },
         UNIX_EPOCH,
     );
@@ -1997,4 +1997,39 @@ fn the_remotes_a_fetch_skipped_reach_the_tabs_until_a_manual_fetch() {
             .skipped_remotes
             .is_empty()
     );
+}
+
+#[test]
+fn tracking_changed_between_automatic_fetches_reloads_the_count() {
+    let (_temp, source, clone, _latest) = remote_fixture();
+    let coordinator = AutoFetchCoordinator::new();
+    let (sink, refreshed) = refresh_recorder();
+    let lifetimes = subscribe_unopened(&coordinator, &[&clone], sink);
+    let take = || std::mem::take(&mut *refreshed.lock().unwrap());
+    let fetch_when_due = || {
+        let due = group_of(&coordinator.inner.state.lock().unwrap(), &clone)
+            .schedule
+            .due_at(AutoFetchInterval::default())
+            .unwrap_or(UNIX_EPOCH);
+        assert!(run_job(&coordinator, due).is_some());
+    };
+    fetch_when_due();
+    assert_eq!(take(), lifetimes);
+    // A fetch run outside GitComet moves origin/main first.
+    std::fs::write(source.join("file"), "third").unwrap();
+    git(&source, &["commit", "-qam", "third"]);
+    git(&clone, &["fetch", "-q"]);
+    fetch_when_due();
+    assert_eq!(take(), lifetimes, "the count reads the new origin/main");
+    // So does pointing the branch at another upstream.
+    git(&source, &["branch", "other", "HEAD~2"]);
+    git(&clone, &["fetch", "-q"]);
+    fetch_when_due();
+    take();
+    git(
+        &clone,
+        &["branch", "-q", "--set-upstream-to", "origin/other"],
+    );
+    fetch_when_due();
+    assert_eq!(take(), lifetimes, "the count follows the new upstream");
 }

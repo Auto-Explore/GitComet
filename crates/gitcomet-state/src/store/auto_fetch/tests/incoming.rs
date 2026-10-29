@@ -370,7 +370,7 @@ fn incoming_tracking_manual_failure_preserves_deadline_and_rejects_older_auto_re
             result: Err(Error::new(ErrorKind::Cancelled)),
             refs_changed: true,
             regrouped: Vec::new(),
-            heads: Vec::new(),
+            tracking: Vec::new(),
         },
         failed_at + Duration::from_secs(2),
     );

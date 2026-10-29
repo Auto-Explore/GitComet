@@ -935,6 +935,35 @@ impl GixRepo {
         Ok(remotes)
     }
 
+    pub(super) fn tracking_stamp_impl(&self, cancellation: &CancellationToken) -> Result<u64> {
+        use std::hash::{Hash, Hasher};
+
+        let mut stamp = std::hash::DefaultHasher::new();
+        self.refs_fingerprint_impl(cancellation)?.hash(&mut stamp);
+        let repo = self.repo_with_current_config()?;
+        let head = crate::refs::head_name(&repo)?;
+        head.as_ref()
+            .map(|name| name.as_bstr().to_vec())
+            .hash(&mut stamp);
+        crate::refs::head_oid(&repo)?
+            .map(|id| id.to_string())
+            .hash(&mut stamp);
+        if let Some(branch) = head
+            .as_ref()
+            .and_then(|name| name.as_bstr().strip_prefix(b"refs/heads/"))
+        {
+            let config = repo.config_snapshot();
+            let branch = branch.to_str_lossy();
+            for key in ["remote", "merge"] {
+                config
+                    .string(format!("branch.{branch}.{key}").as_str())
+                    .map(|value| value.to_vec())
+                    .hash(&mut stamp);
+            }
+        }
+        Ok(stamp.finish())
+    }
+
     pub(super) fn refs_fingerprint_impl(&self, cancellation: &CancellationToken) -> Result<u64> {
         use std::hash::{Hash, Hasher};
 

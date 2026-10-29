@@ -1666,6 +1666,14 @@ pub trait GitRepository: Send + Sync {
             "listing the remotes a fetch contacts is not implemented for this backend",
         )))
     }
+    /// Hash of what decides this worktree's incoming count, without counting:
+    /// HEAD, its branch's upstream configuration and every reference.
+    fn tracking_stamp(&self, cancellation: &CancellationToken) -> Result<u64> {
+        cancellation.check_cancelled()?;
+        Err(Error::new(ErrorKind::Unsupported(
+            "tracking stamps are not implemented for this backend",
+        )))
+    }
     /// Hash of every reference with its target, read fresh from disk: a
     /// fetch's refspecs can write any of them, as a mirror writes refs/heads.
     /// Equal values before and after a fetch mean the fetch moved nothing.
