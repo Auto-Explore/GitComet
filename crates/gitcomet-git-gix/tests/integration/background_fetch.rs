@@ -128,6 +128,45 @@ fn worktrees_share_a_fetch_signature_unless_their_own_config_changes_fetching() 
 }
 
 #[test]
+fn worktrees_whose_relative_remote_url_names_other_repositories_fetch_apart() {
+    let root = tempfile::tempdir().expect("fixture directory");
+    for side in ["a", "b"] {
+        let remote = repository(&root.path().join(side), "remote");
+        commit(&remote, side);
+    }
+    let local = repository(&root.path().join("a"), "checkout");
+    commit(&local, "base");
+    git(&local, &["remote", "add", "origin", "../remote"]);
+    let worktree = |path: PathBuf| {
+        let name = path.file_name().unwrap().to_str().unwrap().to_owned();
+        git(
+            &local,
+            &["worktree", "add", "-b", &name, path.to_str().unwrap()],
+        );
+        path
+    };
+    let beside = worktree(root.path().join("a").join("beside"));
+    let elsewhere = worktree(root.path().join("b").join("elsewhere"));
+    let signature = |path: &Path| {
+        GixBackend
+            .open(path)
+            .expect("open worktree")
+            .fetch_config_signature()
+            .expect("signature")
+    };
+    assert_eq!(
+        signature(&local),
+        signature(&beside),
+        "../remote is a/remote from both"
+    );
+    assert_ne!(
+        signature(&local),
+        signature(&elsewhere),
+        "git fetches b/remote from b/elsewhere"
+    );
+}
+
+#[test]
 fn refs_fingerprint_moves_only_when_a_fetch_changes_tracking_refs_or_tags() {
     let root = tempfile::tempdir().expect("fixture directory");
     let remote = repository(root.path(), "remote");

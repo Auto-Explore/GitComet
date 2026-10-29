@@ -984,6 +984,22 @@ impl GixRepo {
                 section.values(&value_name).hash(&mut signature);
             }
         }
+        // Git resolves a relative path URL from the worktree, so worktrees
+        // sharing `../remote` can fetch different repositories.
+        for name in repo.remote_names() {
+            let Ok(remote) = repo.find_remote(name.as_bstr()) else {
+                continue;
+            };
+            if let Some(url) = remote
+                .url(gix::remote::Direction::Fetch)
+                .filter(|url| url.scheme == gix::url::Scheme::File)
+            {
+                match url.canonicalized(&self.spec.workdir) {
+                    Ok(url) => url.to_bstring().hash(&mut signature),
+                    Err(_) => self.spec.workdir.hash(&mut signature),
+                }
+            }
+        }
         Ok(signature.finish())
     }
 
