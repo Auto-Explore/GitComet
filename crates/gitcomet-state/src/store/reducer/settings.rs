@@ -89,6 +89,27 @@ pub(super) fn set_large_file_tools_state(
     Vec::new()
 }
 
+/// Every repository's walk carries the filter; each one whose walk changed
+/// reloads its history once.
+pub(super) fn set_history_hidden_refs(
+    state: &mut AppState,
+    filter: gitcomet_core::services::HistoryRefFilter,
+) -> Vec<Effect> {
+    if state.history_hidden_refs == filter {
+        return Vec::new();
+    }
+    state.history_hidden_refs = filter;
+    let mut effects = Vec::new();
+    for ix in 0..state.repos.len() {
+        let walk = state.repos[ix].history_walk();
+        state.repos[ix].history_state.hidden_refs = state.history_hidden_refs.clone();
+        if state.repos[ix].history_walk() != walk {
+            effects.extend(util::restart_history_walk(state, ix));
+        }
+    }
+    effects
+}
+
 pub(super) fn set_large_file_settings(
     state: &mut AppState,
     settings: crate::model::LargeFileSettings,

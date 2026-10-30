@@ -294,6 +294,7 @@ impl Msg {
             | Self::SetMaintenanceSettings(..)
             | Self::SetFileBrowserSettings(..)
             | Self::SetLargeFileSettings(..)
+            | Self::SetHistoryHiddenRefs(..)
             | Self::SetDefaultTagType(..)
             | Self::ApplyRepositoryPreferences(..)
             | Self::SetSidebarMode { .. }

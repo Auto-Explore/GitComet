@@ -5,7 +5,7 @@ use crate::msg::RepoCommandKind;
 use gitcomet_core::domain::SignatureFormats;
 use gitcomet_core::process::GitRuntimeState;
 use gitcomet_core::remote_url::RemoteUrlPolicy;
-use gitcomet_core::services::{SafePushAfterCommitContext, SubmoduleTrustTarget};
+use gitcomet_core::services::{HistoryRefFilter, SafePushAfterCommitContext, SubmoduleTrustTarget};
 use gitcomet_core::signing_tools::SigningToolsState;
 use rustc_hash::FxHashMap;
 use serde::{Deserialize, Serialize};
@@ -179,6 +179,9 @@ pub struct AppState {
     pub large_file_settings: LargeFileSettings,
     pub remote_url_policy: RemoteUrlPolicy,
     pub git_log_settings: GitLogSettings,
+    /// Ref namespaces every all-branches walk leaves out, resolved from
+    /// [`HiddenRefSettings`] against the product's presets.
+    pub history_hidden_refs: HistoryRefFilter,
     pub remote_settings: RemoteSettings,
     pub maintenance_settings: MaintenanceSettings,
     pub file_browser_settings: FileBrowserSettings,

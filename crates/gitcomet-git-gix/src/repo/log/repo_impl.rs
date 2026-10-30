@@ -756,7 +756,7 @@ impl GixRepo {
             return focus_tips(repo, focus, cancellation);
         }
         if walk.mode() == HistoryMode::AllBranches {
-            return self.all_branches_tips(repo, walk.hidden_remotes(), cancellation);
+            return self.all_branches_tips(repo, walk, cancellation);
         }
         Ok(Arc::from(
             gix_head_id_or_none(repo)?.into_iter().collect::<Vec<_>>(),
@@ -766,7 +766,7 @@ impl GixRepo {
     pub(super) fn all_branches_tips(
         &self,
         repo: &gix::Repository,
-        hidden_remotes: &[Arc<str>],
+        walk: &gitcomet_core::services::HistoryWalk,
         cancellation: Option<&CancellationToken>,
     ) -> Result<Arc<[gix::ObjectId]>> {
         use rustc_hash::FxHasher;
@@ -777,20 +777,24 @@ impl GixRepo {
         let refs = crate::refs::view_cancellable(repo, cancellation_token).map_err(|e| {
             Error::new(ErrorKind::Backend(format!("gix references: {e}"))).with_source(e)
         })?;
-        let hidden_refs = crate::repo::remotes::hidden_remote_tracking_refs(
+        let hidden_remote_refs = crate::repo::remotes::hidden_remote_tracking_refs(
             repo,
             &refs,
-            hidden_remotes,
+            walk.hidden_remotes(),
             cancellation_token,
         )?;
+        let hidden_refs = walk.hidden_refs();
 
-        // Refs left out of History. Every all-branches reader (pages, authors,
-        // the index, snapshots) starts from these tips, so excluding here
-        // reaches all of them and their caches.
-        let filter = &self.history_ref_filter;
+        // Refs left out of History: the product's fixed filter and the walk's.
+        // Every all-branches reader (pages, authors, the index, snapshots)
+        // starts from these tips, so excluding here reaches all of them and
+        // their caches. Excluded refs never reach the fingerprint, so a new
+        // ref in a hidden namespace keeps the cached tips.
+        let fixed = &self.history_ref_filter;
+        let excluded_name = |name: &[u8]| fixed.excludes(name) || hidden_refs.excludes(name);
         let excluded = |reference: &crate::refs::Reference<'_>| {
-            hidden_refs.contains(reference.name())
-                || !filter.is_empty() && filter.excludes(&reference.name().as_bstr().to_string())
+            hidden_remote_refs.contains(reference.name())
+                || excluded_name(reference.name().as_bstr())
         };
 
         // Fingerprint pass: names, raw targets and followed symbolic chains
@@ -798,7 +802,8 @@ impl GixRepo {
         let head_id = refs.head_oid()?;
         let mut hasher = FxHasher::default();
         head_id.hash(&mut hasher);
-        filter.hash(&mut hasher);
+        fixed.hash(&mut hasher);
+        hidden_refs.hash(&mut hasher);
         let mut ref_count = 0usize;
         let iter = refs
             .all()
@@ -820,7 +825,7 @@ impl GixRepo {
             ref_count += 1;
         }
         // Older stash entries are reflog-only and need explicit tips.
-        let stash_tips = if filter.excludes("refs/stash") {
+        let stash_tips = if excluded_name(b"refs/stash") {
             Vec::new()
         } else {
             stash_reflog_tips(repo, 50)?
@@ -917,7 +922,7 @@ impl GixRepo {
 
         let repo = self.repo();
         let shallow = shallow_snapshot(&repo)?;
-        let tips = self.all_branches_tips(&repo, &[], cancellation)?;
+        let tips = self.all_branches_tips(&repo, &HistoryMode::AllBranches.into(), cancellation)?;
 
         let cache_key = self.log_page_cache_key(
             HistoryMode::AllBranches,

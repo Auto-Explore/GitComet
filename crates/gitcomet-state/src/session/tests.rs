@@ -1310,6 +1310,79 @@ fn history_show_graph_gradient_round_trips_and_survives_other_writers() {
 }
 
 #[test]
+fn history_hidden_refs_round_trip_and_survive_other_writers() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("session.json");
+    let loaded = load_from_path(&path);
+    assert_eq!(loaded.history_hidden_refs_enabled, None);
+    assert_eq!(loaded.history_hidden_ref_presets, None);
+    assert_eq!(loaded.history_hidden_ref_prefixes, None);
+
+    persist_ui_settings_to_path(
+        UiSettings {
+            history_hidden_refs_enabled: Some(false),
+            history_hidden_ref_presets: Some(BTreeMap::from([("git-notes".into(), false)])),
+            history_hidden_ref_prefixes: Some(vec!["refs/review".into()]),
+            ..UiSettings::default()
+        },
+        &path,
+    )
+    .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    assert_eq!(json["history_hidden_refs_enabled"], false);
+    assert_eq!(json["history_hidden_ref_presets"]["git-notes"], false);
+    assert_eq!(json["history_hidden_ref_prefixes"][0], "refs/review");
+    persist_ui_settings_to_path(
+        UiSettings {
+            history_show_graph: Some(true),
+            ..UiSettings::default()
+        },
+        &path,
+    )
+    .unwrap();
+
+    let loaded = load_from_path(&path);
+    assert_eq!(loaded.history_hidden_refs_enabled, Some(false));
+    assert_eq!(
+        loaded.history_hidden_ref_presets,
+        Some(BTreeMap::from([("git-notes".into(), false)]))
+    );
+    assert_eq!(
+        loaded.history_hidden_ref_prefixes,
+        Some(vec!["refs/review".to_string()])
+    );
+}
+
+#[test]
+fn history_hidden_refs_settings_convert_through_the_session() {
+    use crate::model::{HiddenRefPrefix, HiddenRefSettings};
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("session.json");
+    assert_eq!(
+        load_from_path(&path).hidden_ref_settings(),
+        HiddenRefSettings::default(),
+        "nothing saved means the defaults"
+    );
+
+    let mut expected = HiddenRefSettings::default();
+    expected.enabled = false;
+    expected.preset_overrides.insert("t3-code".into(), false);
+    expected.add_custom_prefix(HiddenRefPrefix::parse("refs/review").unwrap());
+    let mut settings = UiSettings::default();
+    settings.set_hidden_ref_settings(&expected);
+    let saved = settings.history_hidden_ref_prefixes.as_mut().unwrap();
+    saved.push("refs/heads/wip".into());
+    saved.push("refs/review/".into());
+    persist_ui_settings_to_path(settings, &path).unwrap();
+
+    assert_eq!(
+        load_from_path(&path).hidden_ref_settings(),
+        expected,
+        "a saved prefix that no longer parses, or repeats, is dropped"
+    );
+}
+
+#[test]
 fn remove_recent_repo_drops_matching_entry() {
     let dir = env::temp_dir().join(format!(
         "gitcomet-remove-recent-repo-test-{}-{}",

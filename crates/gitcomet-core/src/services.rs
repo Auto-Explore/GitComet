@@ -2221,58 +2221,81 @@ pub struct RepositoryWatchInfo {
     pub discovery_incomplete: bool,
 }
 
-/// Ref names History leaves out of its all-branches walk, as patterns over
-/// full names: a plain name matches itself and everything under it
-/// (`refs/pull` covers `refs/pull/7/head`), `*` matches within one path
-/// segment, and `**` across segments (`refs/remotes/*/pr/**`).
+/// Ref namespaces History leaves out of its all-branches walk, as prefixes
+/// matched at path-segment boundaries: `refs/pull` covers `refs/pull/7/head`
+/// but not `refs/pulled`.
 ///
 /// Immutable and cheap to clone; the default excludes nothing. It filters the
 /// walk's starting refs only: HEAD is always walked, and a commit reachable
 /// from a kept ref stays visible.
 #[derive(Clone, Debug, Default, Eq, PartialEq, Hash)]
 pub struct HistoryRefFilter {
-    excluded: Arc<[Arc<str>]>,
+    /// Sorted, without a trailing `/`, and none inside another.
+    prefixes: Arc<[Arc<str>]>,
 }
 
 impl HistoryRefFilter {
-    pub fn excluding<I, S>(patterns: I) -> Self
+    pub fn excluding<I, S>(prefixes: I) -> Self
     where
         I: IntoIterator<Item = S>,
-        S: Into<Arc<str>>,
+        S: AsRef<str>,
     {
-        let mut excluded: Vec<Arc<str>> = patterns.into_iter().map(Into::into).collect();
-        excluded.retain(|pattern| !pattern.is_empty());
-        excluded.sort();
-        excluded.dedup();
+        let owned: Vec<S> = prefixes.into_iter().collect();
+        let mut sorted: Vec<&str> = owned
+            .iter()
+            .map(|prefix| prefix.as_ref().trim_end_matches('/'))
+            .filter(|prefix| !prefix.is_empty())
+            .collect();
+        sorted.sort_unstable();
+        // Sorted order puts an enclosing prefix before everything inside it.
+        let mut kept: Vec<Arc<str>> = Vec::with_capacity(sorted.len());
+        for prefix in sorted {
+            if !prefix_covers(&kept, prefix.as_bytes()) {
+                kept.push(prefix.into());
+            }
+        }
         Self {
-            excluded: excluded.into(),
+            prefixes: kept.into(),
         }
     }
 
     pub fn is_empty(&self) -> bool {
-        self.excluded.is_empty()
+        self.prefixes.is_empty()
     }
 
-    pub fn patterns(&self) -> &[Arc<str>] {
-        &self.excluded
+    pub fn prefixes(&self) -> &[Arc<str>] {
+        &self.prefixes
     }
 
     /// Whether the full ref name `name` (`refs/heads/main`) is left out.
-    pub fn excludes(&self, name: &str) -> bool {
-        self.excluded
-            .iter()
-            .any(|pattern| ref_pattern_matches(pattern, name))
+    /// Allocation-free: one binary search per path segment.
+    pub fn excludes(&self, name: impl AsRef<[u8]>) -> bool {
+        !self.prefixes.is_empty() && prefix_covers(&self.prefixes, name.as_ref())
     }
 }
 
-/// What a history walk starts from: its mode, and the remotes an all-branches
-/// walk leaves out. A hidden remote's refs are the remote-tracking refs its
-/// fetch refspecs write, unless a shown remote's refspecs write them too.
-/// Other modes walk only HEAD, so they hide nothing.
+/// Whether `name` or one of its segment-boundary ancestors is in `sorted`.
+fn prefix_covers(sorted: &[Arc<str>], name: &[u8]) -> bool {
+    let listed = |candidate: &[u8]| {
+        sorted
+            .binary_search_by(|prefix| prefix.as_bytes().cmp(candidate))
+            .is_ok()
+    };
+    name.iter()
+        .enumerate()
+        .any(|(at, byte)| *byte == b'/' && listed(&name[..at]))
+        || listed(name)
+}
+
+/// What a history walk starts from: its mode, and the remotes and ref
+/// namespaces an all-branches walk leaves out. A hidden remote's refs are the
+/// remote-tracking refs its fetch refspecs write, unless a shown remote's
+/// refspecs write them too. Other modes walk only HEAD, so they hide nothing.
 #[derive(Clone, Debug, Default, Eq, PartialEq, Hash)]
 pub struct HistoryWalk {
     mode: HistoryMode,
     hidden_remotes: Arc<[Arc<str>]>,
+    hidden_refs: HistoryRefFilter,
 }
 
 impl HistoryWalk {
@@ -2291,7 +2314,18 @@ impl HistoryWalk {
         Self {
             mode,
             hidden_remotes: hidden.into(),
+            hidden_refs: HistoryRefFilter::default(),
         }
+    }
+
+    /// Leaves `filter`'s namespaces out of an all-branches walk. Backends
+    /// without ref filtering walk them anyway: hiding is a view preference,
+    /// and showing extra history is the safe failure.
+    pub fn with_hidden_refs(mut self, filter: HistoryRefFilter) -> Self {
+        if self.mode.is_all_branches() {
+            self.hidden_refs = filter;
+        }
+        self
     }
 
     pub fn mode(&self) -> HistoryMode {
@@ -2302,56 +2336,16 @@ impl HistoryWalk {
     pub fn hidden_remotes(&self) -> &[Arc<str>] {
         &self.hidden_remotes
     }
+
+    pub fn hidden_refs(&self) -> &HistoryRefFilter {
+        &self.hidden_refs
+    }
 }
 
 impl From<HistoryMode> for HistoryWalk {
     fn from(mode: HistoryMode) -> Self {
         Self::new(mode, std::iter::empty::<Arc<str>>())
     }
-}
-
-fn ref_pattern_matches(pattern: &str, name: &str) -> bool {
-    if !pattern.contains('*') {
-        let pattern = pattern.trim_end_matches('/');
-        return name == pattern
-            || name
-                .strip_prefix(pattern)
-                .is_some_and(|rest| rest.starts_with('/'));
-    }
-    glob_segments(
-        &pattern.split('/').collect::<Vec<_>>(),
-        &name.split('/').collect::<Vec<_>>(),
-    )
-}
-
-fn glob_segments(pattern: &[&str], name: &[&str]) -> bool {
-    match pattern.split_first() {
-        None => name.is_empty(),
-        Some((&"**", rest)) => (0..=name.len()).any(|skip| glob_segments(rest, &name[skip..])),
-        Some((segment, rest)) => name
-            .split_first()
-            .is_some_and(|(first, tail)| glob_segment(segment, first) && glob_segments(rest, tail)),
-    }
-}
-
-/// `*` within one segment.
-fn glob_segment(pattern: &str, text: &str) -> bool {
-    let parts: Vec<&str> = pattern.split('*').collect();
-    if parts.len() == 1 {
-        return pattern == text;
-    }
-    let (first, last) = (parts[0], parts[parts.len() - 1]);
-    if !text.starts_with(first) || !text[first.len()..].ends_with(last) {
-        return false;
-    }
-    let mut rest = &text[first.len()..text.len() - last.len()];
-    for middle in &parts[1..parts.len() - 1] {
-        match rest.find(middle) {
-            Some(at) => rest = &rest[at + middle.len()..],
-            None => return false,
-        }
-    }
-    true
 }
 
 /// Options fixed when a repository opens. The default changes nothing.
@@ -2362,6 +2356,12 @@ pub struct RepositoryOptions {
 }
 
 impl RepositoryOptions {
+    /// A product's defaults: the ref namespaces it always hides.
+    pub fn for_identity(identity: &crate::identity::ProductIdentity) -> Self {
+        Self::default()
+            .with_history_ref_filter(HistoryRefFilter::excluding(identity.hidden_ref_prefixes()))
+    }
+
     pub fn with_history_ref_filter(mut self, filter: HistoryRefFilter) -> Self {
         self.history_ref_filter = filter;
         self

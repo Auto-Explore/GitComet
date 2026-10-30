@@ -56,10 +56,8 @@ pub struct AppLaunch {
 
 impl AppLaunch {
     pub fn new(identity: ProductIdentity) -> Self {
-        let repository_options = gitcomet_core::services::RepositoryOptions::default()
-            .with_history_ref_filter(gitcomet_core::services::HistoryRefFilter::excluding(
-                identity.hidden_ref_prefixes().iter().copied(),
-            ));
+        let repository_options =
+            gitcomet_core::services::RepositoryOptions::for_identity(&identity);
         Self {
             identity,
             about: cli::DEFAULT_ABOUT.to_string(),
@@ -79,10 +77,8 @@ impl AppLaunch {
     /// Installs a product's identity before logging and any path resolution.
     pub fn identity(mut self, identity: ProductIdentity) -> Self {
         if !self.repository_options_customized {
-            self.repository_options = gitcomet_core::services::RepositoryOptions::default()
-                .with_history_ref_filter(gitcomet_core::services::HistoryRefFilter::excluding(
-                    identity.hidden_ref_prefixes().iter().copied(),
-                ));
+            self.repository_options =
+                gitcomet_core::services::RepositoryOptions::for_identity(&identity);
         }
         self.identity = identity;
         self

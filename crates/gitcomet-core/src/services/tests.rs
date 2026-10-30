@@ -33,36 +33,78 @@ fn combined_steps_join_non_empty_streams_in_order() {
 }
 
 #[test]
-fn history_ref_filters_match_names_prefixes_and_globs() {
+fn history_ref_filters_match_prefixes_at_segment_boundaries() {
     use super::HistoryRefFilter;
-    let filter =
-        HistoryRefFilter::excluding(["refs/pull", "refs/remotes/*/pr/**", "refs/heads/wip-*", ""]);
-    assert_eq!(filter.patterns().len(), 3, "empty patterns are dropped");
+    let filter = HistoryRefFilter::excluding([
+        "refs/pull",
+        "refs/t3/",
+        "refs/a",
+        "refs/a-b",
+        "refs/remotes/origin/pr",
+        "",
+        "/",
+    ]);
+    assert_eq!(
+        filter.prefixes().iter().map(|p| &**p).collect::<Vec<_>>(),
+        [
+            "refs/a",
+            "refs/a-b",
+            "refs/pull",
+            "refs/remotes/origin/pr",
+            "refs/t3"
+        ],
+        "sorted, trailing `/` dropped, empty prefixes dropped"
+    );
     for excluded in [
         "refs/pull",
         "refs/pull/7/head",
+        "refs/t3",
+        "refs/t3/checkpoints/x/turn/1",
+        "refs/a/x",
+        "refs/a-b/x",
         "refs/remotes/origin/pr/7",
-        "refs/remotes/origin/pr/7/merge",
-        "refs/heads/wip-parser",
     ] {
         assert!(filter.excludes(excluded), "{excluded}");
+        assert!(filter.excludes(excluded.as_bytes()), "{excluded} as bytes");
     }
     for kept in [
         "refs/pulled/7",
+        "refs/t3code/x",
+        "refs/a-c/x",
+        "refs",
         "refs/heads/main",
         "refs/remotes/origin/main",
-        "refs/remotes/origin/nested/pr/7",
-        "refs/heads/wip",
-        "refs/heads/wip-a/b",
+        "refs/remotes/origin/prx",
     ] {
         assert!(!filter.excludes(kept), "{kept}");
     }
+    assert_eq!(
+        HistoryRefFilter::excluding(["refs/t3/checkpoints", "refs/t3", "refs/t3/x/y"]).prefixes(),
+        HistoryRefFilter::excluding(["refs/t3"]).prefixes(),
+        "a prefix inside another adds nothing"
+    );
     assert!(HistoryRefFilter::default().is_empty());
     assert!(!HistoryRefFilter::default().excludes("refs/heads/main"));
     // Order and duplicates do not make two filters different.
     assert_eq!(
         HistoryRefFilter::excluding(["b", "a", "a"]),
         HistoryRefFilter::excluding(["a", "b"])
+    );
+}
+
+#[test]
+fn history_walk_hidden_refs_only_change_all_branches_walks() {
+    use super::{HistoryRefFilter, HistoryWalk};
+    let filter = HistoryRefFilter::excluding(["refs/t3"]);
+    let all = HistoryWalk::from(HistoryMode::AllBranches);
+    let hiding = all.clone().with_hidden_refs(filter.clone());
+    assert_eq!(hiding.hidden_refs(), &filter);
+    assert_ne!(hiding, all, "hiding refs is a different walk");
+    let head = HistoryWalk::from(HistoryMode::FullReachable);
+    assert_eq!(
+        head.clone().with_hidden_refs(filter),
+        head,
+        "a HEAD-only walk has no refs to hide"
     );
 }
 

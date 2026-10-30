@@ -230,6 +230,7 @@ pub(super) struct HistoryPreferences {
     pub(super) verify_commit_signatures: bool,
     pub(super) tag_fetch_mode: GitLogTagFetchMode,
     pub(super) default_mode: HistoryMode,
+    pub(super) hidden_ref_settings: gitcomet_state::model::HiddenRefSettings,
 }
 
 impl Default for HistoryPreferences {
@@ -248,6 +249,7 @@ impl Default for HistoryPreferences {
             verify_commit_signatures: false,
             tag_fetch_mode: GitLogTagFetchMode::default(),
             default_mode: HistoryMode::default(),
+            hidden_ref_settings: Default::default(),
         }
     }
 }
@@ -440,6 +442,7 @@ impl UiPreferences {
                 verify_commit_signatures: session.history_verify_commit_signatures.unwrap_or(false),
                 tag_fetch_mode: session.history_tag_fetch_mode.unwrap_or_default(),
                 default_mode: session.default_history_mode.unwrap_or_default(),
+                hidden_ref_settings: session.hidden_ref_settings(),
             },
             file_editing: FileEditingPreferences {
                 auto_save: session.auto_save_file_edits.unwrap_or(false),

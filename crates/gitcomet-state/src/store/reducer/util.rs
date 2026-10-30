@@ -840,6 +840,25 @@ pub(super) fn refresh_primary_effects(repo_state: &mut RepoState) -> Vec<Effect>
     effects
 }
 
+/// After `state.repos[ix]`'s walk changed: drop its history readers and reload
+/// the first page now if it is active, or on its next activation.
+pub(super) fn restart_history_walk(state: &mut AppState, ix: usize) -> Vec<Effect> {
+    let is_active = state.active_repo == Some(state.repos[ix].id);
+    let repo = &mut state.repos[ix];
+    repo.reset_history_readers();
+    repo.retain_log_while_loading();
+    repo.set_log_loading_more(false);
+    repo.set_log_scan_progress(None);
+    if !is_active {
+        repo.loads_in_flight.invalidate_log();
+        repo.set_log(Loadable::NotLoaded);
+        return Vec::new();
+    }
+    repo.set_log(Loadable::Loading);
+    let request = first_page_log_request(repo);
+    request_log_effect(repo, request).into_iter().collect()
+}
+
 /// The request for a fresh first page of `repo_state`'s history, under whatever
 /// walk and author filter it currently has.
 pub(super) fn first_page_log_request(repo_state: &RepoState) -> crate::model::PendingLogLoad {

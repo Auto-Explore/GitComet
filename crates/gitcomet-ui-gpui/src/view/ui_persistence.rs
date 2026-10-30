@@ -272,6 +272,10 @@ impl GitCometView {
                             } else {
                                 gitcomet_state::model::GitLogTagFetchMode::Disabled
                             }),
+                            // Owned by the settings window, which persists it itself.
+                            history_hidden_refs_enabled: None,
+                            history_hidden_ref_presets: None,
+                            history_hidden_ref_prefixes: None,
                             default_history_mode: None,
                             commit_push_after_enabled: Some(this.commit_push_after_enabled),
                             default_tag_type: None,
