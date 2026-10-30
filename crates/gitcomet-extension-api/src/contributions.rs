@@ -214,6 +214,11 @@ pub type CanvasOverlayObserver =
 /// while hidden, until dropped with
 /// [`WindowHost::drop_canvas_overlay`](crate::WindowHost::drop_canvas_overlay)
 /// or the repository closes. One overlay is shown per repository.
+///
+/// An overlay is not one of the repository's views: showing or hiding it
+/// emits no `ViewChanged`, so History and the selected view stay what they
+/// were, and it stays shown while another repository's tab is selected,
+/// covering its own repository again when that tab comes back.
 #[derive(Clone)]
 #[non_exhaustive]
 pub struct CanvasOverlayDescriptor {
