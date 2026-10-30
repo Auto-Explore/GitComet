@@ -41,11 +41,3 @@ The setting applies to every open workspace window. Each repository showing
 A hidden ref does not start the walk. HEAD is always walked, and a commit that a
 shown branch reaches stays visible. Other history modes walk only HEAD, so the
 setting does not affect them.
-
-Hiding also keeps the history index stable. The index is keyed by the commits the
-walk starts from, so every new ref in a shown namespace rebuilds it. Agent tools
-write a checkpoint ref per turn. Refs in a hidden namespace never reach that key,
-so new checkpoints leave the built index in place.
-
-A product built on GitComet can replace the list or its defaults, and can hide
-namespaces permanently. A permanently hidden namespace shows as a locked switch.
