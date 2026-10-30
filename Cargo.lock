@@ -1801,9 +1801,9 @@ dependencies = [
 
 [[package]]
 name = "encoding_rs"
-version = "0.8.42"
+version = "0.8.44"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8e985e0451871ad22fb8d2b6b076e2028a502a0d3950998c2c5c0a4f9b5d9679"
+checksum = "89253175e704ab869b04f9db224d38630e0211a53841a79181deae0889e169f5"
 dependencies = [
  "cfg-if",
  "core_detect",
@@ -2417,7 +2417,7 @@ checksum = "1033caf0b349c518623b5396bfb2cf0bddf44f0306d543a250e5743297aafd10"
 
 [[package]]
 name = "gitcomet"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "embed-resource",
  "gitcomet-app",
@@ -2435,7 +2435,7 @@ dependencies = [
 
 [[package]]
 name = "gitcomet-app"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "clap",
  "gitcomet-core",
@@ -2458,7 +2458,7 @@ dependencies = [
 
 [[package]]
 name = "gitcomet-base"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "gitcomet-base",
  "serde",
@@ -2469,7 +2469,7 @@ dependencies = [
 
 [[package]]
 name = "gitcomet-conflict-resolver"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "gitcomet-core",
  "gitcomet-text",
@@ -2482,7 +2482,7 @@ dependencies = [
 
 [[package]]
 name = "gitcomet-core"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "chardetng",
  "encoding_rs",
@@ -2512,7 +2512,7 @@ dependencies = [
 
 [[package]]
 name = "gitcomet-diagrams"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "criterion",
  "gitcomet-base",
@@ -2527,7 +2527,7 @@ dependencies = [
 
 [[package]]
 name = "gitcomet-difftastic"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "difftastic",
  "gitcomet-core",
@@ -2537,7 +2537,7 @@ dependencies = [
 
 [[package]]
 name = "gitcomet-extension-api"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "gitcomet-core",
  "gitcomet-state",
@@ -2582,11 +2582,11 @@ dependencies = [
 
 [[package]]
 name = "gitcomet-fonts"
-version = "0.3.2"
+version = "0.3.3"
 
 [[package]]
 name = "gitcomet-fs-watch"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "dispatch2",
  "libc",
@@ -2599,7 +2599,7 @@ dependencies = [
 
 [[package]]
 name = "gitcomet-git-gix"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "crc32fast",
  "filetime",
@@ -2625,7 +2625,7 @@ dependencies = [
 
 [[package]]
 name = "gitcomet-markdown"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "gitcomet-core",
  "gitcomet-diagrams",
@@ -2639,7 +2639,7 @@ dependencies = [
 
 [[package]]
 name = "gitcomet-perf"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "serde",
  "serde_json",
@@ -2648,7 +2648,7 @@ dependencies = [
 
 [[package]]
 name = "gitcomet-state"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "gitcomet-base",
  "gitcomet-core",
@@ -2668,7 +2668,7 @@ dependencies = [
 
 [[package]]
 name = "gitcomet-syntax"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "dekobon-tree-sitter-groovy",
  "gitcomet-base",
@@ -2778,7 +2778,7 @@ dependencies = [
 
 [[package]]
 name = "gitcomet-text"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "gpui_ce_shared_string",
  "gpui_ce_sum_tree",
@@ -2791,7 +2791,7 @@ dependencies = [
 
 [[package]]
 name = "gitcomet-tree-sitter-alloc"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "ctor",
  "rustfs-mimalloc-sys",
@@ -2801,7 +2801,7 @@ dependencies = [
 
 [[package]]
 name = "gitcomet-ui-gpui"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "alacritty_terminal",
  "anyhow",
@@ -2854,7 +2854,7 @@ dependencies = [
 
 [[package]]
 name = "gitcomet-ui-kit"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "fontdb",
  "gitcomet-base",
@@ -2882,7 +2882,7 @@ dependencies = [
 
 [[package]]
 name = "gitcomet-ui-media"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "fast_image_resize",
  "gitcomet-base",
@@ -2899,7 +2899,7 @@ dependencies = [
 
 [[package]]
 name = "gitcomet-ui-terminal"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "alacritty_terminal",
  "gitcomet-base",
@@ -4920,9 +4920,9 @@ dependencies = [
 
 [[package]]
 name = "js-sys"
-version = "0.3.106"
+version = "0.3.107"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7883d941dae510fb2d978fc3fe018c71c9e2892fd38854de3e8b92c2e5ad9cc5"
+checksum = "8dc09d2154098bbf4ef54eab6b117a3c24cbbffe94046b16ee6d6d4510584d3a"
 dependencies = [
  "cfg-if",
  "futures-util",
@@ -6566,9 +6566,9 @@ dependencies = [
 
 [[package]]
 name = "pulldown-cmark"
-version = "0.13.5"
+version = "0.13.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "278e9268c93b9e498a2da46c34d90ba93a3255eb99009646398f34bc73ab36eb"
+checksum = "3db2be46835f013dd3f4fa7f5f7402c537787b54ebb6fe2b94bbdd7e2669bb7b"
 dependencies = [
  "bitflags 2.13.2",
  "memchr",
@@ -7762,9 +7762,9 @@ dependencies = [
 
 [[package]]
 name = "sysinfo"
-version = "0.40.0"
+version = "0.40.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "110e37d98880fd804cd47509b90a8444f7aaaab655ae625e83cd442a8bc2ebf2"
+checksum = "0e8a3edbe0394ce115f3917a00349dd242be09eb5a091ed509eaf67b55cfb8a8"
 dependencies = [
  "libc",
  "memchr",
@@ -9298,12 +9298,11 @@ dependencies = [
 
 [[package]]
 name = "wasm-bindgen"
-version = "0.2.129"
+version = "0.2.130"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9bb54f33acc68fd454578d9820b0bde1a1a3d17aa17bb7b6595806d02886d409"
+checksum = "a0181c14ddd6c7b8b0b0132a5f1ea2f32be0d893cd3ea97b6e3b28886b8a3d1c"
 dependencies = [
  "cfg-if",
- "once_cell",
  "rustversion",
  "wasm-bindgen-macro",
  "wasm-bindgen-shared",
@@ -9311,9 +9310,9 @@ dependencies = [
 
 [[package]]
 name = "wasm-bindgen-futures"
-version = "0.4.79"
+version = "0.4.80"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3cbab34de2d982e9b48e18d216d04c4a6f641066ff19ffb699980f591ee3610e"
+checksum = "5e14e0327cb5368ad60ccb22d04a9827a693c95a926d8d125e9fa39e0baec501"
 dependencies = [
  "js-sys",
  "tokio",
@@ -9322,9 +9321,9 @@ dependencies = [
 
 [[package]]
 name = "wasm-bindgen-macro"
-version = "0.2.129"
+version = "0.2.130"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2e29d0c35b16e224a7eeb5cd2d25e3e1968fbd65604117b44d3b789d00ee8535"
+checksum = "6e931a02a39abdbf66966fc35902b5ed58344750a70885bed4ebb3d8eaf28ed9"
 dependencies = [
  "quote",
  "wasm-bindgen-macro-support",
@@ -9332,9 +9331,9 @@ dependencies = [
 
 [[package]]
 name = "wasm-bindgen-macro-support"
-version = "0.2.129"
+version = "0.2.130"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6f501a8bc3719dba86ef8ae4728879c08001bea749eb1333ac5b91e040e2a6b7"
+checksum = "2ca4b54280e455bd831e33a6b8e734baf432fe63fbc35c42ac14ce67a043a53a"
 dependencies = [
  "bumpalo",
  "proc-macro2",
@@ -9345,9 +9344,9 @@ dependencies = [
 
 [[package]]
 name = "wasm-bindgen-shared"
-version = "0.2.129"
+version = "0.2.130"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "23f0c9c52aa7cd7d77769a4cfe2a9adb1b331f489a41d912ce14513d5ab995c6"
+checksum = "3b1f9c3798725016c6ee5f2f57869ec0831e8bbc0ab0310a86e787e97f41389e"
 dependencies = [
  "unicode-ident",
 ]
@@ -9453,9 +9452,9 @@ dependencies = [
 
 [[package]]
 name = "web-sys"
-version = "0.3.106"
+version = "0.3.107"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "88261b9deccee56594c11a3460c462c41f58d148598fe70ad77070126a68aba4"
+checksum = "d7d179596ff5ec0f6de4db64d54011bde6289cc49603d3a6e4ce3f329207ab88"
 dependencies = [
  "js-sys",
  "wasm-bindgen",
@@ -10354,9 +10353,9 @@ dependencies = [
 
 [[package]]
 name = "zcheapstr"
-version = "1.1.0"
+version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d1afec51604565183aeb5c54c20aeab286120d4e4460f7f76e3e8bb8c0d99473"
+checksum = "939f186d9ecebe044315a5cb6d6f78568bbc21152adc954d5a0c2f58bdbc9920"
 dependencies = [
  "serde",
 ]
