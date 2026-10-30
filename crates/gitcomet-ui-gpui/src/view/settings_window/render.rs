@@ -227,8 +227,6 @@ impl Render for SettingsWindowView {
                     .tab_stop(false)
                     .on_key_down(cx.listener(Self::hosted_dialog_key))
                     .occlude()
-                    .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                    .on_mouse_down(gpui::MouseButton::Right, |_, _, cx| cx.stop_propagation())
                     .min_w(ui_scale.px(180.0))
                     .max_w(ui_scale.px(380.0))
                     .p_1()
@@ -246,12 +244,7 @@ impl Render for SettingsWindowView {
                         .absolute()
                         .inset_0()
                         .occlude()
-                        .on_mouse_down(
-                            gpui::MouseButton::Left,
-                            cx.listener(|view, _, window, cx| view.close_hosted_dialog(window, cx)),
-                        )
-                        .on_mouse_down(
-                            gpui::MouseButton::Right,
+                        .on_any_pointer_click(
                             cx.listener(|view, _, window, cx| view.close_hosted_dialog(window, cx)),
                         )
                         .child(
