@@ -15,6 +15,23 @@ impl Render for CardPreview {
     }
 }
 
+/// A hint as an extension would host it after a line's text.
+struct LineHintPreview {
+    theme: AppTheme,
+}
+
+impl Render for LineHintPreview {
+    fn render(&mut self, _: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
+        let scale = ui_scale::UiScale::current(cx);
+        div()
+            .pl(scale.px(24.0))
+            .pr(scale.px(8.0))
+            .text_size(self.theme.ui_text(11.0))
+            .text_color(self.theme.colors.foreground.secondary)
+            .child("Grace Hopper, 2 days ago · Flip the default")
+    }
+}
+
 /// A review thread as an extension would host it between the lines.
 struct ThreadPreview {
     theme: AppTheme,
@@ -120,7 +137,9 @@ fn inline_card_visual_capture() {
                         theme,
                         reply: cx.new(|cx| components::TextInput::new_inert(components::TextInputOptions { placeholder: "Write a reply".into(), ..Default::default() }, cx)),
                     });
+                    let hint = app.new(|_| LineHintPreview { theme });
                     pane.set_views(vec![
+                        gitcomet_extension_api::DiffHostedView::end_of_line(gitcomet_extension_api::DiffScrollAnchor { side: DiffLineSide::New, line: 1 }, hint),
                         gitcomet_extension_api::DiffHostedView::block(gitcomet_extension_api::DiffScrollAnchor { side: DiffLineSide::New, line: 2 }, thread),
                     ], app);
                     app.new(|_| CardPreview { _owner: owner, pane })
