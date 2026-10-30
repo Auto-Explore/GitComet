@@ -702,10 +702,11 @@ fn conversion_waits_for_owned_operation_lease_before_mutating() {
         Err(std::sync::mpsc::TryRecvError::Empty)
     ));
     drop(lease);
-    rx.recv_timeout(std::time::Duration::from_secs(5))
-        .unwrap()
-        .unwrap();
+    // The lease contract is checked above. Completing the conversion also
+    // runs Git commands and syncs files, so it has no five-second deadline.
+    // Join first to report worker panics and keep the fixture alive until done.
     thread.join().unwrap();
+    rx.try_recv().unwrap().unwrap();
     assert_eq!(native_mode(&root).unwrap(), RepositoryMode::WorkingTree);
 }
 

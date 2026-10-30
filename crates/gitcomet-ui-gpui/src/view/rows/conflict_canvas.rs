@@ -5,7 +5,10 @@ use super::canvas_text::{
     HighlightSpans, LineMetrics, center_text_y, compute_runs, diff_text_style, empty_highlights,
     line_metrics, paint_gutter_divider, sticky_gutter_bounds, text_clip_bounds_behind_gutter,
 };
-use super::diff_text::{whitespace_visible_line_styled_text_for_raw, whitespace_visible_line_text};
+use super::diff_text::{
+    display_diff_text, hash_text_content, whitespace_visible_line_styled_text_for_raw,
+    whitespace_visible_line_text,
+};
 use super::*;
 use gpui::{
     App, Bounds, ContentMask, DispatchPhase, Hitbox, HitboxBehavior, PaintQuad, Pixels, Styled,
@@ -15,7 +18,6 @@ use palette::IntoColor;
 use rustc_hash::FxHasher;
 use std::cell::RefCell;
 use std::hash::{Hash, Hasher};
-use std::sync::Arc;
 
 const GUTTER_TEXT_LAYOUT_CACHE_MAX_ENTRIES: usize = 16_384;
 const CONFLICT_TEXT_LAYOUT_CACHE_MAX_ENTRIES: usize = 32_768;
@@ -626,62 +628,25 @@ fn prepare_conflict_text_for_canvas(
     styled: Option<&CachedDiffStyledText>,
     reveal_whitespace_chars: bool,
 ) -> PreparedConflictText {
-    let Some(styled) = styled else {
-        let display = if reveal_whitespace_chars {
-            whitespace_visible_line_text(text.as_ref())
-        } else {
-            text
-        };
-        return PreparedConflictText {
-            text_hash: hash_text(display.as_ref()),
-            text: display,
+    let display = if !reveal_whitespace_chars {
+        display_diff_text(styled, text)
+    } else if let Some(styled) = styled.filter(|styled| !styled.highlights.is_empty()) {
+        whitespace_visible_line_styled_text_for_raw(tab_width, styled, text.as_ref())
+    } else {
+        let text = whitespace_visible_line_text(text.as_ref());
+        CachedDiffStyledText {
+            text_hash: hash_text_content(text.as_ref()),
+            text,
             highlights: empty_highlights(),
             highlights_hash: 0,
-        };
-    };
-
-    if styled.highlights.is_empty() {
-        if reveal_whitespace_chars {
-            let display = whitespace_visible_line_text(text.as_ref());
-            return PreparedConflictText {
-                text_hash: hash_text(display.as_ref()),
-                text: display,
-                highlights: empty_highlights(),
-                highlights_hash: 0,
-            };
         }
-        // The text is the styled text unchanged, whose hash is already known;
-        // re-hashing it here ran per visible row per frame.
-        return PreparedConflictText {
-            text_hash: styled.text_hash,
-            text: styled.text.clone(),
-            highlights: empty_highlights(),
-            highlights_hash: 0,
-        };
-    }
-
-    if reveal_whitespace_chars {
-        let visible = whitespace_visible_line_styled_text_for_raw(tab_width, styled, text.as_ref());
-        return PreparedConflictText {
-            text: visible.text,
-            highlights: visible.highlights,
-            text_hash: visible.text_hash,
-            highlights_hash: visible.highlights_hash,
-        };
-    }
-
+    };
     PreparedConflictText {
-        text: styled.text.clone(),
-        highlights: Arc::clone(&styled.highlights),
-        text_hash: styled.text_hash,
-        highlights_hash: styled.highlights_hash,
+        text: display.text,
+        highlights: display.highlights,
+        text_hash: display.text_hash,
+        highlights_hash: display.highlights_hash,
     }
-}
-
-fn hash_text(text: &str) -> u64 {
-    let mut hasher = FxHasher::default();
-    text.hash(&mut hasher);
-    hasher.finish()
 }
 
 #[cfg(test)]
@@ -953,6 +918,30 @@ mod tests {
     use super::*;
 
     #[test]
+    fn crlf_conflict_cells_hide_only_the_painted_terminator() {
+        let raw: SharedString = "alpha\r".into();
+        let style = gpui::HighlightStyle {
+            font_weight: Some(gpui::FontWeight::BOLD),
+            ..Default::default()
+        };
+        let styled =
+            super::super::diff_text::build_cached_diff_styled_text_from_relative_highlights(
+                4,
+                raw.as_ref(),
+                &[(0..raw.len(), style)],
+            );
+        for styled in [None, Some(&styled)] {
+            let hidden = prepare_conflict_text_for_canvas(4, raw.clone(), styled, false);
+            assert_eq!(hidden.text.as_ref(), "alpha");
+            assert!(hidden.highlights.iter().all(|(range, _)| range.end <= 5));
+            let revealed = prepare_conflict_text_for_canvas(4, raw.clone(), styled, true);
+            assert_eq!(revealed.text.as_ref(), "alpha␍↵");
+            assert_ne!(hidden.text_hash, revealed.text_hash);
+        }
+        assert_eq!(raw.as_ref(), "alpha\r");
+    }
+
+    #[test]
     fn prepare_text_cell_applies_whitespace_when_no_styled_text() {
         let tab_width = 4;
 
@@ -1043,7 +1032,7 @@ mod tests {
         assert_eq!(prepared.text.as_ref(), "a·b↵");
         assert_eq!(prepared.highlights.len(), 1);
         assert_eq!(prepared.highlights[0].0, 1..4);
-        assert_eq!(prepared.text_hash, hash_text("a·b↵"));
+        assert_eq!(prepared.text_hash, hash_text_content("a·b↵"));
         assert_ne!(prepared.highlights_hash, 0);
     }
 

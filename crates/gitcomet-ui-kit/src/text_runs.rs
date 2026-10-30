@@ -15,6 +15,23 @@ use gpui::{HighlightStyle, Hsla, StrikethroughStyle, TextRun, TextStyle, Underli
 use std::hash::{Hash, Hasher};
 use std::ops::Range;
 
+/// Make a logical row safe for a single-line shaper. Interior CRs occupy one
+/// blank cell (and one source byte), rather than creating backend-only lines.
+/// Only a complete row may hide its terminal CR. Copy/edit offsets stay in
+/// the original source; this transformation preserves every visible offset.
+pub fn single_line_display_text(text: &str, complete_row: bool) -> std::borrow::Cow<'_, str> {
+    let text = if complete_row {
+        text.strip_suffix('\r').unwrap_or(text)
+    } else {
+        text
+    };
+    if text.contains('\r') {
+        std::borrow::Cow::Owned(text.replace('\r', " "))
+    } else {
+        std::borrow::Cow::Borrowed(text)
+    }
+}
+
 /// Clamp `range` to `text` and widen it onto the surrounding character
 /// boundaries. Returns `None` when nothing is left to highlight.
 pub fn snap_highlight_range(text: &str, range: &Range<usize>) -> Option<Range<usize>> {
