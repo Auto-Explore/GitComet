@@ -392,11 +392,12 @@ impl DiffInlineCard {
 ///
 /// The pane measures the view before it first draws it, and again when the
 /// view notifies or when the text style or the row height changes; a block
-/// view also when its column's width does. `render` may so run twice in a
-/// frame, once to measure and once to draw, and must have no side effects. A
-/// view whose height follows a child view's should notify along with it. The
-/// view keeps its own state while it is scrolled away. Its mouse presses are
-/// its own, and the diff's shortcuts stand aside while it holds focus.
+/// or over view also when its column's width does. `render` may so run twice
+/// in a frame, once to measure and once to draw, and must have no side
+/// effects. A view whose height follows a child view's should notify along
+/// with it. The view keeps its own state while it is scrolled away. Its mouse
+/// presses are its own, and the diff's shortcuts stand aside while it holds
+/// focus.
 #[derive(Clone)]
 pub struct DiffHostedView {
     anchor: DiffScrollAnchor,
@@ -419,6 +420,23 @@ pub enum DiffPlacement {
     /// nearly full rather than given a row of its own. Views after the same
     /// line sit side by side in order.
     EndOfLine,
+    /// Over the text beside the line: the pane reserves no rows for it. Its
+    /// top is at the line's bottom, the bottom of its last row for a wrapped
+    /// line, and it lines up with `align`'s edge of its column; it moves
+    /// above the line when it would run past the pane's bottom, and stays
+    /// below when it fits neither way. It is measured at its natural width
+    /// up to its column's, holds still against sideways scrolling and is
+    /// clipped to its column, over the rows and block views but under menus.
+    Over { align: DiffAlign },
+}
+
+/// The edge of its column a [`DiffPlacement::Over`] view lines up with.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DiffAlign {
+    /// Where the column's text starts.
+    Start,
+    /// The column's end, short of its scrollbar.
+    End,
 }
 
 /// Subscribes a callback to a view's notifies, without its type.
@@ -433,6 +451,11 @@ impl DiffHostedView {
     /// A view after the text of `anchor`'s line.
     pub fn end_of_line<V: Render>(anchor: DiffScrollAnchor, view: Entity<V>) -> Self {
         Self::new(anchor, DiffPlacement::EndOfLine, view)
+    }
+
+    /// A view over the text beside `anchor`'s line, lined up with `align`.
+    pub fn over<V: Render>(anchor: DiffScrollAnchor, align: DiffAlign, view: Entity<V>) -> Self {
+        Self::new(anchor, DiffPlacement::Over { align }, view)
     }
 
     fn new<V: Render>(anchor: DiffScrollAnchor, placement: DiffPlacement, view: Entity<V>) -> Self {

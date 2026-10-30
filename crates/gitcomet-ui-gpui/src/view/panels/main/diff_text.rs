@@ -151,6 +151,16 @@ impl DiffRenderer {
                             gpui::ListHorizontalSizingBehavior::Unconstrained,
                         )
                     });
+                    let over = self.render_hosted_over_layer(
+                        None,
+                        scrollbar_gutter,
+                        if self.diff_word_wrap {
+                            px(0.0)
+                        } else {
+                            horizontal_scrollbar_gutter
+                        },
+                        cx,
+                    );
                     div()
                         .id("diff_scroll_container")
                         .relative()
@@ -165,6 +175,7 @@ impl DiffRenderer {
                                 .pr(scrollbar_gutter)
                                 .child(list),
                         )
+                        .children(over)
                         // Anchored to the rows container so the
                         // handle's hover highlight matches the
                         // annotation column height exactly.
@@ -256,6 +267,31 @@ impl DiffRenderer {
                             gpui::ListHorizontalSizingBehavior::Unconstrained,
                         )
                     });
+                    // Over the columns' rows, short of their scrollbars.
+                    let bottom_gutter = if self.diff_word_wrap {
+                        px(0.0)
+                    } else {
+                        horizontal_scrollbar_gutter
+                    };
+                    let column_gutter = |gutter| {
+                        if vertical_sync_enabled {
+                            px(0.0)
+                        } else {
+                            gutter
+                        }
+                    };
+                    let left_over = self.render_hosted_over_layer(
+                        Some(gitcomet_extension_api::DiffLineSide::Old),
+                        column_gutter(left_scrollbar_gutter),
+                        bottom_gutter,
+                        cx,
+                    );
+                    let right_over = self.render_hosted_over_layer(
+                        Some(gitcomet_extension_api::DiffLineSide::New),
+                        column_gutter(right_scrollbar_gutter),
+                        bottom_gutter,
+                        cx,
+                    );
                     // Built before `resize_handle` captures `cx`.
                     let split_annotate_handle = self
                         .annotation_active()
@@ -398,6 +434,7 @@ impl DiffRenderer {
                                                         })
                                                         .child(left),
                                                 )
+                                                .children(left_over)
                                                 .when(!vertical_sync_enabled, |d| {
                                                     d.child(
                                                         components::Scrollbar::new(
@@ -444,6 +481,7 @@ impl DiffRenderer {
                                                         })
                                                         .child(right),
                                                 )
+                                                .children(right_over)
                                                 .when(!vertical_sync_enabled, |d| {
                                                     d.child(
                                                         components::Scrollbar::new(
