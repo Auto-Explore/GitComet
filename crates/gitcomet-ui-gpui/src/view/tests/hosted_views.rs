@@ -364,43 +364,143 @@ fn keys_and_clicks_in_an_inline_view_stay_in_it(cx: &mut gpui::TestAppContext) {
     });
 }
 
-/// A view stays put while its column scrolls sideways under a long line.
+/// A view stays put while its column scrolls sideways under a long line,
+/// in a split's new-side column as inline.
 #[gpui::test]
 fn inline_views_hold_still_while_the_lines_scroll_sideways(cx: &mut gpui::TestAppContext) {
     let long = "x".repeat(400);
+    for layout in [DiffLayout::Inline, DiffLayout::Split] {
+        let Mounted {
+            thread,
+            renderer,
+            id,
+            cx,
+            ..
+        } = mount(
+            cx,
+            layout,
+            format!("one\n{long}\nthree\n"),
+            format!("one\n{long} changed\nthree\n"),
+            1,
+        );
+        let region = match layout {
+            DiffLayout::Split => DiffTextRegion::SplitRight,
+            _ => DiffTextRegion::Inline,
+        };
+        let view = thread_frame(id, &thread);
+        let before = cx.debug_bounds(view).unwrap();
+        let text = painted(cx, &renderer, region, "one");
+        cx.update(|_, app| {
+            renderer.update(app, |renderer, cx| {
+                let scroll = match layout {
+                    DiffLayout::Split => renderer.diff_split_right_scroll.0.borrow(),
+                    _ => renderer.diff_scroll.0.borrow(),
+                };
+                let offset = scroll.base_handle.offset();
+                scroll
+                    .base_handle
+                    .set_offset(gpui::point(px(-200.0), offset.y));
+                cx.notify();
+            })
+        });
+        draw(cx);
+        let scrolled = painted(cx, &renderer, region, "one");
+        assert!(
+            scrolled.left() < text.left() - px(100.0),
+            "{layout:?}: the lines scrolled: {text:?} to {scrolled:?}"
+        );
+        assert_eq!(
+            cx.debug_bounds(view).unwrap().left(),
+            before.left(),
+            "{layout:?}"
+        );
+    }
+}
+
+/// Replacing a pane's views drops what it knew of those that went: their
+/// rows collapse, their states go and their notifies no longer redraw the
+/// pane. Removing them all leaves the document's rows alone.
+#[gpui::test]
+fn replaced_and_removed_inline_views_leave_nothing_behind(cx: &mut gpui::TestAppContext) {
+    let (old, new) = three_lines();
     let Mounted {
+        pane,
         thread,
         renderer,
         id,
         cx,
-        ..
-    } = mount(
-        cx,
-        DiffLayout::Inline,
-        format!("one\n{long}\nthree\n"),
-        format!("one\n{long} changed\nthree\n"),
-        1,
-    );
-    let view = thread_frame(id, &thread);
-    let before = cx.debug_bounds(view).unwrap();
-    let text = painted(cx, &renderer, DiffTextRegion::Inline, "one");
+    } = mount(cx, DiffLayout::Inline, old, new, 2);
+    let pane_view = pane
+        .view()
+        .downcast::<crate::view::hosted::diff_pane::DiffPaneView>()
+        .unwrap();
     cx.update(|_, app| {
-        renderer.update(app, |renderer, cx| {
-            let scroll = renderer.diff_scroll.0.borrow();
-            let offset = scroll.base_handle.offset();
-            scroll
-                .base_handle
-                .set_offset(gpui::point(px(-200.0), offset.y));
+        thread.update(app, |thread, cx| {
+            thread.replies = 8;
             cx.notify();
         })
     });
     draw(cx);
-    let scrolled = painted(cx, &renderer, DiffTextRegion::Inline, "one");
-    assert!(
-        scrolled.left() < text.left() - px(100.0),
-        "the lines scrolled: {text:?} to {scrolled:?}"
+    let tall = reserved(cx, &renderer);
+
+    // A short note on line 1 takes the thread's place.
+    let note = cx.update(|_, app| {
+        let note = app.new(|cx| Thread {
+            input: cx.new(|cx| {
+                components::TextInput::new_inert(components::TextInputOptions::default(), cx)
+            }),
+            replies: 0,
+            resolved: 0,
+            renders: Rc::default(),
+        });
+        pane.set_inline_views(
+            vec![DiffInlineView::new(
+                DiffScrollAnchor {
+                    side: DiffLineSide::New,
+                    line: 1,
+                },
+                note.clone(),
+            )],
+            app,
+        );
+        note
+    });
+    draw(cx);
+    assert!(cx.debug_bounds(thread_frame(id, &thread)).is_none());
+    assert!(cx.debug_bounds(thread_frame(id, &note)).is_some());
+    let short = reserved(cx, &renderer);
+    let content = cx.debug_bounds("thread_root").unwrap().size.height;
+    let height = row_height(cx, &renderer);
+    assert_eq!(
+        short,
+        (f32::from(content) / f32::from(height)).ceil() as usize
     );
-    assert_eq!(cx.debug_bounds(view).unwrap().left(), before.left());
+    assert!(short < tall, "the thread's rows went with it");
+    assert_eq!(
+        cx.update(|_, app| renderer.read(app).hosted_inline_view_states()),
+        1
+    );
+
+    // The thread is no longer watched: its notify redraws nothing.
+    let renders = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|_, app| pane_view.read(app).rendered_statuses().len())
+    };
+    let before = renders(cx);
+    cx.update(|_, app| thread.update(app, |_, cx| cx.notify()));
+    cx.run_until_parked();
+    assert_eq!(renders(cx), before, "the old view's notify reaches no pane");
+    cx.update(|_, app| note.update(app, |_, cx| cx.notify()));
+    cx.run_until_parked();
+    assert!(renders(cx) > before, "the new view's does");
+
+    cx.update(|_, app| pane.set_inline_views(Vec::new(), app));
+    draw(cx);
+    assert_eq!(reserved(cx, &renderer), 0);
+    assert!(cx.debug_bounds(thread_frame(id, &note)).is_none());
+    assert_eq!(
+        cx.update(|_, app| renderer.read(app).hosted_inline_view_states()),
+        0
+    );
 }
 
 /// A view growing above the top line keeps that line where it was.
