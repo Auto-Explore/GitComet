@@ -446,6 +446,7 @@ fn reflog_rows_are_visible_with_the_terminal_open(cx: &mut gpui::TestAppContext)
     );
 }
 
+#[cfg(target_os = "linux")]
 #[test]
 #[ignore = "renders reflog previews using the native text backend and a GPU"]
 fn reflog_panel_visual_capture() {
