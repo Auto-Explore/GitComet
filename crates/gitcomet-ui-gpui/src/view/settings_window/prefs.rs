@@ -86,6 +86,10 @@ impl SettingsWindowView {
             history_show_tags: Some(self.history_show_tags),
             history_verify_commit_signatures: Some(self.history_verify_commit_signatures),
             history_tag_fetch_mode: Some(self.history_tag_fetch_mode),
+            // Filled from `hidden_ref_settings` below.
+            history_hidden_refs_enabled: None,
+            history_hidden_ref_presets: None,
+            history_hidden_ref_prefixes: None,
             default_history_mode: Some(self.default_history_mode),
             default_tag_type: Some(self.default_tag_type),
             fetch_prune_deleted_remote_branches: Some(self.prune_deleted_remote_branches_on_fetch),
@@ -105,6 +109,7 @@ impl SettingsWindowView {
         };
         self.terminal_preferences
             .apply_to_ui_settings(&mut settings);
+        settings.set_hidden_ref_settings(&self.hidden_ref_settings);
         settings
     }
 
@@ -1108,6 +1113,67 @@ impl SettingsWindowView {
         self.default_tag_type = tag_type;
         self.persist_preferences(cx);
         self.broadcast_preference(PreferenceChange::DefaultTagType(tag_type), cx);
+        cx.notify();
+    }
+
+    pub(super) fn set_hidden_ref_settings(
+        &mut self,
+        settings: gitcomet_state::model::HiddenRefSettings,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.hidden_ref_settings == settings {
+            return;
+        }
+        self.hidden_ref_settings = settings.clone();
+        self.persist_preferences(cx);
+        self.broadcast_preference(PreferenceChange::HiddenRefSettings(settings), cx);
+        cx.notify();
+    }
+
+    pub(super) fn set_hidden_ref_preset(
+        &mut self,
+        preset: &gitcomet_core::identity::HistoryRefPreset,
+        hidden: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let mut next = self.hidden_ref_settings.clone();
+        next.set_preset_hidden(preset, hidden);
+        self.set_hidden_ref_settings(next, cx);
+    }
+
+    pub(super) fn add_hidden_ref_prefix(&mut self, cx: &mut gpui::Context<Self>) {
+        let text = self.hidden_ref_prefix_input.read(cx).text().to_owned();
+        let prefix = match gitcomet_state::model::HiddenRefPrefix::parse(&text) {
+            Ok(prefix) => prefix,
+            Err(error) => {
+                self.hidden_ref_prefix_error = Some(error);
+                cx.notify();
+                return;
+            }
+        };
+        let mut next = self.hidden_ref_settings.clone();
+        next.add_custom_prefix(prefix);
+        self.clear_hidden_ref_prefix_input(cx);
+        self.set_hidden_ref_settings(next, cx);
+    }
+
+    pub(super) fn remove_hidden_ref_prefix(
+        &mut self,
+        prefix: &gitcomet_state::model::HiddenRefPrefix,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let mut next = self.hidden_ref_settings.clone();
+        next.remove_custom_prefix(prefix);
+        self.set_hidden_ref_settings(next, cx);
+    }
+
+    pub(super) fn clear_hidden_ref_prefix_input(&mut self, cx: &mut gpui::Context<Self>) {
+        self.hidden_ref_prefix_error = None;
+        self.hidden_ref_prefix_input.update(cx, |input, cx| {
+            if !input.text().is_empty() {
+                input.set_text(String::new(), cx);
+            }
+        });
         cx.notify();
     }
 

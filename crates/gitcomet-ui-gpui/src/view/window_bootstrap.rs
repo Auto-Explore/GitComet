@@ -269,6 +269,12 @@ impl PreparedWindowBootstrap {
             follow_selected_commit: ui_preferences.history.files_follow_selected_commit,
         }));
         store.dispatch(Msg::SetLargeFileSettings(ui_preferences.large_files));
+        store.dispatch(Msg::SetHistoryHiddenRefs(
+            ui_preferences
+                .history
+                .hidden_ref_settings
+                .filter(gitcomet_core::identity::current().history_ref_presets()),
+        ));
         let saved_open_repos = ui_session.open_repos.clone();
         let saved_active_repo = ui_session.active_repo.clone();
         let mut startup_repo_bootstrap_pending = false;

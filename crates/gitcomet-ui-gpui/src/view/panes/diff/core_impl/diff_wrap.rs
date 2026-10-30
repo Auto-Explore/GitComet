@@ -722,6 +722,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[allow(clippy::single_range_in_vec_init)]
     fn crlf_wrap_does_not_add_a_row_but_keeps_the_source_terminator() {
         for (text, expected) in [
             ("abcd\r", vec![0..5]),

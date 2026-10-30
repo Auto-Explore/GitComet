@@ -348,8 +348,10 @@ status and working-file caches stay with that working tree.
 Each history request resolves its own HEAD, references and configuration. Its
 exact query includes the common identity, object interpretation generation,
 mode, normalized author filter, resolved tips and shallow boundaries. Excluded
-references are left out before the tips resolve, so requests that start from the
-same commits share results. Matching all-branches requests across linked
+references (the product's fixed list and the user's
+[hidden refs](hidden-refs.md)) are left out before the tips resolve, so requests
+that start from the same commits share results, and a new ref in a hidden
+namespace keeps the tips cache and the built index. Matching all-branches requests across linked
 worktrees share an index. Different HEAD-based histories and author filters stay
 separate. Registrations coalesce before the build queue; each requester receives
 progress and can leave independently. The last requester cancels the underlying
