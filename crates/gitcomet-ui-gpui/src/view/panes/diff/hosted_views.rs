@@ -2,7 +2,7 @@
 //! view reserves as many as its measured height needs and is drawn once,
 //! from the first of them on screen, over the rest. A view is measured when
 //! it first shows and again only when it notifies, its column's width
-//! changes or the text style does.
+//! changes, or the text style or the row height does.
 use super::*;
 use gitcomet_extension_api::{DiffInlineView, DiffLineSide};
 use gpui::{Div, EntityId, TextStyle};
@@ -15,6 +15,9 @@ struct InlineViewState {
     measured: bool,
     /// The column width it was measured at.
     width: Pixels,
+    /// The row height its rows were counted in, which follows the UI scale
+    /// and the editor's metrics.
+    row_height: Pixels,
     /// Its wrapper's: the diff's keys stand aside while focus is inside.
     focus: gpui::FocusHandle,
 }
@@ -82,6 +85,7 @@ impl InlineViews {
             rows: 1,
             measured: false,
             width: px(0.0),
+            row_height: px(0.0),
             focus: cx.focus_handle(),
         })
     }
@@ -139,7 +143,7 @@ impl DiffRenderer {
 
     /// The views to measure, each with the width it draws at: those not
     /// measured since they showed or notified, those whose column changed
-    /// width, and every one when the text style changed.
+    /// width, and every one when the text style or the row height changed.
     fn inline_views_to_measure(
         &mut self,
         text: &TextStyle,
@@ -155,7 +159,9 @@ impl DiffRenderer {
             .iter()
             .map(|view| self.hosted_view_width(view.anchor().side, window))
             .collect();
-        let views = &mut self.hosted_decor.as_mut().expect("hosted renderer").views;
+        let decor = self.hosted_decor.as_mut().expect("hosted renderer");
+        let row_height = decor.row_height;
+        let views = &mut decor.views;
         let restyled = views.text.as_ref() != Some(text);
         if restyled {
             views.text = Some(text.clone());
@@ -165,10 +171,15 @@ impl DiffRenderer {
             .zip(widths)
             .filter_map(|(view, width)| {
                 let state = views.state(view.view().entity_id(), cx);
-                if state.measured && state.width == width && !restyled {
+                if state.measured
+                    && state.width == width
+                    && state.row_height == row_height
+                    && !restyled
+                {
                     return None;
                 }
                 state.width = width;
+                state.row_height = row_height;
                 Some((view.view().entity_id(), view.view().clone(), width))
             })
             .collect()

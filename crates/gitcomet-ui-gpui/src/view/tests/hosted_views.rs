@@ -261,6 +261,52 @@ fn inline_views_draw_after_their_line_in_rows_that_follow_their_height(
     }
 }
 
+/// The rows a mounted view reserves: the list's rows past the document's.
+fn reserved(cx: &mut gpui::VisualTestContext, renderer: &gpui::Entity<DiffRenderer>) -> usize {
+    let rows = cx.update(|_, app| renderer.update(app, |r, _| r.diff_list_len()));
+    let document = cx.update(|_, app| renderer.read(app).diff_visible_len());
+    rows - document
+}
+
+/// A view's rows are counted again in the new row height when the UI scale
+/// changes, though the view itself did not notify.
+#[gpui::test]
+fn inline_view_rows_follow_the_ui_scale(cx: &mut gpui::TestAppContext) {
+    let (old, new) = three_lines();
+    let Mounted {
+        renderer,
+        thread,
+        cx,
+        ..
+    } = mount(cx, DiffLayout::Inline, old, new, 2);
+    // Fixed-height replies, so the rows they need change with the row height.
+    cx.update(|_, app| {
+        thread.update(app, |thread, cx| {
+            thread.replies = 8;
+            cx.notify();
+        })
+    });
+    draw(cx);
+    let at_100 = reserved(cx, &renderer);
+    for percent in [150, 200] {
+        cx.update(|window, app| {
+            ui_scale::set_default(app, percent);
+            ui_scale::apply_to_window(window, percent);
+            window.refresh();
+        });
+        draw(cx);
+        let height = cx.update(|_, app| renderer.read(app).theme.editor_row_height(percent));
+        let content = cx.debug_bounds("thread_root").unwrap().size.height;
+        let rows = reserved(cx, &renderer);
+        assert_eq!(
+            rows,
+            (f32::from(content) / f32::from(height)).ceil() as usize,
+            "{percent}%: the rows {content:?} needs in rows of {height:?}"
+        );
+        assert!(rows < at_100, "{percent}%: taller rows, fewer of them");
+    }
+}
+
 /// Keys typed in a view's input are the input's: none runs a diff shortcut,
 /// even one the diff would take, such as Escape closing its search. A click
 /// in the view runs the view's own handler, starts or moves no diff
