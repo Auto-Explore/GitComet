@@ -698,7 +698,7 @@ impl DiffRenderer {
                         this.render_hosted_card_row(card, row, side, display, window, cx)
                     }
                     DisplayRow::View { view, row } => {
-                        this.render_hosted_view_row(view, row, side, display == first, window, cx)
+                        this.render_hosted_view_row(view, row, side, display == first, cx)
                     }
                     DisplayRow::Inset { inset, line } => {
                         use crate::kit::interaction::ControlInteractionExt as _;
