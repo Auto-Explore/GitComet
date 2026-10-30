@@ -1917,3 +1917,48 @@ fn a_start_view_is_no_wider_than_the_room_after_the_text_start(cx: &mut gpui::Te
         "the column less the text start",
     );
 }
+
+/// At a row height the list rounds to device pixels, the pane's scroll
+/// anchor still names the line at the top of the rows, far down a long
+/// diff too.
+#[gpui::test]
+fn the_scroll_anchor_names_the_top_line_at_a_fractional_row_height(cx: &mut gpui::TestAppContext) {
+    let ((), pane, renderer, id, cx) = mount_views(
+        cx,
+        DiffLayout::Inline,
+        numbered("line", 400, None),
+        numbered("line", 400, Some(1)),
+        |_| ((), Vec::new()),
+    );
+    cx.update(|window, app| {
+        ui_scale::set_default(app, 115);
+        ui_scale::apply_to_window(window, 115);
+        window.refresh();
+    });
+    draw(cx);
+    let height = cx.update(|_, app| renderer.read(app).theme.editor_row_height(115));
+    assert!(f32::from(height).fract() != 0.0, "{height:?}");
+    let list_top = cx
+        .debug_bounds(selector(format!("hosted_diff_{id}_row_0")))
+        .unwrap()
+        .top();
+    scroll_to(cx, &renderer, -height * 300.0 - px(2.0));
+    // The line whose row holds the rows' top: "line N" is new line N + 1.
+    let line = cx.update(|_, app| {
+        renderer
+            .read(app)
+            .diff_text_hitboxes
+            .values()
+            .find(|hit| hit.bounds.top() <= list_top && hit.bounds.bottom() > list_top)
+            .map(|hit| hit.painted_text.to_string())
+            .unwrap()
+    });
+    let shown: u32 = line.strip_prefix("line ").unwrap().parse().unwrap();
+    assert_eq!(
+        cx.update(|_, app| pane.scroll_anchor(app)),
+        Some(DiffScrollAnchor {
+            side: DiffLineSide::New,
+            line: shown + 1
+        })
+    );
+}
