@@ -64,11 +64,11 @@ pub use id::{ContributionId, ExtensionId, IdError};
 pub use lifecycle::{HostNotifier, ShellEvent, Slot, SlotSignal, WindowExtension};
 pub use panes::{
     DiffAnnotation, DiffAnnotations, DiffBar, DiffBarItem, DiffBarItemStyle, DiffBarRun,
-    DiffFileNavigation, DiffFilePosition, DiffGlyph, DiffGutterAction, DiffInlineCard,
-    DiffInlineView, DiffInset, DiffLayout, DiffLegendItem, DiffLineRange, DiffLineSide, DiffPane,
-    DiffPaneEvent, DiffPaneEventHandler, DiffPaneOptions, DiffPanePolicy, DiffRowDecor,
-    DiffRowDecorProvider, DiffRowStyle, DiffScrollAnchor, DiffSelectionAction, DiffSelectionRun,
-    DiffSnapshot, FileList, FileListHeaderItem, FileListMode, FileSelected,
+    DiffFileNavigation, DiffFilePosition, DiffGlyph, DiffGutterAction, DiffHostedView,
+    DiffInlineCard, DiffInset, DiffLayout, DiffLegendItem, DiffLineRange, DiffLineSide, DiffPane,
+    DiffPaneEvent, DiffPaneEventHandler, DiffPaneOptions, DiffPanePolicy, DiffPlacement,
+    DiffRowDecor, DiffRowDecorProvider, DiffRowStyle, DiffScrollAnchor, DiffSelectionAction,
+    DiffSelectionRun, DiffSnapshot, FileList, FileListHeaderItem, FileListMode, FileSelected,
 };
 pub use registry::{
     KeyBindingDeclaration, MenuItemDeclaration, Registrar, RegistrationError, Registry,

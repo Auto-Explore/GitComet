@@ -1,14 +1,14 @@
-//! Extension views between diff lines. The list keeps its uniform rows: a
-//! view reserves as many as its measured height needs and is drawn once,
-//! from the first of them on screen, over the rest. A view is measured when
-//! it first shows and again only when it notifies, its column's width
+//! Extension views in a hosted diff. The list keeps its uniform rows: a
+//! block view reserves as many as its measured height needs and is drawn
+//! once, from the first of them on screen, over the rest. A view is measured
+//! when it first shows and again only when it notifies, its column's width
 //! changes, or the text style or the row height does.
 use super::*;
-use gitcomet_extension_api::{DiffInlineView, DiffLineSide};
+use gitcomet_extension_api::{DiffHostedView, DiffLineSide};
 use gpui::{Div, EntityId, TextStyle};
 
 /// What the pane knows of one view.
-struct InlineViewState {
+struct HostedViewState {
     /// Rows from its last measured height; one until it is measured.
     rows: usize,
     /// Whether `rows` still holds: not after it notified.
@@ -22,11 +22,11 @@ struct InlineViewState {
     focus: gpui::FocusHandle,
 }
 
-/// A hosted diff's views between lines, by their entities.
+/// A hosted diff's extension views, by their entities.
 #[derive(Default)]
-pub(in crate::view) struct InlineViews {
-    views: Arc<[DiffInlineView]>,
-    states: FxHashMap<EntityId, InlineViewState>,
+pub(in crate::view) struct HostedViews {
+    views: Arc<[DiffHostedView]>,
+    states: FxHashMap<EntityId, HostedViewState>,
     /// The text style they were measured in, and are drawn in rather than
     /// the diff's editor font.
     text: Option<TextStyle>,
@@ -35,18 +35,18 @@ pub(in crate::view) struct InlineViews {
     projected: Vec<EntityId>,
 }
 
-impl InlineViews {
+impl HostedViews {
     pub(super) fn is_empty(&self) -> bool {
         self.views.is_empty()
     }
 
-    pub(super) fn views(&self) -> &[DiffInlineView] {
+    pub(super) fn views(&self) -> &[DiffHostedView] {
         &self.views
     }
 
     /// Replaces the views, keeping what is known of those that stay.
     /// Whether the list is a new one.
-    pub(super) fn set(&mut self, views: Arc<[DiffInlineView]>) -> bool {
+    pub(super) fn set(&mut self, views: Arc<[DiffHostedView]>) -> bool {
         if Arc::ptr_eq(&self.views, &views) {
             return false;
         }
@@ -57,7 +57,7 @@ impl InlineViews {
     }
 
     /// The rows `view` takes.
-    pub(super) fn rows(&self, view: &DiffInlineView) -> usize {
+    pub(super) fn rows(&self, view: &DiffHostedView) -> usize {
         self.states
             .get(&view.view().entity_id())
             .map_or(1, |state| state.rows)
@@ -80,8 +80,8 @@ impl InlineViews {
             .position(|view| view.view().entity_id() == *id)
     }
 
-    fn state(&mut self, id: EntityId, cx: &mut App) -> &mut InlineViewState {
-        self.states.entry(id).or_insert_with(|| InlineViewState {
+    fn state(&mut self, id: EntityId, cx: &mut App) -> &mut HostedViewState {
+        self.states.entry(id).or_insert_with(|| HostedViewState {
             rows: 1,
             measured: false,
             width: px(0.0),
@@ -93,7 +93,7 @@ impl InlineViews {
 
 /// A view laid out at its column's width in the text style it is measured
 /// in, the same for measuring it and for drawing it.
-fn inline_view_frame(content: AnyView, width: Pixels, text: &TextStyle) -> Div {
+fn hosted_view_frame(content: AnyView, width: Pixels, text: &TextStyle) -> Div {
     let mut frame = div().w(width);
     *frame.text_style() = text.subtract(&gpui::TextStyleRefinement::default());
     frame.child(content)
@@ -102,14 +102,14 @@ fn inline_view_frame(content: AnyView, width: Pixels, text: &TextStyle) -> Div {
 /// Measures the views that need it, as gpui's `list` measures its items, in
 /// the text style the pane's rows are drawn under. The renderer's rows follow
 /// in the same frame.
-pub(in crate::view) fn measure_inline_views(
+pub(in crate::view) fn measure_hosted_views(
     renderer: &gpui::Entity<DiffRenderer>,
     window: &mut Window,
     cx: &mut App,
 ) {
     let text = window.text_style();
     let views = renderer.update(cx, |pane, cx| {
-        pane.inline_views_to_measure(&text, window, cx)
+        pane.hosted_views_to_measure(&text, window, cx)
     });
     if views.is_empty() {
         return;
@@ -117,7 +117,7 @@ pub(in crate::view) fn measure_inline_views(
     let heights = views
         .into_iter()
         .map(|(id, view, width)| {
-            let mut frame = inline_view_frame(view, width, &text).into_any_element();
+            let mut frame = hosted_view_frame(view, width, &text).into_any_element();
             let size = frame.layout_as_root(
                 gpui::size(
                     gpui::AvailableSpace::Definite(width),
@@ -129,7 +129,7 @@ pub(in crate::view) fn measure_inline_views(
             (id, size.height)
         })
         .collect();
-    renderer.update(cx, |pane, _| pane.set_inline_view_heights(heights));
+    renderer.update(cx, |pane, _| pane.set_hosted_view_heights(heights));
 }
 
 impl DiffRenderer {
@@ -146,7 +146,7 @@ impl DiffRenderer {
     /// The views to measure, each with the width it draws at: those not
     /// measured since they showed or notified, those whose column changed
     /// width, and every one when the text style or the row height changed.
-    fn inline_views_to_measure(
+    fn hosted_views_to_measure(
         &mut self,
         text: &TextStyle,
         window: &Window,
@@ -187,7 +187,7 @@ impl DiffRenderer {
 
     /// Takes measured heights as whole rows. A view whose rows changed moves
     /// the lines after it, so the rows are projected again.
-    fn set_inline_view_heights(&mut self, heights: Vec<(EntityId, Pixels)>) {
+    fn set_hosted_view_heights(&mut self, heights: Vec<(EntityId, Pixels)>) {
         let Some(decor) = self.hosted_decor.as_mut() else {
             return;
         };
@@ -206,7 +206,7 @@ impl DiffRenderer {
     }
 
     /// Measures the view again before it is next drawn: it notified.
-    pub(in crate::view) fn forget_inline_view_height(&mut self, id: EntityId) {
+    pub(in crate::view) fn forget_hosted_view_height(&mut self, id: EntityId) {
         if let Some(state) = self
             .hosted_decor
             .as_mut()
@@ -218,7 +218,7 @@ impl DiffRenderer {
 
     /// How many views the pane keeps state for.
     #[cfg(test)]
-    pub(in crate::view) fn hosted_inline_view_states(&self) -> usize {
+    pub(in crate::view) fn hosted_view_states(&self) -> usize {
         self.hosted_decor
             .as_ref()
             .map_or(0, |decor| decor.views.states.len())
@@ -279,7 +279,7 @@ impl DiffRenderer {
             .id(("hosted_view_row", id))
             .relative()
             .child(
-                inline_view_frame(content, width, &text)
+                hosted_view_frame(content, width, &text)
                     .id("hosted_view")
                     .debug_selector(move || format!("hosted_diff_{pane_id}_view_{}", id.as_u64()))
                     .absolute()

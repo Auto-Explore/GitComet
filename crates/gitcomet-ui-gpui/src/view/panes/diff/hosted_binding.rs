@@ -1,7 +1,7 @@
 //! Hosted controls and list-boundary projection for the shared diff renderer.
 use super::*;
 use gitcomet_extension_api::{
-    DiffAnnotations, DiffGlyph, DiffInlineCard, DiffInlineView, DiffInset, DiffLineRange,
+    DiffAnnotations, DiffGlyph, DiffHostedView, DiffInlineCard, DiffInset, DiffLineRange,
     DiffLineSide, DiffPaneOptions,
 };
 use palette::IntoColor;
@@ -26,7 +26,7 @@ pub(in crate::view) struct HostedDiffDecor {
     most_people: Option<usize>,
     pub insets: Arc<[DiffInset]>,
     pub cards: Arc<[DiffInlineCard]>,
-    pub(super) views: super::hosted_views::InlineViews,
+    pub(super) views: super::hosted_views::HostedViews,
     pub(super) row_height: Pixels,
     pub(super) card_layouts: Vec<super::hosted_cards::CardLayout>,
     pub(super) card_layout_key: Option<super::hosted_cards::LayoutKey>,
@@ -413,7 +413,7 @@ impl DiffRenderer {
         annotations: Arc<DiffAnnotations>,
         insets: Arc<[DiffInset]>,
         cards: Arc<[DiffInlineCard]>,
-        views: Arc<[DiffInlineView]>,
+        views: Arc<[DiffHostedView]>,
     ) {
         self.store.set_policy(options.policy);
         self.diff_show_line_numbers = options.policy.line_numbers;

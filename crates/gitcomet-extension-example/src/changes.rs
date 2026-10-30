@@ -16,7 +16,7 @@
 use gitcomet_core::domain::{CommitId, DiffTarget};
 use gitcomet_extension_api::{
     ChangeSource, DiffAnnotation, DiffAnnotations, DiffBar, DiffBarItem, DiffFileNavigation,
-    DiffInlineView, DiffInset, DiffLegendItem, DiffLineRange, DiffLineSide, DiffPane,
+    DiffHostedView, DiffInset, DiffLegendItem, DiffLineRange, DiffLineSide, DiffPane,
     DiffPaneOptions, DiffPanePolicy, DiffScrollAnchor, FileList, FileListFilterChip,
     FileListGroups, FileListMarks, FileListMode, FileListVisible, HostedAction, PopOutWindow,
     RepositoryViewContext, RepositoryWatch, RowGlyph, RowMark,
@@ -73,7 +73,7 @@ pub struct ChangesView {
     /// The next note's or discussion's id.
     next_id: u64,
     /// The current pane's discussions; a new pick clears them too.
-    discussions: Vec<DiffInlineView>,
+    discussions: Vec<DiffHostedView>,
     /// The window the current pane is shown in instead of here.
     popped: Option<PopOutWindow>,
     /// The linked worktree the list shows, watched while it does.
@@ -380,13 +380,13 @@ impl ChangesView {
     }
 
     /// The current pane's discussions.
-    pub fn discussions(&self) -> &[DiffInlineView] {
+    pub fn discussions(&self) -> &[DiffHostedView] {
         &self.discussions
     }
 
     fn show_discussions(&self, cx: &mut Context<Self>) {
         if let Some(current) = &self.current {
-            current.set_inline_views(self.discussions.clone(), cx);
+            current.set_views(self.discussions.clone(), cx);
         }
     }
 
@@ -441,7 +441,7 @@ impl ChangesView {
         self.discussions.clear();
         self.show_flags(cx);
         current.set_insets(Vec::new(), cx);
-        current.set_inline_views(Vec::new(), cx);
+        current.set_views(Vec::new(), cx);
         current.set_target(target, cx);
         let bar = self.current_bar(cx);
         current.set_bar(bar, cx);
@@ -523,7 +523,7 @@ fn discuss(view: &WeakEntity<ChangesView>, range: DiffLineRange, cx: &mut App) {
             line: range.end,
         };
         this.discussions
-            .push(DiffInlineView::new(anchor, discussion));
+            .push(DiffHostedView::block(anchor, discussion));
         this.show_discussions(cx);
     });
 }
