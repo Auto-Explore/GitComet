@@ -41,11 +41,6 @@ pub(in crate::view) struct HostedDiffDecor {
 }
 
 impl HostedDiffDecor {
-    /// How many rows the list has when it lists the projection's.
-    pub(super) fn list_rows(&self) -> usize {
-        self.display.len()
-    }
-
     /// Whether rows other than the document's are listed: then the list's
     /// rows are the projection's, not the document's.
     fn projects(&self) -> bool {
@@ -57,6 +52,26 @@ impl DiffRenderer {
     /// The hosted decoration when the list's rows are its projection's.
     fn hosted_projection(&self) -> Option<&HostedDiffDecor> {
         self.hosted_decor.as_ref().filter(|decor| decor.projects())
+    }
+
+    /// Where row `row` of the view with entity `id` is in the list.
+    #[cfg(test)]
+    pub(in crate::view) fn hosted_view_row_index(
+        &mut self,
+        id: gpui::EntityId,
+        row: usize,
+    ) -> Option<usize> {
+        self.prepare_hosted_projection();
+        let decor = self.hosted_decor.as_ref()?;
+        let view = decor
+            .views
+            .views()
+            .iter()
+            .position(|view| view.view().entity_id() == id)?;
+        decor
+            .display
+            .iter()
+            .position(|item| *item == DisplayRow::View { view, row })
     }
 
     pub(in crate::view) fn hosted_context_actions(
@@ -363,27 +378,15 @@ impl DiffRenderer {
 
     /// The list's row at the top of `handle`'s column.
     fn hosted_scroll_top(&self, handle: &UniformListScrollHandle) -> usize {
-        let height = self.hosted_row_pitch(handle);
+        let height = self
+            .hosted_decor
+            .as_ref()
+            .map_or(px(0.0), |decor| decor.row_height);
         if height <= px(0.0) {
             return 0;
         }
         let offset = handle.0.borrow().base_handle.offset().y;
         (-offset / height).floor().max(0.0) as usize
-    }
-
-    /// How far apart `handle`'s list laid its rows out when it last did:
-    /// at a fractional row height, not quite the row height its rows ask
-    /// for. The row height until the list has laid out.
-    fn hosted_row_pitch(&self, handle: &UniformListScrollHandle) -> Pixels {
-        let Some(decor) = &self.hosted_decor else {
-            return px(0.0);
-        };
-        let rows = if decor.projects() {
-            decor.display.len()
-        } else {
-            self.diff_visible_len()
-        };
-        super::hosted_views::list_row_pitch(handle, rows).unwrap_or(decor.row_height)
     }
 
     pub(in crate::view) fn hosted_reveal_at(
@@ -506,7 +509,6 @@ impl DiffRenderer {
         let len = self.diff_visible_len();
         let saved = [&self.diff_scroll, &self.diff_split_right_scroll].map(|handle| {
             let top = self.hosted_scroll_top(handle);
-            let pitch = self.hosted_row_pitch(handle);
             let anchor = decor
                 .display
                 .get(top)
@@ -524,7 +526,7 @@ impl DiffRenderer {
                     _ => None,
                 })
             });
-            (handle.clone(), top, pitch, anchor, following)
+            (handle.clone(), top, anchor, following)
         });
         let decor = self.hosted_decor.as_mut().unwrap();
         decor.display.clear();
@@ -535,7 +537,7 @@ impl DiffRenderer {
             decor.display.push(DisplayRow::Document(row));
             decor.display.extend(after.remove(&row).unwrap_or_default());
         }
-        for (handle, top, pitch, anchor, following) in saved {
+        for (handle, top, anchor, following) in saved {
             let restored = anchor
                 .and_then(|anchor| decor.display.iter().position(|row| *row == anchor))
                 .or_else(|| following.and_then(|row| decor.document.get(row).copied()));
@@ -543,7 +545,7 @@ impl DiffRenderer {
                 let scroll = handle.0.borrow();
                 if scroll.deferred_scroll_to_item.is_none() {
                     let mut offset = scroll.base_handle.offset();
-                    offset.y += pitch * (top as f32 - restored as f32);
+                    offset.y += decor.row_height * (top as f32 - restored as f32);
                     scroll.base_handle.set_offset(offset);
                 }
             }
@@ -699,13 +701,14 @@ impl DiffRenderer {
                     }
                     DisplayRow::Inset { inset, line } => {
                         use crate::kit::interaction::ControlInteractionExt as _;
-                        let inset = &this.hosted_decor.as_ref().unwrap().insets[inset];
+                        let decor = this.hosted_decor.as_ref().unwrap();
+                        let inset = &decor.insets[inset];
                         let own_side = side.is_none_or(|side| side == inset.side);
                         let action = inset.on_click.clone().filter(|_| own_side);
                         div()
                             .id(("hosted_inset", display))
                             .debug_selector(move || format!("hosted_diff_{pane_id}_row_{display}"))
-                            .h(this.theme.editor_row_height(ui_scale::current(cx).percent))
+                            .h(decor.row_height)
                             .w_full()
                             .overflow_hidden()
                             .bg(this.theme.colors.surface.raised)

@@ -490,8 +490,7 @@ impl DiffRenderer {
         );
     }
 
-    pub(in crate::view) fn main_pane_content_width(&self, cx: &mut gpui::Context<Self>) -> Pixels {
-        let _ = cx;
+    pub(in crate::view) fn main_pane_content_width(&self) -> Pixels {
         if let Some(width) = self.hosted_content_width {
             return width;
         }
@@ -503,5 +502,73 @@ impl DiffRenderer {
             self.layout_sidebar_collapsed,
             self.layout_details_collapsed,
         )
+    }
+
+    /// The diff's columns as it lays them out.
+    pub(in crate::view) fn diff_columns(&self) -> DiffColumns {
+        self.diff_columns_for(self.diff_view)
+    }
+
+    /// The columns the diff lays out in `mode`.
+    pub(in crate::view) fn diff_columns_for(&self, mode: DiffViewMode) -> DiffColumns {
+        let width = self.main_pane_content_width();
+        let gutter = self.diff_vertical_scrollbar_gutter_for_column(
+            DiffHorizontalScrollColumn::Primary,
+            self.diff_scroll.clone(),
+        );
+        match mode {
+            DiffViewMode::Inline => DiffColumns {
+                split: width,
+                widths: [width; 2],
+                gutters: [gutter; 2],
+                shared_gutter: px(0.0),
+            },
+            DiffViewMode::Split => {
+                let right_gutter = self.diff_vertical_scrollbar_gutter_for_column(
+                    DiffHorizontalScrollColumn::SplitRight,
+                    self.diff_split_right_scroll.clone(),
+                );
+                // Columns that scroll together share the left one's
+                // scrollbar, past the right column.
+                let synced = self.diff_scroll_sync.includes_vertical();
+                let shared_gutter = if synced { gutter } else { px(0.0) };
+                let split = (width - shared_gutter).max(px(0.0));
+                let (left, right) =
+                    crate::view::diff_split_column_widths(split, self.diff_split_ratio);
+                DiffColumns {
+                    split,
+                    widths: [left, right],
+                    gutters: if synced {
+                        [px(0.0); 2]
+                    } else {
+                        [gutter, right_gutter]
+                    },
+                    shared_gutter,
+                }
+            }
+        }
+    }
+}
+
+/// A diff's columns: an inline diff's one, given for both sides, or a
+/// split's two, each with the vertical scrollbar it keeps at its right.
+#[derive(Clone, Copy, Debug)]
+pub(in crate::view) struct DiffColumns {
+    /// The width the columns divide: a split's, less the scrollbar they
+    /// share.
+    pub(in crate::view) split: Pixels,
+    /// Each column's width, its own scrollbar's included.
+    pub(in crate::view) widths: [Pixels; 2],
+    /// The scrollbar each column keeps at its right.
+    pub(in crate::view) gutters: [Pixels; 2],
+    /// The scrollbar a split's columns share, when they scroll together.
+    pub(in crate::view) shared_gutter: Pixels,
+}
+
+impl DiffColumns {
+    /// What each column has for its rows: its width less its scrollbar,
+    /// never below nothing.
+    pub(in crate::view) fn row_widths(&self) -> [Pixels; 2] {
+        [0, 1].map(|side| (self.widths[side] - self.gutters[side]).max(px(0.0)))
     }
 }

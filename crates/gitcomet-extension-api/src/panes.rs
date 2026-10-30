@@ -342,9 +342,9 @@ impl DiffInset {
 ///
 /// The pane measures the view before it first draws it, and again when the
 /// view notifies or when the text style or the row height changes; a block
-/// or over view also when its column's width does. `render` may so run twice
-/// in a frame, once to measure and once to draw, and must have no side
-/// effects. A view whose height follows a child view's should notify along
+/// or over view also when its column's width does, and a start-aligned over
+/// view when the text start moves. `render` may so run twice in a frame, once
+/// to measure and once to draw, and must have no side effects. A view whose height follows a child view's should notify along
 /// with it. The view keeps its own state while it is scrolled away. Its mouse
 /// presses are its own, and the diff's shortcuts stand aside while it holds
 /// focus.
@@ -374,10 +374,11 @@ pub enum DiffPlacement {
     /// top is at the line's bottom, the bottom of its last row for a wrapped
     /// line, and it lines up with `align`'s edge of its column; it moves
     /// above the line when it would run past the pane's bottom, and stays
-    /// below when it fits neither way. It is measured at its natural width
-    /// up to the room from its edge to the column's end, holds still against
-    /// sideways scrolling and is clipped to its column, over the rows and
-    /// block views but under menus. Views over the same line overlap.
+    /// below when it fits neither way. It is measured at its natural width,
+    /// lined up with the start up to the room from the text start to the
+    /// column's end, with the end up to the column's width. It holds still
+    /// against sideways scrolling and is clipped to its column, over the rows
+    /// and block views but under menus. Views over the same line overlap.
     Over { align: DiffAlign },
 }
 
