@@ -258,11 +258,9 @@ impl LineTextSource<'_> {
             starts.push(text.len());
             text.push_str(snapshot.line_text(row).as_ref());
             // Re-add the terminator the model strips, so `line_text_for_index`
-            // sees the same shape it does for a whole document — but only where
-            // the document really has one. A final row with no trailing newline
-            // that ends in `\r` keeps that `\r` in the `Whole` variant, so
-            // inventing a terminator here would make the same row shape one
-            // character narrower in this arm than in the other.
+            // sees the same row boundaries as the whole document, including a
+            // final row without a newline. Display trimming does not change
+            // the document's line starts or source bytes.
             if row + 1 < line_count {
                 text.push('\n');
             }
@@ -277,14 +275,7 @@ impl LineTextSource<'_> {
         // caret in and out would move it.
         let stray = extra.filter(|row| !rows.contains(row)).map(|row| {
             let text = snapshot.line_text(row);
-            // Strip only where the document really terminates the row, exactly
-            // as the windowed rows above do: a `\r` at the very end of a file
-            // with no trailing newline survives in the `Whole` variant, so it
-            // has to survive here.
-            let text = match text.strip_suffix('\r') {
-                Some(stripped) if row + 1 < line_count => stripped,
-                _ => text.as_ref(),
-            };
+            let text = text.strip_suffix('\r').unwrap_or(text.as_ref());
             (row, text.to_owned())
         });
 
@@ -337,9 +328,12 @@ pub(super) fn line_text_for_index<'a>(text: &'a str, starts: &[usize], line_ix: 
         .min(text_len);
     if end > start && text.as_bytes().get(end - 1) == Some(&b'\n') {
         end -= 1;
-        if end > start && text.as_bytes().get(end - 1) == Some(&b'\r') {
-            end -= 1;
-        }
+    }
+    // Match read-only content views even when the last row ends in a CR
+    // without LF. Keep the source and line index intact; borrow only the
+    // visible prefix so shaping needs no extra allocation or run projection.
+    if end > start && text.as_bytes().get(end - 1) == Some(&b'\r') {
+        end -= 1;
     }
     text.get(start..end).unwrap_or("")
 }

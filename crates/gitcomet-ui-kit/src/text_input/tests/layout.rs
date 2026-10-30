@@ -68,6 +68,113 @@ fn line_text_for_index_excludes_crlf_terminators() {
     assert_eq!(line_text_for_index(text, starts.as_slice(), 2), "");
 }
 
+#[test]
+fn final_cr_display_prefix_is_borrowed_without_changing_source_ranges() {
+    let text = "alpha\r\nfinal\r";
+    let starts = compute_line_starts(text);
+    assert_eq!(starts, [0, 7]);
+    let final_row = line_text_for_index(text, &starts, 1);
+    assert_eq!(final_row, "final");
+    assert_eq!(final_row.as_ptr(), text[7..].as_ptr());
+    assert_eq!(text, "alpha\r\nfinal\r");
+}
+
+#[gpui::test]
+fn final_cr_without_lf_matches_crlf_selection_geometry(cx: &mut gpui::TestAppContext) {
+    crate::test_support::use_real_text_backend(cx);
+    for soft_wrap in [false, true] {
+        let (input, cx) = cx.add_window_view(|window, cx| {
+            TextInput::new(
+                TextInputOptions {
+                    multiline: true,
+                    soft_wrap,
+                    ..Default::default()
+                },
+                window,
+                cx,
+            )
+        });
+        let mut line_width = None;
+        for text in ["final", "final\r", "final\r\n"] {
+            cx.update(|window, app| {
+                input.update(app, |input, cx| {
+                    input.set_text(text, cx);
+                    input.select_all_text(window, cx);
+                    input.copy(&Copy, window, cx);
+                })
+            });
+            crate::test_support::refresh_and_draw(cx);
+            assert_eq!(
+                cx.read_from_clipboard()
+                    .and_then(|item| item.text())
+                    .as_deref(),
+                Some(text)
+            );
+            cx.update(|window, app| {
+                let input = input.read(app);
+                assert_eq!(input.text(), text);
+                assert_eq!(input.selected_range(), 0..text.len());
+                let visible = input.hotspot_bounds(&(0..5)).unwrap();
+                if let Some(expected) = line_width {
+                    assert_eq!(visible.size.width, expected);
+                } else {
+                    line_width = Some(visible.size.width);
+                }
+                assert_eq!(
+                    input.index_for_mouse_position(point(
+                        visible.right() + px(4.0),
+                        visible.center().y
+                    )),
+                    5
+                );
+                if text == "final\r" {
+                    let hidden = input.hotspot_bounds(&(5..6)).unwrap();
+                    assert_eq!(
+                        hidden.size.width,
+                        px(0.0),
+                        "final CR has no selectable cell"
+                    );
+                    assert_eq!(hidden.left(), visible.right());
+                }
+                let color = input.theme_for_test().colors.editor.selection_background;
+                assert!(
+                    window
+                        .painted_quads()
+                        .iter()
+                        .any(|q| q.background == color.into() && q.bounds.size.width.0 > 0.0)
+                );
+            });
+        }
+        // Interior CR is still one source cell, while the final CR is hidden.
+        cx.update(|_, app| input.update(app, |input, cx| input.set_text("a\rb\r", cx)));
+        crate::test_support::refresh_and_draw(cx);
+        cx.update(|_, app| {
+            let input = input.read(app);
+            assert!(input.hotspot_bounds(&(1..2)).unwrap().size.width > px(0.0));
+            assert_eq!(input.hotspot_bounds(&(3..4)).unwrap().size.width, px(0.0));
+        });
+        // Edits still address the original final CR rather than its display.
+        // Activation is delivered asynchronously by the test platform; finish
+        // that lifecycle before asking the platform input handler to edit.
+        cx.update(|window, app| {
+            window.activate();
+            input.update(app, |input, cx| input.set_text("final\r", cx));
+        });
+        cx.run_until_parked();
+        cx.update(|window, app| {
+            input.update(app, |input, cx| window.focus(&input.focus_handle, cx));
+        });
+        crate::test_support::refresh_and_draw(cx);
+        cx.update(|window, app| {
+            input.update(app, |input, cx| {
+                assert!(input.accepts_text_input(window, cx));
+                input.replace_text_in_range(Some(0..0), "x", window, cx);
+                assert_eq!(input.text(), "xfinal\r");
+            })
+        });
+    }
+}
+
 #[gpui::test]
 fn multiline_crlf_plain_layout_draws_without_painting_carriage_returns(
     cx: &mut gpui::TestAppContext,
@@ -108,6 +215,118 @@ fn multiline_crlf_plain_layout_draws_without_painting_carriage_returns(
             "host=local-api.internal"
         );
     });
+}
+
+#[gpui::test]
+fn cr_only_content_has_no_phantom_selection_rows(test_cx: &mut gpui::TestAppContext) {
+    crate::test_support::use_real_text_backend(test_cx);
+    let (input, cx) = test_cx.add_window_view(|window, cx| {
+        TextInput::new(
+            TextInputOptions {
+                multiline: true,
+                ..Default::default()
+            },
+            window,
+            cx,
+        )
+    });
+    let text = "alpha\rbeta\rgamma\r";
+    cx.update(|window, app| {
+        input.update(app, |input, cx| {
+            input.set_text(text, cx);
+            input.select_all_text(window, cx);
+            input.copy(&Copy, window, cx);
+        })
+    });
+    crate::test_support::refresh_and_draw(cx);
+    assert_eq!(
+        cx.read_from_clipboard()
+            .and_then(|item| item.text())
+            .as_deref(),
+        Some(text)
+    );
+    cx.update(|window, app| {
+        let input = input.read(app);
+        assert_eq!(input.text(), text);
+        assert_eq!(input.selected_range(), 0..text.len());
+        let start = input.hotspot_bounds(&(0..1)).unwrap();
+        let last = input
+            .hotspot_bounds(&(text.len() - 2..text.len() - 1))
+            .unwrap();
+        assert_eq!(
+            start.top(),
+            last.top(),
+            "CRs cannot create shaper-only rows"
+        );
+        assert!(last.left() > start.left());
+        let color = input.theme_for_test().colors.editor.selection_background;
+        assert!(
+            window
+                .painted_quads()
+                .iter()
+                .any(|q| q.background == color.into() && q.bounds.size.width.0 > 0.0)
+        );
+    });
+}
+
+#[gpui::test]
+fn multiline_crlf_drag_selection_paints_each_row(test_cx: &mut gpui::TestAppContext) {
+    crate::test_support::use_real_text_backend(test_cx);
+    for soft_wrap in [false, true] {
+        let text = "alpha\r\nbeta\té🙂 a\rb\r\n\r\ngamma\r\n";
+        let end = text.find("gamma").unwrap() + 3;
+        let (input, cx) = test_cx.add_window_view(|window, cx| {
+            TextInput::new(
+                TextInputOptions {
+                    multiline: true,
+                    soft_wrap,
+                    ..Default::default()
+                },
+                window,
+                cx,
+            )
+        });
+        cx.update(|_, app| input.update(app, |input, cx| input.set_text(text, cx)));
+        crate::test_support::refresh_and_draw(cx);
+        let (from, to) = cx.update(|_, app| {
+            let input = input.read(app);
+            let at = |offset| {
+                let bounds = input
+                    .hotspot_bounds(&(offset..offset + 1))
+                    .expect("character bounds");
+                point(bounds.left() + px(0.1), bounds.center().y)
+            };
+            (at(1), at(end))
+        });
+        for reverse in [false, true] {
+            let (from, to) = if reverse { (to, from) } else { (from, to) };
+            cx.simulate_mouse_down(from, MouseButton::Left, gpui::Modifiers::default());
+            cx.simulate_mouse_move(to, Some(MouseButton::Left), gpui::Modifiers::default());
+            cx.simulate_mouse_up(to, MouseButton::Left, gpui::Modifiers::default());
+            crate::test_support::refresh_and_draw(cx);
+            cx.update(|window, app| {
+                let input = input.read(app);
+                assert_eq!(input.selected_range(), 1..end);
+                assert_eq!(input.text(), text);
+                let color = input.theme_for_test().colors.editor.selection_background;
+                let scale = window.scale_factor();
+                let quads = window.painted_quads();
+                for offset in [1, text.find("beta").unwrap(), text.find("gamma").unwrap()] {
+                    let row = input.hotspot_bounds(&(offset..offset + 1)).unwrap();
+                    let y = f32::from(row.center().y) * scale;
+                    assert!(
+                        quads.iter().any(|quad| {
+                            quad.background == color.into()
+                                && quad.bounds.size.width.0 > 0.0
+                                && quad.bounds.origin.y.0 <= y
+                                && quad.bounds.origin.y.0 + quad.bounds.size.height.0 >= y
+                        }),
+                        "selected row at {offset} must paint, wrap={soft_wrap}"
+                    );
+                }
+            });
+        }
+    }
 }
 
 /// A plain multiline input inside a fixed-height scrolling viewport, the way

@@ -1,5 +1,73 @@
 use super::*;
 
+#[gpui::test]
+fn crlf_editor_save_preserves_line_endings(cx: &mut gpui::TestAppContext) {
+    gitcomet_ui_kit::test_support::use_real_text_backend(cx);
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let dir = tempfile::tempdir().unwrap();
+    let path = PathBuf::from("file.txt");
+    let original = "alpha\r\nbeta\r\ngamma\r\n";
+    std::fs::write(dir.path().join(&path), original).unwrap();
+    cx.update(|_, app| {
+        view.update(app, |view, cx| {
+            push_test_state(
+                view,
+                editor_state(gitcomet_state::model::RepoId(9903), dir.path(), &path),
+                cx,
+            );
+            view.diff_renderer.update(cx, |pane, cx| {
+                pane.auto_save_file_edits = false;
+                pane.ensure_file_editor_loaded(cx);
+            });
+        })
+    });
+    cx.run_until_parked();
+    cx.update(|window, app| {
+        view.read(app)
+            .diff_renderer
+            .clone()
+            .update(app, |pane, cx| {
+                pane.file_editor_input.update(cx, |input, cx| {
+                    assert_eq!(input.text(), original);
+                    input.select_all_text(window, cx);
+                    assert_eq!(input.selected_range(), 0..original.len());
+                    input.replace_utf8_range(0..5, "changed", cx);
+                    assert_eq!(input.text(), "changed\r\nbeta\r\ngamma\r\n");
+                });
+            })
+    });
+    cx.run_until_parked();
+    cx.update(|_, app| {
+        view.read(app)
+            .diff_renderer
+            .clone()
+            .update(app, |pane, cx| {
+                assert!(pane.file_editor_is_dirty(), "edited buffer must be dirty");
+                assert!(
+                    pane.save_file_editor_buffer(cx),
+                    "save must be queued: {:?}",
+                    pane.file_editor_error()
+                );
+            })
+    });
+    finish_editor_saves(&view, cx);
+    cx.update(|_, app| {
+        let pane = view.read(app).diff_renderer.read(app);
+        assert!(
+            pane.file_editor_save_error().is_none(),
+            "{:?}",
+            pane.file_editor_save_error()
+        );
+        assert!(!pane.file_editor_is_dirty(), "save must settle the buffer");
+    });
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join(&path)).unwrap(),
+        "changed\r\nbeta\r\ngamma\r\n"
+    );
+}
+
 #[cfg(unix)]
 #[gpui::test]
 fn repository_editor_rejects_saves_through_a_symlinked_directory(cx: &mut gpui::TestAppContext) {

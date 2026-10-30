@@ -280,6 +280,7 @@ impl IndexedFileDiffSource {
         let mut source_len = 0usize;
         let mut line_ascii_only = true;
         let mut line_has_tabs = false;
+        let mut line_ends_with_cr = false;
         let mut ended_with_newline = false;
 
         if source_len_hint > 0 {
@@ -305,11 +306,13 @@ impl IndexedFileDiffSource {
                     line_flags.push(preview_line_flags_from_bools(
                         line_ascii_only,
                         line_has_tabs,
+                        line_ends_with_cr,
                     ));
                     source_len = source_len.saturating_add(1);
                     line_starts.push(source_len);
                     line_ascii_only = true;
                     line_has_tabs = false;
+                    line_ends_with_cr = false;
                     continue;
                 }
 
@@ -319,6 +322,7 @@ impl IndexedFileDiffSource {
                 if byte == b'\t' {
                     line_has_tabs = true;
                 }
+                line_ends_with_cr = byte == b'\r';
                 source_len = source_len.saturating_add(1);
             }
         }
@@ -330,6 +334,7 @@ impl IndexedFileDiffSource {
             line_flags.push(preview_line_flags_from_bools(
                 line_ascii_only,
                 line_has_tabs,
+                line_ends_with_cr,
             ));
         }
 
@@ -382,6 +387,7 @@ impl IndexedFileDiffSource {
                         preview_line_is_ascii_without_loading(flags),
                         preview_line_has_tabs_without_loading(flags),
                     )
+                    .with_known_trailing_cr(preview_line_has_trailing_cr(flags))
                 };
                 // Long lines (minified files) are not retained.
                 if range.len() > RECENT_FILE_LINE_MAX_BYTES {
@@ -2191,6 +2197,31 @@ pub(in crate::view) fn build_file_diff_cache_with_engine(
 mod tests {
     use super::*;
     use std::path::{Path, PathBuf};
+
+    #[test]
+    fn crlf_indexed_long_lines_need_no_tail_reads_across_frames() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("long.txt");
+        // Put CR and LF on opposite sides of the scanner's buffer boundary.
+        let prefix = "x".repeat(FILE_DIFF_INDEX_SCAN_BUFFER_BYTES - 1);
+        for ending in ["\r", " "] {
+            std::fs::write(&path, format!("{prefix}{ending}\nsecond\r\nthird\n")).unwrap();
+            let source = IndexedFileDiffSource::from_file(&path).unwrap();
+            gitcomet_core::file_diff::take_file_slice_bytes_read_for_tests();
+            for _ in 0..10 {
+                assert_eq!(
+                    source.line_text(0).unwrap().has_trailing_cr(),
+                    ending == "\r"
+                );
+                assert!(source.line_text(1).unwrap().has_trailing_cr());
+                assert!(!source.line_text(2).unwrap().has_trailing_cr());
+            }
+            assert_eq!(
+                gitcomet_core::file_diff::take_file_slice_bytes_read_for_tests(),
+                0
+            );
+        }
+    }
 
     #[test]
     fn file_backed_lines_are_read_once_across_frames() {
