@@ -53,7 +53,7 @@ struct Mounted<'a> {
 }
 
 /// A view's frame, as pane `id` draws it.
-fn thread_frame<V: 'static>(id: u64, thread: &gpui::Entity<V>) -> &'static str {
+fn view_frame<V: 'static>(id: u64, thread: &gpui::Entity<V>) -> &'static str {
     selector(format!(
         "hosted_diff_{id}_view_{}",
         thread.entity_id().as_u64()
@@ -215,7 +215,7 @@ fn block_views_draw_after_their_line_in_rows_that_follow_their_height(
             DiffLayout::Split => DiffTextRegion::SplitRight,
             _ => DiffTextRegion::Inline,
         };
-        let view = thread_frame(id, &thread);
+        let view = view_frame(id, &thread);
         let height = row_height(cx, &renderer);
         let reserved = |cx: &mut gpui::VisualTestContext| {
             let rows = cx.update(|_, app| renderer.update(app, |r, _| r.diff_list_len()));
@@ -411,7 +411,7 @@ fn block_views_hold_still_while_the_lines_scroll_sideways(cx: &mut gpui::TestApp
             DiffLayout::Split => DiffTextRegion::SplitRight,
             _ => DiffTextRegion::Inline,
         };
-        let view = thread_frame(id, &thread);
+        let view = view_frame(id, &thread);
         let before = cx.debug_bounds(view).unwrap();
         let text = painted(cx, &renderer, region, "one");
         cx.update(|_, app| {
@@ -490,8 +490,8 @@ fn replaced_and_removed_hosted_views_leave_nothing_behind(cx: &mut gpui::TestApp
         note
     });
     draw(cx);
-    assert!(cx.debug_bounds(thread_frame(id, &thread)).is_none());
-    assert!(cx.debug_bounds(thread_frame(id, &note)).is_some());
+    assert!(cx.debug_bounds(view_frame(id, &thread)).is_none());
+    assert!(cx.debug_bounds(view_frame(id, &note)).is_some());
     let short = reserved(cx, &renderer);
     let content = cx.debug_bounds("thread_root").unwrap().size.height;
     let height = row_height(cx, &renderer);
@@ -520,7 +520,7 @@ fn replaced_and_removed_hosted_views_leave_nothing_behind(cx: &mut gpui::TestApp
     cx.update(|_, app| pane.set_views(Vec::new(), app));
     draw(cx);
     assert_eq!(reserved(cx, &renderer), 0);
-    assert!(cx.debug_bounds(thread_frame(id, &note)).is_none());
+    assert!(cx.debug_bounds(view_frame(id, &note)).is_none());
     assert_eq!(
         cx.update(|_, app| renderer.read(app).hosted_view_states()),
         0
@@ -766,7 +766,7 @@ fn end_of_line_views_sit_after_their_lines_text_in_no_rows_of_their_own(
             DiffLayout::Split => DiffTextRegion::SplitRight,
             _ => DiffTextRegion::Inline,
         };
-        let frame = cx.debug_bounds(thread_frame(id, &hint)).expect("drawn");
+        let frame = cx.debug_bounds(view_frame(id, &hint)).expect("drawn");
         let (text, end) = text_end(cx, &renderer, region, "TWO");
         assert_near(frame.left(), end, &format!("{layout:?}: after the text"));
         assert_eq!(frame.top(), text.top(), "{layout:?}: on its line's row");
@@ -835,9 +835,9 @@ fn end_of_line_views_scroll_sideways_with_the_text(cx: &mut gpui::TestAppContext
             draw(cx);
         };
         scroll_x(cx, px(1750.0) - end);
-        let before = cx.debug_bounds(thread_frame(id, &hint)).unwrap();
+        let before = cx.debug_bounds(view_frame(id, &hint)).unwrap();
         scroll_x(cx, px(1600.0) - end);
-        let after = cx.debug_bounds(thread_frame(id, &hint)).unwrap();
+        let after = cx.debug_bounds(view_frame(id, &hint)).unwrap();
         assert_near(
             after.left(),
             before.left() - px(150.0),
@@ -882,7 +882,7 @@ fn end_of_line_views_follow_a_streamed_line(cx: &mut gpui::TestAppContext) {
     });
     assert!(streamed, "the line is streamed");
     let (_, end) = text_end(cx, &renderer, DiffTextRegion::Inline, "xxx");
-    let frame = cx.debug_bounds(thread_frame(id, &hint)).expect("drawn");
+    let frame = cx.debug_bounds(view_frame(id, &hint)).expect("drawn");
     assert_near(frame.left(), end, "after the cells");
 }
 
@@ -913,7 +913,7 @@ fn end_of_line_views_go_on_a_wrapped_lines_last_row(cx: &mut gpui::TestAppContex
     });
     assert!(rows > 1, "the line wraps over {rows} rows");
     let (last, end) = text_end(cx, &renderer, DiffTextRegion::Inline, "w");
-    let frame = cx.debug_bounds(thread_frame(id, &hint)).expect("drawn");
+    let frame = cx.debug_bounds(view_frame(id, &hint)).expect("drawn");
     assert_eq!(frame.top(), last.top(), "on the last row");
     assert_near(frame.left(), end, "after its text");
     assert_eq!(reserved(cx, &renderer), 0);
@@ -984,7 +984,7 @@ fn only_block_views_reserve_rows(cx: &mut gpui::TestAppContext) {
             ];
             ((thread, hint), views)
         });
-    assert!(cx.debug_bounds(thread_frame(id, &hint)).is_some());
+    assert!(cx.debug_bounds(view_frame(id, &hint)).is_some());
     let content = cx.debug_bounds("thread_root").unwrap().size.height;
     let height = row_height(cx, &renderer);
     assert_eq!(
@@ -999,8 +999,8 @@ fn only_block_views_reserve_rows(cx: &mut gpui::TestAppContext) {
         )
     });
     draw(cx);
-    assert!(cx.debug_bounds(thread_frame(id, &thread)).is_none());
-    assert!(cx.debug_bounds(thread_frame(id, &hint)).is_some());
+    assert!(cx.debug_bounds(view_frame(id, &thread)).is_none());
+    assert!(cx.debug_bounds(view_frame(id, &hint)).is_some());
     assert_eq!(reserved(cx, &renderer), 0);
 }
 
@@ -1017,7 +1017,7 @@ fn an_end_of_line_view_is_measured_once_until_it_notifies(cx: &mut gpui::TestApp
         2,
         50.0,
     );
-    let frame = thread_frame(id, &hint);
+    let frame = view_frame(id, &hint);
     let renders = cx.update(|_, app| hint.read(app).renders.clone());
     let one_frame = |cx: &mut gpui::VisualTestContext| {
         cx.update(|window, app| {
@@ -1087,4 +1087,165 @@ fn an_end_of_line_view_is_measured_once_until_it_notifies(cx: &mut gpui::TestApp
     renders.set(0);
     one_frame(cx);
     assert_eq!(renders.get(), 1, "back in view: drawn, not measured");
+}
+
+/// A view moved between placements is measured again for its new one: at
+/// its column's width between lines, at its own after the text, and back.
+#[gpui::test]
+fn a_view_moved_between_placements_is_measured_for_its_new_one(cx: &mut gpui::TestAppContext) {
+    let (old, new) = three_lines();
+    let (hint, pane, renderer, id, cx) = mount_views(cx, DiffLayout::Inline, old, new, |app| {
+        let hint = new_hint(app, 50.0);
+        (hint.clone(), vec![DiffHostedView::block(on_new(2), hint)])
+    });
+    let frame = view_frame(id, &hint);
+    let block = cx.debug_bounds(frame).unwrap();
+    let rows = reserved(cx, &renderer);
+    assert!(
+        block.size.width > px(400.0),
+        "its column's width: {block:?}"
+    );
+    assert!(rows > 0);
+
+    cx.update(|_, app| {
+        pane.set_views(
+            vec![DiffHostedView::end_of_line(on_new(2), hint.clone())],
+            app,
+        )
+    });
+    draw(cx);
+    let end = cx.debug_bounds(frame).unwrap();
+    assert_eq!(end.size.width, px(50.0), "its own width");
+    assert_eq!(end.size.height, row_height(cx, &renderer));
+    assert_eq!(reserved(cx, &renderer), 0);
+
+    cx.update(|_, app| pane.set_views(vec![DiffHostedView::block(on_new(2), hint.clone())], app));
+    draw(cx);
+    assert_eq!(cx.debug_bounds(frame).unwrap().size, block.size);
+    assert_eq!(reserved(cx, &renderer), rows);
+}
+
+/// Views after the same line sit side by side after its text, in the
+/// order they were given.
+#[gpui::test]
+fn end_of_line_views_after_one_line_sit_side_by_side_in_order(cx: &mut gpui::TestAppContext) {
+    let (old, new) = three_lines();
+    let ((first, second), _pane, renderer, id, cx) =
+        mount_views(cx, DiffLayout::Inline, old, new, |app| {
+            let first = new_hint(app, 60.0);
+            let second = new_hint(app, 40.0);
+            let views = vec![
+                DiffHostedView::end_of_line(on_new(2), first.clone()),
+                DiffHostedView::end_of_line(on_new(2), second.clone()),
+            ];
+            ((first, second), views)
+        });
+    let (_, end) = text_end(cx, &renderer, DiffTextRegion::Inline, "TWO");
+    let first = cx.debug_bounds(view_frame(id, &first)).unwrap();
+    let second = cx.debug_bounds(view_frame(id, &second)).unwrap();
+    assert_near(first.left(), end, "the first right after the text");
+    assert_near(second.left(), first.right(), "the second right after it");
+    assert_eq!(first.size.width, px(60.0));
+    assert_eq!(second.size.width, px(40.0));
+    assert_eq!(first.top(), second.top());
+}
+
+/// A view anchored to an old line shows on its row: a removed line's, and a
+/// context line's beside one anchored to the same row's new line, in an
+/// inline diff; in a split, in the old side's column.
+#[gpui::test]
+fn end_of_line_views_follow_old_lines_too(cx: &mut gpui::TestAppContext) {
+    let on_old = |line| DiffScrollAnchor {
+        side: DiffLineSide::Old,
+        line,
+    };
+    for layout in [DiffLayout::Inline, DiffLayout::Split] {
+        let (old, new) = three_lines();
+        let ((removed, new_one, old_one), _pane, renderer, id, cx) =
+            mount_views(cx, layout, old, new, |app| {
+                let removed = new_hint(app, 30.0);
+                let new_one = new_hint(app, 40.0);
+                let old_one = new_hint(app, 50.0);
+                let views = vec![
+                    DiffHostedView::end_of_line(on_old(2), removed.clone()),
+                    DiffHostedView::end_of_line(on_new(1), new_one.clone()),
+                    DiffHostedView::end_of_line(on_old(1), old_one.clone()),
+                ];
+                ((removed, new_one, old_one), views)
+            });
+        let (old_region, new_region) = match layout {
+            DiffLayout::Split => (DiffTextRegion::SplitLeft, DiffTextRegion::SplitRight),
+            _ => (DiffTextRegion::Inline, DiffTextRegion::Inline),
+        };
+        let frame = |cx: &mut gpui::VisualTestContext, view: &gpui::Entity<Hint>| {
+            cx.debug_bounds(view_frame(id, view)).unwrap()
+        };
+        let (two, end) = text_end(cx, &renderer, old_region, "two");
+        let removed = frame(cx, &removed);
+        assert_near(removed.left(), end, &format!("{layout:?}: after two"));
+        assert_eq!(removed.top(), two.top(), "{layout:?}");
+
+        let (old_row, old_end) = text_end(cx, &renderer, old_region, "one");
+        let old_one = frame(cx, &old_one);
+        let new_one = frame(cx, &new_one);
+        assert_eq!(old_one.top(), old_row.top(), "{layout:?}: on one's row");
+        assert_eq!(new_one.top(), old_row.top(), "{layout:?}: on one's row");
+        match layout {
+            DiffLayout::Split => {
+                let (_, new_end) = text_end(cx, &renderer, new_region, "one");
+                assert_near(old_one.left(), old_end, "after the old side's one");
+                assert_near(new_one.left(), new_end, "after the new side's one");
+                assert!(old_one.right() < new_one.left(), "each in its column");
+            }
+            _ => {
+                assert_near(new_one.left(), old_end, "the first given first");
+                assert_near(old_one.left(), new_one.right(), "then the other");
+            }
+        }
+    }
+}
+
+/// In a split with word wrap, each side's view goes on the last row of its
+/// own side's text, though the two sides wrap over different rows.
+#[gpui::test]
+fn end_of_line_views_in_a_wrapped_split_follow_each_sides_last_row(cx: &mut gpui::TestAppContext) {
+    let words = |count: usize| {
+        (0..count)
+            .map(|word| format!("w{word:02}"))
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    let on_old = DiffScrollAnchor {
+        side: DiffLineSide::Old,
+        line: 2,
+    };
+    let ((left, right), _pane, renderer, id, cx) = mount_views(
+        cx,
+        DiffLayout::Split,
+        format!("one\n{}\nthree\n", words(20)),
+        format!("one\n{}\nthree\n", words(80)),
+        |app| {
+            let left = new_hint(app, 30.0);
+            let right = new_hint(app, 30.0);
+            let views = vec![
+                DiffHostedView::end_of_line(on_old, left.clone()),
+                DiffHostedView::end_of_line(on_new(2), right.clone()),
+            ];
+            ((left, right), views)
+        },
+    );
+    cx.update(|_, app| renderer.update(app, |pane, cx| pane.set_diff_word_wrap(true, cx)));
+    draw(cx);
+    let (left_row, left_end) = text_end(cx, &renderer, DiffTextRegion::SplitLeft, "w");
+    let (right_row, right_end) = text_end(cx, &renderer, DiffTextRegion::SplitRight, "w");
+    assert!(
+        left_row.top() < right_row.top(),
+        "the new side wraps further"
+    );
+    let left = cx.debug_bounds(view_frame(id, &left)).unwrap();
+    let right = cx.debug_bounds(view_frame(id, &right)).unwrap();
+    assert_eq!(left.top(), left_row.top(), "on the old side's last row");
+    assert_near(left.left(), left_end, "after the old side's text");
+    assert_eq!(right.top(), right_row.top(), "on the new side's last row");
+    assert_near(right.left(), right_end, "after the new side's text");
 }

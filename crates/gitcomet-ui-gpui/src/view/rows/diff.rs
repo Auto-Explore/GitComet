@@ -31,6 +31,9 @@ struct DiffRowsRenderPass {
     ui_scale_percent: u32,
     annotation_width: Pixels,
     blame_ctx: Option<BlameRenderCtx>,
+    /// Whether hosted views go after any line's text: the rows' canvases
+    /// then find where their text ends.
+    line_end_views: bool,
 }
 
 struct SplitDiffRowsRenderPass {
@@ -139,6 +142,7 @@ impl DiffRenderer {
             ui_scale_percent,
             annotation_width,
             blame_ctx,
+            line_end_views: this.has_hosted_line_end_views(),
         };
 
         if this.is_collapsed_diff_projection_active() {
@@ -248,6 +252,7 @@ impl DiffRenderer {
                 ui_scale_percent,
                 annotation_width,
                 blame_ctx,
+                line_end_views: this.has_hosted_line_end_views(),
             },
             column,
             is_left,

@@ -8,24 +8,57 @@
 use super::*;
 use gitcomet_extension_api::{DiffHostedView, DiffLineSide, DiffPlacement};
 use gpui::{Div, EntityId, TextStyle};
+use smallvec::SmallVec;
 use std::cell::Cell;
 use std::rc::Rc;
 
 /// What the pane knows of one view.
 struct HostedViewState {
-    /// A block view's rows from its last measured height; one until it is
-    /// measured.
-    rows: usize,
-    /// Whether what was measured still holds: not after it notified.
-    measured: bool,
-    /// The width it draws at: its column's for a block view, the one it
-    /// measured at for a view at a line's end.
-    width: Pixels,
-    /// The row height its rows were counted in, which follows the UI scale
-    /// and the editor's metrics.
-    row_height: Pixels,
+    /// What it was last measured against, and the size it measured at,
+    /// which it draws at; none until it is measured, and none again after it
+    /// notified.
+    measured: Option<(Measure, Size<Pixels>)>,
     /// Its wrapper's: the diff's keys stand aside while focus is inside.
     focus: gpui::FocusHandle,
+}
+
+/// What a view's measured size holds for: its placement, and what its size
+/// depends on there. The row height follows the UI scale and the editor's
+/// metrics.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Measure {
+    /// At its column's width, its height then counted in rows.
+    Block { column: Pixels, row_height: Pixels },
+    /// At its own width.
+    EndOfLine { row_height: Pixels },
+}
+
+impl Measure {
+    fn of(placement: DiffPlacement, column: Pixels, row_height: Pixels) -> Self {
+        match placement {
+            DiffPlacement::Block => Self::Block { column, row_height },
+            DiffPlacement::EndOfLine => Self::EndOfLine { row_height },
+        }
+    }
+
+    /// The width to lay the view out at; none for its own.
+    fn width(self) -> Option<Pixels> {
+        match self {
+            Self::Block { column, .. } => Some(column),
+            Self::EndOfLine { .. } => None,
+        }
+    }
+}
+
+/// The rows a measured block view takes; one for any other, or before it is
+/// measured.
+fn measured_rows(measured: Option<(Measure, Size<Pixels>)>) -> usize {
+    match measured {
+        Some((Measure::Block { row_height, .. }, size)) => {
+            ((f32::from(size.height) / f32::from(row_height).max(1.0)).ceil() as usize).max(1)
+        }
+        Some((Measure::EndOfLine { .. }, _)) | None => 1,
+    }
 }
 
 /// A hosted diff's extension views, by their entities.
@@ -39,6 +72,8 @@ pub(in crate::view) struct HostedViews {
     /// The views as last projected, so a row of one can be found again in a
     /// replacement list.
     projected: Vec<EntityId>,
+    /// The views after a line's text, by their line, in list order.
+    line_end_views: FxHashMap<(DiffLineSide, u32), SmallVec<[usize; 1]>>,
     /// The rows built this frame with views after their text, by row and
     /// column.
     line_ends: FxHashMap<(usize, DiffTextRegion), Rc<HostedLineEnd>>,
@@ -71,15 +106,30 @@ impl HostedViews {
         }
         self.states
             .retain(|id, _| views.iter().any(|view| view.view().entity_id() == *id));
+        self.line_end_views.clear();
+        for (ix, view) in views.iter().enumerate() {
+            match view.placement() {
+                DiffPlacement::Block => {}
+                DiffPlacement::EndOfLine => {
+                    let anchor = view.anchor();
+                    self.line_end_views
+                        .entry((anchor.side, anchor.line))
+                        .or_default()
+                        .push(ix);
+                }
+            }
+        }
         self.views = views;
         true
     }
 
     /// The rows `view` takes.
     pub(super) fn rows(&self, view: &DiffHostedView) -> usize {
-        self.states
-            .get(&view.view().entity_id())
-            .map_or(1, |state| state.rows)
+        measured_rows(
+            self.states
+                .get(&view.view().entity_id())
+                .and_then(|state| state.measured),
+        )
     }
 
     /// Notes the views' order as projected.
@@ -101,12 +151,17 @@ impl HostedViews {
 
     fn state(&mut self, id: EntityId, cx: &mut App) -> &mut HostedViewState {
         self.states.entry(id).or_insert_with(|| HostedViewState {
-            rows: 1,
-            measured: false,
-            width: px(0.0),
-            row_height: px(0.0),
+            measured: None,
             focus: cx.focus_handle(),
         })
+    }
+
+    /// The width `id` draws at: the one it measured at.
+    fn width(&self, id: EntityId) -> Pixels {
+        self.states
+            .get(&id)
+            .and_then(|state| state.measured)
+            .map_or(px(0.0), |(_, size)| size.width)
     }
 }
 
@@ -148,11 +203,8 @@ pub(in crate::view) fn measure_hosted_views(
     }
     let sizes = views
         .into_iter()
-        .map(|(id, view, placement, column)| {
-            let width = match placement {
-                DiffPlacement::Block => Some(column),
-                DiffPlacement::EndOfLine => None,
-            };
+        .map(|(id, view, measure)| {
+            let width = measure.width();
             let mut frame = hosted_view_frame(view, width, &text).into_any_element();
             let size = frame.layout_as_root(
                 gpui::size(
@@ -165,7 +217,7 @@ pub(in crate::view) fn measure_hosted_views(
                 window,
                 cx,
             );
-            (id, placement, size)
+            (id, measure, size)
         })
         .collect();
     renderer.update(cx, |pane, _| pane.set_hosted_view_sizes(sizes));
@@ -182,16 +234,17 @@ impl DiffRenderer {
             .map(|width| width.max(px(0.0)))
     }
 
-    /// The views to measure, each with its column's width: those not
-    /// measured since they showed or notified, block views whose column
-    /// changed width, and every one when the text style or the row height
-    /// changed.
+    /// The views to measure, each with what it is measured against: those
+    /// whose size does not hold for their placement as it now is, which is
+    /// those not measured since they showed or notified, block views whose
+    /// column changed width, and every one when the row height did, or when
+    /// the text style changed.
     fn hosted_views_to_measure(
         &mut self,
         text: &TextStyle,
         window: &Window,
         cx: &mut App,
-    ) -> Vec<(EntityId, AnyView, DiffPlacement, Pixels)> {
+    ) -> Vec<(EntityId, AnyView, Measure)> {
         let Some(decor) = &self.hosted_decor else {
             return Vec::new();
         };
@@ -210,59 +263,42 @@ impl DiffRenderer {
         list.iter()
             .filter_map(|view| {
                 let column = widths[usize::from(view.anchor().side == DiffLineSide::New)];
+                let measure = Measure::of(view.placement(), column, row_height);
                 let state = views.state(view.view().entity_id(), cx);
-                let resized = match view.placement() {
-                    DiffPlacement::Block => std::mem::replace(&mut state.width, column) != column,
-                    DiffPlacement::EndOfLine => false,
-                };
-                if state.measured && !resized && state.row_height == row_height && !restyled {
+                if !restyled && state.measured.is_some_and(|(at, _)| at == measure) {
                     return None;
                 }
-                state.row_height = row_height;
-                Some((
-                    view.view().entity_id(),
-                    view.view().clone(),
-                    view.placement(),
-                    column,
-                ))
+                Some((view.view().entity_id(), view.view().clone(), measure))
             })
             .collect()
     }
 
-    /// Takes measured sizes: a block view's height as whole rows, a line
-    /// end view's width as the one it draws at. A block view whose rows
-    /// changed moves the lines after it, so the rows are projected again.
-    fn set_hosted_view_sizes(&mut self, sizes: Vec<(EntityId, DiffPlacement, Size<Pixels>)>) {
+    /// Takes measured sizes. A view whose rows changed moves the lines after
+    /// it, so the rows are projected again.
+    fn set_hosted_view_sizes(&mut self, sizes: Vec<(EntityId, Measure, Size<Pixels>)>) {
         let Some(decor) = self.hosted_decor.as_mut() else {
             return;
         };
-        let row_height = f32::from(decor.row_height).max(1.0);
-        for (id, placement, size) in sizes {
+        for (id, measure, size) in sizes {
             let Some(state) = decor.views.states.get_mut(&id) else {
                 continue;
             };
-            state.measured = true;
-            match placement {
-                DiffPlacement::Block => {
-                    let rows = ((f32::from(size.height) / row_height).ceil() as usize).max(1);
-                    if state.rows != rows {
-                        state.rows = rows;
-                        decor.key = None;
-                    }
-                }
-                DiffPlacement::EndOfLine => state.width = size.width,
+            let rows = measured_rows(state.measured);
+            state.measured = Some((measure, size));
+            if measured_rows(state.measured) != rows {
+                decor.key = None;
             }
         }
     }
 
     /// Measures the view again before it is next drawn: it notified.
-    pub(in crate::view) fn forget_hosted_view_height(&mut self, id: EntityId) {
+    pub(in crate::view) fn forget_hosted_view_size(&mut self, id: EntityId) {
         if let Some(state) = self
             .hosted_decor
             .as_mut()
             .and_then(|decor| decor.views.states.get_mut(&id))
         {
-            state.measured = false;
+            state.measured = None;
         }
     }
 
@@ -310,19 +346,21 @@ impl DiffRenderer {
         let rows = decor.views.rows(view);
         // The pane measures its views before its rows draw.
         let text = decor.views.text.clone().expect("measured before drawn");
+        // Drawn at the width it was measured at, this frame's column's.
+        let width = decor.views.width(id);
         let scroll = match side {
             Some(DiffLineSide::New) => &self.diff_split_right_scroll,
             _ => &self.diff_scroll,
         };
         let scroll_x = scroll.0.borrow().base_handle.offset().x;
-        // Drawn at the width it was measured at, this frame's column's.
-        let state = self
+        let focus = self
             .hosted_decor
             .as_mut()
             .expect("hosted renderer")
             .views
-            .state(id, cx);
-        let (width, focus) = (state.width, state.focus.clone());
+            .state(id, cx)
+            .focus
+            .clone();
         // Ids from the view's entity, so its element state follows it from
         // row to row as it scrolls.
         placeholder
@@ -339,6 +377,13 @@ impl DiffRenderer {
                 &focus,
             ))
             .into_any_element()
+    }
+
+    /// Whether any hosted view goes after a line's text.
+    pub(in crate::view) fn has_hosted_line_end_views(&self) -> bool {
+        self.hosted_decor
+            .as_ref()
+            .is_some_and(|decor| !decor.views.line_end_views.is_empty())
     }
 
     /// Forgets the line ends of `side`'s rows, or an inline diff's, before
@@ -368,67 +413,80 @@ impl DiffRenderer {
     /// Whether row `visible_ix` is the one its line's text ends on in
     /// `region`: the last of a wrapped line's rows that holds any of it.
     fn is_hosted_line_end_row(&self, visible_ix: usize, region: DiffTextRegion) -> bool {
-        let Some(wrap) = self.diff_text_wrap_for_visible_ix(visible_ix) else {
+        if self.diff_text_wrap_for_visible_ix(visible_ix).is_none() {
             return true;
+        }
+        let rows = &self.diff_wrap_visible_rows;
+        let source = rows[visible_ix].source_visible_ix;
+        // The wrap projection keeps a line's rows together, in order.
+        let after = rows.partition_point(|row| row.source_visible_ix <= source);
+        let holds_text = |row: &super::helpers::state::DiffWrapVisualRow| {
+            let range = match region {
+                DiffTextRegion::Inline | DiffTextRegion::SplitLeft => row.primary_range,
+                DiffTextRegion::SplitRight => row.secondary_range,
+            };
+            row.wrap_ix == 0 || range.start < range.end
         };
-        let holds_text = |wrap: rows::DiffTextWrapSlice| {
-            wrap.wrap_ix == 0 || !wrap.range_for_region(region).is_empty()
-        };
-        let source = self.diff_source_visible_ix_for_visible_ix(visible_ix);
-        holds_text(wrap)
-            && !(visible_ix + 1..self.diff_visible_len())
-                .take_while(|next| self.diff_source_visible_ix_for_visible_ix(*next) == source)
-                .filter_map(|next| self.diff_text_wrap_for_visible_ix(next))
-                .any(holds_text)
+        (visible_ix..after).rev().find(|ix| holds_text(&rows[*ix])) == Some(visible_ix)
     }
 
-    /// The views after the text of document row `row`, in `side`'s column or
-    /// in an inline diff's one: those anchored to its line on that side, side
-    /// by side in order, one row high, centred on it and at their measured
-    /// widths, on the row its text ends on. They go where the row's canvas finds the text
-    /// to end, so they scroll sideways with it.
+    /// The views after the text of document row `row`, whose line numbers
+    /// are `lines`, in `side`'s column or in an inline diff's one: those
+    /// anchored to its line on that side, side by side in list order, one
+    /// row high, centred on it and at their measured widths, on the row its
+    /// text ends on. They go where the row's canvas finds the text to end, so
+    /// they scroll sideways with it.
     pub(super) fn render_hosted_line_end(
         &mut self,
         row: usize,
         side: Option<DiffLineSide>,
+        (old, new): (Option<u32>, Option<u32>),
         cx: &mut gpui::Context<Self>,
     ) -> Option<AnyElement> {
-        let region = hosted_region(side);
-        let (old, new) = self.hosted_line_numbers(row);
         let decor = self.hosted_decor.as_ref()?;
-        let ends: Vec<_> = decor
-            .views
-            .views()
-            .iter()
-            .filter(|view| match view.placement() {
-                DiffPlacement::Block => false,
-                DiffPlacement::EndOfLine => {
-                    let anchor = view.anchor();
-                    let line = match anchor.side {
-                        DiffLineSide::Old => old,
-                        DiffLineSide::New => new,
-                    };
-                    side.is_none_or(|side| side == anchor.side) && line == Some(anchor.line)
-                }
-            })
-            .map(|view| (view.view().entity_id(), view.view().clone()))
-            .collect();
+        let index = &decor.views.line_end_views;
+        if index.is_empty() {
+            return None;
+        }
+        let on = |at: DiffLineSide, line: Option<u32>| {
+            line.filter(|_| side.is_none_or(|side| side == at))
+                .and_then(|line| index.get(&(at, line)))
+        };
+        let mut ends: SmallVec<[usize; 2]> =
+            [on(DiffLineSide::Old, old), on(DiffLineSide::New, new)]
+                .into_iter()
+                .flatten()
+                .flatten()
+                .copied()
+                .collect();
+        let region = hosted_region(side);
         if ends.is_empty() || !self.is_hosted_line_end_row(row, region) {
             return None;
         }
+        ends.sort_unstable();
         let pane_id = decor.view_id;
         let row_height = decor.row_height;
         // The pane measures its views before its rows draw.
         let text = decor.views.text.clone().expect("measured before drawn");
+        let ends: SmallVec<[(EntityId, AnyView, Pixels); 2]> = ends
+            .into_iter()
+            .map(|ix| {
+                let view = decor.views.views()[ix].view();
+                let id = view.entity_id();
+                (id, view.clone(), decor.views.width(id))
+            })
+            .collect();
         let views = &mut self.hosted_decor.as_mut().expect("hosted renderer").views;
+        // Ids from the first view's entity, so their element state stays
+        // with them when rows come and go above.
+        let key = ends[0].0;
         let mut width = px(0.0);
         let frames: Vec<_> = ends
             .into_iter()
-            .map(|(id, content)| {
-                let state = views.state(id, cx);
-                width += state.width;
+            .map(|(id, content, view_width)| {
+                width += view_width;
                 keeps_its_input(
-                    hosted_view_frame(content, Some(state.width), &text)
+                    hosted_view_frame(content, Some(view_width), &text)
                         .id(("hosted_view", id))
                         .debug_selector(move || {
                             format!("hosted_diff_{pane_id}_view_{}", id.as_u64())
@@ -439,7 +497,7 @@ impl DiffRenderer {
                         .flex()
                         .flex_col()
                         .justify_center(),
-                    &state.focus,
+                    &views.state(id, cx).focus,
                 )
             })
             .collect();
@@ -452,6 +510,7 @@ impl DiffRenderer {
             HostedLineEndSlot {
                 end,
                 views: div()
+                    .id(("hosted_line_end", key))
                     .flex()
                     .h(row_height)
                     .overflow_hidden()
