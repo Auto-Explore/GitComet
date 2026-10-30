@@ -335,56 +335,6 @@ impl DiffInset {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
-#[non_exhaustive]
-pub struct DiffInlineCard {
-    pub id: SharedString,
-    pub range: DiffLineRange,
-    pub title: SharedString,
-    pub text: SharedString,
-    pub pending: bool,
-    pub actions: Vec<crate::HostedAction>,
-    pub header_actions: Vec<(crate::HostedAction, SharedString)>,
-}
-
-impl DiffInlineCard {
-    pub fn new(
-        id: impl Into<SharedString>,
-        range: DiffLineRange,
-        title: impl Into<SharedString>,
-        text: impl Into<SharedString>,
-    ) -> Self {
-        Self {
-            id: id.into(),
-            range,
-            title: title.into(),
-            text: text.into(),
-            pending: false,
-            actions: Vec::new(),
-            header_actions: Vec::new(),
-        }
-    }
-
-    pub fn pending(mut self, pending: bool) -> Self {
-        self.pending = pending;
-        self
-    }
-
-    pub fn with_action(mut self, action: crate::HostedAction) -> Self {
-        self.actions.push(action);
-        self
-    }
-
-    pub fn with_header_action(
-        mut self,
-        action: crate::HostedAction,
-        icon: impl Into<SharedString>,
-    ) -> Self {
-        self.header_actions.push((action, icon.into()));
-        self
-    }
-}
-
 /// A view of the extension's own in a diff pane, at a line on one side; in a
 /// split it draws in that side's column only. Its entity is what identifies
 /// it: a pane shows an entity once, and keeps its state and measured size
@@ -410,7 +360,7 @@ pub struct DiffHostedView {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DiffPlacement {
     /// Between lines, after its anchor's line. The pane reserves whole rows
-    /// for it, as many as its height needs, after the line's cards, and holds
+    /// for it, as many as its height needs, after the line's insets, and holds
     /// it against sideways scrolling.
     Block,
     /// After the line's text, on the line's own row: the pane reserves no
@@ -687,7 +637,6 @@ pub trait DiffPaneImpl {
     fn set_legend(&self, legend: Vec<DiffLegendItem>, cx: &mut App);
     /// Replaces the pane's insets; each shows after its line on its side.
     fn set_insets(&self, insets: Vec<DiffInset>, cx: &mut App);
-    fn set_inline_cards(&self, cards: Vec<DiffInlineCard>, cx: &mut App);
     /// The selected file lines' text, one line each; insets never included.
     fn selected_text(&self, cx: &App) -> Option<String>;
     fn text_for_range(&self, range: DiffLineRange, cx: &App) -> Option<String>;
@@ -721,9 +670,6 @@ pub trait DiffPaneImpl {
 pub struct DiffPane(Rc<dyn DiffPaneImpl>);
 
 impl DiffPane {
-    pub fn set_inline_cards(&self, cards: Vec<DiffInlineCard>, cx: &mut App) {
-        self.0.set_inline_cards(cards, cx)
-    }
     /// Replaces the extension's own views in the pane.
     pub fn set_views(&self, views: Vec<DiffHostedView>, cx: &mut App) {
         self.0.set_views(views, cx)

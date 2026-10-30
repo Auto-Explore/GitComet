@@ -15,7 +15,6 @@ mod file_disk;
 pub(in crate::view) mod file_editor;
 pub(in crate::view) mod helpers;
 mod hosted_binding;
-mod hosted_cards;
 mod hosted_people;
 mod hosted_views;
 pub(in crate::view) mod input;
@@ -100,7 +99,7 @@ impl Render for DiffRenderer {
         self.diff_surface_frame = self.diff_surface_frame.wrapping_add(1);
         self.last_window_size = window.viewport_size();
         self.sync_layout_snapshot(cx);
-        self.prepare_hosted_cards(window, cx);
+        self.sync_hosted_row_height(cx);
         if self.annotate_enabled && self.rendered_diff_target().is_some() {
             self.request_blame_for_current_target(false, cx);
         }

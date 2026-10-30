@@ -235,14 +235,48 @@ pub(in crate::view) fn measure_hosted_views(
 }
 
 impl DiffRenderer {
+    /// Notes the row height the hosted rows are drawn and counted in, which
+    /// follows the UI scale and the editor's metrics.
+    pub(in crate::view) fn sync_hosted_row_height(&mut self, cx: &mut App) {
+        let row_height = self
+            .theme
+            .editor_row_height(ui_scale::UiScale::current(cx).percent());
+        if let Some(decor) = self.hosted_decor.as_mut() {
+            decor.row_height = row_height;
+        }
+    }
+
     /// How wide views draw in each column, old side then new: the column
     /// less its scrollbar, and never below nothing in a narrow split.
     fn hosted_view_widths(&self, window: &Window) -> [Pixels; 2] {
         let width = self
             .hosted_content_width
             .unwrap_or(window.viewport_size().width);
-        self.hosted_card_widths(width)
-            .map(|width| width.max(px(0.0)))
+        let left_gutter = self.diff_vertical_scrollbar_gutter_for_column(
+            DiffHorizontalScrollColumn::Primary,
+            self.diff_scroll.clone(),
+        );
+        let widths = match self.diff_view {
+            DiffViewMode::Inline => [width - left_gutter; 2],
+            DiffViewMode::Split => {
+                let synced = self.diff_scroll_sync.includes_vertical();
+                let shared = if synced { left_gutter } else { px(0.0) };
+                let (left, right) = crate::view::diff_split_column_widths(
+                    (width - shared).max(px(0.0)),
+                    self.diff_split_ratio,
+                );
+                if synced {
+                    [left, right]
+                } else {
+                    let right_gutter = self.diff_vertical_scrollbar_gutter_for_column(
+                        DiffHorizontalScrollColumn::SplitRight,
+                        self.diff_split_right_scroll.clone(),
+                    );
+                    [left - left_gutter, right - right_gutter]
+                }
+            }
+        };
+        widths.map(|width| width.max(px(0.0)))
     }
 
     /// The views to measure, each with what it is measured against: those
