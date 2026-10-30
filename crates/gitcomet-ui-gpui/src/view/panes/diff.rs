@@ -35,7 +35,9 @@ pub(in crate::view) use text_format::TextEncodingMenuState;
 // The editor's free functions are exercised directly by the panel tests; the
 // pane itself reaches them through `impl DiffRenderer`.
 use crate::view::documents::disk::DiskIdentity;
-pub(in crate::view) use core_impl::{DiffRendererInit, EngineNotice, LineNumberCells};
+pub(in crate::view) use core_impl::{
+    DiffRendererInit, EngineNotice, LineNumberCells, device_snapped, list_row_pitch,
+};
 #[cfg(test)]
 pub(in crate::view) use diff_text::take_opened_web_links_for_tests;
 pub(in crate::view) use file_disk::{DiskCheckCause, DiskSurface, FileDiskNotice, FileDiskSeen};
@@ -110,7 +112,6 @@ impl Render for DiffRenderer {
                         }
                 )
             );
-        self.sync_hosted_row_height(cx);
         if !bare_working_file && self.annotate_enabled && self.rendered_diff_target().is_some() {
             self.request_blame_for_current_target(false, cx);
         }

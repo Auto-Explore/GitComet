@@ -290,6 +290,15 @@ pub(in crate::view) struct DiffWrapVisualRow {
     pub(in crate::view) secondary_range: rows::DiffWrapByteRange,
 }
 
+/// How a diff's list was built: its rows, and the row height they asked
+/// for at the window's scale factor.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(in crate::view) struct DiffListBuilt {
+    pub(in crate::view) rows: usize,
+    pub(in crate::view) row_height: Pixels,
+    pub(in crate::view) scale_factor: f32,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(in crate::view) struct DiffWrapVisibleCacheKey {
     pub(in crate::view) source_len: usize,
@@ -1015,9 +1024,9 @@ pub(crate) struct DiffRenderer {
     // History view, scroll handles, and gutter geometry.
     pub(in crate::view) diff_scroll: UniformListScrollHandle,
     pub(in crate::view) diff_split_right_scroll: UniformListScrollHandle,
-    /// The rows the lists on `diff_scroll` and `diff_split_right_scroll`
-    /// were last built with, which their handles' measured contents are of.
-    pub(in crate::view) diff_list_rows: [usize; 2],
+    /// How the list on `diff_scroll` was last built, which its handle's
+    /// measured contents are of.
+    pub(in crate::view) diff_list_built: DiffListBuilt,
     pub(in crate::view) conflict_resolver_diff_scroll: UniformListScrollHandle,
     pub(in crate::view) conflict_preview_ours_scroll: UniformListScrollHandle,
     pub(in crate::view) conflict_preview_theirs_scroll: UniformListScrollHandle,

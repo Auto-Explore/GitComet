@@ -246,17 +246,22 @@ pub(in crate::view) fn measure_hosted_views(
 impl DiffRenderer {
     /// Notes the row height the hosted rows are placed, counted and drawn
     /// in, which follows the UI scale and the editor's metrics: the pitch the
-    /// list laid its rows out at, which gpui snaps to device pixels, or the
-    /// height they ask for until it has laid them out at that height.
-    pub(in crate::view) fn sync_hosted_row_height(&mut self, cx: &mut App) {
+    /// list laid its rows out at when it last asked for this height at this
+    /// scale; otherwise the height as gpui will snap it, and the next frame
+    /// takes the pitch the list then lays them out at.
+    pub(in crate::view) fn sync_hosted_row_height(&mut self, window: &mut Window, cx: &mut App) {
         let asked = self
             .theme
             .editor_row_height(ui_scale::UiScale::current(cx).percent());
-        // A pitch further off was laid out before the height changed.
-        let row_height = self
-            .diff_list_pitch(DiffHorizontalScrollColumn::Primary)
-            .filter(|pitch| (*pitch - asked).abs() < px(1.0))
-            .unwrap_or(asked);
+        let scale_factor = window.scale_factor();
+        let built = self.diff_list_built;
+        let current = built.row_height == asked && built.scale_factor == scale_factor;
+        let pitch = list_row_pitch(&self.diff_scroll, built.rows).filter(|_| current);
+        if built.rows > 0 && !current {
+            // The views are cached: nothing else draws the frame that would.
+            window.on_next_frame(|window, _| window.refresh());
+        }
+        let row_height = pitch.unwrap_or_else(|| device_snapped(asked, scale_factor));
         if let Some(decor) = self.hosted_decor.as_mut() {
             decor.row_height = row_height;
         }
@@ -636,6 +641,7 @@ impl DiffRenderer {
                 .child(HostedOverLayer {
                     pane_id,
                     scroll: self.column_scroll(side).clone(),
+                    list_rows: self.diff_list_built.rows,
                     row_height,
                     start: self.diff_text_start(region, LineNumberCells::of(region), cx),
                     text,
@@ -666,7 +672,9 @@ struct OverView {
 struct HostedOverLayer {
     pane_id: u64,
     scroll: UniformListScrollHandle,
-    /// The pitch the list lays its rows out at.
+    /// The rows the column's list was built with this frame.
+    list_rows: usize,
+    /// The pitch until the list has laid out.
     row_height: Pixels,
     /// Where the column's text starts.
     start: Pixels,
@@ -720,7 +728,8 @@ impl Element for HostedOverLayer {
     ) -> Self::PrepaintState {
         // Where the rows are this frame: the list prepainted first.
         let origin = bounds.top() + self.scroll.0.borrow().base_handle.offset().y;
-        let pitch = self.row_height;
+        // The pitch the list laid its rows out at this frame.
+        let pitch = list_row_pitch(&self.scroll, self.list_rows).unwrap_or(self.row_height);
         let (pane_id, start) = (self.pane_id, self.start);
         let mask = gpui::ContentMask {
             bounds,

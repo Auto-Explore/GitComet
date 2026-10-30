@@ -344,10 +344,10 @@ impl DiffInset {
 /// view notifies or when the text style or the row height changes; a block
 /// or over view also when its column's width does, and a start-aligned over
 /// view when the text start moves. `render` may so run twice in a frame, once
-/// to measure and once to draw, and must have no side effects. A view whose height follows a child view's should notify along
-/// with it. The view keeps its own state while it is scrolled away. Its mouse
-/// presses are its own, and the diff's shortcuts stand aside while it holds
-/// focus.
+/// to measure and once to draw, and must have no side effects. A view whose
+/// height follows a child view's should notify along with it. The view keeps
+/// its own state while it is scrolled away. Its mouse presses are its own,
+/// and the diff's shortcuts stand aside while it holds focus.
 #[derive(Clone)]
 pub struct DiffHostedView {
     anchor: DiffScrollAnchor,
