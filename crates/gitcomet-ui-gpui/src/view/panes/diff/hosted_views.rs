@@ -216,6 +216,14 @@ impl DiffRenderer {
         }
     }
 
+    /// How many views the pane keeps state for.
+    #[cfg(test)]
+    pub(in crate::view) fn hosted_inline_view_states(&self) -> usize {
+        self.hosted_decor
+            .as_ref()
+            .map_or(0, |decor| decor.views.states.len())
+    }
+
     /// Whether focus is inside a hosted view: its keys are then its own.
     pub(in crate::view) fn hosted_view_focused(&self, window: &Window, cx: &App) -> bool {
         self.hosted_decor.as_ref().is_some_and(|decor| {
