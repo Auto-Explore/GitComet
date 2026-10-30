@@ -1,7 +1,9 @@
 //! An extension's own views in a hosted diff.
 
 use super::*;
-use gitcomet_extension_api::{DiffHostedView, DiffLayout, DiffLineRange, DiffScrollAnchor};
+use gitcomet_extension_api::{
+    DiffAlign, DiffHostedView, DiffLayout, DiffLineRange, DiffScrollAnchor,
+};
 use std::cell::Cell;
 use std::rc::Rc;
 
@@ -640,6 +642,7 @@ fn hosted_renderer_of(pane: &DiffPane, app: &App) -> gpui::Entity<DiffRenderer> 
 struct Hint {
     input: gpui::Entity<components::TextInput>,
     width: Pixels,
+    height: Pixels,
     clicks: usize,
     renders: Rc<Cell<usize>>,
 }
@@ -652,7 +655,7 @@ impl Render for Hint {
             .flex()
             .items_center()
             .w(self.width)
-            .h(px(60.0))
+            .h(self.height)
             .child(
                 div()
                     .id("hint_button")
@@ -680,6 +683,7 @@ fn new_hint(app: &mut App, width: f32) -> gpui::Entity<Hint> {
             components::TextInput::new_inert(components::TextInputOptions::default(), cx)
         }),
         width: px(width),
+        height: px(60.0),
         clicks: 0,
         renders: Rc::default(),
     })
@@ -1248,4 +1252,314 @@ fn end_of_line_views_in_a_wrapped_split_follow_each_sides_last_row(cx: &mut gpui
     assert_near(left.left(), left_end, "after the old side's text");
     assert_eq!(right.top(), right_row.top(), "on the new side's last row");
     assert_near(right.left(), right_end, "after the new side's text");
+}
+
+/// A pane of `old` and `new` with a hint `width` wide over the text below
+/// new line `line`, lined up with `align`.
+fn mount_over(
+    cx: &mut gpui::TestAppContext,
+    layout: DiffLayout,
+    old: String,
+    new: String,
+    line: u32,
+    align: DiffAlign,
+    width: f32,
+) -> (
+    gpui::Entity<Hint>,
+    DiffPane,
+    gpui::Entity<DiffRenderer>,
+    u64,
+    &mut gpui::VisualTestContext,
+) {
+    mount_views(cx, layout, old, new, |app| {
+        let hint = new_hint(app, width);
+        let view = DiffHostedView::over(on_new(line), align, hint.clone());
+        (hint, vec![view])
+    })
+}
+
+/// The layer over `region`'s rows that pane `id` draws its over views in.
+fn over_layer(id: u64, region: DiffTextRegion) -> &'static str {
+    selector(format!("hosted_diff_{id}_over_{region:?}"))
+}
+
+/// Scrolls the inline list to `y`, and draws.
+fn scroll_to(cx: &mut gpui::VisualTestContext, renderer: &gpui::Entity<DiffRenderer>, y: Pixels) {
+    cx.update(|_, app| {
+        renderer.update(app, |renderer, cx| {
+            let scroll = renderer.diff_scroll.0.borrow();
+            let x = scroll.base_handle.offset().x;
+            scroll.base_handle.set_offset(gpui::point(x, y));
+            cx.notify();
+        })
+    });
+    draw(cx);
+}
+
+/// Where new line `line`'s row is in the inline list, counted in rows.
+fn list_row(
+    cx: &mut gpui::VisualTestContext,
+    renderer: &gpui::Entity<DiffRenderer>,
+    line: u32,
+) -> usize {
+    cx.update(|_, app| {
+        let renderer = renderer.read(app);
+        let document = (0..renderer.diff_visible_len())
+            .find(|row| renderer.hosted_line_numbers(*row).1 == Some(line))
+            .unwrap();
+        renderer.diff_list_index(document)
+    })
+}
+
+/// A view over the text floats below its line at its own size, at its
+/// column's text start or end, in its side's column only, and takes no rows.
+#[gpui::test]
+fn over_views_float_below_their_line(cx: &mut gpui::TestAppContext) {
+    for layout in [DiffLayout::Inline, DiffLayout::Split] {
+        for align in [DiffAlign::Start, DiffAlign::End] {
+            let (old, new) = three_lines();
+            let (hint, _pane, renderer, id, cx) = mount_over(cx, layout, old, new, 1, align, 120.0);
+            let region = match layout {
+                DiffLayout::Split => DiffTextRegion::SplitRight,
+                _ => DiffTextRegion::Inline,
+            };
+            let what = format!("{layout:?} {align:?}");
+            let frame = cx.debug_bounds(view_frame(id, &hint)).expect("drawn");
+            let layer = cx.debug_bounds(over_layer(id, region)).unwrap();
+            let one = painted(cx, &renderer, region, "one");
+            assert_eq!(frame.top(), one.bottom(), "{what}: below its line");
+            assert_eq!(frame.size, gpui::size(px(120.0), px(60.0)), "{what}");
+            match align {
+                DiffAlign::Start => assert_near(frame.left(), one.left(), &what),
+                DiffAlign::End => assert_near(frame.right(), layer.right(), &what),
+            }
+            assert!(frame.left() >= layer.left(), "{what}: in its column");
+            assert_eq!(reserved(cx, &renderer), 0, "{what}: no rows");
+            if layout == DiffLayout::Split {
+                assert!(
+                    cx.debug_bounds(over_layer(id, DiffTextRegion::SplitLeft))
+                        .is_none()
+                );
+            }
+        }
+    }
+}
+
+/// A view that would run past the pane's bottom goes above its line; one
+/// that fits neither way stays below it, clipped.
+#[gpui::test]
+fn over_views_move_above_their_line_near_the_bottom(cx: &mut gpui::TestAppContext) {
+    let (hint, _pane, renderer, id, cx) = mount_over(
+        cx,
+        DiffLayout::Inline,
+        numbered("line", 100, None),
+        numbered("line", 100, Some(1)),
+        71,
+        DiffAlign::Start,
+        120.0,
+    );
+    let frame = view_frame(id, &hint);
+    let layer = cx
+        .debug_bounds(over_layer(id, DiffTextRegion::Inline))
+        .unwrap();
+    let height = row_height(cx, &renderer);
+    let row = list_row(cx, &renderer, 71);
+    // Its line's bottom a little above the pane's.
+    scroll_to(
+        cx,
+        &renderer,
+        layer.size.height - px(10.0) - height * (row + 1) as f32,
+    );
+    let line = painted(cx, &renderer, DiffTextRegion::Inline, "line 70");
+    assert_near(
+        line.bottom(),
+        layer.bottom() - px(10.0),
+        "the line near the bottom",
+    );
+    let above = cx.debug_bounds(frame).unwrap();
+    assert_eq!(above.bottom(), line.top(), "above its line");
+
+    cx.update(|_, app| {
+        hint.update(app, |hint, cx| {
+            hint.height = layer.size.height;
+            cx.notify();
+        })
+    });
+    draw(cx);
+    let line = painted(cx, &renderer, DiffTextRegion::Inline, "line 70");
+    assert_eq!(
+        cx.debug_bounds(frame).unwrap().top(),
+        line.bottom(),
+        "fits neither way: below"
+    );
+}
+
+/// A view over the text holds still while its column scrolls sideways, and
+/// moves with its line when the rows scroll.
+#[gpui::test]
+fn over_views_follow_their_line_but_not_sideways_scrolling(cx: &mut gpui::TestAppContext) {
+    let long = "x".repeat(400);
+    let (hint, _pane, renderer, id, cx) = mount_over(
+        cx,
+        DiffLayout::Inline,
+        format!("{long}\n{}", numbered("line", 60, None)),
+        format!("{long} changed\n{}", numbered("line", 60, None)),
+        1,
+        DiffAlign::Start,
+        120.0,
+    );
+    let frame = view_frame(id, &hint);
+    let before = cx.debug_bounds(frame).unwrap();
+    cx.update(|_, app| {
+        renderer.update(app, |renderer, cx| {
+            let scroll = renderer.diff_scroll.0.borrow();
+            let y = scroll.base_handle.offset().y;
+            scroll.base_handle.set_offset(gpui::point(px(-200.0), y));
+            cx.notify();
+        })
+    });
+    draw(cx);
+    let text = painted(cx, &renderer, DiffTextRegion::Inline, "changed");
+    assert!(
+        text.left() < before.left() - px(100.0),
+        "the lines scrolled"
+    );
+    assert_eq!(cx.debug_bounds(frame).unwrap().origin, before.origin);
+
+    let height = row_height(cx, &renderer);
+    scroll_to(cx, &renderer, -height);
+    assert_near(
+        cx.debug_bounds(frame).unwrap().top(),
+        before.top() - height,
+        "a row up with its line",
+    );
+}
+
+/// A view whose line is above the rows on screen still shows while it
+/// reaches into them; wholly out of view it is not drawn, and the pane
+/// keeps what it knew of it, so it is drawn again without measuring.
+#[gpui::test]
+fn over_views_show_while_they_reach_into_view(cx: &mut gpui::TestAppContext) {
+    let (hint, _pane, renderer, id, cx) = mount_over(
+        cx,
+        DiffLayout::Inline,
+        numbered("line", 100, None),
+        numbered("line", 100, Some(1)),
+        31,
+        DiffAlign::Start,
+        120.0,
+    );
+    let frame = view_frame(id, &hint);
+    let layer = cx
+        .debug_bounds(over_layer(id, DiffTextRegion::Inline))
+        .unwrap();
+    let height = row_height(cx, &renderer);
+    let row = list_row(cx, &renderer, 31);
+    // Its line's bottom 10px above the rows on screen.
+    scroll_to(cx, &renderer, -height * (row + 1) as f32 - px(10.0));
+    let shown = cx.debug_bounds(frame).expect("it reaches into view");
+    assert_near(shown.top(), layer.top() - px(10.0), "below its line");
+
+    scroll_to(cx, &renderer, -height * (row + 10) as f32);
+    assert!(cx.debug_bounds(frame).is_none(), "out of view");
+    assert_eq!(
+        cx.update(|_, app| renderer.read(app).hosted_view_states()),
+        1
+    );
+    let renders = cx.update(|_, app| hint.read(app).renders.clone());
+    renders.set(0);
+    scroll_to(cx, &renderer, px(0.0) - height * (row as f32 - 2.0));
+    assert!(cx.debug_bounds(frame).is_some(), "back in view");
+    assert!(renders.get() > 0);
+    renders.set(0);
+    cx.update(|window, app| {
+        window.refresh();
+        let _ = window.draw(app);
+    });
+    assert_eq!(renders.get(), 1, "drawn, not measured");
+}
+
+/// Keys typed in a view over the text are its input's, and a click on its
+/// button is the button's, though it floats over the diff's rows.
+#[gpui::test]
+fn keys_and_clicks_in_an_over_view_stay_in_it(cx: &mut gpui::TestAppContext) {
+    let (old, new) = three_lines();
+    let (hint, pane, renderer, _, cx) =
+        mount_over(cx, DiffLayout::Inline, old, new, 1, DiffAlign::Start, 200.0);
+    let diff_focus = cx.update(|_, app| renderer.read(app).diff_panel_focus_handle.clone());
+    click_debug_selector(cx, "diff_text_empty_space_Inline");
+    cx.simulate_keystrokes("ctrl-f");
+    draw(cx);
+    assert!(cx.update(|_, app| renderer.read(app).diff_search_active));
+    let selected = cx.update(|_, app| pane.selection(app));
+
+    click_debug_selector(cx, "hint_button");
+    draw(cx);
+    assert_eq!(cx.update(|_, app| hint.read(app).clicks), 1);
+    cx.update(|window, app| {
+        assert!(!diff_focus.is_focused(window), "the diff took no focus");
+        assert!(!renderer.read(app).diff_text_selecting);
+        assert_eq!(pane.selection(app), selected, "the selection did not move");
+    });
+
+    cx.update(|_, app| {
+        app.bind_keys([
+            gpui::KeyBinding::new("left", crate::kit::Left, Some("TextInput")),
+            gpui::KeyBinding::new("right", crate::kit::Right, Some("TextInput")),
+        ])
+    });
+    click_debug_selector(cx, "hint_input");
+    draw(cx);
+    let input = cx.update(|_, app| hint.read(app).input.clone());
+    let input_focus = cx.update(|_, app| input.read(app).focus_handle());
+    assert!(cx.update(|window, _| input_focus.is_focused(window)));
+    cx.simulate_keystrokes("a space b left left c right right enter escape f2 f3");
+    draw(cx);
+    assert_eq!(
+        cx.update(|_, app| input.read(app).text().to_string()),
+        "ac b"
+    );
+    assert!(
+        cx.update(|_, app| renderer.read(app).diff_search_active),
+        "Escape stayed in the view"
+    );
+    cx.update(|_, app| assert_eq!(pane.selection(app), selected));
+}
+
+/// A view over the text is measured again when it notifies, and no wider
+/// than its column.
+#[gpui::test]
+fn over_views_are_measured_again_when_they_notify(cx: &mut gpui::TestAppContext) {
+    let (old, new) = three_lines();
+    let (hint, _pane, _renderer, id, cx) =
+        mount_over(cx, DiffLayout::Inline, old, new, 1, DiffAlign::End, 120.0);
+    let frame = view_frame(id, &hint);
+    let renders = cx.update(|_, app| hint.read(app).renders.clone());
+    renders.set(0);
+    cx.update(|_, app| {
+        hint.update(app, |hint, cx| {
+            hint.width = px(160.0);
+            cx.notify();
+        })
+    });
+    assert_eq!(renders.get(), 2, "measured, then drawn");
+    draw(cx);
+    assert_eq!(cx.debug_bounds(frame).unwrap().size.width, px(160.0));
+
+    cx.update(|_, app| {
+        hint.update(app, |hint, cx| {
+            hint.width = px(5000.0);
+            cx.notify();
+        })
+    });
+    draw(cx);
+    let layer = cx
+        .debug_bounds(over_layer(id, DiffTextRegion::Inline))
+        .unwrap();
+    let wide = cx.debug_bounds(frame).unwrap();
+    assert!(
+        wide.size.width <= layer.size.width,
+        "up to its column's width: {wide:?} in {layer:?}"
+    );
+    assert_near(wide.right(), layer.right(), "still at the end");
 }

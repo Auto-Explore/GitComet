@@ -32,6 +32,35 @@ impl Render for LineHintPreview {
     }
 }
 
+/// A suggestion as an extension would float it over the text below a line.
+struct SuggestionPreview {
+    theme: AppTheme,
+}
+
+impl Render for SuggestionPreview {
+    fn render(&mut self, _: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
+        let theme = self.theme;
+        let scale = ui_scale::UiScale::current(cx);
+        div()
+            .mr(scale.px(12.0))
+            .p(scale.px(8.0))
+            .flex()
+            .items_center()
+            .gap(scale.px(8.0))
+            .rounded(px(theme.radii.panel))
+            .border_1()
+            .border_color(theme.colors.stroke.subtle)
+            .bg(theme.colors.surface.raised)
+            .shadow_md()
+            .text_size(theme.ui_text(12.0))
+            .text_color(theme.colors.foreground.primary)
+            .child("Suggested: return the flag instead")
+            .child(
+                components::Button::new("capture_suggestion_apply", "Apply").render(theme, scale),
+            )
+    }
+}
+
 /// A review thread as an extension would host it between the lines.
 struct ThreadPreview {
     theme: AppTheme,
@@ -138,9 +167,11 @@ fn inline_card_visual_capture() {
                         reply: cx.new(|cx| components::TextInput::new_inert(components::TextInputOptions { placeholder: "Write a reply".into(), ..Default::default() }, cx)),
                     });
                     let hint = app.new(|_| LineHintPreview { theme });
+                    let suggestion = app.new(|_| SuggestionPreview { theme });
                     pane.set_views(vec![
                         gitcomet_extension_api::DiffHostedView::end_of_line(gitcomet_extension_api::DiffScrollAnchor { side: DiffLineSide::New, line: 1 }, hint),
                         gitcomet_extension_api::DiffHostedView::block(gitcomet_extension_api::DiffScrollAnchor { side: DiffLineSide::New, line: 2 }, thread),
+                        gitcomet_extension_api::DiffHostedView::over(gitcomet_extension_api::DiffScrollAnchor { side: DiffLineSide::New, line: 3 }, gitcomet_extension_api::DiffAlign::End, suggestion),
                     ], app);
                     app.new(|_| CardPreview { _owner: owner, pane })
                 }).unwrap();

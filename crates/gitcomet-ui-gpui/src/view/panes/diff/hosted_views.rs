@@ -2,11 +2,12 @@
 //! block view reserves as many as its measured height needs and is drawn
 //! once, from the first of them on screen, over the rest. A view at a line's
 //! end takes no rows: its line's row draws it where its canvas finds the
-//! text to end. A view is measured when it first shows and again only when
-//! it notifies, a block view's column changes width, or the text style or
-//! the row height does.
+//! text to end. A view over the text takes none either: a layer over its
+//! column's rows places it beside its line. A view is measured when it first
+//! shows and again only when it notifies, a block or over view's column
+//! changes width, or the text style or the row height does.
 use super::*;
-use gitcomet_extension_api::{DiffHostedView, DiffLineSide, DiffPlacement};
+use gitcomet_extension_api::{DiffAlign, DiffHostedView, DiffLineSide, DiffPlacement};
 use gpui::{Div, EntityId, TextStyle};
 use smallvec::SmallVec;
 use std::cell::Cell;
@@ -31,6 +32,8 @@ enum Measure {
     Block { column: Pixels, row_height: Pixels },
     /// At its own width.
     EndOfLine { row_height: Pixels },
+    /// At its own width, up to its column's.
+    Over { column: Pixels, row_height: Pixels },
 }
 
 impl Measure {
@@ -38,14 +41,25 @@ impl Measure {
         match placement {
             DiffPlacement::Block => Self::Block { column, row_height },
             DiffPlacement::EndOfLine => Self::EndOfLine { row_height },
+            DiffPlacement::Over { .. } => Self::Over { column, row_height },
         }
     }
 
-    /// The width to lay the view out at; none for its own.
-    fn width(self) -> Option<Pixels> {
+    /// The view laid out to be measured, with the width it has for it.
+    fn frame(self, content: AnyView, text: &TextStyle) -> (Div, gpui::AvailableSpace) {
         match self {
-            Self::Block { column, .. } => Some(column),
-            Self::EndOfLine { .. } => None,
+            Self::Block { column, .. } => (
+                hosted_view_frame(content, Some(column), text),
+                gpui::AvailableSpace::Definite(column),
+            ),
+            Self::EndOfLine { .. } => (
+                hosted_view_frame(content, None, text),
+                gpui::AvailableSpace::MaxContent,
+            ),
+            Self::Over { column, .. } => (
+                hosted_view_frame(content, None, text).max_w(column),
+                gpui::AvailableSpace::MaxContent,
+            ),
         }
     }
 }
@@ -57,7 +71,7 @@ fn measured_rows(measured: Option<(Measure, Size<Pixels>)>) -> usize {
         Some((Measure::Block { row_height, .. }, size)) => {
             ((f32::from(size.height) / f32::from(row_height).max(1.0)).ceil() as usize).max(1)
         }
-        Some((Measure::EndOfLine { .. }, _)) | None => 1,
+        Some((Measure::EndOfLine { .. } | Measure::Over { .. }, _)) | None => 1,
     }
 }
 
@@ -74,6 +88,8 @@ pub(in crate::view) struct HostedViews {
     projected: Vec<EntityId>,
     /// The views after a line's text, by their line, in list order.
     line_end_views: FxHashMap<(DiffLineSide, u32), SmallVec<[usize; 1]>>,
+    /// The views over the text, in list order.
+    over_views: Vec<usize>,
     /// The rows built this frame with views after their text, by row and
     /// column.
     line_ends: FxHashMap<(usize, DiffTextRegion), Rc<HostedLineEnd>>,
@@ -107,6 +123,7 @@ impl HostedViews {
         self.states
             .retain(|id, _| views.iter().any(|view| view.view().entity_id() == *id));
         self.line_end_views.clear();
+        self.over_views.clear();
         for (ix, view) in views.iter().enumerate() {
             match view.placement() {
                 DiffPlacement::Block => {}
@@ -117,6 +134,7 @@ impl HostedViews {
                         .or_default()
                         .push(ix);
                 }
+                DiffPlacement::Over { .. } => self.over_views.push(ix),
             }
         }
         self.views = views;
@@ -204,16 +222,9 @@ pub(in crate::view) fn measure_hosted_views(
     let sizes = views
         .into_iter()
         .map(|(id, view, measure)| {
-            let width = measure.width();
-            let mut frame = hosted_view_frame(view, width, &text).into_any_element();
-            let size = frame.layout_as_root(
-                gpui::size(
-                    width.map_or(
-                        gpui::AvailableSpace::MaxContent,
-                        gpui::AvailableSpace::Definite,
-                    ),
-                    gpui::AvailableSpace::MinContent,
-                ),
+            let (frame, width) = measure.frame(view, &text);
+            let size = frame.into_any_element().layout_as_root(
+                gpui::size(width, gpui::AvailableSpace::MinContent),
                 window,
                 cx,
             );
@@ -236,9 +247,9 @@ impl DiffRenderer {
 
     /// The views to measure, each with what it is measured against: those
     /// whose size does not hold for their placement as it now is, which is
-    /// those not measured since they showed or notified, block views whose
-    /// column changed width, and every one when the row height did, or when
-    /// the text style changed.
+    /// those not measured since they showed or notified, block and over views
+    /// whose column changed width, and every one when the row height did, or
+    /// when the text style changed.
     fn hosted_views_to_measure(
         &mut self,
         text: &TextStyle,
@@ -348,11 +359,7 @@ impl DiffRenderer {
         let text = decor.views.text.clone().expect("measured before drawn");
         // Drawn at the width it was measured at, this frame's column's.
         let width = decor.views.width(id);
-        let scroll = match side {
-            Some(DiffLineSide::New) => &self.diff_split_right_scroll,
-            _ => &self.diff_scroll,
-        };
-        let scroll_x = scroll.0.borrow().base_handle.offset().x;
+        let scroll_x = self.column_scroll(side).0.borrow().base_handle.offset().x;
         let focus = self
             .hosted_decor
             .as_mut()
@@ -519,6 +526,256 @@ impl DiffRenderer {
             }
             .into_any_element(),
         )
+    }
+}
+
+impl DiffRenderer {
+    /// The scroll handle of `side`'s column, or of an inline diff's.
+    fn column_scroll(&self, side: Option<DiffLineSide>) -> &UniformListScrollHandle {
+        match side {
+            Some(DiffLineSide::New) => &self.diff_split_right_scroll,
+            _ => &self.diff_scroll,
+        }
+    }
+
+    /// Where `region`'s text starts in its column: past the people column,
+    /// the annotation column where it is drawn, and the gutters.
+    fn hosted_text_start(&self, region: DiffTextRegion, cx: &mut App) -> Pixels {
+        let scale = ui_scale::UiScale::current(cx);
+        let percent = scale.percent();
+        let metrics = ui_scale::UiScale::from_percent(percent).with_appearance(self.theme.metrics);
+        let gutters = match (self.diff_show_line_numbers, region) {
+            (false, _) => rows::diff_canvas_row_horizontal_padding(percent),
+            (true, DiffTextRegion::Inline) => rows::diff_canvas_inline_text_start(metrics),
+            (true, DiffTextRegion::SplitLeft | DiffTextRegion::SplitRight) => {
+                rows::diff_canvas_single_column_text_start(metrics)
+            }
+        };
+        // Only a split's old side draws the annotation column.
+        let annotation = match region {
+            DiffTextRegion::Inline | DiffTextRegion::SplitLeft if self.annotation_active() => {
+                self.annotate_column_width_px(percent)
+            }
+            _ => px(0.0),
+        };
+        self.hosted_people_column_width(scale) + annotation + gutters
+    }
+
+    /// The views over the text of `side`'s column, or of an inline diff's:
+    /// a layer over its rows that clips them, `right` and `bottom` short of
+    /// its edges for its scrollbars. Each is at the size it was measured at,
+    /// below its line or above it, lined up with its column's text start or
+    /// end; the layer places them as it prepaints, from where the rows have
+    /// then scrolled.
+    pub(in crate::view) fn render_hosted_over_layer(
+        &mut self,
+        side: Option<DiffLineSide>,
+        right: Pixels,
+        bottom: Pixels,
+        cx: &mut gpui::Context<Self>,
+    ) -> Option<AnyElement> {
+        let decor = self.hosted_decor.as_ref()?;
+        if decor.views.over_views.is_empty() {
+            return None;
+        }
+        let row_height = decor.row_height;
+        let placed: Vec<_> = decor
+            .views
+            .over_views
+            .iter()
+            .filter_map(|ix| {
+                let view = &decor.views.views()[*ix];
+                let align = match view.placement() {
+                    DiffPlacement::Over { align } => align,
+                    DiffPlacement::Block | DiffPlacement::EndOfLine => return None,
+                };
+                let anchor = view.anchor();
+                if side.is_some_and(|side| side != anchor.side) {
+                    return None;
+                }
+                let (first, last) = decor.line_rows.get(&(anchor.side, anchor.line))?;
+                let line = (
+                    row_height * *decor.document.get(*first)? as f32,
+                    row_height * (*decor.document.get(*last)? + 1) as f32,
+                );
+                let id = view.view().entity_id();
+                let (_, size) = decor.views.states.get(&id)?.measured?;
+                Some((id, view.view().clone(), line, size, align))
+            })
+            .collect();
+        if placed.is_empty() {
+            return None;
+        }
+        let pane_id = decor.view_id;
+        // The pane measures its views before its rows draw.
+        let text = decor.views.text.clone().expect("measured before drawn");
+        let region = hosted_region(side);
+        let start = self.hosted_text_start(region, cx);
+        let scroll = self.column_scroll(side).clone();
+        let views = &mut self.hosted_decor.as_mut().expect("hosted renderer").views;
+        let placed = placed
+            .into_iter()
+            .map(|(id, content, line, size, align)| OverView {
+                line,
+                size,
+                align,
+                shown: false,
+                element: keeps_its_input(
+                    hosted_view_frame(content, Some(size.width), &text)
+                        .id(("hosted_view", id))
+                        .debug_selector(move || {
+                            format!("hosted_diff_{pane_id}_view_{}", id.as_u64())
+                        })
+                        .h(size.height)
+                        // The rows under it see no hover, though they still
+                        // scroll under the wheel.
+                        .block_mouse_except_scroll(),
+                    &views.state(id, cx).focus,
+                )
+                .into_any_element(),
+            })
+            .collect();
+        Some(
+            div()
+                .absolute()
+                .top_0()
+                .left_0()
+                .right(right)
+                .bottom(bottom)
+                .debug_selector(move || format!("hosted_diff_{pane_id}_over_{region:?}"))
+                .child(HostedOverLayer {
+                    scroll,
+                    start,
+                    views: placed,
+                })
+                .into_any_element(),
+        )
+    }
+}
+
+/// A view over the text, which its layer places.
+struct OverView {
+    /// Its line's top and bottom in the list, as if it were not scrolled.
+    line: (Pixels, Pixels),
+    size: Size<Pixels>,
+    align: DiffAlign,
+    /// Whether it is placed in the layer's bounds this frame.
+    shown: bool,
+    element: AnyElement,
+}
+
+/// A column's views over its text, filling it and clipped to it. A view
+/// goes below its line, or above it when it would run past the bottom and
+/// fits there, held against sideways scrolling; one wholly outside is not
+/// drawn.
+struct HostedOverLayer {
+    scroll: UniformListScrollHandle,
+    /// Where the column's text starts.
+    start: Pixels,
+    views: Vec<OverView>,
+}
+
+impl IntoElement for HostedOverLayer {
+    type Element = Self;
+
+    fn into_element(self) -> Self::Element {
+        self
+    }
+}
+
+impl Element for HostedOverLayer {
+    type RequestLayoutState = ();
+    type PrepaintState = ();
+
+    fn id(&self) -> Option<ElementId> {
+        None
+    }
+
+    fn source_location(&self) -> Option<&'static core::panic::Location<'static>> {
+        None
+    }
+
+    fn request_layout(
+        &mut self,
+        _id: Option<&GlobalElementId>,
+        _inspector_id: Option<&gpui::InspectorElementId>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> (gpui::LayoutId, Self::RequestLayoutState) {
+        let mut style = gpui::Style {
+            position: gpui::Position::Absolute,
+            ..Default::default()
+        };
+        style.inset = gpui::Edges::all(px(0.0).into());
+        (window.request_layout(style, [], cx), ())
+    }
+
+    fn prepaint(
+        &mut self,
+        _id: Option<&GlobalElementId>,
+        _inspector_id: Option<&gpui::InspectorElementId>,
+        bounds: Bounds<Pixels>,
+        _request_layout: &mut Self::RequestLayoutState,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Self::PrepaintState {
+        // Where the rows are this frame: the list prepainted first.
+        let origin = bounds.top() + self.scroll.0.borrow().base_handle.offset().y;
+        let start = self.start;
+        let mask = gpui::ContentMask {
+            bounds,
+            ..Default::default()
+        };
+        window.with_content_mask(Some(mask), |window| {
+            for view in &mut self.views {
+                let (line_top, line_bottom) = (origin + view.line.0, origin + view.line.1);
+                let above = line_top - view.size.height;
+                let top =
+                    if line_bottom + view.size.height > bounds.bottom() && above >= bounds.top() {
+                        above
+                    } else {
+                        line_bottom
+                    };
+                view.shown = top < bounds.bottom() && top + view.size.height > bounds.top();
+                if !view.shown {
+                    continue;
+                }
+                let left = match view.align {
+                    DiffAlign::Start => bounds.left() + start,
+                    DiffAlign::End => bounds.right() - view.size.width,
+                };
+                view.element.layout_as_root(
+                    gpui::size(
+                        gpui::AvailableSpace::Definite(view.size.width),
+                        gpui::AvailableSpace::Definite(view.size.height),
+                    ),
+                    window,
+                    cx,
+                );
+                view.element.prepaint_at(gpui::point(left, top), window, cx);
+            }
+        });
+    }
+
+    fn paint(
+        &mut self,
+        _id: Option<&GlobalElementId>,
+        _inspector_id: Option<&gpui::InspectorElementId>,
+        bounds: Bounds<Pixels>,
+        _request_layout: &mut Self::RequestLayoutState,
+        _prepaint: &mut Self::PrepaintState,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        let mask = gpui::ContentMask {
+            bounds,
+            ..Default::default()
+        };
+        window.with_content_mask(Some(mask), |window| {
+            for view in self.views.iter_mut().filter(|view| view.shown) {
+                view.element.paint(window, cx);
+            }
+        });
     }
 }
 

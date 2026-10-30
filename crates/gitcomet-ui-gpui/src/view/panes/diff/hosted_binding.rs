@@ -34,7 +34,10 @@ pub(in crate::view) struct HostedDiffDecor {
     pub(super) key: Option<(u64, u64, u64, usize, DiffViewMode, usize)>,
     display: Vec<DisplayRow>,
     projected_card_ids: Vec<SharedString>,
-    document: Vec<usize>,
+    /// Each document row's place in `display`.
+    pub(super) document: Vec<usize>,
+    /// Each file line's first and last document rows, by side.
+    pub(super) line_rows: FxHashMap<(DiffLineSide, u32), (usize, usize)>,
     selection_anchor: Option<usize>,
     markers: Arc<Vec<(f32, gpui::Hsla)>>,
     pub(super) search_document: std::cell::RefCell<Option<diff_search::SourceSearchDocument>>,
@@ -466,24 +469,28 @@ impl DiffRenderer {
             return;
         }
         let mut after = FxHashMap::<usize, Vec<DisplayRow>>::default();
-        let mut anchors = FxHashMap::default();
+        // Each line's first and last rows: more than one when it wraps.
+        let mut anchors = FxHashMap::<(DiffLineSide, u32), (usize, usize)>::default();
         for row in 0..self.diff_visible_len() {
             let (old, new) = self.hosted_line_numbers(row);
             for (side, line) in [(DiffLineSide::Old, old), (DiffLineSide::New, new)] {
                 if let Some(line) = line {
-                    anchors.insert((side, line), row);
+                    anchors
+                        .entry((side, line))
+                        .and_modify(|(_, last)| *last = row)
+                        .or_insert((row, row));
                 }
             }
         }
         for (ix, inset) in decor.insets.iter().enumerate() {
-            if let Some(row) = anchors.get(&(inset.side, inset.line)) {
+            if let Some((_, row)) = anchors.get(&(inset.side, inset.line)) {
                 after.entry(*row).or_default().extend(
                     (0..inset.lines.len()).map(|line| DisplayRow::Inset { inset: ix, line }),
                 );
             }
         }
         for (ix, card) in decor.cards.iter().enumerate() {
-            if let Some(row) = anchors.get(&(card.range.side, card.range.end))
+            if let Some((_, row)) = anchors.get(&(card.range.side, card.range.end))
                 && let Some(layout) = decor.card_layouts.get(ix)
             {
                 after
@@ -492,18 +499,18 @@ impl DiffRenderer {
                     .extend((0..layout.rows(card)).map(|row| DisplayRow::Card { card: ix, row }));
             }
         }
-        // After the line's cards; a view at a line's end takes no rows.
+        // After the line's cards; the other views take no rows.
         for (ix, view) in decor.views.views().iter().enumerate() {
             match view.placement() {
                 DiffPlacement::Block => {
-                    if let Some(row) = anchors.get(&(view.anchor().side, view.anchor().line)) {
+                    if let Some((_, row)) = anchors.get(&(view.anchor().side, view.anchor().line)) {
                         after.entry(*row).or_default().extend(
                             (0..decor.views.rows(view))
                                 .map(|row| DisplayRow::View { view: ix, row }),
                         );
                     }
                 }
-                DiffPlacement::EndOfLine => {}
+                DiffPlacement::EndOfLine | DiffPlacement::Over { .. } => {}
             }
         }
         let len = self.diff_visible_len();
@@ -565,7 +572,7 @@ impl DiffRenderer {
                 .annotations
                 .iter()
                 .filter_map(|(side, line, mark)| {
-                    let document = *anchors.get(&(side, line))?;
+                    let (_, document) = *anchors.get(&(side, line))?;
                     let display = *decor.document.get(document)?;
                     Some((
                         display as f32 / decor.display.len().max(1) as f32,
@@ -574,6 +581,7 @@ impl DiffRenderer {
                 })
                 .collect(),
         );
+        decor.line_rows = anchors;
         decor.key = Some(key);
     }
 
