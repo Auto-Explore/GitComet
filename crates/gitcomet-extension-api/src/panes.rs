@@ -413,9 +413,10 @@ pub enum DiffPlacement {
     /// it against sideways scrolling.
     Block,
     /// After the line's text, on the line's own row: the pane reserves no
-    /// rows for it. It is measured at its natural width, clipped to one row's
-    /// height and scrolls sideways with the text; a wrapped line shows it on
-    /// its last row. Views after the same line sit side by side in order.
+    /// rows for it. It is measured at its natural width, centred on the row
+    /// and clipped to its height, and scrolls sideways with the text; a
+    /// wrapped line shows it on its last row. Views after the same line sit
+    /// side by side in order.
     EndOfLine,
 }
 
