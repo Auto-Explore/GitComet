@@ -380,3 +380,72 @@ fn a_focused_ref_is_walked_even_when_its_remote_is_hidden() {
         vec!["base.txt", "upstream.txt"]
     );
 }
+
+fn index_for(repo: &dyn GitRepository, walk: &HistoryWalk) -> HistoryIndexHandle {
+    repo.build_history_index(
+        walk,
+        None,
+        &Default::default(),
+        &CancellationToken::new(),
+        &mut |_| {},
+    )
+    .unwrap()
+    .expect("the gix backend indexes history")
+}
+
+/// A T3 Code style checkpoint: a parentless snapshot of the current tree.
+fn write_checkpoint(repo: &Path, name: &str) {
+    let tree = git_stdout(repo, &["rev-parse", "HEAD^{tree}"]);
+    let commit = git_stdout(repo, &["commit-tree", &tree, "-m", name]);
+    run_git(repo, &["update-ref", name, &commit]);
+}
+
+/// Agent tools write a ref per turn. Shown, every one changes the tips and
+/// forces a full index rebuild; hidden, it never reaches the fingerprint.
+#[test]
+fn a_new_ref_in_a_hidden_namespace_keeps_the_history_index() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    run_git(repo, &["init", "-q", "-b", "main"]);
+    run_git(repo, &["config", "user.name", "Committer"]);
+    run_git(repo, &["config", "user.email", "committer@example.com"]);
+    commit_as(repo, "base", "base.txt");
+    write_checkpoint(repo, "refs/t3/checkpoints/thread/turn/0");
+    let opened = GixBackend.open(repo).unwrap();
+    let repo_handle = opened.as_ref();
+    let shown = HistoryWalk::from(HistoryMode::AllBranches);
+    let hidden = shown
+        .clone()
+        .with_hidden_refs(HistoryRefFilter::excluding(["refs/t3"]));
+
+    let shown_before = index_for(repo_handle, &shown);
+    let hidden_before = index_for(repo_handle, &hidden);
+    assert_eq!(shown_before.len(), 2, "base and the turn 0 checkpoint");
+    assert_eq!(hidden_before.len(), 1, "only base");
+
+    write_checkpoint(repo, "refs/t3/checkpoints/thread/turn/1");
+
+    let shown_after = index_for(repo_handle, &shown);
+    assert!(
+        !Arc::ptr_eq(&shown_before, &shown_after),
+        "a shown checkpoint rebuilds the index"
+    );
+    assert_eq!(shown_after.len(), 3);
+    let hidden_after = index_for(repo_handle, &hidden);
+    assert!(
+        Arc::ptr_eq(&hidden_before, &hidden_after),
+        "a hidden checkpoint keeps the built index"
+    );
+    let summaries: Vec<String> = repo_handle
+        .read_history_range(
+            &hidden_after,
+            0..hidden_after.len(),
+            &CancellationToken::new(),
+        )
+        .unwrap()
+        .commits
+        .iter()
+        .map(|commit| commit.summary.to_string())
+        .collect();
+    assert_eq!(summaries, ["base.txt"]);
+}

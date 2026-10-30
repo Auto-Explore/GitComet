@@ -2,7 +2,7 @@
 
 use super::{CommitSignatureMap, Loadable, RepoState, Shared};
 use gitcomet_core::domain::*;
-use gitcomet_core::services::HistoryWalk;
+use gitcomet_core::services::{HistoryRefFilter, HistoryWalk};
 use rustc_hash::FxHashSet;
 use std::collections::{BTreeSet, VecDeque};
 use std::path::PathBuf;
@@ -96,6 +96,9 @@ pub struct HistoryState {
     pub history_author_filter: Option<String>,
     /// The refs the history walk starts from, empty for the normal walk.
     pub history_focus: HistoryFocusSet,
+    /// Ref namespaces the all-branches walk leaves out: the app-wide setting,
+    /// copied into every repository so its walk carries it.
+    pub hidden_refs: HistoryRefFilter,
     pub log: Loadable<Shared<LogPage>>,
     pub retained_log_while_loading: Option<Shared<LogPage>>,
     pub log_loading_more: bool,
@@ -271,6 +274,7 @@ impl Default for HistoryState {
             history_scope: LogScope::default(),
             history_author_filter: None,
             history_focus: HistoryFocusSet::default(),
+            hidden_refs: HistoryRefFilter::default(),
             log: Loadable::NotLoaded,
             retained_log_while_loading: None,
             log_loading_more: false,
@@ -629,12 +633,14 @@ impl RepoState {
         }
     }
 
-    /// What the history pane walks: its mode, without the hidden remotes.
+    /// What the history pane walks: its mode, without the hidden remotes and
+    /// ref namespaces.
     pub fn history_walk(&self) -> HistoryWalk {
         HistoryWalk::new(
             self.history_state.history_scope,
             self.history_hidden_remotes().iter().map(String::as_str),
         )
+        .with_hidden_refs(self.history_state.hidden_refs.clone())
     }
 
     pub(crate) fn set_log_scope(&mut self, scope: LogScope) {

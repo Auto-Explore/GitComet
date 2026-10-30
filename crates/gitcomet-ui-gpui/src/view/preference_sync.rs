@@ -919,6 +919,18 @@ impl GitCometView {
         self.store.dispatch(Msg::SetDefaultTagType(tag_type));
     }
 
+    pub(in crate::view) fn set_hidden_ref_settings_preference(
+        &mut self,
+        settings: gitcomet_state::model::HiddenRefSettings,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let filter = settings.filter(gitcomet_core::identity::current().history_ref_presets());
+        self.update_ui_preferences(cx, move |preferences| {
+            preferences.history.hidden_ref_settings = settings;
+        });
+        self.store.dispatch(Msg::SetHistoryHiddenRefs(filter));
+    }
+
     pub(in crate::view) fn set_large_file_settings_preference(
         &mut self,
         settings: gitcomet_state::model::LargeFileSettings,
@@ -1079,6 +1091,9 @@ impl GitCometView {
             }
             PreferenceChange::LargeFileSettings(settings) => {
                 self.set_large_file_settings_preference(settings, cx)
+            }
+            PreferenceChange::HiddenRefSettings(settings) => {
+                self.set_hidden_ref_settings_preference(settings, cx)
             }
             PreferenceChange::RemotePrune(enabled) => self.set_remote_prune_preference(enabled, cx),
             PreferenceChange::AutoFetch(settings) => self.set_auto_fetch_preference(settings, cx),

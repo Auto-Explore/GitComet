@@ -65,7 +65,7 @@ fn combined_history_ref_groups_keep_exact_targets_and_toggle_with_keyboard(
             this.ui_model.update(cx, |model, cx| model.set_state(state.clone(), cx));
             this.popover_host.update(cx, |host, cx| {
                 host.state = state.clone();
-                host.open_popover_at(PopoverKind::CommitMenu { repo_id: RepoId(1), commit_id: commit_id.clone() }, point(px(10.0), px(10.0)), window, cx);
+                host.open_popover_at(PopoverKind::CommitMenu { repo_id: RepoId(1), commit_id: commit_id.clone(), refs: CommitMenuRefs::All }, point(px(10.0), px(10.0)), window, cx);
                 let model = host.context_menu_model(host.popover.as_ref().unwrap(), cx).unwrap();
                 let groups = model.items.iter().filter_map(|item| match item {
                     ContextMenuItem::Entry { label, action, .. } if matches!(action.as_ref(), ContextMenuAction::ToggleHistoryRefGroup { .. }) => Some(label.as_ref()), _ => None,
@@ -109,6 +109,180 @@ fn combined_history_ref_groups_keep_exact_targets_and_toggle_with_keyboard(
 }
 
 #[gpui::test]
+fn commit_menu_for_one_picked_ref_lists_only_that_ref(cx: &mut gpui::TestAppContext) {
+    #[derive(Debug, PartialEq)]
+    struct OpenedMenu {
+        /// Ref group headers, plus the tags loading/error label.
+        groups: Vec<String>,
+        /// What the commit section's "Copy branch name" entries copy.
+        copied_branch_names: Vec<String>,
+        expanded: Option<HistoryMenuRef>,
+    }
+
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let mut repo = ref_repo();
+    let commit_id = repo.branches.ready().unwrap()[0].target.clone();
+    let state_with = |repo: RepoState| {
+        Arc::new(AppState {
+            active_repo: Some(repo.id),
+            repos: vec![repo],
+            ..AppState::test_default()
+        })
+    };
+    let open = |state: Arc<AppState>, refs: CommitMenuRefs, cx: &mut gpui::VisualTestContext| {
+        cx.update(|window, app| {
+            view.update(app, |this, cx| {
+                this.state = state.clone();
+                this.popover_host.update(cx, |host, cx| {
+                    host.state = state.clone();
+                    host.open_popover_at(
+                        PopoverKind::CommitMenu {
+                            repo_id: RepoId(1),
+                            commit_id: commit_id.clone(),
+                            refs,
+                        },
+                        point(px(10.0), px(10.0)),
+                        window,
+                        cx,
+                    );
+                    let model = host
+                        .context_menu_model(host.popover.as_ref().unwrap(), cx)
+                        .unwrap();
+                    let groups = model
+                        .items
+                        .iter()
+                        .filter_map(|item| match item {
+                            ContextMenuItem::Entry { label, action, .. }
+                                if matches!(
+                                    action.as_ref(),
+                                    ContextMenuAction::ToggleHistoryRefGroup { .. }
+                                ) =>
+                            {
+                                Some(label.to_string())
+                            }
+                            ContextMenuItem::Label(text)
+                                if text.as_ref().to_lowercase().contains("tags") =>
+                            {
+                                Some(text.as_ref().to_string())
+                            }
+                            _ => None,
+                        })
+                        .collect();
+                    // Expanded groups carry their own "Copy branch name"; skip them.
+                    let commit_section = model.groups.last().map_or(0, |group| group.end);
+                    let copied_branch_names = model.items[commit_section..]
+                        .iter()
+                        .filter_map(|item| match item {
+                            ContextMenuItem::Entry { label, action, .. }
+                                if label.starts_with("Copy branch name") =>
+                            {
+                                match action.as_ref() {
+                                    ContextMenuAction::CopyText { text } => Some(text.clone()),
+                                    _ => None,
+                                }
+                            }
+                            _ => None,
+                        })
+                        .collect();
+                    OpenedMenu {
+                        groups,
+                        copied_branch_names,
+                        expanded: host.expanded_history_ref.clone(),
+                    }
+                })
+            })
+        })
+    };
+    let local_release = HistoryMenuRef::Branch(BranchMenuTarget::local("release"));
+    let remote_release = HistoryMenuRef::Branch(BranchMenuTarget::remote("team/alice", "release"));
+    let tag_release = HistoryMenuRef::Tag("release".into());
+
+    // Same-named refs of every kind: the pick must match its kind, not its name.
+    let state = state_with(repo.clone());
+    assert_eq!(
+        open(state.clone(), CommitMenuRefs::All, cx),
+        OpenedMenu {
+            groups: vec![
+                "Local branch main".into(),
+                "Local branch release".into(),
+                "Remote branch team/alice/release".into(),
+                "Tag release".into(),
+            ],
+            copied_branch_names: vec!["main".into(), "release".into()],
+            expanded: None,
+        }
+    );
+    assert_eq!(
+        open(
+            state.clone(),
+            CommitMenuRefs::Only(local_release.clone()),
+            cx
+        ),
+        OpenedMenu {
+            groups: vec!["Local branch release".into()],
+            copied_branch_names: vec!["release".into()],
+            expanded: Some(local_release),
+        }
+    );
+    assert_eq!(
+        open(
+            state.clone(),
+            CommitMenuRefs::Only(remote_release.clone()),
+            cx
+        ),
+        OpenedMenu {
+            groups: vec!["Remote branch team/alice/release".into()],
+            copied_branch_names: vec!["team/alice/release".into()],
+            expanded: Some(remote_release),
+        }
+    );
+    assert_eq!(
+        open(state.clone(), CommitMenuRefs::Only(tag_release.clone()), cx),
+        OpenedMenu {
+            groups: vec!["Tag release".into()],
+            copied_branch_names: vec![],
+            expanded: Some(tag_release.clone()),
+        }
+    );
+    assert_eq!(
+        open(state, CommitMenuRefs::Hidden, cx),
+        OpenedMenu {
+            groups: vec![],
+            copied_branch_names: vec![],
+            expanded: None,
+        }
+    );
+
+    // Unloaded tags only concern menus that would list a tag.
+    repo.tags = Loadable::Loading;
+    let state = state_with(repo);
+    assert_eq!(
+        open(
+            state.clone(),
+            CommitMenuRefs::Only(HistoryMenuRef::Branch(BranchMenuTarget::local("main"))),
+            cx,
+        )
+        .groups,
+        ["Local branch main"]
+    );
+    assert_eq!(
+        open(state.clone(), CommitMenuRefs::Only(tag_release), cx).groups,
+        ["Loading tags…"]
+    );
+    assert_eq!(
+        open(state, CommitMenuRefs::All, cx).groups,
+        [
+            "Local branch main",
+            "Local branch release",
+            "Remote branch team/alice/release",
+            "Loading tags…"
+        ]
+    );
+}
+
+#[gpui::test]
 fn history_ref_submenus_share_the_sidebar_header_surface(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
@@ -132,6 +306,7 @@ fn history_ref_submenus_share_the_sidebar_header_surface(cx: &mut gpui::TestAppC
                     PopoverKind::CommitMenu {
                         repo_id: RepoId(1),
                         commit_id: commit_id.clone(),
+                        refs: CommitMenuRefs::All,
                     },
                     point(px(10.0), px(10.0)),
                     window,

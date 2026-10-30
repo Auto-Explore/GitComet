@@ -441,8 +441,9 @@ pub use mod_helpers::{
     GitCometViewMode, InitialRepositoryLaunchMode, StartupCrashReport, WorkspaceBootstrap,
 };
 use panels::{
-    ActionBarView, BottomStatusBarView, PopoverHost, PopoverHostInit, RepoTabsBarView,
-    action_bar_density, action_bar_height, bottom_status_bar_height,
+    ActionBarView, BottomStatusBarView, CommitMenuRefs, HistoryMenuRef, PopoverHost,
+    PopoverHostInit, RepoTabsBarView, action_bar_density, action_bar_height,
+    bottom_status_bar_height,
 };
 pub(crate) use panes::DiffRenderer;
 use panes::{

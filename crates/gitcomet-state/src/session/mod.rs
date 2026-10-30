@@ -1,4 +1,7 @@
-use crate::model::{AppState, AutoFetchInterval, DefaultTagType, GitLogTagFetchMode, RepoId};
+use crate::model::{
+    AppState, AutoFetchInterval, DefaultTagType, GitLogTagFetchMode, HiddenRefPrefix,
+    HiddenRefSettings, RepoId,
+};
 use gitcomet_core::domain::{HistoryFocus, HistoryFocusSet, HistoryMode, LogScope};
 use gitcomet_core::platform::dirs;
 use rustc_hash::FxHashSet;
@@ -97,6 +100,9 @@ pub struct UiSession {
     pub annex_pull_push_on_adjusted: Option<bool>,
     pub annex_sync_content: Option<bool>,
     pub history_tag_fetch_mode: Option<GitLogTagFetchMode>,
+    pub history_hidden_refs_enabled: Option<bool>,
+    pub history_hidden_ref_presets: Option<BTreeMap<String, bool>>,
+    pub history_hidden_ref_prefixes: Option<Vec<String>>,
     pub default_history_mode: Option<HistoryMode>,
     pub commit_push_after_enabled: Option<bool>,
     pub default_tag_type: Option<DefaultTagType>,
@@ -304,6 +310,12 @@ pub(crate) struct UiSessionFile {
     annex_sync_content: Option<bool>,
     #[serde(default, deserialize_with = "lenient")]
     history_tag_fetch_mode: Option<GitLogTagFetchMode>,
+    #[serde(default, deserialize_with = "lenient")]
+    history_hidden_refs_enabled: Option<bool>,
+    #[serde(default, deserialize_with = "lenient")]
+    history_hidden_ref_presets: Option<BTreeMap<String, bool>>,
+    #[serde(default, deserialize_with = "lenient")]
+    history_hidden_ref_prefixes: Option<Vec<String>>,
     #[serde(default, deserialize_with = "lenient")]
     default_history_mode: Option<HistoryModeSetting>,
     #[serde(default, deserialize_with = "lenient")]
@@ -571,6 +583,9 @@ pub fn load_from_path(path: &Path) -> UiSession {
         annex_pull_push_on_adjusted: file.annex_pull_push_on_adjusted,
         annex_sync_content: file.annex_sync_content,
         history_tag_fetch_mode: file.history_tag_fetch_mode,
+        history_hidden_refs_enabled: file.history_hidden_refs_enabled,
+        history_hidden_ref_presets: file.history_hidden_ref_presets,
+        history_hidden_ref_prefixes: file.history_hidden_ref_prefixes,
         default_history_mode: file.default_history_mode.map(Into::into),
         commit_push_after_enabled: file.commit_push_after_enabled,
         default_tag_type: file.default_tag_type,

@@ -409,6 +409,8 @@ pub enum Msg {
     SetMaintenanceSettings(MaintenanceSettings),
     SetFileBrowserSettings(FileBrowserSettings),
     SetLargeFileSettings(crate::model::LargeFileSettings),
+    /// The resolved hidden-refs setting; every all-branches walk leaves these out.
+    SetHistoryHiddenRefs(gitcomet_core::services::HistoryRefFilter),
     SetDefaultTagType(DefaultTagType),
     SetActiveRepo {
         repo_id: RepoId,

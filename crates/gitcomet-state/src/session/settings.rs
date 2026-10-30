@@ -73,6 +73,9 @@ pub struct UiSettings {
     pub annex_pull_push_on_adjusted: Option<bool>,
     pub annex_sync_content: Option<bool>,
     pub history_tag_fetch_mode: Option<GitLogTagFetchMode>,
+    pub history_hidden_refs_enabled: Option<bool>,
+    pub history_hidden_ref_presets: Option<BTreeMap<String, bool>>,
+    pub history_hidden_ref_prefixes: Option<Vec<String>>,
     pub default_history_mode: Option<HistoryMode>,
     pub commit_push_after_enabled: Option<bool>,
     pub default_tag_type: Option<DefaultTagType>,
@@ -82,6 +85,37 @@ pub struct UiSettings {
     pub recommend_repo_maintenance: Option<bool>,
     pub git_executable_path: Option<Option<PathBuf>>,
     pub external_code_editor: Option<Option<ExternalCodeEditorSetting>>,
+}
+
+impl UiSession {
+    /// Saved prefixes that no longer parse, or repeat, are dropped.
+    pub fn hidden_ref_settings(&self) -> HiddenRefSettings {
+        let mut settings = HiddenRefSettings::default();
+        if let Some(enabled) = self.history_hidden_refs_enabled {
+            settings.enabled = enabled;
+        }
+        settings.preset_overrides = self.history_hidden_ref_presets.clone().unwrap_or_default();
+        for prefix in self.history_hidden_ref_prefixes.iter().flatten() {
+            if let Ok(prefix) = HiddenRefPrefix::parse(prefix) {
+                settings.add_custom_prefix(prefix);
+            }
+        }
+        settings
+    }
+}
+
+impl UiSettings {
+    pub fn set_hidden_ref_settings(&mut self, settings: &HiddenRefSettings) {
+        self.history_hidden_refs_enabled = Some(settings.enabled);
+        self.history_hidden_ref_presets = Some(settings.preset_overrides.clone());
+        self.history_hidden_ref_prefixes = Some(
+            settings
+                .custom_prefixes()
+                .iter()
+                .map(|prefix| prefix.as_str().to_owned())
+                .collect(),
+        );
+    }
 }
 
 pub fn persist_ui_settings(settings: UiSettings) -> io::Result<()> {
@@ -190,6 +224,9 @@ pub fn persist_ui_settings_to_path(settings: UiSettings, path: &Path) -> io::Res
         apply_setting!(settings, file, annex_sync_content);
         apply_setting!(settings, file, history_relative_dates);
         apply_setting!(settings, file, history_tag_fetch_mode);
+        apply_setting!(settings, file, history_hidden_refs_enabled);
+        apply_setting!(settings, file, history_hidden_ref_presets);
+        apply_setting!(settings, file, history_hidden_ref_prefixes);
         if let Some(value) = settings.default_history_mode {
             file.default_history_mode = Some(value.into());
         }

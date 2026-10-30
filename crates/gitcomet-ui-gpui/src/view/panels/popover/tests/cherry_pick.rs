@@ -259,6 +259,7 @@ fn cherry_pick_colours(
                         &PopoverKind::CommitMenu {
                             repo_id,
                             commit_id: CommitId(picked[0].into()),
+                            refs: CommitMenuRefs::All,
                         },
                         cx,
                     )

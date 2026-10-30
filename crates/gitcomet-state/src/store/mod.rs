@@ -1396,6 +1396,11 @@ impl AppStore {
     #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
     pub fn replace_snapshot_for_test(&self, state: Arc<AppState>) {
+        // Reduce what is already queued first (a new view's settings
+        // bootstrap), so a slow worker cannot apply it over the replacement.
+        let _ = self
+            .barrier_for_test()
+            .recv_timeout(std::time::Duration::from_secs(5));
         let mut current = self.state.write().unwrap_or_else(|e| e.into_inner());
         *current = state;
     }

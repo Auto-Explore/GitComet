@@ -8,9 +8,34 @@ pub fn is_valid_branch_name(name: &str) -> bool {
             .is_ok()
 }
 
+/// Whether git accepts `name` as a full ref name, as `git check-ref-format`
+/// does.
+pub fn is_valid_ref_name(name: &str) -> bool {
+    gix_validate::reference::name(name.into()).is_ok()
+}
+
 #[cfg(test)]
 mod tests {
-    use super::is_valid_branch_name;
+    use super::{is_valid_branch_name, is_valid_ref_name};
+
+    #[test]
+    fn full_ref_names_follow_git_ref_rules() {
+        for valid in ["refs/t3", "refs/jj/keep", "refs/review-1.2"] {
+            assert!(is_valid_ref_name(valid), "{valid}");
+        }
+        for invalid in [
+            "refs/a..b",
+            "refs/x.lock",
+            "refs/a.",
+            "refs/@{x}",
+            "refs/my review",
+            "refs/a*b",
+            "refs//a",
+            "refs/.hidden",
+        ] {
+            assert!(!is_valid_ref_name(invalid), "{invalid}");
+        }
+    }
 
     #[test]
     fn branch_names_follow_git_ref_rules() {

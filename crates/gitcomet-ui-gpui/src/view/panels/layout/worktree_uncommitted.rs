@@ -40,7 +40,12 @@ impl DetailsPaneView {
             return div().into_any_element();
         };
 
-        let header = components::content_header_bar(theme, ui_scale)
+        // Typography-only, like "Commit details": right-panel headers carry no fill.
+        let header = div()
+            .flex()
+            .items_center()
+            .h(components::content_header_height(ui_scale))
+            .px_2()
             .gap_2()
             .child(
                 div()

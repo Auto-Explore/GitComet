@@ -1016,9 +1016,14 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
             has_source_c.hash(hasher);
             is_three_way.hash(hasher);
         }
-        PopoverKind::CommitMenu { repo_id, commit_id } => {
+        PopoverKind::CommitMenu {
+            repo_id,
+            commit_id,
+            refs,
+        } => {
             repo_id.hash(hasher);
             commit_id.hash(hasher);
+            refs.hash(hasher);
         }
         PopoverKind::StatusFileMenu {
             repo_id,
@@ -1533,6 +1538,7 @@ mod tests {
             PopoverKind::CommitMenu {
                 repo_id,
                 commit_id: CommitId("deadbeef".into()),
+                refs: CommitMenuRefs::All,
             },
             bump_worktrees,
         ));
@@ -1884,6 +1890,7 @@ mod tests {
         let popover = PopoverKind::CommitMenu {
             repo_id,
             commit_id: CommitId("deadbeef".into()),
+            refs: CommitMenuRefs::All,
         };
         let before = notify_fingerprint(&state, &popover, None);
         state.git_log_settings.show_history_tags = !state.git_log_settings.show_history_tags;

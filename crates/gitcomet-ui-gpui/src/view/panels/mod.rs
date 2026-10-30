@@ -48,10 +48,30 @@ pub(in crate::view) enum AddRepoMenuAction {
     Initialize,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq, Ord, PartialOrd)]
 pub(in crate::view) enum HistoryMenuRef {
     Branch(BranchMenuTarget),
     Tag(String),
+}
+
+/// Which of the commit's refs its menu lists.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub(in crate::view) enum CommitMenuRefs {
+    All,
+    /// The one ref picked from the row's ref list.
+    Only(HistoryMenuRef),
+    /// The detached HEAD picked from the row's ref list: no ref of its own.
+    Hidden,
+}
+
+impl CommitMenuRefs {
+    pub(in crate::view) fn admits(&self, target: &HistoryMenuRef) -> bool {
+        match self {
+            Self::All => true,
+            Self::Only(only) => only == target,
+            Self::Hidden => false,
+        }
+    }
 }
 
 #[derive(Clone)]

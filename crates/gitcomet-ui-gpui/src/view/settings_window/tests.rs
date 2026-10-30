@@ -33,6 +33,7 @@ mod automatic_fetch;
 mod chrome_and_layout;
 mod executables;
 mod extensions;
+mod hidden_refs;
 mod large_file_tools_lifecycle;
 mod preferences;
 mod restoration;

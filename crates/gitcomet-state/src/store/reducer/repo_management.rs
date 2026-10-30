@@ -488,6 +488,7 @@ fn open_repo_with_mode(
             }
         };
         repo_state.history_state.history_scope = history_mode;
+        repo_state.history_state.hidden_refs = state.history_hidden_refs.clone();
         repo_state.history_state.history_author_filter = session_preferences
             .repo_history_author_filters
             .get(&workdir_key)
@@ -588,6 +589,7 @@ pub(super) fn restore_session(
         let mut repo_state = {
             let mut repo_state = crate::model::RepoState::new_opening(repo_id, spec.clone());
             repo_state.history_state.history_scope = history_mode;
+            repo_state.history_state.hidden_refs = state.history_hidden_refs.clone();
             repo_state.history_state.history_author_filter = session_preferences
                 .repo_history_author_filters
                 .get(&workdir_key)

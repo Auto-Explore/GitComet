@@ -1095,6 +1095,7 @@ fn reduce_inner(
         ),
         Msg::SetRemoteSettings(settings) => settings::set_remote_settings(state, settings),
         Msg::SetLargeFileSettings(settings) => settings::set_large_file_settings(state, settings),
+        Msg::SetHistoryHiddenRefs(filter) => settings::set_history_hidden_refs(state, filter),
         Msg::SetMaintenanceSettings(settings) => maintenance::set_settings(state, settings),
         Msg::SetFileBrowserSettings(settings) => {
             effects::set_file_browser_settings(state, settings)

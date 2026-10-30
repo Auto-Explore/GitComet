@@ -253,6 +253,7 @@ fn merge_entry_names_and_gates_on_the_commits_own_repository(cx: &mut gpui::Test
                         &PopoverKind::CommitMenu {
                             repo_id,
                             commit_id: commit_id.clone(),
+                            refs: CommitMenuRefs::All,
                         },
                         cx,
                     )
@@ -385,6 +386,7 @@ fn copy_branch_name_entries_follow_the_commits_branches(cx: &mut gpui::TestAppCo
                             &PopoverKind::CommitMenu {
                                 repo_id,
                                 commit_id: commit_id.clone(),
+                                refs: CommitMenuRefs::All,
                             },
                             cx,
                         )

@@ -127,7 +127,7 @@ GitComet started from frustration with existing tools on huge codebases like Chr
   - Full local-first desktop workflow
   - Git remotes, [branch-scoped Pull](docs/pull.md), push, staging, commits
   - Configurable automatic background fetch across open workspaces ([docs](docs/automatic-fetch.md))
-  - Worktrees, branching, and full history
+  - Worktrees, branching, and full history, without agent checkpoints and other tool refs ([docs](docs/hidden-refs.md))
   - Bare repository browsing and conversion ([docs](docs/bare-repositories.md))
   - Multi-repository browsing
   - Inline and side-by-side diffs

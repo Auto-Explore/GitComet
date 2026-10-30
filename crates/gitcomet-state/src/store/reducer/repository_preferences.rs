@@ -118,18 +118,7 @@ pub(super) fn apply(state: &mut AppState, snapshot: RepositoryPreferencesSnapsho
         repo.shared_preferences = Some(snapshot.clone());
         repo.branch_sidebar_rev += 1;
         if repo.history_walk() != walk {
-            repo.reset_history_readers();
-            repo.retain_log_while_loading();
-            repo.set_log_loading_more(false);
-            repo.set_log_scan_progress(None);
-            if state.active_repo == Some(repo_id) {
-                repo.set_log(Loadable::Loading);
-                let request = super::util::first_page_log_request(repo);
-                effects.extend(super::util::request_log_effect(repo, request));
-            } else {
-                repo.loads_in_flight.invalidate_log();
-                repo.set_log(Loadable::NotLoaded);
-            }
+            effects.extend(super::util::restart_history_walk(state, ix));
         }
     }
     effects

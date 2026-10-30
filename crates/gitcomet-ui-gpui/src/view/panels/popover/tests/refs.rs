@@ -317,6 +317,7 @@ fn combined_ref_menu_scopes_actions_to_expanded_tag(cx: &mut gpui::TestAppContex
                         &PopoverKind::CommitMenu {
                             repo_id,
                             commit_id: commit_id.clone(),
+                            refs: CommitMenuRefs::All,
                         },
                         cx,
                     )
@@ -388,6 +389,7 @@ fn tag_ref_menu_requests_remote_tags_when_not_loaded(cx: &mut gpui::TestAppConte
                     PopoverKind::CommitMenu {
                         repo_id,
                         commit_id: commit_id.clone(),
+                        refs: CommitMenuRefs::All,
                     },
                     gpui::point(gpui::px(120.0), gpui::px(72.0)),
                     window,
@@ -2547,6 +2549,7 @@ fn commit_menu_leaves_out_branches_of_remotes_hidden_from_history(cx: &mut gpui:
                     &PopoverKind::CommitMenu {
                         repo_id,
                         commit_id: commit_id.clone(),
+                        refs: CommitMenuRefs::All,
                     },
                     cx,
                 )
