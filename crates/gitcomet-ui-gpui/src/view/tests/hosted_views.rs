@@ -1563,3 +1563,357 @@ fn over_views_are_measured_again_when_they_notify(cx: &mut gpui::TestAppContext)
     );
     assert_near(wide.right(), layer.right(), "still at the end");
 }
+
+/// Where `region`'s text starts, as a row painted it.
+fn text_left(
+    cx: &mut gpui::VisualTestContext,
+    renderer: &gpui::Entity<DiffRenderer>,
+    region: DiffTextRegion,
+) -> Pixels {
+    cx.update(|_, app| {
+        renderer
+            .read(app)
+            .diff_text_hitboxes
+            .iter()
+            .find(|((_, at), _)| *at == region)
+            .map(|(_, hit)| hit.bounds.left())
+            .unwrap_or_else(|| panic!("a row is painted in {region:?}"))
+    })
+}
+
+/// At a row height the list rounds to device pixels, a view far down the
+/// list still sits right below its line: it follows the rows as the list
+/// lays them out, not as many row heights down.
+#[gpui::test]
+fn over_views_follow_the_lists_rows_at_a_fractional_row_height(cx: &mut gpui::TestAppContext) {
+    let (hint, _pane, renderer, id, cx) = mount_over(
+        cx,
+        DiffLayout::Inline,
+        numbered("line", 400, None),
+        numbered("line", 400, Some(1)),
+        301,
+        DiffAlign::Start,
+        120.0,
+    );
+    cx.update(|window, app| {
+        ui_scale::set_default(app, 115);
+        ui_scale::apply_to_window(window, 115);
+        window.refresh();
+    });
+    draw(cx);
+    let height = cx.update(|_, app| renderer.read(app).theme.editor_row_height(115));
+    assert!(
+        f32::from(height).fract() != 0.0,
+        "{height:?}: a row height the list rounds"
+    );
+    let row = list_row(cx, &renderer, 301);
+    assert!(row > 300);
+    scroll_to(cx, &renderer, -height * (row as f32 - 5.0));
+    let line = painted(cx, &renderer, DiffTextRegion::Inline, "line 300");
+    assert_near(
+        cx.debug_bounds(view_frame(id, &hint)).unwrap().top(),
+        line.bottom(),
+        "right below its line",
+    );
+}
+
+/// Rows the pane places above a view's line, an inset's and a block
+/// view's, move it down with its line.
+#[gpui::test]
+fn over_views_sit_below_their_line_past_rows_placed_above_it(cx: &mut gpui::TestAppContext) {
+    let (old, new) = three_lines();
+    let (hint, pane, renderer, id, cx) = mount_views(cx, DiffLayout::Inline, old, new, |app| {
+        let thread = new_thread(app, 1);
+        let hint = new_hint(app, 120.0);
+        let views = vec![
+            DiffHostedView::block(on_new(1), thread),
+            DiffHostedView::over(on_new(3), DiffAlign::Start, hint.clone()),
+        ];
+        (hint, views)
+    });
+    cx.update(|_, app| {
+        pane.set_insets(
+            vec![gitcomet_extension_api::DiffInset::new(
+                DiffLineSide::New,
+                1,
+                ["A note".into(), "Its second line".into()],
+            )],
+            app,
+        )
+    });
+    draw(cx);
+    assert!(reserved(cx, &renderer) > 2, "rows placed above line 3");
+    let three = painted(cx, &renderer, DiffTextRegion::Inline, "three");
+    assert_eq!(
+        cx.debug_bounds(view_frame(id, &hint)).unwrap().top(),
+        three.bottom()
+    );
+}
+
+/// A wrapped line's view goes below its last row.
+#[gpui::test]
+fn over_views_go_below_a_wrapped_lines_last_row(cx: &mut gpui::TestAppContext) {
+    let words = (0..80)
+        .map(|word| format!("w{word:02}"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let (hint, _pane, renderer, id, cx) = mount_over(
+        cx,
+        DiffLayout::Inline,
+        "one\nthree\n".into(),
+        format!("one\n{words}\nthree\n"),
+        2,
+        DiffAlign::Start,
+        120.0,
+    );
+    cx.update(|_, app| renderer.update(app, |pane, cx| pane.set_diff_word_wrap(true, cx)));
+    draw(cx);
+    let (last, _) = text_end(cx, &renderer, DiffTextRegion::Inline, "w");
+    let first = painted(cx, &renderer, DiffTextRegion::Inline, "w00");
+    assert!(last.top() > first.top(), "the line wraps");
+    assert_eq!(
+        cx.debug_bounds(view_frame(id, &hint)).unwrap().top(),
+        last.bottom()
+    );
+}
+
+/// A view lined up with the text start starts where the text does, past a
+/// people column, without line numbers, and in a split's old side.
+#[gpui::test]
+fn over_views_start_where_the_text_does(cx: &mut gpui::TestAppContext) {
+    let (old, new) = three_lines();
+    let (hint, pane, renderer, id, inline) =
+        mount_over(cx, DiffLayout::Inline, old, new, 1, DiffAlign::Start, 120.0);
+    let frame = view_frame(id, &hint);
+    assert_near(
+        inline.debug_bounds(frame).unwrap().left(),
+        text_left(inline, &renderer, DiffTextRegion::Inline),
+        "with line numbers",
+    );
+    inline.update(|_, app| {
+        pane.set_annotations(
+            Arc::new(
+                gitcomet_extension_api::DiffAnnotations::new().with(
+                    DiffLineSide::New,
+                    1,
+                    gitcomet_extension_api::DiffAnnotation::new(gpui::blue())
+                        .with_people(["Ada Lovelace", "Grace Hopper"]),
+                ),
+            ),
+            app,
+        )
+    });
+    draw(inline);
+    let with_people = inline.debug_bounds(frame).unwrap().left();
+    assert_near(
+        with_people,
+        text_left(inline, &renderer, DiffTextRegion::Inline),
+        "past the people column",
+    );
+    inline.update(|_, app| {
+        let mut policy = gitcomet_extension_api::DiffPanePolicy::default();
+        policy.line_numbers = false;
+        pane.set_policy(policy, app);
+    });
+    draw(inline);
+    let bare = inline.debug_bounds(frame).unwrap().left();
+    assert!(bare < with_people, "the gutters went");
+    assert_near(
+        bare,
+        text_left(inline, &renderer, DiffTextRegion::Inline),
+        "without line numbers",
+    );
+
+    let on_old = DiffScrollAnchor {
+        side: DiffLineSide::Old,
+        line: 2,
+    };
+    let (old, new) = three_lines();
+    let (hint, _pane, renderer, id, cx) = mount_views(cx, DiffLayout::Split, old, new, |app| {
+        let hint = new_hint(app, 120.0);
+        let view = DiffHostedView::over(on_old, DiffAlign::Start, hint.clone());
+        (hint, vec![view])
+    });
+    let frame = cx.debug_bounds(view_frame(id, &hint)).unwrap();
+    assert_near(
+        frame.left(),
+        text_left(cx, &renderer, DiffTextRegion::SplitLeft),
+        "in the old side's column",
+    );
+    assert!(frame.right() < text_left(cx, &renderer, DiffTextRegion::SplitRight));
+}
+
+/// A view lined up with the text start starts past the annotation column
+/// of a pane that shows blame.
+#[gpui::test]
+fn over_views_start_past_the_annotation_column(cx: &mut gpui::TestAppContext) {
+    let (_dir, store, view, app_cx) = open_repository(cx);
+    let (pane, hint) = app_cx.update(|_, app| {
+        let host = view.read(app).extension_window.as_ref().unwrap().host();
+        let repository = host.active_repository(app).unwrap().unwrap();
+        let mut policy = gitcomet_extension_api::DiffPanePolicy::default();
+        policy.blame = true;
+        let pane = host
+            .create_diff_pane(
+                &repository,
+                DiffTarget::working_tree("a.rs".into(), DiffArea::Unstaged),
+                DiffPaneOptions {
+                    policy,
+                    layout: DiffLayout::Inline,
+                    content_width: Some(900.0),
+                    ..Default::default()
+                },
+                app,
+            )
+            .unwrap();
+        let hint = new_hint(app, 120.0);
+        pane.set_views(
+            vec![DiffHostedView::over(
+                on_new(2),
+                DiffAlign::Start,
+                hint.clone(),
+            )],
+            app,
+        );
+        (pane, hint)
+    });
+    settle(app_cx, &view, &store, "hosted file", |cx| {
+        cx.update(|_, app| !pane.is_loading(app))
+    });
+    let renderer = hosted_renderer(app_cx, &pane);
+    let id = app_cx.update(|_, app| {
+        pane.view()
+            .downcast::<crate::view::hosted::diff_pane::DiffPaneView>()
+            .unwrap()
+            .read(app)
+            .view_id()
+    });
+    let mounted = pane.view();
+    let (_, cx) = cx.add_window_view(move |_, _| PaneHolder(mounted));
+    draw(cx);
+    assert!(cx.update(|_, app| renderer.read(app).annotation_active()));
+    let annotation = cx.update(|_, app| renderer.read(app).annotate_column_width_px(100));
+    let text = text_left(cx, &renderer, DiffTextRegion::Inline);
+    let frame = cx.debug_bounds(view_frame(id, &hint)).unwrap();
+    assert!(frame.left() > annotation, "past the annotation column");
+    assert_near(frame.left(), text, "where the text starts");
+}
+
+/// A line the pane reveals shows its view right below it in the frame it
+/// scrolls to.
+#[gpui::test]
+fn a_revealed_line_shows_its_over_view_below_it(cx: &mut gpui::TestAppContext) {
+    let (hint, pane, renderer, id, cx) = mount_over(
+        cx,
+        DiffLayout::Inline,
+        numbered("line", 100, None),
+        numbered("line", 100, Some(1)),
+        71,
+        DiffAlign::Start,
+        120.0,
+    );
+    assert!(
+        cx.debug_bounds(view_frame(id, &hint)).is_none(),
+        "far below"
+    );
+    cx.update(|_, app| pane.reveal(DiffLineSide::New, 71, app));
+    draw(cx);
+    let line = painted(cx, &renderer, DiffTextRegion::Inline, "line 70");
+    assert_eq!(
+        cx.debug_bounds(view_frame(id, &hint)).unwrap().top(),
+        line.bottom()
+    );
+}
+
+/// The wheel over a view scrolls the rows under it, and a click beside it
+/// reaches them.
+#[gpui::test]
+fn the_rows_under_an_over_view_still_scroll_and_take_clicks_beside_it(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (hint, pane, renderer, id, cx) = mount_over(
+        cx,
+        DiffLayout::Inline,
+        numbered("line", 100, None),
+        numbered("line", 100, Some(1)),
+        2,
+        DiffAlign::Start,
+        120.0,
+    );
+    let frame = cx.debug_bounds(view_frame(id, &hint)).unwrap();
+    let offset = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|_, app| {
+            renderer
+                .read(app)
+                .diff_scroll
+                .0
+                .borrow()
+                .base_handle
+                .offset()
+                .y
+        })
+    };
+    let before = offset(cx);
+    cx.simulate_event(gpui::ScrollWheelEvent {
+        position: frame.center(),
+        delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.0), px(-100.0))),
+        ..Default::default()
+    });
+    draw(cx);
+    assert!(offset(cx) < before, "the rows scrolled");
+
+    scroll_to(cx, &renderer, px(0.0));
+    let frame = cx.debug_bounds(view_frame(id, &hint)).unwrap();
+    // Line 4's row, under the view's height but to its right.
+    let row = list_row(cx, &renderer, 4);
+    let bounds = cx
+        .debug_bounds(selector(format!("hosted_diff_{id}_row_{row}")))
+        .unwrap();
+    assert!(bounds.top() > frame.top() && bounds.bottom() < frame.bottom());
+    let at = gpui::point(frame.right() + px(40.0), bounds.center().y);
+    cx.simulate_mouse_move(at, None, gpui::Modifiers::none());
+    cx.simulate_mouse_down(at, gpui::MouseButton::Left, gpui::Modifiers::none());
+    cx.simulate_mouse_up(at, gpui::MouseButton::Left, gpui::Modifiers::none());
+    cx.run_until_parked();
+    assert_eq!(
+        cx.update(|_, app| pane.selection(app)),
+        Some(DiffLineRange {
+            side: DiffLineSide::New,
+            start: 4,
+            end: 4
+        })
+    );
+}
+
+/// A view lined up with the text start is no wider than the room from
+/// there to the column's end, which a view lined up with the end fills.
+#[gpui::test]
+fn a_start_view_is_no_wider_than_the_room_after_the_text_start(cx: &mut gpui::TestAppContext) {
+    let (old, new) = three_lines();
+    let ((start, end), _pane, renderer, id, cx) =
+        mount_views(cx, DiffLayout::Inline, old, new, |app| {
+            let start = new_hint(app, 5000.0);
+            let end = new_hint(app, 5000.0);
+            let views = vec![
+                DiffHostedView::over(on_new(1), DiffAlign::Start, start.clone()),
+                DiffHostedView::over(on_new(3), DiffAlign::End, end.clone()),
+            ];
+            ((start, end), views)
+        });
+    let layer = cx
+        .debug_bounds(over_layer(id, DiffTextRegion::Inline))
+        .unwrap();
+    let start = cx.debug_bounds(view_frame(id, &start)).unwrap();
+    let end = cx.debug_bounds(view_frame(id, &end)).unwrap();
+    assert_near(
+        start.left(),
+        text_left(cx, &renderer, DiffTextRegion::Inline),
+        "at the text start",
+    );
+    assert!(end.size.width < px(5000.0), "capped at the column");
+    assert_near(
+        start.size.width + (start.left() - layer.left()),
+        end.size.width,
+        "the column less the text start",
+    );
+}
