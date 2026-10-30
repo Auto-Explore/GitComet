@@ -832,7 +832,28 @@ impl DiffRenderer {
                             .debug_selector(move || {
                                 format!("hosted_diff_{pane_id}_gutter_{display}")
                             })
-                            .when_some(fill, |lane, color| lane.bg(color))
+                            // Beside a people column, a colour keeps to the
+                            // lane's width at its start.
+                            .when_some(fill, |lane, color| {
+                                if column > px(0.0) {
+                                    lane.relative().child(
+                                        div()
+                                            .debug_selector(move || {
+                                                format!(
+                                                    "hosted_diff_{pane_id}_gutter_fill_{display}"
+                                                )
+                                            })
+                                            .absolute()
+                                            .left_0()
+                                            .top_0()
+                                            .bottom_0()
+                                            .w(lane_width)
+                                            .bg(color),
+                                    )
+                                } else {
+                                    lane.bg(color)
+                                }
+                            })
                             .when_some(text, |lane, text| lane.child(text))
                             .when_some(glyph, |lane, (glyph, color)| {
                                 lane.flex().items_center().justify_center().child(

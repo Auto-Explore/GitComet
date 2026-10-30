@@ -3608,14 +3608,17 @@ fn people_annotations_draw_in_a_column_before_the_rows(cx: &mut gpui::TestAppCon
                 .with_glyph(glyph),
         )
     };
+    // With a colour-only annotation on line 1 beside them.
     let people = |names: &[&str]| {
-        DiffAnnotations::new().with(
-            DiffLineSide::New,
-            3,
-            DiffAnnotation::new(gpui::red())
-                .with_label("comments")
-                .with_people(names.iter().copied()),
-        )
+        DiffAnnotations::new()
+            .with(
+                DiffLineSide::New,
+                3,
+                DiffAnnotation::new(gpui::red())
+                    .with_label("comments")
+                    .with_people(names.iter().copied()),
+            )
+            .with(DiffLineSide::New, 1, DiffAnnotation::new(gpui::blue()))
     };
     // The glyph sits inside the column's padding on both sides.
     let fits = |glyph: Bounds<Pixels>, column: Bounds<Pixels>, what: &str| {
@@ -3703,6 +3706,17 @@ fn people_annotations_draw_in_a_column_before_the_rows(cx: &mut gpui::TestAppCon
             "one circle: {one:?}"
         );
         fits(one, column, "one person");
+        // A colour fills the lane's 12px at the column's start, not the
+        // whole column; a click anywhere in the column is still its.
+        let fill = cx
+            .debug_bounds(selector(format!("hosted_diff_{id}_gutter_fill_0")))
+            .expect("line 1's colour");
+        let first = cx
+            .debug_bounds(selector(format!("hosted_diff_{id}_gutter_0")))
+            .unwrap();
+        assert!((fill.size.width - px(12.0)).abs() < px(0.01), "{fill:?}");
+        assert_eq!(fill.left(), first.left());
+        assert!((first.size.width - column.size.width).abs() < px(0.01));
 
         cx.update(|_, app| pane.set_annotations(people(&["Ada Lovelace", "Grace Hopper"]), app));
         draw(cx);
