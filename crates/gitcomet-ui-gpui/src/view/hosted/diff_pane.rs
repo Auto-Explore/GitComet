@@ -1122,7 +1122,9 @@ impl DiffPaneImpl for HostedDiffPane {
     fn set_views(&self, views: Vec<DiffHostedView>, cx: &mut App) {
         /// The same view at the same place; the observer is the entity's.
         fn same(a: &DiffHostedView, b: &DiffHostedView) -> bool {
-            a.placement() == b.placement() && a.view().entity_id() == b.view().entity_id()
+            a.anchor() == b.anchor()
+                && a.placement() == b.placement()
+                && a.view().entity_id() == b.view().entity_id()
         }
         self.entity.update(cx, |pane, cx| {
             // An entity shows once: its first place wins.
