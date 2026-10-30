@@ -2,7 +2,7 @@
 use super::*;
 use gitcomet_extension_api::{
     DiffAnnotations, DiffGlyph, DiffHostedView, DiffInlineCard, DiffInset, DiffLineRange,
-    DiffLineSide, DiffPaneOptions,
+    DiffLineSide, DiffPaneOptions, DiffPlacement,
 };
 use palette::IntoColor;
 
@@ -492,12 +492,18 @@ impl DiffRenderer {
                     .extend((0..layout.rows(card)).map(|row| DisplayRow::Card { card: ix, row }));
             }
         }
-        // After the line's cards.
+        // After the line's cards; a view at a line's end takes no rows.
         for (ix, view) in decor.views.views().iter().enumerate() {
-            if let Some(row) = anchors.get(&(view.anchor().side, view.anchor().line)) {
-                after.entry(*row).or_default().extend(
-                    (0..decor.views.rows(view)).map(|row| DisplayRow::View { view: ix, row }),
-                );
+            match view.placement() {
+                DiffPlacement::Block => {
+                    if let Some(row) = anchors.get(&(view.anchor().side, view.anchor().line)) {
+                        after.entry(*row).or_default().extend(
+                            (0..decor.views.rows(view))
+                                .map(|row| DisplayRow::View { view: ix, row }),
+                        );
+                    }
+                }
+                DiffPlacement::EndOfLine => {}
             }
         }
         let len = self.diff_visible_len();
@@ -643,6 +649,7 @@ impl DiffRenderer {
         if this.hosted_decor.is_none() {
             return render(this, range, window, cx);
         }
+        this.forget_hosted_line_ends(side);
         let pane_id = this.hosted_decor.as_ref().unwrap().view_id;
         let original_theme = this.theme;
         let style = this.hosted_decor.as_ref().unwrap().options.style;
@@ -734,6 +741,9 @@ impl DiffRenderer {
                     }
                     DisplayRow::Document(row) => {
                         use crate::kit::interaction::ControlInteractionExt as _;
+                        // After the row, so its canvas finds where the text
+                        // ends before the views there are placed.
+                        let line_end = this.render_hosted_line_end(row, side, cx);
                         let element = div()
                             .id(("hosted_row", display))
                             .debug_selector(move || format!("hosted_diff_{pane_id}_row_{display}"))
@@ -742,6 +752,7 @@ impl DiffRenderer {
                                     .pop_front()
                                     .unwrap_or_else(|| div().into_any_element()),
                             )
+                            .when_some(line_end, |row, line_end| row.relative().child(line_end))
                             .on_activate(
                                 false,
                                 crate::kit::interaction::ControlActivation::Composite,

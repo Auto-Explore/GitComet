@@ -52,8 +52,8 @@ struct Mounted<'a> {
     cx: &'a mut gpui::VisualTestContext,
 }
 
-/// The thread's frame, as pane `id` draws it.
-fn thread_frame(id: u64, thread: &gpui::Entity<Thread>) -> &'static str {
+/// A view's frame, as pane `id` draws it.
+fn thread_frame<V: 'static>(id: u64, thread: &gpui::Entity<V>) -> &'static str {
     selector(format!(
         "hosted_diff_{id}_view_{}",
         thread.entity_id().as_u64()
@@ -77,6 +77,58 @@ fn mount<'a>(
     new: String,
     line: u32,
 ) -> Mounted<'a> {
+    let (thread, pane, renderer, id, cx) = mount_views(cx, layout, old, new, |app| {
+        let thread = new_thread(app, 1);
+        let view = DiffHostedView::block(
+            DiffScrollAnchor {
+                side: DiffLineSide::New,
+                line,
+            },
+            thread.clone(),
+        );
+        (thread, vec![view])
+    });
+    Mounted {
+        pane,
+        thread,
+        renderer,
+        id,
+        cx,
+    }
+}
+
+fn new_thread(app: &mut App, replies: usize) -> gpui::Entity<Thread> {
+    app.new(|cx| Thread {
+        input: cx.new(|cx| {
+            components::TextInput::new_inert(
+                components::TextInputOptions {
+                    placeholder: "Write a reply".into(),
+                    ..Default::default()
+                },
+                cx,
+            )
+        }),
+        replies,
+        resolved: 0,
+        renders: Rc::default(),
+    })
+}
+
+/// A snapshot pane of `old` and `new` showing the views `views` makes, with
+/// what else it returns.
+fn mount_views<T>(
+    cx: &mut gpui::TestAppContext,
+    layout: DiffLayout,
+    old: String,
+    new: String,
+    views: impl FnOnce(&mut App) -> (T, Vec<DiffHostedView>),
+) -> (
+    T,
+    DiffPane,
+    gpui::Entity<DiffRenderer>,
+    u64,
+    &mut gpui::VisualTestContext,
+) {
     install_example(cx);
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, app_cx) =
@@ -95,31 +147,9 @@ fn mount<'a>(
                 app,
             )
             .unwrap();
-        let thread = app.new(|cx| Thread {
-            input: cx.new(|cx| {
-                components::TextInput::new_inert(
-                    components::TextInputOptions {
-                        placeholder: "Write a reply".into(),
-                        ..Default::default()
-                    },
-                    cx,
-                )
-            }),
-            replies: 1,
-            resolved: 0,
-            renders: Rc::default(),
-        });
-        pane.set_views(
-            vec![DiffHostedView::block(
-                DiffScrollAnchor {
-                    side: DiffLineSide::New,
-                    line,
-                },
-                thread.clone(),
-            )],
-            app,
-        );
-        (pane, thread)
+        let (made, views) = views(app);
+        pane.set_views(views, app);
+        (pane, made)
     });
     app_cx.run_until_parked();
     let renderer = hosted_renderer(app_cx, &pane);
@@ -136,13 +166,7 @@ fn mount<'a>(
     cx.update(|window, _| window.activate());
     draw(cx);
     assert!(cx.update(|_, app| !pane.is_loading(app)));
-    Mounted {
-        pane,
-        thread,
-        renderer,
-        id,
-        cx,
-    }
+    (thread, pane, renderer, id, cx)
 }
 
 fn three_lines() -> (String, String) {
@@ -609,4 +633,452 @@ fn hosted_renderer_of(pane: &DiffPane, app: &App) -> gpui::Entity<DiffRenderer> 
         .renderer()
         .cloned()
         .unwrap()
+}
+
+/// A hint after a line: a button and a reply box in a row of a set width,
+/// taller than a diff row so that its clipping shows.
+struct Hint {
+    input: gpui::Entity<components::TextInput>,
+    width: Pixels,
+    clicks: usize,
+    renders: Rc<Cell<usize>>,
+}
+
+impl Render for Hint {
+    fn render(&mut self, _: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
+        self.renders.set(self.renders.get() + 1);
+        div()
+            .debug_selector(|| "hint_root".into())
+            .flex()
+            .w(self.width)
+            .h(px(60.0))
+            .child(
+                div()
+                    .id("hint_button")
+                    .debug_selector(|| "hint_button".into())
+                    .flex_none()
+                    .w(px(16.0))
+                    .h(px(8.0))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.clicks += 1;
+                        cx.notify();
+                    })),
+            )
+            .child(
+                div()
+                    .debug_selector(|| "hint_input".into())
+                    .flex_1()
+                    .child(self.input.clone()),
+            )
+    }
+}
+
+fn new_hint(app: &mut App, width: f32) -> gpui::Entity<Hint> {
+    app.new(|cx| Hint {
+        input: cx.new(|cx| {
+            components::TextInput::new_inert(components::TextInputOptions::default(), cx)
+        }),
+        width: px(width),
+        clicks: 0,
+        renders: Rc::default(),
+    })
+}
+
+fn on_new(line: u32) -> DiffScrollAnchor {
+    DiffScrollAnchor {
+        side: DiffLineSide::New,
+        line,
+    }
+}
+
+/// A pane of `old` and `new` with a hint `width` wide after new line
+/// `line`.
+fn mount_hint(
+    cx: &mut gpui::TestAppContext,
+    layout: DiffLayout,
+    old: String,
+    new: String,
+    line: u32,
+    width: f32,
+) -> (
+    gpui::Entity<Hint>,
+    DiffPane,
+    gpui::Entity<DiffRenderer>,
+    u64,
+    &mut gpui::VisualTestContext,
+) {
+    mount_views(cx, layout, old, new, |app| {
+        let hint = new_hint(app, width);
+        let view = DiffHostedView::end_of_line(on_new(line), hint.clone());
+        (hint, vec![view])
+    })
+}
+
+/// The text bounds of the last row in `region` that painted `text`, and
+/// where its text ends: its shaped line's width, or its monospace cells'
+/// when the line was streamed.
+fn text_end(
+    cx: &mut gpui::VisualTestContext,
+    renderer: &gpui::Entity<DiffRenderer>,
+    region: DiffTextRegion,
+    text: &str,
+) -> (Bounds<Pixels>, Pixels) {
+    cx.update(|_, app| {
+        let renderer = renderer.read(app);
+        let hit = renderer
+            .diff_text_hitboxes
+            .iter()
+            .filter(|((_, at), hit)| *at == region && hit.painted_text.contains(text))
+            .map(|(_, hit)| hit)
+            .max_by(|a, b| f32::from(a.bounds.top()).total_cmp(&f32::from(b.bounds.top())))
+            .unwrap_or_else(|| panic!("{text} is painted in {region:?}"));
+        let width = match hit.streamed_ascii_monospace_cell_width {
+            Some(cell) => cell * hit.text_len as f32,
+            None => {
+                renderer
+                    .diff_text_layout_cache
+                    .get(&hit.layout_key)
+                    .expect("its layout is cached")
+                    .layout
+                    .width
+            }
+        };
+        (hit.bounds, hit.bounds.left() + width)
+    })
+}
+
+fn assert_near(a: Pixels, b: Pixels, what: &str) {
+    assert!((a - b).abs() < px(0.5), "{what}: {a:?} against {b:?}");
+}
+
+/// A view at a line's end sits on its line's row right after the text, at
+/// its own width and one row high, in its side's column only, and takes no
+/// rows of the list.
+#[gpui::test]
+fn end_of_line_views_sit_after_their_lines_text_in_no_rows_of_their_own(
+    cx: &mut gpui::TestAppContext,
+) {
+    for layout in [DiffLayout::Inline, DiffLayout::Split] {
+        let (old, new) = three_lines();
+        let (hint, _pane, renderer, id, cx) = mount_hint(cx, layout, old, new, 2, 50.0);
+        let region = match layout {
+            DiffLayout::Split => DiffTextRegion::SplitRight,
+            _ => DiffTextRegion::Inline,
+        };
+        let frame = cx.debug_bounds(thread_frame(id, &hint)).expect("drawn");
+        let (text, end) = text_end(cx, &renderer, region, "TWO");
+        assert_near(frame.left(), end, &format!("{layout:?}: after the text"));
+        assert_eq!(frame.top(), text.top(), "{layout:?}: on its line's row");
+        assert_eq!(frame.size.width, px(50.0), "{layout:?}: its own width");
+        assert_eq!(
+            frame.size.height,
+            row_height(cx, &renderer),
+            "{layout:?}: one row high, though the hint is taller"
+        );
+        assert_eq!(reserved(cx, &renderer), 0, "{layout:?}: no rows");
+        if layout == DiffLayout::Split {
+            let left = painted(cx, &renderer, DiffTextRegion::SplitLeft, "two");
+            assert!(
+                frame.left() > left.right(),
+                "in the new side's column: {frame:?}"
+            );
+        }
+    }
+}
+
+/// A view at a line's end moves with the text when its column scrolls
+/// sideways, and its column's scroll range makes room for it.
+#[gpui::test]
+fn end_of_line_views_scroll_sideways_with_the_text(cx: &mut gpui::TestAppContext) {
+    let long = "x".repeat(600);
+    for layout in [DiffLayout::Inline, DiffLayout::Split] {
+        let (hint, _pane, renderer, id, cx) = mount_hint(
+            cx,
+            layout,
+            format!("one\n{long}\nthree\n"),
+            format!("one\n{long} changed\nthree\n"),
+            2,
+            400.0,
+        );
+        let (region, column) = match layout {
+            DiffLayout::Split => (DiffTextRegion::SplitRight, 1),
+            _ => (DiffTextRegion::Inline, 0),
+        };
+        let (text, end) = text_end(cx, &renderer, region, "changed");
+        let scroll_width =
+            cx.update(|_, app| renderer.read(app).diff_horizontal_scroll.content_widths[column]);
+        assert!(
+            scroll_width - (end - text.left()) >= px(400.0),
+            "{layout:?}: the row's scroll width {scroll_width:?} holds the view"
+        );
+        // Two offsets that both show the line's end; the range ends where
+        // the view does.
+        let scroll_x = |cx: &mut gpui::VisualTestContext, x: Pixels| {
+            cx.update(|_, app| {
+                renderer.update(app, |renderer, cx| {
+                    let scroll = match layout {
+                        DiffLayout::Split => renderer.diff_split_right_scroll.0.borrow(),
+                        _ => renderer.diff_scroll.0.borrow(),
+                    };
+                    let offset = scroll.base_handle.offset();
+                    scroll.base_handle.set_offset(gpui::point(x, offset.y));
+                    cx.notify();
+                })
+            });
+            draw(cx);
+        };
+        scroll_x(cx, px(1750.0) - end);
+        let before = cx.debug_bounds(thread_frame(id, &hint)).unwrap();
+        scroll_x(cx, px(1600.0) - end);
+        let after = cx.debug_bounds(thread_frame(id, &hint)).unwrap();
+        assert_near(
+            after.left(),
+            before.left() - px(150.0),
+            &format!("{layout:?}: it scrolled with the text"),
+        );
+        let (_, end) = text_end(cx, &renderer, region, "changed");
+        assert_near(after.left(), end, &format!("{layout:?}: still after it"));
+    }
+}
+
+/// A line long enough to stream in monospace cells ends where its cells do.
+#[gpui::test]
+fn end_of_line_views_follow_a_streamed_line(cx: &mut gpui::TestAppContext) {
+    let long = "x".repeat(70_000);
+    let (hint, _pane, renderer, id, cx) = mount_hint(
+        cx,
+        DiffLayout::Inline,
+        "one\nthree\n".into(),
+        format!("one\n{long}\nthree\n"),
+        2,
+        50.0,
+    );
+    let (_, end) = text_end(cx, &renderer, DiffTextRegion::Inline, "xxx");
+    // To the line's end, where the view is.
+    cx.update(|_, app| {
+        renderer.update(app, |renderer, cx| {
+            let scroll = renderer.diff_scroll.0.borrow();
+            let offset = scroll.base_handle.offset();
+            scroll
+                .base_handle
+                .set_offset(gpui::point(offset.x - end + px(300.0), offset.y));
+            cx.notify();
+        })
+    });
+    draw(cx);
+    let streamed = cx.update(|_, app| {
+        renderer
+            .read(app)
+            .diff_text_hitboxes
+            .values()
+            .any(|hit| hit.streamed_ascii_monospace_cell_width.is_some())
+    });
+    assert!(streamed, "the line is streamed");
+    let (_, end) = text_end(cx, &renderer, DiffTextRegion::Inline, "xxx");
+    let frame = cx.debug_bounds(thread_frame(id, &hint)).expect("drawn");
+    assert_near(frame.left(), end, "after the cells");
+}
+
+/// A wrapped line shows its view after the text of its last row.
+#[gpui::test]
+fn end_of_line_views_go_on_a_wrapped_lines_last_row(cx: &mut gpui::TestAppContext) {
+    let words = (0..80)
+        .map(|word| format!("w{word:02}"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let (hint, _pane, renderer, id, cx) = mount_hint(
+        cx,
+        DiffLayout::Inline,
+        "one\nthree\n".into(),
+        format!("one\n{words}\nthree\n"),
+        2,
+        50.0,
+    );
+    cx.update(|_, app| renderer.update(app, |pane, cx| pane.set_diff_word_wrap(true, cx)));
+    draw(cx);
+    let rows = cx.update(|_, app| {
+        renderer
+            .read(app)
+            .diff_text_hitboxes
+            .values()
+            .filter(|hit| hit.painted_text.contains("w"))
+            .count()
+    });
+    assert!(rows > 1, "the line wraps over {rows} rows");
+    let (last, end) = text_end(cx, &renderer, DiffTextRegion::Inline, "w");
+    let frame = cx.debug_bounds(thread_frame(id, &hint)).expect("drawn");
+    assert_eq!(frame.top(), last.top(), "on the last row");
+    assert_near(frame.left(), end, "after its text");
+    assert_eq!(reserved(cx, &renderer), 0);
+}
+
+/// Keys typed in a line end view's input are the input's, and a click on
+/// its button is the button's: neither reaches the diff.
+#[gpui::test]
+fn keys_and_clicks_in_an_end_of_line_view_stay_in_it(cx: &mut gpui::TestAppContext) {
+    let (old, new) = three_lines();
+    let (hint, pane, renderer, _, cx) = mount_hint(cx, DiffLayout::Inline, old, new, 2, 200.0);
+    let diff_focus = cx.update(|_, app| renderer.read(app).diff_panel_focus_handle.clone());
+    click_debug_selector(cx, "diff_text_empty_space_Inline");
+    cx.simulate_keystrokes("ctrl-f");
+    draw(cx);
+    assert!(cx.update(|_, app| renderer.read(app).diff_search_active));
+    let selected = cx.update(|_, app| pane.selection(app));
+
+    click_debug_selector(cx, "hint_button");
+    draw(cx);
+    assert_eq!(cx.update(|_, app| hint.read(app).clicks), 1);
+    cx.update(|window, app| {
+        assert!(!diff_focus.is_focused(window), "the diff took no focus");
+        assert!(!renderer.read(app).diff_text_selecting);
+        assert_eq!(pane.selection(app), selected, "the selection did not move");
+    });
+
+    cx.update(|_, app| {
+        app.bind_keys([
+            gpui::KeyBinding::new("left", crate::kit::Left, Some("TextInput")),
+            gpui::KeyBinding::new("right", crate::kit::Right, Some("TextInput")),
+        ])
+    });
+    // Its visible top: the row clips the rest.
+    let input = cx.debug_bounds("hint_input").unwrap();
+    let at = input.origin + gpui::point(px(4.0), px(4.0));
+    cx.simulate_mouse_move(at, None, gpui::Modifiers::none());
+    cx.simulate_mouse_down(at, gpui::MouseButton::Left, gpui::Modifiers::none());
+    cx.simulate_mouse_up(at, gpui::MouseButton::Left, gpui::Modifiers::none());
+    draw(cx);
+    let input = cx.update(|_, app| hint.read(app).input.clone());
+    let input_focus = cx.update(|_, app| input.read(app).focus_handle());
+    assert!(cx.update(|window, _| input_focus.is_focused(window)));
+    cx.simulate_keystrokes("a space b left left c right right enter escape f2 f3");
+    draw(cx);
+    assert_eq!(
+        cx.update(|_, app| input.read(app).text().to_string()),
+        "ac b"
+    );
+    assert!(
+        cx.update(|_, app| renderer.read(app).diff_search_active),
+        "Escape stayed in the view"
+    );
+    cx.update(|_, app| assert_eq!(pane.selection(app), selected));
+}
+
+/// Only a block view reserves rows: with one of each, the list has the
+/// block view's rows; with the line end view alone, the document's only.
+#[gpui::test]
+fn only_block_views_reserve_rows(cx: &mut gpui::TestAppContext) {
+    let (old, new) = three_lines();
+    let ((thread, hint), pane, renderer, id, cx) =
+        mount_views(cx, DiffLayout::Inline, old, new, |app| {
+            let thread = new_thread(app, 1);
+            let hint = new_hint(app, 50.0);
+            let views = vec![
+                DiffHostedView::block(on_new(1), thread.clone()),
+                DiffHostedView::end_of_line(on_new(2), hint.clone()),
+            ];
+            ((thread, hint), views)
+        });
+    assert!(cx.debug_bounds(thread_frame(id, &hint)).is_some());
+    let content = cx.debug_bounds("thread_root").unwrap().size.height;
+    let height = row_height(cx, &renderer);
+    assert_eq!(
+        reserved(cx, &renderer),
+        (f32::from(content) / f32::from(height)).ceil() as usize,
+        "the block view's rows only"
+    );
+    cx.update(|_, app| {
+        pane.set_views(
+            vec![DiffHostedView::end_of_line(on_new(2), hint.clone())],
+            app,
+        )
+    });
+    draw(cx);
+    assert!(cx.debug_bounds(thread_frame(id, &thread)).is_none());
+    assert!(cx.debug_bounds(thread_frame(id, &hint)).is_some());
+    assert_eq!(reserved(cx, &renderer), 0);
+}
+
+/// A line end view is measured again when it notifies, but not when the
+/// views are replaced around it or its line scrolls away and back; while
+/// its line is away it is not drawn, and the pane keeps what it knew.
+#[gpui::test]
+fn an_end_of_line_view_is_measured_once_until_it_notifies(cx: &mut gpui::TestAppContext) {
+    let (hint, pane, renderer, id, cx) = mount_hint(
+        cx,
+        DiffLayout::Inline,
+        numbered("line", 100, None),
+        numbered("line", 100, Some(1)),
+        2,
+        50.0,
+    );
+    let frame = thread_frame(id, &hint);
+    let renders = cx.update(|_, app| hint.read(app).renders.clone());
+    let one_frame = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|window, app| {
+            window.refresh();
+            let _ = window.draw(app);
+        });
+    };
+
+    renders.set(0);
+    // The context draws the frame the replacement asks for.
+    cx.update(|_, app| {
+        let thread = new_thread(app, 1);
+        pane.set_views(
+            vec![
+                DiffHostedView::block(on_new(1), thread),
+                DiffHostedView::end_of_line(on_new(2), hint.clone()),
+            ],
+            app,
+        )
+    });
+    assert_eq!(renders.get(), 1, "replaced around it: drawn, not measured");
+    assert_eq!(
+        cx.update(|_, app| renderer.read(app).hosted_view_states()),
+        2
+    );
+
+    renders.set(0);
+    cx.update(|_, app| {
+        hint.update(app, |hint, cx| {
+            hint.width = px(90.0);
+            cx.notify();
+        })
+    });
+    assert_eq!(renders.get(), 2, "measured, then drawn");
+    draw(cx);
+    assert_eq!(cx.debug_bounds(frame).unwrap().size.width, px(90.0));
+
+    let height = row_height(cx, &renderer);
+    let scroll_to = |cx: &mut gpui::VisualTestContext, y: Pixels| {
+        cx.update(|_, app| {
+            renderer.update(app, |renderer, cx| {
+                renderer
+                    .diff_scroll
+                    .0
+                    .borrow()
+                    .base_handle
+                    .set_offset(gpui::point(px(0.0), y));
+                cx.notify();
+            })
+        });
+        draw(cx);
+    };
+    scroll_to(cx, -height * 60.0);
+    assert!(cx.debug_bounds(frame).is_none(), "its line is away");
+    assert_eq!(
+        cx.update(|_, app| renderer.read(app).hosted_view_states()),
+        2
+    );
+    renders.set(0);
+    scroll_to(cx, px(0.0));
+    assert!(renders.get() > 0, "drawn again");
+    assert_eq!(
+        cx.debug_bounds(frame).unwrap().size.width,
+        px(90.0),
+        "at the width it was measured at"
+    );
+    renders.set(0);
+    one_frame(cx);
+    assert_eq!(renders.get(), 1, "back in view: drawn, not measured");
 }
