@@ -172,6 +172,7 @@ impl TextInput {
         &self.placeholder
     }
 
+    /// Shows `placeholder` from now on while the input is empty.
     pub fn set_placeholder(
         &mut self,
         placeholder: impl Into<SharedString>,
