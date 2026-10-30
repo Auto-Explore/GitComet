@@ -1537,6 +1537,8 @@ impl GitCometView {
 
     fn show_documents_canvas(&mut self, cx: &mut gpui::Context<Self>) {
         self.documents_active = true;
+        // A document takes the main slot from an overlay too.
+        self.hide_active_canvas_overlay(cx);
         self.notify_bottom_status_bar(cx);
         cx.notify();
     }
@@ -1640,7 +1642,7 @@ impl GitCometView {
                             this.documents
                                 .update(cx, |docs, cx| docs.open(path, display, cx));
                             if display {
-                                this.documents_active = true;
+                                this.show_documents_canvas(cx);
                             }
                         }
                         Err(error) => this.push_toast(components::ToastKind::Error, error, cx),

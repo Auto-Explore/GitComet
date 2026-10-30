@@ -19,7 +19,7 @@ use gitcomet_state::msg::Msg;
 use gitcomet_ui_kit::gpui::{App, HighlightStyle, Pixels, Point, SharedString, WindowId};
 use gitcomet_ui_kit::theme::AppTheme;
 use std::cell::{Cell, RefCell};
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -45,6 +45,18 @@ pub enum HostRequest {
     CloseBottomPanel {
         repository: RepositoryHandle,
         panel: ContributionId,
+    },
+    ShowCanvasOverlay {
+        repository: RepositoryHandle,
+        overlay: ContributionId,
+    },
+    HideCanvasOverlay {
+        repository: RepositoryHandle,
+        overlay: ContributionId,
+    },
+    DropCanvasOverlay {
+        repository: RepositoryHandle,
+        overlay: ContributionId,
     },
     Dialog {
         title: SharedString,
@@ -88,6 +100,8 @@ pub struct FakeWindowHost {
     open: RefCell<Vec<RepositoryHandle>>,
     workspace: RefCell<BTreeMap<ExtensionId, serde_json::Value>>,
     open_panels: RefCell<HashSet<(RepositoryHandle, ContributionId)>>,
+    /// The canvas overlay shown over each repository.
+    shown_overlays: RefCell<HashMap<RepositoryHandle, ContributionId>>,
     requests: RefCell<Vec<HostRequest>>,
     dispatched: RefCell<Vec<Msg>>,
     observers: RefCell<Vec<(u64, StateObserver)>>,
@@ -110,6 +124,7 @@ impl FakeWindowHost {
             open: RefCell::default(),
             workspace: RefCell::default(),
             open_panels: RefCell::default(),
+            shown_overlays: RefCell::default(),
             requests: RefCell::default(),
             dispatched: RefCell::default(),
             observers: RefCell::default(),
@@ -195,6 +210,13 @@ impl FakeWindowHost {
 
     fn record(&self, request: HostRequest) {
         self.requests.borrow_mut().push(request);
+    }
+
+    fn forget_overlay(&self, repository: &RepositoryHandle, overlay: &ContributionId) {
+        let mut shown = self.shown_overlays.borrow_mut();
+        if shown.get(repository) == Some(overlay) {
+            shown.remove(repository);
+        }
     }
 }
 
@@ -370,6 +392,60 @@ impl WindowHostImpl for FakeWindowHost {
         self.open_panels
             .borrow()
             .contains(&(repository.clone(), panel.clone()))
+    }
+
+    fn show_canvas_overlay(
+        &self,
+        repository: &RepositoryHandle,
+        overlay: &ContributionId,
+        _cx: &mut App,
+    ) -> Result<(), HostError> {
+        self.shown_overlays
+            .borrow_mut()
+            .insert(repository.clone(), overlay.clone());
+        self.record(HostRequest::ShowCanvasOverlay {
+            repository: repository.clone(),
+            overlay: overlay.clone(),
+        });
+        Ok(())
+    }
+
+    fn hide_canvas_overlay(
+        &self,
+        repository: &RepositoryHandle,
+        overlay: &ContributionId,
+        _cx: &mut App,
+    ) -> Result<(), HostError> {
+        self.forget_overlay(repository, overlay);
+        self.record(HostRequest::HideCanvasOverlay {
+            repository: repository.clone(),
+            overlay: overlay.clone(),
+        });
+        Ok(())
+    }
+
+    fn drop_canvas_overlay(
+        &self,
+        repository: &RepositoryHandle,
+        overlay: &ContributionId,
+        _cx: &mut App,
+    ) -> Result<(), HostError> {
+        self.forget_overlay(repository, overlay);
+        self.record(HostRequest::DropCanvasOverlay {
+            repository: repository.clone(),
+            overlay: overlay.clone(),
+        });
+        Ok(())
+    }
+
+    fn is_canvas_overlay_shown(
+        &self,
+        repository: &RepositoryHandle,
+        overlay: &ContributionId,
+        cx: &App,
+    ) -> bool {
+        self.is_current(repository, cx)
+            && self.shown_overlays.borrow().get(repository) == Some(overlay)
     }
 
     fn watch_repository(
@@ -559,6 +635,91 @@ mod tests {
                 repository: first,
                 message: "Off screen".into(),
             }]
+        );
+    }
+
+    #[gpui::test]
+    fn canvas_overlays_are_one_per_repository_and_recorded(cx: &mut gpui::TestAppContext) {
+        let fake = FakeWindowHost::new(WindowId::from(3));
+        let host = fake.host();
+        let extension = ExtensionId::new("com.example.overlays").unwrap();
+        let first = extension.contribution("first").unwrap();
+        let second = extension.contribution("second").unwrap();
+        let repository = fake.open_repository("/tmp/repository");
+        cx.update(|cx| {
+            assert_eq!(host.show_canvas_overlay(&repository, &first, cx), Ok(()));
+            assert_eq!(host.show_canvas_overlay(&repository, &second, cx), Ok(()));
+            assert!(!host.is_canvas_overlay_shown(&repository, &first, cx));
+            assert!(host.is_canvas_overlay_shown(&repository, &second, cx));
+
+            assert_eq!(host.hide_canvas_overlay(&repository, &first, cx), Ok(()));
+            assert!(
+                host.is_canvas_overlay_shown(&repository, &second, cx),
+                "hiding an overlay that is not shown leaves the shown one"
+            );
+            assert_eq!(host.hide_canvas_overlay(&repository, &second, cx), Ok(()));
+            assert!(!host.is_canvas_overlay_shown(&repository, &second, cx));
+
+            assert_eq!(host.show_canvas_overlay(&repository, &first, cx), Ok(()));
+            assert_eq!(host.drop_canvas_overlay(&repository, &first, cx), Ok(()));
+            assert!(!host.is_canvas_overlay_shown(&repository, &first, cx));
+
+            assert_eq!(host.show_canvas_overlay(&repository, &second, cx), Ok(()));
+        });
+        cx.update(|cx| {
+            assert_eq!(host.show_canvas_overlay(&repository, &second, cx), Ok(()));
+        });
+        let next = fake.open_repository("/tmp/next");
+        cx.update(|cx| {
+            assert!(!host.is_canvas_overlay_shown(&next, &second, cx));
+            assert_eq!(host.show_canvas_overlay(&next, &first, cx), Ok(()));
+            assert!(
+                host.is_canvas_overlay_shown(&repository, &second, cx),
+                "each repository has its own overlay"
+            );
+        });
+        fake.close_repository(&repository);
+        cx.update(|cx| {
+            assert!(
+                !host.is_canvas_overlay_shown(&repository, &second, cx),
+                "a closed repository shows no overlay"
+            );
+            assert_eq!(
+                host.show_canvas_overlay(&repository, &first, cx),
+                Err(HostError::RepositoryClosed)
+            );
+            assert!(host.is_canvas_overlay_shown(&next, &first, cx));
+        });
+
+        let show = |overlay: &ContributionId| HostRequest::ShowCanvasOverlay {
+            repository: repository.clone(),
+            overlay: overlay.clone(),
+        };
+        assert_eq!(
+            fake.requests(),
+            [
+                show(&first),
+                show(&second),
+                HostRequest::HideCanvasOverlay {
+                    repository: repository.clone(),
+                    overlay: first.clone(),
+                },
+                HostRequest::HideCanvasOverlay {
+                    repository: repository.clone(),
+                    overlay: second.clone(),
+                },
+                show(&first),
+                HostRequest::DropCanvasOverlay {
+                    repository: repository.clone(),
+                    overlay: first.clone(),
+                },
+                show(&second),
+                show(&second),
+                HostRequest::ShowCanvasOverlay {
+                    repository: next,
+                    overlay: first,
+                },
+            ]
         );
     }
 }

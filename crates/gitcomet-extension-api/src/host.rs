@@ -295,6 +295,47 @@ pub trait WindowHostImpl {
         cx: &App,
     ) -> bool;
 
+    /// Records canvas overlay `overlay` as shown over `repository` at once,
+    /// replacing any other shown there, and builds and draws it after the
+    /// current update.
+    fn show_canvas_overlay(
+        &self,
+        _repository: &RepositoryHandle,
+        _overlay: &ContributionId,
+        _cx: &mut App,
+    ) -> Result<(), HostError> {
+        Err(HostError::Unsupported)
+    }
+
+    /// Hides it at once, keeping its view; Ok when it was not shown.
+    fn hide_canvas_overlay(
+        &self,
+        _repository: &RepositoryHandle,
+        _overlay: &ContributionId,
+        _cx: &mut App,
+    ) -> Result<(), HostError> {
+        Err(HostError::Unsupported)
+    }
+
+    /// Hides it if shown and drops its view; Ok when it was never shown.
+    fn drop_canvas_overlay(
+        &self,
+        _repository: &RepositoryHandle,
+        _overlay: &ContributionId,
+        _cx: &mut App,
+    ) -> Result<(), HostError> {
+        Err(HostError::Unsupported)
+    }
+
+    fn is_canvas_overlay_shown(
+        &self,
+        _repository: &RepositoryHandle,
+        _overlay: &ContributionId,
+        _cx: &App,
+    ) -> bool {
+        false
+    }
+
     /// Watches `repository` until the returned value drops.
     fn watch_repository(
         &self,
@@ -836,6 +877,53 @@ impl WindowHost {
         cx: &App,
     ) -> bool {
         self.0.is_bottom_panel_open(repository, panel, cx)
+    }
+
+    /// Shows canvas overlay `overlay` over `repository`'s main canvas,
+    /// hiding any other overlay shown there. [`HostError::Unsupported`] when
+    /// no canvas overlay has that id or the window has no repository chrome
+    /// (a focused diff, settings).
+    pub fn show_canvas_overlay(
+        &self,
+        repository: &RepositoryHandle,
+        overlay: &ContributionId,
+        cx: &mut App,
+    ) -> Result<(), HostError> {
+        self.check(repository, cx)?;
+        self.0.show_canvas_overlay(repository, overlay, cx)
+    }
+
+    /// Returns to the view behind; the overlay's view is kept.
+    pub fn hide_canvas_overlay(
+        &self,
+        repository: &RepositoryHandle,
+        overlay: &ContributionId,
+        cx: &mut App,
+    ) -> Result<(), HostError> {
+        self.check(repository, cx)?;
+        self.0.hide_canvas_overlay(repository, overlay, cx)
+    }
+
+    /// Hides the overlay and drops its view; the next show builds it again.
+    pub fn drop_canvas_overlay(
+        &self,
+        repository: &RepositoryHandle,
+        overlay: &ContributionId,
+        cx: &mut App,
+    ) -> Result<(), HostError> {
+        self.check(repository, cx)?;
+        self.0.drop_canvas_overlay(repository, overlay, cx)
+    }
+
+    /// Whether the overlay covers `repository`'s canvas now (recorded at
+    /// once, before the host draws it). False once the repository has closed.
+    pub fn is_canvas_overlay_shown(
+        &self,
+        repository: &RepositoryHandle,
+        overlay: &ContributionId,
+        cx: &App,
+    ) -> bool {
+        self.0.is_canvas_overlay_shown(repository, overlay, cx)
     }
 
     /// Keeps `repository`'s file watcher running (and its changes delivered)

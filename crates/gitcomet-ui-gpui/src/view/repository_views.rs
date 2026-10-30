@@ -271,6 +271,18 @@ pub(in crate::view) struct ViewTabs {
     pub(in crate::view) selected: Option<usize>,
 }
 
+/// What fills a repository's main slot, first match wins.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::view) enum MainSlot {
+    /// A standalone document.
+    Document,
+    /// An extension's canvas overlay, built or not yet.
+    Overlay(usize),
+    /// The selected repository view.
+    View(usize),
+    History,
+}
+
 /// The More tab's invoker, so the tab shows open while its menu does.
 pub(in crate::view) const MORE_VIEWS_INVOKER: &str = "repository_view_more";
 
@@ -313,7 +325,11 @@ impl GitCometView {
             .unwrap_or(gitcomet_extension_api::ViewTarget::History);
         self.bottom_status_bar
             .update(cx, |bar, cx| bar.set_active_view(active_view.clone(), cx));
-        let enabled = !self.window_gated && navigation.is_none();
+        let covered = match self.main_slot() {
+            MainSlot::Overlay(_) => true,
+            MainSlot::Document | MainSlot::View(_) | MainSlot::History => false,
+        };
+        let enabled = !self.window_gated && navigation.is_none() && !covered;
         let slot = navigation.as_ref().and_then(|_| {
             let repo = self.active_repo()?;
             self.repository_views.as_ref()?.active_action_bar(repo)
@@ -323,6 +339,7 @@ impl GitCometView {
             bar.set_active_view(active_view, cx);
             bar.set_extension_navigation(navigation, slot, cx);
             bar.set_view_tabs(tabs, cx);
+            bar.set_canvas_covered(covered, cx);
         });
         crate::app::set_diff_fallback_enabled(self.window_handle.window_id(), enabled, cx);
     }
@@ -705,6 +722,11 @@ impl GitCometView {
         cx: &mut gpui::Context<Self>,
     ) {
         let key = repo_key(&repo);
+        // Asking for the main canvas, even the view already behind an
+        // overlay, uncovers it.
+        if matches!(area, RoutedArea::Main) {
+            self.hide_canvas_overlay_for(key, cx);
+        }
         let (count, current, build, bar_build) = match area {
             RoutedArea::Main => {
                 let Some(router) = self.repository_views.as_ref() else {
@@ -792,20 +814,7 @@ impl GitCometView {
             self.follow_view(&repo, window, cx);
             // The old view may have hidden the field that held focus. Give
             // it to the newly selected view even before its first frame.
-            let focus = self.repository_views.as_ref().and_then(|router| {
-                let index = router.selected(&repo)?;
-                let (_, descriptor) = router.views.get(index)?;
-                let view = router.built(&repo, index)?;
-                descriptor.focus.as_ref()?.as_ref()(&view, cx)
-            });
-            if let Some(focus) = focus {
-                window.focus(&focus, cx);
-            } else if index.is_some() {
-                window.focus(&self.repository_view_focus, cx);
-            } else {
-                let focus = self.diff_renderer.read(cx).diff_panel_focus_handle.clone();
-                window.focus(&focus, cx);
-            }
+            self.focus_main_view(&repo, window, cx);
         }
         self.sync_sidebar_tabs(cx);
         self.sync_extension_navigation(cx);
@@ -816,6 +825,34 @@ impl GitCometView {
             }
         }
         cx.notify();
+    }
+
+    /// Gives the keyboard to `repo`'s main view: the selected extension view's
+    /// own focus, its scope, or History's diff.
+    pub(in crate::view) fn focus_main_view(
+        &self,
+        repo: &RepoState,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let selected = self
+            .repository_views
+            .as_ref()
+            .and_then(|router| router.selected(repo));
+        let focus = self.repository_views.as_ref().and_then(|router| {
+            let index = selected?;
+            let (_, descriptor) = router.views.get(index)?;
+            let view = router.built(repo, index)?;
+            descriptor.focus.as_ref()?.as_ref()(&view, cx)
+        });
+        if let Some(focus) = focus {
+            window.focus(&focus, cx);
+        } else if selected.is_some() {
+            window.focus(&self.repository_view_focus, cx);
+        } else {
+            let focus = self.diff_renderer.read(cx).diff_panel_focus_handle.clone();
+            window.focus(&focus, cx);
+        }
     }
 
     /// What the details header lists for the active repository; `None`
@@ -869,27 +906,57 @@ impl GitCometView {
         (header, targets)
     }
 
-    /// The main area for the active repository: History, the extension view
-    /// selected from the action bar's tabs, or an open standalone document.
-    pub(in crate::view) fn repository_main_content(&mut self) -> AnyElement {
+    /// What fills the active repository's main slot. Drawing, the diff keys,
+    /// Back and Forward and the action bar all follow this one answer.
+    pub(in crate::view) fn main_slot(&self) -> MainSlot {
         // A standalone document takes the main slot; the panes around it stay.
         if self.documents_active {
-            return stable_cached_fill_view(self.documents.clone());
+            return MainSlot::Document;
         }
-        let history = || stable_cached_fill_view(self.main_pane.clone());
-        let active = self
+        if let Some(index) = self.shown_canvas_overlay() {
+            return MainSlot::Overlay(index);
+        }
+        let selected = self
             .repository_views
             .as_ref()
             .zip(self.active_repo())
-            .and_then(|(router, repo)| router.active_view(repo));
-        match active {
+            .and_then(|(router, repo)| router.selected(repo));
+        match selected {
+            Some(index) => MainSlot::View(index),
+            None => MainSlot::History,
+        }
+    }
+
+    /// The main area for the active repository, as [`Self::main_slot`] says.
+    pub(in crate::view) fn repository_main_content(&mut self) -> AnyElement {
+        match self.main_slot() {
+            MainSlot::Document => stable_cached_fill_view(self.documents.clone()),
+            // The view behind stays built and is drawn again once uncovered;
+            // until the overlay's first build, the slot stays empty.
+            MainSlot::Overlay(index) => {
+                let slot = div().size_full().track_focus(&self.canvas_overlay_focus);
+                match self.canvas_overlay_view(index) {
+                    Some(overlay) => slot.child(overlay),
+                    None => slot,
+                }
+                .into_any_element()
+            }
             // The scope `diff_shortcut_target` searches for hosted panes.
-            Some(view) => div()
-                .size_full()
-                .track_focus(&self.repository_view_focus)
-                .child(view)
-                .into_any_element(),
-            None => history(),
+            MainSlot::View(index) => {
+                let view = self
+                    .active_repo()
+                    .zip(self.repository_views.as_ref())
+                    .and_then(|(repo, router)| router.built(repo, index));
+                match view {
+                    Some(view) => div()
+                        .size_full()
+                        .track_focus(&self.repository_view_focus)
+                        .child(view)
+                        .into_any_element(),
+                    None => stable_cached_fill_view(self.main_pane.clone()),
+                }
+            }
+            MainSlot::History => stable_cached_fill_view(self.main_pane.clone()),
         }
     }
 

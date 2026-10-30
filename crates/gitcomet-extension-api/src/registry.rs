@@ -1,10 +1,10 @@
 //! Collecting, validating, and freezing extension declarations.
 
 use crate::contributions::{
-    BottomPanelDescriptor, ChromeDescriptor, CloseGuard, CommandDescriptor,
-    CommitBoxItemDescriptor, DetailsTabDescriptor, MenuLocation, RepositoryEntryGate,
-    RepositoryViewDescriptor, SettingsPageDescriptor, SidebarSectionDescriptor,
-    SidebarTabDescriptor, StatusItemDescriptor, WindowGateDescriptor,
+    BottomPanelDescriptor, CanvasOverlayDescriptor, ChromeDescriptor, CloseGuard,
+    CommandDescriptor, CommitBoxItemDescriptor, DetailsTabDescriptor, MenuLocation,
+    RepositoryEntryGate, RepositoryViewDescriptor, SettingsPageDescriptor,
+    SidebarSectionDescriptor, SidebarTabDescriptor, StatusItemDescriptor, WindowGateDescriptor,
 };
 use crate::id::{ContributionId, ExtensionId};
 use crate::{BarItemLocation, BuiltinBarItem, Extension, HistoryAnnotator};
@@ -65,6 +65,7 @@ pub struct Registrar {
     bar_item_locations: Vec<(BuiltinBarItem, BarItemLocation)>,
     repository_views: Vec<(ContributionId, RepositoryViewDescriptor)>,
     bottom_panels: Vec<(ContributionId, BottomPanelDescriptor)>,
+    canvas_overlays: Vec<(ContributionId, CanvasOverlayDescriptor)>,
     details_tabs: Vec<(ContributionId, DetailsTabDescriptor)>,
     sidebar_tabs: Vec<(ContributionId, SidebarTabDescriptor)>,
     sidebar_sections: Vec<(ContributionId, SidebarSectionDescriptor)>,
@@ -93,6 +94,7 @@ impl Registrar {
             bar_item_locations: Vec::new(),
             repository_views: Vec::new(),
             bottom_panels: Vec::new(),
+            canvas_overlays: Vec::new(),
             details_tabs: Vec::new(),
             sidebar_tabs: Vec::new(),
             sidebar_sections: Vec::new(),
@@ -173,6 +175,19 @@ impl Registrar {
     ) -> &mut Self {
         if let Some(id) = self.id(local) {
             self.bottom_panels.push((id, descriptor));
+        }
+        self
+    }
+
+    /// Registers a view an extension can show over a repository's main
+    /// canvas with [`WindowHost::show_canvas_overlay`](crate::WindowHost::show_canvas_overlay).
+    pub fn canvas_overlay(
+        &mut self,
+        local: impl Into<Cow<'static, str>>,
+        descriptor: CanvasOverlayDescriptor,
+    ) -> &mut Self {
+        if let Some(id) = self.id(local) {
+            self.canvas_overlays.push((id, descriptor));
         }
         self
     }
@@ -401,6 +416,7 @@ pub struct Registry {
     bar_item_locations: Vec<(BuiltinBarItem, BarItemLocation)>,
     repository_views: Vec<(ContributionId, RepositoryViewDescriptor)>,
     bottom_panels: Vec<(ContributionId, BottomPanelDescriptor)>,
+    canvas_overlays: Vec<(ContributionId, CanvasOverlayDescriptor)>,
     details_tabs: Vec<(ContributionId, DetailsTabDescriptor)>,
     sidebar_tabs: Vec<(ContributionId, SidebarTabDescriptor)>,
     sidebar_sections: Vec<(ContributionId, SidebarSectionDescriptor)>,
@@ -459,6 +475,7 @@ impl Registry {
             registry.instances.push(extension);
             registry.repository_views.extend(registrar.repository_views);
             registry.bottom_panels.extend(registrar.bottom_panels);
+            registry.canvas_overlays.extend(registrar.canvas_overlays);
             registry.details_tabs.extend(registrar.details_tabs);
             registry.sidebar_tabs.extend(registrar.sidebar_tabs);
             registry.sidebar_sections.extend(registrar.sidebar_sections);
@@ -503,6 +520,10 @@ impl Registry {
             (
                 "bottom panel",
                 duplicates(registry.bottom_panels.iter().map(|(id, _)| id)),
+            ),
+            (
+                "canvas overlay",
+                duplicates(registry.canvas_overlays.iter().map(|(id, _)| id)),
             ),
             (
                 "details tab",
@@ -664,6 +685,10 @@ impl Registry {
 
     pub fn bottom_panels(&self) -> &[(ContributionId, BottomPanelDescriptor)] {
         &self.bottom_panels
+    }
+
+    pub fn canvas_overlays(&self) -> &[(ContributionId, CanvasOverlayDescriptor)] {
+        &self.canvas_overlays
     }
 
     pub fn details_tabs(&self) -> &[(ContributionId, DetailsTabDescriptor)] {
