@@ -1235,6 +1235,14 @@ fn reveal_commit_enter_reveals_the_resolved_full_id(cx: &mut gpui::TestAppContex
         !reveal_commit_is_open(cx, &view),
         "activating a result should close the dialog"
     );
+    // The reveal is reduced on the store's worker thread, which
+    // `run_until_parked` does not wait for.
+    wait_until("store reveal target after Enter", || {
+        store.snapshot().repos[0]
+            .history_state
+            .reveal_target
+            .is_some()
+    });
     assert_eq!(
         store.snapshot().repos[0]
             .history_state
