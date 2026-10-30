@@ -1207,3 +1207,40 @@ fn caret_frame_reserves_no_selection_quads_in_a_truncated_line(cx: &mut gpui::Te
     assert_eq!(caret, 0);
     assert!(selection > 0, "the probe must see a selection's quads");
 }
+
+#[gpui::test]
+fn a_new_placeholder_is_drawn_in_place_of_the_old(cx: &mut gpui::TestAppContext) {
+    let (input, cx) = cx.add_window_view(|window, cx| {
+        TextInput::new(
+            TextInputOptions {
+                placeholder: "Ask the agent".into(),
+                multiline: true,
+                soft_wrap: true,
+                ..Default::default()
+            },
+            window,
+            cx,
+        )
+    });
+    let drawn = |cx: &mut gpui::VisualTestContext| {
+        crate::test_support::refresh_and_draw(cx);
+        cx.update(|_, app| match input.read(app).layout.last.as_ref() {
+            Some(TextInputLayout::Wrapped { lines, .. }) => lines[0].text.to_string(),
+            Some(TextInputLayout::Plain(lines)) => lines.get(0).unwrap().text.to_string(),
+            other => panic!("not drawn as lines: {}", other.is_some()),
+        })
+    };
+    assert_eq!(drawn(cx), "Ask the agent");
+    cx.update(|_, app| {
+        input.update(app, |input, cx| {
+            input.set_placeholder("Ask the agent, or type / for its commands", cx)
+        })
+    });
+    assert_eq!(drawn(cx), "Ask the agent, or type / for its commands");
+    cx.update(|_, app| {
+        assert_eq!(
+            input.read(app).placeholder(),
+            "Ask the agent, or type / for its commands"
+        )
+    });
+}

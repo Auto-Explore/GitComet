@@ -167,6 +167,24 @@ impl TextInput {
         self.line_height_override
     }
 
+    /// What the input shows while it is empty.
+    pub fn placeholder(&self) -> &str {
+        &self.placeholder
+    }
+
+    pub fn set_placeholder(
+        &mut self,
+        placeholder: impl Into<SharedString>,
+        cx: &mut Context<Self>,
+    ) {
+        let placeholder = placeholder.into();
+        if self.placeholder == placeholder {
+            return;
+        }
+        self.placeholder = placeholder;
+        cx.notify();
+    }
+
     pub fn take_enter_pressed(&mut self) -> bool {
         std::mem::take(&mut self.interaction.enter_pressed)
     }
