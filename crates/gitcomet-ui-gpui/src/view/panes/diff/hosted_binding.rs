@@ -1,8 +1,8 @@
 //! Hosted controls and list-boundary projection for the shared diff renderer.
 use super::*;
 use gitcomet_extension_api::{
-    DiffAnnotations, DiffGlyph, DiffHostedView, DiffInlineCard, DiffInset, DiffLineRange,
-    DiffLineSide, DiffPaneOptions, DiffPlacement,
+    DiffAnnotations, DiffGlyph, DiffHostedView, DiffInset, DiffLineRange, DiffLineSide,
+    DiffPaneOptions, DiffPlacement,
 };
 use palette::IntoColor;
 
@@ -13,7 +13,6 @@ const GUTTER_LANE_WIDTH: f32 = 12.0;
 enum DisplayRow {
     Document(usize),
     Inset { inset: usize, line: usize },
-    Card { card: usize, row: usize },
     View { view: usize, row: usize },
 }
 
@@ -25,15 +24,11 @@ pub(in crate::view) struct HostedDiffDecor {
     /// The most people one annotation names, which the rows make room for.
     most_people: Option<usize>,
     pub insets: Arc<[DiffInset]>,
-    pub cards: Arc<[DiffInlineCard]>,
     pub(super) views: super::hosted_views::HostedViews,
     pub(super) row_height: Pixels,
-    pub(super) card_layouts: Vec<super::hosted_cards::CardLayout>,
-    pub(super) card_layout_key: Option<super::hosted_cards::LayoutKey>,
     pub file_cache: Option<Arc<diff_cache::SharedFileDiffCache>>,
     pub(super) key: Option<(u64, u64, u64, usize, DiffViewMode, usize)>,
     display: Vec<DisplayRow>,
-    projected_card_ids: Vec<SharedString>,
     /// Each document row's place in `display`.
     pub(super) document: Vec<usize>,
     /// Each file line's first and last document rows, by side.
@@ -49,7 +44,7 @@ impl HostedDiffDecor {
     /// Whether rows other than the document's are listed: then the list's
     /// rows are the projection's, not the document's.
     fn projects(&self) -> bool {
-        !self.insets.is_empty() || !self.cards.is_empty() || !self.views.is_empty()
+        !self.insets.is_empty() || !self.views.is_empty()
     }
 }
 
@@ -57,17 +52,6 @@ impl DiffRenderer {
     /// The hosted decoration when the list's rows are its projection's.
     fn hosted_projection(&self) -> Option<&HostedDiffDecor> {
         self.hosted_decor.as_ref().filter(|decor| decor.projects())
-    }
-
-    #[cfg(test)]
-    pub(in crate::view) fn hosted_card_row_index(&mut self, id: &str, row: usize) -> Option<usize> {
-        self.prepare_hosted_projection();
-        let decor = self.hosted_decor.as_ref()?;
-        let card = decor.cards.iter().position(|card| card.id == id)?;
-        decor
-            .display
-            .iter()
-            .position(|item| *item == DisplayRow::Card { card, row })
     }
 
     pub(in crate::view) fn hosted_context_actions(
@@ -415,14 +399,14 @@ impl DiffRenderer {
         options: DiffPaneOptions,
         annotations: Arc<DiffAnnotations>,
         insets: Arc<[DiffInset]>,
-        cards: Arc<[DiffInlineCard]>,
         views: Arc<[DiffHostedView]>,
     ) {
         self.store.set_policy(options.policy);
         self.diff_show_line_numbers = options.policy.line_numbers;
-        let reset = self.hosted_decor.as_ref().is_none_or(|decor| {
-            !Arc::ptr_eq(&decor.insets, &insets) || !Arc::ptr_eq(&decor.cards, &cards)
-        });
+        let reset = self
+            .hosted_decor
+            .as_ref()
+            .is_none_or(|decor| !Arc::ptr_eq(&decor.insets, &insets));
         let decor = self.hosted_decor.get_or_insert_with(Default::default);
         decor.view_id = view_id;
         decor.options = options;
@@ -435,7 +419,6 @@ impl DiffRenderer {
             .max();
         decor.annotations = annotations;
         decor.insets = insets;
-        decor.cards = cards;
         let reset = decor.views.set(views) || reset;
         if reset {
             decor.key = None;
@@ -450,7 +433,6 @@ impl DiffRenderer {
             return;
         };
         if decor.insets.is_empty()
-            && decor.cards.is_empty()
             && decor.views.is_empty()
             && decor.annotations.is_empty()
             && decor.display.is_empty()
@@ -489,17 +471,7 @@ impl DiffRenderer {
                 );
             }
         }
-        for (ix, card) in decor.cards.iter().enumerate() {
-            if let Some((_, row)) = anchors.get(&(card.range.side, card.range.end))
-                && let Some(layout) = decor.card_layouts.get(ix)
-            {
-                after
-                    .entry(*row)
-                    .or_default()
-                    .extend((0..layout.rows(card)).map(|row| DisplayRow::Card { card: ix, row }));
-            }
-        }
-        // After the line's cards; the other views take no rows.
+        // After the line's insets; the other views take no rows.
         for (ix, view) in decor.views.views().iter().enumerate() {
             match view.placement() {
                 DiffPlacement::Block => {
@@ -521,11 +493,6 @@ impl DiffRenderer {
                 .get(top)
                 .copied()
                 .and_then(|anchor| match anchor {
-                    DisplayRow::Card { card, row } => {
-                        let id = decor.projected_card_ids.get(card)?;
-                        let card = decor.cards.iter().position(|card| &card.id == id)?;
-                        Some(DisplayRow::Card { card, row })
-                    }
                     DisplayRow::View { view, row } => {
                         let view = decor.views.reprojected(view)?;
                         Some(DisplayRow::View { view, row })
@@ -542,7 +509,6 @@ impl DiffRenderer {
         });
         let decor = self.hosted_decor.as_mut().unwrap();
         decor.display.clear();
-        decor.projected_card_ids = decor.cards.iter().map(|card| card.id.clone()).collect();
         decor.views.project();
         decor.document.clear();
         for row in 0..len {
@@ -709,9 +675,6 @@ impl DiffRenderer {
                     .copied()
                     .unwrap_or(DisplayRow::Document(display));
                 match row {
-                    DisplayRow::Card { card, row } => {
-                        this.render_hosted_card_row(card, row, side, display, window, cx)
-                    }
                     DisplayRow::View { view, row } => {
                         this.render_hosted_view_row(view, row, side, display == first, cx)
                     }

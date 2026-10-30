@@ -6,9 +6,9 @@ use crate::view::panes::diff::{DiffBody, DiffRendererInit};
 use gitcomet_core::domain::DiffTarget;
 use gitcomet_core::text_format::TextEncoding;
 use gitcomet_extension_api::{
-    DiffAnnotations, DiffHostedView, DiffInlineCard, DiffInset, DiffLayout, DiffLegendItem,
-    DiffLineRange, DiffLineSide, DiffPaneEvent, DiffPaneOptions, DiffPanePolicy, DiffScrollAnchor,
-    DiffSnapshot, RepositoryHandle, StateSubscription, WindowHost, panes::DiffPaneImpl,
+    DiffAnnotations, DiffHostedView, DiffInset, DiffLayout, DiffLegendItem, DiffLineRange,
+    DiffLineSide, DiffPaneEvent, DiffPaneOptions, DiffPanePolicy, DiffScrollAnchor, DiffSnapshot,
+    RepositoryHandle, StateSubscription, WindowHost, panes::DiffPaneImpl,
 };
 use gitcomet_state::diff_session::{DiffSession, DiffSessionMsg, DiffViewId};
 use std::rc::Rc;
@@ -55,7 +55,6 @@ pub(crate) struct DiffPaneView {
     /// when its body is the patch.
     patch_error: Option<SharedString>,
     insets: Arc<[DiffInset]>,
-    cards: Arc<[DiffInlineCard]>,
     views: Arc<[DiffHostedView]>,
     /// A view that notifies is measured again before it is next drawn.
     view_observers: Vec<gpui::Subscription>,
@@ -112,7 +111,6 @@ impl DiffPaneView {
             error: None,
             patch_error: None,
             insets: Arc::from([]),
-            cards: Arc::from([]),
             views: Arc::from([]),
             view_observers: Vec::new(),
             annotations: Arc::default(),
@@ -279,7 +277,6 @@ impl DiffPaneView {
                     self.options.clone(),
                     self.annotations.clone(),
                     self.insets.clone(),
-                    self.cards.clone(),
                     self.views.clone(),
                 );
                 pane.hosted_decor.as_mut().unwrap().file_cache = self.file_cache.clone();
@@ -397,7 +394,6 @@ impl DiffPaneView {
     }
 
     fn reset(&mut self) {
-        self.cards = Arc::from([]);
         self.views = Arc::from([]);
         self.view_observers.clear();
         self.engaged = next_engaged();
@@ -666,7 +662,6 @@ impl DiffPaneView {
                     self.options.clone(),
                     self.annotations.clone(),
                     self.insets.clone(),
-                    self.cards.clone(),
                     self.views.clone(),
                 );
                 cx.notify();
@@ -846,7 +841,7 @@ impl Render for DiffPaneView {
     fn render(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
         self.prepare_renderer(window, cx);
         if let Some(renderer) = self.renderer.clone() {
-            renderer.update(cx, |pane, cx| pane.prepare_hosted_cards(window, cx));
+            renderer.update(cx, |pane, cx| pane.sync_hosted_row_height(cx));
             // Before the renderer counts its rows, which follow the views'
             // heights in this frame.
             crate::view::panes::diff::measure_hosted_views(&renderer, window, cx);
@@ -1108,17 +1103,6 @@ impl DiffPaneImpl for HostedDiffPane {
         self.entity
             .update(cx, |pane, cx| pane.set_insets(insets, cx));
     }
-    fn set_inline_cards(&self, cards: Vec<DiffInlineCard>, cx: &mut App) {
-        self.entity.update(cx, |pane, cx| {
-            if pane.cards.as_ref() == cards.as_slice() {
-                return;
-            }
-            pane.cards = cards.into();
-            pane.sync_decor(cx);
-            cx.notify();
-        });
-    }
-
     fn set_views(&self, views: Vec<DiffHostedView>, cx: &mut App) {
         /// The same view at the same place; the observer is the entity's.
         fn same(a: &DiffHostedView, b: &DiffHostedView) -> bool {
