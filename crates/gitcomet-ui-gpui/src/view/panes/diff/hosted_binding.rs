@@ -361,16 +361,29 @@ impl DiffRenderer {
         })
     }
 
+    /// The list's row at the top of `handle`'s column.
     fn hosted_scroll_top(&self, handle: &UniformListScrollHandle) -> usize {
-        let height = self
-            .hosted_decor
-            .as_ref()
-            .map_or(px(0.0), |decor| decor.row_height);
+        let height = self.hosted_row_pitch(handle);
         if height <= px(0.0) {
             return 0;
         }
         let offset = handle.0.borrow().base_handle.offset().y;
         (-offset / height).floor().max(0.0) as usize
+    }
+
+    /// How far apart `handle`'s list laid its rows out when it last did:
+    /// at a fractional row height, not quite the row height its rows ask
+    /// for. The row height until the list has laid out.
+    fn hosted_row_pitch(&self, handle: &UniformListScrollHandle) -> Pixels {
+        let Some(decor) = &self.hosted_decor else {
+            return px(0.0);
+        };
+        let rows = if decor.projects() {
+            decor.display.len()
+        } else {
+            self.diff_visible_len()
+        };
+        super::hosted_views::list_row_pitch(handle, rows).unwrap_or(decor.row_height)
     }
 
     pub(in crate::view) fn hosted_reveal_at(
@@ -493,6 +506,7 @@ impl DiffRenderer {
         let len = self.diff_visible_len();
         let saved = [&self.diff_scroll, &self.diff_split_right_scroll].map(|handle| {
             let top = self.hosted_scroll_top(handle);
+            let pitch = self.hosted_row_pitch(handle);
             let anchor = decor
                 .display
                 .get(top)
@@ -510,7 +524,7 @@ impl DiffRenderer {
                     _ => None,
                 })
             });
-            (handle.clone(), top, anchor, following)
+            (handle.clone(), top, pitch, anchor, following)
         });
         let decor = self.hosted_decor.as_mut().unwrap();
         decor.display.clear();
@@ -521,7 +535,7 @@ impl DiffRenderer {
             decor.display.push(DisplayRow::Document(row));
             decor.display.extend(after.remove(&row).unwrap_or_default());
         }
-        for (handle, top, anchor, following) in saved {
+        for (handle, top, pitch, anchor, following) in saved {
             let restored = anchor
                 .and_then(|anchor| decor.display.iter().position(|row| *row == anchor))
                 .or_else(|| following.and_then(|row| decor.document.get(row).copied()));
@@ -529,7 +543,7 @@ impl DiffRenderer {
                 let scroll = handle.0.borrow();
                 if scroll.deferred_scroll_to_item.is_none() {
                     let mut offset = scroll.base_handle.offset();
-                    offset.y += decor.row_height * (top as f32 - restored as f32);
+                    offset.y += pitch * (top as f32 - restored as f32);
                     scroll.base_handle.set_offset(offset);
                 }
             }
