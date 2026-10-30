@@ -125,6 +125,7 @@ fn context_menu_default_actions_do_not_render_enter_shortcuts(cx: &mut gpui::Tes
                         &PopoverKind::CommitMenu {
                             repo_id,
                             commit_id: commit_id.clone(),
+                            refs: CommitMenuRefs::All,
                         },
                         cx,
                     )

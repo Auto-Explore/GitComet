@@ -1,8 +1,13 @@
 use super::*;
 
-/// The complete row context, independent of which painted chip was clicked.
-pub(super) fn model(this: &PopoverHost, repo_id: RepoId, commit_id: &CommitId) -> ContextMenuModel {
-    let commit = commit::model(this, repo_id, commit_id);
+/// The row context, listing the commit's refs that `refs` admits.
+pub(super) fn model(
+    this: &PopoverHost,
+    repo_id: RepoId,
+    commit_id: &CommitId,
+    refs: &CommitMenuRefs,
+) -> ContextMenuModel {
+    let commit = commit::model(this, repo_id, commit_id, refs);
     let sha = commit_id.as_ref();
     let mut model = ContextMenuModel::new(vec![ContextMenuItem::Header(
         format!("Commit {}", sha.get(..8).unwrap_or(sha)).into(),
@@ -15,16 +20,16 @@ pub(super) fn model(this: &PopoverHost, repo_id: RepoId, commit_id: &CommitId) -
     let Some(repo) = this.state.repos.iter().find(|repo| repo.id == repo_id) else {
         return model;
     };
-    let mut refs = Vec::new();
+    let mut targets = Vec::new();
     if let Some(branches) = repo.branches.ready() {
-        refs.extend(
+        targets.extend(
             branches
                 .iter()
                 .filter(|branch| branch.target == *commit_id)
                 .map(|branch| HistoryMenuRef::Branch(BranchMenuTarget::local(&branch.name))),
         );
     }
-    refs.extend(
+    targets.extend(
         repo.history_remote_branches_iter()
             .filter(|branch| branch.target == *commit_id)
             .map(|branch| {
@@ -32,15 +37,16 @@ pub(super) fn model(this: &PopoverHost, repo_id: RepoId, commit_id: &CommitId) -
             }),
     );
     if let Some(tags) = repo.tags.ready() {
-        refs.extend(
+        targets.extend(
             tags.iter()
                 .filter(|tag| tag.target == *commit_id)
                 .map(|tag| HistoryMenuRef::Tag(tag.name.clone())),
         );
     }
-    refs.sort();
-    refs.dedup();
-    for target in refs {
+    targets.retain(|target| refs.admits(target));
+    targets.sort();
+    targets.dedup();
+    for target in targets {
         let expanded = this.expanded_history_ref.as_ref() == Some(&target);
         let label = match &target {
             HistoryMenuRef::Branch(BranchMenuTarget::Local { name }) => {
@@ -84,7 +90,12 @@ pub(super) fn model(this: &PopoverHost, repo_id: RepoId, commit_id: &CommitId) -
             model.items.push(ContextMenuItem::Separator);
         }
     }
-    if !matches!(&repo.tags, Loadable::Ready(_)) {
+    // Until tags load, a picked tag has no group yet; say why.
+    let tags_wanted = matches!(
+        refs,
+        CommitMenuRefs::All | CommitMenuRefs::Only(HistoryMenuRef::Tag(_))
+    );
+    if tags_wanted && !matches!(&repo.tags, Loadable::Ready(_)) {
         model.items.push(ContextMenuItem::Label(match &repo.tags {
             Loadable::Error(error) => format!("Tags unavailable: {error}").into(),
             _ => "Loading tags…".into(),

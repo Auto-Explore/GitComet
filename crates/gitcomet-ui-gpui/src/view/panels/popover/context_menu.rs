@@ -596,9 +596,11 @@ impl PopoverHost {
                 Some(previous_commit_messages::model(self, *repo_id))
             }
             PopoverKind::RepoTabMenu { repo_id } => Some(repo_tab::model(self, *repo_id)),
-            PopoverKind::CommitMenu { repo_id, commit_id } => {
-                Some(history_refs::model(self, *repo_id, commit_id))
-            }
+            PopoverKind::CommitMenu {
+                repo_id,
+                commit_id,
+                refs,
+            } => Some(history_refs::model(self, *repo_id, commit_id, refs)),
             PopoverKind::ReflogEntryMenu {
                 repo_id,
                 target,

@@ -366,9 +366,18 @@ impl PopoverHost {
             PopoverKind::RepoTabMenu { repo_id } => {
                 self.context_menu_view(PopoverKind::RepoTabMenu { repo_id }, cx)
             }
-            PopoverKind::CommitMenu { repo_id, commit_id } => {
-                self.context_menu_view(PopoverKind::CommitMenu { repo_id, commit_id }, cx)
-            }
+            PopoverKind::CommitMenu {
+                repo_id,
+                commit_id,
+                refs,
+            } => self.context_menu_view(
+                PopoverKind::CommitMenu {
+                    repo_id,
+                    commit_id,
+                    refs,
+                },
+                cx,
+            ),
             PopoverKind::ReflogEntryMenu {
                 repo_id,
                 target,

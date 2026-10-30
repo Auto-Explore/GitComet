@@ -76,6 +76,7 @@ fn open_commit_menu_at(
                     PopoverKind::CommitMenu {
                         repo_id: RepoId(1),
                         commit_id: commit_id(),
+                        refs: CommitMenuRefs::All,
                     },
                     at,
                     window,

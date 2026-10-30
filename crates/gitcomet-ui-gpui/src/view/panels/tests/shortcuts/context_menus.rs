@@ -857,6 +857,7 @@ fn file_and_diff_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::Te
             PopoverKind::CommitMenu {
                 repo_id,
                 commit_id: commit_id.clone(),
+                refs: CommitMenuRefs::All,
             },
         )
     });
@@ -1351,6 +1352,7 @@ fn commit_context_menu_disables_history_rewrites_during_active_operations(
                 PopoverKind::CommitMenu {
                     repo_id,
                     commit_id: commit_id.clone(),
+                    refs: CommitMenuRefs::All,
                 },
             )
         })
@@ -1370,6 +1372,7 @@ fn commit_context_menu_disables_history_rewrites_during_active_operations(
                 PopoverKind::CommitMenu {
                     repo_id,
                     commit_id: commit_id.clone(),
+                    refs: CommitMenuRefs::All,
                 },
             )
         });

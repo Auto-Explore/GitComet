@@ -329,10 +329,23 @@ impl HistoryRefsHoverHost {
         commit_id: &CommitId,
         item: &HistoryRefListItem,
     ) -> Option<PopoverKind> {
-        let _ = item;
+        let refs = match &item.kind {
+            HistoryRefListItemKind::Tag { name } => {
+                CommitMenuRefs::Only(HistoryMenuRef::Tag(name.clone()))
+            }
+            HistoryRefListItemKind::LocalBranch { name }
+            | HistoryRefListItemKind::AttachedHead { branch: name } => {
+                CommitMenuRefs::Only(HistoryMenuRef::Branch(BranchMenuTarget::local(name)))
+            }
+            HistoryRefListItemKind::RemoteBranch { remote, branch, .. } => CommitMenuRefs::Only(
+                HistoryMenuRef::Branch(BranchMenuTarget::remote(remote, branch)),
+            ),
+            HistoryRefListItemKind::DetachedHead => CommitMenuRefs::Hidden,
+        };
         Some(PopoverKind::CommitMenu {
             repo_id,
             commit_id: commit_id.clone(),
+            refs,
         })
     }
 

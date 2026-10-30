@@ -2567,6 +2567,7 @@ pub(super) fn history_commit_row_canvas(
                             let kind = PopoverKind::CommitMenu {
                                 repo_id,
                                 commit_id: commit_id.clone(),
+                                refs: CommitMenuRefs::All,
                             };
                             this.open_popover_at(
                                 kind.invoked_by(context_menu_invoker),

@@ -1932,7 +1932,14 @@ impl PopoverHost {
         self.context_menu_arrows.reset();
         self.pin_menu_entries = None;
         self.context_menu_selected_ix = None;
-        self.expanded_history_ref = None;
+        // A ref picked from the row's ref list opens with its actions showing.
+        self.expanded_history_ref = match &kind {
+            PopoverKind::CommitMenu {
+                refs: CommitMenuRefs::Only(target),
+                ..
+            } => Some(target.clone()),
+            _ => None,
+        };
         self.repo_picker_selected_index = None;
         self.repo_picker_search_query.clear();
         // Belongs with the reset above, not with the RepoPicker arm below: every

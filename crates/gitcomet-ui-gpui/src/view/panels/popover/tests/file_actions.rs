@@ -82,6 +82,7 @@ fn commit_menu_has_add_tag_entry(cx: &mut gpui::TestAppContext) {
                         &PopoverKind::CommitMenu {
                             repo_id,
                             commit_id: commit_id.clone(),
+                            refs: CommitMenuRefs::All,
                         },
                         cx,
                     )
@@ -152,6 +153,7 @@ fn commit_menu_disables_add_tag_when_history_tags_are_hidden(cx: &mut gpui::Test
                         &PopoverKind::CommitMenu {
                             repo_id,
                             commit_id: commit_id.clone(),
+                            refs: CommitMenuRefs::All,
                         },
                         cx,
                     )
@@ -291,6 +293,7 @@ fn revert_confirm_keeps_and_restores_the_commit_menu_invoker_focus(cx: &mut gpui
                     PopoverKind::CommitMenu {
                         repo_id,
                         commit_id: commit_id.clone(),
+                        refs: CommitMenuRefs::All,
                     },
                     gpui::point(gpui::px(0.0), gpui::px(0.0)),
                     window,
@@ -344,6 +347,7 @@ fn commit_menu_hides_cherry_pick_for_current_head(cx: &mut gpui::TestAppContext)
                         &PopoverKind::CommitMenu {
                             repo_id,
                             commit_id: commit_id.clone(),
+                            refs: CommitMenuRefs::All,
                         },
                         cx,
                     )
@@ -382,6 +386,7 @@ fn commit_menu_disables_cherry_pick_when_local_operation_in_progress(
                         &PopoverKind::CommitMenu {
                             repo_id,
                             commit_id: commit_id.clone(),
+                            refs: CommitMenuRefs::All,
                         },
                         cx,
                     )
@@ -418,6 +423,7 @@ fn commit_menu_disables_merge_when_repository_is_busy(cx: &mut gpui::TestAppCont
                         &PopoverKind::CommitMenu {
                             repo_id,
                             commit_id: commit_id.clone(),
+                            refs: CommitMenuRefs::All,
                         },
                         cx,
                     )
@@ -457,6 +463,7 @@ fn detached_head_commit_menu_names_head_as_merge_destination(cx: &mut gpui::Test
                         &PopoverKind::CommitMenu {
                             repo_id,
                             commit_id: commit_id.clone(),
+                            refs: CommitMenuRefs::All,
                         },
                         cx,
                     )
@@ -2257,6 +2264,7 @@ fn review_adjusted_branch_menus_disable_merge_and_squash(cx: &mut gpui::TestAppC
                         &PopoverKind::CommitMenu {
                             repo_id,
                             commit_id: commit_id.clone(),
+                            refs: CommitMenuRefs::All,
                         },
                         cx,
                     )

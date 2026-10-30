@@ -207,6 +207,7 @@ fn a_right_click_on_a_mark_opens_its_annotators_menu(cx: &mut gpui::TestAppConte
         Some(PopoverKind::CommitMenu {
             repo_id,
             commit_id: CommitId(id.into()),
+            refs: CommitMenuRefs::All,
         })
     };
 

@@ -426,6 +426,7 @@ pub(crate) enum PopoverKind {
     CommitMenu {
         repo_id: RepoId,
         commit_id: CommitId,
+        refs: CommitMenuRefs,
     },
     StatusFileMenu {
         repo_id: RepoId,

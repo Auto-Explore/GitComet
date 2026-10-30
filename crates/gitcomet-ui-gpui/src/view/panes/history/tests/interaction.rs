@@ -1097,7 +1097,8 @@ fn history_refs_hover_lists_refs_and_opens_item_menus_in_mode(
             crate::view::test_support::popover_kind(view.read(app), app),
             Some(PopoverKind::CommitMenu {
                 repo_id,
-                commit_id: commit_id.clone()
+                commit_id: commit_id.clone(),
+                refs: CommitMenuRefs::All,
             })
         );
     });
@@ -1195,7 +1196,10 @@ fn history_refs_hover_lists_refs_and_opens_item_menus_in_mode(
             crate::view::test_support::popover_kind(view.read(app), app),
             Some(PopoverKind::CommitMenu {
                 repo_id,
-                commit_id: commit_id.clone()
+                commit_id: commit_id.clone(),
+                refs: CommitMenuRefs::Only(HistoryMenuRef::Branch(BranchMenuTarget::local(
+                    "feature"
+                ))),
             })
         );
     });
@@ -1228,7 +1232,8 @@ fn history_refs_hover_lists_refs_and_opens_item_menus_in_mode(
             crate::view::test_support::popover_kind(view.read(app), app),
             Some(PopoverKind::CommitMenu {
                 repo_id,
-                commit_id: commit_id.clone()
+                commit_id: commit_id.clone(),
+                refs: CommitMenuRefs::Only(HistoryMenuRef::Tag("release".into())),
             })
         );
         assert!(crate::view::test_support::history_refs_hover_is_open(
@@ -1275,7 +1280,10 @@ fn history_refs_hover_lists_refs_and_opens_item_menus_in_mode(
             crate::view::test_support::popover_kind(view.read(app), app),
             Some(PopoverKind::CommitMenu {
                 repo_id,
-                commit_id: commit_id.clone()
+                commit_id: commit_id.clone(),
+                refs: CommitMenuRefs::Only(HistoryMenuRef::Branch(BranchMenuTarget::local(
+                    "feature"
+                ))),
             })
         );
     });
@@ -1304,7 +1312,8 @@ fn history_refs_hover_lists_refs_and_opens_item_menus_in_mode(
             crate::view::test_support::popover_kind(view.read(app), app),
             Some(PopoverKind::CommitMenu {
                 repo_id,
-                commit_id: commit_id.clone()
+                commit_id: commit_id.clone(),
+                refs: CommitMenuRefs::Only(HistoryMenuRef::Tag("release".into())),
             })
         );
         assert!(crate::view::test_support::history_refs_hover_is_open(
@@ -1351,7 +1360,8 @@ fn history_refs_hover_lists_refs_and_opens_item_menus_in_mode(
             crate::view::test_support::popover_kind(view.read(app), app),
             Some(PopoverKind::CommitMenu {
                 repo_id,
-                commit_id: commit_id.clone()
+                commit_id: commit_id.clone(),
+                refs: CommitMenuRefs::Only(HistoryMenuRef::Tag("release".into())),
             })
         );
     });
@@ -1408,7 +1418,10 @@ fn history_refs_hover_lists_refs_and_opens_item_menus_in_mode(
                 crate::view::test_support::popover_kind(view.read(app), app),
                 Some(PopoverKind::CommitMenu {
                     repo_id,
-                    commit_id: commit_id.clone()
+                    commit_id: commit_id.clone(),
+                    refs: CommitMenuRefs::Only(HistoryMenuRef::Branch(BranchMenuTarget::local(
+                        "feature"
+                    ))),
                 })
             );
             assert_eq!(
@@ -1433,7 +1446,10 @@ fn history_refs_hover_lists_refs_and_opens_item_menus_in_mode(
             crate::view::test_support::popover_kind(view.read(app), app),
             Some(PopoverKind::CommitMenu {
                 repo_id,
-                commit_id: commit_id.clone()
+                commit_id: commit_id.clone(),
+                refs: CommitMenuRefs::Only(HistoryMenuRef::Branch(BranchMenuTarget::local(
+                    "feature"
+                ))),
             })
         );
         assert_eq!(
@@ -2187,7 +2203,10 @@ fn history_refs_hover_item_click_keeps_existing_history_selection(cx: &mut gpui:
             crate::view::test_support::popover_kind(view.read(app), app),
             Some(PopoverKind::CommitMenu {
                 repo_id,
-                commit_id: hovered_commit.clone()
+                commit_id: hovered_commit.clone(),
+                refs: CommitMenuRefs::Only(HistoryMenuRef::Branch(BranchMenuTarget::local(
+                    "feature"
+                ))),
             })
         );
         assert!(crate::view::test_support::history_refs_hover_is_open(
@@ -2343,7 +2362,10 @@ fn history_refs_hover_and_item_menu_close_when_history_page_changes_without_mous
             crate::view::test_support::popover_kind(view.read(app), app),
             Some(PopoverKind::CommitMenu {
                 repo_id,
-                commit_id: CommitId("tip".into())
+                commit_id: CommitId("tip".into()),
+                refs: CommitMenuRefs::Only(HistoryMenuRef::Branch(BranchMenuTarget::local(
+                    "feature"
+                ))),
             })
         );
     });
@@ -2373,7 +2395,10 @@ fn history_refs_hover_and_item_menu_close_when_history_page_changes_without_mous
             crate::view::test_support::popover_kind(view.read(app), app),
             Some(PopoverKind::CommitMenu {
                 repo_id,
-                commit_id: CommitId("tip".into())
+                commit_id: CommitId("tip".into()),
+                refs: CommitMenuRefs::Only(HistoryMenuRef::Branch(BranchMenuTarget::local(
+                    "feature"
+                ))),
             }),
             "a signature reply must not dismiss the refs item menu"
         );
