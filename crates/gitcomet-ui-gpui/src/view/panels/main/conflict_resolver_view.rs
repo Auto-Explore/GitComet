@@ -945,7 +945,7 @@ impl DiffRenderer {
                             };
                             let handle_w = scaled_px(PANE_RESIZE_HANDLE_PX);
                             let min_col_w = scaled_px(DIFF_SPLIT_COL_MIN_PX);
-                            let main_w = (self.main_pane_content_width(cx)
+                            let main_w = (self.main_pane_content_width()
                                 - scrollbar_gutter
                                 - minimap_w)
                                 .max(px(0.0));
@@ -1045,7 +1045,7 @@ impl DiffRenderer {
                                                     px(0.0)
                                                 };
                                                 let main_w =
-                                                    (this.main_pane_content_width(cx)
+                                                    (this.main_pane_content_width()
                                                         - scrollbar_gutter)
                                                         .max(px(0.0));
                                                 let avail = (main_w - handle_w * 2.0).max(px(0.0));

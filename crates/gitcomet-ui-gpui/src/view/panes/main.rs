@@ -497,7 +497,7 @@ impl Render for MainPaneView {
         let width = self.diff_renderer.update(cx, |pane, cx| {
             pane.last_window_size = window.viewport_size();
             pane.sync_layout_snapshot(cx);
-            pane.main_pane_content_width(cx)
+            pane.main_pane_content_width()
         });
         self.history_view.update(cx, |history, _| {
             history.set_last_window_size(window.viewport_size());

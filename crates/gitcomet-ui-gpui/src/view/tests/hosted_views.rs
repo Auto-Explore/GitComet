@@ -1962,3 +1962,216 @@ fn the_scroll_anchor_names_the_top_line_at_a_fractional_row_height(cx: &mut gpui
         })
     );
 }
+
+/// The line at the top of the rows, as the pane's scroll anchor names it.
+fn top_line(cx: &mut gpui::VisualTestContext, pane: &DiffPane) -> Option<DiffScrollAnchor> {
+    cx.update(|_, app| pane.scroll_anchor(app))
+}
+
+/// Removing tall block views above the top line keeps that line at the top.
+#[gpui::test]
+fn removing_block_views_above_the_top_line_keeps_it(cx: &mut gpui::TestAppContext) {
+    let ((), pane, renderer, _, cx) = mount_views(
+        cx,
+        DiffLayout::Inline,
+        numbered("line", 100, None),
+        numbered("line", 100, Some(1)),
+        |app| {
+            let views = [2, 4]
+                .map(|line| DiffHostedView::block(on_new(line), new_thread(app, 20)))
+                .into();
+            ((), views)
+        },
+    );
+    assert!(reserved(cx, &renderer) > 30, "tall views above");
+    let row = list_row(cx, &renderer, 40);
+    let height = row_height(cx, &renderer);
+    scroll_to(cx, &renderer, -height * row as f32);
+    let top = top_line(cx, &pane);
+    assert_eq!(top, Some(on_new(40)));
+    cx.update(|_, app| pane.set_views(Vec::new(), app));
+    draw(cx);
+    assert_eq!(reserved(cx, &renderer), 0);
+    assert_eq!(top_line(cx, &pane), top, "the same line at the top");
+}
+
+/// At a row height the list rounds to device pixels, a block view growing
+/// above the top line, far down a long diff, keeps that line at the top.
+#[gpui::test]
+fn a_growing_block_view_keeps_the_top_line_at_a_fractional_row_height(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (thread, pane, renderer, _, cx) = mount_views(
+        cx,
+        DiffLayout::Inline,
+        numbered("line", 400, None),
+        numbered("line", 400, Some(1)),
+        |app| {
+            let thread = new_thread(app, 1);
+            (
+                thread.clone(),
+                vec![DiffHostedView::block(on_new(2), thread)],
+            )
+        },
+    );
+    cx.update(|window, app| {
+        ui_scale::set_default(app, 115);
+        ui_scale::apply_to_window(window, 115);
+        window.refresh();
+    });
+    draw(cx);
+    let asked = cx.update(|_, app| renderer.read(app).theme.editor_row_height(115));
+    assert!(f32::from(asked).fract() != 0.0, "{asked:?}");
+    let row = list_row(cx, &renderer, 300);
+    let height = row_height_of(cx, &renderer);
+    scroll_to(cx, &renderer, -height * row as f32);
+    let top = top_line(cx, &pane);
+    assert_eq!(top, Some(on_new(300)));
+    cx.update(|_, app| {
+        thread.update(app, |thread, cx| {
+            thread.replies += 6;
+            cx.notify();
+        })
+    });
+    draw(cx);
+    assert_eq!(top_line(cx, &pane), top, "the same line at the top");
+}
+
+/// The row height the pane places its rows at: the list's own.
+fn row_height_of(
+    cx: &mut gpui::VisualTestContext,
+    renderer: &gpui::Entity<DiffRenderer>,
+) -> Pixels {
+    cx.update(|_, app| renderer.read(app).hosted_row_height())
+}
+
+/// A row of a block view at the top stays at the top when an earlier view
+/// is removed and when it comes back: the view's identity holds its place.
+#[gpui::test]
+fn the_top_row_of_a_block_view_holds_when_an_earlier_view_goes_and_returns(
+    cx: &mut gpui::TestAppContext,
+) {
+    let ((note, answer), pane, renderer, _, cx) = mount_views(
+        cx,
+        DiffLayout::Inline,
+        numbered("line", 100, None),
+        numbered("line", 100, Some(1)),
+        |app| {
+            let note = new_thread(app, 1);
+            let answer = new_thread(app, 40);
+            let views = vec![
+                DiffHostedView::block(on_new(2), note.clone()),
+                DiffHostedView::block(on_new(4), answer.clone()),
+            ];
+            ((note, answer), views)
+        },
+    );
+    let answer_id = answer.entity_id();
+    let at_answer = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|_, app| {
+            renderer.update(app, |renderer, _| {
+                renderer.hosted_view_row_index(answer_id, 8).unwrap()
+            })
+        })
+    };
+    let height = row_height_of(cx, &renderer);
+    let index = at_answer(cx);
+    scroll_to(cx, &renderer, -height * (index as f32 + 0.25));
+    for views in [
+        vec![DiffHostedView::block(on_new(4), answer.clone())],
+        vec![
+            DiffHostedView::block(on_new(4), answer.clone()),
+            DiffHostedView::block(on_new(2), note.clone()),
+        ],
+    ] {
+        cx.update(|_, app| pane.set_views(views, app));
+        draw(cx);
+        let offset = cx.update(|_, app| {
+            renderer
+                .read(app)
+                .diff_scroll
+                .0
+                .borrow()
+                .base_handle
+                .offset()
+                .y
+        });
+        assert_eq!(offset, -height * (at_answer(cx) as f32 + 0.25));
+    }
+}
+
+/// In a split of a pane that shows blame, a view lined up with the text
+/// start is no wider than the room from there to its column's end, in the
+/// old side's column past the annotation column and in the new side's.
+#[gpui::test]
+fn start_views_in_a_split_fit_their_column(cx: &mut gpui::TestAppContext) {
+    let (_dir, store, view, app_cx) = open_repository(cx);
+    let on_old = |line| DiffScrollAnchor {
+        side: DiffLineSide::Old,
+        line,
+    };
+    let (pane, hints) = app_cx.update(|_, app| {
+        let host = view.read(app).extension_window.as_ref().unwrap().host();
+        let repository = host.active_repository(app).unwrap().unwrap();
+        let mut policy = gitcomet_extension_api::DiffPanePolicy::default();
+        policy.blame = true;
+        let pane = host
+            .create_diff_pane(
+                &repository,
+                DiffTarget::working_tree("a.rs".into(), DiffArea::Unstaged),
+                DiffPaneOptions {
+                    policy,
+                    layout: DiffLayout::Split,
+                    content_width: Some(1200.0),
+                    ..Default::default()
+                },
+                app,
+            )
+            .unwrap();
+        let hints = [0; 4].map(|_| new_hint(app, 5000.0));
+        pane.set_views(
+            vec![
+                DiffHostedView::over(on_old(2), DiffAlign::Start, hints[0].clone()),
+                DiffHostedView::over(on_old(6), DiffAlign::End, hints[1].clone()),
+                DiffHostedView::over(on_new(2), DiffAlign::Start, hints[2].clone()),
+                DiffHostedView::over(on_new(6), DiffAlign::End, hints[3].clone()),
+            ],
+            app,
+        );
+        (pane, hints)
+    });
+    settle(app_cx, &view, &store, "hosted file", |cx| {
+        cx.update(|_, app| !pane.is_loading(app))
+    });
+    let renderer = hosted_renderer(app_cx, &pane);
+    let id = app_cx.update(|_, app| {
+        pane.view()
+            .downcast::<crate::view::hosted::diff_pane::DiffPaneView>()
+            .unwrap()
+            .read(app)
+            .view_id()
+    });
+    let mounted = pane.view();
+    let (_, cx) = cx.add_window_view(move |_, _| PaneHolder(mounted));
+    draw(cx);
+    assert!(cx.update(|_, app| renderer.read(app).annotation_active()));
+    for (region, [start, end]) in [
+        (DiffTextRegion::SplitLeft, [&hints[0], &hints[1]]),
+        (DiffTextRegion::SplitRight, [&hints[2], &hints[3]]),
+    ] {
+        let layer = cx.debug_bounds(over_layer(id, region)).unwrap();
+        let start = cx.debug_bounds(view_frame(id, start)).unwrap();
+        let end = cx.debug_bounds(view_frame(id, end)).unwrap();
+        assert_near(
+            start.left(),
+            text_left(cx, &renderer, region),
+            &format!("{region:?}: at the text start"),
+        );
+        assert!(end.size.width < px(5000.0), "{region:?}: capped");
+        assert_near(
+            start.size.width + (start.left() - layer.left()),
+            end.size.width,
+            &format!("{region:?}: the column less the text start"),
+        );
+    }
+}

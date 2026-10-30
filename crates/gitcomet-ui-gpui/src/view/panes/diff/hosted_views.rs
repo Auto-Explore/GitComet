@@ -5,7 +5,8 @@
 //! text to end. A view over the text takes none either: a layer over its
 //! column's rows places it beside its line. A view is measured when it first
 //! shows and again only when it notifies, a block or over view's column
-//! changes width, or the text style or the row height does.
+//! changes width, a start-aligned over view's text start moves, or the text
+//! style or the row height does.
 use super::*;
 use gitcomet_extension_api::{DiffAlign, DiffHostedView, DiffLineSide, DiffPlacement};
 use gpui::{Div, EntityId, TextStyle};
@@ -32,8 +33,8 @@ enum Measure {
     Block { column: Pixels, row_height: Pixels },
     /// At its own width.
     EndOfLine { row_height: Pixels },
-    /// At its own width, up to `max`: the room from its edge of the column
-    /// to the column's end.
+    /// At its own width, up to `max`: lined up with the start, the room from
+    /// the text start to the column's end; with the end, the column's width.
     Over { max: Pixels, row_height: Pixels },
 }
 
@@ -223,9 +224,7 @@ pub(in crate::view) fn measure_hosted_views(
     cx: &mut App,
 ) {
     let text = window.text_style();
-    let views = renderer.update(cx, |pane, cx| {
-        pane.hosted_views_to_measure(&text, window, cx)
-    });
+    let views = renderer.update(cx, |pane, cx| pane.hosted_views_to_measure(&text, cx));
     if views.is_empty() {
         return;
     }
@@ -245,59 +244,33 @@ pub(in crate::view) fn measure_hosted_views(
 }
 
 impl DiffRenderer {
-    /// Notes the row height the hosted rows are drawn and counted in, which
-    /// follows the UI scale and the editor's metrics.
+    /// Notes the row height the hosted rows are placed, counted and drawn
+    /// in, which follows the UI scale and the editor's metrics: the pitch the
+    /// list laid its rows out at, which gpui snaps to device pixels, or the
+    /// height they ask for until it has laid them out at that height.
     pub(in crate::view) fn sync_hosted_row_height(&mut self, cx: &mut App) {
-        let row_height = self
+        let asked = self
             .theme
             .editor_row_height(ui_scale::UiScale::current(cx).percent());
+        // A pitch further off was laid out before the height changed.
+        let row_height = self
+            .diff_list_pitch(DiffHorizontalScrollColumn::Primary)
+            .filter(|pitch| (*pitch - asked).abs() < px(1.0))
+            .unwrap_or(asked);
         if let Some(decor) = self.hosted_decor.as_mut() {
             decor.row_height = row_height;
         }
     }
 
-    /// How wide views draw in each column, old side then new: the column
-    /// less its scrollbar, and never below nothing in a narrow split.
-    fn hosted_view_widths(&self, window: &Window) -> [Pixels; 2] {
-        let width = self
-            .hosted_content_width
-            .unwrap_or(window.viewport_size().width);
-        let left_gutter = self.diff_vertical_scrollbar_gutter_for_column(
-            DiffHorizontalScrollColumn::Primary,
-            self.diff_scroll.clone(),
-        );
-        let widths = match self.diff_view {
-            DiffViewMode::Inline => [width - left_gutter; 2],
-            DiffViewMode::Split => {
-                let synced = self.diff_scroll_sync.includes_vertical();
-                let shared = if synced { left_gutter } else { px(0.0) };
-                let (left, right) = crate::view::diff_split_column_widths(
-                    (width - shared).max(px(0.0)),
-                    self.diff_split_ratio,
-                );
-                if synced {
-                    [left, right]
-                } else {
-                    let right_gutter = self.diff_vertical_scrollbar_gutter_for_column(
-                        DiffHorizontalScrollColumn::SplitRight,
-                        self.diff_split_right_scroll.clone(),
-                    );
-                    [left - left_gutter, right - right_gutter]
-                }
-            }
-        };
-        widths.map(|width| width.max(px(0.0)))
-    }
-
     /// The views to measure, each with what it is measured against: those
     /// whose size does not hold for their placement as it now is, which is
     /// those not measured since they showed or notified, block and over views
-    /// whose column changed width, and every one when the row height did, or
-    /// when the text style changed.
+    /// whose column changed width, start-aligned over views whose text start
+    /// moved, and every one when the row height did, or when the text style
+    /// changed.
     fn hosted_views_to_measure(
         &mut self,
         text: &TextStyle,
-        window: &Window,
         cx: &mut App,
     ) -> Vec<(EntityId, AnyView, Measure)> {
         let Some(decor) = &self.hosted_decor else {
@@ -306,13 +279,14 @@ impl DiffRenderer {
         if decor.views.is_empty() {
             return Vec::new();
         }
-        let widths = self.hosted_view_widths(window);
+        // How wide views draw in each column, old side then new.
+        let widths = self.diff_columns().row_widths();
         let starts = [DiffLineSide::Old, DiffLineSide::New].map(|side| {
             let region = match self.diff_view {
                 DiffViewMode::Inline => DiffTextRegion::Inline,
                 DiffViewMode::Split => hosted_region(Some(side)),
             };
-            self.diff_text_start(region, cx)
+            self.diff_text_start(region, LineNumberCells::of(region), cx)
         });
         let decor = self.hosted_decor.as_mut().expect("hosted renderer");
         let row_height = decor.row_height;
@@ -362,6 +336,14 @@ impl DiffRenderer {
         {
             state.measured = None;
         }
+    }
+
+    /// The row height the pane places its rows at.
+    #[cfg(test)]
+    pub(in crate::view) fn hosted_row_height(&self) -> Pixels {
+        self.hosted_decor
+            .as_ref()
+            .map_or(px(0.0), |decor| decor.row_height)
     }
 
     /// How many views the pane keeps state for.
@@ -640,7 +622,6 @@ impl DiffRenderer {
         }
         let pane_id = decor.view_id;
         let row_height = decor.row_height;
-        let list_rows = decor.list_rows();
         // The pane measures its views before its rows draw.
         let text = decor.views.text.clone().expect("measured before drawn");
         let region = hosted_region(side);
@@ -655,9 +636,8 @@ impl DiffRenderer {
                 .child(HostedOverLayer {
                     pane_id,
                     scroll: self.column_scroll(side).clone(),
-                    list_rows,
                     row_height,
-                    start: self.diff_text_start(region, cx),
+                    start: self.diff_text_start(region, LineNumberCells::of(region), cx),
                     text,
                     views,
                 })
@@ -686,10 +666,7 @@ struct OverView {
 struct HostedOverLayer {
     pane_id: u64,
     scroll: UniformListScrollHandle,
-    /// The rows of the column's list, which it lays out at a pitch of its
-    /// own.
-    list_rows: usize,
-    /// The pitch until the list has laid out.
+    /// The pitch the list lays its rows out at.
     row_height: Pixels,
     /// Where the column's text starts.
     start: Pixels,
@@ -743,7 +720,7 @@ impl Element for HostedOverLayer {
     ) -> Self::PrepaintState {
         // Where the rows are this frame: the list prepainted first.
         let origin = bounds.top() + self.scroll.0.borrow().base_handle.offset().y;
-        let pitch = list_row_pitch(&self.scroll, self.list_rows).unwrap_or(self.row_height);
+        let pitch = self.row_height;
         let (pane_id, start) = (self.pane_id, self.start);
         let mask = gpui::ContentMask {
             bounds,
@@ -820,14 +797,6 @@ impl Element for HostedOverLayer {
             }
         });
     }
-}
-
-/// How far apart a uniform list of `rows` rows laid them out when it last
-/// did: the row it measured, which gpui snaps to device pixels, so not
-/// always the row height its rows asked for.
-pub(super) fn list_row_pitch(handle: &UniformListScrollHandle, rows: usize) -> Option<Pixels> {
-    let size = handle.0.borrow().last_item_size?;
-    (rows > 0).then(|| size.contents.height / rows as f32)
 }
 
 /// The text region of `side`'s column, or of an inline diff's.

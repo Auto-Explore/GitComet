@@ -2617,6 +2617,7 @@ impl DiffRenderer {
                                     .into_any_element()
                             } else {
                                 let scroll_handle = self.diff_scroll.0.borrow().base_handle.clone();
+                                self.diff_list_rows[0] = diff_len;
                                 let list = uniform_list(
                                     "conflict_compare_diff",
                                     diff_len,

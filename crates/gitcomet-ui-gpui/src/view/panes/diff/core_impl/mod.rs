@@ -12,6 +12,7 @@ use std::time::Instant;
 mod engine;
 mod init;
 
+pub(in crate::view) use diff_wrap::LineNumberCells;
 pub(in crate::view) use engine::EngineNotice;
 pub(in crate::view) use init::DiffRendererInit;
 
@@ -497,6 +498,23 @@ impl DiffRenderer {
         {
             cx.notify();
         }
+    }
+
+    /// How far apart `column`'s list laid its rows out when it last did:
+    /// the row it measured, which gpui snaps to device pixels, so at a
+    /// fractional row height not quite the height its rows ask for. None
+    /// before it has laid any out.
+    pub(in crate::view) fn diff_list_pitch(
+        &self,
+        column: DiffHorizontalScrollColumn,
+    ) -> Option<Pixels> {
+        let handle = match column {
+            DiffHorizontalScrollColumn::Primary => &self.diff_scroll,
+            DiffHorizontalScrollColumn::SplitRight => &self.diff_split_right_scroll,
+        };
+        let rows = self.diff_list_rows[column.index()];
+        let size = handle.0.borrow().last_item_size?;
+        (rows > 0).then(|| size.contents.height / rows as f32)
     }
 
     pub(in crate::view) fn diff_vertical_scrollbar_gutter_for_column(

@@ -4,6 +4,24 @@ pub(super) fn line_ranges_intersect(a: &Range<usize>, b: &Range<usize>) -> bool 
     a.start < b.end && b.start < a.end
 }
 
+/// The line-number cells a row keeps before its text: an inline diff row
+/// keeps both sides', a split column's or a file preview's row one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::view) enum LineNumberCells {
+    Both,
+    One,
+}
+
+impl LineNumberCells {
+    /// A diff row's in `region`.
+    pub(in crate::view) fn of(region: DiffTextRegion) -> Self {
+        match region {
+            DiffTextRegion::Inline => Self::Both,
+            DiffTextRegion::SplitLeft | DiffTextRegion::SplitRight => Self::One,
+        }
+    }
+}
+
 /// Shared wrap width for the two split columns: the narrower of their usable
 /// text widths, each past its own text start, which only the left one's
 /// annotation column moves.
@@ -400,17 +418,20 @@ impl DiffRenderer {
 
     /// Where `region`'s text starts in its row: past a hosted pane's people
     /// column, the annotation column where it is drawn, which is an inline
-    /// diff's or a split's old side, and the gutters.
-    pub(in crate::view) fn diff_text_start(&self, region: DiffTextRegion, cx: &mut App) -> Pixels {
+    /// diff's or a split's old side, and the row's line-number `cells`.
+    pub(in crate::view) fn diff_text_start(
+        &self,
+        region: DiffTextRegion,
+        cells: LineNumberCells,
+        cx: &mut App,
+    ) -> Pixels {
         let scale = ui_scale::UiScale::current(cx);
         let percent = scale.percent();
         let metrics = ui_scale::UiScale::from_percent(percent).with_appearance(self.theme.metrics);
-        let gutters = match (self.diff_show_line_numbers, region) {
+        let gutters = match (self.diff_show_line_numbers, cells) {
             (false, _) => rows::diff_canvas_row_horizontal_padding(percent),
-            (true, DiffTextRegion::Inline) => rows::diff_canvas_inline_text_start(metrics),
-            (true, DiffTextRegion::SplitLeft | DiffTextRegion::SplitRight) => {
-                rows::diff_canvas_single_column_text_start(metrics)
-            }
+            (true, LineNumberCells::Both) => rows::diff_canvas_inline_text_start(metrics),
+            (true, LineNumberCells::One) => rows::diff_canvas_single_column_text_start(metrics),
         };
         let annotation = match region {
             DiffTextRegion::Inline | DiffTextRegion::SplitLeft if self.annotation_active() => {
@@ -429,8 +450,6 @@ impl DiffRenderer {
         cx: &mut gpui::Context<Self>,
     ) -> (usize, usize) {
         let ui_scale_percent = crate::ui_scale::UiScale::current(cx).percent();
-        let vertical_gutter = components::Scrollbar::gutter(components::ScrollbarAxis::Vertical);
-        let content_width = (self.main_pane_content_width(cx) - vertical_gutter).max(px(0.0));
         // Measured in the editor font the rows are painted in, not in the
         // ambient UI font that is still current while this element tree is
         // being built. See `diff_text_wrap_char_width`.
@@ -440,13 +459,15 @@ impl DiffRenderer {
             self.theme.metrics.editor_font_size_px,
         );
         let pad = rows::diff_canvas_row_horizontal_padding(ui_scale_percent);
+        let [inline_width, _] = self.diff_columns_for(DiffViewMode::Inline).row_widths();
         let inline_columns = diff_wrap_columns_for_width(
-            content_width - self.diff_text_start(DiffTextRegion::Inline, cx) - pad,
+            inline_width
+                - self.diff_text_start(DiffTextRegion::Inline, LineNumberCells::Both, cx)
+                - pad,
             char_width,
         );
 
-        let (left_w, right_w) =
-            crate::view::diff_split_column_widths(content_width, self.diff_split_ratio);
+        let [left_w, right_w] = self.diff_columns_for(DiffViewMode::Split).row_widths();
         // Both columns wrap at one width so their rows stay aligned, so take the
         // narrower of the two. Annotation sits inside the left column only:
         // charging it to whichever column happens to be narrower can leave no
@@ -454,8 +475,8 @@ impl DiffRenderer {
         let split_text_width = split_wrap_text_width(
             left_w,
             right_w,
-            self.diff_text_start(DiffTextRegion::SplitLeft, cx),
-            self.diff_text_start(DiffTextRegion::SplitRight, cx),
+            self.diff_text_start(DiffTextRegion::SplitLeft, LineNumberCells::One, cx),
+            self.diff_text_start(DiffTextRegion::SplitRight, LineNumberCells::One, cx),
             pad,
         );
         let split_columns = diff_wrap_columns_for_width(split_text_width, char_width);
@@ -474,36 +495,20 @@ impl DiffRenderer {
         cx: &mut gpui::Context<Self>,
     ) -> usize {
         let ui_scale_percent = crate::ui_scale::UiScale::current(cx).percent();
-        let vertical_gutter = components::Scrollbar::gutter(components::ScrollbarAxis::Vertical);
-        let content_width = (self.main_pane_content_width(cx) - vertical_gutter).max(px(0.0));
+        let [width, _] = self.diff_columns_for(DiffViewMode::Inline).row_widths();
         let char_width = rows::diff_canvas_text_wrap_char_width(
             window,
             self.diff_wrap_measure_font_family(cx),
             self.theme.metrics.editor_font_size_px,
         );
         let pad = rows::diff_canvas_row_horizontal_padding(ui_scale_percent);
-        let text_start = if self.diff_show_line_numbers {
-            rows::diff_canvas_single_column_text_start(
-                ui_scale::UiScale::from_percent(ui_scale_percent)
-                    .with_appearance(self.theme.metrics),
-            )
-        } else {
-            pad
-        };
-        let annotation_width = if self.annotation_active() {
-            self.annotate_column_width_px(ui_scale_percent)
-        } else {
-            px(0.0)
-        };
+        // One column of lines, past its one line number.
+        let text_start = self.diff_text_start(DiffTextRegion::Inline, LineNumberCells::One, cx);
         // The change bar is only drawn for a wholly added or removed file, but
         // it is always subtracted: wrapping a few pixels early is invisible,
         // wrapping late runs the last character under the scrollbar.
         let change_bar = rows::diff_canvas_change_bar_width(ui_scale_percent);
-        let people_column = self.hosted_people_column_width(ui_scale::UiScale::current(cx));
-        diff_wrap_columns_for_width(
-            content_width - annotation_width - people_column - change_bar - text_start - pad,
-            char_width,
-        )
+        diff_wrap_columns_for_width(width - change_bar - text_start - pad, char_width)
     }
 
     pub(super) fn diff_wrap_ranges_for_source_visible_ix(
