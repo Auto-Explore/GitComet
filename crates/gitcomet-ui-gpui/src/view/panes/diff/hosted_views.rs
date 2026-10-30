@@ -133,12 +133,14 @@ pub(in crate::view) fn measure_inline_views(
 }
 
 impl DiffRenderer {
-    /// How wide a view on `side` draws: its column, less the scrollbar.
-    fn hosted_view_width(&self, side: DiffLineSide, window: &Window) -> Pixels {
+    /// How wide views draw in each column, old side then new: the column
+    /// less its scrollbar, and never below nothing in a narrow split.
+    fn hosted_view_widths(&self, window: &Window) -> [Pixels; 2] {
         let width = self
             .hosted_content_width
             .unwrap_or(window.viewport_size().width);
-        self.hosted_card_widths(width)[usize::from(side == DiffLineSide::New)]
+        self.hosted_card_widths(width)
+            .map(|width| width.max(px(0.0)))
     }
 
     /// The views to measure, each with the width it draws at: those not
@@ -153,12 +155,10 @@ impl DiffRenderer {
         let Some(decor) = &self.hosted_decor else {
             return Vec::new();
         };
-        let widths: Vec<_> = decor
-            .views
-            .views()
-            .iter()
-            .map(|view| self.hosted_view_width(view.anchor().side, window))
-            .collect();
+        if decor.views.is_empty() {
+            return Vec::new();
+        }
+        let widths = self.hosted_view_widths(window);
         let decor = self.hosted_decor.as_mut().expect("hosted renderer");
         let row_height = decor.row_height;
         let views = &mut decor.views;
@@ -168,8 +168,8 @@ impl DiffRenderer {
         }
         let list = views.views.clone();
         list.iter()
-            .zip(widths)
-            .filter_map(|(view, width)| {
+            .filter_map(|view| {
+                let width = widths[usize::from(view.anchor().side == DiffLineSide::New)];
                 let state = views.state(view.view().entity_id(), cx);
                 if state.measured
                     && state.width == width
@@ -236,7 +236,6 @@ impl DiffRenderer {
         row: usize,
         side: Option<DiffLineSide>,
         first_on_screen: bool,
-        window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
         let decor = self.hosted_decor.as_ref().expect("hosted renderer");
@@ -253,20 +252,19 @@ impl DiffRenderer {
         let rows = decor.views.rows(view);
         // The pane measures its views before its rows draw.
         let text = decor.views.text.clone().expect("measured before drawn");
-        let width = self.hosted_view_width(view.anchor().side, window);
         let scroll = match side {
             Some(DiffLineSide::New) => &self.diff_split_right_scroll,
             _ => &self.diff_scroll,
         };
         let scroll_x = scroll.0.borrow().base_handle.offset().x;
-        let focus = self
+        // Drawn at the width it was measured at, this frame's column's.
+        let state = self
             .hosted_decor
             .as_mut()
             .expect("hosted renderer")
             .views
-            .state(id, cx)
-            .focus
-            .clone();
+            .state(id, cx);
+        let (width, focus) = (state.width, state.focus.clone());
         // Ids from the view's entity, so its element state follows it from
         // row to row as it scrolls.
         placeholder
