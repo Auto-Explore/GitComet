@@ -173,7 +173,35 @@ fn settings_menu_is_bare_and_closes_on_an_outside_click(cx: &mut gpui::TestAppCo
         "no title above the entries"
     );
 
+    let right_click = |cx: &mut gpui::VisualTestContext, at| {
+        cx.simulate_mouse_down(at, gpui::MouseButton::Right, gpui::Modifiers::default());
+        cx.simulate_mouse_up(at, gpui::MouseButton::Right, gpui::Modifiers::default());
+        cx.run_until_parked();
+    };
+    right_click(
+        cx,
+        gpui::point(menu.right() - px(4.0), menu.bottom() - px(4.0)),
+    );
+    cx.update(|_, app| assert!(settings.read(app).extension_dialog.is_some()));
+
     let outside = gpui::point(menu.right() + px(40.0), menu.bottom() + px(40.0));
+    right_click(cx, outside);
+    cx.update(|_, app| assert!(settings.read(app).extension_dialog.is_none()));
+
+    cx.update(|_, app| {
+        let host = settings.read(app).extension_window.as_ref().unwrap().host();
+        host.open_menu(
+            gpui::point(px(100.0), px(100.0)),
+            vec![HostedMenuItem::action(HostedAction::new(
+                "Reconnect",
+                |_| {},
+            ))],
+            app,
+        )
+        .unwrap();
+    });
+    cx.run_until_parked();
+    cx.update(|_, app| assert!(settings.read(app).extension_dialog.is_some()));
     cx.simulate_click(outside, gpui::Modifiers::default());
     cx.run_until_parked();
     cx.update(|_, app| assert!(settings.read(app).extension_dialog.is_none()));
