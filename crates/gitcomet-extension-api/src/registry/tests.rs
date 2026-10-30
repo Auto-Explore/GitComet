@@ -292,3 +292,59 @@ fn bar_placement_conflicts_are_rejected_with_the_declaring_extension() {
         ]
     );
 }
+
+fn canvas_overlay() -> CanvasOverlayDescriptor {
+    CanvasOverlayDescriptor::new(|_, _: &mut Window, _: &mut App| {
+        unreachable!("registration never builds a view")
+    })
+}
+
+#[test]
+fn canvas_overlays_keep_order_and_reject_duplicates() {
+    let registry = build(vec![
+        Fixture {
+            id: "com.example.a",
+            register: |r| {
+                r.canvas_overlay("first", canvas_overlay())
+                    .canvas_overlay("second", canvas_overlay());
+            },
+        },
+        Fixture {
+            id: "com.example.b",
+            register: |r| {
+                r.canvas_overlay("first", canvas_overlay());
+            },
+        },
+    ])
+    .expect("valid registrations");
+    let ids: Vec<String> = registry
+        .canvas_overlays()
+        .iter()
+        .map(|(id, _)| id.to_string())
+        .collect();
+    assert_eq!(
+        ids,
+        [
+            "com.example.a/first",
+            "com.example.a/second",
+            "com.example.b/first"
+        ]
+    );
+
+    let errors = build(vec![Fixture {
+        id: "com.example.a",
+        register: |r| {
+            r.canvas_overlay("first", canvas_overlay())
+                .canvas_overlay("first", canvas_overlay());
+        },
+    }])
+    .err()
+    .expect("a duplicate overlay");
+    let messages: Vec<String> = errors.iter().map(ToString::to_string).collect();
+    assert!(
+        messages
+            .iter()
+            .any(|message| message.contains("canvas overlay com.example.a/first is declared twice")),
+        "{messages:#?}"
+    );
+}

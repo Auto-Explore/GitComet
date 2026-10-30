@@ -183,6 +183,79 @@ impl BottomPanelDescriptor {
     }
 }
 
+/// What happened to a canvas overlay. Delivered after the host's update.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum CanvasOverlayVisibility {
+    /// Now covers its repository's main canvas.
+    Shown,
+    /// No longer covers it; its view is kept. Sent whoever hid it: the
+    /// extension, a view tab, navigation, a document taking the slot, or
+    /// another overlay shown over the same repository.
+    Hidden,
+    /// Forgotten: no longer shown, and its view, if one was built, is gone.
+    /// Not preceded by `Hidden`; sent by `drop_canvas_overlay` or when the
+    /// repository closes (the context's handle is then no longer current).
+    Dropped,
+}
+
+/// Told of a canvas overlay's visibility changes.
+pub type CanvasOverlayObserver =
+    Rc<dyn Fn(RepositoryViewContext, CanvasOverlayVisibility, &mut App)>;
+
+/// A view an extension shows over a repository's main canvas (History or
+/// the selected repository view), shown with
+/// [`WindowHost::show_canvas_overlay`](crate::WindowHost::show_canvas_overlay).
+/// The action bar, sidebar, details, bottom panel and status bar stay; hiding
+/// it returns to the view behind, which the host never rebuilt. Anything
+/// that asks for the main canvas hides it: a view tab (the one behind
+/// included), navigation, Back, choosing a commit or file in History, or a
+/// document taking the slot. Built on first show per repository and kept
+/// while hidden, until dropped with
+/// [`WindowHost::drop_canvas_overlay`](crate::WindowHost::drop_canvas_overlay)
+/// or the repository closes. One overlay is shown per repository.
+#[derive(Clone)]
+#[non_exhaustive]
+pub struct CanvasOverlayDescriptor {
+    pub build: ViewBuilder<RepositoryViewContext>,
+    /// Focused by the host each time the overlay is shown.
+    pub focus: Option<ViewFocus>,
+    /// Told of every visibility change, whoever caused it.
+    pub on_visibility: Option<CanvasOverlayObserver>,
+}
+
+impl CanvasOverlayDescriptor {
+    pub fn new(
+        build: impl Fn(RepositoryViewContext, &mut Window, &mut App) -> AnyView + 'static,
+    ) -> Self {
+        Self {
+            build: Rc::new(build),
+            focus: None,
+            on_visibility: None,
+        }
+    }
+
+    /// Give the keyboard to the built view of type `V` each time the overlay
+    /// is shown over the active repository.
+    pub fn with_focus<V: Focusable + 'static>(mut self) -> Self {
+        self.focus = Some(Rc::new(|view, cx| {
+            view.clone()
+                .downcast::<V>()
+                .ok()
+                .map(|view| view.read(cx).focus_handle(cx))
+        }));
+        self
+    }
+
+    pub fn on_visibility(
+        mut self,
+        observer: impl Fn(RepositoryViewContext, CanvasOverlayVisibility, &mut App) + 'static,
+    ) -> Self {
+        self.on_visibility = Some(Rc::new(observer));
+        self
+    }
+}
+
 /// A surrounding panel that accepts tabs. This identifies placement,
 /// independent of the extension or workflow that supplies its content.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]

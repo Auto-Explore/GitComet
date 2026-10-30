@@ -625,18 +625,22 @@ impl GitCometView {
             .iter()
             .any(|repo| !next.repos.iter().any(|next_repo| next_repo.id == repo.id));
         // Opening a file or commit in the repository asks to see it, so the
-        // main slot goes back from the document viewer.
-        let leave_documents =
-            self.documents_active && repository_navigated(&self.state, next.as_ref());
+        // main slot goes back from the document viewer or a canvas overlay.
+        let navigated = (self.documents_active || self.canvas_overlay_shown())
+            && repository_navigated(&self.state, next.as_ref());
         self.state = next;
-        if leave_documents {
-            self.show_repository_canvas(cx);
+        if navigated {
+            if self.documents_active {
+                self.show_repository_canvas(cx);
+            }
+            self.hide_active_canvas_overlay(cx);
         }
         if let Some(extension_window) = self.extension_window.as_ref() {
             extension_window.set_state(&self.state, cx);
         }
         self.retain_open_repository_views();
-        if self.repository_views.is_some() {
+        self.retain_open_canvas_overlays(cx);
+        if self.repository_views.is_some() || self.canvas_overlays_registered() {
             self.sync_extension_navigation(cx);
         }
         if self.sidebar_tabs.is_some() {

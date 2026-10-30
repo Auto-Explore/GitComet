@@ -44,14 +44,14 @@ pub mod storage;
 pub use services::{RepositoryReader, StoreView, SyntaxService};
 
 pub use contributions::{
-    BottomPanelDescriptor, ChromeDescriptor, CloseDecision, CloseGuard, CloseRequest, CloseScope,
-    CommandContext, CommandDescriptor, CommandHandler, CommitBoxItemDescriptor,
-    DetailsTabDescriptor, EntryOrigin, GateDecision, MenuLocation, Navigate,
-    NavigationAvailability, PanelArea, PanelContentPolicy, PanelTabDescriptor, RepositoryEntryGate,
-    RepositoryEntryRequest, RepositoryViewContext, RepositoryViewDescriptor, SettingsPageContext,
-    SettingsPageDescriptor, SettingsTarget, SidebarSectionDescriptor, SidebarTabDescriptor,
-    StatusItemDescriptor, ViewBuilder, ViewFocus, ViewNavigation, ViewTarget, WindowGateDescriptor,
-    WindowGatePredicate,
+    BottomPanelDescriptor, CanvasOverlayDescriptor, CanvasOverlayObserver, CanvasOverlayVisibility,
+    ChromeDescriptor, CloseDecision, CloseGuard, CloseRequest, CloseScope, CommandContext,
+    CommandDescriptor, CommandHandler, CommitBoxItemDescriptor, DetailsTabDescriptor, EntryOrigin,
+    GateDecision, MenuLocation, Navigate, NavigationAvailability, PanelArea, PanelContentPolicy,
+    PanelTabDescriptor, RepositoryEntryGate, RepositoryEntryRequest, RepositoryViewContext,
+    RepositoryViewDescriptor, SettingsPageContext, SettingsPageDescriptor, SettingsTarget,
+    SidebarSectionDescriptor, SidebarTabDescriptor, StatusItemDescriptor, ViewBuilder, ViewFocus,
+    ViewNavigation, ViewTarget, WindowGateDescriptor, WindowGatePredicate,
 };
 /// Revision-pinned state types hosted panes take.
 pub use gitcomet_state::diff_session::ChangeSource;

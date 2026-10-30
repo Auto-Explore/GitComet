@@ -301,6 +301,7 @@ use gitcomet_ui_media::rendered_preview::{
 use gitcomet_ui_media::{diagram_preview, image_preview, rendered_preview};
 #[cfg(feature = "benchmarks")]
 pub use image_preview::benchmarks::ImageInspectionFixture;
+mod canvas_overlays;
 mod diff_commands;
 pub(crate) mod diff_navigation;
 mod diff_preview;

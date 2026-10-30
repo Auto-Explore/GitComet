@@ -514,7 +514,8 @@ fn commands_reach_the_palette_key_bindings_and_menus(cx: &mut gpui::TestAppConte
             vec![
                 "extension:com.example.review/mark-reviewed",
                 "extension:com.example.review/show-summary",
-                "extension:com.example.review/toggle-review-log"
+                "extension:com.example.review/toggle-review-log",
+                "extension:com.example.review/toggle-review-overlay"
             ]
         );
         let app_menu =
@@ -553,7 +554,7 @@ fn commands_reach_the_palette_key_bindings_and_menus(cx: &mut gpui::TestAppConte
 }
 
 #[gpui::test]
-fn retained_panes_and_bottom_panels_do_not_keep_a_closed_windows_store_alive(
+fn retained_panes_bottom_panels_and_overlays_do_not_keep_a_closed_windows_store_alive(
     cx: &mut gpui::TestAppContext,
 ) {
     use gitcomet_extension_api::{ChangeSource, DiffPaneOptions};
@@ -563,13 +564,14 @@ fn retained_panes_and_bottom_panels_do_not_keep_a_closed_windows_store_alive(
         install_example(app);
     });
     let window = open_window_with_repo(cx, workspace, Path::new("/tmp/host-store-lifetime"));
-    let (host, weak_store, panels, key) = window
+    let (host, weak_store, panels, overlays, key) = window
         .update(cx, |view, _, _| {
             let extensions = view.extension_window.as_ref().unwrap();
             (
                 extensions.host(),
                 Arc::downgrade(&view.store),
                 extensions.bottom_panels(),
+                extensions.canvas_overlays(),
                 crate::view::extension_panels::repo_key(view.active_repo().unwrap()),
             )
         })
@@ -600,10 +602,19 @@ fn retained_panes_and_bottom_panels_do_not_keep_a_closed_windows_store_alive(
             app,
         )
         .unwrap();
+        host.show_canvas_overlay(
+            &repository,
+            &review::extension_id()
+                .contribution(review::REVIEW_OVERLAY)
+                .unwrap(),
+            app,
+        )
+        .unwrap();
         (pane, list)
     });
     cx.run_until_parked();
     assert!(!panels.borrow().shown(key).is_empty());
+    assert!(overlays.borrow().view(key, 0).is_some());
     window
         .update(cx, |_, window, _| window.remove_window())
         .unwrap();
@@ -615,6 +626,10 @@ fn retained_panes_and_bottom_panels_do_not_keep_a_closed_windows_store_alive(
     assert!(
         panels.borrow().shown(key).is_empty(),
         "closing breaks the panel/host cycle"
+    );
+    assert!(
+        overlays.borrow().view(key, 0).is_none(),
+        "closing breaks the overlay/host cycle"
     );
     cx.update(|app| {
         assert!(!host.is_open(app));

@@ -10,6 +10,8 @@ Products launch through [`AppLaunch`](../crates/gitcomet-app/src/lib.rs) or [`Ui
 
 The extension [`Registry`](../crates/gitcomet-extension-api/src/registry.rs) validates key chords and optional context predicates with GPUI's parsers before keymap installation. Invalid contexts join the existing registration errors, preserving declaration order and reporting all registration problems together.
 
+A [canvas overlay](../crates/gitcomet-ui-gpui/src/view/canvas_overlays.rs) replaces one repository's main slot with an extension's view, at most one per repository, while the action bar, sidebar, details, bottom panel and status bar stay. History or the selected repository view stays built behind it and is drawn again unchanged when the overlay hides; showing and hiding never emit `ViewChanged` or `MainViewChanged`. Anything that asks for the main canvas hides it: a view tab, including the one behind, navigation, Back, choosing a commit or file, or a document taking the slot.
+
 [Dependency checks](../scripts/ci/boundaries.py) enforce the layering across normal and build dependencies, and [a grammar check](../scripts/ci/grammar_symbols.py) fails when two linked crates define the same tree-sitter language. GPUI revisions and gix features are selected in the [workspace manifest](../Cargo.toml); local dependency patches and grammar changes are documented in [vendor/README.md](../vendor/README.md).
 
 ## Git contracts and errors

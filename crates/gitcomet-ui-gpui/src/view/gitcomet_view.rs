@@ -1,3 +1,4 @@
+use super::repository_views::MainSlot;
 use super::*;
 
 impl GitCometView {
@@ -1200,6 +1201,7 @@ impl GitCometView {
             window_gated: false,
             extension_window,
             repository_view_focus: cx.focus_handle(),
+            canvas_overlay_focus: cx.focus_handle(),
             repository_views: Self::repository_view_router(cx),
             details_tabs: Self::details_tab_router(cx),
             sidebar_tabs: Self::sidebar_tab_router(cx),
@@ -2357,26 +2359,23 @@ impl GitCometView {
     }
 
     /// The diff the diff keys (F1–F4, F7, Alt+Up/Down) act on: History's,
-    /// unless an extension's repository view is selected. Then it is the
-    /// hosted diff pane inside that view the user is engaged with, and with
-    /// none there the keys do nothing, rather than move History's hidden
-    /// selection.
+    /// unless an extension's canvas overlay covers it or an extension's
+    /// repository view is selected. Then it is the hosted diff pane inside
+    /// that overlay or view the user is engaged with, and with none there the
+    /// keys do nothing, rather than move History's hidden selection.
     pub(super) fn diff_shortcut_target(
         &self,
         window: &Window,
         cx: &App,
     ) -> Option<Entity<DiffRenderer>> {
-        let extension_view_selected = self
-            .repository_views
-            .as_ref()
-            .zip(self.active_repo())
-            .is_some_and(|(router, repo)| router.selected(repo).is_some());
-        if !extension_view_selected || self.documents_active {
-            return Some(self.diff_renderer.clone());
-        }
+        let scope = match self.main_slot() {
+            MainSlot::Document | MainSlot::History => return Some(self.diff_renderer.clone()),
+            MainSlot::Overlay(_) => &self.canvas_overlay_focus,
+            MainSlot::View(_) => &self.repository_view_focus,
+        };
         self.extension_window
             .as_ref()?
-            .diff_pane_for_keys(&self.repository_view_focus, window, cx)
+            .diff_pane_for_keys(scope, window, cx)
     }
 
     pub(super) fn defer_search_match_navigation(
@@ -2494,6 +2493,17 @@ impl GitCometView {
     pub(super) fn dispatch_global_nav(&self, forward: bool, cx: &mut gpui::Context<Self>) {
         if !self.shell_action_allowed(super::shell_policy::ShellAction::Repository) {
             return;
+        }
+        // Over a canvas overlay, Back uncovers the view behind and Forward
+        // waits: neither moves a view the user cannot see.
+        match self.main_slot() {
+            MainSlot::Overlay(_) => {
+                if !forward {
+                    self.hide_active_canvas_overlay(cx);
+                }
+                return;
+            }
+            MainSlot::Document | MainSlot::View(_) | MainSlot::History => {}
         }
         if self.route_extension_navigation(forward, cx) {
             return;

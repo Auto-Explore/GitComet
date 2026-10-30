@@ -259,6 +259,9 @@ pub(in super::super) struct ActionBarView {
     extension_slot: Option<gpui::AnyView>,
     /// The repository's views as tabs, while an extension registers any.
     view_tabs: Option<ViewTabs>,
+    /// An extension's canvas overlay covers the active repository's view:
+    /// Back is enabled to uncover it, and Forward waits.
+    canvas_covered: bool,
     store: Arc<AppStore>,
     state: Arc<AppState>,
     theme: AppTheme,
@@ -328,6 +331,7 @@ impl ActionBarView {
             extension_navigation: None,
             extension_slot: None,
             view_tabs: None,
+            canvas_covered: false,
             store,
             state,
             theme,
@@ -413,6 +417,18 @@ impl ActionBarView {
             return;
         }
         self.view_tabs = tabs;
+        cx.notify();
+    }
+
+    pub(in crate::view) fn set_canvas_covered(
+        &mut self,
+        covered: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.canvas_covered == covered {
+            return;
+        }
+        self.canvas_covered = covered;
         cx.notify();
     }
 
@@ -532,29 +548,6 @@ impl ActionBarView {
                 })
                 .child(tab),
         )
-    }
-
-    fn extension_navigate(&self, forward: bool, cx: &mut gpui::Context<Self>) -> bool {
-        let Some((context, navigation)) = &self.extension_navigation else {
-            return false;
-        };
-        if let Some(navigation) = navigation {
-            let can = if forward {
-                &navigation.can_forward
-            } else {
-                &navigation.can_back
-            };
-            if can(context, cx) {
-                let run = if forward {
-                    navigation.forward.clone()
-                } else {
-                    navigation.back.clone()
-                };
-                let context = context.clone();
-                cx.defer(move |cx| run(context, cx));
-            }
-        }
-        true
     }
 
     pub(in super::super) fn set_active_context_menu_invoker(
@@ -800,6 +793,11 @@ impl BarItemOwner for ActionBarView {
                 })
             },
         );
+        let (nav_can_back, nav_can_forward) = if self.canvas_covered {
+            (true, false)
+        } else {
+            (nav_can_back, nav_can_forward)
+        };
         let nav_back = components::Button::new("global_nav_back", "")
             .start_slot(icon(
                 "icons/arrow_left.svg",
@@ -812,12 +810,9 @@ impl BarItemOwner for ActionBarView {
             .style(components::ButtonStyle::Transparent)
             .disabled(!nav_can_back)
             .on_click(theme, cx, |this, _e, _w, cx| {
-                if this.extension_navigate(false, cx) {
-                    return;
-                }
-                if let Some(repo_id) = this.active_repo_id() {
-                    this.store.dispatch(Msg::GlobalNavBack { repo_id });
-                }
+                let _ = this
+                    .root_view
+                    .update(cx, |root, cx| root.dispatch_global_nav(false, cx));
             })
             .gitcomet_tooltip(
                 theme,
@@ -839,12 +834,9 @@ impl BarItemOwner for ActionBarView {
             .style(components::ButtonStyle::Transparent)
             .disabled(!nav_can_forward)
             .on_click(theme, cx, |this, _e, _w, cx| {
-                if this.extension_navigate(true, cx) {
-                    return;
-                }
-                if let Some(repo_id) = this.active_repo_id() {
-                    this.store.dispatch(Msg::GlobalNavForward { repo_id });
-                }
+                let _ = this
+                    .root_view
+                    .update(cx, |root, cx| root.dispatch_global_nav(true, cx));
             })
             .gitcomet_tooltip(
                 theme,

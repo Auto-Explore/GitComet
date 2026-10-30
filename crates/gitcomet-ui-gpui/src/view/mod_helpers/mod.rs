@@ -975,6 +975,8 @@ pub struct GitCometView {
     /// Scopes the active extension view, so the diff keys can find the
     /// hosted pane inside it (see `diff_shortcut_target`).
     pub(super) repository_view_focus: FocusHandle,
+    /// Scopes the shown canvas overlay, likewise.
+    pub(super) canvas_overlay_focus: FocusHandle,
     /// Present only when an extension registers a repository view.
     pub(super) repository_views: Option<super::repository_views::RepositoryViewRouter>,
     /// Present only when an extension registers a details tab.

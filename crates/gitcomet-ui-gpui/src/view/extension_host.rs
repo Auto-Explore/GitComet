@@ -4,15 +4,19 @@
 //! With no extension registered nothing here allocates or runs: the registry
 //! global is absent, windows skip every lookup, and no task is spawned.
 
+use super::canvas_overlays::{announce, leave_later};
 use super::command_palette::{CommandEntry, Needs};
+use super::extension_panels::handle_key;
 use super::*;
 use crate::kit::components::Shortcut;
+use gitcomet_extension_api::{
+    CanvasOverlayVisibility, HostNotifier, ShellEvent, Slot, WindowExtension,
+};
 use gitcomet_extension_api::{
     CommandContext, DialogContent, DialogHandle, EntryOrigin, ExtensionId, GateDecision, HostError,
     MenuLocation, Registry, RepositoryEntryRequest, RepositoryHandle, StateObserver, WindowHost,
     host::WindowHostImpl, storage::StorageError,
 };
-use gitcomet_extension_api::{HostNotifier, ShellEvent, Slot, WindowExtension};
 use gitcomet_state::msg::Msg;
 use gitcomet_state::session::WorkspaceId;
 use gpui::{Action, KeyBinding, WindowId};
@@ -272,6 +276,7 @@ struct HostWindow {
     theme: Rc<std::cell::Cell<AppTheme>>,
     observers: Rc<StateObservers>,
     bottom_panels: super::extension_panels::SharedBottomPanels,
+    canvas_overlays: super::canvas_overlays::SharedCanvasOverlays,
     diff_panes: SharedDiffPanes,
     diff_environment: super::hosted::environment::DiffPaneEnvironment,
     external_editor:
@@ -459,6 +464,20 @@ impl HostWindow {
             .and_then(std::rc::Weak::upgrade)
             .map(|host| WindowHost::new(host))
             .ok_or(HostError::WindowClosed)
+    }
+
+    /// Only a main window has a repository canvas to cover.
+    fn canvas_overlay_index(
+        &self,
+        overlay: &gitcomet_extension_api::ContributionId,
+    ) -> Result<usize, HostError> {
+        if self.kind != gitcomet_core::identity::WindowKind::Main {
+            return Err(HostError::Unsupported);
+        }
+        self.canvas_overlays
+            .borrow()
+            .index_of(overlay)
+            .ok_or(HostError::Unsupported)
     }
 
     fn live(&self) -> Result<(), HostError> {
@@ -695,7 +714,7 @@ impl WindowHostImpl for HostWindow {
             .borrow()
             .index_of(panel)
             .ok_or(HostError::Unsupported)?;
-        let key = (repository.repo_id(), repository.lifetime());
+        let key = handle_key(repository);
         self.bottom_panels.borrow_mut().open(key, index);
         let window = self.window_handle;
         // Deferred like dialogs: the root builds the view in its own update.
@@ -721,7 +740,7 @@ impl WindowHostImpl for HostWindow {
             .borrow()
             .index_of(panel)
             .ok_or(HostError::Unsupported)?;
-        let key = (repository.repo_id(), repository.lifetime());
+        let key = handle_key(repository);
         if self.bottom_panels.borrow_mut().close(key, index) {
             cx.defer(move |cx| {
                 view.update(cx, |root, cx| {
@@ -739,9 +758,120 @@ impl WindowHostImpl for HostWindow {
         _cx: &App,
     ) -> bool {
         let panels = self.bottom_panels.borrow();
-        panels.index_of(panel).is_some_and(|index| {
-            panels.is_open((repository.repo_id(), repository.lifetime()), index)
-        })
+        panels
+            .index_of(panel)
+            .is_some_and(|index| panels.is_open(handle_key(repository), index))
+    }
+
+    fn show_canvas_overlay(
+        &self,
+        repository: &RepositoryHandle,
+        overlay: &gitcomet_extension_api::ContributionId,
+        cx: &mut App,
+    ) -> Result<(), HostError> {
+        let view = self.view.upgrade().ok_or(HostError::WindowClosed)?;
+        let index = self.canvas_overlay_index(overlay)?;
+        let host = self.host()?;
+        let key = handle_key(repository);
+        let previous = self
+            .canvas_overlays
+            .borrow_mut()
+            .show(key, index, repository.clone());
+        if previous != Some(index) {
+            if let Some(replaced) = previous {
+                announce(
+                    &self.canvas_overlays,
+                    &host,
+                    replaced,
+                    repository,
+                    CanvasOverlayVisibility::Hidden,
+                    cx,
+                );
+            }
+            announce(
+                &self.canvas_overlays,
+                &host,
+                index,
+                repository,
+                CanvasOverlayVisibility::Shown,
+                cx,
+            );
+        }
+        let window = self.window_handle;
+        // Deferred like dialogs: the root builds the view in its own update.
+        cx.defer(move |cx| {
+            let _ = window.update(cx, |_, window, cx| {
+                view.update(cx, |root, cx| {
+                    root.present_canvas_overlay(key, index, window, cx);
+                });
+            });
+        });
+        Ok(())
+    }
+
+    fn hide_canvas_overlay(
+        &self,
+        repository: &RepositoryHandle,
+        overlay: &gitcomet_extension_api::ContributionId,
+        cx: &mut App,
+    ) -> Result<(), HostError> {
+        self.live()?;
+        let index = self.canvas_overlay_index(overlay)?;
+        let host = self.host()?;
+        let key = handle_key(repository);
+        if self.canvas_overlays.borrow_mut().hide(key, index) {
+            announce(
+                &self.canvas_overlays,
+                &host,
+                index,
+                repository,
+                CanvasOverlayVisibility::Hidden,
+                cx,
+            );
+            leave_later(self.window_handle, self.view.clone(), key, cx);
+        }
+        Ok(())
+    }
+
+    fn drop_canvas_overlay(
+        &self,
+        repository: &RepositoryHandle,
+        overlay: &gitcomet_extension_api::ContributionId,
+        cx: &mut App,
+    ) -> Result<(), HostError> {
+        self.live()?;
+        let index = self.canvas_overlay_index(overlay)?;
+        let host = self.host()?;
+        let key = handle_key(repository);
+        let taken = self.canvas_overlays.borrow_mut().take(key, index);
+        let Some((shown, repository)) = taken else {
+            return Ok(());
+        };
+        if shown {
+            leave_later(self.window_handle, self.view.clone(), key, cx);
+        }
+        announce(
+            &self.canvas_overlays,
+            &host,
+            index,
+            &repository,
+            CanvasOverlayVisibility::Dropped,
+            cx,
+        );
+        Ok(())
+    }
+
+    fn is_canvas_overlay_shown(
+        &self,
+        repository: &RepositoryHandle,
+        overlay: &gitcomet_extension_api::ContributionId,
+        cx: &App,
+    ) -> bool {
+        let overlays = self.canvas_overlays.borrow();
+        self.is_current(repository, cx)
+            && overlays
+                .index_of(overlay)
+                .is_some_and(|index| overlays.is_shown(handle_key(repository), index))
     }
 
     fn watch_repository(
@@ -1259,6 +1389,7 @@ pub(in crate::view) struct ExtensionWindow {
     theme: Rc<std::cell::Cell<AppTheme>>,
     observers: Rc<StateObservers>,
     bottom_panels: super::extension_panels::SharedBottomPanels,
+    canvas_overlays: super::canvas_overlays::SharedCanvasOverlays,
     diff_panes: SharedDiffPanes,
     external_editor:
         Rc<std::cell::RefCell<Option<gitcomet_state::session::ExternalCodeEditorSetting>>>,
@@ -1288,6 +1419,9 @@ impl ExtensionWindow {
         let diff_panes: SharedDiffPanes = Rc::default();
         let bottom_panels = Rc::new(std::cell::RefCell::new(
             super::extension_panels::BottomPanels::new(registry.bottom_panels()),
+        ));
+        let canvas_overlays = Rc::new(std::cell::RefCell::new(
+            super::canvas_overlays::CanvasOverlays::new(registry.canvas_overlays()),
         ));
         let state = Rc::new(std::cell::RefCell::new(state));
         let theme = Rc::new(std::cell::Cell::new(theme));
@@ -1330,6 +1464,7 @@ impl ExtensionWindow {
             theme: Rc::clone(&theme),
             observers: Rc::clone(&observers),
             bottom_panels: Rc::clone(&bottom_panels),
+            canvas_overlays: Rc::clone(&canvas_overlays),
             diff_panes: Rc::clone(&diff_panes),
             diff_environment,
             external_editor: Rc::clone(&external_editor),
@@ -1357,6 +1492,7 @@ impl ExtensionWindow {
                 *host.state.borrow_mut() = Arc::default();
                 host.observers.observers.borrow_mut().clear();
                 *host.bottom_panels.borrow_mut() = Default::default();
+                *host.canvas_overlays.borrow_mut() = Default::default();
                 host.diff_panes.borrow_mut().clear();
                 host.terminals.borrow_mut().clear();
             }
@@ -1371,6 +1507,7 @@ impl ExtensionWindow {
             theme,
             observers,
             bottom_panels,
+            canvas_overlays,
             diff_panes,
             external_editor,
             terminals,
@@ -1416,6 +1553,10 @@ impl ExtensionWindow {
 
     pub(in crate::view) fn bottom_panels(&self) -> super::extension_panels::SharedBottomPanels {
         Rc::clone(&self.bottom_panels)
+    }
+
+    pub(in crate::view) fn canvas_overlays(&self) -> super::canvas_overlays::SharedCanvasOverlays {
+        Rc::clone(&self.canvas_overlays)
     }
 
     /// Publishes the view's latest state to extension handles and schedules
@@ -1509,6 +1650,7 @@ impl Drop for ExtensionWindow {
         // Built panels can hold host handles, which share this same panel map.
         // Break that ownership cycle when the window goes away.
         *self.bottom_panels.borrow_mut() = Default::default();
+        *self.canvas_overlays.borrow_mut() = Default::default();
     }
 }
 
