@@ -841,7 +841,7 @@ impl Render for DiffPaneView {
     fn render(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
         self.prepare_renderer(window, cx);
         if let Some(renderer) = self.renderer.clone() {
-            renderer.update(cx, |pane, cx| pane.sync_hosted_row_height(cx));
+            renderer.update(cx, |pane, cx| pane.sync_hosted_row_height(window, cx));
             // Before the renderer counts its rows, which follow the views'
             // heights in this frame.
             crate::view::panes::diff::measure_hosted_views(&renderer, window, cx);

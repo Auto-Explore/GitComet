@@ -136,7 +136,7 @@ impl DiffRenderer {
                         horizontal_scrollbar_gutter
                     };
                     let rows = self.diff_list_len();
-                    self.diff_list_rows[0] = rows;
+                    self.note_diff_list_built(rows, window, cx);
                     let list =
                         uniform_list("diff", rows, cx.processor(Self::render_projected_inline))
                             .h_full()
@@ -196,7 +196,7 @@ impl DiffRenderer {
                     self.sync_diff_split_scroll();
                     let vertical_sync_enabled = self.diff_scroll_sync.includes_vertical();
                     let count = self.diff_list_len();
-                    self.diff_list_rows = [count; 2];
+                    self.note_diff_list_built(count, window, cx);
                     let horizontal_scrollbar_gutter =
                         components::Scrollbar::gutter(components::ScrollbarAxis::Horizontal);
                     let columns = self.diff_columns();
@@ -308,19 +308,9 @@ impl DiffRenderer {
                                         return;
                                     }
 
-                                    let scrollbar_gutter =
-                                        if this.diff_scroll_sync.includes_vertical() {
-                                            components::Scrollbar::visible_gutter(
-                                                this.diff_scroll.clone(),
-                                                components::ScrollbarAxis::Vertical,
-                                            )
-                                        } else {
-                                            px(0.0)
-                                        };
-                                    let main_w = (this.main_pane_content_width()
-                                        - scrollbar_gutter)
-                                        .max(px(0.0));
-                                    let available = (main_w - handle_w).max(px(0.0));
+                                    // The width the layout divides.
+                                    let available =
+                                        (this.diff_columns().split - handle_w).max(px(0.0));
                                     let dx = e.event.position.x - state.start_x;
                                     match next_diff_split_drag_ratio(
                                         available,

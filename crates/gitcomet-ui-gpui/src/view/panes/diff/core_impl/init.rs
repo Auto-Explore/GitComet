@@ -604,7 +604,7 @@ impl DiffRenderer {
             conflict_resolved_outline_background_delay_override: None,
             diff_scroll: UniformListScrollHandle::default(),
             diff_split_right_scroll: UniformListScrollHandle::default(),
-            diff_list_rows: [0; 2],
+            diff_list_built: Default::default(),
             conflict_resolver_diff_scroll: UniformListScrollHandle::default(),
             conflict_preview_ours_scroll: UniformListScrollHandle::default(),
             conflict_preview_theirs_scroll: UniformListScrollHandle::default(),

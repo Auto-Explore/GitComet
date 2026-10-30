@@ -500,21 +500,21 @@ impl DiffRenderer {
         }
     }
 
-    /// How far apart `column`'s list laid its rows out when it last did:
-    /// the row it measured, which gpui snaps to device pixels, so at a
-    /// fractional row height not quite the height its rows ask for. None
-    /// before it has laid any out.
-    pub(in crate::view) fn diff_list_pitch(
-        &self,
-        column: DiffHorizontalScrollColumn,
-    ) -> Option<Pixels> {
-        let handle = match column {
-            DiffHorizontalScrollColumn::Primary => &self.diff_scroll,
-            DiffHorizontalScrollColumn::SplitRight => &self.diff_split_right_scroll,
+    /// Notes the list on `diff_scroll` as it is built this frame, with
+    /// `rows` rows.
+    pub(in crate::view) fn note_diff_list_built(
+        &mut self,
+        rows: usize,
+        window: &Window,
+        cx: &mut App,
+    ) {
+        self.diff_list_built = helpers::state::DiffListBuilt {
+            rows,
+            row_height: self
+                .theme
+                .editor_row_height(crate::ui_scale::UiScale::current(cx).percent()),
+            scale_factor: window.scale_factor(),
         };
-        let rows = self.diff_list_rows[column.index()];
-        let size = handle.0.borrow().last_item_size?;
-        (rows > 0).then(|| size.contents.height / rows as f32)
     }
 
     pub(in crate::view) fn diff_vertical_scrollbar_gutter_for_column(
@@ -2576,3 +2576,21 @@ use scroll_sync::*;
 
 #[cfg(test)]
 mod tests;
+
+/// How far apart a uniform list of `rows` rows laid them out when it last
+/// did: the row it measured, which gpui snaps to device pixels. None before
+/// it has laid any out.
+pub(in crate::view) fn list_row_pitch(
+    handle: &UniformListScrollHandle,
+    rows: usize,
+) -> Option<Pixels> {
+    let size = handle.0.borrow().last_item_size?;
+    (rows > 0).then(|| size.contents.height / rows as f32)
+}
+
+/// `length` as gpui lays it out at `scale_factor`: in whole device pixels,
+/// halves toward zero, as its `round_to_device_pixel` does.
+pub(in crate::view) fn device_snapped(length: Pixels, scale_factor: f32) -> Pixels {
+    let device = f32::from(length) * scale_factor;
+    px((device.abs() - 0.5).ceil().copysign(device) / scale_factor)
+}

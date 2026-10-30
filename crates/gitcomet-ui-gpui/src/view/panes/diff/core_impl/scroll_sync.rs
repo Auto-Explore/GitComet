@@ -524,10 +524,6 @@ impl DiffRenderer {
                 shared_gutter: px(0.0),
             },
             DiffViewMode::Split => {
-                let right_gutter = self.diff_vertical_scrollbar_gutter_for_column(
-                    DiffHorizontalScrollColumn::SplitRight,
-                    self.diff_split_right_scroll.clone(),
-                );
                 // Columns that scroll together share the left one's
                 // scrollbar, past the right column.
                 let synced = self.diff_scroll_sync.includes_vertical();
@@ -538,11 +534,7 @@ impl DiffRenderer {
                 DiffColumns {
                     split,
                     widths: [left, right],
-                    gutters: if synced {
-                        [px(0.0); 2]
-                    } else {
-                        [gutter, right_gutter]
-                    },
+                    gutters: if synced { [px(0.0); 2] } else { [gutter; 2] },
                     shared_gutter,
                 }
             }

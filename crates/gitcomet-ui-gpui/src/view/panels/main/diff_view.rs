@@ -316,7 +316,7 @@ impl DiffRenderer {
             return false;
         }
 
-        // An extension's view between the lines owns the keys typed in it.
+        // An extension's view in the diff owns the keys typed in it.
         if self.hosted_view_focused(window, cx) {
             return false;
         }
@@ -2617,7 +2617,7 @@ impl DiffRenderer {
                                     .into_any_element()
                             } else {
                                 let scroll_handle = self.diff_scroll.0.borrow().base_handle.clone();
-                                self.diff_list_rows[0] = diff_len;
+                                self.note_diff_list_built(diff_len, window, cx);
                                 let list = uniform_list(
                                     "conflict_compare_diff",
                                     diff_len,

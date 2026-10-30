@@ -131,6 +131,38 @@ fn mount_views<T>(
     u64,
     &mut gpui::VisualTestContext,
 ) {
+    mount_views_in(cx, layout, old, new, views, false)
+}
+
+/// A view that holds a pane, cached as the app's views are: it draws again
+/// only when something in it notifies or the window refreshes.
+struct CachedPaneHolder(gpui::AnyView);
+
+impl Render for CachedPaneHolder {
+    fn render(&mut self, _: &mut Window, _: &mut gpui::Context<Self>) -> impl IntoElement {
+        div().size_full().child(
+            self.0
+                .clone()
+                .cached(gpui::StyleRefinement::default().size_full()),
+        )
+    }
+}
+
+/// [`mount_views`], the pane `cached` as the app's views are or not.
+fn mount_views_in<T>(
+    cx: &mut gpui::TestAppContext,
+    layout: DiffLayout,
+    old: String,
+    new: String,
+    views: impl FnOnce(&mut App) -> (T, Vec<DiffHostedView>),
+    cached: bool,
+) -> (
+    T,
+    DiffPane,
+    gpui::Entity<DiffRenderer>,
+    u64,
+    &mut gpui::VisualTestContext,
+) {
     install_example(cx);
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, app_cx) =
@@ -163,7 +195,11 @@ fn mount_views<T>(
             .view_id()
     });
     let mounted = pane.view();
-    let (_, cx) = cx.add_window_view(move |_, _| PaneHolder(mounted));
+    let cx = if cached {
+        cx.add_window_view(move |_, _| CachedPaneHolder(mounted)).1
+    } else {
+        cx.add_window_view(move |_, _| PaneHolder(mounted)).1
+    };
     // An input takes typing only in the active window.
     cx.update(|window, _| window.activate());
     draw(cx);
@@ -2174,4 +2210,172 @@ fn start_views_in_a_split_fit_their_column(cx: &mut gpui::TestAppContext) {
             &format!("{region:?}: the column less the text start"),
         );
     }
+}
+
+/// When the row height changes, a view over the text far down a pane that
+/// is cached as the app's are sits right below its line in the one frame
+/// that redraws the pane: the pane counts in the height as gpui snaps it
+/// until the list has laid its rows out at it, then in the list's pitch.
+#[gpui::test]
+fn a_row_height_change_places_the_rows_in_the_frame_that_redraws(cx: &mut gpui::TestAppContext) {
+    let (hint, pane, renderer, id, cx) = mount_views_in(
+        cx,
+        DiffLayout::Inline,
+        numbered("line", 300, None),
+        numbered("line", 300, Some(1)),
+        |app| {
+            let hint = new_hint(app, 120.0);
+            let view = DiffHostedView::over(on_new(201), DiffAlign::Start, hint.clone());
+            (hint, vec![view])
+        },
+        true,
+    );
+    let row = list_row(cx, &renderer, 201);
+    let height = row_height(cx, &renderer);
+    scroll_to(cx, &renderer, -height * (row as f32 - 10.0));
+    let asked = cx.update(|_, app| renderer.read(app).theme.editor_row_height(110));
+    assert!(f32::from(asked).fract() != 0.0, "{asked:?}: gpui snaps it");
+    let frame = view_frame(id, &hint);
+    // The one frame the scale change draws.
+    cx.update(|window, app| {
+        ui_scale::set_default(app, 110);
+        ui_scale::apply_to_window(window, 110);
+        window.refresh();
+        let _ = window.draw(app);
+    });
+    let line = painted(cx, &renderer, DiffTextRegion::Inline, "line 200");
+    assert_near(
+        cx.debug_bounds(frame).unwrap().top(),
+        line.bottom(),
+        "in the frame that redraws",
+    );
+    // What the pane counts in between frames: the line at the rows' top.
+    let top = cx
+        .debug_bounds(over_layer(id, DiffTextRegion::Inline))
+        .unwrap()
+        .top();
+    let shown = cx.update(|_, app| {
+        renderer
+            .read(app)
+            .diff_text_hitboxes
+            .values()
+            .find(|hit| hit.bounds.top() <= top && hit.bounds.bottom() > top)
+            .map(|hit| hit.painted_text.to_string())
+            .unwrap()
+    });
+    let shown: u32 = shown.strip_prefix("line ").unwrap().parse().unwrap();
+    assert_eq!(top_line(cx, &pane), Some(on_new(shown + 1)), "the top line");
+    // The frame it asks for, which counts in the list's own pitch.
+    cx.update(|window, app| {
+        assert!(
+            window.simulate_next_frame(app) > 0,
+            "a next frame is asked for"
+        );
+        let _ = window.draw(app);
+    });
+    let line = painted(cx, &renderer, DiffTextRegion::Inline, "line 200");
+    assert_near(
+        cx.debug_bounds(frame).unwrap().top(),
+        line.bottom(),
+        "in the frame after",
+    );
+}
+
+/// Dragging a split's divider moves it with the pointer, though a short
+/// diff whose columns scroll together shows no scrollbar.
+#[gpui::test]
+fn the_split_divider_follows_the_pointer(cx: &mut gpui::TestAppContext) {
+    let (old, new) = three_lines();
+    let ((), pane, renderer, _, cx) =
+        mount_views(cx, DiffLayout::Split, old, new, |_| ((), Vec::new()));
+    // Wide enough for the divider to move.
+    cx.update(|_, app| pane.set_content_width(Some(1600.0), app));
+    draw(cx);
+    let left_width = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|_, app| renderer.read(app).diff_columns().widths[0])
+    };
+    let before = left_width(cx);
+    let start = cx.update(|_, app| {
+        renderer.update(app, |renderer, cx| {
+            renderer.diff_text_start(
+                DiffTextRegion::SplitLeft,
+                crate::view::panes::diff::LineNumberCells::One,
+                cx,
+            )
+        })
+    });
+    // The divider sits right of the left column, whose text starts `start`
+    // in.
+    let left = text_left(cx, &renderer, DiffTextRegion::SplitLeft) - start;
+    let row = painted(cx, &renderer, DiffTextRegion::SplitLeft, "one");
+    let at = gpui::point(
+        left + before + px(PANE_RESIZE_HANDLE_PX / 2.0),
+        row.center().y,
+    );
+    let button = gpui::MouseButton::Left;
+    let step = |ix: usize| at + gpui::point(px(30.0) * ix as f32, px(0.0));
+    cx.simulate_mouse_down(at, button, gpui::Modifiers::default());
+    for ix in 1..=10 {
+        cx.simulate_mouse_move(step(ix), Some(button), gpui::Modifiers::default());
+    }
+    cx.simulate_mouse_up(step(10), button, gpui::Modifiers::default());
+    draw(cx);
+    assert_near(
+        left_width(cx),
+        before + px(300.0),
+        "the column grew by the drag",
+    );
+}
+
+/// In a split whose columns scroll apart, each with its own scrollbar, the
+/// wrap width is the drawn rows' text width, and the layer over each
+/// column's text stops at its rows, short of its scrollbar.
+#[gpui::test]
+fn a_split_scrolling_apart_wraps_and_floats_within_each_columns_rows(
+    cx: &mut gpui::TestAppContext,
+) {
+    let on_old = DiffScrollAnchor {
+        side: DiffLineSide::Old,
+        line: 1,
+    };
+    let (old, new) = three_lines();
+    let ((), _pane, renderer, id, cx) = mount_views(cx, DiffLayout::Split, old, new, |app| {
+        let views = vec![
+            DiffHostedView::over(on_old, DiffAlign::End, new_hint(app, 80.0)),
+            DiffHostedView::over(on_new(1), DiffAlign::End, new_hint(app, 80.0)),
+        ];
+        ((), views)
+    });
+    cx.update(|_, app| {
+        renderer.update(app, |renderer, cx| {
+            renderer.diff_scroll_sync = crate::view::DiffScrollSync::Horizontal;
+            cx.notify();
+        })
+    });
+    draw(cx);
+    let pad = rows::diff_canvas_row_horizontal_padding(100);
+    for region in [DiffTextRegion::SplitLeft, DiffTextRegion::SplitRight] {
+        let layer = cx.debug_bounds(over_layer(id, region)).unwrap();
+        let text = painted(cx, &renderer, region, "one");
+        assert_near(layer.right(), text.right() + pad, &format!("{region:?}"));
+    }
+    let left = painted(cx, &renderer, DiffTextRegion::SplitLeft, "one");
+    let right = painted(cx, &renderer, DiffTextRegion::SplitRight, "one");
+    let (columns, char_width) = cx.update(|window, app| {
+        renderer.update(app, |renderer, cx| {
+            let family = renderer.diff_wrap_measure_font_family(cx);
+            let char_width = rows::diff_canvas_text_wrap_char_width(
+                window,
+                family,
+                renderer.theme.metrics.editor_font_size_px,
+            );
+            (renderer.diff_wrap_columns(window, cx).1, char_width)
+        })
+    });
+    let narrower = left.size.width.min(right.size.width);
+    assert_eq!(
+        columns,
+        (f32::from(narrower) / f32::from(char_width)).floor() as usize,
+        "the wrap width is the narrower column's drawn text width"
+    );
 }
