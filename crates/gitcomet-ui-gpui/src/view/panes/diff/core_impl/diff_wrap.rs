@@ -5,16 +5,17 @@ pub(super) fn line_ranges_intersect(a: &Range<usize>, b: &Range<usize>) -> bool 
 }
 
 /// Shared wrap width for the two split columns: the narrower of their usable
-/// text widths, with the annotation column charged to the left one only.
+/// text widths, each past its own text start, which only the left one's
+/// annotation column moves.
 pub(super) fn split_wrap_text_width(
     left_w: Pixels,
     right_w: Pixels,
-    annotation_width: Pixels,
-    text_start: Pixels,
+    left_start: Pixels,
+    right_start: Pixels,
     pad: Pixels,
 ) -> Pixels {
-    let left = left_w - annotation_width - text_start - pad;
-    let right = right_w - text_start - pad;
+    let left = left_w - left_start - pad;
+    let right = right_w - right_start - pad;
     left.min(right).max(px(0.0))
 }
 
@@ -397,6 +398,31 @@ impl DiffRenderer {
         crate::font_preferences::current_editor_font_family(cx).into()
     }
 
+    /// Where `region`'s text starts in its row: past a hosted pane's people
+    /// column, the annotation column where it is drawn, which is an inline
+    /// diff's or a split's old side, and the gutters.
+    pub(in crate::view) fn diff_text_start(&self, region: DiffTextRegion, cx: &mut App) -> Pixels {
+        let scale = ui_scale::UiScale::current(cx);
+        let percent = scale.percent();
+        let metrics = ui_scale::UiScale::from_percent(percent).with_appearance(self.theme.metrics);
+        let gutters = match (self.diff_show_line_numbers, region) {
+            (false, _) => rows::diff_canvas_row_horizontal_padding(percent),
+            (true, DiffTextRegion::Inline) => rows::diff_canvas_inline_text_start(metrics),
+            (true, DiffTextRegion::SplitLeft | DiffTextRegion::SplitRight) => {
+                rows::diff_canvas_single_column_text_start(metrics)
+            }
+        };
+        let annotation = match region {
+            DiffTextRegion::Inline | DiffTextRegion::SplitLeft if self.annotation_active() => {
+                self.annotate_column_width_px(percent)
+            }
+            DiffTextRegion::Inline | DiffTextRegion::SplitLeft | DiffTextRegion::SplitRight => {
+                px(0.0)
+            }
+        };
+        self.hosted_people_column_width(scale) + annotation + gutters
+    }
+
     pub(in crate::view) fn diff_wrap_columns(
         &self,
         window: &mut gpui::Window,
@@ -414,33 +440,8 @@ impl DiffRenderer {
             self.theme.metrics.editor_font_size_px,
         );
         let pad = rows::diff_canvas_row_horizontal_padding(ui_scale_percent);
-        let inline_text_start = if self.diff_show_line_numbers {
-            rows::diff_canvas_inline_text_start(
-                ui_scale::UiScale::from_percent(ui_scale_percent)
-                    .with_appearance(self.theme.metrics),
-            )
-        } else {
-            pad
-        };
-        let single_text_start = if self.diff_show_line_numbers {
-            rows::diff_canvas_single_column_text_start(
-                ui_scale::UiScale::from_percent(ui_scale_percent)
-                    .with_appearance(self.theme.metrics),
-            )
-        } else {
-            pad
-        };
-        // Inline annotate reserves a fixed column at the left, narrowing the
-        // available text width for word wrapping.
-        let annotation_width = if self.annotation_active() {
-            self.annotate_column_width_px(ui_scale_percent)
-        } else {
-            px(0.0)
-        };
-        // A hosted pane's people column sits before each side's rows.
-        let people_column = self.hosted_people_column_width(ui_scale::UiScale::current(cx));
         let inline_columns = diff_wrap_columns_for_width(
-            content_width - annotation_width - people_column - inline_text_start - pad,
+            content_width - self.diff_text_start(DiffTextRegion::Inline, cx) - pad,
             char_width,
         );
 
@@ -453,8 +454,8 @@ impl DiffRenderer {
         let split_text_width = split_wrap_text_width(
             left_w,
             right_w,
-            annotation_width,
-            single_text_start + people_column,
+            self.diff_text_start(DiffTextRegion::SplitLeft, cx),
+            self.diff_text_start(DiffTextRegion::SplitRight, cx),
             pad,
         );
         let split_columns = diff_wrap_columns_for_width(split_text_width, char_width);
@@ -745,7 +746,7 @@ mod tests {
         let (left, right) = (px(650.0), px(440.0));
         let annotation = px(375.0);
 
-        let width = split_wrap_text_width(left, right, annotation, text_start, pad);
+        let width = split_wrap_text_width(left, right, text_start + annotation, text_start, pad);
 
         assert_eq!(width, left - annotation - text_start - pad);
         assert!(
@@ -761,11 +762,17 @@ mod tests {
         let (text_start, pad) = (px(40.0), px(8.0));
 
         assert_eq!(
-            split_wrap_text_width(px(900.0), px(300.0), px(0.0), text_start, pad),
+            split_wrap_text_width(px(900.0), px(300.0), text_start, text_start, pad),
             px(300.0) - text_start - pad
         );
         assert_eq!(
-            split_wrap_text_width(px(400.0), px(900.0), px(100.0), text_start, pad),
+            split_wrap_text_width(
+                px(400.0),
+                px(900.0),
+                text_start + px(100.0),
+                text_start,
+                pad
+            ),
             px(400.0) - px(100.0) - text_start - pad
         );
     }
@@ -774,7 +781,7 @@ mod tests {
     /// column rather than at a negative width.
     #[test]
     fn a_column_narrower_than_its_chrome_never_wraps_below_one() {
-        let width = split_wrap_text_width(px(80.0), px(80.0), px(375.0), px(40.0), px(8.0));
+        let width = split_wrap_text_width(px(80.0), px(80.0), px(415.0), px(40.0), px(8.0));
 
         assert_eq!(width, px(0.0));
         assert_eq!(diff_wrap_columns_for_width(width, px(7.8)), 1);

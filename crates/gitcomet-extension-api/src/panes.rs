@@ -375,8 +375,9 @@ pub enum DiffPlacement {
     /// line, and it lines up with `align`'s edge of its column; it moves
     /// above the line when it would run past the pane's bottom, and stays
     /// below when it fits neither way. It is measured at its natural width
-    /// up to its column's, holds still against sideways scrolling and is
-    /// clipped to its column, over the rows and block views but under menus.
+    /// up to the room from its edge to the column's end, holds still against
+    /// sideways scrolling and is clipped to its column, over the rows and
+    /// block views but under menus. Views over the same line overlap.
     Over { align: DiffAlign },
 }
 

@@ -41,6 +41,11 @@ pub(in crate::view) struct HostedDiffDecor {
 }
 
 impl HostedDiffDecor {
+    /// How many rows the list has when it lists the projection's.
+    pub(super) fn list_rows(&self) -> usize {
+        self.display.len()
+    }
+
     /// Whether rows other than the document's are listed: then the list's
     /// rows are the projection's, not the document's.
     fn projects(&self) -> bool {

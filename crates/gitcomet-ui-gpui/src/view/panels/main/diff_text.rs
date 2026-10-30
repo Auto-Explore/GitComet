@@ -129,6 +129,12 @@ impl DiffRenderer {
                         DiffHorizontalScrollColumn::Primary,
                         self.diff_scroll.clone(),
                     );
+                    // Wrapped rows end at the pane: no sideways scrollbar.
+                    let bottom_gutter = if self.diff_word_wrap {
+                        px(0.0)
+                    } else {
+                        horizontal_scrollbar_gutter
+                    };
                     let list = uniform_list(
                         "diff",
                         self.diff_list_len(),
@@ -136,11 +142,7 @@ impl DiffRenderer {
                     )
                     .h_full()
                     .min_h(px(0.0))
-                    .pb(if self.diff_word_wrap {
-                        px(0.0)
-                    } else {
-                        horizontal_scrollbar_gutter
-                    })
+                    .pb(bottom_gutter)
                     .track_scroll(&self.diff_scroll)
                     .with_decoration(DiffTextEmptySpaceDecoration {
                         view: cx.entity(),
@@ -151,16 +153,8 @@ impl DiffRenderer {
                             gpui::ListHorizontalSizingBehavior::Unconstrained,
                         )
                     });
-                    let over = self.render_hosted_over_layer(
-                        None,
-                        scrollbar_gutter,
-                        if self.diff_word_wrap {
-                            px(0.0)
-                        } else {
-                            horizontal_scrollbar_gutter
-                        },
-                        cx,
-                    );
+                    let over =
+                        self.render_hosted_over_layer(None, scrollbar_gutter, bottom_gutter, cx);
                     div()
                         .id("diff_scroll_container")
                         .relative()
@@ -218,6 +212,24 @@ impl DiffRenderer {
                     } else {
                         px(0.0)
                     };
+                    // Wrapped rows end at the pane: no sideways scrollbar.
+                    let bottom_gutter = if self.diff_word_wrap {
+                        px(0.0)
+                    } else {
+                        horizontal_scrollbar_gutter
+                    };
+                    // A column's own scrollbar, unless the two share one.
+                    let column_gutter = |gutter| {
+                        if vertical_sync_enabled {
+                            px(0.0)
+                        } else {
+                            gutter
+                        }
+                    };
+                    let (left_gutter, right_gutter) = (
+                        column_gutter(left_scrollbar_gutter),
+                        column_gutter(right_scrollbar_gutter),
+                    );
                     let handle_w = px(PANE_RESIZE_HANDLE_PX);
                     let main_w =
                         (self.main_pane_content_width(cx) - shared_scrollbar_gutter).max(px(0.0));
@@ -230,11 +242,7 @@ impl DiffRenderer {
                     )
                     .h_full()
                     .min_h(px(0.0))
-                    .pb(if self.diff_word_wrap {
-                        px(0.0)
-                    } else {
-                        horizontal_scrollbar_gutter
-                    })
+                    .pb(bottom_gutter)
                     .track_scroll(&self.diff_scroll)
                     .with_decoration(DiffTextEmptySpaceDecoration {
                         view: cx.entity(),
@@ -252,11 +260,7 @@ impl DiffRenderer {
                     )
                     .h_full()
                     .min_h(px(0.0))
-                    .pb(if self.diff_word_wrap {
-                        px(0.0)
-                    } else {
-                        horizontal_scrollbar_gutter
-                    })
+                    .pb(bottom_gutter)
                     .track_scroll(&self.diff_split_right_scroll)
                     .with_decoration(DiffTextEmptySpaceDecoration {
                         view: cx.entity(),
@@ -268,27 +272,15 @@ impl DiffRenderer {
                         )
                     });
                     // Over the columns' rows, short of their scrollbars.
-                    let bottom_gutter = if self.diff_word_wrap {
-                        px(0.0)
-                    } else {
-                        horizontal_scrollbar_gutter
-                    };
-                    let column_gutter = |gutter| {
-                        if vertical_sync_enabled {
-                            px(0.0)
-                        } else {
-                            gutter
-                        }
-                    };
                     let left_over = self.render_hosted_over_layer(
                         Some(gitcomet_extension_api::DiffLineSide::Old),
-                        column_gutter(left_scrollbar_gutter),
+                        left_gutter,
                         bottom_gutter,
                         cx,
                     );
                     let right_over = self.render_hosted_over_layer(
                         Some(gitcomet_extension_api::DiffLineSide::New),
-                        column_gutter(right_scrollbar_gutter),
+                        right_gutter,
                         bottom_gutter,
                         cx,
                     );
@@ -427,11 +419,7 @@ impl DiffRenderer {
                                                     div()
                                                         .h_full()
                                                         .min_h(px(0.0))
-                                                        .pr(if vertical_sync_enabled {
-                                                            px(0.0)
-                                                        } else {
-                                                            left_scrollbar_gutter
-                                                        })
+                                                        .pr(left_gutter)
                                                         .child(left),
                                                 )
                                                 .children(left_over)
@@ -451,11 +439,7 @@ impl DiffRenderer {
                                                         theme,
                                                         "diff_split_left_hscrollbar",
                                                         self.diff_scroll.clone(),
-                                                        if vertical_sync_enabled {
-                                                            px(0.0)
-                                                        } else {
-                                                            left_scrollbar_gutter
-                                                        },
+                                                        left_gutter,
                                                         "diff_split_left_hscrollbar",
                                                     ))
                                                 })
@@ -474,11 +458,7 @@ impl DiffRenderer {
                                                     div()
                                                         .h_full()
                                                         .min_h(px(0.0))
-                                                        .pr(if vertical_sync_enabled {
-                                                            px(0.0)
-                                                        } else {
-                                                            right_scrollbar_gutter
-                                                        })
+                                                        .pr(right_gutter)
                                                         .child(right),
                                                 )
                                                 .children(right_over)
@@ -498,11 +478,7 @@ impl DiffRenderer {
                                                         theme,
                                                         "diff_split_right_hscrollbar",
                                                         self.diff_split_right_scroll.clone(),
-                                                        if vertical_sync_enabled {
-                                                            px(0.0)
-                                                        } else {
-                                                            right_scrollbar_gutter
-                                                        },
+                                                        right_gutter,
                                                         "diff_split_right_hscrollbar",
                                                     ))
                                                 }),
