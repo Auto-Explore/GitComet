@@ -30,6 +30,7 @@ pub(in crate::view) struct GraphCheckpoint {
     main: Option<u32>,
     main_target: Option<usize>,
     pending: bool,
+    reserved: bool,
 }
 
 impl GraphCheckpoint {
@@ -61,6 +62,7 @@ impl GraphCheckpoint {
             main: self.main,
             main_target: self.main_target,
             pending: self.pending,
+            reserved: self.reserved,
             lanes: Vec::with_capacity(self.targets.len()),
             targets: FxHashMap::with_capacity_and_hasher(live, Default::default()),
             free: BTreeSet::new(),
@@ -110,6 +112,9 @@ pub(in crate::view) struct GraphWalk {
     main: Option<u32>,
     main_target: Option<usize>,
     pending: bool,
+    /// Nothing has reached the seeded main lane yet, so its run so far is
+    /// [`LanePaint::RESERVED`].
+    reserved: bool,
 }
 
 impl GraphWalk {
@@ -124,6 +129,8 @@ impl GraphWalk {
             main: None,
             main_target,
             pending: main_target.is_some(),
+            // HEAD on the first row has no run above it.
+            reserved: main_target.is_some_and(|target| target > 0),
         };
         if let Some(target) = main_target {
             walk.place(
@@ -169,6 +176,7 @@ impl GraphWalk {
             main: self.main,
             main_target: self.main_target,
             pending: self.pending,
+            reserved: self.reserved,
         }
     }
     fn place(&mut self, col: usize, lane: LiveLane) {
@@ -281,6 +289,7 @@ impl GraphWalk {
         } else {
             self.lanes[node].unwrap().color
         };
+        let reserved_id = self.main.filter(|_| self.reserved);
         let mut lanes_now = LanePaints::new();
         if materialize {
             let len = self.lanes.len().max(fork.map_or(0, |(col, _)| col + 1));
@@ -297,6 +306,7 @@ impl GraphWalk {
                                     && self.main == Some(lane.id)),
                             false,
                         )
+                        .with_reserved(reserved_id == Some(lane.id))
                     },
                 ));
             }
@@ -365,9 +375,13 @@ impl GraphWalk {
         }
         changed.sort_unstable();
         changed.dedup();
+        // Below HEAD the main lane is HEAD's own; a merge edge into it keeps
+        // this row's continuation reserved, as the edge's elbow draws it.
+        let reserved_id = reserved_id.filter(|_| self.main_target != Some(row));
         let outgoing = |slot: Option<LiveLane>| {
             slot.map_or(LanePaint::HOLE, |lane| {
                 LanePaint::lane(lane.color, false, lane.born == row)
+                    .with_reserved(reserved_id == Some(lane.id))
             })
         };
         let next: SmallVec<[(usize, LanePaint); 4]> = changed
@@ -402,6 +416,10 @@ impl GraphWalk {
                 });
             }
         }
+        self.reserved = reserved_id.is_some()
+            && !edges.iter().any(|edge| {
+                self.lanes[usize::from(edge.to_col)].map(|lane| lane.id) == reserved_id
+            });
         self.pending = false;
         GraphTransition {
             paint: GraphRow {
