@@ -1,7 +1,7 @@
-//! An extension's own views between a hosted diff's lines.
+//! An extension's own views in a hosted diff.
 
 use super::*;
-use gitcomet_extension_api::{DiffInlineView, DiffLayout, DiffLineRange, DiffScrollAnchor};
+use gitcomet_extension_api::{DiffHostedView, DiffLayout, DiffLineRange, DiffScrollAnchor};
 use std::cell::Cell;
 use std::rc::Rc;
 
@@ -109,8 +109,8 @@ fn mount<'a>(
             resolved: 0,
             renders: Rc::default(),
         });
-        pane.set_inline_views(
-            vec![DiffInlineView::new(
+        pane.set_views(
+            vec![DiffHostedView::block(
                 DiffScrollAnchor {
                     side: DiffLineSide::New,
                     line,
@@ -175,7 +175,7 @@ fn row_height(cx: &mut gpui::VisualTestContext, renderer: &gpui::Entity<DiffRend
 /// frame, over as many rows as its measured height needs; when it grows,
 /// the lines after it move down by the rows it gained.
 #[gpui::test]
-fn inline_views_draw_after_their_line_in_rows_that_follow_their_height(
+fn block_views_draw_after_their_line_in_rows_that_follow_their_height(
     cx: &mut gpui::TestAppContext,
 ) {
     for layout in [DiffLayout::Inline, DiffLayout::Split] {
@@ -271,7 +271,7 @@ fn reserved(cx: &mut gpui::VisualTestContext, renderer: &gpui::Entity<DiffRender
 /// A view's rows are counted again in the new row height when the UI scale
 /// changes, though the view itself did not notify.
 #[gpui::test]
-fn inline_view_rows_follow_the_ui_scale(cx: &mut gpui::TestAppContext) {
+fn block_view_rows_follow_the_ui_scale(cx: &mut gpui::TestAppContext) {
     let (old, new) = three_lines();
     let Mounted {
         renderer,
@@ -312,7 +312,7 @@ fn inline_view_rows_follow_the_ui_scale(cx: &mut gpui::TestAppContext) {
 /// in the view runs the view's own handler, starts or moves no diff
 /// selection and leaves focus out of the diff.
 #[gpui::test]
-fn keys_and_clicks_in_an_inline_view_stay_in_it(cx: &mut gpui::TestAppContext) {
+fn keys_and_clicks_in_a_hosted_view_stay_in_it(cx: &mut gpui::TestAppContext) {
     let (old, new) = three_lines();
     let Mounted {
         pane,
@@ -367,7 +367,7 @@ fn keys_and_clicks_in_an_inline_view_stay_in_it(cx: &mut gpui::TestAppContext) {
 /// A view stays put while its column scrolls sideways under a long line,
 /// in a split's new-side column as inline.
 #[gpui::test]
-fn inline_views_hold_still_while_the_lines_scroll_sideways(cx: &mut gpui::TestAppContext) {
+fn block_views_hold_still_while_the_lines_scroll_sideways(cx: &mut gpui::TestAppContext) {
     let long = "x".repeat(400);
     for layout in [DiffLayout::Inline, DiffLayout::Split] {
         let Mounted {
@@ -421,7 +421,7 @@ fn inline_views_hold_still_while_the_lines_scroll_sideways(cx: &mut gpui::TestAp
 /// rows collapse, their states go and their notifies no longer redraw the
 /// pane. Removing them all leaves the document's rows alone.
 #[gpui::test]
-fn replaced_and_removed_inline_views_leave_nothing_behind(cx: &mut gpui::TestAppContext) {
+fn replaced_and_removed_hosted_views_leave_nothing_behind(cx: &mut gpui::TestAppContext) {
     let (old, new) = three_lines();
     let Mounted {
         pane,
@@ -453,8 +453,8 @@ fn replaced_and_removed_inline_views_leave_nothing_behind(cx: &mut gpui::TestApp
             resolved: 0,
             renders: Rc::default(),
         });
-        pane.set_inline_views(
-            vec![DiffInlineView::new(
+        pane.set_views(
+            vec![DiffHostedView::block(
                 DiffScrollAnchor {
                     side: DiffLineSide::New,
                     line: 1,
@@ -477,7 +477,7 @@ fn replaced_and_removed_inline_views_leave_nothing_behind(cx: &mut gpui::TestApp
     );
     assert!(short < tall, "the thread's rows went with it");
     assert_eq!(
-        cx.update(|_, app| renderer.read(app).hosted_inline_view_states()),
+        cx.update(|_, app| renderer.read(app).hosted_view_states()),
         1
     );
 
@@ -493,12 +493,12 @@ fn replaced_and_removed_inline_views_leave_nothing_behind(cx: &mut gpui::TestApp
     cx.run_until_parked();
     assert!(renders(cx) > before, "the new view's does");
 
-    cx.update(|_, app| pane.set_inline_views(Vec::new(), app));
+    cx.update(|_, app| pane.set_views(Vec::new(), app));
     draw(cx);
     assert_eq!(reserved(cx, &renderer), 0);
     assert!(cx.debug_bounds(thread_frame(id, &note)).is_none());
     assert_eq!(
-        cx.update(|_, app| renderer.read(app).hosted_inline_view_states()),
+        cx.update(|_, app| renderer.read(app).hosted_view_states()),
         0
     );
 }
@@ -565,7 +565,7 @@ fn the_top_line_holds_when_a_view_above_it_grows(cx: &mut gpui::TestAppContext) 
 
 /// Search, copy and a selection across a view read the diff's lines only.
 #[gpui::test]
-fn search_copy_and_selection_skip_inline_views(cx: &mut gpui::TestAppContext) {
+fn search_copy_and_selection_skip_block_views(cx: &mut gpui::TestAppContext) {
     let (old, new) = three_lines();
     let Mounted { pane, id, cx, .. } = mount(cx, DiffLayout::Inline, old, new, 2);
     assert_eq!(rows_with(cx, &pane, "Resolve"), 0);

@@ -120,8 +120,8 @@ fn inline_card_visual_capture() {
                         theme,
                         reply: cx.new(|cx| components::TextInput::new_inert(components::TextInputOptions { placeholder: "Write a reply".into(), ..Default::default() }, cx)),
                     });
-                    pane.set_inline_views(vec![
-                        gitcomet_extension_api::DiffInlineView::new(gitcomet_extension_api::DiffScrollAnchor { side: DiffLineSide::New, line: 2 }, thread),
+                    pane.set_views(vec![
+                        gitcomet_extension_api::DiffHostedView::block(gitcomet_extension_api::DiffScrollAnchor { side: DiffLineSide::New, line: 2 }, thread),
                     ], app);
                     app.new(|_| CardPreview { _owner: owner, pane })
                 }).unwrap();

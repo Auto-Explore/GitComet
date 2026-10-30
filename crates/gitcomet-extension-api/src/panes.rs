@@ -5,10 +5,10 @@
 //! A pane lives while its handle or its mounted view does; dropping both
 //! closes its session and cancels its work.
 //!
-//! File-line features (selection, reveal, annotations, insets, blame, and
-//! gutter actions) require a single-file target or a snapshot. Whole-commit
-//! and whole-comparison patches display and search all files; their repeated
-//! line numbers cannot be addressed by the side/line API.
+//! File-line features (selection, reveal, annotations, insets, hosted views,
+//! blame, and gutter actions) require a single-file target or a snapshot.
+//! Whole-commit and whole-comparison patches display and search all files;
+//! their repeated line numbers cannot be addressed by the side/line API.
 
 use gitcomet_core::domain::{CommitFileChange, DiffTarget};
 use gitcomet_core::text_format::TextEncoding;
@@ -385,34 +385,49 @@ impl DiffInlineCard {
     }
 }
 
-/// A view of the extension's own between diff lines, after its anchor's
-/// line on that side; in a split it draws in that side's column only. The
-/// pane reserves whole rows for it, as many as its height needs, and draws a
-/// line's cards before its views. Its entity is what identifies it: a pane
-/// shows an entity once, and keeps its place and height across replacements.
+/// A view of the extension's own in a diff pane, at a line on one side; in a
+/// split it draws in that side's column only. Its entity is what identifies
+/// it: a pane shows an entity once, and keeps its place and height across
+/// replacements.
 ///
 /// The pane measures the view before it first draws it, and again when the
-/// view notifies, when its column's width changes or when the text style
-/// does. `render` may so run twice in a frame, once to measure and once to
-/// draw, and must have no side effects. A view whose height follows a child
-/// view's should notify along with it. The view keeps its own state while it
-/// is scrolled away.
+/// view notifies, when its column's width changes or when the text style or
+/// the row height does. `render` may so run twice in a frame, once to measure
+/// and once to draw, and must have no side effects. A view whose height
+/// follows a child view's should notify along with it. The view keeps its own
+/// state while it is scrolled away. Its mouse presses are its own, and the
+/// diff's shortcuts stand aside while it holds focus.
 #[derive(Clone)]
 #[non_exhaustive]
-pub struct DiffInlineView {
-    anchor: DiffScrollAnchor,
+pub struct DiffHostedView {
+    placement: DiffPlacement,
     view: AnyView,
     observe: ObserveView,
+}
+
+/// Where a [`DiffHostedView`] shows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum DiffPlacement {
+    /// Between lines, after its anchor's line. The pane reserves whole rows
+    /// for it, as many as its height needs, after the line's cards, and holds
+    /// it against sideways scrolling.
+    Block(DiffScrollAnchor),
 }
 
 /// Subscribes a callback to a view's notifies, without its type.
 type ObserveView = Rc<dyn Fn(Box<dyn FnMut(&mut App)>, &mut App) -> Subscription>;
 
-impl DiffInlineView {
-    pub fn new<V: Render>(anchor: DiffScrollAnchor, view: Entity<V>) -> Self {
+impl DiffHostedView {
+    /// A view between lines, after `anchor`'s line.
+    pub fn block<V: Render>(anchor: DiffScrollAnchor, view: Entity<V>) -> Self {
+        Self::new(DiffPlacement::Block(anchor), view)
+    }
+
+    fn new<V: Render>(placement: DiffPlacement, view: Entity<V>) -> Self {
         let observed = view.downgrade();
         Self {
-            anchor,
+            placement,
             view: view.into(),
             observe: Rc::new(move |mut on_notify, cx| match observed.upgrade() {
                 Some(view) => cx.observe(&view, move |_, cx| on_notify(cx)),
@@ -421,9 +436,15 @@ impl DiffInlineView {
         }
     }
 
-    /// The line the view shows after.
+    pub fn placement(&self) -> DiffPlacement {
+        self.placement
+    }
+
+    /// The line the view shows at.
     pub fn anchor(&self) -> DiffScrollAnchor {
-        self.anchor
+        match self.placement {
+            DiffPlacement::Block(anchor) => anchor,
+        }
     }
 
     pub fn view(&self) -> &AnyView {
@@ -438,10 +459,10 @@ impl DiffInlineView {
     }
 }
 
-impl std::fmt::Debug for DiffInlineView {
+impl std::fmt::Debug for DiffHostedView {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("DiffInlineView")
-            .field("anchor", &self.anchor)
+        f.debug_struct("DiffHostedView")
+            .field("placement", &self.placement)
             .field("view", &self.view.entity_id())
             .finish()
     }
@@ -654,8 +675,8 @@ pub trait DiffPaneImpl {
     fn set_bar(&self, bar: DiffBar, cx: &mut App) {
         let _ = (bar, cx);
     }
-    /// Replaces the views shown between lines.
-    fn set_inline_views(&self, views: Vec<DiffInlineView>, cx: &mut App) {
+    /// Replaces the extension's own views in the pane.
+    fn set_views(&self, views: Vec<DiffHostedView>, cx: &mut App) {
         let _ = (views, cx);
     }
 }
@@ -669,10 +690,10 @@ impl DiffPane {
     pub fn set_inline_cards(&self, cards: Vec<DiffInlineCard>, cx: &mut App) {
         self.0.set_inline_cards(cards, cx)
     }
-    /// Replaces the views shown between lines; a view whose entity stays
-    /// keeps its place and its measured height.
-    pub fn set_inline_views(&self, views: Vec<DiffInlineView>, cx: &mut App) {
-        self.0.set_inline_views(views, cx)
+    /// Replaces the extension's own views in the pane; a view whose entity
+    /// stays keeps its state and its measured height.
+    pub fn set_views(&self, views: Vec<DiffHostedView>, cx: &mut App) {
+        self.0.set_views(views, cx)
     }
     pub fn text_for_range(&self, range: DiffLineRange, cx: &App) -> Option<String> {
         self.0.text_for_range(range, cx)

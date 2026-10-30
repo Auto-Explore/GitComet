@@ -6,7 +6,7 @@ use crate::view::panes::diff::{DiffBody, DiffRendererInit};
 use gitcomet_core::domain::DiffTarget;
 use gitcomet_core::text_format::TextEncoding;
 use gitcomet_extension_api::{
-    DiffAnnotations, DiffInlineCard, DiffInlineView, DiffInset, DiffLayout, DiffLegendItem,
+    DiffAnnotations, DiffHostedView, DiffInlineCard, DiffInset, DiffLayout, DiffLegendItem,
     DiffLineRange, DiffLineSide, DiffPaneEvent, DiffPaneOptions, DiffPanePolicy, DiffScrollAnchor,
     DiffSnapshot, RepositoryHandle, StateSubscription, WindowHost, panes::DiffPaneImpl,
 };
@@ -56,7 +56,7 @@ pub(crate) struct DiffPaneView {
     patch_error: Option<SharedString>,
     insets: Arc<[DiffInset]>,
     cards: Arc<[DiffInlineCard]>,
-    views: Arc<[DiffInlineView]>,
+    views: Arc<[DiffHostedView]>,
     /// A view that notifies is measured again before it is next drawn.
     view_observers: Vec<gpui::Subscription>,
     annotations: Arc<DiffAnnotations>,
@@ -849,7 +849,7 @@ impl Render for DiffPaneView {
             renderer.update(cx, |pane, cx| pane.prepare_hosted_cards(window, cx));
             // Before the renderer counts its rows, which follow the views'
             // heights in this frame.
-            crate::view::panes::diff::measure_inline_views(&renderer, window, cx);
+            crate::view::panes::diff::measure_hosted_views(&renderer, window, cx);
         }
         let theme = self.host.theme(cx);
         let ui_scale = ui_scale::UiScale::current(cx);
@@ -1119,10 +1119,10 @@ impl DiffPaneImpl for HostedDiffPane {
         });
     }
 
-    fn set_inline_views(&self, views: Vec<DiffInlineView>, cx: &mut App) {
+    fn set_views(&self, views: Vec<DiffHostedView>, cx: &mut App) {
         /// The same view at the same place; the observer is the entity's.
-        fn same(a: &DiffInlineView, b: &DiffInlineView) -> bool {
-            a.anchor() == b.anchor() && a.view().entity_id() == b.view().entity_id()
+        fn same(a: &DiffHostedView, b: &DiffHostedView) -> bool {
+            a.placement() == b.placement() && a.view().entity_id() == b.view().entity_id()
         }
         self.entity.update(cx, |pane, cx| {
             // An entity shows once: its first place wins.
@@ -1147,7 +1147,7 @@ impl DiffPaneImpl for HostedDiffPane {
                             let _ = pane_entity.update(cx, |pane, cx| {
                                 if let Some(renderer) = &pane.renderer {
                                     renderer.update(cx, |renderer, _| {
-                                        renderer.forget_inline_view_height(id)
+                                        renderer.forget_hosted_view_height(id)
                                     });
                                 }
                                 cx.notify();
