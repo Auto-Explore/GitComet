@@ -741,9 +741,8 @@ impl DiffRenderer {
                     }
                     DisplayRow::Document(row) => {
                         use crate::kit::interaction::ControlInteractionExt as _;
-                        // After the row, so its canvas finds where the text
-                        // ends before the views there are placed.
-                        let line_end = this.render_hosted_line_end(row, side, cx);
+                        let (old, new) = this.hosted_line_numbers(row);
+                        let line_end = this.render_hosted_line_end(row, side, (old, new), cx);
                         let element = div()
                             .id(("hosted_row", display))
                             .debug_selector(move || format!("hosted_diff_{pane_id}_row_{display}"))
@@ -752,7 +751,6 @@ impl DiffRenderer {
                                     .pop_front()
                                     .unwrap_or_else(|| div().into_any_element()),
                             )
-                            .when_some(line_end, |row, line_end| row.relative().child(line_end))
                             .on_activate(
                                 false,
                                 crate::kit::interaction::ControlActivation::Composite,
@@ -779,7 +777,17 @@ impl DiffRenderer {
                                 }),
                             )
                             .into_any_element();
-                        let (old, new) = this.hosted_line_numbers(row);
+                        // After the row, so its canvas finds where the text
+                        // ends before the views there are placed; beside it,
+                        // so their ids do not follow the row's place.
+                        let element = match line_end {
+                            Some(line_end) => div()
+                                .relative()
+                                .child(element)
+                                .child(line_end)
+                                .into_any_element(),
+                            None => element,
+                        };
                         let anchor = match side {
                             Some(DiffLineSide::Old) => old.map(|n| (DiffLineSide::Old, n)),
                             Some(DiffLineSide::New) => new.map(|n| (DiffLineSide::New, n)),

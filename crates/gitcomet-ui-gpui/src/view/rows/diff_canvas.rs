@@ -737,6 +737,7 @@ pub(super) fn inline_diff_line_row_canvas(
     show_line_numbers: bool,
     wrap: Option<DiffTextWrapSlice>,
     annotation_width: Pixels,
+    line_end_views: bool,
     blame: Option<RowBlamePaint>,
     annot_hover: Option<(usize, AnnotArea)>,
     stage: Option<StageGutterSpec>,
@@ -770,21 +771,23 @@ pub(super) fn inline_diff_line_row_canvas(
     let offset_map = paint_payload.offset_map;
     let canvas_id = diff_row_canvas_id("diff_row_canvas_inline", visible_ix, revision);
     let test_row_bg = semantic_diff_row_bg(theme, bg);
-    let text_end = RowTextEnd::new(
-        DiffTextRegion::Inline,
-        &text,
-        &highlights,
-        text_hash,
-        highlights_hash,
-        streamed_spec.as_ref(),
-        reveal_whitespace_chars,
-        wrap,
-        fg,
-        show_line_numbers,
-        ui_scale_percent,
-        theme,
-    );
-    let end_view = view.clone();
+    let text_end = line_end_views.then(|| {
+        RowTextEnd::new(
+            &view,
+            DiffTextRegion::Inline,
+            &text,
+            &highlights,
+            text_hash,
+            highlights_hash,
+            streamed_spec.as_ref(),
+            reveal_whitespace_chars,
+            wrap,
+            fg,
+            show_line_numbers,
+            ui_scale_percent,
+            theme,
+        )
+    });
 
     keyed_canvas(
         canvas_id,
@@ -801,7 +804,9 @@ pub(super) fn inline_diff_line_row_canvas(
             };
             let content_bounds = inset_left(bounds, annotation_width);
             let text_bounds = inline_text_bounds(content_bounds, gutter_total, pad);
-            text_end.place(&end_view, visible_ix, text_bounds, window, cx);
+            if let Some(text_end) = &text_end {
+                text_end.place(visible_ix, text_bounds, window, cx);
+            }
             // Everything but the annotation column, which owns its own clicks.
             let row_hitbox = window.insert_hitbox(content_bounds, HitboxBehavior::Normal);
             let text_hitbox = window.insert_hitbox(text_bounds, HitboxBehavior::Normal);
@@ -1378,6 +1383,7 @@ pub(super) fn patch_split_column_row_canvas(
     show_line_numbers: bool,
     wrap: Option<DiffTextWrapSlice>,
     annotation_width: Pixels,
+    line_end_views: bool,
     blame: Option<RowBlamePaint>,
     annot_hover: Option<(usize, AnnotArea)>,
     stage: Option<StageGutterSpec>,
@@ -1421,21 +1427,23 @@ pub(super) fn patch_split_column_row_canvas(
         revision,
     );
     let test_row_bg = semantic_diff_row_bg(theme, bg);
-    let text_end = RowTextEnd::new(
-        region,
-        &text,
-        &highlights,
-        text_hash,
-        highlights_hash,
-        streamed_spec.as_ref(),
-        reveal_whitespace_chars,
-        wrap,
-        fg,
-        show_line_numbers,
-        ui_scale_percent,
-        theme,
-    );
-    let end_view = view.clone();
+    let text_end = line_end_views.then(|| {
+        RowTextEnd::new(
+            &view,
+            region,
+            &text,
+            &highlights,
+            text_hash,
+            highlights_hash,
+            streamed_spec.as_ref(),
+            reveal_whitespace_chars,
+            wrap,
+            fg,
+            show_line_numbers,
+            ui_scale_percent,
+            theme,
+        )
+    });
 
     keyed_canvas(
         canvas_id,
@@ -1452,7 +1460,9 @@ pub(super) fn patch_split_column_row_canvas(
             };
             let content_bounds = inset_left(bounds, annotation_width);
             let text_bounds = single_column_text_bounds(content_bounds, gutter_total, pad);
-            text_end.place(&end_view, visible_ix, text_bounds, window, cx);
+            if let Some(text_end) = &text_end {
+                text_end.place(visible_ix, text_bounds, window, cx);
+            }
             // Everything but the annotation column, which owns its own clicks.
             let row_hitbox = window.insert_hitbox(content_bounds, HitboxBehavior::Normal);
             let text_hitbox = window.insert_hitbox(text_bounds, HitboxBehavior::Normal);
@@ -2267,7 +2277,8 @@ fn paint_selectable_diff_text(
         hitbox_cell_width = Some(cell_width);
         pending_prepared_syntax = pending;
         streamed_slice_range = Some(resolved_slice_range);
-        let total_text_cells = total_text_len.saturating_add(usize::from(reveal_whitespace_chars));
+        let total_text_cells =
+            streamed_text_cells(total_text_len, 0..total_text_len, reveal_whitespace_chars);
         let required_row_w = (row_extra
             + cell_width * total_text_cells as f32
             + diff_scaled_px(DIFF_ROW_TEXT_TRAILING_PADDING_PX, ui_scale_percent))
@@ -2526,6 +2537,18 @@ fn diff_row_text_extra(
     }
 }
 
+/// Whether a streamed slice of a line `len` long reaches the line's end,
+/// which revealed whitespace marks after the line's last cell.
+fn streamed_slice_ends_line(len: usize, range: &Range<usize>) -> bool {
+    range.end >= len
+}
+
+/// The monospace cells a streamed slice of a line `len` long takes, with the
+/// end-of-line mark revealed whitespace adds.
+fn streamed_text_cells(len: usize, range: Range<usize>, reveal_whitespace: bool) -> usize {
+    range.len() + usize::from(reveal_whitespace && streamed_slice_ends_line(len, &range))
+}
+
 fn horizontal_column(region: DiffTextRegion) -> DiffHorizontalScrollColumn {
     match region {
         DiffTextRegion::Inline | DiffTextRegion::SplitLeft => DiffHorizontalScrollColumn::Primary,
@@ -2536,6 +2559,7 @@ fn horizontal_column(region: DiffTextRegion) -> DiffHorizontalScrollColumn {
 /// What a row's canvas needs to find where its text ends, as
 /// `paint_selectable_diff_text` lays it out, for hosted views after it.
 struct RowTextEnd {
+    view: Entity<DiffRenderer>,
     region: DiffTextRegion,
     text: SharedString,
     highlights: Arc<[(Range<usize>, HighlightStyle)]>,
@@ -2554,6 +2578,7 @@ struct RowTextEnd {
 impl RowTextEnd {
     #[allow(clippy::too_many_arguments)]
     fn new(
+        view: &Entity<DiffRenderer>,
         region: DiffTextRegion,
         text: &SharedString,
         highlights: &Arc<[(Range<usize>, HighlightStyle)]>,
@@ -2568,6 +2593,7 @@ impl RowTextEnd {
         theme: AppTheme,
     ) -> Self {
         Self {
+            view: view.clone(),
             region,
             text: text.clone(),
             highlights: highlights.clone(),
@@ -2590,12 +2616,12 @@ impl RowTextEnd {
     /// as it is painted, into the same cache.
     fn place(
         &self,
-        view: &Entity<DiffRenderer>,
         visible_ix: usize,
         text_bounds: Bounds<Pixels>,
         window: &mut Window,
         cx: &mut App,
     ) {
+        let view = &self.view;
         let Some(line_end) = view.read(cx).hosted_line_end(visible_ix, self.region) else {
             return;
         };
@@ -2608,8 +2634,7 @@ impl RowTextEnd {
                 let range = self
                     .wrap
                     .map_or(0..len, |wrap| wrap.range_for_region(self.region));
-                let cells =
-                    range.len() + usize::from(self.reveal_whitespace_chars && range.end >= len);
+                let cells = streamed_text_cells(len, range, self.reveal_whitespace_chars);
                 (cell_width * cells as f32, None)
             }
             None => {
