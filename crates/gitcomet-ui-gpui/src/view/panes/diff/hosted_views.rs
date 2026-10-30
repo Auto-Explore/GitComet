@@ -384,8 +384,8 @@ impl DiffRenderer {
 
     /// The views after the text of document row `row`, in `side`'s column or
     /// in an inline diff's one: those anchored to its line on that side, side
-    /// by side in order, one row high and at their measured widths, on the
-    /// row its text ends on. They go where the row's canvas finds the text
+    /// by side in order, one row high, centred on it and at their measured
+    /// widths, on the row its text ends on. They go where the row's canvas finds the text
     /// to end, so they scroll sideways with it.
     pub(super) fn render_hosted_line_end(
         &mut self,
@@ -434,7 +434,11 @@ impl DiffRenderer {
                             format!("hosted_diff_{pane_id}_view_{}", id.as_u64())
                         })
                         .flex_none()
-                        .h_full(),
+                        .h_full()
+                        // Centred on the row, a taller view clipped both ways.
+                        .flex()
+                        .flex_col()
+                        .justify_center(),
                     &state.focus,
                 )
             })

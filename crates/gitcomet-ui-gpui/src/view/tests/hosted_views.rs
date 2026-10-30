@@ -635,8 +635,8 @@ fn hosted_renderer_of(pane: &DiffPane, app: &App) -> gpui::Entity<DiffRenderer> 
         .unwrap()
 }
 
-/// A hint after a line: a button and a reply box in a row of a set width,
-/// taller than a diff row so that its clipping shows.
+/// A hint after a line: a button and a reply box centred in a row of a set
+/// width, taller than a diff row so that its clipping shows.
 struct Hint {
     input: gpui::Entity<components::TextInput>,
     width: Pixels,
@@ -650,6 +650,7 @@ impl Render for Hint {
         div()
             .debug_selector(|| "hint_root".into())
             .flex()
+            .items_center()
             .w(self.width)
             .h(px(60.0))
             .child(
@@ -769,6 +770,12 @@ fn end_of_line_views_sit_after_their_lines_text_in_no_rows_of_their_own(
         let (text, end) = text_end(cx, &renderer, region, "TWO");
         assert_near(frame.left(), end, &format!("{layout:?}: after the text"));
         assert_eq!(frame.top(), text.top(), "{layout:?}: on its line's row");
+        let content = cx.debug_bounds("hint_root").unwrap();
+        assert_near(
+            content.center().y,
+            frame.center().y,
+            &format!("{layout:?}: centred on the row"),
+        );
         assert_eq!(frame.size.width, px(50.0), "{layout:?}: its own width");
         assert_eq!(
             frame.size.height,
@@ -940,9 +947,8 @@ fn keys_and_clicks_in_an_end_of_line_view_stay_in_it(cx: &mut gpui::TestAppConte
             gpui::KeyBinding::new("right", crate::kit::Right, Some("TextInput")),
         ])
     });
-    // Its visible top: the row clips the rest.
-    let input = cx.debug_bounds("hint_input").unwrap();
-    let at = input.origin + gpui::point(px(4.0), px(4.0));
+    // Its middle, on the row's: the row clips the rest.
+    let at = cx.debug_bounds("hint_input").unwrap().center();
     cx.simulate_mouse_move(at, None, gpui::Modifiers::none());
     cx.simulate_mouse_down(at, gpui::MouseButton::Left, gpui::Modifiers::none());
     cx.simulate_mouse_up(at, gpui::MouseButton::Left, gpui::Modifiers::none());
