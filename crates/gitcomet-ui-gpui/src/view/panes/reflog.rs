@@ -3,7 +3,6 @@ use crate::kit::click::PointerClickExt as _;
 use crate::kit::interaction::{self as controls, ControlInteractionExt as _};
 use crate::ui_scale::UiScale;
 use crate::view::date_time::{DateTimeFormat, Timezone};
-use crate::view::perf::{self, ViewPerfRenderLane};
 use gitcomet_core::domain::ReflogEntry;
 use rustc_hash::FxHasher;
 use std::hash::{Hash, Hasher};
@@ -24,6 +23,25 @@ const REFLOG_CELL_GAP_PX: f32 = 8.0;
 const REFLOG_TABLE_PADDING_PX: f32 = 8.0;
 /// A dense table like the log, so rows take the log's comfortable height.
 const REFLOG_ROW_COMFORTABLE_HEIGHT_PX: f32 = 36.0;
+
+#[cfg(test)]
+thread_local! {
+    // (row-builder calls, rows built). Thread-local because parallel tests
+    // draw their own reflog panes; a process-wide count picks up their rows.
+    static REFLOG_ROWS_BUILT: std::cell::Cell<(usize, usize)> =
+        const { std::cell::Cell::new((0, 0)) };
+}
+
+#[inline]
+fn record_reflog_rows_built(rows: usize) {
+    #[cfg(test)]
+    REFLOG_ROWS_BUILT.with(|built| {
+        let (calls, total) = built.get();
+        built.set((calls + 1, total + rows));
+    });
+    #[cfg(not(test))]
+    let _ = rows;
+}
 
 /// A reflog table column: design pixels widened by the UI font, so text cells
 /// keep their content as the font grows.
@@ -373,17 +391,16 @@ impl ReflogPaneView {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
-        let requested = range.len();
         let theme = this.theme;
         let ui_scale = UiScale::from_percent(this.ui_scale_percent).with_appearance(theme.metrics);
         let now = SystemTime::now();
 
         let Some(repo_id) = this.state.active_repo else {
-            perf::record_row_batch(ViewPerfRenderLane::Reflog, requested, 0);
+            record_reflog_rows_built(0);
             return Vec::new();
         };
         let Some(panel) = this.panels.get(&repo_id) else {
-            perf::record_row_batch(ViewPerfRenderLane::Reflog, requested, 0);
+            record_reflog_rows_built(0);
             return Vec::new();
         };
         let selected = panel.selected.clone();
@@ -409,7 +426,7 @@ impl ReflogPaneView {
                 cx,
             ));
         }
-        perf::record_row_batch(ViewPerfRenderLane::Reflog, requested, rows.len());
+        record_reflog_rows_built(rows.len());
         rows
     }
 
@@ -1084,19 +1101,16 @@ mod view_tests {
     fn the_list_builds_only_the_visible_window_not_the_whole_reflog(cx: &mut gpui::TestAppContext) {
         let (pane, repo_id, cx) = open_pane(cx, reflog_entries(ENTRY_COUNT));
 
-        let before = perf::snapshot().reflog_rows_batch;
+        REFLOG_ROWS_BUILT.with(|built| built.set((0, 0)));
         cx.update(|window, app| {
             let _ = window.draw(app);
         });
-        let after = perf::snapshot().reflog_rows_batch;
-
-        let calls = after.calls - before.calls;
-        let painted = after.painted_rows - before.painted_rows;
+        let (calls, painted) = REFLOG_ROWS_BUILT.with(std::cell::Cell::get);
         assert!(calls > 0, "the row builder should have run");
         assert!(painted > 0, "the visible rows should have been built");
 
         // A screenful at 28px per row plus overscan — nowhere near all 200.
-        let visible_upper_bound = (PANE_HEIGHT_PX / REFLOG_ROW_HEIGHT_PX).ceil() as u64 * 3;
+        let visible_upper_bound = (PANE_HEIGHT_PX / REFLOG_ROW_HEIGHT_PX).ceil() as usize * 3;
         assert!(
             painted <= visible_upper_bound,
             "expected at most {visible_upper_bound} rows for a {PANE_HEIGHT_PX}px panel, \
