@@ -31,9 +31,7 @@ pub(crate) struct FileListView {
     body: Entity<ChangedFileListView>,
     source: ChangeSource,
     /// The marks last published; none before the first.
-    marks: Option<gitcomet_extension_api::FileListMarks>,
-    /// Some mark has a glyph, so every file row reserves the glyph column.
-    marks_glyphs: bool,
+    marks: Option<PublishedMarks>,
     chips: Vec<gitcomet_extension_api::FileListFilterChip>,
     header_items: Vec<gitcomet_extension_api::panes::FileListHeaderItem>,
     base: Option<CommitId>,
@@ -47,7 +45,29 @@ pub(crate) struct FileListView {
     _state: Option<StateSubscription>,
 }
 
+/// Marks an extension published, with what the rows need of them all.
+struct PublishedMarks {
+    marks: gitcomet_extension_api::FileListMarks,
+    /// Some mark has a glyph, so every file row reserves the glyph column.
+    glyphs: bool,
+}
+
 impl FileListView {
+    /// Takes `marks` unless they repeat the revision of those it has.
+    /// Whether it took them.
+    fn publish_marks(&mut self, marks: gitcomet_extension_api::FileListMarks) -> bool {
+        if self
+            .marks
+            .as_ref()
+            .is_some_and(|current| current.marks.revision == marks.revision)
+        {
+            return false;
+        }
+        let glyphs = marks.rows.values().any(|mark| mark.glyph.is_some());
+        self.marks = Some(PublishedMarks { marks, glyphs });
+        true
+    }
+
     /// Measured and tested in the tree layout and path order, whatever the
     /// user's defaults are.
     #[cfg(any(test, feature = "benchmarks"))]
@@ -117,8 +137,13 @@ impl FileListView {
     ) -> usize {
         let plan = self.controller.borrow_mut().plan();
         if decor {
-            let marks = self.marks.get_or_insert_default();
+            let mut marks = self
+                .marks
+                .as_ref()
+                .map(|published| published.marks.clone())
+                .unwrap_or_default();
             marks.revision = marks.revision.wrapping_add(1);
+            self.publish_marks(marks);
         }
         let rows = self.render_rows(0..60, cx);
         assert!(Arc::ptr_eq(&plan, &self.controller.borrow_mut().plan()));
@@ -176,7 +201,6 @@ impl FileListView {
             body,
             source,
             marks: None,
-            marks_glyphs: false,
             chips: Vec::new(),
             header_items: Vec::new(),
             base: None,
@@ -409,10 +433,9 @@ impl FileListView {
             .presentation_at_ordinal(ordinal)?;
         let selected = self.controller.borrow_mut().selected.as_ref() == Some(&change.path);
         let path = change.path.clone();
-        let mark = self
-            .marks
-            .as_ref()
-            .and_then(|marks| marks.rows.get(&change.path))
+        let published = self.marks.as_ref();
+        let mark = published
+            .and_then(|published| published.marks.rows.get(&change.path))
             .cloned();
         let (row, tooltip) = crate::view::rows::changed_file_row(
             crate::view::rows::ChangedFileRow {
@@ -427,15 +450,17 @@ impl FileListView {
                 context_menu_active: false,
                 path_alignment_group: None,
                 diff_stat: true,
-                leading: self.marks_glyphs.then(|| {
-                    let path = change.path.clone();
-                    mark_glyph(
-                        mark.as_ref(),
-                        move || format!("hosted_file_list_{list_id}_glyph_{}", path.display()),
-                        theme,
-                        ui_scale::UiScale::current(cx),
-                    )
-                }),
+                leading: published
+                    .is_some_and(|published| published.glyphs)
+                    .then(|| {
+                        let path = change.path.clone();
+                        mark_glyph(
+                            mark.as_ref(),
+                            move || format!("hosted_file_list_{list_id}_glyph_{}", path.display()),
+                            theme,
+                            ui_scale::UiScale::current(cx),
+                        )
+                    }),
             },
             theme,
             ui_scale_percent,
@@ -446,10 +471,8 @@ impl FileListView {
         let label = mark
             .as_ref()
             .and_then(|mark| Some((mark.label.clone()?, mark.color)));
-        let trailing = self
-            .marks
-            .as_ref()
-            .and_then(|marks| marks.trailing.get(&change.path))
+        let trailing = published
+            .and_then(|published| published.marks.trailing.get(&change.path))
             .map(|mark| {
                 let path = change.path.clone();
                 super::row_mark(mark, ui_scale::UiScale::current(cx)).debug_selector(move || {
@@ -925,13 +948,7 @@ impl FileListImpl for HostedFileList {
     }
     fn set_marks(&self, marks: gitcomet_extension_api::FileListMarks, cx: &mut App) {
         self.entity.update(cx, |list, cx| {
-            if list
-                .marks
-                .as_ref()
-                .is_none_or(|current| current.revision != marks.revision)
-            {
-                list.marks_glyphs = marks.rows.values().any(|mark| mark.glyph.is_some());
-                list.marks = Some(marks);
+            if list.publish_marks(marks) {
                 cx.notify();
             }
         });
