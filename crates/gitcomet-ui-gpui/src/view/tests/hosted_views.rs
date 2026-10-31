@@ -1057,6 +1057,32 @@ fn a_line_end_view_scrolled_into_a_cached_pane_makes_room(cx: &mut gpui::TestApp
     assert!(furthest > px(1500.0), "room for the hint: {furthest:?}");
 }
 
+/// The room an inline row made for a new line's view does not follow it
+/// into a split's old-side column: the view is drawn in the new side's.
+#[gpui::test]
+fn a_split_leaves_an_inline_line_end_view_s_room_behind(cx: &mut gpui::TestAppContext) {
+    let (old, new) = three_lines();
+    let (_hint, pane, renderer, _, cx) = mount_hint(cx, DiffLayout::Inline, old, new, 2, 4000.0);
+    let (_, furthest) = hint_column_scroll(cx, &renderer, DiffLayout::Inline);
+    assert!(furthest > px(1500.0), "room for the hint inline");
+
+    cx.update(|_, app| pane.set_layout(DiffLayout::Split, app));
+    draw(cx);
+    let old_side = cx.update(|_, app| {
+        renderer
+            .read(app)
+            .diff_scroll
+            .0
+            .borrow()
+            .base_handle
+            .max_offset()
+            .x
+    });
+    assert_eq!(old_side, px(0.0), "the old side's short lines fit");
+    let (_, new_side) = hint_column_scroll(cx, &renderer, DiffLayout::Split);
+    assert!(new_side > px(1500.0), "room for the hint on the new side");
+}
+
 /// A line long enough to stream in monospace cells ends where its cells do;
 /// a CRLF line's CR is not drawn, so its view sits after the last drawn
 /// cell, not one cell further.
