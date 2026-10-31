@@ -457,6 +457,7 @@ impl DiffRenderer {
 
     pub(in crate::view) fn reset_diff_horizontal_scroll_state(&mut self) {
         self.diff_horizontal_scroll.reset();
+        self.forget_hosted_line_end_rows();
         // A reveal names a row in the view it was armed over. That view is gone,
         // so the request must go with it rather than fire against whatever row
         // now holds that index.
@@ -475,6 +476,7 @@ impl DiffRenderer {
         column: DiffHorizontalScrollColumn,
     ) -> Pixels {
         self.diff_horizontal_scroll.content_widths[column.index()]
+            .max(self.hosted_line_end_rows_width(column))
     }
 
     pub(in crate::view) fn diff_horizontal_layout_min_width(

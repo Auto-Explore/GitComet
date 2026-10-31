@@ -8,6 +8,7 @@
 //! changes width, a start-aligned over view's text start moves, or the text
 //! style or the row height does.
 use super::*;
+use crate::view::rows::horizontal_column;
 use gitcomet_extension_api::{DiffAlign, DiffHostedView, DiffLineSide, DiffPlacement};
 use gpui::{Div, EntityId, TextStyle};
 use smallvec::SmallVec;
@@ -106,13 +107,27 @@ pub(in crate::view) struct HostedViews {
     /// The rows built this frame with views after their text, by row and
     /// column.
     line_ends: FxHashMap<(usize, DiffTextRegion), Rc<HostedLineEnd>>,
+    /// How wide the rows built with views after their text are without
+    /// them. Their column's scroll range holds each with its views as they
+    /// now measure, so a view that goes or shrinks gives its room back.
+    line_end_rows: FxHashMap<LineEndRow, Pixels>,
+}
+
+/// A row with views after its text: its column, and its lines there, whose
+/// views it shows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(in crate::view) struct LineEndRow {
+    region: DiffTextRegion,
+    old: Option<u32>,
+    new: Option<u32>,
 }
 
 /// Where a row's text ends, which its canvas works out as it prepaints; the
 /// views after the text are then placed there.
 pub(in crate::view) struct HostedLineEnd {
-    /// How wide the views are together, which the row's scroll range makes
-    /// room for.
+    /// The row whose text it follows.
+    pub(in crate::view) row: LineEndRow,
+    /// How wide the views are together.
     pub(in crate::view) width: Pixels,
     /// The text's end in the window, once the canvas has found it.
     pub(in crate::view) x: Cell<Option<Pixels>>,
@@ -194,6 +209,16 @@ impl HostedViews {
             .get(&id)
             .and_then(|state| state.measured)
             .map_or(px(0.0), |(_, size)| size.width)
+    }
+
+    /// How wide the views after `row`'s text now are together.
+    fn line_end_width(&self, row: LineEndRow) -> Pixels {
+        [(DiffLineSide::Old, row.old), (DiffLineSide::New, row.new)]
+            .into_iter()
+            .filter_map(|(side, line)| self.line_end_views.get(&(side, line?)))
+            .flatten()
+            .map(|ix| self.width(self.views[*ix].view().entity_id()))
+            .fold(px(0.0), |total, width| total + width)
     }
 }
 
@@ -447,6 +472,55 @@ impl DiffRenderer {
         }
     }
 
+    /// Notes how wide `row`'s text is, its gutter and padding included,
+    /// which its column's scroll range holds with the views after it.
+    pub(in crate::view) fn record_hosted_line_end_text(
+        &mut self,
+        row: LineEndRow,
+        width: Pixels,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.diff_word_wrap {
+            return;
+        }
+        let Some(decor) = self.hosted_decor.as_mut() else {
+            return;
+        };
+        if decor.views.line_end_rows.insert(row, width) != Some(width) {
+            cx.notify();
+        }
+    }
+
+    /// The widest of `column`'s rows with views after their text, the views
+    /// as they now measure; zero without any.
+    pub(in crate::view) fn hosted_line_end_rows_width(
+        &self,
+        column: DiffHorizontalScrollColumn,
+    ) -> Pixels {
+        let Some(decor) = &self.hosted_decor else {
+            return px(0.0);
+        };
+        let inline = self.diff_view == DiffViewMode::Inline;
+        decor
+            .views
+            .line_end_rows
+            .iter()
+            .filter(|(row, _)| {
+                (row.region == DiffTextRegion::Inline) == inline
+                    && horizontal_column(row.region) == column
+            })
+            .map(|(row, text)| (*text + decor.views.line_end_width(*row)).round())
+            .fold(px(0.0), Pixels::max)
+    }
+
+    /// Forgets how wide the rows with views after their text are, with the
+    /// rest of the horizontal scroll range.
+    pub(in crate::view) fn forget_hosted_line_end_rows(&mut self) {
+        if let Some(decor) = self.hosted_decor.as_mut() {
+            decor.views.line_end_rows.clear();
+        }
+    }
+
     /// Where the views after the text of row `visible_ix` in `region` go, if
     /// it was built with any; its canvas finds the place.
     pub(in crate::view) fn hosted_line_end(
@@ -500,18 +574,24 @@ impl DiffRenderer {
         if index.is_empty() {
             return None;
         }
-        let on = |at: DiffLineSide, line: Option<u32>| {
+        let shown = |at: DiffLineSide, line: Option<u32>| {
             line.filter(|_| side.is_none_or(|side| side == at))
-                .and_then(|line| index.get(&(at, line)))
         };
-        let mut ends: SmallVec<[usize; 2]> =
-            [on(DiffLineSide::Old, old), on(DiffLineSide::New, new)]
-                .into_iter()
-                .flatten()
-                .flatten()
-                .copied()
-                .collect();
-        let region = hosted_region(side);
+        let line_end_row = LineEndRow {
+            region: hosted_region(side),
+            old: shown(DiffLineSide::Old, old),
+            new: shown(DiffLineSide::New, new),
+        };
+        let mut ends: SmallVec<[usize; 2]> = [
+            (DiffLineSide::Old, line_end_row.old),
+            (DiffLineSide::New, line_end_row.new),
+        ]
+        .into_iter()
+        .filter_map(|(at, line)| index.get(&(at, line?)))
+        .flatten()
+        .copied()
+        .collect();
+        let region = line_end_row.region;
         if ends.is_empty() || !self.is_hosted_line_end_row(row, region) {
             return None;
         }
@@ -532,11 +612,10 @@ impl DiffRenderer {
         // Ids from the first view's entity, so their element state stays
         // with them when rows come and go above.
         let key = ends[0].0;
-        let mut width = px(0.0);
+        let width = views.line_end_width(line_end_row);
         let frames: Vec<_> = ends
             .into_iter()
             .map(|(id, content, view_width)| {
-                width += view_width;
                 keeps_its_input(
                     hosted_view_frame(content, Some(view_width), &text)
                         .id(("hosted_view", id))
@@ -554,6 +633,7 @@ impl DiffRenderer {
             })
             .collect();
         let end = Rc::new(HostedLineEnd {
+            row: line_end_row,
             width,
             x: Cell::new(None),
         });

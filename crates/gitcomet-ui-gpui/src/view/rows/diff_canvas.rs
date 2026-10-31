@@ -2539,7 +2539,7 @@ fn streamed_text_cells(len: usize, range: Range<usize>, reveal_whitespace: bool)
     range.len() + usize::from(reveal_whitespace && ends_line)
 }
 
-fn horizontal_column(region: DiffTextRegion) -> DiffHorizontalScrollColumn {
+pub(in crate::view) fn horizontal_column(region: DiffTextRegion) -> DiffHorizontalScrollColumn {
     match region {
         DiffTextRegion::Inline | DiffTextRegion::SplitLeft => DiffHorizontalScrollColumn::Primary,
         DiffTextRegion::SplitRight => DiffHorizontalScrollColumn::SplitRight,
@@ -2603,8 +2603,9 @@ impl RowTextEnd {
     }
 
     /// Finds where row `visible_ix`'s text ends if hosted views go after it,
-    /// and widens its column's scroll range to hold them. The text is shaped
-    /// as it is painted, into the same cache.
+    /// and notes how wide the row's text is, which its column's scroll range
+    /// holds with them. The text is shaped as it is painted, into the same
+    /// cache.
     fn place(
         &self,
         visible_ix: usize,
@@ -2646,25 +2647,19 @@ impl RowTextEnd {
             }
         };
         line_end.x.set(Some(text_bounds.left() + width));
-        let row_width = (diff_row_text_extra(
+        let text_width = diff_row_text_extra(
             self.region,
             self.show_line_numbers,
             self.ui_scale_percent,
             self.theme,
             window,
         ) + width
-            + line_end.width
-            + diff_scaled_px(DIFF_ROW_TEXT_TRAILING_PADDING_PX, self.ui_scale_percent))
-        .round();
+            + diff_scaled_px(DIFF_ROW_TEXT_TRAILING_PADDING_PX, self.ui_scale_percent);
         view.update(cx, |this, cx| {
             if let Some((key, shaped)) = layout {
                 this.touch_diff_text_layout_cache(key, shaped);
             }
-            this.record_diff_horizontal_content_width_for_column(
-                horizontal_column(self.region),
-                row_width,
-                cx,
-            );
+            this.record_hosted_line_end_text(line_end.row, text_width, cx);
         });
     }
 }

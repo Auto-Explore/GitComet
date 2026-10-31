@@ -1250,8 +1250,8 @@ pub(in crate::view) use self::diff_canvas::{
     diff_inline_text_start as diff_canvas_inline_text_start,
     diff_row_horizontal_padding as diff_canvas_row_horizontal_padding,
     diff_single_column_text_start as diff_canvas_single_column_text_start,
-    diff_text_wrap_char_width as diff_canvas_text_wrap_char_width, is_streamable_diff_text,
-    whitespace_visible_diff_offset_map,
+    diff_text_wrap_char_width as diff_canvas_text_wrap_char_width, horizontal_column,
+    is_streamable_diff_text, whitespace_visible_diff_offset_map,
 };
 #[cfg(test)]
 pub(in crate::view) use self::diff_canvas::{
