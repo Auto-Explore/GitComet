@@ -1046,6 +1046,34 @@ fn a_shrunk_line_end_view_gives_back_its_scroll_range(cx: &mut gpui::TestAppCont
     }
 }
 
+/// In a pane drawn again only when something in it notifies, as the app's
+/// are, a line end view scrolled into sight makes room for itself in its
+/// column's scroll range.
+#[gpui::test]
+fn a_line_end_view_scrolled_into_a_cached_pane_makes_room(cx: &mut gpui::TestAppContext) {
+    let (_hint, _pane, renderer, _, cx) = mount_views_in(
+        cx,
+        DiffLayout::Inline,
+        numbered("line", 100, None),
+        numbered("line", 100, Some(1)),
+        |app| {
+            let hint = new_hint(app, 4000.0);
+            (
+                hint.clone(),
+                vec![DiffHostedView::end_of_line(on_new(80), hint)],
+            )
+        },
+        true,
+    );
+    let (_, furthest) = hint_column_scroll(cx, &renderer, DiffLayout::Inline);
+    assert_eq!(furthest, px(0.0), "its line is out of sight");
+
+    let height = row_height(cx, &renderer);
+    scroll_to(cx, &renderer, -height * 70.0);
+    let (_, furthest) = hint_column_scroll(cx, &renderer, DiffLayout::Inline);
+    assert!(furthest > px(1500.0), "room for the hint: {furthest:?}");
+}
+
 /// A line long enough to stream in monospace cells ends where its cells do;
 /// a CRLF line's CR is not drawn, so its view sits after the last drawn
 /// cell, not one cell further.
