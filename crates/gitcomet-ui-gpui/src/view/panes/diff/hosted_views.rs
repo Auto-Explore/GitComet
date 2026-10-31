@@ -211,13 +211,19 @@ impl HostedViews {
             .map_or(px(0.0), |(_, size)| size.width)
     }
 
-    /// How wide the views after `row`'s text now are together.
-    fn line_end_width(&self, row: LineEndRow) -> Pixels {
+    /// The views after `row`'s text, by their place in the list.
+    fn line_end_views_after(&self, row: LineEndRow) -> impl Iterator<Item = usize> + '_ {
         [(DiffLineSide::Old, row.old), (DiffLineSide::New, row.new)]
             .into_iter()
             .filter_map(|(side, line)| self.line_end_views.get(&(side, line?)))
             .flatten()
-            .map(|ix| self.width(self.views[*ix].view().entity_id()))
+            .copied()
+    }
+
+    /// How wide the views after `row`'s text now are together.
+    fn line_end_width(&self, row: LineEndRow) -> Pixels {
+        self.line_end_views_after(row)
+            .map(|ix| self.width(self.views[ix].view().entity_id()))
             .fold(px(0.0), |total, width| total + width)
     }
 }
@@ -570,8 +576,7 @@ impl DiffRenderer {
         cx: &mut gpui::Context<Self>,
     ) -> Option<AnyElement> {
         let decor = self.hosted_decor.as_ref()?;
-        let index = &decor.views.line_end_views;
-        if index.is_empty() {
+        if decor.views.line_end_views.is_empty() {
             return None;
         }
         let shown = |at: DiffLineSide, line: Option<u32>| {
@@ -582,15 +587,8 @@ impl DiffRenderer {
             old: shown(DiffLineSide::Old, old),
             new: shown(DiffLineSide::New, new),
         };
-        let mut ends: SmallVec<[usize; 2]> = [
-            (DiffLineSide::Old, line_end_row.old),
-            (DiffLineSide::New, line_end_row.new),
-        ]
-        .into_iter()
-        .filter_map(|(at, line)| index.get(&(at, line?)))
-        .flatten()
-        .copied()
-        .collect();
+        let mut ends: SmallVec<[usize; 2]> =
+            decor.views.line_end_views_after(line_end_row).collect();
         let region = line_end_row.region;
         if ends.is_empty() || !self.is_hosted_line_end_row(row, region) {
             return None;
