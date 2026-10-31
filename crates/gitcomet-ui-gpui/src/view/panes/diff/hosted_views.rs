@@ -506,15 +506,11 @@ impl DiffRenderer {
         let Some(decor) = &self.hosted_decor else {
             return px(0.0);
         };
-        let inline = self.diff_view == DiffViewMode::Inline;
         decor
             .views
             .line_end_rows
             .iter()
-            .filter(|(row, _)| {
-                (row.region == DiffTextRegion::Inline) == inline
-                    && horizontal_column(row.region) == column
-            })
+            .filter(|(row, _)| horizontal_column(row.region) == column)
             .map(|(row, text)| (*text + decor.views.line_end_width(*row)).round())
             .fold(px(0.0), Pixels::max)
     }
