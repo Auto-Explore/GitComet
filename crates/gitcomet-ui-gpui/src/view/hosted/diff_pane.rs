@@ -1133,7 +1133,7 @@ impl DiffPaneImpl for HostedDiffPane {
                             let _ = pane_entity.update(cx, |pane, cx| {
                                 if let Some(renderer) = &pane.renderer {
                                     renderer.update(cx, |renderer, _| {
-                                        renderer.forget_hosted_view_size(id)
+                                        renderer.hosted_view_notified(id)
                                     });
                                 }
                                 cx.notify();
