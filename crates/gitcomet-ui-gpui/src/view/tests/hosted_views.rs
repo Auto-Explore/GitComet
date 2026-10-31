@@ -1060,7 +1060,7 @@ fn a_line_end_view_scrolled_into_a_cached_pane_makes_room(cx: &mut gpui::TestApp
 /// The room an inline row made for a new line's view does not follow it
 /// into a split's old-side column: the view is drawn in the new side's.
 #[gpui::test]
-fn a_split_leaves_an_inline_line_end_view_s_room_behind(cx: &mut gpui::TestAppContext) {
+fn a_split_leaves_an_inline_line_end_views_room_behind(cx: &mut gpui::TestAppContext) {
     let (old, new) = three_lines();
     let (_hint, pane, renderer, _, cx) = mount_hint(cx, DiffLayout::Inline, old, new, 2, 4000.0);
     let (_, furthest) = hint_column_scroll(cx, &renderer, DiffLayout::Inline);
