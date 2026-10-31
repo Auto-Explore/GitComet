@@ -211,8 +211,8 @@ impl HostedViews {
             .map_or(px(0.0), |(_, size)| size.width)
     }
 
-    /// The views after the text of the row on `lines`, by their place in the
-    /// list.
+    /// The list indices of the views after the text of the row on `lines`,
+    /// the old side's first; sorted, they are in list order.
     fn line_end_views_after(&self, lines: LineEndLines) -> impl Iterator<Item = usize> + '_ {
         [
             (DiffLineSide::Old, lines.old),
