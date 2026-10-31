@@ -64,7 +64,7 @@ use streamed_text::prepare_streamed_diff_slice_for_paint;
 use streamed_text::should_stream_diff_text;
 use streamed_text::streamed_diff_text_ascii_cell_width;
 use streamed_text::streamed_diff_text_visible_slice_range;
-use streamed_text::streamed_line_display_len;
+use streamed_text::streamed_drawn_len;
 use streamed_text::whitespace_marker_len;
 
 pub(super) mod annotation;
@@ -2195,13 +2195,7 @@ fn paint_selectable_diff_text(
     let row_extra = diff_row_text_extra(region, show_line_numbers, ui_scale_percent, theme, window);
     let mut total_text_len = streamed_spec
         .filter(|spec| should_stream_diff_text(Some(spec)))
-        .map(|spec| {
-            if reveal_whitespace_chars {
-                spec.raw_text.len()
-            } else {
-                streamed_line_display_len(&spec.raw_text)
-            }
-        })
+        .map(|spec| streamed_drawn_len(&spec.raw_text, reveal_whitespace_chars))
         .unwrap_or_else(|| text.len());
     let source_text_len = offset_map
         .map(DiffTextOffsetMap::source_len)
@@ -2537,16 +2531,12 @@ fn diff_row_text_extra(
     }
 }
 
-/// Whether a streamed slice of a line `len` long reaches the line's end,
-/// which revealed whitespace marks after the line's last cell.
-fn streamed_slice_ends_line(len: usize, range: &Range<usize>) -> bool {
-    range.end >= len
-}
-
 /// The monospace cells a streamed slice of a line `len` long takes, with the
-/// end-of-line mark revealed whitespace adds.
+/// end-of-line mark revealed whitespace adds once the slice reaches the
+/// line's end.
 fn streamed_text_cells(len: usize, range: Range<usize>, reveal_whitespace: bool) -> usize {
-    range.len() + usize::from(reveal_whitespace && streamed_slice_ends_line(len, &range))
+    let ends_line = range.end >= len;
+    range.len() + usize::from(reveal_whitespace && ends_line)
 }
 
 fn horizontal_column(region: DiffTextRegion) -> DiffHorizontalScrollColumn {
@@ -2565,7 +2555,8 @@ struct RowTextEnd {
     highlights: Arc<[(Range<usize>, HighlightStyle)]>,
     text_hash: u64,
     highlights_hash: u64,
-    /// The whole line's length, when it is streamed in monospace cells.
+    /// The whole line's length as drawn, when it is streamed in monospace
+    /// cells: a trailing CR is drawn only while whitespace is revealed.
     streamed_len: Option<usize>,
     reveal_whitespace_chars: bool,
     wrap: Option<DiffTextWrapSlice>,
@@ -2601,7 +2592,7 @@ impl RowTextEnd {
             highlights_hash,
             streamed_len: streamed_spec
                 .filter(|spec| should_stream_diff_text(Some(spec)))
-                .map(|spec| spec.raw_text.len()),
+                .map(|spec| streamed_drawn_len(&spec.raw_text, reveal_whitespace_chars)),
             reveal_whitespace_chars,
             wrap,
             fg,
@@ -2631,9 +2622,10 @@ impl RowTextEnd {
             Some(len) => {
                 let cell_width =
                     streamed_diff_text_ascii_cell_width(&base_style, metrics.font_size, window);
-                let range = self
-                    .wrap
-                    .map_or(0..len, |wrap| wrap.range_for_region(self.region));
+                let range = self.wrap.map_or(0..len, |wrap| {
+                    let range = wrap.range_for_region(self.region);
+                    range.start.min(len)..range.end.min(len)
+                });
                 let cells = streamed_text_cells(len, range, self.reveal_whitespace_chars);
                 (cell_width * cells as f32, None)
             }
