@@ -485,20 +485,27 @@ impl DiffRenderer {
 
     /// Notes how wide the text of the row on `lines` is, its gutter and
     /// padding included, which its column's scroll range holds with the views
-    /// after it.
+    /// after it. The rows are laid out again only when that range changes.
     pub(in crate::view) fn record_hosted_line_end_text(
         &mut self,
         lines: LineEndLines,
         width: Pixels,
         cx: &mut gpui::Context<Self>,
     ) {
-        if self.diff_word_wrap {
+        if self.diff_word_wrap
+            || self
+                .hosted_decor
+                .as_ref()
+                .is_none_or(|decor| decor.views.line_end_text.get(&lines) == Some(&width))
+        {
             return;
         }
-        let Some(decor) = self.hosted_decor.as_mut() else {
-            return;
-        };
-        if decor.views.line_end_text.insert(lines, width) != Some(width) {
+        let column = horizontal_column(lines.region);
+        let range = self.diff_horizontal_content_width_for_column(column);
+        if let Some(decor) = self.hosted_decor.as_mut() {
+            decor.views.line_end_text.insert(lines, width);
+        }
+        if self.diff_horizontal_content_width_for_column(column) != range {
             cx.notify();
         }
     }
