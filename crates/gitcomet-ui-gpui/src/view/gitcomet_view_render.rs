@@ -268,8 +268,8 @@ impl Render for GitCometView {
         {
             let summary = report.summary.clone();
 
-            // A product without an issue tracker offers only Ignore.
-            let report_button = (!report.issue_url.is_empty()).then(|| {
+            // A native review action takes precedence over the issue tracker.
+            let report_button = self.can_report_startup_crash(cx).then(|| {
                 components::Button::new("startup_crash_report_open", "Report Issue")
                     .style(components::ButtonStyle::Filled)
                     .on_click(theme, cx, |this, _e, _w, cx| {
