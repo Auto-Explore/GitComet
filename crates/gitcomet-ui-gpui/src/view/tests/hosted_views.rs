@@ -1,6 +1,7 @@
 //! An extension's own views in a hosted diff.
 
 use super::*;
+use crate::view::panes::diff::helpers::state::DiffHorizontalScrollColumn;
 use gitcomet_extension_api::{
     DiffAlign, DiffHostedView, DiffLayout, DiffLineRange, DiffScrollAnchor,
 };
@@ -907,12 +908,18 @@ fn end_of_line_views_scroll_sideways_with_the_text(cx: &mut gpui::TestAppContext
             400.0,
         );
         let (region, column) = match layout {
-            DiffLayout::Split => (DiffTextRegion::SplitRight, 1),
-            _ => (DiffTextRegion::Inline, 0),
+            DiffLayout::Split => (
+                DiffTextRegion::SplitRight,
+                DiffHorizontalScrollColumn::SplitRight,
+            ),
+            _ => (DiffTextRegion::Inline, DiffHorizontalScrollColumn::Primary),
         };
         let (text, end) = text_end(cx, &renderer, region, "changed");
-        let scroll_width =
-            cx.update(|_, app| renderer.read(app).diff_horizontal_scroll.content_widths[column]);
+        let scroll_width = cx.update(|_, app| {
+            renderer
+                .read(app)
+                .diff_horizontal_content_width_for_column(column)
+        });
         assert!(
             scroll_width - (end - text.left()) >= px(400.0),
             "{layout:?}: the row's scroll width {scroll_width:?} holds the view"
@@ -944,6 +951,98 @@ fn end_of_line_views_scroll_sideways_with_the_text(cx: &mut gpui::TestAppContext
         );
         let (_, end) = text_end(cx, &renderer, region, "changed");
         assert_near(after.left(), end, &format!("{layout:?}: still after it"));
+    }
+}
+
+/// The horizontal offset and furthest offset of the column a hint after a
+/// new line is drawn in.
+fn hint_column_scroll(
+    cx: &mut gpui::VisualTestContext,
+    renderer: &gpui::Entity<DiffRenderer>,
+    layout: DiffLayout,
+) -> (Pixels, Pixels) {
+    cx.update(|_, app| {
+        let renderer = renderer.read(app);
+        let scroll = match layout {
+            DiffLayout::Split => renderer.diff_split_right_scroll.0.borrow(),
+            _ => renderer.diff_scroll.0.borrow(),
+        };
+        (
+            scroll.base_handle.offset().x,
+            scroll.base_handle.max_offset().x,
+        )
+    })
+}
+
+/// A short line with a hint after it far wider than its column, the column
+/// scrolled as far right as it goes.
+fn mount_wide_hint_scrolled_right(
+    cx: &mut gpui::TestAppContext,
+    layout: DiffLayout,
+) -> (
+    gpui::Entity<Hint>,
+    DiffPane,
+    gpui::Entity<DiffRenderer>,
+    &mut gpui::VisualTestContext,
+) {
+    let (old, new) = three_lines();
+    let (hint, pane, renderer, _, cx) = mount_hint(cx, layout, old, new, 2, 4000.0);
+    cx.update(|_, app| {
+        renderer.update(app, |renderer, cx| {
+            let scroll = match layout {
+                DiffLayout::Split => renderer.diff_split_right_scroll.0.borrow(),
+                _ => renderer.diff_scroll.0.borrow(),
+            };
+            let offset = scroll.base_handle.offset();
+            scroll
+                .base_handle
+                .set_offset(gpui::point(px(-10_000.0), offset.y));
+            cx.notify();
+        })
+    });
+    draw(cx);
+    let (offset, furthest) = hint_column_scroll(cx, &renderer, layout);
+    assert!(furthest > px(1500.0), "{layout:?}: room for the hint");
+    assert_eq!(offset, -furthest, "{layout:?}: scrolled to the far end");
+    (hint, pane, renderer, cx)
+}
+
+/// A line end view that goes takes the room it made in its column's scroll
+/// range with it, and the column scrolled into that room comes back to the
+/// text.
+#[gpui::test]
+fn a_removed_line_end_view_gives_back_its_scroll_range(cx: &mut gpui::TestAppContext) {
+    for layout in [DiffLayout::Inline, DiffLayout::Split] {
+        let (_hint, pane, renderer, cx) = mount_wide_hint_scrolled_right(cx, layout);
+
+        cx.update(|_, app| pane.set_views(Vec::new(), app));
+        draw(cx);
+        assert_eq!(
+            hint_column_scroll(cx, &renderer, layout),
+            (px(0.0), px(0.0)),
+            "{layout:?}: the short lines fit their column"
+        );
+    }
+}
+
+/// A line end view that shrinks gives back the room it no longer needs.
+#[gpui::test]
+fn a_shrunk_line_end_view_gives_back_its_scroll_range(cx: &mut gpui::TestAppContext) {
+    for layout in [DiffLayout::Inline, DiffLayout::Split] {
+        let (hint, _pane, renderer, cx) = mount_wide_hint_scrolled_right(cx, layout);
+
+        cx.update(|_, app| {
+            hint.update(app, |hint, cx| {
+                hint.width = px(40.0);
+                cx.notify();
+            })
+        });
+        draw(cx);
+        assert_eq!(
+            hint_column_scroll(cx, &renderer, layout),
+            (px(0.0), px(0.0)),
+            "{layout:?}: the short lines and the hint fit their column"
+        );
     }
 }
 
