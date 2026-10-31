@@ -349,3 +349,37 @@ fn canvas_overlays_keep_order_and_reject_duplicates() {
         "{messages:#?}"
     );
 }
+
+#[test]
+fn crash_report_action_has_one_owner() {
+    let provider = || Fixture {
+        id: "com.example.a",
+        register: |r| {
+            r.crash_report_action("report", Rc::new(|_, _, _| {}));
+        },
+    };
+    assert!(
+        build(vec![provider()])
+            .ok()
+            .unwrap()
+            .crash_report_action()
+            .is_some()
+    );
+    assert!(Registry::default().crash_report_action().is_none());
+    let errors = build(vec![
+        provider(),
+        Fixture {
+            id: "com.example.b",
+            register: |r| {
+                r.crash_report_action("report", Rc::new(|_, _, _| {}));
+            },
+        },
+    ])
+    .err()
+    .expect("competing report actions must be refused");
+    assert!(errors.iter().any(|error| {
+        error
+            .message
+            .contains("crash_report_action has more than one provider")
+    }));
+}

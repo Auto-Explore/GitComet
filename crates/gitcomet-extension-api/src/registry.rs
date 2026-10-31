@@ -2,8 +2,8 @@
 
 use crate::contributions::{
     BottomPanelDescriptor, CanvasOverlayDescriptor, ChromeDescriptor, CloseGuard,
-    CommandDescriptor, CommitBoxItemDescriptor, DetailsTabDescriptor, MenuLocation,
-    RepositoryEntryGate, RepositoryViewDescriptor, SettingsPageDescriptor,
+    CommandDescriptor, CommitBoxItemDescriptor, CrashReportAction, DetailsTabDescriptor,
+    MenuLocation, RepositoryEntryGate, RepositoryViewDescriptor, SettingsPageDescriptor,
     SidebarSectionDescriptor, SidebarTabDescriptor, StatusItemDescriptor, WindowGateDescriptor,
 };
 use crate::id::{ContributionId, ExtensionId};
@@ -84,6 +84,7 @@ pub struct Registrar {
     window_gates: Vec<(ContributionId, WindowGateDescriptor)>,
     close_guards: Vec<(ContributionId, CloseGuard)>,
     startup_workflows: Vec<(ContributionId, crate::StartupWorkflow)>,
+    crash_report_actions: Vec<(ContributionId, CrashReportAction)>,
     errors: Vec<String>,
 }
 
@@ -113,6 +114,7 @@ impl Registrar {
             window_gates: Vec::new(),
             close_guards: Vec::new(),
             startup_workflows: Vec::new(),
+            crash_report_actions: Vec::new(),
             errors: Vec::new(),
         }
     }
@@ -395,6 +397,20 @@ impl Registrar {
         self
     }
 
+    /// Replaces the crash banner's browser action with a native review flow.
+    /// At most one extension may provide it. The action remains available
+    /// without a repository or a satisfied window gate, and receives no raw log.
+    pub fn crash_report_action(
+        &mut self,
+        local: impl Into<Cow<'static, str>>,
+        action: CrashReportAction,
+    ) -> &mut Self {
+        if let Some(id) = self.id(local) {
+            self.crash_report_actions.push((id, action));
+        }
+        self
+    }
+
     pub fn close_guard(
         &mut self,
         local: impl Into<Cow<'static, str>>,
@@ -435,6 +451,7 @@ pub struct Registry {
     window_gates: Vec<(ContributionId, WindowGateDescriptor)>,
     close_guards: Vec<(ContributionId, CloseGuard)>,
     startup_workflows: Vec<(ContributionId, crate::StartupWorkflow)>,
+    crash_report_actions: Vec<(ContributionId, CrashReportAction)>,
 }
 
 impl Registry {
@@ -486,6 +503,9 @@ impl Registry {
                 .sidebar_providers
                 .extend(registrar.sidebar_providers);
             registry.edition_strip.extend(registrar.edition_strip);
+            registry
+                .crash_report_actions
+                .extend(registrar.crash_report_actions);
             registry.title_bar_brand.extend(registrar.title_bar_brand);
             registry.status_items.extend(registrar.status_items);
             registry.commit_box_items.extend(registrar.commit_box_items);
@@ -589,6 +609,14 @@ impl Registry {
                 if let Some(extension) = extension {
                     error(&extension, format!("asset {path} is declared twice"));
                 }
+            }
+        }
+        if registry.crash_report_actions.len() > 1 {
+            for (id, _) in registry.crash_report_actions.iter().skip(1) {
+                error(
+                    id.extension(),
+                    "crash_report_action has more than one provider".to_string(),
+                );
             }
         }
         if registry.edition_strip.len() > 1 {
@@ -709,6 +737,11 @@ impl Registry {
 
     pub fn sidebar_sections(&self) -> &[(ContributionId, SidebarSectionDescriptor)] {
         &self.sidebar_sections
+    }
+
+    /// The crash banner's native report-review action, when provided.
+    pub fn crash_report_action(&self) -> Option<&CrashReportAction> {
+        self.crash_report_actions.first().map(|(_, action)| action)
     }
 
     pub fn edition_strip(&self) -> Option<&ChromeDescriptor> {

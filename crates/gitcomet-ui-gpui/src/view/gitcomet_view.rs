@@ -2307,10 +2307,36 @@ impl GitCometView {
             .filter(|url| !url.is_empty())
     }
 
+    pub(super) fn can_report_startup_crash(&self, cx: &App) -> bool {
+        self.startup_crash_report_issue_url().is_some()
+            || (self.extension_window.is_some()
+                && super::extension_host::registry(cx)
+                    .is_some_and(|registry| registry.crash_report_action().is_some()))
+    }
+
     /// The "Report Issue" button's whole body, so the button stays a one-liner
     /// and tests can drive the real sequence through
     /// [`Self::report_startup_crash_report_with`].
     pub(super) fn report_startup_crash_report(&mut self, cx: &mut gpui::Context<Self>) {
+        if self.startup_crash_report.is_none() {
+            return;
+        }
+        if let Some(action) = super::extension_host::registry(cx)
+            .and_then(|registry| registry.crash_report_action().cloned())
+        {
+            if let Some(host) = self
+                .extension_window
+                .as_ref()
+                .map(|extension| extension.host())
+            {
+                let window = self.window_handle;
+                // Release this view's borrow before the extension opens a dialog.
+                cx.defer(move |cx| {
+                    let _ = window.update(cx, |_, window, cx| action(host, window, cx));
+                });
+            }
+            return;
+        }
         self.report_startup_crash_report_with(cx, |url| platform_open::open_url_blocking(&url));
     }
 
