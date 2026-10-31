@@ -150,7 +150,7 @@ impl DiffPaneView {
             cx,
         );
         pane._state = subscription;
-        pane.open(target);
+        pane.open(target, cx);
         pane
     }
 
@@ -393,9 +393,12 @@ impl DiffPaneView {
         }
     }
 
-    fn reset(&mut self) {
+    /// Forgets the shown file, its views with it: the renderer too, so it
+    /// neither draws them nor keeps their rows in the next file.
+    fn reset(&mut self, cx: &mut gpui::Context<Self>) {
         self.views = Arc::from([]);
         self.view_observers.clear();
+        self.sync_decor(cx);
         self.engaged = next_engaged();
         self.revision = self.revision.wrapping_add(1);
         if let Some(cache) = self.file_cache.take() {
@@ -465,7 +468,7 @@ impl DiffPaneView {
         };
         *shown = snapshot.clone();
         self.snapshot_rev = self.snapshot_rev.wrapping_add(1);
-        self.reset();
+        self.reset(cx);
         let cache = snapshot.patch.is_none().then(|| {
             Arc::new(SharedFileDiffCache::with_engine(
                 Arc::new(gitcomet_core::domain::FileDiffText::new_shared(
@@ -578,7 +581,7 @@ impl DiffPaneView {
         if matches!(self.source, PaneSource::Snapshot(_)) {
             return;
         }
-        self.open(target.clone());
+        self.open(target.clone(), cx);
         if let Some(renderer) = &self.renderer {
             renderer.update(cx, |pane, cx| pane.set_pending_target(target.clone(), cx));
         }
@@ -674,11 +677,11 @@ impl DiffPaneView {
         cx.notify();
     }
 
-    fn open(&mut self, target: DiffTarget) {
+    fn open(&mut self, target: DiffTarget, cx: &mut gpui::Context<Self>) {
         if !matches!(self.source, PaneSource::Session { .. }) {
             return;
         }
-        self.reset();
+        self.reset(cx);
         self.pending_target = Some(target.clone());
         let PaneSource::Session {
             store,

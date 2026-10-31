@@ -639,6 +639,76 @@ fn replaced_and_removed_hosted_views_leave_nothing_behind(cx: &mut gpui::TestApp
     );
 }
 
+/// Another snapshot is another file: the old file's views go from the
+/// renderer too, so it neither draws them nor keeps their rows. The pane
+/// drops them itself; the extension clearing them afterwards changes nothing.
+#[gpui::test]
+fn a_new_snapshot_leaves_the_old_files_views_behind(cx: &mut gpui::TestAppContext) {
+    let (old, new) = three_lines();
+    let Mounted {
+        pane,
+        thread,
+        renderer,
+        id,
+        cx,
+    } = mount(cx, DiffLayout::Inline, old, new, 2);
+    assert!(cx.debug_bounds(view_frame(id, &thread)).is_some());
+    assert!(reserved(cx, &renderer) > 0);
+
+    cx.update(|_, app| {
+        pane.set_snapshot(
+            DiffSnapshot::new("other.txt", "a\nb\nc\n", "a\nB\nc\n"),
+            app,
+        )
+    });
+    draw(cx);
+    assert!(cx.debug_bounds(view_frame(id, &thread)).is_none());
+    assert_eq!(reserved(cx, &renderer), 0);
+    assert_eq!(
+        cx.update(|_, app| renderer.read(app).hosted_view_states()),
+        0
+    );
+
+    cx.update(|_, app| pane.set_views(Vec::new(), app));
+    draw(cx);
+    assert!(cx.debug_bounds(view_frame(id, &thread)).is_none());
+    assert_eq!(reserved(cx, &renderer), 0);
+}
+
+/// Retargeting a pane opens another file: the old file's views reserve no
+/// rows in it.
+#[gpui::test]
+fn a_retargeted_pane_leaves_the_old_files_views_behind(cx: &mut gpui::TestAppContext) {
+    let (_dir, store, view, cx) = open_repository(cx);
+    let target = |path: &str| DiffTarget::working_tree(path.into(), DiffArea::Unstaged);
+    let pane = cx.update(|_, app| {
+        let host = view.read(app).extension_window.as_ref().unwrap().host();
+        let repository = host.active_repository(app).unwrap().unwrap();
+        let pane = host
+            .create_diff_pane(&repository, target("a.rs"), DiffPaneOptions::default(), app)
+            .unwrap();
+        let thread = new_thread(app, 1);
+        pane.set_views(vec![DiffHostedView::block(on_new(4), thread)], app);
+        pane
+    });
+    settle(cx, &view, &store, "a.rs", |cx| {
+        cx.update(|_, app| !pane.is_loading(app))
+    });
+    let renderer = cx.update(|_, app| hosted_renderer_of(&pane, app));
+    assert_eq!(
+        reserved(cx, &renderer),
+        1,
+        "the view's row after a.rs line 4"
+    );
+
+    cx.update(|_, app| pane.set_target(target("b.rs"), app));
+    settle(cx, &view, &store, "b.rs", |cx| {
+        cx.update(|_, app| !pane.is_loading(app))
+    });
+    assert_eq!(rows_with(cx, &pane, "b edited 20"), 1);
+    assert_eq!(reserved(cx, &renderer), 0, "none after b.rs line 4");
+}
+
 /// A view growing above the top line keeps that line where it was.
 #[gpui::test]
 fn the_top_line_holds_when_a_view_above_it_grows(cx: &mut gpui::TestAppContext) {
