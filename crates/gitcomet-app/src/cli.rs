@@ -38,6 +38,11 @@ pub struct Cli {
     /// Path to a git repository to open (default mode only).
     #[arg(global = false)]
     pub path: Option<PathBuf>,
+
+    /// Keep the browser attached to this terminal instead of relaunching
+    /// detached (default mode only).
+    #[arg(long)]
+    pub foreground: bool,
 }
 
 #[derive(Subcommand, Debug)]
@@ -218,7 +223,11 @@ pub struct ExtractMergeFixturesConfig {
 #[non_exhaustive]
 pub enum AppMode {
     /// Full repository browser (default).
-    Browser { path: Option<PathBuf> },
+    Browser {
+        path: Option<PathBuf>,
+        /// Keep the process attached to the launching terminal.
+        foreground: bool,
+    },
     /// Focused diff view.
     Difftool(DifftoolConfig),
     /// Focused merge view.
@@ -717,7 +726,10 @@ fn parse_app_mode_from_args_env_and_config(
         .and_then(|matches| Cli::from_arg_matches(&matches));
     match parsed {
         Ok(cli) => match cli.command {
-            None => Ok(AppMode::Browser { path: cli.path }),
+            None => Ok(AppMode::Browser {
+                path: cli.path,
+                foreground: cli.foreground,
+            }),
             Some(Command::Difftool(args)) => {
                 resolve_difftool_with_env(args, env).map(AppMode::Difftool)
             }
