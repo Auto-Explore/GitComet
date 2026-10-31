@@ -376,7 +376,7 @@ impl DiffRenderer {
     }
 
     /// Measures the view again before it is next drawn: it notified.
-    pub(in crate::view) fn hosted_view_notified(&mut self, id: EntityId) {
+    pub(in crate::view) fn mark_hosted_view_notified(&mut self, id: EntityId) {
         if let Some(state) = self
             .hosted_decor
             .as_mut()
