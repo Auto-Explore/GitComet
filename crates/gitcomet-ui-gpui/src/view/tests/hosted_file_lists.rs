@@ -249,6 +249,30 @@ fn shown(cx: &mut gpui::VisualTestContext, list: &HostedFileList) -> Vec<String>
     })
 }
 
+/// A list's first marks show at whatever revision they carry, zero too: a
+/// revision tells a publication from the one before it, and the first has
+/// none.
+#[gpui::test]
+fn the_first_marks_show_at_revision_zero(cx: &mut gpui::TestAppContext) {
+    let (list, entity, cx) = mount_list(cx, ["a.rs", "b.rs"].map(String::from));
+    let id = list_id(cx, &entity);
+    let flagged = RowMark::new(gpui::red())
+        .with_glyph(RowGlyph::Text("F".into()))
+        .with_label("flagged");
+    cx.update(|_, app| {
+        list.set_marks(
+            FileListMarks::new(0, BTreeMap::from([(PathBuf::from("a.rs"), flagged)])),
+            app,
+        )
+    });
+    draw(cx);
+    assert!(
+        cx.debug_bounds(selector(format!("hosted_file_list_{id}_glyph_a.rs")))
+            .is_some(),
+        "a.rs draws its glyph"
+    );
+}
+
 /// A glyph takes a column before the file icon in every row once any mark
 /// has one; a label alone adds no column.
 #[gpui::test]
