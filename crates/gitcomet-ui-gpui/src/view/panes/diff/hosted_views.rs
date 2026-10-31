@@ -551,11 +551,12 @@ impl DiffRenderer {
             .cloned()
     }
 
-    /// Whether row `visible_ix` is the one its line's text ends on in
-    /// `region`: the last of a wrapped line's rows that holds any of it.
-    fn is_hosted_line_end_row(&self, visible_ix: usize, region: DiffTextRegion) -> bool {
+    /// The row the text of row `visible_ix`'s line ends on in `region`: the
+    /// last of a wrapped line's rows that holds any of it, short of the rows
+    /// that pad it to the other side's.
+    fn hosted_text_end_row(&self, visible_ix: usize, region: DiffTextRegion) -> usize {
         if self.diff_text_wrap_for_visible_ix(visible_ix).is_none() {
-            return true;
+            return visible_ix;
         }
         let rows = &self.diff_wrap_visible_rows;
         let source = rows[visible_ix].source_visible_ix;
@@ -568,7 +569,11 @@ impl DiffRenderer {
             };
             row.wrap_ix == 0 || range.start < range.end
         };
-        (visible_ix..after).rev().find(|ix| holds_text(&rows[*ix])) == Some(visible_ix)
+        // Its first row holds text, so the search ends by it.
+        (0..after)
+            .rev()
+            .find(|ix| holds_text(&rows[*ix]))
+            .unwrap_or(visible_ix)
     }
 
     /// The views after the text of document row `row`, whose line numbers
@@ -598,7 +603,7 @@ impl DiffRenderer {
         };
         let mut ends: SmallVec<[usize; 2]> = decor.views.line_end_views_after(lines).collect();
         let region = lines.region;
-        if ends.is_empty() || !self.is_hosted_line_end_row(row, region) {
+        if ends.is_empty() || self.hosted_text_end_row(row, region) != row {
             return None;
         }
         ends.sort_unstable();
@@ -686,6 +691,7 @@ impl DiffRenderer {
         if decor.views.over_views.is_empty() {
             return None;
         }
+        let region = hosted_region(side);
         let views: Vec<_> = decor
             .views
             .over_views
@@ -697,10 +703,8 @@ impl DiffRenderer {
                     return None;
                 }
                 let (first, last) = decor.line_rows.get(&(anchor.side, anchor.line))?;
-                let rows = (
-                    *decor.document.get(*first)?,
-                    *decor.document.get(*last)? + 1,
-                );
+                let last = self.hosted_text_end_row(*last, region);
+                let rows = (*decor.document.get(*first)?, *decor.document.get(last)? + 1);
                 let id = view.view().entity_id();
                 let state = decor.views.states.get(&id)?;
                 let (_, size) = state.measured?;
@@ -722,7 +726,6 @@ impl DiffRenderer {
         let row_height = decor.row_height;
         // The pane measures its views before its rows draw.
         let text = decor.views.text.clone().expect("measured before drawn");
-        let region = hosted_region(side);
         Some(
             div()
                 .absolute()

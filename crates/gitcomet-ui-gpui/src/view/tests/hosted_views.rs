@@ -1982,6 +1982,56 @@ fn over_views_go_below_a_wrapped_lines_last_row(cx: &mut gpui::TestAppContext) {
     );
 }
 
+/// In a split with word wrap, each side's view goes below the last row of
+/// its own side's text, not below the rows that pad the shorter side out to
+/// the other's.
+#[gpui::test]
+fn over_views_in_a_wrapped_split_go_below_their_sides_last_row(cx: &mut gpui::TestAppContext) {
+    let words = |count: usize| {
+        (0..count)
+            .map(|word| format!("w{word:02}"))
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    let on_old = DiffScrollAnchor {
+        side: DiffLineSide::Old,
+        line: 2,
+    };
+    let ((left, right), _pane, renderer, id, cx) = mount_views(
+        cx,
+        DiffLayout::Split,
+        format!("one\n{}\nthree\n", words(20)),
+        format!("one\n{}\nthree\n", words(80)),
+        |app| {
+            let left = new_hint(app, 120.0);
+            let right = new_hint(app, 120.0);
+            let views = vec![
+                DiffHostedView::over(on_old, DiffAlign::Start, left.clone()),
+                DiffHostedView::over(on_new(2), DiffAlign::Start, right.clone()),
+            ];
+            ((left, right), views)
+        },
+    );
+    cx.update(|_, app| renderer.update(app, |pane, cx| pane.set_diff_word_wrap(true, cx)));
+    draw(cx);
+    let (left_row, _) = text_end(cx, &renderer, DiffTextRegion::SplitLeft, "w");
+    let (right_row, _) = text_end(cx, &renderer, DiffTextRegion::SplitRight, "w");
+    assert!(
+        left_row.bottom() < right_row.bottom(),
+        "the new side wraps further"
+    );
+    assert_eq!(
+        cx.debug_bounds(view_frame(id, &left)).unwrap().top(),
+        left_row.bottom(),
+        "below the old side's last row"
+    );
+    assert_eq!(
+        cx.debug_bounds(view_frame(id, &right)).unwrap().top(),
+        right_row.bottom(),
+        "below the new side's"
+    );
+}
+
 /// A view lined up with the text start starts where the text does, past a
 /// people column, without line numbers, and in a split's old side.
 #[gpui::test]
