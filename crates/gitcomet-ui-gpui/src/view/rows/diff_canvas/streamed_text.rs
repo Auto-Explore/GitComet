@@ -62,6 +62,19 @@ pub(super) fn streamed_line_display_len(
     text.len() - usize::from(text.has_trailing_cr())
 }
 
+/// The cells a streamed line is drawn in: all of it while whitespace is
+/// revealed, otherwise without the trailing CR.
+pub(super) fn streamed_drawn_len(
+    text: &gitcomet_core::file_diff::FileDiffLineText,
+    reveal_whitespace_chars: bool,
+) -> usize {
+    if reveal_whitespace_chars {
+        text.len()
+    } else {
+        streamed_line_display_len(text)
+    }
+}
+
 pub(super) struct PreparedStreamedDiffSlice {
     pub(super) styled: CachedDiffStyledText,
     pub(super) visible_source_len: usize,
