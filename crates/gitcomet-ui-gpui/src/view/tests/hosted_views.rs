@@ -486,6 +486,33 @@ fn keys_and_clicks_in_a_hosted_view_stay_in_it(cx: &mut gpui::TestAppContext) {
     });
 }
 
+/// The scroll handle of the column new lines are drawn in: a split's right
+/// column, or an inline diff's only one.
+fn new_side_scroll(renderer: &DiffRenderer, layout: DiffLayout) -> &gpui::UniformListScrollHandle {
+    match layout {
+        DiffLayout::Split => &renderer.diff_split_right_scroll,
+        _ => &renderer.diff_scroll,
+    }
+}
+
+/// Scrolls the column new lines are drawn in sideways to `x`, and draws.
+fn scroll_new_side_x(
+    cx: &mut gpui::VisualTestContext,
+    renderer: &gpui::Entity<DiffRenderer>,
+    layout: DiffLayout,
+    x: Pixels,
+) {
+    cx.update(|_, app| {
+        renderer.update(app, |renderer, cx| {
+            let scroll = new_side_scroll(renderer, layout).0.borrow();
+            let offset = scroll.base_handle.offset();
+            scroll.base_handle.set_offset(gpui::point(x, offset.y));
+            cx.notify();
+        })
+    });
+    draw(cx);
+}
+
 /// A view stays put while its column scrolls sideways under a long line,
 /// in a split's new-side column as inline.
 #[gpui::test]
@@ -512,20 +539,7 @@ fn block_views_hold_still_while_the_lines_scroll_sideways(cx: &mut gpui::TestApp
         let view = view_frame(id, &thread);
         let before = cx.debug_bounds(view).unwrap();
         let text = painted(cx, &renderer, region, "one");
-        cx.update(|_, app| {
-            renderer.update(app, |renderer, cx| {
-                let scroll = match layout {
-                    DiffLayout::Split => renderer.diff_split_right_scroll.0.borrow(),
-                    _ => renderer.diff_scroll.0.borrow(),
-                };
-                let offset = scroll.base_handle.offset();
-                scroll
-                    .base_handle
-                    .set_offset(gpui::point(px(-200.0), offset.y));
-                cx.notify();
-            })
-        });
-        draw(cx);
+        scroll_new_side_x(cx, &renderer, layout, px(-200.0));
         let scrolled = painted(cx, &renderer, region, "one");
         assert!(
             scrolled.left() < text.left() - px(100.0),
@@ -926,23 +940,9 @@ fn end_of_line_views_scroll_sideways_with_the_text(cx: &mut gpui::TestAppContext
         );
         // Two offsets that both show the line's end; the range ends where
         // the view does.
-        let scroll_x = |cx: &mut gpui::VisualTestContext, x: Pixels| {
-            cx.update(|_, app| {
-                renderer.update(app, |renderer, cx| {
-                    let scroll = match layout {
-                        DiffLayout::Split => renderer.diff_split_right_scroll.0.borrow(),
-                        _ => renderer.diff_scroll.0.borrow(),
-                    };
-                    let offset = scroll.base_handle.offset();
-                    scroll.base_handle.set_offset(gpui::point(x, offset.y));
-                    cx.notify();
-                })
-            });
-            draw(cx);
-        };
-        scroll_x(cx, px(1750.0) - end);
+        scroll_new_side_x(cx, &renderer, layout, px(1750.0) - end);
         let before = cx.debug_bounds(view_frame(id, &hint)).unwrap();
-        scroll_x(cx, px(1600.0) - end);
+        scroll_new_side_x(cx, &renderer, layout, px(1600.0) - end);
         let after = cx.debug_bounds(view_frame(id, &hint)).unwrap();
         assert_near(
             after.left(),
@@ -962,11 +962,7 @@ fn hint_column_scroll(
     layout: DiffLayout,
 ) -> (Pixels, Pixels) {
     cx.update(|_, app| {
-        let renderer = renderer.read(app);
-        let scroll = match layout {
-            DiffLayout::Split => renderer.diff_split_right_scroll.0.borrow(),
-            _ => renderer.diff_scroll.0.borrow(),
-        };
+        let scroll = new_side_scroll(renderer.read(app), layout).0.borrow();
         (
             scroll.base_handle.offset().x,
             scroll.base_handle.max_offset().x,
@@ -987,20 +983,7 @@ fn mount_wide_hint_scrolled_right(
 ) {
     let (old, new) = three_lines();
     let (hint, pane, renderer, _, cx) = mount_hint(cx, layout, old, new, 2, 4000.0);
-    cx.update(|_, app| {
-        renderer.update(app, |renderer, cx| {
-            let scroll = match layout {
-                DiffLayout::Split => renderer.diff_split_right_scroll.0.borrow(),
-                _ => renderer.diff_scroll.0.borrow(),
-            };
-            let offset = scroll.base_handle.offset();
-            scroll
-                .base_handle
-                .set_offset(gpui::point(px(-10_000.0), offset.y));
-            cx.notify();
-        })
-    });
-    draw(cx);
+    scroll_new_side_x(cx, &renderer, layout, px(-10_000.0));
     let (offset, furthest) = hint_column_scroll(cx, &renderer, layout);
     assert!(furthest > px(1500.0), "{layout:?}: room for the hint");
     assert_eq!(offset, -furthest, "{layout:?}: scrolled to the far end");
