@@ -24,6 +24,10 @@ pub type ViewFocus = Rc<dyn Fn(&AnyView, &App) -> Option<FocusHandle>>;
 /// Runs a command.
 pub type CommandHandler = Rc<dyn Fn(CommandContext, &mut Window, &mut App)>;
 
+/// Opens an extension's crash-report review flow. The host supplies no raw log
+/// or repository context; invoking this action must not submit a report.
+pub type CrashReportAction = Rc<dyn Fn(WindowHost, &mut Window, &mut App)>;
+
 /// What a repository view is built for: its window and repository.
 #[derive(Clone, Debug)]
 pub struct RepositoryViewContext {
