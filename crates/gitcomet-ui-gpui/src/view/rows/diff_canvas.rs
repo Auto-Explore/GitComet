@@ -2659,7 +2659,7 @@ impl RowTextEnd {
             if let Some((key, shaped)) = layout {
                 this.touch_diff_text_layout_cache(key, shaped);
             }
-            this.record_hosted_line_end_text(line_end.row, text_width, cx);
+            this.record_hosted_line_end_text(line_end.lines, text_width, cx);
         });
     }
 }
