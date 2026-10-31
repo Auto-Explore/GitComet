@@ -1798,11 +1798,12 @@ fn a_native_crash_report_action_is_available_without_an_issue_url_or_repository(
     let crash_log_path = report_dir.path().join("pending-startup-report.log");
     std::fs::write(&crash_log_path, "private raw crash text").unwrap();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
-    let config = GitCometViewConfig::normal(Some(StartupCrashReport {
+    let mut config = GitCometViewConfig::normal(Some(StartupCrashReport {
         issue_url: String::new(),
         summary: "Previous process stopped".into(),
         crash_log_path: crash_log_path.clone(),
     }));
+    config.workspace = WorkspaceBootstrap::Empty;
     let (view, cx) = cx.add_window_view(|window, cx| {
         GitCometView::new_with_config(store, events, config, window, cx)
     });
