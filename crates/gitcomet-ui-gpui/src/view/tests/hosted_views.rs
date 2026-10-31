@@ -369,6 +369,65 @@ fn block_view_rows_follow_the_ui_scale(cx: &mut gpui::TestAppContext) {
     }
 }
 
+/// A block view between lines, of a set height.
+fn mount_block_hint(
+    cx: &mut gpui::TestAppContext,
+) -> (
+    gpui::Entity<Hint>,
+    DiffPane,
+    gpui::Entity<DiffRenderer>,
+    &mut gpui::VisualTestContext,
+) {
+    let (old, new) = three_lines();
+    let (hint, pane, renderer, _, cx) = mount_views(cx, DiffLayout::Inline, old, new, |app| {
+        let hint = new_hint(app, 50.0);
+        (hint.clone(), vec![DiffHostedView::block(on_new(2), hint)])
+    });
+    (hint, pane, renderer, cx)
+}
+
+/// A view that shrinks to one row gives the others back, though one row is
+/// also what an unmeasured view takes.
+#[gpui::test]
+fn a_block_view_collapsing_to_one_row_gives_back_the_rest(cx: &mut gpui::TestAppContext) {
+    let (hint, _pane, renderer, cx) = mount_block_hint(cx);
+    let height = row_height(cx, &renderer);
+    assert!(reserved(cx, &renderer) > 1, "60px takes more than one row");
+
+    cx.update(|_, app| {
+        hint.update(app, |hint, cx| {
+            hint.height = height / 2.0;
+            cx.notify();
+        })
+    });
+    draw(cx);
+    assert_eq!(reserved(cx, &renderer), 1);
+}
+
+/// A view that notifies at the height it had keeps the rows where they
+/// are: they are not placed again.
+#[gpui::test]
+fn a_block_view_notifying_at_its_height_keeps_the_rows_placed(cx: &mut gpui::TestAppContext) {
+    let (hint, pane, renderer, cx) = mount_block_hint(cx);
+    let rows = reserved(cx, &renderer);
+    assert!(rows > 1, "60px takes more than one row");
+    let builds = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|_, app| {
+            pane.view()
+                .downcast::<crate::view::hosted::diff_pane::DiffPaneView>()
+                .unwrap()
+                .read(app)
+                .marker_builds(app)
+        })
+    };
+    let before = builds(cx);
+
+    cx.update(|_, app| hint.update(app, |_, cx| cx.notify()));
+    draw(cx);
+    assert_eq!(builds(cx), before, "placed once");
+    assert_eq!(reserved(cx, &renderer), rows);
+}
+
 /// Keys typed in a view's input are the input's: none runs a diff shortcut,
 /// even one the diff would take, such as Escape closing its search. A click
 /// in the view runs the view's own handler, starts or moves no diff

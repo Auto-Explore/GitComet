@@ -17,9 +17,11 @@ use std::rc::Rc;
 /// What the pane knows of one view.
 struct HostedViewState {
     /// What it was last measured against, and the size it measured at,
-    /// which it draws at; none until it is measured, and none again after it
-    /// notified.
+    /// which it draws at; none until it is measured.
     measured: Option<(Measure, Size<Pixels>)>,
+    /// It notified since it was measured, so it is measured again before it
+    /// is next drawn; its rows until then are the ones it measured at.
+    notified: bool,
     /// Its wrapper's: the diff's keys stand aside while focus is inside.
     focus: gpui::FocusHandle,
 }
@@ -181,6 +183,7 @@ impl HostedViews {
     fn state(&mut self, id: EntityId, cx: &mut App) -> &mut HostedViewState {
         self.states.entry(id).or_insert_with(|| HostedViewState {
             measured: None,
+            notified: false,
             focus: cx.focus_handle(),
         })
     }
@@ -306,7 +309,10 @@ impl DiffRenderer {
                 let side = usize::from(view.anchor().side == DiffLineSide::New);
                 let measure = Measure::of(view.placement(), widths[side], starts[side], row_height);
                 let state = views.state(view.view().entity_id(), cx);
-                if !restyled && state.measured.is_some_and(|(at, _)| at == measure) {
+                if !restyled
+                    && !state.notified
+                    && state.measured.is_some_and(|(at, _)| at == measure)
+                {
                     return None;
                 }
                 Some((view.view().entity_id(), view.view().clone(), measure))
@@ -326,6 +332,7 @@ impl DiffRenderer {
             };
             let rows = measured_rows(state.measured);
             state.measured = Some((measure, size));
+            state.notified = false;
             if measured_rows(state.measured) != rows {
                 decor.key = None;
             }
@@ -333,13 +340,13 @@ impl DiffRenderer {
     }
 
     /// Measures the view again before it is next drawn: it notified.
-    pub(in crate::view) fn forget_hosted_view_size(&mut self, id: EntityId) {
+    pub(in crate::view) fn hosted_view_notified(&mut self, id: EntityId) {
         if let Some(state) = self
             .hosted_decor
             .as_mut()
             .and_then(|decor| decor.views.states.get_mut(&id))
         {
-            state.measured = None;
+            state.notified = true;
         }
     }
 
