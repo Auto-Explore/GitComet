@@ -888,72 +888,50 @@ fn end_of_line_views_scroll_sideways_with_the_text(cx: &mut gpui::TestAppContext
     }
 }
 
-/// A line long enough to stream in monospace cells ends where its cells do.
+/// A line long enough to stream in monospace cells ends where its cells do;
+/// a CRLF line's CR is not drawn, so its view sits after the last drawn
+/// cell, not one cell further.
 #[gpui::test]
 fn end_of_line_views_follow_a_streamed_line(cx: &mut gpui::TestAppContext) {
     let long = "x".repeat(70_000);
-    let (hint, _pane, renderer, id, cx) = mount_hint(
-        cx,
-        DiffLayout::Inline,
-        "one\nthree\n".into(),
-        format!("one\n{long}\nthree\n"),
-        2,
-        50.0,
-    );
-    let (_, end) = text_end(cx, &renderer, DiffTextRegion::Inline, "xxx");
-    // To the line's end, where the view is.
-    cx.update(|_, app| {
-        renderer.update(app, |renderer, cx| {
-            let scroll = renderer.diff_scroll.0.borrow();
-            let offset = scroll.base_handle.offset();
-            scroll
-                .base_handle
-                .set_offset(gpui::point(offset.x - end + px(300.0), offset.y));
-            cx.notify();
-        })
-    });
-    draw(cx);
-    let streamed = cx.update(|_, app| {
-        renderer
-            .read(app)
-            .diff_text_hitboxes
-            .values()
-            .any(|hit| hit.streamed_ascii_monospace_cell_width.is_some())
-    });
-    assert!(streamed, "the line is streamed");
-    let (_, end) = text_end(cx, &renderer, DiffTextRegion::Inline, "xxx");
-    let frame = cx.debug_bounds(view_frame(id, &hint)).expect("drawn");
-    assert_near(frame.left(), end, "after the cells");
-}
-
-/// A streamed CRLF line does not draw its CR, so its view sits after the
-/// last drawn cell, not one cell further.
-#[gpui::test]
-fn end_of_line_views_follow_a_streamed_crlf_line(cx: &mut gpui::TestAppContext) {
-    let long = "x".repeat(70_000);
-    let (hint, _pane, renderer, id, cx) = mount_hint(
-        cx,
-        DiffLayout::Inline,
-        "one\r\nthree\r\n".into(),
-        format!("one\r\n{long}\r\nthree\r\n"),
-        2,
-        50.0,
-    );
-    let (_, end) = text_end(cx, &renderer, DiffTextRegion::Inline, "xxx");
-    cx.update(|_, app| {
-        renderer.update(app, |renderer, cx| {
-            let scroll = renderer.diff_scroll.0.borrow();
-            let offset = scroll.base_handle.offset();
-            scroll
-                .base_handle
-                .set_offset(gpui::point(offset.x - end + px(300.0), offset.y));
-            cx.notify();
-        })
-    });
-    draw(cx);
-    let (_, end) = text_end(cx, &renderer, DiffTextRegion::Inline, "xxx");
-    let frame = cx.debug_bounds(view_frame(id, &hint)).expect("drawn");
-    assert_near(frame.left(), end, "after the last drawn cell");
+    for eol in ["\n", "\r\n"] {
+        let (hint, _pane, renderer, id, cx) = mount_hint(
+            cx,
+            DiffLayout::Inline,
+            format!("one{eol}three{eol}"),
+            format!("one{eol}{long}{eol}three{eol}"),
+            2,
+            50.0,
+        );
+        let (_, end) = text_end(cx, &renderer, DiffTextRegion::Inline, "xxx");
+        // To the line's end, where the view is.
+        cx.update(|_, app| {
+            renderer.update(app, |renderer, cx| {
+                let scroll = renderer.diff_scroll.0.borrow();
+                let offset = scroll.base_handle.offset();
+                scroll
+                    .base_handle
+                    .set_offset(gpui::point(offset.x - end + px(300.0), offset.y));
+                cx.notify();
+            })
+        });
+        draw(cx);
+        let streamed = cx.update(|_, app| {
+            renderer
+                .read(app)
+                .diff_text_hitboxes
+                .values()
+                .any(|hit| hit.streamed_ascii_monospace_cell_width.is_some())
+        });
+        assert!(streamed, "{eol:?}: the line is streamed");
+        let (_, end) = text_end(cx, &renderer, DiffTextRegion::Inline, "xxx");
+        let frame = cx.debug_bounds(view_frame(id, &hint)).expect("drawn");
+        assert_near(
+            frame.left(),
+            end,
+            &format!("{eol:?}: after the last drawn cell"),
+        );
+    }
 }
 
 /// A wrapped line shows its view after the text of its last row.
