@@ -370,28 +370,28 @@ fn block_view_rows_follow_the_ui_scale(cx: &mut gpui::TestAppContext) {
     }
 }
 
-/// A block view between lines, of a set height.
+/// An inline pane of three lines with a 60px hint between lines 2 and 3.
 fn mount_block_hint(
     cx: &mut gpui::TestAppContext,
 ) -> (
     gpui::Entity<Hint>,
     DiffPane,
     gpui::Entity<DiffRenderer>,
+    u64,
     &mut gpui::VisualTestContext,
 ) {
     let (old, new) = three_lines();
-    let (hint, pane, renderer, _, cx) = mount_views(cx, DiffLayout::Inline, old, new, |app| {
+    mount_views(cx, DiffLayout::Inline, old, new, |app| {
         let hint = new_hint(app, 50.0);
         (hint.clone(), vec![DiffHostedView::block(on_new(2), hint)])
-    });
-    (hint, pane, renderer, cx)
+    })
 }
 
 /// A view that shrinks to one row gives the others back, though one row is
 /// also what an unmeasured view takes.
 #[gpui::test]
 fn a_block_view_collapsing_to_one_row_gives_back_the_rest(cx: &mut gpui::TestAppContext) {
-    let (hint, _pane, renderer, cx) = mount_block_hint(cx);
+    let (hint, _pane, renderer, _, cx) = mount_block_hint(cx);
     let height = row_height(cx, &renderer);
     assert!(reserved(cx, &renderer) > 1, "60px takes more than one row");
 
@@ -409,16 +409,16 @@ fn a_block_view_collapsing_to_one_row_gives_back_the_rest(cx: &mut gpui::TestApp
 /// are: they are not placed again.
 #[gpui::test]
 fn a_block_view_notifying_at_its_height_keeps_the_rows_placed(cx: &mut gpui::TestAppContext) {
-    let (hint, pane, renderer, cx) = mount_block_hint(cx);
+    let (hint, _pane, renderer, _, cx) = mount_block_hint(cx);
     let rows = reserved(cx, &renderer);
     assert!(rows > 1, "60px takes more than one row");
     let builds = |cx: &mut gpui::VisualTestContext| {
         cx.update(|_, app| {
-            pane.view()
-                .downcast::<crate::view::hosted::diff_pane::DiffPaneView>()
-                .unwrap()
+            renderer
                 .read(app)
-                .marker_builds(app)
+                .hosted_decor
+                .as_ref()
+                .map_or(0, |decor| decor.marker_builds)
         })
     };
     let before = builds(cx);
@@ -1310,11 +1310,7 @@ fn an_end_of_line_view_is_measured_once_until_it_notifies(cx: &mut gpui::TestApp
 /// its column's width between lines, at its own after the text, and back.
 #[gpui::test]
 fn a_view_moved_between_placements_is_measured_for_its_new_one(cx: &mut gpui::TestAppContext) {
-    let (old, new) = three_lines();
-    let (hint, pane, renderer, id, cx) = mount_views(cx, DiffLayout::Inline, old, new, |app| {
-        let hint = new_hint(app, 50.0);
-        (hint.clone(), vec![DiffHostedView::block(on_new(2), hint)])
-    });
+    let (hint, pane, renderer, id, cx) = mount_block_hint(cx);
     let frame = view_frame(id, &hint);
     let block = cx.debug_bounds(frame).unwrap();
     let rows = reserved(cx, &renderer);
