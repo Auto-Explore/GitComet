@@ -56,6 +56,22 @@ pub struct RepoMaintenanceState {
 }
 
 #[derive(Clone, Debug)]
+pub enum BareModeConversionState {
+    Idle,
+    Previewing,
+    AwaitingConfirmation(Arc<BareConversionPreview>),
+    Converting,
+    Reopening,
+    Failed(Arc<gitcomet_core::error::Error>),
+}
+
+impl BareModeConversionState {
+    pub fn is_busy(&self) -> bool {
+        matches!(self, Self::Previewing | Self::Converting | Self::Reopening)
+    }
+}
+
+#[derive(Clone, Debug)]
 pub struct RepoState {
     pub id: RepoId,
     pub spec: RepoSpec,
@@ -87,9 +103,18 @@ pub struct RepoState {
     pub common_dir: Option<Arc<std::path::Path>>,
     pub shared_preferences: Option<super::RepositoryPreferencesSnapshot>,
     pub maintenance: RepoMaintenanceState,
+    pub auto_fetch: super::RepoAutoFetchState,
+    pub(crate) auto_fetch_revision: u64,
+    /// A read the last automatic-fetch refresh started failed.
+    pub(crate) refresh_read_failed: bool,
+    pub incoming: super::RepoIncomingState,
 
     pub open: Loadable<()>,
+    pub repository_mode: Option<RepositoryMode>,
+    pub bare_mode_conversion: BareModeConversionState,
+    pub head_commit: Option<CommitId>,
     pub history_state: HistoryState,
+    pub reword: super::RewordState,
     pub head_branch: Loadable<String>,
     pub detached_head_commit: Option<CommitId>,
     pub head_branch_rev: u64,
@@ -345,8 +370,16 @@ impl RepoState {
             common_dir: None,
             shared_preferences: None,
             maintenance: RepoMaintenanceState::default(),
+            auto_fetch: super::RepoAutoFetchState::default(),
+            auto_fetch_revision: 0,
+            refresh_read_failed: false,
+            incoming: super::RepoIncomingState::default(),
             open: Loadable::Loading,
+            repository_mode: None,
+            bare_mode_conversion: BareModeConversionState::Idle,
+            head_commit: None,
             history_state: HistoryState::default(),
+            reword: super::RewordState::default(),
             head_branch: Loadable::NotLoaded,
             detached_head_commit: None,
             head_branch_rev: 0,
@@ -432,6 +465,38 @@ impl RepoState {
             pending: RepoPendingState::default(),
             load_epoch: crate::model::RepoLoadEpoch(0),
         }
+    }
+
+    pub fn is_bare(&self) -> bool {
+        self.repository_mode == Some(RepositoryMode::Bare)
+    }
+
+    pub(crate) fn retire_repository_lifetime(&mut self) {
+        self.bump_load_epoch();
+        self.history_state.commit_signatures_cancellation.cancel();
+        for session in self.diff_sessions.values() {
+            session.cancellation.cancel();
+        }
+        for session in self.change_lists.values() {
+            session.cancellation.cancel();
+        }
+        self.diff_sessions = Arc::default();
+        self.change_lists = Arc::default();
+        self.lifetime = RepoLifetime::allocate();
+        self.loads_in_flight.clear();
+        self.pending = Default::default();
+        self.set_open(Loadable::Loading);
+    }
+
+    pub fn has_working_tree(&self) -> bool {
+        self.repository_mode == Some(RepositoryMode::WorkingTree)
+    }
+
+    pub fn live_file_source(&self) -> Option<FileSource> {
+        if self.is_bare() {
+            return self.head_commit.clone().map(FileSource::Commit);
+        }
+        Some(FileSource::WorkingDirectory)
     }
 
     pub(crate) fn new_external_drop_opening(
@@ -759,7 +824,10 @@ impl RepoState {
 
     /// Pull and Push of the current branch go through git-annex.
     pub fn annex_takes_over_pull_push(&self, settings: &LargeFileSettings) -> bool {
-        settings.annex_pull_push && self.annex_adjusted_branch().is_some()
+        settings.annex_pull_push
+            && (self.annex_adjusted_branch().is_some()
+                || self.is_bare()
+                    && matches!(&self.large_file_support, Loadable::Ready(support) if support.annex.in_use()))
     }
 
     pub fn large_file_command_busy(
@@ -1041,6 +1109,9 @@ impl RepoState {
     /// Resolves the commit HEAD points at: the current branch's target when
     /// attached, else the detached HEAD commit.
     pub fn head_commit_id(&self) -> Option<CommitId> {
+        if self.is_bare() {
+            return self.head_commit.clone();
+        }
         if let Loadable::Ready(head_branch) = &self.head_branch
             && head_branch != "HEAD"
             && let Loadable::Ready(branches) = &self.branches
@@ -1082,6 +1153,27 @@ impl RepoState {
     pub(crate) fn set_upstream_divergence(&mut self, v: Loadable<Option<UpstreamDivergence>>) {
         self.upstream_divergence = v;
         self.upstream_divergence_rev = self.upstream_divergence_rev.wrapping_add(1);
+    }
+
+    /// Last-known counts stay current while a fetch or reload is merely
+    /// running, so routine background checks don't repaint every tab.
+    pub fn incoming_is_stale(&self) -> bool {
+        matches!(self.incoming, super::RepoIncomingState::Stale(_))
+            || matches!(
+                self.auto_fetch.status,
+                super::AutoFetchStatus::Failed { .. }
+            )
+    }
+
+    /// The tab shows no current incoming count and loads none, or a refresh
+    /// read failed, so automatic fetch refreshes it after its next fetch even
+    /// when that moves nothing.
+    pub(crate) fn needs_auto_fetch_refresh(&self) -> bool {
+        self.refresh_read_failed
+            || (!matches!(self.incoming, super::RepoIncomingState::Current(_))
+                && !self
+                    .loads_in_flight
+                    .is_in_flight(super::LoadKind::UpstreamDivergence))
     }
 
     pub(crate) fn set_open(&mut self, v: Loadable<()>) {

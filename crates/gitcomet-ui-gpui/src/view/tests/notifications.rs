@@ -130,6 +130,7 @@ fn worktree_tooltip_includes_branch_name() {
     );
 
     repo.worktrees = Loadable::Ready(Arc::new(vec![Worktree {
+        bare: false,
         path: PathBuf::from("linked-worktree"),
         head: None,
         branch: Some("feature/tooltip".to_string()),
@@ -308,7 +309,10 @@ fn removed_repo_tab_tooltip_does_not_reappear_after_hover_target_disappears(
             .first()
             .map(|r| r.spec.workdir.clone())
             .unwrap_or_else(|| PathBuf::from("/tmp/splash-tooltip-clear-test"));
-        path_display::path_display_string(&workdir)
+        format!(
+            "{}\nIncoming commits unknown.",
+            path_display::path_display_string(&workdir)
+        )
     };
     assert_eq!(
         test_support::tooltip_text(cx, &view).map(|text| text.to_string()),
@@ -471,6 +475,7 @@ fn apply_state_snapshot_routes_command_errors_into_error_toasts(cx: &mut gpui::T
     repo.feedback_mut().last_error = Some(error.clone());
     repo.feedback_mut()
         .push_command_result(gitcomet_state::model::CommandLogEntry {
+            kind: gitcomet_state::model::CommandLogKind::Other,
             time: std::time::SystemTime::now(),
             ok: false,
             command: "git fetch".to_string(),
@@ -478,9 +483,10 @@ fn apply_state_snapshot_routes_command_errors_into_error_toasts(cx: &mut gpui::T
             stdout: "".into(),
             stderr: "fatal: test".into(),
             announce_success: true,
-            handled_by_auth_prompt: false,
+            handled_by_prompt: false,
             failure_id: None,
             hook_operation_id: None,
+            source: gitcomet_state::model::CommandSource::User,
         });
     next.active_repo = Some(repo_id);
     next.repos.push(repo);
@@ -518,6 +524,7 @@ const AUTH_PROMPT_KINDS: [AuthPromptKind; 2] =
 
 fn announced_command(summary: &str) -> gitcomet_state::model::CommandLogEntry {
     gitcomet_state::model::CommandLogEntry {
+        kind: gitcomet_state::model::CommandLogKind::Other,
         time: std::time::SystemTime::now(),
         ok: true,
         command: "git push".into(),
@@ -525,10 +532,71 @@ fn announced_command(summary: &str) -> gitcomet_state::model::CommandLogEntry {
         stdout: "".into(),
         stderr: "".into(),
         announce_success: true,
-        handled_by_auth_prompt: false,
+        handled_by_prompt: false,
         failure_id: None,
         hook_operation_id: None,
+        source: gitcomet_state::model::CommandSource::User,
     }
+}
+
+#[gpui::test]
+fn automatic_fetch_results_are_reported_to_consumers_without_notifications(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    cx.run_until_parked();
+    let observed = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let _subscription = cx.update(|_, app| {
+        let observed = std::rc::Rc::clone(&observed);
+        app.subscribe(&view, move |_, event: &CommandResultShown, _| {
+            observed.borrow_mut().push(event.entry.clone());
+        })
+    });
+    let mut repo = open_repo_state_with_workdir("/tmp/quiet-automatic-fetch");
+    repo.feedback_mut().last_error = Some("Earlier manual error".into());
+    let mut success = announced_command("Fetch: Synchronized");
+    success.command = "git fetch --all".into();
+    success.source = gitcomet_state::model::CommandSource::Background;
+    repo.feedback_mut().push_command_result(success.clone());
+    let mut failure = success;
+    failure.ok = false;
+    failure.summary = "Fetch failed: offline".into();
+    failure.stderr = "offline".into();
+    repo.feedback_mut().push_command_result(failure);
+    let mut state = AppState {
+        active_repo: Some(repo.id),
+        repos: vec![repo],
+        ..AppState::test_default()
+    };
+    apply_notification_snapshot(cx, &view, &state);
+    assert!(all_toasts(cx, &view).is_empty());
+    assert!(error_toasts(cx, &view).is_empty());
+    let entries = observed.borrow();
+    assert_eq!(entries.len(), 2);
+    assert_eq!(entries[1].stderr.as_ref(), "offline");
+    drop(entries);
+    cx.update(|_, app| {
+        let view = view.read(app);
+        assert!(view.state.auth_prompt.is_none());
+        assert_eq!(
+            view.state.repos[0].feedback.last_error.as_deref(),
+            Some("Earlier manual error")
+        );
+    });
+
+    state.repos[0]
+        .feedback_mut()
+        .push_command_result(announced_command("Manual push completed"));
+    apply_notification_snapshot(cx, &view, &state);
+    assert_eq!(
+        all_toasts(cx, &view)
+            .into_iter()
+            .map(|(_, message)| message)
+            .collect::<Vec<_>>(),
+        ["Manual push completed"]
+    );
 }
 
 fn warning(message: &str) -> gitcomet_state::model::AppNotification {
@@ -702,16 +770,18 @@ fn auth_rejection(kind: AuthPromptKind) -> &'static str {
 fn auth_pull_attempt(kind: AuthPromptKind) -> gitcomet_state::model::CommandLogEntry {
     let challenge = auth_challenge(kind);
     gitcomet_state::model::CommandLogEntry {
+        kind: gitcomet_state::model::CommandLogKind::Pull,
         time: std::time::SystemTime::UNIX_EPOCH,
         ok: false,
-        command: "git pull --prune".into(),
+        command: "git -c fetch.pruneTags=false pull --no-prune -- origin refs/heads/main".into(),
         summary: format!("Pull failed:\n\n{challenge}"),
         stdout: "".into(),
         stderr: challenge.into(),
         announce_success: true,
-        handled_by_auth_prompt: true,
+        handled_by_prompt: true,
         failure_id: None,
         hook_operation_id: None,
+        source: gitcomet_state::model::CommandSource::User,
     }
 }
 
@@ -746,7 +816,7 @@ fn successful_pull_attempt() -> gitcomet_state::model::CommandLogEntry {
         summary: "Pull: Fast-forwarded".into(),
         stdout: "Updating 1111111..2222222\nFast-forward\n".into(),
         stderr: "".into(),
-        handled_by_auth_prompt: false,
+        handled_by_prompt: false,
         ..auth_pull_attempt(AuthPromptKind::Passphrase)
     }
 }
@@ -1224,19 +1294,25 @@ fn genuine_retry_failures_still_produce_error_toasts(cx: &mut gpui::TestAppConte
         apply_notification_snapshot(cx, &view, &state);
         state.auth_prompt = None;
 
-        for (command, summary) in [
-            ("git pull --prune", "Pull failed: Connection timed out"),
+        for (command_kind, command, summary) in [
             (
+                gitcomet_state::model::CommandLogKind::Pull,
+                "git pull --no-prune -- origin refs/heads/main",
+                "Pull timed out: Connection timed out",
+            ),
+            (
+                gitcomet_state::model::CommandLogKind::Other,
                 "git push",
                 "Push failed: ! [rejected] main -> main (fetch first)",
             ),
         ] {
             state.repos[0].feedback_mut().push_command_result(
                 gitcomet_state::model::CommandLogEntry {
+                    kind: command_kind,
                     command: command.into(),
                     summary: summary.into(),
                     stderr: summary.into(),
-                    handled_by_auth_prompt: false,
+                    handled_by_prompt: false,
                     ..auth_pull_attempt(kind)
                 },
             );
@@ -1247,6 +1323,62 @@ fn genuine_retry_failures_still_produce_error_toasts(cx: &mut gpui::TestAppConte
             );
         }
         assert_eq!(error_toasts(cx, &view).len(), 2);
+    }
+}
+
+#[gpui::test]
+fn pull_reconcile_prompt_recognizes_full_command_arguments(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let mut state = auth_pull_state(AuthPromptKind::Passphrase);
+    state.auth_prompt = None;
+    let entry = &mut state.repos[0].feedback_mut().command_log[0];
+    entry.command = "git -c fetch.pruneTags=false -C /tmp/repo pull --ff-only --no-prune -- origin refs/heads/main".into();
+    entry.handled_by_prompt = false;
+    entry.failure_id = Some(gitcomet_core::error::GitFailureId::CommandFailed);
+    entry.summary = "Pull failed".into();
+    entry.stderr = "fatal: Not possible to fast-forward, aborting.".into();
+    apply_notification_snapshot(cx, &view, &state);
+    test_support::redraw(cx);
+    assert!(cx.debug_bounds("pull_reconcile_merge").is_some());
+    assert!(cx.debug_bounds("pull_reconcile_rebase").is_some());
+}
+
+#[gpui::test]
+fn pull_recovery_ignores_other_commands_and_timeouts(cx: &mut gpui::TestAppContext) {
+    use gitcomet_core::error::GitFailureId;
+    use gitcomet_state::model::CommandLogKind;
+
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let mut state = auth_pull_state(AuthPromptKind::Passphrase);
+    state.auth_prompt = None;
+    let mut entry = auth_pull_attempt(AuthPromptKind::Passphrase);
+    entry.command = "git pull-looking-command".into();
+    entry.handled_by_prompt = false;
+    entry.kind = CommandLogKind::Other;
+    entry.failure_id = Some(GitFailureId::WorktreeWouldBeOverwritten);
+    assert!(
+        ErrorReport::command_failure(RepoId(1), &entry)
+            .actions
+            .is_empty()
+    );
+
+    for (kind, failure_id) in [
+        (CommandLogKind::Other, GitFailureId::CommandFailed),
+        (CommandLogKind::Pull, GitFailureId::Timeout),
+    ] {
+        entry.kind = kind;
+        entry.failure_id = Some(failure_id);
+        entry.stderr = "fatal: Not possible to fast-forward, aborting.".into();
+        state.repos[0]
+            .feedback_mut()
+            .push_command_result(entry.clone());
+        apply_notification_snapshot(cx, &view, &state);
+        test_support::redraw(cx);
+        assert!(cx.debug_bounds("pull_reconcile_merge").is_none());
     }
 }
 
@@ -1268,7 +1400,7 @@ fn pull_blocked_after_authentication_has_one_actionable_failure_and_no_stale_pro
         .push_command_result(gitcomet_state::model::CommandLogEntry {
             summary: "Pull failed".into(),
             stderr: "error: Your local changes to the following files would be overwritten by merge:\n\tREADME.md\nAborting".into(),
-            handled_by_auth_prompt: false,
+            handled_by_prompt: false,
             failure_id: Some(gitcomet_core::error::GitFailureId::WorktreeWouldBeOverwritten),
             ..auth_pull_attempt(AuthPromptKind::Passphrase)
         });
@@ -1298,6 +1430,8 @@ fn authentication_owned_hook_attempts_are_quiet_even_without_the_prompt_snapshot
     let operation_id = GitOperationId(1);
     state.repos[0].feedback_mut().command_log[0].hook_operation_id = Some(operation_id);
     state.repos[0].feedback_mut().command_log[0].command = "git push".into();
+    state.repos[0].feedback_mut().command_log[0].kind =
+        gitcomet_state::model::CommandLogKind::Other;
     state.repos[0].feedback_mut().command_log[0].summary =
         format!("Push failed:\n\n{WINDOWS_SSH_PASSPHRASE_CHALLENGE}");
     state.repos[0]
@@ -1310,7 +1444,7 @@ fn authentication_owned_hook_attempts_are_quiet_even_without_the_prompt_snapshot
             time: std::time::SystemTime::UNIX_EPOCH,
             duration: Some(Duration::from_secs(1)),
             status: GitHookOperationStatus::Failed,
-            handled_by_auth_prompt: true,
+            handled_by_prompt: true,
             hooks: vec![gitcomet_state::model::GitHookRun {
                 id: gitcomet_core::git_operation::HookExecutionId {
                     sid: "auth-test".into(),
@@ -1325,6 +1459,7 @@ fn authentication_owned_hook_attempts_are_quiet_even_without_the_prompt_snapshot
             output_bytes: 0,
             output_truncated: false,
             latest_line: String::new(),
+            command: None,
             command_started: true,
             transfer: None,
             progress_lane: false,

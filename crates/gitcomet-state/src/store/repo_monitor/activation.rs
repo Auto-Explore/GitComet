@@ -273,9 +273,10 @@ impl MetadataSnapshot {
             // Deliberately omit objects and private caches: reading their
             // contents is not necessary to detect a changed Git view. Ref
             // targets, replacements and shallow boundaries are included.
+            // FETCH_HEAD is omitted too: every fetch rewrites it, and the refs
+            // a fetch moves are read anyway.
             for name in [
                 "ORIG_HEAD",
-                "FETCH_HEAD",
                 "MERGE_HEAD",
                 "MERGE_MSG",
                 "MERGE_MODE",
@@ -636,6 +637,19 @@ mod tests {
                 "missed deletion: {name}"
             );
         }
+    }
+
+    #[test]
+    fn fetch_head_rewrites_keep_history_and_tags() {
+        let (dir, backend) = fixture();
+        let mut refresh = ActivationRefresh::default();
+        refresh.change(dir.path(), &backend);
+        fs::write(
+            dir.path().join(".git/FETCH_HEAD"),
+            "1111\t\tbranch 'main'\n",
+        )
+        .unwrap();
+        assert_working_changes_only(refresh.change(dir.path(), &backend));
     }
 
     #[test]
@@ -1177,6 +1191,7 @@ mod tests {
             );
             repo.set_open(Loadable::Ready(()));
             repo.set_worktrees(Loadable::Ready(vec![Worktree {
+                bare: false,
                 path: repo.spec.workdir.clone(),
                 head: None,
                 branch: Some("main".into()),

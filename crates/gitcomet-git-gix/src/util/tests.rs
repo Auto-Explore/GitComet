@@ -495,6 +495,33 @@ fn operation_context_reports_real_hooks_output_and_exit_codes() {
 }
 
 #[test]
+fn metadata_output_keeps_status_and_bytes_without_operation_events() {
+    let (sender, receiver) = mpsc::channel();
+    let operation = GitOperationContext::new("metadata", move |_, event| {
+        sender.send(event).unwrap();
+    });
+    let _scope = git_operation::attach(&operation);
+    let output = run_git_metadata_output(failing_command_with_streams(), "git metadata").unwrap();
+    assert_eq!(output.status.code(), Some(7));
+    assert_eq!(output.stdout, b"out");
+    assert_eq!(output.stderr, b"err");
+    assert!(receiver.try_iter().next().is_none());
+}
+
+#[test]
+fn metadata_output_observes_attached_cancellation_before_spawn() {
+    let operation = GitOperationContext::new("metadata", |_, _| {});
+    let _scope = git_operation::attach(&operation);
+    assert!(git_operation::cancel(operation.id()));
+    let error = run_git_metadata_output(
+        Command::new("gitcomet-command-that-must-not-be-spawned"),
+        "git metadata",
+    )
+    .unwrap_err();
+    assert!(matches!(error.kind(), ErrorKind::Cancelled));
+}
+
+#[test]
 fn run_git_with_output_failure_preserves_structured_details() {
     let err = run_git_with_output(failing_command_with_streams(), "git synthetic")
         .expect_err("expected failing command");
@@ -643,6 +670,26 @@ fn classifies_local_overwrites_independently_of_auth_prompt_diagnostics() {
 }
 
 #[test]
+fn classifies_worktree_removal_refusals() {
+    for (stderr, blocker) in [
+        (
+            "fatal: '/tmp/linked' contains modified or untracked files, use --force to delete it",
+            WorktreeRemovalBlocker::Changes,
+        ),
+        (
+            "fatal: working trees containing submodules cannot be moved or removed",
+            WorktreeRemovalBlocker::Submodules,
+        ),
+    ] {
+        assert_eq!(
+            classify_git_failure(stderr),
+            GitFailureId::WorktreeRemovalBlocked(blocker),
+            "{stderr}"
+        );
+    }
+}
+
+#[test]
 fn parsed_stdout_failure_preserves_authoritative_auth_outcome() {
     let error = run_git_parsed_stdout(
         failing_command_with_streams(),
@@ -716,6 +763,29 @@ fn run_command_with_timeout_returns_structured_timeout_failure() {
         }
         other => panic!("expected structured git timeout, got {other:?}"),
     }
+}
+
+#[test]
+fn git_timeout_reason_survives_nonempty_output() {
+    let error = git_timeout_error(
+        "git -C /repo pull --rebase --no-prune -- origin refs/heads/main",
+        Duration::from_secs(300),
+        None,
+        b"Updating abc123..def456\n".to_vec(),
+        b"Receiving objects: 45%\r".to_vec(),
+    );
+    let ErrorKind::Git(failure) = error.kind() else {
+        panic!("expected structured timeout: {error:?}");
+    };
+    assert_eq!(failure.id(), GitFailureId::Timeout);
+    assert_eq!(
+        failure.detail(),
+        Some(
+            "after 300 seconds without output or progress (set GITCOMET_GIT_COMMAND_TIMEOUT_SECS to override)"
+        )
+    );
+    assert_eq!(failure.stdout(), b"Updating abc123..def456\n");
+    assert_eq!(failure.stderr(), b"Receiving objects: 45%\r");
 }
 
 #[test]

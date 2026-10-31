@@ -171,8 +171,9 @@ fn closing_active_repo_refreshes_open_neighbor_with_cancelled_loads() {
         );
         assert!(repo1_state.loads_in_flight.request(LoadKind::StagedStatus));
         let log_request = crate::model::PendingLogLoad {
-            scope: repo1_state.history_state.history_scope,
+            walk: repo1_state.history_state.history_scope.into(),
             author: None,
+            focus: Default::default(),
             limit: 50,
             cursor: None,
         };
@@ -251,6 +252,8 @@ fn stale_open_result_after_cancel_is_ignored() {
             repo_id: repo1,
             load_epoch: old_epoch,
             message: Box::new(crate::msg::InternalMsg::RepoOpenedOk {
+                repository_mode: gitcomet_core::domain::RepositoryMode::WorkingTree,
+                head_commit: None,
                 preferences: None,
                 repo_id: repo1,
                 spec: RepoSpec {
@@ -342,6 +345,8 @@ fn inactive_open_result_does_not_schedule_refresh_or_tags() {
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::RepoOpenedOk {
+            repository_mode: gitcomet_core::domain::RepositoryMode::WorkingTree,
+            head_commit: None,
             preferences: None,
             repo_id: inactive_repo,
             spec: RepoSpec {
@@ -523,6 +528,8 @@ fn pre_open_worktree_lazy_load_retries_after_repo_opened() {
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::RepoOpenedOk {
+            repository_mode: gitcomet_core::domain::RepositoryMode::WorkingTree,
+            head_commit: None,
             preferences: None,
             repo_id,
             spec: RepoSpec {
@@ -555,6 +562,8 @@ fn load_ref_metadata_emits_effect_and_result_builds_the_lookup_map() {
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::RepoOpenedOk {
+            repository_mode: gitcomet_core::domain::RepositoryMode::WorkingTree,
+            head_commit: None,
             preferences: None,
             repo_id,
             spec: RepoSpec {
@@ -721,6 +730,8 @@ fn branch_change_during_an_in_flight_metadata_load_schedules_a_refetch() {
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::RepoOpenedOk {
+            repository_mode: gitcomet_core::domain::RepositoryMode::WorkingTree,
+            head_commit: None,
             preferences: None,
             repo_id,
             spec: RepoSpec {
@@ -794,6 +805,8 @@ fn pre_open_submodule_load_auto_starts_after_repo_opened() {
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::RepoOpenedOk {
+            repository_mode: gitcomet_core::domain::RepositoryMode::WorkingTree,
+            head_commit: None,
             preferences: None,
             repo_id,
             spec: RepoSpec {
@@ -851,6 +864,8 @@ fn pre_open_stash_lazy_load_can_retry_after_repo_opened() {
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::RepoOpenedOk {
+            repository_mode: gitcomet_core::domain::RepositoryMode::WorkingTree,
+            head_commit: None,
             preferences: None,
             repo_id,
             spec: RepoSpec {
@@ -921,6 +936,8 @@ fn ensure_sidebar_data_retries_requested_sections_after_repo_opened() {
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::RepoOpenedOk {
+            repository_mode: gitcomet_core::domain::RepositoryMode::WorkingTree,
+            head_commit: None,
             preferences: None,
             repo_id,
             spec: RepoSpec {
@@ -1989,6 +2006,96 @@ fn set_active_repo_uses_full_refresh_when_hot_switch_metadata_is_incomplete() {
         "expected worktrees refresh even on the full refresh path"
     );
     assert_independent_worktree_list_load(&effects, repo1);
+}
+
+#[test]
+fn set_active_repo_hot_switch_waits_for_history_tags_when_tag_fetching_is_off() {
+    let mut repos: RepositoryRuntimes = Default::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState {
+        git_log_settings: GitLogSettings {
+            show_history_tags: true,
+            tag_fetch_mode: GitLogTagFetchMode::Disabled,
+            ..GitLogSettings::default()
+        },
+        ..AppState::test_default()
+    };
+
+    open_repo_ready(&mut repos, &id_alloc, &mut state, "/tmp/repo1");
+    open_repo_ready(&mut repos, &id_alloc, &mut state, "/tmp/repo2");
+
+    let repo1 = RepoId(1);
+    let repo1_state = state
+        .repos
+        .iter_mut()
+        .find(|repo| repo.id == repo1)
+        .expect("repo1 exists");
+    mark_repo_switch_secondary_metadata_ready(repo1_state);
+    repo1_state.tags = Loadable::NotLoaded;
+    repo1_state.last_active_at = Some(SystemTime::now());
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::SetActiveRepo { repo_id: repo1 },
+    );
+
+    assert!(
+        has_full_refresh_only_effects(&effects, repo1),
+        "history shows tags, so missing tags force the full refresh path"
+    );
+}
+
+#[test]
+fn tag_settings_load_only_their_own_tags_for_the_active_repo() {
+    for (show_history_tags, tag_fetch_mode) in [
+        (true, GitLogTagFetchMode::Disabled),
+        (false, GitLogTagFetchMode::OnRepositoryActivation),
+    ] {
+        let mut repos: RepositoryRuntimes = Default::default();
+        let id_alloc = AtomicU64::new(1);
+        let mut state = AppState {
+            git_log_settings: GitLogSettings {
+                show_history_tags: false,
+                tag_fetch_mode: GitLogTagFetchMode::Disabled,
+                ..GitLogSettings::default()
+            },
+            ..AppState::test_default()
+        };
+        open_repo_ready(&mut repos, &id_alloc, &mut state, "/tmp/repo1");
+
+        let effects = reduce(
+            &mut repos,
+            &id_alloc,
+            &mut state,
+            Msg::SetGitLogSettings {
+                show_history_tags,
+                tag_fetch_mode,
+                verify_commit_signatures: false,
+            },
+        );
+
+        let loads = (
+            effects.iter().any(|effect| {
+                matches!(effect, Effect::References(ReferenceEffect::LoadTags { .. }))
+            }),
+            effects.iter().any(|effect| {
+                matches!(
+                    effect,
+                    Effect::References(ReferenceEffect::LoadRemoteTags { .. })
+                )
+            }),
+        );
+        assert_eq!(
+            loads,
+            (
+                show_history_tags,
+                tag_fetch_mode == GitLogTagFetchMode::OnRepositoryActivation
+            ),
+            "show_history_tags={show_history_tags} tag_fetch_mode={tag_fetch_mode:?}"
+        );
+    }
 }
 
 #[test]

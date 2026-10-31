@@ -76,10 +76,12 @@ pub enum RepoCommandEffect {
     RemoveWorktree {
         repo_id: RepoId,
         path: PathBuf,
+        delete_branch: Option<String>,
     },
     ForceRemoveWorktree {
         repo_id: RepoId,
         path: PathBuf,
+        delete_branch: Option<String>,
     },
     CheckSubmoduleAddTrust {
         repo_id: RepoId,
@@ -163,6 +165,12 @@ pub enum RepoCommandEffect {
         prune: bool,
         auth: Option<StagedGitAuth>,
     },
+    FetchRemote {
+        repo_id: RepoId,
+        remote: String,
+        prune: bool,
+        auth: Option<StagedGitAuth>,
+    },
     FetchRefspecs {
         repo_id: RepoId,
         remote: String,
@@ -184,14 +192,12 @@ pub enum RepoCommandEffect {
     Pull {
         repo_id: RepoId,
         mode: PullMode,
-        prune: bool,
         auth: Option<StagedGitAuth>,
     },
     PullBranch {
         repo_id: RepoId,
         remote: String,
         branch: String,
-        prune: bool,
         auth: Option<StagedGitAuth>,
     },
     MergeRef {
@@ -264,6 +270,15 @@ pub enum RepoCommandEffect {
         expected_head: CommitId,
         message: String,
         count: usize,
+    },
+    RewordCommit {
+        repo_id: RepoId,
+        request_id: crate::model::RewordRequestId,
+        commit_id: CommitId,
+        message: String,
+        resume: bool,
+        /// Signing auth staged when a failed reword is replayed.
+        auth: Option<StagedGitAuth>,
     },
     Rebase {
         repo_id: RepoId,
@@ -366,6 +381,7 @@ macro_rules! match_git_auth {
             | RepoCommandEffect::LoadSubmodule { auth: $auth, .. }
             | RepoCommandEffect::SafePushAfterCommit { auth: $auth, .. }
             | RepoCommandEffect::FetchAll { auth: $auth, .. }
+            | RepoCommandEffect::FetchRemote { auth: $auth, .. }
             | RepoCommandEffect::FetchRefspecs { auth: $auth, .. }
             | RepoCommandEffect::Pull { auth: $auth, .. }
             | RepoCommandEffect::PullBranch { auth: $auth, .. }
@@ -378,6 +394,7 @@ macro_rules! match_git_auth {
             | RepoCommandEffect::DeleteRemoteBranch { auth: $auth, .. }
             | RepoCommandEffect::DeleteRemoteBranches { auth: $auth, .. }
             | RepoCommandEffect::RebaseContinue { auth: $auth, .. }
+            | RepoCommandEffect::RewordCommit { auth: $auth, .. }
             | RepoCommandEffect::PushTag { auth: $auth, .. }
             | RepoCommandEffect::DeleteRemoteTag { auth: $auth, .. } => $then,
             RepoCommandEffect::SaveWorktreeFile { .. }
@@ -525,12 +542,28 @@ impl RepoCommandEffect {
                 }
                 .finished(repo_id, Err(error)),
             ),
-            RepoCommandEffect::RemoveWorktree { repo_id, path } => {
-                Some(RepoCommandKind::RemoveWorktree { path }.finished(repo_id, Err(error)))
-            }
-            RepoCommandEffect::ForceRemoveWorktree { repo_id, path } => {
-                Some(RepoCommandKind::ForceRemoveWorktree { path }.finished(repo_id, Err(error)))
-            }
+            RepoCommandEffect::RemoveWorktree {
+                repo_id,
+                path,
+                delete_branch,
+            } => Some(
+                RepoCommandKind::RemoveWorktree {
+                    path,
+                    delete_branch,
+                }
+                .finished(repo_id, Err(error)),
+            ),
+            RepoCommandEffect::ForceRemoveWorktree {
+                repo_id,
+                path,
+                delete_branch,
+            } => Some(
+                RepoCommandKind::ForceRemoveWorktree {
+                    path,
+                    delete_branch,
+                }
+                .finished(repo_id, Err(error)),
+            ),
             RepoCommandEffect::CheckSubmoduleAddTrust {
                 repo_id,
                 url,
@@ -647,6 +680,9 @@ impl RepoCommandEffect {
             RepoCommandEffect::FetchAll { repo_id, .. } => {
                 Some(RepoCommandKind::FetchAll.finished(repo_id, Err(error)))
             }
+            RepoCommandEffect::FetchRemote {
+                repo_id, remote, ..
+            } => Some(RepoCommandKind::FetchRemote { remote }.finished(repo_id, Err(error))),
             RepoCommandEffect::FetchRefspecs {
                 repo_id,
                 remote,
@@ -758,6 +794,23 @@ impl RepoCommandEffect {
                     expected_head,
                     message,
                     count,
+                }
+                .finished(repo_id, Err(error)),
+            ),
+            RepoCommandEffect::RewordCommit {
+                repo_id,
+                request_id,
+                commit_id,
+                message,
+                resume,
+                ..
+            } => Some(
+                RepoCommandKind::RewordCommit {
+                    request_id,
+                    commit_id,
+                    message,
+                    rebase_paused: resume,
+                    rewritten_id: None,
                 }
                 .finished(repo_id, Err(error)),
             ),

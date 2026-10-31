@@ -889,23 +889,12 @@ impl GitCometView {
             .preferences
             .history
             .verify_commit_signatures;
+        // The reducer loads whatever tags the new settings need.
         self.store.dispatch(Msg::SetGitLogSettings {
             show_history_tags: show_tags,
             tag_fetch_mode,
             verify_commit_signatures,
         });
-        if show_tags
-            && auto_fetch_tags_on_repo_activation
-            && let Some(repo) = self.diff_renderer.read(cx).active_repo()
-        {
-            if matches!(repo.tags, Loadable::NotLoaded | Loadable::Error(_)) {
-                self.store.dispatch(Msg::LoadTags { repo_id: repo.id });
-            }
-            if matches!(repo.remote_tags, Loadable::NotLoaded | Loadable::Error(_)) {
-                self.store
-                    .dispatch(Msg::LoadRemoteTags { repo_id: repo.id });
-            }
-        }
         self.schedule_ui_settings_persist(cx);
     }
 
@@ -945,6 +934,18 @@ impl GitCometView {
         self.store.dispatch(Msg::SetDefaultTagType(tag_type));
     }
 
+    pub(in crate::view) fn set_hidden_ref_settings_preference(
+        &mut self,
+        settings: gitcomet_state::model::HiddenRefSettings,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let filter = settings.filter(gitcomet_core::identity::current().history_ref_presets());
+        self.update_ui_preferences(cx, move |preferences| {
+            preferences.history.hidden_ref_settings = settings;
+        });
+        self.store.dispatch(Msg::SetHistoryHiddenRefs(filter));
+    }
+
     pub(in crate::view) fn set_large_file_settings_preference(
         &mut self,
         settings: gitcomet_state::model::LargeFileSettings,
@@ -966,6 +967,26 @@ impl GitCometView {
         });
         self.store.dispatch(Msg::SetRemoteSettings(RemoteSettings {
             prune_deleted_remote_branches_on_fetch: enabled,
+            auto_fetch: self.ui_model.read(cx).preferences.remotes.auto_fetch,
+        }));
+    }
+
+    pub(in crate::view) fn set_auto_fetch_preference(
+        &mut self,
+        settings: gitcomet_state::model::AutoFetchSettings,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.update_ui_preferences(cx, move |preferences| {
+            preferences.remotes.auto_fetch = settings;
+        });
+        self.store.dispatch(Msg::SetRemoteSettings(RemoteSettings {
+            prune_deleted_remote_branches_on_fetch: self
+                .ui_model
+                .read(cx)
+                .preferences
+                .remotes
+                .prune_deleted_remote_branches_on_fetch,
+            auto_fetch: settings,
         }));
     }
 
@@ -1086,7 +1107,11 @@ impl GitCometView {
             PreferenceChange::LargeFileSettings(settings) => {
                 self.set_large_file_settings_preference(settings, cx)
             }
+            PreferenceChange::HiddenRefSettings(settings) => {
+                self.set_hidden_ref_settings_preference(settings, cx)
+            }
             PreferenceChange::RemotePrune(enabled) => self.set_remote_prune_preference(enabled, cx),
+            PreferenceChange::AutoFetch(settings) => self.set_auto_fetch_preference(settings, cx),
             PreferenceChange::MaintenanceRecommendations(enabled) => {
                 self.set_maintenance_recommendation_preference(enabled, cx)
             }

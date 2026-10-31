@@ -9,10 +9,10 @@ use super::{
     analyze_history_stashes, build_history_branch_chips_by_target,
     build_history_branch_containment_bits, build_history_branch_ref_items_by_target,
     build_history_branch_text_by_target, build_history_tag_names_by_target,
-    build_history_visible_indices, graph_branch_heads, history_graph,
-    history_ref_items_from_displayed_refs, next_history_stash_tip_for_commit_ix,
-    related_commit_contains,
+    build_history_visible_indices, history_graph, history_ref_items_from_displayed_refs,
+    next_history_stash_tip_for_commit_ix, related_commit_contains,
 };
+use crate::view::caches::HistoryStashTip;
 
 #[cfg(test)]
 pub(super) fn is_probable_stash_tip(commit: &Commit) -> bool {
@@ -27,6 +27,7 @@ pub(super) fn stash_summary_from_log_summary(summary: &str) -> Option<&str> {
 
 pub(super) fn resolve_history_head_target<'a>(
     history_scope: LogScope,
+    history_focus: &gitcomet_core::domain::HistoryFocusSet,
     detached_head_commit: Option<&'a CommitId>,
     head_branch: Option<&'a str>,
     branches: &'a [Branch],
@@ -35,8 +36,8 @@ pub(super) fn resolve_history_head_target<'a>(
 ) -> Option<&'a str> {
     match head_branch {
         Some("HEAD") => detached_head_commit.map(AsRef::as_ref).or_else(|| {
-            history_scope
-                .guarantees_head_visibility()
+            history_focus
+                .head_is_first(history_scope)
                 .then(|| {
                     visible_indices
                         .first()
@@ -53,6 +54,84 @@ pub(super) fn resolve_history_head_target<'a>(
     }
 }
 
+pub(super) fn graph_branch_heads<'a>(
+    history_scope: LogScope,
+    branches: &'a [Branch],
+    remote_branches: &'a [RemoteBranch],
+) -> impl Iterator<Item = &'a str> + 'a {
+    let (branches, remote_branches): (&[Branch], &[RemoteBranch]) =
+        if history_scope.is_current_branch_mode() {
+            (&[], &[])
+        } else {
+            (branches, remote_branches)
+        };
+    branches
+        .iter()
+        .map(|b| b.target.as_ref())
+        .chain(remote_branches.iter().map(|b| b.target.as_ref()))
+}
+
+/// The graph the history list draws for a page of commits.
+pub(in crate::view) struct HistoryPageGraph<'a> {
+    stash_tips: Vec<HistoryStashTip<'a>>,
+    /// Page indices of the rows shown: stash helper commits are left out.
+    visible_indices: HistoryVisibleIndices,
+    head_target: Option<&'a str>,
+    rows: Arc<[history_graph::GraphRow]>,
+}
+
+impl HistoryPageGraph<'_> {
+    pub(in crate::view) fn row_for_commit_ix(
+        &self,
+        commit_ix: usize,
+    ) -> Option<&history_graph::GraphRow> {
+        self.rows.get(self.visible_indices.visible_ix(commit_ix)?)
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(in crate::view) fn build_history_page_graph<'a>(
+    history_scope: LogScope,
+    history_focus: &gitcomet_core::domain::HistoryFocusSet,
+    detached_head_commit: Option<&'a CommitId>,
+    head_branch: Option<&'a str>,
+    branches: &'a [Branch],
+    remote_branches: &'a [RemoteBranch],
+    stashes: &'a [StashEntry],
+    commits: &'a [Commit],
+    theme: AppTheme,
+) -> HistoryPageGraph<'a> {
+    let stash_analysis = analyze_history_stashes(commits, stashes);
+    let stash_helper_ids = stash_analysis.stash_helper_ids;
+    let visible_indices = build_history_visible_indices(commits, &stash_helper_ids);
+    let head_target = resolve_history_head_target(
+        history_scope,
+        history_focus,
+        detached_head_commit,
+        head_branch,
+        branches,
+        &visible_indices,
+        commits,
+    );
+    let branch_heads = graph_branch_heads(history_scope, branches, remote_branches);
+    let rows = if stash_helper_ids.is_empty() {
+        history_graph::compute_graph(commits, theme, branch_heads, head_target).into()
+    } else {
+        let visible_commit_refs = visible_indices
+            .iter()
+            .map(|ix| &commits[ix])
+            .collect::<Vec<_>>();
+        history_graph::compute_graph_refs(&visible_commit_refs, theme, branch_heads, head_target)
+            .into()
+    };
+    HistoryPageGraph {
+        stash_tips: stash_analysis.stash_tips,
+        visible_indices,
+        head_target,
+        rows,
+    }
+}
+
 pub(super) fn build_history_base_cache(
     request: HistoryBaseCacheRequest,
     page: &LogPage,
@@ -62,31 +141,22 @@ pub(super) fn build_history_base_cache(
     remote_branches: &[RemoteBranch],
     stashes: &[StashEntry],
 ) -> HistoryBaseCache {
-    let stash_analysis = analyze_history_stashes(&page.commits, stashes);
-    let stash_tips = stash_analysis.stash_tips;
-    let stash_helper_ids = stash_analysis.stash_helper_ids;
-
-    let visible_indices = build_history_visible_indices(&page.commits, &stash_helper_ids);
-    let head_target = resolve_history_head_target(
+    let HistoryPageGraph {
+        stash_tips,
+        visible_indices,
+        head_target,
+        rows: graph_rows,
+    } = build_history_page_graph(
         request.history_scope,
+        &request.history_focus,
         request.detached_head_commit.as_ref(),
         head_branch,
         branches,
-        &visible_indices,
+        remote_branches,
+        stashes,
         &page.commits,
+        theme,
     );
-
-    let branch_heads = graph_branch_heads(request.history_scope, branches, remote_branches);
-    let graph_rows: Arc<[history_graph::GraphRow]> = if stash_helper_ids.is_empty() {
-        history_graph::compute_graph(&page.commits, theme, branch_heads, head_target).into()
-    } else {
-        let visible_commit_refs = visible_indices
-            .iter()
-            .map(|ix| &page.commits[ix])
-            .collect::<Vec<_>>();
-        history_graph::compute_graph_refs(&visible_commit_refs, theme, branch_heads, head_target)
-            .into()
-    };
     let has_stash_tips = !stash_tips.is_empty();
     let mut author_cache: FxHashMap<&str, HistoryAuthorVm> =
         FxHashMap::with_capacity_and_hasher(64, Default::default());
@@ -180,6 +250,7 @@ pub(super) fn build_history_decoration_cache(
 ) -> HistoryDecorationCache {
     let head_target = resolve_history_head_target(
         request.base_request.history_scope,
+        &request.base_request.history_focus,
         request.detached_head_commit.as_ref(),
         head_branch,
         branches,

@@ -1,5 +1,8 @@
-use crate::model::{AppState, DefaultTagType, GitLogTagFetchMode, RepoId};
-use gitcomet_core::domain::{HistoryMode, LogScope};
+use crate::model::{
+    AppState, AutoFetchInterval, DefaultTagType, GitLogTagFetchMode, HiddenRefPrefix,
+    HiddenRefSettings, RepoId,
+};
+use gitcomet_core::domain::{HistoryFocus, HistoryFocusSet, HistoryMode, LogScope};
 use gitcomet_core::platform::dirs;
 use rustc_hash::FxHashSet;
 use serde::{Deserialize, Serialize};
@@ -97,10 +100,15 @@ pub struct UiSession {
     pub annex_pull_push_on_adjusted: Option<bool>,
     pub annex_sync_content: Option<bool>,
     pub history_tag_fetch_mode: Option<GitLogTagFetchMode>,
+    pub history_hidden_refs_enabled: Option<bool>,
+    pub history_hidden_ref_presets: Option<BTreeMap<String, bool>>,
+    pub history_hidden_ref_prefixes: Option<Vec<String>>,
     pub default_history_mode: Option<HistoryMode>,
     pub commit_push_after_enabled: Option<bool>,
     pub default_tag_type: Option<DefaultTagType>,
     pub fetch_prune_deleted_remote_branches: Option<bool>,
+    pub auto_fetch_enabled: Option<bool>,
+    pub auto_fetch_interval_minutes: Option<AutoFetchInterval>,
     pub recommend_repo_maintenance: Option<bool>,
     pub git_executable_path: Option<PathBuf>,
     pub external_code_editor: Option<ExternalCodeEditorSetting>,
@@ -303,6 +311,12 @@ pub(crate) struct UiSessionFile {
     #[serde(default, deserialize_with = "lenient")]
     history_tag_fetch_mode: Option<GitLogTagFetchMode>,
     #[serde(default, deserialize_with = "lenient")]
+    history_hidden_refs_enabled: Option<bool>,
+    #[serde(default, deserialize_with = "lenient")]
+    history_hidden_ref_presets: Option<BTreeMap<String, bool>>,
+    #[serde(default, deserialize_with = "lenient")]
+    history_hidden_ref_prefixes: Option<Vec<String>>,
+    #[serde(default, deserialize_with = "lenient")]
     default_history_mode: Option<HistoryModeSetting>,
     #[serde(default, deserialize_with = "lenient")]
     commit_push_after_enabled: Option<bool>,
@@ -310,6 +324,10 @@ pub(crate) struct UiSessionFile {
     default_tag_type: Option<DefaultTagType>,
     #[serde(default, deserialize_with = "lenient")]
     fetch_prune_deleted_remote_branches: Option<bool>,
+    #[serde(default, deserialize_with = "lenient")]
+    auto_fetch_enabled: Option<bool>,
+    #[serde(default, deserialize_with = "lenient")]
+    auto_fetch_interval_minutes: Option<AutoFetchInterval>,
     #[serde(default, deserialize_with = "lenient")]
     recommend_repo_maintenance: Option<bool>,
     #[serde(default, deserialize_with = "lenient")]
@@ -327,6 +345,14 @@ pub(crate) struct UiSessionFile {
     repo_history_scopes: Option<BTreeMap<String, HistoryScopeSetting>>,
     #[serde(default, deserialize_with = "lenient")]
     repo_history_author_filters: Option<BTreeMap<String, Option<String>>>,
+    // Focus was called "solo" while it was in development; the alias keeps
+    // sessions written by those builds readable.
+    #[serde(
+        default,
+        alias = "repo_history_solos",
+        deserialize_with = "history_mode::deserialize_repo_history_focus"
+    )]
+    repo_history_focus: Option<BTreeMap<String, Vec<HistoryFocusSetting>>>,
     #[serde(skip_serializing, default, deserialize_with = "lenient")]
     repo_fetch_prune_deleted_remote_tracking_branches: Option<BTreeMap<String, bool>>,
     #[serde(default, deserialize_with = "lenient")]
@@ -557,10 +583,15 @@ pub fn load_from_path(path: &Path) -> UiSession {
         annex_pull_push_on_adjusted: file.annex_pull_push_on_adjusted,
         annex_sync_content: file.annex_sync_content,
         history_tag_fetch_mode: file.history_tag_fetch_mode,
+        history_hidden_refs_enabled: file.history_hidden_refs_enabled,
+        history_hidden_ref_presets: file.history_hidden_ref_presets,
+        history_hidden_ref_prefixes: file.history_hidden_ref_prefixes,
         default_history_mode: file.default_history_mode.map(Into::into),
         commit_push_after_enabled: file.commit_push_after_enabled,
         default_tag_type: file.default_tag_type,
         fetch_prune_deleted_remote_branches: file.fetch_prune_deleted_remote_branches,
+        auto_fetch_enabled: file.auto_fetch_enabled,
+        auto_fetch_interval_minutes: file.auto_fetch_interval_minutes,
         recommend_repo_maintenance: file.recommend_repo_maintenance,
         git_executable_path: file
             .git_executable_path
@@ -576,6 +607,7 @@ pub(crate) struct RepoSessionPreferences {
     pub(crate) repo_history_modes: BTreeMap<String, HistoryMode>,
     pub(crate) repo_history_scopes: BTreeMap<String, LogScope>,
     pub(crate) repo_history_author_filters: BTreeMap<String, Option<String>>,
+    pub(crate) repo_history_focus: BTreeMap<String, HistoryFocusSet>,
 }
 
 #[cfg(test)]
@@ -877,7 +909,7 @@ pub use extensions::{
     check_extension_namespace_size, extension_namespace, extension_namespace_from_path,
     persist_extension_namespace, persist_extension_namespace_to_path,
 };
-use history_mode::{HistoryModeSetting, HistoryScopeSetting};
+use history_mode::{HistoryFocusSetting, HistoryModeSetting, HistoryScopeSetting};
 use maintenance::{RepoMaintenanceSession, lenient_repo_maintenance};
 use parse::*;
 use survey::{SurveyPromptSession, current_unix_seconds};
@@ -918,4 +950,5 @@ mod tests;
 mod repository_preferences;
 pub(crate) use repository_preferences::{
     initialize_repository_preferences, persist_repository_preference_updates,
+    rekey_repository_preferences,
 };

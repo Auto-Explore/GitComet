@@ -86,6 +86,8 @@ fn repo_opened_ok_sets_loading_and_emits_refresh_effects() {
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::RepoOpenedOk {
+            repository_mode: gitcomet_core::domain::RepositoryMode::WorkingTree,
+            head_commit: None,
             preferences: None,
             repo_id: RepoId(1),
             spec: RepoSpec {
@@ -225,6 +227,8 @@ fn repo_opened_ok_auto_loads_tags_when_enabled() {
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::RepoOpenedOk {
+            repository_mode: gitcomet_core::domain::RepositoryMode::WorkingTree,
+            head_commit: None,
             preferences: None,
             repo_id: RepoId(1),
             spec: RepoSpec {
@@ -253,6 +257,69 @@ fn repo_opened_ok_auto_loads_tags_when_enabled() {
 }
 
 #[test]
+fn repo_opened_ok_loads_history_tags_and_remote_tags_independently() {
+    for (show_history_tags, tag_fetch_mode) in [
+        (true, GitLogTagFetchMode::OnRepositoryActivation),
+        (true, GitLogTagFetchMode::Disabled),
+        (false, GitLogTagFetchMode::OnRepositoryActivation),
+        (false, GitLogTagFetchMode::Disabled),
+    ] {
+        let mut repos: RepositoryRuntimes = Default::default();
+        let id_alloc = AtomicU64::new(1);
+        let mut state = AppState {
+            git_log_settings: GitLogSettings {
+                show_history_tags,
+                tag_fetch_mode,
+                ..GitLogSettings::default()
+            },
+            ..AppState::test_default()
+        };
+        reduce(
+            &mut repos,
+            &id_alloc,
+            &mut state,
+            Msg::OpenRepo(PathBuf::from("/tmp/repo")),
+        );
+        let effects = reduce(
+            &mut repos,
+            &id_alloc,
+            &mut state,
+            Msg::Internal(crate::msg::InternalMsg::RepoOpenedOk {
+                repository_mode: gitcomet_core::domain::RepositoryMode::WorkingTree,
+                head_commit: None,
+                preferences: None,
+                repo_id: RepoId(1),
+                spec: RepoSpec {
+                    workdir: PathBuf::from("/tmp/repo"),
+                },
+                repo: Arc::new(DummyRepo::new("/tmp/repo")),
+            }),
+        );
+
+        // History tags are local; only the fetch setting contacts remotes.
+        let loads = (
+            effects.iter().any(|effect| {
+                matches!(effect, Effect::References(ReferenceEffect::LoadTags { .. }))
+            }),
+            effects.iter().any(|effect| {
+                matches!(
+                    effect,
+                    Effect::References(ReferenceEffect::LoadRemoteTags { .. })
+                )
+            }),
+        );
+        assert_eq!(
+            loads,
+            (
+                show_history_tags,
+                tag_fetch_mode == GitLogTagFetchMode::OnRepositoryActivation
+            ),
+            "show_history_tags={show_history_tags} tag_fetch_mode={tag_fetch_mode:?}"
+        );
+    }
+}
+
+#[test]
 fn repo_opened_ok_for_closed_repo_is_ignored() {
     let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
@@ -276,6 +343,8 @@ fn repo_opened_ok_for_closed_repo_is_ignored() {
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::RepoOpenedOk {
+            repository_mode: gitcomet_core::domain::RepositoryMode::WorkingTree,
+            head_commit: None,
             preferences: None,
             repo_id: RepoId(1),
             spec: RepoSpec {
@@ -1305,6 +1374,8 @@ fn repo_opened_ok_loads_file_browser_for_active_repo_in_files_mode() {
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::RepoOpenedOk {
+            repository_mode: gitcomet_core::domain::RepositoryMode::WorkingTree,
+            head_commit: None,
             preferences: None,
             repo_id: repo1,
             spec,

@@ -98,11 +98,11 @@ fn main() {
                     json!("fetched")
                 }
                 "pull" | "pull-merge" => {
-                    repo.pull(PullMode::Merge, true).unwrap();
+                    repo.pull(PullMode::Merge).unwrap();
                     json!("pulled")
                 }
                 "pull-rebase" => {
-                    repo.pull(PullMode::Rebase, true).unwrap();
+                    repo.pull(PullMode::Rebase).unwrap();
                     json!("pulled")
                 }
                 "lfs-fetch" => {

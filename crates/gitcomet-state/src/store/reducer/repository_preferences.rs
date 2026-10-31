@@ -1,5 +1,6 @@
 use crate::model::{
-    AppState, Loadable, RepoId, RepositoryPreferenceUpdate, RepositoryPreferencesSnapshot,
+    AppState, Loadable, RepoId, RepoState, RepositoryPreferenceUpdate,
+    RepositoryPreferencesSnapshot,
 };
 use crate::msg::Effect;
 use crate::msg::PersistenceEffect;
@@ -9,19 +10,27 @@ pub(super) fn update(
     repo_id: RepoId,
     update: RepositoryPreferenceUpdate,
 ) -> Vec<Effect> {
-    let Some(repo) = state.repos.iter().find(|repo| repo.id == repo_id) else {
-        return Vec::new();
-    };
-    if !matches!(repo.open, Loadable::Ready(())) {
-        return Vec::new();
-    }
-    vec![Effect::Persistence(
-        PersistenceEffect::UpdateRepositoryPreferences {
-            repo_id,
+    state
+        .repos
+        .iter()
+        .find(|repo| repo.id == repo_id)
+        .and_then(|repo| update_effect(repo, update))
+        .into_iter()
+        .collect()
+}
+
+/// Persists and broadcasts `update`; a repository still opening has no record.
+pub(super) fn update_effect(
+    repo: &RepoState,
+    update: RepositoryPreferenceUpdate,
+) -> Option<Effect> {
+    matches!(repo.open, Loadable::Ready(())).then(|| {
+        Effect::Persistence(PersistenceEffect::UpdateRepositoryPreferences {
+            repo_id: repo.id,
             key: repo.repository_key(),
             update,
-        },
-    )]
+        })
+    })
 }
 
 pub(super) fn set_explorer_visibility(
@@ -104,22 +113,13 @@ pub(super) fn apply(state: &mut AppState, snapshot: RepositoryPreferencesSnapsho
             ));
         }
         let repo = &mut state.repos[ix];
-        if repo.history_state.history_scope != preferences.history_mode {
-            repo.set_log_scope(preferences.history_mode);
-            repo.retain_log_while_loading();
-            repo.set_log_loading_more(false);
-            repo.set_log_scan_progress(None);
-            if state.active_repo == Some(repo_id) {
-                repo.set_log(Loadable::Loading);
-                let request = super::util::first_page_log_request(repo);
-                effects.extend(super::util::request_log_effect(repo, request));
-            } else {
-                repo.loads_in_flight.invalidate_log();
-                repo.set_log(Loadable::NotLoaded);
-            }
-        }
+        let walk = repo.history_walk();
+        repo.history_state.history_scope = preferences.history_mode;
         repo.shared_preferences = Some(snapshot.clone());
         repo.branch_sidebar_rev += 1;
+        if repo.history_walk() != walk {
+            effects.extend(super::util::restart_history_walk(state, ix));
+        }
     }
     effects
 }

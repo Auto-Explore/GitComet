@@ -19,6 +19,7 @@ language_registry! {
     DiffSyntaxLanguage::Markdown => ["md", "markdown", "mdown", "mkd", "mkdn", "mdwn", "mdx", "mdc"],
     DiffSyntaxLanguage::MarkdownInline => ["markdown-inline", "markdown_inline"],
     DiffSyntaxLanguage::Html => ["html", "htm"],
+    DiffSyntaxLanguage::Razor => ["cshtml", "razor"],
     DiffSyntaxLanguage::Vue => ["vue"],
     DiffSyntaxLanguage::Svelte => ["svelte"],
     // The first six are the grammar's own declared file-types; `dj` is the
@@ -345,6 +346,14 @@ pub(super) fn tree_sitter_grammar(
         DiffSyntaxLanguage::Html => Some((
             tree_sitter_html::LANGUAGE.into(),
             TreesitterQueryAsset::with_injections(HTML_HIGHLIGHTS_QUERY, HTML_INJECTIONS_QUERY),
+        )),
+        DiffSyntaxLanguage::Razor => Some((
+            tree_sitter_razor_modern::LANGUAGE.into(),
+            TreesitterQueryAsset::with_injections_and_supplement(
+                CSHARP_HIGHLIGHTS_QUERY,
+                RAZOR_INJECTIONS_QUERY,
+                RAZOR_HIGHLIGHTS_QUERY,
+            ),
         )),
         DiffSyntaxLanguage::Jinja => Some((
             tree_sitter_jinja_dialects::LANGUAGE.into(),
@@ -817,27 +826,22 @@ fn init_highlight_spec(language: DiffSyntaxLanguage) -> TreesitterHighlightSpec 
     let injection_query = asset.injections.map(|source| {
         tree_sitter::Query::new(&ts_language, source).expect("injections.scm should compile")
     });
-    let injection_combined_patterns = injection_query
+    let injection_patterns = injection_query
         .as_ref()
-        .map(|injection_query| {
-            (0..injection_query.pattern_count())
-                .map(|pattern_ix| {
-                    injection_query
-                        .property_settings(pattern_ix)
-                        .iter()
-                        .any(|setting| setting.key.as_ref() == "injection.combined")
-                })
-                .collect::<Vec<_>>()
-        })
+        .map(injection_patterns_for_query)
+        .transpose()
+        .expect("injection query properties should be valid")
         .unwrap_or_default();
-    let has_combined_injections = injection_combined_patterns.iter().any(|combined| *combined);
+    let has_combined_injections = injection_patterns
+        .iter()
+        .any(|pattern| matches!(pattern, InjectionPattern::Combined(_)));
     TreesitterHighlightSpec {
         ts_language,
         query,
         capture_kinds,
         discarded_capture,
         injection_query,
-        injection_combined_patterns,
+        injection_patterns,
         has_combined_injections,
     }
 }
@@ -946,6 +950,7 @@ pub(super) fn tree_sitter_highlight_spec(
         DiffSyntaxLanguage::MarkdownInline => highlight_spec_entry!(MarkdownInline),
         DiffSyntaxLanguage::Hcl => highlight_spec_entry!(Hcl),
         DiffSyntaxLanguage::Html => highlight_spec_entry!(Html),
+        DiffSyntaxLanguage::Razor => highlight_spec_entry!(Razor),
         DiffSyntaxLanguage::Vue => highlight_spec_entry!(Vue),
         DiffSyntaxLanguage::Svelte => highlight_spec_entry!(Svelte),
         DiffSyntaxLanguage::Jinja => highlight_spec_entry!(Jinja),

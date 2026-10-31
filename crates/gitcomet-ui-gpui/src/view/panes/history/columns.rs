@@ -1,13 +1,13 @@
 //! History column widths: which columns fit, resizing and resets.
 
 use super::{
-    Branch, HISTORY_COL_AUTHOR_MAX_PX, HISTORY_COL_AUTHOR_MIN_PX, HISTORY_COL_AUTHOR_PX,
+    HISTORY_COL_AUTHOR_MAX_PX, HISTORY_COL_AUTHOR_MIN_PX, HISTORY_COL_AUTHOR_PX,
     HISTORY_COL_BRANCH_MAX_PX, HISTORY_COL_BRANCH_MIN_PX, HISTORY_COL_BRANCH_PX,
     HISTORY_COL_DATE_MAX_PX, HISTORY_COL_DATE_MIN_PX, HISTORY_COL_DATE_PX,
     HISTORY_COL_GRAPH_MAX_PX, HISTORY_COL_GRAPH_PX, HISTORY_COL_MESSAGE_MIN_PX,
     HISTORY_COL_SHA_MAX_PX, HISTORY_COL_SHA_MIN_PX, HISTORY_COL_SHA_PX,
     HISTORY_GRAPH_FULL_WIDTH_LANES, HistoryBranchNamesMode, HistoryColResizeHandle,
-    HistoryColResizeState, LogScope, Pixels, RemoteBranch, px, ui_scale,
+    HistoryColResizeState, Pixels, px, ui_scale,
 };
 
 pub(in super::super::super) fn history_scrollbar_gutter() -> Pixels {
@@ -28,23 +28,6 @@ pub(super) fn history_scaled_px(value: f32, ui_scale_percent: u32) -> Pixels {
 
 pub(super) fn history_message_min_width(ui_scale_percent: u32) -> Pixels {
     history_scaled_px(HISTORY_COL_MESSAGE_MIN_PX, ui_scale_percent)
-}
-
-pub(super) fn graph_branch_heads<'a>(
-    history_scope: LogScope,
-    branches: &'a [Branch],
-    remote_branches: &'a [RemoteBranch],
-) -> impl Iterator<Item = &'a str> + 'a {
-    let (branches, remote_branches): (&[Branch], &[RemoteBranch]) =
-        if history_scope.is_current_branch_mode() {
-            (&[], &[])
-        } else {
-            (branches, remote_branches)
-        };
-    branches
-        .iter()
-        .map(|b| b.target.as_ref())
-        .chain(remote_branches.iter().map(|b| b.target.as_ref()))
 }
 
 pub(super) fn history_column_static_bounds(

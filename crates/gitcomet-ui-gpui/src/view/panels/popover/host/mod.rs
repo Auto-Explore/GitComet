@@ -221,6 +221,8 @@ impl PopoverHost {
                     .map(|repo| repo.feedback.hook_activity_rev)
             });
             this.state = next_state;
+            this.sync_bare_mode_confirmation(cx);
+            this.close_working_tree_prompt_in_bare_mode(cx);
             if let Some(selected_action) = selected_action
                 && let Some(model) = this
                     .popover
@@ -886,6 +888,7 @@ impl PopoverHost {
             error_details_scroll: ScrollHandle::new(),
             error_details_rail_scroll: ScrollHandle::new(),
             commit_mainline: None,
+            force_push_lease: None,
             context_menu_focus_handle,
             menu_invoker_focus: None,
             focus_return: None,
@@ -1344,6 +1347,17 @@ impl PopoverHost {
     }
 
     fn close_popover_with_resolution(&mut self, resolved: bool, cx: &mut gpui::Context<Self>) {
+        if !resolved {
+            self.dismiss_open_force_prompt();
+        }
+        if let Some(PopoverKind::Repo {
+            repo_id,
+            kind: RepoPopoverKind::DisableBareModeConfirm,
+        }) = self.popover.as_ref()
+        {
+            self.store
+                .dispatch(Msg::ClearBareConversionPreview { repo_id: *repo_id });
+        }
         self.prepare_worktree_menu_location(None, cx);
         let application_close = match self.popover.as_ref() {
             Some(PopoverKind::UnsavedFileEditsConfirm(prompt)) => {
@@ -1561,6 +1575,21 @@ impl PopoverHost {
         cx.stop_propagation();
     }
 
+    /// A force prompt lives in shared state and must be dismissed there too,
+    /// or the same refusal could not offer it again.
+    fn dismiss_open_force_prompt(&self) {
+        if let Some(PopoverKind::ForceRemoveWorktreeConfirm(prompt)) = self.popover.as_ref() {
+            self.store.dispatch(Msg::DismissForceRemoveWorktreePrompt {
+                prompt: prompt.clone(),
+            });
+        }
+        if let Some(PopoverKind::ForceDeleteBranchConfirm(prompt)) = self.popover.as_ref() {
+            self.store.dispatch(Msg::DismissForceDeleteBranchPrompt {
+                prompt: prompt.clone(),
+            });
+        }
+    }
+
     pub(in crate::view) fn dismiss_prompt_popover(
         &mut self,
         window: &mut Window,
@@ -1749,6 +1778,17 @@ impl PopoverHost {
             new_source,
             markdown_image_approval,
         } = kind.into();
+        if let Some(repo_id) = kind.working_tree_repository(self.active_repo_id())
+            && self
+                .state
+                .repos
+                .iter()
+                .find(|repo| repo.id == repo_id)
+                .is_some_and(RepoState::is_bare)
+        {
+            self.explain_working_tree_required(cx);
+            return;
+        }
         self.focus_return = focus_return;
         self.markdown_image_approval = markdown_image_approval;
         // Branch-collision prompts are also held in shared state. Replacing one
@@ -1756,6 +1796,7 @@ impl PopoverHost {
         // collision cannot emit a fresh prompt later.
         if self.popover.as_ref() != Some(&kind) {
             self.resolve_open_branch_exists_prompt(BranchExistsChoice::Cancel);
+            self.dismiss_open_force_prompt();
             // An extension's dialog this popover does not show is gone, and
             // its extension is told.
             if self.extension_dialog.as_ref().is_some_and(
@@ -1792,6 +1833,14 @@ impl PopoverHost {
             self.cached_workspace_id =
                 crate::workspaces::workspace_for_window(cx, window.window_handle().window_id())
                     .map(|group| group.id);
+        }
+        if let PopoverKind::ForcePushConfirm { repo_id } = &kind {
+            self.force_push_lease = self
+                .state
+                .repos
+                .iter()
+                .find(|repo| repo.id == *repo_id)
+                .and_then(crate::view::force_push_lease);
         }
         if let PopoverKind::CherryPickCommitConfirm { repo_id, commit_id }
         | PopoverKind::RevertCommitConfirm { repo_id, commit_id } = &kind
@@ -1883,7 +1932,14 @@ impl PopoverHost {
         self.context_menu_arrows.reset();
         self.pin_menu_entries = None;
         self.context_menu_selected_ix = None;
-        self.expanded_history_ref = None;
+        // A ref picked from the row's ref list opens with its actions showing.
+        self.expanded_history_ref = match &kind {
+            PopoverKind::CommitMenu {
+                refs: CommitMenuRefs::Only(target),
+                ..
+            } => Some(target.clone()),
+            _ => None,
+        };
         self.repo_picker_selected_index = None;
         self.repo_picker_search_query.clear();
         // Belongs with the reset above, not with the RepoPicker arm below: every
@@ -1941,14 +1997,14 @@ impl PopoverHost {
                     let selected = operation_id
                         .filter(|requested| {
                             operations.iter().any(|operation| {
-                                operation.id == *requested && operation.is_reportable()
+                                operation.id == *requested && operation.has_activity_details()
                             })
                         })
                         .or_else(|| {
                             operations
                                 .iter()
                                 .rev()
-                                .find(|operation| operation.is_reportable())
+                                .find(|operation| operation.has_activity_details())
                                 .map(|operation| operation.id)
                         });
                     self.hook_activity_selected = selected;
@@ -1978,12 +2034,18 @@ impl PopoverHost {
                         upstream_picker::initial_selected_index(self, *repo_id, branch);
                 }
                 PopoverKind::CreateBranchFromRefPrompt {
+                    repo_id,
                     source_selectable,
                     target,
                     name_prefix,
                     ..
                 } => {
-                    self.create_branch_checkout_enabled = true;
+                    self.create_branch_checkout_enabled = !self
+                        .state
+                        .repos
+                        .iter()
+                        .find(|repo| repo.id == *repo_id)
+                        .is_some_and(RepoState::is_bare);
                     self.create_branch_source_target = target.clone();
                     if *source_selectable {
                         let _ = self.ensure_branch_picker_search_input(window, cx);

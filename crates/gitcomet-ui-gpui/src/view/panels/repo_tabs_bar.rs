@@ -2,6 +2,8 @@ use super::super::path_display;
 use super::*;
 use crate::kit::click::PointerClickExt as _;
 use crate::kit::interaction::{self as controls, ControlInteractionExt as _};
+use gitcomet_core::domain::HeadTracking;
+use gitcomet_state::model::RepoIncomingState;
 use rustc_hash::FxHasher;
 use std::cell::Cell;
 use std::hash::{Hash, Hasher};
@@ -109,6 +111,8 @@ const REPO_TAB_CONTENT_HEIGHT_PX: f32 = 18.0;
 const REPO_TAB_STATUS_SIZE_PX: f32 = components::REPOSITORY_BADGE_SIZE_PX;
 const REPO_TAB_LABEL_GAP_PX: f32 = 6.0;
 const REPO_TAB_CLOSE_FADE_WIDTH_PX: f32 = 16.0;
+/// Counts above this show as `↓99+`; the tooltip keeps the exact number.
+const REPO_TAB_INCOMING_MAX_SHOWN: usize = 99;
 pub(in crate::view) const REPO_TAB_SIDE_PADDING_PX: f32 = 14.0;
 const REPO_TAB_HOVER_BOX_X_OVERHANG_PX: f32 = 4.0;
 const REPO_TAB_HOVER_BOX_Y_OVERHANG_PX: f32 = 3.0;
@@ -317,6 +321,9 @@ impl RepoTabsBarView {
             repo.id.hash(&mut hasher);
             repo.spec.workdir.hash(&mut hasher);
             repo.feedback.missing_on_disk.hash(&mut hasher);
+            Self::repo_tab_tracking(repo)
+                .map(|tracking| (tracking, repo.incoming_is_stale()))
+                .hash(&mut hasher);
         }
         if let Some(repo_id) = state.active_repo
             && let Some(repo) = state.repos.iter().find(|r| r.id == repo_id)
@@ -365,6 +372,27 @@ impl RepoTabsBarView {
             || repo.push_in_flight > 0
     }
 
+    fn repo_tab_tracking(repo: &RepoState) -> Option<&HeadTracking> {
+        match &repo.incoming {
+            RepoIncomingState::Unknown => None,
+            RepoIncomingState::Current(snapshot) | RepoIncomingState::Stale(snapshot) => {
+                Some(&snapshot.tracking)
+            }
+        }
+    }
+
+    fn repo_tab_incoming_text(repo: &RepoState) -> Option<SharedString> {
+        let divergence = Self::repo_tab_tracking(repo)?.divergence()?;
+        if divergence.behind == 0 {
+            return None;
+        }
+        Some(if divergence.behind > REPO_TAB_INCOMING_MAX_SHOWN {
+            format!("↓{REPO_TAB_INCOMING_MAX_SHOWN}+").into()
+        } else {
+            format!("↓{}", divergence.behind).into()
+        })
+    }
+
     fn repo_tab_tooltip(repo: &RepoState) -> SharedString {
         if repo.feedback.missing_on_disk {
             return format!(
@@ -374,7 +402,62 @@ impl RepoTabsBarView {
             .into();
         }
 
-        path_display::path_display_shared(&repo.spec.workdir)
+        let detail = match Self::repo_tab_tracking(repo) {
+            None => "Incoming commits unknown.".to_string(),
+            Some(HeadTracking::Detached) => {
+                "Detached HEAD; incoming commits unavailable.".to_string()
+            }
+            Some(HeadTracking::Untracked { branch }) => {
+                format!("{branch} has no remote upstream.")
+            }
+            Some(HeadTracking::Tracking {
+                branch,
+                upstream,
+                divergence,
+            }) => match divergence {
+                None => format!(
+                    "{branch} tracks {}/{}; incoming commit counts are unavailable.",
+                    upstream.remote, upstream.branch
+                ),
+                Some(divergence) => {
+                    let mut detail = if divergence.behind == 0 {
+                        format!(
+                            "{branch} has no incoming commits from {}/{}.",
+                            upstream.remote, upstream.branch
+                        )
+                    } else {
+                        let noun = if divergence.behind == 1 {
+                            "commit"
+                        } else {
+                            "commits"
+                        };
+                        format!(
+                            "{branch} is {} {noun} behind {}/{}.",
+                            divergence.behind, upstream.remote, upstream.branch
+                        )
+                    };
+                    if divergence.ahead > 0 {
+                        let noun = if divergence.ahead == 1 {
+                            "commit"
+                        } else {
+                            "commits"
+                        };
+                        detail.push_str(&format!(" {} local {noun} ahead.", divergence.ahead));
+                    }
+                    detail
+                }
+            },
+        };
+        let freshness = if Self::repo_tab_tracking(repo).is_some() && repo.incoming_is_stale() {
+            "\nLast known tracking information; it may be out of date."
+        } else {
+            ""
+        };
+        format!(
+            "{}\n{detail}{freshness}",
+            path_display::path_display_string(&repo.spec.workdir)
+        )
+        .into()
     }
 
     fn repo_tab_shows_missing_warning(repo: &RepoState, show_spinner: bool) -> bool {
@@ -805,12 +888,33 @@ impl Render for RepoTabsBarView {
             .iter()
             .map(|repo| path_display::repo_path_name(&repo.spec.workdir))
             .collect::<Vec<_>>();
+        let incoming_labels = self
+            .state
+            .repos
+            .iter()
+            .map(Self::repo_tab_incoming_text)
+            .collect::<Vec<_>>();
+        // The count takes the repository mark's place, so it only widens the
+        // tab when it needs more room than the mark's square.
+        let status_slot_widths = incoming_labels
+            .iter()
+            .map(|label| {
+                label.as_ref().map_or(px(REPO_TAB_STATUS_SIZE_PX), |label| {
+                    components::repository_behind_box_width(
+                        label,
+                        crate::view::chrome::chrome_scale(),
+                        window,
+                    )
+                })
+            })
+            .collect::<Vec<_>>();
         let natural_tab_widths = self
             .state
             .repos
             .iter()
             .zip(&repo_tab_labels)
-            .map(|(repo, label)| {
+            .zip(&status_slot_widths)
+            .map(|((repo, label), status_width)| {
                 let text_width =
                     repo_tab_text_width(label.clone(), px(REPO_TAB_FONT_SIZE_PX), window);
                 let terminal_width = if self.open_terminal_repo_ids.contains(&repo.id) {
@@ -818,9 +922,8 @@ impl Render for RepoTabsBarView {
                 } else {
                     px(0.0)
                 };
-                let content_width = px(REPO_TAB_STATUS_SIZE_PX + REPO_TAB_LABEL_GAP_PX)
-                    + text_width
-                    + terminal_width;
+                let content_width =
+                    *status_width + px(REPO_TAB_LABEL_GAP_PX) + text_width + terminal_width;
                 components::Tab::natural_width(content_width, tab_horizontal_padding)
             })
             .collect::<Vec<_>>();
@@ -849,6 +952,7 @@ impl Render for RepoTabsBarView {
             let is_hovered = self.hovered_repo_tab == Some(repo_id);
             let is_pressed = self.pressed_repo_tab == Some(repo_id);
             let label = repo_tab_labels[ix].clone();
+            let incoming_label = incoming_labels[ix].clone();
             let initials: SharedString = components::repository_initials(label.as_ref()).into();
             let label_bg = controls::InteractionStyle::new(theme).resolved_background(
                 strip_bg,
@@ -918,8 +1022,11 @@ impl Render for RepoTabsBarView {
                 tab = tab.end_slot(close_overlay);
             }
 
+            // One status slot, highest priority first: spinner, missing
+            // warning, incoming count, initials.
             let show_missing_warning = Self::repo_tab_shows_missing_warning(repo, show_spinner);
-            let show_initials = !show_spinner && !show_missing_warning;
+            let incoming_label = incoming_label.filter(|_| !show_spinner && !show_missing_warning);
+            let show_initials = !show_spinner && !show_missing_warning && incoming_label.is_none();
             let status_color = with_alpha(
                 theme.colors.foreground.primary,
                 if theme.is_dark { 0.72 } else { 0.62 },
@@ -953,7 +1060,9 @@ impl Render for RepoTabsBarView {
                 )
                 .child(
                     div()
-                        .size(px(REPO_TAB_STATUS_SIZE_PX))
+                        .flex_none()
+                        .h(px(REPO_TAB_STATUS_SIZE_PX))
+                        .w(status_slot_widths[ix])
                         .flex()
                         .items_center()
                         .justify_center()
@@ -970,6 +1079,18 @@ impl Render for RepoTabsBarView {
                                 theme.colors.status.warning.foreground,
                                 px(12.0),
                             ))
+                        })
+                        .when_some(incoming_label, |d, incoming| {
+                            d.child(
+                                components::repository_behind_box(
+                                    theme,
+                                    crate::view::chrome::chrome_scale(),
+                                    incoming,
+                                    status_slot_widths[ix],
+                                    repo.incoming_is_stale(),
+                                )
+                                .debug_selector(move || format!("repo_tab_incoming_{}", repo_id.0)),
+                            )
                         })
                         .when(show_initials, |d| {
                             d.child(
@@ -1406,11 +1527,14 @@ mod tests {
         RepoTabsBarView, repo_tab_close_button_fill, repo_tab_drag_direction,
         repo_tab_insert_before_for_drag_cursor, repo_tab_insert_before_for_drop,
     };
-    use gitcomet_core::domain::RepoSpec;
-    use gitcomet_state::model::{RepoId, RepoState};
+    use gitcomet_core::domain::{HeadTracking, RepoSpec, Upstream, UpstreamDivergence};
+    use gitcomet_state::model::{
+        AppState, RepoId, RepoIncomingSnapshot, RepoIncomingState, RepoState,
+    };
     use gitcomet_state::msg::Msg;
     use gpui::{Bounds, point, px, size};
     use std::path::PathBuf;
+    use std::time::UNIX_EPOCH;
 
     fn repo_state(path: &str) -> RepoState {
         RepoState::new_opening(
@@ -1456,6 +1580,7 @@ mod tests {
         use gitcomet_state::model::{LoadKind, Loadable};
         let mut repo = repo_state("/tmp/remote-tag-loading");
         repo.open = Loadable::Ready(());
+        repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
         repo.loads_in_flight.request(LoadKind::RemoteTags);
         assert!(!RepoTabsBarView::is_repo_busy(&repo));
 
@@ -1472,6 +1597,7 @@ mod tests {
         use gitcomet_state::model::{LoadKind, Loadable};
         let mut repo = repo_state("/tmp/focus-refresh");
         repo.open = Loadable::Ready(());
+        repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
         repo.head_branch = Loadable::Ready("main".into());
         repo.status = Loadable::Ready(std::sync::Arc::new(gitcomet_core::domain::RepoStatus {
             staged: Default::default(),
@@ -1499,12 +1625,160 @@ mod tests {
     }
 
     #[test]
-    fn repo_tab_tooltip_defaults_to_repo_path() {
+    fn repo_tab_tooltip_reports_unknown_incoming_commits() {
         let repo = repo_state("/tmp/repo");
         assert_eq!(
             RepoTabsBarView::repo_tab_tooltip(&repo).as_ref(),
-            "/tmp/repo"
+            "/tmp/repo\nIncoming commits unknown."
         );
+    }
+
+    fn tracked(behind: usize) -> HeadTracking {
+        HeadTracking::Tracking {
+            branch: "main".into(),
+            upstream: Upstream {
+                remote: "origin".into(),
+                branch: "main".into(),
+            },
+            divergence: Some(UpstreamDivergence { ahead: 0, behind }),
+        }
+    }
+
+    #[test]
+    fn repo_tab_incoming_distinguishes_known_counts_and_unavailable_tracking() {
+        let mut repo = repo_state("/tmp/repo");
+        for (tracking, explanation) in [
+            (
+                HeadTracking::Detached,
+                "Detached HEAD; incoming commits unavailable.",
+            ),
+            (
+                HeadTracking::Untracked {
+                    branch: "main".into(),
+                },
+                "main has no remote upstream.",
+            ),
+            (
+                HeadTracking::Tracking {
+                    branch: "main".into(),
+                    upstream: Upstream {
+                        remote: "origin".into(),
+                        branch: "main".into(),
+                    },
+                    divergence: None,
+                },
+                "main tracks origin/main; incoming commit counts are unavailable.",
+            ),
+            (tracked(0), "main has no incoming commits from origin/main."),
+        ] {
+            repo.incoming = RepoIncomingState::Current(RepoIncomingSnapshot {
+                tracking,
+                checked_at: UNIX_EPOCH,
+            });
+            assert_eq!(RepoTabsBarView::repo_tab_incoming_text(&repo), None);
+            assert_eq!(
+                RepoTabsBarView::repo_tab_tooltip(&repo).as_ref(),
+                format!("/tmp/repo\n{explanation}")
+            );
+        }
+        repo.incoming = RepoIncomingState::Current(RepoIncomingSnapshot {
+            tracking: tracked(3),
+            checked_at: UNIX_EPOCH,
+        });
+        assert_eq!(
+            RepoTabsBarView::repo_tab_incoming_text(&repo).as_deref(),
+            Some("↓3")
+        );
+        assert_eq!(
+            RepoTabsBarView::repo_tab_tooltip(&repo).as_ref(),
+            "/tmp/repo\nmain is 3 commits behind origin/main."
+        );
+        repo.incoming = RepoIncomingState::Stale(RepoIncomingSnapshot {
+            tracking: tracked(3),
+            checked_at: UNIX_EPOCH,
+        });
+        // Staleness is the badge colour and the tooltip; the text keeps the
+        // badge width stable.
+        assert_eq!(
+            RepoTabsBarView::repo_tab_incoming_text(&repo).as_deref(),
+            Some("↓3")
+        );
+        assert_eq!(
+            RepoTabsBarView::repo_tab_tooltip(&repo).as_ref(),
+            "/tmp/repo\nmain is 3 commits behind origin/main.\nLast known tracking information; it may be out of date."
+        );
+    }
+
+    #[test]
+    fn repo_tab_incoming_caps_large_counts_to_fit_the_status_slot() {
+        let mut repo = repo_state("/tmp/repo");
+        for (behind, text) in [(99, "↓99"), (100, "↓99+"), (12345, "↓99+")] {
+            repo.incoming = RepoIncomingState::Current(RepoIncomingSnapshot {
+                tracking: tracked(behind),
+                checked_at: UNIX_EPOCH,
+            });
+            assert_eq!(
+                RepoTabsBarView::repo_tab_incoming_text(&repo).as_deref(),
+                Some(text)
+            );
+        }
+        assert!(
+            RepoTabsBarView::repo_tab_tooltip(&repo).contains("12345 commits behind"),
+            "the tooltip keeps the exact count"
+        );
+    }
+
+    #[test]
+    fn repo_tab_incoming_fingerprint_tracks_inactive_counts_identity_and_effective_freshness() {
+        let mut repo = repo_state("/tmp/repo");
+        repo.incoming = RepoIncomingState::Current(RepoIncomingSnapshot {
+            tracking: tracked(3),
+            checked_at: UNIX_EPOCH,
+        });
+        let mut state = AppState {
+            repos: vec![repo],
+            ..AppState::test_default()
+        };
+        let first = RepoTabsBarView::notify_fingerprint(&state);
+        state.repos[0].incoming = RepoIncomingState::Current(RepoIncomingSnapshot {
+            tracking: tracked(12),
+            checked_at: UNIX_EPOCH,
+        });
+        let changed_count = RepoTabsBarView::notify_fingerprint(&state);
+        assert_ne!(first, changed_count);
+        state.repos[0].auto_fetch.status = gitcomet_state::model::AutoFetchStatus::Running;
+        assert_eq!(
+            changed_count,
+            RepoTabsBarView::notify_fingerprint(&state),
+            "a routine background fetch must not repaint the tab strip"
+        );
+        state.repos[0].auto_fetch.status = gitcomet_state::model::AutoFetchStatus::Failed {
+            at: UNIX_EPOCH,
+            error: gitcomet_core::error::Error::new(gitcomet_core::error::ErrorKind::Backend(
+                "offline".into(),
+            )),
+        };
+        let failed = RepoTabsBarView::notify_fingerprint(&state);
+        assert_ne!(changed_count, failed);
+        assert_eq!(
+            RepoTabsBarView::repo_tab_incoming_text(&state.repos[0]).as_deref(),
+            Some("↓12")
+        );
+        if let RepoIncomingState::Current(snapshot) = &mut state.repos[0].incoming {
+            snapshot.tracking = HeadTracking::Tracking {
+                branch: "release".into(),
+                upstream: Upstream {
+                    remote: "upstream".into(),
+                    branch: "release".into(),
+                },
+                divergence: Some(UpstreamDivergence {
+                    ahead: 0,
+                    behind: 12,
+                }),
+            };
+        }
+        assert_ne!(failed, RepoTabsBarView::notify_fingerprint(&state));
+        assert!(!RepoTabsBarView::repo_tab_tooltip(&state.repos[0]).contains("origin/main"));
     }
 
     #[test]

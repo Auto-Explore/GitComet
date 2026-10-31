@@ -114,17 +114,22 @@ impl GixRepo {
                 if cancellation.is_cancelled() {
                     return None;
                 }
-                let mut cmd = git_workdir_cmd_for(&workdir);
-                cmd.arg("ls-remote")
-                    .arg("--tags")
-                    .arg("--refs")
-                    .arg("--")
-                    .arg(&remote_name);
-                match run_git_capture_cancellable(
-                    cmd,
-                    &format!("git ls-remote --tags --refs {remote_name}"),
-                    &cancellation,
-                ) {
+                // Nobody asked for this lookup, so it never prompts for
+                // credentials: it uses stored ones or fails.
+                let output = crate::util::background::with_background_git(&cancellation, || {
+                    let mut cmd = git_workdir_cmd_for(&workdir);
+                    cmd.arg("ls-remote")
+                        .arg("--tags")
+                        .arg("--refs")
+                        .arg("--")
+                        .arg(&remote_name);
+                    run_git_capture_cancellable(
+                        cmd,
+                        &format!("git ls-remote --tags --refs {remote_name}"),
+                        &cancellation,
+                    )
+                });
+                match output {
                     Ok(output) => Some(parse_ls_remote_tags(&output, &remote_name)),
                     Err(error) if matches!(error.kind(), ErrorKind::Cancelled) => None,
                     // Remote tag presence is best-effort metadata for UI menus.

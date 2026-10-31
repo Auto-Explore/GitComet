@@ -6,7 +6,6 @@ use super::canvas_text::compute_runs;
 use super::canvas_text::diff_text_style;
 use super::canvas_text::line_metrics;
 use super::diff_text::hash_rgba_bits as hash_rgba;
-use super::diff_text::whitespace_visible_styled_text;
 use super::*;
 use crate::view::panes::diff::diff_search::DiffSearchMatcher;
 use crate::view::panes::diff::diff_search::DiffSearchOptions;
@@ -61,9 +60,11 @@ use streamed_text::STREAMED_DIFF_TEXT_MIN_BYTES;
 use streamed_text::STREAMED_DIFF_TEXT_OVERSCAN_COLUMNS;
 use streamed_text::build_streamed_diff_slice_styled_text;
 use streamed_text::diff_text_paint_payload;
+use streamed_text::prepare_streamed_diff_slice_for_paint;
 use streamed_text::should_stream_diff_text;
 use streamed_text::streamed_diff_text_ascii_cell_width;
 use streamed_text::streamed_diff_text_visible_slice_range;
+use streamed_text::streamed_line_display_len;
 use streamed_text::whitespace_marker_len;
 
 pub(super) mod annotation;
@@ -2192,9 +2193,15 @@ fn paint_selectable_diff_text(
 ) {
     let base_style = diff_text_base_style(window, base_fg);
     let row_extra = diff_row_text_extra(region, show_line_numbers, ui_scale_percent, theme, window);
-    let total_text_len = streamed_spec
+    let mut total_text_len = streamed_spec
         .filter(|spec| should_stream_diff_text(Some(spec)))
-        .map(|spec| spec.raw_text.len())
+        .map(|spec| {
+            if reveal_whitespace_chars {
+                spec.raw_text.len()
+            } else {
+                streamed_line_display_len(&spec.raw_text)
+            }
+        })
         .unwrap_or_else(|| text.len());
     let source_text_len = offset_map
         .map(DiffTextOffsetMap::source_len)
@@ -2213,6 +2220,7 @@ fn paint_selectable_diff_text(
     let mut streamed_styled = None;
     let mut streamed_slice_range = None;
     let mut streamed_slice_is_wrap = false;
+    let mut streamed_visible_slice_len = 0;
     let mut paint_x = bounds.left();
     let mut hitbox_cell_width = None;
     let mut pending_prepared_syntax = false;
@@ -2230,18 +2238,25 @@ fn paint_selectable_diff_text(
             streamed_diff_text_visible_slice_range(
                 bounds,
                 clip_bounds,
+                // Include the indexed tail in this same read, even if metadata
+                // says it is a CR. The file may have changed since indexing.
                 spec.raw_text.len(),
                 cell_width,
                 overscan_columns,
             )
         });
-        let (mut slice_styled, pending, resolved_slice_range) =
+        let (slice_styled, pending, resolved_slice_range) =
             build_streamed_diff_slice_styled_text(tab_width, theme, spec, &slice_range);
-        if reveal_whitespace_chars {
-            let append_eol_marker =
-                streamed_slice_ends_line(spec.raw_text.len(), &resolved_slice_range);
-            slice_styled = whitespace_visible_styled_text(&slice_styled, append_eol_marker);
-        }
+        let prepared = prepare_streamed_diff_slice_for_paint(
+            &slice_styled,
+            &resolved_slice_range,
+            spec.raw_text.len(),
+            total_text_len,
+            reveal_whitespace_chars,
+        );
+        total_text_len = prepared.total_display_len;
+        streamed_visible_slice_len = prepared.visible_source_len;
+        let slice_styled = prepared.styled;
         let (layout_key, layout, shaped_new) = ensure_layout_cached(
             view,
             slice_styled.text_hash,
@@ -2262,8 +2277,7 @@ fn paint_selectable_diff_text(
         hitbox_cell_width = Some(cell_width);
         pending_prepared_syntax = pending;
         streamed_slice_range = Some(resolved_slice_range);
-        let len = spec.raw_text.len();
-        let total_text_cells = streamed_text_cells(len, 0..len, reveal_whitespace_chars);
+        let total_text_cells = total_text_len.saturating_add(usize::from(reveal_whitespace_chars));
         let required_row_w = (row_extra
             + cell_width * total_text_cells as f32
             + diff_scaled_px(DIFF_ROW_TEXT_TRAILING_PADDING_PX, ui_scale_percent))
@@ -2325,7 +2339,10 @@ fn paint_selectable_diff_text(
     let x_range_for_local = |r: &Range<usize>| -> (Pixels, Pixels) {
         if let Some(cell_width) = hitbox_cell_width {
             let (start, end) = if streamed_slice_is_wrap {
-                (r.start.min(total_text_len), r.end.min(total_text_len))
+                (
+                    r.start.min(streamed_visible_slice_len),
+                    r.end.min(streamed_visible_slice_len),
+                )
             } else {
                 let start = streamed_slice_range
                     .as_ref()
@@ -2418,10 +2435,7 @@ fn paint_selectable_diff_text(
             visual_text_range.start
         },
         text_len: if streamed_slice_is_wrap {
-            streamed_slice_range
-                .as_ref()
-                .map(|range| range.end.saturating_sub(range.start))
-                .unwrap_or(text.len())
+            streamed_visible_slice_len
         } else if let Some(offset_map) = offset_map {
             offset_map.display_len()
         } else {
@@ -2550,7 +2564,8 @@ struct RowTextEnd {
     highlights: Arc<[(Range<usize>, HighlightStyle)]>,
     text_hash: u64,
     highlights_hash: u64,
-    /// The whole line's length, when it is streamed in monospace cells.
+    /// The whole line's length as drawn, when it is streamed in monospace
+    /// cells: a trailing CR is drawn only while whitespace is revealed.
     streamed_len: Option<usize>,
     reveal_whitespace_chars: bool,
     wrap: Option<DiffTextWrapSlice>,
@@ -2586,7 +2601,13 @@ impl RowTextEnd {
             highlights_hash,
             streamed_len: streamed_spec
                 .filter(|spec| should_stream_diff_text(Some(spec)))
-                .map(|spec| spec.raw_text.len()),
+                .map(|spec| {
+                    if reveal_whitespace_chars {
+                        spec.raw_text.len()
+                    } else {
+                        streamed_line_display_len(&spec.raw_text)
+                    }
+                }),
             reveal_whitespace_chars,
             wrap,
             fg,
@@ -2616,9 +2637,10 @@ impl RowTextEnd {
             Some(len) => {
                 let cell_width =
                     streamed_diff_text_ascii_cell_width(&base_style, metrics.font_size, window);
-                let range = self
-                    .wrap
-                    .map_or(0..len, |wrap| wrap.range_for_region(self.region));
+                let range = self.wrap.map_or(0..len, |wrap| {
+                    let range = wrap.range_for_region(self.region);
+                    range.start.min(len)..range.end.min(len)
+                });
                 let cells = streamed_text_cells(len, range, self.reveal_whitespace_chars);
                 (cell_width * cells as f32, None)
             }

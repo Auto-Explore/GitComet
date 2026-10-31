@@ -1226,7 +1226,7 @@ pub(in crate::view) use diff_text::{
     drain_completed_prepared_diff_syntax_chunk_builds,
     drain_completed_prepared_diff_syntax_chunk_builds_for_document,
     has_pending_prepared_diff_syntax_chunk_builds, inject_background_prepared_diff_syntax_document,
-    live_syntax_document_supported, live_syntax_reparse,
+    line_display_text, live_syntax_document_supported, live_syntax_reparse,
     prepare_diff_syntax_document_in_background_text_with_reuse,
     prepare_diff_syntax_document_with_budget_reuse_text,
     prepared_diff_syntax_document_is_available, prepared_diff_syntax_line_for_inline_diff_row,

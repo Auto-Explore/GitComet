@@ -44,6 +44,9 @@ impl LanePaint {
     /// `lanes_next` only: this lane starts at this row's node rather than
     /// continuing down from the row above.
     const FROM_NODE: u8 = 1 << 2;
+    /// The HEAD lane above anything that reaches it: kept free for the
+    /// uncommitted-changes row, and only drawn while that row is shown.
+    const RESERVED: u8 = 1 << 3;
 
     /// No lane occupies this column on this row.
     pub const HOLE: Self = Self {
@@ -68,6 +71,18 @@ impl LanePaint {
     }
 
     #[inline]
+    pub(in crate::view) const fn with_reserved(self, reserved: bool) -> Self {
+        if reserved {
+            Self {
+                color_ix: self.color_ix,
+                flags: self.flags | Self::RESERVED,
+            }
+        } else {
+            self
+        }
+    }
+
+    #[inline]
     pub const fn is_active(self) -> bool {
         self.flags & Self::ACTIVE != 0
     }
@@ -80,6 +95,11 @@ impl LanePaint {
     #[inline]
     pub const fn starts_at_node(self) -> bool {
         self.flags & Self::FROM_NODE != 0
+    }
+
+    #[inline]
+    pub const fn reserved(self) -> bool {
+        self.flags & Self::RESERVED != 0
     }
 }
 
@@ -554,6 +574,73 @@ mod tests {
         assert_eq!(graph[2].node_col, 0);
         assert_eq!(graph[1].lanes_now[0].color_ix, seeded_lane);
         assert_eq!(graph[2].lanes_now[0].color_ix, seeded_lane);
+    }
+
+    #[test]
+    fn head_lane_is_reserved_until_head() {
+        let theme = AppTheme::gitcomet_dark();
+        let commits = vec![
+            commit("feature2", vec!["base"]),
+            commit("main2", vec!["base"]),
+            commit("base", vec!["root"]),
+            commit("root", Vec::new()),
+        ];
+        let graph = compute_graph(&commits, theme, ["feature2", "main2"], Some("main2"));
+
+        assert!(graph[0].lanes_now[0].reserved());
+        assert!(graph[0].lanes_next[0].reserved());
+        assert!(graph[1].lanes_now[0].reserved(), "the run into HEAD");
+        assert!(!graph[1].lanes_next[0].reserved(), "HEAD's own lane");
+        assert!(!graph[2].lanes_now[0].reserved());
+        assert!(
+            graph
+                .iter()
+                .flat_map(|row| row
+                    .lanes_now
+                    .iter()
+                    .skip(1)
+                    .chain(row.lanes_next.iter().skip(1)))
+                .all(|lane| !lane.reserved()),
+            "only the HEAD lane is reserved"
+        );
+    }
+
+    #[test]
+    fn a_merge_into_the_head_lane_ends_its_reserved_run() {
+        let theme = AppTheme::gitcomet_dark();
+        let commits = vec![
+            commit("merge", vec!["feature", "head"]),
+            commit("feature", vec!["head"]),
+            commit("head", vec!["root"]),
+            commit("root", Vec::new()),
+        ];
+        let graph = compute_graph(&commits, theme, ["merge"], Some("head"));
+
+        assert_eq!(graph[0].edges_out[0].to_col, 0);
+        assert!(graph[0].lanes_now[0].reserved());
+        // The merge edge's elbow draws this row's continuation.
+        assert!(graph[0].lanes_next[0].reserved());
+        assert!(!graph[1].lanes_now[0].reserved());
+        assert!(!graph[1].lanes_next[0].reserved());
+        assert!(!graph[2].lanes_now[0].reserved());
+    }
+
+    #[test]
+    fn head_on_the_first_row_reserves_nothing() {
+        let theme = AppTheme::gitcomet_dark();
+        let commits = vec![
+            commit("head", vec!["base"]),
+            commit("side", vec!["base"]),
+            commit("base", Vec::new()),
+        ];
+        let graph = compute_graph(&commits, theme, ["head", "side"], Some("head"));
+
+        assert!(
+            graph
+                .iter()
+                .flat_map(|row| row.lanes_now.iter().chain(&row.lanes_next))
+                .all(|lane| !lane.reserved())
+        );
     }
 
     #[test]

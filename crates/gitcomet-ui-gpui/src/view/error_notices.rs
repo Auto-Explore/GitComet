@@ -33,7 +33,7 @@ impl ErrorReport {
         entry: &gitcomet_state::model::CommandLogEntry,
     ) -> Self {
         if entry.failure_id != Some(gitcomet_core::error::GitFailureId::WorktreeWouldBeOverwritten)
-            || !entry.command.trim_start().starts_with("git pull")
+            || entry.kind != gitcomet_state::model::CommandLogKind::Pull
         {
             return Self::message(Some(repo_id), entry.summary.clone());
         }

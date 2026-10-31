@@ -35,7 +35,26 @@ fn spawn_repo_action(
         move |repo, msg_tx| {
             let gate = super::super::mutation_gate::for_repo(repo.as_ref());
             let _mutation = gate.read().unwrap_or_else(|error| error.into_inner());
+            if let Err(error) = super::super::repository_requirement::check(
+                repo.as_ref(),
+                action.repository_requirement(),
+            ) {
+                send_or_log(
+                    &msg_tx,
+                    Msg::Internal(InternalMsg::RepoActionFinished {
+                        repo_id,
+                        action,
+                        result: Err(error),
+                    }),
+                );
+                return;
+            }
+            let tracking_repo = action.changes_tracking().then(|| Arc::clone(&repo));
+            let tracking_sender = msg_tx.clone();
             task(repo, msg_tx);
+            if let Some(repo) = tracking_repo {
+                tracking_sender.refresh_other_tracking(repo_id, repo.as_ref());
+            }
         },
         move |msg_tx| {
             send_or_log(
@@ -116,8 +135,13 @@ fn schedule_repo_action_with_result<T, F, M>(
         let operation = GitOperationTask::start(repo_id, label, context, &msg_tx);
         let result = {
             let _scope = operation.attach();
-            run(repo)
+            super::super::repository_requirement::check(
+                repo.as_ref(),
+                gitcomet_core::domain::RepositoryRequirement::WorkingTree,
+            )
+            .and_then(|()| run(Arc::clone(&repo)))
         };
+        msg_tx.refresh_other_tracking(repo_id, repo.as_ref());
         let outcome = GitOperationTask::outcome(&result);
         let message = finish(repo_id, result);
         operation.finish(outcome, message);
@@ -233,6 +257,16 @@ fn open_worktree_holding_branch(
         ))));
     }
     Ok(handle)
+}
+
+fn is_branch_not_fully_merged(result: &Result<(), Error>) -> bool {
+    matches!(
+        result,
+        Err(error) if matches!(
+            error.kind(),
+            ErrorKind::Git(failure) if failure.id() == GitFailureId::BranchNotFullyMerged
+        )
+    )
 }
 
 fn is_branch_already_exists(result: &Result<(), Error>) -> bool {
@@ -613,6 +647,7 @@ pub(super) fn schedule_delete_branch(
     name: String,
 ) {
     let context = single_line_context(&name);
+    let refused_name = name.clone();
     schedule_repo_action_with_hook(
         executor,
         repos,
@@ -622,7 +657,20 @@ pub(super) fn schedule_delete_branch(
         context,
         move |repo| repo.delete_branch(&name),
         send_refresh_branches_on_success,
-        repo_action_finished(RepoActionKind::DeleteBranch),
+        move |repo_id, result| {
+            if is_branch_not_fully_merged(&result) {
+                InternalMsg::BranchNotFullyMerged {
+                    repo_id,
+                    name: refused_name,
+                }
+            } else {
+                InternalMsg::RepoActionFinished {
+                    repo_id,
+                    action: RepoActionKind::DeleteBranch,
+                    result,
+                }
+            }
+        },
     );
 }
 

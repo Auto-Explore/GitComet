@@ -31,6 +31,29 @@ fn git(repo: &Path, args: &[&str]) -> String {
     String::from_utf8_lossy(&output.stdout).into_owned()
 }
 
+/// Confirms an enabled special remote through GitComet, as the user does
+/// before git-annex 10.20261026+ uses a remote someone else configured.
+/// Older git-annex lists none to confirm.
+fn verify_special_remote(repo: &Path, name: &str) {
+    let opened = open(repo);
+    let support = opened
+        .large_file_support(&CancellationToken::new())
+        .unwrap();
+    if let Some(check) = support
+        .annex
+        .unverified_remotes
+        .iter()
+        .find(|check| check.name == name)
+    {
+        opened
+            .run_large_file_command(&LargeFileCommand::AnnexVerifyRemote {
+                name: name.to_string(),
+                id: check.id.clone(),
+            })
+            .unwrap();
+    }
+}
+
 fn git_annex_available() -> bool {
     gitcomet_core::test_support::git_fixture::git_command()
         .args(["annex", "version", "--raw"])
@@ -38,7 +61,8 @@ fn git_annex_available() -> bool {
         .is_ok_and(|output| output.status.success())
 }
 
-/// An initialized annex with `big.bin` (locked) and a `backup` directory remote.
+/// An initialized annex with `big.bin` and a `backup` directory remote.
+/// Filesystems without symlinks use unlocked files on an adjusted branch.
 fn init_annex_repo(dir: &Path) -> PathBuf {
     let repo = dir.join("repo");
     fs::create_dir_all(&repo).unwrap();
@@ -118,6 +142,9 @@ macro_rules! require_annex {
         }
     };
 }
+
+#[path = "annex_bare.rs"]
+mod bare;
 
 #[test]
 fn support_lists_repositories_special_remotes_and_numcopies() {
@@ -203,7 +230,12 @@ fn copy_drop_get_and_refused_drop() {
         },
     )
     .unwrap();
-    assert!(!repo.join("big.bin").is_file(), "locked link now dangles");
+    assert!(
+        git(&repo, &["annex", "find", "--format=${key}", "big.bin"])
+            .trim()
+            .is_empty(),
+        "dropped content is absent from the local store"
+    );
     let files = open(&repo)
         .uncommitted_large_files_for_status(&staged_row("big.bin"), &CancellationToken::new())
         .unwrap();
@@ -232,6 +264,10 @@ fn unlocked_presence_comes_from_git_annex_find() {
     require_annex!();
     let dir = tempfile::tempdir().unwrap();
     let repo = init_annex_repo(dir.path());
+    let was_locked = fs::symlink_metadata(repo.join("big.bin"))
+        .unwrap()
+        .file_type()
+        .is_symlink();
     run(
         &repo,
         LargeFileCommand::AnnexUnlock {
@@ -239,7 +275,9 @@ fn unlocked_presence_comes_from_git_annex_find() {
         },
     )
     .unwrap();
-    git(&repo, &["commit", "-qam", "unlock"]);
+    if was_locked {
+        git(&repo, &["commit", "-qam", "unlock"]);
+    }
     // Touch the index entry so it is a staged row of an unlocked pointer.
     fs::write(repo.join("other.bin"), vec![9u8; 2048]).unwrap();
     git(&repo, &["annex", "add", "-q", "other.bin"]);
@@ -428,7 +466,10 @@ fn adjust_and_leave_adjusted_branch() {
     require_annex!();
     let dir = tempfile::tempdir().unwrap();
     let repo = init_annex_repo(dir.path());
-    let base = git(&repo, &["branch", "--show-current"]).trim().to_string();
+    let branch = git(&repo, &["branch", "--show-current"]);
+    let base = gitcomet_core::annex::adjusted_branch(branch.trim())
+        .map_or(branch.trim(), |(base, _)| base)
+        .to_string();
     run(
         &repo,
         LargeFileCommand::AnnexAdjust {
@@ -472,6 +513,9 @@ fn amending_the_adjustment_commit_is_refused() {
     require_annex!();
     let dir = tempfile::tempdir().unwrap();
     let repo = init_annex_repo(dir.path());
+    // Initialization may already have entered an adjusted branch. Propagate
+    // the fixture's own commit so HEAD is an adjustment commit in either mode.
+    git(&repo, &["annex", "sync", "--no-commit", "--no-content"]);
     run(
         &repo,
         LargeFileCommand::AnnexAdjust {
@@ -502,6 +546,9 @@ fn sync_never_commits_and_describe_trust_apply() {
     require_annex!();
     let dir = tempfile::tempdir().unwrap();
     let repo = init_annex_repo(dir.path());
+    // Settle propagation of fixture commits made on an automatic adjusted
+    // branch before checking that a new uncommitted file stays uncommitted.
+    git(&repo, &["annex", "sync", "--no-commit", "--no-content"]);
     fs::write(repo.join("draft.txt"), "uncommitted\n").unwrap();
     let before = git(&repo, &["rev-parse", "HEAD"]);
     run(&repo, LargeFileCommand::AnnexSync { content: false }).unwrap();
@@ -636,7 +683,11 @@ fn get_by_key_restores_a_dropped_historical_version() {
         },
     )
     .unwrap();
-    assert!(!repo.join("big.bin").is_file());
+    assert!(
+        git(&repo, &["annex", "find", "--format=${key}", "big.bin"])
+            .trim()
+            .is_empty()
+    );
     run(
         &repo,
         LargeFileCommand::AnnexGetKeys {
@@ -644,9 +695,10 @@ fn get_by_key_restores_a_dropped_historical_version() {
         },
     )
     .unwrap();
-    assert!(
-        repo.join("big.bin").is_file(),
-        "the locked link resolves again"
+    assert_eq!(
+        git(&repo, &["annex", "find", "--format=${key}", "big.bin"]).trim(),
+        key.trim(),
+        "the requested key is present again, including with an unlocked pointer"
     );
     assert!(
         run(
@@ -1179,7 +1231,29 @@ fn assistant_counts_as_running_only_while_its_process_lives() {
     assert!(!running());
     let pid_file = repo.join(".git/annex/daemon.pid");
     fs::write(&pid_file, format!("{}\n", std::process::id())).unwrap();
+    #[cfg(windows)]
+    let held_lock = {
+        use std::os::windows::fs::OpenOptionsExt as _;
+
+        // Windows git-annex tests the assistant's held lock, not its MSYS PID.
+        fs::OpenOptions::new()
+            .create(true)
+            .truncate(true)
+            .read(true)
+            .write(true)
+            .share_mode(0)
+            .open(repo.join(format!(".git/annex/daemon.pid.{}.lck", std::process::id())))
+            .unwrap()
+    };
     assert!(running());
+    #[cfg(windows)]
+    {
+        drop(held_lock);
+        assert!(
+            !running(),
+            "a stale PID without the held lock is not running"
+        );
+    }
     if cfg!(unix) {
         // Left behind by a killed assistant.
         let mut child = Command::new("true").spawn().unwrap();
@@ -1344,7 +1418,7 @@ fn transfer_progress_is_coalesced_for_many_small_files() {
 /// child. PATH and the silence deadline are process-wide, so tests that change
 /// them must not share a process with the others.
 fn in_child(name: &str, env: &[(&str, std::ffi::OsString)]) -> bool {
-    crate::child_test::in_child(
+    gitcomet_core::test_support::child_test::in_child(
         "GITCOMET_ANNEX_TEST_CHILD",
         module_path!(),
         name,
@@ -1363,16 +1437,6 @@ fn path_with(dir: &Path) -> std::ffi::OsString {
     let mut dirs = vec![dir.to_path_buf()];
     dirs.extend(std::env::split_paths(&path));
     std::env::join_paths(dirs).unwrap()
-}
-
-#[cfg(unix)]
-fn write_script(path: &Path, text: &str) {
-    fs::write(path, text).unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-        fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
-    }
 }
 
 #[cfg(unix)]
@@ -1396,7 +1460,7 @@ fn old_git_annex_shim(root: &Path) -> Option<PathBuf> {
         log = dir.join("calls.log").display(),
         real = real.display(),
     );
-    write_script(&dir.join("git-annex"), &script);
+    gitcomet_core::test_support::script::write_executable(&dir.join("git-annex"), &script);
     Some(dir)
 }
 
@@ -1564,7 +1628,7 @@ fn a_silent_content_transfer_outlives_the_silence_deadline() {
             let root = child_root("silent-transfer");
             let bin = root.join("bin");
             fs::create_dir_all(&bin).unwrap();
-            write_script(
+            gitcomet_core::test_support::script::write_executable(
                 &bin.join("git-annex-remote-slowtest"),
                 &SLOW_REMOTE.replace("@SECS@", "2"),
             );
@@ -1960,7 +2024,7 @@ fn with_annex_shim_env(name: &str, script: &str, env: &[(&str, &str)], test: imp
     let dir = tempfile::tempdir().unwrap();
     let bin = dir.path().join("bin");
     fs::create_dir(&bin).unwrap();
-    write_script(&bin.join("git-annex"), script);
+    gitcomet_core::test_support::script::write_executable(&bin.join("git-annex"), script);
     let mut child_env = vec![
         ("PATH", path_with(&bin)),
         ("GITCOMET_ANNEX_TEST_ROOT", dir.path().as_os_str().into()),
@@ -2410,4 +2474,77 @@ exec sleep 30
             }
         },
     );
+}
+
+#[test]
+fn a_special_remote_someone_else_configured_waits_for_confirmation() {
+    require_annex!();
+    let dir = tempfile::tempdir().unwrap();
+    let source = init_annex_repo(dir.path());
+    git(
+        &source,
+        &["annex", "copy", "-q", "--to", "backup", "big.bin"],
+    );
+    let clone = dir.path().join("clone");
+    git(
+        dir.path(),
+        &[
+            "clone",
+            "-q",
+            source.to_str().unwrap(),
+            clone.to_str().unwrap(),
+        ],
+    );
+    git(&clone, &["config", "user.name", "Test"]);
+    git(&clone, &["config", "user.email", "test@example.com"]);
+    git(&clone, &["annex", "init", "-q", "desktop"]);
+    let store = format!("directory={}", dir.path().join("store").display());
+    git(&clone, &["annex", "enableremote", "backup", &store]);
+    let pending = || {
+        open(&clone)
+            .large_file_support(&CancellationToken::new())
+            .unwrap()
+            .annex
+            .unverified_remotes
+    };
+    let tracked = Command::new("git")
+        .args([
+            "-C",
+            clone.to_str().unwrap(),
+            "config",
+            "remote.backup.annex-verified",
+        ])
+        .output()
+        .unwrap();
+    if !tracked.status.success() {
+        assert!(pending().is_empty(), "older git-annex verifies nothing");
+        return;
+    }
+    let checks = pending();
+    assert_eq!(checks.len(), 1, "{checks:?}");
+    assert_eq!(checks[0].name, "backup");
+    assert_eq!(checks[0].configuration, "type=directory encryption=none");
+    let get = || {
+        run(
+            &clone,
+            LargeFileCommand::AnnexGet {
+                paths: paths("big.bin"),
+                from: Some("backup".into()),
+            },
+        )
+    };
+    assert!(
+        get().is_err(),
+        "git-annex refuses the remote until it is confirmed"
+    );
+    run(
+        &clone,
+        LargeFileCommand::AnnexVerifyRemote {
+            name: "backup".into(),
+            id: checks[0].id.clone(),
+        },
+    )
+    .unwrap();
+    assert!(pending().is_empty());
+    get().unwrap();
 }

@@ -79,20 +79,28 @@ pub(in crate::view) fn preview_source_text_and_line_starts_from_lines(
 
 const PREVIEW_LINE_FLAG_ASCII_ONLY: u8 = 0b01;
 const PREVIEW_LINE_FLAG_HAS_TABS: u8 = 0b10;
+const PREVIEW_LINE_FLAG_TRAILING_CR: u8 = 0b100;
 
 #[inline]
 pub(in crate::view) fn preview_line_flags_for_text(text: &str) -> u8 {
-    preview_line_flags_from_bools(text.is_ascii(), text.contains('\t'))
+    preview_line_flags_from_bools(text.is_ascii(), text.contains('\t'), text.ends_with('\r'))
 }
 
 #[inline]
-pub(in crate::view) fn preview_line_flags_from_bools(ascii_only: bool, has_tabs: bool) -> u8 {
+pub(in crate::view) fn preview_line_flags_from_bools(
+    ascii_only: bool,
+    has_tabs: bool,
+    trailing_cr: bool,
+) -> u8 {
     let mut flags = 0u8;
     if ascii_only {
         flags |= PREVIEW_LINE_FLAG_ASCII_ONLY;
     }
     if has_tabs {
         flags |= PREVIEW_LINE_FLAG_HAS_TABS;
+    }
+    if trailing_cr {
+        flags |= PREVIEW_LINE_FLAG_TRAILING_CR;
     }
     flags
 }
@@ -105,6 +113,10 @@ pub(in crate::view) fn preview_line_is_ascii_without_loading(flags: u8) -> bool 
 #[inline]
 pub(in crate::view) fn preview_line_has_tabs_without_loading(flags: u8) -> bool {
     (flags & PREVIEW_LINE_FLAG_HAS_TABS) != 0
+}
+
+pub(in crate::view) fn preview_line_has_trailing_cr(flags: u8) -> bool {
+    (flags & PREVIEW_LINE_FLAG_TRAILING_CR) != 0
 }
 
 pub(in crate::view) fn preview_line_flags_from_source(

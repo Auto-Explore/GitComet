@@ -16,6 +16,7 @@ pub(super) fn is_keyword(language: DiffSyntaxLanguage, ident: &str) -> bool {
         // template is full of attributes named `class`, `for`, `template` and so
         // on, which would otherwise all render as keywords.
         DiffSyntaxLanguage::Html
+        | DiffSyntaxLanguage::Razor
         | DiffSyntaxLanguage::Xml
         | DiffSyntaxLanguage::Vue
         | DiffSyntaxLanguage::Css

@@ -10,6 +10,7 @@ use std::path::PathBuf;
 
 fn worktree(path: &str, branch: Option<&str>, head: Option<&str>) -> Worktree {
     Worktree {
+        bare: false,
         path: PathBuf::from(path),
         head: head.map(|h| CommitId(std::sync::Arc::from(h))),
         branch: branch.map(str::to_string),

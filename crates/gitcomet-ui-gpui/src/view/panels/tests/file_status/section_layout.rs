@@ -848,6 +848,7 @@ fn comfortable_chrome_chips_grow_with_the_density(cx: &mut gpui::TestAppContext)
         view.update(app, |this, cx| {
             let mut repo = opening_repo_state(repo_id, Path::new("/tmp/comfortable-chips"));
             repo.open = Loadable::Ready(());
+            repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
             push_test_state(this, app_state_with_repo(repo, repo_id), cx);
         })
     });
@@ -946,6 +947,7 @@ fn comfortable_stage_and_commit_targets_fit_rows_at_laptop_and_4k_sizes(
         view.update(app, |this, cx| {
             let mut repo = opening_repo_state(repo_id, Path::new("/tmp/comfortable-targets"));
             repo.open = Loadable::Ready(());
+            repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
             repo.status = Loadable::Ready(
                 RepoStatus {
                     staged: Arc::new(vec![FileStatus {

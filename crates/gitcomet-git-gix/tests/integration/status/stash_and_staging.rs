@@ -2572,7 +2572,7 @@ fn repository_entered_at_sub() -> tempfile::TempDir {
 #[cfg(unix)]
 #[test]
 fn staged_changes_outside_the_process_directory_are_listed() {
-    if !crate::child_test::in_child(
+    if !gitcomet_core::test_support::child_test::in_child(
         SUBDIRECTORY_CHILD,
         module_path!(),
         "staged_changes_outside_the_process_directory_are_listed",
@@ -2618,7 +2618,7 @@ fn staged_changes_outside_the_process_directory_are_listed() {
 #[cfg(unix)]
 #[test]
 fn unstaging_everything_during_a_merge_reaches_outside_the_process_directory() {
-    if !crate::child_test::in_child(
+    if !gitcomet_core::test_support::child_test::in_child(
         SUBDIRECTORY_CHILD,
         module_path!(),
         "unstaging_everything_during_a_merge_reaches_outside_the_process_directory",

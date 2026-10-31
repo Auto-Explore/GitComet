@@ -526,7 +526,7 @@ impl DiffRenderer {
         self.file_editor_dirty()
     }
 
-    /// Whether the toolbar shows Save and Discard for the editor: always
+    /// Whether the action bar shows Cancel and Save for the editor: always
     /// without auto-save, and with it while the buffer cannot be written.
     pub(in crate::view) fn file_editor_shows_save_controls(&self) -> bool {
         !self.auto_save_file_edits
@@ -1016,6 +1016,18 @@ impl DiffRenderer {
             self.prune_orphaned_file_editor_stash(cx);
             return Ok(false);
         };
+        if self
+            .repositories()
+            .iter()
+            .find(|repo| repo.id == repo_id)
+            .is_some_and(RepoState::is_bare)
+        {
+            buffer.document.set_save_error(
+                Some(gitcomet_core::domain::WORKING_TREE_REQUIRED_MESSAGE.into()),
+                cx,
+            );
+            return Ok(false);
+        }
         let Some(origin) = self.store.document_save_origin(repo_id, lifetime) else {
             return Ok(false);
         };

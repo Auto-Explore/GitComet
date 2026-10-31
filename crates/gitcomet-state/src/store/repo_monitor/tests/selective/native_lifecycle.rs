@@ -347,6 +347,23 @@ fn git_metadata_noise_is_filtered_before_debouncing() {
 }
 
 #[test]
+fn fetch_head_rewrites_are_not_repository_changes() {
+    let (_temp, root) = repository();
+    let rules = load_gitignore_rules(&root);
+    let snapshot = rules.state.snapshot();
+    assert_eq!(
+        snapshot.classify(&root.join(".git/FETCH_HEAD")),
+        PathClass::Cache,
+        "every fetch rewrites it, including one that moves no ref"
+    );
+    assert_eq!(
+        snapshot.classify(&root.join(".git/refs/remotes/origin/FETCH_HEAD")),
+        PathClass::Git { tags: false },
+        "a branch with that name is still a ref"
+    );
+}
+
+#[test]
 fn metadata_noise_in_a_mixed_event_preserves_real_changes() {
     let (_temp, root) = repository();
     let mut rules = load_gitignore_rules(&root);

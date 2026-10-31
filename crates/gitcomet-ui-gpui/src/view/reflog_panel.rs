@@ -167,7 +167,14 @@ impl GitCometView {
                 .h(self.terminal_panel_height + tab_bar_height)
                 .min_h(self.ui_scale().px(REFLOG_PANEL_MIN_HEIGHT_PX) + tab_bar_height)
                 .child(tab_bar)
-                .child(div().flex_1().min_h(px(0.0)).child(content))
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .flex_1()
+                        .min_h(px(0.0))
+                        .child(content),
+                )
                 .into_any(),
         )
     }

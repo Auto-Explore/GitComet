@@ -191,7 +191,16 @@ impl PopoverHost {
         &self,
         cx: &mut gpui::Context<Self>,
     ) -> bool {
-        self.create_branch_prompt_repo_and_target().is_some()
+        self.create_branch_prompt_repo_and_target()
+            .is_some_and(|(repo_id, _)| {
+                !self.create_branch_checkout_enabled
+                    || !self
+                        .state
+                        .repos
+                        .iter()
+                        .find(|repo| repo.id == repo_id)
+                        .is_some_and(RepoState::is_bare)
+            })
             && self
                 .create_branch_input
                 .read_with(cx, |input, _| is_submittable_branch_name(input.text()))
@@ -225,6 +234,9 @@ impl PopoverHost {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
+        if !self.can_submit_create_branch(cx) {
+            return;
+        }
         let Some((repo_id, target)) = self.create_branch_prompt_repo_and_target() else {
             return;
         };

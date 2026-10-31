@@ -194,6 +194,7 @@ fn app_store_open_repo_effect_propagates_open_error_into_state() {
 
 mod actions_emit_effects;
 mod auth_prompt;
+mod bare_mode;
 mod commit_signatures;
 mod conflict_session;
 mod conflict_telemetry;
@@ -204,6 +205,7 @@ mod external_and_history;
 mod file_browser_follow;
 mod filesystem;
 mod filesystem_engine;
+mod history_hidden_refs;
 mod maintenance;
 mod prepared_inputs;
 mod reducer_diagnostics;

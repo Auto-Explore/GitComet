@@ -9,6 +9,24 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 pub type Result<T> = std::result::Result<T, Error>;
 
+pub struct RepositoryOperationLease {
+    _guard: Box<dyn Send>,
+}
+
+impl RepositoryOperationLease {
+    pub fn new(guard: impl Send + 'static) -> Self {
+        Self {
+            _guard: Box::new(guard),
+        }
+    }
+}
+
+impl Default for RepositoryOperationLease {
+    fn default() -> Self {
+        Self::new(())
+    }
+}
+
 /// Which commit a comparison measures its newer side against.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash)]
 pub enum ComparisonBase {
@@ -503,6 +521,14 @@ pub struct CommitOperationOutcome {
     pub post_head: Option<CommitId>,
 }
 
+/// What [`GitRepository::reword_commit_with_output`] did.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct RewordCommitOutcome {
+    pub output: CommandOutput,
+    /// The rewritten commit's new id, when the backend could tell it.
+    pub rewritten_id: Option<CommitId>,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SafePushAfterCommitContext {
     pub amend: bool,
@@ -580,6 +606,35 @@ pub enum SafePushAfterCommitDecision {
 /// result; a caller without a cancellable task can pass a fresh token. Keep the
 /// same token when delegating so cancellation reaches the underlying work.
 pub trait GitRepository: Send + Sync {
+    fn acquire_operation_lease(&self) -> Result<RepositoryOperationLease> {
+        Ok(RepositoryOperationLease::default())
+    }
+
+    fn repository_mode(&self) -> Result<RepositoryMode> {
+        Ok(RepositoryMode::WorkingTree)
+    }
+
+    fn preview_disable_bare_mode(&self) -> Result<BareConversionPreview> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "bare mode conversion is not implemented for this backend",
+        )))
+    }
+
+    fn disable_bare_mode(&self, _preview: &BareConversionPreview) -> Result<BareModeDisabled> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "bare mode conversion is not implemented for this backend",
+        )))
+    }
+
+    fn disable_bare_mode_cancellable(
+        &self,
+        preview: &BareConversionPreview,
+        cancellation: &CancellationToken,
+    ) -> Result<BareModeDisabled> {
+        cancellation.check_cancelled()?;
+        self.disable_bare_mode(preview)
+    }
+
     fn rebase_range_with_output(&self, _range: &RebaseRange) -> Result<CommandOutput> {
         Err(Error::new(ErrorKind::Unsupported(
             "explicit-range rebase is not implemented",
@@ -624,13 +679,21 @@ pub trait GitRepository: Send + Sync {
     /// packs written since become visible; later reads reopen the store.
     fn release_object_store(&self) {}
 
-    /// Distinct author names across the complete, unfiltered history scope.
-    /// Called on demand, independently of the visible commit metadata cache.
+    /// Distinct author names across the walk's complete history, without an
+    /// author filter. Called on demand, independently of the visible commit
+    /// metadata cache.
+    ///
+    /// `focus` narrows the walk the way [`Self::read_history`] does, so the
+    /// catalog offers the authors of the commits actually on screen.
     fn history_authors(
         &self,
-        mode: HistoryMode,
+        walk: &HistoryWalk,
+        focus: &HistoryFocusSet,
         cancellation: &CancellationToken,
     ) -> Result<Arc<[Arc<str>]>> {
+        let _ = focus;
+        refuse_hidden_remotes(walk)?;
+        let mode = walk.mode();
         let mut authors = Vec::new();
         let mut seen = std::collections::HashSet::new();
         let mut cursor = None;
@@ -656,8 +719,9 @@ pub trait GitRepository: Send + Sync {
     /// from the branch tip to the requested offset.
     fn build_history_index(
         &self,
-        _mode: HistoryMode,
+        _walk: &HistoryWalk,
         _author: Option<&str>,
+        _focus: &HistoryFocusSet,
         cancellation: &CancellationToken,
         _on_progress: &mut dyn FnMut(crate::history_index::HistoryIndexProgress),
     ) -> Result<Option<crate::history_index::HistoryIndexHandle>> {
@@ -691,14 +755,23 @@ pub trait GitRepository: Send + Sync {
 
     /// Read or refresh a history snapshot. Backends without snapshot support
     /// conservatively rebuild and never claim an unchanged result.
+    ///
+    /// A non-empty `focus` replaces the walk's tips with the refs it names, so
+    /// the page holds only the commits those refs reach. The default
+    /// implementation has no way to reseed the paged reader and ignores it, the
+    /// same way it ignores `author`; backends that support focus override this.
     fn read_history(
         &self,
-        mode: HistoryMode,
+        walk: &HistoryWalk,
         author: Option<&str>,
+        focus: &HistoryFocusSet,
         request: &HistoryReadRequest,
         cancellation: &CancellationToken,
         on_chunk: &mut dyn FnMut(LogChunk),
     ) -> Result<HistoryReadResult> {
+        let _ = focus;
+        refuse_hidden_remotes(walk)?;
+        let mode = walk.mode();
         let page = match request {
             HistoryReadRequest::Page {
                 limit,
@@ -1052,6 +1125,13 @@ pub trait GitRepository: Send + Sync {
     fn head_path_is_gitlink(&self, _path: &Path) -> Result<bool> {
         Ok(false)
     }
+    fn head_tracking(&self, cancellation: &CancellationToken) -> Result<HeadTracking> {
+        cancellation.check_cancelled()?;
+        Err(Error::new(ErrorKind::Unsupported(
+            "head tracking is not implemented for this backend",
+        )))
+    }
+
     fn upstream_divergence(
         &self,
         cancellation: &CancellationToken,
@@ -1386,6 +1466,36 @@ pub trait GitRepository: Send + Sync {
             "git rebase -i is not implemented for this backend",
         )))
     }
+    /// Replaces the message of `commit_id`, which must be HEAD or a commit on
+    /// HEAD's linear first-parent history. Trees are unchanged: HEAD is
+    /// amended without its staged changes, and an older commit is reworded
+    /// by replaying its descendants on top of it.
+    fn reword_commit_with_output(
+        &self,
+        _commit_id: &CommitId,
+        _message: &str,
+    ) -> Result<RewordCommitOutcome> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "rewording a commit is not implemented for this backend",
+        )))
+    }
+    /// Continue a paused message edit only when its persisted rebase belongs
+    /// to this target and message. This retains the rewritten target's identity
+    /// across signing retries, unlike a generic rebase continuation.
+    fn continue_reword_commit_with_output(
+        &self,
+        _commit_id: &CommitId,
+        _message: &str,
+    ) -> Result<RewordCommitOutcome> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "continuing a commit message edit is not implemented for this backend",
+        )))
+    }
+    /// Whether the paused operation is the message edit identified by these
+    /// arguments. An unrelated rebase must never be resumed as a signing retry.
+    fn reword_commit_in_progress(&self, _commit_id: &CommitId, _message: &str) -> Result<bool> {
+        Ok(false)
+    }
     /// Picks `entries` in order. Without `commit` every pick only merges into
     /// the index and worktree, and reword/squash/fixup steps are refused.
     fn interactive_cherry_pick_with_output(
@@ -1519,7 +1629,69 @@ pub trait GitRepository: Send + Sync {
     }
 
     fn fetch_all(&self, _prune: bool) -> Result<CommandOutput>;
-    fn pull(&self, mode: PullMode, _prune: bool) -> Result<CommandOutput>;
+    fn fetch_all_background(
+        &self,
+        _prune: bool,
+        _cancellation: &CancellationToken,
+    ) -> Result<CommandOutput> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "background fetching is not implemented for this backend",
+        )))
+    }
+    /// [`Self::fetch_all_background`] without the `skipped` remotes.
+    fn fetch_all_background_except(
+        &self,
+        prune: bool,
+        skipped: &[String],
+        cancellation: &CancellationToken,
+    ) -> Result<CommandOutput> {
+        if skipped.is_empty() {
+            self.fetch_all_background(prune, cancellation)
+        } else {
+            Err(Error::new(ErrorKind::Unsupported(
+                "skipping remotes in a background fetch is not implemented for this backend",
+            )))
+        }
+    }
+    /// [`Self::fetch_all`] from `remote` alone.
+    fn fetch_remote(&self, _remote: &str, _prune: bool) -> Result<CommandOutput> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "fetching a single remote is not implemented for this backend",
+        )))
+    }
+    /// The remotes [`Self::fetch_all`] contacts: every remote except those
+    /// `skipFetchAll` leaves out and git-annex special remotes.
+    fn fetch_all_remote_names(&self) -> Result<Vec<String>> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "listing the remotes a fetch contacts is not implemented for this backend",
+        )))
+    }
+    /// Hash of what decides this worktree's incoming count, without counting:
+    /// HEAD, its branch's upstream configuration and every reference.
+    fn tracking_stamp(&self, cancellation: &CancellationToken) -> Result<u64> {
+        cancellation.check_cancelled()?;
+        Err(Error::new(ErrorKind::Unsupported(
+            "tracking stamps are not implemented for this backend",
+        )))
+    }
+    /// Hash of every reference with its target, read fresh from disk: a
+    /// fetch's refspecs can write any of them, as a mirror writes refs/heads.
+    /// Equal values before and after a fetch mean the fetch moved nothing.
+    fn refs_fingerprint(&self, cancellation: &CancellationToken) -> Result<u64> {
+        cancellation.check_cancelled()?;
+        Err(Error::new(ErrorKind::Unsupported(
+            "reference fingerprints are not implemented for this backend",
+        )))
+    }
+    /// Hash of the configuration that decides what a fetch from this worktree
+    /// does: remotes, fetch defaults and URL rewrites as this worktree resolves
+    /// them. Worktrees of one repository with equal values fetch the same refs.
+    fn fetch_config_signature(&self) -> Result<u64> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "fetch configuration signatures are not implemented for this backend",
+        )))
+    }
+    fn pull(&self, mode: PullMode) -> Result<CommandOutput>;
     fn push(&self) -> Result<()>;
 
     fn push_with_tags(&self, _request: &crate::tag_push::TagPushRequest) -> Result<CommandOutput> {
@@ -1662,12 +1834,7 @@ pub trait GitRepository: Send + Sync {
         Ok(CommandOutput::empty_success("git commit --amend"))
     }
 
-    fn pull_branch_with_output(
-        &self,
-        _remote: &str,
-        _branch: &str,
-        _prune: bool,
-    ) -> Result<CommandOutput> {
+    fn pull_branch_with_output(&self, _remote: &str, _branch: &str) -> Result<CommandOutput> {
         Err(Error::new(ErrorKind::Unsupported(
             "pulling a specific remote branch is not implemented for this backend",
         )))
@@ -2054,92 +2221,131 @@ pub struct RepositoryWatchInfo {
     pub discovery_incomplete: bool,
 }
 
-/// Ref names History leaves out of its all-branches walk, as patterns over
-/// full names: a plain name matches itself and everything under it
-/// (`refs/pull` covers `refs/pull/7/head`), `*` matches within one path
-/// segment, and `**` across segments (`refs/remotes/*/pr/**`).
+/// Ref namespaces History leaves out of its all-branches walk, as prefixes
+/// matched at path-segment boundaries: `refs/pull` covers `refs/pull/7/head`
+/// but not `refs/pulled`.
 ///
 /// Immutable and cheap to clone; the default excludes nothing. It filters the
 /// walk's starting refs only: HEAD is always walked, and a commit reachable
 /// from a kept ref stays visible.
 #[derive(Clone, Debug, Default, Eq, PartialEq, Hash)]
 pub struct HistoryRefFilter {
-    excluded: Arc<[Arc<str>]>,
+    /// Sorted, without a trailing `/`, and none inside another.
+    prefixes: Arc<[Arc<str>]>,
 }
 
 impl HistoryRefFilter {
-    pub fn excluding<I, S>(patterns: I) -> Self
+    pub fn excluding<I, S>(prefixes: I) -> Self
     where
         I: IntoIterator<Item = S>,
-        S: Into<Arc<str>>,
+        S: AsRef<str>,
     {
-        let mut excluded: Vec<Arc<str>> = patterns.into_iter().map(Into::into).collect();
-        excluded.retain(|pattern| !pattern.is_empty());
-        excluded.sort();
-        excluded.dedup();
+        let owned: Vec<S> = prefixes.into_iter().collect();
+        let mut sorted: Vec<&str> = owned
+            .iter()
+            .map(|prefix| prefix.as_ref().trim_end_matches('/'))
+            .filter(|prefix| !prefix.is_empty())
+            .collect();
+        sorted.sort_unstable();
+        // Sorted order puts an enclosing prefix before everything inside it.
+        let mut kept: Vec<Arc<str>> = Vec::with_capacity(sorted.len());
+        for prefix in sorted {
+            if !prefix_covers(&kept, prefix.as_bytes()) {
+                kept.push(prefix.into());
+            }
+        }
         Self {
-            excluded: excluded.into(),
+            prefixes: kept.into(),
         }
     }
 
     pub fn is_empty(&self) -> bool {
-        self.excluded.is_empty()
+        self.prefixes.is_empty()
     }
 
-    pub fn patterns(&self) -> &[Arc<str>] {
-        &self.excluded
+    pub fn prefixes(&self) -> &[Arc<str>] {
+        &self.prefixes
     }
 
     /// Whether the full ref name `name` (`refs/heads/main`) is left out.
-    pub fn excludes(&self, name: &str) -> bool {
-        self.excluded
-            .iter()
-            .any(|pattern| ref_pattern_matches(pattern, name))
+    /// Allocation-free: one binary search per path segment.
+    pub fn excludes(&self, name: impl AsRef<[u8]>) -> bool {
+        !self.prefixes.is_empty() && prefix_covers(&self.prefixes, name.as_ref())
     }
 }
 
-fn ref_pattern_matches(pattern: &str, name: &str) -> bool {
-    if !pattern.contains('*') {
-        let pattern = pattern.trim_end_matches('/');
-        return name == pattern
-            || name
-                .strip_prefix(pattern)
-                .is_some_and(|rest| rest.starts_with('/'));
-    }
-    glob_segments(
-        &pattern.split('/').collect::<Vec<_>>(),
-        &name.split('/').collect::<Vec<_>>(),
-    )
+/// Whether `name` or one of its segment-boundary ancestors is in `sorted`.
+fn prefix_covers(sorted: &[Arc<str>], name: &[u8]) -> bool {
+    let listed = |candidate: &[u8]| {
+        sorted
+            .binary_search_by(|prefix| prefix.as_bytes().cmp(candidate))
+            .is_ok()
+    };
+    name.iter()
+        .enumerate()
+        .any(|(at, byte)| *byte == b'/' && listed(&name[..at]))
+        || listed(name)
 }
 
-fn glob_segments(pattern: &[&str], name: &[&str]) -> bool {
-    match pattern.split_first() {
-        None => name.is_empty(),
-        Some((&"**", rest)) => (0..=name.len()).any(|skip| glob_segments(rest, &name[skip..])),
-        Some((segment, rest)) => name
-            .split_first()
-            .is_some_and(|(first, tail)| glob_segment(segment, first) && glob_segments(rest, tail)),
-    }
+/// What a history walk starts from: its mode, and the remotes and ref
+/// namespaces an all-branches walk leaves out. A hidden remote's refs are the
+/// remote-tracking refs its fetch refspecs write, unless a shown remote's
+/// refspecs write them too. Other modes walk only HEAD, so they hide nothing.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Hash)]
+pub struct HistoryWalk {
+    mode: HistoryMode,
+    hidden_remotes: Arc<[Arc<str>]>,
+    hidden_refs: HistoryRefFilter,
 }
 
-/// `*` within one segment.
-fn glob_segment(pattern: &str, text: &str) -> bool {
-    let parts: Vec<&str> = pattern.split('*').collect();
-    if parts.len() == 1 {
-        return pattern == text;
-    }
-    let (first, last) = (parts[0], parts[parts.len() - 1]);
-    if !text.starts_with(first) || !text[first.len()..].ends_with(last) {
-        return false;
-    }
-    let mut rest = &text[first.len()..text.len() - last.len()];
-    for middle in &parts[1..parts.len() - 1] {
-        match rest.find(middle) {
-            Some(at) => rest = &rest[at + middle.len()..],
-            None => return false,
+impl HistoryWalk {
+    pub fn new<I, S>(mode: HistoryMode, hidden_remotes: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<Arc<str>>,
+    {
+        let mut hidden: Vec<Arc<str>> = if mode.is_all_branches() {
+            hidden_remotes.into_iter().map(Into::into).collect()
+        } else {
+            Vec::new()
+        };
+        hidden.sort();
+        hidden.dedup();
+        Self {
+            mode,
+            hidden_remotes: hidden.into(),
+            hidden_refs: HistoryRefFilter::default(),
         }
     }
-    true
+
+    /// Leaves `filter`'s namespaces out of an all-branches walk. Backends
+    /// without ref filtering walk them anyway: hiding is a view preference,
+    /// and showing extra history is the safe failure.
+    pub fn with_hidden_refs(mut self, filter: HistoryRefFilter) -> Self {
+        if self.mode.is_all_branches() {
+            self.hidden_refs = filter;
+        }
+        self
+    }
+
+    pub fn mode(&self) -> HistoryMode {
+        self.mode
+    }
+
+    /// Sorted remote names.
+    pub fn hidden_remotes(&self) -> &[Arc<str>] {
+        &self.hidden_remotes
+    }
+
+    pub fn hidden_refs(&self) -> &HistoryRefFilter {
+        &self.hidden_refs
+    }
+}
+
+impl From<HistoryMode> for HistoryWalk {
+    fn from(mode: HistoryMode) -> Self {
+        Self::new(mode, std::iter::empty::<Arc<str>>())
+    }
 }
 
 /// Options fixed when a repository opens. The default changes nothing.
@@ -2150,6 +2356,12 @@ pub struct RepositoryOptions {
 }
 
 impl RepositoryOptions {
+    /// A product's defaults: the ref namespaces it always hides.
+    pub fn for_identity(identity: &crate::identity::ProductIdentity) -> Self {
+        Self::default()
+            .with_history_ref_filter(HistoryRefFilter::excluding(identity.hidden_ref_prefixes()))
+    }
+
     pub fn with_history_ref_filter(mut self, filter: HistoryRefFilter) -> Self {
         self.history_ref_filter = filter;
         self
@@ -2158,6 +2370,15 @@ impl RepositoryOptions {
     pub fn is_default(&self) -> bool {
         *self == Self::default()
     }
+}
+
+fn refuse_hidden_remotes(walk: &HistoryWalk) -> Result<()> {
+    if !walk.hidden_remotes().is_empty() {
+        return Err(Error::new(ErrorKind::Unsupported(
+            "hiding remotes from history is not supported by this backend",
+        )));
+    }
+    Ok(())
 }
 
 fn unsupported_repository_options() -> Error {

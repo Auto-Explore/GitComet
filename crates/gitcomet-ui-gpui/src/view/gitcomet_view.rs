@@ -196,6 +196,12 @@ impl GitCometView {
         });
         command_palette::PaletteContext {
             has_active_repo: repo.is_some(),
+            is_bare: repo.is_some_and(RepoState::is_bare),
+            pull_unavailable: repo
+                .and_then(|repo| pull_unavailable_reason(repo, &self.state.large_file_settings)),
+            push_unavailable: repo.and_then(|repo| {
+                push_request(repo, &self.state.large_file_settings).unavailable_reason()
+            }),
             external_editor: self.effective_external_editor().is_some(),
             merging: repo.is_some_and(merge_in_progress),
             sequencer: repo.is_some_and(|repo| {
@@ -444,25 +450,6 @@ impl GitCometView {
                 bar.set_active_context_menu_invoker(next.clone(), cx);
             });
         });
-    }
-
-    pub(in crate::view) fn register_pending_worktree_branch_removal(
-        &mut self,
-        repo_id: RepoId,
-        path: std::path::PathBuf,
-        branch: String,
-    ) {
-        self.pending_worktree_branch_removals
-            .insert((repo_id, path), branch);
-    }
-
-    pub(super) fn take_pending_worktree_branch_removal(
-        &mut self,
-        repo_id: RepoId,
-        path: &std::path::Path,
-    ) -> Option<String> {
-        self.pending_worktree_branch_removals
-            .remove(&(repo_id, path.to_path_buf()))
     }
 
     #[cfg(test)]
@@ -925,6 +912,8 @@ impl GitCometView {
                 return;
             }
             crate::app::mark_gitcomet_window_focused(cx, this.window_handle.window_id());
+            #[cfg(target_os = "macos")]
+            cx.defer(crate::app::refresh_macos_app_menus);
             crate::workspaces::mark_window_active(cx, this.window_handle.window_id());
             if !this.has_repo_tabs() {
                 // Another window may have opened or closed repositories.
@@ -1331,7 +1320,6 @@ impl GitCometView {
             pending_hook_activity_open: None,
             minimized_hook_activity_chains: FxHashSet::default(),
             minimized_hook_activity_repos: FxHashSet::default(),
-            pending_worktree_branch_removals: FxHashMap::default(),
             startup_crash_report,
             #[cfg(target_os = "macos")]
             recent_repos_menu_fingerprint: ui_session.recent_repos.clone(),
@@ -1343,6 +1331,8 @@ impl GitCometView {
             auth_prompt_submitted_generation: None,
             auth_prompt_input_error: None,
             auth_prompt_focus_return: None,
+            annex_remote_rejected: None,
+            annex_remote_later: Default::default(),
             active_context_menu_invoker: None,
         };
 
@@ -1882,6 +1872,11 @@ impl GitCometView {
 
     pub(super) fn active_repo_id(&self) -> Option<RepoId> {
         self.state.active_repo
+    }
+
+    #[cfg(target_os = "macos")]
+    pub(crate) fn active_repository_is_bare(&self) -> bool {
+        self.active_repo().is_some_and(RepoState::is_bare)
     }
 
     pub(super) fn active_repo(&self) -> Option<&RepoState> {

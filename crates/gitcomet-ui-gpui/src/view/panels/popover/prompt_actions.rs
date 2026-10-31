@@ -123,6 +123,14 @@ impl PopoverHost {
                 create_tag_prompt::panel(self, repo_id, target, cx)
             }
             PopoverKind::Repo { repo_id, kind } => match kind {
+                RepoPopoverKind::RepositoryModeMenu => self.context_menu_view(
+                    PopoverKind::Repo {
+                        repo_id,
+                        kind: RepoPopoverKind::RepositoryModeMenu,
+                    },
+                    cx,
+                ),
+                RepoPopoverKind::DisableBareModeConfirm => bare_mode::panel(self, repo_id, cx),
                 RepoPopoverKind::Remote(remote_kind) => match remote_kind {
                     RemotePopoverKind::AddPrompt => remote_add_prompt::panel(self, repo_id, cx),
                     RemotePopoverKind::EditUrlPrompt { name, kind } => {
@@ -238,14 +246,12 @@ impl PopoverHost {
             PopoverKind::MergeAbortConfirm { repo_id } => {
                 merge_abort_confirm::panel(self, repo_id, cx)
             }
-            PopoverKind::ForceDeleteBranchConfirm { repo_id, name } => {
-                force_delete_branch_confirm::panel(self, repo_id, name, cx)
+            PopoverKind::ForceDeleteBranchConfirm(prompt) => {
+                force_delete_branch_confirm::panel(self, prompt, cx)
             }
-            PopoverKind::ForceRemoveWorktreeConfirm {
-                repo_id,
-                path,
-                branch,
-            } => force_remove_worktree_confirm::panel(self, repo_id, path, branch, cx),
+            PopoverKind::ForceRemoveWorktreeConfirm(prompt) => {
+                force_remove_worktree_confirm::panel(self, prompt, cx)
+            }
             PopoverKind::DiscardChangesConfirm {
                 repo_id,
                 area,
@@ -360,9 +366,18 @@ impl PopoverHost {
             PopoverKind::RepoTabMenu { repo_id } => {
                 self.context_menu_view(PopoverKind::RepoTabMenu { repo_id }, cx)
             }
-            PopoverKind::CommitMenu { repo_id, commit_id } => {
-                self.context_menu_view(PopoverKind::CommitMenu { repo_id, commit_id }, cx)
-            }
+            PopoverKind::CommitMenu {
+                repo_id,
+                commit_id,
+                refs,
+            } => self.context_menu_view(
+                PopoverKind::CommitMenu {
+                    repo_id,
+                    commit_id,
+                    refs,
+                },
+                cx,
+            ),
             PopoverKind::ReflogEntryMenu {
                 repo_id,
                 target,

@@ -5,11 +5,12 @@ use super::super::diff_text::build_cached_diff_query_overlay_styled_text;
 use super::super::diff_text::build_cached_diff_styled_text;
 use super::super::diff_text::build_cached_diff_styled_text_from_relative_highlights;
 use super::super::diff_text::hash_rgba_bits as hash_rgba;
-use super::super::diff_text::slice_cached_diff_styled_text;
 use super::super::diff_text::syntax_highlights_for_streamed_line_slice_heuristic;
 use super::super::diff_text::whitespace_visible_line_styled_text;
 use super::super::diff_text::whitespace_visible_line_styled_text_for_raw;
 use super::super::diff_text::whitespace_visible_line_text;
+use super::super::diff_text::whitespace_visible_styled_text;
+use super::super::diff_text::{DIFF_TEXT_DERIVED_CACHE_MAX_ENTRIES, display_styled_slice};
 use super::super::*;
 use super::DiffTextWrapSlice;
 use super::STREAMED_DIFF_TEXT_CELL_WIDTH_CACHE;
@@ -51,6 +52,52 @@ pub(super) fn should_stream_diff_text(spec: Option<&StreamedDiffTextPaintSpec>) 
         return false;
     };
     is_streamable_diff_text(&spec.raw_text)
+}
+
+/// Use indexed/cached tail metadata without materializing the lazy line.
+/// Source length continues to include the hidden CR.
+pub(super) fn streamed_line_display_len(
+    text: &gitcomet_core::file_diff::FileDiffLineText,
+) -> usize {
+    text.len() - usize::from(text.has_trailing_cr())
+}
+
+pub(super) struct PreparedStreamedDiffSlice {
+    pub(super) styled: CachedDiffStyledText,
+    pub(super) visible_source_len: usize,
+    pub(super) total_display_len: usize,
+}
+
+/// Once the terminal slice is read, its bytes are authoritative for both paint
+/// and hit testing. The indexed terminator may be stale until a disk change is
+/// reindexed; checking the already-read slice adds no I/O.
+pub(super) fn prepare_streamed_diff_slice_for_paint(
+    styled: &CachedDiffStyledText,
+    source_range: &Range<usize>,
+    source_len: usize,
+    indexed_display_len: usize,
+    reveal_whitespace_chars: bool,
+) -> PreparedStreamedDiffSlice {
+    let ends_at_line_end = source_range.end == source_len;
+    if reveal_whitespace_chars {
+        return PreparedStreamedDiffSlice {
+            styled: whitespace_visible_styled_text(styled, ends_at_line_end),
+            visible_source_len: source_range.len(),
+            total_display_len: source_len,
+        };
+    }
+    let styled = display_styled_slice(styled, 0..styled.text.len(), ends_at_line_end);
+    let visible_source_len = styled.text.len();
+    let total_display_len = if ends_at_line_end {
+        source_range.start + visible_source_len
+    } else {
+        indexed_display_len
+    };
+    PreparedStreamedDiffSlice {
+        styled,
+        visible_source_len,
+        total_display_len,
+    }
 }
 
 fn streamed_diff_text_cell_width_cache_key(base_style: &TextStyle, font_size: Pixels) -> u64 {
@@ -625,8 +672,6 @@ pub(super) fn build_streamed_diff_slice_styled_text(
     (base, pending, resolved_slice_range)
 }
 
-const DIFF_TEXT_DERIVED_CACHE_MAX_ENTRIES: usize = 8_192;
-
 thread_local! {
     /// Whitespace-revealed text plus its offset map, keyed by the source
     /// styled text. Both were rebuilt for every visible row on every frame
@@ -634,10 +679,6 @@ thread_local! {
     static WHITESPACE_VISIBLE_TEXT_CACHE: std::cell::RefCell<
         super::FxLruCache<u64, (CachedDiffStyledText, DiffTextOffsetMap)>,
     > = std::cell::RefCell::new(super::new_fx_lru_cache(DIFF_TEXT_DERIVED_CACHE_MAX_ENTRIES));
-    /// Word-wrap slices keyed by (source styled text, display range): a
-    /// substring plus clipped highlights per visible wrapped row per frame.
-    static WRAP_SLICE_CACHE: std::cell::RefCell<super::FxLruCache<u64, CachedDiffStyledText>> =
-        std::cell::RefCell::new(super::new_fx_lru_cache(DIFF_TEXT_DERIVED_CACHE_MAX_ENTRIES));
 }
 
 fn whitespace_visible_cached(
@@ -719,28 +760,6 @@ fn whitespace_visible_raw_cached(
     value
 }
 
-fn slice_cached_diff_styled_text_cached(
-    styled: &CachedDiffStyledText,
-    range: Range<usize>,
-) -> CachedDiffStyledText {
-    let key = {
-        let mut hasher = FxHasher::default();
-        styled.text_hash.hash(&mut hasher);
-        styled.highlights_hash.hash(&mut hasher);
-        range.start.hash(&mut hasher);
-        range.end.hash(&mut hasher);
-        hasher.finish()
-    };
-    if let Some(hit) = WRAP_SLICE_CACHE.with(|cache| cache.borrow_mut().get(&key).cloned()) {
-        return hit;
-    }
-    let sliced = slice_cached_diff_styled_text(styled, range);
-    WRAP_SLICE_CACHE.with(|cache| {
-        cache.borrow_mut().put(key, sliced.clone());
-    });
-    sliced
-}
-
 pub(super) fn diff_text_paint_payload(
     tab_width: usize,
     styled: Option<&CachedDiffStyledText>,
@@ -783,7 +802,8 @@ pub(super) fn diff_text_paint_payload(
                 .as_ref()
                 .map(|map| display_range_for_source_range(map, &source_range))
                 .unwrap_or_else(|| source_range.clone());
-            wrapped = slice_cached_diff_styled_text_cached(styled, display_range.clone());
+            let ends_at_line_end = display_range.end == styled.text.len();
+            wrapped = display_styled_slice(styled, display_range.clone(), ends_at_line_end);
             offset_map = offset_map
                 .as_ref()
                 .map(|map| slice_diff_text_offset_map(map, display_range, source_range));
@@ -817,13 +837,14 @@ pub(super) fn diff_text_paint_payload(
         };
     }
 
-    let wrapped;
-    let styled = if let (Some(styled), Some(wrap)) = (styled, wrap) {
-        wrapped = slice_cached_diff_styled_text_cached(styled, wrap.range_for_region(region));
-        Some(&wrapped)
-    } else {
-        styled
-    };
+    let display = styled.map(|styled| {
+        let range = wrap
+            .map(|wrap| wrap.range_for_region(region))
+            .unwrap_or(0..styled.text.len());
+        let ends_at_line_end = range.end >= styled.text.len();
+        display_styled_slice(styled, range, ends_at_line_end)
+    });
+    let styled = display.as_ref();
     let text = styled.map(|s| s.text.clone()).unwrap_or_default();
     let highlights = styled
         .map(|s| Arc::clone(&s.highlights))

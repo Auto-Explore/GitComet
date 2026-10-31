@@ -185,16 +185,29 @@ pub(super) fn add_worktree(
     })]
 }
 
-pub(super) fn remove_worktree(repo_id: RepoId, path: PathBuf) -> Vec<Effect> {
+pub(super) fn remove_worktree(
+    repo_id: RepoId,
+    path: PathBuf,
+    delete_branch: Option<String>,
+) -> Vec<Effect> {
     vec![Effect::RepoCommand(RepoCommandEffect::RemoveWorktree {
         repo_id,
         path,
+        delete_branch,
     })]
 }
 
-pub(super) fn force_remove_worktree(repo_id: RepoId, path: PathBuf) -> Vec<Effect> {
+pub(super) fn force_remove_worktree(
+    repo_id: RepoId,
+    path: PathBuf,
+    delete_branch: Option<String>,
+) -> Vec<Effect> {
     vec![Effect::RepoCommand(
-        RepoCommandEffect::ForceRemoveWorktree { repo_id, path },
+        RepoCommandEffect::ForceRemoveWorktree {
+            repo_id,
+            path,
+            delete_branch,
+        },
     )]
 }
 
@@ -402,6 +415,11 @@ fn run_large_file_command_with_auth(
     command: gitcomet_core::large_files::LargeFileCommand,
     auth: Option<StagedGitAuth>,
 ) -> Vec<Effect> {
+    if command.repository_requirement() == gitcomet_core::domain::RepositoryRequirement::WorkingTree
+        && super::refuse_bare_worktree_action(state, repo_id)
+    {
+        return Vec::new();
+    }
     let pulls = command.pulls();
     let pushes = command.pushes();
     if let Some(repo) = state.repos.iter_mut().find(|repo| repo.id == repo_id)
@@ -481,6 +499,22 @@ pub(super) fn fetch_all(
     })]
 }
 
+pub(super) fn fetch_remote(
+    repos: &RepositoryRuntimes,
+    state: &mut AppState,
+    repo_id: RepoId,
+    remote: String,
+) -> Vec<Effect> {
+    let prune = state.remote_settings.prune_deleted_remote_branches_on_fetch;
+    bump_in_flight(repos, state, repo_id, InFlightKind::Pull);
+    vec![Effect::RepoCommand(RepoCommandEffect::FetchRemote {
+        repo_id,
+        remote,
+        prune,
+        auth: None,
+    })]
+}
+
 pub(super) fn fetch_refspecs(
     repos: &RepositoryRuntimes,
     state: &mut AppState,
@@ -529,7 +563,6 @@ pub(super) fn pull(
     vec![Effect::RepoCommand(RepoCommandEffect::Pull {
         repo_id,
         mode,
-        prune: state.remote_settings.prune_deleted_remote_branches_on_fetch,
         auth: None,
     })]
 }
@@ -546,7 +579,6 @@ pub(super) fn pull_branch(
         repo_id,
         remote,
         branch,
-        prune: state.remote_settings.prune_deleted_remote_branches_on_fetch,
         auth: None,
     })]
 }
@@ -1059,7 +1091,7 @@ pub(super) fn commit_finished(
     repo_id: RepoId,
     result: std::result::Result<(), Error>,
     amend: bool,
-    handled_by_auth_prompt: bool,
+    handled_by_prompt: bool,
 ) -> Vec<Effect> {
     let label = if amend { "Amend" } else { "Commit" };
     let mut succeeded = false;
@@ -1077,12 +1109,8 @@ pub(super) fn commit_finished(
             succeeded = true;
             repo_state.set_recent_commit_messages(Loadable::NotLoaded);
             repo_state.set_diff_target(None);
-            repo_state.diff_state.diff = Loadable::NotLoaded;
-            repo_state.diff_state.diff_file = Loadable::NotLoaded;
-            repo_state.diff_state.diff_preview_text_file = Loadable::NotLoaded;
-            repo_state.diff_state.submodule_summary = Loadable::NotLoaded;
+            repo_state.diff_state.clear_loads();
             repo_state.diff_state.inline_submodule_diff = None;
-            repo_state.diff_state.diff_file_image = Loadable::NotLoaded;
             repo_state.bump_diff_state_rev();
             invalidate_loaded_blame(repo_state);
             push_action_log(
@@ -1097,7 +1125,7 @@ pub(super) fn commit_finished(
         }
         Err(e) => {
             let summary = format_failure_summary(label, &e);
-            if !handled_by_auth_prompt {
+            if !handled_by_prompt {
                 repo_state.feedback_mut().last_error = Some(summary.clone());
             }
             push_action_log(
@@ -1107,7 +1135,7 @@ pub(super) fn commit_finished(
                 label.to_string(),
                 summary,
                 Some(&e),
-                handled_by_auth_prompt,
+                handled_by_prompt,
             );
         }
     }
@@ -1130,7 +1158,7 @@ pub(super) fn safe_push_after_commit_finished(
     repo_id: RepoId,
     auth: Option<StagedGitAuth>,
     result: std::result::Result<gitcomet_core::services::SafePushAfterCommitDecision, Error>,
-    handled_by_auth_prompt: bool,
+    handled_by_prompt: bool,
 ) -> Vec<Effect> {
     match result {
         Ok(gitcomet_core::services::SafePushAfterCommitDecision::Push { target }) => {
@@ -1171,7 +1199,7 @@ pub(super) fn safe_push_after_commit_finished(
             };
             repo_state.pending.force_push_lease = None;
             let summary = format_failure_summary("Push after commit", &e);
-            if !handled_by_auth_prompt {
+            if !handled_by_prompt {
                 repo_state.feedback_mut().last_error = Some(summary.clone());
             }
             push_action_log(
@@ -1181,7 +1209,7 @@ pub(super) fn safe_push_after_commit_finished(
                 "Push after commit".to_string(),
                 summary,
                 Some(&e),
-                handled_by_auth_prompt,
+                handled_by_prompt,
             );
             refresh_full_effects(repo_state, git_log_settings)
         }
@@ -1202,6 +1230,7 @@ fn command_may_change_large_file_support(command: &RepoCommandKind) -> bool {
                 | C::AnnexSync { .. } | C::AnnexInit | C::AnnexAdjust { .. }
                 | C::AnnexLeaveAdjusted { .. } | C::AnnexEnableRemote { .. }
                 | C::AnnexInitRemote { .. } | C::AnnexTrust { .. }
+                | C::AnnexVerifyRemote { .. }
                 | C::AnnexDescribe { .. } | C::AnnexNumcopies { .. }
                 | C::AnnexWebapp | C::AnnexStopAssistant | C::AnnexRestage => true,
                 C::LfsPushAll { .. } | C::LfsPrune
@@ -1236,6 +1265,7 @@ fn command_may_change_large_file_support(command: &RepoCommandKind) -> bool {
         | RepoCommandKind::RemoveRemote { .. }
         | RepoCommandKind::SetRemoteUrl { .. } => true,
         RepoCommandKind::FetchAll
+        | RepoCommandKind::FetchRemote { .. }
         | RepoCommandKind::FetchRefspecs { .. }
         | RepoCommandKind::PruneMergedBranches
         | RepoCommandKind::PruneLocalTags
@@ -1270,6 +1300,8 @@ fn command_may_change_large_file_support(command: &RepoCommandKind) -> bool {
         | RepoCommandKind::StageHunk
         | RepoCommandKind::UnstageHunk
         | RepoCommandKind::ApplyWorktreePatch { .. }
+        // Rewording keeps every tree as it was.
+        | RepoCommandKind::RewordCommit { .. }
         | RepoCommandKind::RunMaintenance => false,
     }
 }
@@ -1281,6 +1313,7 @@ fn tracks_local_actions_in_flight(command: &RepoCommandKind) -> bool {
             | RepoCommandKind::SquashRef { .. }
             | RepoCommandKind::Reset { .. }
             | RepoCommandKind::SquashCommits { .. }
+            | RepoCommandKind::RewordCommit { .. }
             | RepoCommandKind::Rebase { .. }
             | RepoCommandKind::RebaseContinue
             | RepoCommandKind::RebaseAbort
@@ -1325,6 +1358,7 @@ pub(super) fn command_touches_sequencer_state(command: &RepoCommandKind) -> bool
         RepoCommandKind::MergeRef { .. }
             | RepoCommandKind::SquashRef { .. }
             | RepoCommandKind::SquashCommits { .. }
+            | RepoCommandKind::RewordCommit { .. }
             | RepoCommandKind::Reset { .. }
             | RepoCommandKind::Rebase { .. }
             | RepoCommandKind::RebaseContinue
@@ -1352,6 +1386,7 @@ fn command_clears_pending_force_push_lease(command: &RepoCommandKind) -> bool {
             | RepoCommandKind::ForcePushWithLease { .. }
             | RepoCommandKind::PushSetUpstream { .. }
             | RepoCommandKind::Reset { .. }
+            | RepoCommandKind::RewordCommit { .. }
             | RepoCommandKind::Rebase { .. }
             | RepoCommandKind::RebaseContinue
             | RepoCommandKind::RebaseAbort
@@ -1369,6 +1404,7 @@ pub(super) fn command_clears_diff_selection(command: &RepoCommandKind) -> bool {
         command,
         RepoCommandKind::Reset { .. }
             | RepoCommandKind::SquashCommits { .. }
+            | RepoCommandKind::RewordCommit { .. }
             | RepoCommandKind::Rebase { .. }
             | RepoCommandKind::RebaseContinue
             | RepoCommandKind::RebaseAbort
@@ -1428,7 +1464,7 @@ pub(super) fn repo_command_finished(
     repo_id: RepoId,
     command: RepoCommandKind,
     result: std::result::Result<CommandOutput, Error>,
-    handled_by_auth_prompt: bool,
+    handled_by_prompt: bool,
 ) -> Vec<Effect> {
     let refresh_worktrees = matches!(
         &command,
@@ -1476,6 +1512,7 @@ pub(super) fn repo_command_finished(
     }
 
     let mut extra_effects = Vec::new();
+    let mut reselect = None;
     if let RepoCommandKind::LargeFile { command } = &command {
         if command.pulls() {
             repo_state.pull_in_flight = repo_state.pull_in_flight.saturating_sub(1);
@@ -1494,6 +1531,7 @@ pub(super) fn repo_command_finished(
     }
     match &command {
         RepoCommandKind::FetchAll
+        | RepoCommandKind::FetchRemote { .. }
         | RepoCommandKind::FetchRefspecs { .. }
         | RepoCommandKind::PruneMergedBranches
         | RepoCommandKind::PruneLocalTags => {
@@ -1536,6 +1574,9 @@ pub(super) fn repo_command_finished(
             repo_state.sequencer_actions_in_flight.saturating_sub(1);
         repo_state.bump_ops_rev();
     }
+    if command_succeeded && matches!(command, RepoCommandKind::RebaseAbort) {
+        repo_state.reword.clear_continuation();
+    }
 
     if matches!(&command, RepoCommandKind::AddSubmodule { .. }) {
         repo_state.submodule_add_in_flight = None;
@@ -1550,12 +1591,8 @@ pub(super) fn repo_command_finished(
             repo_state.set_recent_commit_messages(Loadable::NotLoaded);
             if command_clears_diff_selection(&command) {
                 repo_state.set_diff_target(None);
-                repo_state.diff_state.diff = Loadable::NotLoaded;
-                repo_state.diff_state.diff_file = Loadable::NotLoaded;
-                repo_state.diff_state.diff_preview_text_file = Loadable::NotLoaded;
-                repo_state.diff_state.submodule_summary = Loadable::NotLoaded;
+                repo_state.diff_state.clear_loads();
                 repo_state.diff_state.inline_submodule_diff = None;
-                repo_state.diff_state.diff_file_image = Loadable::NotLoaded;
                 repo_state.bump_diff_state_rev();
             }
             if matches!(
@@ -1571,6 +1608,29 @@ pub(super) fn repo_command_finished(
                 repo_state.history_state.squash_preview_pending = None;
                 repo_state.set_squash_preview(Loadable::NotLoaded);
             }
+            if let RepoCommandKind::RewordCommit {
+                commit_id,
+                rewritten_id,
+                ..
+            } = &command
+            {
+                // A refresh started while signing was paused may still return
+                // the old history. Supersede it before selecting the rewritten
+                // id, or that stale page can prune the new selection.
+                repo_state.loads_in_flight.invalidate_log();
+                // Index builds also use the old snapshot until the fresh log
+                // arrives; they must not reconcile against rewritten selection.
+                repo_state.history_state.log_snapshot = None;
+                // The reworded commit and its descendants have new ids. Follow
+                // the reworded commit when it is the one being shown; another
+                // selection is left to the log reload, which prunes it if
+                // the rewrite took it away.
+                if repo_state.history_state.selected_commit.as_ref() == Some(commit_id) {
+                    repo_state.set_selected_commit(None);
+                    repo_state.set_commit_details(Loadable::NotLoaded);
+                    reselect = rewritten_id.clone();
+                }
+            }
             push_command_log(inputs, repo_state, true, &command, &output, None, false);
         }
         Err(e) => {
@@ -1581,9 +1641,9 @@ pub(super) fn repo_command_finished(
                 &command,
                 &CommandOutput::default(),
                 Some(&e),
-                handled_by_auth_prompt,
+                handled_by_prompt,
             );
-            if !handled_by_auth_prompt {
+            if !handled_by_prompt {
                 repo_state.feedback_mut().last_error = repo_state
                     .feedback
                     .command_log
@@ -1711,12 +1771,8 @@ pub(super) fn repo_command_finished(
         if let Some(conflict_target) = selected_conflict_target(repo_state, &target) {
             // Blanked, so there is nothing stale left to guard against.
             repo_state.diff_state.diff_reload_in_flight = false;
-            repo_state.diff_state.diff = Loadable::NotLoaded;
-            repo_state.diff_state.diff_file = Loadable::NotLoaded;
-            repo_state.diff_state.diff_preview_text_file = Loadable::NotLoaded;
-            repo_state.diff_state.submodule_summary = Loadable::NotLoaded;
+            repo_state.diff_state.clear_loads();
             repo_state.diff_state.inline_submodule_diff = None;
-            repo_state.diff_state.diff_file_image = Loadable::NotLoaded;
             repo_state.bump_diff_state_rev();
             match conflict_target {
                 SelectedConflictTarget::Current => {
@@ -1742,6 +1798,18 @@ pub(super) fn repo_command_finished(
     }
     let mut effects = refresh_full_effects(repo_state, state.git_log_settings);
     effects.extend(extra_effects);
+    if let Some(commit_id) = reselect {
+        effects.extend(super::effects::select_commit(state, repo_id, commit_id));
+        if let Some(repo) = state.repos.iter_mut().find(|repo| repo.id == repo_id) {
+            // This id has no row in the old history. Clear its row hints before
+            // the detail load captures the selection revision; the fresh page
+            // must not change that revision merely by clearing stale hints.
+            let mut selection = repo.history_state.multi_selection.clone();
+            selection.anchor_index = None;
+            selection.anchor_log_rev = None;
+            repo.set_commit_multi_selection(selection);
+        }
+    }
     effects
 }
 

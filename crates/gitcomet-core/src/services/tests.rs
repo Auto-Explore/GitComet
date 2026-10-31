@@ -33,36 +33,78 @@ fn combined_steps_join_non_empty_streams_in_order() {
 }
 
 #[test]
-fn history_ref_filters_match_names_prefixes_and_globs() {
+fn history_ref_filters_match_prefixes_at_segment_boundaries() {
     use super::HistoryRefFilter;
-    let filter =
-        HistoryRefFilter::excluding(["refs/pull", "refs/remotes/*/pr/**", "refs/heads/wip-*", ""]);
-    assert_eq!(filter.patterns().len(), 3, "empty patterns are dropped");
+    let filter = HistoryRefFilter::excluding([
+        "refs/pull",
+        "refs/t3/",
+        "refs/a",
+        "refs/a-b",
+        "refs/remotes/origin/pr",
+        "",
+        "/",
+    ]);
+    assert_eq!(
+        filter.prefixes().iter().map(|p| &**p).collect::<Vec<_>>(),
+        [
+            "refs/a",
+            "refs/a-b",
+            "refs/pull",
+            "refs/remotes/origin/pr",
+            "refs/t3"
+        ],
+        "sorted, trailing `/` dropped, empty prefixes dropped"
+    );
     for excluded in [
         "refs/pull",
         "refs/pull/7/head",
+        "refs/t3",
+        "refs/t3/checkpoints/x/turn/1",
+        "refs/a/x",
+        "refs/a-b/x",
         "refs/remotes/origin/pr/7",
-        "refs/remotes/origin/pr/7/merge",
-        "refs/heads/wip-parser",
     ] {
         assert!(filter.excludes(excluded), "{excluded}");
+        assert!(filter.excludes(excluded.as_bytes()), "{excluded} as bytes");
     }
     for kept in [
         "refs/pulled/7",
+        "refs/t3code/x",
+        "refs/a-c/x",
+        "refs",
         "refs/heads/main",
         "refs/remotes/origin/main",
-        "refs/remotes/origin/nested/pr/7",
-        "refs/heads/wip",
-        "refs/heads/wip-a/b",
+        "refs/remotes/origin/prx",
     ] {
         assert!(!filter.excludes(kept), "{kept}");
     }
+    assert_eq!(
+        HistoryRefFilter::excluding(["refs/t3/checkpoints", "refs/t3", "refs/t3/x/y"]).prefixes(),
+        HistoryRefFilter::excluding(["refs/t3"]).prefixes(),
+        "a prefix inside another adds nothing"
+    );
     assert!(HistoryRefFilter::default().is_empty());
     assert!(!HistoryRefFilter::default().excludes("refs/heads/main"));
     // Order and duplicates do not make two filters different.
     assert_eq!(
         HistoryRefFilter::excluding(["b", "a", "a"]),
         HistoryRefFilter::excluding(["a", "b"])
+    );
+}
+
+#[test]
+fn history_walk_hidden_refs_only_change_all_branches_walks() {
+    use super::{HistoryRefFilter, HistoryWalk};
+    let filter = HistoryRefFilter::excluding(["refs/t3"]);
+    let all = HistoryWalk::from(HistoryMode::AllBranches);
+    let hiding = all.clone().with_hidden_refs(filter.clone());
+    assert_eq!(hiding.hidden_refs(), &filter);
+    assert_ne!(hiding, all, "hiding refs is a different walk");
+    let head = HistoryWalk::from(HistoryMode::FullReachable);
+    assert_eq!(
+        head.clone().with_hidden_refs(filter),
+        head,
+        "a HEAD-only walk has no refs to hide"
     );
 }
 
@@ -206,7 +248,7 @@ fn provided_trait_methods_use_unsupported_fallback_behavior() {
         crate::remote_url::RemoteUrlPolicy::default(),
     ));
     assert_unsupported(repo.fetch_all(true));
-    assert_unsupported(repo.pull(PullMode::FastForwardOnly, true));
+    assert_unsupported(repo.pull(PullMode::FastForwardOnly));
     assert_unsupported(repo.push_with_output());
     assert_unsupported(repo.push_after_commit_with_output(&safe_push_target));
     assert_unsupported(repo.push_after_commit_set_upstream_with_output(&safe_push_target));
@@ -224,7 +266,7 @@ fn provided_trait_methods_use_unsupported_fallback_behavior() {
     assert_unsupported(repo.unset_upstream_branch_with_output("main"));
     assert_unsupported(repo.delete_remote_branch_with_output("origin", "main"));
     assert_unsupported(repo.commit_amend_with_output("message"));
-    assert_unsupported(repo.pull_branch_with_output("origin", "main", false));
+    assert_unsupported(repo.pull_branch_with_output("origin", "main"));
     assert_unsupported(repo.merge_ref_with_output("origin/main"));
     assert_unsupported(repo.squash_ref_with_output("origin/main"));
     assert_unsupported(repo.reset_with_output("HEAD~1", ResetMode::Mixed));
@@ -473,7 +515,7 @@ impl GitRepository for RecordingHistoryModeRepo {
         result.map(|()| CommandOutput::empty_success("git fetch --all"))
     }
 
-    fn pull(&self, _mode: super::PullMode, _prune: bool) -> super::Result<CommandOutput> {
+    fn pull(&self, _mode: super::PullMode) -> super::Result<CommandOutput> {
         let result: super::Result<()> = { unsupported() };
         result.map(|()| CommandOutput::empty_success("git pull"))
     }
@@ -769,4 +811,80 @@ fn log_history_mode_page_delegates_current_branch_modes_to_head_log() {
             ("all", 7, Some("cursor".to_string())),
         ]
     );
+}
+
+#[test]
+fn provided_history_readers_refuse_hidden_remotes_they_cannot_apply() {
+    use super::{HistoryReadRequest, HistoryWalk};
+    let repo = RecordingHistoryModeRepo::new();
+    let hidden = HistoryWalk::new(HistoryMode::AllBranches, ["origin"]);
+    let first_page = HistoryReadRequest::Page {
+        limit: 7,
+        cursor: None,
+        snapshot: None,
+    };
+    let cancel = CancellationToken::new();
+
+    let error = repo
+        .read_history(
+            &hidden,
+            None,
+            &Default::default(),
+            &first_page,
+            &cancel,
+            &mut |_| {},
+        )
+        .unwrap_err();
+    assert!(
+        matches!(error.kind(), ErrorKind::Unsupported(_)),
+        "{error:?}"
+    );
+    let error = repo
+        .history_authors(&hidden, &Default::default(), &cancel)
+        .unwrap_err();
+    assert!(
+        matches!(error.kind(), ErrorKind::Unsupported(_)),
+        "{error:?}"
+    );
+    assert!(repo.calls().is_empty(), "{:?}", repo.calls());
+    assert!(
+        repo.build_history_index(&hidden, None, &Default::default(), &cancel, &mut |_| {})
+            .unwrap()
+            .is_none(),
+        "no index still means the paged reader"
+    );
+
+    repo.read_history(
+        &HistoryMode::AllBranches.into(),
+        None,
+        &Default::default(),
+        &first_page,
+        &cancel,
+        &mut |_| {},
+    )
+    .expect("nothing to hide");
+    assert_eq!(repo.calls(), vec![("all", 7, None)]);
+}
+
+#[test]
+fn only_an_all_branches_walk_hides_remotes() {
+    use super::HistoryWalk;
+    let walk = HistoryWalk::new(HistoryMode::AllBranches, ["upstream", "origin", "upstream"]);
+    assert_eq!(
+        walk.hidden_remotes()
+            .iter()
+            .map(AsRef::as_ref)
+            .collect::<Vec<&str>>(),
+        ["origin", "upstream"]
+    );
+    for mode in [
+        HistoryMode::FullReachable,
+        HistoryMode::FirstParent,
+        HistoryMode::NoMerges,
+        HistoryMode::MergesOnly,
+    ] {
+        let walk = HistoryWalk::new(mode, ["origin"]);
+        assert!(walk.hidden_remotes().is_empty(), "{mode:?}");
+        assert_eq!(walk, HistoryWalk::from(mode), "{mode:?}");
+    }
 }

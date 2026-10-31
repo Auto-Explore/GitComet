@@ -57,8 +57,10 @@ pub enum CloneOpStatus {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CommandLogEntry {
+    pub source: super::CommandSource,
     pub time: SystemTime,
     pub ok: bool,
+    pub kind: CommandLogKind,
     pub command: String,
     pub summary: String,
     /// Shared and capped: the log is deep-copied on every store dispatch
@@ -69,18 +71,25 @@ pub struct CommandLogEntry {
     /// Whether finishing this command is worth telling the user about. Routine,
     /// user-initiated edits announce themselves through the change they make —
     /// a toast per staged line is noise — but they still belong in the log.
-    /// Failures are surfaced unless an authentication prompt handles them.
+    /// Failures are surfaced unless a prompt handles them.
     pub announce_success: bool,
-    /// This failed attempt is recoverable through the authentication prompt.
-    /// Retain its output for diagnostics without announcing a terminal failure,
-    /// even after the prompt has been submitted or dismissed.
-    pub handled_by_auth_prompt: bool,
+    /// This failed attempt is recoverable through a prompt (authentication, or
+    /// forcing a refused worktree removal). Retain its output for diagnostics
+    /// without announcing a terminal failure, even after the prompt has been
+    /// submitted or dismissed.
+    pub handled_by_prompt: bool,
     /// Preserve the failure category for typed recovery actions in the UI.
     pub failure_id: Option<gitcomet_core::error::GitFailureId>,
     /// The hook-activity entry that owns user-facing reporting for this
     /// command. When present, the UI does not also show the generic command
     /// completion toast/banner.
     pub hook_operation_id: Option<GitOperationId>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CommandLogKind {
+    Pull,
+    Other,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -137,14 +146,15 @@ pub struct GitHookOperation {
     pub time: SystemTime,
     pub duration: Option<Duration>,
     pub status: GitHookOperationStatus,
-    /// The authentication prompt owns feedback for this failed attempt.
-    /// Persist this on the attempt so a later retry cannot revive its notice.
-    pub handled_by_auth_prompt: bool,
+    /// A prompt owns feedback for this failed attempt. Persist this on the
+    /// attempt so a later retry cannot revive its notice.
+    pub handled_by_prompt: bool,
     pub hooks: Vec<GitHookRun>,
     pub output: Arc<VecDeque<GitHookOutputChunk>>,
     pub output_bytes: usize,
     pub output_truncated: bool,
     pub latest_line: String,
+    pub command: Option<Arc<str>>,
     /// An explicit command requested activity before producing any output.
     pub command_started: bool,
     /// Latest large-file transfer progress, when the operation moved content.
@@ -165,6 +175,10 @@ impl GitHookOperation {
         self.command_started || self.has_hooks() || self.transfer.is_some()
     }
 
+    pub fn has_activity_details(&self) -> bool {
+        self.is_reportable() || self.command.is_some()
+    }
+
     pub fn active_hook_name(&self) -> Option<&str> {
         self.hooks
             .iter()
@@ -176,7 +190,7 @@ impl GitHookOperation {
     pub fn combined_output(&self) -> String {
         let mut output = String::new();
         if self.output_truncated {
-            output.push_str("[Earlier hook output was truncated]\n");
+            output.push_str("[Earlier output was truncated]\n");
         }
         for chunk in self.output.iter() {
             output.push_str(&chunk.text);

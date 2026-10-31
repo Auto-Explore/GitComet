@@ -51,8 +51,9 @@ itertools = { workspace = true }
 lru = { workspace = true }
 memchr = { workspace = true }
 rustc-hash = { workspace = true }
-rustix = { workspace = true }
+rustix = { workspace = true, features = ["fs"] }
 same-file = { workspace = true }
+serde = { workspace = true }
 serde_json = { workspace = true }
 smallvec = { workspace = true }
 tempfile = { workspace = true }

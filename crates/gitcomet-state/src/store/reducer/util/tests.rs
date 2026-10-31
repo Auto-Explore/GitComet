@@ -31,6 +31,8 @@ fn command_output(command: &str, stdout: &str, stderr: &str) -> CommandOutput {
 
 fn dummy_log_entry(ix: usize) -> CommandLogEntry {
     CommandLogEntry {
+        kind: crate::model::CommandLogKind::Other,
+        source: crate::model::CommandSource::User,
         time: SystemTime::UNIX_EPOCH,
         ok: true,
         command: format!("cmd-{ix}"),
@@ -38,7 +40,7 @@ fn dummy_log_entry(ix: usize) -> CommandLogEntry {
         stdout: Arc::from(""),
         stderr: Arc::from(""),
         announce_success: true,
-        handled_by_auth_prompt: false,
+        handled_by_prompt: false,
         failure_id: None,
         hook_operation_id: None,
     }
@@ -169,6 +171,7 @@ fn duplicate_worktree_paths_preserve_first_submodule_and_first_eligible_preview(
             SelectedDiffLoadPlan {
                 load_submodule_summary: submodule,
                 preview_text_side: preview_side,
+                one_sided_side: preview_side,
                 ..SelectedDiffLoadPlan::default()
             },
             "status order: {kinds:?}"
@@ -227,6 +230,60 @@ fn content_preview_forces_full_content_preview_plan() {
         )
         .load_patch_diff
     );
+}
+
+#[test]
+fn comparison_added_or_deleted_file_loads_only_its_present_side() {
+    use crate::model::{RangeSelection, Shared};
+    use gitcomet_core::domain::{CommitFileChange, DiffPreviewTextSide};
+
+    let mut repo = repo_state(12);
+    let from = CommitId("base".into());
+    let to = CommitId("tip".into());
+    repo.history_state.range_selection = Some(RangeSelection::new(
+        from.clone(),
+        Some(to.clone()),
+        "base".into(),
+        "tip".into(),
+    ));
+    repo.history_state.range_files = Loadable::Ready(Shared::new(vec![
+        CommitFileChange::new(PathBuf::from("added.txt"), FileStatusKind::Added),
+        CommitFileChange::new(PathBuf::from("deleted.txt"), FileStatusKind::Deleted),
+        CommitFileChange::new(PathBuf::from("modified.txt"), FileStatusKind::Modified),
+    ]));
+    let plan_for = |repo: &RepoState, path: &str| {
+        let target =
+            DiffTarget::commit_range(from.clone(), Some(to.clone()), Some(PathBuf::from(path)));
+        selected_diff_load_plan(
+            &crate::store::reducer::test_inputs::for_target(repo, &target),
+            repo,
+            &target,
+        )
+    };
+
+    let added = plan_for(&repo, "added.txt");
+    assert!(!added.load_patch_diff);
+    assert!(!added.load_file_text);
+    assert_eq!(added.preview_text_side, Some(DiffPreviewTextSide::New));
+
+    let deleted = plan_for(&repo, "deleted.txt");
+    assert!(!deleted.load_patch_diff);
+    assert_eq!(deleted.preview_text_side, Some(DiffPreviewTextSide::Old));
+
+    let modified = plan_for(&repo, "modified.txt");
+    assert!(modified.load_patch_diff);
+    assert_eq!(modified.preview_text_side, None);
+
+    // A list from another comparison says nothing about this one.
+    repo.history_state.range_selection = Some(RangeSelection::new(
+        CommitId("other".into()),
+        Some(to.clone()),
+        "other".into(),
+        "tip".into(),
+    ));
+    let stale = plan_for(&repo, "added.txt");
+    assert!(stale.load_patch_diff);
+    assert_eq!(stale.preview_text_side, None);
 }
 
 #[test]
@@ -1323,6 +1380,45 @@ fn error_format_helpers_preserve_backend_operation_and_path() {
         format_failure_summary("Refresh", &error),
         "Refresh failed:\n\nresolve HEAD (repository): reference target unavailable"
     );
+}
+
+#[test]
+fn timeout_summary_bounds_both_streams_without_losing_the_reason() {
+    let command = "git -C /repo pull --rebase --no-prune -- origin refs/heads/main";
+    let reason = "after 300 seconds without output or progress (set GITCOMET_GIT_COMMAND_TIMEOUT_SECS to override)";
+    let stdout = format!(
+        "discarded stdout prefix{}stdout tail\n",
+        "x".repeat(300_000)
+    );
+    let stderr = format!(
+        "discarded stderr prefix{}stderr tail\n",
+        "y".repeat(300_000)
+    );
+    let error = Error::new(ErrorKind::Git(GitFailure::new(
+        command,
+        GitFailureId::Timeout,
+        None,
+        stdout.into_bytes(),
+        stderr.into_bytes(),
+        Some(reason.into()),
+    )));
+    let (actual_command, summary) = summarize_command(
+        &RepoCommandKind::Pull {
+            mode: PullMode::Rebase,
+        },
+        &CommandOutput::default(),
+        false,
+        Some(&error),
+    );
+    assert_eq!(actual_command, command);
+    assert!(summary.starts_with("Pull timed out:"));
+    assert!(summary.contains(reason));
+    assert!(summary.contains("stdout tail"));
+    assert!(summary.contains("stderr tail"));
+    assert!(!summary.contains("discarded stdout prefix"));
+    assert!(!summary.contains("discarded stderr prefix"));
+    assert_eq!(summary.matches("[Earlier output was truncated]").count(), 2);
+    assert!(summary.len() < 2 * 256 * 1024 + 1024);
 }
 
 #[test]

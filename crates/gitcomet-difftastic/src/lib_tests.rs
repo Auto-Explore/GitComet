@@ -3,6 +3,10 @@ use std::time::{Duration, Instant};
 
 use super::*;
 
+/// Long enough that a slow, busy runner never hits it: these tests are about
+/// cancellation and fallbacks, not the production deadline.
+const TEST_DEADLINE: Duration = Duration::from_secs(120);
+
 fn input<'a>(path: &'a str, old: &'a str, new: &'a str) -> Input<'a> {
     Input {
         path: Path::new(path),
@@ -88,7 +92,7 @@ fn cancelling_mid_comparison_returns_promptly() {
         let outcome = compare_until(
             input("data.json", &old, &new),
             &cancellation,
-            Instant::now() + DEADLINE,
+            Instant::now() + TEST_DEADLINE,
             0,
             |input, should_stop| {
                 let counted = || {
@@ -138,7 +142,13 @@ fn the_deepest_source_under_the_byte_limit_falls_back_without_recursing() {
     let (old, new) = (side("1"), side("2"));
     assert!(old.len() <= BYTE_LIMIT);
     assert_eq!(
-        compare(input("data.json", &old, &new), &CancellationToken::new()),
+        compare_until(
+            input("data.json", &old, &new),
+            &CancellationToken::new(),
+            Instant::now() + TEST_DEADLINE,
+            0,
+            |input, should_stop| api::compare(input, NESTING_LIMIT, should_stop),
+        ),
         Ok(StructuralDiffOutcome::Fallback(
             DiffEngineFallback::NestingLimit
         ))

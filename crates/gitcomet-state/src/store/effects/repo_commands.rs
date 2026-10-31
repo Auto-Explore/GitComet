@@ -41,6 +41,13 @@ fn large_file_command_context(command: &gitcomet_core::large_files::LargeFileCom
         [path] => path.display().to_string(),
         many => format!("{} files", many.len()),
     };
+    let annex_paths = |items: &[PathBuf]| {
+        if items.is_empty() {
+            "all versions".to_string()
+        } else {
+            paths(items)
+        }
+    };
     match command {
         C::LfsPull { paths: p } | C::LfsLock { paths: p } => paths(p),
         C::LfsFetchForDiff { target } => match target {
@@ -59,15 +66,15 @@ fn large_file_command_context(command: &gitcomet_core::large_files::LargeFileCom
         C::LfsFetchAll => "all refs".to_string(),
         C::LfsPrune | C::LfsFsck | C::LfsInstall => "this repository".to_string(),
         C::AnnexGet { paths: p, from } | C::AnnexDrop { paths: p, from, .. } => match from {
-            Some(from) => format!("{} · {from}", paths(p)),
-            None => paths(p),
+            Some(from) => format!("{} · {from}", annex_paths(p)),
+            None => annex_paths(p),
         },
         C::AnnexGetKeys { keys } => match keys.as_slice() {
             [key] => key.clone(),
             many => format!("{} versions", many.len()),
         },
         C::AnnexCopy { paths: p, to } | C::AnnexMove { paths: p, to } => {
-            format!("{} · to {to}", paths(p))
+            format!("{} · to {to}", annex_paths(p))
         }
         C::AnnexUnlock { paths: p } | C::AnnexLock { paths: p } | C::AnnexAdd { paths: p } => {
             paths(p)
@@ -81,7 +88,9 @@ fn large_file_command_context(command: &gitcomet_core::large_files::LargeFileCom
         }
         C::AnnexAdjust { mode } => mode.label().to_string(),
         C::AnnexLeaveAdjusted { base } => base.clone(),
-        C::AnnexEnableRemote { name, .. } | C::AnnexInitRemote { name, .. } => name.clone(),
+        C::AnnexEnableRemote { name, .. }
+        | C::AnnexInitRemote { name, .. }
+        | C::AnnexVerifyRemote { name, .. } => name.clone(),
         C::AnnexTrust { repository, trust } => format!("{repository} · {}", trust.label()),
         C::AnnexDescribe { repository, .. } => repository.clone(),
         C::AnnexNumcopies { copies } => copies.to_string(),
@@ -97,6 +106,7 @@ fn large_file_command_context(command: &gitcomet_core::large_files::LargeFileCom
 fn repo_command_context(command: &RepoCommandKind) -> Option<String> {
     let context = match command {
         RepoCommandKind::FetchAll => "All remotes".to_string(),
+        RepoCommandKind::FetchRemote { remote } => remote.clone(),
         RepoCommandKind::FetchRefspecs { remote, refspecs } => {
             format!("{remote}: {}", refspecs.join(" "))
         }
@@ -156,6 +166,12 @@ fn repo_command_context(command: &RepoCommandKind) -> Option<String> {
         RepoCommandKind::SquashCommits { message, count, .. } => {
             let subject = message_subject(message).unwrap_or_else(|| "No commit message".into());
             format!("{count} commits · {subject}")
+        }
+        RepoCommandKind::RewordCommit {
+            commit_id, message, ..
+        } => {
+            let subject = message_subject(message).unwrap_or_else(|| "No commit message".into());
+            format!("{} · {subject}", short_commit_id(commit_id.as_ref()))
         }
         RepoCommandKind::Rebase { onto } => format!("Current branch onto {onto}"),
         RepoCommandKind::RebaseContinue => "Current rebase".to_string(),
@@ -233,8 +249,8 @@ fn repo_command_context(command: &RepoCommandKind) -> Option<String> {
             crate::msg::worktree_checkout_label(checkout),
             path.display()
         ),
-        RepoCommandKind::RemoveWorktree { path }
-        | RepoCommandKind::ForceRemoveWorktree { path } => path.display().to_string(),
+        RepoCommandKind::RemoveWorktree { path, .. }
+        | RepoCommandKind::ForceRemoveWorktree { path, .. } => path.display().to_string(),
         RepoCommandKind::AddSubmodule {
             path, branch, name, ..
         } => {
@@ -271,6 +287,7 @@ fn schedule_repo_command_with_context<F>(
     F: FnOnce(Arc<dyn GitRepository>) -> Result<CommandOutput, Error> + Send + 'static,
 {
     let gated = command.holds_mutation_gate();
+    let requirement = command.repository_requirement();
     schedule_repo_command_task(
         executor,
         repos,
@@ -278,16 +295,20 @@ fn schedule_repo_command_with_context<F>(
         repo_id,
         command,
         context_override,
-        move |repo| {
+        move |repo, _command| {
             let gate = gated.then(|| super::super::mutation_gate::for_repo(repo.as_ref()));
             let _mutation = gate
                 .as_ref()
                 .map(|gate| gate.read().unwrap_or_else(|error| error.into_inner()));
+            let _operation = repo.acquire_operation_lease()?;
+            super::super::repository_requirement::check(repo.as_ref(), requirement)?;
             run(repo)
         },
     );
 }
 
+/// `run` may record what the command did in its [`RepoCommandKind`] before
+/// the completion reports it.
 fn schedule_repo_command_task<F>(
     executor: &TaskExecutor,
     repos: &RepositoryRuntimes,
@@ -297,8 +318,21 @@ fn schedule_repo_command_task<F>(
     context_override: Option<String>,
     run: F,
 ) where
-    F: FnOnce(Arc<dyn GitRepository>) -> Result<CommandOutput, Error> + Send + 'static,
+    F: FnOnce(Arc<dyn GitRepository>, &mut RepoCommandKind) -> Result<CommandOutput, Error>
+        + Send
+        + 'static,
 {
+    let auto_fetch = Arc::clone(&msg_tx.auto_fetch);
+    let foreground = if command.blocks_auto_fetch() {
+        repos.repository(&repo_id).map(|repo| {
+            auto_fetch
+                .admission()
+                .reserve(super::super::auto_fetch::repository_key(repo.as_ref()))
+        })
+    } else {
+        None
+    };
+    let is_manual_fetch = command.fetches_every_remote();
     let label = command.hook_activity_label();
     let context = context_override.or_else(|| repo_command_context(&command));
     // The reducer counted the command in flight and only its completion
@@ -311,6 +345,7 @@ fn schedule_repo_command_task<F>(
         msg_tx,
         move |repo, msg_tx| {
             let fetches_objects = command.fetches_objects();
+            let changes_tracking = command.changes_tracking();
             let operation = GitOperationTask::start_with_progress_lane(
                 repo_id,
                 label,
@@ -318,15 +353,31 @@ fn schedule_repo_command_task<F>(
                 command.shows_progress(),
                 &msg_tx,
             );
-            let result = {
-                let _scope = operation.attach();
-                run(Arc::clone(&repo))
-            };
+            let result = foreground
+                .as_ref()
+                .map_or(Ok(()), |reservation| {
+                    reservation.wait(operation.cancellation())
+                })
+                .and_then(|()| {
+                    let _scope = operation.attach();
+                    run(Arc::clone(&repo), &mut command)
+                });
             if fetches_objects {
                 // The refresh this command triggers should read the new packs
                 // through a fresh store, and old packs must not stay mapped.
                 repo.release_object_store();
                 super::repo_load::release_all_worktree_scan_handles();
+            }
+            if is_manual_fetch {
+                auto_fetch.manual_fetch_finished(
+                    &repo.spec().workdir,
+                    std::time::SystemTime::now(),
+                    &result,
+                );
+            }
+            drop(foreground);
+            if changes_tracking {
+                msg_tx.refresh_other_tracking(repo_id, repo.as_ref());
             }
             let outcome = GitOperationTask::outcome(&result);
             if let RepoCommandKind::ApplyFileChange { commit_retry, .. } = &mut command
@@ -459,6 +510,24 @@ struct SaveWorktreeFileRequest {
     completion: Option<smol::channel::Sender<bool>>,
 }
 
+struct SaveCompletion(Option<smol::channel::Sender<bool>>);
+
+impl SaveCompletion {
+    fn finish(mut self, succeeded: bool) {
+        if let Some(sender) = self.0.take() {
+            let _ = sender.try_send(succeeded);
+        }
+    }
+}
+
+impl Drop for SaveCompletion {
+    fn drop(&mut self) {
+        if let Some(sender) = self.0.take() {
+            let _ = sender.try_send(false);
+        }
+    }
+}
+
 fn schedule_save_worktree_file(
     executor: &TaskExecutor,
     repos: &RepositoryRuntimes,
@@ -473,6 +542,7 @@ fn schedule_save_worktree_file(
         stage,
         completion,
     } = request;
+    let completion = SaveCompletion(completion);
     let command_path = path.clone();
     let engine = msg_tx.filesystem;
     schedule_repo_command(
@@ -510,9 +580,7 @@ fn schedule_save_worktree_file(
                     exit_code: Some(0),
                 })
             })();
-            if let Some(completion) = completion {
-                let _ = completion.try_send(result.is_ok());
-            }
+            completion.finish(result.is_ok());
             result
         },
     );
@@ -758,6 +826,7 @@ fn schedule_remove_worktree(
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     path: PathBuf,
+    delete_branch: Option<String>,
 ) {
     let command_path = path.clone();
     schedule_repo_command(
@@ -765,7 +834,10 @@ fn schedule_remove_worktree(
         repos,
         msg_tx,
         repo_id,
-        RepoCommandKind::RemoveWorktree { path: command_path },
+        RepoCommandKind::RemoveWorktree {
+            path: command_path,
+            delete_branch,
+        },
         move |repo| repo.remove_worktree_with_output(&path),
     );
 }
@@ -776,6 +848,7 @@ fn schedule_force_remove_worktree(
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     path: PathBuf,
+    delete_branch: Option<String>,
 ) {
     let command_path = path.clone();
     schedule_repo_command(
@@ -783,7 +856,10 @@ fn schedule_force_remove_worktree(
         repos,
         msg_tx,
         repo_id,
-        RepoCommandKind::ForceRemoveWorktree { path: command_path },
+        RepoCommandKind::ForceRemoveWorktree {
+            path: command_path,
+            delete_branch,
+        },
         move |repo| repo.force_remove_worktree_with_output(&path),
     );
 }
@@ -1090,6 +1166,23 @@ fn schedule_fetch_all(
     );
 }
 
+fn schedule_fetch_remote(
+    executor: &TaskExecutor,
+    repos: &RepositoryRuntimes,
+    msg_tx: StoreWorkerSender,
+    repo_id: RepoId,
+    remote: String,
+    prune: bool,
+    auth: Option<StagedGitAuth>,
+) {
+    let command = RepoCommandKind::FetchRemote {
+        remote: remote.clone(),
+    };
+    schedule_repo_command(executor, repos, msg_tx, repo_id, command, move |repo| {
+        run_with_git_auth(auth, || repo.fetch_remote(&remote, prune))
+    });
+}
+
 fn schedule_fetch_refspecs(
     executor: &TaskExecutor,
     repos: &RepositoryRuntimes,
@@ -1212,16 +1305,13 @@ fn schedule_pull(
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     mode: PullMode,
-    prune: bool,
-    tracking: Option<(String, String)>,
+    context: Option<String>,
     auth: Option<StagedGitAuth>,
 ) {
     let command = RepoCommandKind::Pull { mode };
-    let context = tracking.map(|(local, upstream)| {
-        pull_mode_suffix(mode).map_or_else(
-            || format!("{upstream} → {local}"),
-            |mode| format!("{upstream} → {local} · {mode}"),
-        )
+    let context = context.map(|context| match pull_mode_suffix(mode) {
+        Some(mode) => format!("{context} · {mode}"),
+        None => context,
     });
     schedule_repo_command_with_context(
         executor,
@@ -1230,7 +1320,7 @@ fn schedule_pull(
         repo_id,
         command,
         context,
-        move |repo| run_with_git_auth(auth, || repo.pull(mode, prune)),
+        move |repo| run_with_git_auth(auth, || repo.pull(mode)),
     );
 }
 
@@ -1241,7 +1331,6 @@ fn schedule_pull_branch(
     repo_id: RepoId,
     remote: String,
     branch: String,
-    prune: bool,
     local_branch: Option<String>,
     auth: Option<StagedGitAuth>,
 ) {
@@ -1258,11 +1347,7 @@ fn schedule_pull_branch(
             branch: command_branch,
         },
         context,
-        move |repo| {
-            run_with_git_auth(auth, || {
-                repo.pull_branch_with_output(&remote, &branch, prune)
-            })
-        },
+        move |repo| run_with_git_auth(auth, || repo.pull_branch_with_output(&remote, &branch)),
     );
 }
 
@@ -1394,8 +1479,22 @@ fn schedule_safe_push_after_commit(
 ) {
     let finish_context = context.clone();
     let follow_up_auth = auth.clone();
+    // The preflight fetches the push target and then reads FETCH_HEAD, which
+    // an automatic fetch beside it would rewrite.
+    let foreground = repos.repository(&repo_id).map(|repo| {
+        msg_tx
+            .auto_fetch
+            .admission()
+            .reserve(super::super::auto_fetch::repository_key(repo.as_ref()))
+    });
     spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
-        let result = run_with_git_auth(auth, || repo.safe_push_after_commit(&context));
+        let result = foreground
+            .as_ref()
+            .map_or(Ok(()), |reservation| {
+                reservation.wait(&gitcomet_core::services::CancellationToken::new())
+            })
+            .and_then(|()| run_with_git_auth(auth, || repo.safe_push_after_commit(&context)));
+        drop(foreground);
         send_or_log(
             &msg_tx,
             Msg::Internal(crate::msg::InternalMsg::SafePushAfterCommitFinished {
@@ -1620,6 +1719,61 @@ fn schedule_squash_commits(
     schedule_repo_command(executor, repos, msg_tx, repo_id, command, move |repo| {
         repo.squash_commits_with_output(&oldest, &expected_head, &message)
     });
+}
+
+fn schedule_reword_commit(
+    executor: &TaskExecutor,
+    repos: &RepositoryRuntimes,
+    msg_tx: StoreWorkerSender,
+    repo_id: RepoId,
+    request_id: crate::model::RewordRequestId,
+    commit_id: gitcomet_core::domain::CommitId,
+    message: String,
+    resume: bool,
+    auth: Option<StagedGitAuth>,
+) {
+    let command = RepoCommandKind::RewordCommit {
+        request_id,
+        commit_id: commit_id.clone(),
+        message: message.clone(),
+        rebase_paused: resume,
+        rewritten_id: None,
+    };
+    schedule_repo_command_task(
+        executor,
+        repos,
+        msg_tx,
+        repo_id,
+        command,
+        None,
+        move |repo, command| {
+            let gate = super::super::mutation_gate::for_repo(repo.as_ref());
+            let _mutation = gate.read().unwrap_or_else(|error| error.into_inner());
+            let result = run_with_git_auth(auth, || {
+                if resume {
+                    repo.continue_reword_commit_with_output(&commit_id, &message)
+                } else {
+                    repo.reword_commit_with_output(&commit_id, &message)
+                }
+            });
+            if let RepoCommandKind::RewordCommit {
+                rewritten_id,
+                rebase_paused,
+                ..
+            } = command
+            {
+                match &result {
+                    Ok(outcome) => *rewritten_id = outcome.rewritten_id.clone(),
+                    Err(_) => {
+                        *rebase_paused = repo
+                            .reword_commit_in_progress(&commit_id, &message)
+                            .unwrap_or(resume);
+                    }
+                }
+            }
+            result.map(|outcome| outcome.output)
+        },
+    );
 }
 
 fn schedule_rebase(
@@ -2484,11 +2638,19 @@ pub(super) fn schedule(
             checkout,
             open_after,
         } => schedule_add_worktree(executor, repos, msg_tx, repo_id, path, checkout, open_after),
-        RepoCommandEffect::RemoveWorktree { repo_id, path } => {
-            schedule_remove_worktree(executor, repos, msg_tx, repo_id, path);
+        RepoCommandEffect::RemoveWorktree {
+            repo_id,
+            path,
+            delete_branch,
+        } => {
+            schedule_remove_worktree(executor, repos, msg_tx, repo_id, path, delete_branch);
         }
-        RepoCommandEffect::ForceRemoveWorktree { repo_id, path } => {
-            schedule_force_remove_worktree(executor, repos, msg_tx, repo_id, path);
+        RepoCommandEffect::ForceRemoveWorktree {
+            repo_id,
+            path,
+            delete_branch,
+        } => {
+            schedule_force_remove_worktree(executor, repos, msg_tx, repo_id, path, delete_branch);
         }
         RepoCommandEffect::CheckSubmoduleAddTrust {
             repo_id,
@@ -2638,7 +2800,7 @@ pub(super) fn schedule(
                 repo_id,
                 command,
                 None,
-                move |repo| {
+                move |repo, _command| {
                     let gate = super::super::mutation_gate::for_repo(repo.as_ref());
                     let _mutation = match gate.try_write() {
                         Ok(guard) => guard,
@@ -2650,6 +2812,11 @@ pub(super) fn schedule(
                             )));
                         }
                     };
+                    let _operation = repo.acquire_operation_lease()?;
+                    super::super::repository_requirement::check(
+                        repo.as_ref(),
+                        gitcomet_core::domain::RepositoryRequirement::WorkingTree,
+                    )?;
                     let _filesystem = match filesystem.try_lock() {
                         Ok(guard) => guard,
                         Err(std::sync::TryLockError::Poisoned(error)) => error.into_inner(),
@@ -2704,6 +2871,12 @@ pub(super) fn schedule(
             prune,
             auth,
         } => schedule_fetch_all(executor, repos, msg_tx, repo_id, prune, auth),
+        RepoCommandEffect::FetchRemote {
+            repo_id,
+            remote,
+            prune,
+            auth,
+        } => schedule_fetch_remote(executor, repos, msg_tx, repo_id, remote, prune, auth),
         RepoCommandEffect::FetchRefspecs {
             repo_id,
             remote,
@@ -2725,7 +2898,6 @@ pub(super) fn schedule(
         RepoCommandEffect::Pull {
             repo_id,
             mode,
-            prune,
             auth,
         } => schedule_pull(
             executor,
@@ -2733,15 +2905,15 @@ pub(super) fn schedule(
             msg_tx,
             repo_id,
             mode,
-            prune,
-            tracking_branch_context(thread_state, repo_id),
+            tracking_branch_context(thread_state, repo_id)
+                .map(|(local, upstream)| format!("{upstream} → {local}"))
+                .or_else(|| current_branch_context(thread_state, repo_id)),
             auth,
         ),
         RepoCommandEffect::PullBranch {
             repo_id,
             remote,
             branch,
-            prune,
             auth,
         } => schedule_pull_branch(
             executor,
@@ -2750,7 +2922,6 @@ pub(super) fn schedule(
             repo_id,
             remote,
             branch,
-            prune,
             current_branch_context(thread_state, repo_id),
             auth,
         ),
@@ -2851,6 +3022,16 @@ pub(super) fn schedule(
             expected_head,
             message,
             count,
+        ),
+        RepoCommandEffect::RewordCommit {
+            repo_id,
+            request_id,
+            commit_id,
+            message,
+            resume,
+            auth,
+        } => schedule_reword_commit(
+            executor, repos, msg_tx, repo_id, request_id, commit_id, message, resume, auth,
         ),
         RepoCommandEffect::Rebase { repo_id, onto } => {
             schedule_rebase(executor, repos, msg_tx, repo_id, onto)

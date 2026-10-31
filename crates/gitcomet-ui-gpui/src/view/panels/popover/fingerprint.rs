@@ -10,16 +10,42 @@ pub(super) fn notify_fingerprint(
     binding: Option<crate::view::pane_store::DiffBinding>,
 ) -> u64 {
     let mut hasher = FxHasher::default();
-    binding
+    let active_repository = binding
         .map(|binding| binding.repo_id)
         .or(state.active_repo)
-        .and_then(|id| state.repos.iter().find(|repo| repo.id == id))
+        .and_then(|id| state.repos.iter().find(|repo| repo.id == id));
+    active_repository
         .and_then(|repo| repo.shared_preferences.as_ref())
         .map(|snapshot| snapshot.revision)
         .hash(&mut hasher);
+    if let Some(repo) = repo_for_popover(state, popover, binding).or(active_repository) {
+        repo.repository_mode.hash(&mut hasher);
+        std::mem::discriminant(&repo.bare_mode_conversion).hash(&mut hasher);
+    }
     hash_popover_kind(popover, &mut hasher);
     if matches!(popover, PopoverKind::CommitMenu { .. }) {
         state.git_log_settings.show_history_tags.hash(&mut hasher);
+    }
+    if matches!(popover, PopoverKind::PullPicker) {
+        state.remote_settings.auto_fetch.enabled.hash(&mut hasher);
+        if let Some(repo) = repo_for_popover(state, popover, binding) {
+            repo.auto_fetch.last_success_at.hash(&mut hasher);
+            repo.auto_fetch.retry_at.hash(&mut hasher);
+            repo.auto_fetch.paused_remotes.hash(&mut hasher);
+            std::mem::discriminant(&repo.auto_fetch.status).hash(&mut hasher);
+            match &repo.auto_fetch.status {
+                gitcomet_state::model::AutoFetchStatus::Failed { at, error } => {
+                    at.hash(&mut hasher);
+                    super::context_menu::pull::auto_fetch_failure_description(error)
+                        .hash(&mut hasher);
+                    super::context_menu::pull::auto_fetch_auth_recovery_hint(error)
+                        .hash(&mut hasher);
+                }
+                gitcomet_state::model::AutoFetchStatus::Succeeded { at } => at.hash(&mut hasher),
+                gitcomet_state::model::AutoFetchStatus::Idle
+                | gitcomet_state::model::AutoFetchStatus::Running => {}
+            }
+        }
     }
 
     match popover {
@@ -235,8 +261,13 @@ fn repo_for_popover<'a>(
         | PopoverKind::MergeCommitConfirm { repo_id, .. }
         | PopoverKind::MergeAbortConfirm { repo_id }
         | PopoverKind::BranchExistsPrompt { repo_id, .. }
-        | PopoverKind::ForceDeleteBranchConfirm { repo_id, .. }
-        | PopoverKind::ForceRemoveWorktreeConfirm { repo_id, .. }
+        | PopoverKind::ForceDeleteBranchConfirm(gitcomet_state::model::ForceDeleteBranchPrompt {
+            repo_id,
+            ..
+        })
+        | PopoverKind::ForceRemoveWorktreeConfirm(
+            gitcomet_state::model::ForceRemoveWorktreePrompt { repo_id, .. },
+        )
         | PopoverKind::DiscardChangesConfirm { repo_id, .. }
         | PopoverKind::DiscardFolderChangesConfirm { repo_id, .. }
         | PopoverKind::FileListFolderMenu { repo_id, .. }
@@ -304,7 +335,7 @@ fn hash_repo_for_popover<H: Hasher>(
         | PopoverKind::BranchGroupMenu { .. }
         | PopoverKind::SidebarPinnedOverflow { .. }
         | PopoverKind::SidebarAncestorMenu { .. }
-        | PopoverKind::ForceDeleteBranchConfirm { .. }
+        | PopoverKind::ForceDeleteBranchConfirm(_)
         | PopoverKind::PushSetUpstreamPrompt { .. } => {
             repo.head_branch_rev.hash(hasher);
             repo.branches_rev.hash(hasher);
@@ -564,7 +595,7 @@ fn hash_repo_for_popover<H: Hasher>(
         | PopoverKind::ResetPrompt { .. }
         | PopoverKind::CheckoutRemoteBranchPrompt { .. }
         | PopoverKind::CreateTagPrompt { .. }
-        | PopoverKind::ForceRemoveWorktreeConfirm { .. }
+        | PopoverKind::ForceRemoveWorktreeConfirm(_)
         // Its member list is resolved when it opens and carried on the kind, so
         // it must not change under the user mid-confirmation.
         | PopoverKind::DeleteBranchesConfirm { .. }
@@ -607,6 +638,19 @@ fn hash_repo_for_popover<H: Hasher>(
         | PopoverKind::ErrorDetails { .. }
         | PopoverKind::Hosted { .. }
         | PopoverKind::CommitPrompt { .. } => {}
+        PopoverKind::Repo {
+            kind: RepoPopoverKind::RepositoryModeMenu | RepoPopoverKind::DisableBareModeConfirm,
+            ..
+        } => {
+            match &repo.bare_mode_conversion {
+                gitcomet_state::model::BareModeConversionState::AwaitingConfirmation(preview) => Arc::as_ptr(preview).hash(hasher),
+                gitcomet_state::model::BareModeConversionState::Failed(error) => Arc::as_ptr(error).hash(hasher),
+                gitcomet_state::model::BareModeConversionState::Idle
+                | gitcomet_state::model::BareModeConversionState::Previewing
+                | gitcomet_state::model::BareModeConversionState::Converting
+                | gitcomet_state::model::BareModeConversionState::Reopening => {}
+            }
+        }
     }
 }
 
@@ -812,19 +856,8 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
             target.hash(hasher);
             operation.hash(hasher);
         }
-        PopoverKind::ForceDeleteBranchConfirm { repo_id, name } => {
-            repo_id.hash(hasher);
-            name.hash(hasher);
-        }
-        PopoverKind::ForceRemoveWorktreeConfirm {
-            repo_id,
-            path,
-            branch,
-        } => {
-            repo_id.hash(hasher);
-            path.hash(hasher);
-            branch.hash(hasher);
-        }
+        PopoverKind::ForceDeleteBranchConfirm(prompt) => prompt.hash(hasher),
+        PopoverKind::ForceRemoveWorktreeConfirm(prompt) => prompt.hash(hasher),
         PopoverKind::DiscardChangesConfirm {
             repo_id,
             area,
@@ -985,9 +1018,14 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
             has_source_c.hash(hasher);
             is_three_way.hash(hasher);
         }
-        PopoverKind::CommitMenu { repo_id, commit_id } => {
+        PopoverKind::CommitMenu {
+            repo_id,
+            commit_id,
+            refs,
+        } => {
             repo_id.hash(hasher);
             commit_id.hash(hasher);
+            refs.hash(hasher);
         }
         PopoverKind::StatusFileMenu {
             repo_id,
@@ -1191,6 +1229,10 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
 
 fn hash_repo_popover_kind<H: Hasher>(repo_id: RepoId, kind: &RepoPopoverKind, hasher: &mut H) {
     match kind {
+        RepoPopoverKind::RepositoryModeMenu | RepoPopoverKind::DisableBareModeConfirm => {
+            std::mem::discriminant(kind).hash(hasher);
+            repo_id.hash(hasher);
+        }
         RepoPopoverKind::Remote(remote_kind) => match remote_kind {
             RemotePopoverKind::AddPrompt => {
                 9u8.hash(hasher);
@@ -1498,6 +1540,7 @@ mod tests {
             PopoverKind::CommitMenu {
                 repo_id,
                 commit_id: CommitId("deadbeef".into()),
+                refs: CommitMenuRefs::All,
             },
             bump_worktrees,
         ));
@@ -1538,6 +1581,81 @@ mod tests {
         let after = notify_fingerprint(&state, &PopoverKind::PullPicker, None);
 
         assert_ne!(before, after);
+    }
+
+    #[test]
+    fn pull_picker_fingerprint_changes_between_failed_snapshots_without_a_running_snapshot() {
+        use gitcomet_state::model::AutoFetchStatus;
+        let at = std::time::UNIX_EPOCH;
+        let failed = |at, message: &str| AutoFetchStatus::Failed {
+            at,
+            error: gitcomet_core::error::Error::new(gitcomet_core::error::ErrorKind::Backend(
+                message.into(),
+            )),
+        };
+        let repo_id = RepoId(9);
+        let mut repo = RepoState::new_opening(
+            repo_id,
+            gitcomet_core::domain::RepoSpec {
+                workdir: std::env::temp_dir().join("gitcomet_pull_picker_failed_fetch_fingerprint"),
+            },
+        );
+        repo.auto_fetch.last_success_at = Some(at);
+        repo.auto_fetch.status = failed(at, "network disconnected");
+        let mut state = AppState {
+            active_repo: Some(repo_id),
+            repos: vec![repo],
+            ..AppState::test_default()
+        };
+        state.remote_settings.auto_fetch.enabled = true;
+        let first = notify_fingerprint(&state, &PopoverKind::PullPicker, None);
+        state.repos[0].auto_fetch.status = failed(at, "authentication required");
+        let second = notify_fingerprint(&state, &PopoverKind::PullPicker, None);
+        assert_ne!(first, second);
+        state.repos[0].auto_fetch.status = failed(
+            at + std::time::Duration::from_secs(60),
+            "authentication required",
+        );
+        assert_ne!(
+            second,
+            notify_fingerprint(&state, &PopoverKind::PullPicker, None)
+        );
+        let failure = gitcomet_core::error::GitFailure::new(
+            "git fetch --all",
+            gitcomet_core::error::GitFailureId::CommandFailed,
+            Some(128),
+            Vec::new(),
+            Vec::new(),
+            Some("authentication required".into()),
+        );
+        state.repos[0].auto_fetch.status = AutoFetchStatus::Failed {
+            at,
+            error: gitcomet_core::error::Error::new(gitcomet_core::error::ErrorKind::Git(
+                failure.clone(),
+            )),
+        };
+        let without_auth_hint = notify_fingerprint(&state, &PopoverKind::PullPicker, None);
+        state.repos[0].auto_fetch.status = AutoFetchStatus::Failed {
+            at,
+            error: gitcomet_core::error::Error::new(gitcomet_core::error::ErrorKind::Git(
+                failure.with_auth_outcome(gitcomet_core::auth::AuthOutcome::NeedsInput(
+                    gitcomet_core::auth::AuthChallenge::from_prompt(
+                        gitcomet_core::auth::GitAuthKind::UsernamePassword,
+                        "Password for test remote:",
+                    ),
+                )),
+            )),
+        };
+        let with_auth_hint = notify_fingerprint(&state, &PopoverKind::PullPicker, None);
+        assert_ne!(without_auth_hint, with_auth_hint);
+        state.repos[0].auto_fetch.retry_at = Some(at + std::time::Duration::from_secs(3600));
+        let retrying = notify_fingerprint(&state, &PopoverKind::PullPicker, None);
+        assert_ne!(with_auth_hint, retrying);
+        state.repos[0].auto_fetch.paused_remotes = vec!["origin".into()];
+        assert_ne!(
+            retrying,
+            notify_fingerprint(&state, &PopoverKind::PullPicker, None)
+        );
     }
 
     #[test]
@@ -1774,6 +1892,7 @@ mod tests {
         let popover = PopoverKind::CommitMenu {
             repo_id,
             commit_id: CommitId("deadbeef".into()),
+            refs: CommitMenuRefs::All,
         };
         let before = notify_fingerprint(&state, &popover, None);
         state.git_log_settings.show_history_tags = !state.git_log_settings.show_history_tags;

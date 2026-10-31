@@ -1284,3 +1284,101 @@ fn linked_worktree_sessions_reload_on_their_own_worktree_and_leave_history_alone
         history_before
     );
 }
+
+/// A session's added or deleted file has one side, as the selected diff's does,
+/// and it follows the status that lands after it opened.
+#[test]
+fn a_session_records_the_one_side_its_change_has() {
+    let (mut repos, ids, mut state, repo_id) = setup();
+    let lifetime = state.repos[0].lifetime();
+    let view = DiffViewId::next();
+    let status = |kind| {
+        Ok(gitcomet_core::domain::RepoStatus {
+            staged: Arc::default(),
+            unstaged: Arc::new(vec![gitcomet_core::domain::FileStatus {
+                path: PathBuf::from("a.rs"),
+                kind,
+                conflict: None,
+            }]),
+        })
+    };
+    reduce(
+        &mut repos,
+        &ids,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::StatusLoaded {
+            repo_id,
+            result: status(gitcomet_core::domain::FileStatusKind::Untracked),
+        }),
+    );
+    let opened = reduce(
+        &mut repos,
+        &ids,
+        &mut state,
+        Msg::DiffSession(DiffSessionMsg::Open {
+            repo_id,
+            lifetime,
+            view,
+            target: worktree("a.rs"),
+        }),
+    );
+    let new_side = Some(gitcomet_core::domain::DiffPreviewTextSide::New);
+    let side = |state: &AppState| {
+        state.repos[0].diff_sessions[&view]
+            .diff_state
+            .one_sided_side
+    };
+    let reads = |effects: &[Effect]| match &session_effect(effects).work {
+        DiffSessionWork::Content {
+            preview_text_side, ..
+        } => *preview_text_side,
+        other => panic!("not a content load: {other:?}"),
+    };
+    assert_eq!(side(&state), new_side);
+    assert_eq!(
+        reads(&opened),
+        new_side,
+        "the first load reads the one side"
+    );
+
+    let file = gitcomet_core::domain::DiffPreviewTextFile {
+        path: PathBuf::from("/tmp/sessions/a.rs"),
+        side: gitcomet_core::domain::DiffPreviewTextSide::New,
+        large_file: None,
+    };
+    let generation = session_effect(&opened).generation;
+    reduce(
+        &mut repos,
+        &ids,
+        &mut state,
+        Msg::DiffSession(DiffSessionMsg::Loaded {
+            repo_id,
+            view,
+            lifetime,
+            generation,
+            content: DiffSessionContent::PreviewText(Ok(Some(file.clone()))),
+        }),
+    );
+    assert!(matches!(
+        &state.repos[0].diff_sessions[&view].diff_state.diff_preview_text_file,
+        Loadable::Ready(Some(loaded)) if **loaded == file
+    ));
+
+    let landed = reduce(
+        &mut repos,
+        &ids,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::StatusLoaded {
+            repo_id,
+            result: status(gitcomet_core::domain::FileStatusKind::Modified),
+        }),
+    );
+    assert_eq!(side(&state), None);
+    let reloaded = landed
+        .iter()
+        .any(|effect| matches!(effect, Effect::DiffSession(work) if work.view == view));
+    assert!(
+        reloaded || state.repos[0].diff_sessions[&view].refresh_queued,
+        "a side change reloads the session: {landed:?}"
+    );
+}

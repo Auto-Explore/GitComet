@@ -119,6 +119,7 @@ fn continuing_winners(
     row: &history_graph::GraphRow,
     pin_col: usize,
     node_pinned: bool,
+    draw_reserved: bool,
     selection_possible: bool,
     selected: impl Fn(usize, history_graph::LanePaint) -> bool,
 ) -> SmallVec<[LaneItem; 8]> {
@@ -151,7 +152,11 @@ fn continuing_winners(
         &row.lanes_next,
         pin_col,
         selection_possible,
-        |col, lane| lane.is_active() && !(col >= pin_col && !node_pinned && lane.starts_at_node()),
+        |col, lane| {
+            lane.is_active()
+                && (draw_reserved || !lane.reserved())
+                && !(col >= pin_col && !node_pinned && lane.starts_at_node())
+        },
         selected,
         extra,
     )
@@ -189,6 +194,9 @@ pub(super) fn paint_history_graph(
     // unrelated one elsewhere on the page that recycled its colour.
     row_ix: usize,
     connect_from_top_col: Option<usize>,
+    // Whether the HEAD lane's reserved run is drawn: only while the
+    // uncommitted-changes row it leads up to is shown.
+    draw_reserved: bool,
     is_stash_node: bool,
     // The lane the selected commit sits on. Every colour the graph draws goes
     // through `lane`, so that one lane stays saturated along its whole run and
@@ -247,11 +255,16 @@ pub(super) fn paint_history_graph(
     let pin_col = pinned_from_col(margin_x, col_gap, edge_x);
     let selection_possible = selected_lane.is_some_and(|lane| lane.covers_row(row_ix));
 
+    let enters_from_top = |col: usize, lane: history_graph::LanePaint| {
+        lane.is_active()
+            && (lane.incoming() && (draw_reserved || !lane.reserved())
+                || connect_from_top_col == Some(col))
+    };
     // Whether column `col` draws a vertical down from the top edge of this row.
     let has_incoming_vertical = |col: usize| {
         row.lanes_now
             .get(col)
-            .is_some_and(|lane| lane.is_active() && lane.incoming())
+            .is_some_and(|&lane| enters_from_top(col, lane))
             || connect_from_top_col == Some(col)
     };
     // A join whose source column also has an incoming vertical is drawn as one
@@ -269,11 +282,7 @@ pub(super) fn paint_history_graph(
         &row.lanes_now,
         pin_col,
         selection_possible,
-        |col, lane| {
-            lane.is_active()
-                && (lane.incoming() || connect_from_top_col == Some(col))
-                && !joins_out_of(col)
-        },
+        |col, lane| enters_from_top(col, lane) && !joins_out_of(col),
         |col, lane| paints_last(col, lane.color_ix),
         (None, None),
     );
@@ -328,6 +337,7 @@ pub(super) fn paint_history_graph(
         row,
         pin_col,
         same_x(node_x, edge_x),
+        draw_reserved,
         selection_possible,
         |col, lane| paints_last(col, lane.color_ix),
     );
@@ -814,6 +824,7 @@ pub(super) fn paint_history_graph_band(
     // Index of the commit row *below* the band, whose lanes it draws.
     row_ix: usize,
     connect_from_top_col: Option<usize>,
+    draw_reserved: bool,
     selected_lane: Option<SelectedLane>,
     node: BandNodePaint,
     show_graph_color_marker: bool,
@@ -869,7 +880,7 @@ pub(super) fn paint_history_graph_band(
     let selection_possible = selected_lane.is_some_and(|lane| lane.covers_row(row_ix));
     let node_col = usize::from(node.col);
     let passes_through = |col: usize, lane: history_graph::LanePaint| {
-        lane.incoming() || connect_from_top_col == Some(col)
+        lane.incoming() && (draw_reserved || !lane.reserved()) || connect_from_top_col == Some(col)
     };
     for top in [true, false] {
         let winners = coalesced_lanes(
@@ -1788,6 +1799,20 @@ mod band_tests {
     }
 
     #[test]
+    fn a_reserved_lane_continues_only_when_drawn() {
+        let mut row = band(&[born(0).with_reserved(true), born(1)], 1);
+        row.lanes_now[0] = incoming(0).with_reserved(true);
+        let cols = |draw_reserved| {
+            continuing_winners(&row, usize::MAX, false, draw_reserved, false, |_, _| false)
+                .iter()
+                .map(|(col, _)| *col)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(cols(true), [0, 1]);
+        assert_eq!(cols(false), [1]);
+    }
+
+    #[test]
     fn holes_are_never_drawn() {
         let row = band(&[LanePaint::HOLE, incoming(4)], 1);
         assert_eq!(segment(&row, None, 0), None);
@@ -2317,6 +2342,7 @@ mod coalescing_regressions {
                                             &row.lanes_now,
                                             10,
                                             None,
+                                            true,
                                             selected,
                                             BandNodePaint {
                                                 col: row.node_col,
@@ -2342,6 +2368,7 @@ mod coalescing_regressions {
                                             &row,
                                             10,
                                             None,
+                                            true,
                                             false,
                                             selected,
                                             history_canvas::HistoryRowVisual::new(
@@ -2542,6 +2569,7 @@ mod lane_coalescing_regressions {
                 &row,
                 pin_col,
                 same_x(node_x, edge_x),
+                true,
                 selection_possible,
                 |col, lane| paints_last(col, lane.color_ix),
             );
@@ -2638,10 +2666,14 @@ mod lane_coalescing_regressions {
                 is_merge: false,
                 from_node_cols: Default::default(),
             };
-            let continuing =
-                continuing_winners(&row, pin_col, false, selection.is_some(), |col, lane| {
-                    col >= pin_col && selection == Some(lane.color_ix)
-                });
+            let continuing = continuing_winners(
+                &row,
+                pin_col,
+                false,
+                true,
+                selection.is_some(),
+                |col, lane| col >= pin_col && selection == Some(lane.color_ix),
+            );
             assert_eq!(continuing.len(), pin_col + 1, "{selection:?}");
         }
     }
@@ -2728,6 +2760,7 @@ mod author_node_geometry_tests {
                                     &row,
                                     0,
                                     None,
+                                    true,
                                     false,
                                     None,
                                     history_canvas::HistoryRowVisual::new(

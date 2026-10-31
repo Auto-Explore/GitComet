@@ -4,7 +4,7 @@ use std::process::Command;
 /// the environment variable `marker` set and `configure` applied, and returns
 /// false; in that child, returns true. For tests that change process-wide
 /// state such as the working directory, PATH or the locale.
-pub(crate) fn in_child(
+pub fn in_child(
     marker: &str,
     module: &str,
     name: &str,
@@ -23,7 +23,7 @@ pub(crate) fn in_child(
 /// Runs test `name` of the caller's module (`module_path!()`) again in a child
 /// process built from `command`, and fails unless the child ran that test and
 /// it passed: an unmatched `--exact` filter would otherwise pass silently.
-pub(crate) fn run(command: &mut Command, module: &str, name: &str) {
+pub fn run(command: &mut Command, module: &str, name: &str) {
     let qualified = match module.split_once("::") {
         Some((_, path)) => format!("{path}::{name}"),
         None => name.to_string(),

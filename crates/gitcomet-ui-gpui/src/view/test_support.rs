@@ -1,6 +1,89 @@
 use super::*;
 use std::time::Duration;
 
+/// Hides `remotes` from the history graph, as the repository's shared
+/// preferences would after the menu toggle.
+pub(crate) fn hide_remotes_in_history(repo: &mut RepoState, remotes: &[&str]) {
+    repo.shared_preferences = Some(gitcomet_state::model::RepositoryPreferencesSnapshot {
+        key: gitcomet_state::model::RepositoryKey::Worktree(repo.spec.workdir.clone()),
+        revision: 1,
+        preferences: Arc::new(gitcomet_state::model::SharedRepositoryPreferences {
+            history_mode: repo.history_state.history_scope,
+            history_hidden_remotes: remotes.iter().map(|remote| remote.to_string()).collect(),
+            ..Default::default()
+        }),
+    });
+}
+
+pub(crate) fn install_working_tree_repositories(store: &AppStore) {
+    for repo in &store.snapshot().repos {
+        if !repo.has_working_tree() {
+            continue;
+        }
+        let backend = store
+            .repository(repo.id, repo.lifetime())
+            .unwrap_or_else(|| {
+                Arc::new(gitcomet_core::test_support::UnconfiguredRepository::new(
+                    &repo.spec.workdir,
+                ))
+            });
+        store.insert_repo_for_test(repo.id, backend);
+    }
+}
+
+#[test]
+fn fixture_repository_survives_refresh_after_its_lifetime_changes() {
+    let (store, _events) = AppStore::new_test(Arc::new(TestBackend));
+    store.disable_repo_monitors_for_test();
+    let directory = tempfile::tempdir().unwrap();
+    let repo_id = RepoId(1);
+    let fixture = || {
+        let mut repo = RepoState::new_opening(
+            repo_id,
+            gitcomet_core::domain::RepoSpec {
+                workdir: directory.path().to_path_buf(),
+            },
+        );
+        repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
+        repo.open = Loadable::Ready(());
+        Arc::new(AppState {
+            repos: vec![repo],
+            active_repo: Some(repo_id),
+            ..AppState::test_default()
+        })
+    };
+    let initial = fixture();
+    store.replace_snapshot_for_test(initial.clone());
+    let backend: Arc<dyn gitcomet_core::services::GitRepository> = Arc::new(
+        gitcomet_core::test_support::UnconfiguredRepository::new(directory.path()),
+    );
+    store.insert_repo_for_test(repo_id, Arc::clone(&backend));
+    assert!(Arc::ptr_eq(
+        &store
+            .repository(repo_id, initial.repos[0].lifetime())
+            .unwrap(),
+        &backend,
+    ));
+
+    let replacement = fixture();
+    let lifetime = replacement.repos[0].lifetime();
+    assert_ne!(lifetime, initial.repos[0].lifetime());
+    store.replace_snapshot_for_test(replacement);
+    install_working_tree_repositories(&store);
+    store.dispatch(Msg::LoadFileBrowser {
+        repo_id,
+        source: gitcomet_core::domain::FileSource::WorkingDirectory,
+    });
+    store
+        .barrier_for_test()
+        .recv_timeout(Duration::from_secs(3))
+        .unwrap();
+    let retained = store
+        .repository(repo_id, lifetime)
+        .expect("fixture backend remains open");
+    assert!(Arc::ptr_eq(&retained, &backend));
+}
+
 pub(crate) fn push_test_state(
     view: &GitCometView,
     state: Arc<AppState>,

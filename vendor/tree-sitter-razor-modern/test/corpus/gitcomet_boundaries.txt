@@ -1,0 +1,35 @@
+==================
+Void elements do not consume the following element
+==================
+<input><p>@name</p>
+---
+(compilation_unit
+  (element)
+  (element (razor_implicit_expression (identifier))))
+
+==================
+HTML comments expose Razor expressions
+==================
+<!-- @name -->
+---
+(compilation_unit
+  (html_comment (razor_implicit_expression (identifier))))
+
+==================
+Escaped at owns its second byte
+==================
+<p>@@</p>
+---
+(compilation_unit (element (razor_escape (escaped_at))))
+
+==================
+Line transitions expose expressions
+==================
+@{
+@:Hello @name
+}
+---
+(compilation_unit
+  (razor_block
+    (explicit_line_transition
+      (razor_line_markup (razor_implicit_expression (identifier))))))

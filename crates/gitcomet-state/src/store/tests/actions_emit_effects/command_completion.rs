@@ -886,13 +886,15 @@ fn additional_routing_messages_emit_effects_and_update_counters() {
         Msg::RemoveWorktree {
             repo_id,
             path: PathBuf::from("nested/worktree"),
+            delete_branch: None,
         },
     );
     assert!(matches!(
         effects.as_slice(),
         [Effect::RepoCommand(RepoCommandEffect::RemoveWorktree {
             repo_id: RepoId(1),
-            path
+            path,
+            ..
         })] if path == &PathBuf::from("/tmp/repo/nested/worktree")
     ));
     assert_eq!(state.repos[0].worktrees_in_flight, 2);
@@ -1230,6 +1232,7 @@ fn repo_command_finished_error_summaries_cover_additional_labels() {
         (
             RepoCommandKind::RemoveWorktree {
                 path: PathBuf::from("/tmp/worktree"),
+                delete_branch: None,
             },
             "Worktree",
         ),
@@ -1385,6 +1388,7 @@ fn repo_command_finished_success_summaries_cover_additional_commands() {
         (
             RepoCommandKind::RemoveWorktree {
                 path: PathBuf::from("../wt"),
+                delete_branch: None,
             },
             "Worktree removed → ../wt",
         ),

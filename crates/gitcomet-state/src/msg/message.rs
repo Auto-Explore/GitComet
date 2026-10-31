@@ -1,8 +1,8 @@
 use crate::model::GitLogTagFetchMode;
 use crate::model::{
     BranchExistsPromptState, ConflictFileLoadMode, DefaultTagType, FileBrowserSettings,
-    GitOperationOuterOutcome, MaintenanceSettings, RemoteSettings, RepoId, SidebarDataRequest,
-    SidebarMode,
+    ForceDeleteBranchPrompt, ForceRemoveWorktreePrompt, GitOperationOuterOutcome,
+    MaintenanceSettings, RemoteSettings, RepoId, SidebarDataRequest, SidebarMode,
 };
 use gitcomet_core::auth::StagedGitAuth;
 use gitcomet_core::conflict_session::ConflictSession;
@@ -93,6 +93,47 @@ pub enum BranchExistsChoice {
 }
 
 impl RepoActionKind {
+    pub(crate) fn changes_tracking(self) -> bool {
+        matches!(
+            self,
+            Self::CheckoutBranch
+                | Self::CheckoutRemoteBranch
+                | Self::CheckoutCommit
+                | Self::CherryPickCommit
+                | Self::CreateBranch
+                | Self::CreateBranchAndCheckout
+                | Self::RenameBranch
+                | Self::DeleteBranch
+                | Self::ForceDeleteBranch
+                | Self::DeleteBranches
+        )
+    }
+
+    pub fn repository_requirement(self) -> RepositoryRequirement {
+        match self {
+            Self::CreateBranch
+            | Self::RenameBranch
+            | Self::DeleteBranch
+            | Self::ForceDeleteBranch
+            | Self::DeleteBranches => RepositoryRequirement::Repository,
+            Self::CheckoutBranch
+            | Self::CheckoutRemoteBranch
+            | Self::CheckoutCommit
+            | Self::CherryPickCommit
+            | Self::CreateBranchAndCheckout
+            | Self::StagePath
+            | Self::StagePaths
+            | Self::UnstagePath
+            | Self::UnstagePaths
+            | Self::DiscardWorktreeChangesPath
+            | Self::DiscardWorktreeChangesPaths
+            | Self::Stash
+            | Self::ApplyStash
+            | Self::PopStash
+            | Self::DropStash => RepositoryRequirement::WorkingTree,
+        }
+    }
+
     pub(crate) fn status_diff_area(self) -> Option<DiffArea> {
         match self {
             Self::StagePath | Self::StagePaths => Some(DiffArea::Unstaged),
@@ -368,6 +409,8 @@ pub enum Msg {
     SetMaintenanceSettings(MaintenanceSettings),
     SetFileBrowserSettings(FileBrowserSettings),
     SetLargeFileSettings(crate::model::LargeFileSettings),
+    /// The resolved hidden-refs setting; every all-branches walk leaves these out.
+    SetHistoryHiddenRefs(gitcomet_core::services::HistoryRefFilter),
     SetDefaultTagType(DefaultTagType),
     SetActiveRepo {
         repo_id: RepoId,
@@ -377,6 +420,16 @@ pub enum Msg {
         insert_before: Option<RepoId>,
     },
     ReloadRepo {
+        repo_id: RepoId,
+    },
+    PreviewDisableBareMode {
+        repo_id: RepoId,
+    },
+    DisableBareMode {
+        repo_id: RepoId,
+        preview: Arc<BareConversionPreview>,
+    },
+    ClearBareConversionPreview {
         repo_id: RepoId,
     },
     RepoActivated {
@@ -430,6 +483,26 @@ pub enum Msg {
     SetHistoryAuthorFilter {
         repo_id: RepoId,
         author: Option<String>,
+    },
+    /// Focuses the history on a set of refs: the walk is reseeded from them, so
+    /// only the commits they reach remain. An empty set clears the focus.
+    SetHistoryFocus {
+        repo_id: RepoId,
+        focus: HistoryFocusSet,
+    },
+    /// Focuses `target`, or unfocuses it when the focus already covers it. The
+    /// per-ref menu entry and the sidebar's eye are toggles, and this is what
+    /// they send.
+    ToggleHistoryFocus {
+        repo_id: RepoId,
+        target: HistoryFocus,
+    },
+    /// Focuses every one of `targets`, or unfocuses every one of them. A branch
+    /// group's menu entries and eye send this with the group's members.
+    FocusHistoryRefs {
+        repo_id: RepoId,
+        targets: Vec<HistoryFocus>,
+        focused: bool,
     },
     LoadMoreHistory {
         repo_id: RepoId,
@@ -805,6 +878,9 @@ pub enum Msg {
     ShowBranchExistsPrompt {
         prompt: BranchExistsPromptState,
     },
+    DismissForceDeleteBranchPrompt {
+        prompt: ForceDeleteBranchPrompt,
+    },
     RenameBranch {
         repo_id: RepoId,
         old_name: String,
@@ -857,10 +933,16 @@ pub enum Msg {
     RemoveWorktree {
         repo_id: RepoId,
         path: PathBuf,
+        /// The local branch to delete once the worktree is gone.
+        delete_branch: Option<String>,
     },
     ForceRemoveWorktree {
         repo_id: RepoId,
         path: PathBuf,
+        delete_branch: Option<String>,
+    },
+    DismissForceRemoveWorktreePrompt {
+        prompt: ForceRemoveWorktreePrompt,
     },
     AddSubmodule {
         repo_id: RepoId,
@@ -1085,6 +1167,23 @@ pub enum Msg {
         expected_head: CommitId,
         message: String,
         count: usize,
+    },
+    /// Replaces the message of `commit_id`: HEAD, or a commit on HEAD's
+    /// linear first-parent history. The backend re-validates the target.
+    RewordCommit {
+        repo_id: RepoId,
+        request_id: crate::model::RewordRequestId,
+        commit_id: CommitId,
+        message: String,
+    },
+    ContinueRewordCommit {
+        repo_id: RepoId,
+        request_id: crate::model::RewordRequestId,
+    },
+    /// Releases the editor's acknowledgment; does not cancel Git work.
+    DismissRewordCommit {
+        repo_id: RepoId,
+        request_id: crate::model::RewordRequestId,
     },
     Rebase {
         repo_id: RepoId,
@@ -1314,6 +1413,35 @@ pub enum Msg {
 
 #[derive(strum::IntoStaticStr)]
 pub enum InternalMsg {
+    AutoFetchUpdated {
+        repo_id: RepoId,
+        lifetime: crate::model::RepoLifetime,
+        revision: u64,
+        snapshot: crate::model::RepoAutoFetchState,
+        result:
+            Option<Arc<gitcomet_core::services::Result<gitcomet_core::services::CommandOutput>>>,
+    },
+    AutoFetchRefresh {
+        repo_id: RepoId,
+        lifetime: crate::model::RepoLifetime,
+    },
+    QuiesceRepository {
+        common_dir: PathBuf,
+        cancellation: gitcomet_core::services::CancellationToken,
+        reply: std::sync::mpsc::Sender<()>,
+    },
+    RepositoryModeLoaded {
+        repo_id: RepoId,
+        result: Result<(RepositoryMode, Option<CommitId>), Error>,
+    },
+    BareConversionPreviewLoaded {
+        repo_id: RepoId,
+        result: Result<BareConversionPreview, Error>,
+    },
+    BareModeDisabled {
+        common_dir: PathBuf,
+        result: Result<BareModeDisabled, Error>,
+    },
     AuthPromptValidated {
         generation: u64,
         result: gitcomet_core::auth::PassphraseValidation,
@@ -1368,6 +1496,8 @@ pub enum InternalMsg {
         message: Box<InternalMsg>,
     },
     RepoOpenedOk {
+        repository_mode: RepositoryMode,
+        head_commit: Option<CommitId>,
         preferences: Option<crate::model::RepositoryPreferencesSnapshot>,
         repo_id: RepoId,
         spec: RepoSpec,
@@ -1420,6 +1550,10 @@ pub enum InternalMsg {
     UpstreamDivergenceLoaded {
         repo_id: RepoId,
         result: Result<Option<UpstreamDivergence>, Error>,
+    },
+    HeadTrackingLoaded {
+        repo_id: RepoId,
+        result: Result<gitcomet_core::domain::HeadTracking, Error>,
     },
     LogLoaded {
         repo_id: RepoId,
@@ -1696,6 +1830,11 @@ pub enum InternalMsg {
     BranchAlreadyExists {
         action: RepoActionKind,
         prompt: BranchExistsPromptState,
+    },
+    /// `git branch -d` refused `name` because it is not fully merged.
+    BranchNotFullyMerged {
+        repo_id: RepoId,
+        name: String,
     },
     /// The action was carried out in (or redirected to) another worktree that
     /// has the branch checked out; on success that worktree is opened.

@@ -317,6 +317,7 @@ fn combined_ref_menu_scopes_actions_to_expanded_tag(cx: &mut gpui::TestAppContex
                         &PopoverKind::CommitMenu {
                             repo_id,
                             commit_id: commit_id.clone(),
+                            refs: CommitMenuRefs::All,
                         },
                         cx,
                     )
@@ -364,6 +365,7 @@ fn tag_ref_menu_requests_remote_tags_when_not_loaded(cx: &mut gpui::TestAppConte
         },
     );
     repo.open = Loadable::Ready(());
+    repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
     repo.tags = Loadable::Ready(Arc::new(vec![gitcomet_core::domain::Tag {
         name: "release".to_string(),
         target: commit_id.clone(),
@@ -387,6 +389,7 @@ fn tag_ref_menu_requests_remote_tags_when_not_loaded(cx: &mut gpui::TestAppConte
                     PopoverKind::CommitMenu {
                         repo_id,
                         commit_id: commit_id.clone(),
+                        refs: CommitMenuRefs::All,
                     },
                     gpui::point(gpui::px(120.0), gpui::px(72.0)),
                     window,
@@ -855,14 +858,14 @@ fn remote_menu_lists_fetch_and_prune_actions(cx: &mut gpui::TestAppContext) {
             .expect("expected remote context menu model");
 
         let fetch = model.items.iter().find_map(|item| match item {
-            ContextMenuItem::Entry { label, action, .. } if label.as_ref() == "Fetch all" => {
+            ContextMenuItem::Entry { label, action, .. } if label.as_ref() == "Fetch" => {
                 Some((**action).clone())
             }
             _ => None,
         });
         assert!(matches!(
             fetch,
-            Some(ContextMenuAction::FetchAll { repo_id: rid }) if rid == repo_id
+            Some(ContextMenuAction::FetchRemote { repo_id: rid, remote }) if rid == repo_id && remote == remote_name
         ));
 
         let prune_branches = model.items.iter().find_map(|item| match item {
@@ -2186,7 +2189,7 @@ fn pull_and_push_picker_headers_include_tracking_branch_name(cx: &mut gpui::Test
 }
 
 #[gpui::test]
-fn pull_menu_disables_every_pull_mode_without_a_live_upstream(cx: &mut gpui::TestAppContext) {
+fn pull_menu_disables_every_pull_mode_without_an_upstream(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -2197,12 +2200,9 @@ fn pull_menu_disables_every_pull_mode_without_a_live_upstream(cx: &mut gpui::Tes
         std::process::id()
     ));
 
-    // Returns every (label, disabled) entry of the Pull menu for a branch with
-    // the given upstream. A remote always exists, so `pull_request` alone would
-    // still offer the preferred-remote pull.
     let pull_entries = |cx: &mut gpui::VisualTestContext,
                         upstream: Option<gitcomet_core::domain::Upstream>|
-     -> Vec<(String, bool)> {
+     -> Vec<(String, bool, Option<String>)> {
         cx.update(|_window, app| {
             view.update(app, |this, cx| {
                 let mut repo = RepoState::new_opening(
@@ -2254,10 +2254,15 @@ fn pull_menu_disables_every_pull_mode_without_a_live_upstream(cx: &mut gpui::Tes
         model
             .items
             .iter()
-            .filter_map(|item| match item {
+            .enumerate()
+            .filter_map(|(ix, item)| match item {
                 ContextMenuItem::Entry {
                     label, disabled, ..
-                } => Some((label.to_string(), *disabled)),
+                } => Some((
+                    label.to_string(),
+                    *disabled,
+                    model.entry_tooltips.get(&ix).map(ToString::to_string),
+                )),
                 _ => None,
             })
             .collect()
@@ -2269,20 +2274,47 @@ fn pull_menu_disables_every_pull_mode_without_a_live_upstream(cx: &mut gpui::Tes
         "Pull (fast-forward only)",
         "Pull (rebase)",
     ];
-    let disabled_labels = |entries: &[(String, bool)], disabled: bool| -> Vec<String> {
+    let disabled_labels =
+        |entries: &[(String, bool, Option<String>)], disabled: bool| -> Vec<String> {
+            entries
+                .iter()
+                .filter(|(_, is_disabled, _)| *is_disabled == disabled)
+                .map(|(label, _, _)| label.clone())
+                .collect()
+        };
+    let pull_tooltips = |entries: &[(String, bool, Option<String>)]| -> Vec<Option<String>> {
         entries
             .iter()
-            .filter(|(_, is_disabled)| *is_disabled == disabled)
-            .map(|(label, _)| label.clone())
+            .filter(|(label, _, _)| pull_modes.contains(&label.as_str()))
+            .map(|(_, _, tooltip)| tooltip.clone())
             .collect()
     };
+    // The command palette's Pull row, which shares the toolbar button's reason.
+    let palette_pull_reason = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|_window, app| {
+            let context = view.read(app).command_palette_context(app);
+            let entry = crate::view::command_palette::COMMANDS
+                .iter()
+                .find(|entry| entry.id == crate::view::commands::Command::Pull.id())
+                .expect("Pull palette entry");
+            crate::view::command_palette::command_unavailable_reason(entry, &context)
+        })
+    };
 
+    // `origin/feature/local` exists, but it is not the branch's upstream.
     let without_upstream = pull_entries(cx, None);
     assert_eq!(
         disabled_labels(&without_upstream, true),
         pull_modes,
-        "every pull mode is disabled while the branch has no tracking branch"
+        "every pull mode is disabled while the branch has no upstream"
     );
+    let reason = "Set an upstream for this branch first";
+    assert_eq!(
+        pull_tooltips(&without_upstream),
+        vec![Some(reason.to_string()); 4],
+        "each disabled pull mode says why"
+    );
+    assert_eq!(palette_pull_reason(cx), Some(reason));
     assert!(
         disabled_labels(&without_upstream, false)
             .iter()
@@ -2302,10 +2334,12 @@ fn pull_menu_disables_every_pull_mode_without_a_live_upstream(cx: &mut gpui::Tes
         Vec::<String>::new(),
         "a live tracking branch enables every pull mode"
     );
+    assert_eq!(pull_tooltips(&with_upstream), vec![None; 4]);
+    assert_eq!(palette_pull_reason(cx), None);
     assert!(
         pull_modes
             .iter()
-            .all(|mode| with_upstream.iter().any(|(label, _)| label == mode))
+            .all(|mode| with_upstream.iter().any(|(label, _, _)| label == mode))
     );
 }
 
@@ -2396,4 +2430,146 @@ fn local_branch_menu_excludes_pull_merge_and_squash_for_current_branch(
         assert!(!has_squash, "expected squash entry to be excluded");
         assert!(delete_disabled, "expected delete entry to be disabled");
     });
+}
+
+#[gpui::test]
+fn remote_menu_offers_to_hide_shown_remotes_and_show_hidden_ones(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let repo_id = RepoId(23);
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = RepoState::new_opening(
+                repo_id,
+                gitcomet_core::domain::RepoSpec {
+                    workdir: std::env::temp_dir().join("gitcomet_ui_test_remote_history_menu"),
+                },
+            );
+            repo.remotes = Loadable::Ready(Arc::new(vec![
+                web_remote("origin", None),
+                web_remote("upstream", None),
+            ]));
+            crate::view::test_support::hide_remotes_in_history(&mut repo, &["upstream"]);
+            let state = Arc::new(AppState {
+                repos: vec![repo],
+                active_repo: Some(repo_id),
+                ..AppState::test_default()
+            });
+            this.state = Arc::clone(&state);
+            this.ui_model
+                .update(cx, |model, cx| model.set_state(state, cx));
+        });
+    });
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.popover_host.update(cx, |host, cx| {
+                for (name, shown, label, eye) in [
+                    (
+                        "origin",
+                        true,
+                        "Hide from history graph",
+                        "icons/eye_off.svg",
+                    ),
+                    ("upstream", false, "Show in history graph", "icons/eye.svg"),
+                ] {
+                    let model = host
+                        .context_menu_model(
+                            &PopoverKind::remote(
+                                repo_id,
+                                RemotePopoverKind::Menu {
+                                    name: name.to_string(),
+                                },
+                            ),
+                            cx,
+                        )
+                        .expect("expected a remote menu");
+                    let ix = entry_ix(&model, label);
+                    let ContextMenuItem::Entry { icon, action, .. } = &model.items[ix] else {
+                        unreachable!();
+                    };
+                    assert_eq!(icon.as_ref().map(|icon| icon.as_ref()), Some(eye), "{name}");
+                    assert!(
+                        matches!(
+                            action.as_ref(),
+                            ContextMenuAction::SetRemoteHistoryVisibility {
+                                repo_id: rid,
+                                remote,
+                                hidden,
+                            } if *rid == repo_id && remote == name && *hidden == shown
+                        ),
+                        "{name}: choosing it flips the remote's visibility"
+                    );
+                }
+            })
+        })
+    });
+}
+
+#[gpui::test]
+fn commit_menu_leaves_out_branches_of_remotes_hidden_from_history(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let repo_id = RepoId(24);
+    let commit_id = CommitId("0123456789abcdef".into());
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = RepoState::new_opening(
+                repo_id,
+                gitcomet_core::domain::RepoSpec {
+                    workdir: std::env::temp_dir().join("gitcomet_ui_test_hidden_remote_refs"),
+                },
+            );
+            repo.tags = Loadable::Ready(Arc::new(Vec::new()));
+            repo.remote_branches = Loadable::Ready(Arc::new(
+                ["origin", "upstream"]
+                    .map(|remote| gitcomet_core::domain::RemoteBranch {
+                        remote: remote.to_string(),
+                        name: "main".to_string(),
+                        target: commit_id.clone(),
+                    })
+                    .to_vec(),
+            ));
+            crate::view::test_support::hide_remotes_in_history(&mut repo, &["upstream"]);
+            let state = Arc::new(AppState {
+                repos: vec![repo],
+                active_repo: Some(repo_id),
+                ..AppState::test_default()
+            });
+            this.state = Arc::clone(&state);
+            this.ui_model
+                .update(cx, |model, cx| model.set_state(state, cx));
+        });
+    });
+    let labels = cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.popover_host.update(cx, |host, cx| {
+                host.context_menu_model(
+                    &PopoverKind::CommitMenu {
+                        repo_id,
+                        commit_id: commit_id.clone(),
+                        refs: CommitMenuRefs::All,
+                    },
+                    cx,
+                )
+            })
+        })
+        .expect("expected a commit menu")
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            ContextMenuItem::Entry { label, .. } => Some(label.as_ref().to_owned()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+    });
+    assert!(
+        labels.contains(&"Remote branch origin/main".to_string()),
+        "{labels:?}"
+    );
+    assert!(
+        !labels.iter().any(|label| label.contains("upstream/main")),
+        "{labels:?}"
+    );
 }

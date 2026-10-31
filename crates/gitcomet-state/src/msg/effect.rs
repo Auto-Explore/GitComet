@@ -59,9 +59,11 @@ pub enum Effect {
         /// Identifies this walk, so its replies can be told from those of a
         /// walk a newer request superseded. See [`crate::model::LogLoadSeq`].
         seq: crate::model::LogLoadSeq,
-        scope: LogScope,
+        walk: gitcomet_core::services::HistoryWalk,
         /// Case-insensitive author filter, or `None` for all authors.
         author: Option<String>,
+        /// The refs the walk is focused on, empty for the normal seed.
+        focus: HistoryFocusSet,
         limit: usize,
         cursor: Option<LogCursor>,
     },

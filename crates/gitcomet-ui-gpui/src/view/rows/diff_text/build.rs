@@ -156,9 +156,10 @@ pub(in super::super) fn selectable_cached_diff_text(
 ) -> AnyElement {
     let view = cx.entity();
     let (text, highlights) = if let Some(styled) = styled {
-        (styled.text.clone(), Arc::clone(&styled.highlights))
+        let display = display_styled_slice(styled, 0..styled.text.len(), true);
+        (display.text, display.highlights)
     } else {
-        (fallback_text, empty_highlights())
+        (display_plain_text(fallback_text), empty_highlights())
     };
 
     let overlay_text = text.clone();
@@ -261,7 +262,7 @@ fn empty_highlights() -> SharedDiffTextHighlights {
     Arc::clone(EMPTY.get_or_init(|| Arc::from(Vec::new())))
 }
 
-pub(super) fn hash_text_content(text: &str) -> u64 {
+pub(in crate::view::rows) fn hash_text_content(text: &str) -> u64 {
     let mut hasher = FxHasher::default();
     text.hash(&mut hasher);
     hasher.finish()

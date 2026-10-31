@@ -1,0 +1,257 @@
+=============================
+Doctype and document skeleton
+=============================
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <title>@ViewData["Title"] - ExampleApp</title>
+</head>
+<body>
+    @RenderBody()
+</body>
+</html>
+
+---
+
+(compilation_unit
+  (html_doctype)
+  (element
+    (element
+      (element)
+      (element
+        (razor_implicit_expression
+          (element_access_expression
+            (identifier)
+            (bracketed_argument_list
+              (argument
+                (string_literal
+                  (string_literal_content))))))
+        (html_text)))
+    (element
+      (razor_implicit_expression
+        (invocation_expression
+          (identifier)
+          (argument_list))))))
+
+==============================
+Razor comment between elements
+==============================
+<div>
+    @* A note
+       across two lines *@
+    <span>shown</span>
+</div>
+@* trailing note *@
+
+---
+
+(compilation_unit
+  (element
+    (razor_comment)
+    (element
+      (html_text)))
+  (razor_comment))
+
+========================================
+Razor comment containing code and markup
+========================================
+@*
+    @{ var hidden = 1; }
+    <p>@hidden</p>
+*@
+<p>visible</p>
+
+---
+
+(compilation_unit
+  (razor_comment)
+  (element
+    (html_text)))
+
+====================
+HTML comment
+====================
+<!-- a comment -->
+<p>text</p>
+
+---
+
+(compilation_unit
+  (html_comment)
+  (element
+    (html_text)))
+
+===========================
+C# comments in a code block
+===========================
+@{
+    // line comment
+    /* block comment */
+    var x = 1;
+}
+
+---
+
+(compilation_unit
+  (razor_block
+    (comment)
+    (comment)
+    (field_declaration
+      (variable_declaration
+        (implicit_type)
+        (variable_declarator
+          (identifier)
+          (integer_literal))))))
+
+=======================
+Text element transition
+=======================
+@if (Model.Any)
+{
+    <text>@Model.Count of @Model.Total items</text>
+}
+
+---
+
+(compilation_unit
+  (razor_if
+    (razor_condition
+      (member_access_expression
+        (identifier)
+        (identifier)))
+    (element
+      (razor_implicit_expression
+        (member_access_expression
+          (identifier)
+          (identifier)))
+      (html_text)
+      (razor_implicit_expression
+        (member_access_expression
+          (identifier)
+          (identifier)))
+      (html_text))))
+
+====================
+Line transition
+====================
+@foreach (var item in Model.Items)
+{
+    @:Item: @item.Name
+}
+
+---
+
+(compilation_unit
+  (razor_foreach
+    (implicit_type)
+    (identifier)
+    (member_access_expression
+      (identifier)
+      (identifier))
+    (explicit_line_transition
+      (razor_line_markup
+        (razor_implicit_expression
+          (member_access_expression
+            (identifier)
+            (identifier)))))))
+
+================================
+Text mentioning a directive name
+================================
+<p>Use the page directive to route requests.</p>
+
+---
+
+(compilation_unit
+  (element
+    (html_text)))
+
+=====================
+Tag helper attributes
+=====================
+<a asp-page="/Registry" asp-route-runId="@item.RunId" class="link">Open</a>
+<input asp-for="SchemaFilter" autocomplete="off" />
+<form method="post" asp-page-handler="Dismiss"></form>
+
+---
+
+(compilation_unit
+  (element
+    (razor_implicit_expression
+      (member_access_expression
+        (identifier)
+        (identifier)))
+    (html_text))
+  (element)
+  (element))
+
+==============================
+Partial tag and custom element
+==============================
+<partial name="_RegistryConnectionRequired" />
+<utc-time value="@run.StartedAt" />
+
+---
+
+(compilation_unit
+  (element)
+  (element
+    (razor_implicit_expression
+      (member_access_expression
+        (identifier)
+        (identifier)))))
+
+======================================
+Component event and binding attributes
+======================================
+<button @onclick="Increment" @onclick:preventDefault>Add</button>
+<input @bind="name" @bind:culture="Culture" />
+
+---
+
+(compilation_unit
+  (element
+    (razor_html_attribute
+      (razor_attribute_name)
+      (razor_attribute_value
+        (identifier)))
+    (razor_html_attribute
+      (razor_attribute_name
+        (razor_attribute_modifier)))
+    (html_text))
+  (element
+    (razor_html_attribute
+      (razor_attribute_name)
+      (razor_attribute_value
+        (identifier)))
+    (razor_html_attribute
+      (razor_attribute_name
+        (razor_attribute_modifier))
+      (razor_attribute_value
+        (identifier)))))
+
+=============================================
+Element with a boolean attribute and entities
+=============================================
+<option value="" selected>All &amp; more &mdash; enabled</option>
+
+---
+
+(compilation_unit
+  (element
+    (html_text)))
+
+================================================
+Text starting with punctuation inside an element
+================================================
+<p>(required for row identity or change detection)</p>
+<p>. leading dot and > greater-than</p>
+
+---
+
+(compilation_unit
+  (element
+    (html_text))
+  (element
+    (html_text)))

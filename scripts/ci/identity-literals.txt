@@ -11,8 +11,8 @@ crates/gitcomet-app/src/launch.rs identifier 1 GitComet's default app icon, used
 crates/gitcomet-core/src/auth/askpass.rs identifier 7 askpass helper script and prompt file names
 crates/gitcomet-core/src/conflict_session.rs identifier 1 in-memory merge block sentinel
 crates/gitcomet-base/src/fs_utils.rs identifier 1 temporary file prefix
-crates/gitcomet-base/src/identity.rs display-name 8 GitComet's own identity (definition site)
-crates/gitcomet-base/src/identity.rs identifier 7 GitComet's own identity (definition site)
+crates/gitcomet-base/src/identity.rs display-name 9 GitComet's own identity (definition site)
+crates/gitcomet-base/src/identity.rs identifier 9 GitComet's own identity (definition site)
 crates/gitcomet-base/src/identity.rs package-metadata 1 GitComet's own identity (definition site)
 crates/gitcomet-base/src/identity.rs vendor 7 GitComet's own identity (definition site)
 crates/gitcomet-core/src/path_utils.rs identifier 2 filesystem service staging and save temporary file prefixes

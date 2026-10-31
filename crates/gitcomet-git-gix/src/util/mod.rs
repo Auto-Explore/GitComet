@@ -5,7 +5,7 @@ use gitcomet_core::auth::askpass::{
     resolve_auth_outcome, take_pending_git_auth,
 };
 use gitcomet_core::domain::{Commit, CommitId, CommitParentIds, LogPage};
-use gitcomet_core::error::{Error, ErrorKind, GitFailure, GitFailureId};
+use gitcomet_core::error::{Error, ErrorKind, GitFailure, GitFailureId, WorktreeRemovalBlocker};
 use gitcomet_core::git_operation::{
     self, GitOperationContext, GitOperationEvent, GitOutputChunk, GitOutputStream, HookExecutionId,
 };
@@ -38,6 +38,9 @@ thread_local! {
 }
 
 fn command_git_auth() -> Option<PromptAuth> {
+    if let Some(auth) = background::background_git_auth() {
+        return auth;
+    }
     SHARED_GIT_AUTH
         .with(|slot| slot.borrow().clone())
         .unwrap_or_else(take_pending_git_auth)
@@ -71,6 +74,7 @@ pub(super) const GIT_TRACE2_POLL: Duration = Duration::from_millis(20);
 pub(super) const GIT_PROCESS_TERMINATE_GRACE: Duration = Duration::from_secs(2);
 
 mod args;
+pub(crate) mod background;
 mod log_parse;
 mod process;
 mod stream;

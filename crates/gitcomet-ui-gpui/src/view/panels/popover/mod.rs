@@ -10,6 +10,7 @@ mod annex_prompt;
 mod app_menu;
 mod apply_file_change_confirm;
 mod author_filter;
+pub(in crate::view) mod bare_mode;
 mod branch_exists_prompt;
 mod branch_picker;
 mod checkout_remote_branch_prompt;
@@ -51,6 +52,7 @@ mod remote_edit_url_prompt;
 mod remote_remove_confirm;
 mod rename_branch_prompt;
 mod repo_picker;
+mod repository_requirements;
 mod reset_prompt;
 mod revert_commit_confirm;
 pub(in crate::view) mod rows_cache;
@@ -250,6 +252,9 @@ pub(in super::super) struct PopoverHost {
     /// Explicit 1-based mainline selected in the open merge-commit
     /// cherry-pick or revert confirmation. Reset every time either opens.
     commit_mainline: Option<usize>,
+    /// The lease the open force-push confirmation pushes with, taken when it
+    /// opened so a later fetch cannot move it.
+    force_push_lease: Option<gitcomet_core::services::ForcePushLease>,
     context_menu_focus_handle: FocusHandle,
     /// Focus held by the menu or confirmation's invoker, restored on dismissal.
     menu_invoker_focus: Option<FocusHandle>,
@@ -598,6 +603,10 @@ fn popover_is_context_menu(kind: &PopoverKind) -> bool {
     matches!(
         kind,
         PopoverKind::Hosted { menu: true, .. }
+            | PopoverKind::Repo {
+                kind: RepoPopoverKind::RepositoryModeMenu,
+                ..
+            }
             | PopoverKind::AppMenu
             | PopoverKind::AddRepoMenu
             | PopoverKind::PullPicker
@@ -679,6 +688,10 @@ fn popover_is_confirm_dialog(kind: &PopoverKind) -> bool {
     matches!(
         kind,
         PopoverKind::StashDropConfirm { .. }
+            | PopoverKind::Repo {
+                kind: RepoPopoverKind::DisableBareModeConfirm,
+                ..
+            }
             | PopoverKind::ErrorDetails { .. }
             | PopoverKind::ForcePushConfirm { .. }
             | PopoverKind::CherryPickCommitConfirm { .. }
@@ -690,9 +703,9 @@ fn popover_is_confirm_dialog(kind: &PopoverKind) -> bool {
             | PopoverKind::RebaseOntoConfirm { .. }
             | PopoverKind::RebaseReword { .. }
             | PopoverKind::BranchExistsPrompt { .. }
-            | PopoverKind::ForceDeleteBranchConfirm { .. }
+            | PopoverKind::ForceDeleteBranchConfirm(_)
             | PopoverKind::DeleteBranchesConfirm { .. }
-            | PopoverKind::ForceRemoveWorktreeConfirm { .. }
+            | PopoverKind::ForceRemoveWorktreeConfirm(_)
             | PopoverKind::DiscardChangesConfirm { .. }
             | PopoverKind::DiscardFolderChangesConfirm { .. }
             | PopoverKind::AddToGitignorePrompt { .. }
@@ -916,6 +929,7 @@ impl ConfirmDialog {
             .flex()
             .flex_col()
             .min_w(self.width.preferred_px(ui_scale))
+            .max_w(self.width.max_px(ui_scale))
             .child(popover_title(theme, self.title))
             .child(popover_rule(theme))
             .children(self.sections)
@@ -1039,8 +1053,8 @@ fn popover_anchor_corner(kind: &PopoverKind) -> Anchor {
         | PopoverKind::FilesystemConflict(_)
         | PopoverKind::DeletePermanentlyConfirm(_)
         | PopoverKind::FilesystemUnsavedEditsConfirm(_)
-        | PopoverKind::ForceDeleteBranchConfirm { .. }
-        | PopoverKind::ForceRemoveWorktreeConfirm { .. }
+        | PopoverKind::ForceDeleteBranchConfirm(_)
+        | PopoverKind::ForceRemoveWorktreeConfirm(_)
         | PopoverKind::PullReconcilePrompt { .. }
         | PopoverKind::RebaseOntoConfirm { .. }
         | PopoverKind::RebaseReword { .. }
@@ -1065,6 +1079,14 @@ fn popover_anchor_corner(kind: &PopoverKind) -> Anchor {
 
 pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<PopoverWidthSpec> {
     match kind {
+        PopoverKind::Repo {
+            kind: RepoPopoverKind::RepositoryModeMenu,
+            ..
+        } => Some(DEFAULT_CONTEXT_MENU_WIDTH),
+        PopoverKind::Repo {
+            kind: RepoPopoverKind::DisableBareModeConfirm,
+            ..
+        } => Some(DIALOG_540_WIDTH),
         PopoverKind::RepoPicker { .. }
         | PopoverKind::BranchPicker {
             purpose: BranchPickerPurpose::Delete | BranchPickerPurpose::RebaseOnto,
@@ -1104,7 +1126,7 @@ pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<Popover
             ..
         }
         | PopoverKind::ForcePushConfirm { .. }
-        | PopoverKind::ForceDeleteBranchConfirm { .. }
+        | PopoverKind::ForceDeleteBranchConfirm(_)
         | PopoverKind::DeleteBranchesConfirm { .. }
         | PopoverKind::DiscardChangesConfirm { .. }
         | PopoverKind::DiscardFolderChangesConfirm { .. }
@@ -1121,7 +1143,7 @@ pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<Popover
             Some(DIALOG_540_WIDTH)
         }
         PopoverKind::MergeAbortConfirm { .. } => Some(DIALOG_360_WIDTH),
-        PopoverKind::ForceRemoveWorktreeConfirm { .. } => Some(DIALOG_460_WIDTH),
+        PopoverKind::ForceRemoveWorktreeConfirm(_) => Some(DIALOG_460_WIDTH),
         PopoverKind::PullReconcilePrompt { .. } | PopoverKind::AddToGitignorePrompt { .. } => {
             Some(DIALOG_440_WIDTH)
         }

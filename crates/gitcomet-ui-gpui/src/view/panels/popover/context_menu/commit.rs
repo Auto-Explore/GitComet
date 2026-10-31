@@ -57,31 +57,6 @@ fn multi_cherry_pick_plan(
         return None;
     };
 
-    let branches = match &repo.branches {
-        Loadable::Ready(branches) => Some(branches),
-        _ => None,
-    };
-    let remote_branches = match &repo.remote_branches {
-        Loadable::Ready(branches) => Some(branches),
-        _ => None,
-    };
-    let branch_heads = branches
-        .into_iter()
-        .flat_map(|branches| branches.iter().map(|branch| branch.target.as_ref()))
-        .chain(
-            remote_branches
-                .into_iter()
-                .flat_map(|branches| branches.iter().map(|branch| branch.target.as_ref())),
-        )
-        .collect::<Vec<_>>();
-    let head_target = repo.head_commit_id();
-    let graph_rows = crate::view::history_graph::compute_graph(
-        &page.commits,
-        this.theme,
-        branch_heads,
-        head_target.as_ref().map(|head| head.as_ref()),
-    );
-
     let mut selected = page
         .commits
         .iter()
@@ -91,6 +66,22 @@ fn multi_cherry_pick_plan(
     if selected.len() < 2 {
         return None;
     }
+
+    let branches = repo.branches.ready().map_or(&[][..], |b| b.as_slice());
+    let stashes = repo.stashes.ready().map_or(&[][..], |s| s.as_slice());
+    let remote_branches = repo.history_remote_branches();
+    // The colours of the rows the history list shows for these commits.
+    let graph = crate::view::panes::history::build_history_page_graph(
+        repo.history_state.history_scope,
+        &repo.history_state.history_focus,
+        repo.detached_head_commit.as_ref(),
+        repo.head_branch.ready().map(String::as_str),
+        branches,
+        &remote_branches,
+        stashes,
+        &page.commits,
+        this.theme,
+    );
     // Use reversed page order as the stable oldest-first baseline. Before the
     // editor becomes available, the repository-backed setup load follows the
     // complete graph through unselected commits and corrects any ancestry
@@ -110,8 +101,8 @@ fn multi_cherry_pick_plan(
             message: commit.summary.to_string(),
             new_message: None,
         });
-        let color_ix = graph_rows
-            .get(page_ix)
+        let color_ix = graph
+            .row_for_commit_ix(page_ix)
             .map(|row| row.node_color_ix)
             .unwrap_or(0);
         source_colors.push((commit.id.as_ref().to_string(), color_ix));
@@ -167,11 +158,12 @@ fn repo_commit_is_ancestor_of_head(repo: &RepoState, commit_id: &CommitId) -> bo
 
 /// Branch names a commit's menu offers to copy: the local branches pointing at
 /// it, or, when there are none, its remote branches as `remote/branch` (the
-/// same text the branch's own menu copies).
+/// same text the branch's own menu copies). Only branches `refs` admits.
 fn commit_branch_names_to_copy(
     this: &PopoverHost,
     repo_id: RepoId,
     commit_id: &CommitId,
+    refs: &CommitMenuRefs,
 ) -> Vec<String> {
     let Some(repo) = this.state.repos.iter().find(|repo| repo.id == repo_id) else {
         return Vec::new();
@@ -182,7 +174,12 @@ fn commit_branch_names_to_copy(
         .map(|branches| {
             branches
                 .iter()
-                .filter(|branch| branch.target == *commit_id)
+                .filter(|branch| {
+                    branch.target == *commit_id
+                        && refs.admits(&HistoryMenuRef::Branch(BranchMenuTarget::local(
+                            &branch.name,
+                        )))
+                })
                 .map(|branch| branch.name.clone())
                 .collect()
         })
@@ -190,20 +187,25 @@ fn commit_branch_names_to_copy(
     if !local.is_empty() {
         return local;
     }
-    repo.remote_branches
-        .ready()
-        .map(|branches| {
-            branches
-                .iter()
-                .filter(|branch| branch.target == *commit_id)
-                .map(|branch| format!("{}/{}", branch.remote, branch.name))
-                .collect()
+    repo.history_remote_branches_iter()
+        .filter(|branch| {
+            branch.target == *commit_id
+                && refs.admits(&HistoryMenuRef::Branch(BranchMenuTarget::remote(
+                    &branch.remote,
+                    &branch.name,
+                )))
         })
-        .unwrap_or_default()
+        .map(|branch| format!("{}/{}", branch.remote, branch.name))
+        .collect()
 }
 
-pub(super) fn model(this: &PopoverHost, repo_id: RepoId, commit_id: &CommitId) -> ContextMenuModel {
-    model_with_header(this, repo_id, commit_id, true)
+pub(super) fn model(
+    this: &PopoverHost,
+    repo_id: RepoId,
+    commit_id: &CommitId,
+    refs: &CommitMenuRefs,
+) -> ContextMenuModel {
+    model_with_header(this, repo_id, commit_id, refs, true)
 }
 
 pub(super) fn action_items(
@@ -211,13 +213,14 @@ pub(super) fn action_items(
     repo_id: RepoId,
     commit_id: &CommitId,
 ) -> ContextMenuModel {
-    model_with_header(this, repo_id, commit_id, false)
+    model_with_header(this, repo_id, commit_id, &CommitMenuRefs::All, false)
 }
 
 fn model_with_header(
     this: &PopoverHost,
     repo_id: RepoId,
     commit_id: &CommitId,
+    refs: &CommitMenuRefs,
     include_header: bool,
 ) -> ContextMenuModel {
     let sha = commit_id.as_ref().to_string();
@@ -249,7 +252,11 @@ fn model_with_header(
             Loadable::Ready(branches) => Some(
                 branches
                     .iter()
-                    .filter(|b| b.target == *commit_id)
+                    .filter(|b| {
+                        b.target == *commit_id
+                            && refs
+                                .admits(&HistoryMenuRef::Branch(BranchMenuTarget::local(&b.name)))
+                    })
                     .map(|b| b.name.clone())
                     .collect(),
             ),
@@ -353,7 +360,7 @@ fn model_with_header(
             disabled: false,
             action: Box::new(ContextMenuAction::CopyText { text: sha.clone() }),
         });
-        let names = commit_branch_names_to_copy(this, repo_id, commit_id);
+        let names = commit_branch_names_to_copy(this, repo_id, commit_id, refs);
         let single = names.len() == 1;
         for name in names {
             items.push(ContextMenuItem::Entry {

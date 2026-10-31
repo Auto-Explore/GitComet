@@ -79,13 +79,13 @@ pub(super) fn send_unavailable_git_effect_result(
         Effect::LoadLog {
             repo_id,
             seq,
-            scope,
+            walk,
             cursor,
             ..
         } => send(Msg::Internal(crate::msg::InternalMsg::LogLoaded {
             repo_id,
             seq,
-            scope,
+            scope: walk.mode(),
             cursor,
             result: Err(git_unavailable_error(runtime)),
         })),

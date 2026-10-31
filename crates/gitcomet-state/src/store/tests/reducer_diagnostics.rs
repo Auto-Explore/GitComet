@@ -49,6 +49,8 @@ fn timing_state_clone_with_full_repository_logs() {
                 message: format!("diagnostic {ix} for repository {id}"),
             });
             repo.feedback_mut().command_log.push(CommandLogEntry {
+                kind: crate::model::CommandLogKind::Other,
+                source: crate::model::CommandSource::User,
                 time: std::time::SystemTime::UNIX_EPOCH,
                 ok: true,
                 command: format!("git fetch origin refs/heads/feature-{ix}"),
@@ -56,7 +58,7 @@ fn timing_state_clone_with_full_repository_logs() {
                 stdout: Arc::from(""),
                 stderr: Arc::from(""),
                 announce_success: false,
-                handled_by_auth_prompt: false,
+                handled_by_prompt: false,
                 failure_id: None,
                 hook_operation_id: None,
             });

@@ -28,6 +28,7 @@ pub(super) struct FileDiffLineFileSlice {
     pub(super) ascii_only: bool,
     pub(super) has_tabs: bool,
     pub(super) text: OnceLock<Arc<str>>,
+    trailing_cr: OnceLock<bool>,
 }
 
 /// Largest file a batch keeps in memory; larger ones keep an open handle.
@@ -328,6 +329,7 @@ impl FileDiffLineText {
                 ascii_only,
                 has_tabs,
                 text: OnceLock::new(),
+                trailing_cr: OnceLock::new(),
             })),
         }
     }
@@ -347,6 +349,33 @@ impl FileDiffLineText {
                 })
                 .as_ref(),
         }
+    }
+
+    /// Supply terminator metadata collected while indexing this source. This
+    /// avoids even a tail-byte read for lazily painted lines.
+    pub fn with_known_trailing_cr(self, trailing_cr: bool) -> Self {
+        if let FileDiffLineTextStorage::FileSlice(slice) = &self.storage {
+            let _ = slice.trailing_cr.set(trailing_cr);
+        }
+        self
+    }
+
+    /// Inspect in-memory text directly; unknown file-backed tails are read at
+    /// most once for this shared slice, without materializing the whole line.
+    pub fn has_trailing_cr(&self) -> bool {
+        let FileDiffLineTextStorage::FileSlice(slice) = &self.storage else {
+            return self.as_str().ends_with('\r');
+        };
+        if let Some(text) = slice.text.get() {
+            return text.ends_with('\r');
+        }
+        *slice.trailing_cr.get_or_init(|| {
+            let len = self.len();
+            len > 0
+                && self
+                    .slice_bytes(len - 1..len)
+                    .is_some_and(|tail| tail.as_ref() == b"\r")
+        })
     }
 
     pub fn is_empty(&self) -> bool {

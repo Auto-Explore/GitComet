@@ -12,8 +12,11 @@ pub(super) fn panel(
             theme,
             "Fast-forward isn't possible. Choose whether to merge or rebase.",
         )
-        .command(theme, "Merge: git pull --no-rebase")
-        .command(theme, "Rebase: git pull --rebase")
+        .text(
+            theme,
+            "Merge combines your changes with the upstream branch.",
+        )
+        .text(theme, "Rebase replays your commits on the upstream branch.")
         .render(
             theme,
             dialog_cancel_button(

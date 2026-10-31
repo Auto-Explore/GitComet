@@ -50,7 +50,6 @@ impl Render for GitCometView {
             self.ui_window_size_last_seen = self.last_window_size;
         }
         let ui_scale_percent = self.ui_scale_percent;
-        let scaled_px = ui_scale::scaler(ui_scale_percent);
 
         if self
             .pending_branch_exists_prompt
@@ -118,18 +117,21 @@ impl Render for GitCometView {
             );
         }
 
-        if let Some((repo_id, name)) = self.pending_force_delete_branch_prompt.take()
-            && self.active_repo_id() == Some(repo_id)
+        if self
+            .pending_force_delete_branch_prompt
+            .as_ref()
+            .is_some_and(|prompt| self.active_repo_id() == Some(prompt.repo_id))
+            && let Some(prompt) = self.pending_force_delete_branch_prompt.take()
         {
             if self.pending_force_delete_branch_centered {
                 self.open_popover_centered(
-                    PopoverKind::ForceDeleteBranchConfirm { repo_id, name },
+                    PopoverKind::ForceDeleteBranchConfirm(prompt),
                     window,
                     cx,
                 );
             } else {
                 self.open_popover_at(
-                    PopoverKind::ForceDeleteBranchConfirm { repo_id, name },
+                    PopoverKind::ForceDeleteBranchConfirm(prompt),
                     self.last_mouse_pos,
                     window,
                     cx,
@@ -137,15 +139,14 @@ impl Render for GitCometView {
             }
         }
 
-        if let Some((repo_id, path, branch)) = self.pending_force_remove_worktree_prompt.take()
-            && self.active_repo_id() == Some(repo_id)
+        if self
+            .pending_force_remove_worktree_prompt
+            .as_ref()
+            .is_some_and(|prompt| self.active_repo_id() == Some(prompt.repo_id))
+            && let Some(prompt) = self.pending_force_remove_worktree_prompt.take()
         {
             self.open_popover_at(
-                PopoverKind::ForceRemoveWorktreeConfirm {
-                    repo_id,
-                    path,
-                    branch,
-                },
+                PopoverKind::ForceRemoveWorktreeConfirm(prompt),
                 self.last_mouse_pos,
                 window,
                 cx,
@@ -449,22 +450,7 @@ impl Render for GitCometView {
                     this.cancel_auth_prompt(cx);
                 });
 
-            let prompt_form = div()
-                .flex()
-                .flex_col()
-                .gap_1()
-                .child(
-                    div()
-                        .text_size(theme.ui_text(14.0))
-                        .font_weight(FontWeight::BOLD)
-                        .child(title),
-                )
-                .child(
-                    div()
-                        .text_size(theme.ui_text(14.0))
-                        .text_color(theme.colors.foreground.secondary)
-                        .child(subtitle),
-                )
+            let prompt_form = prompt_banner_form(theme, title, subtitle)
                 .when(requires_username, |this| {
                     this.child(self.auth_prompt_username_input.clone())
                 })
@@ -490,20 +476,12 @@ impl Render for GitCometView {
                 .when(
                     !reason.trim().is_empty() && prompt.status != AuthPromptStatus::Rejected,
                     |this| {
-                        this.child(
-                            restrict_scroll_to_vertical_axis(
-                                div()
-                                    .id("auth_prompt_reason_scroll")
-                                    .max_h(scaled_px(96.0))
-                                    .overflow_y_scroll(),
-                            )
-                            .child(
-                                div()
-                                    .text_size(theme.ui_text(12.0))
-                                    .text_color(theme.colors.foreground.secondary)
-                                    .child(reason),
-                            ),
-                        )
+                        this.child(prompt_banner_details(
+                            theme,
+                            ui_scale_percent,
+                            "auth_prompt_reason_scroll",
+                            reason,
+                        ))
                     },
                 )
                 .child(
@@ -516,21 +494,14 @@ impl Render for GitCometView {
                         .child(cancel_button),
                 );
 
-            let (prompt_bg, prompt_border) = Self::auth_prompt_banner_colors(theme);
-            body = body.child(
-                div()
-                    .relative()
-                    .px_2()
-                    .py_1()
-                    .bg(prompt_bg)
-                    .border_1()
-                    .border_color(prompt_border)
-                    .rounded(px(theme.radii.panel))
-                    .child(prompt_form),
-            );
+            body = body.child(prompt_banner(theme, prompt_form));
         } else {
             self.auth_prompt_key = None;
             self.restore_focus_after_auth_prompt(window, cx);
+        }
+
+        if let Some(banner) = self.annex_remote_check_banner(theme, cx) {
+            body = body.child(banner);
         }
 
         let mut root = div()
@@ -1029,5 +1000,204 @@ impl GitCometView {
                     }
                 }),
             )
+    }
+}
+
+/// The frame the passphrase, host-key and special-remote prompts share.
+fn prompt_banner(theme: AppTheme, form: gpui::Div) -> gpui::Div {
+    let (background, border) = GitCometView::auth_prompt_banner_colors(theme);
+    div()
+        .relative()
+        .px_2()
+        .py_1()
+        .bg(background)
+        .border_1()
+        .border_color(border)
+        .rounded(px(theme.radii.panel))
+        .child(form)
+}
+
+/// A prompt's title and the line under it.
+fn prompt_banner_form(
+    theme: AppTheme,
+    title: impl Into<SharedString>,
+    subtitle: impl Into<SharedString>,
+) -> gpui::Div {
+    div()
+        .flex()
+        .flex_col()
+        .gap_1()
+        .child(
+            div()
+                .text_size(theme.ui_text(14.0))
+                .font_weight(FontWeight::BOLD)
+                .child(title.into()),
+        )
+        .child(
+            div()
+                .text_size(theme.ui_text(14.0))
+                .text_color(theme.colors.foreground.secondary)
+                .child(subtitle.into()),
+        )
+}
+
+/// Longer prompt text, scrolled within a few lines.
+fn prompt_banner_details(
+    theme: AppTheme,
+    ui_scale_percent: u32,
+    id: &'static str,
+    text: impl Into<SharedString>,
+) -> impl IntoElement {
+    restrict_scroll_to_vertical_axis(
+        div()
+            .id(id)
+            .debug_selector(move || id.to_string())
+            .max_h(ui_scale::scaler(ui_scale_percent)(96.0))
+            .overflow_y_scroll(),
+    )
+    .child(
+        div()
+            .text_size(theme.ui_text(12.0))
+            .text_color(theme.colors.foreground.secondary)
+            .child(text.into()),
+    )
+}
+
+impl GitCometView {
+    /// Asks the user to confirm the location of a special remote someone else
+    /// configured, which git-annex will not use until then.
+    fn annex_remote_check_banner(
+        &mut self,
+        theme: AppTheme,
+        cx: &mut gpui::Context<Self>,
+    ) -> Option<gpui::Div> {
+        let ui_scale_percent = self.ui_scale_percent;
+        let repo = self.active_repo()?;
+        let repo_id = repo.id;
+        let Loadable::Ready(support) = &repo.large_file_support else {
+            return None;
+        };
+        let check = support
+            .annex
+            .unverified_remotes
+            .iter()
+            .find(|check| {
+                !self.annex_remote_later.contains(&(
+                    repo_id,
+                    check.name.clone(),
+                    check.configuration.clone(),
+                ))
+            })?
+            .clone();
+        let name = check.name.clone();
+        if self.annex_remote_rejected.as_ref() == Some(&(repo_id, name.clone())) {
+            let remove = components::Button::new(
+                "annex_remote_check_remove",
+                "Remove remote and its settings",
+            )
+            .style(components::ButtonStyle::Danger)
+            .on_click(theme, cx, move |this, _e, _w, cx| {
+                this.annex_remote_rejected = None;
+                this.store.dispatch(Msg::RemoveRemote {
+                    repo_id,
+                    name: name.clone(),
+                });
+                cx.notify();
+            });
+            let back = components::Button::new("annex_remote_check_back", "Back")
+                .style(components::ButtonStyle::Outlined)
+                .on_click(theme, cx, |this, _e, _w, cx| {
+                    this.annex_remote_rejected = None;
+                    cx.notify();
+                });
+            let form = prompt_banner_form(
+                theme,
+                format!("Remove special remote \u{201c}{}\u{201d}?", check.name),
+                "If you do not recognise its location, someone else may have set it up. \
+                 Git pushes to every remote stay blocked while it exists.",
+            )
+            .child(prompt_banner_details(
+                theme,
+                ui_scale_percent,
+                "annex_remote_check_details",
+                "No annexed files have moved to or from it. Branches fetched from it, \
+                 the git-annex branch among them, may need cleaning up.",
+            ))
+            .child(
+                div()
+                    .pt_1()
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .child(remove)
+                    .child(back),
+            );
+            return Some(prompt_banner(theme, form));
+        }
+        let confirm = components::Button::new("annex_remote_check_confirm", "Confirm location")
+            .style(components::ButtonStyle::Filled)
+            .on_click(theme, cx, {
+                let check = check.clone();
+                move |this, _e, _w, cx| {
+                    this.store.dispatch(Msg::RunLargeFileCommand {
+                        repo_id,
+                        command: gitcomet_core::large_files::LargeFileCommand::AnnexVerifyRemote {
+                            name: check.name.clone(),
+                            id: check.id.clone(),
+                        },
+                    });
+                    cx.notify();
+                }
+            });
+        let not_mine = components::Button::new("annex_remote_check_not_mine", "Not my location")
+            .style(components::ButtonStyle::Outlined)
+            .on_click(theme, cx, {
+                let name = name.clone();
+                move |this, _e, _w, cx| {
+                    this.annex_remote_rejected = Some((repo_id, name.clone()));
+                    cx.notify();
+                }
+            });
+        let later = components::Button::new("annex_remote_check_later", "Later")
+            .style(components::ButtonStyle::Outlined)
+            .on_click(theme, cx, {
+                let check = check.clone();
+                move |this, _e, _w, cx| {
+                    this.annex_remote_later.insert((
+                        repo_id,
+                        check.name.clone(),
+                        check.configuration.clone(),
+                    ));
+                    cx.notify();
+                }
+            });
+        let configuration = if check.configuration.is_empty() {
+            "git-annex shows no settings for this remote.".to_string()
+        } else {
+            check.configuration.clone()
+        };
+        let form = prompt_banner_form(
+            theme,
+            format!("Confirm where \u{201c}{}\u{201d} stores files", check.name),
+            "Someone else configured this special remote. git-annex sends no annexed files to it, \
+             and git pushes to every remote wait, until you confirm its location.",
+        )
+        .child(prompt_banner_details(
+            theme,
+            ui_scale_percent,
+            "annex_remote_check_details",
+            configuration,
+        ))
+        .child(
+            div()
+                .pt_1()
+                .flex()
+                .items_center()
+                .gap_1()
+                .child(confirm)
+                .child(not_mine)
+                .child(later),
+        );
+        Some(prompt_banner(theme, form))
     }
 }

@@ -169,6 +169,7 @@ impl GitRepository for RepoActivationRecordingRepo {
                 .worktree_lists
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             Ok(vec![gitcomet_core::domain::Worktree {
+                bare: false,
                 path: self.spec.workdir.clone(),
                 head: None,
                 branch: Some("main".into()),
@@ -244,11 +245,7 @@ impl GitRepository for RepoActivationRecordingRepo {
         result.map(|()| gitcomet_core::services::CommandOutput::empty_success("git fetch --all"))
     }
 
-    fn pull(
-        &self,
-        _mode: PullMode,
-        _prune: bool,
-    ) -> Result<gitcomet_core::services::CommandOutput> {
+    fn pull(&self, _mode: PullMode) -> Result<gitcomet_core::services::CommandOutput> {
         let result: Result<()> = { Ok(()) };
         result.map(|()| gitcomet_core::services::CommandOutput::empty_success("git pull"))
     }
@@ -424,8 +421,9 @@ fn repo_monitor_active_repo_activation_coalesces_with_in_flight_refresh() {
         let mut state = active_ready_repo_state(repo_id, workdir.clone());
         let loads_in_flight = &mut state.repos[0].loads_in_flight;
         loads_in_flight.request_primary_refresh_batch(crate::model::PendingLogLoad {
-            scope: gitcomet_core::domain::HistoryMode::FullReachable,
+            walk: gitcomet_core::domain::HistoryMode::FullReachable.into(),
             author: None,
+            focus: Default::default(),
             limit: 200,
             cursor: None,
         });
@@ -573,6 +571,7 @@ fn checked_activation_skips_only_the_settled_single_checkout_listing() {
         repo.sequencer_state = Loadable::Ready(Default::default());
         repo.merge_commit_message = Loadable::Ready(None);
         let own = Worktree {
+            bare: false,
             path: workdir.clone(),
             head: None,
             branch: Some("main".into()),
@@ -584,6 +583,7 @@ fn checked_activation_skips_only_the_settled_single_checkout_listing() {
             "linked checkout" => repo.set_worktrees(Loadable::Ready(vec![
                 own,
                 Worktree {
+                    bare: false,
                     path: workdir.join("linked"),
                     head: None,
                     branch: Some("linked".into()),
@@ -757,6 +757,7 @@ fn reducer_effect_handling_does_not_wait_for_stopped_repo_monitor() {
         publication: &std::sync::atomic::AtomicU64::new(0),
         filesystem_executor: &crate::store::executor::FILESYSTEM_QUEUE,
         deferred_acknowledgements: &mut Vec::new(),
+        auto_fetch_inputs: &mut None,
     }
     .handle_effects(&mut repos, std::iter::empty::<Effect>());
     let elapsed = started.elapsed();
@@ -952,6 +953,7 @@ fn a_watch_lease_keeps_a_background_repositorys_monitor_running() {
             publication: &std::sync::atomic::AtomicU64::new(0),
             filesystem_executor: &crate::store::executor::FILESYSTEM_QUEUE,
             deferred_acknowledgements: &mut Vec::new(),
+            auto_fetch_inputs: &mut None,
         }
         .handle_effects(&mut repos, std::iter::empty::<Effect>());
     };

@@ -47,12 +47,18 @@ pub(super) fn diff_wrap_byte_ranges_for_source_text(
     text: &str,
     columns: usize,
 ) -> Vec<rows::DiffWrapByteRange> {
-    let mut ranges = rows::diff_wrap_ranges_for_text(tab_width, text, columns)
+    let display = rows::line_display_text(text);
+    let mut ranges = rows::diff_wrap_ranges_for_text(tab_width, display.as_ref(), columns)
         .into_iter()
         .map(rows::DiffWrapByteRange::from_range)
         .collect::<Vec<_>>();
     if ranges.is_empty() {
         ranges.push(rows::DiffWrapByteRange::default());
+    }
+    // The hidden CR must not consume a column or create a blank wrapped row,
+    // but the last slice still owns it for selection and copying.
+    if let Some(last) = ranges.last_mut() {
+        last.end += text.len() - display.len();
     }
     ranges
 }
@@ -728,6 +734,31 @@ impl DiffRenderer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[allow(clippy::single_range_in_vec_init)]
+    fn crlf_wrap_does_not_add_a_row_but_keeps_the_source_terminator() {
+        for (text, expected) in [
+            ("abcd\r", vec![0..5]),
+            ("abcdefgh\r", vec![0..4, 4..9]),
+            ("éééé\r", vec![0..9]),
+            ("\r", vec![0..1]),
+            ("a\tb\r", vec![0..2, 2..4]),
+            ("ab\rcd\r", vec![0..3, 3..6]),
+            ("abc\rd\r", vec![0..4, 4..6]),
+            ("abcd", vec![0..4]),
+            ("", vec![0..0]),
+        ] {
+            assert_eq!(
+                diff_wrap_byte_ranges_for_source_text(4, text, 4),
+                expected
+                    .into_iter()
+                    .map(rows::DiffWrapByteRange::from_range)
+                    .collect::<Vec<_>>(),
+                "{text:?}"
+            );
+        }
+    }
 
     /// Annotation lives inside the left split column. Charging it to whichever
     /// column is narrower left no room at all and wrapped every line to one

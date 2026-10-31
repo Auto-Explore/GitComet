@@ -1,3 +1,4 @@
+mod bare_conversion;
 mod clone;
 mod commit_details;
 mod conflict_load;
@@ -20,7 +21,7 @@ mod util;
 pub(super) mod worktree_list;
 
 /// Releases one runtime's ownership without disturbing other stores or tabs.
-pub(super) use repo_load::release_worktree_scan_handles;
+pub(super) use repo_load::{release_all_worktree_scan_handles, release_worktree_scan_handles};
 
 use crate::model::AppState;
 use crate::msg::{Effect, Msg};
@@ -162,7 +163,7 @@ pub(super) fn schedule_effect(
         Effect::Persistence(work) => {
             persistence::schedule(session_persist_executor, thread_state, msg_tx, work)
         }
-        Effect::Control(work) => control::schedule(repos, msg_tx, work),
+        Effect::Control(work) => control::schedule(executor, repos, msg_tx, work),
         Effect::Status(work) => {
             status::schedule(repo_load_executor, thread_state, repos, msg_tx, work)
         }
@@ -170,6 +171,7 @@ pub(super) fn schedule_effect(
             repo_load_executor,
             metadata_executor,
             thread_state,
+            backend,
             repos,
             msg_tx,
             work,
@@ -206,7 +208,35 @@ pub(super) fn schedule_effect(
             });
         }
         Effect::Filesystem(request) => {
+            let local_targets: Vec<_> = thread_state
+                .read()
+                .unwrap_or_else(|error| error.into_inner())
+                .repos
+                .iter()
+                .map(|repo| {
+                    (
+                        repo.spec.workdir.clone(),
+                        repos.repository(&repo.id).cloned(),
+                    )
+                })
+                .collect();
             filesystem_executor.spawn(move || {
+                let mut repository_targets = super::repository_registry::repository_targets();
+                repository_targets.extend(local_targets);
+                let mutation_paths = msg_tx.filesystem.lock()
+                    .unwrap_or_else(|error| error.into_inner())
+                    .mutation_paths(&request.operation);
+                let mut gates = std::collections::BTreeMap::new();
+                if let Ok(paths) = &mutation_paths {
+                    for path in paths {
+                        let Some((_, Some(repository))) = repository_targets.iter()
+                            .filter(|(root, _)| path.starts_with(root))
+                            .max_by_key(|(root, _)| root.components().count()) else { continue; };
+                        gates.entry(repository.common_dir().unwrap_or_else(|| repository.spec().workdir.clone()))
+                            .or_insert_with(|| super::mutation_gate::for_repo(repository.as_ref()));
+                    }
+                }
+                let _mutations: Vec<_> = gates.values().map(|gate| gate.read().unwrap_or_else(|error| error.into_inner())).collect();
                 // The engine ticks once per item and every dispatch deep-copies
                 // AppState, so an unthrottled thousand-file drop spends longer
                 // cloning state than moving files -- and starves the progress
@@ -215,11 +245,33 @@ pub(super) fn schedule_effect(
                 // one is held back and flushed so the bar ends where it should.
                 let mut last_sent: Option<std::time::Instant> = None;
                 let mut withheld: Option<gitcomet_core::filesystem::Progress> = None;
+                let mut operation_leases = Vec::new();
+                let mut checked_roots = std::collections::HashSet::new();
                 let result = msg_tx
                     .filesystem
                     .lock()
                     .unwrap_or_else(|e| e.into_inner())
-                    .execute(request, |progress| {
+                    .execute_checked(request, |paths| {
+                        let expected_paths = mutation_paths.as_ref()
+                            .map_err(|error| std::io::Error::new(error.kind(), error.to_string()))?;
+                        if expected_paths.as_slice() != paths {
+                            return Err(std::io::Error::other("The affected files changed while this operation was waiting. Try again."));
+                        }
+                        for path in paths {
+                            let Some((root, repository)) = repository_targets.iter()
+                                .filter(|(root, _)| path.starts_with(root))
+                                .max_by_key(|(root, _)| root.components().count()) else { continue; };
+                            if !checked_roots.insert(root) {
+                                continue;
+                            }
+                            let repository = repository.as_ref().ok_or_else(|| std::io::Error::other("Wait for this repository to finish opening before changing its files."))?;
+                            operation_leases.push(repository.acquire_operation_lease()
+                                .map_err(|error| std::io::Error::other(error.to_string()))?);
+                            super::repository_requirement::check(repository.as_ref(), gitcomet_core::domain::RepositoryRequirement::WorkingTree)
+                                .map_err(|error| std::io::Error::other(error.to_string()))?;
+                        }
+                        Ok(())
+                    }, |progress| {
                         let now = std::time::Instant::now();
                         if last_sent
                             .is_none_or(|sent| now.duration_since(sent) >= FILESYSTEM_PROGRESS_TICK)
@@ -292,8 +344,9 @@ pub(super) fn schedule_effect(
         Effect::LoadLog {
             repo_id,
             seq,
-            scope,
+            walk,
             author,
+            focus,
             limit,
             cursor,
         } => load_tokens::load_log(
@@ -303,8 +356,9 @@ pub(super) fn schedule_effect(
             msg_tx,
             repo_id,
             seq,
-            scope,
+            walk,
             author,
+            focus,
             limit,
             cursor,
         ),

@@ -31,7 +31,10 @@ impl DetailsPaneView {
         let Some(repo) = self.active_repo() else {
             return false;
         };
-        if self.pending_commits.contains_key(&repo.id) || repo.commit_in_flight > 0 {
+        if repo.is_bare()
+            || self.pending_commits.contains_key(&repo.id)
+            || repo.commit_in_flight > 0
+        {
             return false;
         }
         if message.trim().is_empty() {
@@ -92,6 +95,9 @@ impl DetailsPaneView {
         window: &Window,
         cx: &mut gpui::Context<Self>,
     ) -> bool {
+        if self.handle_commit_reword_submit_shortcut(window, cx) {
+            return true;
+        }
         if !self
             .commit_message_input
             .read(cx)

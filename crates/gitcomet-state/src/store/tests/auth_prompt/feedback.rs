@@ -144,7 +144,7 @@ fn windows_ssh_pull_retry_keeps_auth_attempts_out_of_terminal_failure_feedback()
         let feedback = &state.repos[0].feedback;
         assert_eq!(feedback.command_log.len(), 3);
         let entry = feedback.command_log.last().unwrap();
-        assert!(!entry.handled_by_auth_prompt);
+        assert!(!entry.handled_by_prompt);
         assert_eq!(entry.ok, outcome == "success");
         assert_eq!(feedback.last_error.is_some(), outcome == "failure");
         assert!(feedback.command_log.iter().all(|entry| {
@@ -190,7 +190,7 @@ fn auth_prompt_does_not_clear_an_unrelated_existing_error() {
             .command_log
             .last()
             .unwrap()
-            .handled_by_auth_prompt
+            .handled_by_prompt
     );
 }
 
@@ -262,14 +262,14 @@ fn auth_recovery_marks_only_its_own_hook_operation() {
         let feedback = &state.repos[0].feedback;
         let entry = feedback.command_log.last().unwrap();
         assert_eq!(entry.hook_operation_id, Some(operation_id));
-        assert_eq!(entry.handled_by_auth_prompt, operation_id == auth_id);
+        assert_eq!(entry.handled_by_prompt, operation_id == auth_id);
         let activity = feedback
             .hook_activity
             .iter()
             .find(|op| op.id == operation_id)
             .unwrap();
         assert_eq!(activity.status, GitHookOperationStatus::Failed);
-        assert_eq!(activity.handled_by_auth_prompt, operation_id == auth_id);
+        assert_eq!(activity.handled_by_prompt, operation_id == auth_id);
         assert_eq!(feedback.last_error.is_none(), operation_id == auth_id);
     }
     assert!(
@@ -621,5 +621,5 @@ fn assert_terminal_failure_keeps_prompt(state: &AppState) {
     assert!(feedback.last_error.is_some());
     let entry = feedback.command_log.last().expect("failed attempt logged");
     assert!(!entry.ok);
-    assert!(!entry.handled_by_auth_prompt);
+    assert!(!entry.handled_by_prompt);
 }
