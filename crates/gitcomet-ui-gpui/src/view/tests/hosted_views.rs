@@ -926,6 +926,36 @@ fn end_of_line_views_follow_a_streamed_line(cx: &mut gpui::TestAppContext) {
     assert_near(frame.left(), end, "after the cells");
 }
 
+/// A streamed CRLF line does not draw its CR, so its view sits after the
+/// last drawn cell, not one cell further.
+#[gpui::test]
+fn end_of_line_views_follow_a_streamed_crlf_line(cx: &mut gpui::TestAppContext) {
+    let long = "x".repeat(70_000);
+    let (hint, _pane, renderer, id, cx) = mount_hint(
+        cx,
+        DiffLayout::Inline,
+        "one\r\nthree\r\n".into(),
+        format!("one\r\n{long}\r\nthree\r\n"),
+        2,
+        50.0,
+    );
+    let (_, end) = text_end(cx, &renderer, DiffTextRegion::Inline, "xxx");
+    cx.update(|_, app| {
+        renderer.update(app, |renderer, cx| {
+            let scroll = renderer.diff_scroll.0.borrow();
+            let offset = scroll.base_handle.offset();
+            scroll
+                .base_handle
+                .set_offset(gpui::point(offset.x - end + px(300.0), offset.y));
+            cx.notify();
+        })
+    });
+    draw(cx);
+    let (_, end) = text_end(cx, &renderer, DiffTextRegion::Inline, "xxx");
+    let frame = cx.debug_bounds(view_frame(id, &hint)).expect("drawn");
+    assert_near(frame.left(), end, "after the last drawn cell");
+}
+
 /// A wrapped line shows its view after the text of its last row.
 #[gpui::test]
 fn end_of_line_views_go_on_a_wrapped_lines_last_row(cx: &mut gpui::TestAppContext) {
