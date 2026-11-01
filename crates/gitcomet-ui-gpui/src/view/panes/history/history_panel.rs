@@ -63,7 +63,7 @@ impl HistoryView {
         ));
         self.ensure_indexed_history(cx);
         self.apply_indexed_history(cx);
-        if self.indexed.presentation.is_none() {
+        if self.indexed.presentation.is_none() && !self.indexed_is_building() {
             self.apply_pending_history_cache();
             self.ensure_history_cache(cx);
         }
