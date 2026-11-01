@@ -8,7 +8,7 @@ use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 pub(crate) const STARTUP_SOCKET_ARG: &str = "--__gitcomet-startup-socket";
@@ -18,29 +18,61 @@ const STARTUP_TIMEOUT: Duration = Duration::from_secs(60);
 const ACK_TIMEOUT: Duration = Duration::from_secs(2);
 const SUPERVISOR_POLL: Duration = Duration::from_millis(10);
 const CANCEL_GRACE: Duration = Duration::from_secs(1);
+// Below sun_path (108 on Linux, 104 on macOS) with room for the NUL.
+const MAX_SOCKET_PATH: usize = 100;
+const SOCKET_SUFFIX: &str = "/gc-start-XXXXXX/ready";
+
+#[derive(Debug)]
+pub(crate) enum LaunchError {
+    /// Nothing was started; the caller may run the browser in-process.
+    Setup(io::Error),
+    /// The browser process ran and was stopped before confirming startup.
+    Startup(io::Error),
+}
+
+impl std::fmt::Display for LaunchError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Setup(error) | Self::Startup(error) => error.fmt(f),
+        }
+    }
+}
 
 pub(crate) fn relaunch_command(executable: &OsStr, args: &[OsString]) -> Command {
     let mut command = Command::new(executable);
     command.args(args.iter().skip(1));
-    command.env_remove("GITCOMET_SKIP_TERMINAL_DETACH");
     command
 }
 
+// Stderr goes quiet before READY so nothing reaches the terminal after the
+// launcher returns. A failed exchange is reported once on the original stderr.
 pub(crate) fn notify_ready(endpoint: &Path) -> Result<(), String> {
-    notify_ready_io(endpoint)
-        .map_err(|error| format!("Could not acknowledge browser startup: {error}"))
+    let terminal = detach_stderr();
+    notify_ready_io(endpoint).map_err(|error| {
+        let message = format!("Could not acknowledge browser startup: {error}");
+        // Not eprintln!: it panics with EIO on a hung-up terminal.
+        let _ = match terminal {
+            Ok(terminal) => writeln!(std::fs::File::from(terminal), "{message}"),
+            Err(_) => writeln!(io::stderr(), "{message}"),
+        };
+        message
+    })
+}
+
+fn detach_stderr() -> io::Result<std::os::fd::OwnedFd> {
+    use std::os::fd::AsFd as _;
+    let null = std::fs::OpenOptions::new().write(true).open("/dev/null")?;
+    let mut stderr = io::stderr().lock();
+    stderr.flush()?;
+    let terminal = rustix::io::dup(stderr.as_fd())?;
+    rustix::stdio::dup2_stderr(&null)?;
+    Ok(terminal)
 }
 
 fn notify_ready_io(endpoint: &Path) -> io::Result<()> {
     let mut stream = UnixStream::connect(endpoint)?;
     stream.set_read_timeout(Some(ACK_TIMEOUT))?;
     stream.set_write_timeout(Some(ACK_TIMEOUT))?;
-    let null = std::fs::OpenOptions::new().write(true).open("/dev/null")?;
-    {
-        let mut stderr = io::stderr().lock();
-        stderr.flush()?;
-        rustix::stdio::dup2_stderr(&null)?;
-    }
     stream.write_all(READY)?;
     let mut acknowledgement = [0; ACK.len()];
     stream.read_exact(&mut acknowledgement)?;
@@ -53,9 +85,9 @@ fn notify_ready_io(endpoint: &Path) -> io::Result<()> {
     Ok(())
 }
 
-pub(crate) fn launch(args: &[OsString]) -> io::Result<i32> {
-    let startup = StartupListener::new()?;
-    let executable = std::env::current_exe()?;
+pub(crate) fn launch(args: &[OsString]) -> Result<i32, LaunchError> {
+    let startup = StartupListener::new().map_err(LaunchError::Setup)?;
+    let executable = std::env::current_exe().map_err(LaunchError::Setup)?;
     let mut child_args = Vec::with_capacity(args.len() + 2);
     child_args.push(executable.as_os_str().to_owned());
     child_args.push(STARTUP_SOCKET_ARG.into());
@@ -76,11 +108,50 @@ struct StartupListener {
     message: [u8; READY.len()],
 }
 
+// Per-user runtime dir first: a shared or full /tmp must not block launch.
+fn startup_directories() -> Vec<PathBuf> {
+    let runtime = std::env::var_os("XDG_RUNTIME_DIR")
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute());
+    let mut directories = Vec::new();
+    for directory in runtime
+        .into_iter()
+        .chain([std::env::temp_dir(), PathBuf::from("/tmp")])
+    {
+        if !directories.contains(&directory) {
+            directories.push(directory);
+        }
+    }
+    directories
+}
+
 impl StartupListener {
     fn new() -> io::Result<Self> {
+        Self::new_in(&startup_directories())
+    }
+
+    fn new_in(directories: &[PathBuf]) -> io::Result<Self> {
+        let mut last_error = None;
+        for parent in directories {
+            if parent.as_os_str().len() + SOCKET_SUFFIX.len() > MAX_SOCKET_PATH {
+                last_error = Some(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("{} is too long for a socket path", parent.display()),
+                ));
+                continue;
+            }
+            match Self::bind_in(parent) {
+                Ok(listener) => return Ok(listener),
+                Err(error) => last_error = Some(error),
+            }
+        }
+        Err(last_error.unwrap_or_else(|| io::Error::other("no startup socket directory")))
+    }
+
+    fn bind_in(parent: &Path) -> io::Result<Self> {
         let directory = tempfile::Builder::new()
             .prefix("gc-start-")
-            .tempdir_in("/tmp")?;
+            .tempdir_in(parent)?;
         std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o700))?;
         let listener = UnixListener::bind(directory.path().join("ready"))?;
         listener.set_nonblocking(true)?;
@@ -133,9 +204,12 @@ impl StartupListener {
         if self.received < READY.len() {
             return Ok(false);
         }
-        stream.set_nonblocking(false)?;
-        stream.set_write_timeout(Some(ACK_TIMEOUT))?;
-        stream.write_all(ACK)?;
+        // READY means the window is up: the browser owns the session even if
+        // the ACK is lost, so a failed write must not get it killed.
+        let _ = stream
+            .set_nonblocking(false)
+            .and_then(|()| stream.set_write_timeout(Some(ACK_TIMEOUT)))
+            .and_then(|()| stream.write_all(ACK));
         Ok(true)
     }
 }
@@ -143,6 +217,7 @@ impl StartupListener {
 struct StartupSignals {
     received: Arc<AtomicUsize>,
     registrations: Vec<signal_hook::SigId>,
+    restore_defaults: Arc<AtomicBool>,
 }
 
 impl StartupSignals {
@@ -150,12 +225,19 @@ impl StartupSignals {
         let mut signals = Self {
             received: Arc::new(AtomicUsize::new(0)),
             registrations: Vec::new(),
+            restore_defaults: Arc::new(AtomicBool::new(false)),
         };
         for signal in [
             signal_hook::consts::SIGINT,
             signal_hook::consts::SIGTERM,
             signal_hook::consts::SIGHUP,
         ] {
+            // Kept for the process lifetime: unregistering alone would leave
+            // the signal ignored if the browser then runs in the foreground.
+            signal_hook::flag::register_conditional_default(
+                signal,
+                signals.restore_defaults.clone(),
+            )?;
             signals
                 .registrations
                 .push(signal_hook::flag::register_usize(
@@ -173,6 +255,7 @@ impl Drop for StartupSignals {
         for registration in self.registrations.drain(..) {
             signal_hook::low_level::unregister(registration);
         }
+        self.restore_defaults.store(true, Ordering::Relaxed);
     }
 }
 
@@ -212,19 +295,32 @@ impl Drop for PendingChild {
 
 fn supervise(
     mut command: Command,
-    mut startup: StartupListener,
+    startup: StartupListener,
     timeout: Duration,
-) -> io::Result<i32> {
-    let signals = StartupSignals::new()?;
+) -> Result<i32, LaunchError> {
+    let signals = StartupSignals::new().map_err(LaunchError::Setup)?;
     command.stdin(Stdio::null()).stdout(Stdio::null());
-    let child = CommandWrap::from(command).wrap(ProcessSession).spawn()?;
+    let child = CommandWrap::from(command)
+        .wrap(ProcessSession)
+        .spawn()
+        .map_err(LaunchError::Setup)?;
     let group = Pid::from_raw(i32::try_from(child.id()).expect("Unix PID fits i32"))
         .expect("spawned child has a PID");
-    let mut pending = PendingChild {
+    let pending = PendingChild {
         child: child.into_inner(),
         group,
         handed_off: false,
     };
+    await_startup(pending, startup, &signals, timeout).map_err(LaunchError::Startup)
+}
+
+fn await_startup(
+    mut pending: PendingChild,
+    mut startup: StartupListener,
+    signals: &StartupSignals,
+    timeout: Duration,
+) -> io::Result<i32> {
+    let group = pending.group;
     let deadline = Instant::now() + timeout;
     loop {
         let signal = signals.received.load(Ordering::Relaxed);

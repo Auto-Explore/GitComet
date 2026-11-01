@@ -169,6 +169,7 @@ impl AppLaunch {
             cli::parse_launch(args.clone(), &about)
         };
         let mut on_ready: Option<ReadyCallback> = None;
+        let mut bundle_relaunch = launch::BundleRelaunch::Spawn;
         let parsed = match parsed {
             Ok(parsed) => {
                 let is_cli_browser = matches!(entry, LaunchEntry::Cli)
@@ -218,28 +219,27 @@ impl AppLaunch {
                 if is_cli_browser && on_ready.is_none() && !foreground {
                     use std::io::IsTerminal as _;
                     if std::io::stdin().is_terminal() {
-                        return match process_launch::launch(&args) {
-                            Ok(code) => code,
-                            Err(error) => {
+                        match process_launch::launch(&args) {
+                            Ok(code) => return code,
+                            Err(process_launch::LaunchError::Setup(error)) => eprintln!(
+                                "Could not detach from the terminal ({error}); \
+                                 running in the foreground."
+                            ),
+                            Err(process_launch::LaunchError::Startup(error)) => {
                                 eprintln!("Failed to start the browser: {error}");
-                                exit_code::ERROR
+                                return exit_code::ERROR;
                             }
-                        };
+                        }
                     }
                 }
-                #[cfg(not(all(unix, feature = "ui-gpui-runtime")))]
-                let _ = foreground;
+                bundle_relaunch =
+                    launch::bundle_relaunch(is_cli_browser, on_ready.is_some(), foreground);
                 Ok(parsed.outcome)
             }
             Err(message) => Err(message),
         };
         #[cfg(feature = "ui-gpui-runtime")]
-        if let Ok(CliOutcome::Run(mode)) = &parsed {
-            if matches!(entry, LaunchEntry::Cli)
-                && let Some(code) = launch::prepare_platform_launch(mode, &args, true)
-            {
-                return code;
-            }
+        if let Ok(CliOutcome::Run(_)) = &parsed {
             let _stage = gitcomet_core::startup_trace::span("crashlog_install");
             crashlog::install();
         }
@@ -250,7 +250,8 @@ impl AppLaunch {
                 repository_options,
                 backend,
                 on_ready.take(),
-                matches!(entry, LaunchEntry::Library).then_some(args.as_slice()),
+                &args,
+                bundle_relaunch,
             )
         })
     }

@@ -9,7 +9,7 @@ pub(super) type ReadyCallback = Box<dyn FnOnce() -> Result<(), String>>;
 enum ReadinessState {
     Disabled,
     Waiting(ReadyCallback),
-    Complete(Result<(), String>),
+    Complete,
 }
 
 #[derive(Clone)]
@@ -33,22 +33,18 @@ impl StartupReadiness {
         if !exists || !self.pending() {
             return;
         }
-        let state = self.0.replace(ReadinessState::Complete(Err(
-            "startup readiness callback did not complete".into(),
-        )));
-        if let ReadinessState::Waiting(callback) = state {
-            *self.0.borrow_mut() = ReadinessState::Complete(callback());
+        if let ReadinessState::Waiting(callback) = self.0.replace(ReadinessState::Complete) {
+            let _ = callback();
         }
     }
 
     pub(super) fn observe(&self, cx: &mut App) -> bool {
         self.notify_if_window_exists(!cx.windows().is_empty());
-        if matches!(*self.0.borrow(), ReadinessState::Complete(Err(_))) {
-            cx.quit();
-        }
         !self.pending()
     }
 
+    // The poll catches windows an extension startup workflow opens itself;
+    // gpui has no window-opened hook. open_gitcomet_window observes directly.
     pub(super) fn watch(&self, cx: &mut App) {
         if self.observe(cx) {
             return;
@@ -70,14 +66,11 @@ impl StartupReadiness {
 
     pub(super) fn result(&self) -> Result<(), UiLaunchError> {
         match &*self.0.borrow() {
-            ReadinessState::Disabled | ReadinessState::Complete(Ok(())) => Ok(()),
+            // A failed handoff comes after the window is shown: not a launch failure.
+            ReadinessState::Disabled | ReadinessState::Complete => Ok(()),
             ReadinessState::Waiting(_) => Err(UiLaunchError::from_launch_failure(
                 "main GPUI window launch",
                 "application exited before creating its first window",
-            )),
-            ReadinessState::Complete(Err(message)) => Err(UiLaunchError::from_launch_failure(
-                "main GPUI window launch",
-                message.clone(),
             )),
         }
     }
@@ -106,18 +99,17 @@ mod tests {
     }
 
     #[test]
-    fn readiness_failure_is_retained_without_retrying_the_callback() {
-        let readiness =
-            StartupReadiness::new(Some(Box::new(|| Err("launcher disconnected".into()))));
+    fn a_failed_handoff_is_not_a_launch_failure_and_is_not_retried() {
+        let calls = Rc::new(Cell::new(0));
+        let seen = calls.clone();
+        let readiness = StartupReadiness::new(Some(Box::new(move || {
+            seen.set(seen.get() + 1);
+            Err("launcher disconnected".into())
+        })));
         readiness.notify_if_window_exists(true);
         readiness.notify_if_window_exists(true);
-        assert!(
-            readiness
-                .result()
-                .unwrap_err()
-                .to_string()
-                .contains("launcher disconnected")
-        );
+        assert_eq!(calls.get(), 1);
+        assert!(readiness.result().is_ok());
     }
 
     #[test]

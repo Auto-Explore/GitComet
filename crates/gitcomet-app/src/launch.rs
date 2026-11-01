@@ -131,7 +131,8 @@ pub(crate) fn run_mode(
     repository_options: gitcomet_core::services::RepositoryOptions,
     backend_override: Option<std::sync::Arc<dyn gitcomet_core::services::GitBackend>>,
     on_ready: Option<crate::ReadyCallback>,
-    library_args: Option<&[std::ffi::OsString]>,
+    args: &[std::ffi::OsString],
+    bundle: BundleRelaunch,
 ) -> i32 {
     // Validated in every mode, so a broken product fails the same way
     // whichever mode it is started in.
@@ -159,13 +160,12 @@ pub(crate) fn run_mode(
         &repository_options,
         &backend_override,
         &on_ready,
-        library_args,
+        args,
+        bundle,
     );
 
     #[cfg(feature = "ui-gpui-runtime")]
-    if let Some(args) = library_args
-        && let Some(code) = prepare_platform_launch(&mode, args, false)
-    {
+    if let Some(code) = prepare_platform_launch(&mode, args, bundle) {
         return code;
     }
 
@@ -400,11 +400,32 @@ fn run_browser(
     }
 }
 
+/// How a macOS browser launch moves into its app bundle.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum BundleRelaunch {
+    /// Become the bundled app: keeps the pid a launcher supervises and the
+    /// terminal a foreground launch asked for.
+    Exec,
+    Spawn,
+}
+
+pub(crate) fn bundle_relaunch(
+    cli_browser: bool,
+    supervised: bool,
+    foreground: bool,
+) -> BundleRelaunch {
+    if cli_browser && (supervised || foreground) {
+        BundleRelaunch::Exec
+    } else {
+        BundleRelaunch::Spawn
+    }
+}
+
 #[cfg(feature = "ui-gpui-runtime")]
-pub(crate) fn prepare_platform_launch(
+fn prepare_platform_launch(
     mode: &AppMode,
     args: &[std::ffi::OsString],
-    cli_entry: bool,
+    bundle: BundleRelaunch,
 ) -> Option<i32> {
     #[cfg(target_os = "linux")]
     if let Some(code) = maybe_relaunch_with_linux_x11_fallback(mode, args) {
@@ -412,9 +433,9 @@ pub(crate) fn prepare_platform_launch(
     }
     #[cfg(target_os = "macos")]
     if matches!(mode, AppMode::Browser { .. }) {
-        return maybe_relaunch_browser_from_macos_app_bundle(args, cli_entry);
+        return maybe_relaunch_browser_from_macos_app_bundle(args, bundle);
     }
-    let _ = (mode, args, cli_entry);
+    let _ = (mode, args, bundle);
     None
 }
 
@@ -490,7 +511,7 @@ fn candidate_macos_app_bundle_paths(resolved_exe: &std::path::Path) -> Vec<std::
 #[cfg(all(target_os = "macos", feature = "ui-gpui-runtime"))]
 fn maybe_relaunch_browser_from_macos_app_bundle(
     args: &[std::ffi::OsString],
-    cli_entry: bool,
+    bundle: BundleRelaunch,
 ) -> Option<i32> {
     if std::env::var_os(MACOS_BUNDLE_RELAUNCH_ENV).is_some() {
         return None;
@@ -525,18 +546,18 @@ fn maybe_relaunch_browser_from_macos_app_bundle(
             prep_errors.join("; ")
         };
         eprintln!("Failed to prepare macOS app bundle: {details}");
-        return cli_entry.then_some(exit_code::ERROR);
+        return None;
     };
 
-    let mut relaunch = crate::process_launch::relaunch_command(app_exe.as_os_str(), args);
-    relaunch.env(MACOS_BUNDLE_RELAUNCH_ENV, "1");
-    if cli_entry {
+    let mut command = crate::process_launch::relaunch_command(app_exe.as_os_str(), args);
+    command.env(MACOS_BUNDLE_RELAUNCH_ENV, "1");
+    if bundle == BundleRelaunch::Exec {
         use std::os::unix::process::CommandExt as _;
-        let error = relaunch.exec();
+        let error = command.exec();
         eprintln!("Failed to relaunch via macOS app bundle: {error}");
-        return Some(exit_code::ERROR);
+        return None;
     }
-    match relaunch.spawn() {
+    match command.spawn() {
         Ok(_) => Some(exit_code::SUCCESS),
         Err(err) => {
             eprintln!("Failed to relaunch via macOS app bundle: {err}");
@@ -782,6 +803,22 @@ mod tests {
     #[cfg(feature = "ui-gpui-runtime")]
     use std::fs;
     use std::io::{self, Write};
+
+    #[test]
+    fn only_supervised_or_foreground_cli_launches_exec_into_the_bundle() {
+        for (cli_browser, supervised, foreground, expected) in [
+            (true, true, false, BundleRelaunch::Exec),
+            (true, false, true, BundleRelaunch::Exec),
+            (true, false, false, BundleRelaunch::Spawn),
+            (false, false, true, BundleRelaunch::Spawn),
+        ] {
+            assert_eq!(
+                bundle_relaunch(cli_browser, supervised, foreground),
+                expected,
+                "cli_browser={cli_browser} supervised={supervised} foreground={foreground}"
+            );
+        }
+    }
 
     #[derive(Default)]
     struct RecordingWriter {

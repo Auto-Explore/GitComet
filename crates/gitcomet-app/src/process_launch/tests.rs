@@ -44,6 +44,11 @@ fn run_child(scenario: &str) -> ! {
                 .unwrap();
         }
         "timeout" => {}
+        "unacknowledged" => {
+            assert!(notify_ready(&endpoint).is_err());
+            eprintln!("written after the handoff");
+            std::process::exit(0);
+        }
         "cancel" => {
             crate::crashlog::install();
             crate::crashlog::begin_session().unwrap();
@@ -58,15 +63,8 @@ fn run_child(scenario: &str) -> ! {
             let pid = rustix::process::getpid();
             assert_eq!(rustix::process::getsid(None).unwrap(), pid);
             assert_eq!(rustix::process::getpgrp(), pid);
-            let shell = Command::new("/bin/sh")
-                .args(["-c", "test -z \"${GITCOMET_SKIP_TERMINAL_DETACH+x}\""])
-                .status()
-                .unwrap();
-            assert!(
-                shell.success(),
-                "the internal detach guard reached a user shell"
-            );
             if scenario == "retained-stderr" {
+                #[allow(clippy::zombie_processes)] // The descendant deliberately retains stderr.
                 let _descendant = Command::new(std::env::current_exe().unwrap())
                     .args(["--exact", CHILD_TEST, "--nocapture"])
                     .env("GITCOMET_TEST_STARTUP_SCENARIO", "hold-stderr")
@@ -133,27 +131,6 @@ fn inherited_stderr_descriptors_do_not_delay_readiness() {
 }
 
 #[test]
-fn an_inherited_detach_guard_does_not_reach_user_shells() {
-    const CHILD: &str = "GITCOMET_TEST_INHERITED_DETACH_GUARD";
-    if std::env::var_os(CHILD).is_some() {
-        assert_eq!(std::env::var("GITCOMET_SKIP_TERMINAL_DETACH").unwrap(), "1");
-        verify_success("ready");
-        return;
-    }
-    let output = Command::new(std::env::current_exe().unwrap())
-        .args([
-            "--exact",
-            "process_launch::tests::an_inherited_detach_guard_does_not_reach_user_shells",
-            "--nocapture",
-        ])
-        .env(CHILD, "1")
-        .env("GITCOMET_SKIP_TERMINAL_DETACH", "1")
-        .output()
-        .unwrap();
-    assert!(output.status.success(), "{output:?}");
-}
-
-#[test]
 fn large_startup_diagnostics_are_relayed_without_deadlocking() {
     verify_success("large-output");
 }
@@ -193,14 +170,20 @@ fn startup_deadline_and_spawn_failure_are_errors() {
     let endpoint = startup.endpoint();
     let command = child_command("timeout", &startup, &directory.path().join("pid"));
     let error = supervise(command, startup, Duration::ZERO).unwrap_err();
-    assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+    assert!(
+        matches!(&error, LaunchError::Startup(error) if error.kind() == io::ErrorKind::TimedOut),
+        "{error:?}"
+    );
     assert!(!endpoint.exists());
 
     let startup = StartupListener::new().unwrap();
     let endpoint = startup.endpoint();
     let command = Command::new(directory.path().join("missing-executable"));
     let error = supervise(command, startup, STARTUP_TIMEOUT).unwrap_err();
-    assert_eq!(error.kind(), io::ErrorKind::NotFound);
+    assert!(
+        matches!(&error, LaunchError::Setup(error) if error.kind() == io::ErrorKind::NotFound),
+        "{error:?}"
+    );
     assert!(!endpoint.exists());
 }
 
@@ -240,7 +223,7 @@ fn startup_cancellation_stops_and_reaps_the_child() {
 }
 
 #[test]
-fn relaunch_keeps_supplied_argument_boundaries_and_removes_stale_guard() {
+fn relaunch_keeps_supplied_argument_boundaries() {
     let args = vec![
         "custom-product".into(),
         "--".into(),
@@ -254,9 +237,87 @@ fn relaunch_keeps_supplied_argument_boundaries_and_removes_stale_guard() {
             .map(OsString::as_os_str)
             .collect::<Vec<_>>()
     );
-    assert!(
-        command
-            .get_envs()
-            .any(|(key, value)| key == "GITCOMET_SKIP_TERMINAL_DETACH" && value.is_none())
+}
+
+#[test]
+fn startup_socket_skips_unusable_and_too_long_directories() {
+    let directory = tempfile::tempdir().unwrap();
+    let too_long = directory.path().join("d".repeat(MAX_SOCKET_PATH));
+    std::fs::create_dir(&too_long).unwrap();
+    let missing = directory.path().join("missing");
+    let error = StartupListener::new_in(&[missing.clone(), too_long.clone()])
+        .err()
+        .expect("no usable directory");
+    assert_eq!(error.kind(), io::ErrorKind::InvalidInput, "{error}");
+    let startup = StartupListener::new_in(&[missing, too_long, directory.path().into()]).unwrap();
+    assert!(startup.endpoint().starts_with(directory.path()));
+}
+
+#[test]
+fn signals_fall_back_to_their_default_action_after_supervision() {
+    const CHILD: &str = "GITCOMET_TEST_SIGNAL_DEFAULT";
+    const TEST: &str =
+        "process_launch::tests::signals_fall_back_to_their_default_action_after_supervision";
+    if std::env::var_os(CHILD).is_some() {
+        drop(StartupSignals::new().unwrap());
+        rustix::process::kill_process(rustix::process::getpid(), Signal::TERM).unwrap();
+        std::thread::sleep(Duration::from_secs(5));
+        return;
+    }
+    let status = Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", TEST, "--nocapture"])
+        .env(CHILD, "1")
+        .status()
+        .unwrap();
+    use std::os::unix::process::ExitStatusExt as _;
+    assert_eq!(
+        status.signal(),
+        Some(signal_hook::consts::SIGTERM),
+        "{status:?}"
     );
+}
+
+#[test]
+fn a_lost_acknowledgement_still_hands_off_startup() {
+    let mut startup = StartupListener::new().unwrap();
+    let mut client = UnixStream::connect(startup.endpoint()).unwrap();
+    client.write_all(READY).unwrap();
+    drop(client);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !startup
+        .poll()
+        .expect("READY arrived, so the browser owns the session")
+    {
+        assert!(Instant::now() < deadline, "READY was never read");
+        std::thread::sleep(SUPERVISOR_POLL);
+    }
+}
+
+#[test]
+fn a_failed_handoff_reports_to_the_original_stderr_then_stays_quiet() {
+    let directory = tempfile::tempdir().unwrap();
+    let report = directory.path().join("pid");
+    let endpoint = directory.path().join("ready");
+    let listener = UnixListener::bind(&endpoint).unwrap();
+    let mut child = Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", CHILD_TEST, "--nocapture"])
+        .env("GITCOMET_TEST_STARTUP_SCENARIO", "unacknowledged")
+        .env("GITCOMET_TEST_STARTUP_ENDPOINT", &endpoint)
+        .env("GITCOMET_TEST_STARTUP_REPORT", &report)
+        .stdout(Stdio::null())
+        .stderr(std::fs::File::create(report.with_extension("stderr")).unwrap())
+        .spawn()
+        .unwrap();
+    let (mut stream, _) = listener.accept().unwrap();
+    let mut ready = [0; READY.len()];
+    stream.read_exact(&mut ready).unwrap();
+    assert_eq!(ready, READY);
+    drop(stream);
+    assert!(child.wait().unwrap().success());
+    let stderr = std::fs::read_to_string(report.with_extension("stderr")).unwrap();
+    assert!(
+        stderr.contains("Could not acknowledge browser startup"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("written after the handoff"), "{stderr}");
 }

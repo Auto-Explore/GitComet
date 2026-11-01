@@ -33,8 +33,7 @@ fn run_without_display(mut command: Command, profile: &std::path::Path) -> Outpu
 #[test]
 fn terminal_startup_failure_keeps_diagnostics_and_error_status() {
     let profile = tempfile::tempdir().unwrap();
-    let mut command = Command::new(gitcomet_test_bin::gitcomet_bin());
-    command.env("GITCOMET_SKIP_TERMINAL_DETACH", "1");
+    let command = Command::new(gitcomet_test_bin::gitcomet_bin());
     let output = run_without_display(command, profile.path());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert_eq!(output.status.code(), Some(2), "{stderr}");
@@ -131,7 +130,6 @@ fn library_launch_preserves_supplied_arguments_and_process_state_with_terminal_s
             "library_launch_preserves_supplied_arguments_and_process_state_with_terminal_stdin",
             "--nocapture",
         ])
-        .env_remove("GITCOMET_SKIP_TERMINAL_DETACH")
         .env(CHILD, "1");
     let output = run_without_display(command, profile.path());
     assert!(output.status.success(), "{output:?}");
