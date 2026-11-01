@@ -312,6 +312,7 @@ pub(super) fn bind_app_keys(cx: &mut App) {
         #[cfg(target_os = "macos")]
         KeyBinding::new("alt-cmd-h", HideOthers, None),
     ]);
+    cx.bind_keys(crate::view::workspace_rail::key_bindings());
     refresh_external_editor_key_binding(cx);
 }
 

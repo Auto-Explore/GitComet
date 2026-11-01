@@ -33,7 +33,8 @@ pub(super) fn submodule_discard_note<'a>(
         .any(|path| submodules.iter().any(|submodule| submodule.path == path))
         .then_some(
             "Submodules are checked out at the commit this repository records. \
-             GitComet stops if a submodule has uncommitted changes or unpushed commits.",
+             Nothing is discarded if a submodule has uncommitted changes or \
+             commits that are on no branch.",
         )
 }
 

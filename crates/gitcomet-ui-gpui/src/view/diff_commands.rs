@@ -174,7 +174,8 @@ impl DiffNavigation for WindowNavigation {
         self.0
             .read_with(cx, |root, _| {
                 (
-                    root.sidebar_render_width,
+                    // The rail sits left of the sidebar and takes width too.
+                    root.sidebar_render_width + root.workspace_rail_width(),
                     root.details_render_width,
                     root.sidebar_collapsed,
                     root.details_collapsed,

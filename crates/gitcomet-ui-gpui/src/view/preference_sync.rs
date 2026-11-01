@@ -65,6 +65,18 @@ impl GitCometView {
         self.schedule_ui_settings_persist(cx);
     }
 
+    pub(crate) fn set_workspace_rail_enabled(&mut self, next: bool, cx: &mut gpui::Context<Self>) {
+        if self.workspace_rail_enabled == next {
+            return;
+        }
+        self.workspace_rail_enabled = next;
+        self.update_ui_preferences(cx, move |preferences| {
+            preferences.appearance.workspace_rail = next;
+        });
+        self.clamp_pane_widths_to_window();
+        cx.notify();
+    }
+
     pub(super) fn ui_scale(&self) -> ui_scale::UiScale {
         ui_scale::UiScale::from_percent(self.ui_scale_percent).with_appearance(self.theme.metrics)
     }
@@ -1058,6 +1070,7 @@ impl GitCometView {
             PreferenceChange::CheckForUpdatesOnStartup(next) => {
                 self.set_check_for_updates_on_startup(next, cx)
             }
+            PreferenceChange::WorkspaceRail(next) => self.set_workspace_rail_enabled(next, cx),
             PreferenceChange::HistoryBranchNames(next) => self.set_history_branch_names(next, cx),
             PreferenceChange::HistoryColumns {
                 graph,

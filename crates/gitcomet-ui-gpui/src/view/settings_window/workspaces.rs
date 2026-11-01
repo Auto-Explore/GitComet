@@ -200,6 +200,24 @@ impl SettingsWindowView {
                             )),
                     )
                     .child(new_workspace_button),
+            )
+            .child(
+                self.toggle_row(
+                    "settings_window_workspace_rail",
+                    format!(
+                        "Show workspace rail (switch workspaces inside a window, {})",
+                        crate::kit::components::alt_shortcut("1-9")
+                    ),
+                    self.workspace_rail_enabled,
+                    theme,
+                )
+                .on_activate(
+                    false,
+                    controls::ControlActivation::Action,
+                    cx.listener(|this, _e: &ClickEvent, _window, cx| {
+                        this.set_workspace_rail_enabled(!this.workspace_rail_enabled, cx);
+                    }),
+                ),
             );
         if workspaces.is_empty() {
             return card.child(

@@ -156,7 +156,11 @@ impl GitCometView {
                 live_repo_paths.push(path.clone());
             }
         }
-        let workspace_id = if self.view_mode == GitCometViewMode::Normal {
+        // A rail switch has let go of the old workspace; its tabs are still
+        // closing and must not be saved as a new one.
+        let workspace_id = if self.view_mode == GitCometViewMode::Normal
+            && self.pending_workspace_switch.is_none()
+        {
             crate::workspaces::sync_window(
                 cx,
                 self.window_handle.window_id(),
@@ -760,6 +764,9 @@ impl GitCometView {
         self.drive_focused_mergetool_bootstrap();
         self.drive_submodule_diff_bootstrap();
 
+        if self.pending_workspace_switch.is_some() && self.state.repos.is_empty() {
+            self.finish_workspace_switch(cx);
+        }
         if workspace_membership_changed {
             self.sync_workspace_and_registry(cx);
         }

@@ -37,6 +37,8 @@ pub(super) struct AppearancePreferences {
     pub(super) date_time_format: DateTimeFormat,
     pub(super) timezone: Timezone,
     pub(super) show_timezone: bool,
+    /// The workspace rail down the window's left edge.
+    pub(super) workspace_rail: bool,
 }
 
 impl Default for AppearancePreferences {
@@ -52,6 +54,7 @@ impl Default for AppearancePreferences {
             date_time_format: DateTimeFormat::YmdHm,
             timezone: Timezone::default(),
             show_timezone: true,
+            workspace_rail: false,
         }
     }
 }
@@ -343,6 +346,7 @@ impl UiPreferences {
                     .and_then(Timezone::from_key)
                     .unwrap_or_default(),
                 show_timezone: session.show_timezone.unwrap_or(true),
+                workspace_rail: session.workspace_rail_enabled.unwrap_or(false),
             },
             change_tracking: ChangeTrackingPreferences {
                 view: session

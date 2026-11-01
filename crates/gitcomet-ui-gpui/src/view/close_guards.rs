@@ -256,7 +256,7 @@ impl GitCometView {
     }
 
     /// Filesystem work outside the editor that closing must not cut short.
-    fn filesystem_writes_pending(&self, cx: &gpui::App) -> bool {
+    pub(in crate::view) fn filesystem_writes_pending(&self, cx: &gpui::App) -> bool {
         super::native_transfers::active(cx)
             || self.file_operations.has_pending()
             || !self.state.filesystem.pending.is_empty()

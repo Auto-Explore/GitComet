@@ -64,6 +64,7 @@ impl SettingsWindowView {
             ),
             remote_markdown_image_policy: Some(self.remote_markdown_image_policy.key().to_string()),
             check_for_updates_on_startup: Some(self.check_for_updates_on_startup),
+            workspace_rail_enabled: Some(self.workspace_rail_enabled),
             auto_save_file_edits: Some(self.auto_save_file_edits),
             // Merge tool settings are managed from the resolver's cog menu;
             // None never overwrites the stored values.
@@ -918,6 +919,16 @@ impl SettingsWindowView {
         self.check_for_updates_on_startup = next;
         self.persist_preferences(cx);
         self.broadcast_preference(PreferenceChange::CheckForUpdatesOnStartup(next), cx);
+        cx.notify();
+    }
+
+    pub(super) fn set_workspace_rail_enabled(&mut self, next: bool, cx: &mut gpui::Context<Self>) {
+        if self.workspace_rail_enabled == next {
+            return;
+        }
+        self.workspace_rail_enabled = next;
+        self.persist_preferences(cx);
+        self.broadcast_preference(PreferenceChange::WorkspaceRail(next), cx);
         cx.notify();
     }
 

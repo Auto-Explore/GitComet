@@ -98,6 +98,15 @@ pub(crate) fn sync_store_snapshot(view: &GitCometView, cx: &mut impl gpui::AppCo
     push_test_state(view, view.store.snapshot(), cx);
 }
 
+/// The working directories of the window's open tabs, in tab order.
+pub(crate) fn open_repo_workdirs(view: &GitCometView) -> Vec<std::path::PathBuf> {
+    view.state
+        .repos
+        .iter()
+        .map(|repo| repo.spec.workdir.clone())
+        .collect()
+}
+
 pub(crate) fn startup_repository_state_for_test(
     view: &GitCometView,
 ) -> (bool, usize, Option<std::path::PathBuf>) {

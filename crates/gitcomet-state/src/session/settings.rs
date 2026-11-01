@@ -46,6 +46,7 @@ pub struct UiSettings {
     pub remote_markdown_image_policy: Option<String>,
     pub allowed_remote_protocols: Option<BTreeSet<String>>,
     pub check_for_updates_on_startup: Option<bool>,
+    pub workspace_rail_enabled: Option<bool>,
     pub auto_save_file_edits: Option<bool>,
     pub mergetool_auto_advance: Option<bool>,
     pub mergetool_collapse_unchanged: Option<bool>,
@@ -191,6 +192,7 @@ pub fn persist_ui_settings_to_path(settings: UiSettings, path: &Path) -> io::Res
         apply_setting!(settings, file, remote_markdown_image_policy);
         apply_setting!(settings, file, allowed_remote_protocols);
         apply_setting!(settings, file, check_for_updates_on_startup);
+        apply_setting!(settings, file, workspace_rail_enabled);
         apply_setting!(settings, file, auto_save_file_edits);
         apply_setting!(settings, file, diff_show_line_numbers);
         apply_setting!(settings, file, change_tracking_height);

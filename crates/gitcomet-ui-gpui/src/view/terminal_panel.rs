@@ -758,7 +758,7 @@ impl GitCometView {
             .collect()
     }
 
-    fn terminal_shutdown_summary_for_action(
+    pub(in crate::view) fn terminal_shutdown_summary_for_action(
         &self,
         action: &TerminalShutdownAction,
     ) -> TerminalShutdownSummary {

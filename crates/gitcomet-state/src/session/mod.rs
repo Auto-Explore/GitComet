@@ -73,6 +73,8 @@ pub struct UiSession {
     pub remote_markdown_image_policy: Option<String>,
     pub allowed_remote_protocols: Option<BTreeSet<String>>,
     pub check_for_updates_on_startup: Option<bool>,
+    /// Show the workspace rail, which switches workspaces inside a window.
+    pub workspace_rail_enabled: Option<bool>,
     pub auto_save_file_edits: Option<bool>,
     pub mergetool_auto_advance: Option<bool>,
     pub mergetool_collapse_unchanged: Option<bool>,
@@ -254,6 +256,8 @@ pub(crate) struct UiSessionFile {
     allowed_remote_protocols: Option<BTreeSet<String>>,
     #[serde(default, deserialize_with = "lenient")]
     check_for_updates_on_startup: Option<bool>,
+    #[serde(default, deserialize_with = "lenient")]
+    workspace_rail_enabled: Option<bool>,
     #[serde(default, deserialize_with = "lenient")]
     auto_save_file_edits: Option<bool>,
     #[serde(default, deserialize_with = "lenient")]
@@ -550,6 +554,7 @@ pub fn load_from_path(path: &Path) -> UiSession {
         remote_markdown_image_policy: file.remote_markdown_image_policy,
         allowed_remote_protocols: file.allowed_remote_protocols,
         check_for_updates_on_startup: file.check_for_updates_on_startup,
+        workspace_rail_enabled: file.workspace_rail_enabled,
         auto_save_file_edits: file.auto_save_file_edits,
         mergetool_auto_advance: file.mergetool_auto_advance,
         mergetool_collapse_unchanged: file.mergetool_collapse_unchanged,

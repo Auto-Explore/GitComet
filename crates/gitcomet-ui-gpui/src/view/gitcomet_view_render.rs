@@ -275,7 +275,21 @@ impl Render for GitCometView {
             ));
         }
 
-        body = body.child(center_content);
+        if self.workspace_rail_shown() {
+            let rail = self.workspace_rail(cx);
+            body = body.child(
+                div().flex().flex_1().min_h(px(0.0)).child(rail).child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .flex_1()
+                        .min_w(px(0.0))
+                        .child(center_content),
+                ),
+            );
+        } else {
+            body = body.child(center_content);
+        }
 
         if let Some(report) = self.startup_crash_report.clone()
             && self.view_mode == GitCometViewMode::Normal
@@ -597,6 +611,51 @@ impl Render for GitCometView {
                 this.toggle_command_palette(window, cx);
                 cx.stop_propagation();
             }))
+            .on_action(
+                cx.listener(|this, _: &workspace_rail::SwitchWorkspace1, _w, cx| {
+                    this.rail_shortcut(0, cx);
+                }),
+            )
+            .on_action(
+                cx.listener(|this, _: &workspace_rail::SwitchWorkspace2, _w, cx| {
+                    this.rail_shortcut(1, cx);
+                }),
+            )
+            .on_action(
+                cx.listener(|this, _: &workspace_rail::SwitchWorkspace3, _w, cx| {
+                    this.rail_shortcut(2, cx);
+                }),
+            )
+            .on_action(
+                cx.listener(|this, _: &workspace_rail::SwitchWorkspace4, _w, cx| {
+                    this.rail_shortcut(3, cx);
+                }),
+            )
+            .on_action(
+                cx.listener(|this, _: &workspace_rail::SwitchWorkspace5, _w, cx| {
+                    this.rail_shortcut(4, cx);
+                }),
+            )
+            .on_action(
+                cx.listener(|this, _: &workspace_rail::SwitchWorkspace6, _w, cx| {
+                    this.rail_shortcut(5, cx);
+                }),
+            )
+            .on_action(
+                cx.listener(|this, _: &workspace_rail::SwitchWorkspace7, _w, cx| {
+                    this.rail_shortcut(6, cx);
+                }),
+            )
+            .on_action(
+                cx.listener(|this, _: &workspace_rail::SwitchWorkspace8, _w, cx| {
+                    this.rail_shortcut(7, cx);
+                }),
+            )
+            .on_action(
+                cx.listener(|this, _: &workspace_rail::SwitchWorkspace9, _w, cx| {
+                    this.rail_shortcut(8, cx);
+                }),
+            )
             .on_action(
                 cx.listener(|this, _: &crate::app::OpenWorkspace, window, cx| {
                     // Claimed either way so the app-level handler cannot toggle
@@ -960,7 +1019,7 @@ impl GitCometView {
                         return;
                     }
 
-                    let total_w = this.last_window_size.width;
+                    let total_w = this.panes_total_width();
                     let next_width = next_pane_resize_drag_width(
                         &state,
                         e.event.position.x,

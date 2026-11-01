@@ -1088,6 +1088,11 @@ pub struct GitCometView {
     pub(super) remote_markdown_image_policy: RemoteMarkdownImagePolicy,
     pub(super) remote_url_policy: RemoteUrlPolicy,
     pub(super) check_for_updates_on_startup: bool,
+    /// Show the workspace rail (a Settings option).
+    pub(super) workspace_rail_enabled: bool,
+    /// A rail switch waiting for this window's tabs to close.
+    pub(super) pending_workspace_switch:
+        Option<crate::view::workspace_rail::PendingWorkspaceSwitch>,
     pub(super) update_check_in_flight: bool,
     pub(super) update_check_manual_feedback_requested: bool,
     pub(super) ui_scale_percent: u32,

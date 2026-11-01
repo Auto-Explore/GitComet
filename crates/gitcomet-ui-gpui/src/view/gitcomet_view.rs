@@ -580,6 +580,7 @@ impl GitCometView {
         let remote_markdown_image_policy = ui_preferences.security.remote_markdown_images;
         let remote_url_policy = ui_preferences.security.remote_url_policy;
         let check_for_updates_on_startup = ui_preferences.security.check_for_updates_on_startup;
+        let workspace_rail_enabled = ui_preferences.appearance.workspace_rail;
         let commit_push_after_enabled = ui_preferences.repository.commit_push_after_enabled;
         let initial_state = store.snapshot();
         // The worker queued Git adoption before the restore. If it is already
@@ -1262,6 +1263,8 @@ impl GitCometView {
             remote_markdown_image_policy,
             remote_url_policy,
             check_for_updates_on_startup,
+            workspace_rail_enabled,
+            pending_workspace_switch: None,
             update_check_in_flight: false,
             update_check_manual_feedback_requested: false,
             ui_scale_percent: ui_scale.percent,

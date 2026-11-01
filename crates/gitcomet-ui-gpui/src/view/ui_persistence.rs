@@ -235,6 +235,8 @@ impl GitCometView {
                             check_for_updates_on_startup: Some(
                                 this.check_for_updates_on_startup,
                             ),
+                            // Only the settings window changes the rail.
+                            workspace_rail_enabled: None,
                             // Auto-save is only ever changed from the settings
                             // window; the main window mirrors it to drive the
                             // editor, so None keeps the stored value.
@@ -305,7 +307,10 @@ impl GitCometView {
     }
 
     pub(super) fn clamp_pane_widths_to_window(&mut self) {
-        let total_w = self.last_window_size.width;
+        if self.last_window_size.width.is_zero() {
+            return;
+        }
+        let total_w = self.panes_total_width();
         if total_w.is_zero() {
             return;
         }

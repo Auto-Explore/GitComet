@@ -2856,6 +2856,163 @@ fn opening_a_workspace_owned_by_another_window_leaves_this_window_empty(
     });
 }
 
+/// Let the store reduce what the view dispatched, then hand the view its
+/// snapshot (test windows are not driven by store events).
+fn settle_rail_window(view: &gpui::Entity<GitCometView>, cx: &mut gpui::VisualTestContext) {
+    for _ in 0..3 {
+        crate::view::test_support::drain_store_worker(view, cx);
+        cx.update(|_window, app| {
+            view.update(app, |view, cx| {
+                crate::view::test_support::sync_store_snapshot(view, cx)
+            })
+        });
+        cx.run_until_parked();
+    }
+}
+
+fn rail_window_on(
+    cx: &mut gpui::TestAppContext,
+    current: session::Workspace,
+    others: Vec<session::Workspace>,
+) -> (
+    gpui::Entity<GitCometView>,
+    &mut gpui::VisualTestContext,
+    gpui::WindowId,
+) {
+    let mut workspaces = vec![current.clone()];
+    workspaces.extend(others);
+    let (view, cx, window_id) = empty_window_for_adoption(cx, workspaces);
+    cx.update(|_window, app| {
+        view.update(app, |view, cx| {
+            view.set_workspace_rail_enabled(true, cx);
+            view.adopt_workspace(current, cx);
+        })
+    });
+    settle_rail_window(&view, cx);
+    (view, cx, window_id)
+}
+
+#[gpui::test]
+fn the_workspace_rail_switches_this_window_in_place(cx: &mut gpui::TestAppContext) {
+    let current_repo = PathBuf::from("/tmp/rail-current");
+    let mut current = session::Workspace::new(vec![current_repo.clone()]);
+    current.custom_name = Some("Current".into());
+    let current_id = current.id;
+    let mut saved = session::Workspace::new(vec![PathBuf::from("/tmp/rail-saved")]);
+    saved.custom_name = Some("Saved".into());
+    saved.restore_on_launch = false;
+    let saved_id = saved.id;
+    let (view, cx, window_id) = rail_window_on(cx, current, vec![saved]);
+    assert!(
+        cx.update(
+            |_window, app| !crate::view::test_support::open_repo_workdirs(view.read(app))
+                .is_empty()
+        ),
+        "the current workspace's tab is open"
+    );
+
+    cx.update(|_window, app| {
+        view.update(app, |view, cx| {
+            view.switch_workspace_from_rail(Some(saved_id), cx)
+        })
+    });
+    settle_rail_window(&view, cx);
+
+    cx.cx.update(|app| {
+        assert_eq!(app.windows().len(), 1, "the switch stays in this window");
+        assert_eq!(
+            crate::workspaces::workspace_for_window(app, window_id).map(|w| w.id),
+            Some(saved_id)
+        );
+        let left = crate::workspaces::workspace(app, current_id).expect("the old one is kept");
+        assert_eq!(left.repositories, vec![current_repo.clone()]);
+        assert!(
+            !left.restore_on_launch,
+            "it is closed, as its window would be"
+        );
+        assert_eq!(
+            crate::workspaces::workspaces(app).len(),
+            2,
+            "the closing tabs are not saved as a new workspace"
+        );
+    });
+    let open =
+        cx.update(|_window, app| crate::view::test_support::open_repo_workdirs(view.read(app)));
+    assert_eq!(open, vec![PathBuf::from("/tmp/rail-saved")]);
+}
+
+#[gpui::test]
+fn the_rail_new_workspace_tile_returns_the_window_to_home(cx: &mut gpui::TestAppContext) {
+    let current_repo = PathBuf::from("/tmp/rail-home");
+    let current = session::Workspace::new(vec![current_repo.clone()]);
+    let current_id = current.id;
+    let (view, cx, window_id) = rail_window_on(cx, current, Vec::new());
+
+    cx.update(|_window, app| {
+        view.update(app, |view, cx| view.switch_workspace_from_rail(None, cx))
+    });
+    settle_rail_window(&view, cx);
+
+    assert!(cx.update(|_window, app| {
+        crate::view::test_support::open_repo_workdirs(view.read(app)).is_empty()
+    }));
+    cx.cx.update(|app| {
+        assert!(crate::workspaces::workspace_for_window(app, window_id).is_none());
+        let left = crate::workspaces::workspace(app, current_id).expect("kept as saved");
+        assert_eq!(left.repositories, vec![current_repo.clone()]);
+    });
+}
+
+#[gpui::test]
+fn the_rail_focuses_a_workspace_another_window_holds(cx: &mut gpui::TestAppContext) {
+    let mut current = session::Workspace::new(vec![PathBuf::from("/tmp/rail-mine")]);
+    current.custom_name = Some("Mine".into());
+    let mut owned = session::Workspace::new(vec![PathBuf::from("/tmp/rail-owned")]);
+    owned.custom_name = Some("Owned".into());
+    let owned_id = owned.id;
+    let (view, cx, window_id) = rail_window_on(cx, current, vec![owned.clone()]);
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let config = crate::view::GitCometViewConfig {
+        workspace: WorkspaceBootstrap::Saved(Box::new(owned)),
+        ..crate::view::GitCometViewConfig::normal(None)
+    };
+    let owner = cx
+        .cx
+        .add_window(|window, cx| GitCometView::new_with_config(store, events, config, window, cx));
+    cx.cx.update(|app| {
+        let _ = owner.update(app, |view, _window, cx| {
+            crate::view::test_support::sync_store_snapshot(view, cx);
+        });
+    });
+    cx.run_until_parked();
+
+    cx.update(|_window, app| {
+        view.update(app, |view, cx| {
+            view.switch_workspace_from_rail(Some(owned_id), cx)
+        })
+    });
+    cx.run_until_parked();
+
+    cx.cx.update(|app| {
+        assert_ne!(
+            crate::workspaces::workspace_for_window(app, window_id).map(|w| w.id),
+            Some(owned_id),
+            "a workspace lives in one window"
+        );
+        assert_eq!(
+            crate::workspaces::workspace_for_window(app, owner.window_id()).map(|w| w.id),
+            Some(owned_id)
+        );
+    });
+    assert!(
+        cx.update(
+            |_window, app| !crate::view::test_support::open_repo_workdirs(view.read(app))
+                .is_empty()
+        ),
+        "this window keeps its own tabs"
+    );
+}
+
 #[gpui::test]
 fn adopting_an_empty_customized_workspace_keeps_the_window_on_home(cx: &mut gpui::TestAppContext) {
     let mut workspace = session::Workspace::new(Vec::new());

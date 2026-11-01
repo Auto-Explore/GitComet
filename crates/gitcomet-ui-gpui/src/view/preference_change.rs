@@ -35,6 +35,7 @@ pub(in crate::view) enum PreferenceChange {
     RemoteMarkdownImagePolicy(RemoteMarkdownImagePolicy),
     RemoteUrlPolicy(RemoteUrlPolicy),
     CheckForUpdatesOnStartup(bool),
+    WorkspaceRail(bool),
     HistoryBranchNames(HistoryBranchNamesMode),
     HistoryColumns {
         graph: bool,

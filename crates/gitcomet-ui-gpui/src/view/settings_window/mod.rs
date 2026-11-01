@@ -673,6 +673,7 @@ pub(crate) struct SettingsWindowView {
     remote_url_policy: RemoteUrlPolicy,
     remote_markdown_image_policy: RemoteMarkdownImagePolicy,
     check_for_updates_on_startup: bool,
+    workspace_rail_enabled: bool,
     diff_scroll_sync: DiffScrollSync,
     history_branch_names: HistoryBranchNamesMode,
     history_show_graph: bool,
@@ -1117,6 +1118,7 @@ impl SettingsWindowView {
         let remote_url_policy = ui_preferences.security.remote_url_policy;
         let remote_markdown_image_policy = ui_preferences.security.remote_markdown_images;
         let check_for_updates_on_startup = ui_preferences.security.check_for_updates_on_startup;
+        let workspace_rail_enabled = ui_preferences.appearance.workspace_rail;
         let history_branch_names = ui_preferences.history.branch_names;
         let history_show_graph = ui_preferences.history.show_graph;
         let history_show_graph_gradient = ui_preferences.history.show_graph_gradient;
@@ -1530,6 +1532,7 @@ impl SettingsWindowView {
             remote_url_policy,
             remote_markdown_image_policy,
             check_for_updates_on_startup,
+            workspace_rail_enabled,
             diff_scroll_sync,
             history_branch_names,
             history_show_graph,
