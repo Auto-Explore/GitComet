@@ -260,14 +260,9 @@ pub(crate) fn run_mode(
 }
 
 #[cfg(feature = "ui-gpui-runtime")]
-fn run_browser(
+pub(crate) fn browser_request(
     path: Option<std::path::PathBuf>,
-    extensions: gitcomet_extension_api::Registry,
-    backend: std::sync::Arc<dyn gitcomet_core::services::GitBackend>,
-    on_ready: Option<crate::ReadyCallback>,
-) -> i32 {
-    let name = identity::current().display_name();
-
+) -> gitcomet_ui_gpui::BrowserOpenRequest {
     let path = browser_instance::normalize_browser_path(path);
     let session = {
         let _stage = gitcomet_core::startup_trace::span("browser_session_load");
@@ -278,26 +273,46 @@ fn run_browser(
         .as_deref()
         .and_then(gitcomet_ui_gpui::BrowserOpenTarget::from_key)
         .unwrap_or_default();
-    let initial_browser_request = gitcomet_ui_gpui::BrowserOpenRequest {
-        path: path.clone(),
+    gitcomet_ui_gpui::BrowserOpenRequest {
+        path,
         target: browser_open_target,
-    };
+    }
+}
+
+#[cfg(feature = "ui-gpui-runtime")]
+pub(crate) fn finish_browser_forward(on_ready: Option<crate::ReadyCallback>) -> i32 {
+    if let Some(on_ready) = on_ready
+        && let Err(error) = on_ready()
+    {
+        eprintln!("{error}");
+        return exit_code::ERROR;
+    }
+    exit_code::SUCCESS
+}
+
+#[cfg(feature = "ui-gpui-runtime")]
+fn run_browser(
+    path: Option<std::path::PathBuf>,
+    extensions: gitcomet_extension_api::Registry,
+    backend: std::sync::Arc<dyn gitcomet_core::services::GitBackend>,
+    on_ready: Option<crate::ReadyCallback>,
+) -> i32 {
+    let name = identity::current().display_name();
+    let initial_browser_request = browser_request(path);
     let instance_result = {
         let _stage = gitcomet_core::startup_trace::span("browser_instance_broker");
         browser_instance::start_or_forward(initial_browser_request.clone())
     };
     let mut browser_instance = match instance_result {
         Ok(browser_instance::StartResult::Forwarded) => {
-            if let Some(on_ready) = on_ready
-                && let Err(error) = on_ready()
-            {
-                eprintln!("{error}");
-                return exit_code::ERROR;
-            }
-            return exit_code::SUCCESS;
+            return finish_browser_forward(on_ready);
         }
         Ok(browser_instance::StartResult::Primary(primary)) => Some(primary),
-        Err(err) => {
+        Err(browser_instance::StartError::Forward(error)) => {
+            eprintln!("Could not forward the browser request: {error}");
+            return exit_code::ERROR;
+        }
+        Err(browser_instance::StartError::Broker(err)) => {
             eprintln!(
                 "Could not initialize the {name} browser-instance broker; \
                      launching this process independently: {err}"

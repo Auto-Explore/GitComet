@@ -44,6 +44,57 @@ fn terminal_startup_failure_keeps_diagnostics_and_error_status() {
 }
 
 #[test]
+fn a_running_browser_receives_requests_before_relaunch_or_gui_preparation() {
+    use std::io::{BufRead, BufReader, Write};
+    use std::net::{Ipv4Addr, TcpListener};
+    use std::time::Duration;
+
+    let profile = tempfile::tempdir().unwrap();
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let descriptor = serde_json::json!({
+        "version": 1,
+        "port": listener.local_addr().unwrap().port(),
+        "token": "early-forward-fixture",
+        "pid": std::process::id(),
+        "product": gitcomet_app::ProductIdentity::gitcomet().app_id(),
+    });
+    std::fs::write(profile.path().join("instance.json"), descriptor.to_string()).unwrap();
+    let server = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        let mut line = String::new();
+        BufReader::new(&mut stream).read_line(&mut line).unwrap();
+        let request: serde_json::Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(request["token"], "early-forward-fixture");
+        stream.write_all(b"ok\n").unwrap();
+    });
+    let trace_path = profile.path().join("startup.jsonl");
+    let mut command = Command::new(gitcomet_test_bin::gitcomet_bin());
+    command.env("GITCOMET_STARTUP_TRACE", &trace_path);
+    let output = run_without_display(command, profile.path());
+    assert!(output.status.success(), "{output:?}");
+    server.join().unwrap();
+    let trace = std::fs::read_to_string(trace_path).unwrap();
+    let names: Vec<String> = trace
+        .lines()
+        .map(|line| {
+            let row: serde_json::Value = serde_json::from_str(line).unwrap();
+            row["name"].as_str().unwrap().to_owned()
+        })
+        .collect();
+    assert_eq!(names.iter().filter(|name| *name == "app_entry").count(), 1);
+    for stage in [
+        "crashlog_install",
+        "git_executable_preference",
+        "native_application",
+    ] {
+        assert!(!names.iter().any(|name| name == stage), "{stage}: {trace}");
+    }
+}
+
+#[test]
 fn library_launch_preserves_supplied_arguments_and_process_state_with_terminal_stdin() {
     const CHILD: &str = "GITCOMET_TEST_LIBRARY_LAUNCH";
     if std::env::var_os(CHILD).is_some() {

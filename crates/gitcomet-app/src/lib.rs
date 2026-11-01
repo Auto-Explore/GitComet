@@ -194,11 +194,28 @@ impl AppLaunch {
                     true
                 };
                 #[cfg(all(unix, feature = "ui-gpui-runtime"))]
-                if is_cli_browser {
+                if let Some(endpoint) = parsed.startup_socket {
+                    on_ready = Some(Box::new(move || process_launch::notify_ready(&endpoint)));
+                }
+                #[cfg(feature = "ui-gpui-runtime")]
+                if is_cli_browser
+                    && let CliOutcome::Run(AppMode::Browser { path }) = &parsed.outcome
+                {
+                    match browser_instance::forward_if_running(|| {
+                        launch::browser_request(path.clone())
+                    }) {
+                        Ok(true) => return launch::finish_browser_forward(on_ready.take()),
+                        Ok(false) => {}
+                        Err(error) => {
+                            eprintln!("Could not forward the browser request: {error}");
+                            return exit_code::ERROR;
+                        }
+                    }
+                }
+                #[cfg(all(unix, feature = "ui-gpui-runtime"))]
+                if is_cli_browser && on_ready.is_none() && !foreground {
                     use std::io::IsTerminal as _;
-                    if let Some(endpoint) = parsed.startup_socket {
-                        on_ready = Some(Box::new(move || process_launch::notify_ready(&endpoint)));
-                    } else if !foreground && std::io::stdin().is_terminal() {
+                    if std::io::stdin().is_terminal() {
                         return match process_launch::launch(&args) {
                             Ok(code) => code,
                             Err(error) => {
