@@ -3322,7 +3322,11 @@ fn grouped_file_lists_pin_the_current_group_without_replanning(cx: &mut gpui::Te
 
     // The pinned header collapses its group like the row does.
     let sticky = selector(format!("hosted_file_list_{id}_sticky_Added"));
-    let center = cx.debug_bounds(sticky).unwrap().center();
+    let last_added = selector(format!("hosted_file_list_{id}_file_a59.rs"));
+    let header = cx.debug_bounds(sticky).unwrap();
+    assert!(header.top() >= px(0.0), "the pinned header is on screen");
+    assert!(cx.debug_bounds(last_added).is_some());
+    let center = header.center();
     cx.simulate_mouse_down(center, gpui::MouseButton::Left, gpui::Modifiers::default());
     draw(cx);
     assert_eq!(
@@ -3333,11 +3337,12 @@ fn grouped_file_lists_pin_the_current_group_without_replanning(cx: &mut gpui::Te
     cx.simulate_mouse_up(center, gpui::MouseButton::Left, gpui::Modifiers::default());
     draw(cx);
     assert!(
-        cx.debug_bounds(selector(format!("hosted_file_list_{id}_file_a00.rs")))
-            .is_none()
+        cx.debug_bounds(last_added).is_none(),
+        "the Added group collapsed"
     );
+    // The shorter list clamps into Modified, which now owns the pin.
     assert!(
-        cx.debug_bounds(selector(format!("hosted_file_list_{id}_group_Modified")))
+        cx.debug_bounds(selector(format!("hosted_file_list_{id}_sticky_Modified")))
             .is_some()
     );
 }
