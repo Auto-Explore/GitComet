@@ -52,7 +52,7 @@ pub(in crate::view) enum VirtualBranchesRow {
     Target {
         name: String,
     },
-    /// The first branch of a stacked_branch: the line it stands on.
+    /// The first branch of a stacked branch: the line it stands on.
     StackedBranchBase {
         name: String,
         applied: bool,
@@ -83,6 +83,10 @@ pub(in crate::view) enum VirtualBranchesRow {
     },
     Placeholder {
         message: String,
+    },
+    /// Names the group of rows below it.
+    SectionHeader {
+        label: &'static str,
     },
     /// The conflict banner, when the last apply failed.
     Conflict {
@@ -212,6 +216,11 @@ fn build_rows(repo: &RepoState) -> Vec<VirtualBranchesRow> {
     // The stacked branches were derived once when the virtual branches was loaded, and the
     // fingerprint below already covers that revision, so re-deriving them per
     // build would only cost time on a long stacked branch list.
+    if !repo.virtual_branches.stacked_branches.is_empty() {
+        rows.push(VirtualBranchesRow::SectionHeader {
+            label: "Stacked branches",
+        });
+    }
     for stacked_branch in repo.virtual_branches.stacked_branches.iter() {
         for (index, member) in stacked_branch.branches.iter().enumerate() {
             let count = counts.get(&member.branch.name).copied().unwrap_or(0);
@@ -438,6 +447,9 @@ impl SidebarPaneView {
                     ),
                     VirtualBranchesRow::Placeholder { message } => {
                         render_placeholder_row(theme, row_height, message.clone())
+                    }
+                    VirtualBranchesRow::SectionHeader { label } => {
+                        render_placeholder_row(theme, row_height, (*label).into())
                     }
                     VirtualBranchesRow::Conflict { message } => render_conflict_row(
                         theme,
@@ -1084,8 +1096,8 @@ mod tests {
         let presentation = VirtualBranchesPresentation::build(Some(&repo));
         assert_eq!(
             names(&presentation),
-            ["main", "api", "ui", ""],
-            "target, stacked branch base, stacked branch, then the summary row and no files"
+            ["main", "", "api", "ui", ""],
+            "target, the Stacked branches header, stacked branch base, stacked branch, then the summary row and no files"
         );
     }
 
