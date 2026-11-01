@@ -230,7 +230,11 @@ Built-in `uninstall` restores those backups only when the key still has the setu
 gitcomet [path] [--foreground]
 ```
 
-When launched from an interactive terminal, the browser relaunches itself detached so the shell prompt returns immediately. Pass `--foreground` (or set `GITCOMET_FOREGROUND=1`) to keep it attached to the terminal for debugging. Non-interactive launches (Finder, `open`, scripts) are unaffected.
+On Unix, when standard input is a terminal, the browser relaunches itself detached so the shell prompt returns without waiting for the window to close. Pass `--foreground` (or set `GITCOMET_FOREGROUND=1`) to keep it attached for debugging or to wait for completion in a script. A script launched from a terminal can inherit terminal input and detach too; Finder, `open`, and launches without terminal input do not use automatic terminal detachment.
+
+`GITCOMET_FOREGROUND` accepts `1`/`true` and `0`/`false` (case-insensitive). An empty or unset value uses automatic detachment. Other values are errors; `--foreground` overrides the environment.
+
+Products built on the library opt into terminal detachment with `AppLaunch::run_cli()` or `App::run()`. Existing `AppLaunch::run()` and `run_with_args()` calls do not automatically detach. Use `run_cli()` at a process entry point whose configuration can be recreated when its executable restarts.
 
 **Difftool:**
 

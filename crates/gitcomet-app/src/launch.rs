@@ -130,6 +130,7 @@ pub(crate) fn run_mode(
     extensions: crate::Extensions,
     repository_options: gitcomet_core::services::RepositoryOptions,
     backend_override: Option<std::sync::Arc<dyn gitcomet_core::services::GitBackend>>,
+    foreground: bool,
 ) -> i32 {
     // Validated in every mode, so a broken product fails the same way
     // whichever mode it is started in.
@@ -198,7 +199,7 @@ pub(crate) fn run_mode(
 
             emit(result)
         }
-        AppMode::Browser { path, foreground } => {
+        AppMode::Browser { path } => {
             #[cfg(feature = "ui-gpui-runtime")]
             {
                 run_browser(path, foreground, extensions, backend())
@@ -496,8 +497,6 @@ fn maybe_relaunch_browser_from_macos_app_bundle() -> bool {
 
 #[cfg(all(unix, feature = "ui-gpui-runtime"))]
 const TERMINAL_DETACH_RELAUNCH_ENV: &str = "GITCOMET_SKIP_TERMINAL_DETACH";
-#[cfg(all(unix, feature = "ui-gpui-runtime"))]
-const TERMINAL_DETACH_FOREGROUND_ENV: &str = "GITCOMET_FOREGROUND";
 
 /// Conditions that decide whether the browser should relaunch itself
 /// detached from the launching terminal.
@@ -506,8 +505,6 @@ const TERMINAL_DETACH_FOREGROUND_ENV: &str = "GITCOMET_FOREGROUND";
 struct TerminalDetachEnvironment {
     /// True when this process is already the detached relaunch.
     skip_detach_relaunch: bool,
-    /// True when the environment explicitly requested foreground execution.
-    foreground_requested: bool,
     /// True when stdin is attached to an interactive terminal.
     stdin_is_terminal: bool,
 }
@@ -518,29 +515,20 @@ impl TerminalDetachEnvironment {
         use std::io::IsTerminal as _;
         Self {
             skip_detach_relaunch: std::env::var_os(TERMINAL_DETACH_RELAUNCH_ENV).is_some(),
-            foreground_requested: std::env::var_os(TERMINAL_DETACH_FOREGROUND_ENV).is_some(),
             stdin_is_terminal: std::io::stdin().is_terminal(),
         }
     }
 
     #[cfg(test)]
-    fn from_sources(
-        skip_detach_relaunch: bool,
-        foreground_requested: bool,
-        stdin_is_terminal: bool,
-    ) -> Self {
+    fn from_sources(skip_detach_relaunch: bool, stdin_is_terminal: bool) -> Self {
         Self {
             skip_detach_relaunch,
-            foreground_requested,
             stdin_is_terminal,
         }
     }
 
     fn should_detach(self, foreground_flag: bool) -> bool {
-        !self.skip_detach_relaunch
-            && !foreground_flag
-            && !self.foreground_requested
-            && self.stdin_is_terminal
+        !self.skip_detach_relaunch && !foreground_flag && self.stdin_is_terminal
     }
 }
 
@@ -954,10 +942,7 @@ mod tests {
     #[test]
     fn configured_git_preference_is_intentionally_browser_only() {
         assert!(mode_uses_configured_git_executable_preference(
-            &AppMode::Browser {
-                path: None,
-                foreground: false
-            }
+            &AppMode::Browser { path: None }
         ));
         assert!(!mode_uses_configured_git_executable_preference(
             &AppMode::Difftool(cli::DifftoolConfig {
@@ -1158,30 +1143,28 @@ mod tests {
     #[test]
     #[cfg(all(feature = "ui-gpui-runtime", unix))]
     fn browser_detaches_from_interactive_terminals_by_default() {
-        let env = TerminalDetachEnvironment::from_sources(false, false, true);
+        let env = TerminalDetachEnvironment::from_sources(false, true);
         assert!(env.should_detach(false));
     }
 
     #[test]
     #[cfg(all(feature = "ui-gpui-runtime", unix))]
     fn browser_detachment_is_skipped_for_the_detached_relaunch() {
-        let env = TerminalDetachEnvironment::from_sources(true, false, true);
+        let env = TerminalDetachEnvironment::from_sources(true, true);
         assert!(!env.should_detach(false));
     }
 
     #[test]
     #[cfg(all(feature = "ui-gpui-runtime", unix))]
     fn browser_detachment_is_skipped_when_foreground_is_requested() {
-        let flag = TerminalDetachEnvironment::from_sources(false, false, true);
+        let flag = TerminalDetachEnvironment::from_sources(false, true);
         assert!(!flag.should_detach(true));
-        let env_var = TerminalDetachEnvironment::from_sources(false, true, true);
-        assert!(!env_var.should_detach(false));
     }
 
     #[test]
     #[cfg(all(feature = "ui-gpui-runtime", unix))]
     fn browser_detachment_is_skipped_without_an_interactive_terminal() {
-        let env = TerminalDetachEnvironment::from_sources(false, false, false);
+        let env = TerminalDetachEnvironment::from_sources(false, false);
         assert!(!env.should_detach(false));
     }
 

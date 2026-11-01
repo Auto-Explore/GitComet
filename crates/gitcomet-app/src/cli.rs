@@ -38,11 +38,6 @@ pub struct Cli {
     /// Path to a git repository to open (default mode only).
     #[arg(global = false)]
     pub path: Option<PathBuf>,
-
-    /// Keep the browser attached to this terminal instead of relaunching
-    /// detached (default mode only).
-    #[arg(long)]
-    pub foreground: bool,
 }
 
 #[derive(Subcommand, Debug)]
@@ -223,11 +218,7 @@ pub struct ExtractMergeFixturesConfig {
 #[non_exhaustive]
 pub enum AppMode {
     /// Full repository browser (default).
-    Browser {
-        path: Option<PathBuf>,
-        /// Keep the process attached to the launching terminal.
-        foreground: bool,
-    },
+    Browser { path: Option<PathBuf> },
     /// Focused diff view.
     Difftool(DifftoolConfig),
     /// Focused merge view.
@@ -249,6 +240,29 @@ pub enum CliOutcome {
     Run(AppMode),
     /// `--help`, `--version`, or `help`: print and exit without running a mode.
     Inform(Informational),
+}
+
+pub(crate) struct ParsedLaunch {
+    pub(crate) outcome: CliOutcome,
+    pub(crate) foreground: bool,
+}
+
+pub(crate) fn foreground_requested(flag: bool, value: Option<OsString>) -> Result<bool, String> {
+    if flag {
+        return Ok(true);
+    }
+    let Some(value) = value else {
+        return Ok(false);
+    };
+    match value
+        .to_str()
+        .map(|value| value.trim().to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("" | "0" | "false") => Ok(false),
+        Some("1" | "true") => Ok(true),
+        _ => Err("Invalid GITCOMET_FOREGROUND value: expected 1/true or 0/false.".into()),
+    }
 }
 
 /// Help or version text, printed the way clap would print it.
@@ -275,6 +289,12 @@ pub(crate) fn cli_command(about: &str) -> clap::Command {
     let identity = gitcomet_core::identity::current();
     let name = identity.executable_name().to_owned();
     Cli::command()
+        .arg(
+            clap::Arg::new("foreground")
+                .long("foreground")
+                .action(clap::ArgAction::SetTrue)
+                .help("Keep the browser attached to this terminal (default mode only)"),
+        )
         .name(name.clone())
         .version(identity.version().to_owned())
         .about(about.to_owned())
@@ -719,17 +739,25 @@ fn parse_app_mode_from_args_env_and_config(
     git_config: &dyn Fn(&str) -> Option<String>,
     about: &str,
 ) -> Result<CliOutcome, String> {
+    parse_launch_from_args_env_and_config(args, env, git_config, about).map(|parsed| parsed.outcome)
+}
+
+fn parse_launch_from_args_env_and_config(
+    args: Vec<OsString>,
+    env: &dyn EnvLookup,
+    git_config: &dyn Fn(&str) -> Option<String>,
+    about: &str,
+) -> Result<ParsedLaunch, String> {
     let normalized_args = normalize_empty_mergetool_base_arg(&args);
 
     let parsed = cli_command(about)
         .try_get_matches_from(normalized_args.iter())
-        .and_then(|matches| Cli::from_arg_matches(&matches));
+        .and_then(|matches| {
+            Cli::from_arg_matches(&matches).map(|cli| (cli, matches.get_flag("foreground")))
+        });
     match parsed {
-        Ok(cli) => match cli.command {
-            None => Ok(AppMode::Browser {
-                path: cli.path,
-                foreground: cli.foreground,
-            }),
+        Ok((cli, foreground)) => match cli.command {
+            None => Ok(AppMode::Browser { path: cli.path }),
             Some(Command::Difftool(args)) => {
                 resolve_difftool_with_env(args, env).map(AppMode::Difftool)
             }
@@ -748,7 +776,10 @@ fn parse_app_mode_from_args_env_and_config(
                 resolve_extract_merge_fixtures(args).map(AppMode::ExtractMergeFixtures)
             }
         }
-        .map(CliOutcome::Run),
+        .map(|mode| ParsedLaunch {
+            outcome: CliOutcome::Run(mode),
+            foreground,
+        }),
         Err(clap_err) => {
             // --help and --version are informational, not errors: they must
             // not fall through to the compat parser and exit 2.
@@ -757,7 +788,10 @@ fn parse_app_mode_from_args_env_and_config(
                 clap_err.kind(),
                 ErrorKind::DisplayHelp | ErrorKind::DisplayVersion
             ) {
-                return Ok(CliOutcome::Inform(Informational(clap_err)));
+                return Ok(ParsedLaunch {
+                    outcome: CliOutcome::Inform(Informational(clap_err)),
+                    foreground: false,
+                });
             }
 
             let compat_args = if normalized_args.len() > 1 {
@@ -768,11 +802,18 @@ fn parse_app_mode_from_args_env_and_config(
             if let Some(mode) =
                 parse_compat_external_mode_with_config(compat_args, env, git_config)?
             {
-                return Ok(CliOutcome::Run(mode));
+                return Ok(ParsedLaunch {
+                    outcome: CliOutcome::Run(mode),
+                    foreground: false,
+                });
             }
             Err(clap_err.to_string())
         }
     }
+}
+
+pub(crate) fn parse_launch(args: Vec<OsString>, about: &str) -> Result<ParsedLaunch, String> {
+    parse_launch_from_args_env_and_config(args, &ProcessEnv, &|_| None, about)
 }
 
 fn parse_app_mode_from_args_and_env(

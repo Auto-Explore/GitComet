@@ -37,6 +37,12 @@ use std::io::Write;
 
 type PrepareHook = Box<dyn FnOnce(&AppMode) -> Result<(), String>>;
 
+#[derive(Clone, Copy)]
+enum LaunchEntry {
+    Library,
+    Cli,
+}
+
 /// The compiled-in extensions, in registration order.
 #[cfg(feature = "ui-gpui-runtime")]
 pub(crate) type Extensions = Vec<Box<dyn gitcomet_extension_api::Extension>>;
@@ -138,6 +144,14 @@ impl AppLaunch {
 
     /// Runs with `args` (including the program name) and returns the exit code.
     pub fn run_with_args(self, args: Vec<OsString>) -> i32 {
+        self.run_args(args, LaunchEntry::Library)
+    }
+
+    pub fn run_cli(self) -> i32 {
+        self.run_args(std::env::args_os().collect(), LaunchEntry::Cli)
+    }
+
+    fn run_args(self, args: Vec<OsString>, entry: LaunchEntry) -> i32 {
         gitcomet_core::startup_trace::mark("app_entry");
         let Self {
             identity,
@@ -161,10 +175,32 @@ impl AppLaunch {
 
         let parsed = {
             let _stage = gitcomet_core::startup_trace::span("parse_cli");
-            cli::parse_cli(args, &about)
+            cli::parse_launch(args, &about)
+        };
+        let (parsed, foreground) = match parsed {
+            Ok(parsed) => {
+                let foreground = if matches!(entry, LaunchEntry::Cli)
+                    && matches!(parsed.outcome, CliOutcome::Run(AppMode::Browser { .. }))
+                {
+                    match cli::foreground_requested(
+                        parsed.foreground,
+                        std::env::var_os("GITCOMET_FOREGROUND"),
+                    ) {
+                        Ok(foreground) => foreground,
+                        Err(message) => {
+                            eprintln!("{message}");
+                            return exit_code::ERROR;
+                        }
+                    }
+                } else {
+                    true
+                };
+                (Ok(parsed.outcome), foreground)
+            }
+            Err(message) => (Err(message), true),
         };
         dispatch(parsed, on_prepare, move |mode| {
-            launch::run_mode(mode, extensions, repository_options, backend)
+            launch::run_mode(mode, extensions, repository_options, backend, foreground)
         })
     }
 }
@@ -209,7 +245,7 @@ impl App {
         Self(self.0.extension(extension))
     }
     pub fn run(self) -> ! {
-        std::process::exit(self.0.run())
+        std::process::exit(self.0.run_cli())
     }
 }
 
