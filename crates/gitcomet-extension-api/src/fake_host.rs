@@ -92,6 +92,7 @@ pub enum HostRequest {
 /// and read back what it did with [`FakeWindowHost::requests`],
 /// [`FakeWindowHost::take_dispatched`] and the workspace state accessors.
 pub struct FakeWindowHost {
+    weak: std::rc::Weak<Self>,
     window: WindowId,
     kind: WindowKind,
     theme: AppTheme,
@@ -102,6 +103,8 @@ pub struct FakeWindowHost {
     open_panels: RefCell<HashSet<(RepositoryHandle, ContributionId)>>,
     /// The canvas overlay shown over each repository.
     shown_overlays: RefCell<HashMap<RepositoryHandle, ContributionId>>,
+    overlays: RefCell<HashMap<ContributionId, crate::CanvasOverlayDescriptor>>,
+    overlay_entries: RefCell<HashSet<(RepositoryHandle, ContributionId)>>,
     requests: RefCell<Vec<HostRequest>>,
     dispatched: RefCell<Vec<Msg>>,
     observers: RefCell<Vec<(u64, StateObserver)>>,
@@ -115,7 +118,8 @@ impl FakeWindowHost {
     /// A main window with the default dark theme, an empty state and no
     /// active repository.
     pub fn new(window: WindowId) -> Rc<Self> {
-        Rc::new(Self {
+        Rc::new_cyclic(|weak| Self {
+            weak: weak.clone(),
             window,
             kind: WindowKind::Main,
             theme: AppTheme::gitcomet_dark(),
@@ -125,6 +129,8 @@ impl FakeWindowHost {
             workspace: RefCell::default(),
             open_panels: RefCell::default(),
             shown_overlays: RefCell::default(),
+            overlays: RefCell::default(),
+            overlay_entries: RefCell::default(),
             requests: RefCell::default(),
             dispatched: RefCell::default(),
             observers: RefCell::default(),
@@ -161,11 +167,63 @@ impl FakeWindowHost {
 
     /// Closes a repository: its handle stops being current, and no repository
     /// is active if it was.
-    pub fn close_repository(&self, repository: &RepositoryHandle) {
+    pub fn close_repository(&self, repository: &RepositoryHandle, cx: &mut App) {
         self.open.borrow_mut().retain(|open| open != repository);
         let mut active = self.active.borrow_mut();
         if active.as_ref() == Some(repository) {
             *active = None;
+        }
+        drop(active);
+        self.shown_overlays.borrow_mut().remove(repository);
+        let dropped: Vec<_> = self
+            .overlay_entries
+            .borrow()
+            .iter()
+            .filter(|(repo, _)| repo == repository)
+            .map(|(_, id)| id.clone())
+            .collect();
+        self.overlay_entries
+            .borrow_mut()
+            .retain(|(repo, _)| repo != repository);
+        for id in dropped {
+            self.announce_overlay(repository, &id, crate::CanvasOverlayVisibility::Dropped, cx);
+        }
+    }
+
+    pub fn register_canvas_overlay(
+        &self,
+        id: ContributionId,
+        descriptor: crate::CanvasOverlayDescriptor,
+    ) {
+        self.overlays.borrow_mut().insert(id, descriptor);
+    }
+
+    fn check_overlay(&self, id: &ContributionId) -> Result<(), HostError> {
+        if self.kind == WindowKind::Main && self.overlays.borrow().contains_key(id) {
+            Ok(())
+        } else {
+            Err(HostError::Unsupported)
+        }
+    }
+
+    fn announce_overlay(
+        &self,
+        repository: &RepositoryHandle,
+        id: &ContributionId,
+        visibility: crate::CanvasOverlayVisibility,
+        cx: &mut App,
+    ) {
+        let observer = self
+            .overlays
+            .borrow()
+            .get(id)
+            .and_then(|descriptor| descriptor.on_visibility.clone());
+        if let Some(observer) = observer {
+            let context = crate::RepositoryViewContext {
+                window: WindowHost::new(self.weak.upgrade().expect("live fake host")),
+                repository: repository.clone(),
+            };
+            cx.defer(move |cx| observer(context, visibility, cx));
         }
     }
 
@@ -398,11 +456,32 @@ impl WindowHostImpl for FakeWindowHost {
         &self,
         repository: &RepositoryHandle,
         overlay: &ContributionId,
-        _cx: &mut App,
+        cx: &mut App,
     ) -> Result<(), HostError> {
-        self.shown_overlays
+        self.check_overlay(overlay)?;
+        self.overlay_entries
+            .borrow_mut()
+            .insert((repository.clone(), overlay.clone()));
+        let previous = self
+            .shown_overlays
             .borrow_mut()
             .insert(repository.clone(), overlay.clone());
+        if previous.as_ref() != Some(overlay) {
+            if let Some(previous) = previous {
+                self.announce_overlay(
+                    repository,
+                    &previous,
+                    crate::CanvasOverlayVisibility::Hidden,
+                    cx,
+                );
+            }
+            self.announce_overlay(
+                repository,
+                overlay,
+                crate::CanvasOverlayVisibility::Shown,
+                cx,
+            );
+        }
         self.record(HostRequest::ShowCanvasOverlay {
             repository: repository.clone(),
             overlay: overlay.clone(),
@@ -414,9 +493,19 @@ impl WindowHostImpl for FakeWindowHost {
         &self,
         repository: &RepositoryHandle,
         overlay: &ContributionId,
-        _cx: &mut App,
+        cx: &mut App,
     ) -> Result<(), HostError> {
+        self.check_overlay(overlay)?;
+        let shown = self.shown_overlays.borrow().get(repository) == Some(overlay);
         self.forget_overlay(repository, overlay);
+        if shown {
+            self.announce_overlay(
+                repository,
+                overlay,
+                crate::CanvasOverlayVisibility::Hidden,
+                cx,
+            );
+        }
         self.record(HostRequest::HideCanvasOverlay {
             repository: repository.clone(),
             overlay: overlay.clone(),
@@ -428,9 +517,22 @@ impl WindowHostImpl for FakeWindowHost {
         &self,
         repository: &RepositoryHandle,
         overlay: &ContributionId,
-        _cx: &mut App,
+        cx: &mut App,
     ) -> Result<(), HostError> {
+        self.check_overlay(overlay)?;
         self.forget_overlay(repository, overlay);
+        if self
+            .overlay_entries
+            .borrow_mut()
+            .remove(&(repository.clone(), overlay.clone()))
+        {
+            self.announce_overlay(
+                repository,
+                overlay,
+                crate::CanvasOverlayVisibility::Dropped,
+                cx,
+            );
+        }
         self.record(HostRequest::DropCanvasOverlay {
             repository: repository.clone(),
             overlay: overlay.clone(),
@@ -617,7 +719,7 @@ mod tests {
             fake.select_repository(&first);
             assert_eq!(host.active_repository(cx), Ok(Some(first.clone())));
 
-            fake.close_repository(&first);
+            fake.close_repository(&first, cx);
             assert_eq!(host.active_repository(cx), Ok(None));
             assert_eq!(
                 host.set_commit_message(&first, "Too late".into(), cx),
@@ -639,12 +741,65 @@ mod tests {
     }
 
     #[gpui::test]
+    fn overlay_registration_and_drop_notifications_match_the_host(cx: &mut gpui::TestAppContext) {
+        let fake = FakeWindowHost::new(WindowId::from(3));
+        let host = fake.host();
+        let id = ExtensionId::new("com.example.overlays")
+            .unwrap()
+            .contribution("first")
+            .unwrap();
+        let repository = fake.open_repository("/tmp/repository");
+        cx.update(|cx| {
+            assert_eq!(
+                host.show_canvas_overlay(&repository, &id, cx),
+                Err(HostError::Unsupported)
+            );
+            assert_eq!(
+                host.hide_canvas_overlay(&repository, &id, cx),
+                Err(HostError::Unsupported)
+            );
+            assert_eq!(
+                host.drop_canvas_overlay(&repository, &id, cx),
+                Err(HostError::Unsupported)
+            );
+        });
+        assert!(fake.requests().is_empty());
+        let events = Rc::new(RefCell::new(Vec::new()));
+        let log = events.clone();
+        fake.register_canvas_overlay(
+            id.clone(),
+            crate::CanvasOverlayDescriptor::new(|_, _, _| panic!("no views"))
+                .on_visibility(move |_, visibility, _| log.borrow_mut().push(visibility)),
+        );
+        cx.update(|cx| {
+            host.show_canvas_overlay(&repository, &id, cx).unwrap();
+            host.hide_canvas_overlay(&repository, &id, cx).unwrap();
+            host.drop_canvas_overlay(&repository, &id, cx).unwrap();
+            host.drop_canvas_overlay(&repository, &id, cx).unwrap();
+            host.show_canvas_overlay(&repository, &id, cx).unwrap();
+            fake.close_repository(&repository, cx);
+        });
+        cx.run_until_parked();
+        use crate::CanvasOverlayVisibility::{Dropped, Hidden, Shown};
+        assert_eq!(
+            *events.borrow(),
+            vec![Shown, Hidden, Dropped, Shown, Dropped]
+        );
+    }
+
+    #[gpui::test]
     fn canvas_overlays_are_one_per_repository_and_recorded(cx: &mut gpui::TestAppContext) {
         let fake = FakeWindowHost::new(WindowId::from(3));
         let host = fake.host();
         let extension = ExtensionId::new("com.example.overlays").unwrap();
         let first = extension.contribution("first").unwrap();
         let second = extension.contribution("second").unwrap();
+        for id in [&first, &second] {
+            fake.register_canvas_overlay(
+                id.clone(),
+                crate::CanvasOverlayDescriptor::new(|_, _, _| panic!("fake does not build views")),
+            );
+        }
         let repository = fake.open_repository("/tmp/repository");
         cx.update(|cx| {
             assert_eq!(host.show_canvas_overlay(&repository, &first, cx), Ok(()));
@@ -678,7 +833,7 @@ mod tests {
                 "each repository has its own overlay"
             );
         });
-        fake.close_repository(&repository);
+        cx.update(|cx| fake.close_repository(&repository, cx));
         cx.update(|cx| {
             assert!(
                 !host.is_canvas_overlay_shown(&repository, &second, cx),

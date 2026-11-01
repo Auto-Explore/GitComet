@@ -53,14 +53,12 @@ struct PublishedMarks {
 }
 
 impl FileListView {
-    /// Takes `marks` unless they repeat the revision of those it has.
-    /// Whether it took them.
     fn publish_marks(&mut self, marks: gitcomet_extension_api::FileListMarks) -> bool {
-        if self
-            .marks
-            .as_ref()
-            .is_some_and(|current| current.marks.revision == marks.revision)
-        {
+        if self.marks.as_ref().is_some_and(|current| {
+            current.marks.revision == marks.revision
+                && Arc::ptr_eq(&current.marks.rows, &marks.rows)
+                && Arc::ptr_eq(&current.marks.trailing, &marks.trailing)
+        }) {
             return false;
         }
         let glyphs = marks.rows.values().any(|mark| mark.glyph.is_some());
