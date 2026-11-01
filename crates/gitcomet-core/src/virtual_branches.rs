@@ -1,4 +1,4 @@
-//! The virtual branches model: virtual branches, stacks, and the target branch.
+//! The virtual branches model: virtual branches, stacked branches, and the target branch.
 //!
 //! A *virtual branch* is an independent unit of work that lives as an ordinary
 //! Git branch under `refs/heads/`. Nothing about it requires server support:
@@ -9,8 +9,8 @@
 //!
 //! The interesting design decision is that "stacked" and "independent" are not
 //! two types. A branch is independent when [`VirtualBranch::parent`] is `None`,
-//! and stacked when it is `Some`. Moving a branch between stacks, reordering a
-//! stack, and promoting a branch to independent are all the same edit: change
+//! and stacked when it is `Some`. Moving a branch between stacked branches, reordering a
+//! stacked branch, and promoting a branch to independent are all the same edit: change
 //! one field. That keeps the data model small enough to serialize to a file and
 //! reason about in tests.
 //!
@@ -131,26 +131,26 @@ impl VirtualBranch {
 /// One column of the virtual branches: a parent branch and everything stacked on it,
 /// in application order.
 ///
-/// Stacks are a view, not stored state. They are derived from `parent` links by
-/// [`VirtualBranchesState::stacks`], so a stack can never disagree with the branches
+/// Stacked branches are a view, not stored state. They are derived from `parent` links by
+/// [`VirtualBranchesState::stacked_branches`], so a stacked branch can never disagree with the branches
 /// that make it up.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct Stack {
-    /// The target branch, or the name of the bottom branch of the stack.
+pub struct StackedBranch {
+    /// The target branch, or the name of the bottom branch of the stacked branch.
     pub base: String,
-    /// Members from the bottom of the stack upward, so `stacked_on` is
+    /// Members from the bottom of the stacked branch upward, so `stacked_on` is
     /// unambiguous when rendering indentation.
-    pub branches: Vec<StackMember>,
+    pub branches: Vec<StackedBranchMember>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct StackMember {
+pub struct StackedBranchMember {
     pub branch: VirtualBranch,
-    /// Depth within the stack: 0 for the branch that sits on the base.
+    /// Depth within the stacked_branch: 0 for the branch that sits on the base.
     pub depth: usize,
 }
 
-impl Stack {
+impl StackedBranch {
     pub fn is_empty(&self) -> bool {
         self.branches.is_empty()
     }
@@ -291,45 +291,45 @@ impl VirtualBranchesState {
         Ok(ordered)
     }
 
-    /// The branches grouped into stacks, each with its depth.
+    /// The branches grouped into stacked branches, each with its depth.
     ///
     /// Unreachable branches (cycles) do not appear; [`Self::validate`] is what
     /// surfaces them, so a corrupt state degrades to a missing row rather than
     /// an infinite loop in the renderer.
-    pub fn stacks(&self) -> Result<Vec<Stack>> {
+    pub fn stacked_branches(&self) -> Result<Vec<StackedBranch>> {
         let order = self.topological_order()?;
-        let mut stacks: Vec<Stack> = Vec::new();
+        let mut stacked_branches: Vec<StackedBranch> = Vec::new();
 
         for name in order {
             let Some(branch) = self.get(&name) else {
                 continue;
             };
             match &branch.parent {
-                None => stacks.push(Stack {
+                None => stacked_branches.push(StackedBranch {
                     base: self.target.clone(),
-                    branches: vec![StackMember {
+                    branches: vec![StackedBranchMember {
                         branch: branch.clone(),
                         depth: 0,
                     }],
                 }),
                 Some(parent) => {
-                    let depth = match stacks.iter_mut().rev().find(|s| s.contains(parent)) {
-                        Some(stack) => {
-                            let depth = stack
+                    let depth = match stacked_branches.iter_mut().rev().find(|s| s.contains(parent)) {
+                        Some(stacked_branch) => {
+                            let depth = stacked_branch
                                 .branches
                                 .iter()
                                 .find(|m| m.branch.name == *parent)
                                 .map_or(0, |m| m.depth + 1);
-                            stack.branches.push(StackMember {
+                            stacked_branch.branches.push(StackedBranchMember {
                                 branch: branch.clone(),
                                 depth,
                             });
                             depth
                         }
                         None => {
-                            stacks.push(Stack {
+                            stacked_branches.push(StackedBranch {
                                 base: parent.clone(),
-                                branches: vec![StackMember {
+                                branches: vec![StackedBranchMember {
                                     branch: branch.clone(),
                                     depth: 0,
                                 }],
@@ -342,7 +342,7 @@ impl VirtualBranchesState {
             }
         }
 
-        Ok(stacks)
+        Ok(stacked_branches)
     }
 
     /// Everything that would make this state unusable to render or apply.
@@ -470,7 +470,7 @@ impl VirtualBranchesState {
         self.set_parent(&branch.name, Some(name))
     }
 
-    /// Insert a branch below `name`: it takes `name`'s place in the stack, so
+    /// Insert a branch below `name`: it takes `name`'s place in the stacked branch, so
     /// `name` ends up sitting on it and everything above follows along.
     ///
     /// The mirror of [`Self::insert_above`], and deliberately not the same
@@ -485,17 +485,17 @@ impl VirtualBranchesState {
             .clone();
         self.push_branch(branch.clone())?;
         self.set_parent(name, Some(&branch.name))?;
-        // The new branch inherits the anchor's old parent, so the stack keeps
+        // The new branch inherits the anchor's old parent, so the stacked branch keeps
         // its depth and everything that was above the anchor stays above it.
         self.set_parent(&branch.name, displaced.as_deref())
     }
 
-    /// Move `name` into `stack_base`'s stack, optionally above or below
+    /// Move `name` into `stacked_branch_base`'s stacked branch, optionally above or below
     /// `relative_to`.
-    pub fn move_to_stack(
+    pub fn move_to_stacked_branch(
         &mut self,
         name: &str,
-        stack_base: &str,
+        stacked_branch_base: &str,
         relative_to: Option<&str>,
         below: bool,
     ) -> Result<()> {
@@ -503,11 +503,11 @@ impl VirtualBranchesState {
             return Err(virtual_branches_error(format!("no virtual-branches branch '{name}'")));
         }
         let parent = match relative_to {
-            None => Some(stack_base.to_string()),
+            None => Some(stacked_branch_base.to_string()),
             Some(relative) if relative == name => self.get(name).and_then(|b| b.parent.clone()),
             Some(relative) => {
                 // A relative branch that is not in the virtual branches cannot be
-                // reasoned about. Falling back to `stack_base` would land the
+                // reasoned about. Falling back to `stacked_branch_base` would land the
                 // branch somewhere the user never asked for and report success,
                 // which is the same failure `insert_above`/`insert_below` refuse.
                 if self.get(relative).is_none() {
@@ -519,7 +519,7 @@ impl VirtualBranchesState {
                     Some(
                         self.get(relative)
                             .and_then(|b| b.parent.clone())
-                            .unwrap_or_else(|| stack_base.to_string()),
+                            .unwrap_or_else(|| stacked_branch_base.to_string()),
                     )
                 }
             }
@@ -530,7 +530,7 @@ impl VirtualBranchesState {
         self.set_parent(name, parent.as_deref())
     }
 
-    /// Swap two branches' positions, keeping each one's place in its stack.
+    /// Swap two branches' positions, keeping each one's place in its stacked branch.
     pub fn reorder(&mut self, first: &str, second: &str) -> Result<()> {
         if first == second {
             return Ok(());
@@ -555,11 +555,11 @@ impl VirtualBranchesState {
         right: &VirtualBranch,
     ) -> Result<()> {
         // Reordering only makes sense between siblings: two branches with
-        // different parents are in different stacks, and "swap" has no meaning
+        // different parents are in different stacked branches, and "swap" has no meaning
         // without first choosing where the second one goes.
         if left.parent != right.parent {
             return Err(virtual_branches_error(format!(
-                "'{first}' and '{second}' are in different stacks; move one into the other's stack instead"
+                "'{first}' and '{second}' are in different stacked branches; move one into the other's stacked branch instead"
             )));
         }
 
@@ -613,7 +613,7 @@ impl VirtualBranchesState {
         Ok(())
     }
 
-    /// Remove a branch, re-parenting whatever was stacked on it so the stack
+    /// Remove a branch, re-parenting whatever was stacked on it so the stacked branch
     /// does not develop a hole.
     pub fn remove_branch(&mut self, name: &str) -> Result<VirtualBranch> {
         let index = self
@@ -1447,17 +1447,17 @@ mod tests {
     }
 
     #[test]
-    fn stacks_group_independent_branches_separately() {
+    fn stacked_branches_group_independent_branches_separately() {
         let state = virtual_branches().with_branches(vec![
             vb("api"),
             vb("ui").with_parent("api"),
             vb("e2e").with_parent("ui"),
             vb("fix"),
         ]);
-        let stacks = state.stacks().unwrap();
-        assert_eq!(stacks.len(), 2);
+        let stacked_branches = state.stacked_branches().unwrap();
+        assert_eq!(stacked_branches.len(), 2);
 
-        let first = &stacks[0];
+        let first = &stacked_branches[0];
         assert_eq!(first.base, "main");
         assert_eq!(
             first
@@ -1469,7 +1469,7 @@ mod tests {
         );
         assert_eq!(first.applied_count(), 3);
 
-        let second = &stacks[1];
+        let second = &stacked_branches[1];
         assert_eq!(second.base, "main");
         assert_eq!(second.branches[0].branch.name, "fix");
     }
@@ -1478,13 +1478,13 @@ mod tests {
     fn order_controls_sibling_ordering() {
         let state =
             virtual_branches().with_branches(vec![vb("second").with_order(1), vb("first").with_order(0)]);
-        let stacks = state.stacks().unwrap();
-        // Two roots are two stacks, and `order` is what decides which one
+        let stacked_branches = state.stacked_branches().unwrap();
+        // Two roots are two stacked branches, and `order` is what decides which one
         // comes first: without it the declaration order ("second" first)
         // would win.
-        assert_eq!(stacks.len(), 2);
-        assert_eq!(stacks[0].branches[0].branch.name, "first");
-        assert_eq!(stacks[1].branches[0].branch.name, "second");
+        assert_eq!(stacked_branches.len(), 2);
+        assert_eq!(stacked_branches[0].branches[0].branch.name, "first");
+        assert_eq!(stacked_branches[1].branches[0].branch.name, "second");
     }
 
     #[test]
@@ -1586,7 +1586,7 @@ mod tests {
     fn a_branch_inserted_below_another_takes_its_place() {
         // The opposite of the above case, which is the whole point of having
         // two: `ui2` is pushed *down* to where `ui` was, `ui` now sits on it,
-        // and the stack is one deeper without anything above having moved.
+        // and the stacked branch is one deeper without anything above having moved.
         let mut state = virtual_branches().with_branches(vec![vb("api"), vb("ui").with_parent("api")]);
         state.insert_below(vb("ui2"), "ui").unwrap();
         assert_eq!(
@@ -1656,7 +1656,7 @@ mod tests {
     }
 
     #[test]
-    fn reorder_across_stacks_is_refused() {
+    fn reorder_across_stacked_branches_is_refused() {
         let mut state = virtual_branches().with_branches(vec![vb("api"), vb("ui").with_parent("api")]);
         assert!(state.reorder("api", "ui").is_err());
     }
@@ -1673,27 +1673,27 @@ mod tests {
     }
 
     #[test]
-    fn move_to_stack_places_a_branch_under_the_new_base() {
+    fn move_to_stacked_branch_places_a_branch_under_the_new_base() {
         let mut state = virtual_branches().with_branches(vec![vb("api"), vb("ui").with_parent("api")]);
-        state.move_to_stack("ui", "main", None, false).unwrap();
+        state.move_to_stacked_branch("ui", "main", None, false).unwrap();
         assert_eq!(state.get("ui").unwrap().parent, None);
     }
 
     #[test]
-    fn move_to_stack_below_a_sibling_stacks_on_that_sibling() {
+    fn move_to_stacked_branch_below_a_sibling_stacked_branches_on_that_sibling() {
         let mut state = virtual_branches().with_branches(vec![vb("api"), vb("e2e").with_parent("api")]);
         state
-            .move_to_stack("e2e", "main", Some("api"), true)
+            .move_to_stacked_branch("e2e", "main", Some("api"), true)
             .unwrap();
         assert_eq!(state.get("e2e").unwrap().parent.as_deref(), Some("api"));
     }
 
     #[test]
-    fn move_to_stack_above_a_sibling_takes_its_place() {
+    fn move_to_stacked_branch_above_a_sibling_takes_its_place() {
         let mut state =
             virtual_branches().with_branches(vec![vb("api"), vb("e2e").with_parent("api"), vb("other")]);
         state
-            .move_to_stack("other", "main", Some("api"), false)
+            .move_to_stacked_branch("other", "main", Some("api"), false)
             .unwrap();
         assert_eq!(state.get("other").unwrap().parent, None);
         assert_eq!(state.get("e2e").unwrap().parent.as_deref(), Some("api"));
@@ -1708,7 +1708,7 @@ mod tests {
         ]);
         assert!(
             state
-                .move_to_stack("api", "main", Some("e2e"), true)
+                .move_to_stacked_branch("api", "main", Some("e2e"), true)
                 .is_err()
         );
         assert_eq!(state.get("api").unwrap().parent, None);
@@ -1717,12 +1717,12 @@ mod tests {
     #[test]
     fn a_move_relative_to_a_branch_that_is_not_there_is_refused() {
         // The drag named a branch that was removed in the meantime. Guessing the
-        // stack base instead would put the branch somewhere the user never
+        // stacked branch base instead would put the branch somewhere the user never
         // asked for and report the move as done.
         let mut state = virtual_branches().with_branches(vec![vb("api"), vb("ui").with_parent("api")]);
         assert!(
             state
-                .move_to_stack("api", "main", Some("gone"), false)
+                .move_to_stacked_branch("api", "main", Some("gone"), false)
                 .is_err()
         );
         assert_eq!(state.get("api").unwrap().parent, None);
@@ -1736,7 +1736,7 @@ mod tests {
     }
 
     #[test]
-    fn set_applied_toggles_a_branch_without_disturbing_the_stack() {
+    fn set_applied_toggles_a_branch_without_disturbing_the_stacked_branch() {
         let mut state = virtual_branches().with_branches(vec![vb("api"), vb("ui").with_parent("api")]);
         state
             .set_applied("ui", BranchApplyState::Unapplied)
@@ -2503,17 +2503,17 @@ mod tests {
     fn a_branch_reports_whether_anything_is_stacked_on_it() {
         let state =
             virtual_branches().with_branches(vec![vb("api"), vb("ui").with_parent("api"), vb("docs")]);
-        let stacks = state.stacks().unwrap();
-        assert!(stacks[0].contains("api"));
+        let stacked_branches = state.stacked_branches().unwrap();
+        assert!(stacked_branches[0].contains("api"));
         assert!(
-            stacks[0].contains("ui"),
-            "a child belongs to its parent's stack"
+            stacked_branches[0].contains("ui"),
+            "a child belongs to its parent's stacked branch"
         );
         assert!(
-            !stacks[0].contains("docs"),
+            !stacked_branches[0].contains("docs"),
             "an independent branch starts its own"
         );
-        assert!(virtual_branches().stacks().unwrap().is_empty(), "nothing to stack");
+        assert!(virtual_branches().stacked_branches().unwrap().is_empty(), "nothing to stacked branch");
     }
 
     #[test]
@@ -2526,7 +2526,7 @@ mod tests {
         assert_eq!(
             state.parent_after_move("ui", Some("docs"), true),
             Some("docs".to_string()),
-            "below stacks on the branch it is dropped under"
+            "below stacked branches on the branch it is dropped under"
         );
         assert_eq!(
             state.parent_after_move("ui", Some("docs"), false),

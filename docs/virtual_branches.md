@@ -6,7 +6,7 @@ GitButler-style alternative, for working on several things at once without
 checking any of them out.
 
 This document explains the model behind the Virtual branches tab: what a virtual
-branch is, how stacks work, what `gitcomet/virtual` is for, and which
+branch is, how stacked branches work, what `gitcomet/virtual` is for, and which
 operations change which piece of it.
 
 ## Why another workflow
@@ -70,10 +70,10 @@ main
 All three exist as branches. The two that are applied are what you see in the
 working directory.
 
-## Stacks
+## Stacked branches
 
-A **stack** is a chain of branches, each stacked on the one below it. The
-bottom of the stack sits on the target branch.
+A **stacked branch** is a chain of branches, each stacked on the one below it. The
+bottom of the stacked branch sits on the target branch.
 
 ```
 main
@@ -92,8 +92,8 @@ feature/ui  → feature/api
 feature/e2e → feature/ui
 ```
 
-Stacks are not stored as a separate structure. They are derived from the
-`parent` fields by `VirtualBranchesState::stacks()`, which means a stack can never
+Stacked branches are not stored as a separate structure. They are derived from the
+`parent` fields by `VirtualBranchesState::stacked_branches()`, which means a stacked branch can never
 disagree with the branches that make it up.
 
 ### Above and below
@@ -106,7 +106,7 @@ target ── api ── ui        insert "ui2" above ui   →  api ── ui �
                            insert "ui2" below ui   →  api ── ui2 ── ui
 ```
 
-*Above* stacks the new branch on the anchor: it starts at the anchor's tip and
+*Above* stacked branches the new branch on the anchor: it starts at the anchor's tip and
 displaces nothing. *Below* puts it in the anchor's place: it starts at the
 anchor's base and the anchor is then replayed on top of it. Either way the
 branches that were already stacked on the anchor stay where they were.
@@ -126,10 +126,10 @@ why every structural edit is the same edit — changing one field:
 
 | Action | What changes |
 | --- | --- |
-| Stack a branch onto another | `parent = Some(other)` |
+| Stacked branch a branch onto another | `parent = Some(other)` |
 | Make a branch independent | `parent = None` |
-| Move a branch to another stack | `parent = Some(new_base)` |
-| Reorder within a stack | swap two siblings' `order` |
+| Move a branch to another stacked branch | `parent = Some(new_base)` |
+| Reorder within a stacked branch | swap two siblings' `order` |
 
 `VirtualBranchesState` validates every one of these before it is written, so a move
 that would close a loop is refused with the state left exactly as it was.
@@ -410,9 +410,9 @@ requests will need later; the multi-PR workflow itself is not implemented yet.
 ## What the Virtual branches tab can do today
 
 Per branch: apply/unapply, push, a `⋯` menu (new branch above it, new branch
-below it, change its base, move it into another stack, commit every file
+below it, change its base, move it into another stacked branch, commit every file
 assigned to it, remove it from the virtual branches), and `↑`/`↓` to reorder it inside
-its stack — the arrows are disabled at the ends of a stack rather than offered
+its stacked branch — the arrows are disabled at the ends of a stacked branch rather than offered
 and refused.
 
 Per virtual branches: `New branch` on the summary line, and `Change` on the target row
@@ -447,7 +447,7 @@ for the button to name; the branch's *Commit its assigned files* is what
 commits it. Its *Assign* button stays live, and assigns the whole file to one
 branch — a real answer to a real question, and one that clears the split.
 
-A conflict from a failed apply is shown above the stacks and can be dismissed.
+A conflict from a failed apply is shown above the stacked branches and can be dismissed.
 
 Every `VirtualBranchesEdit` variant is now reachable from the view, through a single
 popover, `PopoverKind::VirtualBranchesPrompt`, with one `VirtualBranchesPromptKind` per
@@ -457,7 +457,7 @@ distinct thing the dialog can be asked for:
   one each — what differs is the label on the field and which `VirtualBranchesEdit`
   confirming builds;
 - opened from a branch row it shows that branch's actions first, because
-  stacking, re-parenting, joining a stack and removing are the same four
+  stacking, re-parenting, joining a stacked branch and removing are the same four
   questions about the same branch and a row has no room for four buttons;
 - the step shown is host state rather than part of the kind, so narrowing the
   list to one action does not change which popover is open — a kind swap would
@@ -486,8 +486,8 @@ gesture. Everything else in `VirtualBranchesEdit` has a control.
 | 5 | Independent virtual branches | done |
 | 6 | Stacked / dependent branches | done |
 | 7 | Create branches above/below existing ones | done — `VirtualBranchesEdit::InsertRelativeTo`, two distinct edits |
-| 8 | Move branches between stacks | done — `MoveToStack` |
-| 9 | Reorder within a stack | done — `Reorder` plus `↑`/`↓` |
+| 8 | Move branches between stacked branches | done — `MoveToStackedBranch` |
+| 9 | Reorder within a stacked branch | done — `Reorder` plus `↑`/`↓` |
 | 10 | Assign files to virtual branches | done |
 | 11 | Assign individual hunks | done — `HunkFingerprint`, diff hunk menu |
 | 12 | Maintain `gitcomet/virtual` | done |
@@ -564,7 +564,7 @@ would send the user looking for a file two branches are already committing.
 
 | Piece | Location |
 | --- | --- |
-| Model, validation, stacks | `crates/gitcomet-core/src/virtual_branches.rs` |
+| Model, validation, stacked branches | `crates/gitcomet-core/src/virtual_branches.rs` |
 | Service contract | `crates/gitcomet-core/src/services.rs` (virtual branches section) |
 | Git plumbing | `crates/gitcomet-git-gix/src/repo/virtual_branches.rs` |
 | Per-repository state | `crates/gitcomet-state/src/model/virtual_branches.rs` |

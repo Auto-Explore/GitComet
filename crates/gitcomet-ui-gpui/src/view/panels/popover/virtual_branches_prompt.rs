@@ -2,7 +2,7 @@
 //! and removing a virtual branch, and for re-pointing the virtual branches target.
 //!
 //! The dialog has two steps. Opened from a branch row it first offers that
-//! branch's actions, because stacking, re-parenting, joining another stack and
+//! branch's actions, because stacking, re-parenting, joining another stacked branch and
 //! removing are the same four questions about the same branch and a row has
 //! no room for four buttons. Picking one narrows the dialog to a single text
 //! field, which is where every other prompt in the app puts its input.
@@ -12,7 +12,7 @@ use super::*;
 /// The line above the field, explaining what confirming will do.
 ///
 /// Worth the space: restacking rewrites the branch's history and moving a
-/// branch into a stack does too, and neither is obvious from the button label.
+/// branch into a stacked branch does too, and neither is obvious from the button label.
 fn detail_line(
     kind: VirtualBranchesPromptKind,
     branch: &str,
@@ -25,14 +25,14 @@ fn detail_line(
                 .into()
         }
         VirtualBranchesPromptKind::CreateAbove => format!(
-            "The new branch is stacked on {branch}, so it starts from {branch}'s tip. Nothing already in the stack moves."
+            "The new branch is stacked on {branch}, so it starts from {branch}'s tip. Nothing already in the stacked branch moves."
         )
         .into(),
         // Below is the one creation that moves work that already exists: the
         // new branch starts from the anchor's *base*, so the anchor and
         // anything stacked on it have to be replayed on top of it.
         VirtualBranchesPromptKind::CreateBelow => format!(
-            "The new branch takes {branch}'s place in the stack, so it starts from {branch}'s base; {branch} and anything stacked on it are rebased."
+            "The new branch takes {branch}'s place in the stacked branch, so it starts from {branch}'s base; {branch} and anything stacked on it are rebased."
         )
         .into(),
         VirtualBranchesPromptKind::SetTarget => format!(
@@ -46,7 +46,7 @@ fn detail_line(
                 format!("{branch} is rebased onto {value}; its history is rewritten.").into()
             }
         }
-        VirtualBranchesPromptKind::MoveToStack => {
+        VirtualBranchesPromptKind::MoveToStackedBranch => {
             format!("{branch} is rebased so it sits directly above {value}.").into()
         }
         // Neither of these has a field, so the detail line is the whole body.
@@ -107,7 +107,7 @@ fn branch_actions() -> [VirtualBranchesPromptKind; 6] {
         VirtualBranchesPromptKind::CreateAbove,
         VirtualBranchesPromptKind::CreateBelow,
         VirtualBranchesPromptKind::SetParent,
-        VirtualBranchesPromptKind::MoveToStack,
+        VirtualBranchesPromptKind::MoveToStackedBranch,
         VirtualBranchesPromptKind::CommitBranch,
         VirtualBranchesPromptKind::Remove,
     ]
@@ -118,7 +118,7 @@ fn action_label(kind: VirtualBranchesPromptKind) -> &'static str {
         VirtualBranchesPromptKind::CreateAbove => "New branch above this",
         VirtualBranchesPromptKind::CreateBelow => "New branch below this",
         VirtualBranchesPromptKind::SetParent => "Change its base branch",
-        VirtualBranchesPromptKind::MoveToStack => "Move it into another stack",
+        VirtualBranchesPromptKind::MoveToStackedBranch => "Move it into another stacked branch",
         VirtualBranchesPromptKind::CommitBranch => "Commit its assigned files",
         VirtualBranchesPromptKind::Remove => "Remove it from the virtual branches",
         _ => "",
@@ -272,7 +272,7 @@ mod tests {
             VirtualBranchesPromptKind::CreateAbove,
             VirtualBranchesPromptKind::CreateBelow,
             VirtualBranchesPromptKind::SetParent,
-            VirtualBranchesPromptKind::MoveToStack,
+            VirtualBranchesPromptKind::MoveToStackedBranch,
             VirtualBranchesPromptKind::CommitBranch,
             VirtualBranchesPromptKind::Remove,
         ] {
@@ -321,7 +321,7 @@ mod tests {
         assert!(VirtualBranchesPromptKind::CreateBelow.asks_for_text());
         assert!(VirtualBranchesPromptKind::SetTarget.asks_for_text());
         assert!(VirtualBranchesPromptKind::SetParent.asks_for_text());
-        assert!(VirtualBranchesPromptKind::MoveToStack.asks_for_text());
+        assert!(VirtualBranchesPromptKind::MoveToStackedBranch.asks_for_text());
         assert!(VirtualBranchesPromptKind::AssignFile.asks_for_text());
         assert!(VirtualBranchesPromptKind::AssignHunk.asks_for_text());
     }
@@ -352,7 +352,7 @@ mod tests {
 
     #[test]
     fn the_insert_lines_describe_what_each_direction_actually_does() {
-        // `CreateAbove` stacks the new branch on the anchor and leaves every
+        // `CreateAbove` stacked branches the new branch on the anchor and leaves every
         // existing branch alone; `CreateBelow` starts it from the anchor's base
         // and rebases the anchor onto it. These two descriptions were once the
         // other way round, which sold a history rewrite as the harmless option.
@@ -417,7 +417,7 @@ mod tests {
             VirtualBranchesPromptKind::CreateBelow,
             VirtualBranchesPromptKind::SetTarget,
             VirtualBranchesPromptKind::SetParent,
-            VirtualBranchesPromptKind::MoveToStack,
+            VirtualBranchesPromptKind::MoveToStackedBranch,
             VirtualBranchesPromptKind::Remove,
             VirtualBranchesPromptKind::AssignFile,
             VirtualBranchesPromptKind::AssignHunk,

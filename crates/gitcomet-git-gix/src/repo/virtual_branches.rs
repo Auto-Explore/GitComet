@@ -171,7 +171,7 @@ impl GixRepo {
     /// tree has unstaged changes — "cannot rebase: You have unstaged changes" —
     /// and in a virtual branches that is the *normal* state, not a mistake: the whole
     /// point is uncommitted changes spread across several branches at once.
-    /// Every stack edit would fail, so the replay goes through the same
+    /// Every stacked branch edit would fail, so the replay goes through the same
     /// `merge-tree` + `commit-tree` plumbing the target change already uses,
     /// which reads neither the worktree nor the index.
     ///
@@ -1676,7 +1676,7 @@ mod tests {
         let mut state = repo.read_virtual_branches().expect("read virtual branches");
         state
             .set_parent("ui", Some("api"))
-            .expect("stack ui on api");
+            .expect("stacked branch ui on api");
         repo.write_virtual_branches(&state).expect("write virtual branches");
         assign_the_two_hunks(&repo);
 
@@ -1813,7 +1813,7 @@ mod tests {
     #[test]
     fn committing_to_a_branch_that_is_not_in_the_virtual_branches_is_refused() {
         // Otherwise a typo would create a commit on a ref the virtual branches has no
-        // idea about, invisible in every stack in the UI.
+        // idea about, invisible in every stacked branch in the UI.
         let (temp, repo, _) = repo_with_a_splittable_file();
         let root = temp.path();
         std::fs::write(root.join("mine.txt"), "y\n").unwrap();
@@ -2205,7 +2205,7 @@ mod tests {
 
     #[test]
     fn creating_a_virtual_branch_on_a_base_that_does_not_exist_is_refused() {
-        // A typo in a stack's base would otherwise create a branch that GitComet
+        // A typo in a stacked branch's base would otherwise create a branch that GitComet
         // believes in and that nothing can be built on.
         let (_temp, repo, _) = repo_with_two_branches();
         let root = repo.spec().workdir.clone();
@@ -2312,7 +2312,7 @@ mod tests {
         let target = state.target.clone();
         state
             .set_parent("ui", Some("api"))
-            .expect("stack ui on api");
+            .expect("stacked branch ui on api");
 
         assert_eq!(
             repo.virtual_branch_push_target("api", &state).as_deref(),

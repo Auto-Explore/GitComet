@@ -379,7 +379,7 @@ fn creating_a_branch_creates_it_at_the_target_and_puts_it_in_the_virtual_branche
 }
 
 #[test]
-fn inserting_above_an_anchor_stacks_on_it_and_replays_nothing() {
+fn inserting_above_an_anchor_stacked_branches_on_it_and_replays_nothing() {
     // Above means "on top of the anchor": the anchor's base did not move, so
     // nothing that already existed has to be replayed.
     let repo = Arc::new(VirtualBranchesRepo::new(vec![applied("api")]));
@@ -397,7 +397,7 @@ fn inserting_above_an_anchor_stacks_on_it_and_replays_nothing() {
     assert_eq!(
         calls.created,
         [("ui".to_string(), "api".to_string())],
-        "above stacks on the anchor itself"
+        "above stacked branches on the anchor itself"
     );
     assert!(
         calls.rebased.is_empty(),
@@ -449,7 +449,7 @@ fn inserting_below_an_anchor_takes_its_place_and_replays_it() {
 #[test]
 fn inserting_below_a_stacked_anchor_keeps_the_stack_the_same_depth() {
     // The anchor had a parent, so the branch displacing it inherits that parent
-    // instead of jumping to the target — otherwise the stack loses a level and
+    // instead of jumping to the target — otherwise the stacked branch loses a level and
     // everything above the anchor would be pulled down with it.
     let repo = Arc::new(VirtualBranchesRepo::new(vec![
         applied("base"),
@@ -578,13 +578,13 @@ fn detaching_a_branch_replays_it_onto_the_target() {
 }
 
 #[test]
-fn moving_into_another_stack_rebases_onto_the_new_base() {
+fn moving_into_another_stacked_branch_rebases_onto_the_new_base() {
     let repo = Arc::new(VirtualBranchesRepo::new(vec![applied("api"), applied("ui")]));
     apply(
         &repo,
-        VirtualBranchesEdit::MoveToStack {
+        VirtualBranchesEdit::MoveToStackedBranch {
             name: "ui".into(),
-            stack_base: "api".into(),
+            stacked_branch_base: "api".into(),
             relative_to: Some("api".into()),
             below: true,
         },
@@ -607,9 +607,9 @@ fn a_move_that_leaves_the_base_alone_does_not_rewrite_anything() {
     ]));
     let outcome = apply(
         &repo,
-        VirtualBranchesEdit::MoveToStack {
+        VirtualBranchesEdit::MoveToStackedBranch {
             name: "ui".into(),
-            stack_base: "api".into(),
+            stacked_branch_base: "api".into(),
             relative_to: Some("api".into()),
             below: true,
         },
@@ -687,7 +687,7 @@ fn removing_a_branch_moves_its_children_onto_its_own_base() {
             .and_then(|branch| branch.parent.clone())
             .as_deref(),
         Some("base"),
-        "the stack must not develop a hole where the removed branch was"
+        "the stacked branch must not develop a hole where the removed branch was"
     );
 }
 

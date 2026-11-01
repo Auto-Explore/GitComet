@@ -167,7 +167,7 @@ fn apply_edit(
             // Above and below are different edits, so they start the new branch from
             // different commits and only one of them rewrites history.
             //
-            // *Above* stacks the new branch on the anchor, so it starts at the
+            // *Above* stacked branches the new branch on the anchor, so it starts at the
             // anchor's tip and displaces nothing.
             //
             // *Below* puts it where the anchor sat, so it starts at the
@@ -211,17 +211,17 @@ fn apply_edit(
             repo.rebase_virtual_branch(name, &base)?;
             return rebuild_virtual_branches(repo).map(Some);
         }
-        VirtualBranchesEdit::MoveToStack {
+        VirtualBranchesEdit::MoveToStackedBranch {
             name,
-            stack_base,
+            stacked_branch_base,
             relative_to,
             below,
         } => {
             let before = state.get(name).and_then(|b| b.parent.clone());
-            state.move_to_stack(name, stack_base, relative_to.as_deref(), *below)?;
+            state.move_to_stacked_branch(name, stacked_branch_base, relative_to.as_deref(), *below)?;
             repo.write_virtual_branches(&state)?;
-            // Only a change of stack needs history rewritten; a reorder inside
-            // the same stack does not.
+            // Only a change of stacked branch needs history rewritten; a reorder inside
+            // the same stacked branch does not.
             if state.get(name).and_then(|b| b.parent.clone()) != before {
                 let onto = state
                     .get(name)

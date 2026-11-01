@@ -1,14 +1,14 @@
-//! Per-repository virtual branches state: the virtual branches, their stacks, and
+//! Per-repository virtual branches state: the virtual branches, their stacked branches, and
 //! which branch each changed file belongs to.
 //!
-//! This is a cache of what `gitcomet/virtual.json` holds, plus the stacks
+//! This is a cache of what `gitcomet/virtual.json` holds, plus the stacked branches
 //! derived from it. It is loaded lazily — a repository that never opens the
 //! Virtual branches view never reads or writes a virtual branches — and every field is a
 //! `Loadable` so the UI can show the state it has while a reload is in flight
 //! rather than blanking out.
 
 use gitcomet_core::virtual_branches::{
-    AssignmentIndex, BranchApplyState, FileAssignment, Stack, VirtualBranch, VirtualBranchesState,
+    AssignmentIndex, BranchApplyState, FileAssignment, StackedBranch, VirtualBranch, VirtualBranchesState,
 };
 use rustc_hash::FxHashMap;
 use std::path::PathBuf;
@@ -73,9 +73,9 @@ impl VirtualBranchesConflict {
 pub struct VirtualBranchesRepoState {
     /// The stored virtual branches: target branch plus virtual branches.
     pub state: Loadable<Arc<VirtualBranchesState>>,
-    /// Stacks derived from `state`, computed once per load so rendering a long
-    /// stack list does not re-sort per frame.
-    pub stacks: Arc<Vec<Stack>>,
+    /// Stacked branches derived from `state`, computed once per load so rendering a long
+    /// stacked branch list does not re-sort per frame.
+    pub stacked_branches: Arc<Vec<StackedBranch>>,
     /// Which virtual branch each changed file — or each of its hunks — belongs
     /// to.
     pub assignments: Arc<AssignmentIndex>,
@@ -106,11 +106,11 @@ impl VirtualBranchesRepoState {
     /// Recompute the derived fields from a freshly loaded state.
     ///
     /// A virtual branches that fails to validate (hand-edited, or written by an
-    /// incompatible version) still renders: the stacks are empty and the raw
+    /// incompatible version) still renders: the stacked branches are empty and the raw
     /// state is kept for the error message, rather than the view refusing to
     /// draw at all.
     pub fn set_state(&mut self, state: VirtualBranchesState) {
-        self.stacks = Arc::new(state.stacks().unwrap_or_default());
+        self.stacked_branches = Arc::new(state.stacked_branches().unwrap_or_default());
         self.state = Loadable::Ready(Arc::new(state));
         self.conflict = None;
         self.bump_rev();
@@ -118,7 +118,7 @@ impl VirtualBranchesRepoState {
 
     pub fn clear(&mut self) {
         self.state = Loadable::NotLoaded;
-        self.stacks = Arc::new(Vec::new());
+        self.stacked_branches = Arc::new(Vec::new());
         self.assignments = Arc::new(AssignmentIndex::default());
         self.virtual_branches_commit = Loadable::NotLoaded;
         self.busy = VirtualBranchesBusy::default();
@@ -149,11 +149,11 @@ impl VirtualBranchesRepoState {
     }
 
     pub fn applied_count(&self) -> usize {
-        self.stacks.iter().map(Stack::applied_count).sum()
+        self.stacked_branches.iter().map(StackedBranch::applied_count).sum()
     }
 
     pub fn total_count(&self) -> usize {
-        self.stacks.iter().map(|stack| stack.branches.len()).sum()
+        self.stacked_branches.iter().map(|stacked_branch| stacked_branch.branches.len()).sum()
     }
 
     /// Changed files with the branch — or the branches — they are assigned to.
@@ -247,7 +247,7 @@ pub enum VirtualBranchesEdit {
     Create {
         name: String,
     },
-    /// Slot a new branch into a stack next to `anchor`.
+    /// Slot a new branch into a stacked branch next to `anchor`.
     ///
     /// `below` is the whole difference: below means stacking on the anchor,
     /// above means taking the anchor's place and pushing it — and whatever was
@@ -266,10 +266,10 @@ pub enum VirtualBranchesEdit {
         name: String,
         parent: Option<String>,
     },
-    /// Move a branch into a stack, above or below a sibling.
-    MoveToStack {
+    /// Move a branch into a stacked branch, above or below a sibling.
+    MoveToStackedBranch {
         name: String,
-        stack_base: String,
+        stacked_branch_base: String,
         relative_to: Option<String>,
         below: bool,
     },
@@ -316,7 +316,7 @@ impl VirtualBranchesEdit {
             | Self::InsertRelativeTo { name, .. }
             | Self::SetApplied { name, .. }
             | Self::SetParent { name, .. }
-            | Self::MoveToStack { name, .. }
+            | Self::MoveToStackedBranch { name, .. }
             | Self::Remove { name }
             | Self::CommitPaths { name, .. } => Some(name),
             Self::Reorder { first, .. } => Some(first),
@@ -345,13 +345,13 @@ impl VirtualBranchesEdit {
     /// Whether a branch's base moved, which is the only edit that rewrites
     /// branch history.
     ///
-    /// Inserting *above* an anchor stacks the new branch on it, so nothing that
+    /// Inserting *above* an anchor stacked branches the new branch on it, so nothing that
     /// existed changes base. Inserting *below* puts the new branch in the
     /// anchor's place, which leaves the anchor sitting on it, so the anchor's
     /// commits have to be replayed on the branch that displaced them.
     pub fn rewrites_history(&self) -> bool {
         match self {
-            Self::SetParent { .. } | Self::MoveToStack { .. } | Self::SetTarget { .. } => true,
+            Self::SetParent { .. } | Self::MoveToStackedBranch { .. } | Self::SetTarget { .. } => true,
             Self::InsertRelativeTo { below, .. } => *below,
             _ => false,
         }
@@ -390,12 +390,12 @@ mod tests {
     }
 
     #[test]
-    fn set_state_derives_stacks() {
+    fn set_state_derives_stacked_branches() {
         let virtual_branches = loaded(&[
             ("api", None, BranchApplyState::Applied),
             ("ui", Some("api"), BranchApplyState::Applied),
         ]);
-        assert_eq!(virtual_branches.stacks.len(), 1);
+        assert_eq!(virtual_branches.stacked_branches.len(), 1);
         assert_eq!(virtual_branches.total_count(), 2);
         assert_eq!(virtual_branches.applied_count(), 2);
     }
@@ -556,21 +556,21 @@ mod tests {
         virtual_branches.busy.applying = true;
         virtual_branches.clear();
         assert!(virtual_branches.virtual_branches().is_none());
-        assert!(virtual_branches.stacks.is_empty());
+        assert!(virtual_branches.stacked_branches.is_empty());
         assert!(virtual_branches.assignments.is_empty());
         assert!(!virtual_branches.busy.any());
     }
 
     #[test]
-    fn a_corrupt_virtual_branches_still_renders_empty_stacks() {
+    fn a_corrupt_virtual_branches_still_renders_empty_stacked_branches() {
         let mut virtual_branches = VirtualBranchesRepoState::default();
-        // A cycle cannot produce stacks, but it must not panic the view.
+        // A cycle cannot produce stacked branches, but it must not panic the view.
         let cyclic = VirtualBranchesState::new("main").with_branches(vec![
             VirtualBranch::new("a").with_parent("b"),
             VirtualBranch::new("b").with_parent("a"),
         ]);
         virtual_branches.set_state(cyclic);
-        assert!(virtual_branches.stacks.is_empty());
+        assert!(virtual_branches.stacked_branches.is_empty());
         assert!(virtual_branches.virtual_branches().is_some());
     }
 
@@ -650,7 +650,7 @@ mod tests {
             anchor: "a".into(),
             below,
         };
-        // Above stacks on the anchor: nothing that existed changes base.
+        // Above stacked branches on the anchor: nothing that existed changes base.
         assert!(!insert(false).rewrites_history());
         // Below takes the anchor's place, so the anchor is replayed on it.
         assert!(insert(true).rewrites_history());

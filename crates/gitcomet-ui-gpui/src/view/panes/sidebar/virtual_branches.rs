@@ -1,4 +1,4 @@
-//! The Virtual branches view: virtual branches as stacks over a target branch, and
+//! The Virtual branches view: virtual branches as stacked branches over a target branch, and
 //! the working tree grouped by the branch each file belongs to.
 //!
 //! This is an alternative to the branch workflow, not a replacement. The
@@ -8,8 +8,8 @@
 //!
 //! The rows are computed from `RepoState::virtual branches` and cached behind a
 //! fingerprint, the same way the branch tree is, because the pane re-renders on
-//! every store notification and rebuilding stacks per frame would show up as a
-//! stutter in a long stack list.
+//! every store notification and rebuilding stacked branches per frame would show up as a
+//! stutter in a long stacked branch list.
 
 use super::*;
 use crate::view::panels::popover::virtual_branches_prompt::{
@@ -22,29 +22,29 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 /// How much narrower each stacked branch is indented. Small on purpose: a deep
-/// stack should still leave room for the branch name.
+/// stacked branch should still leave room for the branch name.
 const STACK_INDENT_PX: f32 = 10.0;
 /// File rows sit a little further in than a stacked branch, so the two kinds of
 /// row are distinguishable by position alone.
 const FILE_INDENT_PX: f32 = 14.0;
 const ROW_GAP_PX: f32 = 6.0;
 
-/// The branches a row can be swapped with, in the same stack.
+/// The branches a row can be swapped with, in the same stacked branch.
 ///
 /// Carried on the row rather than looked up while rendering because the arrows
-/// have to be disabled at the ends of a stack, and a row that cannot move has to
+/// have to be disabled at the ends of a stacked branch, and a row that cannot move has to
 /// say so before it is clicked rather than after.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(in crate::view) struct VirtualBranchesSiblings {
-    /// The branch one row up in the stack.
+    /// The branch one row up in the stacked branch.
     pub(in crate::view) above: Option<String>,
-    /// The branch one row down in the stack.
+    /// The branch one row down in the stacked branch.
     pub(in crate::view) below: Option<String>,
 }
 
 /// One row of the virtual branches list.
 ///
-/// The list interleaves stack headers, branch rows, and file rows, so a single
+/// The list interleaves stacked branch headers, branch rows, and file rows, so a single
 /// enum keeps the index space of the uniform list simple.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(in crate::view) enum VirtualBranchesRow {
@@ -52,8 +52,8 @@ pub(in crate::view) enum VirtualBranchesRow {
     Target {
         name: String,
     },
-    /// The first branch of a stack: the line it stands on.
-    StackBase {
+    /// The first branch of a stacked_branch: the line it stands on.
+    StackedBranchBase {
         name: String,
         applied: bool,
         file_count: usize,
@@ -136,7 +136,7 @@ impl VirtualBranchesPresentation {
 }
 
 /// Changed paths for the repository, falling back to nothing while loading so
-/// the stacks still render above an empty file list.
+/// the stacked branches still render above an empty file list.
 fn changed_paths(repo: &RepoState) -> Arc<Vec<PathBuf>> {
     match &repo.worktree_status {
         Loadable::Ready(status) => {
@@ -209,24 +209,24 @@ fn build_rows(repo: &RepoState) -> Vec<VirtualBranchesRow> {
         name: virtual_branches.target.clone(),
     });
 
-    // The stacks were derived once when the virtual branches was loaded, and the
+    // The stacked branches were derived once when the virtual branches was loaded, and the
     // fingerprint below already covers that revision, so re-deriving them per
-    // build would only cost time on a long stack list.
-    for stack in repo.virtual_branches.stacks.iter() {
-        for (index, member) in stack.branches.iter().enumerate() {
+    // build would only cost time on a long stacked branch list.
+    for stacked_branch in repo.virtual_branches.stacked_branches.iter() {
+        for (index, member) in stacked_branch.branches.iter().enumerate() {
             let count = counts.get(&member.branch.name).copied().unwrap_or(0);
             let siblings = VirtualBranchesSiblings {
                 above: index
                     .checked_sub(1)
-                    .and_then(|above| stack.branches.get(above))
+                    .and_then(|above| stacked_branch.branches.get(above))
                     .map(|above| above.branch.name.clone()),
-                below: stack
+                below: stacked_branch
                     .branches
                     .get(index + 1)
                     .map(|below| below.branch.name.clone()),
             };
             if index == 0 {
-                rows.push(VirtualBranchesRow::StackBase {
+                rows.push(VirtualBranchesRow::StackedBranchBase {
                     name: member.branch.name.clone(),
                     applied: member.branch.is_applied(),
                     file_count: count,
@@ -322,7 +322,7 @@ impl SidebarPaneView {
     }
 
     /// One row of the virtual branches list. Registered as the uniform-list processor
-    /// so a long stack list scrolls without building every row.
+    /// so a long stacked branch list scrolls without building every row.
     pub(in crate::view) fn render_virtual_branches_rows(
         this: &mut Self,
         range: std::ops::Range<usize>,
@@ -335,7 +335,7 @@ impl SidebarPaneView {
         let presentation = this.virtual_branches_presentation_cached();
         let Some(repo_id) = this.active_repo_id() else {
             // No repository means there is nothing to dispatch an action to, so
-            // only the placeholder row survives; the stack rows are never built.
+            // only the placeholder row survives; the stacked branch rows are never built.
             return presentation
                 .rows
                 .iter()
@@ -369,7 +369,7 @@ impl SidebarPaneView {
                         repo_id,
                         cx,
                     ),
-                    VirtualBranchesRow::StackBase {
+                    VirtualBranchesRow::StackedBranchBase {
                         name,
                         applied,
                         file_count,
@@ -637,7 +637,7 @@ fn render_branch_row(
         cx,
     );
 
-    // Stacking, re-parenting, joining another stack and removing are four
+    // Stacking, re-parenting, joining another stacked branch and removing are four
     // questions about the same branch, and a row already carries push and
     // apply; the actions go behind one button rather than four more.
     let actions = components::Button::new(format!("virtual_branches_actions_{name}"), "⋯")
@@ -709,7 +709,7 @@ fn render_branch_row(
         .into_any_element()
 }
 
-/// Which way a branch's arrow moves it within its stack.
+/// Which way a branch's arrow moves it within its stacked branch.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ReorderDirection {
     Up,
@@ -742,7 +742,7 @@ impl ReorderDirection {
 
 /// One of a branch's two reordering arrows.
 ///
-/// The arrow at the end of a stack is disabled rather than offered and refused,
+/// The arrow at the end of a stacked branch is disabled rather than offered and refused,
 /// because "there is nothing above this" is something the row can already show.
 #[allow(clippy::too_many_arguments)]
 fn reorder_button(
@@ -1049,7 +1049,7 @@ mod tests {
         );
         let mut state = VirtualBranchesRepoState::default();
         state.set_state(virtual_branches);
-        // Most tests are about the stack layout, and the tab normally has the
+        // Most tests are about the stacked branch layout, and the tab normally has the
         // working directory. The notice for when it does not has its own test.
         state.active = true;
         repo.virtual_branches = state;
@@ -1062,7 +1062,7 @@ mod tests {
             .iter()
             .map(|row| match row {
                 VirtualBranchesRow::Target { name }
-                | VirtualBranchesRow::StackBase { name, .. }
+                | VirtualBranchesRow::StackedBranchBase { name, .. }
                 | VirtualBranchesRow::Branch { name, .. } => name.clone(),
                 _ => String::new(),
             })
@@ -1070,7 +1070,7 @@ mod tests {
     }
 
     #[test]
-    fn rows_start_with_the_target_then_the_stacks() {
+    fn rows_start_with_the_target_then_the_stacked_branches() {
         let repo = repo_with(VirtualBranchesState::new("main").with_branches(vec![
             VirtualBranch::new("api"),
             VirtualBranch::new("ui").with_parent("api"),
@@ -1079,7 +1079,7 @@ mod tests {
         assert_eq!(
             names(&presentation),
             ["main", "api", "ui", ""],
-            "target, stack base, stacked branch, then the summary row and no files"
+            "target, stacked branch base, stacked branch, then the summary row and no files"
         );
     }
 
@@ -1153,7 +1153,7 @@ mod tests {
             .rows
             .iter()
             .filter_map(|row| match row {
-                VirtualBranchesRow::StackBase {
+                VirtualBranchesRow::StackedBranchBase {
                     name,
                     applied: false,
                     ..
@@ -1228,7 +1228,7 @@ mod tests {
             .rows
             .iter()
             .filter_map(|row| match row {
-                VirtualBranchesRow::StackBase { name, siblings, .. }
+                VirtualBranchesRow::StackedBranchBase { name, siblings, .. }
                 | VirtualBranchesRow::Branch { name, siblings, .. } => {
                     Some((name.clone(), siblings.clone()))
                 }
@@ -1238,14 +1238,14 @@ mod tests {
         assert_eq!(siblings.len(), 3);
         assert_eq!(
             siblings[0].1.above, None,
-            "the stack base has nothing above it"
+            "the stacked branch base has nothing above it"
         );
         assert_eq!(siblings[0].1.below.as_deref(), Some("ui"));
         assert_eq!(siblings[1].1.above.as_deref(), Some("api"));
         assert_eq!(siblings[1].1.below.as_deref(), Some("docs"));
         assert_eq!(
             siblings[2].1.below, None,
-            "the top of the stack has nothing below it"
+            "the top of the stacked branch has nothing below it"
         );
     }
 

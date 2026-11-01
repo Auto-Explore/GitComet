@@ -37,7 +37,7 @@ pub(super) fn set_branch_applied(
     applied: BranchApplyState,
 ) -> Vec<Effect> {
     // Applying or unapplying always rewrites `gitcomet/virtual`, so it takes
-    // the same busy gate as a stack change.
+    // the same busy gate as a stacked branch change.
     apply_edit(
         state,
         repo_id,
@@ -461,8 +461,8 @@ pub(super) fn virtual_branches_loaded(
     };
     repo.virtual_branches.busy.loading = false;
     match &result {
-        // `set_state` derives the stacks and stores the state, so the loadable
-        // and the cached stacks can never disagree.
+        // `set_state` derives the stacked branches and stores the state, so the loadable
+        // and the cached stacked branches can never disagree.
         Ok(loaded) => {
             repo.virtual_branches.set_state(loaded.clone());
             repo.virtual_branches.virtual_branches_commit = match &virtual_branches_commit {
@@ -578,7 +578,7 @@ pub(super) fn virtual_branches_assign_finished(
     }
 
     // Mirror the write into the store. Reloading the whole virtual branches to learn
-    // something the view already knows would discard the derived stacks and
+    // something the view already knows would discard the derived stacked branches and
     // rebuild them for nothing, and on a hunk-by-hunk assignment that is once
     // per hunk.
     let index = std::sync::Arc::make_mut(&mut repo.virtual_branches.assignments);

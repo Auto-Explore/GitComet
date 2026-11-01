@@ -19,7 +19,7 @@ impl PopoverHost {
     ///
     /// The field is seeded rather than emptied: re-parenting wants the current
     /// base so the user edits it instead of retyping it, while moving into a
-    /// stack has nothing sensible to prefill and so gets nothing.
+    /// stacked branch has nothing sensible to prefill and so gets nothing.
     pub(in crate::view::panels::popover) fn open_virtual_branches_prompt_step(
         &mut self,
         kind: VirtualBranchesPromptKind,
@@ -216,7 +216,7 @@ impl PopoverHost {
 /// `in_virtual_branches` answers whether a name is one of the repository's virtual
 /// branches, `free_name` turns typed text into a name nothing else has taken,
 /// `is_git_branch` whether it is a real branch in the repository — the target
-/// is a real branch, while a base or a stack is a virtual one, and conflating
+/// is a real branch, while a base or a stacked branch is a virtual one, and conflating
 /// the two is how a prompt ends up offering a branch that cannot be resolved —
 /// and `assignment_of` which branch a file currently belongs to, with
 /// `paths_for` the files assigned to a branch.
@@ -266,7 +266,7 @@ fn edit_for(
                 return None;
             }
             // An empty field means "sit on the target directly", which is how a
-            // branch leaves a stack, so it is an answer here rather than a
+            // branch leaves a stacked branch, so it is an answer here rather than a
             // missing one.
             if !value.is_empty() && (value == branch || !in_virtual_branches(value)) {
                 return None;
@@ -276,13 +276,13 @@ fn edit_for(
                 parent: (!value.is_empty()).then(|| value.to_string()),
             }
         }
-        VirtualBranchesPromptKind::MoveToStack => {
+        VirtualBranchesPromptKind::MoveToStackedBranch => {
             if !branch_exists || value.is_empty() || value == branch || !in_virtual_branches(value) {
                 return None;
             }
-            VirtualBranchesEdit::MoveToStack {
+            VirtualBranchesEdit::MoveToStackedBranch {
                 name: branch.to_string(),
-                stack_base: value.to_string(),
+                stacked_branch_base: value.to_string(),
                 relative_to: None,
                 below: false,
             }
@@ -519,7 +519,7 @@ mod tests {
     }
 
     #[test]
-    fn inserting_below_stacks_on_the_branch_and_inserting_above_takes_its_place() {
+    fn inserting_below_stacked_branches_on_the_branch_and_inserting_above_takes_its_place() {
         let Some(VirtualBranchesEdit::InsertRelativeTo {
             name,
             anchor,
@@ -572,7 +572,7 @@ mod tests {
         assert_eq!(parent.as_deref(), Some("ui"));
 
         // Empty means "back onto the target", which is how a branch leaves a
-        // stack.
+        // stacked branch.
         let Some(VirtualBranchesEdit::SetParent { parent, .. }) =
             edit(VirtualBranchesPromptKind::SetParent, "ui", "")
         else {
@@ -584,24 +584,24 @@ mod tests {
     #[test]
     fn a_branch_cannot_be_stacked_on_itself_or_on_nothing() {
         assert!(edit(VirtualBranchesPromptKind::SetParent, "api", "api").is_none());
-        assert!(edit(VirtualBranchesPromptKind::MoveToStack, "api", "api").is_none());
-        assert!(edit(VirtualBranchesPromptKind::MoveToStack, "api", "").is_none());
-        assert!(edit(VirtualBranchesPromptKind::MoveToStack, "api", "gone").is_none());
+        assert!(edit(VirtualBranchesPromptKind::MoveToStackedBranch, "api", "api").is_none());
+        assert!(edit(VirtualBranchesPromptKind::MoveToStackedBranch, "api", "").is_none());
+        assert!(edit(VirtualBranchesPromptKind::MoveToStackedBranch, "api", "gone").is_none());
     }
 
     #[test]
-    fn moving_into_a_stack_names_the_stack_base() {
-        let Some(VirtualBranchesEdit::MoveToStack {
+    fn moving_into_a_stacked_branch_names_the_stacked_branch_base() {
+        let Some(VirtualBranchesEdit::MoveToStackedBranch {
             name,
-            stack_base,
+            stacked_branch_base,
             relative_to,
             below,
-        }) = edit(VirtualBranchesPromptKind::MoveToStack, "api", "ui")
+        }) = edit(VirtualBranchesPromptKind::MoveToStackedBranch, "api", "ui")
         else {
             panic!("expected a move edit");
         };
         assert_eq!(name, "api");
-        assert_eq!(stack_base, "ui");
+        assert_eq!(stacked_branch_base, "ui");
         assert_eq!(relative_to, None);
         assert!(!below);
     }
@@ -672,7 +672,7 @@ mod tests {
         VirtualBranchesPromptKind::CreateBelow,
         VirtualBranchesPromptKind::SetTarget,
         VirtualBranchesPromptKind::SetParent,
-        VirtualBranchesPromptKind::MoveToStack,
+        VirtualBranchesPromptKind::MoveToStackedBranch,
         VirtualBranchesPromptKind::Remove,
         VirtualBranchesPromptKind::AssignFile,
         VirtualBranchesPromptKind::AssignHunk,
@@ -952,7 +952,7 @@ mod tests {
             VirtualBranchesPromptKind::CreateAbove,
             VirtualBranchesPromptKind::CreateBelow,
             VirtualBranchesPromptKind::SetParent,
-            VirtualBranchesPromptKind::MoveToStack,
+            VirtualBranchesPromptKind::MoveToStackedBranch,
             VirtualBranchesPromptKind::Remove,
         ] {
             assert!(

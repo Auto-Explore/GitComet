@@ -1129,7 +1129,7 @@ pub(in crate::view) enum VirtualBranchesPromptKind {
     BranchActions,
     /// A new branch built directly on the virtual branches target.
     Create,
-    /// A new branch that takes [`VirtualBranchesPrompt::branch`]'s place in the stack.
+    /// A new branch that takes [`VirtualBranchesPrompt::branch`]'s place in the stacked branch.
     CreateAbove,
     /// A new branch stacked under [`VirtualBranchesPrompt::branch`].
     CreateBelow,
@@ -1137,8 +1137,8 @@ pub(in crate::view) enum VirtualBranchesPromptKind {
     SetTarget,
     /// Restack [`VirtualBranchesPrompt::branch`] onto a different base.
     SetParent,
-    /// Move [`VirtualBranchesPrompt::branch`] into another branch's stack.
-    MoveToStack,
+    /// Move [`VirtualBranchesPrompt::branch`] into another branch's stacked branch.
+    MoveToStackedBranch,
     /// Delete [`VirtualBranchesPrompt::branch`].
     Remove,
     /// Say which branch [`VirtualBranchesPrompt::path`] belongs to.
@@ -1169,7 +1169,7 @@ impl VirtualBranchesPromptKind {
             Self::CreateBelow => "New branch below",
             Self::SetTarget => "Set virtual branches target",
             Self::SetParent => "Change base branch",
-            Self::MoveToStack => "Move into stack",
+            Self::MoveToStackedBranch => "Move into stacked branch",
             Self::Remove => "Remove branch",
             Self::AssignFile => "Assign file",
             Self::AssignHunk => "Assign hunk",
@@ -1183,7 +1183,7 @@ impl VirtualBranchesPromptKind {
             Self::Create | Self::CreateAbove | Self::CreateBelow => "Branch name",
             Self::SetTarget => "Target branch",
             Self::SetParent => "New base branch",
-            Self::MoveToStack => "Stack to join",
+            Self::MoveToStackedBranch => "Stacked branch to join",
             // An empty field is the way to unassign, so the label says what
             // clearing it does rather than just naming the value.
             Self::AssignFile => "Branch (empty leaves it unassigned)",
@@ -1200,7 +1200,7 @@ impl VirtualBranchesPromptKind {
             Self::Create | Self::CreateAbove | Self::CreateBelow => "Create",
             Self::SetTarget => "Set target",
             Self::SetParent => "Restack",
-            Self::MoveToStack => "Move",
+            Self::MoveToStackedBranch => "Move",
             Self::Remove => "Remove",
             Self::AssignFile | Self::AssignHunk => "Assign",
             Self::CommitMessage | Self::CommitBranch => "Commit",
