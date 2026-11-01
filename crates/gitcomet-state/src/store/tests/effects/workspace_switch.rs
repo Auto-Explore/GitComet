@@ -31,18 +31,17 @@ fn replies_to_unconfigured(effect: Effect) -> std::sync::mpsc::Receiver<Msg> {
     let repo_id = RepoId(7);
     let executor = super::super::executor::TaskExecutor::new(1);
     let backend: Arc<dyn GitBackend> = Arc::new(Backend);
-    let repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = {
-        let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
-        repos.insert(
+    let mut repos = RepositoryRuntimes::default();
+    {
+        repos.attach_repository_for_test(
             repo_id,
             Arc::new(UnconfiguredRepository::new(std::path::PathBuf::from(
                 "/repo",
             ))),
         );
-        repos
-    };
+    }
     let (msg_tx, msg_rx) = std::sync::mpsc::channel::<Msg>();
-    schedule_effect_for_test(&executor, &executor, &backend, &repos, msg_tx, effect);
+    schedule_effect_for_test(&executor, &executor, &backend, &mut repos, msg_tx, effect);
     msg_rx
 }
 
@@ -138,14 +137,14 @@ fn a_switch_for_a_repository_that_is_gone_still_answers() {
     // set on the way in is never cleared.
     let executor = super::super::executor::TaskExecutor::new(1);
     let backend: Arc<dyn GitBackend> = Arc::new(Backend);
-    let repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos = RepositoryRuntimes::default();
     let (msg_tx, msg_rx) = std::sync::mpsc::channel::<Msg>();
 
     schedule_effect_for_test(
         &executor,
         &executor,
         &backend,
-        &repos,
+        &mut repos,
         msg_tx,
         Effect::EnterWorkspace {
             repo_id: RepoId(404),
@@ -208,8 +207,8 @@ fn a_successful_leave_runs_the_checkout_that_waited_for_it() {
         },
         Arc::clone(&calls),
     );
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
-    repos.insert(repo_id, Arc::new(repo));
+    let mut repos = RepositoryRuntimes::default();
+    repos.attach_repository_for_test(repo_id, Arc::new(repo));
     let executor = super::super::executor::TaskExecutor::new(1);
     let backend: Arc<dyn GitBackend> = Arc::new(Backend);
     let (msg_tx, msg_rx) = std::sync::mpsc::channel::<Msg>();
@@ -218,7 +217,7 @@ fn a_successful_leave_runs_the_checkout_that_waited_for_it() {
         &executor,
         &executor,
         &backend,
-        &repos,
+        &mut repos,
         msg_tx,
         Effect::LeaveWorkspaceAndCheckout {
             repo_id,

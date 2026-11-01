@@ -208,7 +208,10 @@ impl UiLaunch {
     }
 
     pub fn run(self) -> Result<UiRunOutcome, UiLaunchError> {
-        install_live_kit_policy();
+        {
+            let _stage = gitcomet_core::startup_trace::span("ui_runtime_policy");
+            install_live_kit_policy();
+        }
         let Self {
             backend,
             extensions,
@@ -219,7 +222,10 @@ impl UiLaunch {
         } = self;
         let mut launch = normal_launch_config(initial_request.path, startup_crash_report);
         launch.browser_open_target = initial_request.target;
-        ensure_graphics_device_available("main GPUI window launch")?;
+        {
+            let _stage = gitcomet_core::startup_trace::span("graphics_device_precheck");
+            ensure_graphics_device_available("main GPUI window launch")?;
+        }
         run_with_panic_guard("main GPUI window launch", move || {
             run_windowed_app(
                 backend,
@@ -237,87 +243,23 @@ impl UiLaunch {
     }
 }
 
-#[deprecated(note = "use `UiLaunch`")]
-pub fn run(backend: Arc<dyn GitBackend>) -> Result<(), UiLaunchError> {
-    UiLaunch::new(backend).run().map(|_| ())
-}
-
-#[deprecated(note = "use `UiLaunch`")]
-pub fn run_with_startup_crash_report(
-    backend: Arc<dyn GitBackend>,
-    initial_path: Option<PathBuf>,
-    startup_crash_report: Option<StartupCrashReport>,
-) -> Result<UiRunOutcome, UiLaunchError> {
-    UiLaunch::new(backend)
-        .initial_request(BrowserOpenRequest {
-            path: initial_path,
-            target: BrowserOpenTarget::ExistingWindow,
-        })
-        .startup_crash_report(startup_crash_report)
-        .run()
-}
-
-#[deprecated(note = "use `UiLaunch`")]
-pub fn run_with_startup_crash_report_and_shutdown_callback(
-    backend: Arc<dyn GitBackend>,
-    initial_path: Option<PathBuf>,
-    startup_crash_report: Option<StartupCrashReport>,
-    on_shutdown: Option<impl Fn() + Send + Sync + 'static>,
-) -> Result<UiRunOutcome, UiLaunchError> {
-    #[allow(deprecated)]
-    run_with_startup_crash_report_shutdown_callback_and_browser_requests(
-        backend,
-        initial_path,
-        startup_crash_report,
-        on_shutdown,
-        None,
-    )
-}
-
-#[deprecated(note = "use `UiLaunch`")]
-pub fn run_with_startup_crash_report_shutdown_callback_and_browser_requests(
-    backend: Arc<dyn GitBackend>,
-    initial_path: Option<PathBuf>,
-    startup_crash_report: Option<StartupCrashReport>,
-    on_shutdown: Option<impl Fn() + Send + Sync + 'static>,
-    browser_requests: Option<crate::BrowserRequestReceiver>,
-) -> Result<UiRunOutcome, UiLaunchError> {
-    #[allow(deprecated)]
-    run_with_startup_crash_report_shutdown_callback_and_initial_browser_request(
-        backend,
-        BrowserOpenRequest {
-            path: initial_path,
-            target: BrowserOpenTarget::ExistingWindow,
-        },
-        startup_crash_report,
-        on_shutdown,
-        browser_requests,
-    )
-}
-
-#[deprecated(note = "use `UiLaunch`")]
-pub fn run_with_startup_crash_report_shutdown_callback_and_initial_browser_request(
-    backend: Arc<dyn GitBackend>,
-    initial_request: BrowserOpenRequest,
-    startup_crash_report: Option<StartupCrashReport>,
-    on_shutdown: Option<impl Fn() + Send + Sync + 'static>,
-    browser_requests: Option<crate::BrowserRequestReceiver>,
-) -> Result<UiRunOutcome, UiLaunchError> {
-    let mut launch = UiLaunch::new(backend)
-        .initial_request(initial_request)
-        .startup_crash_report(startup_crash_report)
-        .browser_requests(browser_requests);
-    launch.on_shutdown = on_shutdown.map(|callback| Arc::new(callback) as ShutdownCallback);
-    launch.run()
-}
-
 /// Configuration for a standalone diff using the same pane as repository views.
 #[derive(Clone, Debug)]
 pub struct FocusedDiffConfig {
     pub label_left: String,
     pub label_right: String,
     pub display_path: Option<String>,
-    pub diff_text: String,
+    pub input: FocusedDiffInput,
+}
+
+#[derive(Clone, Debug)]
+pub enum FocusedDiffInput {
+    FilePair {
+        path: PathBuf,
+        old: Arc<str>,
+        new: Arc<str>,
+    },
+    Patch(String),
 }
 
 impl UiLaunch {
@@ -533,9 +475,19 @@ pub(super) fn run_windowed_app(
     let quit_when_all_windows_closed = should_quit_when_all_windows_closed(&launch);
     // Without this, `gpui` keeps its null client and every request — the
     // update check, and images a markdown preview points at — fails silently.
-    let application = application()
+    let platform_stage = gitcomet_core::startup_trace::span("native_application");
+    #[cfg(target_os = "windows")]
+    let (application, renderer_session) = crate::windows_renderer::application(
+        launch.view_config.view_mode == GitCometViewMode::Normal,
+    );
+    #[cfg(not(target_os = "windows"))]
+    let application = gpui_platform::application();
+    drop(platform_stage);
+    let http_stage = gitcomet_core::startup_trace::span("http_client");
+    let application = application
         .with_assets(GitCometAssets::with_extensions(extensions.assets()))
         .with_http_client(crate::http::client());
+    drop(http_stage);
 
     #[cfg(target_os = "macos")]
     let open_urls_rx = if launch.view_config.view_mode == GitCometViewMode::Normal {
@@ -560,13 +512,18 @@ pub(super) fn run_windowed_app(
         });
     }
 
+    gitcomet_core::startup_trace::mark("event_loop_start");
     application.run(move |cx: &mut App| {
+        gitcomet_core::startup_trace::mark("event_loop_callback");
         cx.set_global(clean_shutdown_tracker);
+        #[cfg(target_os = "windows")]
+        cx.set_global(renderer_session);
         crate::ui_probe::start_if_enabled(cx);
         crate::environment::initialize(cx);
         cx.set_global(GitCometBackendGlobal(Arc::clone(&backend)));
         configure_filesystem_journal_storage();
         cx.on_app_quit(|_| {
+            AppStore::shutdown_background_fetches();
             // GPUI only waits 200 ms for returned futures. Journal directories
             // can be large, so finish cleanup before that timeout starts.
             gitcomet_core::filesystem::cleanup_on_shutdown();
@@ -582,8 +539,11 @@ pub(super) fn run_windowed_app(
             async {}
         })
         .detach();
-        if let Err(err) = crate::bundled_fonts::register(cx) {
-            eprintln!("Failed to register bundled fonts: {err:#}");
+        {
+            let _stage = gitcomet_core::startup_trace::span("register_bundled_fonts");
+            if let Err(err) = crate::bundled_fonts::register(cx) {
+                eprintln!("Failed to register bundled fonts: {err:#}");
+            }
         }
         if quit_when_all_windows_closed {
             cx.on_window_closed(|cx, _| {
@@ -621,10 +581,30 @@ pub(super) fn run_windowed_app(
         bind_text_input_keys(cx);
         bind_terminal_keys(cx);
 
-        open_initial_gitcomet_windows(cx, Arc::clone(&backend), &launch);
-        crate::view::scenario_driver::start_if_requested(cx);
-
-        cx.activate(true);
+        let launch_is_normal = launch.view_config.view_mode == GitCometViewMode::Normal;
+        let resume = move |cx: &mut App| {
+            let _stage = gitcomet_core::startup_trace::span("open_initial_windows");
+            open_initial_gitcomet_windows(cx, Arc::clone(&backend), &launch);
+            crate::view::scenario_driver::start_if_requested(cx);
+            cx.activate(true);
+        };
+        let workflows: Vec<_> = crate::view::extension_host::registry(cx)
+            .filter(|_| launch_is_normal)
+            .map(|registry| {
+                registry
+                    .startup_workflows()
+                    .iter()
+                    .map(|(_, workflow)| workflow.clone())
+                    .collect()
+            })
+            .unwrap_or_default();
+        let mut next: Box<dyn FnOnce(&mut App)> = Box::new(resume);
+        for workflow in workflows.into_iter().rev() {
+            next = Box::new(move |cx| {
+                workflow(gitcomet_extension_api::StartupContinuation::new(next), cx)
+            });
+        }
+        next(cx);
     });
 }
 
@@ -736,7 +716,7 @@ pub(super) fn open_gitcomet_window(
     clear_clean_shutdown_request(cx);
     let ui_session = session::load();
     let ui_scale = crate::session_ui::ui_scale(&ui_session, cx);
-    crate::window_controls::current_or_initialize_from_session(&ui_session, cx);
+    crate::session_ui::window_controls(&ui_session, cx);
     let min_size = main_window_min_size_for_percent(ui_scale.percent);
     let default_size = fit_default_window_size(
         main_window_default_size_for_percent(ui_scale.percent),
@@ -785,7 +765,20 @@ pub(super) fn open_gitcomet_window(
     let view_config = launch.view_config.clone();
     let ui_scale_percent = ui_scale.percent;
 
+    let store_stage = gitcomet_core::startup_trace::span("app_store_init");
+    #[cfg(test)]
+    let (store, events) = AppStore::new_test(Arc::clone(&backend));
+    #[cfg(not(test))]
+    let (store, events) = AppStore::new(Arc::clone(&backend));
+    drop(store_stage);
+    // The store's own workers can open the active repository while the native
+    // window initializes its renderer. Entry gates and store settings are applied
+    // before any repository request, and the view consumes this decision once.
+    let bootstrap =
+        crate::view::window_bootstrap::PreparedWindowBootstrap::new(&store, view_config, cx);
+
     let window = crate::ui_probe::time_section("open main window", || {
+        let _stage = gitcomet_core::startup_trace::span("open_window");
         cx.open_window(
             with_main_window_background(WindowOptions {
                 window_bounds: Some(window_bounds),
@@ -794,7 +787,7 @@ pub(super) fn open_gitcomet_window(
                     title: Some(window_title.into()),
                     appears_transparent: true,
                     traffic_light_position: Some(
-                        crate::view::chrome::macos_traffic_light_position(),
+                        crate::kit::window_chrome::macos_traffic_light_position(),
                     ),
                 }),
                 app_id: Some(app_id),
@@ -806,30 +799,17 @@ pub(super) fn open_gitcomet_window(
                 ..Default::default()
             }),
             move |window, cx| {
+                let _stage = gitcomet_core::startup_trace::span("window_view_init");
                 ui_scale::apply_to_window(window, ui_scale_percent);
                 window.on_window_should_close(cx, |window, cx| {
                     close_window_or_warn(window, cx);
                     false
                 });
-                #[cfg(test)]
-                let (store, events) = AppStore::new_test(Arc::clone(&backend));
-                #[cfg(not(test))]
-                let (store, events) = AppStore::new(Arc::clone(&backend));
-                cx.new(|cx| {
-                    GitCometView::new_with_config(store, events, view_config.clone(), window, cx)
-                })
+                cx.new(|cx| GitCometView::new_with_bootstrap(store, events, bootstrap, window, cx))
             },
         )
     })
-    .unwrap_or_else(|err| {
-        let name = identity::current().display_name();
-        panic!(
-            "failed to open main {name} window: {err}\n\
-             This is usually a GPU/display problem, not a {name} bug. \
-             If you just updated your system (kernel, mesa, or vulkan drivers), reboot. \
-             For diagnostics, include the crash report from the next launch."
-        )
-    });
+    .unwrap_or_else(|err| panic!("{}", window_open_failure_message(&err)));
 
     #[cfg(target_os = "macos")]
     refresh_macos_app_menus(cx);
@@ -840,19 +820,24 @@ pub(super) fn open_gitcomet_window(
     window
 }
 
-/// Client-side decorations inset a rounded frame into the surface; the pixels
-/// outside it must show the desktop, not a solid fill, so every platform but
-/// macOS asks for a transparent surface.
+pub(super) fn window_open_failure_message(err: &anyhow::Error) -> String {
+    let name = identity::current().display_name();
+    format!(
+        "failed to open main {name} window: {err:#}\n\
+         For diagnostics, include the crash report from the next launch."
+    )
+}
+
+/// Windows and macOS use their default opaque surfaces. Linux client-side
+/// decorations retain transparency around the inset rounded frame.
 ///
-/// `GITCOMET_WINDOW_BACKGROUND=opaque|transparent` overrides the choice. It is
-/// a diagnostic knob: on Windows a transparent surface changes how the
-/// compositor blends the window, so this is the quickest way to tell whether
-/// that is what makes a build feel slow.
+/// `GITCOMET_WINDOW_BACKGROUND=opaque|transparent` overrides the choice for
+/// compositor and startup diagnostics.
 pub(crate) fn with_main_window_background(mut options: WindowOptions) -> WindowOptions {
     let transparent = match std::env::var("GITCOMET_WINDOW_BACKGROUND") {
         Ok(value) if value.trim().eq_ignore_ascii_case("opaque") => false,
         Ok(value) if value.trim().eq_ignore_ascii_case("transparent") => true,
-        _ => !cfg!(target_os = "macos"),
+        _ => !cfg!(any(target_os = "macos", target_os = "windows")),
     };
     #[cfg(target_os = "macos")]
     {
@@ -970,4 +955,22 @@ pub(crate) fn ensure_graphics_device_available(
     _context: &'static str,
 ) -> Result<(), UiLaunchError> {
     Ok(())
+}
+
+/// Opens a fresh workspace on behalf of an extension. The returned handle is
+/// weak and the normal repository entry gates apply to each path.
+pub(crate) fn open_extension_workspace(
+    paths: Vec<PathBuf>,
+    cx: &mut App,
+) -> Result<gitcomet_extension_api::WindowHost, gitcomet_extension_api::HostError> {
+    let backend = cx
+        .try_global::<GitCometBackendGlobal>()
+        .ok_or(gitcomet_extension_api::HostError::Unsupported)?
+        .0
+        .clone();
+    let launch = normal_empty_launch_config(None);
+    let window = open_gitcomet_window(cx, backend, &launch);
+    window
+        .update(cx, |view, _, _| view.extension_open_repositories(paths))
+        .map_err(|_| gitcomet_extension_api::HostError::WindowClosed)?
 }

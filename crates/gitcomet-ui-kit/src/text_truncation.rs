@@ -294,7 +294,7 @@ fn shape_truncated_line_uncached(
     let shaped_line =
         window
             .text_system()
-            .shape_line(candidate.display_text.clone(), font_size, &runs, None);
+            .shape_line(candidate.display_text.clone(), font_size, &runs);
 
     TruncatedLineLayout {
         #[cfg(any(test, feature = "test-support"))]

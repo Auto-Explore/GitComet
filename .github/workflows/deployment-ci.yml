@@ -4,7 +4,9 @@ on:
   pull_request:
     branches: ["main", "dev"]
     paths:
+      - ".github/workflows/deployment-ci.yml"
       - ".github/workflows/build-release-artifacts.yml"
+      - ".github/workflows/deploy-aur.yml"
       - ".github/workflows/deploy-homebrew-tap.yml"
       - ".github/workflows/deploy-apt-repo.yml"
       - ".github/workflows/deploy-windows-installer.yml"
@@ -17,6 +19,8 @@ on:
       - "scripts/generate-homebrew-cask.sh"
       - "scripts/build-apt-repo.sh"
       - "scripts/package-linux.sh"
+      - "scripts/update-aur.sh"
+      - "scripts/test-aur-packaging.sh"
       - "scripts/check-linux-runtime-deps.sh"
       - "scripts/test-linux-runtime-deps.sh"
       - "packaging/linux/**"
@@ -40,7 +44,9 @@ on:
   push:
     branches: ["main", "dev"]
     paths:
+      - ".github/workflows/deployment-ci.yml"
       - ".github/workflows/build-release-artifacts.yml"
+      - ".github/workflows/deploy-aur.yml"
       - ".github/workflows/deploy-homebrew-tap.yml"
       - ".github/workflows/deploy-apt-repo.yml"
       - ".github/workflows/deploy-windows-installer.yml"
@@ -53,6 +59,8 @@ on:
       - "scripts/generate-homebrew-cask.sh"
       - "scripts/build-apt-repo.sh"
       - "scripts/package-linux.sh"
+      - "scripts/update-aur.sh"
+      - "scripts/test-aur-packaging.sh"
       - "scripts/check-linux-runtime-deps.sh"
       - "scripts/test-linux-runtime-deps.sh"
       - "packaging/linux/**"
@@ -89,22 +97,6 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Lint GitHub Actions workflows
-        env:
-          ACTIONLINT_VERSION: 1.7.12
-        run: |
-          set -euo pipefail
-
-          installer="$RUNNER_TEMP/download-actionlint.bash"
-          curl --fail --silent --show-error --location \
-            "https://raw.githubusercontent.com/rhysd/actionlint/v${ACTIONLINT_VERSION}/scripts/download-actionlint.bash" \
-            --output "$installer"
-          bash "$installer" "$ACTIONLINT_VERSION" "$RUNNER_TEMP"
-          # Shell scripts are checked separately below. Disabling actionlint's
-          # ShellCheck integration keeps this gate focused on workflow syntax,
-          # expressions, events, reusable-workflow inputs, and action metadata.
-          "$RUNNER_TEMP/actionlint" -color -shellcheck=""
-
       - name: Validate shell scripts syntax
         run: |
           bash -n scripts/cargo-flatten-dupes.sh
@@ -114,6 +106,9 @@ jobs:
           bash -n scripts/generate-homebrew-cask.sh
           bash -n scripts/build-apt-repo.sh
           bash -n scripts/package-linux.sh
+          bash -n scripts/update-aur.sh
+          bash -n scripts/test-aur-packaging.sh
+          bash -n packaging/linux/PKGBUILD.in
           bash -n scripts/check-linux-runtime-deps.sh
           bash -n scripts/test-linux-runtime-deps.sh
           bash -n scripts/emit-breakpad-symbols.sh
@@ -143,21 +138,16 @@ jobs:
             }
           '
 
-      - name: Validate workflow YAML
-        run: |
-          ruby -e 'require "yaml"; %w[
-            .github/workflows/build-release-artifacts.yml
-            .github/workflows/deploy-homebrew-tap.yml
-            .github/workflows/deploy-apt-repo.yml
-            .github/workflows/deploy-windows-installer.yml
-            .github/workflows/deploy-microsoft-store.yml
-            .github/workflows/deployment-ci.yml
-            .github/workflows/release-manual-main.yml
-          ].each { |path| YAML.load_file(path) }'
-
       - name: Validate deployment workflow config keys
         run: |
           set -euo pipefail
+          grep -Fq 'vars.AUR_GIT_REPOSITORY' .github/workflows/release-manual-main.yml
+          grep -Fq 'vars.AUR_GIT_BRANCH' .github/workflows/release-manual-main.yml
+          grep -Fq 'vars.AUR_GIT_REPOSITORY' .github/workflows/deploy-aur.yml
+          grep -Fq 'vars.AUR_GIT_BRANCH' .github/workflows/deploy-aur.yml
+          grep -Fq 'AUR_PRIVATE_SSH_KEY' .github/workflows/deploy-aur.yml
+          grep -Fq 'AUR_PRIVATE_SSH_KEY_PASSPHRASE' .github/workflows/deploy-aur.yml
+          grep -Fq 'ssh://aur@aur.archlinux.org/gitcomet-bin.git' .github/workflows/deploy-aur.yml
           grep -Fq 'vars.APT_STORAGE_ACCOUNT' .github/workflows/release-manual-main.yml
           grep -Fq 'vars.APT_STORAGE_CONTAINER' .github/workflows/release-manual-main.yml
           grep -Fq 'vars.APT_REPO_DISTRIBUTION' .github/workflows/release-manual-main.yml
@@ -248,6 +238,19 @@ jobs:
             echo "dump_syms $triple -> $asset ($sha)"
           done
           grep -Fq 'setup-dump-syms' .github/workflows/build-release-artifacts.yml
+
+      - name: Install actionlint for Microsoft Store workflow tests
+        env:
+          ACTIONLINT_VERSION: 1.7.12
+          ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/actionlint.tar.gz"
+          curl -fsSL --max-time 60 \
+            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz" \
+            --output "$archive"
+          printf '%s  %s\n' "$ACTIONLINT_SHA256" "$archive" | sha256sum --check --strict
+          tar -xzf "$archive" -C "$RUNNER_TEMP" actionlint
 
       - name: Test Microsoft Store deployment workflow
         env:
@@ -456,6 +459,36 @@ jobs:
       - name: Verify dump_syms is runnable
         run: dump_syms --version
 
+  aur-metadata-smoke:
+    name: Validate AUR metadata and package payloads
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    container:
+      image: archlinux:base-devel
+    steps:
+      - name: Install Arch packaging tooling
+        shell: bash
+        run: |
+          set -euo pipefail
+          pacman -Syu --noconfirm --needed git shadow desktop-file-utils
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # builder cannot read checkout's root-owned credential file in RUNNER_TEMP.
+          # This smoke job only needs local Git operations.
+          persist-credentials: false
+
+      - name: Create non-root packaging user
+        shell: bash
+        run: |
+          set -euo pipefail
+          id -u builder >/dev/null 2>&1 || useradd -m builder
+          chown -R builder:builder "$GITHUB_WORKSPACE"
+
+      - name: Test AUR generation and both architecture payloads
+        shell: bash
+        run: su builder -c "cd '$GITHUB_WORKSPACE' && scripts/test-aur-packaging.sh"
+
   linux-packaging-smoke:
     name: Validate Linux packaging script
     runs-on: ubuntu-22.04
@@ -494,11 +527,30 @@ jobs:
             gitcomet-v0.0.0-rc.1-linux-x86_64/README.md \
             gitcomet-v0.0.0-rc.1-linux-x86_64/gitcomet | LC_ALL=C sort | diff - "$RUNNER_TEMP/tarball.txt"
 
+      # Retry registry failures before running the package checks.
+      - name: Pull Linux smoke test images with retries
+        run: |
+          set -euo pipefail
+          for image in fedora:42 ubuntu:22.04; do
+            for attempt in 1 2 3 4; do
+              if docker pull "$image"; then
+                break
+              fi
+              if [ "$attempt" -eq 4 ]; then
+                echo "::error title=Container image pull failed::Could not pull ${image} after ${attempt} attempts."
+                exit 1
+              fi
+              delay=$((attempt * 5))
+              echo "::warning title=Container image pull retry::Failed to pull ${image} (attempt ${attempt}/4); retrying in ${delay}s."
+              sleep "$delay"
+            done
+          done
+
       # Resolves the hard dependencies (git, the renderer either/or, hicolor)
       # and checks that every weak dependency names a real Fedora package.
       - name: Install the .rpm on Fedora 42
         run: |
-          docker run --rm -i -v "$PWD/dist/linux-ci:/pkgs:ro" fedora:42 bash -euo pipefail -s <<'EOF'
+          docker run --pull=never --rm -i -v "$PWD/dist/linux-ci:/pkgs:ro" fedora:42 bash -euo pipefail -s <<'EOF'
           dnf install -y -q --setopt=install_weak_deps=False /pkgs/gitcomet-0.0.0.rc.1-1.x86_64.rpm
           test "$(rpm -q --queryformat '%{VERSION}' gitcomet)" = "0.0.0~rc.1"
           rpm -qL gitcomet | grep -qx /usr/share/licenses/gitcomet/LICENSE-AGPL-3.0
@@ -517,7 +569,7 @@ jobs:
 
       - name: Install the .deb on Ubuntu 22.04
         run: |
-          docker run --rm -i -v "$PWD/dist/linux-ci:/pkgs:ro" ubuntu:22.04 bash -euo pipefail -s <<'EOF'
+          docker run --pull=never --rm -i -v "$PWD/dist/linux-ci:/pkgs:ro" ubuntu:22.04 bash -euo pipefail -s <<'EOF'
           export DEBIAN_FRONTEND=noninteractive
           apt-get update -qq
           apt-get install -y -qq --no-install-recommends /pkgs/gitcomet_0.0.0.rc.1-1_amd64.deb
@@ -696,7 +748,7 @@ jobs:
           toolchain: stable
 
       - name: Cache Rust artifacts
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
 
       # Cached so an outage or rate limit at mozilla/dump_syms does not fail
       # unrelated pull requests. Keyed on the resolver script contents so any

@@ -1,4 +1,4 @@
-use gitcomet_core::text_utils::panic_payload_to_string;
+use gitcomet_core::panic::payload_message;
 use std::any::Any;
 use std::fmt;
 
@@ -21,7 +21,7 @@ impl UiLaunchError {
     pub(crate) fn from_panic(context: &'static str, payload: Box<dyn Any + Send>) -> Self {
         Self {
             context,
-            message: panic_payload_to_string(payload.as_ref(), "<non-string panic payload>"),
+            message: payload_message(payload.as_ref()),
             is_panic: true,
         }
     }
@@ -78,7 +78,7 @@ mod tests {
     fn panic_guard_handles_non_string_payloads() {
         let err = run_with_panic_guard("main window", || std::panic::panic_any(42_u8))
             .expect_err("launch should fail");
-        assert_eq!(err.panic_message(), "<non-string panic payload>");
+        assert_eq!(err.panic_message(), "unknown panic payload");
     }
 
     #[test]

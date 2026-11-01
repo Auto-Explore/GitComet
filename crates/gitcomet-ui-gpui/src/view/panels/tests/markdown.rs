@@ -1,6 +1,6 @@
 use super::*;
 use crate::view::mod_helpers::MarkdownSearchSurface;
-use crate::view::panes::main::DiffWrapVisualRow;
+use crate::view::panes::diff::helpers::state::DiffWrapVisualRow;
 
 /// `debug_bounds` takes a `&'static str`; tests that build a selector from a
 /// row index need one that outlives the call.
@@ -32,6 +32,7 @@ fn picture_offsets(
 struct RenderedPreviewFixture {
     workdir: std::path::PathBuf,
     document: Arc<crate::view::markdown_preview::MarkdownPreviewDocument>,
+    _directory: tempfile::TempDir,
 }
 
 impl RenderedPreviewFixture {
@@ -62,15 +63,20 @@ impl RenderedPreviewFixture {
         source: &str,
         status: gitcomet_core::domain::FileStatusKind,
     ) -> Self {
-        let workdir = open_rendered_markdown_preview(cx, view, repo_id, name, source, status);
+        let (workdir, directory) =
+            open_rendered_markdown_preview(cx, view, repo_id, name, source, status);
         let document = cx.update(|_window, app| {
-            let pane = view.read(app).main_pane.read(app);
+            let pane = view.read(app).diff_renderer.read(app);
             match &pane.worktree_markdown.document {
                 gitcomet_state::model::Loadable::Ready(document) => Arc::clone(document),
                 other => panic!("expected a ready preview, got {other:?}"),
             }
         });
-        Self { workdir, document }
+        Self {
+            workdir,
+            document,
+            _directory: directory,
+        }
     }
 
     /// Document index of the first row whose text is exactly `text`.
@@ -109,18 +115,25 @@ fn open_rendered_markdown_preview(
     name: &str,
     source: &str,
     status: gitcomet_core::domain::FileStatusKind,
-) -> std::path::PathBuf {
-    let workdir =
-        std::env::temp_dir().join(format!("gitcomet_ui_test_{}_{name}", std::process::id()));
+) -> (std::path::PathBuf, tempfile::TempDir) {
+    let directory = tempfile::Builder::new()
+        .prefix(&format!("gitcomet_{name}_"))
+        .tempdir()
+        .unwrap();
+    let workdir = directory.path().to_path_buf();
     let file_rel = std::path::PathBuf::from("docs/preview.md");
     let abs_path = workdir.join(&file_rel);
-    let preview_lines = Arc::new(source.lines().map(ToOwned::to_owned).collect::<Vec<_>>());
+    let preview_lines = Arc::new(
+        source
+            .split_terminator('\n')
+            .map(ToOwned::to_owned)
+            .collect::<Vec<_>>(),
+    );
     let target = gitcomet_core::domain::DiffTarget::working_tree(
         file_rel.clone(),
         gitcomet_core::domain::DiffArea::Unstaged,
     );
 
-    let _ = std::fs::remove_dir_all(&workdir);
     std::fs::create_dir_all(abs_path.parent().expect("fixture parent dir"))
         .expect("create preview workdir");
     std::fs::write(&abs_path, source.as_bytes()).expect("write preview fixture");
@@ -152,7 +165,7 @@ fn open_rendered_markdown_preview(
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 set_ready_worktree_preview(
                     pane,
                     abs_path.clone(),
@@ -181,7 +194,7 @@ fn open_rendered_markdown_preview(
         cx.run_until_parked();
     }
 
-    workdir
+    (workdir, directory)
 }
 
 fn table_row_ixs(fixture: &RenderedPreviewFixture) -> Vec<usize> {
@@ -237,8 +250,8 @@ fn copied_preview_selection(
     view: &gpui::Entity<super::super::GitCometView>,
 ) -> Option<String> {
     cx.update(|_window, app| {
-        let main_pane = view.read(app).main_pane.clone();
-        main_pane.update(app, |pane, cx| {
+        let diff_renderer = view.read(app).diff_renderer.clone();
+        diff_renderer.update(app, |pane, cx| {
             pane.copy_selected_diff_text_to_clipboard(cx)
         });
     });
@@ -258,7 +271,7 @@ fn open_rendered_markdown_diff_in(
     let workdir = open_rendered_markdown_diff(cx, view, repo_id, name, old_text, new_text);
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.diff_view = mode;
                 cx.notify();
             });
@@ -313,8 +326,8 @@ fn open_rendered_markdown_diff(
     );
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
-                pane.diff_markdown.cache_repo_id = Some(repo_id);
+            this.diff_renderer.update(cx, |pane, cx| {
+                pane.diff_markdown.cache_repo_id = Some(repo_id.into());
                 pane.diff_markdown.cache_rev = 1;
                 pane.diff_markdown.cache_target = Some(target.clone());
                 pane.diff_markdown.preview = gitcomet_state::model::Loadable::Ready(Arc::new(
@@ -343,7 +356,7 @@ fn point_on_link_in_region(
     region: DiffTextRegion,
 ) -> gpui::Point<Pixels> {
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         let bounds = pane
             .diff_text_hitbox_bounds_for_tests(row_ix, region)
             .unwrap_or_else(|| panic!("row {row_ix} of {region:?} is drawn"));
@@ -418,7 +431,14 @@ fn open_conflict_markdown_preview(
                 gitcomet_core::domain::DiffArea::Unstaged,
             );
             let merged = format!("<<<<<<< ours\n{ours}=======\n{theirs}>>>>>>> theirs\n");
-            set_test_conflict_file(&mut repo, file_rel.clone(), base, ours, theirs, &merged);
+            set_test_conflict_file(
+                &mut repo,
+                file_rel.clone(),
+                base,
+                ours,
+                theirs,
+                merged.as_str(),
+            );
             repo.conflict_state.conflict_file_load_mode =
                 gitcomet_state::model::ConflictFileLoadMode::Full;
             push_test_state(this, app_state_with_repo(repo, repo_id), cx);
@@ -427,7 +447,7 @@ fn open_conflict_markdown_preview(
     draw_frames(cx, 1);
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.conflict_resolver.resolver_preview_mode = ConflictResolverPreviewMode::Preview;
                 cx.notify();
             });
@@ -436,8 +456,51 @@ fn open_conflict_markdown_preview(
     draw_frames(cx, 3);
 }
 
+mod diagrams;
 mod images;
 mod links;
 mod rendering;
 mod selection_search;
 mod task_editing;
+
+#[gpui::test]
+fn file_history_controls_live_in_the_bottom_bar(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    let fixture = RenderedPreviewFixture::open(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(70799),
+        "viewer_controls_bottom_bar",
+        "# Title\nText\n",
+    );
+    let bar = cx.debug_bounds("diff_bottom_bar").unwrap();
+    let header = cx.debug_bounds("diff_file_header").unwrap();
+    for selector in [
+        "viewer_revision_badge",
+        "viewer_nav_back",
+        "viewer_nav_forward",
+    ] {
+        let bounds = cx.debug_bounds(selector).expect(selector);
+        assert!(bar.contains(&bounds.center()), "{selector} in {bar:?}");
+        assert!(
+            !header.contains(&bounds.center()),
+            "{selector} outside the header"
+        );
+    }
+    let text = cx.debug_bounds("markdown_diff_view_text").unwrap();
+    cx.simulate_click(text.center(), gpui::Modifiers::default());
+    draw_and_drain_test_window(cx);
+    assert_eq!(
+        cx.update(|_, app| view
+            .read(app)
+            .diff_renderer
+            .read(app)
+            .rendered_preview_modes
+            .get(crate::view::RenderedPreviewKind::Markdown)),
+        crate::view::RenderedPreviewMode::Source
+    );
+    fixture.cleanup();
+}

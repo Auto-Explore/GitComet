@@ -4,6 +4,7 @@ use gitcomet_core::path_utils::canonicalize_or_original;
 use gitcomet_core::services::{GitBackend, GitRepository};
 use rustc_hash::FxHashMap;
 use std::collections::VecDeque;
+use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
@@ -11,16 +12,25 @@ use std::sync::{Arc, RwLock, mpsc};
 use std::thread;
 use std::time::Instant;
 
+mod auto_fetch;
+mod auto_fetch_admission;
+mod bare_conversion;
 mod effects;
 mod executor;
+mod mutation_gate;
 mod reducer;
 mod reducer_diagnostics;
 mod repo_load_trace;
 mod repo_monitor;
+mod repository_preferences;
+mod repository_registry;
+mod repository_requirement;
+mod repository_runtime;
 mod send_diagnostics;
+#[cfg(any(test, feature = "test-support"))]
+mod test_support;
 mod worker_channel;
 
-use effects::RepoTaskToken;
 use effects::{EffectExecutors, schedule_effect};
 use executor::StoreExecutorPool;
 use executor::{
@@ -28,16 +38,93 @@ use executor::{
 };
 #[cfg(feature = "benchmarks")]
 use reducer::fill_select_diff_inline;
+use reducer::prepared::PreparedReduction;
+#[cfg(any(test, feature = "benchmarks"))]
+use reducer::reduce;
 use reducer::{
     fill_reorder_repo_tabs_inline, fill_set_active_repo_inline, fill_stage_path_inline,
-    fill_stage_paths_inline, fill_unstage_path_inline, fill_unstage_paths_inline, reduce,
+    fill_stage_paths_inline, fill_unstage_path_inline, fill_unstage_paths_inline, reduce_prepared,
     reset_conflict_resolutions_inline, set_conflict_region_choice_inline,
 };
 use repo_monitor::RepoMonitorManager;
+use repository_runtime::RepositoryRuntimes;
 use send_diagnostics::try_send_state_changed_or_log;
 use worker_channel::{StoreInstanceId, StoreWorkerCommand, StoreWorkerSender};
 
 pub use reducer_diagnostics::StoreReducerDiagnostics;
+
+/// Which filesystem engine and submission queue a store's file operations use.
+#[derive(Clone, Copy)]
+enum FilesystemScope {
+    /// Windows share the process's, so undo history and write order span windows.
+    Process,
+    /// Tests run concurrently in one process; one must not undo, or queue
+    /// behind, another's file operations.
+    #[cfg(any(test, feature = "test-support"))]
+    Store,
+}
+
+impl FilesystemScope {
+    fn engine(self) -> &'static std::sync::Mutex<gitcomet_core::filesystem::Filesystem> {
+        match self {
+            Self::Process => gitcomet_core::filesystem::global(),
+            #[cfg(any(test, feature = "test-support"))]
+            Self::Store => isolated_filesystem(),
+        }
+    }
+
+    fn own_queue(self) -> Option<std::sync::LazyLock<TaskExecutor>> {
+        match self {
+            Self::Process => None,
+            #[cfg(any(test, feature = "test-support"))]
+            Self::Store => Some(std::sync::LazyLock::new(executor::filesystem_queue)),
+        }
+    }
+}
+
+/// Leaked like the process-wide engine, which is never dropped either.
+#[cfg(any(test, feature = "test-support"))]
+fn isolated_filesystem() -> &'static std::sync::Mutex<gitcomet_core::filesystem::Filesystem> {
+    Box::leak(Box::default())
+}
+
+/// Inactive repositories whose file monitors keep running, most recently
+/// active first. A macOS FSEvents stream is one recursive registration per
+/// root, so a warm monitor costs little; inotify registers every directory,
+/// so elsewhere only the active repository is watched.
+#[cfg(target_os = "macos")]
+const WARM_INACTIVE_REPO_MONITORS: usize = 2;
+#[cfg(not(target_os = "macos"))]
+const WARM_INACTIVE_REPO_MONITORS: usize = 0;
+
+/// The `count` most recently active open tabs that are neither active nor
+/// leased, most recent first.
+fn warm_inactive_repos(state: &AppState, count: usize) -> Vec<RepoId> {
+    if count == 0 {
+        return Vec::new();
+    }
+    let mut recent: Vec<_> = state
+        .repos
+        .iter()
+        .filter(|repo| {
+            state.active_repo != Some(repo.id)
+                && !state.watch_leases.contains_key(&repo.id)
+                && matches!(repo.open, crate::model::Loadable::Ready(()))
+                && repo.last_active_at.is_some()
+        })
+        .collect();
+    recent.sort_by_key(|repo| std::cmp::Reverse(repo.last_active_at));
+    recent.truncate(count);
+    recent.into_iter().map(|repo| repo.id).collect()
+}
+
+// Executor trace labels need a static name; derive it once from the product identity.
+static WORKTREE_SCAN_THREAD_NAME: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+    format!(
+        "{}-worktree-scan",
+        gitcomet_core::identity::current().executable_name()
+    )
+});
 
 fn canonicalize_path(path: PathBuf) -> PathBuf {
     canonicalize_or_original(path)
@@ -53,6 +140,17 @@ fn make_mut_state_with_diagnostics(state: &mut Arc<AppState>) -> &mut AppState {
     } else {
         Arc::make_mut(state)
     }
+}
+
+/// Feedback acknowledgements only release entries the window has shown. The
+/// worker applies them in the next reducer pass instead of copying and
+/// publishing the whole state for them alone; the window already finds new
+/// entries by sequence, so entries it has shown may linger until then.
+fn is_feedback_acknowledgement(msg: &Msg) -> bool {
+    matches!(
+        msg,
+        Msg::AcknowledgeNotifications { .. } | Msg::AcknowledgeRepoFeedback { .. }
+    )
 }
 
 fn is_control_msg(msg: &Msg) -> bool {
@@ -73,16 +171,23 @@ fn is_control_command(command: &StoreWorkerCommand) -> bool {
     match command {
         StoreWorkerCommand::Msg(msg) | StoreWorkerCommand::Traced(msg, _) => is_control_msg(msg),
         StoreWorkerCommand::Shutdown => true,
+        StoreWorkerCommand::SetAutoFetchAllowed(_) => true,
         StoreWorkerCommand::Repository { .. } => true,
+        StoreWorkerCommand::ActivationRefresh(_) => false,
         #[cfg(any(test, feature = "test-support"))]
         StoreWorkerCommand::InsertRepoForTest { .. } => true,
         #[cfg(any(test, feature = "test-support"))]
         StoreWorkerCommand::DisableRepoMonitorsForTest => true,
+        #[cfg(any(test, feature = "test-support"))]
+        StoreWorkerCommand::BarrierForTest(_) => false,
+        #[cfg(test)]
+        StoreWorkerCommand::RepoMonitorBarrierForTest { .. } => false,
     }
 }
 
 fn can_control_command_overtake(command: &StoreWorkerCommand) -> bool {
     matches!(command.msg(), Some(Msg::Internal(_)))
+        || matches!(command, StoreWorkerCommand::ActivationRefresh(_))
 }
 
 fn first_control_command_before_order_barrier(
@@ -161,24 +266,92 @@ fn selection_index_builds_for_test() -> usize {
 
 /// Per-message scratch context for the store worker loop: the shared handles
 /// for the reduce-then-handle skeleton plus the effect dispatch machinery.
+#[cfg(test)]
+static EMPTY_TEST_COMMIT_IDENTITY: std::sync::LazyLock<
+    Arc<RwLock<Option<gitcomet_core::commit_identity::CommitIdentityResolver>>>,
+> = std::sync::LazyLock::new(|| Arc::new(RwLock::new(None)));
+
 struct WorkerLoopContext<'a> {
+    commit_identity:
+        &'a Arc<RwLock<Option<gitcomet_core::commit_identity::CommitIdentityResolver>>>,
     thread_state: &'a Arc<RwLock<Arc<AppState>>>,
     active_repo_id: &'a Arc<AtomicU64>,
     event_tx: &'a smol::channel::Sender<StoreEvent>,
     repo_monitors: &'a mut RepoMonitorManager,
-    repo_task_tokens: &'a mut FxHashMap<RepoId, RepoTaskToken>,
     thread_msg_tx: &'a StoreWorkerSender,
     executor: &'a TaskExecutor,
     repo_load_executor: &'a TaskExecutor,
+    worktree_scan_executor: &'a std::sync::LazyLock<TaskExecutor>,
     metadata_executor: &'a TaskExecutor,
     signature_executor: &'a TaskExecutor,
     history_find_executor: &'a std::sync::LazyLock<TaskExecutor>,
     session_persist_executor: &'a TaskExecutor,
+    filesystem_executor: &'a std::sync::LazyLock<TaskExecutor>,
     backend: &'a Arc<dyn GitBackend>,
     publication: &'a AtomicU64,
+    /// Feedback acknowledgements held for the next reducer pass; see
+    /// [`is_feedback_acknowledgement`].
+    deferred_acknowledgements: &'a mut Vec<(Msg, reducer::prepared::ReducerInputs)>,
+    /// Hash of what the last automatic-fetch sync read.
+    auto_fetch_inputs: &'a mut Option<u64>,
 }
 
 impl WorkerLoopContext<'_> {
+    fn sync_auto_fetch(&mut self, repos: &RepositoryRuntimes) {
+        let (registrations, settings, sign_in_open) = {
+            let state = self
+                .thread_state
+                .read()
+                .unwrap_or_else(|error| error.into_inner());
+            let mut settings = state.remote_settings;
+            settings.auto_fetch.enabled &= state.git_runtime.is_available();
+            let allowed = self
+                .thread_msg_tx
+                .auto_fetch_allowed
+                .load(Ordering::Acquire);
+            let registered = state
+                .repos
+                .iter()
+                .filter(|repo| allowed && !repo.is_provisional_external_drop_open());
+            // This runs after every message and a coordinator sync is
+            // O(tabs), so skip it while nothing it reads has changed.
+            let sign_in_open = state.auth_prompt.is_some();
+            let mut inputs = rustc_hash::FxHasher::default();
+            (allowed, settings, sign_in_open).hash(&mut inputs);
+            for repo in registered.clone() {
+                repo.id.hash(&mut inputs);
+                repo.lifetime_id().hash(&mut inputs);
+                repo.spec.workdir.hash(&mut inputs);
+                repo.common_dir.hash(&mut inputs);
+                repos
+                    .repository(&repo.id)
+                    .map(|repository| Arc::as_ptr(repository).cast::<()>())
+                    .hash(&mut inputs);
+                (state.active_repo == Some(repo.id)).hash(&mut inputs);
+                repo.needs_auto_fetch_refresh().hash(&mut inputs);
+            }
+            let inputs = inputs.finish();
+            if *self.auto_fetch_inputs == Some(inputs) && self.thread_msg_tx.is_alive() {
+                return;
+            }
+            *self.auto_fetch_inputs = Some(inputs);
+            let registrations = registered
+                .map(|repo| auto_fetch::Registration {
+                    repo_id: repo.id,
+                    lifetime: repo.lifetime_id(),
+                    workdir: repo.spec.workdir.clone(),
+                    common_dir: repo.common_dir.as_ref().map(|path| path.to_path_buf()),
+                    repository: repos.repository(&repo.id).cloned(),
+                    active: state.active_repo == Some(repo.id),
+                    needs_refresh: repo.needs_auto_fetch_refresh(),
+                })
+                .collect();
+            (registrations, settings, sign_in_open)
+        };
+        self.thread_msg_tx
+            .sync_auto_fetch(registrations, settings, sign_in_open, self.backend);
+    }
+
     /// Runs one reducer under the write lock, records its pass, and dispatches
     /// its effects.
     ///
@@ -188,13 +361,9 @@ impl WorkerLoopContext<'_> {
     /// [`fill_set_active_repo_inline`] and its navigation/finalization logic.
     fn reduce_and_handle<I>(
         &mut self,
-        repos: &mut FxHashMap<RepoId, Arc<dyn GitRepository>>,
+        repos: &mut RepositoryRuntimes,
         id_alloc: &AtomicU64,
-        reduce_with: impl FnOnce(
-            &mut AppState,
-            &mut FxHashMap<RepoId, Arc<dyn GitRepository>>,
-            &AtomicU64,
-        ) -> I,
+        reduce_with: impl FnOnce(&mut AppState, &mut RepositoryRuntimes, &AtomicU64) -> I,
     ) where
         I: IntoIterator<Item = crate::msg::Effect>,
     {
@@ -202,7 +371,15 @@ impl WorkerLoopContext<'_> {
             let mut app_state = self.thread_state.write().unwrap_or_else(|e| e.into_inner());
             let mutable = make_mut_state_with_diagnostics(&mut app_state);
             let reduce_started = Instant::now();
+            for (acknowledgement, inputs) in self.deferred_acknowledgements.drain(..) {
+                reduce_prepared(&inputs, repos, id_alloc, mutable, acknowledgement);
+            }
             let effects = reduce_with(mutable, repos, id_alloc);
+            repository_registry::update_repositories(
+                self.thread_msg_tx.store_id().get(),
+                mutable,
+                repos,
+            );
             let reduce_duration = reduce_started.elapsed();
             reducer_diagnostics::record_reducer_pass(reduce_duration);
             // Bumped under the write lock, so a reader holding the read lock
@@ -221,13 +398,17 @@ impl WorkerLoopContext<'_> {
             gitcomet_core::op_trace::duration_ns(reduce_duration),
             publication,
         );
+        // Reducers also close repositories indirectly (for example, after
+        // removing a worktree). Dispose the retired owners here,
+        // outside the state lock and before any replacement work is scheduled.
+        repos.release_retired();
         // Cancel changed/cleared selections before dispatching their effects,
         // outside the state write lock. Index selections once, including absent
         // repos as cleared selections, instead of scanning all repos per token.
         // Most messages arrive with no selected-diff load in flight, so build
         // the index only for the first token that has one.
         let mut selections: Option<FxHashMap<_, _>> = None;
-        for (id, token) in self.repo_task_tokens.iter_mut() {
+        for (id, token) in repos.load_scopes_mut() {
             if !token.has_selected_diff_work() {
                 continue;
             }
@@ -255,10 +436,11 @@ impl WorkerLoopContext<'_> {
         self.handle_effects(repos, effects);
     }
 
-    fn handle_effects<I>(&mut self, repos: &FxHashMap<RepoId, Arc<dyn GitRepository>>, effects: I)
+    fn handle_effects<I>(&mut self, repos: &mut RepositoryRuntimes, effects: I)
     where
         I: IntoIterator<Item = crate::msg::Effect>,
     {
+        self.sync_auto_fetch(repos);
         let active_value = self
             .thread_state
             .read()
@@ -266,7 +448,7 @@ impl WorkerLoopContext<'_> {
             .active_repo
             .map(|id| id.0)
             .unwrap_or(0);
-        self.active_repo_id.store(active_value, Ordering::Relaxed);
+        self.active_repo_id.store(active_value, Ordering::SeqCst);
 
         try_send_state_changed_or_log(
             self.event_tx,
@@ -276,14 +458,19 @@ impl WorkerLoopContext<'_> {
 
         // Keep filesystem monitoring scoped to the active repository, plus any
         // a watch lease holds, to minimize OS watcher load in large multi-repo
-        // sessions.
+        // sessions. Where watching is cheap, the most recently active tabs stay
+        // watched too: switching back then needs neither a watcher rebuild nor
+        // a refresh when nothing changed (`unchanged_since_inactive`).
         let (active_repo, watched): (Option<RepoId>, Vec<(RepoId, std::path::PathBuf, bool)>) = {
             let state = self.thread_state.read().unwrap_or_else(|e| e.into_inner());
+            let warm = warm_inactive_repos(&state, WARM_INACTIVE_REPO_MONITORS);
             let watched = state
                 .repos
                 .iter()
                 .filter(|repo| {
-                    state.active_repo == Some(repo.id) || state.watch_leases.contains_key(&repo.id)
+                    state.active_repo == Some(repo.id)
+                        || state.watch_leases.contains_key(&repo.id)
+                        || warm.contains(&repo.id)
                 })
                 .map(|repo| {
                     let leased = state.watch_leases.contains_key(&repo.id);
@@ -294,16 +481,17 @@ impl WorkerLoopContext<'_> {
         };
 
         for repo_id in self.repo_monitors.running_repo_ids() {
-            if !watched
-                .iter()
-                .any(|(watched_id, _, _)| *watched_id == repo_id)
+            if !repos.has_repository(&repo_id)
+                || !watched
+                    .iter()
+                    .any(|(watched_id, _, _)| *watched_id == repo_id)
             {
                 self.repo_monitors.stop(repo_id);
             }
         }
 
         for (repo_id, workdir, leased) in watched {
-            if repos.contains_key(&repo_id) {
+            if repos.has_repository(&repo_id) {
                 self.repo_monitors.start(
                     repo_id,
                     workdir,
@@ -320,11 +508,23 @@ impl WorkerLoopContext<'_> {
                 .thread_state
                 .read()
                 .unwrap_or_else(|error| error.into_inner());
-            let mut wanted: Vec<_> = state.worktree_watch_leases.keys().cloned().collect();
+            let mut wanted: Vec<_> = state
+                .worktree_watch_leases
+                .keys()
+                .filter(|(id, lifetime, _)| {
+                    repos.has_repository(id)
+                        && state
+                            .repos
+                            .iter()
+                            .any(|repo| repo.id == *id && repo.lifetime() == *lifetime)
+                })
+                .cloned()
+                .collect();
             if let Some(repo) = state
                 .repos
                 .iter()
                 .find(|repo| state.active_repo == Some(repo.id))
+                && repos.has_repository(&repo.id)
                 && let Some(path) = &repo.history_state.worktree_selection
                 && path != &repo.spec.workdir
             {
@@ -342,7 +542,23 @@ impl WorkerLoopContext<'_> {
             Arc::clone(self.backend),
         );
 
-        for effect in effects {
+        for mut effect in effects {
+            if let crate::msg::Effect::Commit {
+                repo_id, identity, ..
+            }
+            | crate::msg::Effect::CommitAmend {
+                repo_id, identity, ..
+            } = &mut effect
+            {
+                let resolver = self
+                    .commit_identity
+                    .read()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .clone();
+                if let (Some(resolver), Some(repo)) = (resolver, repos.repository(repo_id)) {
+                    *identity = resolver(&repo.spec().workdir);
+                }
+            }
             gitcomet_core::op_trace::record_current(
                 gitcomet_core::op_trace::Stage::EffectQueued,
                 repo_load_trace::effect_name(&effect),
@@ -378,15 +594,16 @@ impl WorkerLoopContext<'_> {
                 EffectExecutors {
                     executor: self.executor,
                     repo_load_executor: self.repo_load_executor,
+                    worktree_scan_executor: self.worktree_scan_executor,
                     session_persist_executor: self.session_persist_executor,
                     metadata_executor: self.metadata_executor,
                     signature_executor: self.signature_executor,
                     history_find_executor: self.history_find_executor,
+                    filesystem_executor: self.filesystem_executor,
                 },
                 self.thread_state,
                 self.backend,
                 repos,
-                self.repo_task_tokens,
                 self.thread_msg_tx.clone(),
                 effect,
             );
@@ -449,6 +666,7 @@ impl std::fmt::Debug for WatchLease {
 }
 
 pub struct AppStore {
+    commit_identity: Arc<RwLock<Option<gitcomet_core::commit_identity::CommitIdentityResolver>>>,
     state: Arc<RwLock<Arc<AppState>>>,
     /// Count of reducer passes that published state; see
     /// [`AppStore::snapshot_with_publication`].
@@ -484,6 +702,7 @@ impl Clone for AppStore {
     fn clone(&self) -> Self {
         Self {
             state: Arc::clone(&self.state),
+            commit_identity: Arc::clone(&self.commit_identity),
             publication: Arc::clone(&self.publication),
             msg_tx: self.msg_tx.clone(),
             public_lifetime: Arc::clone(&self.public_lifetime),
@@ -493,38 +712,106 @@ impl Clone for AppStore {
 }
 
 impl AppStore {
+    pub fn shutdown_background_fetches() {
+        auto_fetch::AutoFetchCoordinator::shared().shutdown();
+    }
+
+    pub fn set_auto_fetch_allowed(&self, allowed: bool) {
+        self.msg_tx.set_auto_fetch_allowed(allowed);
+    }
+
+    /// Acknowledge queued reductions and return their publication sequence.
+    /// Effects scheduled by those reductions can still finish afterwards.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn barrier_for_test(&self) -> mpsc::Receiver<u64> {
+        self.msg_tx.barrier_for_test()
+    }
+
+    /// Stop this store and acknowledge its worker, private pools, and effects.
+    /// This stops all clones of the store; shared pools remain available.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn shutdown_for_test(&self) -> mpsc::Receiver<()> {
+        let completion = self.msg_tx.test_tasks.completion();
+        self.msg_tx.shutdown();
+        completion
+    }
+
     pub fn reducer_diagnostics() -> StoreReducerDiagnostics {
         reducer_diagnostics::snapshot()
     }
 
     pub fn new(backend: Arc<dyn GitBackend>) -> (Self, smol::channel::Receiver<StoreEvent>) {
-        Self::with_initial_state(backend, AppState::default())
+        Self::with_initial_state(
+            backend,
+            AppState::default(),
+            repository_preferences::PreferenceHub::shared(),
+            auto_fetch::AutoFetchCoordinator::shared(),
+            FilesystemScope::Process,
+        )
     }
 
     #[cfg(any(test, feature = "test-support"))]
     pub fn new_test(backend: Arc<dyn GitBackend>) -> (Self, smol::channel::Receiver<StoreEvent>) {
-        Self::with_initial_state(backend, AppState::test_default())
+        Self::with_initial_state(
+            backend,
+            AppState::test_default(),
+            repository_preferences::PreferenceHub::new(
+                crate::session::default_session_file_path_for_effect(),
+            ),
+            auto_fetch::AutoFetchCoordinator::new(),
+            FilesystemScope::Store,
+        )
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn new_test_sharing_preferences(
+        backend: Arc<dyn GitBackend>,
+        other: &Self,
+    ) -> (Self, smol::channel::Receiver<StoreEvent>) {
+        Self::with_initial_state(
+            backend,
+            AppState::test_default(),
+            Arc::clone(&other.msg_tx.preferences),
+            Arc::clone(&other.msg_tx.auto_fetch),
+            FilesystemScope::Store,
+        )
     }
 
     fn with_initial_state(
         backend: Arc<dyn GitBackend>,
         initial: AppState,
+        preferences: Arc<repository_preferences::PreferenceHub>,
+        auto_fetch: Arc<auto_fetch::AutoFetchCoordinator>,
+        scope: FilesystemScope,
     ) -> (Self, smol::channel::Receiver<StoreEvent>) {
         let discovery_backend = Arc::clone(&backend);
         let state = Arc::new(RwLock::new(Arc::new(initial)));
         let (command_tx, command_rx) = mpsc::channel::<StoreWorkerCommand>();
         let store_id = StoreInstanceId::next();
         let store_alive = Arc::new(std::sync::atomic::AtomicBool::new(true));
-        let msg_tx = StoreWorkerSender::new(command_tx, Arc::clone(&store_alive), store_id);
+        let msg_tx = StoreWorkerSender::new(
+            command_tx,
+            Arc::clone(&store_alive),
+            store_id,
+            preferences,
+            auto_fetch,
+            scope.engine(),
+        );
         // Coalesced "state changed" notifications: at most one pending.
         let (event_tx, event_rx) = smol::channel::bounded::<StoreEvent>(1);
 
+        let commit_identity = Arc::new(RwLock::new(None));
+        let thread_commit_identity = Arc::clone(&commit_identity);
         let thread_state = Arc::clone(&state);
         let thread_msg_tx = msg_tx.clone();
         let publication = Arc::new(AtomicU64::new(0));
         let thread_publication = Arc::clone(&publication);
+        #[cfg(any(test, feature = "test-support"))]
+        let worker_receipt = thread_msg_tx.test_tasks.task();
 
         let worker = thread::Builder::new().name("gitcomet-store".into()).spawn(move || {
+            #[cfg(any(test, feature = "test-support"))]
+            let _worker_receipt = worker_receipt;
             // General effects share process-wide workers. Repository loads
             // need a bounded pool per window: blocking opens and filesystem
             // scans in one window must not consume another window's capacity.
@@ -532,8 +819,12 @@ impl AppStore {
                 StoreExecutorPool::Primary,
                 default_worker_threads(),
             );
-            let repo_load_executor =
+            #[allow(unused_mut)]
+            let mut repo_load_executor =
                 TaskExecutor::named("gitcomet-repo-load", repo_load_worker_threads());
+            #[allow(unused_mut)]
+            let mut worktree_scan_executor: std::sync::LazyLock<TaskExecutor> =
+                std::sync::LazyLock::new(|| TaskExecutor::named(&WORKTREE_SCAN_THREAD_NAME, 1));
             let metadata_executor = TaskExecutor::shared_for_store(
                 StoreExecutorPool::Metadata,
                 metadata_worker_threads(),
@@ -543,21 +834,50 @@ impl AppStore {
             let session_persist_executor =
                 TaskExecutor::shared_for_store(StoreExecutorPool::SessionPersist, 1);
             // Find scans read all of history, so each window gets its own.
-            let history_find_executor: std::sync::LazyLock<TaskExecutor> =
+            #[allow(unused_mut)]
+            let mut history_find_executor: std::sync::LazyLock<TaskExecutor> =
                 std::sync::LazyLock::new(|| {
                     TaskExecutor::named(crate::history_find::HISTORY_FIND_THREAD, 1)
                 });
-            let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
-            let mut repo_task_tokens: FxHashMap<RepoId, RepoTaskToken> = FxHashMap::default();
+            #[allow(unused_mut)]
+            let mut store_filesystem_executor = scope.own_queue();
+            let filesystem_executor = match store_filesystem_executor.as_ref() {
+                Some(own) => own,
+                None => &executor::FILESYSTEM_QUEUE,
+            };
+            let mut repos: RepositoryRuntimes = Default::default();
             let mut repo_monitors = RepoMonitorManager::new();
             let id_alloc = AtomicU64::new(1);
             let active_repo_id = Arc::new(AtomicU64::new(0));
             let mut deferred_commands = VecDeque::new();
+            let mut deferred_acknowledgements = Vec::new();
+            let mut auto_fetch_inputs = None;
 
             while let Ok(command) = recv_next_worker_command(&command_rx, &mut deferred_commands) {
-                let (msg, stamp) = match command {
+                let (mut msg, stamp) = match command {
                     StoreWorkerCommand::Msg(msg) => (*msg, None),
+                    StoreWorkerCommand::SetAutoFetchAllowed(allowed) => {
+                        thread_msg_tx.auto_fetch_allowed.store(allowed, Ordering::Release);
+                        let settings = thread_state.read().unwrap_or_else(|error| error.into_inner()).remote_settings;
+                        (Msg::SetRemoteSettings(settings), None)
+                    }
                     StoreWorkerCommand::Traced(msg, stamp) => (*msg, Some(stamp)),
+                    StoreWorkerCommand::ActivationRefresh(refresh) => {
+                        let state = thread_state.read().unwrap_or_else(|e| e.into_inner());
+                        let repo_id = refresh.repo_id;
+                        let Some(repo) = state.repos.iter().find(|repo| repo.id == repo_id) else {
+                            continue;
+                        };
+                        let Some(refresh) = refresh.into_refresh(repo) else {
+                            continue;
+                        };
+                        if refresh.refresh_worktree_dirty && state.active_repo == Some(repo_id) {
+                            deferred_commands.push_front(StoreWorkerCommand::Msg(Box::new(
+                                Msg::LoadWorktreeDirty { repo_id },
+                            )));
+                        }
+                        (Msg::RepoExternallyChanged { repo_id, change: refresh.change }, None)
+                    }
                     StoreWorkerCommand::Shutdown => break,
                     StoreWorkerCommand::Repository {
                         repo_id,
@@ -569,14 +889,19 @@ impl AppStore {
                             .repos
                             .iter()
                             .any(|repo| repo.id == repo_id && repo.lifetime() == lifetime)
-                            .then(|| repos.get(&repo_id).cloned())
+                            .then(|| repos.repository(&repo_id).cloned())
                             .flatten();
                         let _ = reply.send(repository);
                         continue;
                     }
                     #[cfg(any(test, feature = "test-support"))]
                     StoreWorkerCommand::InsertRepoForTest { repo_id, repo } => {
-                        repos.insert(repo_id, repo);
+                        let lifetime = thread_state.read().unwrap_or_else(|error| error.into_inner())
+                            .repos.iter().find(|repo| repo.id == repo_id)
+                            .expect("seed the repository snapshot before inserting its test backend")
+                            .lifetime_id();
+                        repos.opened(repo_id, lifetime, repo);
+                        repos.release_retired();
                         continue;
                     }
                     #[cfg(any(test, feature = "test-support"))]
@@ -584,11 +909,29 @@ impl AppStore {
                         repo_monitors.disable();
                         continue;
                     }
+                    #[cfg(any(test, feature = "test-support"))]
+                    StoreWorkerCommand::BarrierForTest(reply) => {
+                        let _ = reply.send(thread_publication.load(Ordering::Acquire));
+                        continue;
+                    }
+                    #[cfg(test)]
+                    StoreWorkerCommand::RepoMonitorBarrierForTest { repo_id, reply } => {
+                        repo_monitors.barrier_for_test(repo_id, reply);
+                        continue;
+                    }
                 };
 
                 if !thread_msg_tx.is_alive() {
                     continue;
                 }
+                if is_feedback_acknowledgement(&msg) {
+                    deferred_acknowledgements.push(
+                        PreparedReduction::for_worker(msg, &thread_state, &repos).into_parts(),
+                    );
+                    continue;
+                }
+
+                thread_msg_tx.refresh_open_preferences(&mut msg);
 
                 // Effects scheduled while handling this message inherit its
                 // operation, and so do the messages their tasks send back.
@@ -620,7 +963,7 @@ impl AppStore {
                             .read()
                             .unwrap_or_else(|e| e.into_inner())
                             .active_repo,
-                        repo_task_tokens.len()
+                        repos.load_scope_count()
                     );
                 }
 
@@ -628,17 +971,14 @@ impl AppStore {
                     Msg::RestoreSession { .. } => {
                         repo_load_trace::trace!(
                             "restore_session cancelling_all_repo_load_tokens count={}",
-                            repo_task_tokens.len()
+                            repos.load_scope_count()
                         );
                         repo_monitors.stop_all();
-                        for token in repo_task_tokens.values() {
-                            token.cancel();
-                        }
-                        repo_task_tokens.clear();
+                        repos.cancel_all_loads();
                     }
                     Msg::CloseRepo { repo_id } | Msg::MoveRepoOut { repo_id } => {
                         repo_monitors.stop(*repo_id);
-                        if let Some(token) = repo_task_tokens.remove(repo_id) {
+                        if let Some(token) = repos.take_load_scope(repo_id) {
                             repo_load_trace::trace!(
                                 "close_repo cancelling_repo_load_token repo_id={:?} load_epoch={}",
                                 repo_id,
@@ -650,7 +990,7 @@ impl AppStore {
                     Msg::CloseRepos { repo_ids, .. } => {
                         for repo_id in repo_ids {
                             repo_monitors.stop(*repo_id);
-                            if let Some(token) = repo_task_tokens.remove(repo_id) {
+                            if let Some(token) = repos.take_load_scope(repo_id) {
                                 repo_load_trace::trace!(
                                     "close_repos cancelling_repo_load_token repo_id={:?} load_epoch={}",
                                     repo_id,
@@ -662,7 +1002,7 @@ impl AppStore {
                     }
                     Msg::RepoActivated { repo_id } => {
                         repo_load_trace::trace!(
-                            "repo_activated_full_refresh repo_id={:?} monitor_running={}",
+                            "repo_activated repo_id={:?} monitor_running={}",
                             repo_id,
                             repo_monitors.is_running(*repo_id)
                         );
@@ -674,8 +1014,8 @@ impl AppStore {
                     }) if matches!(
                         message.as_ref(),
                         crate::msg::InternalMsg::RepoOpenedErr { .. }
-                    ) && repo_task_tokens
-                        .get(repo_id)
+                    ) && repos
+                        .load_scope(repo_id)
                         .is_some_and(|token| token.load_epoch == *load_epoch) =>
                     {
                         repo_load_trace::trace!(
@@ -683,39 +1023,66 @@ impl AppStore {
                             repo_id,
                             load_epoch
                         );
-                        repo_task_tokens.remove(repo_id);
+                        repos.take_load_scope(repo_id);
                     }
                     _ => {}
                 }
 
                 let mut worker_ctx = WorkerLoopContext {
+                    commit_identity: &thread_commit_identity,
                     thread_state: &thread_state,
                     active_repo_id: &active_repo_id,
                     event_tx: &event_tx,
                     repo_monitors: &mut repo_monitors,
-                    repo_task_tokens: &mut repo_task_tokens,
                     thread_msg_tx: &thread_msg_tx,
                     executor: &executor,
                     repo_load_executor: &repo_load_executor,
+                    worktree_scan_executor: &worktree_scan_executor,
                     metadata_executor: &metadata_executor,
                     signature_executor: &signature_executor,
                     history_find_executor: &history_find_executor,
                     session_persist_executor: &session_persist_executor,
+                    filesystem_executor,
                     backend: &backend,
                     publication: &thread_publication,
+                    deferred_acknowledgements: &mut deferred_acknowledgements,
+                    auto_fetch_inputs: &mut auto_fetch_inputs,
                 };
 
                 match msg {
                     Msg::SetActiveRepo { repo_id } => {
+                        let (previous, switching) = {
+                            let state = worker_ctx
+                                .thread_state
+                                .read()
+                                .unwrap_or_else(|e| e.into_inner());
+                            let known = state.repos.iter().any(|repo| repo.id == repo_id);
+                            (state.active_repo, known && state.active_repo != Some(repo_id))
+                        };
+                        if switching {
+                            if let Some(previous) = previous {
+                                worker_ctx.repo_monitors.mark_inactive(previous);
+                            }
+                            // Publish before reading the generation: a flush
+                            // racing this switch has either moved it already
+                            // or sees `repo_id` active and delivers.
+                            worker_ctx.active_repo_id.store(repo_id.0, Ordering::SeqCst);
+                        }
+                        let unchanged = switching
+                            && worker_ctx.repo_monitors.unchanged_since_inactive(repo_id);
+                        let (_, inputs) = PreparedReduction::for_repo_switch(
+                            repo_id, worker_ctx.thread_state, &repos, unchanged,
+                        ).into_parts();
                         worker_ctx.reduce_and_handle(
                             &mut repos,
                             &id_alloc,
-                            |app_state, repos, _| {
+                            |app_state, _, _| {
                                 let mut effects = reducer::SetActiveRepoEffects::new();
                                 fill_set_active_repo_inline(
-                                    repos,
+                                    &inputs,
                                     app_state,
                                     repo_id,
+                                    unchanged,
                                     &mut effects,
                                 );
                                 effects
@@ -789,59 +1156,85 @@ impl AppStore {
                         });
                     }
                     Msg::RepoActivated { repo_id } => {
-                        // Do a FULL refresh on activation (window focus). The filesystem monitor is
-                        // best-effort and cannot be the sole refresh trigger: in sandboxed/Flatpak
-                        // runs an external editor's or terminal's writes to the bind-mounted repo do
-                        // not propagate inotify events into the sandbox, so the monitor — even when
-                        // its thread is "running" — sees neither worktree edits NOR git-state changes
-                        // (commits, checkouts, fetches). Refreshing only the working-changes lanes
-                        // here would leave the log/branches/HEAD/divergence stale forever in exactly
-                        // that case. A full refresh keeps every view correct regardless of whether,
-                        // or how reliably, the watcher is delivering events; activation is throttled
-                        // upstream (REPO_ACTIVATION_THROTTLE), so this does not run on every alt-tab.
-                        worker_ctx.repo_monitors.revalidate(repo_id);
-                        let change = RepoExternalChange::all();
+                        // Native notifications can be lost (including across sandbox mounts).
+                        // Always check working changes, but compare Git metadata before making
+                        // every focus event reload the same history and reference lists.
+                        let context = worker_ctx.thread_state.read().unwrap_or_else(|e| e.into_inner())
+                            .repos.iter().find(|repo| repo.id == repo_id)
+                            .map(repo_monitor::ActivationContext::for_repo);
+                        let refresh_message = if context.is_some_and(|context| worker_ctx.repo_monitors.refresh_on_activation(repo_id, context)) {
+                            // The monitor will report the checked change. Retain
+                            // the cheap periodic maintenance request below.
+                            Msg::RepoActivated { repo_id }
+                        } else {
+                            Msg::RepoExternallyChanged { repo_id, change: RepoExternalChange::all() }
+                        };
+                        let (message, inputs) = PreparedReduction::for_worker(
+                            refresh_message, worker_ctx.thread_state, &repos,
+                        ).into_parts();
                         worker_ctx.reduce_and_handle(
                             &mut repos,
                             &id_alloc,
                             |app_state, repos, id| {
-                                let mut effects = reduce(
-                                    repos,
-                                    id,
-                                    app_state,
-                                    Msg::RepoExternallyChanged { repo_id, change },
-                                );
+                                let mut effects = reduce_prepared(&inputs, repos, id, app_state, message);
+                                effects.push(crate::msg::Effect::Control(crate::msg::ControlEffect::RefreshRepositoryMode { repo_id }));
                                 // A day-long session gets its daily check on
                                 // focus; the reducer throttles it hourly.
                                 effects.extend(reducer::maintenance::request_check(
-                                    app_state, repo_id,
+                                    &inputs, app_state, repo_id,
                                 ));
                                 effects
                             },
                         );
                     }
                     msg => {
+                        let (msg, inputs) = PreparedReduction::for_worker(msg, worker_ctx.thread_state, &repos).into_parts();
                         worker_ctx.reduce_and_handle(
                             &mut repos,
                             &id_alloc,
-                            |app_state, repos, id| reduce(repos, id, app_state, msg),
+                            |app_state, repos, id| reduce_prepared(&inputs, repos, id, app_state, msg),
                         );
                     }
                 }
             }
 
-            for token in repo_task_tokens.values() {
-                token.cancel();
-            }
+            repos.clear();
             for repo in &thread_state.read().unwrap_or_else(|e| e.into_inner()).repos {
                 repo.history_state.commit_signatures_cancellation.cancel();
             }
             repo_monitors.stop_all();
+            #[cfg(any(test, feature = "test-support"))]
+            {
+                repo_load_executor.join_workers();
+                if let Some(executor) = std::sync::LazyLock::get_mut(&mut worktree_scan_executor) {
+                    executor.join_workers();
+                }
+                if let Some(executor) = std::sync::LazyLock::get_mut(&mut history_find_executor) {
+                    executor.join_workers();
+                }
+                if let Some(executor) = store_filesystem_executor
+                    .as_mut()
+                    .and_then(std::sync::LazyLock::get_mut)
+                {
+                    executor.join_workers();
+                }
+                match scope {
+                    // Production releases the shared engine at exit (cleanup_on_shutdown).
+                    FilesystemScope::Process => {}
+                    // Otherwise a test store's engine would leave its staging folders behind.
+                    FilesystemScope::Store => thread_msg_tx
+                        .filesystem
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .shutdown(),
+                }
+            }
         });
         worker.expect("spawn store worker thread");
 
         (
             Self {
+                commit_identity,
                 state,
                 publication,
                 msg_tx: msg_tx.clone(),
@@ -850,6 +1243,19 @@ impl AppStore {
             },
             event_rx,
         )
+    }
+
+    /// Installs a resolver for this store only. Resolved identities are copied
+    /// into effects, so a queued operation cannot inherit a later window's
+    /// selection. Calling this does not write Git configuration.
+    pub fn set_commit_identity_resolver(
+        &self,
+        resolver: Option<gitcomet_core::commit_identity::CommitIdentityResolver>,
+    ) {
+        *self
+            .commit_identity
+            .write()
+            .unwrap_or_else(|e| e.into_inner()) = resolver;
     }
 
     pub fn dispatch(&self, msg: Msg) {
@@ -871,8 +1277,9 @@ impl AppStore {
         &self,
         file: &std::path::Path,
     ) -> gitcomet_core::services::Result<Option<PathBuf>> {
-        let file = gitcomet_core::filesystem::absolute_identity(file).map_err(|e| {
-            gitcomet_core::error::Error::new(gitcomet_core::error::ErrorKind::Io(e.kind()))
+        let file = gitcomet_core::filesystem::absolute_identity(file).map_err(|error| {
+            gitcomet_core::error::Error::from(error)
+                .with_context("resolve file path for repository discovery", Some(file))
         })?;
         for parent in file.parent().into_iter().flat_map(|p| p.ancestors()) {
             if parent.join(".git").symlink_metadata().is_ok() {
@@ -933,6 +1340,11 @@ impl AppStore {
             .load(Ordering::Relaxed)
     }
 
+    /// The filesystem engine this store's file operations journal into.
+    pub fn filesystem(&self) -> &'static std::sync::Mutex<gitcomet_core::filesystem::Filesystem> {
+        self.msg_tx.filesystem
+    }
+
     pub fn snapshot(&self) -> Arc<AppState> {
         let state = self.state.read().unwrap_or_else(|e| e.into_inner());
         Arc::clone(&state)
@@ -977,7 +1389,18 @@ impl AppStore {
 
     #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
+    pub fn record_planned_one_sided_sides_for_test(state: &mut AppState) {
+        reducer::record_planned_one_sided_sides(state);
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
     pub fn replace_snapshot_for_test(&self, state: Arc<AppState>) {
+        // Reduce what is already queued first (a new view's settings
+        // bootstrap), so a slow worker cannot apply it over the replacement.
+        let _ = self
+            .barrier_for_test()
+            .recv_timeout(std::time::Duration::from_secs(5));
         let mut current = self.state.write().unwrap_or_else(|e| e.into_inner());
         *current = state;
     }
@@ -999,7 +1422,7 @@ impl AppStore {
 
 #[cfg(feature = "benchmarks")]
 pub fn dispatch_sync_for_bench(state: &mut AppState, msg: Msg) -> Vec<crate::msg::Effect> {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let reduce_started = Instant::now();
     let effects = reduce(&mut repos, &id_alloc, state, msg);
@@ -1013,9 +1436,11 @@ pub(crate) fn with_set_active_repo_inline_for_bench<T>(
     repo_id: RepoId,
     f: impl FnOnce(&AppState, &[crate::msg::Effect]) -> T,
 ) -> T {
-    let repos = FxHashMap::default();
+    let repos = RepositoryRuntimes::default();
     let mut effects = reducer::SetActiveRepoEffects::new();
-    fill_set_active_repo_inline(&repos, state, repo_id, &mut effects);
+    let (_, inputs) =
+        PreparedReduction::new(Msg::SetActiveRepo { repo_id }, state, &repos).into_parts();
+    fill_set_active_repo_inline(&inputs, state, repo_id, false, &mut effects);
     f(state, &effects)
 }
 
@@ -1038,9 +1463,14 @@ pub(crate) fn with_select_diff_inline_for_bench<T>(
     target: gitcomet_core::domain::DiffTarget,
     f: impl FnOnce(&AppState, &[crate::msg::Effect]) -> T,
 ) -> T {
-    let repos = FxHashMap::default();
+    let repos = RepositoryRuntimes::default();
     let mut effects = reducer::SelectDiffEffects::new();
-    fill_select_diff_inline(&repos, state, repo_id, target, false, &mut effects);
+    let (message, inputs) =
+        PreparedReduction::new(Msg::SelectDiff { repo_id, target }, state, &repos).into_parts();
+    let Msg::SelectDiff { target, .. } = message else {
+        unreachable!("prepared selection retains its message")
+    };
+    fill_select_diff_inline(&inputs, state, repo_id, target, false, &mut effects);
     f(state, &effects)
 }
 
@@ -1184,3 +1614,6 @@ mod path_tests {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(feature = "benchmarks")]
+pub(crate) use repo_monitor::watcher_startup_for_bench;

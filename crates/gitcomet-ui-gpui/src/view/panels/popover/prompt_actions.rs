@@ -17,7 +17,7 @@ impl PopoverHost {
             .clone()
             .unwrap_or_else(|| PopoverAnchor::Point(point(px(64.0), px(64.0))));
         let anchor_is_bounds = matches!(&anchor_source, PopoverAnchor::Bounds(_));
-        let surface = crate::view::chrome::window_surface_bounds(window);
+        let surface = crate::kit::window_chrome::window_surface_bounds(window);
         let margin_x = scaled_px(16.0);
 
         let is_context_menu = popover_is_context_menu(&kind);
@@ -107,6 +107,9 @@ impl PopoverHost {
             }
             PopoverKind::StashPrompt => stash_prompt::panel(self, cx),
             PopoverKind::CommitPrompt { repo_id } => commit_prompt::panel(self, repo_id, cx),
+            PopoverKind::FileHistoryFilePicker { repo_id } => {
+                file_history_file_picker::panel(self, repo_id, cx)
+            }
             PopoverKind::StashPickerPrompt { repo_id, purpose } => {
                 stash_picker_prompt::panel(self, repo_id, purpose, cx)
             }
@@ -126,6 +129,14 @@ impl PopoverHost {
                 create_tag_prompt::panel(self, repo_id, target, cx)
             }
             PopoverKind::Repo { repo_id, kind } => match kind {
+                RepoPopoverKind::RepositoryModeMenu => self.context_menu_view(
+                    PopoverKind::Repo {
+                        repo_id,
+                        kind: RepoPopoverKind::RepositoryModeMenu,
+                    },
+                    cx,
+                ),
+                RepoPopoverKind::DisableBareModeConfirm => bare_mode::panel(self, repo_id, cx),
                 RepoPopoverKind::Remote(remote_kind) => match remote_kind {
                     RemotePopoverKind::AddPrompt => remote_add_prompt::panel(self, repo_id, cx),
                     RemotePopoverKind::EditUrlPrompt { name, kind } => {
@@ -153,6 +164,13 @@ impl PopoverHost {
                     ),
                     WorktreePopoverKind::Menu { path, branch } => self.context_menu_view(
                         PopoverKind::worktree(repo_id, WorktreePopoverKind::Menu { path, branch }),
+                        cx,
+                    ),
+                    WorktreePopoverKind::CommitMenu { commit_id } => self.context_menu_view(
+                        PopoverKind::worktree(
+                            repo_id,
+                            WorktreePopoverKind::CommitMenu { commit_id },
+                        ),
                         cx,
                     ),
                     WorktreePopoverKind::AddPrompt => {
@@ -208,9 +226,6 @@ impl PopoverHost {
                     }
                 },
             },
-            PopoverKind::FileHistory { repo_id, path } => {
-                file_history::panel(self, repo_id, path, cx)
-            }
             PopoverKind::PushSetUpstreamPrompt {
                 repo_id,
                 remote,
@@ -237,14 +252,12 @@ impl PopoverHost {
             PopoverKind::MergeAbortConfirm { repo_id } => {
                 merge_abort_confirm::panel(self, repo_id, cx)
             }
-            PopoverKind::ForceDeleteBranchConfirm { repo_id, name } => {
-                force_delete_branch_confirm::panel(self, repo_id, name, cx)
+            PopoverKind::ForceDeleteBranchConfirm(prompt) => {
+                force_delete_branch_confirm::panel(self, prompt, cx)
             }
-            PopoverKind::ForceRemoveWorktreeConfirm {
-                repo_id,
-                path,
-                branch,
-            } => force_remove_worktree_confirm::panel(self, repo_id, path, branch, cx),
+            PopoverKind::ForceRemoveWorktreeConfirm(prompt) => {
+                force_remove_worktree_confirm::panel(self, prompt, cx)
+            }
             PopoverKind::DiscardChangesConfirm {
                 repo_id,
                 area,
@@ -343,6 +356,7 @@ impl PopoverHost {
             PopoverKind::CommitFileSortMenu { list } => {
                 self.context_menu_view(PopoverKind::CommitFileSortMenu { list }, cx)
             }
+            kind @ PopoverKind::FileListLayoutMenu { .. } => self.context_menu_view(kind, cx),
             PopoverKind::ChangeTrackingSettings => {
                 self.context_menu_view(PopoverKind::ChangeTrackingSettings, cx)
             }
@@ -358,9 +372,18 @@ impl PopoverHost {
             PopoverKind::RepoTabMenu { repo_id } => {
                 self.context_menu_view(PopoverKind::RepoTabMenu { repo_id }, cx)
             }
-            PopoverKind::CommitMenu { repo_id, commit_id } => {
-                self.context_menu_view(PopoverKind::CommitMenu { repo_id, commit_id }, cx)
-            }
+            PopoverKind::CommitMenu {
+                repo_id,
+                commit_id,
+                refs,
+            } => self.context_menu_view(
+                PopoverKind::CommitMenu {
+                    repo_id,
+                    commit_id,
+                    refs,
+                },
+                cx,
+            ),
             PopoverKind::ReflogEntryMenu {
                 repo_id,
                 target,
@@ -370,6 +393,18 @@ impl PopoverHost {
                     repo_id,
                     target,
                     selector,
+                },
+                cx,
+            ),
+            PopoverKind::FileHistoryCommitMenu {
+                repo_id,
+                commit_id,
+                path,
+            } => self.context_menu_view(
+                PopoverKind::FileHistoryCommitMenu {
+                    repo_id,
+                    commit_id,
+                    path,
                 },
                 cx,
             ),
@@ -519,6 +554,7 @@ impl PopoverHost {
                 },
                 cx,
             ),
+            kind @ PopoverKind::WorktreeFileMenu { .. } => self.context_menu_view(kind, cx),
             kind @ PopoverKind::CommitRangeFileMenu { .. } => self.context_menu_view(kind, cx),
             PopoverKind::FileBrowserFileMenu { repo_id, path } => {
                 self.context_menu_view(PopoverKind::FileBrowserFileMenu { repo_id, path }, cx)

@@ -1,4 +1,5 @@
 use super::GixRepo;
+use crate::util::GitOutput;
 use crate::util::{
     bytes_to_text_preserving_utf8, git_command_failed_error, run_git_preview_output,
     run_git_with_output, validate_hex_commit_id, validate_ref_like_arg,
@@ -8,7 +9,7 @@ use gitcomet_core::services::{CancellationToken, CommandOutput, Result};
 use gitcomet_core::tag_push::{TagPushPreview, TagPushRequest};
 use gitcomet_core::text_utils::redact_url_userinfo;
 use std::collections::BTreeSet;
-use std::process::{Command, Output};
+use std::process::Command;
 
 impl GixRepo {
     fn tag_push_command(
@@ -85,7 +86,7 @@ impl GixRepo {
     }
 }
 
-fn parse_preview(output: Output, label: &str) -> Result<TagPushPreview> {
+fn parse_preview(output: GitOutput, label: &str) -> Result<TagPushPreview> {
     let mut preview = TagPushPreview::default();
     let mut new_tags = BTreeSet::new();
     let mut conflicts = BTreeSet::new();

@@ -1,5 +1,4 @@
 use super::*;
-use crate::view::panes::main::DiffHorizontalScrollColumn;
 
 fn file_diff_ready_shows_processing(
     has_file: bool,
@@ -11,6 +10,14 @@ fn file_diff_ready_shows_processing(
     // them, so a reload does not blink through a placeholder. The placeholder is
     // only for having nothing to show.
     has_file && (!cache_active || cache_inflight) && !has_rendered_rows
+}
+
+/// The image inputs hold the old side first, then the new.
+const fn image_side_index(side: gitcomet_core::domain::DiffPreviewTextSide) -> usize {
+    match side {
+        gitcomet_core::domain::DiffPreviewTextSide::Old => 0,
+        gitcomet_core::domain::DiffPreviewTextSide::New => 1,
+    }
 }
 
 fn image_diff_ready_shows_processing(has_file: bool, cache_active: bool) -> bool {
@@ -66,14 +73,11 @@ fn annex_whereis_lines(
     }
 }
 
-/// Inset between an image/SVG preview column and its artwork.
-const IMAGE_PREVIEW_CELL_PADDING_PX: f32 = 16.0;
-
 /// Gap above the first and below the last row of a rendered markdown preview,
 /// so the document does not start and end flush against the pane edges.
 pub(in crate::view) const MARKDOWN_PREVIEW_DOCUMENT_EDGE_GAP_PX: f32 = 12.0;
 
-impl MainPaneView {
+impl DiffRenderer {
     pub(in crate::view) fn render_diff_horizontal_scrollbar(
         theme: AppTheme,
         id: &'static str,
@@ -125,7 +129,8 @@ impl MainPaneView {
         }
         if !self.is_inline_submodule_diff_active()
             && let Some(repo) = self.active_repo()
-            && let Loadable::Ready(Some(preview)) = &repo.diff_state.diff_preview_text_file
+            && let Loadable::Ready(Some(preview)) =
+                &self.bound_diff_state(repo).diff_preview_text_file
             && preview.large_file.is_some()
         {
             return match preview.side {
@@ -170,7 +175,7 @@ impl MainPaneView {
             .flatten()
             .any(|side| side.pointer.is_lfs() && side.content == LargeFileContent::MissingLocally);
         if missing_lfs && !content_shown {
-            let tool_missing = self.large_file_tools().git_lfs.is_not_found();
+            let tool_missing = self.large_file_tools()?.git_lfs.is_not_found();
             let target = target.clone();
             any = true;
             buttons = buttons.child(
@@ -195,7 +200,7 @@ impl MainPaneView {
             );
         }
 
-        let annex_missing_tool = self.large_file_tools().git_annex.is_not_found();
+        let annex_missing_tool = self.large_file_tools()?.git_annex.is_not_found();
         let annex_keys = annex_card_keys(old, new, true);
         if !annex_keys.is_empty() && !content_shown {
             any = true;
@@ -291,6 +296,12 @@ impl MainPaneView {
                 .get(RenderedPreviewKind::Markdown)
                 == RenderedPreviewMode::Rendered;
 
+        let wants_diagram_preview = rendered_preview_kind == Some(RenderedPreviewKind::Diagram)
+            && self
+                .rendered_preview_modes
+                .get(RenderedPreviewKind::Diagram)
+                == RenderedPreviewMode::Rendered;
+
         if wants_image {
             enum DiffFileImageState {
                 NotLoaded,
@@ -322,7 +333,6 @@ impl MainPaneView {
                 }
                 DiffFileImageState::Error(e) => {
                     self.diff_raw_input.update(cx, |input, cx| {
-                        input.set_theme(theme, cx);
                         input.set_text(e, cx);
                         input.set_read_only(true, cx);
                     });
@@ -353,152 +363,112 @@ impl MainPaneView {
                         components::empty_state(theme, "Diff", "Preview unavailable.")
                             .into_any_element()
                     } else {
-                        enum CachedDiffImageSource {
-                            Path(std::path::PathBuf),
-                            Render(Arc<gpui::RenderImage>, usize),
-                        }
-
+                        use crate::view::image_preview::Input;
                         let old_render = self.file_image_diff_cache_old.clone();
                         let new_render = self.file_image_diff_cache_new.clone();
+                        let fallbacks = [old_render.clone(), new_render.clone()];
                         let [old_frame, new_frame] = self.update_file_image_preview_animation(
                             old_render.as_ref(),
                             new_render.as_ref(),
                             window,
                             cx,
                         );
-                        let old = self
-                            .file_image_diff_cache_old_svg_path
-                            .clone()
-                            .map(CachedDiffImageSource::Path)
-                            .or_else(|| {
-                                old_render
-                                    .map(|image| CachedDiffImageSource::Render(image, old_frame))
-                            });
-                        let new = self
-                            .file_image_diff_cache_new_svg_path
-                            .clone()
-                            .map(CachedDiffImageSource::Path)
-                            .or_else(|| {
-                                new_render
-                                    .map(|image| CachedDiffImageSource::Render(image, new_frame))
-                            });
-
-                        // Breathing room around the artwork. Without it an SVG
-                        // renders edge to edge and reads as cramped against
-                        // the column header, the split divider, and the pane
-                        // edges.
-                        let cell_padding = crate::ui_scale::design_px_from_percent(
-                            IMAGE_PREVIEW_CELL_PADDING_PX,
-                            ui_scale_percent,
-                        );
-                        let clamp_preview_size = self
-                            .file_image_diff_cache_path
-                            .as_deref()
-                            .is_some_and(preview_path_uses_scale_down);
-                        let cell = |id: &'static str, image: Option<CachedDiffImageSource>| {
-                            let muted = theme.colors.foreground.secondary;
-                            div()
-                                .id(id)
-                                .flex_1()
-                                .min_w(px(0.0))
-                                .h_full()
-                                .overflow_hidden()
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .p(cell_padding)
-                                .child(match image {
-                                    Some(CachedDiffImageSource::Path(path)) => gpui::img(path)
-                                        .w_full()
-                                        .h_full()
-                                        .object_fit(gpui::ObjectFit::Contain)
-                                        .with_loading(move || {
-                                            div()
-                                                .text_size(theme.ui_text(14.0))
-                                                .text_color(muted)
-                                                .child("Processing image...")
-                                                .into_any_element()
-                                        })
-                                        .with_fallback(move || {
-                                            div()
-                                                .text_size(theme.ui_text(14.0))
-                                                .text_color(muted)
-                                                .child("Preview unavailable.")
-                                                .into_any_element()
-                                        })
-                                        .into_any_element(),
-                                    Some(CachedDiffImageSource::Render(img_data, frame_index)) => {
-                                        preview_render_image_element(
-                                            img_data,
-                                            frame_index,
-                                            clamp_preview_size,
-                                        )
-                                        .w_full()
-                                        .h_full()
-                                        .into_any_element()
-                                    }
-                                    None => div()
-                                        .text_size(theme.ui_text(14.0))
-                                        .text_color(theme.colors.foreground.secondary)
-                                        .child("No image")
-                                        .into_any_element(),
-                                })
-                        };
-
-                        // A content view is one file, not a comparison: opening
-                        // a picture from the explorer shows the picture, with no
-                        // A/B header and no empty "before" half to explain away.
                         let is_content_view = self
                             .active_repo()
                             .is_some_and(|repo| self.bound_diff_state(repo).content_preview);
-                        if is_content_view {
-                            return div()
-                                .id("diff_image_container")
-                                .debug_selector(|| "diff_image_single".to_string())
-                                .relative()
-                                .h_full()
-                                .min_h(px(0.0))
-                                .flex()
-                                .flex_col()
-                                .bg(theme.colors.surface.canvas)
-                                .child(
-                                    div()
-                                        .flex_1()
-                                        .min_h(px(0.0))
-                                        .flex()
-                                        .child(cell("diff_image_single_cell", new.or(old))),
-                                )
-                                .into_any_element();
+                        let cap = self
+                            .file_image_diff_cache_path
+                            .as_deref()
+                            .is_some_and(preview_path_uses_scale_down);
+                        let mut inputs = [
+                            Input {
+                                source: self.file_image_sources[0].clone(),
+                                preview: old_render,
+                                frame: old_frame,
+                            },
+                            Input {
+                                source: self.file_image_sources[1].clone(),
+                                preview: new_render,
+                                frame: new_frame,
+                            },
+                            Input::default(),
+                        ];
+                        let present_side = if inputs[1].source.is_some()
+                            || inputs[1].preview.is_some()
+                            || self.file_image_diff_cache_new_svg_path.is_some()
+                        {
+                            1
+                        } else {
+                            0
+                        };
+                        // Content, or an added or deleted image: one picture.
+                        let single_side = if is_content_view {
+                            Some(present_side)
+                        } else {
+                            self.one_sided_change_side().map(image_side_index)
+                        };
+                        if let Some(side) = single_side {
+                            inputs[1 - side] = Input::default();
                         }
-
-                        let columns_header = components::split_columns_header(
+                        let present = inputs.each_ref().map(|input| input.source.is_some());
+                        let group = self.prepare_image_preview(inputs, cap, cx);
+                        let mut image = |side: usize| {
+                            if present[side] {
+                                self.image_preview_viewport(group.clone(), side, cx)
+                            } else if let Some(path) = if side == 0 {
+                                self.file_image_diff_cache_old_svg_path.clone()
+                            } else {
+                                self.file_image_diff_cache_new_svg_path.clone()
+                            } {
+                                gpui::img(path)
+                                    .size_full()
+                                    .object_fit(gpui::ObjectFit::Contain)
+                                    .with_loading(move || {
+                                        div()
+                                            .text_size(theme.ui_text(14.0))
+                                            .text_color(theme.colors.foreground.secondary)
+                                            .child("Processing image...")
+                                            .into_any_element()
+                                    })
+                                    .with_fallback(move || {
+                                        div()
+                                            .debug_selector(|| "image_preview_unavailable".into())
+                                            .text_size(theme.ui_text(14.0))
+                                            .text_color(theme.colors.foreground.secondary)
+                                            .child("Preview unavailable.")
+                                            .into_any_element()
+                                    })
+                                    .into_any_element()
+                            } else if let Some(image) = fallbacks[side].as_ref() {
+                                preview_render_image_element(
+                                    image.clone(),
+                                    [old_frame, new_frame][side],
+                                    cap,
+                                )
+                                .size_full()
+                                .into_any_element()
+                            } else {
+                                div()
+                                    .text_size(theme.ui_text(14.0))
+                                    .text_color(theme.colors.foreground.secondary)
+                                    .child("No image")
+                                    .into_any_element()
+                            }
+                        };
+                        let content = if let Some(side) = single_side {
+                            crate::view::rendered_preview::PreviewContent::File(image(side))
+                        } else {
+                            crate::view::rendered_preview::PreviewContent::Diff {
+                                old: image(0),
+                                new: image(1),
+                            }
+                        };
+                        crate::view::rendered_preview::render(
+                            "diff_image",
+                            content,
                             theme,
                             ui_scale_percent,
-                            "A (before)",
-                            "B (after)",
-                        );
-
-                        div()
-                            .id("diff_image_container")
-                            .relative()
-                            .h_full()
-                            .min_h(px(0.0))
-                            .flex()
-                            .flex_col()
-                            .bg(theme.colors.surface.canvas)
-                            .child(columns_header)
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_h(px(0.0))
-                                    .flex()
-                                    .child(cell("diff_image_left", old))
-                                    .child(
-                                        div().w(px(1.0)).h_full().bg(theme.colors.stroke.default),
-                                    )
-                                    .child(cell("diff_image_right", new)),
-                            )
-                            .into_any_element()
+                        )
                     }
                 }
             }
@@ -523,7 +493,7 @@ impl MainPaneView {
                 },
             };
 
-            if !wants_markdown_preview {
+            if !wants_markdown_preview && !wants_diagram_preview {
                 self.ensure_file_diff_cache(cx);
             }
 
@@ -532,7 +502,7 @@ impl MainPaneView {
                     components::empty_state(theme, "Diff", "Select a file.").into_any_element()
                 }
                 DiffFileState::Loading => {
-                    let label = if wants_markdown_preview {
+                    let label = if wants_markdown_preview || wants_diagram_preview {
                         "Preview"
                     } else {
                         "Diff"
@@ -540,11 +510,10 @@ impl MainPaneView {
                     components::empty_state(theme, label, "Loading").into_any_element()
                 }
                 DiffFileState::Error(e) => {
-                    if wants_markdown_preview {
+                    if wants_markdown_preview || wants_diagram_preview {
                         components::empty_state(theme, "Preview", e).into_any_element()
                     } else {
                         self.diff_raw_input.update(cx, |input, cx| {
-                            input.set_theme(theme, cx);
                             input.set_text(e, cx);
                             input.set_read_only(true, cx);
                         });
@@ -559,6 +528,14 @@ impl MainPaneView {
                             .overflow_y_scroll()
                             .track_scroll(&self.diff_raw_scroll)
                             .child(self.diff_raw_input.clone())
+                            .into_any_element()
+                    }
+                }
+                DiffFileState::Ready { has_file } if wants_diagram_preview => {
+                    if has_file {
+                        self.render_diagram_file(theme, ui_scale_percent)
+                    } else {
+                        components::empty_state(theme, "Preview", "No file contents available.")
                             .into_any_element()
                     }
                 }
@@ -593,7 +570,7 @@ impl MainPaneView {
                         components::empty_state(theme, "Diff", "No file contents available.")
                             .into_any_element()
                     } else if let Some(
-                        crate::view::panes::main::diff_cache::FileDiffCacheError::NotText {
+                        crate::view::panes::diff::diff_cache::FileDiffCacheError::NotText {
                             old_bytes,
                             new_bytes,
                         },
@@ -609,7 +586,6 @@ impl MainPaneView {
                         .into_any_element()
                     } else if let Some(error) = self.file_diff_cache_error.clone() {
                         self.diff_raw_input.update(cx, |input, cx| {
-                            input.set_theme(theme, cx);
                             input.set_text(error.to_string(), cx);
                             input.set_read_only(true, cx);
                         });
@@ -634,507 +610,7 @@ impl MainPaneView {
                         components::empty_state(theme, "Diff", "Processing file...")
                             .into_any_element()
                     } else {
-                        self.ensure_diff_visible_indices();
-                        self.ensure_diff_wrap_visible_rows(window, cx);
-                        self.maybe_autoscroll_diff_to_first_change();
-
-                        let total_len = if self.is_collapsed_diff_projection_active() {
-                            self.collapsed_diff_visible_rows.len()
-                        } else {
-                            match self.diff_view {
-                                DiffViewMode::Inline => self.file_diff_inline_row_len(),
-                                DiffViewMode::Split => self.file_diff_split_row_len(),
-                            }
-                        };
-                        if total_len == 0 {
-                            empty_diff_text_document(
-                                cx.entity(),
-                                DiffTextRegion::Inline,
-                                components::empty_state(theme, "Diff", "Empty file.")
-                                    .into_any_element(),
-                            )
-                        } else if self.diff_visible_len() == 0 {
-                            components::empty_state(theme, "Diff", "Nothing to render.")
-                                .into_any_element()
-                        } else {
-                            let markers = self.diff_scrollbar_markers_cache.clone();
-                            match self.diff_view {
-                                DiffViewMode::Inline => {
-                                    let horizontal_scrollbar_gutter = components::Scrollbar::gutter(
-                                        components::ScrollbarAxis::Horizontal,
-                                    );
-                                    let scrollbar_gutter = self
-                                        .diff_vertical_scrollbar_gutter_for_column(
-                                            DiffHorizontalScrollColumn::Primary,
-                                            self.diff_scroll.clone(),
-                                        );
-                                    let list = uniform_list(
-                                        "diff",
-                                        self.diff_list_len(),
-                                        cx.processor(Self::render_projected_inline),
-                                    )
-                                    .h_full()
-                                    .min_h(px(0.0))
-                                    .pb(if self.diff_word_wrap {
-                                        px(0.0)
-                                    } else {
-                                        horizontal_scrollbar_gutter
-                                    })
-                                    .track_scroll(&self.diff_scroll)
-                                    .with_decoration(DiffTextEmptySpaceDecoration {
-                                        view: cx.entity(),
-                                        region: DiffTextRegion::Inline,
-                                    })
-                                    .when(
-                                        !self.diff_word_wrap,
-                                        |list| {
-                                            list.with_horizontal_sizing_behavior(
-                                                gpui::ListHorizontalSizingBehavior::Unconstrained,
-                                            )
-                                        },
-                                    );
-                                    div()
-                                        .id("diff_scroll_container")
-                                        .relative()
-                                        .h_full()
-                                        .min_h(px(0.0))
-                                        .bg(theme.colors.surface.canvas)
-                                        .font_family(editor_font_family.clone())
-                                        .child(
-                                            div()
-                                                .h_full()
-                                                .min_h(px(0.0))
-                                                .pr(scrollbar_gutter)
-                                                .child(list),
-                                        )
-                                        // Anchored to the rows container so the
-                                        // handle's hover highlight matches the
-                                        // annotation column height exactly.
-                                        .when(self.annotation_active(), |d| {
-                                            d.child(self.annotate_resize_handle(
-                                                ui_scale_percent,
-                                                theme,
-                                                cx,
-                                            ))
-                                        })
-                                        .child(
-                                            components::Scrollbar::new(
-                                                "diff_scrollbar",
-                                                self.diff_scroll.clone(),
-                                            )
-                                            .markers(markers)
-                                            .always_visible()
-                                            .render(theme),
-                                        )
-                                        .when(!self.diff_word_wrap, |d| {
-                                            d.child(Self::render_diff_horizontal_scrollbar(
-                                                theme,
-                                                "diff_hscrollbar",
-                                                self.diff_scroll.clone(),
-                                                scrollbar_gutter,
-                                                "diff_hscrollbar",
-                                            ))
-                                        })
-                                        .into_any_element()
-                                }
-                                DiffViewMode::Split => {
-                                    self.sync_diff_split_scroll();
-                                    let vertical_sync_enabled =
-                                        self.diff_scroll_sync.includes_vertical();
-                                    let count = self.diff_list_len();
-                                    let horizontal_scrollbar_gutter = components::Scrollbar::gutter(
-                                        components::ScrollbarAxis::Horizontal,
-                                    );
-                                    let left_scrollbar_gutter = self
-                                        .diff_vertical_scrollbar_gutter_for_column(
-                                            DiffHorizontalScrollColumn::Primary,
-                                            self.diff_scroll.clone(),
-                                        );
-                                    let right_scrollbar_gutter = self
-                                        .diff_vertical_scrollbar_gutter_for_column(
-                                            DiffHorizontalScrollColumn::SplitRight,
-                                            self.diff_split_right_scroll.clone(),
-                                        );
-                                    let shared_scrollbar_gutter = if vertical_sync_enabled {
-                                        left_scrollbar_gutter
-                                    } else {
-                                        px(0.0)
-                                    };
-                                    let handle_w = px(PANE_RESIZE_HANDLE_PX);
-                                    let main_w = (self.main_pane_content_width(cx)
-                                        - shared_scrollbar_gutter)
-                                        .max(px(0.0));
-                                    let (_, min_col_w) = diff_split_drag_params(main_w);
-                                    let (left_w, right_w) =
-                                        diff_split_column_widths(main_w, self.diff_split_ratio);
-                                    let left = uniform_list(
-                                        "diff_split_left",
-                                        count,
-                                        cx.processor(Self::render_projected_left),
-                                    )
-                                    .h_full()
-                                    .min_h(px(0.0))
-                                    .pb(if self.diff_word_wrap {
-                                        px(0.0)
-                                    } else {
-                                        horizontal_scrollbar_gutter
-                                    })
-                                    .track_scroll(&self.diff_scroll)
-                                    .with_decoration(DiffTextEmptySpaceDecoration {
-                                        view: cx.entity(),
-                                        region: DiffTextRegion::SplitLeft,
-                                    })
-                                    .when(
-                                        !self.diff_word_wrap,
-                                        |list| {
-                                            list.with_horizontal_sizing_behavior(
-                                                gpui::ListHorizontalSizingBehavior::Unconstrained,
-                                            )
-                                        },
-                                    );
-                                    let right = uniform_list(
-                                        "diff_split_right",
-                                        count,
-                                        cx.processor(Self::render_projected_right),
-                                    )
-                                    .h_full()
-                                    .min_h(px(0.0))
-                                    .pb(if self.diff_word_wrap {
-                                        px(0.0)
-                                    } else {
-                                        horizontal_scrollbar_gutter
-                                    })
-                                    .track_scroll(&self.diff_split_right_scroll)
-                                    .with_decoration(DiffTextEmptySpaceDecoration {
-                                        view: cx.entity(),
-                                        region: DiffTextRegion::SplitRight,
-                                    })
-                                    .when(
-                                        !self.diff_word_wrap,
-                                        |list| {
-                                            list.with_horizontal_sizing_behavior(
-                                                gpui::ListHorizontalSizingBehavior::Unconstrained,
-                                            )
-                                        },
-                                    );
-                                    let collapsed_file_stat = self
-                                        .is_collapsed_diff_projection_active()
-                                        .then(|| self.collapsed_diff_total_file_stat())
-                                        .flatten();
-                                    let (left_label, right_label) = self.split_diff_pane_labels();
-                                    let left_header = Self::split_column_header_label(
-                                        left_label,
-                                        collapsed_file_stat.map(|(_, removed)| removed),
-                                        '-',
-                                        theme.colors.diff.removed.foreground,
-                                    );
-                                    let right_header = Self::split_column_header_label(
-                                        right_label,
-                                        collapsed_file_stat.map(|(added, _)| added),
-                                        '+',
-                                        theme.colors.diff.added.foreground,
-                                    );
-
-                                    // Built before `resize_handle` captures `cx`.
-                                    let split_annotate_handle =
-                                        self.annotation_active().then(|| {
-                                            self.annotate_resize_handle(ui_scale_percent, theme, cx)
-                                        });
-
-                                    let split_dragging = self.diff_split_resize.is_some();
-                                    let resize_handle = |id: &'static str| {
-                                        div()
-                                            .id(id)
-                                            .group(id)
-                                            .w(handle_w)
-                                            .h_full()
-                                            .cursor(CursorStyle::ResizeLeftRight)
-                                            .child(components::resize_grip(
-                                                theme,
-                                                ui_scale_percent,
-                                                id,
-                                                components::ResizeGripAxis::Vertical,
-                                                split_dragging,
-                                                Some(theme.colors.stroke.default),
-                                            ))
-                                            .on_drag(
-                                                DiffSplitResizeHandle::Divider,
-                                                |_handle, _offset, _window, cx| {
-                                                    cx.new(|_cx| DiffSplitResizeDragGhost)
-                                                },
-                                            )
-                                            .on_mouse_down(
-                                                MouseButton::Left,
-                                                cx.listener(
-                                                    move |this, e: &MouseDownEvent, _w, cx| {
-                                                        cx.stop_propagation();
-                                                        crate::press_gesture::claim_press(cx);
-                                                        crate::text_selection_owner::preserve(cx);
-                                                        this.diff_split_resize =
-                                                            Some(DiffSplitResizeState {
-                                                                handle:
-                                                                    DiffSplitResizeHandle::Divider,
-                                                                start_x: e.position.x,
-                                                                start_ratio: this.diff_split_ratio,
-                                                            });
-                                                        cx.notify();
-                                                    },
-                                                ),
-                                            )
-                                            .on_drag_move(cx.listener(
-                                                move |this,
-                                                      e: &gpui::DragMoveEvent<
-                                                    DiffSplitResizeHandle,
-                                                >,
-                                                      _w,
-                                                      cx| {
-                                                    let Some(state) = this.diff_split_resize else {
-                                                        return;
-                                                    };
-                                                    if state.handle != *e.drag(cx) {
-                                                        return;
-                                                    }
-
-                                                    let scrollbar_gutter = if this
-                                                        .diff_scroll_sync
-                                                        .includes_vertical()
-                                                    {
-                                                        components::Scrollbar::visible_gutter(
-                                                            this.diff_scroll.clone(),
-                                                            components::ScrollbarAxis::Vertical,
-                                                        )
-                                                    } else {
-                                                        px(0.0)
-                                                    };
-                                                    let main_w = (this.main_pane_content_width(cx)
-                                                        - scrollbar_gutter)
-                                                        .max(px(0.0));
-                                                    let available =
-                                                        (main_w - handle_w).max(px(0.0));
-                                                    let dx =
-                                                        e.event.position.x - state.start_x;
-                                                    match next_diff_split_drag_ratio(
-                                                        available,
-                                                        min_col_w,
-                                                        state.start_ratio,
-                                                        dx,
-                                                    ) {
-                                                        None => {
-                                                            if (this.diff_split_ratio - 0.5)
-                                                                .abs()
-                                                                > f32::EPSILON
-                                                            {
-                                                                this.diff_split_ratio = 0.5;
-                                                                cx.notify();
-                                                            }
-                                                        }
-                                                        Some(next_ratio) => {
-                                                            if (this.diff_split_ratio
-                                                                - next_ratio)
-                                                                .abs()
-                                                                > f32::EPSILON
-                                                            {
-                                                                this.diff_split_ratio =
-                                                                    next_ratio;
-                                                                cx.notify();
-                                                            }
-                                                        }
-                                                    }
-                                                },
-                                            ))
-                                            .on_mouse_up(
-                                                MouseButton::Left,
-                                                cx.listener(|this, _e, _w, cx| {
-                                                    if this.diff_split_resize.take().is_some() {
-                                                        cx.notify();
-                                                    }
-                                                }),
-                                            )
-                                            .on_mouse_up_out(
-                                                MouseButton::Left,
-                                                cx.listener(|this, _e, _w, cx| {
-                                                    if this.diff_split_resize.take().is_some() {
-                                                        cx.notify();
-                                                    }
-                                                }),
-                                            )
-                                    };
-
-                                    let columns_header = div()
-                                        .id("diff_split_columns_header")
-                                        .debug_selector(|| "diff_split_columns_header".to_string())
-                                        .w_full()
-                                        // Same right inset as the body below, so both rows divide
-                                        // the identical content box and the column divider lines
-                                        // up. Padding keeps the band and its bottom border
-                                        // full-bleed.
-                                        .pr(shared_scrollbar_gutter)
-                                        .h(components::control_height(
-                                            ui_scale::UiScale::from_percent(ui_scale_percent)
-                                                .with_appearance(theme.metrics),
-                                        ))
-                                        .flex()
-                                        .items_center()
-                                        .text_size(theme.ui_text(12.0))
-                                        .text_color(theme.colors.foreground.secondary)
-                                        .bg(crate::theme::content_header_bg(theme))
-                                        .border_b_1()
-                                        .border_color(theme.colors.stroke.default)
-                                        .child(
-                                            div()
-                                                .w(left_w)
-                                                .min_w(px(0.0))
-                                                .px_2()
-                                                .overflow_hidden()
-                                                .whitespace_nowrap()
-                                                .child(left_header),
-                                        )
-                                        .child(resize_handle("diff_split_resize_handle_header"))
-                                        .child(
-                                            div()
-                                                .w(right_w)
-                                                .min_w(px(0.0))
-                                                .px_2()
-                                                .overflow_hidden()
-                                                .whitespace_nowrap()
-                                                .child(right_header),
-                                        );
-
-                                    div()
-                                        .id("diff_split_scroll_container")
-                                        .relative()
-                                        .h_full()
-                                        .min_h(px(0.0))
-                                        .flex()
-                                        .flex_col()
-                                        .bg(theme.colors.surface.canvas)
-                                        .font_family(editor_font_family.clone())
-                                        .child(columns_header)
-                                        .child(
-                                            div()
-                                                .relative()
-                                                .pr(shared_scrollbar_gutter)
-                                                .flex()
-                                                .flex_col()
-                                                .flex_1()
-                                                .min_h(px(0.0))
-                                                .child(
-                                                    div()
-                                                        .flex_1()
-                                                        .min_h(px(0.0))
-                                                        .flex()
-                                                        .child(
-                                                            div()
-                                                                .relative()
-                                                                .w(left_w)
-                                                                .min_w(px(0.0))
-                                                                .h_full()
-                                                                .child(
-                                                                    div()
-                                                                        .h_full()
-                                                                        .min_h(px(0.0))
-                                                                        .pr(if vertical_sync_enabled {
-                                                                            px(0.0)
-                                                                        } else {
-                                                                            left_scrollbar_gutter
-                                                                        })
-                                                                        .child(left),
-                                                                )
-                                                                .when(!vertical_sync_enabled, |d| {
-                                                                    d.child(
-                                                                        components::Scrollbar::new(
-                                                                            "diff_split_left_scrollbar",
-                                                                            self.diff_scroll.clone(),
-                                                                        )
-                                                                        .markers(markers.clone())
-                                                                        .always_visible()
-                                                                        .render(theme),
-                                                                    )
-                                                                })
-                                                                .when(!self.diff_word_wrap, |d| {
-                                                                    d.child(
-                                                                        Self::render_diff_horizontal_scrollbar(
-                                                                            theme,
-                                                                            "diff_split_left_hscrollbar",
-                                                                            self.diff_scroll.clone(),
-                                                                            if vertical_sync_enabled {
-                                                                                px(0.0)
-                                                                            } else {
-                                                                                left_scrollbar_gutter
-                                                                            },
-                                                                            "diff_split_left_hscrollbar",
-                                                                        ),
-                                                                    )
-                                                                })
-                                                                .when_some(
-                                                                    split_annotate_handle,
-                                                                    |d, handle| d.child(handle),
-                                                                ),
-                                                        )
-                                                        .child(resize_handle(
-                                                            "diff_split_resize_handle_body",
-                                                        ))
-                                                        .child(
-                                                            div()
-                                                                .relative()
-                                                                .w(right_w)
-                                                                .min_w(px(0.0))
-                                                                .h_full()
-                                                                .child(
-                                                                    div()
-                                                                        .h_full()
-                                                                        .min_h(px(0.0))
-                                                                        .pr(if vertical_sync_enabled {
-                                                                            px(0.0)
-                                                                        } else {
-                                                                            right_scrollbar_gutter
-                                                                        })
-                                                                        .child(right),
-                                                                )
-                                                                .when(!vertical_sync_enabled, |d| {
-                                                                    d.child(
-                                                                        components::Scrollbar::new(
-                                                                            "diff_split_right_scrollbar",
-                                                                            self.diff_split_right_scroll.clone(),
-                                                                        )
-                                                                        .markers(markers.clone())
-                                                                        .always_visible()
-                                                                        .render(theme),
-                                                                    )
-                                                                })
-                                                                .when(!self.diff_word_wrap, |d| {
-                                                                    d.child(
-                                                                        Self::render_diff_horizontal_scrollbar(
-                                                                            theme,
-                                                                            "diff_split_right_hscrollbar",
-                                                                            self.diff_split_right_scroll.clone(),
-                                                                            if vertical_sync_enabled {
-                                                                                px(0.0)
-                                                                            } else {
-                                                                                right_scrollbar_gutter
-                                                                            },
-                                                                            "diff_split_right_hscrollbar",
-                                                                        ),
-                                                                    )
-                                                                }),
-                                                        ),
-                                                )
-                                                .when(vertical_sync_enabled, |d| {
-                                                    d.child(
-                                                        components::Scrollbar::new(
-                                                            "diff_scrollbar",
-                                                            self.diff_scroll.clone(),
-                                                        )
-                                                        .markers(markers)
-                                                        .always_visible()
-                                                        .render(theme),
-                                                    )
-                                                }),
-                                        )
-                                        .into_any_element()
-                                }
-                            }
-                        }
+                        self.render_text_diff(theme, window, cx)
                     }
                 }
             }
@@ -1158,7 +634,7 @@ impl MainPaneView {
         let content_height =
             f32::from(scroll.bounds().size.height + scroll.max_offset().y.max(px(0.0)));
         if measured_key == Some(key) && !measured.is_empty() && content_height > 0.0 {
-            return crate::view::markdown_preview::scrollbar_markers_for_extents(
+            return crate::view::markdown_scrollbar::scrollbar_markers_for_extents(
                 &measured,
                 content_height,
             );
@@ -1170,10 +646,10 @@ impl MainPaneView {
         }
         match self.diff_view {
             DiffViewMode::Inline => {
-                crate::view::markdown_preview::scrollbar_markers_for_document(&preview.inline)
+                crate::view::markdown_scrollbar::scrollbar_markers_for_document(&preview.inline)
             }
             DiffViewMode::Split => {
-                crate::view::markdown_preview::scrollbar_markers_for_diff_preview(preview)
+                crate::view::markdown_scrollbar::scrollbar_markers_for_diff_preview(preview)
             }
         }
     }
@@ -1227,6 +703,7 @@ impl MainPaneView {
         };
         // One document listener serves both sides of a split.
         let row_boxes = rows::MarkdownRowBoxes::default();
+        let diagram_heights = crate::view::diagram_preview::block::DiagramHeights::new(cx);
         let context =
             |this: &Self, region: DiffTextRegion, side: usize| rows::MarkdownDocumentContext {
                 theme,
@@ -1239,16 +716,18 @@ impl MainPaneView {
                 row_boxes: row_boxes.clone(),
                 block_scrolls: this.diff_markdown.block_scrolls[side].clone(),
                 blocks: Default::default(),
-                view: Some(cx.entity()),
+                view: Some(cx.entity().into()),
                 text_region: region,
                 change_bar_color: None,
                 query: query.clone(),
                 reveal: this.markdown_interaction.reveal.clone(),
                 scroll: Some(scroll_handle.clone()),
+                diagram_heights: diagram_heights.clone(),
                 hovered_link: this.markdown_interaction.hovered_link.clone(),
                 change_extents: Some(this.diff_markdown.change_extents.clone()),
                 layout: this.diff_markdown.layouts[side].clone(),
                 // Only the split's new side is parsed from the working-tree file.
+                disclosures: None,
                 tasks_editable: region == DiffTextRegion::SplitRight
                     && this.markdown_preview_tasks_editable(),
             };
@@ -1410,10 +889,7 @@ impl MainPaneView {
                 self.diff_split_resize.is_some(),
                 idle_line,
             ))
-            .on_drag(
-                DiffSplitResizeHandle::Divider,
-                |_handle, _offset, _window, cx| cx.new(|_cx| DiffSplitResizeDragGhost),
-            )
+            .on_resize_drag(DiffSplitResizeHandle::Divider)
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, e: &MouseDownEvent, _w, cx| {

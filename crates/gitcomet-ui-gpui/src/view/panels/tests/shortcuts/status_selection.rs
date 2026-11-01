@@ -109,7 +109,6 @@ fn preview(cx: &mut gpui::VisualTestContext, view: &View) -> Option<DiffTarget> 
 
 #[gpui::test]
 fn status_select_all_is_scoped_to_each_focused_section(cx: &mut gpui::TestAppContext) {
-    let _guard = lock_visual_test();
     let (view, cx) = fixture(cx);
     let before = preview(cx, &view);
     for (section, header, expected) in [
@@ -176,14 +175,19 @@ fn status_select_all_is_scoped_to_each_focused_section(cx: &mut gpui::TestAppCon
                 selection.untracked.len() + selection.unstaged.len() + selection.staged.len(),
                 expected.len()
             );
-            assert!(!view.read(app).main_pane.read(app).diff_text_has_selection());
+            assert!(
+                !view
+                    .read(app)
+                    .diff_renderer
+                    .read(app)
+                    .diff_text_has_selection()
+            );
         });
     }
 }
 
 #[gpui::test]
 fn status_select_all_can_be_reduced_to_a_range_and_then_nothing(cx: &mut gpui::TestAppContext) {
-    let _guard = lock_visual_test();
     let (view, cx) = fixture(cx);
     // Start with the preview in a different section from the selection being edited.
     let before = preview(cx, &view);
@@ -245,7 +249,6 @@ fn status_select_all_can_be_reduced_to_a_range_and_then_nothing(cx: &mut gpui::T
 
 #[gpui::test]
 fn status_select_all_includes_collapsed_and_offscreen_files(cx: &mut gpui::TestAppContext) {
-    let _guard = lock_visual_test();
     let (view, cx) = fixture(cx);
     let mut repo = status_repo();
     let paths: Vec<_> = (0..100)
@@ -293,7 +296,6 @@ fn status_select_all_includes_collapsed_and_offscreen_files(cx: &mut gpui::TestA
 
 #[gpui::test]
 fn status_select_all_leaves_text_inputs_and_other_shortcuts_intact(cx: &mut gpui::TestAppContext) {
-    let _guard = lock_visual_test();
     let (view, cx) = fixture(cx);
     let text = "a commit message";
     cx.update(|window, app| {
@@ -336,7 +338,6 @@ fn status_select_all_leaves_text_inputs_and_other_shortcuts_intact(cx: &mut gpui
 fn status_select_all_range_tracks_line_stats_and_refresh_prunes_only_missing_files(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _guard = lock_visual_test();
     let (view, cx) = fixture(cx);
     click_row(
         cx,
@@ -356,23 +357,10 @@ fn status_select_all_range_tracks_line_stats_and_refresh_prunes_only_missing_fil
             .unwrap()
             .clone()
     });
-    repo.uncommitted_line_stats =
-        Loadable::Ready(Arc::new(gitcomet_core::domain::UncommittedLineStats {
-            staged: Default::default(),
-            unstaged: [("a.rs", 100), ("b.rs", 1), ("c.rs", 10)]
-                .into_iter()
-                .map(|(path, additions)| {
-                    (
-                        path.into(),
-                        gitcomet_core::domain::LineStats {
-                            additions: Some(additions),
-                            deletions: Some(0),
-                        },
-                    )
-                })
-                .collect(),
-        }));
-    repo.unstaged_line_stats_rev += 1;
+    load_unstaged_line_stats(
+        &mut repo,
+        &[("a.rs", 100, 0), ("b.rs", 1, 0), ("c.rs", 10, 0)],
+    );
     apply_state(cx, &view, app_state_with_active_repo(repo.clone()));
     cx.update(|_window, app| {
         view.read(app).details_pane.clone().update(app, |pane, cx| {
@@ -423,7 +411,6 @@ fn status_select_all_range_tracks_line_stats_and_refresh_prunes_only_missing_fil
 fn status_selection_staging_uses_remaining_paths_even_when_the_preview_is_excluded(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _guard = lock_visual_test();
     let (view, cx) = fixture(cx);
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(
@@ -529,7 +516,6 @@ fn status_selection_staging_uses_remaining_paths_even_when_the_preview_is_exclud
 fn diff_stage_and_advance_clears_only_the_consumed_singleton_selection(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _guard = lock_visual_test();
     let (view, cx) = fixture(cx);
     for (section, shortcut, first, next) in [
         (StatusSection::CombinedUnstaged, "space", "a.rs", "b.rs"),
@@ -619,7 +605,6 @@ fn diff_stage_and_advance_clears_only_the_consumed_singleton_selection(
 fn status_select_all_on_empty_or_loading_sections_never_selects_diff_text(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _guard = lock_visual_test();
     let (view, cx) = fixture(cx);
     for status in [Loadable::Ready(Arc::new(vec![])), Loadable::Loading] {
         let mut repo = status_repo();
@@ -631,11 +616,82 @@ fn status_select_all_on_empty_or_loading_sections_never_selects_diff_text(
         draw_and_drain_test_window(cx);
         assert!(selected(cx, &view, DiffArea::Staged).is_empty());
         cx.update(|_window, app| {
-            assert!(!view.read(app).main_pane.read(app).diff_text_has_selection());
+            assert!(
+                !view
+                    .read(app)
+                    .diff_renderer
+                    .read(app)
+                    .diff_text_has_selection()
+            );
             assert_eq!(
                 view.read(app).store.snapshot().repos[0].local_actions_in_flight,
                 0
             );
         });
     }
+}
+
+#[gpui::test]
+fn status_section_space_rechecks_selection_before_deferred_staging(cx: &mut gpui::TestAppContext) {
+    let (view, cx) = fixture(cx);
+    let section = StatusSection::CombinedUnstaged;
+    click_row(cx, section, 1, gpui::Modifiers::default());
+    wait_until_store_diff_target_path(cx, &view, Path::new("b.rs"));
+    sync_store_snapshot(cx, &view);
+    let before = preview(cx, &view);
+    let ops_rev = crate::view::test_support::repo_ops_rev(&view, cx, REPO);
+
+    cx.update(|window, app| {
+        view.read(app).details_pane.clone().update(app, |pane, cx| {
+            assert!(pane.handle_status_section_shortcut(
+                section,
+                &gpui::Keystroke::parse("space").unwrap(),
+                window,
+                cx,
+            ));
+            // Model deselection before the deferred action gets to run. Retain
+            // the explicit empty selection, as Ctrl-clicking the last row does.
+            pane.status_multi_selection
+                .get_mut(&REPO)
+                .unwrap()
+                .unstaged
+                .clear();
+            cx.notify();
+        });
+    });
+    draw_and_drain_test_window(cx);
+    crate::view::test_support::drain_store_worker(&view, cx);
+    assert_eq!(
+        crate::view::test_support::repo_ops_rev(&view, cx, REPO),
+        ops_rev
+    );
+    assert_eq!(preview(cx, &view), before);
+    assert!(selected(cx, &view, DiffArea::Unstaged).is_empty());
+}
+
+#[gpui::test]
+fn status_section_keys_step_through_files(cx: &mut gpui::TestAppContext) {
+    let (view, cx) = fixture(cx);
+    let section = StatusSection::CombinedUnstaged;
+    click_row(cx, section, 0, gpui::Modifiers::default());
+    wait_until_store_diff_target_path(cx, &view, Path::new("a.rs"));
+    sync_store_snapshot(cx, &view);
+    let press = |cx: &mut gpui::VisualTestContext, keys: &str, path: &str| {
+        cx.simulate_keystrokes(keys);
+        draw_and_drain_test_window(cx);
+        wait_until_store_diff_target_path(cx, &view, Path::new(path));
+        sync_store_snapshot(cx, &view);
+    };
+    press(cx, "down", "b.rs");
+    press(cx, "end", "new/b.rs");
+    press(cx, "home", "a.rs");
+    cx.update(|window, app| {
+        let pane = view.read(app).details_pane.read(app);
+        assert!(pane.status_section_focus_handle(section).is_focused(window));
+    });
+    cx.simulate_keystrokes("ctrl-a");
+    draw_and_drain_test_window(cx);
+    assert!(selected(cx, &view, DiffArea::Unstaged).len() > 1);
+    press(cx, "down", "b.rs");
+    assert!(selected(cx, &view, DiffArea::Unstaged).len() <= 1);
 }

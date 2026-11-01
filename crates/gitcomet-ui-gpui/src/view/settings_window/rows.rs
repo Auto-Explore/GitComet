@@ -73,7 +73,6 @@ impl SettingsWindowView {
             .items_center()
             .gap_2()
             .rounded(px(theme.radii.row))
-            .cursor(CursorStyle::PointingHand)
             .control_interaction(
                 InteractionStyle::new(theme),
                 InteractionState::default().selected(selected, selected_bg),
@@ -231,22 +230,48 @@ impl SettingsWindowView {
 
     pub(super) fn toggle_row(
         &self,
-        id: &'static str,
-        label: &'static str,
+        id: impl Into<SharedString>,
+        label: impl Into<SharedString>,
         enabled: bool,
         theme: AppTheme,
     ) -> Stateful<gpui::Div> {
         components::settings_toggle_row(id, label, enabled, theme, self.row_scale(theme))
     }
 
+    pub(super) fn disabled_toggle_row(
+        &self,
+        id: impl Into<SharedString>,
+        label: impl Into<SharedString>,
+        enabled: bool,
+        theme: AppTheme,
+    ) -> Stateful<gpui::Div> {
+        components::settings_disabled_toggle_row(id, label, enabled, theme, self.row_scale(theme))
+    }
+
     pub(super) fn info_row(
         &self,
         id: impl Into<SharedString>,
-        label: &'static str,
+        label: impl Into<SharedString>,
         value: impl IntoElement,
         theme: AppTheme,
     ) -> Stateful<gpui::Div> {
         components::settings_info_row(id, label, value, theme)
+    }
+
+    /// Why the field above it rejected its value.
+    pub(super) fn field_error(
+        &self,
+        id: &'static str,
+        message: impl Into<SharedString>,
+        theme: AppTheme,
+    ) -> gpui::Div {
+        div()
+            .debug_selector(move || id.to_string())
+            .px_2()
+            .pb_1()
+            .text_size(theme.ui_text(12.0))
+            .text_color(theme.colors.status.danger.foreground)
+            .child(message.into())
     }
 
     /// Environment rows hold read-only fields so their values can be selected.
@@ -294,7 +319,7 @@ impl SettingsWindowView {
                     format!("settings_window_{}_{}", row.key, index)
                 }
                 .into();
-                let input = self.environment_value_input(id.clone(), row.value, theme, cx);
+                let input = self.environment_value_input(id.clone(), row.value, cx);
                 shown.insert(id.clone());
                 card = card.child(self.info_row(id, row.label, input, theme));
             }
@@ -309,7 +334,6 @@ impl SettingsWindowView {
         &mut self,
         id: SharedString,
         value: String,
-        theme: AppTheme,
         cx: &mut gpui::Context<Self>,
     ) -> Entity<components::TextInput> {
         let input = self
@@ -332,7 +356,6 @@ impl SettingsWindowView {
             })
             .clone();
         input.update(cx, |input, cx| {
-            input.set_theme(theme, cx);
             input.set_text(value, cx);
         });
         input
@@ -595,7 +618,6 @@ impl SettingsWindowView {
                 .operating_system
                 .clone()
                 .unwrap_or_default(),
-            theme,
             cx,
         );
         div()
@@ -977,6 +999,35 @@ impl SettingsWindowView {
                     controls::ControlActivation::Action,
                     cx.listener(move |this, _e: &ClickEvent, _window, cx| {
                         this.set_file_list_layout(option, cx);
+                    }),
+                )
+                .into_any_element()
+            })
+            .collect()
+    }
+
+    pub(super) fn render_file_list_sort_option_rows(
+        this: &mut Self,
+        range: Range<usize>,
+        _window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> Vec<AnyElement> {
+        let theme = this.theme;
+        range
+            .filter_map(|ix| FILE_LIST_SORT_OPTIONS.get(ix).copied())
+            .map(|(id, option, detail)| {
+                this.option_row(
+                    id,
+                    option.label(),
+                    Some(detail.into()),
+                    this.file_list_sort == option,
+                    theme,
+                )
+                .on_activate(
+                    false,
+                    controls::ControlActivation::Action,
+                    cx.listener(move |this, _e: &ClickEvent, _window, cx| {
+                        this.set_file_list_sort(option, cx);
                     }),
                 )
                 .into_any_element()

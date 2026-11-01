@@ -1,5 +1,5 @@
 use super::*;
-use crate::view::panes::main::diff_search::normalize_diff_search_query;
+use crate::view::panes::diff::diff_search::normalize_diff_search_query;
 
 pub(in crate::view) fn prepared_diff_syntax_line_for_one_based_line(
     document: Option<PreparedDiffSyntaxDocument>,

@@ -1,5 +1,5 @@
 use super::*;
-use chrome::{cursor_style_for_resize_edge, resize_edge};
+use crate::kit::window_chrome::{cursor_style_for_resize_edge, resize_edge};
 
 #[cfg(test)]
 use tooltip::clear_visible_tooltip_text_for_test;
@@ -31,6 +31,7 @@ impl Render for GitCometView {
                 | GitCometViewMode::FocusedMergetool
                 | GitCometViewMode::FocusedDiff
         ));
+        self.sync_sidebar_header_layout(window, cx);
         let next_window_size = window.viewport_size();
         let previous_window_width = self.last_window_size.width;
         let window_width_changed = previous_window_width != next_window_size.width;
@@ -50,7 +51,6 @@ impl Render for GitCometView {
             self.ui_window_size_last_seen = self.last_window_size;
         }
         let ui_scale_percent = self.ui_scale_percent;
-        let scaled_px = ui_scale::scaler(ui_scale_percent);
 
         if self
             .pending_branch_exists_prompt
@@ -118,18 +118,21 @@ impl Render for GitCometView {
             );
         }
 
-        if let Some((repo_id, name)) = self.pending_force_delete_branch_prompt.take()
-            && self.active_repo_id() == Some(repo_id)
+        if self
+            .pending_force_delete_branch_prompt
+            .as_ref()
+            .is_some_and(|prompt| self.active_repo_id() == Some(prompt.repo_id))
+            && let Some(prompt) = self.pending_force_delete_branch_prompt.take()
         {
             if self.pending_force_delete_branch_centered {
                 self.open_popover_centered(
-                    PopoverKind::ForceDeleteBranchConfirm { repo_id, name },
+                    PopoverKind::ForceDeleteBranchConfirm(prompt),
                     window,
                     cx,
                 );
             } else {
                 self.open_popover_at(
-                    PopoverKind::ForceDeleteBranchConfirm { repo_id, name },
+                    PopoverKind::ForceDeleteBranchConfirm(prompt),
                     self.last_mouse_pos,
                     window,
                     cx,
@@ -137,15 +140,14 @@ impl Render for GitCometView {
             }
         }
 
-        if let Some((repo_id, path, branch)) = self.pending_force_remove_worktree_prompt.take()
-            && self.active_repo_id() == Some(repo_id)
+        if self
+            .pending_force_remove_worktree_prompt
+            .as_ref()
+            .is_some_and(|prompt| self.active_repo_id() == Some(prompt.repo_id))
+            && let Some(prompt) = self.pending_force_remove_worktree_prompt.take()
         {
             self.open_popover_at(
-                PopoverKind::ForceRemoveWorktreeConfirm {
-                    repo_id,
-                    path,
-                    branch,
-                },
+                PopoverKind::ForceRemoveWorktreeConfirm(prompt),
                 self.last_mouse_pos,
                 window,
                 cx,
@@ -218,7 +220,7 @@ impl Render for GitCometView {
         let (tiling, client_inset) = match decorations {
             Decorations::Client { tiling } => (
                 Some(tiling),
-                chrome::client_side_decoration_inset(self.ui_scale_percent),
+                crate::kit::window_chrome::client_side_decoration_inset(self.ui_scale_percent),
             ),
             Decorations::Server => (None, px(0.0)),
         };
@@ -245,11 +247,13 @@ impl Render for GitCometView {
             .font(gpui::Font {
                 family: crate::font_preferences::applied_ui_font_family(
                     &font_preferences.ui_font_family,
+                    cx,
                 )
                 .into(),
                 features: font_features,
                 fallbacks: None,
                 weight: gpui::FontWeight::default(),
+                width: gpui::FontWidth::default(),
                 style: gpui::FontStyle::default(),
             })
             .text_color(theme.colors.foreground.primary)
@@ -267,7 +271,7 @@ impl Render for GitCometView {
         if show_custom_window_chrome {
             body = body.child(stable_cached_fixed_height_view(
                 self.title_bar.clone(),
-                chrome::TITLE_BAR_HEIGHT,
+                crate::kit::window_chrome::TITLE_BAR_HEIGHT,
             ));
         }
 
@@ -367,8 +371,9 @@ impl Render for GitCometView {
         }
 
         if let Some(prompt) = self.state.auth_prompt.clone() {
-            let prompt_key = format!("{:?}:{:?}", prompt.kind, prompt.operation);
-            if self.auth_prompt_key.as_ref() != Some(&prompt_key) {
+            let prompt_key = prompt.generation;
+            let is_new_prompt = self.auth_prompt_key != Some(prompt_key);
+            if is_new_prompt {
                 self.auth_prompt_key = Some(prompt_key);
                 self.auth_prompt_username_input
                     .update(cx, |input, cx| input.set_text("", cx));
@@ -376,59 +381,90 @@ impl Render for GitCometView {
                     .update(cx, |input, cx| input.set_text("", cx));
             }
 
-            self.auth_prompt_username_input
-                .update(cx, |input, cx| input.set_theme(theme, cx));
+            let is_validating = prompt.status == AuthPromptStatus::Validating
+                || self.auth_prompt_submitted_generation == Some(prompt.generation);
+            self.auth_prompt_username_input.update(cx, |input, cx| {
+                input.set_read_only(is_validating, cx);
+            });
             let is_host_verification = prompt.kind == AuthPromptKind::HostVerification;
             self.auth_prompt_secret_input.update(cx, |input, cx| {
-                input.set_theme(theme, cx);
                 input.set_masked(!is_host_verification, cx);
+                input.set_read_only(is_validating, cx);
             });
+            if is_new_prompt && !is_validating {
+                let first_input = match prompt.kind {
+                    AuthPromptKind::UsernamePassword => {
+                        Some(self.auth_prompt_username_input.clone())
+                    }
+                    AuthPromptKind::Passphrase => Some(self.auth_prompt_secret_input.clone()),
+                    AuthPromptKind::HostVerification => None,
+                };
+                if let Some(input) = first_input {
+                    self.focus_new_auth_prompt(&input, window, cx);
+                }
+            }
 
             let requires_username = prompt.kind == AuthPromptKind::UsernamePassword;
+            let is_pin = prompt
+                .challenge
+                .as_ref()
+                .is_some_and(|challenge| challenge.is_pin());
             let title = match prompt.kind {
                 AuthPromptKind::UsernamePassword => "Repository authentication required",
+                AuthPromptKind::Passphrase if is_pin => "Security key PIN required",
                 AuthPromptKind::Passphrase => "Passphrase required",
                 AuthPromptKind::HostVerification => "Host authenticity confirmation required",
             };
-            let subtitle = match prompt.kind {
-                AuthPromptKind::UsernamePassword => {
-                    "Enter username and password, then confirm to retry."
-                }
-                AuthPromptKind::Passphrase => "Enter your key passphrase, then confirm to retry.",
-                AuthPromptKind::HostVerification => {
-                    "Enter `yes` to trust this host key, or paste the shown fingerprint."
+            let subtitle = if is_validating {
+                "Checking authentication…"
+            } else {
+                match prompt.kind {
+                    AuthPromptKind::UsernamePassword => {
+                        "Enter username and password, then confirm to continue."
+                    }
+                    AuthPromptKind::Passphrase if is_pin => {
+                        "Enter your security key's PIN, then confirm to continue."
+                    }
+                    AuthPromptKind::Passphrase => {
+                        "Enter your key passphrase, then confirm to continue."
+                    }
+                    AuthPromptKind::HostVerification => {
+                        "Enter `yes` to trust this host key, or paste the shown fingerprint."
+                    }
                 }
             };
 
-            let confirm_button = components::Button::new("auth_prompt_confirm", "Confirm")
-                .style(components::ButtonStyle::Filled)
-                .on_click(theme, cx, move |this, _e, _w, cx| {
-                    this.try_auth_prompt_submit(cx);
-                });
+            let inline_error = self.auth_prompt_input_error.clone().or_else(|| {
+                (prompt.status == AuthPromptStatus::Rejected).then(|| prompt.reason.clone())
+            });
+            let reason = prompt
+                .challenge
+                .as_ref()
+                .map(|challenge| challenge.prompt.clone())
+                .unwrap_or_else(|| prompt.reason.clone());
+
+            let confirm_button = components::Button::new(
+                "auth_prompt_confirm",
+                if is_validating {
+                    "Checking…"
+                } else {
+                    "Confirm"
+                },
+            )
+            .style(components::ButtonStyle::Filled)
+            .disabled(is_validating)
+            .on_click(theme, cx, move |this, _e, _w, cx| {
+                this.try_auth_prompt_submit(cx);
+            })
+            .debug_selector(|| "auth_prompt_confirm".to_string());
 
             let cancel_button = components::Button::new("auth_prompt_cancel", "Cancel")
                 .style(components::ButtonStyle::Outlined)
                 .on_click(theme, cx, |this, _e, _w, cx| {
-                    this.store.dispatch(Msg::CancelAuthPrompt);
-                    cx.notify();
+                    this.cancel_auth_prompt(cx);
                 });
 
-            let prompt_form = div()
-                .flex()
-                .flex_col()
-                .gap_1()
-                .child(
-                    div()
-                        .text_size(theme.ui_text(14.0))
-                        .font_weight(FontWeight::BOLD)
-                        .child(title),
-                )
-                .child(
-                    div()
-                        .text_size(theme.ui_text(14.0))
-                        .text_color(theme.colors.foreground.secondary)
-                        .child(subtitle),
-                )
+            let prompt_form = prompt_banner_form(theme, title, subtitle)
                 .when(requires_username, |this| {
                     this.child(self.auth_prompt_username_input.clone())
                 })
@@ -441,22 +477,27 @@ impl Render for GitCometView {
                             .child("Use Cancel if you do not trust this host."),
                     )
                 })
-                .when(!prompt.reason.trim().is_empty(), |this| {
+                .when_some(inline_error, |this, error| {
                     this.child(
-                        restrict_scroll_to_vertical_axis(
-                            div()
-                                .id("auth_prompt_reason_scroll")
-                                .max_h(scaled_px(96.0))
-                                .overflow_y_scroll(),
-                        )
-                        .child(
-                            div()
-                                .text_size(theme.ui_text(12.0))
-                                .text_color(theme.colors.foreground.secondary)
-                                .child(prompt.reason.clone()),
-                        ),
+                        div()
+                            .id("auth_prompt_error")
+                            .debug_selector(|| "auth_prompt_error".to_string())
+                            .text_size(theme.ui_text(12.0))
+                            .text_color(theme.colors.status.danger.foreground)
+                            .child(error),
                     )
                 })
+                .when(
+                    !reason.trim().is_empty() && prompt.status != AuthPromptStatus::Rejected,
+                    |this| {
+                        this.child(prompt_banner_details(
+                            theme,
+                            ui_scale_percent,
+                            "auth_prompt_reason_scroll",
+                            reason,
+                        ))
+                    },
+                )
                 .child(
                     div()
                         .pt_1()
@@ -467,20 +508,14 @@ impl Render for GitCometView {
                         .child(cancel_button),
                 );
 
-            let (prompt_bg, prompt_border) = Self::auth_prompt_banner_colors(theme);
-            body = body.child(
-                div()
-                    .relative()
-                    .px_2()
-                    .py_1()
-                    .bg(prompt_bg)
-                    .border_1()
-                    .border_color(prompt_border)
-                    .rounded(px(theme.radii.panel))
-                    .child(prompt_form),
-            );
+            body = body.child(prompt_banner(theme, prompt_form));
         } else {
             self.auth_prompt_key = None;
+            self.restore_focus_after_auth_prompt(window, cx);
+        }
+
+        if let Some(banner) = self.annex_remote_check_banner(theme, cx) {
+            body = body.child(banner);
         }
 
         let mut root = div()
@@ -515,7 +550,6 @@ impl Render for GitCometView {
                 },
             ));
         }
-        root = root.child(UiScaleScrollCapture { view: cx.entity() });
         root = root
             .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
                 if this.view_mode != GitCometViewMode::FocusedDiff
@@ -639,17 +673,13 @@ impl Render for GitCometView {
             }))
             .on_action(cx.listener(
                 |this, _: &TextInputDiffPrevSearchMatchOrChange, _window, cx| {
-                    this.defer_text_input_main_pane_action(cx, |pane, _window, cx| {
-                        pane.navigate_prev_search_match_or_diff_change(cx)
-                    });
+                    this.defer_search_match_navigation(false, cx);
                     cx.stop_propagation();
                 },
             ))
             .on_action(cx.listener(
                 |this, _: &TextInputDiffNextSearchMatchOrChange, _window, cx| {
-                    this.defer_text_input_main_pane_action(cx, |pane, _window, cx| {
-                        pane.navigate_next_search_match_or_diff_change(cx)
-                    });
+                    this.defer_search_match_navigation(true, cx);
                     cx.stop_propagation();
                 },
             ))
@@ -679,20 +709,24 @@ impl Render for GitCometView {
             }))
             .on_action(
                 cx.listener(|this, _: &DiffPrevSearchMatchOrChange, _window, cx| {
-                    this.defer_text_input_main_pane_action(cx, |pane, _window, cx| {
-                        pane.navigate_prev_search_match_or_diff_change(cx)
-                    });
+                    this.defer_search_match_navigation(false, cx);
                     cx.stop_propagation();
                 }),
             )
             .on_action(
                 cx.listener(|this, _: &DiffNextSearchMatchOrChange, _window, cx| {
-                    this.defer_text_input_main_pane_action(cx, |pane, _window, cx| {
-                        pane.navigate_next_search_match_or_diff_change(cx)
-                    });
+                    this.defer_search_match_navigation(true, cx);
                     cx.stop_propagation();
                 }),
             )
+            .on_action(cx.listener(|this, _: &DiffPrevChange, _window, cx| {
+                this.defer_diff_change_navigation(true, cx);
+                cx.stop_propagation();
+            }))
+            .on_action(cx.listener(|this, _: &DiffNextChange, _window, cx| {
+                this.defer_diff_change_navigation(false, cx);
+                cx.stop_propagation();
+            }))
             .on_action(
                 cx.listener(|this, _: &TextInputDiffPrevChange, _window, cx| {
                     this.defer_text_input_main_pane_action(cx, |pane, _window, cx| {
@@ -730,7 +764,7 @@ impl Render for GitCometView {
             let size = window.viewport_size();
             let next = resize_edge(
                 e.position,
-                chrome::client_side_decoration_inset(this.ui_scale_percent),
+                crate::kit::window_chrome::client_side_decoration_inset(this.ui_scale_percent),
                 size,
                 tiling,
             );
@@ -766,7 +800,9 @@ impl Render for GitCometView {
                     let size = window.viewport_size();
                     let edge = resize_edge(
                         e.position,
-                        chrome::client_side_decoration_inset(this.ui_scale_percent),
+                        crate::kit::window_chrome::client_side_decoration_inset(
+                            this.ui_scale_percent,
+                        ),
                         size,
                         tiling,
                     );
@@ -775,7 +811,7 @@ impl Render for GitCometView {
                     };
 
                     cx.stop_propagation();
-                    crate::app::begin_window_resize(window, edge);
+                    crate::kit::window_chrome::begin_window_resize(window, edge);
                 }),
             );
         } else if self.hover_resize_edge.is_some() {
@@ -798,19 +834,30 @@ impl Render for GitCometView {
             .child(stable_cached_overlay_view(self.toast_host.clone()))
             .child(stable_overlay_view(self.tooltip_host.clone()));
 
-        root = root.child(chrome::window_frame(
+        root = root.child(crate::kit::window_chrome::window_frame(
             theme,
             decorations,
             framed_content.into_any_element(),
             Some(frame_overlay.into_any_element()),
             self.ui_scale_percent,
         ));
+        // Painted last, so viewports with their own Ctrl/Cmd+scroll zoom
+        // capture the wheel first.
+        root = root.child(UiScaleScrollCapture { view: cx.entity() });
 
         if crate::startup_probe::is_enabled() {
-            root = root.on_children_prepainted(|_children_bounds, window, _cx| {
-                if crate::startup_probe::mark_first_paint() {
-                    window.on_next_frame(|_window, cx| {
-                        crate::startup_probe::mark_first_interactive();
+            let home_ready = self.is_home_screen_active() && self.state.git_runtime.is_available();
+            root = root.on_children_prepainted(move |_children_bounds, window, _cx| {
+                let first_paint = crate::startup_probe::mark_first_paint();
+                let home_frame = home_ready && !crate::startup_probe::home_ready_recorded();
+                if first_paint || home_frame {
+                    window.on_next_frame(move |_window, cx| {
+                        if first_paint {
+                            crate::startup_probe::mark_first_interactive();
+                        }
+                        if home_frame {
+                            crate::startup_probe::mark_home_ready();
+                        }
                         if crate::startup_probe::should_exit_after_first_interactive() {
                             crate::app::mark_clean_shutdown_requested(cx);
                             cx.quit();
@@ -821,5 +868,350 @@ impl Render for GitCometView {
         }
 
         root
+    }
+}
+
+impl GitCometView {
+    pub(super) fn pane_resize_handle(
+        &self,
+        theme: AppTheme,
+        id: &'static str,
+        handle: PaneResizeHandle,
+        cx: &gpui::Context<Self>,
+    ) -> gpui::Stateful<gpui::Div> {
+        let collapsed = match handle {
+            PaneResizeHandle::Sidebar => self.sidebar_collapsed,
+            PaneResizeHandle::Details => self.details_collapsed,
+        };
+        if collapsed {
+            return div().id(id).w(px(0.0)).h_full();
+        }
+
+        // Only the details divider shows an idle hairline: it separates two
+        // regions inside the content card. The sidebar handle sits on the
+        // bare canvas and stays invisible until hovered or dragged.
+        let idle_line = matches!(handle, PaneResizeHandle::Details);
+        let dragging = self.pane_resize.is_some_and(|state| state.handle == handle);
+        div()
+            .id(id)
+            .debug_selector(move || id.to_string())
+            .group(id)
+            .w(self.pane_resize_handle_width())
+            .h_full()
+            .cursor(CursorStyle::ResizeLeftRight)
+            .child(components::resize_grip(
+                theme,
+                self.ui_scale_percent,
+                id,
+                components::ResizeGripAxis::Vertical,
+                dragging,
+                idle_line.then_some(theme.colors.stroke.subtle),
+            ))
+            .on_resize_drag(handle)
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, e: &MouseDownEvent, _w, cx| {
+                    cx.stop_propagation();
+                    crate::press_gesture::claim_press(cx);
+                    crate::text_selection_owner::preserve(cx);
+                    match handle {
+                        PaneResizeHandle::Sidebar => {
+                            this.sidebar_width_anim_seq =
+                                this.sidebar_width_anim_seq.wrapping_add(1);
+                            this.sidebar_width_animating = false;
+                            this.sidebar_render_width = this.sidebar_width;
+                        }
+                        PaneResizeHandle::Details => {
+                            this.details_width_anim_seq =
+                                this.details_width_anim_seq.wrapping_add(1);
+                            this.details_width_animating = false;
+                            this.details_render_width = this.details_width;
+                        }
+                    }
+                    let minimum = match handle {
+                        PaneResizeHandle::Sidebar => this.sidebar_min_width(),
+                        PaneResizeHandle::Details => this.details_min_width(),
+                    };
+                    this.pane_resize = Some(
+                        PaneResizeState::new(
+                            handle,
+                            e.position.x,
+                            this.sidebar_width,
+                            this.details_width,
+                            this.last_window_size.width,
+                            this.sidebar_collapsed,
+                            this.details_collapsed,
+                        )
+                        .with_minimums(
+                            minimum,
+                            this.main_min_width(),
+                            this.pane_collapsed_width(),
+                        ),
+                    );
+                    cx.notify();
+                }),
+            )
+            .on_drag_move(cx.listener(
+                move |this, e: &gpui::DragMoveEvent<PaneResizeHandle>, _w, cx| {
+                    let Some(state) = this.pane_resize else {
+                        return;
+                    };
+                    if state.handle != *e.drag(cx) {
+                        return;
+                    }
+
+                    let total_w = this.last_window_size.width;
+                    let next_width = next_pane_resize_drag_width(
+                        &state,
+                        e.event.position.x,
+                        total_w,
+                        this.sidebar_collapsed,
+                        this.details_collapsed,
+                    );
+                    let mut changed = false;
+                    match state.handle {
+                        PaneResizeHandle::Sidebar => {
+                            if this.sidebar_width != next_width {
+                                this.set_sidebar_width_from_pixels(next_width);
+                                changed = true;
+                            }
+                            if this.sidebar_render_width != next_width {
+                                this.sidebar_render_width = next_width;
+                                changed = true;
+                            }
+                        }
+                        PaneResizeHandle::Details => {
+                            if this.details_width != next_width {
+                                this.set_details_width_from_pixels(next_width);
+                                changed = true;
+                            }
+                            if this.details_render_width != next_width {
+                                this.details_render_width = next_width;
+                                changed = true;
+                            }
+                        }
+                    }
+                    if changed {
+                        cx.notify();
+                    }
+                },
+            ))
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, _e, _w, cx| {
+                    if this.pane_resize.take().is_some() {
+                        this.schedule_ui_settings_persist(cx);
+                        cx.notify();
+                    }
+                }),
+            )
+            .on_mouse_up_out(
+                MouseButton::Left,
+                cx.listener(|this, _e, _w, cx| {
+                    if this.pane_resize.take().is_some() {
+                        this.schedule_ui_settings_persist(cx);
+                        cx.notify();
+                    }
+                }),
+            )
+    }
+}
+
+/// The frame the passphrase, host-key and special-remote prompts share.
+fn prompt_banner(theme: AppTheme, form: gpui::Div) -> gpui::Div {
+    let (background, border) = GitCometView::auth_prompt_banner_colors(theme);
+    div()
+        .relative()
+        .px_2()
+        .py_1()
+        .bg(background)
+        .border_1()
+        .border_color(border)
+        .rounded(px(theme.radii.panel))
+        .child(form)
+}
+
+/// A prompt's title and the line under it.
+fn prompt_banner_form(
+    theme: AppTheme,
+    title: impl Into<SharedString>,
+    subtitle: impl Into<SharedString>,
+) -> gpui::Div {
+    div()
+        .flex()
+        .flex_col()
+        .gap_1()
+        .child(
+            div()
+                .text_size(theme.ui_text(14.0))
+                .font_weight(FontWeight::BOLD)
+                .child(title.into()),
+        )
+        .child(
+            div()
+                .text_size(theme.ui_text(14.0))
+                .text_color(theme.colors.foreground.secondary)
+                .child(subtitle.into()),
+        )
+}
+
+/// Longer prompt text, scrolled within a few lines.
+fn prompt_banner_details(
+    theme: AppTheme,
+    ui_scale_percent: u32,
+    id: &'static str,
+    text: impl Into<SharedString>,
+) -> impl IntoElement {
+    restrict_scroll_to_vertical_axis(
+        div()
+            .id(id)
+            .debug_selector(move || id.to_string())
+            .max_h(ui_scale::scaler(ui_scale_percent)(96.0))
+            .overflow_y_scroll(),
+    )
+    .child(
+        div()
+            .text_size(theme.ui_text(12.0))
+            .text_color(theme.colors.foreground.secondary)
+            .child(text.into()),
+    )
+}
+
+impl GitCometView {
+    /// Asks the user to confirm the location of a special remote someone else
+    /// configured, which git-annex will not use until then.
+    fn annex_remote_check_banner(
+        &mut self,
+        theme: AppTheme,
+        cx: &mut gpui::Context<Self>,
+    ) -> Option<gpui::Div> {
+        let ui_scale_percent = self.ui_scale_percent;
+        let repo = self.active_repo()?;
+        let repo_id = repo.id;
+        let Loadable::Ready(support) = &repo.large_file_support else {
+            return None;
+        };
+        let check = support
+            .annex
+            .unverified_remotes
+            .iter()
+            .find(|check| {
+                !self.annex_remote_later.contains(&(
+                    repo_id,
+                    check.name.clone(),
+                    check.configuration.clone(),
+                ))
+            })?
+            .clone();
+        let name = check.name.clone();
+        if self.annex_remote_rejected.as_ref() == Some(&(repo_id, name.clone())) {
+            let remove = components::Button::new(
+                "annex_remote_check_remove",
+                "Remove remote and its settings",
+            )
+            .style(components::ButtonStyle::Danger)
+            .on_click(theme, cx, move |this, _e, _w, cx| {
+                this.annex_remote_rejected = None;
+                this.store.dispatch(Msg::RemoveRemote {
+                    repo_id,
+                    name: name.clone(),
+                });
+                cx.notify();
+            });
+            let back = components::Button::new("annex_remote_check_back", "Back")
+                .style(components::ButtonStyle::Outlined)
+                .on_click(theme, cx, |this, _e, _w, cx| {
+                    this.annex_remote_rejected = None;
+                    cx.notify();
+                });
+            let form = prompt_banner_form(
+                theme,
+                format!("Remove special remote \u{201c}{}\u{201d}?", check.name),
+                "If you do not recognise its location, someone else may have set it up. \
+                 Git pushes to every remote stay blocked while it exists.",
+            )
+            .child(prompt_banner_details(
+                theme,
+                ui_scale_percent,
+                "annex_remote_check_details",
+                "No annexed files have moved to or from it. Branches fetched from it, \
+                 the git-annex branch among them, may need cleaning up.",
+            ))
+            .child(
+                div()
+                    .pt_1()
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .child(remove)
+                    .child(back),
+            );
+            return Some(prompt_banner(theme, form));
+        }
+        let confirm = components::Button::new("annex_remote_check_confirm", "Confirm location")
+            .style(components::ButtonStyle::Filled)
+            .on_click(theme, cx, {
+                let check = check.clone();
+                move |this, _e, _w, cx| {
+                    this.store.dispatch(Msg::RunLargeFileCommand {
+                        repo_id,
+                        command: gitcomet_core::large_files::LargeFileCommand::AnnexVerifyRemote {
+                            name: check.name.clone(),
+                            id: check.id.clone(),
+                        },
+                    });
+                    cx.notify();
+                }
+            });
+        let not_mine = components::Button::new("annex_remote_check_not_mine", "Not my location")
+            .style(components::ButtonStyle::Outlined)
+            .on_click(theme, cx, {
+                let name = name.clone();
+                move |this, _e, _w, cx| {
+                    this.annex_remote_rejected = Some((repo_id, name.clone()));
+                    cx.notify();
+                }
+            });
+        let later = components::Button::new("annex_remote_check_later", "Later")
+            .style(components::ButtonStyle::Outlined)
+            .on_click(theme, cx, {
+                let check = check.clone();
+                move |this, _e, _w, cx| {
+                    this.annex_remote_later.insert((
+                        repo_id,
+                        check.name.clone(),
+                        check.configuration.clone(),
+                    ));
+                    cx.notify();
+                }
+            });
+        let configuration = if check.configuration.is_empty() {
+            "git-annex shows no settings for this remote.".to_string()
+        } else {
+            check.configuration.clone()
+        };
+        let form = prompt_banner_form(
+            theme,
+            format!("Confirm where \u{201c}{}\u{201d} stores files", check.name),
+            "Someone else configured this special remote. git-annex sends no annexed files to it, \
+             and git pushes to every remote wait, until you confirm its location.",
+        )
+        .child(prompt_banner_details(
+            theme,
+            ui_scale_percent,
+            "annex_remote_check_details",
+            configuration,
+        ))
+        .child(
+            div()
+                .pt_1()
+                .flex()
+                .items_center()
+                .gap_1()
+                .child(confirm)
+                .child(not_mine)
+                .child(later),
+        );
+        Some(prompt_banner(theme, form))
     }
 }

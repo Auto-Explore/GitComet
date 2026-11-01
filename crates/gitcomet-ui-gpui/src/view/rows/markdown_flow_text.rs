@@ -17,7 +17,7 @@ type MarkdownFlowHighlightLayers = (MarkdownFlowHighlights, MarkdownFlowBackgrou
 /// selection machinery.
 pub(in crate::view) struct MarkdownFlowText {
     tab_width: usize,
-    view: Entity<MainPaneView>,
+    view: crate::view::markdown_interaction::MarkdownInteraction,
     row_ix: usize,
     region: DiffTextRegion,
     /// The row's raw text when it differs from what is painted, i.e. when tabs
@@ -37,9 +37,6 @@ pub(in crate::view) struct MarkdownFlowText {
     /// Painted ranges set in another font family — inline code, in the editor
     /// font — while the rest of the line keeps the body font.
     font_overrides: Vec<(Range<usize>, SharedString)>,
-    /// The alignment the glyphs are painted with, which the layers beneath
-    /// them follow; the caller sets the same on the text's style.
-    align: gpui::TextAlign,
 }
 
 /// Paint layers for flowing Markdown text, in their visual stacking order.
@@ -58,7 +55,7 @@ pub(in crate::view) enum MarkdownFlowPaintPhase {
 impl MarkdownFlowText {
     pub(in crate::view) fn new(
         tab_width: usize,
-        view: Entity<MainPaneView>,
+        view: crate::view::markdown_interaction::MarkdownInteraction,
         row_ix: usize,
         region: DiffTextRegion,
         row_text: SharedString,
@@ -81,15 +78,7 @@ impl MarkdownFlowText {
             layout: None,
             cell: None,
             font_overrides: Vec::new(),
-            align: gpui::TextAlign::Left,
         }
-    }
-
-    /// Paint the selection and run backgrounds under `align`, which the
-    /// caller also sets as the text's style for `gpui` to paint the glyphs.
-    pub(in crate::view) fn text_align(mut self, align: gpui::TextAlign) -> Self {
-        self.align = align;
-        self
     }
 
     /// Set `ranges` of the text — in row coordinates, or the cell's own when
@@ -136,17 +125,10 @@ impl MarkdownFlowText {
         }
     }
 
-    fn paint_selection(
-        &self,
-        layout: &gpui::TextLayout,
-        align: gpui::TextAlign,
-        window: &mut Window,
-        cx: &mut App,
-    ) {
-        let Some(selected) = self
-            .view
-            .read(cx)
-            .diff_text_local_selection_range_in(self.region, (self.row_ix, 0..self.row_len()))
+    fn paint_selection(&self, layout: &gpui::TextLayout, window: &mut Window, cx: &mut App) {
+        let Some(selected) =
+            self.view
+                .selection_range(self.region, self.row_ix, 0..self.row_len(), cx)
         else {
             return;
         };
@@ -167,8 +149,8 @@ impl MarkdownFlowText {
             return;
         }
 
-        let color = self.view.read(cx).diff_text_selection_color();
-        let rects = markdown_flow_range_rects(layout, align, start, end);
+        let color = self.view.selection_color(cx);
+        let rects = markdown_flow_range_rects(layout, start, end);
         if rects.is_empty() {
             return;
         }
@@ -176,25 +158,20 @@ impl MarkdownFlowText {
         #[cfg(test)]
         record_markdown_flow_paint_phase_for_tests(self.row_ix, MarkdownFlowPaintPhase::Selection);
         for rect in rects {
-            window.paint_quad(fill(rect, color));
+            window.paint_quad(PaintQuad::new(rect).background(color));
         }
     }
 
     /// Paint styled-run backgrounds below the selection layer.
-    fn paint_run_backgrounds(
-        &self,
-        layout: &gpui::TextLayout,
-        align: gpui::TextAlign,
-        window: &mut Window,
-    ) {
+    fn paint_run_backgrounds(&self, layout: &gpui::TextLayout, window: &mut Window) {
         #[cfg(test)]
         record_markdown_flow_paint_phase_for_tests(
             self.row_ix,
             MarkdownFlowPaintPhase::RunBackgrounds,
         );
         for (range, color) in self.run_backgrounds.iter() {
-            for rect in markdown_flow_range_rects(layout, align, range.start, range.end) {
-                window.paint_quad(fill(rect, *color));
+            for rect in markdown_flow_range_rects(layout, range.start, range.end) {
+                window.paint_quad(PaintQuad::new(rect).background(*color));
             }
         }
     }
@@ -237,69 +214,29 @@ fn split_markdown_flow_highlight_layers(
 }
 
 /// The rectangles a byte range covers, in window coordinates, for text
-/// painted under `align`.
+/// using the backend's shaped geometry.
 ///
 /// A wrapped row's selection is not one box: each visual line contributes the
-/// slice of the range that falls inside it, measured against the unwrapped
-/// layout the wrap boundaries index into and shifted as `gpui` aligned it.
-///
-/// `gpui` records the alignment as it paints the glyphs, so after paint
-/// `layout.text_align()` is it; a caller painting beneath the glyphs has to
-/// know it already.
+/// slice of the range that falls inside it. The backend includes alignment and
+/// bidirectional positioning in those rectangles.
 pub(in crate::view) fn markdown_flow_range_rects(
     layout: &gpui::TextLayout,
-    align: gpui::TextAlign,
     start: usize,
     end: usize,
 ) -> Vec<Bounds<Pixels>> {
     let Some(line) = layout.line_layout_for_index(start) else {
         return Vec::new();
     };
-    let unwrapped = &line.unwrapped_layout;
-    let boundary_index = |boundary: &gpui::WrapBoundary| {
-        unwrapped
-            .runs
-            .get(boundary.run_ix)
-            .and_then(|run| run.glyphs.get(boundary.glyph_ix))
-            .map(|glyph| glyph.index)
-    };
-    // Every later line is placed from the boundaries before it, so skipping a
-    // boundary that names a missing glyph would paint the rest a line too
-    // high. Painting nothing is the honest failure.
-    if line
-        .wrap_boundaries()
-        .iter()
-        .any(|boundary| boundary_index(boundary).is_none())
-    {
-        return Vec::new();
-    }
     let bounds = layout.bounds();
-    let line_height = layout.line_height();
-    let starts = std::iter::once(0).chain(line.wrap_boundaries().iter().filter_map(boundary_index));
-    let ends = line
-        .wrap_boundaries()
-        .iter()
-        .filter_map(boundary_index)
-        .chain([unwrapped.len]);
-
-    let mut rects = Vec::new();
-    for (visual_ix, (line_start, line_end)) in starts.zip(ends).enumerate() {
-        let from = start.max(line_start);
-        let to = end.min(line_end);
-        if from >= to {
-            continue;
-        }
-        // Every x is relative to where that line starts inside the unwrapped
-        // layout, then moved to where the line was painted.
-        let shift = line.wrapped_line_offset(visual_ix, align, bounds.size.width);
-        let left = bounds.left() + shift - unwrapped.x_for_index(line_start);
-        let top = bounds.top() + line_height * (visual_ix as f32);
-        rects.push(Bounds::from_corners(
-            point(left + unwrapped.x_for_index(from), top),
-            point(left + unwrapped.x_for_index(to), top + line_height),
-        ));
-    }
+    let origin = bounds.origin;
+    let rects = line.selection_bounds(start..end, layout.line_height());
     rects
+        .into_iter()
+        .map(|mut rect| {
+            rect.origin += origin;
+            rect.intersect(&bounds)
+        })
+        .collect()
 }
 
 /// Offset in tab-expanded text for an offset in the raw text.
@@ -328,7 +265,7 @@ pub(in crate::view) fn markdown_flow_row_offset(
 const MARKDOWN_FLOW_HITBOX_MARGIN: f32 = 2.0;
 
 /// Whether a row is close enough to the window to be worth hit testing.
-fn markdown_flow_row_is_near_viewport(bounds: Bounds<Pixels>, window: &Window) -> bool {
+pub(super) fn markdown_flow_row_is_near_viewport(bounds: Bounds<Pixels>, window: &Window) -> bool {
     let height = window.viewport_size().height;
     let margin = height * MARKDOWN_FLOW_HITBOX_MARGIN;
     bounds.bottom() >= -margin && bounds.top() <= height + margin
@@ -348,7 +285,7 @@ thread_local! {
 }
 
 #[cfg(test)]
-fn record_selection_paint_for_tests(row_ix: usize, rects: &[Bounds<Pixels>]) {
+pub(super) fn record_selection_paint_for_tests(row_ix: usize, rects: &[Bounds<Pixels>]) {
     SELECTION_PAINT_LOG.with(|log| {
         let mut log = log.borrow_mut();
         log.extend(rects.iter().map(|rect| (row_ix, *rect)));
@@ -356,7 +293,7 @@ fn record_selection_paint_for_tests(row_ix: usize, rects: &[Bounds<Pixels>]) {
 }
 
 #[cfg(not(test))]
-fn record_selection_paint_for_tests(_row_ix: usize, _rects: &[Bounds<Pixels>]) {}
+pub(super) fn record_selection_paint_for_tests(_row_ix: usize, _rects: &[Bounds<Pixels>]) {}
 
 /// Font family per byte range of one row's text.
 #[cfg(test)]
@@ -516,11 +453,18 @@ impl gpui::Element for MarkdownFlowText {
                 &self.font_overrides,
             ),
         );
+        // Keep a default run even for empty cells and code lines: Parley adds
+        // a direction marker whose glyphs still need a source style.
+        let runs =
+            crate::text_runs::text_runs_for_highlights(&self.text, &text_style, &self.highlights);
         let mut inner = gpui::StyledText::new(self.text.clone())
-            .with_default_highlights(&text_style, self.highlights.iter().cloned())
+            .with_runs(runs)
             .with_font_family_overrides(self.font_overrides.iter().cloned());
         self.layout = Some(inner.layout().clone());
         let layout = inner.request_layout(id, inspector_id, window, cx);
+        // This element owns range painting and hit testing. Its StyledText must
+        // retain its own measurement instead of joining the parent's paragraph.
+        window.mark_layout_as_atomic(layout.0);
         self.inner = Some(inner);
         layout
     }
@@ -555,7 +499,6 @@ impl gpui::Element for MarkdownFlowText {
         // computing. The virtualized list this renderer replaced built nothing
         // for such a row at all.
         let on_screen = markdown_flow_row_is_near_viewport(bounds, window);
-        let align = self.align;
         let layout = self
             .layout
             .clone()
@@ -564,9 +507,9 @@ impl gpui::Element for MarkdownFlowText {
         // Background colours were removed from `inner` when the element was
         // built. Painting them here gives us the intended stacking order:
         // code/search background -> selection wash -> crisp text.
-        self.paint_run_backgrounds(&layout, align, window);
+        self.paint_run_backgrounds(&layout, window);
         if on_screen {
-            self.paint_selection(&layout, align, window, cx);
+            self.paint_selection(&layout, window, cx);
         }
         #[cfg(test)]
         record_markdown_flow_paint_phase_for_tests(self.row_ix, MarkdownFlowPaintPhase::Glyphs);
@@ -591,58 +534,57 @@ impl gpui::Element for MarkdownFlowText {
         let region = self.region;
         if let Some((cell, row_len)) = self.cell.clone() {
             let text = self.text.clone();
-            self.view.clone().update(cx, |this, _cx| {
-                this.add_diff_text_cell_hitbox(
-                    row_ix,
-                    region,
-                    row_len,
-                    DiffTextHitbox {
-                        bounds,
-                        layout_key: 0,
-                        source_visible_ix: row_ix,
-                        text_start_offset: cell.start,
-                        text_len: cell.len(),
-                        offset_map: None,
-                        painted_text: text,
-                        streamed_ascii_monospace_cell_width: None,
-                        wrapped: Some(DiffTextWrappedHit {
-                            tab_width: self.tab_width,
-                            layout,
-                            untabbed: None,
-                        }),
-                        cells: Vec::new(),
-                    },
-                );
-            });
+            self.view.add_cell_hitbox(
+                row_ix,
+                region,
+                row_len,
+                DiffTextHitbox {
+                    atomic: false,
+                    bounds,
+                    layout_key: 0,
+                    source_visible_ix: row_ix,
+                    text_start_offset: cell.start,
+                    text_len: cell.len(),
+                    offset_map: None,
+                    painted_text: text,
+                    streamed_ascii_monospace_cell_width: None,
+                    wrapped: Some(DiffTextWrappedHit {
+                        tab_width: self.tab_width,
+                        layout,
+                        untabbed: None,
+                    }),
+                    cells: Vec::new(),
+                },
+                cx,
+            );
             return;
         }
         let untabbed = self.untabbed.clone();
         let text_len = untabbed
             .as_ref()
             .map_or_else(|| self.text.len(), |raw| raw.len());
-        self.view.clone().update(cx, |this, _cx| {
-            // A markdown row is its own source line, painted whole.
-            this.set_diff_text_hitbox(
-                row_ix,
-                region,
-                DiffTextHitbox {
-                    bounds,
-                    layout_key: 0,
-                    source_visible_ix: row_ix,
-                    text_start_offset: 0,
-                    text_len,
-                    offset_map: None,
-                    painted_text: self.text.clone(),
-                    streamed_ascii_monospace_cell_width: None,
-                    wrapped: Some(DiffTextWrappedHit {
-                        tab_width: self.tab_width,
-                        layout,
-                        untabbed,
-                    }),
-                    cells: Vec::new(),
-                },
-            );
-        });
+        self.view.set_hitbox(
+            row_ix,
+            region,
+            DiffTextHitbox {
+                atomic: false,
+                bounds,
+                layout_key: 0,
+                source_visible_ix: row_ix,
+                text_start_offset: 0,
+                text_len,
+                offset_map: None,
+                painted_text: self.text.clone(),
+                streamed_ascii_monospace_cell_width: None,
+                wrapped: Some(DiffTextWrappedHit {
+                    tab_width: self.tab_width,
+                    layout,
+                    untabbed,
+                }),
+                cells: Vec::new(),
+            },
+            cx,
+        );
     }
 }
 

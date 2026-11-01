@@ -72,10 +72,9 @@ mod tests {
     use super::*;
     use std::fs;
     use std::path::Path;
-    use std::process::Command as ProcessCommand;
 
     fn run_git(repo: &Path, args: &[&str]) {
-        let output = ProcessCommand::new("git")
+        let output = gitcomet_core::test_support::git_fixture::git_command()
             .arg("-c")
             .arg("commit.gpgsign=false")
             .args(args)
@@ -118,7 +117,7 @@ mod tests {
         run_git(repo, &["add", "a.txt"]);
         run_git(repo, &["commit", "-m", "branch-b change"]);
 
-        let output = ProcessCommand::new("git")
+        let output = gitcomet_core::test_support::git_fixture::git_command()
             .args(["merge", "branch-a", "--no-edit"])
             .current_dir(repo)
             .output()

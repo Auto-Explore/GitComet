@@ -9,7 +9,7 @@
 //! for Windows adds its bundled `usr\bin`, and a custom Git adds its directory.
 //! A bare program name is therefore probed *through* Git as a `!program` alias.
 //! Git executes such an alias directly, without a shell, when the name contains
-//! no shell metacharacters, which [`classify_program`] guarantees.
+//! no shell metacharacters, which `classify_program` guarantees.
 //!
 //! Verification waits for discovery. After discovery, an inconclusive probe
 //! lets Git try; a definite "not found" excludes that verifier's formats.
@@ -488,7 +488,7 @@ mod tests {
 
         impl Fixture {
             fn new() -> Option<Self> {
-                let git_runs = background_command("git")
+                let git_runs = crate::test_support::git_fixture::git_command()
                     .arg("--version")
                     .output()
                     .is_ok_and(|output| output.status.success());
@@ -529,7 +529,7 @@ mod tests {
                 let path = std::env::join_paths(path).expect("join PATH");
                 let global_config = self.global_config.clone();
                 detect_signing_tools_with(&move || {
-                    let mut command = background_command("git");
+                    let mut command = crate::test_support::git_fixture::git_command();
                     command
                         .env("PATH", &path)
                         .env("GIT_CONFIG_NOSYSTEM", "1")

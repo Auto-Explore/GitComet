@@ -1,5 +1,20 @@
 use super::*;
+
+#[test]
+fn bare_monitor_uses_metadata_without_worktree_ignore_rules() {
+    let (_directory, root) = repository();
+    run_git(&root, &["config", "core.bare", "true"]);
+    let mut rules = TestRules::load(&root, Arc::new(gitcomet_git_gix::GixBackend));
+    assert!(!rules.failed);
+    assert!(rules.matcher.is_none());
+    run_git(&root, &["config", "core.bare", "false"]);
+    rules.reload(&root);
+    assert!(!rules.failed);
+    assert!(rules.matcher.is_some());
+}
+use crate::model::LoadKind;
 mod efficiency;
+mod hooks_directory_noise;
 mod native_lifecycle;
 mod path_identities;
 mod policy_lifecycle;
@@ -7,6 +22,9 @@ mod runtime_recovery;
 mod setup_recovery;
 mod storage_and_links;
 mod synchronization;
+#[cfg(windows)]
+mod windows_metadata;
+mod worktree_list;
 use super::super::test_sync::{DrainAck, QUIET_WINDOW, SYNC_TIMEOUT};
 
 fn repository() -> (tempfile::TempDir, PathBuf) {
@@ -356,7 +374,7 @@ fn lfs_cache_events_never_keep_loads_in_flight() {
     let mut loads = RepoLoadsInFlight::default();
     let mut debounce = DebouncedChange::new(Duration::from_millis(250), Duration::from_secs(2));
     let start = Instant::now();
-    let flag = RepoLoadsInFlight::WORKTREE_STATUS;
+    let flag = LoadKind::WorktreeStatus;
     assert!(loads.request(flag));
     for index in 0..100 {
         let event =
@@ -594,6 +612,8 @@ struct RunningMonitor {
     native_events: Arc<AtomicU64>,
     observations: Arc<NativeObservations>,
     callbacks_redirected: bool,
+    enabled: Arc<AtomicBool>,
+    active_repo_id: Arc<AtomicU64>,
 }
 impl RunningMonitor {
     fn revalidate(&self) {
@@ -635,6 +655,13 @@ impl RunningMonitor {
         let thread_tx = callback_tx.unwrap_or_else(|| tx.clone());
         let native_events = Arc::new(AtomicU64::new(0));
         config.native_events = Some(native_events.clone());
+        let enabled = Arc::new(AtomicBool::new(true));
+        let thread_enabled = Arc::clone(&enabled);
+        let active_repo_id = Arc::new(AtomicU64::new(1));
+        let thread_active_repo_id = Arc::clone(&active_repo_id);
+        let progress = Arc::new(std::sync::Mutex::new(StartupProgress::default()));
+        config.startup_progress = Some(Arc::clone(&progress));
+        let started = Instant::now();
         let thread = std::thread::spawn(move || {
             repo_monitor_thread(
                 RepoId(1),
@@ -642,23 +669,50 @@ impl RunningMonitor {
                 StoreWorkerSender::for_test_msg_sender(store_tx),
                 rx,
                 thread_tx,
-                Arc::new(AtomicU64::new(1)),
-                Arc::new(AtomicBool::new(true)),
+                thread_active_repo_id,
+                thread_enabled,
                 backend,
                 config,
             )
         });
-        let (ready_tx, ready_rx) = mpsc::channel();
-        tx.send(MonitorMsg::Barrier(ready_tx)).unwrap();
-        ready_rx.recv_timeout(Duration::from_secs(10)).unwrap();
-        Self {
+        // Own cancellation and joining before any readiness operation can panic.
+        let monitor = Self {
             tx,
             rx: store_rx,
             thread: Some(thread),
             native_events,
             observations,
             callbacks_redirected,
+            enabled,
+            active_repo_id,
+        };
+        let (ready_tx, ready_rx) = mpsc::channel();
+        let ready = monitor
+            .tx
+            .send(MonitorMsg::Barrier(ready_tx))
+            .map_err(|_| "worker disconnected".to_string())
+            .and_then(|_| {
+                ready_rx
+                    .recv_timeout(Duration::from_secs(10))
+                    .map_err(|e| e.to_string())
+            });
+        if let Err(error) = ready {
+            let progress = progress.lock().unwrap_or_else(|e| e.into_inner());
+            panic!(
+                "watcher readiness failed: {error}; elapsed={:?}; phase={}; attempt={}; directories={}; native_events={}; observations={:?}; worker_finished={}",
+                started.elapsed(),
+                progress.phase,
+                progress.attempt,
+                progress.directories,
+                monitor.native_events.load(Ordering::Relaxed),
+                monitor.observations,
+                monitor
+                    .thread
+                    .as_ref()
+                    .is_none_or(|thread| thread.is_finished())
+            );
         }
+        monitor
     }
     #[track_caller]
     fn refresh(&self) {
@@ -849,20 +903,58 @@ impl RunningMonitor {
     #[track_caller]
     fn quiet(&self) {
         let _timing = super::super::test_sync::WaitTiming::new("quiet");
+        #[cfg(target_os = "linux")]
+        if !self.callbacks_redirected && self.native_quiet(Instant::now() + SYNC_TIMEOUT) {
+            let result = self.rx.try_recv();
+            assert!(
+                matches!(result, Err(mpsc::TryRecvError::Empty)),
+                "unexpected refresh while quiet: {result:?}"
+            );
+            return;
+        }
         let result = self.rx.recv_timeout(QUIET_WINDOW);
         assert!(
             matches!(result, Err(mpsc::RecvTimeoutError::Timeout)),
             "unexpected refresh while quiet: {result:?}"
         );
     }
+
+    /// inotify queues events in order as they happen, so a checkpoint round
+    /// that observes no other native event proves every earlier event was
+    /// delivered and drained. Repeats until such a round; false when native
+    /// coverage is unavailable and the caller must observe a quiet window.
+    #[cfg(target_os = "linux")]
+    fn native_quiet(&self, deadline: Instant) -> bool {
+        loop {
+            assert!(
+                Instant::now() < deadline,
+                "native events did not quiet down: {:?}",
+                self.observations
+            );
+            let before = self.observations.sequence();
+            match self.checkpoint_native(deadline) {
+                Ok(_) if self.observations.sequence() == before => return true,
+                Ok(_) => {}
+                Err(SyncError::Unavailable(_)) => return false,
+                Err(error) => panic!("native synchronization failed: {error:?}"),
+            }
+        }
+    }
 }
 impl Drop for RunningMonitor {
     fn drop(&mut self) {
         let _timer =
             gitcomet_core::test_support::git_fixture::FixtureTimer::new("cleanup", "monitor-stop");
+        self.enabled.store(false, Ordering::Relaxed);
         let _ = self.tx.send(MonitorMsg::Stop);
-        if let Some(thread) = self.thread.take() {
-            thread.join().unwrap();
+        if let Some(thread) = self.thread.take()
+            && let Err(error) = thread.join()
+        {
+            if std::thread::panicking() {
+                eprintln!("monitor worker also panicked during cleanup: {error:?}");
+            } else {
+                std::panic::resume_unwind(error);
+            }
         }
     }
 }
@@ -1170,13 +1262,15 @@ fn native_real_lfs_status_does_not_requeue_refreshes() {
             .unwrap();
     }
     for _ in 0..3 {
-        let status = repo.status().unwrap();
+        let status = repo
+            .status(&gitcomet_core::services::CancellationToken::new())
+            .unwrap();
         assert!(
             status.staged.is_empty() && status.unstaged.is_empty(),
             "{status:?}"
         );
         let counts = repo
-            .uncommitted_line_stats_for_status_cancellable(
+            .uncommitted_line_stats_for_status(
                 &status,
                 &gitcomet_core::services::CancellationToken::new(),
             )
@@ -1227,11 +1321,13 @@ fn native_real_lfs_status_does_not_requeue_refreshes() {
             .iter()
             .any(|event| event.paths.contains(&root.join("asset.lfsbin")))
     );
-    let status = repo.status().unwrap();
+    let status = repo
+        .status(&gitcomet_core::services::CancellationToken::new())
+        .unwrap();
     assert!(!status.unstaged.is_empty());
     let token = gitcomet_core::services::CancellationToken::new();
     let supplied_counts = repo
-        .uncommitted_line_stats_for_status_cancellable(&status, &token)
+        .uncommitted_line_stats_for_status(&status, &token)
         .unwrap();
     assert!(
         supplied_counts
@@ -1240,7 +1336,7 @@ fn native_real_lfs_status_does_not_requeue_refreshes() {
     );
     assert_eq!(
         supplied_counts,
-        repo.uncommitted_line_stats_cancellable(&token).unwrap()
+        repo.uncommitted_line_stats(&token).unwrap()
     );
     let events = drain_monitor(&rx, Duration::from_secs(3));
     assert!(

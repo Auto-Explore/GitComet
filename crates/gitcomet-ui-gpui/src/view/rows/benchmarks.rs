@@ -17,12 +17,11 @@ use crate::view::mod_helpers::{
     PaneResizeHandle, PaneResizeState, StatusMultiSelection, StatusSection,
 };
 use crate::view::next_pane_resize_drag_width;
-use crate::view::panes::main::{
-    AsciiCaseInsensitiveNeedle, DiffSearchQueryReuse,
-    diff_cache::{
-        PagedFileDiffRows, PagedPatchDiffRows, PagedPatchSplitRows, PatchInlineVisibleMap,
-    },
-    diff_search_query_reuse,
+use crate::view::panes::diff::diff_cache::{
+    PagedFileDiffRows, PagedPatchDiffRows, PagedPatchSplitRows, PatchInlineVisibleMap,
+};
+use crate::view::panes::diff::diff_search::{
+    AsciiCaseInsensitiveNeedle, DiffSearchQueryReuse, diff_search_query_reuse,
 };
 use crate::view::path_display;
 use gitcomet_core::domain::DiffLineKind;

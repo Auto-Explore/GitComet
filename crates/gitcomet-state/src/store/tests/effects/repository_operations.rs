@@ -1,12 +1,15 @@
 //! Repository operations: stash, branches, checkout, clone, saves, attributes.
 
 use super::*;
+use crate::model::ConflictFile;
+use crate::msg::{PersistenceEffect, RepoCommandEffect, WorktreeSaveBaseline};
+use crate::store::repository_runtime::RepositoryRuntimes;
 
 /// Exercise a worker effect and feed all its replies through the reducer.
 fn apply_effect_with_state_for_test(
     executor: &super::super::executor::TaskExecutor,
     backend: &Arc<dyn GitBackend>,
-    repos: &mut FxHashMap<RepoId, Arc<dyn GitRepository>>,
+    repos: &mut RepositoryRuntimes,
     state: &mut AppState,
     effect: Effect,
 ) -> Vec<Effect> {
@@ -56,11 +59,11 @@ fn attribute_refresh_redecodes_staged_and_commit_diffs() {
     let backend: Arc<dyn GitBackend> = Arc::new(gitcomet_git_gix::GixBackend);
     let repo = backend.open(workdir).unwrap();
     let repo_id = RepoId(9530);
-    let mut repos = FxHashMap::default();
-    repos.insert(repo_id, repo.clone());
+    let mut repos = RepositoryRuntimes::default();
+    repos.attach_repository_for_test(repo_id, repo.clone());
     let executor = super::super::executor::TaskExecutor::new(1);
     let resolve_commit = |revision: &str| {
-        let output = Command::new("git")
+        let output = gitcomet_core::test_support::git_fixture::git_command()
             .arg("-C")
             .arg(workdir)
             .args(["rev-parse", revision])
@@ -97,12 +100,12 @@ fn attribute_refresh_redecodes_staged_and_commit_diffs() {
             repo.text_attributes(Path::new("menu.txt")).unwrap(),
         ));
         let original = Arc::new(
-            repo.diff_parsed_with_encoding_cancellable(&target, None, &CancellationToken::new())
+            repo.diff_parsed(&target, None, &CancellationToken::new())
                 .unwrap(),
         );
         repo_state.diff_state.diff = Loadable::Ready(original.clone());
         repo_state.diff_state.diff_file = Loadable::Ready(
-            repo.diff_file_text_with_encoding_cancellable(&target, None, &CancellationToken::new())
+            repo.diff_file_text(&target, None, &CancellationToken::new())
                 .unwrap()
                 .map(Arc::new),
         );
@@ -193,8 +196,8 @@ fn saving_attributes_preserves_choices_even_when_the_rule_is_shadowed() {
         let backend: Arc<dyn GitBackend> = Arc::new(gitcomet_git_gix::GixBackend);
         let repo = backend.open(workdir).unwrap();
         let repo_id = RepoId(9540);
-        let mut repos = FxHashMap::default();
-        repos.insert(repo_id, repo.clone());
+        let mut repos = RepositoryRuntimes::default();
+        repos.attach_repository_for_test(repo_id, repo.clone());
         let mut state = AppState::test_default();
         let mut repo_state = RepoState::new_opening(repo_id, repo.spec().clone());
         let path = PathBuf::from("sub/menu.txt");
@@ -283,8 +286,8 @@ fn repository_refreshes_reload_selected_text_attributes_from_git() {
     let repo = backend.open(dir.path()).unwrap();
     let repo_id = RepoId(9521);
     let path = PathBuf::from("menu.txt");
-    let mut repos = FxHashMap::default();
-    repos.insert(repo_id, repo.clone());
+    let mut repos = RepositoryRuntimes::default();
+    repos.attach_repository_for_test(repo_id, repo.clone());
     let executor = super::super::executor::TaskExecutor::new(1);
     let id_alloc = AtomicU64::new(9522);
     for refresh in [
@@ -342,7 +345,7 @@ fn repository_refreshes_reload_selected_text_attributes_from_git() {
             &executor,
             &executor,
             &backend,
-            &repos,
+            &mut repos,
             state.clone(),
             tx,
             load,
@@ -387,7 +390,7 @@ fn repository_refreshes_reload_selected_text_attributes_from_git() {
 fn file_save_receipts_wait_for_execution_and_report_success_or_failure() {
     let directory = tempfile::tempdir().unwrap();
     let repo_id = RepoId(1);
-    let repos = [(
+    let mut repos = [(
         repo_id,
         Arc::new(gitcomet_core::test_support::UnconfiguredRepository::new(
             directory.path(),
@@ -400,7 +403,7 @@ fn file_save_receipts_wait_for_execution_and_report_success_or_failure() {
     for (path, succeeds) in [("file.txt", true), ("../outside.txt", false)] {
         let (release, wait) = std::sync::mpsc::channel();
         // Saves run on the shared filesystem queue, not the repo executor.
-        super::super::executor::filesystem_executor().spawn(move || {
+        super::super::executor::FILESYSTEM_QUEUE.spawn(move || {
             let _ = wait.recv();
         });
         let (completion, received) = smol::channel::bounded(1);
@@ -409,16 +412,16 @@ fn file_save_receipts_wait_for_execution_and_report_success_or_failure() {
             &executor,
             &executor,
             &backend,
-            &repos,
+            &mut repos,
             msg_tx,
-            Effect::SaveWorktreeFile {
+            Effect::RepoCommand(RepoCommandEffect::SaveWorktreeFile {
                 repo_id,
                 path: PathBuf::from(path),
                 contents: "saved contents".to_string().into(),
                 expected_contents: None,
                 stage: false,
                 completion: Some(completion),
-            },
+            }),
         );
         assert_eq!(received.try_recv(), Err(smol::channel::TryRecvError::Empty));
         release.send(()).unwrap();
@@ -462,45 +465,45 @@ fn session_update_effects_persist_on_session_executor() {
     let executor = super::super::executor::TaskExecutor::new(1);
     let session_executor = super::super::executor::TaskExecutor::new(1);
     let backend: Arc<dyn GitBackend> = Arc::new(Backend);
-    let repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let (msg_tx, msg_rx) = std::sync::mpsc::channel::<Msg>();
 
     schedule_effect_for_test(
         &executor,
         &session_executor,
         &backend,
-        &repos,
+        &mut repos,
         msg_tx.clone(),
-        Effect::PersistRecentRepo {
+        Effect::Persistence(PersistenceEffect::PersistRecentRepo {
             repo_id: Some(RepoId(1)),
             workdir: repo_a.clone(),
             action: "test recent",
-        },
+        }),
     );
     schedule_effect_for_test(
         &executor,
         &session_executor,
         &backend,
-        &repos,
+        &mut repos,
         msg_tx.clone(),
-        Effect::PersistRepoHistoryMode {
+        Effect::Persistence(PersistenceEffect::PersistRepoHistoryMode {
             repo_id: Some(RepoId(1)),
             workdir: repo_a.clone(),
             mode: LogScope::NoMerges,
             action: "test history mode",
-        },
+        }),
     );
     schedule_effect_for_test(
         &executor,
         &session_executor,
         &backend,
-        &repos,
+        &mut repos,
         msg_tx,
-        Effect::PersistRepoHistoryModesBatch {
+        Effect::Persistence(PersistenceEffect::PersistRepoHistoryModesBatch {
             repo_id: Some(RepoId(1)),
             updates: vec![(repo_b.clone(), LogScope::FirstParent)],
             action: "test history batch",
-        },
+        }),
     );
 
     let (completed_tx, completed_rx) = std::sync::mpsc::channel();
@@ -536,8 +539,8 @@ fn safe_push_after_commit_effect_carries_auth_to_finished_message() {
     let executor = super::super::executor::TaskExecutor::new(1);
     let backend: Arc<dyn GitBackend> = Arc::new(PanicOpenBackend);
     let repo_id = RepoId(3);
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
-    repos.insert(
+    let mut repos: RepositoryRuntimes = Default::default();
+    repos.attach_repository_for_test(
         repo_id,
         Arc::new(UnsupportedRepo {
             spec: RepoSpec {
@@ -555,6 +558,7 @@ fn safe_push_after_commit_effect_carries_auth_to_finished_message() {
         post_head: Some(CommitId("2222222222222222222222222222222222222222".into())),
     };
     let auth = gitcomet_core::auth::StagedGitAuth {
+        challenge: None,
         kind: gitcomet_core::auth::GitAuthKind::UsernamePassword,
         username: Some("alice".to_string()),
         secret: "token".to_string(),
@@ -564,13 +568,13 @@ fn safe_push_after_commit_effect_carries_auth_to_finished_message() {
         &executor,
         &executor,
         &backend,
-        &repos,
+        &mut repos,
         msg_tx,
-        Effect::SafePushAfterCommit {
+        Effect::RepoCommand(RepoCommandEffect::SafePushAfterCommit {
             repo_id,
             context: context.clone(),
             auth: Some(auth.clone()),
-        },
+        }),
     );
 
     let msg = msg_rx
@@ -629,14 +633,14 @@ fn clone_repo_effect_clones_local_repo_and_emits_finished_and_open_repo() {
 
     let executor = super::super::executor::TaskExecutor::new(1);
     let backend: Arc<dyn GitBackend> = Arc::new(Backend);
-    let repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let (msg_tx, msg_rx) = std::sync::mpsc::channel::<Msg>();
 
     schedule_effect_for_test(
         &executor,
         &executor,
         &backend,
-        &repos,
+        &mut repos,
         msg_tx,
         Effect::CloneRepo {
             url: src.display().to_string(),
@@ -682,6 +686,90 @@ fn clone_repo_effect_clones_local_repo_and_emits_finished_and_open_repo() {
 }
 
 #[test]
+fn save_with_an_absent_baseline_only_creates_a_still_absent_file() {
+    for file_appeared in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = PathBuf::from("conflict.txt");
+        let target = dir.path().join(&path);
+        assert!(!target.exists());
+        let displayed_baseline = WorktreeSaveBaseline::Absent;
+
+        if file_appeared {
+            fs::write(&target, b"external file\n").unwrap();
+        }
+
+        let repo_id = RepoId(9531);
+        let repository: Arc<dyn GitRepository> = Arc::new(DummyRepo::new(dir.path()));
+        let mut repos = RepositoryRuntimes::default();
+        repos.attach_repository_for_test(repo_id, repository.clone());
+        let mut repo_state = RepoState::new_opening(repo_id, repository.spec().clone());
+        repo_state.set_open(Loadable::Ready(()));
+        repo_state.conflict_state.conflict_file_path = Some(path.clone());
+        repo_state.conflict_state.conflict_file =
+            Loadable::Ready(Some(ConflictFile::from_loaded_stage_parts(
+                path.clone(),
+                (None, None),
+                (None, None),
+                (None, None),
+                (
+                    None,
+                    file_appeared.then(|| Arc::<str>::from("external file\n")),
+                ),
+            )));
+        let mut state = AppState {
+            repos: vec![repo_state],
+            active_repo: Some(repo_id),
+            ..AppState::test_default()
+        };
+        let (completion_tx, completion_rx) = smol::channel::bounded(1);
+        let effects = reduce(
+            &mut repos,
+            &AtomicU64::new(9532),
+            &mut state,
+            Msg::SaveWorktreeFile {
+                repo_id,
+                path,
+                contents: "resolved\n".into(),
+                expected_contents: displayed_baseline,
+                stage: false,
+                completion: Some(completion_tx),
+            },
+        );
+        assert_eq!(effects.len(), 1);
+        assert_eq!(state.repos[0].local_actions_in_flight, 1);
+        let executor = super::super::executor::TaskExecutor::new(1);
+        let backend: Arc<dyn GitBackend> = Arc::new(FailingBackend);
+        apply_effect_with_state_for_test(
+            &executor,
+            &backend,
+            &mut repos,
+            &mut state,
+            effects.into_iter().next().unwrap(),
+        );
+        executor.join();
+
+        let saved = completion_rx.try_recv().unwrap();
+        assert_eq!(state.repos[0].local_actions_in_flight, 0);
+        assert_eq!(state.repos[0].ops_rev, 2);
+        if file_appeared {
+            assert_eq!(fs::read(&target).unwrap(), b"external file\n");
+            assert!(!saved);
+            assert!(
+                state.repos[0]
+                    .feedback
+                    .last_error
+                    .as_deref()
+                    .is_some_and(|error| error.contains("The file changed on disk"))
+            );
+        } else {
+            assert_eq!(fs::read(&target).unwrap(), b"resolved\n");
+            assert!(saved);
+            assert_eq!(state.repos[0].feedback.last_error, None);
+        }
+    }
+}
+
+#[test]
 fn save_worktree_file_effect_writes_and_can_stage() {
     struct Backend;
     impl GitBackend for Backend {
@@ -703,7 +791,9 @@ fn save_worktree_file_effect_writes_and_can_stage() {
             &self,
             _limit: usize,
             _cursor: Option<&LogCursor>,
+            cancellation: &gitcomet_core::services::CancellationToken,
         ) -> Result<std::sync::Arc<LogPage>> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
         fn commit_details(&self, _id: &CommitId) -> Result<CommitDetails> {
@@ -712,19 +802,39 @@ fn save_worktree_file_effect_writes_and_can_stage() {
         fn reflog_head(&self, _limit: usize) -> Result<Vec<ReflogEntry>> {
             unimplemented!()
         }
-        fn current_branch(&self) -> Result<String> {
+        fn current_branch(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<String> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
-        fn list_branches(&self) -> Result<Vec<Branch>> {
+        fn list_branches(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<Vec<Branch>> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
-        fn list_remotes(&self) -> Result<Vec<Remote>> {
+        fn list_remotes(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<Vec<Remote>> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
-        fn list_remote_branches(&self) -> Result<Vec<RemoteBranch>> {
+        fn list_remote_branches(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<Vec<RemoteBranch>> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
-        fn status(&self) -> Result<RepoStatus> {
+        fn status(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<RepoStatus> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
         fn diff_unified(&self, _target: &DiffTarget) -> Result<String> {
@@ -748,7 +858,11 @@ fn save_worktree_file_effect_writes_and_can_stage() {
         fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
             unimplemented!()
         }
-        fn stash_list(&self) -> Result<Vec<StashEntry>> {
+        fn stash_list(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<Vec<StashEntry>> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
         fn stash_apply(&self, _index: usize) -> Result<()> {
@@ -770,10 +884,10 @@ fn save_worktree_file_effect_writes_and_can_stage() {
         fn commit(&self, _message: &str) -> Result<()> {
             unimplemented!()
         }
-        fn fetch_all(&self) -> Result<()> {
+        fn fetch_all(&self, _prune: bool) -> Result<gitcomet_core::services::CommandOutput> {
             unimplemented!()
         }
-        fn pull(&self, _mode: PullMode) -> Result<()> {
+        fn pull(&self, _mode: PullMode) -> Result<gitcomet_core::services::CommandOutput> {
             unimplemented!()
         }
         fn push(&self) -> Result<()> {
@@ -806,9 +920,9 @@ fn save_worktree_file_effect_writes_and_can_stage() {
         staged: std::sync::Mutex::new(Vec::new()),
     });
     let repo_trait: Arc<dyn GitRepository> = repo.clone();
-    let repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = {
-        let mut repos = FxHashMap::default();
-        repos.insert(repo_id, repo_trait);
+    let mut repos: RepositoryRuntimes = {
+        let mut repos = RepositoryRuntimes::default();
+        repos.attach_repository_for_test(repo_id, repo_trait);
         repos
     };
 
@@ -820,16 +934,16 @@ fn save_worktree_file_effect_writes_and_can_stage() {
         &executor,
         &executor,
         &backend,
-        &repos,
+        &mut repos,
         msg_tx.clone(),
-        Effect::SaveWorktreeFile {
+        Effect::RepoCommand(RepoCommandEffect::SaveWorktreeFile {
             repo_id,
             path: rel.clone(),
             expected_contents: None,
             contents: contents.to_string().into(),
             stage: true,
             completion: None,
-        },
+        }),
     );
 
     let mut saw_write_and_stage = false;
@@ -880,16 +994,16 @@ fn save_worktree_file_effect_writes_and_can_stage() {
         &executor,
         &executor,
         &backend,
-        &repos,
+        &mut repos,
         msg_tx,
-        Effect::SaveWorktreeFile {
+        Effect::RepoCommand(RepoCommandEffect::SaveWorktreeFile {
             repo_id,
             path: escaped_path,
             expected_contents: None,
             contents: "escape".to_string().into(),
             stage: false,
             completion: None,
-        },
+        }),
     );
 
     let start = Instant::now();
@@ -948,7 +1062,9 @@ fn append_gitignore_patterns_effect_creates_appends_and_dedupes() {
             &self,
             _limit: usize,
             _cursor: Option<&LogCursor>,
+            cancellation: &gitcomet_core::services::CancellationToken,
         ) -> Result<std::sync::Arc<LogPage>> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
         fn commit_details(&self, _id: &CommitId) -> Result<CommitDetails> {
@@ -957,19 +1073,39 @@ fn append_gitignore_patterns_effect_creates_appends_and_dedupes() {
         fn reflog_head(&self, _limit: usize) -> Result<Vec<ReflogEntry>> {
             unimplemented!()
         }
-        fn current_branch(&self) -> Result<String> {
+        fn current_branch(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<String> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
-        fn list_branches(&self) -> Result<Vec<Branch>> {
+        fn list_branches(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<Vec<Branch>> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
-        fn list_remotes(&self) -> Result<Vec<Remote>> {
+        fn list_remotes(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<Vec<Remote>> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
-        fn list_remote_branches(&self) -> Result<Vec<RemoteBranch>> {
+        fn list_remote_branches(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<Vec<RemoteBranch>> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
-        fn status(&self) -> Result<RepoStatus> {
+        fn status(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<RepoStatus> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
         fn diff_unified(&self, _target: &DiffTarget) -> Result<String> {
@@ -993,7 +1129,11 @@ fn append_gitignore_patterns_effect_creates_appends_and_dedupes() {
         fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
             unimplemented!()
         }
-        fn stash_list(&self) -> Result<Vec<StashEntry>> {
+        fn stash_list(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<Vec<StashEntry>> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
         fn stash_apply(&self, _index: usize) -> Result<()> {
@@ -1011,10 +1151,10 @@ fn append_gitignore_patterns_effect_creates_appends_and_dedupes() {
         fn commit(&self, _message: &str) -> Result<()> {
             unimplemented!()
         }
-        fn fetch_all(&self) -> Result<()> {
+        fn fetch_all(&self, _prune: bool) -> Result<gitcomet_core::services::CommandOutput> {
             unimplemented!()
         }
-        fn pull(&self, _mode: PullMode) -> Result<()> {
+        fn pull(&self, _mode: PullMode) -> Result<gitcomet_core::services::CommandOutput> {
             unimplemented!()
         }
         fn push(&self) -> Result<()> {
@@ -1032,14 +1172,14 @@ fn append_gitignore_patterns_effect_creates_appends_and_dedupes() {
     let gitignore = base.join(".gitignore");
 
     let repo_id = RepoId(1);
-    let repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = {
+    let mut repos: RepositoryRuntimes = {
         let repo: Arc<dyn GitRepository> = Arc::new(Repo {
             spec: RepoSpec {
                 workdir: base.clone(),
             },
         });
-        let mut repos = FxHashMap::default();
-        repos.insert(repo_id, repo);
+        let mut repos = RepositoryRuntimes::default();
+        repos.attach_repository_for_test(repo_id, repo);
         repos
     };
 
@@ -1048,15 +1188,15 @@ fn append_gitignore_patterns_effect_creates_appends_and_dedupes() {
 
     // Runs one append to completion and hands back the command's stdout, which
     // is how the worker reports the "nothing to add" short-circuit.
-    let append = |patterns: Vec<String>| -> String {
+    let mut append = |patterns: Vec<String>| -> String {
         let (msg_tx, msg_rx) = std::sync::mpsc::channel::<Msg>();
         schedule_effect_for_test(
             &executor,
             &executor,
             &backend,
-            &repos,
+            &mut repos,
             msg_tx,
-            Effect::AppendGitignorePatterns { repo_id, patterns },
+            Effect::RepoCommand(RepoCommandEffect::AppendGitignorePatterns { repo_id, patterns }),
         );
         let start = Instant::now();
         while start.elapsed() < Duration::from_secs(5) {
@@ -1146,7 +1286,9 @@ fn checkout_conflict_base_effect_calls_repo_and_emits_finished() {
             &self,
             _limit: usize,
             _cursor: Option<&LogCursor>,
+            cancellation: &gitcomet_core::services::CancellationToken,
         ) -> Result<std::sync::Arc<LogPage>> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
         fn commit_details(&self, _id: &CommitId) -> Result<CommitDetails> {
@@ -1155,19 +1297,39 @@ fn checkout_conflict_base_effect_calls_repo_and_emits_finished() {
         fn reflog_head(&self, _limit: usize) -> Result<Vec<ReflogEntry>> {
             unimplemented!()
         }
-        fn current_branch(&self) -> Result<String> {
+        fn current_branch(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<String> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
-        fn list_branches(&self) -> Result<Vec<Branch>> {
+        fn list_branches(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<Vec<Branch>> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
-        fn list_remotes(&self) -> Result<Vec<Remote>> {
+        fn list_remotes(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<Vec<Remote>> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
-        fn list_remote_branches(&self) -> Result<Vec<RemoteBranch>> {
+        fn list_remote_branches(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<Vec<RemoteBranch>> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
-        fn status(&self) -> Result<RepoStatus> {
+        fn status(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<RepoStatus> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
         fn diff_unified(&self, _target: &DiffTarget) -> Result<String> {
@@ -1191,7 +1353,11 @@ fn checkout_conflict_base_effect_calls_repo_and_emits_finished() {
         fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
             unimplemented!()
         }
-        fn stash_list(&self) -> Result<Vec<StashEntry>> {
+        fn stash_list(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<Vec<StashEntry>> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
         fn stash_apply(&self, _index: usize) -> Result<()> {
@@ -1209,10 +1375,10 @@ fn checkout_conflict_base_effect_calls_repo_and_emits_finished() {
         fn commit(&self, _message: &str) -> Result<()> {
             unimplemented!()
         }
-        fn fetch_all(&self) -> Result<()> {
+        fn fetch_all(&self, _prune: bool) -> Result<gitcomet_core::services::CommandOutput> {
             unimplemented!()
         }
-        fn pull(&self, _mode: PullMode) -> Result<()> {
+        fn pull(&self, _mode: PullMode) -> Result<gitcomet_core::services::CommandOutput> {
             unimplemented!()
         }
         fn push(&self) -> Result<()> {
@@ -1243,9 +1409,9 @@ fn checkout_conflict_base_effect_calls_repo_and_emits_finished() {
         checkout_base_calls: std::sync::Mutex::new(Vec::new()),
     });
     let repo_trait: Arc<dyn GitRepository> = repo.clone();
-    let repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = {
-        let mut repos = FxHashMap::default();
-        repos.insert(repo_id, repo_trait);
+    let mut repos: RepositoryRuntimes = {
+        let mut repos = RepositoryRuntimes::default();
+        repos.attach_repository_for_test(repo_id, repo_trait);
         repos
     };
 
@@ -1257,12 +1423,12 @@ fn checkout_conflict_base_effect_calls_repo_and_emits_finished() {
         &executor,
         &executor,
         &backend,
-        &repos,
+        &mut repos,
         msg_tx,
-        Effect::CheckoutConflictBase {
+        Effect::RepoCommand(RepoCommandEffect::CheckoutConflictBase {
             repo_id,
             path: rel.clone(),
-        },
+        }),
     );
 
     let start = Instant::now();
@@ -1309,7 +1475,9 @@ fn accept_conflict_deletion_effect_calls_repo_and_emits_finished() {
             &self,
             _limit: usize,
             _cursor: Option<&LogCursor>,
+            cancellation: &gitcomet_core::services::CancellationToken,
         ) -> Result<std::sync::Arc<LogPage>> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
         fn commit_details(&self, _id: &CommitId) -> Result<CommitDetails> {
@@ -1318,19 +1486,39 @@ fn accept_conflict_deletion_effect_calls_repo_and_emits_finished() {
         fn reflog_head(&self, _limit: usize) -> Result<Vec<ReflogEntry>> {
             unimplemented!()
         }
-        fn current_branch(&self) -> Result<String> {
+        fn current_branch(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<String> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
-        fn list_branches(&self) -> Result<Vec<Branch>> {
+        fn list_branches(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<Vec<Branch>> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
-        fn list_remotes(&self) -> Result<Vec<Remote>> {
+        fn list_remotes(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<Vec<Remote>> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
-        fn list_remote_branches(&self) -> Result<Vec<RemoteBranch>> {
+        fn list_remote_branches(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<Vec<RemoteBranch>> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
-        fn status(&self) -> Result<RepoStatus> {
+        fn status(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<RepoStatus> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
         fn diff_unified(&self, _target: &DiffTarget) -> Result<String> {
@@ -1354,7 +1542,11 @@ fn accept_conflict_deletion_effect_calls_repo_and_emits_finished() {
         fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
             unimplemented!()
         }
-        fn stash_list(&self) -> Result<Vec<StashEntry>> {
+        fn stash_list(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<Vec<StashEntry>> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
         fn stash_apply(&self, _index: usize) -> Result<()> {
@@ -1372,10 +1564,10 @@ fn accept_conflict_deletion_effect_calls_repo_and_emits_finished() {
         fn commit(&self, _message: &str) -> Result<()> {
             unimplemented!()
         }
-        fn fetch_all(&self) -> Result<()> {
+        fn fetch_all(&self, _prune: bool) -> Result<gitcomet_core::services::CommandOutput> {
             unimplemented!()
         }
-        fn pull(&self, _mode: PullMode) -> Result<()> {
+        fn pull(&self, _mode: PullMode) -> Result<gitcomet_core::services::CommandOutput> {
             unimplemented!()
         }
         fn push(&self) -> Result<()> {
@@ -1406,9 +1598,9 @@ fn accept_conflict_deletion_effect_calls_repo_and_emits_finished() {
         accepted_deletion_calls: std::sync::Mutex::new(Vec::new()),
     });
     let repo_trait: Arc<dyn GitRepository> = repo.clone();
-    let repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = {
-        let mut repos = FxHashMap::default();
-        repos.insert(repo_id, repo_trait);
+    let mut repos: RepositoryRuntimes = {
+        let mut repos = RepositoryRuntimes::default();
+        repos.attach_repository_for_test(repo_id, repo_trait);
         repos
     };
 
@@ -1420,12 +1612,12 @@ fn accept_conflict_deletion_effect_calls_repo_and_emits_finished() {
         &executor,
         &executor,
         &backend,
-        &repos,
+        &mut repos,
         msg_tx,
-        Effect::AcceptConflictDeletion {
+        Effect::RepoCommand(RepoCommandEffect::AcceptConflictDeletion {
             repo_id,
             path: rel.clone(),
-        },
+        }),
     );
 
     let start = Instant::now();
@@ -1475,7 +1667,9 @@ fn load_stashes_effect_truncates_results_to_limit() {
             &self,
             _limit: usize,
             _cursor: Option<&LogCursor>,
+            cancellation: &gitcomet_core::services::CancellationToken,
         ) -> Result<std::sync::Arc<LogPage>> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
         fn commit_details(&self, _id: &CommitId) -> Result<CommitDetails> {
@@ -1484,19 +1678,39 @@ fn load_stashes_effect_truncates_results_to_limit() {
         fn reflog_head(&self, _limit: usize) -> Result<Vec<ReflogEntry>> {
             unimplemented!()
         }
-        fn current_branch(&self) -> Result<String> {
+        fn current_branch(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<String> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
-        fn list_branches(&self) -> Result<Vec<Branch>> {
+        fn list_branches(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<Vec<Branch>> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
-        fn list_remotes(&self) -> Result<Vec<Remote>> {
+        fn list_remotes(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<Vec<Remote>> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
-        fn list_remote_branches(&self) -> Result<Vec<RemoteBranch>> {
+        fn list_remote_branches(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<Vec<RemoteBranch>> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
-        fn status(&self) -> Result<RepoStatus> {
+        fn status(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<RepoStatus> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
         fn diff_unified(&self, _target: &DiffTarget) -> Result<String> {
@@ -1520,8 +1734,15 @@ fn load_stashes_effect_truncates_results_to_limit() {
         fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
             unimplemented!()
         }
-        fn stash_list(&self) -> Result<Vec<StashEntry>> {
-            Ok(self.stashes.clone())
+        fn stash_list(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<Vec<StashEntry>> {
+            cancellation.check_cancelled()?;
+            let result: Result<Vec<StashEntry>> = { Ok(self.stashes.clone()) };
+            let result = result?;
+            cancellation.check_cancelled()?;
+            Ok(result)
         }
         fn stash_apply(&self, _index: usize) -> Result<()> {
             unimplemented!()
@@ -1538,10 +1759,10 @@ fn load_stashes_effect_truncates_results_to_limit() {
         fn commit(&self, _message: &str) -> Result<()> {
             unimplemented!()
         }
-        fn fetch_all(&self) -> Result<()> {
+        fn fetch_all(&self, _prune: bool) -> Result<gitcomet_core::services::CommandOutput> {
             unimplemented!()
         }
-        fn pull(&self, _mode: PullMode) -> Result<()> {
+        fn pull(&self, _mode: PullMode) -> Result<gitcomet_core::services::CommandOutput> {
             unimplemented!()
         }
         fn push(&self) -> Result<()> {
@@ -1581,9 +1802,9 @@ fn load_stashes_effect_truncates_results_to_limit() {
 
     let executor = super::super::executor::TaskExecutor::new(1);
     let backend: Arc<dyn GitBackend> = Arc::new(Backend);
-    let repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = {
-        let mut repos = FxHashMap::default();
-        repos.insert(repo_id, repo);
+    let mut repos: RepositoryRuntimes = {
+        let mut repos = RepositoryRuntimes::default();
+        repos.attach_repository_for_test(repo_id, repo);
         repos
     };
     let (msg_tx, msg_rx) = std::sync::mpsc::channel::<Msg>();
@@ -1592,7 +1813,7 @@ fn load_stashes_effect_truncates_results_to_limit() {
         &executor,
         &executor,
         &backend,
-        &repos,
+        &mut repos,
         msg_tx,
         Effect::LoadStashes { repo_id, limit: 2 },
     );
@@ -1641,7 +1862,9 @@ fn stash_effect_requests_stash_reload_on_success() {
             &self,
             _limit: usize,
             _cursor: Option<&LogCursor>,
+            cancellation: &gitcomet_core::services::CancellationToken,
         ) -> Result<std::sync::Arc<LogPage>> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
         fn commit_details(&self, _id: &CommitId) -> Result<CommitDetails> {
@@ -1650,19 +1873,39 @@ fn stash_effect_requests_stash_reload_on_success() {
         fn reflog_head(&self, _limit: usize) -> Result<Vec<ReflogEntry>> {
             unimplemented!()
         }
-        fn current_branch(&self) -> Result<String> {
+        fn current_branch(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<String> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
-        fn list_branches(&self) -> Result<Vec<Branch>> {
+        fn list_branches(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<Vec<Branch>> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
-        fn list_remotes(&self) -> Result<Vec<Remote>> {
+        fn list_remotes(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<Vec<Remote>> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
-        fn list_remote_branches(&self) -> Result<Vec<RemoteBranch>> {
+        fn list_remote_branches(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<Vec<RemoteBranch>> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
-        fn status(&self) -> Result<RepoStatus> {
+        fn status(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<RepoStatus> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
         fn diff_unified(&self, _target: &DiffTarget) -> Result<String> {
@@ -1690,7 +1933,11 @@ fn stash_effect_requests_stash_reload_on_success() {
             ));
             Ok(())
         }
-        fn stash_list(&self) -> Result<Vec<StashEntry>> {
+        fn stash_list(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<Vec<StashEntry>> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
         fn stash_apply(&self, _index: usize) -> Result<()> {
@@ -1709,10 +1956,10 @@ fn stash_effect_requests_stash_reload_on_success() {
         fn commit(&self, _message: &str) -> Result<()> {
             unimplemented!()
         }
-        fn fetch_all(&self) -> Result<()> {
+        fn fetch_all(&self, _prune: bool) -> Result<gitcomet_core::services::CommandOutput> {
             unimplemented!()
         }
-        fn pull(&self, _mode: PullMode) -> Result<()> {
+        fn pull(&self, _mode: PullMode) -> Result<gitcomet_core::services::CommandOutput> {
             unimplemented!()
         }
         fn push(&self) -> Result<()> {
@@ -1740,15 +1987,15 @@ fn stash_effect_requests_stash_reload_on_success() {
 
     let executor = super::super::executor::TaskExecutor::new(1);
     let backend: Arc<dyn GitBackend> = Arc::new(Backend);
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
-    repos.insert(RepoId(1), repo);
+    let mut repos: RepositoryRuntimes = Default::default();
+    repos.attach_repository_for_test(RepoId(1), repo);
     let (msg_tx, msg_rx) = std::sync::mpsc::channel::<Msg>();
 
     schedule_effect_for_test(
         &executor,
         &executor,
         &backend,
-        &repos,
+        &mut repos,
         msg_tx,
         Effect::Stash {
             repo_id: RepoId(1),
@@ -1811,7 +2058,9 @@ fn pop_stash_effect_applies_and_drops_then_requests_stash_reload() {
             &self,
             _limit: usize,
             _cursor: Option<&LogCursor>,
+            cancellation: &gitcomet_core::services::CancellationToken,
         ) -> Result<std::sync::Arc<LogPage>> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
         fn commit_details(&self, _id: &CommitId) -> Result<CommitDetails> {
@@ -1820,19 +2069,39 @@ fn pop_stash_effect_applies_and_drops_then_requests_stash_reload() {
         fn reflog_head(&self, _limit: usize) -> Result<Vec<ReflogEntry>> {
             unimplemented!()
         }
-        fn current_branch(&self) -> Result<String> {
+        fn current_branch(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<String> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
-        fn list_branches(&self) -> Result<Vec<Branch>> {
+        fn list_branches(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<Vec<Branch>> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
-        fn list_remotes(&self) -> Result<Vec<Remote>> {
+        fn list_remotes(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<Vec<Remote>> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
-        fn list_remote_branches(&self) -> Result<Vec<RemoteBranch>> {
+        fn list_remote_branches(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<Vec<RemoteBranch>> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
-        fn status(&self) -> Result<RepoStatus> {
+        fn status(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<RepoStatus> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
         fn diff_unified(&self, _target: &DiffTarget) -> Result<String> {
@@ -1857,7 +2126,11 @@ fn pop_stash_effect_applies_and_drops_then_requests_stash_reload() {
         fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
             unimplemented!()
         }
-        fn stash_list(&self) -> Result<Vec<StashEntry>> {
+        fn stash_list(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<Vec<StashEntry>> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
         fn stash_apply(&self, index: usize) -> Result<()> {
@@ -1878,10 +2151,10 @@ fn pop_stash_effect_applies_and_drops_then_requests_stash_reload() {
         fn commit(&self, _message: &str) -> Result<()> {
             unimplemented!()
         }
-        fn fetch_all(&self) -> Result<()> {
+        fn fetch_all(&self, _prune: bool) -> Result<gitcomet_core::services::CommandOutput> {
             unimplemented!()
         }
-        fn pull(&self, _mode: PullMode) -> Result<()> {
+        fn pull(&self, _mode: PullMode) -> Result<gitcomet_core::services::CommandOutput> {
             unimplemented!()
         }
         fn push(&self) -> Result<()> {
@@ -1909,15 +2182,15 @@ fn pop_stash_effect_applies_and_drops_then_requests_stash_reload() {
 
     let executor = super::super::executor::TaskExecutor::new(1);
     let backend: Arc<dyn GitBackend> = Arc::new(Backend);
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
-    repos.insert(RepoId(1), repo);
+    let mut repos: RepositoryRuntimes = Default::default();
+    repos.attach_repository_for_test(RepoId(1), repo);
     let (msg_tx, msg_rx) = std::sync::mpsc::channel::<Msg>();
 
     schedule_effect_for_test(
         &executor,
         &executor,
         &backend,
-        &repos,
+        &mut repos,
         msg_tx,
         Effect::PopStash {
             repo_id: RepoId(1),
@@ -1979,7 +2252,9 @@ fn pop_stash_effect_propagates_apply_error_without_drop_or_reload() {
             &self,
             _limit: usize,
             _cursor: Option<&LogCursor>,
+            cancellation: &gitcomet_core::services::CancellationToken,
         ) -> Result<std::sync::Arc<LogPage>> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
         fn commit_details(&self, _id: &CommitId) -> Result<CommitDetails> {
@@ -1988,19 +2263,39 @@ fn pop_stash_effect_propagates_apply_error_without_drop_or_reload() {
         fn reflog_head(&self, _limit: usize) -> Result<Vec<ReflogEntry>> {
             unimplemented!()
         }
-        fn current_branch(&self) -> Result<String> {
+        fn current_branch(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<String> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
-        fn list_branches(&self) -> Result<Vec<Branch>> {
+        fn list_branches(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<Vec<Branch>> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
-        fn list_remotes(&self) -> Result<Vec<Remote>> {
+        fn list_remotes(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<Vec<Remote>> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
-        fn list_remote_branches(&self) -> Result<Vec<RemoteBranch>> {
+        fn list_remote_branches(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<Vec<RemoteBranch>> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
-        fn status(&self) -> Result<RepoStatus> {
+        fn status(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<RepoStatus> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
         fn diff_unified(&self, _target: &DiffTarget) -> Result<String> {
@@ -2025,7 +2320,11 @@ fn pop_stash_effect_propagates_apply_error_without_drop_or_reload() {
         fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
             unimplemented!()
         }
-        fn stash_list(&self) -> Result<Vec<StashEntry>> {
+        fn stash_list(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<Vec<StashEntry>> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
         fn stash_apply(&self, index: usize) -> Result<()> {
@@ -2046,10 +2345,10 @@ fn pop_stash_effect_propagates_apply_error_without_drop_or_reload() {
         fn commit(&self, _message: &str) -> Result<()> {
             unimplemented!()
         }
-        fn fetch_all(&self) -> Result<()> {
+        fn fetch_all(&self, _prune: bool) -> Result<gitcomet_core::services::CommandOutput> {
             unimplemented!()
         }
-        fn pull(&self, _mode: PullMode) -> Result<()> {
+        fn pull(&self, _mode: PullMode) -> Result<gitcomet_core::services::CommandOutput> {
             unimplemented!()
         }
         fn push(&self) -> Result<()> {
@@ -2077,15 +2376,15 @@ fn pop_stash_effect_propagates_apply_error_without_drop_or_reload() {
 
     let executor = super::super::executor::TaskExecutor::new(1);
     let backend: Arc<dyn GitBackend> = Arc::new(Backend);
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
-    repos.insert(RepoId(1), repo);
+    let mut repos: RepositoryRuntimes = Default::default();
+    repos.attach_repository_for_test(RepoId(1), repo);
     let (msg_tx, msg_rx) = std::sync::mpsc::channel::<Msg>();
 
     schedule_effect_for_test(
         &executor,
         &executor,
         &backend,
-        &repos,
+        &mut repos,
         msg_tx,
         Effect::PopStash {
             repo_id: RepoId(1),
@@ -2146,7 +2445,9 @@ fn drop_stash_effect_requests_stash_reload_on_success() {
             &self,
             _limit: usize,
             _cursor: Option<&LogCursor>,
+            cancellation: &gitcomet_core::services::CancellationToken,
         ) -> Result<std::sync::Arc<LogPage>> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
         fn commit_details(&self, _id: &CommitId) -> Result<CommitDetails> {
@@ -2155,19 +2456,39 @@ fn drop_stash_effect_requests_stash_reload_on_success() {
         fn reflog_head(&self, _limit: usize) -> Result<Vec<ReflogEntry>> {
             unimplemented!()
         }
-        fn current_branch(&self) -> Result<String> {
+        fn current_branch(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<String> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
-        fn list_branches(&self) -> Result<Vec<Branch>> {
+        fn list_branches(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<Vec<Branch>> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
-        fn list_remotes(&self) -> Result<Vec<Remote>> {
+        fn list_remotes(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<Vec<Remote>> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
-        fn list_remote_branches(&self) -> Result<Vec<RemoteBranch>> {
+        fn list_remote_branches(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<Vec<RemoteBranch>> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
-        fn status(&self) -> Result<RepoStatus> {
+        fn status(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<RepoStatus> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
         fn diff_unified(&self, _target: &DiffTarget) -> Result<String> {
@@ -2192,7 +2513,11 @@ fn drop_stash_effect_requests_stash_reload_on_success() {
         fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
             unimplemented!()
         }
-        fn stash_list(&self) -> Result<Vec<StashEntry>> {
+        fn stash_list(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<Vec<StashEntry>> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
         fn stash_apply(&self, _index: usize) -> Result<()> {
@@ -2212,10 +2537,10 @@ fn drop_stash_effect_requests_stash_reload_on_success() {
         fn commit(&self, _message: &str) -> Result<()> {
             unimplemented!()
         }
-        fn fetch_all(&self) -> Result<()> {
+        fn fetch_all(&self, _prune: bool) -> Result<gitcomet_core::services::CommandOutput> {
             unimplemented!()
         }
-        fn pull(&self, _mode: PullMode) -> Result<()> {
+        fn pull(&self, _mode: PullMode) -> Result<gitcomet_core::services::CommandOutput> {
             unimplemented!()
         }
         fn push(&self) -> Result<()> {
@@ -2243,15 +2568,15 @@ fn drop_stash_effect_requests_stash_reload_on_success() {
 
     let executor = super::super::executor::TaskExecutor::new(1);
     let backend: Arc<dyn GitBackend> = Arc::new(Backend);
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
-    repos.insert(RepoId(1), repo);
+    let mut repos: RepositoryRuntimes = Default::default();
+    repos.attach_repository_for_test(RepoId(1), repo);
     let (msg_tx, msg_rx) = std::sync::mpsc::channel::<Msg>();
 
     schedule_effect_for_test(
         &executor,
         &executor,
         &backend,
-        &repos,
+        &mut repos,
         msg_tx,
         Effect::DropStash {
             repo_id: RepoId(1),
@@ -2310,7 +2635,9 @@ fn drop_stash_effect_requests_stash_reload_on_error() {
             &self,
             _limit: usize,
             _cursor: Option<&LogCursor>,
+            cancellation: &gitcomet_core::services::CancellationToken,
         ) -> Result<std::sync::Arc<LogPage>> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
         fn commit_details(&self, _id: &CommitId) -> Result<CommitDetails> {
@@ -2319,19 +2646,39 @@ fn drop_stash_effect_requests_stash_reload_on_error() {
         fn reflog_head(&self, _limit: usize) -> Result<Vec<ReflogEntry>> {
             unimplemented!()
         }
-        fn current_branch(&self) -> Result<String> {
+        fn current_branch(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<String> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
-        fn list_branches(&self) -> Result<Vec<Branch>> {
+        fn list_branches(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<Vec<Branch>> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
-        fn list_remotes(&self) -> Result<Vec<Remote>> {
+        fn list_remotes(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<Vec<Remote>> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
-        fn list_remote_branches(&self) -> Result<Vec<RemoteBranch>> {
+        fn list_remote_branches(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<Vec<RemoteBranch>> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
-        fn status(&self) -> Result<RepoStatus> {
+        fn status(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<RepoStatus> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
         fn diff_unified(&self, _target: &DiffTarget) -> Result<String> {
@@ -2356,7 +2703,11 @@ fn drop_stash_effect_requests_stash_reload_on_error() {
         fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
             unimplemented!()
         }
-        fn stash_list(&self) -> Result<Vec<StashEntry>> {
+        fn stash_list(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<Vec<StashEntry>> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
         fn stash_apply(&self, _index: usize) -> Result<()> {
@@ -2376,10 +2727,10 @@ fn drop_stash_effect_requests_stash_reload_on_error() {
         fn commit(&self, _message: &str) -> Result<()> {
             unimplemented!()
         }
-        fn fetch_all(&self) -> Result<()> {
+        fn fetch_all(&self, _prune: bool) -> Result<gitcomet_core::services::CommandOutput> {
             unimplemented!()
         }
-        fn pull(&self, _mode: PullMode) -> Result<()> {
+        fn pull(&self, _mode: PullMode) -> Result<gitcomet_core::services::CommandOutput> {
             unimplemented!()
         }
         fn push(&self) -> Result<()> {
@@ -2407,15 +2758,15 @@ fn drop_stash_effect_requests_stash_reload_on_error() {
 
     let executor = super::super::executor::TaskExecutor::new(1);
     let backend: Arc<dyn GitBackend> = Arc::new(Backend);
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
-    repos.insert(RepoId(1), repo);
+    let mut repos: RepositoryRuntimes = Default::default();
+    repos.attach_repository_for_test(RepoId(1), repo);
     let (msg_tx, msg_rx) = std::sync::mpsc::channel::<Msg>();
 
     schedule_effect_for_test(
         &executor,
         &executor,
         &backend,
-        &repos,
+        &mut repos,
         msg_tx,
         Effect::DropStash {
             repo_id: RepoId(1),
@@ -2470,7 +2821,7 @@ fn apply_file_change_fixture(repo: &Path) -> String {
     run_git(repo, &["checkout", "-q", "-b", "feature"]);
     fs::write(repo.join("a.txt"), "one\nTWO\n").expect("write feature");
     run_git(repo, &["commit", "-q", "-am", "feature subject\n\nbody"]);
-    let output = Command::new("git")
+    let output = gitcomet_core::test_support::git_fixture::git_command()
         .arg("-C")
         .arg(repo)
         .args(["rev-parse", "HEAD"])
@@ -2503,8 +2854,8 @@ fn run_apply_file_change_effect_with_retry(
         }
     }
     let repo_id = RepoId(9);
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
-    repos.insert(
+    let mut repos: RepositoryRuntimes = Default::default();
+    repos.attach_repository_for_test(
         repo_id,
         gitcomet_git_gix::GixBackend
             .open(repo)
@@ -2517,15 +2868,15 @@ fn run_apply_file_change_effect_with_retry(
         &executor,
         &executor,
         &backend,
-        &repos,
+        &mut repos,
         msg_tx,
-        Effect::ApplyFileChange {
+        Effect::RepoCommand(RepoCommandEffect::ApplyFileChange {
             commit_retry,
             repo_id,
             target,
             commit,
             auth: None,
-        },
+        }),
     );
     let mut msgs = Vec::new();
     loop {
@@ -2663,6 +3014,58 @@ fn a_failed_commit_step_offers_the_message() {
 }
 
 #[test]
+fn pull_lifecycle_retains_local_branch_without_tracking_metadata() {
+    let repo_id = RepoId(341);
+    let spec = RepoSpec {
+        workdir: unique_temp_path("gitcomet-pull-context-without-tracking"),
+    };
+    let repo: Arc<dyn GitRepository> = Arc::new(UnsupportedRepo {
+        spec: spec.clone(),
+        delete_branch_calls: None,
+        cancel_delete_branch: None,
+    });
+    let mut repos = RepositoryRuntimes::default();
+    repos.attach_repository_for_test(repo_id, repo);
+    let mut repo_state = RepoState::new_opening(repo_id, spec);
+    repo_state.set_head_branch(Loadable::Ready("topic".into()));
+    let backend: Arc<dyn GitBackend> = Arc::new(PanicOpenBackend);
+    let executor = super::super::executor::TaskExecutor::new(1);
+    let (msg_tx, msg_rx) = std::sync::mpsc::channel::<Msg>();
+    schedule_effect_with_state_for_test(
+        &executor,
+        &executor,
+        &backend,
+        &mut repos,
+        AppState {
+            repos: vec![repo_state],
+            ..AppState::test_default()
+        },
+        msg_tx,
+        Effect::RepoCommand(RepoCommandEffect::Pull {
+            repo_id,
+            mode: gitcomet_core::services::PullMode::Rebase,
+            auth: None,
+        }),
+    );
+    match msg_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("Pull should start its lifecycle")
+    {
+        Msg::Internal(crate::msg::InternalMsg::GitOperationStarted { label, context, .. }) => {
+            assert_eq!(label, "Pull");
+            assert_eq!(context.as_deref(), Some("topic · rebase"));
+        }
+        other => panic!("unexpected first Pull lifecycle message: {other:?}"),
+    }
+    assert!(matches!(
+        msg_rx.recv_timeout(Duration::from_secs(2)),
+        Ok(Msg::Internal(
+            crate::msg::InternalMsg::GitOperationFinished { .. }
+        ))
+    ));
+}
+
+#[test]
 fn push_lifecycle_uses_cached_tracking_branch_context() {
     let repo_id = RepoId(340);
     let spec = RepoSpec {
@@ -2673,9 +3076,9 @@ fn push_lifecycle_uses_cached_tracking_branch_context() {
         delete_branch_calls: None,
         cancel_delete_branch: None,
     });
-    let repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = {
-        let mut repos = FxHashMap::default();
-        repos.insert(repo_id, repo);
+    let mut repos: RepositoryRuntimes = {
+        let mut repos = RepositoryRuntimes::default();
+        repos.attach_repository_for_test(repo_id, repo);
         repos
     };
     let mut repo_state = RepoState::new_opening(repo_id, spec);
@@ -2697,16 +3100,16 @@ fn push_lifecycle_uses_cached_tracking_branch_context() {
         &executor,
         &executor,
         &backend,
-        &repos,
+        &mut repos,
         AppState {
             repos: vec![repo_state],
             ..AppState::test_default()
         },
         msg_tx,
-        Effect::Push {
+        Effect::RepoCommand(RepoCommandEffect::Push {
             repo_id,
             auth: None,
-        },
+        }),
     );
 
     match msg_rx
@@ -2740,11 +3143,9 @@ fn wait_for_checkout_refresh_messages(
     msg_rx: &std::sync::mpsc::Receiver<Msg>,
     repo_id: RepoId,
     expect_refresh_branches: bool,
-    expect_load_worktrees: bool,
 ) {
     let deadline = Instant::now() + Duration::from_secs(5);
     let mut saw_refresh_branches = false;
-    let mut saw_load_worktrees = false;
     let mut saw_finished = false;
 
     while Instant::now() < deadline {
@@ -2759,7 +3160,10 @@ fn wait_for_checkout_refresh_messages(
                 saw_refresh_branches = true;
             }
             Msg::LoadWorktrees { repo_id: rid } if rid == repo_id => {
-                saw_load_worktrees = true;
+                panic!("worktree refreshes must be requested after action completion");
+            }
+            Msg::LoadWorktreeDirty { repo_id: rid } if rid == repo_id => {
+                panic!("dirty scans must be requested after action completion");
             }
             Msg::Internal(crate::msg::InternalMsg::RepoActionFinished {
                 repo_id: rid,
@@ -2771,10 +3175,7 @@ fn wait_for_checkout_refresh_messages(
             _ => {}
         }
 
-        if saw_finished
-            && saw_refresh_branches == expect_refresh_branches
-            && saw_load_worktrees == expect_load_worktrees
-        {
+        if saw_finished && saw_refresh_branches == expect_refresh_branches {
             return;
         }
     }
@@ -2783,10 +3184,6 @@ fn wait_for_checkout_refresh_messages(
         saw_refresh_branches, expect_refresh_branches,
         "unexpected RefreshBranches emission for repo {repo_id:?}"
     );
-    assert_eq!(
-        saw_load_worktrees, expect_load_worktrees,
-        "unexpected LoadWorktrees emission for repo {repo_id:?}"
-    );
     assert!(
         saw_finished,
         "expected RepoActionFinished for repo {repo_id:?}"
@@ -2794,7 +3191,7 @@ fn wait_for_checkout_refresh_messages(
 }
 
 #[test]
-fn checkout_branch_effect_requests_branch_and_worktree_reload_on_success() {
+fn checkout_branch_effect_defers_worktree_refresh_until_completion() {
     let repo_id = RepoId(700);
     let calls = Arc::new(std::sync::Mutex::new(Vec::new()));
     let backend: Arc<dyn GitBackend> = Arc::new(PanicOpenBackend);
@@ -2807,10 +3204,12 @@ fn checkout_branch_effect_requests_branch_and_worktree_reload_on_success() {
         rename_branch_already_exists: false,
         other_worktree: None,
         current_branch: None,
+        prepared_barrier: None,
+        remote_barrier: None,
     });
-    let repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = {
-        let mut repos = FxHashMap::default();
-        repos.insert(repo_id, repo);
+    let mut repos: RepositoryRuntimes = {
+        let mut repos = RepositoryRuntimes::default();
+        repos.attach_repository_for_test(repo_id, repo);
         repos
     };
     let executor = super::super::executor::TaskExecutor::new(1);
@@ -2820,7 +3219,7 @@ fn checkout_branch_effect_requests_branch_and_worktree_reload_on_success() {
         &executor,
         &executor,
         &backend,
-        &repos,
+        &mut repos,
         msg_tx,
         Effect::CheckoutBranch {
             repo_id,
@@ -2828,7 +3227,7 @@ fn checkout_branch_effect_requests_branch_and_worktree_reload_on_success() {
         },
     );
 
-    wait_for_checkout_refresh_messages(&msg_rx, repo_id, true, true);
+    wait_for_checkout_refresh_messages(&msg_rx, repo_id, true);
     assert_eq!(
         *calls.lock().expect("checkout recording mutex"),
         vec!["checkout feature".to_string()]
@@ -2836,7 +3235,7 @@ fn checkout_branch_effect_requests_branch_and_worktree_reload_on_success() {
 }
 
 #[test]
-fn checkout_remote_branch_effect_requests_branch_and_worktree_reload_on_success() {
+fn checkout_remote_branch_effect_defers_worktree_refresh_until_completion() {
     let repo_id = RepoId(701);
     let calls = Arc::new(std::sync::Mutex::new(Vec::new()));
     let backend: Arc<dyn GitBackend> = Arc::new(PanicOpenBackend);
@@ -2849,10 +3248,12 @@ fn checkout_remote_branch_effect_requests_branch_and_worktree_reload_on_success(
         rename_branch_already_exists: false,
         other_worktree: None,
         current_branch: None,
+        prepared_barrier: None,
+        remote_barrier: None,
     });
-    let repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = {
-        let mut repos = FxHashMap::default();
-        repos.insert(repo_id, repo);
+    let mut repos: RepositoryRuntimes = {
+        let mut repos = RepositoryRuntimes::default();
+        repos.attach_repository_for_test(repo_id, repo);
         repos
     };
     let executor = super::super::executor::TaskExecutor::new(1);
@@ -2862,7 +3263,7 @@ fn checkout_remote_branch_effect_requests_branch_and_worktree_reload_on_success(
         &executor,
         &executor,
         &backend,
-        &repos,
+        &mut repos,
         msg_tx,
         Effect::CheckoutRemoteBranch {
             repo_id,
@@ -2873,7 +3274,7 @@ fn checkout_remote_branch_effect_requests_branch_and_worktree_reload_on_success(
         },
     );
 
-    wait_for_checkout_refresh_messages(&msg_rx, repo_id, true, true);
+    wait_for_checkout_refresh_messages(&msg_rx, repo_id, true);
     assert_eq!(
         *calls.lock().expect("checkout recording mutex"),
         vec!["checkout_remote origin/feature -> feature (Overwrite)".to_string()]
@@ -2881,7 +3282,7 @@ fn checkout_remote_branch_effect_requests_branch_and_worktree_reload_on_success(
 }
 
 #[test]
-fn checkout_commit_effect_requests_worktree_reload_on_success() {
+fn checkout_commit_effect_defers_worktree_refresh_until_completion() {
     let repo_id = RepoId(702);
     let calls = Arc::new(std::sync::Mutex::new(Vec::new()));
     let backend: Arc<dyn GitBackend> = Arc::new(PanicOpenBackend);
@@ -2894,10 +3295,12 @@ fn checkout_commit_effect_requests_worktree_reload_on_success() {
         rename_branch_already_exists: false,
         other_worktree: None,
         current_branch: None,
+        prepared_barrier: None,
+        remote_barrier: None,
     });
-    let repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = {
-        let mut repos = FxHashMap::default();
-        repos.insert(repo_id, repo);
+    let mut repos: RepositoryRuntimes = {
+        let mut repos = RepositoryRuntimes::default();
+        repos.attach_repository_for_test(repo_id, repo);
         repos
     };
     let executor = super::super::executor::TaskExecutor::new(1);
@@ -2908,7 +3311,7 @@ fn checkout_commit_effect_requests_worktree_reload_on_success() {
         &executor,
         &executor,
         &backend,
-        &repos,
+        &mut repos,
         msg_tx,
         Effect::CheckoutCommit {
             repo_id,
@@ -2916,7 +3319,7 @@ fn checkout_commit_effect_requests_worktree_reload_on_success() {
         },
     );
 
-    wait_for_checkout_refresh_messages(&msg_rx, repo_id, false, true);
+    wait_for_checkout_refresh_messages(&msg_rx, repo_id, false);
     assert_eq!(
         *calls.lock().expect("checkout recording mutex"),
         vec![format!("checkout_commit {}", commit_id.as_ref())]
@@ -2924,7 +3327,7 @@ fn checkout_commit_effect_requests_worktree_reload_on_success() {
 }
 
 #[test]
-fn create_branch_and_checkout_effect_requests_branch_and_worktree_reload_on_success() {
+fn create_branch_and_checkout_effect_defers_worktree_refresh_until_completion() {
     let repo_id = RepoId(703);
     let calls = Arc::new(std::sync::Mutex::new(Vec::new()));
     let backend: Arc<dyn GitBackend> = Arc::new(PanicOpenBackend);
@@ -2937,10 +3340,12 @@ fn create_branch_and_checkout_effect_requests_branch_and_worktree_reload_on_succ
         rename_branch_already_exists: false,
         other_worktree: None,
         current_branch: None,
+        prepared_barrier: None,
+        remote_barrier: None,
     });
-    let repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = {
-        let mut repos = FxHashMap::default();
-        repos.insert(repo_id, repo);
+    let mut repos: RepositoryRuntimes = {
+        let mut repos = RepositoryRuntimes::default();
+        repos.attach_repository_for_test(repo_id, repo);
         repos
     };
     let executor = super::super::executor::TaskExecutor::new(1);
@@ -2950,7 +3355,7 @@ fn create_branch_and_checkout_effect_requests_branch_and_worktree_reload_on_succ
         &executor,
         &executor,
         &backend,
-        &repos,
+        &mut repos,
         msg_tx,
         Effect::CreateBranchAndCheckout {
             repo_id,
@@ -2960,7 +3365,7 @@ fn create_branch_and_checkout_effect_requests_branch_and_worktree_reload_on_succ
         },
     );
 
-    wait_for_checkout_refresh_messages(&msg_rx, repo_id, true, true);
+    wait_for_checkout_refresh_messages(&msg_rx, repo_id, true);
     assert_eq!(
         *calls.lock().expect("checkout recording mutex"),
         vec![
@@ -2984,10 +3389,12 @@ fn create_branch_and_checkout_force_effect_skips_separate_create_and_checkout() 
         rename_branch_already_exists: false,
         other_worktree: None,
         current_branch: None,
+        prepared_barrier: None,
+        remote_barrier: None,
     });
-    let repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = {
-        let mut repos = FxHashMap::default();
-        repos.insert(repo_id, repo);
+    let mut repos: RepositoryRuntimes = {
+        let mut repos = RepositoryRuntimes::default();
+        repos.attach_repository_for_test(repo_id, repo);
         repos
     };
     let executor = super::super::executor::TaskExecutor::new(1);
@@ -2997,7 +3404,7 @@ fn create_branch_and_checkout_force_effect_skips_separate_create_and_checkout() 
         &executor,
         &executor,
         &backend,
-        &repos,
+        &mut repos,
         msg_tx,
         Effect::CreateBranchAndCheckout {
             repo_id,
@@ -3007,7 +3414,7 @@ fn create_branch_and_checkout_force_effect_skips_separate_create_and_checkout() 
         },
     );
 
-    wait_for_checkout_refresh_messages(&msg_rx, repo_id, true, true);
+    wait_for_checkout_refresh_messages(&msg_rx, repo_id, true);
     assert_eq!(
         *calls.lock().expect("checkout recording mutex"),
         vec!["force-create-and-checkout feature HEAD".to_string()]
@@ -3028,10 +3435,12 @@ fn create_branch_and_checkout_effect_routes_collision_with_original_target() {
         rename_branch_already_exists: false,
         other_worktree: None,
         current_branch: None,
+        prepared_barrier: None,
+        remote_barrier: None,
     });
-    let repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = {
-        let mut repos = FxHashMap::default();
-        repos.insert(repo_id, repo);
+    let mut repos: RepositoryRuntimes = {
+        let mut repos = RepositoryRuntimes::default();
+        repos.attach_repository_for_test(repo_id, repo);
         repos
     };
     let executor = super::super::executor::TaskExecutor::new(1);
@@ -3041,7 +3450,7 @@ fn create_branch_and_checkout_effect_routes_collision_with_original_target() {
         &executor,
         &executor,
         &backend,
-        &repos,
+        &mut repos,
         msg_tx,
         Effect::CreateBranchAndCheckout {
             repo_id,
@@ -3078,32 +3487,20 @@ fn create_branch_and_checkout_effect_routes_collision_with_original_target() {
     );
 }
 
-fn assert_refreshes_branches_and_worktrees(others: &[Msg], repo_id: RepoId) {
-    assert_eq!(others.len(), 3, "unexpected messages: {others:?}");
+fn assert_only_branches_refresh_before_completion(others: &[Msg], repo_id: RepoId) {
     assert!(
-        others
-            .iter()
-            .any(|msg| matches!(msg, Msg::RefreshBranches { repo_id: id } if *id == repo_id))
-    );
-    assert!(
-        others
-            .iter()
-            .any(|msg| matches!(msg, Msg::LoadWorktrees { repo_id: id } if *id == repo_id))
-    );
-    assert!(
-        others
-            .iter()
-            .any(|msg| matches!(msg, Msg::LoadWorktreeDirty { repo_id: id } if *id == repo_id))
+        matches!(others, [Msg::RefreshBranches { repo_id: id }] if *id == repo_id),
+        "worktree refreshes must wait for action completion: {others:?}"
     );
 }
 
 #[test]
 fn checkout_branch_effect_reports_other_worktree_without_running_checkout() {
     let repo_id = RepoId(710);
-    let fixture =
+    let mut fixture =
         worktree_redirect_fixture(repo_id, "gitcomet-checkout-redirect", "feature", false);
     let msg_rx = run_effect_with_fixture(
-        &fixture,
+        &mut fixture,
         Effect::CheckoutBranch {
             repo_id,
             name: "feature".to_string(),
@@ -3131,10 +3528,10 @@ fn checkout_branch_effect_reports_other_worktree_without_running_checkout() {
 #[test]
 fn create_branch_and_checkout_force_effect_runs_in_other_worktree() {
     let repo_id = RepoId(711);
-    let fixture =
+    let mut fixture =
         worktree_redirect_fixture(repo_id, "gitcomet-force-create-redirect", "feature", false);
     let msg_rx = run_effect_with_fixture(
-        &fixture,
+        &mut fixture,
         Effect::CreateBranchAndCheckout {
             repo_id,
             name: "feature".to_string(),
@@ -3144,7 +3541,7 @@ fn create_branch_and_checkout_force_effect_runs_in_other_worktree() {
     );
 
     let (others, finished) = recv_until_action_finished(&msg_rx);
-    assert_refreshes_branches_and_worktrees(&others, repo_id);
+    assert_only_branches_refresh_before_completion(&others, repo_id);
     assert!(matches!(
         &finished,
         Msg::Internal(crate::msg::InternalMsg::RepoActionFinishedInWorktree {
@@ -3168,14 +3565,14 @@ fn create_branch_and_checkout_force_effect_runs_in_other_worktree() {
 #[test]
 fn checkout_remote_branch_overwrite_effect_runs_in_other_worktree() {
     let repo_id = RepoId(712);
-    let fixture = worktree_redirect_fixture(
+    let mut fixture = worktree_redirect_fixture(
         repo_id,
         "gitcomet-remote-overwrite-redirect",
         "feature",
         false,
     );
     let msg_rx = run_effect_with_fixture(
-        &fixture,
+        &mut fixture,
         Effect::CheckoutRemoteBranch {
             repo_id,
             remote: "origin".to_string(),
@@ -3186,7 +3583,7 @@ fn checkout_remote_branch_overwrite_effect_runs_in_other_worktree() {
     );
 
     let (others, finished) = recv_until_action_finished(&msg_rx);
-    assert_refreshes_branches_and_worktrees(&others, repo_id);
+    assert_only_branches_refresh_before_completion(&others, repo_id);
     assert!(matches!(
         &finished,
         Msg::Internal(crate::msg::InternalMsg::RepoActionFinishedInWorktree {
@@ -3206,10 +3603,10 @@ fn checkout_remote_branch_overwrite_effect_runs_in_other_worktree() {
 #[test]
 fn checkout_remote_branch_create_effect_runs_here_even_when_branch_is_elsewhere() {
     let repo_id = RepoId(713);
-    let fixture =
+    let mut fixture =
         worktree_redirect_fixture(repo_id, "gitcomet-remote-create-here", "feature", false);
     let msg_rx = run_effect_with_fixture(
-        &fixture,
+        &mut fixture,
         Effect::CheckoutRemoteBranch {
             repo_id,
             remote: "origin".to_string(),
@@ -3220,7 +3617,7 @@ fn checkout_remote_branch_create_effect_runs_here_even_when_branch_is_elsewhere(
     );
 
     let (others, finished) = recv_until_action_finished(&msg_rx);
-    assert_refreshes_branches_and_worktrees(&others, repo_id);
+    assert_only_branches_refresh_before_completion(&others, repo_id);
     assert!(matches!(
         &finished,
         Msg::Internal(crate::msg::InternalMsg::RepoActionFinished {
@@ -3248,9 +3645,9 @@ fn rename_branch_effect_routes_collision_to_prompt() {
     );
     repo.rename_branch_already_exists = true;
     let backend: Arc<dyn GitBackend> = Arc::new(PanicOpenBackend);
-    let repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = {
-        let mut repos = FxHashMap::default();
-        repos.insert(repo_id, Arc::new(repo) as Arc<dyn GitRepository>);
+    let mut repos: RepositoryRuntimes = {
+        let mut repos = RepositoryRuntimes::default();
+        repos.attach_repository_for_test(repo_id, Arc::new(repo) as Arc<dyn GitRepository>);
         repos
     };
     let executor = super::super::executor::TaskExecutor::new(1);
@@ -3260,7 +3657,7 @@ fn rename_branch_effect_routes_collision_to_prompt() {
         &executor,
         &executor,
         &backend,
-        &repos,
+        &mut repos,
         msg_tx,
         Effect::RenameBranch {
             repo_id,
@@ -3308,9 +3705,9 @@ fn rename_branch_effect_finishes_normally_without_collision() {
         Arc::clone(&calls),
     );
     let backend: Arc<dyn GitBackend> = Arc::new(PanicOpenBackend);
-    let repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = {
-        let mut repos = FxHashMap::default();
-        repos.insert(repo_id, Arc::new(repo) as Arc<dyn GitRepository>);
+    let mut repos: RepositoryRuntimes = {
+        let mut repos = RepositoryRuntimes::default();
+        repos.attach_repository_for_test(repo_id, Arc::new(repo) as Arc<dyn GitRepository>);
         repos
     };
     let executor = super::super::executor::TaskExecutor::new(1);
@@ -3320,7 +3717,7 @@ fn rename_branch_effect_finishes_normally_without_collision() {
         &executor,
         &executor,
         &backend,
-        &repos,
+        &mut repos,
         msg_tx,
         Effect::RenameBranch {
             repo_id,
@@ -3331,7 +3728,7 @@ fn rename_branch_effect_finishes_normally_without_collision() {
     );
 
     let (others, finished) = recv_until_action_finished(&msg_rx);
-    assert_refreshes_branches_and_worktrees(&others, repo_id);
+    assert_only_branches_refresh_before_completion(&others, repo_id);
     assert!(matches!(
         &finished,
         Msg::Internal(crate::msg::InternalMsg::RepoActionFinished {
@@ -3349,10 +3746,10 @@ fn rename_branch_effect_finishes_normally_without_collision() {
 #[test]
 fn rename_branch_force_effect_runs_in_other_worktree() {
     let repo_id = RepoId(716);
-    let fixture =
+    let mut fixture =
         worktree_redirect_fixture(repo_id, "gitcomet-rename-force-redirect", "feature", false);
     let msg_rx = run_effect_with_fixture(
-        &fixture,
+        &mut fixture,
         Effect::RenameBranch {
             repo_id,
             old_name: "old".to_string(),
@@ -3362,7 +3759,7 @@ fn rename_branch_force_effect_runs_in_other_worktree() {
     );
 
     let (others, finished) = recv_until_action_finished(&msg_rx);
-    assert_refreshes_branches_and_worktrees(&others, repo_id);
+    assert_only_branches_refresh_before_completion(&others, repo_id);
     assert!(matches!(
         &finished,
         Msg::Internal(crate::msg::InternalMsg::RepoActionFinishedInWorktree {
@@ -3399,7 +3796,9 @@ fn pull_releases_the_object_store_before_its_refresh() {
             &self,
             _limit: usize,
             _cursor: Option<&LogCursor>,
+            cancellation: &gitcomet_core::services::CancellationToken,
         ) -> Result<std::sync::Arc<LogPage>> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
         fn commit_details(&self, _id: &CommitId) -> Result<CommitDetails> {
@@ -3408,19 +3807,39 @@ fn pull_releases_the_object_store_before_its_refresh() {
         fn reflog_head(&self, _limit: usize) -> Result<Vec<ReflogEntry>> {
             unimplemented!()
         }
-        fn current_branch(&self) -> Result<String> {
+        fn current_branch(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<String> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
-        fn list_branches(&self) -> Result<Vec<Branch>> {
+        fn list_branches(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<Vec<Branch>> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
-        fn list_remotes(&self) -> Result<Vec<Remote>> {
+        fn list_remotes(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<Vec<Remote>> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
-        fn list_remote_branches(&self) -> Result<Vec<RemoteBranch>> {
+        fn list_remote_branches(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<Vec<RemoteBranch>> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
-        fn status(&self) -> Result<RepoStatus> {
+        fn status(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<RepoStatus> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
         fn diff_unified(&self, _target: &DiffTarget) -> Result<String> {
@@ -3444,7 +3863,11 @@ fn pull_releases_the_object_store_before_its_refresh() {
         fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
             unimplemented!()
         }
-        fn stash_list(&self) -> Result<Vec<StashEntry>> {
+        fn stash_list(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<Vec<StashEntry>> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
         fn stash_apply(&self, _index: usize) -> Result<()> {
@@ -3462,12 +3885,15 @@ fn pull_releases_the_object_store_before_its_refresh() {
         fn commit(&self, _message: &str) -> Result<()> {
             unimplemented!()
         }
-        fn fetch_all(&self) -> Result<()> {
+        fn fetch_all(&self, _prune: bool) -> Result<gitcomet_core::services::CommandOutput> {
             unimplemented!()
         }
-        fn pull(&self, _mode: PullMode) -> Result<()> {
-            self.calls.lock().unwrap().push("pull");
-            Ok(())
+        fn pull(&self, _mode: PullMode) -> Result<gitcomet_core::services::CommandOutput> {
+            let result: Result<()> = {
+                self.calls.lock().unwrap().push("pull");
+                Ok(())
+            };
+            result.map(|()| gitcomet_core::services::CommandOutput::empty_success("git pull"))
         }
         fn push(&self) -> Result<()> {
             unimplemented!()
@@ -3487,8 +3913,8 @@ fn pull_releases_the_object_store_before_its_refresh() {
     let calls = Arc::new(Mutex::new(Vec::new()));
     let executor = super::super::executor::TaskExecutor::new(1);
     let backend: Arc<dyn GitBackend> = Arc::new(Backend);
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
-    repos.insert(
+    let mut repos: RepositoryRuntimes = Default::default();
+    repos.attach_repository_for_test(
         RepoId(1),
         Arc::new(RecordingRepo {
             spec: RepoSpec {
@@ -3503,14 +3929,13 @@ fn pull_releases_the_object_store_before_its_refresh() {
         &executor,
         &executor,
         &backend,
-        &repos,
+        &mut repos,
         msg_tx,
-        Effect::Pull {
+        Effect::RepoCommand(RepoCommandEffect::Pull {
             repo_id: RepoId(1),
             mode: PullMode::Default,
-            prune: false,
             auth: None,
-        },
+        }),
     );
 
     let finished = loop {

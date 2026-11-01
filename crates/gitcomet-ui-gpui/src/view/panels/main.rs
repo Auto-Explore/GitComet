@@ -4,6 +4,8 @@ mod binary_conflict;
 mod conflict_resolver_view;
 mod decision_conflict;
 mod diff;
+mod diff_bar;
+mod diff_text;
 mod diff_view;
 mod diff_view_helpers;
 mod history;
@@ -11,11 +13,10 @@ mod keep_delete_conflict;
 mod status_nav;
 mod text_format_strip;
 
-pub(super) fn show_external_mergetool_actions(view_mode: GitCometViewMode) -> bool {
-    matches!(view_mode, GitCometViewMode::Normal)
-}
+#[cfg(test)]
+pub(super) use diff_bar::position_label;
 
-pub(super) fn show_conflict_save_stage_action(view_mode: GitCometViewMode) -> bool {
+pub(super) fn show_external_mergetool_actions(view_mode: GitCometViewMode) -> bool {
     matches!(view_mode, GitCometViewMode::Normal)
 }
 

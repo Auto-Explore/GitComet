@@ -1,6 +1,9 @@
 use super::*;
 use std::ffi::OsStr;
 
+#[cfg(unix)]
+mod checked_paths;
+
 fn run(fs: &mut Filesystem, operation: Operation) -> OperationResult {
     fs.execute(Request::new(operation), |_| {})
 }
@@ -291,6 +294,47 @@ fn repository_saves_recheck_symlinks_when_the_queued_request_executes() {
     }
     success(&service.execute(request, |_| {}));
     assert_eq!(fs::read(outside.join("file.txt")).unwrap(), b"replacement");
+}
+
+/// Filesystems that reject the no-replace flag itself (NFS, 9p, FUSE without
+/// rename2) answer EINVAL; every save and explorer move failed there.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn exclusive_rename_without_kernel_no_replace_still_refuses_to_replace() {
+    let unsupported = |_: &Path, _: &Path| Err(rustix::io::Errno::INVAL);
+    let directory = tempfile::tempdir().unwrap();
+    let source = directory.path().join("source");
+    let target = directory.path().join("target");
+    fs::write(&source, b"source").unwrap();
+    fs::write(&target, b"existing").unwrap();
+    let identity = entry_identity(&source).unwrap();
+
+    assert_eq!(
+        rename_exclusive_with(&source, &target, unsupported)
+            .unwrap_err()
+            .kind(),
+        io::ErrorKind::AlreadyExists
+    );
+    assert_eq!(fs::read(&source).unwrap(), b"source");
+    assert_eq!(fs::read(&target).unwrap(), b"existing");
+
+    let renamed = directory.path().join("renamed");
+    rename_exclusive_with(&source, &renamed, unsupported).unwrap();
+    assert!(!source.exists());
+    assert_eq!(entry_identity(&renamed).unwrap(), identity);
+
+    let folder = directory.path().join("folder");
+    fs::create_dir(&folder).unwrap();
+    fs::write(folder.join("inside"), b"kept").unwrap();
+    assert_eq!(
+        rename_exclusive_with(&folder, &target, unsupported)
+            .unwrap_err()
+            .kind(),
+        io::ErrorKind::AlreadyExists
+    );
+    let moved = directory.path().join("moved");
+    rename_exclusive_with(&folder, &moved, unsupported).unwrap();
+    assert_eq!(fs::read(moved.join("inside")).unwrap(), b"kept");
 }
 
 #[cfg(windows)]
@@ -624,6 +668,129 @@ fn undo_refuses_external_changes_and_remains_retryable() {
 }
 
 #[test]
+fn checked_undo_keeps_journal_and_files_when_target_is_refused() {
+    let temp = tempfile::tempdir().unwrap();
+    let source = canonical_path(temp.path()).unwrap().join("file");
+    fs::write(&source, b"original").unwrap();
+    let mut filesystem = Filesystem::default();
+    success(&run(
+        &mut filesystem,
+        Operation::Rename {
+            source: source.clone(),
+            name: "renamed".into(),
+        },
+    ));
+    let renamed = source.with_file_name("renamed");
+    let revision = filesystem.revision();
+    let result = filesystem.execute_checked(
+        Request::new(Operation::Undo),
+        |paths| {
+            assert!(paths.contains(&source));
+            assert!(paths.contains(&renamed));
+            Err(io::Error::other(
+                "Requires a working tree; this repository is bare.",
+            ))
+        },
+        |_| {},
+    );
+    assert!(!result.succeeded());
+    assert!(result.undo_available);
+    assert_eq!(filesystem.revision(), revision);
+    assert!(!source.exists());
+    assert_eq!(fs::read(&renamed).unwrap(), b"original");
+    success(&filesystem.execute_checked(Request::new(Operation::Undo), |_| Ok(()), |_| {}));
+    assert_eq!(fs::read(&source).unwrap(), b"original");
+    assert!(!renamed.exists());
+    assert_eq!(
+        filesystem.mutation_paths(&Operation::Redo).unwrap(),
+        vec![source, renamed]
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn checked_transfers_follow_destination_aliases_and_preserve_source_links() {
+    for intent in [TransferIntent::Copy, TransferIntent::Move] {
+        let directory = tempfile::tempdir().unwrap();
+        let root = canonical_path(directory.path()).unwrap();
+        let destination = root.join("destination");
+        fs::create_dir(&destination).unwrap();
+        let destination_alias = root.join("destination_alias");
+        std::os::unix::fs::symlink(&destination, &destination_alias).unwrap();
+        let original = root.join("original");
+        fs::write(&original, b"unchanged").unwrap();
+        let source = root.join("source_link");
+        std::os::unix::fs::symlink(&original, &source).unwrap();
+        let mut expected = vec![destination.clone()];
+        if intent == TransferIntent::Move {
+            expected.push(source.clone());
+        }
+        expected.sort();
+        let mut service = Filesystem::default();
+        let result = service.execute_checked(
+            Request::new(Operation::Transfer {
+                sources: vec![source.clone()],
+                destination: destination_alias,
+                intent,
+            }),
+            |paths| {
+                assert_eq!(paths, expected);
+                Ok(())
+            },
+            |_| {},
+        );
+        success(&result);
+        assert_eq!(
+            fs::read_link(destination.join("source_link")).unwrap(),
+            original
+        );
+        assert_eq!(fs::read(&original).unwrap(), b"unchanged");
+        assert_eq!(source.exists(), intent == TransferIntent::Copy);
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn checked_transfer_reports_a_destination_alias_changed_since_preparation() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = canonical_path(directory.path()).unwrap();
+    let original = root.join("original");
+    let redirected = root.join("redirected");
+    fs::create_dir(&original).unwrap();
+    fs::create_dir(&redirected).unwrap();
+    let alias = root.join("alias");
+    std::os::unix::fs::symlink(&original, &alias).unwrap();
+    let source = root.join("file.txt");
+    fs::write(&source, b"unchanged").unwrap();
+    let request = Request::new(Operation::Transfer {
+        sources: vec![source.clone()],
+        destination: alias.clone(),
+        intent: TransferIntent::Copy,
+    });
+    let mut service = Filesystem::default();
+    let prepared = service.mutation_paths(&request.operation).unwrap();
+    fs::remove_file(&alias).unwrap();
+    std::os::unix::fs::symlink(&redirected, &alias).unwrap();
+    let result = service.execute_checked(
+        request,
+        |paths| {
+            if paths != prepared {
+                return Err(io::Error::other("destination changed"));
+            }
+            Ok(())
+        },
+        |_| {},
+    );
+    assert!(
+        matches!(&result.items[0].outcome, ItemOutcome::Failed(message) if message == "destination changed")
+    );
+    assert!(result.changes.is_empty());
+    assert!(!original.join("file.txt").exists());
+    assert!(!redirected.join("file.txt").exists());
+    assert_eq!(fs::read(source).unwrap(), b"unchanged");
+}
+
+#[test]
 fn protected_nested_repositories_and_descendant_destinations_are_untouched() {
     let temp = tempfile::tempdir().unwrap();
     let source = temp.path().join("parent");
@@ -773,6 +940,64 @@ fn explicit_replacement_recreates_deleted_parents_for_repository_and_standalone_
             .save(&path, b"direct save", Some(&expected), true)
             .unwrap();
         assert_eq!(fs::read(&path).unwrap(), b"direct save");
+    }
+}
+
+#[test]
+fn checked_replacement_resolves_deleted_parents_without_creating_them_before_admission() {
+    for repository in [false, true] {
+        let directory = tempfile::tempdir().unwrap();
+        let root = canonical_path(directory.path()).unwrap();
+        let deleted = root.join("deleted");
+        let path = deleted.join("nested/file.txt");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, b"loaded").unwrap();
+        let expected = DiskVersion::read(&path).unwrap();
+        fs::remove_dir_all(&deleted).unwrap();
+        let mut service = Filesystem::default();
+        let save = |overwrite| {
+            Request::new(Operation::Save {
+                path: path.clone(),
+                worktree: repository.then(|| root.clone()),
+                contents: Arc::from(&b"retained edits"[..]),
+                expected: Some(expected.clone()),
+                overwrite,
+            })
+        };
+        let ordinary = service.execute_checked(save(false), |_| Ok(()), |_| {});
+        assert!(!ordinary.succeeded());
+        assert!(!deleted.exists());
+        let refused = service.execute_checked(
+            save(true),
+            |paths| {
+                assert_eq!(paths, std::slice::from_ref(&path));
+                assert!(!deleted.exists());
+                Err(io::Error::other("save refused by admission"))
+            },
+            |_| {},
+        );
+        assert!(
+            matches!(&refused.items[0].outcome, ItemOutcome::Failed(message) if message == "save refused by admission")
+        );
+        assert!(!deleted.exists());
+        assert!(refused.changes.is_empty());
+        assert_eq!(service.revision(), 0);
+        let result = service.execute_checked(
+            save(true),
+            |paths| {
+                assert_eq!(paths, std::slice::from_ref(&path));
+                assert!(!deleted.exists());
+                Ok(())
+            },
+            |_| {},
+        );
+        success(&result);
+        assert_eq!(fs::read(&path).unwrap(), b"retained edits");
+        assert_eq!(
+            result.saved_version,
+            Some(DiskVersion::read(&path).unwrap())
+        );
+        assert_eq!(result.changes[0].new.as_ref(), Some(&path));
     }
 }
 
@@ -1598,13 +1823,17 @@ fn journal_storage_skips_cross_volume_candidates() {
     {
         return;
     }
-    let mut service = Filesystem::with_storage_candidates(vec![other_volume.path().to_path_buf()]);
-    replace_for_shutdown(&mut service, fixture.path());
     let root = canonical_path(fixture.path()).unwrap();
-    // No same-volume candidate and no repository: the last resort is the folder.
+    // Keep the repository fallback local even if the temp directory has a
+    // repository ancestor, such as /tmp/.git.
+    let gitdir = root.join(".git");
+    fs::create_dir(&gitdir).unwrap();
+    let mut service = Filesystem::with_storage_candidates(vec![other_volume.path().to_path_buf()]);
+    replace_for_shutdown(&mut service, &root);
     let areas = journal_areas(&service);
+    assert!(!areas.is_empty());
     assert!(
-        areas.iter().all(|area| area.starts_with(&root)),
+        areas.iter().all(|area| area.starts_with(&gitdir)),
         "{areas:?}"
     );
     assert_eq!(fs::read_dir(other_volume.path()).unwrap().count(), 0);

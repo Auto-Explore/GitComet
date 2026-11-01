@@ -2,9 +2,9 @@
 
 #[cfg(any(test, feature = "benchmarks"))]
 use smallvec::SmallVec;
-#[cfg(any(debug_assertions, feature = "benchmarks"))]
+#[cfg(any(test, feature = "benchmarks"))]
 use std::sync::atomic::{AtomicU64, Ordering};
-#[cfg(any(debug_assertions, feature = "benchmarks"))]
+#[cfg(any(test, feature = "benchmarks"))]
 use std::time::Instant;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -25,14 +25,9 @@ pub(crate) enum ViewPerfSpan {
 pub(crate) enum ViewPerfRenderLane {
     ResolvedPreview,
     MarkdownPreview,
-    /// The reflog panel's `uniform_list`. Recorded so a test can prove the
-    /// panel only builds the visible slice: the whole point of that list is
-    /// that a 200-entry reflog costs a screenful of rows, not 200.
-    Reflog,
 }
 
 #[cfg(any(test, feature = "benchmarks"))]
-#[cfg_attr(feature = "benchmarks", allow(dead_code))]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct SpanStats {
     pub calls: u64,
@@ -40,7 +35,6 @@ pub(crate) struct SpanStats {
 }
 
 #[cfg(any(test, feature = "benchmarks"))]
-#[cfg_attr(feature = "benchmarks", allow(dead_code))]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct RowBatchStats {
     pub calls: u64,
@@ -49,12 +43,10 @@ pub(crate) struct RowBatchStats {
 }
 
 #[cfg(any(test, feature = "benchmarks"))]
-#[cfg_attr(feature = "benchmarks", allow(dead_code))]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct ViewPerfSnapshot {
     pub render_resolved_preview_rows_batch: RowBatchStats,
     pub markdown_preview_rows_batch: RowBatchStats,
-    pub reflog_rows_batch: RowBatchStats,
     pub render_three_way_rows: SpanStats,
     pub render_resolver_diff_rows: SpanStats,
     pub render_resolved_preview_rows: SpanStats,
@@ -68,15 +60,15 @@ pub(crate) struct ViewPerfSnapshot {
 }
 
 pub(crate) struct PerfScope {
-    #[cfg(any(debug_assertions, feature = "benchmarks"))]
+    #[cfg(any(test, feature = "benchmarks"))]
     span: ViewPerfSpan,
-    #[cfg(any(debug_assertions, feature = "benchmarks"))]
+    #[cfg(any(test, feature = "benchmarks"))]
     started_at: Instant,
 }
 
 impl Drop for PerfScope {
     fn drop(&mut self) {
-        #[cfg(any(debug_assertions, feature = "benchmarks"))]
+        #[cfg(any(test, feature = "benchmarks"))]
         {
             let elapsed_nanos = self
                 .started_at
@@ -90,13 +82,13 @@ impl Drop for PerfScope {
 
 #[inline]
 pub(crate) fn span(span: ViewPerfSpan) -> PerfScope {
-    #[cfg(not(any(debug_assertions, feature = "benchmarks")))]
+    #[cfg(not(any(test, feature = "benchmarks")))]
     let _ = span;
 
     PerfScope {
-        #[cfg(any(debug_assertions, feature = "benchmarks"))]
+        #[cfg(any(test, feature = "benchmarks"))]
         span,
-        #[cfg(any(debug_assertions, feature = "benchmarks"))]
+        #[cfg(any(test, feature = "benchmarks"))]
         started_at: Instant::now(),
     }
 }
@@ -107,84 +99,68 @@ pub(crate) fn record_row_batch(
     requested_rows: usize,
     painted_rows: usize,
 ) {
-    #[cfg(any(debug_assertions, feature = "benchmarks"))]
+    #[cfg(any(test, feature = "benchmarks"))]
     {
         row_stats(lane).record(
             saturating_usize_to_u64(requested_rows),
             saturating_usize_to_u64(painted_rows),
         );
     }
-    #[cfg(not(any(debug_assertions, feature = "benchmarks")))]
+    #[cfg(not(any(test, feature = "benchmarks")))]
     let _ = (lane, requested_rows, painted_rows);
 }
 
 #[cfg(any(test, feature = "benchmarks"))]
 #[inline]
-#[cfg_attr(feature = "benchmarks", allow(dead_code))]
 pub(crate) fn snapshot() -> ViewPerfSnapshot {
-    #[cfg(any(debug_assertions, feature = "benchmarks"))]
-    {
-        ViewPerfSnapshot {
-            render_resolved_preview_rows_batch: RENDER_RESOLVED_PREVIEW_ROWS_BATCH.snapshot(),
-            markdown_preview_rows_batch: MARKDOWN_PREVIEW_ROWS_BATCH.snapshot(),
-            reflog_rows_batch: REFLOG_ROWS_BATCH.snapshot(),
-            render_three_way_rows: RENDER_THREE_WAY_ROWS_SPAN.snapshot(),
-            render_resolver_diff_rows: RENDER_RESOLVER_DIFF_ROWS_SPAN.snapshot(),
-            render_resolved_preview_rows: RENDER_RESOLVED_PREVIEW_ROWS_SPAN.snapshot(),
-            render_conflict_resolver_pane: RENDER_CONFLICT_RESOLVER_PANE_SPAN.snapshot(),
-            resolved_output_edit_observe: RESOLVED_OUTPUT_EDIT_OBSERVE_SPAN.snapshot(),
-            recompute_resolved_outline: RECOMPUTE_RESOLVED_OUTLINE_SPAN.snapshot(),
-            styled_text_build: STYLED_TEXT_BUILD_SPAN.snapshot(),
-            syntax_highlighting: SYNTAX_HIGHLIGHTING_SPAN.snapshot(),
-            word_query_highlighting: WORD_QUERY_HIGHLIGHTING_SPAN.snapshot(),
-            markdown_preview_parse: MARKDOWN_PREVIEW_PARSE_SPAN.snapshot(),
-        }
-    }
-    #[cfg(not(any(debug_assertions, feature = "benchmarks")))]
-    {
-        ViewPerfSnapshot::default()
+    ViewPerfSnapshot {
+        render_resolved_preview_rows_batch: RENDER_RESOLVED_PREVIEW_ROWS_BATCH.snapshot(),
+        markdown_preview_rows_batch: MARKDOWN_PREVIEW_ROWS_BATCH.snapshot(),
+        render_three_way_rows: RENDER_THREE_WAY_ROWS_SPAN.snapshot(),
+        render_resolver_diff_rows: RENDER_RESOLVER_DIFF_ROWS_SPAN.snapshot(),
+        render_resolved_preview_rows: RENDER_RESOLVED_PREVIEW_ROWS_SPAN.snapshot(),
+        render_conflict_resolver_pane: RENDER_CONFLICT_RESOLVER_PANE_SPAN.snapshot(),
+        resolved_output_edit_observe: RESOLVED_OUTPUT_EDIT_OBSERVE_SPAN.snapshot(),
+        recompute_resolved_outline: RECOMPUTE_RESOLVED_OUTLINE_SPAN.snapshot(),
+        styled_text_build: STYLED_TEXT_BUILD_SPAN.snapshot(),
+        syntax_highlighting: SYNTAX_HIGHLIGHTING_SPAN.snapshot(),
+        word_query_highlighting: WORD_QUERY_HIGHLIGHTING_SPAN.snapshot(),
+        markdown_preview_parse: MARKDOWN_PREVIEW_PARSE_SPAN.snapshot(),
     }
 }
 
 #[cfg(any(test, feature = "benchmarks"))]
 #[inline]
-#[cfg_attr(feature = "benchmarks", allow(dead_code))]
 pub(crate) fn reset() {
-    #[cfg(any(debug_assertions, feature = "benchmarks"))]
-    {
-        RENDER_RESOLVED_PREVIEW_ROWS_BATCH.reset();
-        MARKDOWN_PREVIEW_ROWS_BATCH.reset();
-        REFLOG_ROWS_BATCH.reset();
+    RENDER_RESOLVED_PREVIEW_ROWS_BATCH.reset();
+    MARKDOWN_PREVIEW_ROWS_BATCH.reset();
 
-        RENDER_THREE_WAY_ROWS_SPAN.reset();
-        RENDER_RESOLVER_DIFF_ROWS_SPAN.reset();
-        RENDER_RESOLVED_PREVIEW_ROWS_SPAN.reset();
-        RENDER_CONFLICT_RESOLVER_PANE_SPAN.reset();
-        RESOLVED_OUTPUT_EDIT_OBSERVE_SPAN.reset();
-        RECOMPUTE_RESOLVED_OUTLINE_SPAN.reset();
-        STYLED_TEXT_BUILD_SPAN.reset();
-        SYNTAX_HIGHLIGHTING_SPAN.reset();
-        WORD_QUERY_HIGHLIGHTING_SPAN.reset();
-        MARKDOWN_PREVIEW_PARSE_SPAN.reset();
-    }
+    RENDER_THREE_WAY_ROWS_SPAN.reset();
+    RENDER_RESOLVER_DIFF_ROWS_SPAN.reset();
+    RENDER_RESOLVED_PREVIEW_ROWS_SPAN.reset();
+    RENDER_CONFLICT_RESOLVER_PANE_SPAN.reset();
+    RESOLVED_OUTPUT_EDIT_OBSERVE_SPAN.reset();
+    RECOMPUTE_RESOLVED_OUTLINE_SPAN.reset();
+    STYLED_TEXT_BUILD_SPAN.reset();
+    SYNTAX_HIGHLIGHTING_SPAN.reset();
+    WORD_QUERY_HIGHLIGHTING_SPAN.reset();
+    MARKDOWN_PREVIEW_PARSE_SPAN.reset();
 }
 
 #[inline]
-#[cfg(any(debug_assertions, feature = "benchmarks"))]
+#[cfg(any(test, feature = "benchmarks"))]
 fn saturating_usize_to_u64(value: usize) -> u64 {
     u64::try_from(value).unwrap_or(u64::MAX)
 }
 
-#[cfg(any(debug_assertions, feature = "benchmarks"))]
-#[cfg_attr(feature = "benchmarks", allow(dead_code))]
+#[cfg(any(test, feature = "benchmarks"))]
 #[derive(Debug)]
 struct AtomicSpanStats {
     calls: AtomicU64,
     total_nanos: AtomicU64,
 }
 
-#[cfg(any(debug_assertions, feature = "benchmarks"))]
-#[cfg_attr(feature = "benchmarks", allow(dead_code))]
+#[cfg(any(test, feature = "benchmarks"))]
 impl AtomicSpanStats {
     const fn new() -> Self {
         Self {
@@ -199,7 +175,6 @@ impl AtomicSpanStats {
         self.total_nanos.fetch_add(elapsed_nanos, Ordering::Relaxed);
     }
 
-    #[cfg(any(test, feature = "benchmarks"))]
     #[inline]
     fn snapshot(&self) -> SpanStats {
         SpanStats {
@@ -208,7 +183,6 @@ impl AtomicSpanStats {
         }
     }
 
-    #[cfg(any(test, feature = "benchmarks"))]
     #[inline]
     fn reset(&self) {
         self.calls.store(0, Ordering::Relaxed);
@@ -216,8 +190,7 @@ impl AtomicSpanStats {
     }
 }
 
-#[cfg(any(debug_assertions, feature = "benchmarks"))]
-#[cfg_attr(feature = "benchmarks", allow(dead_code))]
+#[cfg(any(test, feature = "benchmarks"))]
 #[derive(Debug)]
 struct AtomicRowBatchStats {
     calls: AtomicU64,
@@ -225,8 +198,7 @@ struct AtomicRowBatchStats {
     painted_rows: AtomicU64,
 }
 
-#[cfg(any(debug_assertions, feature = "benchmarks"))]
-#[cfg_attr(feature = "benchmarks", allow(dead_code))]
+#[cfg(any(test, feature = "benchmarks"))]
 impl AtomicRowBatchStats {
     const fn new() -> Self {
         Self {
@@ -244,7 +216,6 @@ impl AtomicRowBatchStats {
         self.painted_rows.fetch_add(painted_rows, Ordering::Relaxed);
     }
 
-    #[cfg(any(test, feature = "benchmarks"))]
     #[inline]
     fn snapshot(&self) -> RowBatchStats {
         RowBatchStats {
@@ -254,7 +225,6 @@ impl AtomicRowBatchStats {
         }
     }
 
-    #[cfg(any(test, feature = "benchmarks"))]
     #[inline]
     fn reset(&self) {
         self.calls.store(0, Ordering::Relaxed);
@@ -263,36 +233,33 @@ impl AtomicRowBatchStats {
     }
 }
 
-#[cfg(any(debug_assertions, feature = "benchmarks"))]
+#[cfg(any(test, feature = "benchmarks"))]
 static RENDER_THREE_WAY_ROWS_SPAN: AtomicSpanStats = AtomicSpanStats::new();
-#[cfg(any(debug_assertions, feature = "benchmarks"))]
+#[cfg(any(test, feature = "benchmarks"))]
 static RENDER_RESOLVER_DIFF_ROWS_SPAN: AtomicSpanStats = AtomicSpanStats::new();
-#[cfg(any(debug_assertions, feature = "benchmarks"))]
+#[cfg(any(test, feature = "benchmarks"))]
 static RENDER_RESOLVED_PREVIEW_ROWS_SPAN: AtomicSpanStats = AtomicSpanStats::new();
-#[cfg(any(debug_assertions, feature = "benchmarks"))]
+#[cfg(any(test, feature = "benchmarks"))]
 static RENDER_CONFLICT_RESOLVER_PANE_SPAN: AtomicSpanStats = AtomicSpanStats::new();
-#[cfg(any(debug_assertions, feature = "benchmarks"))]
+#[cfg(any(test, feature = "benchmarks"))]
 static RESOLVED_OUTPUT_EDIT_OBSERVE_SPAN: AtomicSpanStats = AtomicSpanStats::new();
-#[cfg(any(debug_assertions, feature = "benchmarks"))]
+#[cfg(any(test, feature = "benchmarks"))]
 static RECOMPUTE_RESOLVED_OUTLINE_SPAN: AtomicSpanStats = AtomicSpanStats::new();
-#[cfg(any(debug_assertions, feature = "benchmarks"))]
+#[cfg(any(test, feature = "benchmarks"))]
 static STYLED_TEXT_BUILD_SPAN: AtomicSpanStats = AtomicSpanStats::new();
-#[cfg(any(debug_assertions, feature = "benchmarks"))]
+#[cfg(any(test, feature = "benchmarks"))]
 static SYNTAX_HIGHLIGHTING_SPAN: AtomicSpanStats = AtomicSpanStats::new();
-#[cfg(any(debug_assertions, feature = "benchmarks"))]
+#[cfg(any(test, feature = "benchmarks"))]
 static WORD_QUERY_HIGHLIGHTING_SPAN: AtomicSpanStats = AtomicSpanStats::new();
-#[cfg(any(debug_assertions, feature = "benchmarks"))]
+#[cfg(any(test, feature = "benchmarks"))]
 static MARKDOWN_PREVIEW_PARSE_SPAN: AtomicSpanStats = AtomicSpanStats::new();
-#[cfg(any(debug_assertions, feature = "benchmarks"))]
-#[cfg(any(debug_assertions, feature = "benchmarks"))]
+#[cfg(any(test, feature = "benchmarks"))]
 static RENDER_RESOLVED_PREVIEW_ROWS_BATCH: AtomicRowBatchStats = AtomicRowBatchStats::new();
-#[cfg(any(debug_assertions, feature = "benchmarks"))]
+#[cfg(any(test, feature = "benchmarks"))]
 static MARKDOWN_PREVIEW_ROWS_BATCH: AtomicRowBatchStats = AtomicRowBatchStats::new();
-#[cfg(any(debug_assertions, feature = "benchmarks"))]
-static REFLOG_ROWS_BATCH: AtomicRowBatchStats = AtomicRowBatchStats::new();
 
 #[inline]
-#[cfg(any(debug_assertions, feature = "benchmarks"))]
+#[cfg(any(test, feature = "benchmarks"))]
 fn span_stats(span: ViewPerfSpan) -> &'static AtomicSpanStats {
     match span {
         ViewPerfSpan::RenderThreeWayRows => &RENDER_THREE_WAY_ROWS_SPAN,
@@ -309,12 +276,11 @@ fn span_stats(span: ViewPerfSpan) -> &'static AtomicSpanStats {
 }
 
 #[inline]
-#[cfg(any(debug_assertions, feature = "benchmarks"))]
+#[cfg(any(test, feature = "benchmarks"))]
 fn row_stats(lane: ViewPerfRenderLane) -> &'static AtomicRowBatchStats {
     match lane {
         ViewPerfRenderLane::ResolvedPreview => &RENDER_RESOLVED_PREVIEW_ROWS_BATCH,
         ViewPerfRenderLane::MarkdownPreview => &MARKDOWN_PREVIEW_ROWS_BATCH,
-        ViewPerfRenderLane::Reflog => &REFLOG_ROWS_BATCH,
     }
 }
 
@@ -530,7 +496,7 @@ fn percentile_nearest_rank(sorted: &[u64], pct: usize) -> u64 {
     sorted[rank.saturating_sub(1).min(sorted.len() - 1)]
 }
 
-#[cfg(all(test, any(debug_assertions, feature = "benchmarks")))]
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -573,21 +539,14 @@ mod tests {
         record_row_batch(ViewPerfRenderLane::ResolvedPreview, 12, 9);
         let snapshot = snapshot();
 
-        #[cfg(any(debug_assertions, feature = "benchmarks"))]
-        {
-            assert_eq!(
-                snapshot.render_resolved_preview_rows_batch,
-                RowBatchStats {
-                    calls: 1,
-                    requested_rows: 12,
-                    painted_rows: 9,
-                }
-            );
-        }
-        #[cfg(not(any(debug_assertions, feature = "benchmarks")))]
-        {
-            assert_eq!(snapshot, ViewPerfSnapshot::default());
-        }
+        assert_eq!(
+            snapshot.render_resolved_preview_rows_batch,
+            RowBatchStats {
+                calls: 1,
+                requested_rows: 12,
+                painted_rows: 9,
+            }
+        );
     }
 
     #[test]

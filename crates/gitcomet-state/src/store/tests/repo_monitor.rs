@@ -1,5 +1,6 @@
 use super::super::repo_monitor as monitor_impl;
 use super::*;
+use crate::store::repository_runtime::RepositoryRuntimes;
 
 #[derive(Default)]
 struct RepoActivationCallCounts {
@@ -7,6 +8,7 @@ struct RepoActivationCallCounts {
     log: std::sync::atomic::AtomicUsize,
     branches: std::sync::atomic::AtomicUsize,
     remote_branches: std::sync::atomic::AtomicUsize,
+    worktree_lists: std::sync::atomic::AtomicUsize,
 }
 
 impl RepoActivationCallCounts {
@@ -15,6 +17,8 @@ impl RepoActivationCallCounts {
         self.log.store(0, std::sync::atomic::Ordering::Relaxed);
         self.branches.store(0, std::sync::atomic::Ordering::Relaxed);
         self.remote_branches
+            .store(0, std::sync::atomic::Ordering::Relaxed);
+        self.worktree_lists
             .store(0, std::sync::atomic::Ordering::Relaxed);
     }
 
@@ -57,14 +61,21 @@ impl GitRepository for RepoActivationRecordingRepo {
         &self,
         _limit: usize,
         _cursor: Option<&LogCursor>,
+        cancellation: &gitcomet_core::services::CancellationToken,
     ) -> Result<std::sync::Arc<LogPage>> {
-        self.calls
-            .log
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        Ok(std::sync::Arc::new(LogPage {
-            commits: Vec::new(),
-            next_cursor: None,
-        }))
+        cancellation.check_cancelled()?;
+        let result: Result<std::sync::Arc<LogPage>> = {
+            self.calls
+                .log
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            Ok(std::sync::Arc::new(LogPage {
+                commits: Vec::new(),
+                next_cursor: None,
+            }))
+        };
+        let result = result?;
+        cancellation.check_cancelled()?;
+        Ok(result)
     }
 
     fn commit_details(&self, _id: &CommitId) -> Result<CommitDetails> {
@@ -75,36 +86,99 @@ impl GitRepository for RepoActivationRecordingRepo {
         Ok(Vec::new())
     }
 
-    fn current_branch(&self) -> Result<String> {
-        Ok("main".to_string())
+    fn current_branch(
+        &self,
+        cancellation: &gitcomet_core::services::CancellationToken,
+    ) -> Result<String> {
+        cancellation.check_cancelled()?;
+        let result: Result<String> = { Ok("main".to_string()) };
+        let result = result?;
+        cancellation.check_cancelled()?;
+        Ok(result)
     }
 
-    fn list_branches(&self) -> Result<Vec<Branch>> {
-        self.calls
-            .branches
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        Ok(Vec::new())
+    fn list_branches(
+        &self,
+        cancellation: &gitcomet_core::services::CancellationToken,
+    ) -> Result<Vec<Branch>> {
+        cancellation.check_cancelled()?;
+        let result: Result<Vec<Branch>> = {
+            self.calls
+                .branches
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            Ok(Vec::new())
+        };
+        let result = result?;
+        cancellation.check_cancelled()?;
+        Ok(result)
     }
 
-    fn list_remotes(&self) -> Result<Vec<Remote>> {
-        Ok(Vec::new())
+    fn list_remotes(
+        &self,
+        cancellation: &gitcomet_core::services::CancellationToken,
+    ) -> Result<Vec<Remote>> {
+        cancellation.check_cancelled()?;
+        let result: Result<Vec<Remote>> = { Ok(Vec::new()) };
+        let result = result?;
+        cancellation.check_cancelled()?;
+        Ok(result)
     }
 
-    fn list_remote_branches(&self) -> Result<Vec<RemoteBranch>> {
-        self.calls
-            .remote_branches
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        Ok(Vec::new())
+    fn list_remote_branches(
+        &self,
+        cancellation: &gitcomet_core::services::CancellationToken,
+    ) -> Result<Vec<RemoteBranch>> {
+        cancellation.check_cancelled()?;
+        let result: Result<Vec<RemoteBranch>> = {
+            self.calls
+                .remote_branches
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            Ok(Vec::new())
+        };
+        let result = result?;
+        cancellation.check_cancelled()?;
+        Ok(result)
     }
 
-    fn status(&self) -> Result<RepoStatus> {
-        self.calls
-            .status
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        Ok(RepoStatus {
-            staged: std::sync::Arc::new(Vec::new()),
-            unstaged: std::sync::Arc::new(Vec::new()),
-        })
+    fn status(
+        &self,
+        cancellation: &gitcomet_core::services::CancellationToken,
+    ) -> Result<RepoStatus> {
+        cancellation.check_cancelled()?;
+        let result: Result<RepoStatus> = {
+            self.calls
+                .status
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            Ok(RepoStatus {
+                staged: std::sync::Arc::new(Vec::new()),
+                unstaged: std::sync::Arc::new(Vec::new()),
+            })
+        };
+        let result = result?;
+        cancellation.check_cancelled()?;
+        Ok(result)
+    }
+
+    fn list_worktrees(
+        &self,
+        cancellation: &gitcomet_core::services::CancellationToken,
+    ) -> Result<Vec<gitcomet_core::domain::Worktree>> {
+        cancellation.check_cancelled()?;
+        let result: Result<Vec<gitcomet_core::domain::Worktree>> = {
+            self.calls
+                .worktree_lists
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            Ok(vec![gitcomet_core::domain::Worktree {
+                bare: false,
+                path: self.spec.workdir.clone(),
+                head: None,
+                branch: Some("main".into()),
+                detached: false,
+            }])
+        };
+        let result = result?;
+        cancellation.check_cancelled()?;
+        Ok(result)
     }
 
     fn diff_unified(&self, _target: &DiffTarget) -> Result<String> {
@@ -135,8 +209,15 @@ impl GitRepository for RepoActivationRecordingRepo {
         Ok(())
     }
 
-    fn stash_list(&self) -> Result<Vec<StashEntry>> {
-        Ok(Vec::new())
+    fn stash_list(
+        &self,
+        cancellation: &gitcomet_core::services::CancellationToken,
+    ) -> Result<Vec<StashEntry>> {
+        cancellation.check_cancelled()?;
+        let result: Result<Vec<StashEntry>> = { Ok(Vec::new()) };
+        let result = result?;
+        cancellation.check_cancelled()?;
+        Ok(result)
     }
 
     fn stash_apply(&self, _index: usize) -> Result<()> {
@@ -159,12 +240,14 @@ impl GitRepository for RepoActivationRecordingRepo {
         Ok(())
     }
 
-    fn fetch_all(&self) -> Result<()> {
-        Ok(())
+    fn fetch_all(&self, _prune: bool) -> Result<gitcomet_core::services::CommandOutput> {
+        let result: Result<()> = { Ok(()) };
+        result.map(|()| gitcomet_core::services::CommandOutput::empty_success("git fetch --all"))
     }
 
-    fn pull(&self, _mode: PullMode) -> Result<()> {
-        Ok(())
+    fn pull(&self, _mode: PullMode) -> Result<gitcomet_core::services::CommandOutput> {
+        let result: Result<()> = { Ok(()) };
+        result.map(|()| gitcomet_core::services::CommandOutput::empty_success("git pull"))
     }
 
     fn push(&self) -> Result<()> {
@@ -338,13 +421,14 @@ fn repo_monitor_active_repo_activation_coalesces_with_in_flight_refresh() {
         let mut state = active_ready_repo_state(repo_id, workdir.clone());
         let loads_in_flight = &mut state.repos[0].loads_in_flight;
         loads_in_flight.request_primary_refresh_batch(crate::model::PendingLogLoad {
-            scope: gitcomet_core::domain::HistoryMode::FullReachable,
+            walk: gitcomet_core::domain::HistoryMode::FullReachable.into(),
             author: None,
+            focus: Default::default(),
             limit: 200,
             cursor: None,
         });
-        loads_in_flight.request(crate::model::RepoLoadsInFlight::BRANCHES);
-        loads_in_flight.request(crate::model::RepoLoadsInFlight::REMOTE_BRANCHES);
+        loads_in_flight.request(crate::model::LoadKind::Branches);
+        loads_in_flight.request(crate::model::LoadKind::RemoteBranches);
         state
     };
     let (store, _events) = AppStore::new_test(std::sync::Arc::new(FailingBackend));
@@ -399,6 +483,165 @@ fn repo_monitor_unavailable_repo_activation_falls_back_to_git_state_refresh() {
         remote_branches > 0,
         "fallback should schedule remote-branch loading"
     );
+}
+
+#[test]
+fn repo_activation_reuses_one_worktree_listing_and_file_edits_add_none() {
+    let dir = tempfile::tempdir().unwrap();
+    let workdir = canonicalize_or_original(dir.path().to_path_buf());
+    let repo_id = RepoId(23);
+    let calls = Arc::new(RepoActivationCallCounts::default());
+    let mut state = active_ready_repo_state(repo_id, workdir.clone());
+    state.repos[0].set_worktrees(Loadable::Ready(Vec::new()));
+    let (store, _events) = AppStore::new_test(Arc::new(FailingBackend));
+    store.disable_repo_monitors_for_test();
+    store.replace_snapshot_for_test(Arc::new(state));
+    store.insert_repo_for_test(
+        repo_id,
+        Arc::new(RepoActivationRecordingRepo::new(
+            workdir.clone(),
+            calls.clone(),
+        )),
+    );
+    store.dispatch(Msg::RepoActivated { repo_id });
+    super::worktree_redirect::wait_until("focus to refresh the worktree list", || {
+        let state = store.snapshot();
+        state.repos[0]
+            .worktrees
+            .ready()
+            .is_some_and(|list| list.len() == 1 && list[0].path == workdir)
+            && !state.repos[0].loads_in_flight.any_in_flight()
+    });
+    for change in [
+        crate::msg::RepoExternalChange::Worktree,
+        crate::msg::RepoExternalChange::Index,
+    ] {
+        store.dispatch(Msg::RepoExternallyChanged { repo_id, change });
+    }
+    store
+        .barrier_for_test()
+        .recv_timeout(Duration::from_secs(10))
+        .unwrap();
+    super::worktree_redirect::wait_until("file edit refreshes to finish", || {
+        !store.snapshot().repos[0].loads_in_flight.any_in_flight()
+    });
+    store
+        .shutdown_for_test()
+        .recv_timeout(Duration::from_secs(10))
+        .unwrap();
+    assert_eq!(
+        calls
+            .worktree_lists
+            .load(std::sync::atomic::Ordering::Relaxed),
+        1,
+        "focus must reuse the dirty scan's one list query, and edit/stage must add none"
+    );
+}
+
+#[test]
+fn checked_activation_skips_only_the_settled_single_checkout_listing() {
+    use crate::store::repo_monitor::{ActivationContext, CheckedActivation};
+    use gitcomet_core::domain::Worktree;
+
+    for (case, expected_lists) in [
+        ("unchanged", 0),
+        ("linked checkout", 1),
+        ("unknown list", 1),
+        ("failed list", 1),
+        ("unknown dirty scan", 1),
+        ("failed dirty scan", 1),
+        ("stale context", 1),
+        ("explicit refresh", 1),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let workdir = canonicalize_or_original(dir.path().to_path_buf());
+        let repo_id = RepoId(24);
+        let calls = Arc::new(RepoActivationCallCounts::default());
+        let mut state = active_ready_repo_state(repo_id, workdir.clone());
+        let repo = &mut state.repos[0];
+        repo.set_head_branch(Loadable::Ready("main".into()));
+        repo.set_log(Loadable::Ready(Arc::new(LogPage {
+            commits: Vec::new(),
+            next_cursor: None,
+        })));
+        repo.set_branches(Loadable::Ready(Vec::new()));
+        repo.set_remote_branches(Loadable::Ready(Vec::new()));
+        repo.set_tags(Loadable::Ready(Vec::new()));
+        repo.upstream_divergence = Loadable::Ready(None);
+        repo.sequencer_state = Loadable::Ready(Default::default());
+        repo.merge_commit_message = Loadable::Ready(None);
+        let own = Worktree {
+            bare: false,
+            path: workdir.clone(),
+            head: None,
+            branch: Some("main".into()),
+            detached: false,
+        };
+        repo.set_worktrees(Loadable::Ready(vec![own.clone()]));
+        repo.set_worktree_dirty(Loadable::Ready(Vec::new()));
+        match case {
+            "linked checkout" => repo.set_worktrees(Loadable::Ready(vec![
+                own,
+                Worktree {
+                    bare: false,
+                    path: workdir.join("linked"),
+                    head: None,
+                    branch: Some("linked".into()),
+                    detached: false,
+                },
+            ])),
+            "unknown list" => repo.set_worktrees(Loadable::NotLoaded),
+            "failed list" => repo.set_worktrees(Loadable::Error("unavailable".into())),
+            "unknown dirty scan" => repo.set_worktree_dirty(Loadable::NotLoaded),
+            "failed dirty scan" => repo.set_worktree_dirty(Loadable::Error("unavailable".into())),
+            _ => {}
+        }
+        let checked = CheckedActivation {
+            repo_id,
+            context: ActivationContext::for_repo(repo),
+            change: RepoExternalChange {
+                git_state: false,
+                tags: false,
+                ..RepoExternalChange::all()
+            },
+        };
+        if case == "stale context" {
+            repo.log_rev += 1;
+        }
+        let (store, _events) = AppStore::new_test(Arc::new(FailingBackend));
+        store.disable_repo_monitors_for_test();
+        store.replace_snapshot_for_test(Arc::new(state));
+        store.insert_repo_for_test(
+            repo_id,
+            Arc::new(RepoActivationRecordingRepo::new(workdir, calls.clone())),
+        );
+        if case == "explicit refresh" {
+            store.dispatch(Msg::LoadWorktreeDirty { repo_id });
+        } else {
+            store.msg_tx.send_activation_refresh_or_log(checked);
+        }
+        store
+            .barrier_for_test()
+            .recv_timeout(Duration::from_secs(10))
+            .unwrap();
+        super::worktree_redirect::wait_until(case, || {
+            !store.snapshot().repos[0].loads_in_flight.any_in_flight()
+        });
+        store
+            .shutdown_for_test()
+            .recv_timeout(Duration::from_secs(10))
+            .unwrap();
+        assert_eq!(
+            calls.worktree_lists.load(Ordering::Relaxed),
+            expected_lists,
+            "{case}"
+        );
+        assert_eq!(
+            calls.log.load(Ordering::Relaxed) > 0,
+            case == "stale context",
+            "{case}"
+        );
+    }
 }
 
 #[test]
@@ -486,8 +729,8 @@ fn reducer_effect_handling_does_not_wait_for_stopped_repo_monitor() {
     let metadata_executor = TaskExecutor::new(1);
     let session_persist_executor = TaskExecutor::new(1);
     let backend: std::sync::Arc<dyn GitBackend> = std::sync::Arc::new(FailingBackend);
-    let repos: FxHashMap<RepoId, std::sync::Arc<dyn GitRepository>> = FxHashMap::default();
-    let mut repo_task_tokens: FxHashMap<RepoId, RepoTaskToken> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
+
     let mut repo_monitors = monitor_impl::RepoMonitorManager::new();
     let (release_tx, release_rx) = std::sync::mpsc::channel();
     let (exited_tx, exited_rx) = std::sync::mpsc::channel();
@@ -495,14 +738,15 @@ fn reducer_effect_handling_does_not_wait_for_stopped_repo_monitor() {
 
     let started = std::time::Instant::now();
     super::super::WorkerLoopContext {
+        commit_identity: &crate::store::EMPTY_TEST_COMMIT_IDENTITY,
         thread_state: &thread_state,
         active_repo_id: &active_repo_id,
         event_tx: &event_tx,
         repo_monitors: &mut repo_monitors,
-        repo_task_tokens: &mut repo_task_tokens,
         thread_msg_tx: &thread_msg_tx,
         executor: &executor,
         repo_load_executor: &repo_load_executor,
+        worktree_scan_executor: &std::sync::LazyLock::new(|| TaskExecutor::new(1)),
         metadata_executor: &metadata_executor,
         signature_executor: &metadata_executor,
         history_find_executor: &std::sync::LazyLock::new(|| {
@@ -511,8 +755,11 @@ fn reducer_effect_handling_does_not_wait_for_stopped_repo_monitor() {
         session_persist_executor: &session_persist_executor,
         backend: &backend,
         publication: &std::sync::atomic::AtomicU64::new(0),
+        filesystem_executor: &crate::store::executor::FILESYSTEM_QUEUE,
+        deferred_acknowledgements: &mut Vec::new(),
+        auto_fetch_inputs: &mut None,
     }
-    .handle_effects(&repos, std::iter::empty::<Effect>());
+    .handle_effects(&mut repos, std::iter::empty::<Effect>());
     let elapsed = started.elapsed();
 
     assert!(
@@ -532,11 +779,11 @@ fn reducer_effect_handling_does_not_wait_for_stopped_repo_monitor() {
 /// repositories that are not open.
 #[test]
 fn watch_leases_count_and_leave_with_their_repository() {
-    let mut repos: FxHashMap<RepoId, std::sync::Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = std::sync::atomic::AtomicU64::new(1);
     let mut state = AppState::test_default();
     let repo_id = RepoId(1);
-    repos.insert(repo_id, std::sync::Arc::new(DummyRepo::new("/tmp/leased")));
+    repos.attach_repository_for_test(repo_id, std::sync::Arc::new(DummyRepo::new("/tmp/leased")));
     state.repos.push(RepoState::new_opening(
         repo_id,
         RepoSpec {
@@ -675,26 +922,27 @@ fn a_watch_lease_keeps_a_background_repositorys_monitor_running() {
     let metadata_executor = TaskExecutor::new(1);
     let session_persist_executor = TaskExecutor::new(1);
     let backend: std::sync::Arc<dyn GitBackend> = std::sync::Arc::new(FailingBackend);
-    let mut repos: FxHashMap<RepoId, std::sync::Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     for repo in &open_repos {
-        repos.insert(
+        repos.attach_repository_for_test(
             repo.id,
             std::sync::Arc::new(DummyRepo::new(repo.spec.workdir.to_str().unwrap())),
         );
     }
-    let mut repo_task_tokens: FxHashMap<RepoId, RepoTaskToken> = FxHashMap::default();
+
     let mut repo_monitors = monitor_impl::RepoMonitorManager::new();
 
     let mut handle = |repo_monitors: &mut monitor_impl::RepoMonitorManager| {
         super::super::WorkerLoopContext {
+            commit_identity: &crate::store::EMPTY_TEST_COMMIT_IDENTITY,
             thread_state: &thread_state,
             active_repo_id: &active_repo_id,
             event_tx: &event_tx,
             repo_monitors,
-            repo_task_tokens: &mut repo_task_tokens,
             thread_msg_tx: &thread_msg_tx,
             executor: &executor,
             repo_load_executor: &repo_load_executor,
+            worktree_scan_executor: &std::sync::LazyLock::new(|| TaskExecutor::new(1)),
             metadata_executor: &metadata_executor,
             signature_executor: &metadata_executor,
             history_find_executor: &std::sync::LazyLock::new(|| {
@@ -703,8 +951,11 @@ fn a_watch_lease_keeps_a_background_repositorys_monitor_running() {
             session_persist_executor: &session_persist_executor,
             backend: &backend,
             publication: &std::sync::atomic::AtomicU64::new(0),
+            filesystem_executor: &crate::store::executor::FILESYSTEM_QUEUE,
+            deferred_acknowledgements: &mut Vec::new(),
+            auto_fetch_inputs: &mut None,
         }
-        .handle_effects(&repos, std::iter::empty::<Effect>());
+        .handle_effects(&mut repos, std::iter::empty::<Effect>());
     };
     handle(&mut repo_monitors);
     let mut running = repo_monitors.running_repo_ids();
@@ -719,7 +970,7 @@ fn a_watch_lease_keeps_a_background_repositorys_monitor_running() {
 
 #[test]
 fn linked_worktree_leases_count_and_do_not_cross_repository_lifetimes() {
-    let mut repos = FxHashMap::default();
+    let mut repos = RepositoryRuntimes::default();
     let ids = AtomicU64::new(1);
     let repo_id = RepoId(1);
     let mut state = AppState::test_default();
@@ -762,4 +1013,118 @@ fn linked_worktree_leases_count_and_do_not_cross_repository_lifetimes() {
         state.worktree_watch_leases[&(repo_id, new_lifetime, path.clone())],
         1
     );
+}
+
+#[test]
+fn repo_monitor_manager_reports_unchanged_since_inactive_once() {
+    let mut monitors = monitor_impl::RepoMonitorManager::new();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    let (exited_tx, exited_rx) = std::sync::mpsc::channel();
+    monitors.insert_blocked_monitor_for_test(RepoId(7), release_rx, exited_tx);
+
+    // No mark: never left while watched.
+    assert!(!monitors.unchanged_since_inactive(RepoId(7)));
+    monitors.mark_inactive(RepoId(7));
+    assert!(monitors.unchanged_since_inactive(RepoId(7)));
+    // The mark is consumed by the switch that reads it.
+    assert!(!monitors.unchanged_since_inactive(RepoId(7)));
+
+    monitors.mark_inactive(RepoId(7));
+    monitors.bump_change_generation_for_test(RepoId(7));
+    assert!(!monitors.unchanged_since_inactive(RepoId(7)));
+
+    // Degraded coverage may have missed a change.
+    monitors.mark_inactive(RepoId(7));
+    monitors.set_degraded_for_test(RepoId(7), true);
+    assert!(!monitors.unchanged_since_inactive(RepoId(7)));
+    monitors.set_degraded_for_test(RepoId(7), false);
+
+    // A stopped monitor proves nothing.
+    monitors.mark_inactive(RepoId(7));
+    monitors.stop(RepoId(7));
+    assert!(!monitors.unchanged_since_inactive(RepoId(7)));
+    // Unknown repositories are never unchanged.
+    monitors.mark_inactive(RepoId(8));
+    assert!(!monitors.unchanged_since_inactive(RepoId(8)));
+
+    release_tx
+        .send(())
+        .expect("test monitor release signal should send");
+    exited_rx
+        .recv_timeout(std::time::Duration::from_secs(1))
+        .expect("test monitor thread should exit after release");
+}
+
+#[test]
+fn repo_monitor_manager_never_reuses_a_dead_monitor() {
+    let mut monitors = monitor_impl::RepoMonitorManager::new();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    let (exited_tx, exited_rx) = std::sync::mpsc::channel();
+    monitors.insert_blocked_monitor_for_test(RepoId(7), release_rx, exited_tx);
+
+    // The thread ends while the monitor stays enabled, as after a panic.
+    let state = active_ready_repo_state(RepoId(7), PathBuf::from("unused-monitor-workdir"));
+    let context = monitor_impl::ActivationContext::for_repo(&state.repos[0]);
+    assert!(monitors.refresh_on_activation(RepoId(7), context.clone()));
+    release_tx
+        .send(())
+        .expect("test monitor release signal should send");
+    exited_rx
+        .recv_timeout(std::time::Duration::from_secs(1))
+        .expect("test monitor thread should exit after release");
+    // The exit signal precedes the thread's end by a few instructions.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        monitors.mark_inactive(RepoId(7));
+        if !monitors.unchanged_since_inactive(RepoId(7)) {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "a dead monitor still reports its tab unchanged"
+        );
+        std::thread::yield_now();
+    }
+    assert!(
+        !monitors.refresh_on_activation(RepoId(7), context),
+        "a dead monitor must leave activation to the full-refresh fallback"
+    );
+}
+
+#[test]
+fn warm_inactive_repos_keeps_the_most_recently_active_tabs() {
+    let mut state = AppState::test_default();
+    let now = SystemTime::now();
+    for (id, seconds_ago, open) in [
+        (1, Some(0), true),
+        (2, Some(30), true),
+        (3, Some(10), true),
+        (4, Some(20), true),
+        (5, Some(5), true),
+        (6, None, true),
+        (7, Some(1), false),
+    ] {
+        let mut repo = RepoState::new_opening(
+            RepoId(id),
+            RepoSpec {
+                workdir: format!("/tmp/warm-{id}").into(),
+            },
+        );
+        if open {
+            repo.open = Loadable::Ready(());
+        }
+        repo.last_active_at = seconds_ago.map(|ago| now - Duration::from_secs(ago));
+        state.repos.push(repo);
+    }
+    state.active_repo = Some(RepoId(1));
+    // Leased tabs are watched anyway; never-active and opening tabs have
+    // nothing to reuse.
+    Arc::make_mut(&mut state.watch_leases).insert(RepoId(5), 1);
+
+    assert_eq!(
+        warm_inactive_repos(&state, 2),
+        vec![RepoId(3), RepoId(4)],
+        "the least recently active tab is evicted"
+    );
+    assert!(warm_inactive_repos(&state, 0).is_empty());
 }

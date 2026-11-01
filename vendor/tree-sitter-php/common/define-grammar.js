@@ -70,6 +70,16 @@ const OTHER_RESERVED_KEYWORD_SET = [
   'never', 'null', 'object', 'string', 'true', 'void',
 ].map(r => keyword(r, false));
 
+/**
+ * The types a value can be cast to, e.g. `(int) $x`.
+ *
+ * @see https://www.php.net/manual/en/language.types.type-juggling.php#language.types.typecasting
+ */
+const CAST_TYPES = [
+  'array', 'binary', 'bool', 'boolean', 'double', 'float',
+  'int', 'integer', 'object', 'real', 'string', 'unset',
+];
+
 module.exports = function defineGrammar(dialect) {
   if (dialect !== 'php' && dialect !== 'php_only') {
     throw new Error(`Unknown dialect ${dialect}`);
@@ -90,6 +100,7 @@ module.exports = function defineGrammar(dialect) {
 
       [$.namespace_name],
       [$.heredoc_body],
+      [$.parenthesized_expression, $.argument],
     ],
 
     externals: $ => [
@@ -289,6 +300,7 @@ module.exports = function defineGrammar(dialect) {
 
       _namespace_use_group: $ => seq(
         field('type', optional($._namespace_use_type)),
+        optional('\\'),
         $.namespace_name,
         '\\',
         field('body', $.namespace_use_group),
@@ -639,20 +651,7 @@ module.exports = function defineGrammar(dialect) {
         keyword('void', false),
       ),
 
-      cast_type: _ => choice(
-        keyword('array', false),
-        keyword('binary', false),
-        keyword('bool', false),
-        keyword('boolean', false),
-        keyword('double', false),
-        keyword('float', false),
-        keyword('int', false),
-        keyword('integer', false),
-        keyword('object', false),
-        keyword('real', false),
-        keyword('string', false),
-        keyword('unset', false),
-      ),
+      cast_type: _ => choice(...CAST_TYPES.map(type => keyword(type, false))),
 
       _return_type: $ => seq(':', field('return_type', choice($.type, $.bottom_type))),
 
@@ -994,7 +993,13 @@ module.exports = function defineGrammar(dialect) {
 
       error_suppression_expression: $ => prec(PREC.INC, seq('@', $.expression)),
 
-      clone_expression: $ => seq(keyword('clone'), $.primary_expression),
+      clone_expression: $ => seq(
+        keyword('clone'),
+        choice(
+          $.primary_expression,
+          field('arguments', $.arguments),
+        ),
+      ),
 
       primary_expression: $ => choice(
         $._variable,
@@ -1277,6 +1282,10 @@ module.exports = function defineGrammar(dialect) {
           $.variadic_unpacking,
           $.expression,
           $.argument_placeholder,
+          prec(-1, alias(
+            choice(...CAST_TYPES.map(type => keyword(type, false))),
+            $.name,
+          )),
         ),
       ),
 
@@ -1284,7 +1293,7 @@ module.exports = function defineGrammar(dialect) {
         field('name', alias(
           choice(
             reserved('nothing', $.name),
-            keyword('array', false),
+            ...CAST_TYPES.map(type => keyword(type, false)),
             keyword('fn', false),
             keyword('function', false),
             keyword('match', false),

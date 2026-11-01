@@ -68,9 +68,7 @@ pub fn remove_recent_document(path: &Path) -> io::Result<()> {
 pub fn update_recent_document_at(session: &Path, path: &Path, remove: bool) -> io::Result<()> {
     let identity = gitcomet_core::filesystem::absolute_identity(path)
         .or_else(|_| std::path::absolute(path))?;
-    with_session_file_persist_lock(|| {
-        let mut file = load_file(session).unwrap_or_default();
-        file.version = CURRENT_SESSION_FILE_VERSION;
+    update_session_file(session, |file| {
         let recents = file.recent_documents.get_or_insert_with(Vec::new);
         recents.retain(|key| {
             let stored = path_from_storage_key(key);
@@ -80,7 +78,7 @@ pub fn update_recent_document_at(session: &Path, path: &Path, remove: bool) -> i
             recents.insert(0, path_storage_key(&identity));
         }
         recents.truncate(MAX_RECENT_DOCUMENTS);
-        persist_to_path(session, &file)
+        SessionUpdate::Write
     })
 }
 

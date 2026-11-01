@@ -1,7 +1,7 @@
 #[cfg(any(target_os = "linux", test))]
-use gitcomet_core::platform::detect_is_wsl;
+use gitcomet_base::platform::detect_is_wsl;
 #[cfg(target_os = "linux")]
-use gitcomet_core::platform::read_linux_osrelease;
+use gitcomet_base::platform::read_linux_osrelease;
 use gpui::Decorations;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -59,7 +59,7 @@ impl LinuxGuiEnvironment {
 
     #[cfg(any(target_os = "linux", test))]
     pub fn launch_failure_message(&self) -> String {
-        let name = gitcomet_core::identity::current().display_name();
+        let name = gitcomet_base::identity::current().display_name();
         if self.is_wsl {
             if self.has_wayland && !self.has_xdg_runtime_dir && !self.has_x11 {
                 return format!(

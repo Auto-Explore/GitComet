@@ -1,7 +1,7 @@
 use super::*;
-use gitcomet_core::services::HistorySnapshot;
+use gitcomet_core::services::{HistorySnapshot, HistoryWalk};
 
-pub(in super::super) struct HistoryAuthorsCache {
+pub(super) struct HistoryAuthorsCache {
     snapshot: HistorySnapshot,
     names: Arc<[Arc<str>]>,
 }
@@ -9,21 +9,30 @@ pub(in super::super) struct HistoryAuthorsCache {
 impl GixRepo {
     pub(in super::super) fn history_authors_impl(
         &self,
-        mode: HistoryMode,
+        walk: &HistoryWalk,
+        focus: &HistoryFocusSet,
         cancellation: &CancellationToken,
     ) -> Result<Arc<[Arc<str>]>> {
         cancellation.check_cancelled()?;
-        let (store, _) = self.thread_safe_repo();
+        let (store, shared) = self.fresh_history_store()?;
+        let generation = shared.id;
         let repo = store.to_thread_local();
-        let shallow = shallow_snapshot(&repo)?;
-        let tips = if mode == HistoryMode::AllBranches {
-            self.all_branches_tips(&repo, Some(cancellation))?
-        } else {
-            Arc::from(gix_head_id_or_none(&repo)?.into_iter().collect::<Vec<_>>())
-        };
-        let snapshot = HistorySnapshot(format!("{mode:?}|{tips:?}|{shallow:?}").into());
+        let query = self.resolve_history_query(
+            &repo,
+            shared.id,
+            shared.common.id,
+            walk,
+            None,
+            focus,
+            cancellation,
+        )?;
+        let mode = walk.mode();
+        let snapshot = query.snapshot();
+        let tips = query.tips;
+        let shallow = query.shallow;
         if let Some(cached) = self
-            .history_authors_cache
+            .history_cache
+            .authors
             .lock()
             .expect("history authors cache")
             .as_ref()
@@ -38,6 +47,7 @@ impl GixRepo {
             &shallow,
             Some(cancellation),
             None,
+            Some((&shared.topology, generation)),
         )?;
         let mut buffer = Vec::new();
         let mut seen = FxHashSet::default();
@@ -45,7 +55,7 @@ impl GixRepo {
         for info in &mut walk.walk {
             cancellation.check_cancelled()?;
             let info = info.map_err(|error| {
-                crate::repo::object_store::gix_error("gix history authors", &*error)
+                crate::repo::object_store::gix_error("gix history authors", error)
             })?;
             if !mode_includes(mode, info.parent_ids.len()) {
                 continue;
@@ -54,10 +64,7 @@ impl GixRepo {
                 .objects
                 .find_commit(info.id.as_ref(), &mut buffer)
                 .map_err(|error| {
-                    crate::repo::object_store::gix_error(
-                        "gix history author",
-                        &gix::Error::from(error),
-                    )
+                    crate::repo::object_store::gix_error("gix history author", error)
                 })?;
             let name = commit
                 .author()
@@ -72,7 +79,8 @@ impl GixRepo {
         cancellation.check_cancelled()?;
         let names: Arc<[Arc<str>]> = names.into();
         *self
-            .history_authors_cache
+            .history_cache
+            .authors
             .lock()
             .expect("history authors cache") = Some(HistoryAuthorsCache {
             snapshot,

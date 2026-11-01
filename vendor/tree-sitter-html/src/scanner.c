@@ -102,7 +102,7 @@ static void deserialize(Scanner *scanner, const char *buffer, unsigned length) {
 
 static String scan_tag_name(TSLexer *lexer) {
     String tag_name = array_new();
-    while (iswalnum(lexer->lookahead) || lexer->lookahead == '-' || lexer->lookahead == ':') {
+    while (iswalnum(lexer->lookahead) || lexer->lookahead == '-' || lexer->lookahead == ':' || lexer->lookahead == '.') {
         array_push(&tag_name, towupper(lexer->lookahead));
         advance(lexer);
     }

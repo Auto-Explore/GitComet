@@ -13,11 +13,13 @@ pub(super) fn fixture(count: usize, section: CollapsedSidebarSection) -> Arc<App
         },
     );
     repo.open = Loadable::Ready(());
+    repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
     repo.head_branch = Loadable::Ready("main".into());
     repo.status = Loadable::Ready(Arc::new(RepoStatus::default()));
     repo.worktrees = Loadable::Ready(Arc::new(if section == CollapsedSidebarSection::Worktrees {
         (0..count)
             .map(|ix| Worktree {
+                bare: false,
                 path: PathBuf::from(format!("/tmp/worktree-{ix:06}")),
                 head: None,
                 branch: None,
@@ -74,7 +76,6 @@ fn row_selector(section: CollapsedSidebarSection, index: usize) -> &'static str 
 
 #[gpui::test]
 fn auxiliary_sidebar_lists_and_popups_keep_rendering_bounded(cx: &mut gpui::TestAppContext) {
-    let _guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -172,6 +173,7 @@ pub(super) fn branch_fixture(count: usize) -> Arc<AppState> {
         },
     );
     repo.open = Loadable::Ready(());
+    repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
     repo.head_branch = Loadable::Ready("main".into());
     repo.status = Loadable::Ready(Arc::new(RepoStatus::default()));
     repo.worktrees = Loadable::Ready(Arc::new(Vec::new()));
@@ -190,6 +192,7 @@ pub(super) fn branch_fixture(count: usize) -> Arc<AppState> {
     repo.remotes = Loadable::Ready(Arc::new(vec![gitcomet_core::domain::Remote {
         name: "origin".to_string(),
         url: None,
+        default_branch: None,
     }]));
     repo.remote_branches = Loadable::Ready(Arc::new(
         (0..count)
@@ -209,7 +212,6 @@ pub(super) fn branch_fixture(count: usize) -> Arc<AppState> {
 
 #[gpui::test]
 fn scoped_popover_rows_share_density_and_keep_search_fixed(cx: &mut gpui::TestAppContext) {
-    let _guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -289,7 +291,6 @@ fn scoped_popover_rows_share_density_and_keep_search_fixed(cx: &mut gpui::TestAp
 fn an_open_popover_reuses_its_rows_without_copying_the_persisted_sets(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -358,6 +359,7 @@ pub(super) fn file_fixture(count: usize) -> Arc<AppState> {
         },
     );
     repo.open = Loadable::Ready(());
+    repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
     repo.head_branch = Loadable::Ready("main".into());
     repo.status = Loadable::Ready(Arc::new(RepoStatus::default()));
     repo.worktrees = Loadable::Ready(Arc::new(Vec::new()));
@@ -387,7 +389,6 @@ pub(super) fn file_fixture(count: usize) -> Arc<AppState> {
 /// is the one that must not build an element per row.
 #[gpui::test]
 fn collapsed_files_popover_renders_a_bounded_window(cx: &mut gpui::TestAppContext) {
-    let _guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));

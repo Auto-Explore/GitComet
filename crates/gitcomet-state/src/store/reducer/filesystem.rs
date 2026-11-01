@@ -1,11 +1,44 @@
-use crate::model::{AppState, Loadable};
+use crate::model::{AppState, Loadable, RepoState};
 use crate::msg::Effect;
+use crate::msg::StatusEffect;
+use crate::store::reducer::prepared::ReducerInputs;
 use gitcomet_core::domain::{DiffArea, DiffTarget, FileSource};
 use gitcomet_core::filesystem::PathChange;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-pub(super) fn paths_changed(state: &mut AppState, changes: &[PathChange]) -> Vec<Effect> {
+pub(super) fn selected_target_after_changes(
+    repo: &RepoState,
+    changes: &[PathChange],
+) -> Option<DiffTarget> {
+    let mut target = repo.diff_state.diff_target.clone();
+    for change in changes {
+        if let Some(DiffTarget::WorkingTree {
+            path,
+            area: DiffArea::Unstaged,
+            ..
+        }) = &mut target
+        {
+            let absolute = repo.spec.workdir.join(&*path);
+            if change
+                .old
+                .as_ref()
+                .is_some_and(|old| absolute.starts_with(old))
+                && let Some(next) = change.retarget(&absolute)
+                && let Ok(next) = next.strip_prefix(&repo.spec.workdir)
+            {
+                *path = next.to_path_buf();
+            }
+        }
+    }
+    target
+}
+
+pub(super) fn paths_changed(
+    inputs: &ReducerInputs,
+    state: &mut AppState,
+    changes: &[PathChange],
+) -> Vec<Effect> {
     let mut effects = vec![];
     for repo in &mut state.repos {
         let root = &repo.spec.workdir;
@@ -18,7 +51,7 @@ pub(super) fn paths_changed(state: &mut AppState, changes: &[PathChange]) -> Vec
         }) {
             continue;
         }
-        let mut diff_target = repo.diff_state.diff_target.clone();
+        let diff_target = selected_target_after_changes(repo, changes);
         for change in changes {
             let retarget = |path: &Path| -> Option<PathBuf> {
                 let absolute = root.join(path);
@@ -71,14 +104,11 @@ pub(super) fn paths_changed(state: &mut AppState, changes: &[PathChange]) -> Vec
                     entry.path = next;
                 }
             }
-            for target in diff_target
+            for target in repo
+                .diff_state
+                .edit_return_view
                 .iter_mut()
-                .chain(
-                    repo.diff_state
-                        .edit_return_view
-                        .iter_mut()
-                        .map(|view| &mut view.target),
-                )
+                .map(|view| &mut view.target)
                 .chain(
                     repo.navigation
                         .main_history
@@ -104,11 +134,13 @@ pub(super) fn paths_changed(state: &mut AppState, changes: &[PathChange]) -> Vec
         if diff_target != repo.diff_state.diff_target {
             repo.set_diff_target(diff_target.clone());
             if let Some(target) = diff_target {
-                let plan = super::util::selected_diff_load_plan(repo, &target);
+                let plan = super::util::selected_diff_load_plan(inputs, repo, &target);
                 super::util::apply_selected_diff_load_plan_state(repo, plan);
                 repo.diff_state.inline_submodule_diff = None;
                 repo.bump_diff_state_rev();
-                effects.extend(super::util::diff_reload_effects(repo, repo.id, target));
+                effects.extend(super::util::diff_reload_effects(
+                    inputs, repo, repo.id, target,
+                ));
             }
         }
         if !matches!(repo.file_browser.entries, Loadable::NotLoaded) {
@@ -117,7 +149,9 @@ pub(super) fn paths_changed(state: &mut AppState, changes: &[PathChange]) -> Vec
                 source: repo.file_browser.source.clone(),
             });
         }
-        effects.push(Effect::LoadStatus { repo_id: repo.id });
+        effects.push(Effect::Status(StatusEffect::LoadStatus {
+            repo_id: repo.id,
+        }));
     }
     effects
 }
@@ -128,6 +162,15 @@ mod tests {
     use crate::model::{RepoId, RepoState};
     use gitcomet_core::domain::RepoSpec;
     use gitcomet_core::filesystem::{Filesystem, Operation, Request};
+
+    fn paths_changed(state: &mut AppState, changes: &[PathChange]) {
+        let inputs = crate::store::reducer::test_inputs::for_message(
+            state,
+            &Default::default(),
+            crate::msg::Msg::FilesystemPathsChanged(changes.to_vec()),
+        );
+        super::paths_changed(&inputs, state, changes);
+    }
 
     fn selected_repo(root: &Path) -> AppState {
         let mut state = AppState::test_default();
@@ -208,7 +251,14 @@ mod tests {
                     let repos = Default::default();
                     if edit {
                         super::super::diff_selection::open_file_editor(
-                            &repos,
+                            &crate::store::reducer::test_inputs::for_message(
+                                &state,
+                                &repos,
+                                crate::msg::Msg::OpenFileEditor {
+                                    repo_id: RepoId(1),
+                                    path: old.clone(),
+                                },
+                            ),
                             &mut state,
                             RepoId(1),
                             old.clone(),
@@ -234,7 +284,11 @@ mod tests {
                     if edit {
                         assert_eq!(repo.diff_state.diff_target, Some(new_live.clone()));
                         super::super::diff_selection::exit_diff_edit_mode(
-                            &repos,
+                            &crate::store::reducer::test_inputs::for_message(
+                                &state,
+                                &repos,
+                                crate::msg::Msg::ExitDiffEditMode { repo_id: RepoId(1) },
+                            ),
                             &mut state,
                             RepoId(1),
                         );

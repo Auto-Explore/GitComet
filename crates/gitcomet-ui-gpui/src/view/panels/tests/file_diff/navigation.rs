@@ -60,7 +60,7 @@ fn set_diff_text_selection_for_test(
 ) {
     cx.update(|window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.diff_text_anchor = Some(DiffTextPos {
                     source_visible_ix: start_visible_ix,
                     region,
@@ -130,7 +130,7 @@ fn activate_full_diff_nav_fixture(
 
     cx.update(|window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.diff_content_mode = DiffContentMode::Full;
                 pane.diff_view = diff_view;
                 pane.diff_selection_anchor = None;
@@ -163,7 +163,7 @@ fn activate_full_diff_nav_fixture(
             )
         },
     );
-    cx.update(|_window, app| view.read(app).main_pane.read(app).diff_nav_entries())
+    cx.update(|_window, app| view.read(app).diff_renderer.read(app).diff_nav_entries())
 }
 
 fn press_and_assert_anchor(
@@ -176,7 +176,7 @@ fn press_and_assert_anchor(
     cx.simulate_keystrokes(keystroke);
     draw_and_drain_test_window(cx);
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert_eq!(pane.diff_selection_anchor, Some(expected), "{message}");
         // Anchor only: the landed row gets no selection wash.
         assert_eq!(pane.diff_selection_range, None, "{message}");
@@ -282,7 +282,7 @@ fn assert_full_diff_change_shortcuts_visit_each_change_block(
         &format!("F3 should continue after the selected text range in Full diff {diff_view:?}"),
     );
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert_eq!(pane.diff_text_anchor, None);
         assert_eq!(pane.diff_text_head, None);
     });
@@ -297,7 +297,7 @@ fn assert_full_diff_change_shortcuts_visit_each_change_block(
         &format!("F2 should continue before the selected text range in Full diff {diff_view:?}"),
     );
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert_eq!(pane.diff_text_anchor, None);
         assert_eq!(pane.diff_text_head, None);
     });
@@ -382,7 +382,7 @@ fn assert_full_diff_app_keys_move_one_block_per_press(
         draw_and_drain_test_window(cx);
         cx.update(|_window, app| {
             assert_eq!(
-                view.read(app).main_pane.read(app).diff_selection_anchor,
+                view.read(app).diff_renderer.read(app).diff_selection_anchor,
                 Some(expected),
                 "{message} should move exactly one change block in {diff_view:?}"
             );
@@ -444,7 +444,7 @@ fn assert_full_diff_f3_without_selection_reaches_block_at_first_row(
     );
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert_eq!(pane.diff_focus_visible_range(), None);
         assert_eq!(
             pane.diff_nav_next_target_ix(&entries),
@@ -461,7 +461,7 @@ fn assert_full_diff_f3_without_selection_reaches_block_at_first_row(
     draw_and_drain_test_window(cx);
     cx.update(|_window, app| {
         assert_eq!(
-            view.read(app).main_pane.read(app).diff_selection_anchor,
+            view.read(app).diff_renderer.read(app).diff_selection_anchor,
             None
         );
     });
@@ -550,7 +550,7 @@ index 1111111..2222222 100644
 
     cx.update(|window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.set_diff_whitespace_mode(DiffWhitespaceMode::Ignore, cx);
             });
         });
@@ -584,8 +584,8 @@ fn painted_focused_change_block_marks(
     view: &gpui::Entity<super::super::super::GitCometView>,
 ) -> Vec<rows::FocusedChangeBlockPaint> {
     cx.update(|window, app| {
-        let main_pane = view.read(app).main_pane.clone();
-        main_pane.update(app, |_pane, cx| cx.notify());
+        let diff_renderer = view.read(app).diff_renderer.clone();
+        diff_renderer.update(app, |_pane, cx| cx.notify());
         rows::clear_focused_change_block_paint_log_for_tests();
         let _ = window.draw(app);
         let mut painted = rows::focused_change_block_paint_log_for_tests();
@@ -877,7 +877,7 @@ diff --git a/src/lib.rs b/src/lib.rs
         "the whitespace-only block before ignoring whitespace",
     );
     let visible_len = cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.clone();
+        let pane = view.read(app).diff_renderer.clone();
         pane.update(app, |pane, cx| {
             let visible_len = pane.diff_visible_len();
             pane.set_diff_whitespace_mode(DiffWhitespaceMode::Ignore, cx);
@@ -906,7 +906,7 @@ diff --git a/src/lib.rs b/src/lib.rs
     // Split mode keeps the same row indices and row count. Clicking the old
     // anchor must not revive the block captured before the mode switch.
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.clone();
+        let pane = view.read(app).diff_renderer.clone();
         pane.update(app, |pane, cx| {
             assert_eq!(pane.diff_selection_anchor, None);
             let row_ix = pane.diff_mapped_ix_for_visible_ix(row).unwrap();
@@ -951,7 +951,7 @@ fn focused_change_block_bar_hides_after_the_layout_changes(cx: &mut gpui::TestAp
     // longer describe the block, even though the anchor index is unchanged.
     cx.update(|window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.diff_view = DiffViewMode::Split;
                 pane.ensure_diff_visible_indices();
                 cx.notify();
@@ -962,7 +962,7 @@ fn focused_change_block_bar_hides_after_the_layout_changes(cx: &mut gpui::TestAp
     draw_and_drain_test_window(cx);
     cx.update(|_window, app| {
         assert_eq!(
-            view.read(app).main_pane.read(app).diff_selection_anchor,
+            view.read(app).diff_renderer.read(app).diff_selection_anchor,
             Some(entries[0]),
             "fixture should keep the anchor so only the layout check can hide the bar"
         );
@@ -1059,7 +1059,7 @@ fn assert_collapsed_diff_hunk_with_two_change_runs_has_two_stops(
         DiffViewMode::Split => (19, 23),
     };
     let entries = cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         let entries = pane.diff_nav_entries();
         assert_eq!(
             entries,

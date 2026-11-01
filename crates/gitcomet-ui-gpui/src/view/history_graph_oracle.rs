@@ -82,6 +82,8 @@ pub(in crate::view) struct OracleGraphWalk {
     main_lane_id: Option<LaneId>,
     main_target_ix: Option<usize>,
     seeded_main_lane_pending: bool,
+    /// Nothing has reached the seeded main lane yet.
+    main_lane_reserved: bool,
 }
 
 impl OracleGraphWalk {
@@ -113,6 +115,7 @@ impl OracleGraphWalk {
             main_lane_id,
             main_target_ix,
             seeded_main_lane_pending,
+            main_lane_reserved: main_target_ix.is_some_and(|target| target > 0),
         }
     }
 
@@ -129,6 +132,7 @@ impl OracleGraphWalk {
         let main_lane_id = self.main_lane_id;
         let main_target_ix = self.main_target_ix;
         let seeded_main_lane_pending = self.seeded_main_lane_pending;
+        let reserved_lane_id = main_lane_id.filter(|_| self.main_lane_reserved);
         let mut hits: SmallVec<[usize; 4]> = SmallVec::new();
         let mut ended_colors: SmallVec<[LaneColorIx; 4]> = SmallVec::new();
         let mut pick_lane_color_ix =
@@ -246,7 +250,8 @@ impl OracleGraphWalk {
                         && !(suppress_main_incoming
                             && main_lane_id.is_some_and(|mid| lane.id == mid)),
                     false,
-                ),
+                )
+                .with_reserved(reserved_lane_id == Some(lane.id)),
                 None => match fork {
                     Some((fork_col, color_ix)) if fork_col == col => {
                         LanePaint::lane(color_ix, false, false)
@@ -369,6 +374,9 @@ impl OracleGraphWalk {
         // Build lanes_next directly from the lane state. Every surviving lane
         // continues straight down its own column; only lanes born on this row
         // start at the node.
+        // HEAD's own lane continues below it; a merge edge reaching the lane
+        // still leaves this row's continuation to the edge.
+        let reserved_lane_id = reserved_lane_id.filter(|_| main_target_ix != Some(commit_ix));
         let mut lanes_next = LanePaints::with_capacity(lanes.len());
         for (col, slot) in lanes.iter().enumerate() {
             lanes_next.push(match slot {
@@ -379,6 +387,7 @@ impl OracleGraphWalk {
                         "lane changed column mid-life"
                     );
                     LanePaint::lane(lane.color_ix, false, !lane.carried_in)
+                        .with_reserved(reserved_lane_id == Some(lane.id))
                 }
                 None => LanePaint::HOLE,
             });
@@ -419,6 +428,11 @@ impl OracleGraphWalk {
         self.next_color = next_color;
         self.lanes = lanes;
         self.seeded_main_lane_pending = false;
+        self.main_lane_reserved = reserved_lane_id.is_some()
+            && !row.edges_out.iter().any(|edge| {
+                lane_at(&self.lanes, usize::from(edge.to_col)).map(|lane| lane.id)
+                    == reserved_lane_id
+            });
         row
     }
 }

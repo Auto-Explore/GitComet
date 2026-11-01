@@ -26,8 +26,8 @@ fn model_for_visibility(repo_id: RepoId, hidden: bool, ignored: bool) -> Context
             disabled: false,
             action: Box::new(ContextMenuAction::SetExplorerVisibility {
                 repo_id,
-                hidden: !hidden,
-                ignored,
+                hidden: Some(!hidden),
+                ignored: None,
             }),
         },
         ContextMenuItem::Entry {
@@ -37,8 +37,8 @@ fn model_for_visibility(repo_id: RepoId, hidden: bool, ignored: bool) -> Context
             disabled: false,
             action: Box::new(ContextMenuAction::SetExplorerVisibility {
                 repo_id,
-                hidden,
-                ignored: !ignored,
+                hidden: None,
+                ignored: Some(!ignored),
             }),
         },
     ])
@@ -48,7 +48,7 @@ fn model_for_visibility(repo_id: RepoId, hidden: bool, ignored: bool) -> Context
 mod tests {
     use super::*;
 
-    fn entry(model: &ContextMenuModel, label: &str) -> (bool, (bool, bool)) {
+    fn entry(model: &ContextMenuModel, label: &str) -> (bool, (Option<bool>, Option<bool>)) {
         model
             .items
             .iter()
@@ -76,13 +76,25 @@ mod tests {
     }
 
     #[test]
-    fn model_marks_enabled_flags_and_carries_next_values() {
+    fn model_marks_enabled_flags_and_changes_only_the_selected_flag() {
         let model = model_for_visibility(RepoId(7), true, false);
-        assert_eq!(entry(&model, "Show hidden files"), (true, (false, false)));
-        assert_eq!(entry(&model, "Show ignored files"), (false, (true, true)));
+        assert_eq!(
+            entry(&model, "Show hidden files"),
+            (true, (Some(false), None))
+        );
+        assert_eq!(
+            entry(&model, "Show ignored files"),
+            (false, (None, Some(true)))
+        );
 
         let model = model_for_visibility(RepoId(7), false, true);
-        assert_eq!(entry(&model, "Show hidden files"), (false, (true, true)));
-        assert_eq!(entry(&model, "Show ignored files"), (true, (false, false)));
+        assert_eq!(
+            entry(&model, "Show hidden files"),
+            (false, (Some(true), None))
+        );
+        assert_eq!(
+            entry(&model, "Show ignored files"),
+            (true, (None, Some(false)))
+        );
     }
 }

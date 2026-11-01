@@ -7,6 +7,7 @@
     windows_subsystem = "windows"
 )]
 
+#[cfg(not(feature = "perf-alloc"))]
 use rustfs_mimalloc::MiMalloc;
 
 /// This covers Rust only. tree-sitter is C and calls `malloc`, which resolves to
@@ -16,7 +17,13 @@ use rustfs_mimalloc::MiMalloc;
 /// every test rather than this one entry point. See
 /// `gitcomet_tree_sitter_alloc::install_mimalloc_allocator`.
 #[global_allocator]
+#[cfg(not(feature = "perf-alloc"))]
 static GLOBAL: MiMalloc = MiMalloc;
+
+#[cfg(feature = "perf-alloc")]
+#[global_allocator]
+static GLOBAL: &gitcomet_ui_gpui::perf_alloc::PerfTrackingAllocator =
+    &gitcomet_ui_gpui::perf_alloc::TRACKING_MIMALLOC;
 
 fn main() -> ! {
     gitcomet_app::App::new().run()

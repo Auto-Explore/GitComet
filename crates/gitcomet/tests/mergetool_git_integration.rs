@@ -1,6 +1,7 @@
 use gitcomet_core::process::background_command as no_window_command;
 use gitcomet_core::test_support::git_fixture::{
-    FixtureTimer, LinearCommit, append_config, import_linear_history, init_repository,
+    FixtureTimer, LinearCommit, append_config, capture_tool_help, import_linear_history,
+    init_repository,
 };
 #[path = "support/gitcomet_bin.rs"]
 mod gitcomet_test_bin;
@@ -43,7 +44,7 @@ fn is_effectively_absolute_path(value: &str) -> bool {
 
 fn run_git(repo: &Path, args: &[&str]) {
     let _timer = FixtureTimer::new("subprocess", args.first().copied().unwrap_or("git"));
-    let mut cmd = no_window_command("git");
+    let mut cmd = gitcomet_core::test_support::git_fixture::git_command();
     apply_isolated_git_config_env(&mut cmd);
     let output = cmd
         .arg("-C")
@@ -62,7 +63,7 @@ fn run_git(repo: &Path, args: &[&str]) {
 
 fn run_git_capture(repo: &Path, args: &[&str]) -> Output {
     let _timer = FixtureTimer::new("subprocess", args.first().copied().unwrap_or("git"));
-    let mut cmd = no_window_command("git");
+    let mut cmd = gitcomet_core::test_support::git_fixture::git_command();
     apply_isolated_git_config_env(&mut cmd);
     cmd.arg("-C")
         .arg(repo)
@@ -73,7 +74,7 @@ fn run_git_capture(repo: &Path, args: &[&str]) -> Output {
 
 fn run_git_capture_with_env(repo: &Path, args: &[&str], env_vars: &[(&str, &str)]) -> Output {
     let _timer = FixtureTimer::new("subprocess", args.first().copied().unwrap_or("git"));
-    let mut cmd = no_window_command("git");
+    let mut cmd = gitcomet_core::test_support::git_fixture::git_command();
     apply_isolated_git_config_env(&mut cmd);
     cmd.arg("-C").arg(repo).args(args);
     for (key, value) in env_vars {
@@ -84,7 +85,7 @@ fn run_git_capture_with_env(repo: &Path, args: &[&str], env_vars: &[(&str, &str)
 
 fn run_git_capture_in(cwd: &Path, args: &[&str]) -> Output {
     let _timer = FixtureTimer::new("subprocess", args.first().copied().unwrap_or("git"));
-    let mut cmd = no_window_command("git");
+    let mut cmd = gitcomet_core::test_support::git_fixture::git_command();
     apply_isolated_git_config_env(&mut cmd);
     cmd.current_dir(cwd)
         .args(args)
@@ -106,7 +107,7 @@ fn run_git_expect_failure(repo: &Path, args: &[&str]) -> Output {
 
 fn run_git_capture_with_display(repo: &Path, args: &[&str], display: Option<&str>) -> Output {
     let _timer = FixtureTimer::new("subprocess", args.first().copied().unwrap_or("git"));
-    let mut cmd = no_window_command("git");
+    let mut cmd = gitcomet_core::test_support::git_fixture::git_command();
     apply_isolated_git_config_env(&mut cmd);
     cmd.arg("-C").arg(repo).args(args);
     if let Some(display) = display {
@@ -118,9 +119,21 @@ fn run_git_capture_with_display(repo: &Path, args: &[&str], display: Option<&str
 }
 
 fn run_git_with_stdin(repo: &Path, args: &[&str], stdin_text: &str) -> Output {
+    run_git_with_stdin_and_env(repo, args, stdin_text, &[])
+}
+
+fn run_git_with_stdin_and_env(
+    repo: &Path,
+    args: &[&str],
+    stdin_text: &str,
+    env_vars: &[(&str, &str)],
+) -> Output {
     let _timer = FixtureTimer::new("subprocess", args.first().copied().unwrap_or("git"));
-    let mut cmd = no_window_command("git");
+    let mut cmd = gitcomet_core::test_support::git_fixture::git_command();
     apply_isolated_git_config_env(&mut cmd);
+    for (key, value) in env_vars {
+        cmd.env(key, value);
+    }
     cmd.arg("-C")
         .arg(repo)
         .args(args)
@@ -500,7 +513,7 @@ fn setup_whitespace_only_conflict_at_path(repo: &Path, path: &str) {
 }
 
 fn import_conflict_base_and_theirs(repo: &Path, path: &str, theirs: &str, message: &str) {
-    let mut command = no_window_command("git");
+    let mut command = gitcomet_core::test_support::git_fixture::git_command();
     apply_isolated_git_config_env(&mut command);
     command.arg("-C").arg(repo);
     import_linear_history(
@@ -551,6 +564,61 @@ fn git_mergetool_resolves_overlapping_conflict() {
     assert!(
         merged.contains("<<<<<<<") || merged.contains("LOCAL") || merged.contains("REMOTE"),
         "expected mergetool to have processed file.txt\nmerged:\n{merged}\ngit output:\n{text}"
+    );
+}
+
+/// A failed Wayland preflight relaunches the GUI tool under X11. The parent
+/// exited 0 as soon as the child spawned, so git (trusting the exit code)
+/// staged the file with its markers while the child, here without an X
+/// server, failed and resolved nothing.
+#[cfg(all(target_os = "linux", feature = "ui-gpui-runtime"))]
+#[test]
+fn git_mergetool_gui_x11_fallback_reports_the_relaunched_tools_failure() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path();
+    let runtime_dir = tempfile::tempdir().unwrap();
+
+    setup_overlapping_conflict(repo);
+    let bin_q = shell_quote(&gitcomet_bin().to_string_lossy());
+    let cmd = format!(
+        "{bin_q} mergetool --gui --base \"$BASE\" --local \"$LOCAL\" --remote \"$REMOTE\" --merged \"$MERGED\""
+    );
+    append_config(
+        repo,
+        &[
+            ("merge.tool", "gitcomet-gui"),
+            ("mergetool.gitcomet-gui.cmd", &cmd),
+            ("mergetool.gitcomet-gui.trustExitCode", "true"),
+            ("mergetool.prompt", "false"),
+            ("mergetool.keepBackup", "false"),
+        ],
+    );
+
+    let mut cmd = gitcomet_core::test_support::git_fixture::git_command();
+    apply_isolated_git_config_env(&mut cmd);
+    cmd.arg("-C")
+        .arg(repo)
+        .args(["mergetool", "--no-prompt"])
+        .env("XDG_RUNTIME_DIR", runtime_dir.path())
+        .env("WAYLAND_DISPLAY", "gitcomet-test-missing-wayland")
+        .env("DISPLAY", ":9999")
+        .env_remove("WAYLAND_SOCKET")
+        .env_remove("GITCOMET_SKIP_LINUX_X11_RELAUNCH")
+        .env_remove("GITCOMET_DISABLE_LINUX_X11_FALLBACK");
+    let output = cmd.output().expect("git mergetool to run");
+    let text = output_text(&output);
+
+    assert!(
+        text.contains("Relaunching") && text.contains("X11 fallback"),
+        "the Wayland preflight must have failed over to X11\n{text}"
+    );
+    assert!(
+        !output.status.success(),
+        "git must see the relaunched tool's failure\n{text}"
+    );
+    assert!(
+        has_unmerged_entries_for_path(repo, "file.txt"),
+        "a failed tool must leave the conflict unresolved\n{text}"
     );
 }
 
@@ -1147,15 +1215,32 @@ fn git_mergetool_no_trust_exit_code_unchanged_output_stays_unresolved() {
 
     setup_overlapping_conflict(repo);
     configure_mergetool_selection(repo, "fake", None, None);
-    configure_mergetool_command(repo, "fake", "exit 0");
+    configure_mergetool_command(repo, "fake", "echo TOOL=fake >&2; :");
     configure_mergetool_trust_exit_code(repo, "fake", false);
 
-    let output = run_git_capture(repo, &["mergetool", "--no-prompt", "--tool", "fake"]);
+    let original = fs::read(repo.join("file.txt")).unwrap();
+    // --no-prompt suppresses the launch prompt, but Git still asks whether an
+    // unchanged merge succeeded. Supply a real pipe with an explicit refusal
+    // instead of relying on the Windows shell's handling of a null stdin.
+    let output = run_git_with_stdin_and_env(
+        repo,
+        &["mergetool", "--no-prompt", "--tool", "fake"],
+        "n\n",
+        &[("GIT_TRACE", "1"), ("GIT_TRACE2", "1")],
+    );
     let text = output_text(&output);
 
     assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .lines()
+            .any(|line| line == "TOOL=fake"),
+        "git mergetool stopped before the fake tool ran (status: {})\n{text}",
+        output.status
+    );
+    assert!(
         !output.status.success(),
-        "expected git mergetool to fail when trustExitCode=false and output is unchanged\n{text}"
+        "expected git mergetool to fail when trustExitCode=false and output is unchanged (status: {})\n{text}",
+        output.status
     );
     assert!(
         text.contains("seems unchanged"),
@@ -1164,6 +1249,11 @@ fn git_mergetool_no_trust_exit_code_unchanged_output_stays_unresolved() {
     assert!(
         text.contains("Was the merge successful"),
         "expected no-trust follow-up prompt in git output\n{text}"
+    );
+    assert_eq!(
+        fs::read(repo.join("file.txt")).unwrap(),
+        original,
+        "expected the unresolved merge contents to be preserved\n{text}"
     );
 
     let merged = fs::read_to_string(repo.join("file.txt")).unwrap();
@@ -1613,7 +1703,9 @@ fn git_mergetool_tool_help_lists_gitcomet_tool() {
     init_repo(repo);
     configure_gitcomet_mergetool(repo);
 
-    let output = run_git_capture(repo, &["mergetool", "--tool-help"]);
+    let mut command = gitcomet_core::test_support::git_fixture::git_command();
+    apply_isolated_git_config_env(&mut command);
+    let output = capture_tool_help(command.arg("-C").arg(repo), "mergetool");
     let text = output_text(&output);
     assert!(
         output.status.success(),

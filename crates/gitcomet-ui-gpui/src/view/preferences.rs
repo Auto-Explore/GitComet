@@ -2,6 +2,23 @@ use super::*;
 use gitcomet_core::domain::HistoryMode;
 use gitcomet_state::model::GitLogTagFetchMode;
 
+/// The changed-file lists' default layout and sort, for lists built where
+/// the preferences are not passed in: a list an extension opens starts from
+/// them. Set from the preferences and on every change to them.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(in crate::view) struct FileListDefaults {
+    pub(in crate::view) layout: FileListLayout,
+    pub(in crate::view) sort: crate::view::rows::CommitFileSort,
+}
+
+impl gpui::Global for FileListDefaults {}
+
+impl FileListDefaults {
+    pub(in crate::view) fn current(cx: &App) -> Self {
+        cx.try_global::<Self>().copied().unwrap_or_default()
+    }
+}
+
 /// Window geometry and pane state restored at startup.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(super) struct WindowPreferences {
@@ -51,6 +68,7 @@ pub(super) struct ChangeTrackingPreferences {
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(super) struct FileListPreferences {
     pub(super) layout: FileListLayout,
+    pub(super) sort: crate::view::rows::CommitFileSort,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -58,6 +76,7 @@ pub(super) struct DiffPreferences {
     pub(super) scroll_sync: DiffScrollSync,
     pub(super) content_mode: DiffContentMode,
     pub(super) whitespace_mode: DiffWhitespaceMode,
+    pub(super) engine: DiffEngine,
     pub(super) view_mode: DiffViewMode,
     pub(super) annotate_enabled: bool,
     pub(super) reveal_whitespace_chars: bool,
@@ -73,6 +92,7 @@ impl Default for DiffPreferences {
             scroll_sync: DiffScrollSync::default(),
             content_mode: DiffContentMode::default(),
             whitespace_mode: DiffWhitespaceMode::default(),
+            engine: DiffEngine::default(),
             view_mode: DiffViewMode::Split,
             annotate_enabled: false,
             reveal_whitespace_chars: false,
@@ -198,6 +218,7 @@ impl HistoryBranchNamesMode {
 pub(super) struct HistoryPreferences {
     pub(super) branch_names: HistoryBranchNamesMode,
     pub(super) show_graph: bool,
+    pub(super) show_graph_gradient: bool,
     pub(super) show_author: bool,
     pub(super) show_date: bool,
     pub(super) show_sha: bool,
@@ -209,6 +230,7 @@ pub(super) struct HistoryPreferences {
     pub(super) verify_commit_signatures: bool,
     pub(super) tag_fetch_mode: GitLogTagFetchMode,
     pub(super) default_mode: HistoryMode,
+    pub(super) hidden_ref_settings: gitcomet_state::model::HiddenRefSettings,
 }
 
 impl Default for HistoryPreferences {
@@ -216,6 +238,7 @@ impl Default for HistoryPreferences {
         Self {
             branch_names: HistoryBranchNamesMode::default(),
             show_graph: true,
+            show_graph_gradient: true,
             show_author: true,
             show_date: true,
             show_sha: false,
@@ -226,6 +249,7 @@ impl Default for HistoryPreferences {
             verify_commit_signatures: false,
             tag_fetch_mode: GitLogTagFetchMode::default(),
             default_mode: HistoryMode::default(),
+            hidden_ref_settings: Default::default(),
         }
     }
 }
@@ -244,12 +268,14 @@ pub(super) struct RepositoryPreferences {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct RemotePreferences {
     pub(super) prune_deleted_remote_branches_on_fetch: bool,
+    pub(super) auto_fetch: gitcomet_state::model::AutoFetchSettings,
 }
 
 impl Default for RemotePreferences {
     fn default() -> Self {
         Self {
             prune_deleted_remote_branches_on_fetch: true,
+            auto_fetch: Default::default(),
         }
     }
 }
@@ -333,6 +359,11 @@ impl UiPreferences {
                     .as_deref()
                     .and_then(FileListLayout::from_key)
                     .unwrap_or_default(),
+                sort: session
+                    .file_list_sort
+                    .as_deref()
+                    .and_then(crate::view::rows::CommitFileSort::from_key)
+                    .unwrap_or_default(),
             },
             diff: DiffPreferences {
                 scroll_sync: session
@@ -349,6 +380,11 @@ impl UiPreferences {
                     .diff_whitespace_mode
                     .as_deref()
                     .and_then(DiffWhitespaceMode::from_key)
+                    .unwrap_or_default(),
+                engine: session
+                    .diff_engine
+                    .as_deref()
+                    .and_then(DiffEngine::from_key)
                     .unwrap_or_default(),
                 view_mode: session
                     .diff_view_mode
@@ -393,6 +429,7 @@ impl UiPreferences {
                     .and_then(HistoryBranchNamesMode::from_key)
                     .unwrap_or_default(),
                 show_graph: session.history_show_graph.unwrap_or(true),
+                show_graph_gradient: session.history_show_graph_gradient.unwrap_or(true),
                 show_author: session.history_show_author.unwrap_or(true),
                 show_date: session.history_show_date.unwrap_or(true),
                 show_sha: session.history_show_sha.unwrap_or(false),
@@ -405,6 +442,7 @@ impl UiPreferences {
                 verify_commit_signatures: session.history_verify_commit_signatures.unwrap_or(false),
                 tag_fetch_mode: session.history_tag_fetch_mode.unwrap_or_default(),
                 default_mode: session.default_history_mode.unwrap_or_default(),
+                hidden_ref_settings: session.hidden_ref_settings(),
             },
             file_editing: FileEditingPreferences {
                 auto_save: session.auto_save_file_edits.unwrap_or(false),
@@ -417,6 +455,10 @@ impl UiPreferences {
                 prune_deleted_remote_branches_on_fetch: session
                     .fetch_prune_deleted_remote_branches
                     .unwrap_or(true),
+                auto_fetch: gitcomet_state::model::AutoFetchSettings {
+                    enabled: session.auto_fetch_enabled.unwrap_or(false),
+                    interval: session.auto_fetch_interval_minutes.unwrap_or_default(),
+                },
             },
             maintenance: MaintenancePreferences {
                 recommend: session.recommend_repo_maintenance.unwrap_or(true),
@@ -468,8 +510,10 @@ mod tests {
         let preferences = UiPreferences::from_session(&session::UiSession::default());
         assert_eq!(preferences, UiPreferences::default());
         assert_eq!(preferences.diff.view_mode, DiffViewMode::Split);
+        assert_eq!(preferences.diff.engine, DiffEngine::LineByLine);
         assert!(preferences.diff.show_line_numbers);
         assert!(preferences.history.show_graph);
+        assert!(preferences.history.show_graph_gradient);
         // The store carries its own default for the reducer; the two must agree
         // or the Files tab would follow the selection until the first sync.
         assert_eq!(
@@ -478,6 +522,8 @@ mod tests {
         );
         assert!(preferences.merge_tool.view_three_way);
         assert!(preferences.remotes.prune_deleted_remote_branches_on_fetch);
+        assert!(!preferences.remotes.auto_fetch.enabled);
+        assert_eq!(preferences.remotes.auto_fetch.interval.minutes(), 30);
         assert_eq!(
             preferences.maintenance.recommend,
             gitcomet_state::model::MaintenanceSettings::default().recommend
@@ -491,6 +537,17 @@ mod tests {
             RemoteUrlPolicy::default()
         );
         assert!(preferences.security.check_for_updates_on_startup);
+    }
+
+    #[test]
+    fn graph_gradient_restores_explicit_preferences() {
+        for enabled in [false, true] {
+            let preferences = UiPreferences::from_session(&session::UiSession {
+                history_show_graph_gradient: Some(enabled),
+                ..Default::default()
+            });
+            assert_eq!(preferences.history.show_graph_gradient, enabled);
+        }
     }
 
     #[test]

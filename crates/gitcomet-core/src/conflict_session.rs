@@ -44,6 +44,22 @@ pub use region_edit::{
 };
 pub use subchunk::{Subchunk, split_conflict_into_subchunks};
 
+/// How many conflict blocks each autosolve pass resolved.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct ConflictAutosolveStats {
+    pub pass1: usize,
+    pub pass2_split: usize,
+    pub pass1_after_split: usize,
+    pub regex: usize,
+    pub history: usize,
+}
+
+impl ConflictAutosolveStats {
+    pub fn total_resolved(self) -> usize {
+        self.pass1 + self.pass2_split + self.pass1_after_split + self.regex + self.history
+    }
+}
+
 /// The payload content for one side of a conflict.
 ///
 /// Supports text, raw bytes (for non-UTF8 files), or absent content
@@ -1732,7 +1748,7 @@ impl ConflictSession {
         self.auto_resolve_safe_with_options(false)
     }
 
-    /// Like [`auto_resolve_safe`] but with an optional whitespace-resolution toggle.
+    /// Like [`Self::auto_resolve_safe`] but with an optional whitespace-resolution toggle.
     /// Stage-backed regions trust their merge block's KDiff3 classification;
     /// marker-only regions fall back to strip-all comparison.
     pub fn auto_resolve_safe_with_options(&mut self, whitespace_normalize: bool) -> usize {

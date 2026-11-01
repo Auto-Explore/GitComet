@@ -1,6 +1,8 @@
+use super::bar_items::{self, BarItemOwner, BarItems, ExtensionBarItem, RelocatedBarItems};
 use super::*;
 use crate::kit::interaction as controls;
 use crate::view::components::{ControlInteractionExt, InteractionState, InteractionStyle};
+use gitcomet_extension_api::{BarItemLocation, BuiltinBarItem};
 
 /// Slimmer than the tab-bar slot the bottom bar used to borrow; it hosts the
 /// pane collapse toggles, the window's zoom control and the branding strip on
@@ -26,7 +28,7 @@ where
 }
 
 fn pro_launch_label(today: jiff::civil::Date) -> SharedString {
-    let launch_date = jiff::civil::date(2026, 10, 7);
+    let launch_date = jiff::civil::date(2026, 11, 9);
     let days = today.duration_until(launch_date).as_secs() / 86_400;
     match days {
         1 => "Pro launches in 1 day".into(),
@@ -76,7 +78,6 @@ fn status_bar_chip(
         .flex()
         .items_center()
         .justify_center()
-        .cursor(CursorStyle::PointingHand)
         .tab_index(0)
         .control_interaction(
             InteractionStyle::link(theme)
@@ -87,6 +88,7 @@ fn status_bar_chip(
 }
 
 pub(in super::super) struct BottomStatusBarView {
+    pub(super) relocated_items: RelocatedBarItems,
     theme: AppTheme,
     state: Arc<AppState>,
     _ui_model_subscription: gpui::Subscription,
@@ -96,7 +98,7 @@ pub(in super::super) struct BottomStatusBarView {
     pro_launch_label: SharedString,
     /// Extension status items in registration order, built once the window
     /// has opened. Empty without extensions.
-    extension_items: Vec<(Option<gitcomet_extension_api::ViewTarget>, gpui::AnyView)>,
+    extension_items: Vec<ExtensionBarItem>,
     active_view: gitcomet_extension_api::ViewTarget,
     edition_strip: Option<gpui::AnyView>,
     #[cfg(any(test, feature = "benchmarks"))]
@@ -124,6 +126,7 @@ impl BottomStatusBarView {
             }
         });
         Self {
+            relocated_items: Vec::new(),
             theme,
             state,
             _ui_model_subscription: subscription,
@@ -147,7 +150,7 @@ impl BottomStatusBarView {
 
     pub(in super::super) fn set_extension_items(
         &mut self,
-        items: Vec<(Option<gitcomet_extension_api::ViewTarget>, gpui::AnyView)>,
+        items: Vec<ExtensionBarItem>,
         cx: &mut gpui::Context<Self>,
     ) {
         self.extension_items = items;
@@ -184,7 +187,7 @@ impl BottomStatusBarView {
                         .hook_activity
                         .iter()
                         .filter(|operation| {
-                            operation.is_reportable() && operation.status.is_active()
+                            operation.has_activity_details() && operation.status.is_active()
                         })
                         .count(),
                     repo.feedback.hook_activity.iter().rev().any(|operation| {
@@ -256,12 +259,13 @@ impl BottomStatusBarView {
     }
 }
 
-impl Render for BottomStatusBarView {
-    fn render(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
-        #[cfg(any(test, feature = "benchmarks"))]
-        {
-            self.render_count += 1;
-        }
+impl BarItemOwner for BottomStatusBarView {
+    fn bar_items(
+        &mut self,
+        _action_bar: bool,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> BarItems {
         let theme = self.theme;
         let filesystem_pending = self
             .root_view
@@ -285,7 +289,7 @@ impl Render for BottomStatusBarView {
             theme.colors.foreground.secondary
         };
         let zoom_button = components::Button::new("bottom_status_bar_zoom", zoom_label)
-            .start_slot(
+            .start_slot(components::ButtonSlot::custom(move |_| {
                 div()
                     .debug_selector(|| "bottom_status_bar_zoom_icon".to_string())
                     .flex()
@@ -295,8 +299,8 @@ impl Render for BottomStatusBarView {
                         "icons/zoom_in.svg",
                         zoom_icon_color,
                         scaled_px(14.0),
-                    )),
-            )
+                    ))
+            }))
             .style(components::ButtonStyle::Subtle)
             .borderless()
             .no_hover_border()
@@ -379,43 +383,46 @@ impl Render for BottomStatusBarView {
         } else {
             theme.colors.foreground.secondary
         };
-        let activity_icon = div()
-            .flex()
-            .items_center()
-            .gap(scaled_px(3.0))
-            .child(
-                div()
-                    .debug_selector(|| "bottom_hook_activity_lightning".to_string())
-                    .child(svg_icon(
-                        "icons/lightning.svg",
-                        activity_icon_color,
-                        scaled_px(13.0),
-                    )),
-            )
-            .when(active_hook_count > 0, |icon| {
-                icon.child(
+        let activity_icon = components::ButtonSlot::custom(move |disabled| {
+            let color = |color| theme.disabled_color_if(disabled, color);
+            div()
+                .flex()
+                .items_center()
+                .gap(scaled_px(3.0))
+                .child(
                     div()
-                        .debug_selector(|| "bottom_hook_activity_running".to_string())
-                        .min_w(scaled_px(14.0))
-                        .h(scaled_px(14.0))
-                        .px(scaled_px(3.0))
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .rounded(scaled_px(999.0))
-                        .bg(with_alpha(
-                            theme.colors.accent.foreground,
-                            if theme.is_dark { 0.24 } else { 0.16 },
-                        ))
-                        .text_size(theme.ui_text(9.0))
-                        .font_weight(FontWeight::BOLD)
-                        .text_color(theme.colors.accent.foreground)
-                        .child(active_hook_count.to_string()),
+                        .debug_selector(|| "bottom_hook_activity_lightning".to_string())
+                        .child(svg_icon(
+                            "icons/lightning.svg",
+                            color(activity_icon_color),
+                            scaled_px(13.0),
+                        )),
                 )
-            })
-            .when(has_hook_warning && active_hook_count == 0, |icon| {
-                icon.debug_selector(|| "bottom_hook_activity_warning".to_string())
-            });
+                .when(active_hook_count > 0, |icon| {
+                    icon.child(
+                        div()
+                            .debug_selector(|| "bottom_hook_activity_running".to_string())
+                            .min_w(scaled_px(14.0))
+                            .h(scaled_px(14.0))
+                            .px(scaled_px(3.0))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded(scaled_px(999.0))
+                            .bg(color(with_alpha(
+                                theme.colors.accent.foreground,
+                                if theme.is_dark { 0.24 } else { 0.16 },
+                            )))
+                            .text_size(theme.ui_text(9.0))
+                            .font_weight(FontWeight::BOLD)
+                            .text_color(color(theme.colors.accent.foreground))
+                            .child(active_hook_count.to_string()),
+                    )
+                })
+                .when(has_hook_warning && active_hook_count == 0, |icon| {
+                    icon.debug_selector(|| "bottom_hook_activity_warning".to_string())
+                })
+        });
         let hook_activity_button = components::Button::new("bottom_hook_activity", "")
             .selected(keep_minimized)
             .start_slot(activity_icon)
@@ -438,9 +445,9 @@ impl Render for BottomStatusBarView {
             .gitcomet_tooltip(
                 theme,
                 if keep_minimized {
-                    "Git hook activity — keep minimized enabled".into()
+                    "Git activity — keep minimized enabled".into()
                 } else {
-                    "Git hook activity".into()
+                    "Git activity".into()
                 },
             )
             .debug_selector(|| "bottom_hook_activity".to_string());
@@ -462,7 +469,7 @@ impl Render for BottomStatusBarView {
                     .h(scaled_px(12.0))
                     .flex_shrink_0()
                     .text_color(theme.colors.foreground.secondary)
-                    .group_hover("bottom_status_bar_discord", move |s| {
+                    .group_hover_style("bottom_status_bar_discord", move |s| {
                         s.text_color(theme.colors.accent.foreground)
                     }),
             )
@@ -488,10 +495,11 @@ impl Render for BottomStatusBarView {
             .text_size(theme.ui_text(11.0))
             .line_height(scaled_px(theme.metrics.ui_text(12.0)))
             .font_weight(FontWeight::NORMAL)
-            .text_color(with_alpha(
-                theme.colors.foreground.primary,
-                if theme.is_dark { 0.72 } else { 0.62 },
-            ))
+            .text_color(if theme.is_dark {
+                with_alpha(theme.colors.foreground.primary, 0.72)
+            } else {
+                theme.colors.foreground.secondary
+            })
             .on_activate(
                 false,
                 controls::ControlActivation::Action,
@@ -531,7 +539,7 @@ impl Render for BottomStatusBarView {
         // so the mark keeps its brand color regardless of the theme.
         //
         // The color lives on the link itself and the wordmark inherits it, so
-        // one `.hover()` on this stateful element tints the text. A style on the
+        // one `.hover_style()` on this stateful element tints the text. A style on the
         // stateless child could not do it: gpui only repaints on hover for
         // elements that carry state, so the child's own hover would compute a
         // tint that never reaches the screen.
@@ -541,7 +549,6 @@ impl Render for BottomStatusBarView {
             .flex()
             .items_center()
             .gap(scaled_px(4.0))
-            .cursor(CursorStyle::PointingHand)
             .text_color(theme.colors.foreground.secondary)
             .tab_index(0)
             .control_interaction(InteractionStyle::link(theme), InteractionState::default())
@@ -576,7 +583,6 @@ impl Render for BottomStatusBarView {
             .debug_selector(|| "bottom_status_bar_version".to_string())
             .flex()
             .items_center()
-            .cursor(CursorStyle::PointingHand)
             .text_size(theme.ui_text(11.0))
             .line_height(scaled_px(theme.metrics.ui_text(12.0)))
             .text_color(theme.colors.foreground.secondary)
@@ -595,8 +601,111 @@ impl Render for BottomStatusBarView {
             })
             .child(version_label);
 
+        let mut items = BarItems::new(cx);
+        items.push(BuiltinBarItem::SidebarToggle, sidebar_toggle);
+        if filesystem_pending {
+            items.push(
+                BuiltinBarItem::FilesystemProgress,
+                components::Button::new(
+                    "filesystem_progress",
+                    self.state
+                        .filesystem
+                        .progress
+                        .as_ref()
+                        .map(|progress| {
+                            format!(
+                                "Files: {}/{} · Cancel",
+                                progress.completed_items, progress.total_items
+                            )
+                        })
+                        .unwrap_or_else(|| "Files: waiting · Cancel".into()),
+                )
+                .borderless()
+                .style(components::ButtonStyle::Subtle)
+                .on_click(theme, cx, |this, _, _, cx| {
+                    let _ = this
+                        .root_view
+                        .update(cx, |root, cx| root.cancel_filesystem_operations(cx));
+                }),
+            );
+        }
+        items.extensions(&self.extension_items, &self.active_view);
+        items.push(BuiltinBarItem::DetailsToggle, details_toggle);
+        items.push(BuiltinBarItem::HookActivity, hook_activity_button);
+        let documents = {
+            let (documents_shown, picker_open) = self
+                .root_view
+                .upgrade()
+                .map(|root| {
+                    let root = root.read(cx);
+                    (root.documents_active, root.document_picker_open(cx))
+                })
+                .unwrap_or_default();
+            components::Button::new("bottom_documents", "")
+                .start_slot(svg_icon(
+                    "icons/file.svg",
+                    theme.colors.foreground.secondary,
+                    scaled_px(16.),
+                ))
+                .selected(documents_shown)
+                .open(picker_open)
+                .style(components::ButtonStyle::Subtle)
+                .borderless()
+                .on_click_with_bounds(theme, cx, |this, _, bounds, window, cx| {
+                    let _ = this.root_view.update(cx, |root, cx| {
+                        root.toggle_document_picker(bounds, window, cx)
+                    });
+                })
+                .gitcomet_tooltip(theme, "Open a file…".into())
+                .debug_selector(|| "bottom_documents".into())
+        };
+        items.push(BuiltinBarItem::Documents, documents);
+        items.push(BuiltinBarItem::Zoom, zoom_button);
+        let branding = div()
+            .flex()
+            .items_center()
+            .children(self.edition_strip.clone())
+            .when(self.edition_strip.is_none(), |row| {
+                row.child(
+                    // Branding chips want more air between them than the
+                    // toggles, which read as one control group.
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(scaled_px(6.0))
+                        .pl(scaled_px(6.0))
+                        .children(discord_badge)
+                        .children(free_badge)
+                        .children(pro_link)
+                        .child(brand)
+                        .child(version_link)
+                        .when(cfg!(debug_assertions), |row| {
+                            row.child(
+                                div()
+                                    .id("build_dev_badge")
+                                    .text_size(theme.ui_text(10.0))
+                                    .child("DEV"),
+                            )
+                        }),
+                )
+            });
+        items.push(BuiltinBarItem::Branding, branding);
+        items
+    }
+}
+
+impl Render for BottomStatusBarView {
+    fn render(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
+        #[cfg(any(test, feature = "benchmarks"))]
+        {
+            self.render_count += 1;
+        }
+        let mut items = self.bar_items(false, window, cx);
+        let theme = self.theme;
+        let scale = crate::ui_scale::UiScale::current(cx);
         div()
             .id("bottom_status_bar")
+            .debug_selector(|| "bottom_status_bar".into())
             .w_full()
             .h(bottom_status_bar_height(cx))
             .flex_none()
@@ -606,7 +715,7 @@ impl Render for BottomStatusBarView {
             .px_2()
             .bg(theme.colors.surface.chrome)
             .when_some(
-                crate::view::chrome::client_frame_corner_rounding(theme, window),
+                crate::kit::window_chrome::client_frame_corner_rounding(theme, window),
                 |d, rounding| {
                     d.when(rounding.bottom_left, |d| d.rounded_bl(rounding.radius))
                         .when(rounding.bottom_right, |d| d.rounded_br(rounding.radius))
@@ -616,104 +725,25 @@ impl Render for BottomStatusBarView {
                 div()
                     .flex()
                     .items_center()
-                    .gap(scaled_px(2.0))
-                    .child(sidebar_toggle)
-                    .when(filesystem_pending, |d| {
-                        d.child(
-                            components::Button::new(
-                                "filesystem_progress",
-                                self.state
-                                    .filesystem
-                                    .progress
-                                    .as_ref()
-                                    .map(|p| {
-                                        format!(
-                                            "Files: {}/{} · Cancel",
-                                            p.completed_items, p.total_items
-                                        )
-                                    })
-                                    .unwrap_or_else(|| "Files: waiting · Cancel".into()),
-                            )
-                            .borderless()
-                            .style(components::ButtonStyle::Subtle)
-                            .on_click(theme, cx, |this, _, _, cx| {
-                                let _ = this
-                                    .root_view
-                                    .update(cx, |root, cx| root.cancel_filesystem_operations(cx));
-                            }),
-                        )
-                    }),
+                    .gap(scale.px(2.0))
+                    .h_full()
+                    .children(bar_items::placed_views(
+                        &self.relocated_items,
+                        BarItemLocation::StatusBarStart,
+                    ))
+                    .children(items.take(BarItemLocation::StatusBarStart)),
             )
             .child(
                 div()
                     .flex()
                     .items_center()
-                    .gap(scaled_px(2.0))
-                    // Extension indicators sit with the host's own status
-                    // controls, never between the branding chips.
-                    .children(
-                        self.extension_items
-                            .iter()
-                            .filter(|(view, _)| {
-                                view.as_ref().is_none_or(|view| view == &self.active_view)
-                            })
-                            .map(|(_, view)| view.clone()),
-                    )
-                    .child(details_toggle)
-                    .child(hook_activity_button)
-                    .child({
-                        let (documents_shown, picker_open) = self
-                            .root_view
-                            .upgrade()
-                            .map(|root| {
-                                let root = root.read(cx);
-                                (root.documents_active, root.document_picker_open(cx))
-                            })
-                            .unwrap_or_default();
-                        components::Button::new("bottom_documents", "")
-                            .start_slot(svg_icon(
-                                "icons/file.svg",
-                                theme.colors.foreground.secondary,
-                                scaled_px(16.),
-                            ))
-                            .selected(documents_shown)
-                            .open(picker_open)
-                            .style(components::ButtonStyle::Subtle)
-                            .borderless()
-                            .on_click_with_bounds(theme, cx, |this, _, bounds, window, cx| {
-                                let _ = this.root_view.update(cx, |root, cx| {
-                                    root.toggle_document_picker(bounds, window, cx)
-                                });
-                            })
-                            .gitcomet_tooltip(theme, "Open a file…".into())
-                            .debug_selector(|| "bottom_documents".into())
-                    })
-                    .child(zoom_button)
-                    .children(self.edition_strip.clone())
-                    .when(self.edition_strip.is_none(), |row| {
-                        row.child(
-                            // Branding chips want more air between them than the
-                            // toggles, which read as one control group.
-                            div()
-                                .flex()
-                                .items_center()
-                                .gap(scaled_px(6.0))
-                                .pl(scaled_px(6.0))
-                                .children(discord_badge)
-                                .children(free_badge)
-                                .children(pro_link)
-                                .child(brand)
-                                .child(version_link)
-                                .when(cfg!(debug_assertions), |row| {
-                                    row.child(
-                                        div()
-                                            .id("build_dev_badge")
-                                            .text_size(theme.ui_text(10.0))
-                                            .child("DEV"),
-                                    )
-                                }),
-                        )
-                    }),
+                    .gap(scale.px(2.0))
+                    .h_full()
+                    .children(bar_items::placed_views(
+                        &self.relocated_items,
+                        BarItemLocation::StatusBarEnd,
+                    ))
+                    .children(items.take(BarItemLocation::StatusBarEnd)),
             )
     }
 }
@@ -744,14 +774,15 @@ mod tests {
         use jiff::civil::date;
 
         for (today, expected) in [
-            (date(2026, 9, 7), "Pro launches in 30 days"),
-            (date(2026, 9, 8), "Pro launches in 29 days"),
-            (date(2026, 10, 6), "Pro launches in 1 day"),
-            (date(2026, 10, 7), "Get Pro!"),
-            (date(2026, 10, 8), "Get Pro!"),
-            (date(2026, 6, 29), "Pro launches in 100 days"),
-            (date(2026, 6, 28), "Get Pro!"),
-            (date(2025, 10, 7), "Get Pro!"),
+            (date(2026, 10, 7), "Pro launches in 33 days"),
+            (date(2026, 10, 10), "Pro launches in 30 days"),
+            (date(2026, 10, 11), "Pro launches in 29 days"),
+            (date(2026, 11, 8), "Pro launches in 1 day"),
+            (date(2026, 11, 9), "Get Pro!"),
+            (date(2026, 11, 10), "Get Pro!"),
+            (date(2026, 8, 1), "Pro launches in 100 days"),
+            (date(2026, 7, 31), "Get Pro!"),
+            (date(2025, 11, 9), "Get Pro!"),
         ] {
             assert_eq!(pro_launch_label(today).as_ref(), expected, "{today}");
         }

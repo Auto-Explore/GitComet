@@ -1,0 +1,28 @@
+flowchart LR
+  subgraph Intake["Intake cluster"]
+    direction TB
+    A1[Alpha Source]
+    A2[Beta Source]
+    A3[Gamma Source]
+    A4[Delta Source]
+  end
+
+  H{Decision Hub}
+
+  subgraph Output["Output cluster"]
+    direction TB
+    O1[Epsilon Target]
+    O2[Zeta Target]
+    O3[Eta Target]
+  end
+
+  A1 -->|primary request| H
+  A2 --> H
+  A3 -. retry .-> H
+  A4 ==> H
+  H -->|accepts path with a long label| O1
+  H --> O2
+  H <--> O3
+  H --> H
+  O2 -. audit feedback .-> H
+  H -. rollback .-> A2

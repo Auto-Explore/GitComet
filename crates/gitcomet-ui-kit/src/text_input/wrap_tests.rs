@@ -70,8 +70,119 @@ fn seed_wrapped_input(
     input
 }
 
+fn draw_and_assert_end_caret(
+    input: &Entity<TextInput>,
+    expected_text: &str,
+    cx: &mut gpui::VisualTestContext,
+) -> usize {
+    for _ in 0..3 {
+        draw_frame(cx);
+    }
+    cx.update(|window, app| {
+        input.update(app, |input, cx| {
+            assert_eq!(input.text(), expected_text);
+            let TextInputLayout::Wrapped { lines, .. } = input.layout.last.as_ref().unwrap() else {
+                panic!("wrapped layout")
+            };
+            let rows = lines.iter().map(EditorLine::line_count).sum::<usize>();
+            let bounds = input.layout.bounds.unwrap();
+            let line_height = input.layout.line_height;
+            let expected_top = bounds.top() + line_height * (rows - 1) as f32;
+            let end = input.text().encode_utf16().count();
+            let ime = input
+                .bounds_for_range(end..end, bounds, window, cx)
+                .unwrap();
+            assert_eq!(ime.top(), expected_top, "IME caret for {:?}", input.text());
+            let scale = window.scale_factor();
+            let caret = window
+                .painted_quads()
+                .into_iter()
+                .find(|quad| {
+                    quad.background == input.style.cursor.into()
+                        && (quad.bounds.size.width.0 - scale).abs() < 0.01
+                })
+                .expect("focused input must paint its caret");
+            // The painted caret has a 3 px inset within the visual row.
+            assert!(
+                (caret.bounds.origin.y.0 - f32::from(expected_top + px(3.0)) * scale).abs() <= 1.0,
+                "painted caret for {:?}: {:?}, expected row {}",
+                input.text(),
+                caret.bounds,
+                rows - 1
+            );
+            assert!(
+                (caret.bounds.origin.x.0 - f32::from(ime.left()) * scale).abs() <= 1.0,
+                "painted x {:?} must agree with IME {:?} within pixel snapping",
+                caret.bounds,
+                ime
+            );
+            rows
+        })
+    })
+}
+
+#[gpui::test]
+fn wrapped_caret_follows_typing_deletion_history_and_resize(cx: &mut gpui::TestAppContext) {
+    crate::test_support::use_real_text_backend(cx);
+    let (view, cx) = cx.add_window_view(WrappedInputView::new);
+    let input = seed_wrapped_input(&view, cx, "");
+    cx.update(|_window, app| {
+        input.update(app, |input, cx| {
+            input.text_size = Some(13.0);
+            cx.notify();
+        });
+        let width = input.read(app).layout.bounds.unwrap().size.width;
+        view.update(app, |view, cx| {
+            view.width += px(120.0) - width;
+            cx.notify();
+        });
+    });
+    for _ in 0..4 {
+        draw_frame(cx);
+    }
+    let narrow_width = cx.update(|_, app| view.read(app).width);
+    let message = "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu";
+    let mut rows_seen = [false; 4];
+    for (start, character) in message.char_indices() {
+        let end = start + character.len_utf8();
+        cx.simulate_input(&message[start..end]);
+        if character != ' ' {
+            let rows = draw_and_assert_end_caret(&input, &message[..end], cx);
+            if let Some(seen) = rows_seen.get_mut(rows - 1) {
+                *seen = true;
+            }
+        }
+    }
+    assert!(
+        rows_seen.into_iter().all(|seen| seen),
+        "must type through four rows"
+    );
+    let shortened = "alpha beta gamma de";
+    cx.update(|window, app| {
+        input.update(app, |input, cx| {
+            let end = input.text().encode_utf16().count();
+            input.replace_text_in_range(Some(shortened.len()..end), "", window, cx);
+        });
+    });
+    draw_and_assert_end_caret(&input, shortened, cx);
+    cx.update(|window, app| input.update(app, |input, cx| input.undo(&Undo, window, cx)));
+    draw_and_assert_end_caret(&input, message, cx);
+    cx.update(|window, app| input.update(app, |input, cx| input.redo(&Redo, window, cx)));
+    draw_and_assert_end_caret(&input, shortened, cx);
+    for (width, rows) in [(px(240.0), 1), (narrow_width, 2)] {
+        cx.update(|_window, app| {
+            view.update(app, |view, cx| {
+                view.width = width;
+                cx.notify();
+            })
+        });
+        assert_eq!(draw_and_assert_end_caret(&input, shortened, cx), rows);
+    }
+}
+
 #[gpui::test]
 fn reversed_ime_ranges_keep_multiline_text_and_row_caches_in_step(cx: &mut gpui::TestAppContext) {
+    crate::test_support::use_real_text_backend(cx);
     let (view, cx) = cx.add_window_view(WrappedInputView::new);
     let original = "first é😀\nsecond\nthird\nfourth";
     for content_width in [false, true] {
@@ -123,6 +234,7 @@ fn reversed_ime_ranges_keep_multiline_text_and_row_caches_in_step(cx: &mut gpui:
 
 #[gpui::test]
 fn shrinking_wrap_estimates_fill_the_viewport_in_the_same_frame(cx: &mut gpui::TestAppContext) {
+    crate::test_support::use_real_text_backend(cx);
     let (view, cx) = cx.add_window_view(WrappedInputView::new);
     let input = seed_wrapped_input(&view, cx, &"short line\n".repeat(300));
     cx.run_until_parked();
@@ -178,6 +290,7 @@ fn shrinking_wrap_estimates_fill_the_viewport_in_the_same_frame(cx: &mut gpui::T
 fn offscreen_wrapped_edits_keep_measured_height_until_current_text_is_shaped(
     cx: &mut gpui::TestAppContext,
 ) {
+    crate::test_support::use_real_text_backend(cx);
     let (view, cx) = cx.add_window_view(WrappedInputView::new);
     let paragraph = format!("{}\n", "aaaaaaa bbbbbbb ccccccc ".repeat(12));
     let input = seed_wrapped_input(&view, cx, &paragraph.repeat(60));
@@ -229,6 +342,7 @@ fn offscreen_wrapped_edits_keep_measured_height_until_current_text_is_shaped(
 
 #[gpui::test]
 fn wrapped_reveals_survive_multiple_destination_layout_corrections(cx: &mut gpui::TestAppContext) {
+    crate::test_support::use_real_text_backend(cx);
     let (view, cx) = cx.add_window_view(WrappedInputView::new);
     let paragraph = format!("{}\n", "aaaaaaa bbbbbbb ccccccc ".repeat(12));
     for eof in [true, false] {
@@ -282,6 +396,7 @@ fn wrapped_reveals_survive_multiple_destination_layout_corrections(cx: &mut gpui
 
 #[gpui::test]
 fn waiting_for_wrap_layout_does_not_exhaust_destination_reveals(cx: &mut gpui::TestAppContext) {
+    crate::test_support::use_real_text_backend(cx);
     let (view, cx) = cx.add_window_view(WrappedInputView::new);
     let paragraph = format!("{}\n", "aaaaaaa bbbbbbb ccccccc ".repeat(12));
     let input = seed_wrapped_input(&view, cx, &paragraph.repeat(300));
@@ -323,6 +438,7 @@ fn waiting_for_wrap_layout_does_not_exhaust_destination_reveals(cx: &mut gpui::T
 
 #[gpui::test]
 fn wrapped_highlight_updates_preserve_measured_height(cx: &mut gpui::TestAppContext) {
+    crate::test_support::use_real_text_backend(cx);
     let (view, cx) = cx.add_window_view(WrappedInputView::new);
     let text = "a paragraph with several words ".repeat(80);
     let input = seed_wrapped_input(&view, cx, &text);
@@ -358,6 +474,7 @@ fn wrapped_highlight_updates_preserve_measured_height(cx: &mut gpui::TestAppCont
 
 #[gpui::test]
 fn wrapped_typing_and_highlight_rebinding_keep_every_frame_stable(cx: &mut gpui::TestAppContext) {
+    crate::test_support::use_real_text_backend(cx);
     let (view, cx) = cx.add_window_view(WrappedInputView::new);
     let paragraph = "words with room for editing ".repeat(12);
     let text = (0..60)
@@ -440,6 +557,7 @@ fn wrapped_typing_and_highlight_rebinding_keep_every_frame_stable(cx: &mut gpui:
 fn wrapped_document_end_reveals_the_caret_after_destination_rows_are_measured(
     cx: &mut gpui::TestAppContext,
 ) {
+    crate::test_support::use_real_text_backend(cx);
     let (view, cx) = cx.add_window_view(WrappedInputView::new);
     let paragraph = format!("{}\n", "aaaaaaa bbbbbbb ccccccc ".repeat(12));
     let input = seed_wrapped_input(&view, cx, &paragraph.repeat(300));
@@ -481,6 +599,7 @@ fn wrapped_document_end_reveals_the_caret_after_destination_rows_are_measured(
 
 #[gpui::test]
 fn wrapped_message_width_is_stable_when_vertical_overflow_starts(cx: &mut gpui::TestAppContext) {
+    crate::test_support::use_real_text_backend(cx);
     let (view, cx) = cx.add_window_view(WrappedInputView::new);
     let input = seed_wrapped_input(&view, cx, "short");
     let width = cx.update(|_window, app| {
@@ -503,6 +622,7 @@ fn wrapped_message_width_is_stable_when_vertical_overflow_starts(cx: &mut gpui::
 
 #[gpui::test]
 fn wrapped_font_and_viewport_changes_reflow_then_settle(cx: &mut gpui::TestAppContext) {
+    crate::test_support::use_real_text_backend(cx);
     let (view, cx) = cx.add_window_view(WrappedInputView::new);
     let input = seed_wrapped_input(&view, cx, &"several words ".repeat(80));
     let mut previous_rows = cx.update(|_window, app| input.read(app).wrap.row_counts[0]);
@@ -540,6 +660,7 @@ fn wrapped_font_and_viewport_changes_reflow_then_settle(cx: &mut gpui::TestAppCo
 fn wrap_estimates_do_not_replace_current_rows_on_small_or_large_documents(
     cx: &mut gpui::TestAppContext,
 ) {
+    crate::test_support::use_real_text_backend(cx);
     let (view, cx) = cx.add_window_view(WrappedInputView::new);
     let input = seed_wrapped_input(&view, cx, "seed");
     for count in [20, TEXT_INPUT_WRAP_SYNC_LINE_THRESHOLD + 20] {
@@ -593,6 +714,7 @@ fn wrap_estimates_do_not_replace_current_rows_on_small_or_large_documents(
 
 #[gpui::test]
 fn wrapped_edits_rebase_rows_and_pending_dirty_ranges(cx: &mut gpui::TestAppContext) {
+    crate::test_support::use_real_text_backend(cx);
     let (view, cx) = cx.add_window_view(WrappedInputView::new);
     let input = seed_wrapped_input(&view, cx, "alpha\nbeta\ngamma\ndelta");
     cx.update(|window, app| {
@@ -621,6 +743,7 @@ fn wrapped_edits_rebase_rows_and_pending_dirty_ranges(cx: &mut gpui::TestAppCont
 fn wrapped_background_results_cannot_overwrite_edits_or_changed_line_indices(
     cx: &mut gpui::TestAppContext,
 ) {
+    crate::test_support::use_real_text_backend(cx);
     let (view, cx) = cx.add_window_view(WrappedInputView::new);
     let input = seed_wrapped_input(&view, cx, "alpha\nbeta\ngamma");
     cx.update(|_window, app| {
@@ -656,7 +779,6 @@ fn wrapped_background_results_cannot_overwrite_edits_or_changed_line_indices(
 #[cfg(target_os = "linux")]
 #[test]
 fn wrapped_real_font_typing_is_stable_at_normal_and_enlarged_scale() {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let platform = gpui_platform::current_platform(true);
     for percent in [100, 150] {
         let mut cx = gpui::HeadlessAppContext::new(platform.text_system());

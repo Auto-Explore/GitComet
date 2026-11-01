@@ -7,7 +7,10 @@ pub(crate) struct ToastState {
     pub(crate) body: ToastBody,
     pub(crate) actions: Vec<ToastAction>,
     pub(crate) dismiss_behavior: ToastDismissBehavior,
-    pub(crate) ttl: Option<Duration>,
+    /// The TTL ran out and the toast is fading out. Separate from the fade-in
+    /// so the time in between draws no frames: one animation spanning the
+    /// whole lifetime would redraw the window every display refresh.
+    pub(crate) leaving: bool,
 }
 
 #[derive(Clone)]

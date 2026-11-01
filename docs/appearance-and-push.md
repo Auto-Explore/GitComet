@@ -33,6 +33,16 @@ macOS the traffic lights are centred on that same fixed bar. The window frame's
 resize border is not part of this and still follows the UI scale.
 
 
+## Git log graph
+
+**Settings → Git Log → Show graph gradient** controls the lane-colored fade beside
+the graph. It is on by default. Changes apply immediately across open windows
+and are saved across restarts. Turning it off keeps the graph, commit color
+borders, branch colors, and history mode intact.
+
+When on, the gradient follows each window's effective theme. Theme authors can
+adjust or disable it with [`graph_fade_opacity`](themes.md#graph-gradient).
+
 ## History context menu
 
 Right-click anywhere on a history row, including its branch and tag badges, to

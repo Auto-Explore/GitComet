@@ -51,11 +51,18 @@ pub struct DiffState {
     pub diff_file: Loadable<Option<Shared<FileDiffText>>>,
     pub diff_preview_text_file_rev: u64,
     pub diff_preview_text_file: Loadable<Option<Shared<DiffPreviewTextFile>>>,
+    /// The only side the selected change has (added, untracked or deleted),
+    /// as its load plan classified it. The pane shows that side alone.
+    pub one_sided_side: Option<DiffPreviewTextSide>,
     pub submodule_summary_rev: u64,
     pub submodule_summary: Loadable<Shared<SubmoduleDiffSummary>>,
     pub inline_submodule_diff_rev: u64,
     pub inline_submodule_diff: Option<InlineSubmoduleDiffState>,
     pub diff_file_image: Loadable<Option<Shared<FileDiffImage>>>,
+    /// The target whose bytes showed an image that its name does not announce
+    /// (a file without an extension). While it is the selected target, it loads
+    /// and shows as an image, as a named one would.
+    pub content_image_target: Option<DiffTarget>,
     pub text_attributes_rev: u64,
     /// `.gitattributes` and config for the selected file.
     pub text_attributes: Loadable<Arc<TextAttributes>>,
@@ -86,6 +93,23 @@ impl DiffState {
         let path = self.diff_target.as_ref()?.file_path()?;
         self.text_override_for(path)?.encoding
     }
+
+    /// Whether the selected target's bytes showed it is an image although
+    /// its name does not say so.
+    pub fn selected_content_is_image(&self) -> bool {
+        self.diff_target.is_some() && self.content_image_target == self.diff_target
+    }
+
+    /// Drops everything loaded for the selected diff, and what its plan
+    /// recorded about it.
+    pub(crate) fn clear_loads(&mut self) {
+        self.diff = Loadable::NotLoaded;
+        self.diff_file = Loadable::NotLoaded;
+        self.diff_preview_text_file = Loadable::NotLoaded;
+        self.one_sided_side = None;
+        self.submodule_summary = Loadable::NotLoaded;
+        self.diff_file_image = Loadable::NotLoaded;
+    }
 }
 
 impl Default for DiffState {
@@ -108,11 +132,13 @@ impl Default for DiffState {
             diff_file: Loadable::NotLoaded,
             diff_preview_text_file_rev: 0,
             diff_preview_text_file: Loadable::NotLoaded,
+            one_sided_side: None,
             submodule_summary_rev: 0,
             submodule_summary: Loadable::NotLoaded,
             inline_submodule_diff_rev: 0,
             inline_submodule_diff: None,
             diff_file_image: Loadable::NotLoaded,
+            content_image_target: None,
             text_attributes_rev: 0,
             text_attributes: Loadable::NotLoaded,
             text_override_rev: 0,
@@ -320,8 +346,12 @@ pub struct InlineSubmoduleDiffState {
     pub diff_file_image: Loadable<Option<Shared<FileDiffImage>>>,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct ConflictLoadRequestId(pub(crate) u64);
+
 #[derive(Clone, Debug)]
 pub struct ConflictState {
+    load_request: ConflictLoadRequestId,
     pub conflict_file_path: Option<PathBuf>,
     pub conflict_file_load_mode: ConflictFileLoadMode,
     pub conflict_file: Loadable<Option<ConflictFile>>,
@@ -334,9 +364,24 @@ pub struct ConflictState {
     pub conflict_rev: u64,
 }
 
+impl ConflictState {
+    pub(crate) fn load_request(&self) -> ConflictLoadRequestId {
+        self.load_request
+    }
+
+    pub(crate) fn accepts_load(
+        &self,
+        request: ConflictLoadRequestId,
+        path: &std::path::Path,
+    ) -> bool {
+        self.load_request == request && self.conflict_file_path.as_deref() == Some(path)
+    }
+}
+
 impl Default for ConflictState {
     fn default() -> Self {
         Self {
+            load_request: ConflictLoadRequestId::default(),
             conflict_file_path: None,
             conflict_file_load_mode: ConflictFileLoadMode::CurrentOnly,
             conflict_file: Loadable::NotLoaded,
@@ -432,6 +477,54 @@ pub enum ConflictFileLoadMode {
 }
 
 impl RepoState {
+    pub(crate) fn matches_diff_origin(
+        &self,
+        lifetime: u64,
+        view: Option<crate::diff_session::DiffViewId>,
+        file_rev: u64,
+        generation: u64,
+        target: &DiffTarget,
+    ) -> bool {
+        if self.lifetime() != lifetime {
+            return false;
+        }
+        let diff = match view {
+            Some(view) => self
+                .diff_sessions
+                .get(&view)
+                .filter(|session| session.generation == generation)
+                .map(|session| &session.diff_state),
+            None => (self.diff_state.diff_target_rev == generation).then_some(&self.diff_state),
+        };
+        diff.is_some_and(|diff| {
+            diff.diff_file_rev == file_rev
+                && diff.diff_target.as_ref() == Some(target)
+                && !diff.diff_reload_in_flight
+        })
+    }
+
+    pub(crate) fn begin_conflict_load(
+        &mut self,
+        mode: ConflictFileLoadMode,
+        same_path: bool,
+    ) -> ConflictLoadRequestId {
+        self.conflict_state.load_request =
+            ConflictLoadRequestId(self.conflict_state.load_request.0.wrapping_add(1));
+        self.set_conflict_file_load_mode(mode);
+        self.set_conflict_file(Loadable::Loading);
+        if !same_path {
+            self.conflict_state.session_pending_restore = None;
+        }
+        if let Some(session) = self.conflict_state.conflict_session.take() {
+            if same_path {
+                self.conflict_state.session_pending_restore = Some(session);
+            }
+            self.bump_conflict_rev();
+        }
+        self.set_conflict_hide_resolved(false);
+        self.conflict_state.load_request
+    }
+
     pub(crate) fn set_conflict_file_path(&mut self, v: Option<PathBuf>) {
         self.conflict_state.conflict_file_path = v;
         self.conflict_state.conflict_rev = self.conflict_state.conflict_rev.wrapping_add(1);
@@ -467,9 +560,72 @@ impl RepoState {
         self.conflict_state.conflict_rev = self.conflict_state.conflict_rev.wrapping_add(1);
     }
 
+    /// Whether a working-tree path is a submodule, as far as the loaded state
+    /// says: `None` leaves it to the `.git` marker on disk.
+    pub(crate) fn known_worktree_gitlink(
+        &self,
+        path: &std::path::Path,
+        entry: Option<&FileStatus>,
+    ) -> Option<bool> {
+        let Some(entry) = entry else {
+            return Some(false);
+        };
+        if entry.kind == FileStatusKind::Untracked {
+            return Some(false);
+        }
+        if let Loadable::Ready(submodules) = &self.submodules
+            && submodules.iter().any(|submodule| submodule.path == path)
+        {
+            return Some(true);
+        }
+        if entry.kind == FileStatusKind::Deleted {
+            return Some(self.head_gitlink_paths.contains(path));
+        }
+        None
+    }
+
+    /// The only side the target's change has, as the status or the change list on
+    /// screen reports it: new for an added or untracked file, old for a deleted
+    /// one. A known submodule has none; one only its `.git` marker reveals is
+    /// left to the load plan, which probes it.
+    pub fn one_sided_change_side(
+        &self,
+        target: &DiffTarget,
+    ) -> Option<gitcomet_core::domain::DiffPreviewTextSide> {
+        use gitcomet_core::domain::DiffPreviewTextSide;
+
+        let side = |kind| match kind {
+            FileStatusKind::Untracked | FileStatusKind::Added => Some(DiffPreviewTextSide::New),
+            FileStatusKind::Deleted => Some(DiffPreviewTextSide::Old),
+            FileStatusKind::Modified | FileStatusKind::Renamed | FileStatusKind::Conflicted => None,
+        };
+        match target {
+            // Duplicate entries for a path: the first that has one side decides.
+            DiffTarget::WorkingTree { path, area, .. } => {
+                let mut entries = self
+                    .status_entries_for_area(*area)
+                    .into_iter()
+                    .flatten()
+                    .filter(|entry| entry.path == *path)
+                    .peekable();
+                if self.known_worktree_gitlink(path, entries.peek().copied()) == Some(true) {
+                    return None;
+                }
+                entries.find_map(|entry| side(entry.kind))
+            }
+            DiffTarget::Commit { .. } | DiffTarget::CommitRange { .. } => self
+                .history_state
+                .committed_file_change(target)
+                .filter(|file| !file.is_submodule)
+                .and_then(|file| side(file.kind)),
+        }
+    }
+
     pub(crate) fn set_diff_target(&mut self, target: Option<DiffTarget>) {
         if self.diff_state.diff_target != target {
             self.diff_state.diff_target_rev = self.diff_state.diff_target_rev.wrapping_add(1);
+            // Another target's side until its own plan is applied.
+            self.diff_state.one_sided_side = None;
         }
         // The override lasts while its file stays open, across views of it.
         let keeps_override = self.diff_state.text_override.as_ref().is_none_or(|open| {

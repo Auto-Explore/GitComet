@@ -506,7 +506,6 @@ impl SettingsWindowView {
             .pt(ui_scale.px(6.0))
             .pb(ui_scale.px(6.0))
             .rounded(px(theme.radii.control))
-            .cursor(CursorStyle::PointingHand)
             .control_interaction(InteractionStyle::new(theme), InteractionState::default())
             .child(
                 div()
@@ -589,7 +588,6 @@ impl SettingsWindowView {
                 .items_center()
                 .gap_1()
                 .rounded(px(theme.radii.row))
-                .cursor(CursorStyle::PointingHand)
                 .control_interaction(InteractionStyle::new(theme), InteractionState::default())
                 .text_size(theme.ui_text(13.0))
                 .child(

@@ -2,13 +2,12 @@
 //! a cherry-pick narrowed to those files.
 
 use super::GixRepo;
-use super::history::{
-    append_command_output, append_raw_output, gix_head_id_or_none, pathspec_from_file_arg,
-};
+use super::history::{append_command_output, append_raw_output, gix_head_id_or_none};
 use super::patch::{write_patch_file, write_pathspec_file};
 use crate::util::{
     bytes_to_text_preserving_utf8, describe_path_list, git_command_failed_error,
-    run_git_capture_bytes, run_git_raw_output, run_git_with_output, validate_hex_commit_id,
+    path_buf_from_git_bytes, push_literal_paths, push_literal_pathspec_file, run_git_capture_bytes,
+    run_git_raw_output, run_git_with_output, validate_hex_commit_id,
 };
 use gitcomet_core::domain::{
     ApplyChangeSource, ApplyChangeTarget, ApplyFileChangeIndexEntry, ApplyFileChangeRetry, CommitId,
@@ -20,7 +19,6 @@ use gitcomet_core::services::{
 };
 use rustc_hash::FxHashMap;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 /// A path's entry kind and object in a tree or the index; `None` when absent.
 type FileVersion = Option<(gix::object::tree::EntryKind, gix::ObjectId)>;
@@ -66,8 +64,9 @@ impl FileName {
 /// Renames the file in a single-file patch's headers, so a change made under
 /// an old name applies to the file as it is named now. Only headers before the
 /// first hunk are touched.
-fn retarget_patch(patch: &[u8], to: &Path) -> Result<Vec<u8>> {
-    let to = repo_path_bytes(to);
+pub(super) fn retarget_patch(patch: &[u8], to: &Path) -> Result<Vec<u8>> {
+    let path = to;
+    let to = repo_path_bytes(path)?;
     let line = |parts: &[&[u8]]| parts.concat();
     let old_path = gix::quote::ansi_c::quote(line(&[b"a/", &to]).as_slice().into()).into_owned();
     let new_path = gix::quote::ansi_c::quote(line(&[b"b/", &to]).as_slice().into()).into_owned();
@@ -110,7 +109,7 @@ fn retarget_patch(patch: &[u8], to: &Path) -> Result<Vec<u8>> {
     if !retargeted {
         return Err(backend_error(format!(
             "cannot apply a change made to {} under its old name",
-            gix::path::from_byte_slice(&to).display()
+            path.display()
         )));
     }
     Ok(out)
@@ -120,8 +119,10 @@ fn backend_error(message: String) -> Error {
     Error::new(ErrorKind::Backend(format!("apply change: {message}")))
 }
 
-fn repo_path_bytes(path: &Path) -> Vec<u8> {
-    gix::path::to_unix_separators_on_windows(gix::path::into_bstr(path)).to_vec()
+fn repo_path_bytes(path: &Path) -> Result<Vec<u8>> {
+    let bytes = gix::path::into_bstr(path)
+        .map_err(|e| backend_error(format!("encoding path {}: {e}", path.display())))?;
+    Ok(gix::path::to_unix_separators_on_windows(bytes).to_vec())
 }
 
 fn tree_version(
@@ -374,8 +375,8 @@ impl GixRepo {
                 };
                 if status.first() == Some(&b'R') {
                     renames.insert(
-                        gix::path::from_byte_slice(second).to_path_buf(),
-                        gix::path::from_byte_slice(first).to_path_buf(),
+                        path_buf_from_git_bytes(second, "apply change rename destination")?,
+                        path_buf_from_git_bytes(first, "apply change rename source")?,
                     );
                 }
             }
@@ -393,7 +394,7 @@ impl GixRepo {
         paths
             .iter()
             .map(|path| {
-                let key = repo_path_bytes(path);
+                let key = repo_path_bytes(path)?;
                 match index.entry_by_path(key.as_slice().into()) {
                     None => Ok(None),
                     Some(entry) if entry.stage_raw() != 0 => Err(backend_error(format!(
@@ -407,12 +408,6 @@ impl GixRepo {
                 }
             })
             .collect()
-    }
-
-    fn literal_paths_cmd(&self) -> Command {
-        let mut cmd = self.git_workdir_cmd();
-        cmd.env("GIT_LITERAL_PATHSPECS", "1");
-        cmd
     }
 
     /// The `paths` whose worktree copy differs from the index.
@@ -431,28 +426,27 @@ impl GixRepo {
                         dirty.insert(path.as_path());
                     }
                     Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                    Err(error) => return Err(Error::new(ErrorKind::Io(error.kind()))),
+                    Err(error) => return Err(Error::from(error)),
                 }
             }
         }
         for chunk in paths.chunks(PATHS_PER_COMMAND) {
-            let mut cmd = self.literal_paths_cmd();
+            let mut cmd = self.git_workdir_cmd();
             cmd.args([
                 "diff",
                 "--no-ext-diff",
                 "--no-textconv",
                 "--name-only",
                 "-z",
-                "--",
-            ])
-            .args(chunk);
+            ]);
+            push_literal_paths(&mut cmd, chunk);
             let listing = run_git_capture_bytes(cmd, "git diff --name-only")?;
             for name in listing
                 .split(|byte| *byte == 0)
                 .filter(|name| !name.is_empty())
             {
-                let name = gix::path::from_byte_slice(name);
-                if let Some(path) = chunk.iter().find(|path| path.as_path() == name) {
+                let name = path_buf_from_git_bytes(name, "apply change unstaged path")?;
+                if let Some(path) = chunk.iter().find(|path| **path == name) {
                     dirty.insert(path.as_path());
                 }
             }
@@ -492,7 +486,7 @@ impl GixRepo {
     }
 
     fn diff_tree_patch(&self, source: &ChangeSource<'_>, names: &[&Path]) -> Result<Vec<u8>> {
-        let mut cmd = self.literal_paths_cmd();
+        let mut cmd = self.git_workdir_cmd();
         cmd.args([
             "diff-tree",
             "-p",
@@ -508,7 +502,8 @@ impl GixRepo {
             Some(base) => cmd.arg(base.to_string()),
             None => cmd.arg("--root"),
         };
-        cmd.arg(source.tip.to_string()).arg("--").args(names);
+        cmd.arg(source.tip.to_string());
+        push_literal_paths(&mut cmd, names);
         run_git_capture_bytes(cmd, "git diff-tree -p")
     }
 
@@ -518,7 +513,7 @@ impl GixRepo {
         groups: &[&[FileName]],
         paths: &[PathBuf],
         label: &str,
-    ) -> Result<std::process::Output> {
+    ) -> Result<crate::util::GitOutput> {
         let patch_file = write_patch_file(&self.change_patch(source, groups)?)?;
         let mut cmd = self.git_workdir_cmd();
         cmd.args(["apply", "--3way", "--whitespace=nowarn"])
@@ -535,7 +530,7 @@ impl GixRepo {
         &self,
         paths: &[PathBuf],
         label: &str,
-        applied: std::process::Output,
+        applied: crate::util::GitOutput,
     ) -> Error {
         let conflicted: Vec<&Path> = match self.conflicted_paths(paths) {
             Ok(conflicted) => conflicted,
@@ -561,14 +556,17 @@ impl GixRepo {
             "{applied_what} Resolve them, then commit.\n\n{}",
             bytes_to_text_preserving_utf8(&applied.stderr).trim()
         );
-        Error::new(ErrorKind::Git(GitFailure::new(
-            label,
-            GitFailureId::ApplyChangeConflict,
-            applied.status.code(),
-            applied.stdout,
-            applied.stderr,
-            Some(detail.trim_end().to_string()),
-        )))
+        Error::new(ErrorKind::Git(
+            GitFailure::new(
+                label,
+                GitFailureId::ApplyChangeConflict,
+                applied.status.code(),
+                applied.stdout,
+                applied.stderr,
+                Some(detail.trim_end().to_string()),
+            )
+            .with_auth_outcome(applied.auth_outcome),
+        ))
     }
 
     fn conflicted_paths<'p>(&self, paths: &'p [PathBuf]) -> Result<Vec<&'p Path>> {
@@ -576,16 +574,17 @@ impl GixRepo {
         let index = repo
             .open_index()
             .map_err(|e| backend_error(format!("reading the index: {e}")))?;
-        Ok(paths
-            .iter()
-            .filter(|path| {
-                let key = repo_path_bytes(path);
-                index
-                    .entry_by_path(key.as_slice().into())
-                    .is_some_and(|entry| entry.stage_raw() != 0)
-            })
-            .map(PathBuf::as_path)
-            .collect())
+        let mut conflicted = Vec::new();
+        for path in paths {
+            let key = repo_path_bytes(path)?;
+            if index
+                .entry_by_path(key.as_slice().into())
+                .is_some_and(|entry| entry.stage_raw() != 0)
+            {
+                conflicted.push(path.as_path());
+            }
+        }
+        Ok(conflicted)
     }
 
     /// Commits exactly `paths`; `--only` leaves other files' staged work out,
@@ -596,9 +595,12 @@ impl GixRepo {
         paths: &[PathBuf],
         checkpoint: ApplyFileChangeRetry,
     ) -> Result<CommandOutput> {
-        let path_bytes: Vec<Vec<u8>> = paths.iter().map(|path| repo_path_bytes(path)).collect();
+        let path_bytes = paths
+            .iter()
+            .map(|path| repo_path_bytes(path))
+            .collect::<Result<Vec<_>>>()?;
         let pathspec = write_pathspec_file(path_bytes.iter().map(Vec::as_slice))?;
-        let mut cmd = self.literal_paths_cmd();
+        let mut cmd = self.git_workdir_cmd();
         cmd.args(["commit", "--no-verify", "--only"]);
         let label = match &source.message {
             CommitMessage::Reuse(commit_id) => {
@@ -610,22 +612,23 @@ impl GixRepo {
                 "git commit --only".to_string()
             }
         };
-        cmd.arg("--pathspec-file-nul")
-            .arg(pathspec_from_file_arg(pathspec.path()));
+        push_literal_pathspec_file(&mut cmd, pathspec.path());
         run_git_with_output(cmd, &label).map_err(|error| match error.kind() {
             // The change stays staged; mark it so the store offers the message.
             ErrorKind::Git(failure) if failure.id() == GitFailureId::CommandFailed => {
-                Error::new(ErrorKind::Git(
-                    GitFailure::new(
-                        failure.command(),
-                        GitFailureId::ApplyChangeCommitFailed,
-                        failure.exit_code(),
-                        failure.stdout().to_vec(),
-                        failure.stderr().to_vec(),
-                        failure.detail().map(str::to_owned),
-                    )
-                    .with_apply_file_change_retry(checkpoint),
-                ))
+                let mut commit_failure = GitFailure::new(
+                    failure.command(),
+                    GitFailureId::ApplyChangeCommitFailed,
+                    failure.exit_code(),
+                    failure.stdout().to_vec(),
+                    failure.stderr().to_vec(),
+                    failure.detail().map(str::to_owned),
+                )
+                .with_apply_file_change_retry(checkpoint);
+                if let Some(auth_outcome) = failure.auth_outcome() {
+                    commit_failure = commit_failure.with_auth_outcome(auth_outcome.clone());
+                }
+                Error::new(ErrorKind::Git(commit_failure))
             }
             _ => error,
         })
@@ -642,7 +645,8 @@ fn no_changes_error(path: &Path) -> Error {
 fn describe_paths<P: AsRef<Path>>(paths: &[P]) -> String {
     let bytes: Vec<Vec<u8>> = paths
         .iter()
-        .map(|path| gix::path::into_bstr(path.as_ref()).to_vec())
+        // These bytes are only rendered for display, never sent back to Git.
+        .map(|path| path.as_ref().as_os_str().as_encoded_bytes().to_vec())
         .collect();
     describe_path_list(&bytes)
 }
@@ -679,7 +683,7 @@ mod tests {
     fn failed_apply_with_an_unreadable_index_keeps_the_original_git_error() {
         let dir = tempfile::tempdir().unwrap();
         let git = gix::init(dir.path()).unwrap();
-        let repo = GixRepo::new(dir.path().to_path_buf(), git.into_sync());
+        let repo = GixRepo::new(dir.path().to_path_buf(), git.into_sync()).unwrap();
         std::fs::write(dir.path().join(".git/index"), b"invalid index").unwrap();
         let paths = vec![PathBuf::from("a.txt")];
         assert!(repo.conflicted_paths(&paths).is_err());

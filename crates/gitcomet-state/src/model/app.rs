@@ -5,7 +5,7 @@ use crate::msg::RepoCommandKind;
 use gitcomet_core::domain::SignatureFormats;
 use gitcomet_core::process::GitRuntimeState;
 use gitcomet_core::remote_url::RemoteUrlPolicy;
-use gitcomet_core::services::{SafePushAfterCommitContext, SubmoduleTrustTarget};
+use gitcomet_core::services::{HistoryRefFilter, SafePushAfterCommitContext, SubmoduleTrustTarget};
 use gitcomet_core::signing_tools::SigningToolsState;
 use rustc_hash::FxHashMap;
 use serde::{Deserialize, Serialize};
@@ -70,15 +70,17 @@ impl GitLogSettings {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub struct RemoteSettings {
     pub prune_deleted_remote_branches_on_fetch: bool,
+    pub auto_fetch: super::AutoFetchSettings,
 }
 
 impl Default for RemoteSettings {
     fn default() -> Self {
         Self {
             prune_deleted_remote_branches_on_fetch: true,
+            auto_fetch: super::AutoFetchSettings::default(),
         }
     }
 }
@@ -147,9 +149,26 @@ pub struct AppState {
     /// Store-wide sequence; acknowledgements must not reset retry baselines.
     pub repo_open_failure_revision: u64,
     pub clone: Option<CloneOpState>,
+    /// Notifications the window has not acknowledged yet
+    /// (`Msg::AcknowledgeNotifications`).
     pub notifications: Vec<AppNotification>,
+    /// Number pushed, including notifications already acknowledged and dropped.
+    pub notifications_seq: u64,
     pub auth_prompt: Option<AuthPromptState>,
+    /// Every new authentication request has a distinct identity, including
+    /// repeated requests for the same key and operation.
+    pub auth_prompt_generation: u64,
+    /// Cancels local key validation; submitted secrets live only in its effect.
+    pub auth_validation_cancellation: Option<gitcomet_core::services::CancellationToken>,
     pub branch_exists_prompt: Option<BranchExistsPromptState>,
+    pub force_delete_branch_prompt: Option<ForceDeleteBranchPrompt>,
+    /// Every force-delete prompt has a distinct generation, so a refusal that
+    /// repeats the last one is still a new prompt.
+    pub force_delete_branch_prompt_generation: u64,
+    pub force_remove_worktree_prompt: Option<ForceRemoveWorktreePrompt>,
+    /// Every force prompt has a distinct generation, so a refusal that
+    /// repeats the last one is still a new prompt.
+    pub force_remove_worktree_prompt_generation: u64,
     pub submodule_trust_prompt: Option<SubmoduleTrustPromptState>,
     /// A submodule trust check is running in the background. Set the moment the
     /// add/update/load is triggered and cleared when the check resolves, so the
@@ -164,6 +183,9 @@ pub struct AppState {
     pub large_file_settings: LargeFileSettings,
     pub remote_url_policy: RemoteUrlPolicy,
     pub git_log_settings: GitLogSettings,
+    /// Ref namespaces every all-branches walk leaves out, resolved from
+    /// [`HiddenRefSettings`] against the product's presets.
+    pub history_hidden_refs: HistoryRefFilter,
     pub remote_settings: RemoteSettings,
     pub maintenance_settings: MaintenanceSettings,
     pub file_browser_settings: FileBrowserSettings,
@@ -192,6 +214,23 @@ impl AppState {
         }
     }
 
+    /// Queues a notification for the window.
+    pub fn push_notification(&mut self, notification: AppNotification) {
+        self.notifications_seq = self.notifications_seq.wrapping_add(1);
+        self.notifications.push(notification);
+    }
+
+    /// Notifications queued after notification number `seq`.
+    pub fn notifications_after(&self, seq: u64) -> &[AppNotification] {
+        super::feedback_after(&self.notifications, self.notifications_seq, seq)
+    }
+
+    /// Releases the notifications the window has shown, up to number
+    /// `through_seq`.
+    pub fn acknowledge_notifications(&mut self, through_seq: u64) {
+        super::acknowledge_feedback(&mut self.notifications, self.notifications_seq, through_seq);
+    }
+
     /// The signature formats to verify: none when the preference is off,
     /// otherwise those whose verifier was not found missing.
     pub fn signature_verification_formats(&self) -> SignatureFormats {
@@ -205,10 +244,7 @@ impl AppState {
 
 #[derive(Clone, Debug, Default)]
 pub struct FilesystemState {
-    pub pending: std::collections::BTreeMap<
-        gitcomet_core::filesystem::OperationId,
-        gitcomet_core::filesystem::Request,
-    >,
+    pub pending: std::collections::BTreeSet<gitcomet_core::filesystem::OperationId>,
     pub progress: Option<gitcomet_core::filesystem::Progress>,
     pub completed: std::collections::VecDeque<gitcomet_core::filesystem::OperationResult>,
     pub undo_available: bool,
@@ -220,6 +256,25 @@ pub enum BranchExistsPromptOperation {
     CreateBranch,
     CheckoutRemoteBranch { remote: String, branch: String },
     RenameBranch { old_name: String },
+}
+
+/// `git branch -d` refused a branch that is not fully merged.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct ForceDeleteBranchPrompt {
+    pub generation: u64,
+    pub repo_id: RepoId,
+    pub name: String,
+}
+
+/// A plain worktree removal Git refused for a reason `--force` overrides.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct ForceRemoveWorktreePrompt {
+    pub generation: u64,
+    pub repo_id: RepoId,
+    pub path: PathBuf,
+    /// The local branch to delete once the worktree is gone.
+    pub delete_branch: Option<String>,
+    pub blocker: gitcomet_core::error::WorktreeRemovalBlocker,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -267,9 +322,19 @@ pub enum AuthRetryOperation {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AuthPromptState {
+    pub generation: u64,
+    pub challenge: Option<gitcomet_core::auth::AuthChallenge>,
+    pub status: AuthPromptStatus,
     pub kind: AuthPromptKind,
     pub reason: String,
     pub operation: AuthRetryOperation,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AuthPromptStatus {
+    AwaitingInput,
+    Validating,
+    Rejected,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

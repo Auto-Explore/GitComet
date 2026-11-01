@@ -58,18 +58,20 @@ pub enum HostedMenuItem {
         action: HostedAction,
         icon: Option<SharedString>,
         disabled: bool,
+        tooltip: Option<SharedString>,
     },
     Header(SharedString),
     Separator,
 }
 
 impl HostedMenuItem {
-    /// An enabled entry without an icon.
+    /// An enabled entry without an icon or a tooltip.
     pub fn action(action: HostedAction) -> Self {
         Self::Action {
             action,
             icon: None,
             disabled: false,
+            tooltip: None,
         }
     }
 
@@ -88,6 +90,15 @@ impl HostedMenuItem {
         }
         self
     }
+
+    /// Sets the text an action entry shows on hover, disabled or not; other
+    /// entries are unchanged.
+    pub fn with_tooltip(mut self, text: impl Into<SharedString>) -> Self {
+        if let Self::Action { tooltip, .. } = &mut self {
+            *tooltip = Some(text.into());
+        }
+        self
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -96,4 +107,45 @@ pub enum NotificationKind {
     Success,
     Warning,
     Error,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tooltip_of(item: &HostedMenuItem) -> Option<&str> {
+        match item {
+            HostedMenuItem::Action { tooltip, .. } => tooltip.as_deref(),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn action_entries_carry_a_tooltip_only_when_given_one() {
+        let plain = HostedMenuItem::action(HostedAction::new("Cancel run", |_| {}));
+        assert_eq!(tooltip_of(&plain), None);
+
+        let described = HostedMenuItem::action(HostedAction::new("Cancel run", |_| {}))
+            .with_icon("icons/stop.svg")
+            .disabled(true)
+            .with_tooltip("Stops every job still running");
+        assert_eq!(
+            tooltip_of(&described),
+            Some("Stops every job still running")
+        );
+        let HostedMenuItem::Action { icon, disabled, .. } = &described else {
+            panic!("{described:?}");
+        };
+        assert_eq!(icon.as_deref(), Some("icons/stop.svg"));
+        assert!(*disabled);
+
+        assert_eq!(
+            HostedMenuItem::Header("CI".into()).with_tooltip("ignored"),
+            HostedMenuItem::Header("CI".into())
+        );
+        assert_eq!(
+            HostedMenuItem::Separator.with_tooltip("ignored"),
+            HostedMenuItem::Separator
+        );
+    }
 }

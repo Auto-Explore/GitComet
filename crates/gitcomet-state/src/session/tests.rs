@@ -5,7 +5,7 @@ use super::repos::SESSION_REPOS_SNAPSHOT_CACHE;
 use super::survey::SurveyPromptSession;
 use super::*;
 use crate::model::{RepoId, RepoState};
-use gitcomet_core::domain::{HistoryMode, LogScope, RepoSpec};
+use gitcomet_core::domain::{HistoryFocus, HistoryFocusSet, HistoryMode, LogScope, RepoSpec};
 
 fn clear_session_repos_snapshot_cache() {
     SESSION_REPOS_SNAPSHOT_CACHE.with(|cache| {
@@ -24,6 +24,35 @@ fn unique_session_test_dir(label: &str) -> PathBuf {
     ));
     let _ = fs::create_dir_all(&dir);
     dir
+}
+
+#[test]
+fn image_sampling_settings_round_trip_and_survive_other_writers() {
+    let dir = unique_session_test_dir("image-sampling");
+    let path = dir.join("session.json");
+    assert!(load_from_path(&path).image_sampling_mode.is_none());
+    persist_ui_settings_to_path(
+        UiSettings {
+            image_sampling_mode: Some("smooth".into()),
+            image_smooth_filter: Some("hann".into()),
+            ..Default::default()
+        },
+        &path,
+    )
+    .unwrap();
+    persist_ui_settings_to_path(
+        UiSettings {
+            theme_mode: Some("dark".into()),
+            ..Default::default()
+        },
+        &path,
+    )
+    .unwrap();
+    let session = load_from_path(&path);
+    assert_eq!(session.image_sampling_mode.as_deref(), Some("smooth"));
+    assert_eq!(session.image_smooth_filter.as_deref(), Some("hann"));
+    assert_eq!(session.theme_mode.as_deref(), Some("dark"));
+    fs::remove_dir_all(dir).unwrap();
 }
 
 #[test]
@@ -136,9 +165,11 @@ fn assert_session_writer_waits_for_shared_lock(
     );
     drop(guard);
 
+    // Parallel session tests also use this process-wide lock. This wait detects
+    // deadlocks, not write latency; the assertion above checks the lock contract.
     done_rx
-        .recv_timeout(std::time::Duration::from_secs(2))
-        .expect("writer finished after lock release")
+        .recv_timeout(std::time::Duration::from_secs(10))
+        .unwrap_or_else(|err| panic!("{label} writer did not finish after lock release: {err}"))
         .expect("writer persist succeeds");
     handle.join().expect("writer thread joins");
 }
@@ -1246,6 +1277,112 @@ fn history_highlight_commit_chain_round_trips_and_defaults_to_unset() {
 }
 
 #[test]
+fn history_show_graph_gradient_round_trips_and_survives_other_writers() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("session.json");
+    assert_eq!(load_from_path(&path).history_show_graph_gradient, None);
+
+    for enabled in [false, true] {
+        persist_ui_settings_to_path(
+            UiSettings {
+                history_show_graph_gradient: Some(enabled),
+                ..UiSettings::default()
+            },
+            &path,
+        )
+        .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        assert_eq!(json["history_show_graph_gradient"], enabled);
+        persist_ui_settings_to_path(
+            UiSettings {
+                history_show_graph: Some(true),
+                ..UiSettings::default()
+            },
+            &path,
+        )
+        .unwrap();
+        persist_recent_repo_to_path(dir.path(), &path).unwrap();
+        assert_eq!(
+            load_from_path(&path).history_show_graph_gradient,
+            Some(enabled)
+        );
+    }
+}
+
+#[test]
+fn history_hidden_refs_round_trip_and_survive_other_writers() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("session.json");
+    let loaded = load_from_path(&path);
+    assert_eq!(loaded.history_hidden_refs_enabled, None);
+    assert_eq!(loaded.history_hidden_ref_presets, None);
+    assert_eq!(loaded.history_hidden_ref_prefixes, None);
+
+    persist_ui_settings_to_path(
+        UiSettings {
+            history_hidden_refs_enabled: Some(false),
+            history_hidden_ref_presets: Some(BTreeMap::from([("git-notes".into(), false)])),
+            history_hidden_ref_prefixes: Some(vec!["refs/review".into()]),
+            ..UiSettings::default()
+        },
+        &path,
+    )
+    .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    assert_eq!(json["history_hidden_refs_enabled"], false);
+    assert_eq!(json["history_hidden_ref_presets"]["git-notes"], false);
+    assert_eq!(json["history_hidden_ref_prefixes"][0], "refs/review");
+    persist_ui_settings_to_path(
+        UiSettings {
+            history_show_graph: Some(true),
+            ..UiSettings::default()
+        },
+        &path,
+    )
+    .unwrap();
+
+    let loaded = load_from_path(&path);
+    assert_eq!(loaded.history_hidden_refs_enabled, Some(false));
+    assert_eq!(
+        loaded.history_hidden_ref_presets,
+        Some(BTreeMap::from([("git-notes".into(), false)]))
+    );
+    assert_eq!(
+        loaded.history_hidden_ref_prefixes,
+        Some(vec!["refs/review".to_string()])
+    );
+}
+
+#[test]
+fn history_hidden_refs_settings_convert_through_the_session() {
+    use crate::model::{HiddenRefPrefix, HiddenRefSettings};
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("session.json");
+    assert_eq!(
+        load_from_path(&path).hidden_ref_settings(),
+        HiddenRefSettings::default(),
+        "nothing saved means the defaults"
+    );
+
+    let mut expected = HiddenRefSettings::default();
+    expected.enabled = false;
+    expected.preset_overrides.insert("t3-code".into(), false);
+    expected.add_custom_prefix(HiddenRefPrefix::parse("refs/review").unwrap());
+    let mut settings = UiSettings::default();
+    settings.set_hidden_ref_settings(&expected);
+    let saved = settings.history_hidden_ref_prefixes.as_mut().unwrap();
+    saved.push("refs/heads/wip".into());
+    saved.push("refs/review/".into());
+    persist_ui_settings_to_path(settings, &path).unwrap();
+
+    assert_eq!(
+        load_from_path(&path).hidden_ref_settings(),
+        expected,
+        "a saved prefix that no longer parses, or repeats, is dropped"
+    );
+}
+
+#[test]
 fn remove_recent_repo_drops_matching_entry() {
     let dir = env::temp_dir().join(format!(
         "gitcomet-remove-recent-repo-test-{}-{}",
@@ -1279,6 +1416,40 @@ fn remove_recent_repo_drops_matching_entry() {
 
     let loaded = load_from_path(&path);
     assert_eq!(loaded.recent_repos, vec![repo_a]);
+}
+
+#[test]
+fn load_if_changed_rereads_only_a_written_file() {
+    let dir = unique_session_test_dir("stamp");
+    let path = dir.join("session.json");
+    let repo = dir.join("repo");
+    let _ = fs::create_dir_all(&repo);
+    let mut stamp = None;
+    assert!(
+        load_from_path_if_changed(&path, &mut stamp).is_none(),
+        "no file, nothing to read"
+    );
+
+    persist_to_path(
+        &path,
+        &UiSessionFile {
+            version: CURRENT_SESSION_FILE_VERSION,
+            recent_repos: Some(vec![path_storage_key(&repo)]),
+            ..UiSessionFile::default()
+        },
+    )
+    .expect("seed session file");
+    let session = load_from_path_if_changed(&path, &mut stamp).expect("a new file is read");
+    assert_eq!(session.recent_repos, vec![repo]);
+    assert!(
+        load_from_path_if_changed(&path, &mut stamp).is_none(),
+        "an unchanged file is not read again"
+    );
+
+    fs::remove_file(&path).expect("remove session file");
+    let session = load_from_path_if_changed(&path, &mut stamp).expect("a removal is read");
+    assert!(session.recent_repos.is_empty());
+    let _ = fs::remove_dir_all(&dir);
 }
 
 #[test]
@@ -2260,7 +2431,7 @@ fn persist_ui_settings_round_trips_diff_content_mode() {
 }
 
 #[test]
-fn persist_ui_settings_round_trips_diff_whitespace_mode() {
+fn persist_ui_settings_round_trips_diff_engine_and_whitespace_mode() {
     let dir = env::temp_dir().join(format!(
         "gitcomet-ui-settings-test-{}-{}",
         std::process::id(),
@@ -2301,6 +2472,7 @@ fn persist_ui_settings_round_trips_diff_whitespace_mode() {
             diff_scroll_sync: None,
             diff_content_mode: None,
             diff_whitespace_mode: Some("ignore".to_string()),
+            diff_engine: Some("difftastic".to_string()),
             change_tracking_height: None,
             untracked_height: None,
             history_show_author: None,
@@ -2315,6 +2487,7 @@ fn persist_ui_settings_round_trips_diff_whitespace_mode() {
 
     let loaded = load_from_path(&path);
     assert_eq!(loaded.diff_whitespace_mode.as_deref(), Some("ignore"));
+    assert_eq!(loaded.diff_engine.as_deref(), Some("difftastic"));
 }
 
 #[test]
@@ -2809,6 +2982,85 @@ fn persist_ui_settings_round_trips_fetch_prune_deleted_remote_branches() {
 }
 
 #[test]
+fn automatic_fetch_settings_survive_other_preference_writers() {
+    let dir = unique_session_test_dir("automatic-fetch-preferences");
+    let path = dir.join("session.json");
+    persist_ui_settings_to_path(
+        UiSettings {
+            auto_fetch_enabled: Some(true),
+            auto_fetch_interval_minutes: AutoFetchInterval::new(45),
+            ..Default::default()
+        },
+        &path,
+    )
+    .expect("persist automatic fetch settings");
+    persist_ui_settings_to_path(
+        UiSettings {
+            fetch_prune_deleted_remote_branches: Some(false),
+            theme_mode: Some("light".into()),
+            ..Default::default()
+        },
+        &path,
+    )
+    .expect("persist unrelated settings");
+    let loaded = load_from_path(&path);
+    assert_eq!(loaded.auto_fetch_enabled, Some(true));
+    assert_eq!(
+        loaded
+            .auto_fetch_interval_minutes
+            .map(AutoFetchInterval::minutes),
+        Some(45)
+    );
+    let stored: serde_json::Value =
+        serde_json::from_slice(&fs::read(&path).expect("read saved session"))
+            .expect("parse session");
+    assert_eq!(stored["auto_fetch_enabled"], true);
+    assert_eq!(stored["auto_fetch_interval_minutes"], 45);
+    persist_ui_settings_to_path(
+        UiSettings {
+            auto_fetch_enabled: Some(false),
+            ..Default::default()
+        },
+        &path,
+    )
+    .expect("disable automatic fetching");
+    assert_eq!(
+        load_from_path(&path)
+            .auto_fetch_interval_minutes
+            .map(AutoFetchInterval::minutes),
+        Some(45)
+    );
+}
+
+#[test]
+fn malformed_automatic_fetch_intervals_do_not_discard_the_session() {
+    let dir = unique_session_test_dir("automatic-fetch-invalid-interval");
+    let path = dir.join("session.json");
+    for invalid in [
+        serde_json::json!(0),
+        serde_json::json!(1441),
+        serde_json::json!(-1),
+        serde_json::json!(1.5),
+        serde_json::json!("5"),
+    ] {
+        let stored = serde_json::json!({
+            "version": CURRENT_SESSION_FILE_VERSION,
+            "auto_fetch_enabled": true,
+            "auto_fetch_interval_minutes": invalid,
+            "fetch_prune_deleted_remote_branches": false,
+            "theme_mode": "light"
+        });
+        fs::write(&path, serde_json::to_vec(&stored).expect("encode fixture"))
+            .expect("write session fixture");
+        let loaded = load_from_path(&path);
+        assert_eq!(loaded.auto_fetch_enabled, Some(true));
+        assert_eq!(loaded.auto_fetch_interval_minutes, None);
+        assert_eq!(loaded.fetch_prune_deleted_remote_branches, Some(false));
+        assert_eq!(loaded.theme_mode.as_deref(), Some("light"));
+    }
+}
+
+#[test]
 fn v3_repo_prune_preferences_migrate_to_a_conservative_global_preference() {
     let dir = unique_session_test_dir("legacy-repo-fetch-prune-migration");
     let path = dir.join("session.json");
@@ -2966,6 +3218,87 @@ fn persist_ui_settings_round_trips_window_controls_mode() {
     let loaded = load_from_path(&path);
     assert_eq!(loaded.window_controls_mode.as_deref(), Some("hide"));
     assert_eq!(loaded.browser_open_target.as_deref(), Some("new_window"));
+}
+
+#[test]
+fn windows_renderer_fallback_survives_other_settings_and_workspace_writes() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("session.json");
+    persist_ui_settings_to_path(
+        UiSettings {
+            windows_renderer: Some("auto".into()),
+            theme_mode: Some("dark".into()),
+            ..Default::default()
+        },
+        &path,
+    )
+    .unwrap();
+    persist_ui_settings_to_path(
+        UiSettings {
+            windows_renderer: Some("dx11".into()),
+            ..Default::default()
+        },
+        &path,
+    )
+    .unwrap();
+    persist_ui_settings_to_path(
+        UiSettings {
+            ui_scale_percent: Some(150),
+            ..Default::default()
+        },
+        &path,
+    )
+    .unwrap();
+    persist_workspaces_to_path(&[Workspace::new(vec![dir.path().to_path_buf()])], &path).unwrap();
+    let loaded = load_from_path(&path);
+    assert_eq!(loaded.workspaces.len(), 1);
+    assert_eq!(loaded.windows_renderer.as_deref(), Some("dx11"));
+    assert_eq!(loaded.theme_mode.as_deref(), Some("dark"));
+    assert_eq!(loaded.ui_scale_percent, Some(150));
+    persist_ui_settings_to_path(
+        UiSettings {
+            windows_renderer: Some("auto".into()),
+            ..Default::default()
+        },
+        &path,
+    )
+    .unwrap();
+    assert_eq!(
+        load_from_path(&path).windows_renderer.as_deref(),
+        Some("auto")
+    );
+}
+
+#[test]
+fn windows_renderer_update_preserves_extension_namespaces_and_reports_io_errors() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("session.json");
+    persist_extension_namespace_to_path(
+        "example",
+        Some(serde_json::json!({"draft":"keep"})),
+        &path,
+    )
+    .unwrap();
+    persist_ui_settings_to_path(
+        UiSettings {
+            windows_renderer: Some("dx11".into()),
+            ..Default::default()
+        },
+        &path,
+    )
+    .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!(json["extensions"]["example"]["draft"], "keep");
+    assert!(
+        persist_ui_settings_to_path(
+            UiSettings {
+                windows_renderer: Some("dx11".into()),
+                ..Default::default()
+            },
+            dir.path()
+        )
+        .is_err()
+    );
 }
 
 #[test]
@@ -3156,6 +3489,96 @@ fn closed_groups_remain_saved_but_do_not_project_as_open_repositories() {
     assert!(loaded.active_repo.is_none());
 }
 
+/// A session written by a newer build, or one that is not JSON, loads as
+/// empty, and the next write used to replace it outright: every open
+/// repository, workspace and setting in it was gone, with no copy.
+#[test]
+fn first_write_over_an_unreadable_session_keeps_a_backup() {
+    for (name, contents, suffix) in [
+        (
+            "session-newer-version",
+            r#"{"version":7,"open_repos":["/work/newer"],"active_repo":"/work/newer"}"#,
+            ".v7.bak",
+        ),
+        ("session-not-json", "{not json", ".unreadable.bak"),
+    ] {
+        let path = unique_session_test_dir(name).join("session.json");
+        fs::write(&path, contents).expect("seed session");
+        assert!(
+            load_from_path(&path).open_repos.is_empty(),
+            "{name} is unreadable here"
+        );
+
+        let group = Workspace::new(vec![PathBuf::from("/work/replacement")]);
+        persist_workspaces_to_path(&[group], &path).expect("persist workspaces");
+
+        let mut backup_name = path.as_os_str().to_os_string();
+        backup_name.push(suffix);
+        assert_eq!(
+            fs::read_to_string(PathBuf::from(backup_name)).expect("read backup"),
+            contents,
+            "{name}"
+        );
+    }
+}
+
+/// A session file that exists but cannot be read (left root-owned by a `sudo`
+/// run, or a transient NFS error) read as absent, so the next write replaced
+/// it with an empty session and no backup.
+#[cfg(unix)]
+#[test]
+fn a_session_file_that_cannot_be_read_is_never_replaced() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let path = unique_session_test_dir("session-unreadable-file").join("session.json");
+    let contents = r#"{"version":6,"open_repos":["/work/kept"]}"#;
+    fs::write(&path, contents).expect("seed session");
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o000)).expect("make unreadable");
+    if fs::read(&path).is_ok() {
+        // Root reads it regardless; nothing to prove there.
+        return;
+    }
+
+    let group = Workspace::new(vec![PathBuf::from("/work/replacement")]);
+    let result = persist_workspaces_to_path(&[group], &path);
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).expect("make readable");
+
+    assert!(
+        result.is_err(),
+        "the write must not replace an unreadable file"
+    );
+    assert_eq!(fs::read_to_string(&path).unwrap(), contents);
+}
+
+/// One value this build cannot parse (a newer build's setting variant, say)
+/// used to make the whole session unreadable, so the next write dropped every
+/// repository and setting. Each field now resets on its own; a field added
+/// without that fails here.
+#[test]
+fn a_value_this_build_cannot_parse_resets_only_that_value() {
+    let fields = serde_json::to_value(UiSessionFile::default()).expect("serialize session");
+    let serde_json::Value::Object(fields) = fields else {
+        panic!("a session serializes as an object");
+    };
+    for key in fields.keys() {
+        if matches!(key.as_str(), "version" | "open_repos") {
+            continue;
+        }
+        let path = unique_session_test_dir("session-unparsable-value").join("session.json");
+        let contents = serde_json::json!({
+            "version": CURRENT_SESSION_FILE_VERSION,
+            "open_repos": ["/work/kept"],
+            key.as_str(): [{"from": "a newer build"}],
+        });
+        fs::write(&path, contents.to_string()).expect("seed session");
+
+        assert_eq!(
+            load_from_path(&path).open_repos,
+            vec![PathBuf::from("/work/kept")],
+            "{key}"
+        );
+    }
+}
+
 #[test]
 fn first_current_write_preserves_one_v3_backup() {
     let path = unique_session_test_dir("workspace-v3-backup").join("session.json");
@@ -3322,7 +3745,7 @@ fn v4_window_groups_key_loads_as_workspaces_and_rewrites_as_v5() {
     persist_workspaces_to_path(&[workspace], &path).expect("persist workspaces");
     let written: serde_json::Value =
         serde_json::from_slice(&fs::read(&path).expect("read v5")).expect("parse v5");
-    assert_eq!(written["version"], 5);
+    assert_eq!(written["version"], CURRENT_SESSION_FILE_VERSION);
     assert!(written.get("window_groups").is_none());
     assert_eq!(written["workspaces"][0]["custom_name"], "Client work");
 
@@ -3737,7 +4160,6 @@ fn timing_session_persist_cost_by_file_size() {
         )
         .expect("seed session");
         let bytes = fs::metadata(&path).expect("session metadata").len();
-        let contents = fs::read(&path).expect("read session");
 
         let started = std::time::Instant::now();
         for ix in 0..ITERATIONS {
@@ -3759,15 +4181,9 @@ fn timing_session_persist_cost_by_file_size() {
         }
         let snapshot_write = started.elapsed() / ITERATIONS;
 
-        let started = std::time::Instant::now();
-        for _ in 0..ITERATIONS {
-            preserve_previous_version_session_backup(&path, &contents).expect("backup check");
-        }
-        let backup_check = started.elapsed() / ITERATIONS;
-
         println!(
             "session persist: repos={repo_count} bytes={bytes} settings_write={settings_write:?} \
-             snapshot_write={snapshot_write:?} backup_check={backup_check:?}"
+             snapshot_write={snapshot_write:?}"
         );
     }
 }
@@ -3907,4 +4323,124 @@ fn repo_maintenance_entries_are_pruned_oldest_first() {
     assert_eq!(entries.len(), 256);
     assert!(!entries.contains_key("/work/repo-000/.git"));
     assert!(entries.contains_key("/work/repo-299/.git"));
+}
+
+#[test]
+fn repo_history_focus_round_trips_and_clears() {
+    let dir = unique_session_test_dir("repo-history-focus");
+    let session_file = dir.join("session.json");
+    let repo = dir.join("repo");
+    let _ = fs::create_dir_all(&repo);
+    let key = path_storage_key(&repo);
+
+    for focus in [
+        HistoryFocusSet::from_iter([HistoryFocus::local_branch("feature")]),
+        HistoryFocusSet::from_iter([HistoryFocus::remote_branch("origin", "feature")]),
+        HistoryFocusSet::from_iter([HistoryFocus::remote("origin")]),
+        // A whole set round-trips, not just its first entry.
+        HistoryFocusSet::from_iter([
+            HistoryFocus::local_branch("feature"),
+            HistoryFocus::local_branch("main"),
+            HistoryFocus::remote("origin"),
+        ]),
+    ] {
+        persist_repo_history_focus_to_path(&repo, &focus, &session_file)
+            .expect("persist history focus");
+        assert_eq!(
+            load_repo_session_preferences_from_path(&session_file)
+                .repo_history_focus
+                .get(&key),
+            Some(&focus),
+        );
+    }
+
+    persist_repo_history_focus_to_path(&repo, &HistoryFocusSet::default(), &session_file)
+        .expect("clear history focus");
+    assert!(
+        !load_repo_session_preferences_from_path(&session_file)
+            .repo_history_focus
+            .contains_key(&key),
+        "clearing the focus must remove the stored entry, not keep a stale one"
+    );
+}
+
+/// The focus map shares a file with the list of open repositories. A value that
+/// will not parse -- the single-object form an earlier build wrote, or outright
+/// garbage -- must cost at most that one entry, never the whole session.
+#[test]
+fn an_unreadable_history_focus_entry_does_not_discard_the_session() {
+    let dir = unique_session_test_dir("repo-history-focus-tolerance");
+    let session_file = dir.join("session.json");
+    let _ = fs::create_dir_all(&dir);
+
+    fs::write(
+        &session_file,
+        serde_json::json!({
+            "version": 3,
+            "open_repos": ["/tmp/kept-repo"],
+            "repo_history_focus": {
+                // The shape an earlier build wrote: one object, not a list.
+                "/tmp/legacy": {"kind": "local_branch", "name": "feature"},
+                // A list, as written now.
+                "/tmp/current": [{"kind": "remote", "name": "origin"}],
+                // Neither: this entry is dropped, the file is not.
+                "/tmp/garbage": 7,
+            },
+        })
+        .to_string(),
+    )
+    .expect("write session file");
+
+    let loaded = load_repo_session_preferences_from_path(&session_file);
+    assert_eq!(
+        loaded.repo_history_focus.get("/tmp/legacy"),
+        Some(&HistoryFocusSet::from_iter([HistoryFocus::local_branch(
+            "feature"
+        )])),
+        "a single stored ref still reads back as a one-element set"
+    );
+    assert_eq!(
+        loaded.repo_history_focus.get("/tmp/current"),
+        Some(&HistoryFocusSet::from_iter([HistoryFocus::remote(
+            "origin"
+        )]))
+    );
+    assert!(!loaded.repo_history_focus.contains_key("/tmp/garbage"));
+
+    clear_session_repos_snapshot_cache();
+    assert_eq!(
+        load_from_path(&session_file).open_repos,
+        vec![PathBuf::from("/tmp/kept-repo")],
+        "the open repositories must survive an unreadable focus entry"
+    );
+}
+
+/// Focus was stored under `repo_history_solos` while the feature was called
+/// "solo"; a session written then must still restore its focus.
+#[test]
+fn a_session_written_under_the_solo_key_still_restores_its_focus() {
+    let dir = unique_session_test_dir("repo-history-focus-solo-alias");
+    let session_file = dir.join("session.json");
+    let _ = fs::create_dir_all(&dir);
+
+    fs::write(
+        &session_file,
+        serde_json::json!({
+            "version": 3,
+            "repo_history_solos": {
+                "/tmp/repo": [{"kind": "local_branch", "name": "feature"}],
+            },
+        })
+        .to_string(),
+    )
+    .expect("write session file");
+
+    assert_eq!(
+        load_repo_session_preferences_from_path(&session_file)
+            .repo_history_focus
+            .get("/tmp/repo"),
+        Some(&HistoryFocusSet::from_iter([HistoryFocus::local_branch(
+            "feature"
+        )])),
+    );
 }

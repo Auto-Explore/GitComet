@@ -82,6 +82,7 @@ fn commit_menu_has_add_tag_entry(cx: &mut gpui::TestAppContext) {
                         &PopoverKind::CommitMenu {
                             repo_id,
                             commit_id: commit_id.clone(),
+                            refs: CommitMenuRefs::All,
                         },
                         cx,
                     )
@@ -152,6 +153,7 @@ fn commit_menu_disables_add_tag_when_history_tags_are_hidden(cx: &mut gpui::Test
                         &PopoverKind::CommitMenu {
                             repo_id,
                             commit_id: commit_id.clone(),
+                            refs: CommitMenuRefs::All,
                         },
                         cx,
                     )
@@ -291,6 +293,7 @@ fn revert_confirm_keeps_and_restores_the_commit_menu_invoker_focus(cx: &mut gpui
                     PopoverKind::CommitMenu {
                         repo_id,
                         commit_id: commit_id.clone(),
+                        refs: CommitMenuRefs::All,
                     },
                     gpui::point(gpui::px(0.0), gpui::px(0.0)),
                     window,
@@ -344,6 +347,7 @@ fn commit_menu_hides_cherry_pick_for_current_head(cx: &mut gpui::TestAppContext)
                         &PopoverKind::CommitMenu {
                             repo_id,
                             commit_id: commit_id.clone(),
+                            refs: CommitMenuRefs::All,
                         },
                         cx,
                     )
@@ -382,6 +386,7 @@ fn commit_menu_disables_cherry_pick_when_local_operation_in_progress(
                         &PopoverKind::CommitMenu {
                             repo_id,
                             commit_id: commit_id.clone(),
+                            refs: CommitMenuRefs::All,
                         },
                         cx,
                     )
@@ -418,6 +423,7 @@ fn commit_menu_disables_merge_when_repository_is_busy(cx: &mut gpui::TestAppCont
                         &PopoverKind::CommitMenu {
                             repo_id,
                             commit_id: commit_id.clone(),
+                            refs: CommitMenuRefs::All,
                         },
                         cx,
                     )
@@ -457,6 +463,7 @@ fn detached_head_commit_menu_names_head_as_merge_destination(cx: &mut gpui::Test
                         &PopoverKind::CommitMenu {
                             repo_id,
                             commit_id: commit_id.clone(),
+                            refs: CommitMenuRefs::All,
                         },
                         cx,
                     )
@@ -952,7 +959,6 @@ fn commit_file_menu_copy_path_uses_os_native_separators(cx: &mut gpui::TestAppCo
 
 #[gpui::test]
 fn commit_file_menu_copy_path_requires_a_completed_right_click(cx: &mut gpui::TestAppContext) {
-    let _clipboard_guard = lock_clipboard_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -1056,7 +1062,6 @@ fn commit_file_menu_copy_path_requires_a_completed_right_click(cx: &mut gpui::Te
 
 #[gpui::test]
 fn status_file_menu_copy_path_requires_a_completed_right_click(cx: &mut gpui::TestAppContext) {
-    let _clipboard_guard = lock_clipboard_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -1183,7 +1188,7 @@ fn diff_editor_menu_has_open_file_entries(cx: &mut gpui::TestAppContext) {
                 this.popover_host.update(cx, |host, cx| {
                     host.context_menu_model(
                         &PopoverKind::DiffEditorMenu {
-                            repo_id,
+                            repo_id: Some(repo_id),
                             area: DiffArea::Unstaged,
                             path: Some(path.clone()),
                             hunk_patch: None,
@@ -1299,8 +1304,8 @@ fn file_preview_context_menu_matches_diff_editor_actions(cx: &mut gpui::TestAppC
     );
 
     cx.update(|window, app| {
-        let main_pane = view.read(app).main_pane.clone();
-        main_pane.update(app, |pane, cx| {
+        let diff_renderer = view.read(app).diff_renderer.clone();
+        diff_renderer.update(app, |pane, cx| {
             pane.open_diff_editor_context_menu(
                 1,
                 DiffTextRegion::Inline,
@@ -1311,7 +1316,7 @@ fn file_preview_context_menu_matches_diff_editor_actions(cx: &mut gpui::TestAppC
         });
     });
 
-    // Flush deferred popover open from MainPaneView::open_popover_at.
+    // Flush deferred popover open from DiffRenderer::open_popover_at.
     cx.update(|window, app| {
         let _ = window.draw(app);
     });
@@ -1331,7 +1336,7 @@ fn file_preview_context_menu_matches_diff_editor_actions(cx: &mut gpui::TestAppC
                         copy_text,
                         ..
                     } => {
-                        assert_eq!(*rid, repo_id);
+                        assert_eq!(*rid, Some(repo_id));
                         assert_eq!(*area, DiffArea::Staged);
                         assert_eq!(menu_path, &Some(path.clone()));
                         assert_eq!(copy_text, &Some("beta".to_string()));
@@ -1633,7 +1638,7 @@ fn file_browser_file_menu_for_a_commit_source_has_no_explorer_groups(
 
 #[gpui::test]
 fn explorer_entries_carry_icons_and_platform_shortcuts(cx: &mut gpui::TestAppContext) {
-    use crate::view::shortcut_labels::{Shortcut, secondary_shortcut};
+    use crate::kit::components::{Shortcut, secondary_shortcut};
 
     let model = file_browser_menu_model(cx, "src/a.rs", false, |_state| {});
     let entry = |label: &str| {
@@ -2259,6 +2264,7 @@ fn review_adjusted_branch_menus_disable_merge_and_squash(cx: &mut gpui::TestAppC
                         &PopoverKind::CommitMenu {
                             repo_id,
                             commit_id: commit_id.clone(),
+                            refs: CommitMenuRefs::All,
                         },
                         cx,
                     )
@@ -2331,7 +2337,7 @@ fn review_hunk_menu_uses_rendered_large_file_target(cx: &mut gpui::TestAppContex
     });
     cx.update(|_, app| {
         view.update(app, |this, cx| {
-            assert!(this.main_pane.read(cx).has_large_file_text_diff());
+            assert!(this.diff_renderer.read(cx).has_large_file_text_diff());
             this.popover_host.update(cx, |host, cx| {
                 let model = host
                     .context_menu_model(&PopoverKind::DiffHunkMenu { repo_id, src_ix: 3 }, cx)
@@ -2554,7 +2560,6 @@ fn annex_section_and_repository_menus_follow_repo_state(cx: &mut gpui::TestAppCo
 
 #[gpui::test]
 fn annex_text_prompts_submit_on_enter(cx: &mut gpui::TestAppContext) {
-    let _guard = crate::test_support::lock_visual_test();
     for (prompt, text) in [
         (
             AnnexPrompt::AddSpecialRemote,

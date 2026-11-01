@@ -263,6 +263,7 @@ fn app_menu_view_with(
                 },
             );
             repo.open = Loadable::Ready(());
+            repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
             repo.remotes = remotes;
             let state = Arc::new(AppState {
                 repos: vec![repo],
@@ -302,6 +303,7 @@ fn web_remote(name: &str, url: &str) -> gitcomet_core::domain::Remote {
     gitcomet_core::domain::Remote {
         name: name.to_string(),
         url: Some(url.to_string()),
+        default_branch: None,
     }
 }
 
@@ -442,7 +444,6 @@ fn app_menu_disables_update_check_when_environment_override_is_present(
 
 #[gpui::test]
 fn app_menu_zoom_in_zooms_only_this_window(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (_view, cx) = open_app_menu(cx);
     cx.update(|window, app| {
         crate::app::install_app_shortcuts_for_test(app, Arc::new(TestBackend));

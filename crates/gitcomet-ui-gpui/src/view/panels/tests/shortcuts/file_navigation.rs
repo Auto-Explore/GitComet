@@ -37,7 +37,7 @@ fn set_diff_selection_area(
 ) {
     cx.update(|window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.diff_selection_anchor = anchor;
                 pane.diff_selection_range = range;
                 cx.notify();
@@ -121,8 +121,8 @@ fn split_untracked_file_navigation_stays_within_untracked_section(cx: &mut gpui:
     set_change_tracking_view_for_test(cx, &view, ChangeTrackingView::SplitUntracked);
 
     let moved = cx.update(|window, app| {
-        let main_pane = view.read(app).main_pane.clone();
-        main_pane.update(app, |pane, cx| {
+        let diff_renderer = view.read(app).diff_renderer.clone();
+        diff_renderer.update(app, |pane, cx| {
             pane.try_select_adjacent_diff_file(repo_id, 1, window, cx)
         })
     });
@@ -184,8 +184,8 @@ fn split_tracked_file_navigation_does_not_cross_into_untracked_section(
     set_change_tracking_view_for_test(cx, &view, ChangeTrackingView::SplitUntracked);
 
     let moved = cx.update(|window, app| {
-        let main_pane = view.read(app).main_pane.clone();
-        main_pane.update(app, |pane, cx| {
+        let diff_renderer = view.read(app).diff_renderer.clone();
+        diff_renderer.update(app, |pane, cx| {
             pane.try_select_adjacent_diff_file(repo_id, -1, window, cx)
         })
     });
@@ -197,7 +197,6 @@ fn split_tracked_file_navigation_does_not_cross_into_untracked_section(
 
 #[gpui::test]
 fn commit_details_file_navigation_scrolls_selected_row_into_view(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -251,8 +250,8 @@ fn commit_details_file_navigation_scrolls_selected_row_into_view(cx: &mut gpui::
     );
 
     let moved = cx.update(|window, app| {
-        let main_pane = view.read(app).main_pane.clone();
-        main_pane.update(app, |pane, cx| {
+        let diff_renderer = view.read(app).diff_renderer.clone();
+        diff_renderer.update(app, |pane, cx| {
             pane.try_select_adjacent_diff_file(repo_id, 1, window, cx)
         })
     });
@@ -270,6 +269,116 @@ fn commit_details_file_navigation_scrolls_selected_row_into_view(cx: &mut gpui::
         offset_y < px(0.0),
         "expected commit-details file navigation to scroll the selected row into view (offset_y={offset_y:?})",
     );
+}
+
+#[gpui::test]
+fn commit_details_diff_panel_keys_step_through_files(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = RepoId(7053);
+    let commit_id = CommitId("0123456789abcdef".into());
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_commit_details_diff_keys",
+        std::process::id()
+    ));
+    let files = (0..64)
+        .map(|ix| {
+            let kind = if ix == 1 {
+                FileStatusKind::Added
+            } else {
+                FileStatusKind::Modified
+            };
+            CommitFileChange::new(
+                std::path::PathBuf::from(format!("src/commit_keys/file_{ix:02}.rs")),
+                kind,
+            )
+        })
+        .collect::<Vec<_>>();
+    let mut repo = shortcut_fixture_repo(repo_id, &workdir, &commit_id);
+    repo.history_state.selected_commit = Some(commit_id.clone());
+    repo.history_state.commit_details = Loadable::Ready(Arc::new(CommitDetails {
+        id: commit_id.clone(),
+        message: "subject".into(),
+        author_name: String::new(),
+        author_email: String::new(),
+        authored_at_unix: 0,
+        committed_at: "2026-04-14 12:00:00 +0300".into(),
+        committed_at_unix: 0,
+        parent_ids: vec![],
+        files: files.clone(),
+    }));
+    repo.diff_state.diff_target =
+        Some(DiffTarget::commit(commit_id.clone(), files[0].path.clone()));
+
+    apply_state(cx, &view, app_state_with_active_repo(repo));
+    bind_app_keys_for_test(cx);
+    cx.simulate_resize(gpui::size(px(1024.0), px(900.0)));
+    draw_and_drain_test_window(cx);
+    focus_diff_panel(cx, &view);
+
+    // Presses `key` and waits for the store to open `files[expected]`.
+    let press = |cx: &mut gpui::VisualTestContext, key: &str, expected: usize| {
+        cx.simulate_keystrokes(key);
+        draw_and_drain_test_window(cx);
+        wait_until_store_diff_target_path(cx, &view, files[expected].path.as_path());
+        sync_store_snapshot(cx, &view);
+        assert_eq!(
+            active_commit_diff_target_path(cx, &view),
+            Some(files[expected].path.clone()),
+            "after `{key}`"
+        );
+    };
+    let unchanged = |cx: &mut gpui::VisualTestContext, key: &str, expected: usize| {
+        cx.simulate_keystrokes(key);
+        draw_and_drain_test_window(cx);
+        sync_store_snapshot(cx, &view);
+        assert_eq!(
+            active_commit_diff_target_path(cx, &view),
+            Some(files[expected].path.clone()),
+            "`{key}` must not move"
+        );
+    };
+
+    press(cx, "down", 1);
+    press(cx, "down", 2);
+    press(cx, "up", 1);
+    press(cx, "up", 0);
+    unchanged(cx, "up", 0);
+
+    cx.simulate_keystrokes("pagedown");
+    draw_and_drain_test_window(cx);
+    wait_until(cx, "page down to leave the first files", |cx| {
+        sync_store_snapshot(cx, &view);
+        active_commit_diff_target_path(cx, &view)
+            .is_some_and(|path| path != files[0].path && path != files[1].path)
+    });
+    let page_ix = files
+        .iter()
+        .position(|file| Some(&file.path) == active_commit_diff_target_path(cx, &view).as_ref())
+        .unwrap();
+    assert!(page_ix > 2 && page_ix < 63, "page_ix={page_ix}");
+
+    press(cx, "end", 63);
+    let offset_y = cx.update(|_window, app| {
+        let pane = view.read(app).details_pane.read(app);
+        uniform_list_offset(&pane.commit_files_scroll).y
+    });
+    assert!(offset_y < px(0.0), "offset_y={offset_y:?}");
+    press(cx, "home", 0);
+    unchanged(cx, "shift-down", 0);
+
+    cx.update(|window, app| {
+        let focus = view
+            .read(app)
+            .diff_renderer
+            .read(app)
+            .diff_panel_focus_handle
+            .clone();
+        assert!(focus.is_focused(window), "the diff panel keeps focus");
+    });
 }
 
 #[gpui::test]
@@ -391,8 +500,27 @@ fn comparison_diff_steps_through_range_files_with_arrows_and_f1_f4(cx: &mut gpui
     // Where a row click leaves focus.
     focus_diff_panel(cx, &view);
 
-    assert!(cx.debug_bounds("diff_prev_file").is_some());
-    assert!(cx.debug_bounds("diff_next_file").is_some());
+    assert_eq!(drawn_file_arrows(cx, &view), Some((true, true)));
+    assert_eq!(
+        diff_bar_position(cx, &view).as_deref(),
+        Some("2 of 3 files")
+    );
+    assert!(
+        cx.debug_bounds("diff_bar_stage").is_none(),
+        "a comparison has nothing to stage"
+    );
+    // The header's icon knows the file from the comparison's list.
+    assert!(cx.debug_bounds("diff_title_icon").is_some());
+    let icon = cx.debug_bounds("diff_title_icon").unwrap();
+    let text = cx.debug_bounds("diff_title_text").unwrap();
+    assert!(
+        (f32::from(icon.center().y - text.center().y)).abs() < 1.0,
+        "file icon and path share a centre: {icon:?}, {text:?}"
+    );
+    assert_eq!(
+        cx.update(|_window, app| view.read(app).diff_renderer.read(app).rendered_file_kind()),
+        Some(FileStatusKind::Modified)
+    );
 
     cx.simulate_keystrokes("f4");
     draw_and_drain_test_window(cx);
@@ -406,16 +534,36 @@ fn comparison_diff_steps_through_range_files_with_arrows_and_f1_f4(cx: &mut gpui
         Some(range_target(&files[2].path)),
         "expected F4 to open the next comparison file"
     );
-    assert!(
-        cx.debug_bounds("diff_next_file").is_none(),
+    assert_eq!(
+        drawn_file_arrows(cx, &view),
+        Some((true, false)),
         "the last comparison file has no next file"
+    );
+    assert_eq!(
+        diff_bar_position(cx, &view).as_deref(),
+        Some("3 of 3 files")
+    );
+    // A click on the disabled arrow goes nowhere.
+    let next = cx
+        .debug_bounds("diff_next_file")
+        .expect("disabled, not hidden");
+    cx.simulate_click(next.center(), gpui::Modifiers::default());
+    draw_and_drain_test_window(cx);
+    sync_store_snapshot(cx, &view);
+    assert_eq!(
+        cx.update(|_window, app| view.read(app).state.repos[0].diff_state.diff_target.clone()),
+        Some(range_target(&files[2].path))
     );
 
     cx.simulate_keystrokes("f1");
     draw_and_drain_test_window(cx);
     wait_until_store_diff_target_path(cx, &view, files[1].path.as_path());
     sync_store_snapshot(cx, &view);
-    assert!(cx.debug_bounds("diff_next_file").is_some());
+    assert_eq!(drawn_file_arrows(cx, &view), Some((true, true)));
+
+    cx.simulate_keystrokes("down");
+    draw_and_drain_test_window(cx);
+    wait_until_store_diff_target_path(cx, &view, files[2].path.as_path());
 }
 
 #[gpui::test]
@@ -449,7 +597,7 @@ fn commit_message_text_input_change_navigation_shortcuts_move_diff_without_steal
     focus_commit_message_input(cx, &view);
     cx.update(|window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.rebuild_diff_cache(cx);
                 pane.ensure_diff_visible_indices();
                 cx.notify();
@@ -873,7 +1021,7 @@ fn switching_diff_content_mode_restores_diff_panel_focus_for_change_navigation(
     bind_app_keys_and_global_diff_fallback_for_test(cx);
     cx.update(|window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.rebuild_diff_cache(cx);
                 pane.ensure_diff_visible_indices();
                 cx.notify();
@@ -1059,8 +1207,8 @@ fn switching_change_tracking_view_restores_diff_panel_focus_for_adjacent_navigat
     );
 
     let moved = cx.update(|window, app| {
-        let main_pane = view.read(app).main_pane.clone();
-        main_pane.update(app, |pane, cx| {
+        let diff_renderer = view.read(app).diff_renderer.clone();
+        diff_renderer.update(app, |pane, cx| {
             pane.try_select_adjacent_diff_file(repo_id, 1, window, cx)
         })
     });
@@ -1068,4 +1216,180 @@ fn switching_change_tracking_view_restores_diff_panel_focus_for_adjacent_navigat
         moved,
         "expected adjacent navigation to keep working immediately after switching to split view"
     );
+}
+
+#[gpui::test]
+fn image_toolbar_preserves_file_navigation_and_staging_at_normal_window_widths(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    let dir = tempfile::tempdir().unwrap();
+    let paths = ["first.png", "second.png", "third.png"].map(std::path::PathBuf::from);
+    let mut repo = simple_worktree_repo(
+        RepoId(70569),
+        dir.path(),
+        &CommitId("abcdef001122338d".into()),
+        &paths,
+        &paths[1],
+    );
+    let pixels = image::RgbaImage::from_pixel(64, 64, image::Rgba([255, 0, 0, 255]));
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    pixels
+        .write_to(&mut bytes, image::ImageFormat::Png)
+        .unwrap();
+    repo.diff_state.diff_file_rev = 1;
+    repo.diff_state.diff_file_image =
+        Loadable::Ready(Some(Arc::new(gitcomet_core::domain::FileDiffImage {
+            path: paths[1].clone(),
+            old: Some(bytes.get_ref().clone()),
+            new: Some(bytes.into_inner()),
+            ..Default::default()
+        })));
+    apply_state(cx, &view, app_state_with_active_repo(repo));
+    wait_for_file_image_diff_cache(cx, &view, "image toolbar layout", |pane| {
+        pane.file_image_diff_cache_complete
+    });
+
+    for width in [1280.0, 1100.0, 1600.0] {
+        cx.simulate_resize(gpui::size(px(width), px(900.0)));
+        draw_and_drain_test_window(cx);
+        let bar = cx.debug_bounds("diff_bottom_bar").unwrap();
+        let mut controls = Vec::new();
+        for selector in [
+            "diff_prev_file",
+            "diff_next_file",
+            "diff_bar_position",
+            "diff_bar_stage_frame",
+            "image_sampling",
+            "image_zoom_out",
+            "image_zoom",
+            "image_zoom_in",
+            "image_fit",
+            "image_native",
+            "image_link",
+        ] {
+            let bounds = cx.debug_bounds(selector).unwrap();
+            assert!(
+                bounds.left() >= bar.left()
+                    && bounds.right() <= bar.right()
+                    && bounds.top() >= bar.top()
+                    && bounds.bottom() <= bar.bottom(),
+                "{selector} must fit the bar at {width}px: {bounds:?} vs {bar:?}"
+            );
+            for (other, other_bounds) in &controls {
+                assert!(
+                    !bounds.intersects(other_bounds),
+                    "{selector} overlaps {other} at {width}px: {bounds:?} vs {other_bounds:?}"
+                );
+            }
+            controls.push((selector, bounds));
+        }
+    }
+
+    cx.simulate_resize(gpui::size(px(1280.0), px(900.0)));
+    draw_and_drain_test_window(cx);
+    let button = cx.debug_bounds("diff_bar_stage").unwrap();
+    cx.simulate_click(button.center(), Modifiers::default());
+    draw_and_drain_test_window(cx);
+    wait_until_store_diff_target_path(cx, &view, &paths[2]);
+}
+
+/// Every control on the diff's header and bar names its keys in its tooltip.
+#[gpui::test]
+fn the_diff_controls_name_their_keys(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = RepoId(70568);
+    let commit_id = CommitId("abcdef001122338c".into());
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_diff_control_keys",
+        std::process::id()
+    ));
+    let first = std::path::PathBuf::from("src/first.rs");
+    let second = std::path::PathBuf::from("src/second.rs");
+    let mut repo = simple_worktree_repo(
+        repo_id,
+        &workdir,
+        &commit_id,
+        &[first.clone(), second],
+        &first,
+    );
+    // Format controls require resolved source metadata, as real loads supply.
+    std::fs::create_dir_all(&workdir).unwrap();
+    let source = |name: &str, contents: &str| {
+        let path = workdir.join(name);
+        std::fs::write(&path, contents).unwrap();
+        gitcomet_core::domain::FileDiffTextSource::new(path).with_format(
+            gitcomet_core::text_format::SideTextFormat::utf8(
+                gitcomet_core::text_format::LineEndingStats {
+                    lf: 1,
+                    ..Default::default()
+                },
+            ),
+        )
+    };
+    repo.diff_state.diff_file = Loadable::Ready(Some(Arc::new(
+        gitcomet_core::domain::FileDiffText::new_sources(
+            first.clone(),
+            Some(source("old.rs", "old\n")),
+            Some(source("new.rs", "new\n")),
+        ),
+    )));
+    repo.diff_state.diff_file_rev = 1;
+    apply_state(cx, &view, app_state_with_active_repo(repo));
+    cx.simulate_resize(gpui::size(px(1600.0), px(900.0)));
+    draw_and_drain_test_window(cx);
+
+    let bar = cx.debug_bounds("diff_bottom_bar").unwrap();
+    let format = cx
+        .debug_bounds("text_format_strip")
+        .expect("the format items");
+    let stage = cx.debug_bounds("diff_bar_stage_frame").unwrap();
+    assert!(
+        (f32::from(bar.center().x - format.center().x)).abs() < 1.0,
+        "format items centred: {format:?} in {bar:?}"
+    );
+    assert!(
+        (f32::from(bar.right() - stage.right()) - 8.0).abs() < 1.0,
+        "Stage at the right edge: {stage:?} in {bar:?}"
+    );
+
+    let alt = crate::kit::components::alt_shortcut;
+    for (selector, expected) in [
+        (
+            "diff_prev_file",
+            format!("Previous file (F1 / {})", alt("Left")),
+        ),
+        (
+            "diff_next_file",
+            format!("Next file (F4 / {})", alt("Right")),
+        ),
+        ("diff_bar_stage", "Stage this file (Space)".to_string()),
+        (
+            "diff_prev_hunk",
+            format!("Previous change (F2 / Shift+F7 / {})", alt("Up")),
+        ),
+        ("diff_split", format!("Split diff view ({})", alt("S"))),
+        (
+            "diff_edit",
+            format!("Edit the working-tree file ({})", alt("E")),
+        ),
+    ] {
+        let bounds = cx
+            .debug_bounds(selector)
+            .unwrap_or_else(|| panic!("expected {selector} to render"));
+        cx.simulate_mouse_move(bounds.center(), None, Modifiers::default());
+        crate::view::test_support::wait_for_native_tooltip(cx);
+        assert_eq!(
+            crate::view::test_support::tooltip_text(cx, &view).as_deref(),
+            Some(expected.as_str()),
+            "{selector}"
+        );
+    }
 }

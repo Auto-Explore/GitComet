@@ -1,6 +1,6 @@
 use super::*;
 
-use crate::view::shortcut_labels::secondary_shortcut;
+use crate::kit::components::secondary_shortcut;
 
 pub(super) fn model(
     _cursor_line: usize,

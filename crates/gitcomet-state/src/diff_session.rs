@@ -8,8 +8,8 @@
 
 use crate::model::{Loadable, RepoId, Shared};
 use gitcomet_core::domain::{
-    BlameSource, CommitFileChange, CommitId, Diff, DiffArea, DiffTarget, FileDiffImage,
-    FileDiffText,
+    BlameSource, CommitFileChange, CommitId, Diff, DiffArea, DiffPreviewTextFile,
+    DiffPreviewTextSide, DiffTarget, FileDiffImage, FileDiffText,
 };
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::services::BlameLine;
@@ -118,6 +118,7 @@ impl DiffSession {
         self.pending.patch
             || self.pending.file_text
             || self.pending.image
+            || self.pending.preview_text
             || self.pending.blame
             || self.pending.attributes
     }
@@ -149,6 +150,7 @@ pub(crate) struct DiffSessionLoads {
     pub patch: bool,
     pub file_text: bool,
     pub image: bool,
+    pub preview_text: bool,
     pub blame: bool,
 }
 
@@ -406,6 +408,7 @@ pub enum DiffSessionContent {
     /// enum travels through every session message.
     FileText(Result<Option<Box<FileDiffText>>>),
     Image(Result<Option<FileDiffImage>>),
+    PreviewText(Result<Option<DiffPreviewTextFile>>),
     Blame(Result<Vec<BlameLine>>),
 }
 
@@ -418,6 +421,8 @@ pub enum DiffSessionWork {
         patch: bool,
         file_text: bool,
         image: bool,
+        /// The one side an added or deleted file has, read whole.
+        preview_text_side: Option<DiffPreviewTextSide>,
     },
     Blame {
         path: PathBuf,
@@ -475,11 +480,12 @@ impl DiffSessionEffect {
                 patch,
                 file_text,
                 image,
+                preview_text_side,
                 ..
             } => {
-                // `Error` is not `Clone`; each part gets the same message.
                 let text = error.to_string();
-                let error = || Error::new(ErrorKind::Backend(text.clone()));
+                let error =
+                    || Error::new(ErrorKind::Backend(text.clone())).with_source(error.clone());
                 let mut replies = Vec::new();
                 if target.file_path().is_some() {
                     replies.push(reply(DiffSessionContent::Attributes(Err(error()))));
@@ -493,6 +499,9 @@ impl DiffSessionEffect {
                 if image {
                     replies.push(reply(DiffSessionContent::Image(Err(error()))));
                 }
+                if preview_text_side.is_some() {
+                    replies.push(reply(DiffSessionContent::PreviewText(Err(error()))));
+                }
                 replies
             }
             DiffSessionWork::Blame { .. } => vec![reply(DiffSessionContent::Blame(Err(error)))],
@@ -503,6 +512,79 @@ impl DiffSessionEffect {
                 generation,
                 result: Err(error),
             }],
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::error::Error as _;
+    use std::path::Path;
+
+    #[test]
+    fn failed_content_replies_retain_the_shared_original_cause() {
+        let original = Error::from(std::io::Error::from_raw_os_error(5))
+            .with_context("read diff source", Some(Path::new("diff-source")));
+        let message = original.to_string();
+        let replies = DiffSessionEffect {
+            repo_id: RepoId(7),
+            view: DiffViewId(11),
+            lifetime: 13,
+            generation: 17,
+            work: DiffSessionWork::Content {
+                target: DiffTarget::working_tree("file".into(), DiffArea::Unstaged),
+                encoding: None,
+                patch: true,
+                file_text: true,
+                image: true,
+                preview_text_side: None,
+            },
+            cancellation: CancellationToken::new(),
+        }
+        .failed(original.clone());
+        assert_eq!(replies.len(), 4);
+        for (index, reply) in replies.into_iter().enumerate() {
+            let DiffSessionMsg::Loaded {
+                repo_id,
+                view,
+                lifetime,
+                generation,
+                content,
+            } = reply
+            else {
+                panic!("expected content failure");
+            };
+            assert_eq!(
+                (repo_id, view, lifetime, generation),
+                (RepoId(7), DiffViewId(11), 13, 17)
+            );
+            let error = match (index, content) {
+                (0, DiffSessionContent::Attributes(Err(error)))
+                | (1, DiffSessionContent::Patch(Err(error)))
+                | (2, DiffSessionContent::FileText(Err(error)))
+                | (3, DiffSessionContent::Image(Err(error))) => error,
+                other => panic!("unexpected reply: {other:?}"),
+            };
+            assert!(matches!(error.kind(), ErrorKind::Backend(text) if text == &message));
+            let source = error.source().unwrap().downcast_ref::<Error>().unwrap();
+            assert_eq!(
+                source.context().unwrap().path(),
+                Some(Path::new("diff-source"))
+            );
+            assert!(std::ptr::eq(
+                source.source().unwrap(),
+                original.source().unwrap()
+            ));
+            assert_eq!(
+                source
+                    .source()
+                    .unwrap()
+                    .downcast_ref::<std::io::Error>()
+                    .unwrap()
+                    .raw_os_error(),
+                Some(5)
+            );
         }
     }
 }

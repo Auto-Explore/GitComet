@@ -50,8 +50,8 @@ pub fn claim_repo_maintenance_check_to_path(
     common_dir: &Path,
     now_unix_seconds: u64,
 ) -> io::Result<bool> {
-    with_session_file_persist_lock(|| {
-        let mut file = load_file(session_file_path).unwrap_or_default();
+    let mut claimed = false;
+    update_session_file(session_file_path, |file| {
         let entries = file.repo_maintenance.get_or_insert_with(BTreeMap::new);
         let entry = entries.entry(path_storage_key(common_dir)).or_default();
         let due = entry.last_checked_unix_seconds.is_none_or(|last| {
@@ -60,14 +60,14 @@ pub fn claim_repo_maintenance_check_to_path(
             .snoozed_until_unix_seconds
             .is_none_or(|until| until <= now_unix_seconds);
         if !due {
-            return Ok(false);
+            return SessionUpdate::Unchanged;
         }
         entry.last_checked_unix_seconds = Some(now_unix_seconds);
         prune_repo_maintenance(entries);
-        file.version = CURRENT_SESSION_FILE_VERSION;
-        persist_to_path(session_file_path, &file)?;
-        Ok(true)
-    })
+        claimed = true;
+        SessionUpdate::Write
+    })?;
+    Ok(claimed)
 }
 
 /// "Remind me later": no recommendation for a day.
@@ -83,8 +83,7 @@ pub fn persist_repo_maintenance_snooze_to_path(
     common_dir: &Path,
     now_unix_seconds: u64,
 ) -> io::Result<()> {
-    with_session_file_persist_lock(|| {
-        let mut file = load_file(session_file_path).unwrap_or_default();
+    update_session_file(session_file_path, |file| {
         let entries = file.repo_maintenance.get_or_insert_with(BTreeMap::new);
         entries
             .entry(path_storage_key(common_dir))
@@ -92,8 +91,7 @@ pub fn persist_repo_maintenance_snooze_to_path(
             .snoozed_until_unix_seconds =
             Some(now_unix_seconds.saturating_add(MAINTENANCE_SNOOZE_SECONDS));
         prune_repo_maintenance(entries);
-        file.version = CURRENT_SESSION_FILE_VERSION;
-        persist_to_path(session_file_path, &file)
+        SessionUpdate::Write
     })
 }
 

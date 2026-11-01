@@ -84,7 +84,7 @@ fn embedded_gitlink_commit_refreshes_parent() {
     run_git(&child, &["commit", "--allow-empty", "-m", "Advance child"]);
     // Read status without refreshing either index: the probe itself must not
     // generate the parent notification this test is looking for.
-    let status = std::process::Command::new("git")
+    let status = gitcomet_core::test_support::git_fixture::git_command()
         .arg("--no-optional-locks")
         .arg("-C")
         .arg(&root)

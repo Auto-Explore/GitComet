@@ -38,6 +38,7 @@ impl SidebarStickyFrameFixture {
             &build_synthetic_commits(1),
         );
         repo.open = Loadable::Ready(());
+        repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
         let mut pinned = BTreeSet::new();
         if let Loadable::Ready(branches) = &repo.branches {
             for branch in branches.iter().take(pins / 2) {
@@ -196,7 +197,6 @@ impl SidebarStickyFrameFixture {
 #[cfg(test)]
 #[test]
 fn sidebar_sticky_frame_fixture_keeps_large_lists_bounded() {
-    let _guard = crate::test_support::lock_visual_test();
     for (refs, remotes, stashes, pins) in [(1_000, 2, 50, 8), (20_000, 100, 50_000, 2_000)] {
         let mut fixture = SidebarStickyFrameFixture::new(refs, remotes, stashes, pins);
         for drag in [false, true, false, true] {

@@ -29,6 +29,12 @@ pub(crate) fn load_repo_session_preferences_from_path(
             .map(|(k, v)| (k, v.into()))
             .collect(),
         repo_history_author_filters: file.repo_history_author_filters.unwrap_or_default(),
+        repo_history_focus: file
+            .repo_history_focus
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(k, v)| (k, v.into_iter().map(Into::into).collect()))
+            .collect(),
     }
 }
 
@@ -251,7 +257,7 @@ fn promote_within_recents_cap<T: PartialEq>(list: &mut Vec<T>, value: T) {
     list.truncate(MAX_RECENT_REPOS);
 }
 
-/// [`promote_within_recents_cap`] for a caller holding its own copy of what
+/// `promote_within_recents_cap` for a caller holding its own copy of what
 /// [`UiSession::recent_repos`] last returned: applies one recents bump to that
 /// copy so it still matches the file after [`persist_recent_repo`] writes it.
 pub fn promote_recent_repo(recents: &mut Vec<PathBuf>, workdir: &Path) {

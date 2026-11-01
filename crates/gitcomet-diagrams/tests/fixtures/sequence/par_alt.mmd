@@ -1,0 +1,19 @@
+sequenceDiagram
+  participant A
+  participant B
+  par first branch
+    A->>B: hello
+  and second branch
+    B->>A: hi
+  end
+  alt success
+    A->>B: ok
+  else failure
+    B->>A: nope
+  end
+  loop retry
+    A->>B: ping
+  end
+  opt extra
+    B->>A: pong
+  end

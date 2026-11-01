@@ -1,9 +1,11 @@
 use super::actions_emit_effects::invalidate_loaded_blame;
+use super::conflict_load::{
+    start_conflict_target_reload, start_conflict_target_reload_with_mode,
+    start_current_conflict_target_reload,
+};
 use super::util::{
     SelectedConflictTarget, SelectedDiffLoadPlan, apply_selected_diff_load_plan_state,
     diff_target_preview_flags, selected_conflict_target, selected_diff_load_plan,
-    start_conflict_target_reload, start_conflict_target_reload_with_mode,
-    start_current_conflict_target_reload,
 };
 use crate::model::{
     AppState, ConflictFileLoadMode, DiagnosticKind, FileEditReturnView, InlineSubmoduleDiffEntry,
@@ -11,20 +13,15 @@ use crate::model::{
     submodule_inline_diff_entries,
 };
 use crate::msg::Effect;
+use crate::msg::RepoCommandEffect;
+use crate::store::reducer::prepared::ReducerInputs;
 use gitcomet_core::domain::{
     Diff, DiffArea, DiffPreviewTextFile, DiffPreviewTextSide, DiffTarget, FileDiffImage,
     FileDiffText, SubmoduleDiffSummary,
 };
 use gitcomet_core::error::Error;
-use gitcomet_core::services::GitRepository;
-use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
 use std::sync::Arc;
-
-/// The backends the reducer holds, keyed by repo. Only needed to classify a
-/// freshly selected working-tree path against HEAD; see
-/// [`super::cache_selected_deleted_gitlink`].
-type Repos = FxHashMap<RepoId, Arc<dyn GitRepository>>;
 
 pub(crate) const SELECT_DIFF_INLINE_EFFECT_CAPACITY: usize = 3;
 pub(crate) type SelectDiffEffects = SmallVec<[Effect; SELECT_DIFF_INLINE_EFFECT_CAPACITY]>;
@@ -62,8 +59,9 @@ fn inline_submodule_selected_diff_load_plan(target: &DiffTarget) -> SelectedDiff
 
     SelectedDiffLoadPlan {
         load_patch_diff: supports_file,
-        load_file_text: supports_file && (!preview.wants_image || preview.is_svg),
+        load_file_text: supports_file && preview.reads_text(),
         preview_text_side: None,
+        one_sided_side: None,
         load_submodule_summary: false,
         load_file_image: supports_file && preview.wants_image,
     }
@@ -140,14 +138,14 @@ impl ContentViewMode {
 }
 
 pub(super) fn select_diff(
-    repos: &Repos,
+    inputs: &ReducerInputs,
     state: &mut AppState,
     repo_id: RepoId,
     target: DiffTarget,
 ) -> Vec<Effect> {
     let mut effects = SelectDiffEffects::new();
     fill_select_diff_inline(
-        repos,
+        inputs,
         state,
         repo_id,
         target,
@@ -160,7 +158,7 @@ pub(super) fn select_diff(
 /// Open `source`/`path` as a full-content file preview in the main pane,
 /// reusing the added/removed-file preview renderer (no diff, no green/red).
 pub(super) fn open_file_content(
-    repos: &Repos,
+    inputs: &ReducerInputs,
     state: &mut AppState,
     repo_id: RepoId,
     source: gitcomet_core::domain::FileSource,
@@ -178,7 +176,7 @@ pub(super) fn open_file_content(
     }
     let mut effects = SelectDiffEffects::new();
     fill_select_diff_inline(
-        repos,
+        inputs,
         state,
         repo_id,
         target,
@@ -195,7 +193,7 @@ pub(super) fn open_file_content(
 /// copy even when the action was invoked from a commit's file list. Returns no
 /// effects for sources that have no working-tree file.
 pub(super) fn open_file_editor(
-    repos: &Repos,
+    inputs: &ReducerInputs,
     state: &mut AppState,
     repo_id: RepoId,
     path: std::path::PathBuf,
@@ -226,7 +224,7 @@ pub(super) fn open_file_editor(
     }
     let mut effects = SelectDiffEffects::new();
     fill_select_diff_inline(
-        repos,
+        inputs,
         state,
         repo_id,
         target,
@@ -239,13 +237,27 @@ pub(super) fn open_file_editor(
     effects.into_vec()
 }
 
+pub(super) fn editor_return_target(repo: &RepoState) -> Option<(&DiffTarget, bool)> {
+    if !repo.diff_state.edit_mode {
+        return None;
+    }
+    match &repo.diff_state.edit_return_view {
+        Some(view) => Some((&view.target, view.content_preview)),
+        None => repo
+            .diff_state
+            .diff_target
+            .as_ref()
+            .map(|target| (target, true)),
+    }
+}
+
 /// Leave the editor and reload the view that was behind it.
 ///
 /// Restores the diff or read-only content preview that opened the editor. When
 /// there is no recorded origin (for example a restored legacy session), it
 /// falls back to the read-only working-tree preview of the edited file.
 pub(super) fn exit_diff_edit_mode(
-    repos: &Repos,
+    inputs: &ReducerInputs,
     state: &mut AppState,
     repo_id: RepoId,
 ) -> Vec<Effect> {
@@ -255,20 +267,20 @@ pub(super) fn exit_diff_edit_mode(
     if !repo_state.diff_state.edit_mode {
         return Vec::new();
     }
-    let return_view = repo_state.diff_state.edit_return_view.take();
-    let fallback_target = repo_state.diff_state.diff_target.clone();
+    let (target, mode) = editor_return_target(repo_state)
+        .map(|(target, preview)| {
+            (
+                Some(target.clone()),
+                if preview {
+                    ContentViewMode::Preview
+                } else {
+                    ContentViewMode::Diff
+                },
+            )
+        })
+        .unwrap_or((None, ContentViewMode::Preview));
+    repo_state.diff_state.edit_return_view = None;
 
-    let (target, mode) = match return_view {
-        Some(return_view) => (
-            Some(return_view.target),
-            if return_view.content_preview {
-                ContentViewMode::Preview
-            } else {
-                ContentViewMode::Diff
-            },
-        ),
-        None => (fallback_target, ContentViewMode::Preview),
-    };
     let Some(target) = target else {
         let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
             return Vec::new();
@@ -287,7 +299,7 @@ pub(super) fn exit_diff_edit_mode(
     }
 
     let mut effects = SelectDiffEffects::new();
-    fill_select_diff_inline(repos, state, repo_id, target, mode, &mut effects);
+    fill_select_diff_inline(inputs, state, repo_id, target, mode, &mut effects);
     effects.into_vec()
 }
 
@@ -343,7 +355,7 @@ fn view_history_entry_for_target(target: &DiffTarget) -> Option<ViewHistoryEntry
 /// Step the viewer's back/forward history and replay the resulting view without
 /// recording it (so navigation doesn't mutate the stack).
 pub(super) fn viewer_nav(
-    repos: &Repos,
+    inputs: &ReducerInputs,
     state: &mut AppState,
     repo_id: RepoId,
     dir: crate::model::ViewNavDir,
@@ -362,7 +374,7 @@ pub(super) fn viewer_nav(
     };
     let mut effects = SelectDiffEffects::new();
     fill_select_diff_inline(
-        repos,
+        inputs,
         state,
         repo_id,
         target,
@@ -376,7 +388,7 @@ pub(super) fn viewer_nav(
 /// snapshot (diff/file content, history log, and/or commit selection) without
 /// recording it as a new destination.
 pub(super) fn global_nav(
-    repos: &Repos,
+    inputs: &ReducerInputs,
     state: &mut AppState,
     repo_id: RepoId,
     dir: crate::model::ViewNavDir,
@@ -443,11 +455,13 @@ pub(super) fn global_nav(
         };
         if repo_state.history_state.worktree_selection != snapshot.worktree_selection {
             repo_state.set_worktree_selection(snapshot.worktree_selection.clone());
-            if snapshot.worktree_selection.is_some() {
+            if let Some(path) = snapshot.worktree_selection.clone() {
                 repo_state.set_commit_details(Loadable::NotLoaded);
                 // Only the selected worktree's changed files are carried in
                 // state, so the restored row needs a scan to fetch its own.
-                effects.extend(super::effects::request_worktree_dirty_effect(repo_state));
+                effects.extend(super::effects::request_worktree_dirty_path_effect(
+                    repo_state, path,
+                ));
             }
         }
     }
@@ -517,7 +531,7 @@ pub(super) fn global_nav(
             } else {
                 ContentViewMode::Diff
             };
-            fill_select_diff_inline(repos, state, repo_id, target, mode, &mut inline);
+            fill_select_diff_inline(inputs, state, repo_id, target, mode, &mut inline);
             effects.extend(inline.into_vec());
         }
         None => {
@@ -529,20 +543,42 @@ pub(super) fn global_nav(
 }
 
 pub(super) fn fill_select_diff_inline(
-    repos: &Repos,
+    inputs: &ReducerInputs,
     state: &mut AppState,
     repo_id: RepoId,
     target: DiffTarget,
     mode: ContentViewMode,
     effects: &mut SelectDiffEffects,
 ) {
+    let working_tree = match &target {
+        DiffTarget::WorkingTree { worktree: None, .. }
+        | DiffTarget::CommitRange {
+            to_commit_id: None, ..
+        } => Some(repo_id),
+        DiffTarget::WorkingTree {
+            worktree: Some(path),
+            ..
+        } => state
+            .repos
+            .iter()
+            .find(|repo| &repo.spec.workdir == path)
+            .map(|repo| repo.id),
+        DiffTarget::Commit { .. }
+        | DiffTarget::CommitRange {
+            to_commit_id: Some(_),
+            ..
+        } => None,
+    };
+    if working_tree.is_some_and(|repo_id| super::refuse_bare_worktree_action(state, repo_id)) {
+        return;
+    }
     // Classify before planning, not at the `SelectDiff` message: every route
     // that puts a working-tree path on screen — plain selection, the file
     // content/editor views, viewer and global back/forward — lands here, and
     // `selected_diff_load_plan` below reads the classification for staged
     // deletions. Filling it anywhere upstream leaves the navigation routes
     // rendering a removed submodule as an old-side text preview.
-    super::cache_selected_deleted_gitlink(repos, state, repo_id, &target);
+    super::cache_selected_deleted_gitlink(inputs, state, repo_id, &target);
     let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
         return;
     };
@@ -558,11 +594,7 @@ pub(super) fn fill_select_diff_inline(
     if !content_preview && let Some(conflict_target) = selected_conflict_target(repo_state, &target)
     {
         repo_state.set_diff_target(Some(target.clone()));
-        repo_state.diff_state.diff = Loadable::NotLoaded;
-        repo_state.diff_state.diff_file = Loadable::NotLoaded;
-        repo_state.diff_state.diff_preview_text_file = Loadable::NotLoaded;
-        repo_state.diff_state.submodule_summary = Loadable::NotLoaded;
-        repo_state.diff_state.diff_file_image = Loadable::NotLoaded;
+        repo_state.diff_state.clear_loads();
         repo_state.bump_diff_state_rev();
         let conflict_effects = match conflict_target {
             SelectedConflictTarget::Current => start_current_conflict_target_reload(repo_state),
@@ -581,7 +613,7 @@ pub(super) fn fill_select_diff_inline(
             .diff_target
             .as_ref()
             .expect("diff target set before load planning");
-        selected_diff_load_plan(repo_state, target)
+        selected_diff_load_plan(inputs, repo_state, target)
     };
     apply_selected_diff_load_plan_state(repo_state, load_plan);
     super::util::mark_text_attributes_loading(repo_state);
@@ -595,6 +627,18 @@ pub(super) fn fill_select_diff_inline(
         load_submodule_summary: load_plan.load_submodule_summary,
         load_file_image: load_plan.load_file_image,
     });
+    // Without an extension only the bytes say whether a file is an image.
+    // The probe's answer is kept only when they do (`diff_file_image_loaded`).
+    if let Some(target) = &repo_state.diff_state.diff_target
+        && !load_plan.load_file_image
+        && !load_plan.load_submodule_summary
+        && super::util::probes_image_content(target)
+    {
+        effects.push(Effect::LoadDiffFileImage {
+            repo_id,
+            target: target.clone(),
+        });
+    }
 }
 
 pub(super) fn select_conflict_diff(
@@ -613,11 +657,7 @@ pub(super) fn select_conflict_diff(
 
     let target = DiffTarget::working_tree(path.clone(), DiffArea::Unstaged);
     repo_state.set_diff_target(Some(target));
-    repo_state.diff_state.diff = Loadable::NotLoaded;
-    repo_state.diff_state.diff_file = Loadable::NotLoaded;
-    repo_state.diff_state.diff_preview_text_file = Loadable::NotLoaded;
-    repo_state.diff_state.submodule_summary = Loadable::NotLoaded;
-    repo_state.diff_state.diff_file_image = Loadable::NotLoaded;
+    repo_state.diff_state.clear_loads();
     repo_state.bump_diff_state_rev();
 
     let mut effects = start_conflict_target_reload_with_mode(
@@ -627,6 +667,57 @@ pub(super) fn select_conflict_diff(
     );
     effects.extend(super::util::reload_selected_text_attributes(repo_state));
     effects
+}
+
+pub(super) fn action_clears_selected_target(
+    repo: &RepoState,
+    action: crate::msg::RepoActionKind,
+    paths: &[std::path::PathBuf],
+) -> bool {
+    use crate::msg::RepoActionKind;
+    if repo.diff_state.content_preview {
+        return false;
+    }
+    let Some(target) = &repo.diff_state.diff_target else {
+        return false;
+    };
+    if matches!(
+        action,
+        RepoActionKind::DiscardWorktreeChangesPath | RepoActionKind::DiscardWorktreeChangesPaths
+    ) {
+        if paths.is_empty() {
+            return false;
+        }
+        return status_action_matches_target(target, DiffArea::Unstaged, paths)
+            || matches!(target, DiffTarget::WorkingTree { path, area: DiffArea::Staged, .. }
+                if discarded_staged_path_is_removed(repo, path, paths));
+    }
+    action
+        .status_diff_area()
+        .is_some_and(|area| status_action_matches_target(target, area, paths))
+}
+
+fn status_action_matches_target(
+    target: &DiffTarget,
+    area: DiffArea,
+    paths: &[std::path::PathBuf],
+) -> bool {
+    matches!(target, DiffTarget::WorkingTree { path, area: selected_area, .. }
+        if *selected_area == area && (paths.is_empty() || paths.contains(path)))
+}
+
+fn discarded_staged_path_is_removed(
+    repo: &RepoState,
+    path: &std::path::PathBuf,
+    paths: &[std::path::PathBuf],
+) -> bool {
+    paths.contains(path)
+        && repo
+            .status_entry_for_path(DiffArea::Staged, path)
+            .is_some_and(|entry| entry.kind == gitcomet_core::domain::FileStatusKind::Added)
+        && repo
+            .status_entry_for_path(DiffArea::Unstaged, path)
+            .is_none()
 }
 
 pub(super) fn clear_diff_selection_after_discard(
@@ -663,14 +754,7 @@ pub(super) fn clear_diff_selection_after_discard(
         else {
             return None;
         };
-        (paths.contains(path)
-            && repo
-                .status_entry_for_path(DiffArea::Staged, path)
-                .is_some_and(|entry| entry.kind == gitcomet_core::domain::FileStatusKind::Added)
-            && repo
-                .status_entry_for_path(DiffArea::Unstaged, path)
-                .is_none())
-        .then(|| path.clone())
+        discarded_staged_path_is_removed(repo, path, paths).then(|| path.clone())
     })
     .collect();
     clear_diff_selection_for_status_action(state, repo_id, DiffArea::Unstaged, paths);
@@ -693,13 +777,7 @@ pub(super) fn clear_diff_selection_for_status_action(
     let Some(repo) = state.repos.iter_mut().find(|repo| repo.id == repo_id) else {
         return;
     };
-    let matches_target = |target: &DiffTarget| {
-        matches!(
-            target,
-            DiffTarget::WorkingTree { path, area: selected_area, .. }
-                if *selected_area == area && (paths.is_empty() || paths.contains(path))
-        )
-    };
+    let matches_target = |target: &DiffTarget| status_action_matches_target(target, area, paths);
     // Keep the editor buffer, but do not return to a diff that was staged away.
     // Without an origin, exiting the editor falls back to its content preview.
     if repo
@@ -735,11 +813,7 @@ pub(super) fn clear_diff_selection(state: &mut AppState, repo_id: RepoId) -> Vec
     repo_state.diff_state.edit_return_view = None;
 
     repo_state.set_diff_target(None);
-    repo_state.diff_state.diff = Loadable::NotLoaded;
-    repo_state.diff_state.diff_file = Loadable::NotLoaded;
-    repo_state.diff_state.diff_preview_text_file = Loadable::NotLoaded;
-    repo_state.diff_state.submodule_summary = Loadable::NotLoaded;
-    repo_state.diff_state.diff_file_image = Loadable::NotLoaded;
+    repo_state.diff_state.clear_loads();
     repo_state.bump_diff_state_rev();
     Vec::new()
 }
@@ -883,11 +957,17 @@ pub(super) fn close_inline_submodule_diff(state: &mut AppState, repo_id: RepoId)
 }
 
 pub(super) fn stage_hunk(repo_id: RepoId, patch: crate::msg::ContentBytes) -> Vec<Effect> {
-    vec![Effect::StageHunk { repo_id, patch }]
+    vec![Effect::RepoCommand(RepoCommandEffect::StageHunk {
+        repo_id,
+        patch,
+    })]
 }
 
 pub(super) fn unstage_hunk(repo_id: RepoId, patch: crate::msg::ContentBytes) -> Vec<Effect> {
-    vec![Effect::UnstageHunk { repo_id, patch }]
+    vec![Effect::RepoCommand(RepoCommandEffect::UnstageHunk {
+        repo_id,
+        patch,
+    })]
 }
 
 pub(super) fn apply_worktree_patch(
@@ -895,14 +975,15 @@ pub(super) fn apply_worktree_patch(
     patch: crate::msg::ContentBytes,
     reverse: bool,
 ) -> Vec<Effect> {
-    vec![Effect::ApplyWorktreePatch {
+    vec![Effect::RepoCommand(RepoCommandEffect::ApplyWorktreePatch {
         repo_id,
         patch,
         reverse,
-    }]
+    })]
 }
 
 pub(super) fn diff_loaded(
+    inputs: &ReducerInputs,
     state: &mut AppState,
     repo_id: RepoId,
     target: DiffTarget,
@@ -919,7 +1000,7 @@ pub(super) fn diff_loaded(
         if selected_conflict_target(repo_state, &target).is_some() {
             return Vec::new();
         }
-        let current_plan = selected_diff_load_plan(repo_state, &target);
+        let current_plan = selected_diff_load_plan(inputs, repo_state, &target);
         if !current_plan.load_patch_diff {
             return Vec::new();
         }
@@ -939,7 +1020,12 @@ pub(super) fn diff_loaded(
                 invalidate_loaded_blame(repo_state);
             }
             Err(e) => {
-                super::util::push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
+                super::util::push_diagnostic(
+                    inputs,
+                    repo_state,
+                    DiagnosticKind::Error,
+                    e.to_string(),
+                );
                 repo_state.diff_state.diff_rev = repo_state.diff_state.diff_rev.wrapping_add(1);
                 repo_state.diff_state.diff = Loadable::Error(e.to_string());
                 repo_state.bump_diff_state_rev();
@@ -950,6 +1036,7 @@ pub(super) fn diff_loaded(
 }
 
 pub(super) fn text_attributes_loaded(
+    inputs: &ReducerInputs,
     state: &mut AppState,
     repo_id: RepoId,
     target: DiffTarget,
@@ -990,7 +1077,7 @@ pub(super) fn text_attributes_loaded(
         repo_state.bump_diff_state_rev();
     }
     if decoding_changed && let Some(target) = repo_state.diff_state.diff_target.clone() {
-        return super::util::reload_selected_file_text(repo_state, &target);
+        return super::util::reload_selected_file_text(inputs, repo_state, &target);
     }
     Vec::new()
 }
@@ -999,6 +1086,7 @@ pub(super) fn text_attributes_loaded(
 /// (keeping the current content on screen); line ending and tab size are
 /// the views' own business.
 pub(super) fn set_text_override(
+    inputs: &ReducerInputs,
     state: &mut AppState,
     repo_id: RepoId,
     path: std::path::PathBuf,
@@ -1024,10 +1112,11 @@ pub(super) fn set_text_override(
     if previous.and_then(|previous| previous.encoding) == value.encoding {
         return Vec::new();
     }
-    super::util::reload_selected_file_text(repo_state, &target)
+    super::util::reload_selected_file_text(inputs, repo_state, &target)
 }
 
 pub(super) fn diff_file_loaded(
+    inputs: &ReducerInputs,
     state: &mut AppState,
     repo_id: RepoId,
     target: DiffTarget,
@@ -1039,7 +1128,7 @@ pub(super) fn diff_file_loaded(
         if selected_conflict_target(repo_state, &target).is_some() {
             return Vec::new();
         }
-        let current_plan = selected_diff_load_plan(repo_state, &target);
+        let current_plan = selected_diff_load_plan(inputs, repo_state, &target);
         if !current_plan.load_file_text {
             return Vec::new();
         }
@@ -1059,7 +1148,12 @@ pub(super) fn diff_file_loaded(
                 invalidate_loaded_blame(repo_state);
             }
             Err(e) => {
-                super::util::push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
+                super::util::push_diagnostic(
+                    inputs,
+                    repo_state,
+                    DiagnosticKind::Error,
+                    e.to_string(),
+                );
                 repo_state.diff_state.diff_file_rev =
                     repo_state.diff_state.diff_file_rev.wrapping_add(1);
                 repo_state.diff_state.diff_file = Loadable::Error(e.to_string());
@@ -1071,6 +1165,7 @@ pub(super) fn diff_file_loaded(
 }
 
 pub(super) fn diff_file_image_loaded(
+    inputs: &ReducerInputs,
     state: &mut AppState,
     repo_id: RepoId,
     target: DiffTarget,
@@ -1082,9 +1177,18 @@ pub(super) fn diff_file_image_loaded(
         if selected_conflict_target(repo_state, &target).is_some() {
             return Vec::new();
         }
-        let current_plan = selected_diff_load_plan(repo_state, &target);
+        let current_plan = selected_diff_load_plan(inputs, repo_state, &target);
         if !current_plan.load_file_image {
-            return Vec::new();
+            // The probe of a file whose name does not say it is an image.
+            let shows_image = super::util::probes_image_content(&target)
+                && matches!(&result, Ok(Some(image)) if [image.old.as_deref(), image.new.as_deref()]
+                    .into_iter()
+                    .flatten()
+                    .any(super::util::has_image_signature));
+            if !shows_image {
+                return Vec::new();
+            }
+            repo_state.diff_state.content_image_target = Some(target.clone());
         }
         let content_preview = repo_state.diff_state.content_preview;
         repo_state.diff_state.diff_file_rev = repo_state.diff_state.diff_file_rev.wrapping_add(1);
@@ -1101,7 +1205,12 @@ pub(super) fn diff_file_image_loaded(
                 Loadable::Ready(v.map(Arc::new))
             }
             Err(e) => {
-                super::util::push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
+                super::util::push_diagnostic(
+                    inputs,
+                    repo_state,
+                    DiagnosticKind::Error,
+                    e.to_string(),
+                );
                 Loadable::Error(e.to_string())
             }
         };
@@ -1111,6 +1220,7 @@ pub(super) fn diff_file_image_loaded(
 }
 
 pub(super) fn diff_preview_text_file_loaded(
+    inputs: &ReducerInputs,
     state: &mut AppState,
     repo_id: RepoId,
     target: DiffTarget,
@@ -1120,7 +1230,7 @@ pub(super) fn diff_preview_text_file_loaded(
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id)
         && repo_state.diff_state.diff_target.as_ref() == Some(&target)
     {
-        let current_plan = selected_diff_load_plan(repo_state, &target);
+        let current_plan = selected_diff_load_plan(inputs, repo_state, &target);
         if current_plan.preview_text_side != Some(side) {
             return Vec::new();
         }
@@ -1132,7 +1242,12 @@ pub(super) fn diff_preview_text_file_loaded(
         repo_state.diff_state.diff_preview_text_file = match result {
             Ok(preview) => Loadable::Ready(preview.map(Arc::new)),
             Err(e) => {
-                super::util::push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
+                super::util::push_diagnostic(
+                    inputs,
+                    repo_state,
+                    DiagnosticKind::Error,
+                    e.to_string(),
+                );
                 Loadable::Error(e.to_string())
             }
         };
@@ -1142,6 +1257,7 @@ pub(super) fn diff_preview_text_file_loaded(
 }
 
 pub(super) fn submodule_summary_loaded(
+    inputs: &ReducerInputs,
     state: &mut AppState,
     repo_id: RepoId,
     target: DiffTarget,
@@ -1157,7 +1273,7 @@ pub(super) fn submodule_summary_loaded(
             .diff_state
             .diff_target
             .as_ref()
-            .map(|target| selected_diff_load_plan(repo_state, target))
+            .map(|target| selected_diff_load_plan(inputs, repo_state, target))
             .unwrap_or_default();
         if !current_plan.load_submodule_summary {
             return Vec::new();
@@ -1229,7 +1345,12 @@ pub(super) fn submodule_summary_loaded(
             Err(e) => {
                 repo_state.diff_state.submodule_summary_rev =
                     repo_state.diff_state.submodule_summary_rev.wrapping_add(1);
-                super::util::push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
+                super::util::push_diagnostic(
+                    inputs,
+                    repo_state,
+                    DiagnosticKind::Error,
+                    e.to_string(),
+                );
                 repo_state.diff_state.submodule_summary = Loadable::Error(e.to_string());
             }
         }
@@ -1239,6 +1360,7 @@ pub(super) fn submodule_summary_loaded(
 }
 
 pub(super) fn inline_submodule_diff_loaded(
+    inputs: &ReducerInputs,
     state: &mut AppState,
     repo_id: RepoId,
     inline_rev: u64,
@@ -1264,7 +1386,7 @@ pub(super) fn inline_submodule_diff_loaded(
             inline.diff = next_diff;
         }
         if let Some(message) = diagnostic {
-            super::util::push_diagnostic(repo_state, DiagnosticKind::Error, message);
+            super::util::push_diagnostic(inputs, repo_state, DiagnosticKind::Error, message);
         }
         repo_state.bump_diff_state_rev();
     }
@@ -1272,6 +1394,7 @@ pub(super) fn inline_submodule_diff_loaded(
 }
 
 pub(super) fn inline_submodule_diff_file_loaded(
+    inputs: &ReducerInputs,
     state: &mut AppState,
     repo_id: RepoId,
     inline_rev: u64,
@@ -1297,7 +1420,7 @@ pub(super) fn inline_submodule_diff_file_loaded(
             inline.diff_file = next_diff_file;
         }
         if let Some(message) = diagnostic {
-            super::util::push_diagnostic(repo_state, DiagnosticKind::Error, message);
+            super::util::push_diagnostic(inputs, repo_state, DiagnosticKind::Error, message);
         }
         repo_state.bump_diff_state_rev();
     }
@@ -1305,6 +1428,7 @@ pub(super) fn inline_submodule_diff_file_loaded(
 }
 
 pub(super) fn inline_submodule_diff_file_image_loaded(
+    inputs: &ReducerInputs,
     state: &mut AppState,
     repo_id: RepoId,
     inline_rev: u64,
@@ -1330,7 +1454,7 @@ pub(super) fn inline_submodule_diff_file_image_loaded(
             inline.diff_file_image = next_diff_image;
         }
         if let Some(message) = diagnostic {
-            super::util::push_diagnostic(repo_state, DiagnosticKind::Error, message);
+            super::util::push_diagnostic(inputs, repo_state, DiagnosticKind::Error, message);
         }
         repo_state.bump_diff_state_rev();
     }

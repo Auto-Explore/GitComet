@@ -15,6 +15,23 @@ use gpui::{HighlightStyle, Hsla, StrikethroughStyle, TextRun, TextStyle, Underli
 use std::hash::{Hash, Hasher};
 use std::ops::Range;
 
+/// Make a logical row safe for a single-line shaper. Interior CRs occupy one
+/// blank cell (and one source byte), rather than creating backend-only lines.
+/// Only a complete row may hide its terminal CR. Copy/edit offsets stay in
+/// the original source; this transformation preserves every visible offset.
+pub fn single_line_display_text(text: &str, complete_row: bool) -> std::borrow::Cow<'_, str> {
+    let text = if complete_row {
+        text.strip_suffix('\r').unwrap_or(text)
+    } else {
+        text
+    };
+    if text.contains('\r') {
+        std::borrow::Cow::Owned(text.replace('\r', " "))
+    } else {
+        std::borrow::Cow::Borrowed(text)
+    }
+}
+
 /// Clamp `range` to `text` and widen it onto the surrounding character
 /// boundaries. Returns `None` when nothing is left to highlight.
 pub fn snap_highlight_range(text: &str, range: &Range<usize>) -> Option<Range<usize>> {
@@ -89,12 +106,14 @@ pub fn sanitize_highlights<S: Copy>(text: &str, highlights: &mut Vec<(Range<usiz
 /// Ranges that would break the tiling — out of bounds, overlapping a previous
 /// run, or off a character boundary — are skipped or trimmed rather than
 /// emitted, so the returned runs always sum to `text.len()`.
+/// Empty text retains one default run so the backend can style synthetic
+/// direction markers without adding characters to the source text.
 pub fn text_runs_for_highlights(
     text: &str,
     default_style: &TextStyle,
     highlights: &[(Range<usize>, gpui::HighlightStyle)],
 ) -> Vec<TextRun> {
-    if highlights.is_empty() {
+    if text.is_empty() || highlights.is_empty() {
         return vec![default_style.to_run(text.len())];
     }
 
@@ -374,6 +393,17 @@ mod tests {
             overlay_highlights(vec![(4..10, link)], &[], wash),
             vec![(4..10, link)]
         );
+    }
+
+    #[test]
+    fn empty_text_keeps_a_source_style_when_highlights_are_discarded() {
+        let default_style = TextStyle::default();
+        for highlights in [vec![], vec![(0..0, style())], vec![(0..8, style())]] {
+            let runs = text_runs_for_highlights("", &default_style, &highlights);
+            assert_eq!(runs.len(), 1, "synthetic markers need a source style");
+            assert_eq!(runs[0].len, 0, "the source must remain empty");
+            assert_eq!(runs[0].font, default_style.font());
+        }
     }
 
     #[test]

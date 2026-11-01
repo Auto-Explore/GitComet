@@ -84,7 +84,7 @@ fn conflict_side_text(
     }
 }
 
-impl MainPaneView {
+impl DiffRenderer {
     /// Render the keep/delete conflict resolver panel for modify/delete conflicts.
     ///
     /// Used for `DeletedByUs`, `DeletedByThem`, `AddedByUs`, `AddedByThem`.

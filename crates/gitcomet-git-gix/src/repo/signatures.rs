@@ -105,13 +105,6 @@ impl GixRepo {
             .collect()
     }
 
-    pub(in super::super) fn verify_commit_signatures_impl(
-        &self,
-        ids: &[CommitId],
-    ) -> Result<Vec<(CommitId, CommitSignature)>> {
-        self.verify_commit_signatures_cancellable_impl(ids, SignatureFormats::ALL, None)
-    }
-
     pub(in super::super) fn verify_commit_signatures_cancellable_impl(
         &self,
         ids: &[CommitId],
@@ -282,7 +275,7 @@ mod tests {
     fn a_cached_page_does_not_evict_itself_by_counting_hits_as_new_entries() {
         let dir = tempfile::tempdir().unwrap();
         let git = gix::init(dir.path()).unwrap();
-        let repo = GixRepo::new(dir.path().to_path_buf(), git.into_sync());
+        let repo = GixRepo::new(dir.path().to_path_buf(), git.into_sync()).unwrap();
         let ids: Vec<_> = (0..3000)
             .map(|ix| gix::ObjectId::from_hex(format!("{ix:040x}").as_bytes()).unwrap())
             .collect();
@@ -323,7 +316,7 @@ mod tests {
     fn format_cache_evicts_cold_entries_without_flushing_hot_ones() {
         let dir = tempfile::tempdir().unwrap();
         let git = gix::init(dir.path()).unwrap();
-        let repo = GixRepo::new(dir.path().to_path_buf(), git.into_sync());
+        let repo = GixRepo::new(dir.path().to_path_buf(), git.into_sync()).unwrap();
         let oid = |ix| gix::ObjectId::from_hex(format!("{ix:040x}").as_bytes()).unwrap();
         {
             let mut cache = repo.signature_format_cache.lock().unwrap();

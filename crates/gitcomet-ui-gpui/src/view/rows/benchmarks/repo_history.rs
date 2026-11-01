@@ -5,6 +5,7 @@ use crate::view::caches::{
     branch_sidebar_cache_lookup_by_cached_source, branch_sidebar_cache_lookup_by_source,
     branch_sidebar_cache_store,
 };
+use gitcomet_state::msg::{PersistenceEffect, ReferenceEffect, StatusEffect};
 use std::collections::BTreeSet;
 
 fn branch_sidebar_branch_label(name: &str) -> SharedString {
@@ -491,10 +492,14 @@ pub(in crate::view) fn hash_branch_sidebar_rows(rows: &[BranchSidebarRow]) -> u6
                 message.len().hash(&mut h);
             }
             BranchSidebarRow::RemoteHeader {
-                name, collapsed, ..
+                name,
+                collapsed,
+                hidden_in_history,
+                ..
             } => {
                 name.len().hash(&mut h);
                 collapsed.hash(&mut h);
+                hidden_in_history.hash(&mut h);
             }
             BranchSidebarRow::GroupHeader {
                 label,
@@ -1004,7 +1009,7 @@ impl RepoSwitchMetrics {
 
         for effect in effects {
             match effect {
-                Effect::PersistSession { .. } => {
+                Effect::Persistence(PersistenceEffect::PersistSession { .. }) => {
                     metrics.persist_session_effect_count =
                         metrics.persist_session_effect_count.saturating_add(1);
                 }
@@ -1017,16 +1022,16 @@ impl RepoSwitchMetrics {
                     metrics.selected_diff_reload_effect_count =
                         metrics.selected_diff_reload_effect_count.saturating_add(1);
                 }
-                Effect::LoadBranches { .. }
-                | Effect::LoadRemotes { .. }
-                | Effect::LoadRemoteBranches { .. }
-                | Effect::LoadStatus { .. }
-                | Effect::LoadHeadBranch { .. }
-                | Effect::LoadUpstreamDivergence { .. }
+                Effect::References(ReferenceEffect::LoadBranches { .. })
+                | Effect::References(ReferenceEffect::LoadRemotes { .. })
+                | Effect::References(ReferenceEffect::LoadRemoteBranches { .. })
+                | Effect::Status(StatusEffect::LoadStatus { .. })
+                | Effect::References(ReferenceEffect::LoadHeadBranch { .. })
+                | Effect::References(ReferenceEffect::LoadUpstreamDivergence { .. })
                 | Effect::LoadLog { .. }
                 | Effect::LoadRebaseAndMergeState { .. }
-                | Effect::LoadTags { .. }
-                | Effect::LoadRemoteTags { .. }
+                | Effect::References(ReferenceEffect::LoadTags { .. })
+                | Effect::References(ReferenceEffect::LoadRemoteTags { .. })
                 | Effect::LoadStashes { .. }
                 | Effect::LoadRebaseState { .. }
                 | Effect::LoadMergeCommitMessage { .. } => {
@@ -1082,21 +1087,21 @@ fn hash_repo_switch_outcome(state: &AppState, effects: &[Effect]) -> u64 {
             }
             Effect::LoadLog {
                 repo_id,
-                scope,
+                walk,
                 author,
                 limit,
                 cursor,
                 ..
             } => {
                 repo_id.0.hash(&mut h);
-                std::mem::discriminant(scope).hash(&mut h);
+                walk.hash(&mut h);
                 author.hash(&mut h);
                 limit.hash(&mut h);
                 cursor.is_some().hash(&mut h);
             }
-            Effect::PersistSession {
+            Effect::Persistence(PersistenceEffect::PersistSession {
                 repo_id, action, ..
-            } => {
+            }) => {
                 repo_id.hash(&mut h);
                 action.hash(&mut h);
             }
@@ -1104,14 +1109,14 @@ fn hash_repo_switch_outcome(state: &AppState, effects: &[Effect]) -> u64 {
                 repo_id.0.hash(&mut h);
                 limit.hash(&mut h);
             }
-            Effect::LoadBranches { repo_id }
-            | Effect::LoadRemotes { repo_id }
-            | Effect::LoadRemoteBranches { repo_id }
-            | Effect::LoadStatus { repo_id }
-            | Effect::LoadHeadBranch { repo_id }
-            | Effect::LoadUpstreamDivergence { repo_id }
-            | Effect::LoadTags { repo_id }
-            | Effect::LoadRemoteTags { repo_id }
+            Effect::References(ReferenceEffect::LoadBranches { repo_id })
+            | Effect::References(ReferenceEffect::LoadRemotes { repo_id })
+            | Effect::References(ReferenceEffect::LoadRemoteBranches { repo_id })
+            | Effect::Status(StatusEffect::LoadStatus { repo_id })
+            | Effect::References(ReferenceEffect::LoadHeadBranch { repo_id })
+            | Effect::References(ReferenceEffect::LoadUpstreamDivergence { repo_id })
+            | Effect::References(ReferenceEffect::LoadTags { repo_id })
+            | Effect::References(ReferenceEffect::LoadRemoteTags { repo_id })
             | Effect::LoadRebaseState { repo_id }
             | Effect::LoadMergeCommitMessage { repo_id } => {
                 repo_id.0.hash(&mut h);
@@ -2011,8 +2016,9 @@ impl HistoryLoadMoreAppendFixture {
         let seq = state.repos[0]
             .loads_in_flight
             .request_log(gitcomet_state::model::PendingLogLoad {
-                scope: self.scope,
+                walk: self.scope.into(),
                 author: None,
+                focus: Default::default(),
                 limit: self.existing_commits.len(),
                 cursor: None,
             })
@@ -2072,8 +2078,9 @@ impl HistoryLoadMoreAppendFixture {
         let seq = repo.loads_in_flight.active_log_seq().unwrap_or_else(|| {
             repo.loads_in_flight
                 .request_log(gitcomet_state::model::PendingLogLoad {
-                    scope: self.scope,
+                    walk: self.scope.into(),
                     author: None,
+                    focus: Default::default(),
                     limit: page.commits.len(),
                     cursor: cursor.clone(),
                 })

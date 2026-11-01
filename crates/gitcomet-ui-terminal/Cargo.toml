@@ -1,0 +1,31 @@
+[package]
+name = "gitcomet-ui-terminal"
+description = "Embedded terminal widget for GPUI: an alacritty backend on a PTY and the viewport that paints it."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+# Test hooks for the host's terminal tests. Adds functions only.
+test-support = []
+
+# No dependency on gitcomet-state or the UI host: scripts/ci/boundaries.py
+# enforces it.
+[dependencies]
+alacritty_terminal = { workspace = true }
+gitcomet-base = { workspace = true }
+gitcomet-ui-kit = { workspace = true }
+gpui = { workspace = true }
+palette = { workspace = true }
+rustc-hash = { workspace = true }
+smol = { workspace = true }
+
+[dev-dependencies]
+gitcomet-ui-kit = { workspace = true, features = ["test-support"] }
+gpui = { workspace = true, features = ["test-support"] }

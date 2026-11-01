@@ -15,6 +15,7 @@ use gitcomet_core::services::{CancellationToken, Result};
 use gix::bstr::ByteSlice;
 use std::io::Read as _;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, Weak};
 
 /// Larger status snapshots are not classified: each row costs an attribute
 /// lookup and a small read, and such trees are rarely all large files.
@@ -70,38 +71,37 @@ pub(crate) fn strip_annex_filter(repo: &mut gix::Repository) {
         .sections_by_name("filter")
         .into_iter()
         .flatten()
-        .any(|section| section.header().subsection_name() == Some("annex".into()));
+        .any(|section| section.header().subsection_name() == Some(ANNEX_FILTER_DRIVER.into()));
     if !has_annex_filter {
         return;
     }
     let mut config = repo.config_snapshot_mut();
     while config
-        .remove_section("filter", Some(gix::bstr::BStr::new("annex")))
+        .remove_section("filter", ANNEX_FILTER_DRIVER)
         .is_some()
     {}
 }
 
+/// The `filter` attribute value Git LFS assigns, and its driver's name.
+pub(crate) const LFS_FILTER_DRIVER: &str = "lfs";
+
+/// The `filter` attribute value git-annex assigns, and its driver's name.
+pub(crate) const ANNEX_FILTER_DRIVER: &str = "annex";
+
 pub(crate) fn lfs_filter_configured(config: &gix::config::File) -> bool {
-    ["filter.lfs.process", "filter.lfs.clean"]
-        .iter()
-        .any(|key| config.string(*key).is_some_and(|value| !value.is_empty()))
+    ["process", "clean"].iter().any(|key| {
+        config
+            .string_by("filter", LFS_FILTER_DRIVER, *key)
+            .is_some_and(|value| !value.is_empty())
+    })
 }
 
 fn lfs_storage_dir(repo: &gix::Repository) -> PathBuf {
     let config = repo.config_snapshot();
     let storage = config
         .string("lfs.storage")
-        .and_then(|value| gix::path::try_from_bstring(value).ok());
+        .and_then(|value| gix::path::from_bstring(value).ok());
     lfs::storage_dir(storage.as_deref(), repo.common_dir())
-}
-
-fn truthy_env(name: &str) -> bool {
-    std::env::var(name).is_ok_and(|value| {
-        matches!(
-            value.trim().to_ascii_lowercase().as_str(),
-            "1" | "true" | "yes" | "on"
-        )
-    })
 }
 
 fn backend_error(context: &str, error: impl std::fmt::Display) -> Error {
@@ -152,7 +152,7 @@ fn index_classified(
     index: &gix::index::State,
     path: &Path,
 ) -> Option<Classified> {
-    let key = gix::path::to_unix_separators_on_windows(gix::path::into_bstr(path));
+    let key = gix::path::to_unix_separators_on_windows(gix::path::into_bstr(path).ok()?);
     let entry = index.entry_by_path(key.as_ref())?;
     let is_symlink = entry.mode == gix::index::entry::Mode::SYMLINK;
     classify_blob(repo, entry.id, is_symlink)
@@ -248,7 +248,7 @@ impl CommittedPointerScan {
         // Global filter config only means LFS is installed. Use the same
         // attribute sources as the support summary, including nested ones.
         let lfs = stores.lfs.join("objects").is_dir()
-            || scan_lfs_attributes(repo, &CancellationToken::new(), |pattern, _| {
+            || scan_lfs_attributes(repo, &CancellationToken::new(), None, |pattern, _| {
                 pattern.is_some()
             })
             .unwrap_or(false);
@@ -314,7 +314,10 @@ impl LockableLookup<'_> {
         let Some(stack) = self.stack.as_mut() else {
             return false;
         };
-        let key = gix::path::to_unix_separators_on_windows(gix::path::into_bstr(path));
+        let Ok(key) = gix::path::into_bstr(path) else {
+            return false;
+        };
+        let key = gix::path::to_unix_separators_on_windows(key);
         let Ok(platform) = stack.at_entry(key.as_ref(), None) else {
             return false;
         };
@@ -326,6 +329,68 @@ impl LockableLookup<'_> {
     }
 }
 
+/// Only descriptors are cached: attribute contents are read afresh each scan.
+/// A weak key cannot retain the parsed index, and cannot match another snapshot.
+pub(super) struct AttributeSources {
+    index: Weak<gix::fs::FileSnapshot<gix::index::File>>,
+    sources: Arc<[(PathBuf, gix::ObjectId)]>,
+}
+
+fn tracked_attribute_sources(
+    index: &gix::index::State,
+) -> impl Iterator<Item = (PathBuf, gix::ObjectId)> + '_ {
+    index.entries().iter().filter_map(move |entry| {
+        let path = entry.path(index);
+        (path == ".gitattributes" || path.ends_with(b"/.gitattributes"))
+            .then(|| {
+                gix::path::from_bstr(path)
+                    .ok()
+                    .map(|path| (path.into_owned(), entry.id))
+            })
+            .flatten()
+    })
+}
+
+fn cached_attribute_sources(
+    index: &gix::worktree::Index,
+    cache: &Mutex<Option<AttributeSources>>,
+    cancellation: &CancellationToken,
+) -> Result<Arc<[(PathBuf, gix::ObjectId)]>> {
+    cancellation.check_cancelled()?;
+    let index_key = Arc::downgrade(index);
+    {
+        let cache = cache.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(cached) = cache
+            .as_ref()
+            .filter(|cached| cached.index.ptr_eq(&index_key))
+        {
+            return Ok(Arc::clone(&cached.sources));
+        }
+    }
+
+    // The index walk does not hold the cache lock. Only full support scans use
+    // this path; cold row classification must retain its lazy early exit.
+    let mut sources = Vec::new();
+    for source in tracked_attribute_sources(index) {
+        cancellation.check_cancelled()?;
+        sources.push(source);
+    }
+    let sources: Arc<[(PathBuf, gix::ObjectId)]> = sources.into();
+    let mut cache = cache.lock().unwrap_or_else(|e| e.into_inner());
+    cancellation.check_cancelled()?;
+    if let Some(cached) = cache
+        .as_ref()
+        .filter(|cached| cached.index.ptr_eq(&index_key))
+    {
+        return Ok(Arc::clone(&cached.sources));
+    }
+    *cache = Some(AttributeSources {
+        index: index_key,
+        sources: Arc::clone(&sources),
+    });
+    Ok(sources)
+}
+
 /// Visit `filter=lfs` patterns and independent `lockable` rules in tracked
 /// `.gitattributes`, an untracked root one, and `info/attributes`. Macros are
 /// not expanded here; per-file state uses the real attribute stack.
@@ -334,27 +399,57 @@ impl LockableLookup<'_> {
 fn scan_lfs_attributes(
     repo: &gix::Repository,
     cancellation: &CancellationToken,
-    mut found: impl FnMut(Option<LfsTrackedPattern>, bool) -> bool,
+    cache: Option<&Mutex<Option<AttributeSources>>>,
+    found: impl FnMut(Option<LfsTrackedPattern>, bool) -> bool,
 ) -> Result<bool> {
-    let workdir = repo.workdir().unwrap_or(repo.common_dir());
+    if repo.workdir().is_none() {
+        if crate::refs::head_oid(repo)?.is_none() {
+            return scan_lfs_attribute_sources(repo, cancellation, std::iter::empty(), found);
+        }
+        let tree = crate::refs::head_tree_id_or_empty(repo)?;
+        let index = repo
+            .index_from_tree(&tree)
+            .map_err(|error| backend_error("read committed LFS patterns", error))?;
+        return scan_lfs_attribute_sources(
+            repo,
+            cancellation,
+            tracked_attribute_sources(&index).map(|(path, id)| (path, Some(id))),
+            found,
+        );
+    }
     let index = repo
         .index_or_empty()
         .map_err(|e| backend_error("read index for LFS patterns", e))?;
-    let sources = index.entries().iter().filter_map(|entry| {
-        let path = entry.path(&index);
-        (path == ".gitattributes" || path.ends_with(b"/.gitattributes"))
-            .then(|| {
-                gix::path::try_from_bstr(path)
-                    .ok()
-                    .map(|path| (path.into_owned(), Some(entry.id)))
-            })
-            .flatten()
-    });
-    // Include the untracked root and the local attribute overrides too.
-    let sources = sources.chain([
-        (PathBuf::from(".gitattributes"), None),
-        (PathBuf::from(".git/info/attributes"), None),
-    ]);
+    if let Some(cache) = cache {
+        let sources = cached_attribute_sources(&index, cache, cancellation)?;
+        scan_lfs_attribute_sources(
+            repo,
+            cancellation,
+            sources.iter().map(|(path, id)| (path.clone(), Some(*id))),
+            found,
+        )
+    } else {
+        scan_lfs_attribute_sources(
+            repo,
+            cancellation,
+            tracked_attribute_sources(&index).map(|(path, id)| (path, Some(id))),
+            found,
+        )
+    }
+}
+
+fn scan_lfs_attribute_sources(
+    repo: &gix::Repository,
+    cancellation: &CancellationToken,
+    sources: impl Iterator<Item = (PathBuf, Option<gix::ObjectId>)>,
+    mut found: impl FnMut(Option<LfsTrackedPattern>, bool) -> bool,
+) -> Result<bool> {
+    let sources = sources
+        .chain(
+            repo.workdir()
+                .map(|_| (PathBuf::from(".gitattributes"), None)),
+        )
+        .chain([(PathBuf::from(".git/info/attributes"), None)]);
     let mut saw_root = false;
     for (source, id) in sources {
         cancellation.check_cancelled()?;
@@ -365,12 +460,12 @@ fn scan_lfs_attributes(
             saw_root = true;
         }
         let full = if source == Path::new(".git/info/attributes") {
-            repo.common_dir().join("info/attributes")
+            Some(repo.common_dir().join("info/attributes"))
         } else {
-            workdir.join(&source)
+            repo.workdir().map(|workdir| workdir.join(&source))
         };
-        let bytes = std::fs::read(full)
-            .ok()
+        let bytes = full
+            .and_then(|path| std::fs::read(path).ok())
             .or_else(|| repo.find_object(id?).ok().map(|object| object.data.clone()));
         let Some(bytes) = bytes else {
             continue;
@@ -383,7 +478,7 @@ fn scan_lfs_attributes(
             for assignment in assignments.flatten() {
                 match (assignment.name.as_str(), assignment.state) {
                     ("filter", gix::attrs::StateRef::Value(value)) => {
-                        lfs = value.as_bstr() == "lfs";
+                        lfs = value.as_bstr() == LFS_FILTER_DRIVER;
                     }
                     ("filter", _) => lfs = false,
                     ("lockable", state) => lockable = matches!(state, gix::attrs::StateRef::Set),
@@ -446,7 +541,7 @@ impl super::GixRepo {
             return None;
         }
         let index = repo.index_or_empty().ok()?;
-        let key = gix::path::to_unix_separators_on_windows(gix::path::into_bstr(path));
+        let key = gix::path::to_unix_separators_on_windows(gix::path::into_bstr(path).ok()?);
         let entry = index.entry_by_path(key.as_ref())?;
         // A locked (symlink) entry replaced by a file is ordinary content.
         if entry.mode == gix::index::entry::Mode::SYMLINK
@@ -632,28 +727,23 @@ impl super::GixRepo {
         let repo = self.repo_with_current_config()?;
         let config = repo.config_snapshot();
         let storage_dir = lfs_storage_dir(&repo);
-        let skip_flag = |key: &str| {
-            config
-                .string(key)
-                .is_some_and(|value| value.contains_str("--skip"))
-        };
         cancellation.check_cancelled()?;
         let mut lfs = LfsRepoInfo {
             filter_configured: lfs_filter_configured(&config),
-            filter_required: config.boolean("filter.lfs.required").unwrap_or(false),
             has_local_store: storage_dir.join("objects").is_dir(),
             storage_dir,
-            skip_smudge: truthy_env("GIT_LFS_SKIP_SMUDGE")
-                || skip_flag("filter.lfs.smudge")
-                || skip_flag("filter.lfs.process"),
-            locks_verify: config.boolean("lfs.locksverify"),
             ..LfsRepoInfo::default()
         };
-        scan_lfs_attributes(&repo, cancellation, |pattern, lockable| {
-            lfs.tracked_patterns.extend(pattern);
-            lfs.has_lockable_patterns |= lockable;
-            false
-        })?;
+        scan_lfs_attributes(
+            &repo,
+            cancellation,
+            Some(&self.attribute_sources),
+            |pattern, lockable| {
+                lfs.tracked_patterns.extend(pattern);
+                lfs.has_lockable_patterns |= lockable;
+                false
+            },
+        )?;
 
         let annex = AnnexRepoInfo {
             has_annex_dir: repo.common_dir().join("annex").is_dir(),
@@ -668,11 +758,13 @@ impl super::GixRepo {
             assistant_running: super::annex::assistant_running(&repo.common_dir().join("annex")),
             repositories: Vec::new(),
             numcopies: None,
+            unverified_remotes: Vec::new(),
         };
         let mut annex = annex;
         if annex.initialized() {
             cancellation.check_cancelled()?;
             (annex.repositories, annex.numcopies) = self.annex_repositories(&repo);
+            annex.unverified_remotes = self.unverified_remotes(&config);
         }
         *self
             .large_file_scan
@@ -767,7 +859,7 @@ impl super::GixRepo {
         };
         if metadata.file_type().is_symlink() {
             let target = std::fs::read_link(&full).ok()?;
-            let target = gix::path::into_bstr(target).into_owned();
+            let target = gix::path::into_bstr(target).ok()?.into_owned();
             let classified = classify_bytes(target.as_ref(), true)?;
             let present = std::fs::metadata(&full).is_ok_and(|m| m.is_file());
             let worktree = if present {
@@ -789,3 +881,7 @@ impl super::GixRepo {
             .map(|classified| (classified, LargeFileWorktree::Content))
     }
 }
+
+#[cfg(test)]
+#[path = "large_files_attribute_source_tests.rs"]
+mod attribute_source_tests;

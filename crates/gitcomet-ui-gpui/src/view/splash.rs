@@ -443,18 +443,6 @@ impl GitCometView {
                             .border_1()
                             .border_color(border_glow)
                             .rounded(px(theme.radii.panel))
-                            .shadow(vec![gpui::BoxShadow {
-                                color: gpui::rgba(if theme.is_dark {
-                                    0x00000052
-                                } else {
-                                    0x171a3b14
-                                })
-                                .into(),
-                                offset: point(px(0.0), px(22.0)),
-                                blur_radius: px(52.0),
-                                spread_radius: px(0.0),
-                                inset: false,
-                            }])
                             .p_4()
                             .child(self.git_unavailable_panel_content(theme, cx)),
                     ),
@@ -543,7 +531,6 @@ impl GitCometView {
                 .justify_center()
                 .size(slot)
                 .rounded(px(theme.radii.control))
-                .cursor(CursorStyle::PointingHand)
                 .control_interaction(
                     InteractionStyle::new(theme),
                     InteractionState::default().open(is_active),
@@ -618,7 +605,6 @@ impl GitCometView {
             .border_1()
             .border_color(theme.colors.stroke.default)
             .bg(theme.colors.surface.raised)
-            .shadow_lg()
             // Claim clicks anywhere on the panel so its empty regions don't fall
             // through to the dismiss scrim underneath.
             .occlude()
@@ -683,11 +669,40 @@ impl GitCometView {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
+        let home_active = self.is_home_screen_active();
+        self.home.update(cx, |home, _| home.set_active(home_active));
         if let Some(pane) = &self.focused_diff_pane {
             return div()
+                .flex()
+                .flex_col()
                 .flex_1()
                 .min_h(px(0.0))
-                .child(pane.view())
+                .child(
+                    div()
+                        .flex()
+                        .gap_3()
+                        .px_2()
+                        .py_1()
+                        .text_xs()
+                        .text_color(self.theme.colors.foreground.secondary)
+                        .child(
+                            div()
+                                .debug_selector(|| "focused_diff_left_label".to_string())
+                                .flex_1()
+                                .min_w(px(0.0))
+                                .truncate()
+                                .child(format!("Before: {}", pane.labels[0])),
+                        )
+                        .child(
+                            div()
+                                .debug_selector(|| "focused_diff_right_label".to_string())
+                                .flex_1()
+                                .min_w(px(0.0))
+                                .truncate()
+                                .child(format!("After: {}", pane.labels[1])),
+                        ),
+                )
+                .child(div().flex_1().min_h(px(0.0)).child(pane.pane.view()))
                 .into_any_element();
         }
 
@@ -749,7 +764,7 @@ impl GitCometView {
             let bottom_panel_resize_handle = bottom_panel
                 .is_some()
                 .then(|| self.terminal_panel_resize_handle(theme, cx));
-            let main_content = self.repository_main_content(cx);
+            let main_content = self.repository_main_content();
             let details_tabs = self.details_tab_content(cx);
             let sidebar_sections = (!self.sidebar_collapsed)
                 .then(|| self.sidebar_section_content(window, cx))
@@ -803,26 +818,23 @@ impl GitCometView {
                                 .w(self.sidebar_render_width)
                                 .min_h(px(0.0))
                                 .bg(theme.colors.surface.chrome)
+                                .flex_none()
+                                .overflow_hidden()
                                 .when(!self.sidebar_collapsed, |d| {
-                                    // Cached so frames driven by another view's
-                                    // `notify` (a spinner tick in the title bar,
-                                    // a diff update) reuse the sidebar's layout
-                                    // and paint. The wrapper fills this div, so
-                                    // the width animation still re-lays it out.
-                                    match sidebar_sections {
-                                        None => d.child(stable_cached_fill_view(
+                                    let content = div().w(self.sidebar_width).h_full();
+                                    let content = match sidebar_sections {
+                                        None => content.child(stable_cached_fill_view(
                                             self.sidebar_pane.clone(),
                                         )),
-                                        // Extension sections sit below the
-                                        // sidebar's own, which keeps the rest.
-                                        Some(sections) => d
+                                        Some(sections) => content
                                             .flex()
                                             .flex_col()
                                             .child(div().flex_1().min_h(px(0.0)).child(
                                                 stable_cached_fill_view(self.sidebar_pane.clone()),
                                             ))
                                             .child(sections),
-                                    }
+                                    };
+                                    d.child(content)
                                 })
                                 .when(self.sidebar_collapsed, |d| {
                                     d.child(self.collapsed_sidebar_rail(theme, cx))

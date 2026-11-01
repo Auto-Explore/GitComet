@@ -212,10 +212,12 @@ pub(in crate::view) fn worktree_origin_chip(
         .child(svg_icon(WORKTREE_ICON_PATH, palette.icon, icon_size))
         .child(
             div()
+                .min_w(px(0.0))
                 .text_size(theme.ui_text(12.0))
                 .text_color(palette.text)
                 .line_clamp(1)
                 .whitespace_nowrap()
+                .text_ellipsis()
                 .child(label),
         )
 }

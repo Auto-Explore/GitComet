@@ -1,12 +1,18 @@
 mod details;
+pub(in crate::view) mod diff;
+pub(in crate::view) mod file_history;
 pub(in crate::view) mod history;
 pub(in crate::view) mod main;
 mod reflog;
 mod sidebar;
 
 pub(super) use details::{
-    ComparisonCardCache, ComparisonOrderCache, DetailsPaneInit, DetailsPaneView,
+    CommitRewordDraft, CommitRewordSubmission, ComparisonCardCache, ComparisonOrderCache,
+    DetailsPaneInit, DetailsPaneView,
 };
+pub(crate) use diff::DiffRenderer;
+pub(in crate::view) use diff::DiffRendererInit;
+pub(in crate::view) use diff::read_worktree_file_for_editing;
 pub(super) use history::HistoryView;
 #[allow(unused_imports)]
 pub(in crate::view) use history::{
@@ -21,13 +27,11 @@ pub(in crate::view) use history::{
     history_resize_state_preserves_visible_columns,
     history_resize_state_visible_columns_for_current_width,
 };
-pub(in crate::view) use main::MainPaneInit;
 pub(crate) use main::MainPaneView;
-pub(in crate::view) use main::read_worktree_file_for_editing;
 pub(super) use reflog::{ReflogPaneInit, ReflogPaneView};
-pub(in crate::view) use sidebar::ExplorerAction;
 #[cfg(feature = "benchmarks")]
 pub use sidebar::SidebarStickyFrameFixture;
 pub(in crate::view) use sidebar::explorer_operations::ExplorerDrag;
 pub(in crate::view) use sidebar::file_browser_search_is_active;
 pub(super) use sidebar::{CollapsedSidebarSection, SidebarPaneView};
+pub(in crate::view) use sidebar::{ExplorerAction, SidebarExtensionTabs, SidebarHeaderChanged};

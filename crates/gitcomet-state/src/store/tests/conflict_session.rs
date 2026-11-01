@@ -1,13 +1,17 @@
 use super::*;
 use crate::model::ConflictFile;
+use crate::store::repository_runtime::RepositoryRuntimes;
 use gitcomet_core::conflict_session::{ConflictPayload, ConflictResolverStrategy, ConflictSession};
 use gitcomet_core::domain::{FileConflictKind, FileStatus, FileStatusKind, RepoStatus};
 use gitcomet_core::services::ConflictSide;
 
+mod plan_reload;
+mod region_origin;
+
 /// Helper: set up a repo state with a conflicted status entry.
 fn setup_repo_with_conflict(
     state: &mut AppState,
-    repos: &mut FxHashMap<RepoId, Arc<dyn GitRepository>>,
+    repos: &mut RepositoryRuntimes,
     id_alloc: &AtomicU64,
     path: &str,
     conflict_kind: FileConflictKind,
@@ -24,6 +28,9 @@ fn setup_repo_with_conflict(
         id_alloc,
         state,
         Msg::Internal(crate::msg::InternalMsg::RepoOpenedOk {
+            repository_mode: gitcomet_core::domain::RepositoryMode::WorkingTree,
+            head_commit: None,
+            preferences: None,
             repo_id,
             spec: RepoSpec {
                 workdir: PathBuf::from("/tmp/repo"),
@@ -46,6 +53,16 @@ fn setup_repo_with_conflict(
     repo_state.set_conflict_file_path(Some(PathBuf::from(path)));
 
     repo_id
+}
+
+fn conflict_region_origin(state: &AppState) -> Arc<crate::msg::ConflictRegionOrigin> {
+    Arc::new(crate::msg::ConflictRegionOrigin::from_session(
+        state.repos[0]
+            .conflict_state
+            .conflict_session
+            .as_ref()
+            .expect("loaded conflict session"),
+    ))
 }
 
 fn sample_marker_conflict_file(path: &str) -> ConflictFile {
@@ -87,9 +104,304 @@ fn two_region_marker_conflict_file(path: &str, current: &str) -> ConflictFile {
     }
 }
 
+fn current_conflict_request(
+    state: &AppState,
+    repo_id: RepoId,
+) -> crate::model::ConflictLoadRequestId {
+    state
+        .repos
+        .iter()
+        .find(|repo| repo.id == repo_id)
+        .unwrap()
+        .conflict_state
+        .load_request()
+}
+
+fn begin_conflict_load(
+    repos: &mut RepositoryRuntimes,
+    id_alloc: &AtomicU64,
+    state: &mut AppState,
+    repo_id: RepoId,
+    path: &str,
+    mode: crate::model::ConflictFileLoadMode,
+) -> Effect {
+    let mut effects = reduce(
+        repos,
+        id_alloc,
+        state,
+        Msg::LoadConflictFile {
+            repo_id,
+            path: path.into(),
+            mode,
+        },
+    );
+    assert_eq!(effects.len(), 1);
+    effects.remove(0)
+}
+
+fn complete_conflict_load(
+    repos: &mut RepositoryRuntimes,
+    id_alloc: &AtomicU64,
+    state: &mut AppState,
+    effect: &Effect,
+    result: Result<Option<ConflictFile>>,
+) {
+    let Effect::LoadConflictFile {
+        request,
+        repo_id,
+        path,
+        ..
+    } = effect
+    else {
+        panic!("expected conflict load");
+    };
+    reduce(
+        repos,
+        id_alloc,
+        state,
+        Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
+            request: *request,
+            repo_id: *repo_id,
+            path: path.clone(),
+            result: Box::new(result),
+            conflict_session: None,
+        }),
+    );
+}
+
+#[test]
+fn conflict_load_same_path_rejects_stale_error_after_success() {
+    let mut repos = RepositoryRuntimes::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::test_default();
+    let repo_id = setup_repo_with_conflict(
+        &mut state,
+        &mut repos,
+        &id_alloc,
+        "file.txt",
+        FileConflictKind::BothModified,
+    );
+    let old = begin_conflict_load(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        repo_id,
+        "file.txt",
+        crate::model::ConflictFileLoadMode::Full,
+    );
+    let fresh = begin_conflict_load(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        repo_id,
+        "file.txt",
+        crate::model::ConflictFileLoadMode::Full,
+    );
+    complete_conflict_load(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        &fresh,
+        Ok(Some(sample_marker_conflict_file("file.txt"))),
+    );
+    let revision = state.repos[0].conflict_state.conflict_rev;
+    complete_conflict_load(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        &old,
+        Err(Error::new(ErrorKind::Backend("obsolete".into()))),
+    );
+    assert!(matches!(
+        state.repos[0].conflict_state.conflict_file,
+        Loadable::Ready(Some(_))
+    ));
+    assert_eq!(state.repos[0].conflict_state.conflict_rev, revision);
+    assert!(state.repos[0].feedback.diagnostics.is_empty());
+}
+
+#[test]
+fn conflict_load_return_to_path_rejects_stale_success() {
+    let mut repos = RepositoryRuntimes::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::test_default();
+    let repo_id = setup_repo_with_conflict(
+        &mut state,
+        &mut repos,
+        &id_alloc,
+        "file.txt",
+        FileConflictKind::BothModified,
+    );
+    let old = begin_conflict_load(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        repo_id,
+        "file.txt",
+        crate::model::ConflictFileLoadMode::Full,
+    );
+    begin_conflict_load(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        repo_id,
+        "other.txt",
+        crate::model::ConflictFileLoadMode::Full,
+    );
+    let fresh = begin_conflict_load(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        repo_id,
+        "file.txt",
+        crate::model::ConflictFileLoadMode::Full,
+    );
+    complete_conflict_load(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        &fresh,
+        Ok(Some(sample_marker_conflict_file("file.txt"))),
+    );
+    let revision = state.repos[0].conflict_state.conflict_rev;
+    complete_conflict_load(&mut repos, &id_alloc, &mut state, &old, Ok(None));
+    assert!(matches!(
+        state.repos[0].conflict_state.conflict_file,
+        Loadable::Ready(Some(_))
+    ));
+    assert_eq!(state.repos[0].conflict_state.conflict_rev, revision);
+}
+
+#[test]
+fn conflict_load_stale_current_only_cannot_replace_full_session() {
+    let mut repos = RepositoryRuntimes::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::test_default();
+    let repo_id = setup_repo_with_conflict(
+        &mut state,
+        &mut repos,
+        &id_alloc,
+        "file.txt",
+        FileConflictKind::BothModified,
+    );
+    let old = begin_conflict_load(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        repo_id,
+        "file.txt",
+        crate::model::ConflictFileLoadMode::CurrentOnly,
+    );
+    let fresh = begin_conflict_load(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        repo_id,
+        "file.txt",
+        crate::model::ConflictFileLoadMode::Full,
+    );
+    complete_conflict_load(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        &fresh,
+        Ok(Some(sample_marker_conflict_file("file.txt"))),
+    );
+    let revision = state.repos[0].conflict_state.conflict_rev;
+    let provisional = ConflictFile::from_loaded_stage_parts(
+        PathBuf::from("file.txt"),
+        (None, None),
+        (None, None),
+        (None, None),
+        (
+            None,
+            Some("<<<<<<< ours\nours\n=======\ntheirs\n>>>>>>> theirs\n".into()),
+        ),
+    );
+    complete_conflict_load(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        &old,
+        Ok(Some(provisional)),
+    );
+    assert!(
+        !state.repos[0]
+            .conflict_state
+            .conflict_session
+            .as_ref()
+            .unwrap()
+            .base
+            .is_absent()
+    );
+    assert_eq!(state.repos[0].conflict_state.conflict_rev, revision);
+}
+
+#[test]
+fn conflict_load_stale_success_preserves_pending_restore_until_current_reply() {
+    use gitcomet_core::conflict_session::ConflictRegionResolution;
+    let mut repos = RepositoryRuntimes::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::test_default();
+    let repo_id = setup_two_conflict_file(&mut state, &mut repos, &id_alloc);
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::ConflictSetRegionChoice {
+            repo_id,
+            path: PathBuf::from("file.txt").into(),
+            region_index: 1,
+            choice: crate::msg::ConflictRegionChoice::Theirs,
+        },
+    );
+    let Loadable::Ready(Some(file)) = state.repos[0].conflict_state.conflict_file.clone() else {
+        panic!("loaded conflict")
+    };
+    let old = begin_conflict_load(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        repo_id,
+        "file.txt",
+        crate::model::ConflictFileLoadMode::Full,
+    );
+    let fresh = begin_conflict_load(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        repo_id,
+        "file.txt",
+        crate::model::ConflictFileLoadMode::Full,
+    );
+    let revision = state.repos[0].conflict_state.conflict_rev;
+    complete_conflict_load(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        &old,
+        Ok(Some(file.clone())),
+    );
+    let conflict = &state.repos[0].conflict_state;
+    assert!(conflict.conflict_file.is_loading());
+    assert!(conflict.conflict_session.is_none());
+    assert_eq!(conflict.conflict_rev, revision);
+    assert_eq!(
+        conflict.session_pending_restore.as_ref().unwrap().regions[1].resolution,
+        ConflictRegionResolution::PickTheirs
+    );
+    complete_conflict_load(&mut repos, &id_alloc, &mut state, &fresh, Ok(Some(file)));
+    let conflict = &state.repos[0].conflict_state;
+    assert!(conflict.session_pending_restore.is_none());
+    assert_eq!(
+        conflict.conflict_session.as_ref().unwrap().regions[1].resolution,
+        ConflictRegionResolution::PickTheirs
+    );
+}
+
 #[test]
 fn conflict_file_loaded_builds_session_with_regions() {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
 
@@ -119,11 +431,13 @@ fn conflict_file_loaded_builds_session_with_regions() {
         current: Some(current_text.clone()),
     };
 
+    let request = current_conflict_request(&state, repo_id);
     reduce(
         &mut repos,
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
+            request,
             repo_id,
             path: PathBuf::from("file.txt"),
             result: Box::new(Ok(Some(file))),
@@ -155,9 +469,30 @@ fn conflict_file_loaded_builds_session_with_regions() {
 
 #[test]
 fn current_only_session_preserves_first_paint_pick_on_full_upgrade() {
+    first_paint_pick_survives_full_upgrade(FirstPaintPickTiming::Before);
+}
+
+#[test]
+fn current_only_session_preserves_first_paint_pick_during_full_upgrade() {
+    first_paint_pick_survives_full_upgrade(FirstPaintPickTiming::During);
+}
+
+#[test]
+fn current_only_session_maps_stale_first_paint_pick_after_full_upgrade() {
+    first_paint_pick_survives_full_upgrade(FirstPaintPickTiming::After);
+}
+
+#[derive(Clone, Copy)]
+enum FirstPaintPickTiming {
+    Before,
+    During,
+    After,
+}
+
+fn first_paint_pick_survives_full_upgrade(timing: FirstPaintPickTiming) {
     use gitcomet_core::conflict_session::ConflictRegionResolution;
 
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
     let repo_id = setup_repo_with_conflict(
@@ -180,11 +515,13 @@ fn current_only_session_preserves_first_paint_pick_on_full_upgrade() {
         current: Some(current.into()),
     };
 
+    let request = current_conflict_request(&state, repo_id);
     reduce(
         &mut repos,
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
+            request,
             repo_id,
             path: PathBuf::from("file.txt"),
             result: Box::new(Ok(Some(current_only))),
@@ -202,17 +539,17 @@ fn current_only_session_preserves_first_paint_pick_on_full_upgrade() {
     assert!(provisional.ours.is_absent());
     assert!(provisional.theirs.is_absent());
 
-    reduce(
-        &mut repos,
-        &id_alloc,
-        &mut state,
-        Msg::ConflictToggleRegionSource {
-            repo_id,
-            path: PathBuf::from("file.txt").into(),
-            region_index: 0,
-            source: gitcomet_core::merge::MergeSource::A,
-        },
-    );
+    let origin = conflict_region_origin(&state);
+    let pick = || Msg::ConflictToggleRegionSource {
+        repo_id,
+        path: PathBuf::from("file.txt").into(),
+        origin: origin.clone(),
+        region_index: 0,
+        source: gitcomet_core::merge::MergeSource::A,
+    };
+    if matches!(timing, FirstPaintPickTiming::Before) {
+        reduce(&mut repos, &id_alloc, &mut state, pick());
+    }
     reduce(
         &mut repos,
         &id_alloc,
@@ -223,6 +560,9 @@ fn current_only_session_preserves_first_paint_pick_on_full_upgrade() {
             mode: crate::model::ConflictFileLoadMode::Full,
         },
     );
+    if matches!(timing, FirstPaintPickTiming::During) {
+        reduce(&mut repos, &id_alloc, &mut state, pick());
+    }
     let backend_session = ConflictSession::from_merged_shared_text(
         PathBuf::from("file.txt"),
         FileConflictKind::BothModified,
@@ -231,17 +571,22 @@ fn current_only_session_preserves_first_paint_pick_on_full_upgrade() {
         ConflictPayload::Text("theirs\n".into()),
         current.into(),
     );
+    let request = current_conflict_request(&state, repo_id);
     reduce(
         &mut repos,
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
+            request,
             repo_id,
             path: PathBuf::from("file.txt"),
             result: Box::new(Ok(Some(sample_marker_conflict_file("file.txt")))),
             conflict_session: Some(Box::new(backend_session)),
         }),
     );
+    if matches!(timing, FirstPaintPickTiming::After) {
+        reduce(&mut repos, &id_alloc, &mut state, pick());
+    }
 
     let upgraded = state.repos[0]
         .conflict_state
@@ -261,7 +606,7 @@ fn current_only_pick_maps_across_partitioned_stage_plan_boundaries() {
     use gitcomet_core::conflict_session::ConflictRegionResolution;
     use gitcomet_core::merge::MergeSource;
 
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
     let repo_id = setup_repo_with_conflict(
@@ -295,17 +640,20 @@ fn current_only_pick_maps_across_partitioned_stage_plan_boundaries() {
         theirs: None,
         current: Some(current.into()),
     };
+    let request = current_conflict_request(&state, repo_id);
     reduce(
         &mut repos,
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
+            request,
             repo_id,
             path: PathBuf::from("file.txt"),
             result: Box::new(Ok(Some(current_only))),
             conflict_session: None,
         }),
     );
+    let origin = conflict_region_origin(&state);
     reduce(
         &mut repos,
         &id_alloc,
@@ -313,6 +661,7 @@ fn current_only_pick_maps_across_partitioned_stage_plan_boundaries() {
         Msg::ConflictToggleRegionSource {
             repo_id,
             path: PathBuf::from("file.txt").into(),
+            origin: origin.clone(),
             region_index: 0,
             source: MergeSource::A,
         },
@@ -342,11 +691,13 @@ fn current_only_pick_maps_across_partitioned_stage_plan_boundaries() {
         theirs: Some(theirs.into()),
         current: Some(current.into()),
     };
+    let request = current_conflict_request(&state, repo_id);
     reduce(
         &mut repos,
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
+            request,
             repo_id,
             path: PathBuf::from("file.txt"),
             result: Box::new(Ok(Some(full))),
@@ -375,7 +726,7 @@ fn current_only_pick_maps_across_partitioned_stage_plan_boundaries() {
 fn current_only_upgrade_keeps_whitespace_conflicts_manual_on_full_regions() {
     use gitcomet_core::conflict_session::ConflictRegionResolution;
 
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
     let repo_id = setup_repo_with_conflict(
@@ -405,11 +756,13 @@ fn current_only_upgrade_keeps_whitespace_conflicts_manual_on_full_regions() {
         theirs: None,
         current: Some(current.into()),
     };
+    let request = current_conflict_request(&state, repo_id);
     reduce(
         &mut repos,
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
+            request,
             repo_id,
             path: PathBuf::from("file.txt"),
             result: Box::new(Ok(Some(current_only))),
@@ -449,11 +802,13 @@ fn current_only_upgrade_keeps_whitespace_conflicts_manual_on_full_regions() {
         theirs: Some("value  =  1\n".into()),
         current: Some(current.into()),
     };
+    let request = current_conflict_request(&state, repo_id);
     reduce(
         &mut repos,
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
+            request,
             repo_id,
             path: PathBuf::from("file.txt"),
             result: Box::new(Ok(Some(full))),
@@ -479,7 +834,7 @@ fn current_only_upgrade_keeps_whitespace_conflicts_manual_on_full_regions() {
 
 #[test]
 fn conflict_file_loaded_builds_session_for_delete_conflict() {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
 
@@ -503,11 +858,13 @@ fn conflict_file_loaded_builds_session_for_delete_conflict() {
         current: Some("modified\n".to_string().into()),
     };
 
+    let request = current_conflict_request(&state, repo_id);
     reduce(
         &mut repos,
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
+            request,
             repo_id,
             path: PathBuf::from("deleted.txt"),
             result: Box::new(Ok(Some(file))),
@@ -533,7 +890,7 @@ fn conflict_file_loaded_builds_session_for_delete_conflict() {
 
 #[test]
 fn conflict_file_loaded_builds_binary_session() {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
 
@@ -558,11 +915,13 @@ fn conflict_file_loaded_builds_binary_session() {
         current: None,
     };
 
+    let request = current_conflict_request(&state, repo_id);
     reduce(
         &mut repos,
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
+            request,
             repo_id,
             path: PathBuf::from("image.png"),
             result: Box::new(Ok(Some(file))),
@@ -588,7 +947,7 @@ fn conflict_file_loaded_builds_binary_session() {
 
 #[test]
 fn conflict_file_loaded_clears_session_on_error() {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
 
@@ -600,11 +959,13 @@ fn conflict_file_loaded_clears_session_on_error() {
         FileConflictKind::BothModified,
     );
 
+    let request = current_conflict_request(&state, repo_id);
     reduce(
         &mut repos,
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
+            request,
             repo_id,
             path: PathBuf::from("file.txt"),
             result: Box::new(Err(Error::new(ErrorKind::Backend("test error".into())))),
@@ -618,7 +979,7 @@ fn conflict_file_loaded_clears_session_on_error() {
 
 #[test]
 fn load_conflict_file_clears_previous_session() {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
 
@@ -651,11 +1012,13 @@ fn load_conflict_file_clears_previous_session() {
         ),
     };
 
+    let request = current_conflict_request(&state, repo_id);
     reduce(
         &mut repos,
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
+            request,
             repo_id,
             path: PathBuf::from("file.txt"),
             result: Box::new(Ok(Some(file))),
@@ -703,7 +1066,7 @@ fn load_conflict_file_clears_previous_session() {
 
 #[test]
 fn status_loaded_clears_conflict_context_when_path_is_resolved() {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
 
@@ -715,11 +1078,13 @@ fn status_loaded_clears_conflict_context_when_path_is_resolved() {
         FileConflictKind::BothModified,
     );
 
+    let request = current_conflict_request(&state, repo_id);
     reduce(
         &mut repos,
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
+            request,
             repo_id,
             path: PathBuf::from("file.txt"),
             result: Box::new(Ok(Some(sample_marker_conflict_file("file.txt")))),
@@ -771,7 +1136,7 @@ fn status_loaded_clears_conflict_context_when_path_is_resolved() {
 
 #[test]
 fn status_loaded_keeps_conflict_context_for_same_conflicted_path() {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
 
@@ -783,11 +1148,13 @@ fn status_loaded_keeps_conflict_context_for_same_conflicted_path() {
         FileConflictKind::BothModified,
     );
 
+    let request = current_conflict_request(&state, repo_id);
     reduce(
         &mut repos,
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
+            request,
             repo_id,
             path: PathBuf::from("file.txt"),
             result: Box::new(Ok(Some(sample_marker_conflict_file("file.txt")))),
@@ -835,7 +1202,7 @@ fn status_loaded_keeps_conflict_context_for_same_conflicted_path() {
 
 #[test]
 fn conflict_file_loaded_prefers_backend_session_when_provided() {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
 
@@ -874,11 +1241,13 @@ fn conflict_file_loaded_prefers_backend_session_when_provided() {
         ConflictPayload::Absent,
     );
 
+    let request = current_conflict_request(&state, repo_id);
     reduce(
         &mut repos,
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
+            request,
             repo_id,
             path: PathBuf::from("file.txt"),
             result: Box::new(Ok(Some(file))),
@@ -899,7 +1268,7 @@ fn conflict_file_loaded_prefers_backend_session_when_provided() {
 
 #[test]
 fn conflict_set_hide_resolved_updates_repo_state() {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
 
@@ -937,7 +1306,7 @@ fn conflict_set_hide_resolved_updates_repo_state() {
 
 #[test]
 fn conflict_apply_bulk_choice_rewrites_every_marker_region() {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
 
@@ -963,11 +1332,13 @@ theirs two\n\
 >>>>>>> theirs\n\
 ";
     let file = two_region_marker_conflict_file("file.txt", current);
+    let request = current_conflict_request(&state, repo_id);
     reduce(
         &mut repos,
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
+            request,
             repo_id,
             path: PathBuf::from("file.txt"),
             result: Box::new(Ok(Some(file))),
@@ -1030,7 +1401,7 @@ theirs two\n\
 fn conflict_apply_bulk_choice_rewrites_automatic_plan_deltas_too() {
     use gitcomet_core::merge::MergeSource;
 
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
     let repo_id = setup_repo_with_conflict(
@@ -1081,7 +1452,7 @@ fn conflict_apply_bulk_choice_rewrites_automatic_plan_deltas_too() {
 
 #[test]
 fn conflict_set_region_choice_updates_target_session_region() {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
 
@@ -1107,11 +1478,13 @@ theirs two\n\
 >>>>>>> theirs\n\
 ";
     let file = two_region_marker_conflict_file("file.txt", current);
+    let request = current_conflict_request(&state, repo_id);
     reduce(
         &mut repos,
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
+            request,
             repo_id,
             path: PathBuf::from("file.txt"),
             result: Box::new(Ok(Some(file))),
@@ -1161,7 +1534,7 @@ fn conflict_ordered_source_messages_toggle_append_and_replace_manual_content() {
     use gitcomet_core::conflict_session::ConflictRegionResolution;
     use gitcomet_core::merge::{MergeSource, OrderedSelection};
 
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
     let repo_id = setup_repo_with_conflict(
@@ -1171,11 +1544,13 @@ fn conflict_ordered_source_messages_toggle_append_and_replace_manual_content() {
         "file.txt",
         FileConflictKind::BothModified,
     );
+    let request = current_conflict_request(&state, repo_id);
     reduce(
         &mut repos,
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
+            request,
             repo_id,
             path: PathBuf::from("file.txt"),
             result: Box::new(Ok(Some(sample_marker_conflict_file("file.txt")))),
@@ -1184,6 +1559,7 @@ fn conflict_ordered_source_messages_toggle_append_and_replace_manual_content() {
     );
 
     for source in [MergeSource::B, MergeSource::C] {
+        let origin = conflict_region_origin(&state);
         reduce(
             &mut repos,
             &id_alloc,
@@ -1191,6 +1567,7 @@ fn conflict_ordered_source_messages_toggle_append_and_replace_manual_content() {
             Msg::ConflictToggleRegionSource {
                 repo_id,
                 path: PathBuf::from("file.txt").into(),
+                origin: origin.clone(),
                 region_index: 0,
                 source,
             },
@@ -1209,6 +1586,7 @@ fn conflict_ordered_source_messages_toggle_append_and_replace_manual_content() {
         ]))
     );
 
+    let origin = conflict_region_origin(&state);
     reduce(
         &mut repos,
         &id_alloc,
@@ -1216,12 +1594,14 @@ fn conflict_ordered_source_messages_toggle_append_and_replace_manual_content() {
         Msg::ConflictSyncRegionResolutions {
             repo_id,
             path: PathBuf::from("file.txt").into(),
+            origin: origin.clone(),
             updates: vec![crate::msg::ConflictRegionResolutionUpdate {
                 region_index: 0,
                 resolution: ConflictRegionResolution::ManualEdit("manual\n".into()),
             }],
         },
     );
+    let origin = conflict_region_origin(&state);
     reduce(
         &mut repos,
         &id_alloc,
@@ -1229,6 +1609,7 @@ fn conflict_ordered_source_messages_toggle_append_and_replace_manual_content() {
         Msg::ConflictToggleRegionSource {
             repo_id,
             path: PathBuf::from("file.txt").into(),
+            origin: origin.clone(),
             region_index: 0,
             source: MergeSource::C,
         },
@@ -1245,6 +1626,7 @@ fn conflict_ordered_source_messages_toggle_append_and_replace_manual_content() {
         "a source pick replaces manual block content",
     );
 
+    let origin = conflict_region_origin(&state);
     reduce(
         &mut repos,
         &id_alloc,
@@ -1252,6 +1634,7 @@ fn conflict_ordered_source_messages_toggle_append_and_replace_manual_content() {
         Msg::ConflictReplaceRegionSelection {
             repo_id,
             path: PathBuf::from("file.txt").into(),
+            origin: origin.clone(),
             region_index: 0,
             selection: OrderedSelection::from_sources([MergeSource::C, MergeSource::B]),
         },
@@ -1270,6 +1653,7 @@ fn conflict_ordered_source_messages_toggle_append_and_replace_manual_content() {
         ]))
     );
 
+    let origin = conflict_region_origin(&state);
     reduce(
         &mut repos,
         &id_alloc,
@@ -1277,6 +1661,7 @@ fn conflict_ordered_source_messages_toggle_append_and_replace_manual_content() {
         Msg::ConflictReplaceRegionSelection {
             repo_id,
             path: PathBuf::from("file.txt").into(),
+            origin: origin.clone(),
             region_index: 0,
             selection: OrderedSelection::new(),
         },
@@ -1295,7 +1680,7 @@ fn conflict_ordered_source_messages_toggle_append_and_replace_manual_content() {
 
 #[test]
 fn conflict_set_region_choice_base_noops_when_region_has_no_base() {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
 
@@ -1327,11 +1712,13 @@ theirs only\n\
         theirs: Some("theirs only\n".to_string().into()),
         current: Some(current.to_string().into()),
     };
+    let request = current_conflict_request(&state, repo_id);
     reduce(
         &mut repos,
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
+            request,
             repo_id,
             path: PathBuf::from("file.txt"),
             result: Box::new(Ok(Some(file))),
@@ -1374,7 +1761,7 @@ theirs only\n\
 
 #[test]
 fn conflict_reset_resolutions_clears_all_region_choices() {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
 
@@ -1400,11 +1787,13 @@ theirs two\n\
 >>>>>>> theirs\n\
 ";
     let file = two_region_marker_conflict_file("file.txt", current);
+    let request = current_conflict_request(&state, repo_id);
     reduce(
         &mut repos,
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
+            request,
             repo_id,
             path: PathBuf::from("file.txt"),
             result: Box::new(Ok(Some(file))),
@@ -1471,7 +1860,7 @@ theirs two\n\
 
 #[test]
 fn conflict_reset_resolutions_noops_when_already_unresolved() {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
 
@@ -1501,11 +1890,13 @@ theirs one\n\
         theirs: Some("theirs one\n".into()),
         current: Some(current.to_string().into()),
     };
+    let request = current_conflict_request(&state, repo_id);
     reduce(
         &mut repos,
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
+            request,
             repo_id,
             path: PathBuf::from("file.txt"),
             result: Box::new(Ok(Some(file))),
@@ -1546,7 +1937,7 @@ theirs one\n\
 
 #[test]
 fn conflict_file_loaded_uses_plan_default_for_identical_sides() {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
 
@@ -1576,11 +1967,13 @@ same content\n\
         theirs: Some("same content\n".to_string().into()),
         current: Some(current.to_string().into()),
     };
+    let request = current_conflict_request(&state, repo_id);
     reduce(
         &mut repos,
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
+            request,
             repo_id,
             path: PathBuf::from("file.txt"),
             result: Box::new(Ok(Some(file))),
@@ -1631,7 +2024,7 @@ same content\n\
 /// bulk choice is how the user then clears them all at once.
 #[test]
 fn whitespace_only_conflicts_stay_manual_until_the_bulk_choice_clears_them() {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
 
@@ -1663,11 +2056,13 @@ fn whitespace_only_conflicts_stay_manual_until_the_bulk_choice_clears_them() {
         current: Some(current.into()),
     };
 
+    let request = current_conflict_request(&state, repo_id);
     reduce(
         &mut repos,
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
+            request,
             repo_id,
             path: PathBuf::from("file.txt"),
             result: Box::new(Ok(Some(file))),
@@ -1769,7 +2164,7 @@ fn history_conflict_file() -> ConflictFile {
 
 #[test]
 fn conflict_apply_autosolve_history_stays_manual_and_updates_session() {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
 
@@ -1781,11 +2176,13 @@ fn conflict_apply_autosolve_history_stays_manual_and_updates_session() {
         FileConflictKind::BothModified,
     );
 
+    let request = current_conflict_request(&state, repo_id);
     reduce(
         &mut repos,
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
+            request,
             repo_id,
             path: PathBuf::from("file.txt"),
             result: Box::new(Ok(Some(history_conflict_file()))),
@@ -1831,7 +2228,7 @@ fn conflict_apply_autosolve_history_stays_manual_and_updates_session() {
 
 #[test]
 fn conflict_file_reload_keeps_identical_plan_clean() {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
 
@@ -1862,14 +2259,14 @@ same content\n\
         current: Some(current.to_string().into()),
     };
 
-    let load = |repos: &mut FxHashMap<RepoId, Arc<dyn GitRepository>>,
-                state: &mut AppState,
-                file: ConflictFile| {
+    let load = |repos: &mut RepositoryRuntimes, state: &mut AppState, file: ConflictFile| {
+        let request = current_conflict_request(state, repo_id);
         reduce(
             repos,
             &id_alloc,
             state,
             Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
+                request,
                 repo_id,
                 path: PathBuf::from("file.txt"),
                 result: Box::new(Ok(Some(file))),
@@ -1896,7 +2293,7 @@ same content\n\
 
 #[test]
 fn conflict_sync_region_resolutions_updates_manual_edit_and_pick() {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
 
@@ -1922,11 +2319,13 @@ theirs two\n\
 >>>>>>> theirs\n\
 ";
     let file = two_region_marker_conflict_file("file.txt", current);
+    let request = current_conflict_request(&state, repo_id);
     reduce(
         &mut repos,
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
+            request,
             repo_id,
             path: PathBuf::from("file.txt"),
             result: Box::new(Ok(Some(file))),
@@ -1942,6 +2341,7 @@ theirs two\n\
         .conflict_state
         .conflict_rev;
 
+    let origin = conflict_region_origin(&state);
     reduce(
         &mut repos,
         &id_alloc,
@@ -1949,6 +2349,7 @@ theirs two\n\
         Msg::ConflictSyncRegionResolutions {
             repo_id,
             path: PathBuf::from("file.txt").into(),
+            origin: origin.clone(),
             updates: vec![
                 crate::msg::ConflictRegionResolutionUpdate {
                     region_index: 0,
@@ -1987,7 +2388,7 @@ theirs two\n\
 
 #[test]
 fn conflict_sync_region_resolutions_noops_when_resolution_is_unchanged() {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
 
@@ -2017,11 +2418,13 @@ theirs one\n\
         theirs: Some("theirs one\n".to_string().into()),
         current: Some(current.to_string().into()),
     };
+    let request = current_conflict_request(&state, repo_id);
     reduce(
         &mut repos,
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
+            request,
             repo_id,
             path: PathBuf::from("file.txt"),
             result: Box::new(Ok(Some(file))),
@@ -2037,6 +2440,7 @@ theirs one\n\
         .conflict_state
         .conflict_rev;
 
+    let origin = conflict_region_origin(&state);
     reduce(
         &mut repos,
         &id_alloc,
@@ -2044,6 +2448,7 @@ theirs one\n\
         Msg::ConflictSyncRegionResolutions {
             repo_id,
             path: PathBuf::from("file.txt").into(),
+            origin: origin.clone(),
             updates: vec![crate::msg::ConflictRegionResolutionUpdate {
                 region_index: 0,
                 resolution: gitcomet_core::conflict_session::ConflictRegionResolution::Unresolved,
@@ -2067,7 +2472,7 @@ theirs one\n\
 
 #[test]
 fn repo_command_finished_checkout_conflict_side_syncs_all_session_regions() {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
 
@@ -2103,11 +2508,13 @@ theirs two\n\
         theirs: Some("theirs\n".to_string().into()),
         current: Some(current.to_string().into()),
     };
+    let request = current_conflict_request(&state, repo_id);
     reduce(
         &mut repos,
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
+            request,
             repo_id,
             path: PathBuf::from("file.txt"),
             result: Box::new(Ok(Some(file))),
@@ -2154,7 +2561,7 @@ theirs two\n\
 
 #[test]
 fn repo_command_finished_checkout_conflict_base_syncs_regions_with_base() {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
 
@@ -2194,11 +2601,13 @@ theirs two\n\
         theirs: Some("theirs one\ntheirs two\n".to_string().into()),
         current: Some(current.to_string().into()),
     };
+    let request = current_conflict_request(&state, repo_id);
     reduce(
         &mut repos,
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
+            request,
             repo_id,
             path: PathBuf::from("file.txt"),
             result: Box::new(Ok(Some(file))),
@@ -2244,7 +2653,7 @@ theirs two\n\
 
 #[test]
 fn repo_command_finished_accept_conflict_deletion_syncs_two_way_region_resolution() {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
 
@@ -2267,11 +2676,13 @@ fn repo_command_finished_accept_conflict_deletion_syncs_two_way_region_resolutio
         theirs: None,
         current: Some("ours only\n".to_string().into()),
     };
+    let request = current_conflict_request(&state, repo_id);
     reduce(
         &mut repos,
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
+            request,
             repo_id,
             path: PathBuf::from("file.txt"),
             result: Box::new(Ok(Some(file))),
@@ -2315,7 +2726,7 @@ fn repo_command_finished_accept_conflict_deletion_syncs_two_way_region_resolutio
 
 #[test]
 fn repo_command_finished_launch_mergetool_clears_conflict_context() {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
 
@@ -2327,11 +2738,13 @@ fn repo_command_finished_launch_mergetool_clears_conflict_context() {
         FileConflictKind::BothModified,
     );
 
+    let request = current_conflict_request(&state, repo_id);
     reduce(
         &mut repos,
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
+            request,
             repo_id,
             path: PathBuf::from("file.txt"),
             result: Box::new(Ok(Some(sample_marker_conflict_file("file.txt")))),
@@ -2383,7 +2796,7 @@ fn repo_command_finished_launch_mergetool_clears_conflict_context() {
 
 #[test]
 fn repo_command_finished_checkout_conflict_side_clears_binary_conflict_context() {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
 
@@ -2406,11 +2819,13 @@ fn repo_command_finished_checkout_conflict_side_clears_binary_conflict_context()
         theirs: None,
         current: None,
     };
+    let request = current_conflict_request(&state, repo_id);
     reduce(
         &mut repos,
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
+            request,
             repo_id,
             path: PathBuf::from("image.png"),
             result: Box::new(Ok(Some(file))),
@@ -2465,7 +2880,7 @@ fn repo_command_finished_checkout_conflict_side_clears_binary_conflict_context()
 
 #[test]
 fn repo_command_finished_checkout_conflict_base_clears_binary_conflict_context() {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
 
@@ -2488,11 +2903,13 @@ fn repo_command_finished_checkout_conflict_base_clears_binary_conflict_context()
         theirs: None,
         current: None,
     };
+    let request = current_conflict_request(&state, repo_id);
     reduce(
         &mut repos,
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
+            request,
             repo_id,
             path: PathBuf::from("image.png"),
             result: Box::new(Ok(Some(file))),
@@ -2546,7 +2963,7 @@ fn repo_command_finished_checkout_conflict_base_clears_binary_conflict_context()
 
 #[test]
 fn repo_command_finished_conflict_sync_noops_when_paths_or_session_do_not_match() {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
 
@@ -2592,11 +3009,13 @@ fn repo_command_finished_conflict_sync_noops_when_paths_or_session_do_not_match(
     );
 
     // Load a normal session.
+    let request = current_conflict_request(&state, repo_id);
     reduce(
         &mut repos,
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
+            request,
             repo_id,
             path: PathBuf::from("file.txt"),
             result: Box::new(Ok(Some(sample_marker_conflict_file("file.txt")))),
@@ -2683,7 +3102,7 @@ fn repo_command_finished_conflict_sync_noops_when_paths_or_session_do_not_match(
 
 #[test]
 fn repo_command_finished_checkout_conflict_side_ours_syncs_region_resolution() {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
 
@@ -2694,11 +3113,13 @@ fn repo_command_finished_checkout_conflict_side_ours_syncs_region_resolution() {
         "file.txt",
         FileConflictKind::BothModified,
     );
+    let request = current_conflict_request(&state, repo_id);
     reduce(
         &mut repos,
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
+            request,
             repo_id,
             path: PathBuf::from("file.txt"),
             result: Box::new(Ok(Some(sample_marker_conflict_file("file.txt")))),
@@ -2739,7 +3160,7 @@ fn repo_command_finished_checkout_conflict_side_ours_syncs_region_resolution() {
 
 #[test]
 fn repo_command_finished_accept_conflict_deletion_maps_added_by_them_to_pick_ours() {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
 
@@ -2762,11 +3183,13 @@ fn repo_command_finished_accept_conflict_deletion_maps_added_by_them_to_pick_our
         theirs: Some("theirs only\n".to_string().into()),
         current: Some("theirs only\n".to_string().into()),
     };
+    let request = current_conflict_request(&state, repo_id);
     reduce(
         &mut repos,
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
+            request,
             repo_id,
             path: PathBuf::from("file.txt"),
             result: Box::new(Ok(Some(file))),
@@ -2804,7 +3227,7 @@ fn repo_command_finished_accept_conflict_deletion_maps_added_by_them_to_pick_our
 
 #[test]
 fn repo_command_finished_accept_conflict_deletion_maps_both_modified_to_pick_ours() {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
 
@@ -2815,11 +3238,13 @@ fn repo_command_finished_accept_conflict_deletion_maps_both_modified_to_pick_our
         "file.txt",
         FileConflictKind::BothModified,
     );
+    let request = current_conflict_request(&state, repo_id);
     reduce(
         &mut repos,
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
+            request,
             repo_id,
             path: PathBuf::from("file.txt"),
             result: Box::new(Ok(Some(sample_marker_conflict_file("file.txt")))),
@@ -2857,7 +3282,7 @@ fn repo_command_finished_accept_conflict_deletion_maps_both_modified_to_pick_our
 
 #[test]
 fn repo_command_finished_checkout_conflict_base_noops_for_regions_without_base() {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
 
@@ -2880,11 +3305,13 @@ fn repo_command_finished_checkout_conflict_base_noops_for_regions_without_base()
         theirs: Some("theirs only\n".to_string().into()),
         current: Some("theirs only\n".to_string().into()),
     };
+    let request = current_conflict_request(&state, repo_id);
     reduce(
         &mut repos,
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
+            request,
             repo_id,
             path: PathBuf::from("file.txt"),
             result: Box::new(Ok(Some(file))),
@@ -2932,7 +3359,7 @@ fn repo_command_finished_checkout_conflict_base_noops_for_regions_without_base()
 /// side (so it can be split) and the second block has one. Returns the repo id.
 fn setup_two_conflict_file(
     state: &mut AppState,
-    repos: &mut FxHashMap<RepoId, Arc<dyn GitRepository>>,
+    repos: &mut RepositoryRuntimes,
     id_alloc: &AtomicU64,
 ) -> RepoId {
     let repo_id = setup_repo_with_conflict(
@@ -2973,11 +3400,13 @@ fn setup_two_conflict_file(
         theirs: Some("theirs one\ntheirs two\nmiddle\ntheirs three\n".into()),
         current: Some(current.to_string().into()),
     };
+    let request = current_conflict_request(state, repo_id);
     reduce(
         repos,
         id_alloc,
         state,
         Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
+            request,
             repo_id,
             path: PathBuf::from("file.txt"),
             result: Box::new(Ok(Some(file))),
@@ -2993,7 +3422,7 @@ fn conflict_split_region_stays_in_memory_and_carries_over_resolutions() {
         ConflictRegionResolution, ConflictRegionSplitBoundaries,
     };
 
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
     let repo_id = setup_two_conflict_file(&mut state, &mut repos, &id_alloc);
@@ -3107,7 +3536,7 @@ fn conflict_split_partitions_source_backed_autosolved_content() {
         AutosolveRule, ConflictRegionResolution, ConflictRegionSplitBoundaries,
     };
 
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
     let repo_id = setup_two_conflict_file(&mut state, &mut repos, &id_alloc);
@@ -3169,7 +3598,7 @@ fn conflict_split_preserves_arbitrary_manual_content_by_refusing_the_split() {
         ConflictRegionResolution, ConflictRegionSplitBoundaries,
     };
 
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
     let repo_id = setup_two_conflict_file(&mut state, &mut repos, &id_alloc);
@@ -3219,7 +3648,7 @@ fn conflict_split_preserves_arbitrary_manual_content_by_refusing_the_split() {
 fn conflict_split_geometry_survives_same_path_reload() {
     use gitcomet_core::conflict_session::ConflictRegionSplitBoundaries;
 
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
     let repo_id = setup_two_conflict_file(&mut state, &mut repos, &id_alloc);
@@ -3255,11 +3684,13 @@ fn conflict_split_geometry_survives_same_path_reload() {
             mode: crate::model::ConflictFileLoadMode::Full,
         },
     );
+    let request = current_conflict_request(&state, repo_id);
     reduce(
         &mut repos,
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
+            request,
             repo_id,
             path: PathBuf::from("file.txt"),
             result: Box::new(Ok(Some(loaded_file))),
@@ -3288,7 +3719,7 @@ fn conflict_split_geometry_survives_same_path_reload() {
 fn conflict_join_regions_merges_blocks_without_writing() {
     use gitcomet_core::conflict_session::ConflictRegionResolution;
 
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
     let repo_id = setup_two_conflict_file(&mut state, &mut repos, &id_alloc);
@@ -3360,7 +3791,7 @@ fn conflict_join_regions_merges_blocks_without_writing() {
 
 #[test]
 fn conflict_join_geometry_survives_same_path_reload() {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
     let repo_id = setup_two_conflict_file(&mut state, &mut repos, &id_alloc);
@@ -3391,11 +3822,13 @@ fn conflict_join_geometry_survives_same_path_reload() {
             mode: crate::model::ConflictFileLoadMode::Full,
         },
     );
+    let request = current_conflict_request(&state, repo_id);
     reduce(
         &mut repos,
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
+            request,
             repo_id,
             path: PathBuf::from("file.txt"),
             result: Box::new(Ok(Some(loaded_file))),
@@ -3426,7 +3859,7 @@ fn conflict_join_regions_carries_following_resolution_to_shifted_index() {
         ConflictRegionResolution, ConflictRegionSplitBoundaries,
     };
 
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
     let repo_id = setup_two_conflict_file(&mut state, &mut repos, &id_alloc);
@@ -3503,7 +3936,7 @@ fn conflict_join_regions_carries_following_resolution_to_shifted_index() {
 fn conflict_split_noops_on_degenerate_selection() {
     use gitcomet_core::conflict_session::ConflictRegionSplitBoundaries;
 
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
     let repo_id = setup_two_conflict_file(&mut state, &mut repos, &id_alloc);
@@ -3543,7 +3976,7 @@ fn conflict_split_noops_on_degenerate_selection() {
 fn conflict_split_region_rejects_stale_revision() {
     use gitcomet_core::conflict_session::ConflictRegionSplitBoundaries;
 
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
     let repo_id = setup_two_conflict_file(&mut state, &mut repos, &id_alloc);
@@ -3585,7 +4018,7 @@ fn conflict_reload_via_stash_keeps_ordered_resolution() {
     use gitcomet_core::conflict_session::ConflictRegionResolution;
     use gitcomet_core::domain::{DiffArea, DiffTarget};
 
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
 
@@ -3610,12 +4043,14 @@ fn conflict_reload_via_stash_keeps_ordered_resolution() {
         theirs: Some("remote\n".to_string().into()),
         current: Some(current.to_string().into()),
     };
-    let load = |repos: &mut FxHashMap<RepoId, Arc<dyn GitRepository>>, state: &mut AppState| {
+    let load = |repos: &mut RepositoryRuntimes, state: &mut AppState| {
+        let request = current_conflict_request(state, repo_id);
         reduce(
             repos,
             &id_alloc,
             state,
             Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
+                request,
                 repo_id,
                 path: PathBuf::from("file.txt"),
                 result: Box::new(Ok(Some(make_file()))),
@@ -3691,7 +4126,7 @@ fn conflict_reload_via_stash_keeps_ordered_resolution() {
 fn same_path_explicit_full_load_restores_session_resolutions() {
     use gitcomet_core::conflict_session::ConflictRegionResolution;
 
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
     let repo_id = setup_two_conflict_file(&mut state, &mut repos, &id_alloc);
@@ -3734,11 +4169,13 @@ fn same_path_explicit_full_load_restores_session_resolutions() {
         ConflictRegionResolution::PickTheirs,
     );
 
+    let request = current_conflict_request(&state, repo_id);
     reduce(
         &mut repos,
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
+            request,
             repo_id,
             path: PathBuf::from("file.txt"),
             result: Box::new(Ok(Some(file))),
@@ -3762,7 +4199,7 @@ fn same_path_explicit_full_load_restores_session_resolutions() {
 fn failed_same_path_reload_keeps_stash_for_retry() {
     use gitcomet_core::conflict_session::ConflictRegionResolution;
 
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
     let repo_id = setup_two_conflict_file(&mut state, &mut repos, &id_alloc);
@@ -3792,11 +4229,13 @@ fn failed_same_path_reload_keeps_stash_for_retry() {
             mode: crate::model::ConflictFileLoadMode::Full,
         },
     );
+    let request = current_conflict_request(&state, repo_id);
     reduce(
         &mut repos,
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
+            request,
             repo_id,
             path: PathBuf::from("file.txt"),
             result: Box::new(Err(Error::new(ErrorKind::Backend("transient".into())))),
@@ -3822,11 +4261,13 @@ fn failed_same_path_reload_keeps_stash_for_retry() {
             mode: crate::model::ConflictFileLoadMode::Full,
         },
     );
+    let request = current_conflict_request(&state, repo_id);
     reduce(
         &mut repos,
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
+            request,
             repo_id,
             path: PathBuf::from("file.txt"),
             result: Box::new(Ok(Some(file))),
@@ -3855,7 +4296,7 @@ fn resolution_restore_finds_unique_regions_after_large_prefix_deletion() {
             .collect()
     }
 
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
     let repo_id = setup_repo_with_conflict(
@@ -3881,11 +4322,13 @@ fn resolution_restore_finds_unique_regions_after_large_prefix_deletion() {
             current: Some("".into()),
         }
     };
+    let request = current_conflict_request(&state, repo_id);
     reduce(
         &mut repos,
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
+            request,
             repo_id,
             path: PathBuf::from("file.txt"),
             result: Box::new(Ok(Some(make_file(0..40)))),
@@ -3913,11 +4356,13 @@ fn resolution_restore_finds_unique_regions_after_large_prefix_deletion() {
             mode: crate::model::ConflictFileLoadMode::CurrentOnly,
         },
     );
+    let request = current_conflict_request(&state, repo_id);
     reduce(
         &mut repos,
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
+            request,
             repo_id,
             path: PathBuf::from("file.txt"),
             result: Box::new(Ok(Some(make_file(33..40)))),
@@ -3940,7 +4385,7 @@ fn resolution_restore_finds_unique_regions_after_large_prefix_deletion() {
 
 #[test]
 fn clearing_conflict_context_drops_pending_restore_session() {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
     let repo_id = setup_two_conflict_file(&mut state, &mut repos, &id_alloc);
@@ -3986,7 +4431,7 @@ fn clearing_conflict_context_drops_pending_restore_session() {
 fn conflict_manual_alignment_replans_in_memory_and_clears_back() {
     use gitcomet_core::merge::ManualAlignment;
 
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
     let repo_id = setup_two_conflict_file(&mut state, &mut repos, &id_alloc);
@@ -4046,7 +4491,7 @@ fn conflict_manual_alignment_replans_in_memory_and_clears_back() {
 fn conflict_manual_alignment_rejects_a_stale_revision() {
     use gitcomet_core::merge::ManualAlignment;
 
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
     let repo_id = setup_two_conflict_file(&mut state, &mut repos, &id_alloc);

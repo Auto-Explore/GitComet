@@ -391,6 +391,7 @@ mod tests {
         Remote {
             name: name.to_string(),
             url: Some(url.to_string()),
+            default_branch: None,
         }
     }
 
@@ -827,6 +828,7 @@ mod tests {
         let no_url = [Remote {
             name: "origin".to_string(),
             url: None,
+            default_branch: None,
         }];
         assert_eq!(commit_permalink(&no_url, "abc123"), None);
     }
@@ -907,6 +909,7 @@ mod tests {
             Remote {
                 name: "no-url".to_string(),
                 url: None,
+                default_branch: None,
             },
             remote("local", "/srv/git/repo.git"),
             remote("upstream", "https://github.com/org/repo.git"),

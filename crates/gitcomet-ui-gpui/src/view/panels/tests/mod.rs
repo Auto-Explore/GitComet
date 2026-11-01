@@ -1,12 +1,10 @@
 #![allow(clippy::type_complexity)]
 
 pub(super) use super::main::{
-    conflict_side_output_bytes, next_conflict_diff_split_ratio, show_conflict_save_stage_action,
-    show_external_mergetool_actions,
+    conflict_side_output_bytes, next_conflict_diff_split_ratio, show_external_mergetool_actions,
 };
 pub(super) use super::*;
-pub(super) use crate::test_support::{lock_clipboard_test, lock_visual_test};
-pub(super) use crate::view::panes::main::PreparedSyntaxViewMode;
+pub(super) use crate::view::panes::diff::helpers::state::PreparedSyntaxViewMode;
 pub(super) use crate::view::show_diff_file_navigation;
 pub(super) use crate::view::test_support::TestBackend;
 pub(super) use gitcomet_state::store::AppStore;
@@ -15,19 +13,17 @@ pub(super) use std::path::Path;
 pub(super) use std::sync::Arc;
 pub(super) use std::sync::atomic::{AtomicUsize, Ordering};
 
-/// Holds the shared filesystem worker, so editor saves queued meanwhile stay
-/// in flight until [`HeldEditorSaves::release`]. The UI thread must not read
-/// through the editor while held: that read takes the same lock.
+/// Holds a test store's filesystem engine, so that store's editor saves queued
+/// meanwhile stay in flight until [`HeldEditorSaves::release`]. The UI thread
+/// must not read through the editor while held: that read takes the same lock.
 pub(super) struct HeldEditorSaves(
     Option<std::sync::MutexGuard<'static, gitcomet_core::filesystem::Filesystem>>,
 );
 
-pub(super) fn hold_editor_saves() -> HeldEditorSaves {
-    HeldEditorSaves(Some(
-        gitcomet_core::filesystem::global()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner()),
-    ))
+pub(super) fn hold_editor_saves(
+    filesystem: &'static std::sync::Mutex<gitcomet_core::filesystem::Filesystem>,
+) -> HeldEditorSaves {
+    HeldEditorSaves(Some(filesystem.lock().unwrap_or_else(|e| e.into_inner())))
 }
 
 impl HeldEditorSaves {
@@ -38,28 +34,62 @@ impl HeldEditorSaves {
     }
 }
 
-/// Filesystem effects run on the real shared worker. Pump the results into the
+/// Filesystem effects run on the store's real filesystem worker. Pump the results into the
 /// pane without replacing the synthetic repository the fixture pushed.
 pub(super) fn finish_editor_saves(
     view: &gpui::Entity<GitCometView>,
     cx: &mut gpui::VisualTestContext,
 ) {
-    for _ in 0..200 {
+    // A save is real disk I/O on two worker threads; loaded Windows CI runners
+    // have taken over 1 s, so this is a hang guard, not a speed check.
+    let deadline = std::time::Instant::now() + DEFAULT_MAIN_PANE_WAIT_TIMEOUT;
+    loop {
         cx.run_until_parked();
         let drained = cx.update(|_, app| {
-            let main = view.read(app).main_pane.clone();
-            main.update(app, |pane, cx| {
-                let snapshot = pane.store.snapshot();
-                pane.process_file_editor_saves(&snapshot, cx);
-                pane.file_editor_saves.is_empty()
-            })
+            let main = view.read(app).diff_renderer.clone();
+            let owner = view.read(app).ui_model.read(app).documents.clone();
+            let snapshot = main.read(app).store.snapshot().expect("window store");
+            owner.finish_saves(&snapshot, app);
+            main.read(app).editor_documents.pending().is_empty()
         });
         if drained {
             return;
         }
+        if std::time::Instant::now() >= deadline {
+            let report = cx.update(|_, app| unfinished_saves_report(view, app));
+            panic!(
+                "filesystem save did not finish within {DEFAULT_MAIN_PANE_WAIT_TIMEOUT:?}: {report}"
+            );
+        }
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
-    panic!("filesystem save did not finish");
+}
+
+/// Where each unfinished save stands: still in the store's engine, finished but
+/// never taken by the pane, or never seen by the store.
+fn unfinished_saves_report(view: &gpui::Entity<GitCometView>, app: &gpui::App) -> String {
+    let main = view.read(app).diff_renderer.read(app);
+    let snapshot = main.store.snapshot().expect("window store");
+    let waiting: Vec<_> = main
+        .editor_documents
+        .pending()
+        .iter()
+        .filter_map(|buffer| {
+            let state = buffer.read();
+            let save = state.saving().as_ref()?;
+            Some((save.operation, save.destination.clone()))
+        })
+        .collect();
+    let completed: Vec<_> = snapshot
+        .filesystem
+        .completed
+        .iter()
+        .map(|result| result.id)
+        .collect();
+    format!(
+        "pane waits on {waiting:?}; store in flight {:?}, completed {completed:?}",
+        snapshot.filesystem.pending
+    )
 }
 
 pub(super) fn simulate_counted_click(
@@ -93,7 +123,7 @@ pub(super) fn simulate_modified_click(
 }
 
 fn diff_text_click_position_for_offset_range(
-    pane: &MainPaneView,
+    pane: &DiffRenderer,
     visible_ix: usize,
     region: DiffTextRegion,
     target: std::ops::Range<usize>,
@@ -126,7 +156,7 @@ pub(super) fn wait_for_diff_text_click_position_for_offset_range(
         cx.run_until_parked();
 
         if let Some(position) = cx.update(|_window, app| {
-            let pane = view.read(app).main_pane.read(app);
+            let pane = view.read(app).diff_renderer.read(app);
             diff_text_click_position_for_offset_range(pane, visible_ix, region, target.clone())
         }) {
             return position;
@@ -134,7 +164,7 @@ pub(super) fn wait_for_diff_text_click_position_for_offset_range(
 
         if std::time::Instant::now() >= deadline {
             let snapshot = cx.update(|_window, app| {
-                let pane = view.read(app).main_pane.read(app);
+                let pane = view.read(app).diff_renderer.read(app);
                 (
                     pane.diff_visible_len(),
                     pane.diff_text_hitboxes
@@ -161,14 +191,6 @@ const _: () = {
 fn shows_external_mergetool_actions_only_in_normal_mode() {
     assert!(show_external_mergetool_actions(GitCometViewMode::Normal));
     assert!(!show_external_mergetool_actions(
-        GitCometViewMode::FocusedMergetool
-    ));
-}
-
-#[test]
-fn shows_save_stage_action_only_in_normal_mode() {
-    assert!(show_conflict_save_stage_action(GitCometViewMode::Normal));
-    assert!(!show_conflict_save_stage_action(
         GitCometViewMode::FocusedMergetool
     ));
 }
@@ -251,52 +273,52 @@ fn conflict_resolver_strategy_maps_conflict_kinds() {
     use gitcomet_core::domain::FileConflictKind as K;
 
     assert_eq!(
-        MainPaneView::conflict_resolver_strategy(Some(K::BothModified), false),
+        DiffRenderer::conflict_resolver_strategy(Some(K::BothModified), false),
         Some(S::FullTextResolver),
     );
     assert_eq!(
-        MainPaneView::conflict_resolver_strategy(Some(K::BothAdded), false),
+        DiffRenderer::conflict_resolver_strategy(Some(K::BothAdded), false),
         Some(S::FullTextResolver),
     );
     assert_eq!(
-        MainPaneView::conflict_resolver_strategy(Some(K::AddedByUs), false),
+        DiffRenderer::conflict_resolver_strategy(Some(K::AddedByUs), false),
         Some(S::TwoWayKeepDelete),
     );
     assert_eq!(
-        MainPaneView::conflict_resolver_strategy(Some(K::AddedByThem), false),
+        DiffRenderer::conflict_resolver_strategy(Some(K::AddedByThem), false),
         Some(S::TwoWayKeepDelete),
     );
     assert_eq!(
-        MainPaneView::conflict_resolver_strategy(Some(K::DeletedByUs), false),
+        DiffRenderer::conflict_resolver_strategy(Some(K::DeletedByUs), false),
         Some(S::TwoWayKeepDelete),
     );
     assert_eq!(
-        MainPaneView::conflict_resolver_strategy(Some(K::DeletedByThem), false),
+        DiffRenderer::conflict_resolver_strategy(Some(K::DeletedByThem), false),
         Some(S::TwoWayKeepDelete),
     );
     assert_eq!(
-        MainPaneView::conflict_resolver_strategy(Some(K::BothDeleted), false),
+        DiffRenderer::conflict_resolver_strategy(Some(K::BothDeleted), false),
         Some(S::DecisionOnly),
     );
-    assert_eq!(MainPaneView::conflict_resolver_strategy(None, false), None);
+    assert_eq!(DiffRenderer::conflict_resolver_strategy(None, false), None);
 
     // Binary flag overrides any conflict kind to BinarySidePick.
     assert_eq!(
-        MainPaneView::conflict_resolver_strategy(Some(K::BothModified), true),
+        DiffRenderer::conflict_resolver_strategy(Some(K::BothModified), true),
         Some(S::BinarySidePick),
     );
     assert_eq!(
-        MainPaneView::conflict_resolver_strategy(Some(K::DeletedByUs), true),
+        DiffRenderer::conflict_resolver_strategy(Some(K::DeletedByUs), true),
         Some(S::BinarySidePick),
     );
 }
 
 pub(super) fn set_ready_worktree_preview(
-    pane: &mut MainPaneView,
+    pane: &mut DiffRenderer,
     path: std::path::PathBuf,
     lines: Arc<Vec<String>>,
     source_len: usize,
-    cx: &mut gpui::Context<MainPaneView>,
+    cx: &mut gpui::Context<DiffRenderer>,
 ) {
     pane.set_worktree_preview_ready_rows(path, lines.as_ref(), source_len, cx);
     pane.worktree_preview_scroll
@@ -499,7 +521,7 @@ pub(super) fn styled_debug_info_with_styles(
 }
 
 pub(super) fn file_diff_split_row_ix(
-    pane: &MainPaneView,
+    pane: &DiffRenderer,
     region: DiffTextRegion,
     text: &str,
 ) -> Option<usize> {
@@ -513,7 +535,7 @@ pub(super) fn file_diff_split_row_ix(
 }
 
 pub(super) fn file_diff_split_cached_styled<'a>(
-    pane: &'a MainPaneView,
+    pane: &'a DiffRenderer,
     region: DiffTextRegion,
     text: &str,
 ) -> Option<&'a super::CachedDiffStyledText> {
@@ -524,7 +546,7 @@ pub(super) fn file_diff_split_cached_styled<'a>(
 }
 
 pub(super) fn file_diff_split_cached_debug(
-    pane: &MainPaneView,
+    pane: &DiffRenderer,
     region: DiffTextRegion,
     text: &str,
 ) -> Option<(gpui::SharedString, Vec<std::ops::Range<usize>>)> {
@@ -532,7 +554,7 @@ pub(super) fn file_diff_split_cached_debug(
 }
 
 pub(super) fn file_diff_inline_ix(
-    pane: &MainPaneView,
+    pane: &DiffRenderer,
     kind: gitcomet_core::domain::DiffLineKind,
     text: &str,
 ) -> Option<usize> {
@@ -542,7 +564,7 @@ pub(super) fn file_diff_inline_ix(
 }
 
 pub(super) fn file_diff_inline_cached_styled<'a>(
-    pane: &'a MainPaneView,
+    pane: &'a DiffRenderer,
     kind: gitcomet_core::domain::DiffLineKind,
     text: &str,
 ) -> Option<&'a super::CachedDiffStyledText> {
@@ -553,7 +575,7 @@ pub(super) fn file_diff_inline_cached_styled<'a>(
 }
 
 pub(super) fn file_diff_inline_cached_debug(
-    pane: &MainPaneView,
+    pane: &DiffRenderer,
     kind: gitcomet_core::domain::DiffLineKind,
     text: &str,
 ) -> Option<(gpui::SharedString, Vec<std::ops::Range<usize>>)> {
@@ -561,7 +583,7 @@ pub(super) fn file_diff_inline_cached_debug(
 }
 
 pub(super) fn conflict_split_row_ix(
-    pane: &MainPaneView,
+    pane: &DiffRenderer,
     side: crate::view::conflict_resolver::ConflictPickSide,
     text: &str,
 ) -> Option<usize> {
@@ -585,7 +607,7 @@ pub(super) fn conflict_split_row_ix(
 }
 
 pub(super) fn conflict_split_cached_styled<'a>(
-    pane: &'a MainPaneView,
+    pane: &'a DiffRenderer,
     side: crate::view::conflict_resolver::ConflictPickSide,
     text: &str,
 ) -> Option<&'a super::CachedDiffStyledText> {
@@ -704,7 +726,7 @@ pub(super) fn image_diff_svg_fixture(width: u32, height: u32, fill: &str) -> Vec
     .into_bytes()
 }
 
-pub(super) fn file_image_diff_cache_debug_snapshot(pane: &MainPaneView) -> String {
+pub(super) fn file_image_diff_cache_debug_snapshot(pane: &DiffRenderer) -> String {
     format!(
         "seq={} inflight={:?} repo_id={:?} cache_rev={} signature={:?} cache_target={:?} cache_path={:?} old_ready={} new_ready={} old_svg={:?} new_svg={:?} active_diff_file_rev={:?} active_diff_target={:?} active={}",
         pane.file_image_diff_cache_seq,
@@ -738,7 +760,7 @@ pub(super) fn draw_paint_record_for_visible_ix(
 ) -> rows::DiffPaintRecord {
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.scroll_diff_to_item_strict(visible_ix, gpui::ScrollStrategy::Top);
                 cx.notify();
             });
@@ -906,7 +928,6 @@ pub(super) fn assert_file_preview_ctrl_a_ctrl_c_copies_all(
     status_kind: gitcomet_core::domain::FileStatusKind,
     lines: Arc<Vec<String>>,
 ) {
-    let _clipboard_guard = lock_clipboard_test();
     let expected = lines.join("\n");
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
@@ -958,7 +979,7 @@ pub(super) fn assert_file_preview_ctrl_a_ctrl_c_copies_all(
             let workdir = workdir.clone();
             let file_rel = file_rel.clone();
             let lines = Arc::clone(&lines);
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 set_ready_worktree_preview(
                     pane,
                     workdir.join(&file_rel),
@@ -971,8 +992,8 @@ pub(super) fn assert_file_preview_ctrl_a_ctrl_c_copies_all(
     });
 
     cx.update(|window, app| {
-        let main_pane = view.read(app).main_pane.clone();
-        let focus = main_pane.read(app).diff_panel_focus_handle.clone();
+        let diff_renderer = view.read(app).diff_renderer.clone();
+        let focus = diff_renderer.read(app).diff_panel_focus_handle.clone();
         window.focus(&focus, app);
         let _ = window.draw(app);
     });
@@ -1020,7 +1041,6 @@ pub(super) fn assert_markdown_file_preview_toggle_visible(
     new_text: Option<&str>,
     create_worktree_file: bool,
 ) {
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
@@ -1138,7 +1158,7 @@ pub(super) fn assert_markdown_file_preview_toggle_visible(
     );
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         let rendered_preview_kind = crate::view::diff_target_rendered_preview_kind(
             pane.active_repo()
                 .and_then(|repo| repo.diff_state.diff_target.as_ref()),
@@ -1196,6 +1216,32 @@ pub(super) fn opening_repo_state(
     )
 }
 
+/// Loads the unstaged lane's counts as a finished scan does: the map and a
+/// new revision, which every cache of the counts keys on.
+pub(super) fn load_unstaged_line_stats(
+    repo: &mut gitcomet_state::model::RepoState,
+    counts: &[(&str, u32, u32)],
+) {
+    repo.uncommitted_line_stats = gitcomet_state::model::Loadable::Ready(Arc::new(
+        gitcomet_core::domain::UncommittedLineStats {
+            staged: Default::default(),
+            unstaged: counts
+                .iter()
+                .map(|(path, additions, deletions)| {
+                    (
+                        std::path::PathBuf::from(path),
+                        gitcomet_core::domain::LineStats::from((
+                            Some(*additions),
+                            Some(*deletions),
+                        )),
+                    )
+                })
+                .collect(),
+        },
+    ));
+    repo.unstaged_line_stats_rev += 1;
+}
+
 /// Publish `state` the way production does: into the store first, then into the
 /// UI model.
 ///
@@ -1210,10 +1256,20 @@ pub(super) fn push_test_state(
     state: Arc<AppState>,
     cx: &mut impl gpui::AppContext,
 ) {
+    let state = with_one_sided_sides(state);
     this.store.replace_snapshot_for_test(Arc::clone(&state));
+    crate::view::test_support::install_working_tree_repositories(&this.store);
     this.ui_model.update(cx, |model, cx| {
         model.set_state(state, cx);
     });
+}
+
+/// Records each selected diff's one side as the reducer's load plan does;
+/// hand-built states never pass through it.
+pub(super) fn with_one_sided_sides(state: Arc<AppState>) -> Arc<AppState> {
+    let mut state = Arc::unwrap_or_clone(state);
+    AppStore::record_planned_one_sided_sides_for_test(&mut state);
+    Arc::new(state)
 }
 
 /// Sets `repo.status` with a single file and `repo.diff_state.diff_target` in one call.
@@ -1283,10 +1339,10 @@ pub(super) fn set_test_file_status_with_conflict(
 pub(super) fn set_test_conflict_file(
     repo: &mut gitcomet_state::model::RepoState,
     path: impl Into<std::path::PathBuf>,
-    base: impl Into<String>,
-    ours: impl Into<String>,
-    theirs: impl Into<String>,
-    current: impl Into<String>,
+    base: impl Into<Arc<str>>,
+    ours: impl Into<Arc<str>>,
+    theirs: impl Into<Arc<str>>,
+    current: impl Into<Arc<str>>,
 ) {
     let path = path.into();
     repo.conflict_state.conflict_file_path = Some(path.clone());
@@ -1297,10 +1353,10 @@ pub(super) fn set_test_conflict_file(
             ours_bytes: None,
             theirs_bytes: None,
             current_bytes: None,
-            base: Some(base.into().into()),
-            ours: Some(ours.into().into()),
-            theirs: Some(theirs.into().into()),
-            current: Some(current.into().into()),
+            base: Some(base.into()),
+            ours: Some(ours.into()),
+            theirs: Some(theirs.into()),
+            current: Some(current.into()),
         }));
 }
 
@@ -1309,11 +1365,74 @@ pub(super) fn focus_diff_panel(
     view: &gpui::Entity<super::super::GitCometView>,
 ) {
     cx.update(|window, app| {
-        let main_pane = view.read(app).main_pane.clone();
-        let focus = main_pane.read(app).diff_panel_focus_handle.clone();
+        let diff_renderer = view.read(app).diff_renderer.clone();
+        let focus = diff_renderer.read(app).diff_panel_focus_handle.clone();
         window.focus(&focus, app);
         let _ = window.draw(app);
     });
+}
+
+/// The bottom bar's file arrows: `Some((previous enabled, next enabled))`,
+/// or `None` when the bar shows none. The arrows come as a pair and sit in
+/// the bar, not the header.
+pub(super) fn drawn_file_arrows(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+) -> Option<(bool, bool)> {
+    let prev = cx.debug_bounds("diff_prev_file");
+    let next = cx.debug_bounds("diff_next_file");
+    assert_eq!(
+        prev.is_some(),
+        next.is_some(),
+        "the file arrows come as a pair"
+    );
+    let (prev, next) = (prev?, next?);
+    let bar = cx
+        .debug_bounds("diff_bottom_bar")
+        .expect("the file arrows sit in the bottom bar");
+    assert!(
+        bar.contains(&prev.center()) && bar.contains(&next.center()),
+        "the file arrows sit in the bottom bar, not the header"
+    );
+    let nav = cx.update(|_window, app| {
+        let diff_renderer = view.read(app).diff_renderer.clone();
+        diff_renderer.update(app, |pane, cx| {
+            let repo_id = pane.active_repo_id();
+            pane.diff_bar_nav(repo_id, cx)
+        })
+    });
+    nav.map(|nav| (nav.can_prev, nav.can_next))
+}
+
+/// The bottom bar's Stage button's label, when it shows one.
+pub(super) fn diff_bar_stage_label(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+) -> Option<String> {
+    cx.debug_bounds("diff_bar_stage")?;
+    cx.update(|_window, app| {
+        let diff_renderer = view.read(app).diff_renderer.clone();
+        diff_renderer.update(app, |pane, cx| {
+            let repo_id = pane.active_repo_id()?;
+            pane.stage_action(repo_id, cx).map(|action| action.label())
+        })
+    })
+}
+
+/// The bottom bar's "2 of 3 files", when it shows one.
+pub(super) fn diff_bar_position(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+) -> Option<String> {
+    cx.debug_bounds("diff_bar_position")?;
+    cx.update(|_window, app| {
+        let diff_renderer = view.read(app).diff_renderer.clone();
+        diff_renderer.update(app, |pane, cx| {
+            let repo_id = pane.active_repo_id();
+            let (index, count) = pane.diff_bar_nav(repo_id, cx)?.position?;
+            Some(super::main::position_label(index, count))
+        })
+    })
 }
 
 pub(super) const DEFAULT_MAIN_PANE_WAIT_TIMEOUT: std::time::Duration =
@@ -1329,8 +1448,8 @@ pub(super) fn wait_for_main_pane_condition<T, Ready, Snapshot>(
     snapshot: Snapshot,
 ) where
     T: std::fmt::Debug,
-    Ready: Fn(&MainPaneView) -> bool,
-    Snapshot: Fn(&MainPaneView) -> T,
+    Ready: Fn(&DiffRenderer) -> bool,
+    Snapshot: Fn(&DiffRenderer) -> T,
 {
     wait_for_main_pane_condition_with_timeout(
         cx,
@@ -1351,8 +1470,8 @@ pub(super) fn wait_for_main_pane_condition_with_timeout<T, Ready, Snapshot>(
     snapshot: Snapshot,
 ) where
     T: std::fmt::Debug,
-    Ready: Fn(&MainPaneView) -> bool,
-    Snapshot: Fn(&MainPaneView) -> T,
+    Ready: Fn(&DiffRenderer) -> bool,
+    Snapshot: Fn(&DiffRenderer) -> T,
 {
     let deadline = std::time::Instant::now() + timeout;
     loop {
@@ -1362,7 +1481,7 @@ pub(super) fn wait_for_main_pane_condition_with_timeout<T, Ready, Snapshot>(
         cx.run_until_parked();
 
         let ready = cx.update(|_window, app| {
-            let pane = view.read(app).main_pane.read(app);
+            let pane = view.read(app).diff_renderer.read(app);
             is_ready(pane)
         });
         if ready {
@@ -1370,7 +1489,7 @@ pub(super) fn wait_for_main_pane_condition_with_timeout<T, Ready, Snapshot>(
         }
         if std::time::Instant::now() >= deadline {
             let snapshot = cx.update(|_window, app| {
-                let pane = view.read(app).main_pane.read(app);
+                let pane = view.read(app).diff_renderer.read(app);
                 snapshot(pane)
             });
             panic!("timed out waiting for {description}: {snapshot:?}");
@@ -1385,7 +1504,7 @@ pub(super) fn wait_for_file_image_diff_cache<Ready>(
     description: &str,
     is_ready: Ready,
 ) where
-    Ready: Fn(&MainPaneView) -> bool,
+    Ready: Fn(&DiffRenderer) -> bool,
 {
     wait_for_main_pane_condition(
         cx,
@@ -1420,6 +1539,8 @@ mod commit_file_selection;
 mod comparison;
 mod conflict;
 mod control_interaction;
+mod crlf_selection;
+mod diagrams;
 mod diff_marker_refresh;
 mod diff_stage_gutter;
 mod error_details;
@@ -1432,5 +1553,6 @@ mod folder_menus;
 mod large_file_diff;
 mod markdown;
 mod shortcuts;
+mod status_footer;
 mod status_staging;
 mod text_encoding;

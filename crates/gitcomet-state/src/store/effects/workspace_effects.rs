@@ -14,10 +14,11 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use super::super::RepoId;
+use super::super::repository_runtime::RepositoryRuntimes;
 use super::super::executor::TaskExecutor;
 use super::super::worker_channel::StoreWorkerSender;
 use super::util::{
-    RepoMap, missing_repo_error, send_or_log, spawn_detached_with_repo_or_else,
+    missing_repo_error, send_or_log, spawn_detached_with_repo_or_else,
     spawn_with_repo_or_else,
 };
 
@@ -25,7 +26,7 @@ use super::util::{
 /// pass, so the view has all three before it draws rather than filling in.
 pub(super) fn schedule_load_workspace(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
 ) {
@@ -87,7 +88,7 @@ fn read_workspace_commit(
 /// exists that Git does not have.
 pub(super) fn schedule_apply_workspace_edit(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     edit: WorkspaceEdit,
@@ -298,7 +299,7 @@ fn rebuild_workspace(
 /// Put the working directory on the workspace branch.
 pub(super) fn schedule_enter_workspace(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     checkout_base: Option<String>,
@@ -338,7 +339,7 @@ pub(super) fn schedule_enter_workspace(
 /// Take the working directory back off the workspace branch.
 pub(super) fn schedule_leave_workspace(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     checkout_base: Option<String>,
@@ -423,7 +424,7 @@ fn resolve_leave_target(
 /// working directory the workspace still holds.
 pub(super) fn schedule_leave_workspace_and_checkout(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     checkout_base: Option<String>,
@@ -470,7 +471,7 @@ pub(super) fn schedule_leave_workspace_and_checkout(
 /// Persist one file's branch assignment.
 pub(super) fn schedule_assign_workspace_file(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     path: PathBuf,
@@ -529,7 +530,7 @@ pub(super) fn schedule_assign_workspace_file(
 /// caller's concern when it opens a pull request.
 pub(super) fn schedule_push_workspace_branch(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     name: String,

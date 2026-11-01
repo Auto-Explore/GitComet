@@ -2,6 +2,133 @@
 
 use super::*;
 
+#[gpui::test]
+fn razor_view_conflict_output_preserves_embedded_styles_after_live_edits(
+    cx: &mut gpui::TestAppContext,
+) {
+    assert_razor_conflict_output_styles(cx, "Index.cshtml");
+}
+
+#[gpui::test]
+fn razor_component_conflict_output_preserves_embedded_styles_after_live_edits(
+    cx: &mut gpui::TestAppContext,
+) {
+    assert_razor_conflict_output_styles(cx, "Index.razor");
+}
+
+fn assert_razor_conflict_output_styles(cx: &mut gpui::TestAppContext, filename: &str) {
+    let ours = concat!(
+        "@* Razor comment *@\n",
+        "@{ var title = \"server ours\"; }\n",
+        "<p class=\"card\">@title</p>\n",
+        "<script>const label = \"client:@title:suffix\";</script>\n",
+    );
+    let base = ours.replace("ours", "base");
+    let theirs = ours.replace("ours", "theirs");
+    let current = format!("<<<<<<< ours\n{ours}=======\n{theirs}>>>>>>> theirs\n");
+    let directory = tempfile::tempdir().unwrap();
+    let workdir = directory.path().canonicalize().unwrap();
+    let path = std::path::Path::new(filename);
+    std::fs::write(workdir.join(path), &current).unwrap();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    cx.update(|_, app| {
+        view.read(app).diff_renderer.clone().update(app, |pane, _| {
+            pane.live_syntax_unbounded_for_tests = true;
+        });
+    });
+    seed_conflict_scroll_matrix_state(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(1001),
+        &workdir,
+        path,
+        &base,
+        ours,
+        &theirs,
+        &current,
+    );
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "Razor conflict initialized",
+        |pane| pane.conflict_resolver.path.as_deref() == Some(path),
+        |pane| format!("path={:?}", pane.conflict_resolver.path),
+    );
+    let renderer = cx.update(|_, app| view.read(app).diff_renderer.clone());
+    cx.update(|_, app| {
+        renderer.update(app, |pane, cx| {
+            pane.ensure_conflict_resolved_output_materialized(cx)
+        });
+    });
+    cx.run_until_parked();
+
+    for edited in [false, true] {
+        let expected_text = if edited {
+            ours.replace("ours", "edited 😀")
+        } else {
+            ours.to_owned()
+        };
+        if edited {
+            let start = ours.find("ours").unwrap();
+            cx.update(|_, app| {
+                renderer.update(app, |pane, cx| {
+                    pane.conflict_resolver_input.update(cx, |input, cx| {
+                        input.replace_utf8_range(start..start + "ours".len(), "edited 😀", cx);
+                    });
+                });
+            });
+            cx.run_until_parked();
+        }
+        cx.update(|_, app| {
+            renderer.update(app, |pane, cx| {
+                assert!(pane.conflict_resolved_output_projection.is_none());
+                assert_eq!(
+                    pane.conflict_resolved_preview_syntax_language,
+                    Some(rows::DiffSyntaxLanguage::Razor)
+                );
+                assert_eq!(pane.conflict_resolver_input.read(cx).text(), expected_text);
+                let document = pane
+                    .conflict_resolved_output_live_syntax
+                    .as_ref()
+                    .expect("live Razor conflict output");
+                assert_eq!(document.language(), rows::DiffSyntaxLanguage::Razor);
+                let expected = document
+                    .snapshot(crate::kit::syntax_style::SyntaxHighlightPalette::new(
+                        pane.theme,
+                    ))
+                    .highlights_for_byte_range(0..expected_text.len());
+                let rendered = pane.conflict_resolver_input.update(cx, |input, _| {
+                    input.debug_effective_highlights_for_range(0..expected_text.len())
+                });
+                assert_eq!(
+                    rendered, expected,
+                    "{filename}: resolved output must retain engine runs"
+                );
+                for (token, color) in [
+                    ("Razor comment", pane.theme.syntax.comment),
+                    ("var", pane.theme.syntax.keyword),
+                    ("server", pane.theme.syntax.string),
+                    ("p class", pane.theme.syntax.tag),
+                    ("class", pane.theme.syntax.attribute),
+                    ("const", pane.theme.syntax.keyword),
+                    ("client:", pane.theme.syntax.string),
+                    (":suffix", pane.theme.syntax.string),
+                ] {
+                    let offset = expected_text.find(token).unwrap();
+                    let actual = rendered.iter().find(|(range, _)| range.contains(&offset));
+                    assert_eq!(
+                        actual.and_then(|(_, style)| style.color),
+                        Some(color.into_color()),
+                        "{filename}: {token:?} lost its language style after edit={edited}"
+                    );
+                }
+            });
+        });
+    }
+}
+
 /// The input columns stream a whole-file conflict, but the resolved output is
 /// editable at any size — the two gates are independent. `StreamedLargeFile`
 /// describes how the A/B/C columns render; it never demotes the output pane to
@@ -57,7 +184,7 @@ fn whole_file_conflict_bootstrap_streams_input_but_keeps_output_editable(
 
     cx.update(|_window, app| {
         view.update(app, |this, _cx| {
-            this.main_pane.update(_cx, |pane, _cx| {
+            this.diff_renderer.update(_cx, |pane, _cx| {
                 assert_streamed_whole_file_two_way_state(pane, fixture.line_count);
                 assert!(
                     pane.conflict_resolved_output_projection.is_none(),
@@ -73,7 +200,7 @@ fn whole_file_conflict_bootstrap_streams_input_but_keeps_output_editable(
     });
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         let expected = crate::view::conflict_resolver::generate_resolved_text(
             &pane.conflict_resolver.marker_segments,
         );
@@ -131,12 +258,12 @@ fn a_resolved_output_past_the_old_editable_ceiling_still_accepts_edits(
         },
     );
 
-    let main_pane = cx.update(|_window, app| view.read(app).main_pane.clone());
+    let diff_renderer = cx.update(|_window, app| view.read(app).diff_renderer.clone());
 
     // Take "ours" for the single whole-file conflict. This is the step the old
     // ceiling refused: it expands a one-line placeholder into the full file.
     cx.update(|_window, app| {
-        main_pane.update(app, |pane, cx| {
+        diff_renderer.update(app, |pane, cx| {
             pane.conflict_resolver_pick_at(
                 0,
                 crate::view::conflict_resolver::ConflictChoice::Ours,
@@ -147,7 +274,7 @@ fn a_resolved_output_past_the_old_editable_ceiling_still_accepts_edits(
     cx.run_until_parked();
 
     let before = cx.update(|_window, app| {
-        main_pane
+        diff_renderer
             .read(app)
             .conflict_resolver_input
             .read(app)
@@ -161,14 +288,16 @@ fn a_resolved_output_past_the_old_editable_ceiling_still_accepts_edits(
         before.lines().count()
     );
     assert!(
-        cx.update(|_window, app| !main_pane.read(app).conflict_resolved_output_is_streamed()),
+        cx.update(|_window, app| !diff_renderer
+            .read(app)
+            .conflict_resolved_output_is_streamed()),
         "an output expanded past the old ceiling must stay editable, not fall back to streamed",
     );
 
     // Append at the very end, which is never inside a protected marker range.
     let at = before.len();
     cx.update(|_window, app| {
-        main_pane.update(app, |pane, cx| {
+        diff_renderer.update(app, |pane, cx| {
             pane.conflict_resolver_input.update(cx, |input, cx| {
                 input.replace_utf8_range(at..at, "edited", cx);
             });
@@ -177,7 +306,7 @@ fn a_resolved_output_past_the_old_editable_ceiling_still_accepts_edits(
     cx.run_until_parked();
 
     let after = cx.update(|_window, app| {
-        main_pane
+        diff_renderer
             .read(app)
             .conflict_resolver_input
             .read(app)
@@ -238,7 +367,7 @@ fn whole_file_conflict_stage_anyway_serializes_the_materialized_output(
     let (expected, actual, input_before, input_after, projection_after) =
         cx.update(|_window, app| {
             view.update(app, |this, cx| {
-                this.main_pane.update(cx, |pane, cx| {
+                this.diff_renderer.update(cx, |pane, cx| {
                     let expected = crate::view::conflict_resolver::generate_resolved_text(
                         &pane.conflict_resolver.marker_segments,
                     );
@@ -294,7 +423,7 @@ fn structured_conflict_edit_reuses_stashed_outline_base_while_background_recompu
     let repo_id = gitcomet_state::model::RepoId(168);
     let fixture = SyntheticLargeConflictFixture::new(
         "resolved_outline_pending_incremental",
-        "fixtures/resolved_outline_pending.html",
+        "fixtures/resolved_outline_pending.txt",
         20_000,
         4,
     );
@@ -333,7 +462,7 @@ fn structured_conflict_edit_reuses_stashed_outline_base_while_background_recompu
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.ensure_conflict_resolved_output_materialized(cx);
             });
         });
@@ -361,7 +490,7 @@ fn structured_conflict_edit_reuses_stashed_outline_base_while_background_recompu
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.recompute_conflict_resolved_outline_for_tests(cx);
                 pane.conflict_resolver.resolver_pending_recompute_seq = pane
                     .conflict_resolver
@@ -417,7 +546,7 @@ fn structured_conflict_edit_reuses_stashed_outline_base_while_background_recompu
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 let first_block = pane
                     .conflict_resolver
                     .marker_segments
@@ -499,7 +628,7 @@ fn giant_two_way_resync_rebuilds_split_index_after_manual_session_edit(
     let repo_id = gitcomet_state::model::RepoId(172);
     let fixture = SyntheticLargeConflictFixture::new(
         "giant_two_way_resync_manual_edit",
-        "fixtures/resync_manual_edit.html",
+        "fixtures/resync_manual_edit.txt",
         20_001,
         4,
     );
@@ -507,7 +636,7 @@ fn giant_two_way_resync_rebuilds_split_index_after_manual_session_edit(
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, _cx| {
+            this.diff_renderer.update(cx, |pane, _cx| {
                 pane.set_full_document_syntax_budget_override_for_tests(rows::DiffSyntaxBudget {
                     foreground_parse: std::time::Duration::ZERO,
                 });
@@ -540,7 +669,7 @@ fn giant_two_way_resync_rebuilds_split_index_after_manual_session_edit(
 
     let initial_visible_len = cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.conflict_resolver_set_view_mode(ConflictResolverViewMode::TwoWayDiff, cx);
                 pane.conflict_resolver.two_way_split_visible_len()
             })
@@ -633,7 +762,7 @@ fn giant_two_way_resync_rebuilds_split_index_after_manual_session_edit(
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.conflict_resolver_set_view_mode(ConflictResolverViewMode::TwoWayDiff, cx);
 
                 assert_eq!(
@@ -797,7 +926,7 @@ fn large_conflict_resolved_output_above_the_old_line_gate_is_highlighted(
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, _cx| {
+            this.diff_renderer.update(cx, |pane, _cx| {
                 pane.set_full_document_syntax_budget_override_for_tests(rows::DiffSyntaxBudget {
                     foreground_parse: std::time::Duration::from_secs(1),
                 });
@@ -844,7 +973,7 @@ fn large_conflict_resolved_output_above_the_old_line_gate_is_highlighted(
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.recompute_conflict_resolved_outline_for_tests(cx);
                 pane.conflict_resolver.resolver_pending_recompute_seq = pane
                     .conflict_resolver
@@ -874,7 +1003,7 @@ fn large_conflict_resolved_output_above_the_old_line_gate_is_highlighted(
 
     let target_ix = 1usize;
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert_eq!(
             pane.conflict_resolver_input.read_with(app, |input, _| {
                 input.text().lines().nth(target_ix).map(ToOwned::to_owned)
@@ -890,7 +1019,7 @@ fn large_conflict_resolved_output_above_the_old_line_gate_is_highlighted(
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.ensure_conflict_resolved_output_materialized(cx);
                 assert!(
                     pane.conflict_resolved_output_projection.is_none(),
@@ -918,7 +1047,7 @@ fn large_conflict_resolved_output_above_the_old_line_gate_is_highlighted(
     // parse would read it as bare identifiers.
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 let comment_color = pane.theme.syntax.comment;
                 let text = pane.conflict_resolver_input.read(cx).text().to_string();
                 let line_start = text
@@ -960,7 +1089,7 @@ fn large_conflict_resolved_output_above_the_old_line_gate_is_highlighted(
     // calls and field accesses.
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 // Drop the document so the next refresh takes the *first parse*
                 // path. An edit alone would not do: `sync` still has the old
                 // tree to fall back on, so it recovers through the ordinary
@@ -993,7 +1122,7 @@ fn large_conflict_resolved_output_above_the_old_line_gate_is_highlighted(
     );
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.set_full_document_syntax_budget_override_for_tests(rows::DiffSyntaxBudget {
                     foreground_parse: std::time::Duration::from_secs(1),
                 });
@@ -1003,7 +1132,9 @@ fn large_conflict_resolved_output_above_the_old_line_gate_is_highlighted(
                     .conflict_resolved_output_live_syntax
                     .as_ref()
                     .expect("recovered live document")
-                    .snapshot(pane.theme)
+                    .snapshot(crate::kit::syntax_style::SyntaxHighlightPalette::new(
+                        pane.theme,
+                    ))
                     .highlights_for_byte_range(0..text.len());
                 let cold = rows::LiveSyntaxDocument::new(
                     rows::DiffSyntaxLanguage::Rust,
@@ -1012,7 +1143,9 @@ fn large_conflict_resolved_output_above_the_old_line_gate_is_highlighted(
                     None,
                 )
                 .expect("cold parse")
-                .snapshot(pane.theme)
+                .snapshot(crate::kit::syntax_style::SyntaxHighlightPalette::new(
+                    pane.theme,
+                ))
                 .highlights_for_byte_range(0..text.len());
                 assert!(!live.is_empty(), "the recovered document must highlight");
                 assert_eq!(
@@ -1037,7 +1170,7 @@ fn large_conflict_resolved_output_above_the_old_line_gate_is_highlighted(
     // change, the old palette stays installed and the text keeps its old colours.
     let (dark_runs, light_runs) = cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 let len = pane.conflict_resolver_input.read(cx).text().len();
                 let dark = pane.conflict_resolver_input.update(cx, |input, _| {
                     input.debug_effective_highlights_for_range(0..len.min(400))
@@ -1074,7 +1207,7 @@ fn large_conflict_resolved_output_above_the_old_line_gate_is_highlighted(
     // the pane would spin forever instead of ever finishing a frame.
     let settled_version = cx.update(|_window, app| {
         view.read(app)
-            .main_pane
+            .diff_renderer
             .read(app)
             .conflict_resolved_output_live_syntax
             .as_ref()
@@ -1089,7 +1222,7 @@ fn large_conflict_resolved_output_above_the_old_line_gate_is_highlighted(
     cx.update(|_window, app| {
         assert_eq!(
             view.read(app)
-                .main_pane
+                .diff_renderer
                 .read(app)
                 .conflict_resolved_output_live_syntax
                 .as_ref()
@@ -1106,6 +1239,21 @@ fn large_conflict_resolved_output_above_the_old_line_gate_is_highlighted(
 fn edited_conflict_resolved_output_highlights_multiline_comment_on_the_keystroke(
     cx: &mut gpui::TestAppContext,
 ) {
+    edited_conflict_multiline_comment(cx, 64, false);
+}
+
+#[gpui::test]
+fn edited_conflict_resolved_output_defers_large_comment_edits_and_recovers_latest_revision(
+    cx: &mut gpui::TestAppContext,
+) {
+    edited_conflict_multiline_comment(cx, 20_001, true);
+}
+
+fn edited_conflict_multiline_comment(
+    cx: &mut gpui::TestAppContext,
+    fixture_line_count: usize,
+    deferred: bool,
+) {
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -1113,14 +1261,13 @@ fn edited_conflict_resolved_output_highlights_multiline_comment_on_the_keystroke
 
     let repo_id = gitcomet_state::model::RepoId(63);
     let workdir = std::env::temp_dir().join(format!(
-        "gitcomet_ui_test_{}_edited_conflict_resolved_output_background_syntax",
-        std::process::id()
+        "gitcomet_ui_test_{}_edited_conflict_resolved_output_background_syntax_{fixture_line_count}",
+        std::process::id(),
     ));
     let file_rel = std::path::PathBuf::from("src/edited_conflict_resolved_bg.rs");
     let abs_path = workdir.join(&file_rel);
     let inserted_comment_line = "still inside block comment";
     let inserted_prefix = format!("/* start block comment\n{inserted_comment_line}\nend */\n");
-    let fixture_line_count = 20_001usize;
 
     let mut base_lines = vec![
         "fn large_demo() {".to_string(),
@@ -1164,10 +1311,8 @@ fn edited_conflict_resolved_output_highlights_multiline_comment_on_the_keystroke
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, _cx| {
-                pane.set_full_document_syntax_budget_override_for_tests(rows::DiffSyntaxBudget {
-                    foreground_parse: std::time::Duration::from_secs(1),
-                });
+            this.diff_renderer.update(cx, |pane, _cx| {
+                pane.live_syntax_unbounded_for_tests = true;
             });
 
             let mut repo = opening_repo_state(repo_id, &workdir);
@@ -1209,7 +1354,7 @@ fn edited_conflict_resolved_output_highlights_multiline_comment_on_the_keystroke
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.ensure_conflict_resolved_output_materialized(cx);
             });
         });
@@ -1233,7 +1378,7 @@ fn edited_conflict_resolved_output_highlights_multiline_comment_on_the_keystroke
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.recompute_conflict_resolved_outline_for_tests(cx);
                 pane.conflict_resolver.resolver_pending_recompute_seq = pane
                     .conflict_resolver
@@ -1246,7 +1391,7 @@ fn edited_conflict_resolved_output_highlights_multiline_comment_on_the_keystroke
     // Under the live engine there is no plain-then-upgrade window to wait for:
     // the tree is parsed on materialization and edited in place afterwards.
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert!(
             pane.conflict_resolved_output_live_syntax.is_some(),
             "materializing an editable Rust output should build a live syntax document"
@@ -1258,14 +1403,28 @@ fn edited_conflict_resolved_output_highlights_multiline_comment_on_the_keystroke
     });
 
     // Insert a block comment whose body runs onto the next row. Getting that row
-    // right needs the reparse to have happened — `tree.edit` alone only shifts
-    // existing nodes, it cannot invent a comment node — so this is a test that
-    // the keystroke path reparses synchronously within its budget. (The
-    // budget-exhausted path is covered by `syntax::live`'s own tests, where the
-    // deferred tree keeps painting until a background pass catches up.)
+    // right needs a completed reparse: `tree.edit` cannot invent a comment node.
+    // The small fixture removes the clock from the immediate correctness test;
+    // the large fixture forces exhaustion and explicitly releases recovery.
+    let (release, gate) = smol::channel::unbounded();
+    let jobs_before = cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.diff_renderer.update(cx, |pane, _cx| {
+                if deferred {
+                    pane.set_full_document_syntax_budget_override_for_tests(
+                        rows::DiffSyntaxBudget {
+                            foreground_parse: std::time::Duration::ZERO,
+                        },
+                    );
+                    pane.live_syntax_background_gate_for_tests = Some(gate);
+                }
+                pane.live_syntax_background_jobs_started
+            })
+        })
+    });
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.conflict_resolver_input.update(cx, |input, cx| {
                     input.replace_utf8_range(0..0, &inserted_prefix, cx);
                 });
@@ -1273,11 +1432,135 @@ fn edited_conflict_resolved_output_highlights_multiline_comment_on_the_keystroke
         });
     });
 
-    // No `wait_for_*`: the assertion is that this is already true, on the very
-    // next look, with no background pass and no debounce elapsed.
+    if deferred {
+        cx.run_until_parked();
+        for _ in 0..3 {
+            cx.update(|_window, app| {
+                view.update(app, |this, cx| {
+                    this.diff_renderer.update(cx, |pane, cx| {
+                        pane.conflict_resolver_input.update(cx, |input, cx| {
+                            let end = input.text().len();
+                            input.replace_utf8_range(end..end, "\n// latest revision", cx);
+                        });
+                    })
+                });
+            });
+            cx.run_until_parked();
+        }
+        cx.update(|_window, app| {
+            let pane = view.read(app).diff_renderer.read(app);
+            assert_eq!(
+                pane.live_syntax_background_jobs_started - jobs_before,
+                1,
+                "rapid edits must share the in-flight reparse"
+            );
+            assert!(
+                pane.conflict_resolved_output_live_syntax_reparsing
+                    .is_some()
+            );
+        });
+        release.try_send(()).unwrap();
+        cx.run_until_parked();
+        cx.update(|_window, app| {
+            let pane = view.read(app).diff_renderer.read(app);
+            assert_eq!(
+                pane.live_syntax_background_jobs_started - jobs_before,
+                2,
+                "obsolete completion must schedule the newest revision once"
+            );
+            assert!(
+                pane.conflict_resolved_output_live_syntax_reparsing
+                    .is_some()
+            );
+        });
+        release.try_send(()).unwrap();
+        cx.run_until_parked();
+        // Replacing the whole buffer while a later reparse is in flight must
+        // hand off to one cold build, rather than overlap the two computations.
+        cx.update(|_, app| {
+            view.read(app)
+                .diff_renderer
+                .clone()
+                .update(app, |pane, cx| {
+                    pane.conflict_resolver_input.update(cx, |input, cx| {
+                        let end = input.text().len();
+                        input.replace_utf8_range(end..end, "\n// pending replacement", cx);
+                    });
+                });
+        });
+        cx.run_until_parked();
+        cx.update(|_, app| {
+            view.read(app)
+                .diff_renderer
+                .clone()
+                .update(app, |pane, cx| {
+                    pane.conflict_resolver_input.update(cx, |input, cx| {
+                        input.set_text(format!("{}\n// replaced", input.text()), cx);
+                    });
+                    pane.recompute_conflict_resolved_outline_for_tests(cx);
+                    assert!(pane.conflict_resolved_output_live_syntax.is_none());
+                    assert!(
+                        pane.conflict_resolved_output_live_syntax_reparsing
+                            .is_some()
+                    );
+                    assert!(pane.conflict_resolved_output_live_syntax_building.is_none());
+                    assert_eq!(pane.live_syntax_background_jobs_started - jobs_before, 3);
+                });
+        });
+        cx.run_until_parked();
+        release.try_send(()).unwrap();
+        cx.run_until_parked();
+        cx.update(|_, app| {
+            let pane = view.read(app).diff_renderer.read(app);
+            assert_eq!(pane.live_syntax_background_jobs_started - jobs_before, 4);
+            assert!(pane.conflict_resolved_output_live_syntax_building.is_some());
+            assert!(
+                pane.conflict_resolved_output_live_syntax_reparsing
+                    .is_none()
+            );
+        });
+        release.try_send(()).unwrap();
+        cx.run_until_parked();
+        cx.update(|_window, app| {
+            view.update(app, |this, cx| {
+                this.diff_renderer.update(cx, |pane, cx| {
+                    assert!(
+                        pane.conflict_resolved_output_live_syntax_reparsing
+                            .is_none()
+                    );
+                    let document = pane.conflict_resolved_output_live_syntax.as_ref().unwrap();
+                    assert!(document.background_reparse_request().is_none());
+                    let snapshot = pane.conflict_resolver_input.read(cx).text_snapshot();
+                    let text = snapshot.as_shared_string();
+                    let cold = rows::LiveSyntaxDocument::new(
+                        rows::DiffSyntaxLanguage::Rust,
+                        snapshot.rope(),
+                        resolved_output_placeholder_protected_ranges_for_test(&text),
+                        None,
+                    )
+                    .unwrap();
+                    assert_eq!(
+                        document
+                            .snapshot(crate::kit::syntax_style::SyntaxHighlightPalette::new(
+                                pane.theme
+                            ))
+                            .highlights_for_byte_range(0..text.len()),
+                        cold.snapshot(crate::kit::syntax_style::SyntaxHighlightPalette::new(
+                            pane.theme
+                        ))
+                        .highlights_for_byte_range(0..text.len())
+                    );
+                    pane.live_syntax_background_gate_for_tests = None;
+                })
+            });
+        });
+    }
+
+    // The immediate case reaches this assertion without polling or waiting.
+    // The deferred case reaches it only after the controlled recovery above.
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 let comment_color = pane.theme.syntax.comment;
                 let line_start = inserted_prefix
                     .find(inserted_comment_line)
@@ -1292,8 +1575,7 @@ fn edited_conflict_resolved_output_highlights_multiline_comment_on_the_keystroke
                             && range.end >= line_end
                             && style.color == Some(comment_color.into_color())
                     }),
-                    "the row inside the inserted block comment should be comment-coloured \
-                     on the keystroke, not after a background upgrade: {highlights:?}"
+                    "the inserted block comment must have exact highlights: {highlights:?}"
                 );
             });
         });
@@ -1368,7 +1650,7 @@ fn conflict_resolver_fresh_open_uses_persisted_view_mode_and_toasts_once(
     // Persisted preference says the user last used two-way mode.
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, _cx| {
+            this.diff_renderer.update(cx, |pane, _cx| {
                 pane.mergetool_view_three_way = false;
             });
             let repo =
@@ -1398,7 +1680,7 @@ fn conflict_resolver_fresh_open_uses_persisted_view_mode_and_toasts_once(
 
     cx.update(|_window, app| {
         let this = view.read(app);
-        let pane = this.main_pane.read(app);
+        let pane = this.diff_renderer.read(app);
         assert_eq!(
             pane.conflict_resolver.view_mode,
             ConflictResolverViewMode::TwoWayDiff,
@@ -1432,7 +1714,7 @@ fn conflict_resolver_fresh_open_uses_persisted_view_mode_and_toasts_once(
     // Toggling to three-way persists the preference.
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.conflict_resolver_set_view_mode(ConflictResolverViewMode::ThreeWay, cx);
                 assert!(
                     pane.mergetool_view_three_way,
@@ -1473,7 +1755,7 @@ fn conflict_resolver_fresh_open_uses_persisted_view_mode_and_toasts_once(
 
     cx.update(|_window, app| {
         let this = view.read(app);
-        let pane = this.main_pane.read(app);
+        let pane = this.diff_renderer.read(app);
         assert_eq!(
             pane.conflict_resolver.view_mode,
             ConflictResolverViewMode::ThreeWay,
@@ -1498,7 +1780,7 @@ fn conflict_resolver_fresh_open_uses_persisted_view_mode_and_toasts_once(
     cx.run_until_parked();
     cx.update(|_window, app| {
         let this = view.read(app);
-        let pane = this.main_pane.read(app);
+        let pane = this.diff_renderer.read(app);
         assert_eq!(pane.conflict_resolver.path.as_ref(), Some(&file_a));
         assert!(pane.conflict_resolver.open_summary_announced);
         assert_eq!(
@@ -1606,7 +1888,7 @@ fn conflict_resolver_split_selection_and_join_dispatch_and_rebuild_blocks(
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 let range = pane
                     .conflict_resolver
                     .three_way_block_aligned_range(0)
@@ -1747,7 +2029,7 @@ fn conflict_resolver_split_selection_and_join_dispatch_and_rebuild_blocks(
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 let target = ConflictResolverJoinTarget {
                     repo_id,
                     path: file_rel.clone().into(),
@@ -1826,7 +2108,7 @@ fn conflict_resolver_split_selection_and_join_dispatch_and_rebuild_blocks(
         .to_string();
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 assert_eq!(
                     pane.conflict_resolver.current.as_deref(),
                     Some(session_current.as_str()),
@@ -1937,7 +2219,7 @@ fn conflict_resolver_current_only_then_full_keeps_mode_and_edited_worktree_outpu
     let current_only_state = app_state_with_repo(current_only_repo, repo_id);
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, _cx| {
+            this.diff_renderer.update(cx, |pane, _cx| {
                 pane.mergetool_view_three_way = true;
             });
             this.store
@@ -1973,7 +2255,7 @@ fn conflict_resolver_current_only_then_full_keeps_mode_and_edited_worktree_outpu
     cx.update(|_window, app| {
         assert_eq!(
             view.read(app)
-                .main_pane
+                .diff_renderer
                 .read(app)
                 .conflict_resolver
                 .view_mode,
@@ -2047,7 +2329,7 @@ fn conflict_resolver_current_only_then_full_keeps_mode_and_edited_worktree_outpu
         },
     );
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert_eq!(
             pane.conflict_resolver.view_mode,
             ConflictResolverViewMode::ThreeWay

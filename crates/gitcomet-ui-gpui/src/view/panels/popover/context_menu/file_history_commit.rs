@@ -9,11 +9,11 @@ pub(in super::super) fn model(
     let repo = this.state.repos.iter().find(|repo| repo.id == repo_id);
     let is_submodule = repo.is_some_and(|repo| {
         repo.head_gitlink_paths.contains(path)
-            || repo
-                .diff_state
-                .submodule_summary
-                .ready()
-                .is_some_and(|summary| summary.path == path)
+            || this.bound_diff_state(repo).is_some_and(|diff| {
+                diff.submodule_summary
+                    .ready()
+                    .is_some_and(|summary| summary.path == path)
+            })
             || repo
                 .submodules
                 .ready()

@@ -100,9 +100,9 @@ pub fn author_avatar(theme: AppTheme, scale: impl Into<UiScale>, name: &str) -> 
                     let shaped =
                         window
                             .text_system()
-                            .shape_line(initials.clone(), font_size, &[run], None);
+                            .shape_line(initials.clone(), font_size, &[run]);
                     let cap_height = shaped
-                        .runs
+                        .paint_fragments
                         .first()
                         .map(|run| window.text_system().cap_height(run.font_id, font_size))
                         .unwrap_or(font_size * 0.7);

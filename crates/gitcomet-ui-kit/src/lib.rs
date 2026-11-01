@@ -9,12 +9,16 @@
 // Every type a public signature exposes must be nameable by a consumer.
 #![warn(unnameable_types)]
 
+/// Text foundations shared with syntax highlighting; kept at the kit's paths.
+pub use gitcomet_text::{rope, text_model};
+
 /// The GPUI this kit is built against; use it instead of a separate `gpui`
 /// dependency so versions cannot drift.
 pub use gpui;
 
-/// The exact GPUI revision used by this kit and its host.
-pub const GPUI_REVISION: &str = "46e1ede350cc95071b389e83831e18e7d114bbaf";
+/// The exact GPUI revision used by this kit and its host. It lives in its own
+/// file so editing the workspace manifest does not rebuild the kit.
+pub const GPUI_REVISION: &str = include_str!("../gpui-revision").trim_ascii();
 
 pub mod appearance;
 pub mod assets;
@@ -33,10 +37,10 @@ pub mod menu;
 pub mod menu_placement;
 mod minimap;
 pub mod press_gesture;
-pub mod rope;
 mod scrollbar;
+pub mod syntax_style;
 mod text_input;
-pub mod text_model;
+pub mod text_layout;
 pub mod text_runs;
 pub mod text_selection;
 pub mod text_selection_owner;
@@ -48,12 +52,14 @@ pub mod tooltip_host;
 pub mod ui_probe;
 pub mod ui_runtime;
 pub mod ui_scale;
+pub mod window_chrome;
 pub mod window_focus;
+pub mod zoom_wheel;
 
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;
 
-pub use minimap::{MINIMAP_COLUMN_WIDTH_PX, MinimapColumn};
+pub use minimap::{MINIMAP_COLUMN_WIDTH_PX, MinimapBandColor, MinimapColumn};
 pub use scrollbar::{
     SCROLLBAR_GUTTER_PX, Scrollbar, ScrollbarAxis, ScrollbarDriver, ScrollbarMarker,
     ScrollbarMarkerKind,
@@ -88,18 +94,99 @@ pub fn restrict_scroll_to_vertical_axis<E: gpui::Styled>(mut element: E) -> E {
 #[cfg(test)]
 mod version_contract {
     #[test]
-    fn exported_gpui_revision_matches_both_workspace_dependencies() {
+    fn workspace_gpui_dependencies_share_revision() {
         let manifest = include_str!("../../../Cargo.toml");
-        let pins: Vec<_> = manifest
-            .lines()
-            .filter(|line| line.starts_with("gpui = ") || line.starts_with("gpui_platform = "))
-            .collect();
-        assert_eq!(pins.len(), 2);
-        for pin in pins {
-            assert!(
-                pin.contains(super::GPUI_REVISION),
-                "GPUI_REVISION must track {pin}"
+        let revision = |dependency: &str| {
+            let prefix = format!("{dependency} = ");
+            let pin = manifest
+                .lines()
+                .find(|line| line.starts_with(&prefix))
+                .unwrap_or_else(|| panic!("missing workspace dependency {dependency}"));
+            pin.split_once("rev = \"")
+                .and_then(|(_, revision)| revision.split_once('"'))
+                .map(|(revision, _)| revision)
+                .filter(|revision| !revision.is_empty())
+                .unwrap_or_else(|| panic!("missing revision for {dependency}"))
+        };
+
+        let gpui_revision = revision("gpui");
+        assert_eq!(
+            gpui_revision,
+            super::GPUI_REVISION,
+            "update crates/gitcomet-ui-kit/gpui-revision with the workspace gpui pin"
+        );
+        for dependency in [
+            "gpui_platform",
+            "gpui_wgpu",
+            "gpui_parley",
+            "gpui_shared_string",
+            "gpui_sum_tree",
+        ] {
+            assert_eq!(
+                revision(dependency),
+                gpui_revision,
+                "{dependency} must use the same revision as gpui"
             );
         }
+    }
+
+    const FORK: &str = "https://github.com/Havunen/gpui-ce.git";
+
+    /// GPUI patches, and GPUI packages the lock resolves (by name or source)
+    /// from anything other than the pinned fork revision.
+    fn unpinned_gpui(manifest: &str, lock: &str, revision: &str) -> Vec<String> {
+        let pinned = format!("git+{FORK}?rev={revision}#{revision}");
+        let mut problems: Vec<String> = manifest
+            .lines()
+            .filter(|line| line.starts_with("[patch") && line.contains("gpui-ce"))
+            .map(str::to_owned)
+            .collect();
+        let mut resolved = 0;
+        for package in lock.split("[[package]]").skip(1) {
+            let field = |key: &str| {
+                package.lines().find_map(|line| {
+                    line.strip_prefix(key)?
+                        .strip_prefix(" = \"")?
+                        .strip_suffix('"')
+                })
+            };
+            let name = field("name").unwrap_or_default();
+            let source = field("source");
+            if name == "gpui-ce"
+                || name == "gpui_xim"
+                || name.starts_with("gpui_ce_")
+                || source.is_some_and(|source| source.contains(FORK))
+            {
+                resolved += 1;
+                if source != Some(pinned.as_str()) {
+                    problems.push(format!("{name} resolves from {source:?}"));
+                }
+            }
+        }
+        if resolved == 0 {
+            problems.push("Cargo.lock lists no GPUI packages".to_owned());
+        }
+        problems
+    }
+
+    /// The lock decides what is built: a `[patch]` or a stale lock can
+    /// resolve GPUI crates from a path or another revision behind the pins.
+    #[test]
+    fn resolved_gpui_packages_come_from_the_pinned_revision() {
+        let manifest = include_str!("../../../Cargo.toml");
+        let lock = include_str!("../../../Cargo.lock");
+        let revision = super::GPUI_REVISION;
+        assert_eq!(
+            unpinned_gpui(manifest, lock, revision),
+            Vec::<String>::new()
+        );
+
+        let stale = lock.replace(revision, &"0".repeat(revision.len()));
+        assert!(unpinned_gpui(manifest, &stale, revision).len() > 1);
+        let pinned_source = format!("source = \"git+{FORK}?rev={revision}#{revision}\"\n");
+        let path_patched = lock.replacen(&pinned_source, "", 1);
+        assert_eq!(unpinned_gpui(manifest, &path_patched, revision).len(), 1);
+        let patched = format!("{manifest}\n[patch.\"{FORK}\"]\n");
+        assert_eq!(unpinned_gpui(&patched, lock, revision).len(), 1);
     }
 }

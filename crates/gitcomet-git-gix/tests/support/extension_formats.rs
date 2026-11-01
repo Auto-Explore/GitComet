@@ -1,15 +1,13 @@
 use gitcomet_core::domain::{CommitId, DiffArea, DiffLineKind, DiffTarget, HistoryMode};
-use gitcomet_core::services::{CancellationToken, GitBackend};
+use gitcomet_core::services::{CancellationToken, ComparisonOptions, GitBackend};
 use gitcomet_git_gix::GixBackend;
 use std::fs;
 use std::path::Path;
-use std::process::Command;
 
-#[path = "test_git_env.rs"]
-mod test_git_env;
+use crate::test_git_env;
 
 pub fn git(repo: &Path, args: &[&str]) -> String {
-    let mut cmd = Command::new("git");
+    let mut cmd = gitcomet_core::test_support::git_fixture::git_command();
     test_git_env::apply(&mut cmd);
     cmd.env("GIT_AUTHOR_DATE", "1700000000 +0000")
         .env("GIT_COMMITTER_DATE", "1800000000 +0530");
@@ -26,7 +24,7 @@ pub fn reftable_available() -> bool {
     static AVAILABLE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *AVAILABLE.get_or_init(|| {
         let dir = tempfile::tempdir().unwrap();
-        let mut cmd = Command::new("git");
+        let mut cmd = gitcomet_core::test_support::git_fixture::git_command();
         test_git_env::apply(&mut cmd);
         let available = cmd
             .arg("-C")
@@ -71,28 +69,61 @@ pub fn open_stage_commit_and_uncommitted_blame(hash: &str, refs: &str) {
     let repo = GixBackend
         .open(dir.path())
         .expect("open SHA-256 repository");
-    assert_eq!(repo.current_branch().unwrap(), "main");
-    assert!(repo.log_head_page(10, None).unwrap().commits.is_empty());
+    assert_eq!(
+        repo.current_branch(&gitcomet_core::services::CancellationToken::new())
+            .unwrap(),
+        "main"
+    );
+    assert!(
+        repo.log_head_page(10, None, &gitcomet_core::services::CancellationToken::new())
+            .unwrap()
+            .commits
+            .is_empty()
+    );
     fs::write(dir.path().join("file.txt"), "first\n").unwrap();
-    assert!(!repo.status().unwrap().unstaged.is_empty());
+    assert!(
+        !repo
+            .status(&gitcomet_core::services::CancellationToken::new())
+            .unwrap()
+            .unstaged
+            .is_empty()
+    );
     let blame = repo
         .blame_worktree_file(Path::new("file.txt"), DiffArea::Unstaged)
         .unwrap();
     assert_eq!(&*blame[0].commit_id, "0".repeat(width));
     repo.stage(&[Path::new("file.txt")]).unwrap();
-    assert_eq!(repo.status().unwrap().staged.len(), 1);
+    assert_eq!(
+        repo.status(&gitcomet_core::services::CancellationToken::new())
+            .unwrap()
+            .staged
+            .len(),
+        1
+    );
     repo.unstage(&[Path::new("file.txt")]).unwrap();
-    assert!(repo.status().unwrap().staged.is_empty());
+    assert!(
+        repo.status(&gitcomet_core::services::CancellationToken::new())
+            .unwrap()
+            .staged
+            .is_empty()
+    );
     repo.stage(&[Path::new("file.txt")]).unwrap();
     repo.commit("root").unwrap();
-    let page = repo.log_head_page(10, None).unwrap();
+    let page = repo
+        .log_head_page(10, None, &gitcomet_core::services::CancellationToken::new())
+        .unwrap();
     let commits = &page.commits;
     assert_eq!(commits[0].id.as_ref().len(), width);
     for width in [12, 40] {
         let prefix = CommitId(commits[0].id.as_ref()[..width].into());
         assert_eq!(repo.commit_details(&prefix).unwrap().message.trim(), "root");
     }
-    assert_eq!(repo.list_branches().unwrap()[0].target, commits[0].id);
+    assert_eq!(
+        repo.list_branches(&gitcomet_core::services::CancellationToken::new())
+            .unwrap()[0]
+            .target,
+        commits[0].id
+    );
     assert_eq!(
         repo.blame_file(Path::new("file.txt"), Some(commits[0].id.as_ref()))
             .unwrap()[0]
@@ -103,12 +134,29 @@ pub fn open_stage_commit_and_uncommitted_blame(hash: &str, refs: &str) {
     fs::write(dir.path().join("file.txt"), "first\nsecond\n").unwrap();
     let target = DiffTarget::working_tree("file.txt".into(), DiffArea::Unstaged);
     assert!(repo.diff_unified(&target).unwrap().contains("+second"));
-    assert!(repo.diff_file_text(&target).unwrap().is_some());
+    assert!(
+        repo.diff_file_text(
+            &target,
+            None,
+            &gitcomet_core::services::CancellationToken::new()
+        )
+        .unwrap()
+        .is_some()
+    );
     repo.stash_create("sha256 stash", false).unwrap();
-    assert_eq!(repo.stash_list().unwrap().len(), 1);
+    assert_eq!(
+        repo.stash_list(&gitcomet_core::services::CancellationToken::new())
+            .unwrap()
+            .len(),
+        1
+    );
     repo.stash_apply(0).unwrap();
     repo.stash_drop(0).unwrap();
-    assert!(repo.stash_list().unwrap().is_empty());
+    assert!(
+        repo.stash_list(&gitcomet_core::services::CancellationToken::new())
+            .unwrap()
+            .is_empty()
+    );
 }
 
 pub fn history_loose_commit_graph_and_packs(hash: &str, refs: &str) {
@@ -128,7 +176,9 @@ pub fn history_loose_commit_graph_and_packs(hash: &str, refs: &str) {
             git(dir.path(), &["gc"]);
         }
         let repo = GixBackend.open(dir.path()).unwrap();
-        let page = repo.log_head_page(10, None).unwrap();
+        let page = repo
+            .log_head_page(10, None, &gitcomet_core::services::CancellationToken::new())
+            .unwrap();
         assert_eq!(page.commits.len(), 2);
         assert_eq!(
             page.commits[0].parent_ids.as_slice(),
@@ -136,8 +186,9 @@ pub fn history_loose_commit_graph_and_packs(hash: &str, refs: &str) {
         );
         let index = repo
             .build_history_index(
-                HistoryMode::AllBranches,
+                &HistoryMode::AllBranches.into(),
                 None,
+                &Default::default(),
                 &CancellationToken::new(),
                 &mut |_| {},
             )
@@ -146,7 +197,11 @@ pub fn history_loose_commit_graph_and_packs(hash: &str, refs: &str) {
         assert_eq!(index.commit_id(0), Some(head.clone()));
         assert_eq!(index.parent_commit_id(0, 0), Some(root.clone()));
         let empty = gitcomet_core::domain::empty_tree_id_like(&root).unwrap();
-        assert_eq!(repo.diff_range_files(&empty, Some(&head)).unwrap().len(), 1);
+        let direct = ComparisonOptions::direct();
+        let comparison = repo
+            .compare_files(&empty, Some(&head), &direct, &CancellationToken::new())
+            .unwrap();
+        assert_eq!(comparison.files.len(), 1);
         for path in [None, Some("file.txt".into())] {
             assert!(
                 repo.diff_unified(&DiffTarget::commit_range(
@@ -187,20 +242,33 @@ pub fn submodules_and_unconfigured_gitlinks(hash: &str, refs: &str) {
     );
     git(parent.path(), &["commit", "-m", "submodule"]);
     let repo = GixBackend.open(parent.path()).unwrap();
-    let modules = repo.list_submodules().unwrap();
+    let modules = repo
+        .list_submodules(&gitcomet_core::services::CancellationToken::new())
+        .unwrap();
     assert_eq!(modules.len(), 1);
     assert_eq!(modules[0].recorded_head.as_ref(), child_id);
     assert_eq!(
         modules[0].checked_out_head.as_ref().unwrap().as_ref(),
         child_id
     );
-    assert!(repo.status().unwrap().unstaged.is_empty());
+    assert!(
+        repo.status(&gitcomet_core::services::CancellationToken::new())
+            .unwrap()
+            .unstaged
+            .is_empty()
+    );
     fs::write(parent.path().join("module/child.txt"), "edited\n").unwrap();
-    assert_eq!(repo.status().unwrap().unstaged.len(), 1);
-    repo.submodule_diff_summary(&DiffTarget::working_tree(
-        "module".into(),
-        DiffArea::Unstaged,
-    ))
+    assert_eq!(
+        repo.status(&gitcomet_core::services::CancellationToken::new())
+            .unwrap()
+            .unstaged
+            .len(),
+        1
+    );
+    repo.submodule_diff_summary(
+        &DiffTarget::working_tree("module".into(), DiffArea::Unstaged),
+        &gitcomet_core::services::CancellationToken::new(),
+    )
     .unwrap();
     GixBackend.repository_watch_info(parent.path()).unwrap();
     // An index gitlink alone must not cause gix to consult the placeholder HEAD.
@@ -215,7 +283,13 @@ pub fn submodules_and_unconfigured_gitlinks(hash: &str, refs: &str) {
         ],
     );
     let repo = GixBackend.open(unconfigured.path()).unwrap();
-    assert_eq!(repo.status().unwrap().staged.len(), 1);
+    assert_eq!(
+        repo.status(&gitcomet_core::services::CancellationToken::new())
+            .unwrap()
+            .staged
+            .len(),
+        1
+    );
 }
 
 fn has_added_line(diff: &gitcomet_core::domain::Diff, text: &str) -> bool {
@@ -234,12 +308,23 @@ pub fn status_diff_commit_reflog_and_file_history(hash: &str, refs: &str) {
     git(dir.path(), &["commit", "-m", "first"]);
     let first = git(dir.path(), &["rev-parse", "HEAD"]);
     let repo = GixBackend.open(dir.path()).unwrap();
-    assert!(repo.status().unwrap().unstaged.is_empty());
+    assert!(
+        repo.status(&gitcomet_core::services::CancellationToken::new())
+            .unwrap()
+            .unstaged
+            .is_empty()
+    );
 
     fs::write(dir.path().join("notes.txt"), "one\ntwo\n").unwrap();
     let worktree = DiffTarget::working_tree("notes.txt".into(), DiffArea::Unstaged);
     assert!(has_added_line(
-        &repo.diff_parsed(&worktree).unwrap(),
+        &repo
+            .diff_parsed(
+                &worktree,
+                None,
+                &gitcomet_core::services::CancellationToken::new()
+            )
+            .unwrap(),
         "+two"
     ));
     repo.stage(&[Path::new("notes.txt")]).unwrap();
@@ -251,14 +336,31 @@ pub fn status_diff_commit_reflog_and_file_history(hash: &str, refs: &str) {
         git(dir.path(), &["cat-file", "-t", second.as_ref()]),
         "commit"
     );
-    let status = repo.status().unwrap();
+    let status = repo
+        .status(&gitcomet_core::services::CancellationToken::new())
+        .unwrap();
     assert!(status.staged.is_empty() && status.unstaged.is_empty());
     let commit = DiffTarget::commit(second.clone(), "notes.txt".into());
-    assert!(has_added_line(&repo.diff_parsed(&commit).unwrap(), "+two"));
+    assert!(has_added_line(
+        &repo
+            .diff_parsed(
+                &commit,
+                None,
+                &gitcomet_core::services::CancellationToken::new()
+            )
+            .unwrap(),
+        "+two"
+    ));
 
     let cancellation = CancellationToken::new();
     let index = repo
-        .build_history_index(HistoryMode::FullReachable, None, &cancellation, &mut |_| {})
+        .build_history_index(
+            &HistoryMode::FullReachable.into(),
+            None,
+            &Default::default(),
+            &cancellation,
+            &mut |_| {},
+        )
         .unwrap()
         .unwrap();
     let range = repo
@@ -331,41 +433,38 @@ pub fn revision_lookups(hash: &str, refs: &str) {
         assert!(resolve(repo, &"f".repeat(12)).is_err());
     }
 
-    // Enough blobs that two share a four-digit prefix; ambiguity must be named.
-    let blobs = tempfile::tempdir().unwrap();
-    let paths: String = (0..1500)
-        .map(|i| {
-            let path = blobs.path().join(i.to_string());
-            fs::write(&path, format!("blob {i}\n")).unwrap();
-            format!("{}\n", path.display())
+    // Find a four-digit prefix collision in memory and store only its two blobs.
+    // Writing every candidate exhausts temporary filesystem inodes unnecessarily.
+    let object_hash = gix::ObjectId::from_hex(second.as_bytes()).unwrap().kind();
+    let mut prefixes = std::collections::HashMap::new();
+    // There are 65,536 four-digit prefixes, so one more candidate guarantees a collision.
+    let (first_blob, second_blob, ambiguous) = (0..=65_536)
+        .find_map(|i| {
+            let contents = format!("blob {i}\n");
+            let id =
+                gix::objs::compute_hash(object_hash, gix::objs::Kind::Blob, contents.as_bytes())
+                    .unwrap();
+            let prefix = [id.as_bytes()[0], id.as_bytes()[1]];
+            prefixes
+                .insert(prefix, i)
+                .map(|first| (first, i, id.to_string()[..4].to_owned()))
         })
-        .collect();
-    let mut cmd = Command::new("git");
-    test_git_env::apply(&mut cmd);
-    let mut child = cmd
-        .arg("-C")
-        .arg(dir.path())
-        .args(["hash-object", "-w", "--stdin-paths"])
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .spawn()
-        .unwrap();
-    use std::io::Write as _;
-    child
-        .stdin
-        .take()
-        .unwrap()
-        .write_all(paths.as_bytes())
-        .unwrap();
-    let output = child.wait_with_output().unwrap();
-    assert!(output.status.success());
-    let mut prefixes = std::collections::HashSet::new();
-    let ambiguous = String::from_utf8(output.stdout)
-        .unwrap()
-        .lines()
-        .map(|id| id[..4].to_owned())
-        .find(|prefix| !prefixes.insert(prefix.clone()))
-        .expect("1500 ids share a four-digit prefix");
+        .expect("find a four-digit blob/blob collision");
+    let blob_file = tempfile::NamedTempFile::new_in(dir.path()).unwrap();
+    let ids = [first_blob, second_blob].map(|i| {
+        fs::write(blob_file.path(), format!("blob {i}\n")).unwrap();
+        git(
+            dir.path(),
+            &[
+                "hash-object",
+                "-w",
+                "--no-filters",
+                blob_file.path().to_str().unwrap(),
+            ],
+        )
+    });
+    assert_ne!(ids[0], ids[1]);
+    assert!(ids.iter().all(|id| id.starts_with(&ambiguous)));
     let repo = GixBackend.open(dir.path()).unwrap();
     let error = resolve(repo.as_ref(), &ambiguous).unwrap_err().to_string();
     assert!(

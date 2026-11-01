@@ -3,6 +3,9 @@ use gitcomet_core::domain::{DiffArea, DiffTarget, FileSource};
 use gitcomet_core::services::GitBackend;
 use std::path::PathBuf;
 
+mod fixture;
+use fixture::{clean_repository_template, restore_repository};
+
 const REPO: RepoId = RepoId(791);
 type View = Entity<GitCometView>;
 
@@ -63,13 +66,48 @@ fn commit(dir: &Path, message: &str) {
     );
 }
 
+struct ScenarioApp {
+    app: gpui::TestAppContext,
+    store: Option<AppStore>,
+    finished: bool,
+}
+
+impl ScenarioApp {
+    fn finish(&mut self) -> std::result::Result<(), std::sync::mpsc::RecvTimeoutError> {
+        if self.finished {
+            return Ok(());
+        }
+        self.app.quit();
+        let result = self
+            .store
+            .as_ref()
+            .map(|store| {
+                store
+                    .shutdown_for_test()
+                    .recv_timeout(std::time::Duration::from_secs(5))
+            })
+            .unwrap_or(Ok(()));
+        self.finished = true;
+        result
+    }
+}
+
+impl Drop for ScenarioApp {
+    fn drop(&mut self) {
+        if let Err(error) = self.finish() {
+            eprintln!("staging scenario teardown: {error}");
+        }
+    }
+}
+
 fn wait_for(
     cx: &mut gpui::VisualTestContext,
     view: &View,
     store: &AppStore,
     description: &str,
     ready: impl Fn(&RepoState) -> bool,
-) {
+) -> Arc<AppState> {
+    crate::view::test_support::drain_store_worker(view, cx);
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     loop {
         let snapshot = store.snapshot();
@@ -81,7 +119,17 @@ fn wait_for(
         });
         draw_and_drain_test_window(cx);
         if is_ready {
-            return;
+            return snapshot;
+        }
+        let latest = store.snapshot();
+        if ready(&latest.repos[0]) {
+            cx.update(|_, app| {
+                view.update(app, |this, cx| {
+                    crate::view::test_support::push_test_state(this, Arc::clone(&latest), cx);
+                });
+            });
+            draw_and_drain_test_window(cx);
+            return latest;
         }
         assert!(
             std::time::Instant::now() < deadline,
@@ -120,18 +168,45 @@ fn wait_for_displayed_content(cx: &mut gpui::VisualTestContext, view: &View) {
             });
         });
         cx.update(|_, app| {
-            let pane = view.read(app).main_pane.read(app);
+            let pane = view.read(app).diff_renderer.read(app);
             let Some(repo) = pane.active_repo() else {
                 return false;
             };
             if repo.diff_state.edit_mode {
-                !pane.file_editor_loading && pane.file_editor_key.is_some()
+                !pane.file_editor_loading() && pane.file_editor_key().is_some()
             } else {
                 // Untracked files and content views read directly from disk in
                 // the pane; their store diff loadables deliberately stay empty.
                 content_loaded(repo) || matches!(pane.worktree_preview, Loadable::Ready(_))
             }
         })
+    });
+}
+
+/// Waits for the open editor to show `disk_text`, then prepends an unsaved line.
+fn type_unsaved_line(cx: &mut gpui::VisualTestContext, view: &View, disk_text: &str) {
+    let diff_renderer = cx.update(|_, app| view.read(app).diff_renderer.clone());
+    cx.update(|_, app| diff_renderer.update(app, |pane, cx| pane.ensure_file_editor_loaded(cx)));
+    cx.run_until_parked();
+    super::shortcuts::wait_until(cx, "editor loaded before typing", |cx| {
+        cx.update(|_, app| {
+            let pane = diff_renderer.read(app);
+            !pane.file_editor_loading() && pane.file_editor_input.read(app).text() == disk_text
+        })
+    });
+    cx.update(|_, app| {
+        diff_renderer.update(app, |pane, cx| {
+            pane.file_editor_input.update(cx, |input, cx| {
+                input.replace_utf8_range(0..0, "unsaved\n", cx);
+            });
+        });
+    });
+    cx.run_until_parked();
+    cx.update(|_, app| {
+        assert!(
+            diff_renderer.read(app).file_editor_is_dirty(),
+            "the edit must be dirty before pressing anything"
+        );
     });
 }
 
@@ -158,17 +233,15 @@ fn exercise_with_failure(
     failure: Failure,
 ) {
     let dir = tempfile::tempdir().unwrap();
-    git(dir.path(), &["init", "-q", "-b", "main"]);
-    std::fs::create_dir(dir.path().join("nested")).unwrap();
+    // Unwind cleanup closes the app before the directory declared above it.
+    let mut scenario = ScenarioApp {
+        app: cx.new_app(),
+        store: None,
+        finished: false,
+    };
+    let cx = &mut scenario.app;
+    restore_repository(dir.path(), clean_repository_template());
     let tracked = ["a.txt", "b.txt", "nested/c.txt", "nested/d.txt"];
-    for path in tracked {
-        std::fs::write(dir.path().join(path), "base\n").unwrap();
-    }
-    // Long enough that the untouched rename below is detected as one entry.
-    let moved: String = (0..20).map(|line| format!("line {line}\n")).collect();
-    std::fs::write(dir.path().join("moved.txt"), moved).unwrap();
-    git(dir.path(), &["add", "."]);
-    commit(dir.path(), "base");
     for path in tracked {
         std::fs::write(dir.path().join(path), "base\nstaged\n").unwrap();
     }
@@ -188,7 +261,9 @@ fn exercise_with_failure(
         .unwrap();
     }
     let backend = gitcomet_git_gix::GixBackend.open(dir.path()).unwrap();
-    let mut status = backend.status().unwrap();
+    let mut status = backend
+        .status(&gitcomet_core::services::CancellationToken::new())
+        .unwrap();
     if matches!(surface, Surface::PaletteRename) {
         // The status list shows only the destination, so unstaging its entries
         // one by one would leave the source's staged deletion behind.
@@ -214,21 +289,24 @@ fn exercise_with_failure(
     }
     let mut repo = opening_repo_state(REPO, dir.path());
     repo.open = Loadable::Ready(());
+    repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
     repo.worktree_status = Loadable::Ready(status.unstaged.clone());
     repo.staged_status = Loadable::Ready(status.staged.clone());
     repo.status = Loadable::Ready(Arc::new(status));
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    scenario.store = Some(store.clone());
+    store.disable_repo_monitors_for_test();
     let store_for_view = store.clone();
     let (view, cx) = cx
         .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
     // Finish constructor settings before attaching the fixture. Tests pull
     // store snapshots explicitly because the live UI poller is disabled.
     crate::view::test_support::drain_store_worker(&view, cx);
-    store.insert_repo_for_test(REPO, backend);
     super::shortcuts::apply_state(cx, &view, app_state_with_repo(repo, REPO));
+    store.insert_repo_for_test(REPO, backend);
     cx.simulate_resize(gpui::size(px(1600.0), px(1000.0)));
     cx.update(|_, app| {
-        view.read(app).main_pane.clone().update(app, |pane, _| {
+        view.read(app).diff_renderer.clone().update(app, |pane, _| {
             pane.auto_save_file_edits = false;
         });
         view.read(app).details_pane.clone().update(app, |pane, cx| {
@@ -277,34 +355,7 @@ fn exercise_with_failure(
     });
     wait_for_displayed_content(cx, &view);
     if matches!(viewed, Viewed::Editor) {
-        cx.update(|_, app| {
-            view.read(app).main_pane.clone().update(app, |pane, cx| {
-                pane.ensure_file_editor_loaded(cx);
-            });
-        });
-        cx.run_until_parked();
-        super::shortcuts::wait_until(cx, "editor loaded before typing", |cx| {
-            cx.update(|_, app| {
-                let pane = view.read(app).main_pane.read(app);
-                !pane.file_editor_loading
-                    && pane.file_editor_input.read(app).text() == "base\nstaged\nunstaged\n"
-            })
-        });
-        cx.update(|_, app| {
-            view.read(app).main_pane.clone().update(app, |pane, cx| {
-                pane.file_editor_input.update(cx, |input, cx| {
-                    input.replace_utf8_range(0..0, "unsaved\n", cx);
-                });
-            });
-        });
-        cx.run_until_parked();
-        cx.update(|_, app| {
-            let pane = view.read(app).main_pane.read(app);
-            assert!(
-                pane.file_editor_is_dirty(),
-                "the edit must be dirty before staging"
-            );
-        });
+        type_unsaved_line(cx, &view, "base\nstaged\nunstaged\n");
     }
     if matches!(
         surface,
@@ -441,7 +492,7 @@ fn exercise_with_failure(
                 crate::app::bind_app_keys_for_test(app);
                 crate::app::install_global_diff_shortcut_fallback_for_test(app);
                 view.read(app)
-                    .main_pane
+                    .diff_renderer
                     .read(app)
                     .diff_panel_focus_handle
                     .clone()
@@ -584,7 +635,7 @@ fn exercise_with_failure(
         assert_eq!(repo.diff_state.edit_mode, matches!(viewed, Viewed::Editor));
         if matches!(viewed, Viewed::Editor) {
             cx.update(|_, app| {
-                let pane = view.read(app).main_pane.read(app);
+                let pane = view.read(app).diff_renderer.read(app);
                 assert!(pane.is_file_editor_active());
                 assert!(pane.file_editor_is_dirty());
                 assert!(
@@ -596,16 +647,16 @@ fn exercise_with_failure(
             });
         }
     }
-    // Windows live until the GPUI test ends; stop their repository monitors
-    // before this case's temporary working directory is removed.
+    // Release this case's windows before removing its temporary directory.
     store.dispatch(Msg::CloseRepo { repo_id: REPO });
     crate::view::test_support::drain_store_worker(&view, cx);
     assert!(store.snapshot().repos.is_empty());
+    drop(view);
+    scenario.finish().expect("staging scenario teardown");
 }
 
 #[gpui::test]
 fn staging_buttons_keep_the_opposite_diff_open(cx: &mut gpui::TestAppContext) {
-    let _guard = lock_visual_test();
     for surface in [Surface::All, Surface::Row, Surface::Selected] {
         exercise(
             cx,
@@ -628,7 +679,6 @@ fn staging_buttons_keep_the_opposite_diff_open(cx: &mut gpui::TestAppContext) {
 
 #[gpui::test]
 fn staging_buttons_close_only_the_affected_diff(cx: &mut gpui::TestAppContext) {
-    let _guard = lock_visual_test();
     for area in [DiffArea::Unstaged, DiffArea::Staged] {
         for surface in [Surface::All, Surface::Row, Surface::Selected] {
             exercise(cx, area, surface, Viewed::Diff(area), "a.txt", true);
@@ -641,7 +691,6 @@ fn staging_buttons_close_only_the_affected_diff(cx: &mut gpui::TestAppContext) {
 
 #[gpui::test]
 fn staging_buttons_preserve_content_and_unsaved_editors(cx: &mut gpui::TestAppContext) {
-    let _guard = lock_visual_test();
     for area in [DiffArea::Unstaged, DiffArea::Staged] {
         for surface in [Surface::All, Surface::Row] {
             for viewed in [Viewed::Content, Viewed::Editor] {
@@ -653,7 +702,6 @@ fn staging_buttons_preserve_content_and_unsaved_editors(cx: &mut gpui::TestAppCo
 
 #[gpui::test]
 fn staging_split_sections_only_close_included_diffs(cx: &mut gpui::TestAppContext) {
-    let _guard = lock_visual_test();
     exercise(
         cx,
         DiffArea::Unstaged,
@@ -682,7 +730,6 @@ fn staging_split_sections_only_close_included_diffs(cx: &mut gpui::TestAppContex
 
 #[gpui::test]
 fn staging_confirmation_preserves_opposite_diff_and_content(cx: &mut gpui::TestAppContext) {
-    let _guard = lock_visual_test();
     for viewed in [Viewed::Diff(DiffArea::Staged), Viewed::Content] {
         exercise(
             cx,
@@ -705,7 +752,6 @@ fn staging_confirmation_preserves_opposite_diff_and_content(cx: &mut gpui::TestA
 
 #[gpui::test]
 fn staging_menus_preserve_opposite_diffs_and_file_content(cx: &mut gpui::TestAppContext) {
-    let _guard = lock_visual_test();
     for surface in [Surface::ContextMenu, Surface::CommandPalette] {
         for (area, opposite) in [
             (DiffArea::Unstaged, DiffArea::Staged),
@@ -719,7 +765,6 @@ fn staging_menus_preserve_opposite_diffs_and_file_content(cx: &mut gpui::TestApp
 
 #[gpui::test]
 fn failed_staging_preserves_the_diff(cx: &mut gpui::TestAppContext) {
-    let _guard = lock_visual_test();
     for failure in [Failure::IndexLocked, Failure::GitUnavailable] {
         for area in [DiffArea::Unstaged, DiffArea::Staged] {
             for surface in [Surface::All, Surface::Folder, Surface::CommandPalette] {
@@ -736,7 +781,6 @@ fn failed_staging_preserves_the_diff(cx: &mut gpui::TestAppContext) {
 
 #[gpui::test]
 fn palette_unstage_all_includes_both_sides_of_a_rename(cx: &mut gpui::TestAppContext) {
-    let _guard = lock_visual_test();
     exercise(
         cx,
         DiffArea::Staged,
@@ -749,7 +793,6 @@ fn palette_unstage_all_includes_both_sides_of_a_rename(cx: &mut gpui::TestAppCon
 
 #[gpui::test]
 fn staging_folders_and_palette_close_only_affected_diffs(cx: &mut gpui::TestAppContext) {
-    let _guard = lock_visual_test();
     for area in [DiffArea::Unstaged, DiffArea::Staged] {
         let opposite = if area == DiffArea::Unstaged {
             DiffArea::Staged
@@ -793,7 +836,6 @@ fn staging_folders_and_palette_close_only_affected_diffs(cx: &mut gpui::TestAppC
 
 #[gpui::test]
 fn staging_shortcuts_consume_the_selected_paths(cx: &mut gpui::TestAppContext) {
-    let _guard = lock_visual_test();
     for area in [DiffArea::Unstaged, DiffArea::Staged] {
         for key in [
             "space",
@@ -815,9 +857,210 @@ fn staging_shortcuts_consume_the_selected_paths(cx: &mut gpui::TestAppContext) {
     }
 }
 
+/// Exercise the real mouse-to-keyboard route and wait for Git's status refresh
+/// between presses. Focusing the diff manually would bypass the section handler.
+#[gpui::test]
+fn status_section_space_after_mouse_selection_advances_and_keeps_list_focus(
+    cx: &mut gpui::TestAppContext,
+) {
+    use crate::view::FileListLayout;
+    use crate::view::rows::CommitFileSort;
+
+    for section in [
+        StatusSection::CombinedUnstaged,
+        StatusSection::Unstaged,
+        StatusSection::Untracked,
+        StatusSection::Staged,
+    ] {
+        for (layout, sort, order) in [
+            (
+                FileListLayout::Flat,
+                CommitFileSort::PathAscending,
+                [0, 1, 2],
+            ),
+            (
+                FileListLayout::Flat,
+                CommitFileSort::PathDescending,
+                [2, 1, 0],
+            ),
+            (
+                FileListLayout::Tree,
+                CommitFileSort::PathAscending,
+                [2, 0, 1],
+            ),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let mut scenario = ScenarioApp {
+                app: cx.new_app(),
+                store: None,
+                finished: false,
+            };
+            restore_repository(dir.path(), clean_repository_template());
+            let paths = if section == StatusSection::Untracked {
+                ["new/a.txt", "new/b.txt", "new/nested/c.txt"]
+            } else {
+                ["a.txt", "b.txt", "nested/c.txt"]
+            };
+            for path in paths {
+                let path = dir.path().join(path);
+                std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+                std::fs::write(path, "changed\n").unwrap();
+            }
+            if section == StatusSection::Staged {
+                git(dir.path(), &["add", "."]);
+            }
+            // Leave a file in another section when the split section empties.
+            if section == StatusSection::Untracked {
+                std::fs::write(dir.path().join("a.txt"), "unrelated\n").unwrap();
+            } else if section == StatusSection::Unstaged {
+                std::fs::write(dir.path().join("other.txt"), "untracked\n").unwrap();
+            }
+
+            let backend = gitcomet_git_gix::GixBackend.open(dir.path()).unwrap();
+            let status = backend
+                .status(&gitcomet_core::services::CancellationToken::new())
+                .unwrap();
+            let mut repo = opening_repo_state(REPO, dir.path());
+            repo.open = Loadable::Ready(());
+            repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
+            repo.worktree_status = Loadable::Ready(status.unstaged.clone());
+            repo.staged_status = Loadable::Ready(status.staged.clone());
+            repo.status = Loadable::Ready(Arc::new(status));
+            let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+            scenario.store = Some(store.clone());
+            store.disable_repo_monitors_for_test();
+            let store_for_view = store.clone();
+            let (view, cx) = scenario.app.add_window_view(|window, cx| {
+                GitCometView::new(store_for_view, events, None, window, cx)
+            });
+            crate::view::test_support::drain_store_worker(&view, cx);
+            super::shortcuts::apply_state(cx, &view, app_state_with_repo(repo, REPO));
+            store.insert_repo_for_test(REPO, backend);
+            cx.simulate_resize(gpui::size(px(1600.0), px(1000.0)));
+            cx.update(|_, app| {
+                view.update(app, |root, cx| {
+                    root.set_change_tracking_view(
+                        if section == StatusSection::CombinedUnstaged {
+                            ChangeTrackingView::Combined
+                        } else {
+                            ChangeTrackingView::SplitUntracked
+                        },
+                        cx,
+                    );
+                    root.details_pane.update(cx, |pane, cx| {
+                        pane.set_file_list_layout(layout, cx);
+                        pane.set_status_file_sort(section, sort, cx);
+                    });
+                });
+            });
+            cx.update(|_, app| {
+                app.clear_key_bindings();
+                crate::app::bind_app_keys_for_test(app);
+                crate::app::install_global_diff_shortcut_fallback_for_test(app);
+            });
+            draw_and_drain_test_window(cx);
+            let row = cx.update(|_, app| {
+                view.read(app).details_pane.clone().update(app, |pane, cx| {
+                    assert_eq!(
+                        pane.status_display_order_paths(REPO, section),
+                        order.map(|ix| PathBuf::from(paths[ix])),
+                        "{section:?} {layout:?} {sort:?}"
+                    );
+                    pane.reveal_status_row(section, 1, cx).unwrap()
+                })
+            });
+            draw_and_drain_test_window(cx);
+            let selector = format!("status_row_{}_{}_{row}", REPO.0, section.id_label());
+            let bounds = cx
+                .debug_bounds(Box::leak(selector.into_boxed_str()))
+                .unwrap();
+            cx.simulate_click(
+                point(bounds.left() + px(40.0), bounds.center().y),
+                Modifiers::default(),
+            );
+            let area = section.diff_area();
+            let sequence = [paths[order[1]], paths[order[2]], paths[order[0]]];
+            wait_for(cx, &view, &store, "mouse-selected file", |repo| {
+                repo.diff_state.diff_target
+                    == Some(DiffTarget::working_tree(sequence[0].into(), area))
+            });
+
+            // Middle -> next -> previous -> empty, without further mouse clicks.
+            for (ix, path) in sequence.into_iter().enumerate() {
+                let snapshot = store.snapshot();
+                let before = snapshot.repos[0].ops_rev;
+                let status_rev = match area {
+                    DiffArea::Unstaged => snapshot.repos[0].worktree_status_rev,
+                    DiffArea::Staged => snapshot.repos[0].staged_status_rev,
+                };
+                let expected = sequence
+                    .get(ix + 1)
+                    .map(|path| DiffTarget::working_tree((*path).into(), area));
+                cx.update(|window, app| {
+                    assert!(
+                        view.read(app)
+                            .details_pane
+                            .read(app)
+                            .status_section_focus_handle(section)
+                            .is_focused(window)
+                    );
+                });
+                cx.simulate_keystrokes("space");
+                wait_for(
+                    cx,
+                    &view,
+                    &store,
+                    "Space action and status refresh",
+                    |repo| {
+                        repo.ops_rev >= before + 2
+                            && repo.local_actions_in_flight == 0
+                            // Ready lists remain visible during a refresh.
+                            && match area {
+                                DiffArea::Unstaged => repo.worktree_status_rev > status_rev,
+                                DiffArea::Staged => repo.staged_status_rev > status_rev,
+                            }
+                            && matches!(repo.worktree_status, Loadable::Ready(_))
+                            && matches!(repo.staged_status, Loadable::Ready(_))
+                    },
+                );
+                let snapshot = store.snapshot();
+                let repo = &snapshot.repos[0];
+                assert!(
+                    repo.feedback.last_error.is_none(),
+                    "{:?}",
+                    repo.feedback.last_error
+                );
+                assert!(
+                    !repo
+                        .status_entries_for_area(area)
+                        .unwrap()
+                        .iter()
+                        .any(|entry| entry.path == Path::new(path))
+                );
+                assert_eq!(
+                    repo.diff_state.diff_target, expected,
+                    "{section:?} {layout:?} {sort:?}, after Space on {path}"
+                );
+                cx.update(|window, app| {
+                    let pane = view.read(app).details_pane.read(app);
+                    assert!(pane.status_section_focus_handle(section).is_focused(window));
+                    assert!(
+                        !pane.status_multi_selection.contains_key(&REPO),
+                        "the consumed selection must allow the next diff's row to be highlighted"
+                    );
+                    assert_eq!(pane.active_repo().unwrap().diff_state.diff_target, expected);
+                });
+            }
+            store.dispatch(Msg::CloseRepo { repo_id: REPO });
+            crate::view::test_support::drain_store_worker(&view, cx);
+            drop(view);
+            scenario.finish().expect("staging scenario teardown");
+        }
+    }
+}
+
 #[gpui::test]
 fn staging_a_row_preserves_an_unrelated_multi_selection(cx: &mut gpui::TestAppContext) {
-    let _guard = lock_visual_test();
     for area in [DiffArea::Unstaged, DiffArea::Staged] {
         exercise(
             cx,
@@ -832,7 +1075,6 @@ fn staging_a_row_preserves_an_unrelated_multi_selection(cx: &mut gpui::TestAppCo
 
 #[gpui::test]
 fn discarding_files_closes_only_the_affected_unstaged_diff(cx: &mut gpui::TestAppContext) {
-    let _guard = lock_visual_test();
     for surface in [Surface::DiscardSelected, Surface::DiscardPath] {
         for (viewed, path, closes) in [
             (Viewed::Diff(DiffArea::Unstaged), "a.txt", true),
@@ -861,7 +1103,7 @@ fn conflicted_merge(dir: &Path) {
     git(dir, &["checkout", "-q", "main"]);
     std::fs::write(dir.join("a.txt"), "ours\n").unwrap();
     commit(dir, "ours");
-    let merge = std::process::Command::new("git")
+    let merge = gitcomet_core::test_support::git_fixture::git_command()
         .arg("-C")
         .arg(dir)
         // Merge checks the committer identity even with --no-commit.
@@ -887,12 +1129,13 @@ fn conflicted_merge(dir: &Path) {
 
 #[gpui::test]
 fn checking_out_a_conflict_side_preserves_an_unrelated_diff(cx: &mut gpui::TestAppContext) {
-    let _guard = lock_visual_test();
     let dir = tempfile::tempdir().unwrap();
     conflicted_merge(dir.path());
     std::fs::write(dir.path().join("b.txt"), "base\nchanged\n").unwrap();
     let backend = gitcomet_git_gix::GixBackend.open(dir.path()).unwrap();
-    let status = backend.status().unwrap();
+    let status = backend
+        .status(&gitcomet_core::services::CancellationToken::new())
+        .unwrap();
     assert!(
         status
             .unstaged
@@ -901,6 +1144,7 @@ fn checking_out_a_conflict_side_preserves_an_unrelated_diff(cx: &mut gpui::TestA
     );
     let mut repo = opening_repo_state(REPO, dir.path());
     repo.open = Loadable::Ready(());
+    repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
     repo.worktree_status = Loadable::Ready(status.unstaged.clone());
     repo.staged_status = Loadable::Ready(status.staged.clone());
     repo.status = Loadable::Ready(Arc::new(status));
@@ -908,8 +1152,8 @@ fn checking_out_a_conflict_side_preserves_an_unrelated_diff(cx: &mut gpui::TestA
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store.clone(), events, None, window, cx));
     crate::view::test_support::drain_store_worker(&view, cx);
-    store.insert_repo_for_test(REPO, backend);
     super::shortcuts::apply_state(cx, &view, app_state_with_repo(repo, REPO));
+    store.insert_repo_for_test(REPO, backend);
     let target = DiffTarget::working_tree("b.txt".into(), DiffArea::Unstaged);
     store.dispatch(Msg::SelectDiff {
         repo_id: REPO,
@@ -954,15 +1198,26 @@ fn checking_out_a_conflict_side_preserves_an_unrelated_diff(cx: &mut gpui::TestA
     crate::view::test_support::drain_store_worker(&view, cx);
 }
 
-#[gpui::test]
-fn resolve_button_menu_discards_a_conflict_as_ours(cx: &mut gpui::TestAppContext) {
-    let _guard = lock_visual_test();
+/// `conflicted_merge` open in the text resolver on `a.txt`, through the
+/// real backend.
+fn open_text_resolver(
+    cx: &mut gpui::TestAppContext,
+) -> (
+    tempfile::TempDir,
+    AppStore,
+    View,
+    Entity<DiffRenderer>,
+    &mut gpui::VisualTestContext,
+) {
     let dir = tempfile::tempdir().unwrap();
     conflicted_merge(dir.path());
     let backend = gitcomet_git_gix::GixBackend.open(dir.path()).unwrap();
-    let status = backend.status().unwrap();
+    let status = backend
+        .status(&gitcomet_core::services::CancellationToken::new())
+        .unwrap();
     let mut repo = opening_repo_state(REPO, dir.path());
     repo.open = Loadable::Ready(());
+    repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
     repo.worktree_status = Loadable::Ready(status.unstaged.clone());
     repo.staged_status = Loadable::Ready(status.staged.clone());
     repo.status = Loadable::Ready(Arc::new(status));
@@ -970,8 +1225,648 @@ fn resolve_button_menu_discards_a_conflict_as_ours(cx: &mut gpui::TestAppContext
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store.clone(), events, None, window, cx));
     crate::view::test_support::drain_store_worker(&view, cx);
-    store.insert_repo_for_test(REPO, backend);
     super::shortcuts::apply_state(cx, &view, app_state_with_repo(repo, REPO));
+    store.insert_repo_for_test(REPO, backend);
+    store.dispatch(Msg::SelectDiff {
+        repo_id: REPO,
+        target: DiffTarget::working_tree("a.txt".into(), DiffArea::Unstaged),
+    });
+    wait_for(cx, &view, &store, "the conflict file", |repo| {
+        matches!(repo.conflict_state.conflict_file, Loadable::Ready(Some(_)))
+    });
+    let diff_renderer = cx.update(|_, app| view.read(app).diff_renderer.clone());
+    super::shortcuts::wait_until(cx, "the text resolver", |cx| {
+        draw_and_drain_test_window(cx);
+        cx.update(|_, app| {
+            diff_renderer.read(app).conflict_resolver.path.as_deref() == Some(Path::new("a.txt"))
+        })
+    });
+
+    (dir, store, view, diff_renderer, cx)
+}
+
+fn wait_for_full_ours_choice(
+    cx: &mut gpui::VisualTestContext,
+    view: &View,
+    store: &AppStore,
+) -> Arc<AppState> {
+    use gitcomet_core::conflict_session::ConflictRegionResolution;
+    use gitcomet_core::merge::MergeSource;
+
+    wait_for(
+        cx,
+        view,
+        store,
+        "the full conflict with the Ours choice",
+        |repo| {
+            repo.conflict_state.conflict_file_load_mode
+                == gitcomet_state::model::ConflictFileLoadMode::Full
+                && matches!(repo.conflict_state.conflict_file, Loadable::Ready(Some(_)))
+                && repo
+                    .conflict_state
+                    .conflict_session
+                    .as_ref()
+                    .is_some_and(|session| {
+                        session.regions.first().is_some_and(|region| {
+                            region.resolution
+                                == ConflictRegionResolution::Sources(MergeSource::B.into())
+                        })
+                    })
+        },
+    )
+}
+
+/// The text resolver saves from the bottom bar's right end, Save & stage
+/// rightmost, and keeps both whole in a narrow pane. Both stay off while a
+/// conflict is open; once it is picked, Save & stage writes and stages it.
+#[gpui::test]
+fn the_resolver_saves_and_stages_from_the_bottom_bar(cx: &mut gpui::TestAppContext) {
+    let (dir, store, view, diff_renderer, cx) = open_text_resolver(cx);
+
+    let bar = cx.debug_bounds("diff_bottom_bar").expect("the bottom bar");
+    let save = cx.debug_bounds("conflict_save").expect("Save");
+    let save_stage = cx
+        .debug_bounds("conflict_save_stage_frame")
+        .expect("a framed Save & stage");
+    assert!(
+        bar.contains(&save.center()) && bar.contains(&save_stage.center()),
+        "the saves sit in the bottom bar: {save:?} {save_stage:?} {bar:?}"
+    );
+    assert!(
+        save.right() <= save_stage.left(),
+        "Save & stage is rightmost"
+    );
+    assert!(
+        bar.right() - save_stage.right() <= px(12.0),
+        "Save & stage ends at the bar's right edge: {save_stage:?} {bar:?}"
+    );
+
+    // A narrow pane takes room from the bar's left side before Save. The
+    // fixture's error toasts would cover the bar there.
+    cx.update(|_, app| crate::view::test_support::dismiss_error_toasts(&view, app));
+    cx.simulate_resize(gpui::size(px(760.0), px(800.0)));
+    for _ in 0..3 {
+        draw_and_drain_test_window(cx);
+    }
+    let bar = cx.debug_bounds("diff_bottom_bar").expect("the bottom bar");
+    let slot = cx
+        .debug_bounds("diff_bar_actions")
+        .expect("the action slot");
+    let save = cx.debug_bounds("conflict_save").expect("Save");
+    let save_stage = cx
+        .debug_bounds("conflict_save_stage_frame")
+        .expect("Save & stage");
+    assert!(
+        slot.left() <= save.left() && save_stage.right() <= slot.right(),
+        "both saves fit their slot: {save:?} {save_stage:?} {slot:?}"
+    );
+    assert!(slot.right() <= bar.right(), "{slot:?} {bar:?}");
+    let position = cx
+        .debug_bounds("diff_bar_position")
+        .expect("the file's place");
+    assert!(
+        position.right() <= slot.left(),
+        "the file's place shortens instead of running under the saves: {position:?} {slot:?}"
+    );
+
+    let conflicted = std::fs::read_to_string(dir.path().join("a.txt")).unwrap();
+    let ops_before = store.snapshot().repos[0].ops_rev;
+    click(cx, "conflict_save_stage");
+    click(cx, "conflict_save");
+    crate::view::test_support::drain_store_worker(&view, cx);
+    let repo = &store.snapshot().repos[0];
+    assert_eq!(
+        repo.ops_rev, ops_before,
+        "disabled saves do not dispatch an action"
+    );
+    assert_eq!(
+        repo.local_actions_in_flight, 0,
+        "nothing saves while a conflict is open"
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("a.txt")).unwrap(),
+        conflicted
+    );
+
+    cx.update(|_, app| {
+        diff_renderer.update(app, |pane, cx| {
+            pane.conflict_resolver_pick_at(
+                0,
+                crate::view::conflict_resolver::ConflictChoice::Ours,
+                cx,
+            );
+        });
+    });
+    draw_and_drain_test_window(cx);
+    click(cx, "conflict_save_stage");
+    wait_for(cx, &view, &store, "save and stage the resolution", |repo| {
+        repo.local_actions_in_flight == 0
+            && matches!(&repo.status, Loadable::Ready(status) if status.unstaged.is_empty())
+    });
+
+    let snapshot = store.snapshot();
+    assert!(
+        snapshot.repos[0].feedback.last_error.is_none(),
+        "{:?}",
+        snapshot.repos[0].feedback.last_error
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("a.txt")).unwrap(),
+        "ours\n"
+    );
+    assert_eq!(
+        git_output(dir.path(), &["ls-files", "--unmerged"]),
+        b"",
+        "the resolution is staged"
+    );
+    store.dispatch(Msg::CloseRepo { repo_id: REPO });
+    crate::view::test_support::drain_store_worker(&view, cx);
+}
+
+/// The bar's plain Save writes the resolution and leaves the file unmerged.
+#[gpui::test]
+fn the_resolver_bar_save_writes_without_staging(cx: &mut gpui::TestAppContext) {
+    let (dir, store, view, diff_renderer, cx) = open_text_resolver(cx);
+    cx.update(|_, app| {
+        diff_renderer.update(app, |pane, cx| {
+            pane.conflict_resolver_pick_at(
+                0,
+                crate::view::conflict_resolver::ConflictChoice::Ours,
+                cx,
+            );
+        });
+    });
+    draw_and_drain_test_window(cx);
+    let ops_before = store.snapshot().repos[0].ops_rev;
+    click(cx, "conflict_save");
+    wait_for(cx, &view, &store, "save the resolution", |repo| {
+        repo.ops_rev >= ops_before + 2 && repo.local_actions_in_flight == 0
+    });
+
+    let snapshot = store.snapshot();
+    assert!(
+        snapshot.repos[0].feedback.last_error.is_none(),
+        "{:?}",
+        snapshot.repos[0].feedback.last_error
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("a.txt")).unwrap(),
+        "ours\n"
+    );
+    assert!(
+        !git_output(dir.path(), &["ls-files", "--unmerged"]).is_empty(),
+        "Save leaves the file unmerged"
+    );
+    store.dispatch(Msg::CloseRepo { repo_id: REPO });
+    crate::view::test_support::drain_store_worker(&view, cx);
+}
+
+fn save_cached_resolver_during_reload(
+    cx: &mut gpui::TestAppContext,
+    external_contents: Option<&str>,
+) {
+    let (dir, store, view, diff_renderer, cx) = open_text_resolver(cx);
+    wait_for(cx, &view, &store, "the full conflict payload", |repo| {
+        repo.conflict_state.conflict_file_load_mode
+            == gitcomet_state::model::ConflictFileLoadMode::Full
+            && matches!(repo.conflict_state.conflict_file, Loadable::Ready(Some(_)))
+    });
+    cx.update(|_, app| {
+        diff_renderer.update(app, |pane, cx| {
+            pane.conflict_resolver_pick_at(
+                0,
+                crate::view::conflict_resolver::ConflictChoice::Ours,
+                cx,
+            );
+        });
+    });
+    let picked = wait_for_full_ours_choice(cx, &view, &store);
+    let mut loading_state = picked.as_ref().clone();
+    let conflict = &mut loading_state.repos[0].conflict_state;
+    conflict.conflict_file = Loadable::Loading;
+    conflict.session_pending_restore = conflict.conflict_session.take();
+    conflict.conflict_rev = conflict.conflict_rev.wrapping_add(1);
+    super::shortcuts::apply_state(cx, &view, Arc::new(loading_state));
+    draw_and_drain_test_window(cx);
+    cx.update(|_, app| {
+        assert_eq!(
+            diff_renderer
+                .read(app)
+                .conflict_resolver_input
+                .read(app)
+                .text(),
+            "ours\n"
+        );
+    });
+    let unmerged_before = git_output(dir.path(), &["ls-files", "--unmerged"]);
+    assert!(!unmerged_before.is_empty());
+    if let Some(contents) = external_contents {
+        std::fs::write(dir.path().join("a.txt"), contents).unwrap();
+    }
+    let ops_before = store.snapshot().repos[0].ops_rev;
+    click(cx, "conflict_save");
+    wait_for(cx, &view, &store, "complete cached resolver save", |repo| {
+        repo.ops_rev >= ops_before + 2 && repo.local_actions_in_flight == 0
+    });
+    let snapshot = store.snapshot();
+    let error = &snapshot.repos[0].feedback.last_error;
+    match external_contents {
+        None => assert!(error.is_none(), "{error:?}"),
+        Some(_) => assert!(
+            error
+                .as_ref()
+                .is_some_and(|error| error.contains("The file changed on disk")),
+            "{error:?}"
+        ),
+    }
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("a.txt")).unwrap(),
+        external_contents.unwrap_or("ours\n")
+    );
+    assert_eq!(
+        git_output(dir.path(), &["ls-files", "--unmerged"]),
+        unmerged_before
+    );
+    store.dispatch(Msg::CloseRepo { repo_id: REPO });
+    crate::view::test_support::drain_store_worker(&view, cx);
+}
+
+#[gpui::test]
+fn the_resolver_bar_saves_cached_output_during_reload(cx: &mut gpui::TestAppContext) {
+    save_cached_resolver_during_reload(cx, None);
+}
+
+#[gpui::test]
+fn the_resolver_bar_preserves_external_changes_during_reload(cx: &mut gpui::TestAppContext) {
+    save_cached_resolver_during_reload(cx, Some("external edit\n"));
+}
+
+#[derive(Clone, Copy)]
+enum MixedChoiceRefresh {
+    Unchanged,
+    EditedAfterSave,
+    ExternalEdit,
+    Unresolved,
+}
+
+fn save_mixed_choices_after_refresh(cx: &mut gpui::TestAppContext, refresh: MixedChoiceRefresh) {
+    let (dir, store, view, renderer, cx) = open_text_resolver(cx);
+    wait_for(cx, &view, &store, "the full conflict payload", |repo| {
+        repo.conflict_state.conflict_file_load_mode
+            == gitcomet_state::model::ConflictFileLoadMode::Full
+            && matches!(repo.conflict_state.conflict_file, Loadable::Ready(Some(_)))
+    });
+    cx.update(|_, app| {
+        renderer.update(app, |pane, cx| {
+            pane.conflict_resolver_pick_at(0, conflict_resolver::ConflictChoice::Ours, cx);
+        });
+    });
+    let picked = wait_for_full_ours_choice(cx, &view, &store);
+    let expected_output = cx.update(|_, app| {
+        renderer.update(app, |pane, cx| {
+            pane.conflict_resolver_apply_pick_target(
+                ResolverPickTarget::Chunk {
+                    conflict_ix: 0,
+                    choice: conflict_resolver::ConflictChoice::Theirs,
+                    output_line_ix: Some(0),
+                },
+                cx,
+            );
+            assert_eq!(pane.conflict_resolver.conflict_region_indices, vec![0, 0]);
+            if matches!(refresh, MixedChoiceRefresh::Unresolved) {
+                pane.conflict_resolver_pick_at(1, conflict_resolver::ConflictChoice::empty(), cx);
+            }
+            pane.current_conflict_resolved_output_text(cx)
+        })
+    });
+    cx.update(|_, app| {
+        let pane = renderer.read(app);
+        assert!(pane.conflict_resolved_output_is_modified());
+        if matches!(refresh, MixedChoiceRefresh::Unresolved) {
+            assert!(expected_output.contains("<Merge Conflict>"));
+            assert!(
+                pane.conflict_resolver_resolved_count() < pane.conflict_resolver_conflict_count()
+            );
+        }
+    });
+    let original = std::fs::read(dir.path().join("a.txt")).unwrap();
+    let external = b"external edit\n";
+    let mut reloaded = picked.as_ref().clone();
+    let conflict = &mut reloaded.repos[0].conflict_state;
+    let Loadable::Ready(Some(file)) = &mut conflict.conflict_file else {
+        panic!("loaded fixture");
+    };
+    if matches!(refresh, MixedChoiceRefresh::ExternalEdit) {
+        std::fs::write(dir.path().join("a.txt"), external).unwrap();
+        file.current = Some("external edit\n".into());
+        file.current_bytes = Some(Arc::from(external.as_slice()));
+    }
+    conflict.conflict_rev += 1;
+    super::shortcuts::apply_state(cx, &view, Arc::new(reloaded));
+    cx.update(|_, app| {
+        let pane = renderer.read(app);
+        assert_eq!(
+            pane.conflict_resolver_input.read(app).text(),
+            expected_output
+        );
+        assert!(pane.conflict_resolved_output_is_modified());
+        assert_eq!(pane.conflict_resolver.conflict_region_indices, vec![0, 0]);
+    });
+    let unmerged = git_output(dir.path(), &["ls-files", "--unmerged"]);
+    assert!(!unmerged.is_empty());
+    let ops_before = store.snapshot().repos[0].ops_rev;
+    let conflict_rev_before = store.snapshot().repos[0].conflict_state.conflict_rev;
+    click(cx, "conflict_save");
+    if matches!(refresh, MixedChoiceRefresh::Unresolved) {
+        click(cx, "conflict_save_stage");
+        crate::view::test_support::drain_store_worker(&view, cx);
+        assert_eq!(store.snapshot().repos[0].ops_rev, ops_before);
+        assert_eq!(store.snapshot().repos[0].local_actions_in_flight, 0);
+        assert_eq!(std::fs::read(dir.path().join("a.txt")).unwrap(), original);
+    } else {
+        wait_for(
+            cx,
+            &view,
+            &store,
+            "the mixed choice save completion",
+            |repo| repo.ops_rev >= ops_before + 2 && repo.local_actions_in_flight == 0,
+        );
+        let snapshot = store.snapshot();
+        if matches!(refresh, MixedChoiceRefresh::ExternalEdit) {
+            assert!(
+                snapshot.repos[0]
+                    .feedback
+                    .last_error
+                    .as_ref()
+                    .is_some_and(|error| error.contains("The file changed on disk"))
+            );
+            assert_eq!(std::fs::read(dir.path().join("a.txt")).unwrap(), external);
+            store.dispatch(Msg::LoadConflictFile {
+                repo_id: REPO,
+                path: PathBuf::from("a.txt"),
+                mode: gitcomet_state::model::ConflictFileLoadMode::Full,
+            });
+            wait_for(
+                cx,
+                &view,
+                &store,
+                "the external bytes after the refused save",
+                |repo| {
+                    repo.conflict_state.conflict_rev > conflict_rev_before
+                        && matches!(
+                            &repo.conflict_state.conflict_file,
+                            Loadable::Ready(Some(file))
+                                if file.path.as_path() == Path::new("a.txt")
+                                    && file.current.as_deref() == Some("external edit\n")
+                        )
+                },
+            );
+            cx.update(|_, app| {
+                assert_eq!(
+                    renderer.read(app).conflict_resolver_input.read(app).text(),
+                    expected_output
+                );
+            });
+            let second_ops_before = store.snapshot().repos[0].ops_rev;
+            click(cx, "conflict_save");
+            wait_for(cx, &view, &store, "refuse the stale save again", |repo| {
+                repo.ops_rev >= second_ops_before + 2 && repo.local_actions_in_flight == 0
+            });
+            assert!(
+                store.snapshot().repos[0]
+                    .feedback
+                    .last_error
+                    .as_ref()
+                    .is_some_and(|error| error.contains("The file changed on disk"))
+            );
+            assert_eq!(std::fs::read(dir.path().join("a.txt")).unwrap(), external);
+        } else {
+            assert_eq!(snapshot.repos[0].feedback.last_error, None);
+            assert_eq!(
+                std::fs::read_to_string(dir.path().join("a.txt")).unwrap(),
+                expected_output
+            );
+        }
+    }
+    if matches!(refresh, MixedChoiceRefresh::EditedAfterSave) {
+        store.dispatch(Msg::LoadConflictFile {
+            repo_id: REPO,
+            path: PathBuf::from("a.txt"),
+            mode: gitcomet_state::model::ConflictFileLoadMode::Full,
+        });
+        wait_for(
+            cx,
+            &view,
+            &store,
+            "the completed mixed save's reloaded bytes",
+            |repo| {
+                repo.ops_rev >= ops_before + 2
+                    && repo.local_actions_in_flight == 0
+                    && repo.conflict_state.conflict_rev > conflict_rev_before
+                    && matches!(
+                        &repo.conflict_state.conflict_file,
+                        Loadable::Ready(Some(file))
+                            if file.path.as_path() == Path::new("a.txt")
+                                && file.current.as_deref() == Some(expected_output.as_str())
+                    )
+            },
+        );
+        cx.update(|_, app| {
+            renderer.update(app, |pane, cx| {
+                assert_eq!(
+                    pane.conflict_resolver_input.read(cx).text(),
+                    expected_output
+                );
+                pane.conflict_resolver_input.update(cx, |input, cx| {
+                    input.replace_utf8_range(0..0, "second edit\n", cx);
+                });
+            });
+        });
+        cx.run_until_parked();
+        let edited_output = format!("second edit\n{expected_output}");
+        cx.update(|_, app| {
+            let pane = renderer.read(app);
+            assert!(pane.conflict_resolved_output_is_modified());
+            assert_eq!(pane.conflict_resolver_input.read(app).text(), edited_output);
+        });
+        let second_ops_before = store.snapshot().repos[0].ops_rev;
+        click(cx, "conflict_save");
+        wait_for(cx, &view, &store, "save the next local edit", |repo| {
+            repo.ops_rev >= second_ops_before + 2 && repo.local_actions_in_flight == 0
+        });
+        assert_eq!(store.snapshot().repos[0].feedback.last_error, None);
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("a.txt")).unwrap(),
+            edited_output
+        );
+    }
+    assert_eq!(
+        git_output(dir.path(), &["ls-files", "--unmerged"]),
+        unmerged
+    );
+    store.dispatch(Msg::CloseRepo { repo_id: REPO });
+    crate::view::test_support::drain_store_worker(&view, cx);
+}
+
+#[gpui::test]
+fn the_resolver_bar_saves_mixed_choices_after_an_unchanged_refresh(cx: &mut gpui::TestAppContext) {
+    save_mixed_choices_after_refresh(cx, MixedChoiceRefresh::Unchanged);
+}
+
+#[gpui::test]
+fn the_resolver_bar_saves_another_edit_after_mixed_save_reload(cx: &mut gpui::TestAppContext) {
+    save_mixed_choices_after_refresh(cx, MixedChoiceRefresh::EditedAfterSave);
+}
+
+#[gpui::test]
+fn the_resolver_bar_preserves_external_bytes_under_retained_mixed_choices(
+    cx: &mut gpui::TestAppContext,
+) {
+    save_mixed_choices_after_refresh(cx, MixedChoiceRefresh::ExternalEdit);
+}
+
+#[gpui::test]
+fn the_resolver_bar_refuses_retained_unresolved_chunks_after_refresh(
+    cx: &mut gpui::TestAppContext,
+) {
+    save_mixed_choices_after_refresh(cx, MixedChoiceRefresh::Unresolved);
+}
+
+#[derive(Clone, Copy, Debug)]
+enum EditorKeyFocus {
+    Panel,
+    Search,
+}
+
+/// While the editor is open, Save owns Ctrl/Cmd+S and Stage is off the bar,
+/// so no key may stage the on-disk file underneath unsaved edits.
+#[gpui::test]
+fn editing_keys_save_the_buffer_and_never_stage(cx: &mut gpui::TestAppContext) {
+    for focus in [EditorKeyFocus::Panel, EditorKeyFocus::Search] {
+        press_editor_keys(cx, focus);
+    }
+}
+
+fn press_editor_keys(cx: &mut gpui::TestAppContext, focus: EditorKeyFocus) {
+    let dir = tempfile::tempdir().unwrap();
+    let mut scenario = ScenarioApp {
+        app: cx.new_app(),
+        store: None,
+        finished: false,
+    };
+    let cx = &mut scenario.app;
+    restore_repository(dir.path(), clean_repository_template());
+    std::fs::write(dir.path().join("a.txt"), "base\n").unwrap();
+    git(dir.path(), &["add", "a.txt"]);
+    std::fs::write(dir.path().join("a.txt"), "base\nunstaged\n").unwrap();
+    let backend = gitcomet_git_gix::GixBackend.open(dir.path()).unwrap();
+    let status = backend
+        .status(&gitcomet_core::services::CancellationToken::new())
+        .unwrap();
+    let mut repo = opening_repo_state(REPO, dir.path());
+    repo.open = Loadable::Ready(());
+    repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
+    repo.worktree_status = Loadable::Ready(status.unstaged.clone());
+    repo.staged_status = Loadable::Ready(status.staged.clone());
+    repo.status = Loadable::Ready(Arc::new(status));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    scenario.store = Some(store.clone());
+    store.disable_repo_monitors_for_test();
+    let store_for_view = store.clone();
+    let (view, cx) = cx
+        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+    crate::view::test_support::drain_store_worker(&view, cx);
+    super::shortcuts::apply_state(cx, &view, app_state_with_repo(repo, REPO));
+    store.insert_repo_for_test(REPO, backend);
+    cx.update(|_, app| {
+        view.read(app).diff_renderer.clone().update(app, |pane, _| {
+            pane.auto_save_file_edits = false;
+        });
+    });
+    store.dispatch(Msg::OpenFileEditor {
+        repo_id: REPO,
+        path: "a.txt".into(),
+    });
+    wait_for(cx, &view, &store, "editor open", |repo| {
+        repo.diff_state.edit_mode
+    });
+    wait_for_displayed_content(cx, &view);
+    type_unsaved_line(cx, &view, "base\nunstaged\n");
+    let diff_renderer = cx.update(|_, app| view.read(app).diff_renderer.clone());
+    cx.update(|window, app| {
+        app.clear_key_bindings();
+        crate::app::bind_app_keys_for_test(app);
+        crate::app::install_global_diff_shortcut_fallback_for_test(app);
+        diff_renderer.update(app, |pane, cx| match focus {
+            EditorKeyFocus::Panel => pane.diff_panel_focus_handle.clone().focus(window, cx),
+            EditorKeyFocus::Search => {
+                assert!(pane.open_search_for_active_view(window, cx));
+            }
+        });
+    });
+    draw_and_drain_test_window(cx);
+    let index_before = git_output(dir.path(), &["ls-files", "--stage"]);
+    let ops_before = store.snapshot().repos[0].ops_rev;
+
+    if matches!(focus, EditorKeyFocus::Panel) {
+        cx.simulate_keystrokes("space");
+        draw_and_drain_test_window(cx);
+        crate::view::test_support::drain_store_worker(&view, cx);
+        assert_eq!(
+            store.snapshot().repos[0].ops_rev,
+            ops_before,
+            "{focus:?}: Space must not stage while editing"
+        );
+        cx.update(|_, app| {
+            let pane = diff_renderer.read(app);
+            assert!(pane.is_file_editor_active(), "{focus:?}: still editing");
+            assert!(pane.file_editor_is_dirty(), "{focus:?}: edits kept");
+        });
+    }
+
+    cx.simulate_keystrokes("secondary-s");
+    draw_and_drain_test_window(cx);
+    super::finish_editor_saves(&view, cx);
+    wait_for(cx, &view, &store, "save returns from the editor", |repo| {
+        !repo.diff_state.edit_mode
+    });
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("a.txt")).unwrap(),
+        "unsaved\nbase\nunstaged\n",
+        "{focus:?}: Ctrl/Cmd+S saves the buffer"
+    );
+    assert_eq!(
+        git_output(dir.path(), &["ls-files", "--stage"]),
+        index_before,
+        "{focus:?}: Ctrl/Cmd+S must not stage while editing"
+    );
+
+    store.dispatch(Msg::CloseRepo { repo_id: REPO });
+    crate::view::test_support::drain_store_worker(&view, cx);
+    drop(view);
+    scenario.finish().expect("editor keys teardown");
+}
+
+#[gpui::test]
+fn resolve_button_menu_discards_a_conflict_as_ours(cx: &mut gpui::TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    conflicted_merge(dir.path());
+    let backend = gitcomet_git_gix::GixBackend.open(dir.path()).unwrap();
+    let status = backend
+        .status(&gitcomet_core::services::CancellationToken::new())
+        .unwrap();
+    let mut repo = opening_repo_state(REPO, dir.path());
+    repo.open = Loadable::Ready(());
+    repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
+    repo.worktree_status = Loadable::Ready(status.unstaged.clone());
+    repo.staged_status = Loadable::Ready(status.staged.clone());
+    repo.status = Loadable::Ready(Arc::new(status));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store.clone(), events, None, window, cx));
+    crate::view::test_support::drain_store_worker(&view, cx);
+    super::shortcuts::apply_state(cx, &view, app_state_with_repo(repo, REPO));
+    store.insert_repo_for_test(REPO, backend);
 
     let row = format!("status_row_{}_unstaged_0", REPO.0);
     let bounds = cx.debug_bounds(Box::leak(row.into_boxed_str())).unwrap();

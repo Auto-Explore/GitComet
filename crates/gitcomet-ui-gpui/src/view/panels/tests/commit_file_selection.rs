@@ -87,7 +87,6 @@ fn selection(
 /// rows, and a different commit starts with no selection.
 #[gpui::test]
 fn commit_file_tree_shift_click_spans_drawn_files(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
@@ -141,7 +140,6 @@ fn commit_file_tree_shift_click_spans_drawn_files(cx: &mut gpui::TestAppContext)
 /// Submodule rows carry no file change, so the selection's apply skips them.
 #[gpui::test]
 fn commit_file_selection_apply_skips_submodules(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
@@ -246,7 +244,6 @@ fn commit_tree_view(
 /// filter shows them.
 #[gpui::test]
 fn commit_folder_menu_applies_the_folders_shown_files(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let repo_id = RepoId(164);
     let (view, cx) = commit_tree_view(cx, repo_id);
 
@@ -317,7 +314,6 @@ fn commit_folder_menu_applies_the_folders_shown_files(cx: &mut gpui::TestAppCont
 /// "Expand all under here" opens them all again.
 #[gpui::test]
 fn folder_menu_collapses_and_expands_everything_under_it(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let repo_id = RepoId(165);
     let (view, cx) = commit_tree_view(cx, repo_id);
     assert_eq!(file_rows(cx, repo_id).len(), 3);
@@ -374,7 +370,6 @@ fn folder_menu_collapses_and_expands_everything_under_it(cx: &mut gpui::TestAppC
 /// renamed file that diff reads its old side from the rename source.
 #[gpui::test]
 fn commit_file_click_opens_a_renamed_file_from_its_old_path(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)

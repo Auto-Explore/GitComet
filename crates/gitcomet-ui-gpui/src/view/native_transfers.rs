@@ -63,9 +63,10 @@ impl GitCometView {
         cx.update_default_global::<NativeTransfers, _>(|transfers, _| {
             transfers.preparing.insert(id.0, cancellation.clone());
         });
+        let filesystem = self.store.filesystem();
         cx.spawn(async move |view, cx| {
             let result = crate::ui_runtime::background_compute(move || {
-                gitcomet_core::filesystem::global()
+                filesystem
                     .lock()
                     .unwrap_or_else(|e| e.into_inner())
                     .prepare_outbound(id, paths, &cancellation)
@@ -88,7 +89,7 @@ impl GitCometView {
                         crate::clipboard::write_files_owned(
                             cx,
                             receipt.paths.clone(),
-                            TransferIntent::Move,
+                            gpui::FileTransferOperation::Move,
                             id.0,
                         );
                         cx.update_default_global::<NativeTransfers, _>(|transfers, _| {
@@ -116,9 +117,10 @@ impl GitCometView {
         cx.update_default_global::<NativeTransfers, _>(|transfers, _| {
             transfers.preparing.insert(id.0, cancellation.clone());
         });
+        let filesystem = self.store.filesystem();
         cx.spawn(async move |view, cx| {
             let result = crate::ui_runtime::background_compute(move || {
-                gitcomet_core::filesystem::global()
+                filesystem
                     .lock()
                     .unwrap_or_else(|e| e.into_inner())
                     .prepare_outbound(id, paths, &cancellation)

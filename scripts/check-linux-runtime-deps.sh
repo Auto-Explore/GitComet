@@ -9,17 +9,23 @@ Fails when the Linux binary's runtime library needs drift from what the
 packages declare:
 
 - a linked (DT_NEEDED) library outside the known set,
-- a runtime-loaded (dlopen) library added or removed,
+- an undeclared runtime library-name string,
 - a glibc symbol version newer than the supported baseline.
+
+Library-name strings are only a hint about dlopen dependencies. Optimizations
+can construct names at runtime, so missing strings produce an advisory rather
+than proving that a package dependency should be removed.
 
 Linked libraries reach the .deb and .rpm through dpkg-shlibdeps and rpm
 AutoReq. Runtime-loaded ones are invisible to both, so they are declared by
 hand in packaging/linux/debian-control.in and packaging/linux/gitcomet.spec.
-Update those together with the lists below.
+AUR dependencies are declared explicitly in packaging/linux/PKGBUILD.in.
+Update all three templates together with the lists below.
 EOF
 }
 
 linked_allowed=(
+  libfontconfig.so.1
   libxcb.so.1
   libxkbcommon.so.0
   libxkbcommon-x11.so.0
@@ -71,7 +77,7 @@ mapfile -t needed < <(readelf -d "$binary" | sed -n 's/.*(NEEDED).*\[\(.*\)\]$/\
 echo "Linked: ${needed[*]}"
 for lib in "${needed[@]}"; do
   if ! in_list "$lib" "${linked_allowed[@]}"; then
-    echo "error: new linked library ${lib}. dpkg-shlibdeps and rpm AutoReq declare it, but add it to linked_allowed here and to the README runtime-library note." >&2
+    echo "error: new linked library ${lib}. dpkg-shlibdeps and rpm AutoReq declare it, but add it to packaging/linux/PKGBUILD.in, linked_allowed here and the README runtime-library note." >&2
     failed=1
   fi
 done
@@ -79,23 +85,24 @@ done
 # .dynstr also holds the DT_NEEDED names, so drop those from the soname strings.
 # Only actual linked dependencies are declared by the package generators. A
 # library in linked_allowed still needs a manual declaration if it moves to dlopen.
-mapfile -t loaded < <(
-  grep -aoE 'lib[A-Za-z0-9_+-]+\.so\.[0-9]+' "$binary" | LC_ALL=C sort -u |
+mapfile -t runtime_strings < <(
+  LC_ALL=C grep -aoE 'lib[A-Za-z0-9_+-]+\.so\.[0-9]+' "$binary" | LC_ALL=C sort -u |
     while IFS= read -r lib; do
       in_list "$lib" "${needed[@]}" || echo "$lib"
     done
 )
-echo "Runtime-loaded: ${loaded[*]}"
-for lib in "${loaded[@]}"; do
+echo "Runtime library strings: ${runtime_strings[*]}"
+for lib in "${runtime_strings[@]}"; do
   if ! in_list "$lib" "${dlopen_expected[@]}"; then
-    echo "error: new runtime-loaded library ${lib}. Declare it in packaging/linux/debian-control.in and packaging/linux/gitcomet.spec, then add it to dlopen_expected." >&2
+    echo "error: new runtime library string ${lib}. Verify its runtime use, declare it in packaging/linux/debian-control.in, packaging/linux/gitcomet.spec and packaging/linux/PKGBUILD.in, then add it to dlopen_expected." >&2
     failed=1
   fi
 done
+# Fat LTO can replace a string with immediate stores, as in WGPU's Vulkan
+# loader. Absence from this scan cannot establish that dlopen no longer uses it.
 for lib in "${dlopen_expected[@]}"; do
-  if ! in_list "$lib" "${loaded[@]}"; then
-    echo "error: ${lib} is no longer loaded. Drop it from the package dependencies and from dlopen_expected." >&2
-    failed=1
+  if ! in_list "$lib" "${runtime_strings[@]}" && ! in_list "$lib" "${needed[@]}"; then
+    echo "warning: ${lib} was not found in the binary's library-name strings. Its name may be constructed at runtime; keep its package dependency until removal is verified." >&2
   fi
 done
 

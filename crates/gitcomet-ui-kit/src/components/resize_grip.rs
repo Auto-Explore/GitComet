@@ -3,7 +3,7 @@ use crate::ui_scale::UiScale;
 use gpui::prelude::*;
 use gpui::{
     App, Bounds, DispatchPhase, Div, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
-    SharedString, Window, canvas, div, fill, point, px, size,
+    PaintQuad, SharedString, Window, canvas, div, point, px, size,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -115,15 +115,13 @@ pub fn resize_grip(
                 let radii =
                     gpui::Corners::all(px(theme.radii.pill)).clamp_radii_for_quad_size(extent);
                 window.paint_quad(
-                    fill(
-                        segment,
-                        if dragging {
+                    PaintQuad::new(segment)
+                        .background(if dragging {
                             drag_tint(theme)
                         } else {
                             resize_grip_hover_tint(theme)
-                        },
-                    )
-                    .corner_radii(radii),
+                        })
+                        .corner_radii(radii),
                 );
             }
             // Dirty only this grip's owning view. A window refresh also throws

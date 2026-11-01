@@ -34,10 +34,9 @@ pub const LANGUAGE: LanguageFn = unsafe { LanguageFn::from_raw(tree_sitter_swift
 /// [`node-types.json`]: https://tree-sitter.github.io/tree-sitter/using-parsers#static-node-types
 pub const NODE_TYPES: &str = include_str!("../../src/node-types.json");
 
-// GitComet: these consts are guarded so the crate still builds with `queries/`
-// unvendored. `vendor/tree-sitter-build` declares and never sets the cfgs, so they
-// compile out; GitComet keeps its own queries under
-// crates/gitcomet-ui-gpui/src/view/rows/diff_text/queries/.
+// GitComet: `queries/` is vendored because GitComet reads these consts (see
+// Cargo.toml); `vendor/tree-sitter-build` sets each `with_*_query` cfg for the `.scm`
+// files present.
 #[cfg(with_highlights_query)]
 pub const HIGHLIGHTS_QUERY: &str = include_str!("../../queries/highlights.scm");
 #[cfg(with_injections_query)]

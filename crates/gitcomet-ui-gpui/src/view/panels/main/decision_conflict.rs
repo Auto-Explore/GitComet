@@ -39,7 +39,7 @@ fn decision_restore_sources_summary(availability: DecisionRestoreAvailability) -
     }
 }
 
-impl MainPaneView {
+impl DiffRenderer {
     /// Render the decision-only conflict resolver for `BothDeleted` conflicts.
     ///
     /// Both sides deleted the file. The user can accept the deletion (stage

@@ -1,13 +1,32 @@
 use gitcomet_core::domain::{CommitId, Upstream};
 use gitcomet_core::services::{
     ConflictSide, ForcePushLease, InteractiveRebaseEntry, PullMode, RemoteUrlKind, ResetMode,
-    SafePushAfterCommitTarget, SubmoduleTrustTarget,
+    SafePushAfterCommitTarget, SubmoduleTrustTarget, WorktreeCheckout,
 };
 use std::path::PathBuf;
+
+/// How the command log and toasts name what a new worktree checks out.
+pub(crate) fn worktree_checkout_label(checkout: &WorktreeCheckout) -> String {
+    match checkout {
+        WorktreeCheckout::Existing { reference } => reference.clone(),
+        WorktreeCheckout::NewBranch { name, start: None } => format!("new branch {name}"),
+        WorktreeCheckout::NewBranch {
+            name,
+            start: Some(start),
+        } => format!("new branch {name} from {start}"),
+        WorktreeCheckout::TrackRemote { name, upstream } => format!(
+            "new branch {name} tracking {}/{}",
+            upstream.remote, upstream.branch
+        ),
+    }
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum RepoCommandKind {
     FetchAll,
+    FetchRemote {
+        remote: String,
+    },
     /// Exactly these refspecs from one remote.
     FetchRefspecs {
         remote: String,
@@ -70,6 +89,20 @@ pub enum RepoCommandKind {
         expected_head: CommitId,
         message: String,
         count: usize,
+    },
+    RewordCommit {
+        request_id: crate::model::RewordRequestId,
+        commit_id: CommitId,
+        message: String,
+        /// Whether the failure left the reword's rebase paused, as a signing
+        /// failure at its reword step does: a retry then continues that
+        /// rebase, which kept the new message. Otherwise it replays whole.
+        /// Read from the repository after the failure, not guessed from
+        /// which path the target should take.
+        rebase_paused: bool,
+        /// The reworded commit's new id once the command succeeded, so the
+        /// selection can follow it.
+        rewritten_id: Option<CommitId>,
     },
     Rebase {
         onto: String,
@@ -169,13 +202,16 @@ pub enum RepoCommandKind {
     },
     AddWorktree {
         path: PathBuf,
-        reference: Option<String>,
+        checkout: WorktreeCheckout,
+        open_after: bool,
     },
     RemoveWorktree {
         path: PathBuf,
+        delete_branch: Option<String>,
     },
     ForceRemoveWorktree {
         path: PathBuf,
+        delete_branch: Option<String>,
     },
     AddSubmodule {
         url: String,
@@ -211,6 +247,139 @@ pub enum RepoCommandKind {
 }
 
 impl RepoCommandKind {
+    pub(crate) fn changes_tracking(&self) -> bool {
+        self.blocks_auto_fetch()
+            || matches!(
+                self,
+                Self::SetUpstreamBranch { .. }
+                    | Self::UnsetUpstreamBranch { .. }
+                    | Self::MergeRef { .. }
+                    | Self::SquashRef { .. }
+                    | Self::Reset { .. }
+                    | Self::SquashCommits { .. }
+                    | Self::RewordCommit { .. }
+                    | Self::Rebase { .. }
+                    | Self::RebaseContinue
+                    | Self::RebaseAbort
+                    | Self::InteractiveRebase { .. }
+                    | Self::InteractiveCherryPick { .. }
+                    | Self::CherryPick { .. }
+                    | Self::Revert { .. }
+                    | Self::ApplyFileChange { commit: true, .. }
+                    | Self::MergeAbort
+                    | Self::LargeFile { .. }
+            )
+    }
+
+    /// A fetch that reached every remote, so automatic fetch may count it.
+    pub(crate) fn fetches_every_remote(&self) -> bool {
+        matches!(self, Self::FetchAll)
+    }
+
+    pub(crate) fn blocks_auto_fetch(&self) -> bool {
+        self.fetches_objects()
+            || matches!(
+                self,
+                Self::RunMaintenance
+                    | Self::PruneLocalTags
+                    | Self::Push
+                    | Self::PushWithTags { .. }
+                    | Self::PushAfterCommit { .. }
+                    | Self::ForcePush
+                    | Self::ForcePushWithLease { .. }
+                    | Self::PushSetUpstream { .. }
+                    | Self::PushTag { .. }
+                    | Self::DeleteRemoteTag { .. }
+                    | Self::DeleteRemoteBranch { .. }
+                    | Self::DeleteRemoteBranches { .. }
+                    | Self::AddRemote { .. }
+                    | Self::RemoveRemote { .. }
+                    | Self::SetRemoteUrl { .. }
+            )
+            || matches!(self, Self::LargeFile { command } if command.pulls() || command.pushes())
+    }
+
+    pub fn repository_requirement(&self) -> gitcomet_core::domain::RepositoryRequirement {
+        use gitcomet_core::domain::RepositoryRequirement::{Repository, WorkingTree};
+        match self {
+            Self::FetchAll
+            | Self::FetchRemote { .. }
+            | Self::FetchRefspecs { .. }
+            | Self::PruneMergedBranches
+            | Self::PruneLocalTags
+            | Self::RunMaintenance
+            | Self::Push
+            | Self::PushWithTags { .. }
+            | Self::PushAfterCommit { .. }
+            | Self::ForcePush
+            | Self::ForcePushWithLease { .. }
+            | Self::PushSetUpstream { .. }
+            | Self::SetUpstreamBranch { .. }
+            | Self::UnsetUpstreamBranch { .. }
+            | Self::DeleteRemoteBranch { .. }
+            | Self::DeleteRemoteBranches { .. }
+            | Self::SquashCommits { .. }
+            | Self::CreateTag { .. }
+            | Self::DeleteTag { .. }
+            | Self::PushTag { .. }
+            | Self::DeleteRemoteTag { .. }
+            | Self::AddRemote { .. }
+            | Self::RemoveRemote { .. }
+            | Self::SetRemoteUrl { .. }
+            | Self::ExportPatch { .. }
+            | Self::AddWorktree { .. }
+            | Self::RemoveWorktree { .. }
+            | Self::ForceRemoveWorktree { .. } => Repository,
+            Self::Reset { mode, .. } => match mode {
+                ResetMode::Soft => Repository,
+                ResetMode::Mixed | ResetMode::Hard => WorkingTree,
+            },
+            Self::LargeFile { command } => command.repository_requirement(),
+            Self::Pull { .. }
+            | Self::PullBranch { .. }
+            | Self::MergeRef { .. }
+            | Self::SquashRef { .. }
+            | Self::Rebase { .. }
+            | Self::RebaseContinue
+            | Self::RebaseAbort
+            | Self::InteractiveRebase { .. }
+            | Self::RewordCommit { .. }
+            | Self::InteractiveCherryPick { .. }
+            | Self::CherryPick { .. }
+            | Self::Revert { .. }
+            | Self::ApplyFileChange { .. }
+            | Self::MergeAbort
+            | Self::CheckoutConflict { .. }
+            | Self::AcceptConflictDeletion { .. }
+            | Self::CheckoutConflictBase { .. }
+            | Self::LaunchMergetool { .. }
+            | Self::SaveWorktreeFile { .. }
+            | Self::AppendGitignorePatterns { .. }
+            | Self::AppendGitattributesRule { .. }
+            | Self::ApplyPatch { .. }
+            | Self::AddSubmodule { .. }
+            | Self::UpdateSubmodules { .. }
+            | Self::LoadSubmodule { .. }
+            | Self::ChangeSubmodulePointer { .. }
+            | Self::RemoveSubmodule { .. }
+            | Self::StageHunk
+            | Self::UnstageHunk
+            | Self::ApplyWorktreePatch { .. } => WorkingTree,
+        }
+    }
+
+    pub(crate) fn finished(
+        self,
+        repo_id: crate::model::RepoId,
+        result: gitcomet_core::services::Result<gitcomet_core::services::CommandOutput>,
+    ) -> super::InternalMsg {
+        super::InternalMsg::RepoCommandFinished {
+            repo_id,
+            command: self,
+            result,
+        }
+    }
+
     /// Whether the command can rewrite files in the checkout, so a file that
     /// changed under the view when it finished was GitComet's doing. Our own
     /// editor save is not here: the view recognizes those bytes itself.
@@ -222,6 +391,7 @@ impl RepoCommandKind {
             | Self::SquashRef { .. }
             | Self::Reset { .. }
             | Self::SquashCommits { .. }
+            | Self::RewordCommit { .. }
             | Self::Rebase { .. }
             | Self::RebaseContinue
             | Self::RebaseAbort
@@ -246,6 +416,7 @@ impl RepoCommandKind {
             | Self::RemoveSubmodule { .. }
             | Self::ApplyWorktreePatch { .. } => true,
             Self::FetchAll
+            | Self::FetchRemote { .. }
             | Self::FetchRefspecs { .. }
             | Self::PruneMergedBranches
             | Self::PruneLocalTags
@@ -277,11 +448,104 @@ impl RepoCommandKind {
         }
     }
 
+    /// The worktree this command opens as a tab once it succeeds.
+    pub(crate) fn opens_worktree(&self) -> Option<&PathBuf> {
+        match self {
+            Self::AddWorktree {
+                path,
+                open_after: true,
+                ..
+            } => Some(path),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn opens_worktree_mut(&mut self) -> Option<&mut PathBuf> {
+        match self {
+            Self::AddWorktree {
+                path,
+                open_after: true,
+                ..
+            } => Some(path),
+            _ => None,
+        }
+    }
+
+    /// Whether the command holds off prepared patch applies while it runs.
+    /// Only commands that never write the index, the worktree, or what a
+    /// prepared patch checks (attributes, `core.*`/`filter.*` config), and can
+    /// wait minutes on the network or a credential prompt, let them through.
+    pub(crate) fn holds_mutation_gate(&self) -> bool {
+        match self {
+            Self::FetchAll
+            | Self::FetchRemote { .. }
+            | Self::FetchRefspecs { .. }
+            | Self::PruneMergedBranches
+            | Self::Push
+            | Self::PushWithTags { .. }
+            | Self::PushAfterCommit { .. }
+            | Self::ForcePush
+            | Self::ForcePushWithLease { .. }
+            | Self::PushSetUpstream { .. }
+            | Self::DeleteRemoteBranch { .. }
+            | Self::DeleteRemoteBranches { .. }
+            | Self::PushTag { .. }
+            | Self::DeleteRemoteTag { .. } => false,
+            Self::Pull { .. }
+            | Self::PullBranch { .. }
+            | Self::MergeRef { .. }
+            | Self::SquashRef { .. }
+            | Self::Reset { .. }
+            | Self::SquashCommits { .. }
+            | Self::RewordCommit { .. }
+            | Self::Rebase { .. }
+            | Self::RebaseContinue
+            | Self::RebaseAbort
+            | Self::InteractiveRebase { .. }
+            | Self::InteractiveCherryPick { .. }
+            | Self::CherryPick { .. }
+            | Self::Revert { .. }
+            | Self::ApplyFileChange { .. }
+            | Self::MergeAbort
+            | Self::CheckoutConflict { .. }
+            | Self::AcceptConflictDeletion { .. }
+            | Self::CheckoutConflictBase { .. }
+            | Self::LaunchMergetool { .. }
+            | Self::AppendGitignorePatterns { .. }
+            | Self::AppendGitattributesRule { .. }
+            | Self::ExportPatch { .. }
+            | Self::ApplyPatch { .. }
+            | Self::AddSubmodule { .. }
+            | Self::UpdateSubmodules { .. }
+            | Self::LoadSubmodule { .. }
+            | Self::ChangeSubmodulePointer { .. }
+            | Self::RemoveSubmodule { .. }
+            | Self::ApplyWorktreePatch { .. }
+            | Self::PruneLocalTags
+            | Self::RunMaintenance
+            | Self::SetUpstreamBranch { .. }
+            | Self::UnsetUpstreamBranch { .. }
+            | Self::CreateTag { .. }
+            | Self::DeleteTag { .. }
+            | Self::AddRemote { .. }
+            | Self::RemoveRemote { .. }
+            | Self::SetRemoteUrl { .. }
+            | Self::SaveWorktreeFile { .. }
+            | Self::AddWorktree { .. }
+            | Self::RemoveWorktree { .. }
+            | Self::ForceRemoveWorktree { .. }
+            | Self::StageHunk
+            | Self::UnstageHunk
+            | Self::LargeFile { .. } => true,
+        }
+    }
+
     /// Commands that fetch, and so may leave new packs or run a repack.
     pub(crate) fn fetches_objects(&self) -> bool {
         matches!(
             self,
             Self::FetchAll
+                | Self::FetchRemote { .. }
                 | Self::FetchRefspecs { .. }
                 | Self::PruneMergedBranches
                 | Self::Pull { .. }
@@ -296,13 +560,14 @@ impl RepoCommandKind {
 
     pub(crate) fn hook_activity_label(&self) -> &'static str {
         match self {
-            Self::FetchAll | Self::FetchRefspecs { .. } => "Fetch",
+            Self::FetchAll | Self::FetchRemote { .. } | Self::FetchRefspecs { .. } => "Fetch",
             Self::PruneMergedBranches => "Prune branches",
             Self::PruneLocalTags => "Prune tags",
             Self::RunMaintenance => "Maintenance",
             Self::Pull { .. } | Self::PullBranch { .. } => "Pull",
             Self::MergeRef { .. } => "Merge",
             Self::SquashRef { .. } | Self::SquashCommits { .. } => "Squash",
+            Self::RewordCommit { .. } => "Edit commit message",
             Self::Push | Self::PushAfterCommit { .. } => "Push",
             Self::PushWithTags { request } => request.mode.label(),
             Self::ForcePush | Self::ForcePushWithLease { .. } => "Force push",
@@ -349,5 +614,28 @@ impl RepoCommandKind {
             Self::ApplyWorktreePatch { .. } => "Apply worktree patch",
             Self::LargeFile { command } => command.label(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::RepoCommandKind;
+
+    #[test]
+    fn only_fetch_all_counts_as_fetching_every_remote() {
+        assert!(RepoCommandKind::FetchAll.fetches_every_remote());
+        assert!(
+            !RepoCommandKind::FetchRemote {
+                remote: "origin".to_string()
+            }
+            .fetches_every_remote()
+        );
+        assert!(
+            !RepoCommandKind::FetchRefspecs {
+                remote: "origin".to_string(),
+                refspecs: vec!["refs/heads/main".to_string()],
+            }
+            .fetches_every_remote()
+        );
     }
 }

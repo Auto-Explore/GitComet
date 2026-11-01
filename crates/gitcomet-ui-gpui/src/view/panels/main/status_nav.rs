@@ -1,10 +1,117 @@
 use super::*;
+use crate::view::rows::FileListId;
+
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(in crate::view) struct StatusFooterWork {
+    pub(in crate::view) section_resolutions: u64,
+    pub(in crate::view) position_lookups: u64,
+    pub(in crate::view) projection_builds: u64,
+    pub(in crate::view) plan_builds: u64,
+    pub(in crate::view) order_materializations: u64,
+}
+
+#[cfg(test)]
+thread_local! {
+    static STATUS_FOOTER_WORK: std::cell::Cell<StatusFooterWork> = Default::default();
+}
+
+impl DetailsPaneView {
+    #[cfg(test)]
+    pub(in crate::view) fn record_status_footer_work(update: impl FnOnce(&mut StatusFooterWork)) {
+        STATUS_FOOTER_WORK.with(|work| {
+            let mut next = work.get();
+            update(&mut next);
+            work.set(next);
+        });
+    }
+
+    #[cfg(test)]
+    pub(in crate::view) fn take_status_footer_work() -> StatusFooterWork {
+        STATUS_FOOTER_WORK.with(|work| work.replace(StatusFooterWork::default()))
+    }
+
+    /// Resolve the footer from the same source and plan as the status rows.
+    /// Unchanged renders compare retained identities before locating the file's
+    /// section or materializing its drawn order.
+    pub(in crate::view) fn status_footer_position(
+        &self,
+        renderer_repo: &RepoState,
+        path: &std::path::Path,
+        area: DiffArea,
+        view: ChangeTrackingView,
+    ) -> Option<Option<(StatusSection, usize, usize)>> {
+        use crate::view::status_position_cache::{OrderSnapshot, PositionQuery};
+
+        let repo_id = renderer_repo.id;
+        let repo = self.active_repo().filter(|repo| repo.id == repo_id)?;
+        // The panes observe snapshots independently. Use the retained lookup
+        // only when its source is also the source the renderer is navigating.
+        let same_source = match (
+            repo.status_entries_for_area(area),
+            renderer_repo.status_entries_for_area(area),
+        ) {
+            (Some(displayed), Some(rendered)) => std::ptr::eq(displayed, rendered),
+            (None, None) => true,
+            _ => false,
+        };
+        if !same_source {
+            return None;
+        }
+        // Match RepoState::status_entries_for_area, including the legacy
+        // Ready status used while a split lane has no ready value of its own.
+        let lane = match area {
+            DiffArea::Unstaged => &repo.worktree_status,
+            DiffArea::Staged => &repo.staged_status,
+        };
+        let source = match lane {
+            Loadable::Ready(source) => Some(source),
+            _ => match &repo.status {
+                Loadable::Ready(status) => Some(match area {
+                    DiffArea::Unstaged => &status.unstaged,
+                    DiffArea::Staged => &status.staged,
+                }),
+                _ => None,
+            },
+        };
+        Some(self.status_footer_position.borrow_mut().lookup(
+            PositionQuery {
+                repo: repo_id.0,
+                source,
+                path,
+                area,
+                view,
+            },
+            |section| {
+                Some(OrderSnapshot {
+                    projection: self.status_section_order(repo, section)?,
+                    plan: self.status_file_plan(repo, section),
+                })
+            },
+            || status_navigation_section(repo, path, area, view),
+            |section, _| {
+                let order = self.active_status_section_order(repo_id, section);
+                let target = DiffTarget::working_tree(path.to_owned(), area);
+                status_navigation_position(repo, &target, view, order.as_deref())
+                    .map(|(_, index, count)| (index, count))
+            },
+        ))
+    }
+}
 
 #[derive(Debug)]
 pub(super) struct StatusNavigationContext<'a> {
     section: StatusSection,
     entries: Vec<&'a gitcomet_core::domain::FileStatus>,
     current_ix: usize,
+}
+
+/// The index `delta` rows from `current`, clamped to the list. `None` when the
+/// step does not move.
+fn step_ix(current: usize, len: usize, delta: isize) -> Option<usize> {
+    let last = len.checked_sub(1)?;
+    let target = current.saturating_add_signed(delta).min(last);
+    (delta != 0 && target != current).then_some(target)
 }
 
 impl<'a> StatusNavigationContext<'a> {
@@ -16,12 +123,8 @@ impl<'a> StatusNavigationContext<'a> {
         (self.current_ix + 1 < self.entries.len()).then_some(self.current_ix + 1)
     }
 
-    fn adjacent_ix(&self, direction: i8) -> Option<usize> {
-        if direction < 0 {
-            self.prev_ix()
-        } else {
-            self.next_ix()
-        }
+    fn adjacent_ix(&self, delta: isize) -> Option<usize> {
+        step_ix(self.current_ix, self.entries.len(), delta)
     }
 
     pub(super) fn next_or_prev_path(&self) -> Option<std::path::PathBuf> {
@@ -106,6 +209,8 @@ pub(super) fn status_navigation_section(
     area: DiffArea,
     change_tracking_view: ChangeTrackingView,
 ) -> Option<StatusSection> {
+    #[cfg(test)]
+    DetailsPaneView::record_status_footer_work(|work| work.section_resolutions += 1);
     Some(match area {
         DiffArea::Staged => StatusSection::Staged,
         DiffArea::Unstaged => match change_tracking_view {
@@ -151,16 +256,18 @@ pub(super) fn status_navigation_context_for_repo<'a>(
     })
 }
 
-/// Whether the open working-tree target has a file before and after it in the
-/// section's display order: what the toolbar arrows show. The pane renders on
-/// every diff scroll step, so this walks the section once without copying it,
-/// where the navigation context collects the whole section.
-pub(super) fn status_navigation_neighbors(
+/// The open working-tree target's section, its place in the section's display
+/// order and the section's length: the bar's "3 of 43 files" and its arrows.
+/// The pane renders on every diff scroll step, so this walks the section once
+/// without copying it, where the navigation context collects the whole section.
+pub(super) fn status_navigation_position(
     repo: &RepoState,
     diff_target: &DiffTarget,
     change_tracking_view: ChangeTrackingView,
     section_order: Option<&[usize]>,
-) -> Option<(bool, bool)> {
+) -> Option<(StatusSection, usize, usize)> {
+    #[cfg(test)]
+    DetailsPaneView::record_status_footer_work(|work| work.position_lookups += 1);
     let DiffTarget::WorkingTree { path, area, .. } = diff_target else {
         return None;
     };
@@ -190,7 +297,106 @@ pub(super) fn status_navigation_neighbors(
             .for_each(&mut visit),
     }
     let current = current?;
-    Some((current > 0, current + 1 < len))
+    Some((section, current, len))
+}
+
+/// Where the open file sits in the list it came from, for the bottom bar's
+/// "3 of 43 files": its zero-based place, the list's length, and what the
+/// list is, for the count's tooltip.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(in crate::view) struct DiffFilePlace {
+    pub(in crate::view) index: usize,
+    pub(in crate::view) count: usize,
+    pub(in crate::view) context: SharedString,
+}
+
+fn status_section_label(section: StatusSection) -> &'static str {
+    match section {
+        StatusSection::Staged => "Staged changes",
+        StatusSection::Unstaged => "Unstaged changes",
+        StatusSection::Untracked => "Untracked files",
+        StatusSection::CombinedUnstaged => "Changes",
+    }
+}
+
+/// `path`'s place among `files` as drawn, and how many are drawn.
+/// `drawn_source_indices` is the list's display order; `None` means source
+/// order.
+fn file_position_in_list(
+    files: &[gitcomet_core::domain::CommitFileChange],
+    drawn_source_indices: Option<&[usize]>,
+    path: &std::path::Path,
+) -> Option<(usize, usize)> {
+    match drawn_source_indices {
+        Some(drawn) => drawn
+            .iter()
+            .position(|source_ix| files.get(*source_ix).is_some_and(|file| file.path == path))
+            .map(|ix| (ix, drawn.len())),
+        None => files
+            .iter()
+            .position(|file| file.path == path)
+            .map(|ix| (ix, files.len())),
+    }
+}
+
+/// The selected inline diff entry's place in the order drawn, and how many
+/// are drawn; like [`adjacent_inline_diff_ix`].
+fn inline_diff_file_position(
+    selected_ix: usize,
+    entries_len: usize,
+    drawn_order: Option<&[usize]>,
+) -> Option<(usize, usize)> {
+    match drawn_order {
+        Some(order) => order
+            .iter()
+            .position(|entry| *entry == selected_ix)
+            .map(|ix| (ix, order.len())),
+        None => (selected_ix < entries_len).then_some((selected_ix, entries_len)),
+    }
+}
+
+/// Where `diff_target` sits in the list it came from, from the same data the
+/// file arrows step through: the status section, the commit's files, or the
+/// comparison's files. `None` when it came from no list.
+pub(super) fn diff_file_position_for_repo(
+    repo: &RepoState,
+    diff_target: &DiffTarget,
+    change_tracking_view: ChangeTrackingView,
+    file_list_source_indices: Option<&[usize]>,
+    status_section_order: Option<&[usize]>,
+) -> Option<DiffFilePlace> {
+    let (index, count, context): (usize, usize, SharedString) = match diff_target {
+        DiffTarget::WorkingTree { .. } => {
+            let (section, index, count) = status_navigation_position(
+                repo,
+                diff_target,
+                change_tracking_view,
+                status_section_order,
+            )?;
+            (index, count, status_section_label(section).into())
+        }
+        DiffTarget::Commit {
+            commit_id, path, ..
+        } => {
+            let files = repo.history_state.listed_files(diff_target)?;
+            let (index, count) = file_position_in_list(files, file_list_source_indices, path)?;
+            let short: String = commit_id.0.chars().take(7).collect();
+            (index, count, format!("Files in commit {short}").into())
+        }
+        DiffTarget::CommitRange {
+            path: Some(path), ..
+        } => {
+            let files = repo.history_state.listed_files(diff_target)?;
+            let (index, count) = file_position_in_list(files, file_list_source_indices, path)?;
+            (index, count, "Files in comparison".into())
+        }
+        DiffTarget::CommitRange { path: None, .. } => return None,
+    };
+    Some(DiffFilePlace {
+        index,
+        count,
+        context,
+    })
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -221,24 +427,15 @@ fn adjacent_file_in_list<'a>(
     files: &'a [gitcomet_core::domain::CommitFileChange],
     drawn_source_indices: Option<&[usize]>,
     path: &std::path::Path,
-    direction: i8,
+    delta: isize,
 ) -> Option<(usize, &'a gitcomet_core::domain::CommitFileChange)> {
-    let source_indices;
-    let drawn = if let Some(indices) = drawn_source_indices {
-        indices
-    } else {
-        source_indices = (0..files.len()).collect::<Vec<_>>();
-        source_indices.as_slice()
+    let (current_ix, len) = file_position_in_list(files, drawn_source_indices, path)?;
+    let target_ix = step_ix(current_ix, len, delta)?;
+    let source_ix = match drawn_source_indices {
+        Some(drawn) => *drawn.get(target_ix)?,
+        None => target_ix,
     };
-    let current_ix = drawn
-        .iter()
-        .position(|source_ix| files.get(*source_ix).is_some_and(|file| file.path == path))?;
-    let target_ix = if direction < 0 {
-        current_ix.checked_sub(1)?
-    } else {
-        (current_ix + 1 < drawn.len()).then_some(current_ix + 1)?
-    };
-    Some((target_ix, files.get(*drawn.get(target_ix)?)?))
+    Some((target_ix, files.get(source_ix)?))
 }
 
 /// The entry an inline foreign diff should open when stepping `direction` from
@@ -250,19 +447,14 @@ fn adjacent_inline_diff_ix(
     selected_ix: usize,
     entries_len: usize,
     drawn_order: Option<&[usize]>,
-    direction: i8,
+    delta: isize,
 ) -> Option<usize> {
-    let step = |ix: usize, len: usize| match direction {
-        d if d < 0 => ix.checked_sub(1),
-        d if d > 0 => (ix + 1 < len).then_some(ix + 1),
-        _ => None,
-    };
     match drawn_order {
         Some(order) => {
             let display_ix = order.iter().position(|entry| *entry == selected_ix)?;
-            order.get(step(display_ix, order.len())?).copied()
+            order.get(step_ix(display_ix, order.len(), delta)?).copied()
         }
-        None => step(selected_ix, entries_len),
+        None => step_ix(selected_ix, entries_len, delta),
     }
 }
 
@@ -270,11 +462,11 @@ pub(super) fn adjacent_diff_file_target_for_repo(
     repo: &RepoState,
     diff_target: &DiffTarget,
     change_tracking_view: ChangeTrackingView,
-    direction: i8,
+    delta: isize,
     file_list_source_indices: Option<&[usize]>,
     status_section_order: Option<&[usize]>,
 ) -> Option<AdjacentDiffFileTarget> {
-    if direction == 0 {
+    if delta == 0 {
         return None;
     }
 
@@ -286,7 +478,7 @@ pub(super) fn adjacent_diff_file_target_for_repo(
                 change_tracking_view,
                 status_section_order,
             )?;
-            let target_ix = navigation.adjacent_ix(direction)?;
+            let target_ix = navigation.adjacent_ix(delta)?;
             let entry = navigation.entries.get(target_ix)?;
             let path = entry.path.clone();
             let area = navigation.section.diff_area();
@@ -304,14 +496,9 @@ pub(super) fn adjacent_diff_file_target_for_repo(
         DiffTarget::Commit {
             commit_id, path, ..
         } => {
-            let Loadable::Ready(details) = &repo.history_state.commit_details else {
-                return None;
-            };
-            if &details.id != commit_id {
-                return None;
-            }
+            let files = repo.history_state.listed_files(diff_target)?;
             let (target_ix, file) =
-                adjacent_file_in_list(&details.files, file_list_source_indices, path, direction)?;
+                adjacent_file_in_list(files, file_list_source_indices, path, delta)?;
 
             Some(AdjacentDiffFileTarget::Commit {
                 commit_id: commit_id.clone(),
@@ -327,15 +514,9 @@ pub(super) fn adjacent_diff_file_target_for_repo(
             ..
         } => {
             // The file list on screen must be this comparison's.
-            let range = repo.history_state.range_selection.as_ref()?;
-            if range.diff_from() != from_commit_id || &range.to != to_commit_id {
-                return None;
-            }
-            let Loadable::Ready(files) = &repo.history_state.range_files else {
-                return None;
-            };
+            let files = repo.history_state.listed_files(diff_target)?;
             let (target_ix, file) =
-                adjacent_file_in_list(files, file_list_source_indices, path, direction)?;
+                adjacent_file_in_list(files, file_list_source_indices, path, delta)?;
             Some(AdjacentDiffFileTarget::Range {
                 target: DiffTarget::commit_range(
                     from_commit_id.clone(),
@@ -350,7 +531,10 @@ pub(super) fn adjacent_diff_file_target_for_repo(
     }
 }
 
-impl MainPaneView {
+/// Selected entry, entry count and drawn order of the open inline diff.
+type InlineDiffFileState = (usize, usize, Option<std::sync::Arc<[usize]>>);
+
+impl DiffRenderer {
     /// The display order of the section the open working-tree diff belongs to.
     /// The pane owns the sort, so navigation has to ask it rather than re-derive
     /// an order of its own.
@@ -367,14 +551,10 @@ impl MainPaneView {
             return None;
         };
         let section = status_navigation_section(repo, path.as_path(), *area, change_tracking_view)?;
-        self.root_view
-            .update(cx, |root, cx| {
-                root.details_pane
-                    .read(cx)
-                    .active_status_section_order(repo_id, section)
-            })
-            .ok()
-            .flatten()
+        self.commands
+            .navigation
+            .as_ref()?
+            .status_order(repo_id, section, cx)
     }
 
     /// The drawn order of the commit-diff file list the open diff belongs to:
@@ -389,25 +569,106 @@ impl MainPaneView {
             self.bound_diff_state(repo).diff_target,
             Some(DiffTarget::CommitRange { .. })
         );
-        self.root_view
-            .update(cx, |root, cx| {
-                let details = root.details_pane.read(cx);
-                if is_range {
-                    details.active_range_file_source_indices(repo_id)
-                } else {
-                    details.active_commit_file_source_indices(repo_id)
-                }
-            })
-            .ok()
-            .flatten()
+        self.commands
+            .navigation
+            .as_ref()?
+            .file_order(repo_id, is_range, cx)
     }
 
-    /// Both the toolbar and its actions use these neighbors in display order.
-    pub(super) fn inline_diff_file_neighbors(
+    /// Where the open file sits in the list it came from, for the bottom bar.
+    /// Hosted panes have none of the window's lists; their owner says.
+    pub(in crate::view) fn diff_file_place(
         &self,
         repo_id: RepoId,
         cx: &mut gpui::Context<Self>,
-    ) -> Option<(Option<usize>, Option<usize>)> {
+    ) -> Option<DiffFilePlace> {
+        if self.hosted_decor.is_some() {
+            return None;
+        }
+        if let Some(inline) = self.active_inline_submodule_diff() {
+            let worktree = matches!(
+                inline.origin,
+                gitcomet_state::model::ForeignDiffOrigin::Worktree { .. }
+            );
+            let (selected_ix, entries_len) = (inline.selected_ix, inline.entries.len());
+            let path = inline.submodule_repo_path.clone();
+            let drawn_order = worktree
+                .then(|| {
+                    self.commands
+                        .navigation
+                        .as_ref()?
+                        .worktree_order(repo_id, &path, cx)
+                })
+                .flatten();
+            let (index, count) =
+                inline_diff_file_position(selected_ix, entries_len, drawn_order.as_deref())?;
+            let context = if worktree {
+                "Files in worktree"
+            } else {
+                "Files in submodule"
+            };
+            return Some(DiffFilePlace {
+                index,
+                count,
+                context: context.into(),
+            });
+        }
+        let change_tracking_view = self.active_change_tracking_view(cx);
+        if let Some(repo) = self.active_repo()
+            && let Some(DiffTarget::WorkingTree { path, area, .. }) =
+                self.bound_diff_state(repo).diff_target.as_ref()
+            && let Some(position) = self.commands.navigation.as_ref().and_then(|navigation| {
+                navigation.status_position(repo, path, *area, change_tracking_view, cx)
+            })
+        {
+            return position.map(|(section, index, count)| DiffFilePlace {
+                index,
+                count,
+                context: status_section_label(section).into(),
+            });
+        }
+        let file_list_source_indices = self.active_file_list_source_indices(repo_id, cx);
+        let status_section_order =
+            self.active_status_section_order(repo_id, change_tracking_view, cx);
+        let repo = self.active_repo()?;
+        let diff_target = self.bound_diff_state(repo).diff_target.as_ref()?;
+        diff_file_position_for_repo(
+            repo,
+            diff_target,
+            change_tracking_view,
+            file_list_source_indices.as_deref(),
+            status_section_order.as_deref(),
+        )
+    }
+
+    /// The previous footer path, retained for equivalence and allocation
+    /// measurements through the actual pane/navigation implementation.
+    #[cfg(test)]
+    pub(in crate::view) fn uncached_diff_file_place_for_test(
+        &self,
+        repo_id: RepoId,
+        cx: &mut gpui::Context<Self>,
+    ) -> Option<DiffFilePlace> {
+        let file_list_source_indices = self.active_file_list_source_indices(repo_id, cx);
+        let view = self.active_change_tracking_view(cx);
+        let order = self.active_status_section_order(repo_id, view, cx);
+        let repo = self.active_repo()?;
+        let target = self.bound_diff_state(repo).diff_target.as_ref()?;
+        diff_file_position_for_repo(
+            repo,
+            target,
+            view,
+            file_list_source_indices.as_deref(),
+            order.as_deref(),
+        )
+    }
+
+    /// The open inline diff's selected entry, entry count and drawn order.
+    fn inline_diff_file_state(
+        &self,
+        repo_id: RepoId,
+        cx: &mut gpui::Context<Self>,
+    ) -> Option<InlineDiffFileState> {
         let inline = self.active_inline_submodule_diff()?;
         let selected_ix = inline.selected_ix;
         let entries_len = inline.entries.len();
@@ -419,35 +680,28 @@ impl MainPaneView {
         )
         .then(|| inline.submodule_repo_path.clone());
         let drawn_order = worktree_path.and_then(|path| {
-            self.root_view
-                .update(cx, |root, cx| {
-                    root.details_pane
-                        .read(cx)
-                        .active_worktree_file_source_indices(repo_id, &path)
-                })
-                .ok()
-                .flatten()
+            self.commands
+                .navigation
+                .as_ref()?
+                .worktree_order(repo_id, &path, cx)
         });
-        Some((
-            adjacent_inline_diff_ix(selected_ix, entries_len, drawn_order.as_deref(), -1),
-            adjacent_inline_diff_ix(selected_ix, entries_len, drawn_order.as_deref(), 1),
-        ))
+        Some((selected_ix, entries_len, drawn_order))
     }
 
     fn try_select_adjacent_diff_file_inner(
         &mut self,
         repo_id: RepoId,
-        direction: i8,
+        delta: isize,
         focus_diff_panel: bool,
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> bool {
-        if self.store.binding.is_some() {
+        if self.hosted_decor.is_some() {
             if !self.store.policy.file_navigation {
                 return false;
             }
             let action = self.hosted_decor.as_ref().and_then(|decor| {
-                if direction < 0 {
+                if delta < 0 {
                     decor.options.file_navigation.previous.clone()
                 } else {
                     decor.options.file_navigation.next.clone()
@@ -459,12 +713,12 @@ impl MainPaneView {
             }
             return false;
         }
-        if let Some((prev_ix, next_ix)) = self.inline_diff_file_neighbors(repo_id, cx) {
-            let Some(next_ix) = (match direction {
-                d if d < 0 => prev_ix,
-                d if d > 0 => next_ix,
-                _ => None,
-            }) else {
+        if let Some((selected_ix, entries_len, drawn_order)) =
+            self.inline_diff_file_state(repo_id, cx)
+        {
+            let Some(next_ix) =
+                adjacent_inline_diff_ix(selected_ix, entries_len, drawn_order.as_deref(), delta)
+            else {
                 return false;
             };
             if focus_diff_panel {
@@ -488,7 +742,7 @@ impl MainPaneView {
                 repo,
                 diff_target,
                 change_tracking_view,
-                direction,
+                delta,
                 file_list_source_indices.as_deref(),
                 status_section_order.as_deref(),
             )
@@ -547,7 +801,7 @@ impl MainPaneView {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> bool {
-        self.try_select_adjacent_diff_file_inner(repo_id, direction, true, window, cx)
+        self.try_select_adjacent_diff_file_inner(repo_id, direction as isize, true, window, cx)
     }
 
     pub(in crate::view) fn try_select_adjacent_diff_file_preserving_focus(
@@ -557,7 +811,71 @@ impl MainPaneView {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> bool {
-        self.try_select_adjacent_diff_file_inner(repo_id, direction, false, window, cx)
+        self.try_select_adjacent_diff_file_inner(repo_id, direction as isize, false, window, cx)
+    }
+
+    /// The list the open diff came from, to size a page step.
+    fn open_diff_file_list(&self, cx: &mut gpui::Context<Self>) -> Option<FileListId> {
+        if let Some(inline) = self.active_inline_submodule_diff() {
+            return matches!(
+                inline.origin,
+                gitcomet_state::model::ForeignDiffOrigin::Worktree { .. }
+            )
+            .then_some(FileListId::WorktreeFiles);
+        }
+        let repo = self.active_repo()?;
+        Some(match self.bound_diff_state(repo).diff_target.as_ref()? {
+            DiffTarget::Commit { .. } => FileListId::CommitFiles,
+            DiffTarget::CommitRange { .. } => FileListId::RangeFiles,
+            DiffTarget::WorkingTree { path, area, .. } => {
+                let view = self.active_change_tracking_view(cx);
+                FileListId::Status(status_navigation_section(
+                    repo,
+                    path.as_path(),
+                    *area,
+                    view,
+                )?)
+            }
+        })
+    }
+
+    /// Steps the open diff through its file list without moving focus. Does
+    /// nothing in the conflict resolver, so a stray key cannot leave a
+    /// half-resolved file.
+    pub(in crate::view) fn try_step_diff_file(
+        &mut self,
+        repo_id: RepoId,
+        step: DiffFileStep,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> bool {
+        if self.is_conflict_resolver_active() {
+            return false;
+        }
+        let delta = match step {
+            DiffFileStep::Prev => -1,
+            DiffFileStep::Next => 1,
+            _ if self.hosted_decor.is_some() => return false,
+            DiffFileStep::First => isize::MIN,
+            DiffFileStep::Last => isize::MAX,
+            DiffFileStep::PageUp | DiffFileStep::PageDown => {
+                let page = self
+                    .open_diff_file_list(cx)
+                    .and_then(|list| {
+                        self.commands
+                            .navigation
+                            .as_ref()?
+                            .page_rows(repo_id, list, cx)
+                    })
+                    .unwrap_or(1) as isize;
+                if step == DiffFileStep::PageUp {
+                    -page
+                } else {
+                    page
+                }
+            }
+        };
+        self.try_select_adjacent_diff_file_inner(repo_id, delta, false, window, cx)
     }
 }
 
@@ -584,10 +902,40 @@ mod tests {
         }
     }
 
-    /// The toolbar's one-pass answer must match what the prev/next actions
-    /// then do, for every entry, section order and change-tracking view.
     #[test]
-    fn status_navigation_neighbors_match_adjacent_targets() {
+    fn diff_file_step_maps_only_plain_navigation_keys() {
+        let step = |s: &str| DiffFileStep::from_keystroke(&gpui::Keystroke::parse(s).unwrap());
+        assert_eq!(step("up"), Some(DiffFileStep::Prev));
+        assert_eq!(step("down"), Some(DiffFileStep::Next));
+        assert_eq!(step("pageup"), Some(DiffFileStep::PageUp));
+        assert_eq!(step("pagedown"), Some(DiffFileStep::PageDown));
+        assert_eq!(step("home"), Some(DiffFileStep::First));
+        assert_eq!(step("end"), Some(DiffFileStep::Last));
+        assert_eq!(step("alt-up"), None);
+        assert_eq!(step("shift-down"), None);
+        assert_eq!(step("a"), None);
+    }
+
+    #[test]
+    fn step_ix_clamps_and_reports_no_move() {
+        assert_eq!(step_ix(2, 5, 1), Some(3));
+        assert_eq!(step_ix(2, 5, -1), Some(1));
+        assert_eq!(step_ix(0, 5, -1), None);
+        assert_eq!(step_ix(4, 5, 1), None);
+        assert_eq!(step_ix(1, 10, 4), Some(5));
+        assert_eq!(step_ix(7, 10, 4), Some(9));
+        assert_eq!(step_ix(7, 10, -40), Some(0));
+        assert_eq!(step_ix(3, 5, isize::MIN), Some(0));
+        assert_eq!(step_ix(3, 5, isize::MAX), Some(4));
+        assert_eq!(step_ix(0, 0, 1), None);
+        assert_eq!(step_ix(2, 5, 0), None);
+    }
+
+    /// The bar's one-pass place must agree with what the prev/next actions
+    /// then do, for every entry, section order and change-tracking view: an
+    /// arrow is enabled exactly when it has a file to step to.
+    #[test]
+    fn status_navigation_position_matches_adjacent_targets() {
         use gitcomet_core::domain::FileStatusKind::{Added, Modified, Untracked};
         let mut repo = repo_state(RepoId(1), "/tmp/repo");
         let unstaged = vec![
@@ -634,7 +982,8 @@ mod tests {
                             .is_some(),
                         );
                         assert_eq!(
-                            status_navigation_neighbors(&repo, &target, view, order)
+                            diff_file_position_for_repo(&repo, &target, view, None, order)
+                                .map(|place| (place.index > 0, place.index + 1 < place.count))
                                 .unwrap_or((false, false)),
                             expected,
                             "{view:?} {target:?} {order:?}"
@@ -643,6 +992,92 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// The bar's "N of M" counts the section the file is in, in the order the
+    /// section is drawn, and names it.
+    #[test]
+    fn a_working_tree_file_is_placed_in_its_section() {
+        use gitcomet_core::domain::FileStatusKind::{Added, Modified, Untracked};
+        let mut repo = repo_state(RepoId(1), "/tmp/repo");
+        repo.status = Loadable::Ready(
+            gitcomet_core::domain::RepoStatus {
+                staged: std::sync::Arc::new(vec![
+                    file_status("s1.txt", Added),
+                    file_status("s2.txt", Modified),
+                ]),
+                unstaged: std::sync::Arc::new(vec![
+                    file_status("a.txt", Modified),
+                    file_status("b.txt", Untracked),
+                    file_status("c.txt", Modified),
+                    file_status("d.txt", Untracked),
+                    file_status("e.txt", Modified),
+                ]),
+            }
+            .into(),
+        );
+        let place = |path: &str, area, view, order: Option<&[usize]>| {
+            diff_file_position_for_repo(
+                &repo,
+                &DiffTarget::working_tree(pb(path), area),
+                view,
+                None,
+                order,
+            )
+            .map(|place| (place.index, place.count, place.context.to_string()))
+        };
+        use ChangeTrackingView::{Combined, SplitUntracked};
+        assert_eq!(
+            place("s2.txt", DiffArea::Staged, Combined, None),
+            Some((1, 2, "Staged changes".into()))
+        );
+        assert_eq!(
+            place("c.txt", DiffArea::Unstaged, Combined, None),
+            Some((2, 5, "Changes".into()))
+        );
+        assert_eq!(
+            place("c.txt", DiffArea::Unstaged, SplitUntracked, None),
+            Some((1, 3, "Unstaged changes".into()))
+        );
+        assert_eq!(
+            place("d.txt", DiffArea::Unstaged, SplitUntracked, None),
+            Some((1, 2, "Untracked files".into()))
+        );
+        // A sorted section: drawn e, c, a.
+        assert_eq!(
+            place("c.txt", DiffArea::Unstaged, Combined, Some(&[4, 2, 0])),
+            Some((1, 3, "Changes".into()))
+        );
+        assert_eq!(place("zz.txt", DiffArea::Unstaged, Combined, None), None);
+    }
+
+    #[test]
+    fn a_file_is_placed_in_a_list_as_drawn() {
+        let files: Vec<gitcomet_core::domain::CommitFileChange> = ["a.rs", "b.rs", "c.rs"]
+            .into_iter()
+            .map(|path| {
+                gitcomet_core::domain::CommitFileChange::new(
+                    pb(path),
+                    gitcomet_core::domain::FileStatusKind::Modified,
+                )
+            })
+            .collect();
+        assert_eq!(
+            file_position_in_list(&files, None, &pb("b.rs")),
+            Some((1, 3))
+        );
+        assert_eq!(
+            file_position_in_list(&files, Some(&[2, 1, 0]), &pb("c.rs")),
+            Some((0, 3))
+        );
+        // A filter that hides the file: no place.
+        assert_eq!(
+            file_position_in_list(&files, Some(&[0, 2]), &pb("b.rs")),
+            None
+        );
+        assert_eq!(inline_diff_file_position(1, 3, None), Some((1, 3)));
+        assert_eq!(inline_diff_file_position(1, 3, Some(&[2, 1])), Some((1, 2)));
+        assert_eq!(inline_diff_file_position(5, 3, None), None);
     }
 
     #[test]

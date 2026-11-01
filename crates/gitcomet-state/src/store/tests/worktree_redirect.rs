@@ -3,7 +3,7 @@
 use super::*;
 
 fn git_output(repo: &Path, args: &[&str]) -> String {
-    let output = Command::new("git")
+    let output = gitcomet_core::test_support::git_fixture::git_command()
         .arg("-C")
         .arg(repo)
         .args(args)
@@ -14,7 +14,7 @@ fn git_output(repo: &Path, args: &[&str]) -> String {
 }
 
 /// Main worktree on `main` (two commits), linked worktree on `feature` (first commit).
-pub(super) fn repo_with_linked_worktree() -> (tempfile::TempDir, PathBuf, PathBuf) {
+pub(in crate::store) fn repo_with_linked_worktree() -> (tempfile::TempDir, PathBuf, PathBuf) {
     let dir = tempfile::tempdir().expect("tempdir");
     let repo = dir.path().join("repo");
     fs::create_dir_all(&repo).expect("repo dir");
@@ -40,7 +40,11 @@ pub(super) fn repo_with_linked_worktree() -> (tempfile::TempDir, PathBuf, PathBu
             "feature",
         ],
     );
-    (dir, repo, canonicalize_or_original(worktree))
+    (
+        dir,
+        canonicalize_or_original(repo),
+        canonicalize_or_original(worktree),
+    )
 }
 
 pub(super) fn wait_until(description: &str, ready: impl Fn() -> bool) {
@@ -193,7 +197,7 @@ fn rename_onto_branch_held_by_linked_worktree_overwrites_there_and_opens_the_tab
         "feature"
     );
     assert!(
-        Command::new("git")
+        gitcomet_core::test_support::git_fixture::git_command()
             .args([
                 "-C",
                 repo.to_str().expect("utf-8"),
@@ -216,7 +220,7 @@ fn rename_onto_branch_held_by_linked_worktree_overwrites_there_and_opens_the_tab
 }
 
 fn git_config_is_unset(repo: &Path, key: &str) -> bool {
-    !Command::new("git")
+    !gitcomet_core::test_support::git_fixture::git_command()
         .arg("-C")
         .arg(repo)
         .args(["config", "--get", key])
@@ -286,6 +290,9 @@ fn a_linked_worktrees_changes_and_diff_load_from_its_own_checkout() {
     let (_dir, repo, worktree) = repo_with_linked_worktree();
     fs::write(worktree.join("a.txt"), "one\nlinked edit\n").expect("edit the worktree");
     let (store, _events) = AppStore::new_test(Arc::new(gitcomet_git_gix::GixBackend));
+    // This tests explicit linked-worktree loads, not filesystem notifications.
+    // Watcher refreshes would race the history baseline and fixture teardown.
+    store.disable_repo_monitors_for_test();
     let repo_id = open_repo_and_wait(&store, &repo);
     let state = |store: &AppStore| {
         store
@@ -296,6 +303,16 @@ fn a_linked_worktrees_changes_and_diff_load_from_its_own_checkout() {
             .cloned()
             .expect("repository")
     };
+    // Open readiness precedes background metadata (including Git tool probes).
+    // Let those finish before taking a stable history baseline.
+    wait_until("initial repository loads", || {
+        store
+            .snapshot()
+            .repos
+            .iter()
+            .find(|repo| repo.id == repo_id)
+            .is_some_and(|repo| !repo.loads_in_flight.any_in_flight())
+    });
     let before = state(&store);
     let lifetime = before.lifetime();
     let history = (
@@ -365,4 +382,84 @@ fn a_linked_worktrees_changes_and_diff_load_from_its_own_checkout() {
         ),
         history
     );
+}
+
+#[test]
+fn rapid_linked_worktree_switches_and_reopening_finish_with_the_correct_checkout() {
+    let (_dir, main, linked) = repo_with_linked_worktree();
+    fs::write(main.join("b.txt"), "main staged edit\n").unwrap();
+    run_git(&main, &["add", "b.txt"]);
+    fs::write(linked.join("a.txt"), "linked unstaged edit\n").unwrap();
+    fs::write(linked.join("linked-only.txt"), "linked untracked\n").unwrap();
+    let (store, _events) = AppStore::new_test(Arc::new(gitcomet_git_gix::GixBackend));
+    store.disable_repo_monitors_for_test();
+    let main_id = open_repo_and_wait(&store, &main);
+    let linked_id = open_repo_and_wait(&store, &linked);
+    let settled = |id| {
+        let snapshot = store.snapshot();
+        snapshot.active_repo == Some(id)
+            && snapshot
+                .repos
+                .iter()
+                .find(|repo| repo.id == id)
+                .is_some_and(|repo| {
+                    !repo.loads_in_flight.any_foreground_in_flight()
+                        && matches!(repo.status, Loadable::Ready(_))
+                        && matches!(repo.head_branch, Loadable::Ready(_))
+                })
+    };
+    wait_until("initial linked foreground loads", || settled(linked_id));
+    for id in [main_id, linked_id, main_id, linked_id] {
+        store.dispatch(Msg::SetActiveRepo { repo_id: id });
+        wait_until("settled linked checkout switch", || settled(id));
+        let snapshot = store.snapshot();
+        let repo = snapshot.repos.iter().find(|repo| repo.id == id).unwrap();
+        let status = repo.status.ready().unwrap();
+        if id == main_id {
+            assert_eq!(repo.head_branch.ready().unwrap(), "main");
+            assert_eq!(status.staged.len(), 1);
+            assert!(status.unstaged.is_empty());
+        } else {
+            assert_eq!(repo.head_branch.ready().unwrap(), "feature");
+            assert!(status.staged.is_empty());
+            assert_eq!(status.unstaged.len(), 2);
+        }
+    }
+    for _ in 0..20 {
+        store.dispatch(Msg::SetActiveRepo { repo_id: main_id });
+        store.dispatch(Msg::SetActiveRepo { repo_id: linked_id });
+    }
+    store.dispatch(Msg::CloseRepo { repo_id: main_id });
+    wait_until("old checkout to close", || {
+        store.snapshot().repos.iter().all(|repo| repo.id != main_id)
+    });
+    let reopened = open_repo_and_wait(&store, &main);
+    assert_ne!(reopened, main_id);
+    wait_until("reopened foreground and background loads", || {
+        settled(reopened)
+            && store
+                .snapshot()
+                .repos
+                .iter()
+                .find(|repo| repo.id == reopened)
+                .is_some_and(|repo| !repo.loads_in_flight.any_in_flight())
+    });
+    let snapshot = store.snapshot();
+    assert!(snapshot.repos.iter().all(|repo| repo.id != main_id));
+    let repo = snapshot
+        .repos
+        .iter()
+        .find(|repo| repo.id == reopened)
+        .unwrap();
+    assert_eq!(repo.head_branch.ready().unwrap(), "main");
+    assert_eq!(repo.status.ready().unwrap().staged.len(), 1);
+    assert!(repo.status.ready().unwrap().unstaged.is_empty());
+    assert!(
+        repo.worktree_dirty
+            .ready()
+            .unwrap()
+            .iter()
+            .any(|summary| summary.path == linked && summary.modified == 1 && summary.added == 1)
+    );
+    assert_no_error_diagnostics(&store, reopened);
 }

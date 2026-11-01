@@ -111,7 +111,6 @@ fn activate(
 /// stages the folder's whole subtree.
 #[gpui::test]
 fn status_folder_right_click_opens_a_menu_that_stages_the_folder(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let repo_id = RepoId(690);
     let (view, cx) = status_tree_view(cx, repo_id, &["src/a.rs", "src/b.rs"]);
 
@@ -193,7 +192,6 @@ fn status_folder_right_click_opens_a_menu_that_stages_the_folder(cx: &mut gpui::
 /// The discard confirmation counts the folder's files and discards them all.
 #[gpui::test]
 fn discard_folder_confirm_discards_every_file_under_it(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let repo_id = RepoId(691);
     let (view, cx) = status_tree_view(cx, repo_id, &["src/a.rs", "src/b.rs", "docs/c.md"]);
     cx.update(|window, app| {
@@ -246,7 +244,6 @@ fn discard_folder_confirm_discards_every_file_under_it(cx: &mut gpui::TestAppCon
 /// menu offers no absolute path and nothing to apply.
 #[gpui::test]
 fn worktree_folder_menu_copies_only_the_relative_path(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let repo_id = RepoId(692);
     let (view, cx) = status_tree_view(cx, repo_id, &["src/a.rs"]);
     let entries = menu_entries(
@@ -271,4 +268,101 @@ fn worktree_folder_menu_copies_only_the_relative_path(cx: &mut gpui::TestAppCont
             "Copy relative path"
         ]
     );
+}
+
+#[gpui::test]
+fn deleted_linked_worktree_files_keep_diff_and_path_actions_without_file_opening(
+    cx: &mut gpui::TestAppContext,
+) {
+    let linked = tempfile::tempdir().unwrap();
+    let path = std::path::PathBuf::from("deleted.txt");
+    let file = gitcomet_core::domain::FileStatus {
+        path: path.clone(),
+        kind: gitcomet_core::domain::FileStatusKind::Deleted,
+        conflict: None,
+    };
+    let repo_id = RepoId(1);
+    let mut repo = opening_repo_state(repo_id, Path::new("/tmp/origin-checkout"));
+    repo.open = Loadable::Ready(());
+    repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
+    repo.history_state.worktree_selection = Some(linked.path().to_path_buf());
+    repo.worktree_dirty = Loadable::Ready(Arc::new(vec![
+        gitcomet_core::domain::WorktreeDirtySummary {
+            path: linked.path().to_path_buf(),
+            head: None,
+            branch: Some("linked".into()),
+            detached: false,
+            added: 0,
+            modified: 0,
+            deleted: 1,
+            staged: vec![file.clone()],
+            unstaged: vec![file],
+            line_stats: Default::default(),
+        },
+    ]));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    cx.update(|_, app| {
+        view.update(app, |this, cx| {
+            push_test_state(this, app_state_with_repo(repo, repo_id), cx)
+        })
+    });
+    for area in [DiffArea::Staged, DiffArea::Unstaged] {
+        let kind = PopoverKind::WorktreeFileMenu {
+            repo_id,
+            worktree_path: linked.path().to_path_buf(),
+            target: DiffTarget::working_tree(path.clone(), area),
+        };
+        let model = cx.update(|_, app| {
+            view.read(app)
+                .popover_host
+                .clone()
+                .update(app, |host, cx| host.context_menu_model(&kind, cx).unwrap())
+        });
+        for item in model.items {
+            if let ContextMenuItem::Entry {
+                label,
+                disabled,
+                action,
+                ..
+            } = item
+            {
+                match label.as_ref() {
+                    "Open file" | "Open in code editor" => {
+                        assert!(disabled, "a deleted file cannot be opened")
+                    }
+                    "View diff"
+                    | "Open in worktree tab"
+                    | "Open file location"
+                    | "Copy absolute path"
+                    | "Copy relative path" => assert!(!disabled, "deleted files retain {label}"),
+                    unexpected => panic!("unexpected foreign-file action: {unexpected}"),
+                }
+                match *action {
+                    ContextMenuAction::OpenWorktreeFile {
+                        worktree_path,
+                        path: action_path,
+                    }
+                    | ContextMenuAction::OpenWorktreeFileLocation {
+                        worktree_path,
+                        path: action_path,
+                    } => {
+                        assert_eq!(worktree_path, linked.path());
+                        assert_eq!(action_path, path);
+                    }
+                    ContextMenuAction::OpenWorktreeDiff { target, .. } => {
+                        assert_eq!(target, DiffTarget::working_tree(path.clone(), area))
+                    }
+                    ContextMenuAction::CopyText { text }
+                        if label.as_ref() == "Copy absolute path" =>
+                    {
+                        assert_eq!(text, linked.path().join(&path).to_string_lossy())
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
 }

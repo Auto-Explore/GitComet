@@ -35,7 +35,6 @@ fn leave_controls(cx: &mut gpui::VisualTestContext) {
 
 #[gpui::test]
 fn toolbar_menu_highlights_end_on_escape_and_outside_click(cx: &mut gpui::TestAppContext) {
-    let _guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -76,7 +75,6 @@ fn toolbar_menu_highlights_end_on_escape_and_outside_click(cx: &mut gpui::TestAp
 fn toolbar_busy_fill_lasts_until_each_operation_counter_reaches_zero(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -102,7 +100,6 @@ fn toolbar_busy_fill_lasts_until_each_operation_counter_reaches_zero(
 
 #[gpui::test]
 fn footer_panel_toggles_keep_the_same_resting_fill_in_both_states(cx: &mut gpui::TestAppContext) {
-    let _guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -145,7 +142,6 @@ fn footer_panel_toggles_keep_the_same_resting_fill_in_both_states(cx: &mut gpui:
 
 #[gpui::test]
 fn sidebar_tabs_preserve_selected_fill_when_hovered(cx: &mut gpui::TestAppContext) {
-    let _guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -182,7 +178,6 @@ fn sidebar_tabs_preserve_selected_fill_when_hovered(cx: &mut gpui::TestAppContex
 fn repository_sort_preserves_its_open_fill_on_hover_and_clears_when_closed(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));

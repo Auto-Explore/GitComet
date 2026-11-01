@@ -392,6 +392,7 @@ static inline bool scan_extattrident(TSLexer *lexer) {
 
 static bool scan_comment(Scanner *scanner, TSLexer *lexer) {
   int32_t last = 0;
+  uint32_t depth = 0;
 
   if (lexer->lookahead != '*') return false;
   advance(lexer);
@@ -404,7 +405,10 @@ static bool scan_comment(Scanner *scanner, TSLexer *lexer) {
         } else {
           advance(lexer);
         }
-        scan_comment(scanner, lexer);
+        if (lexer->lookahead == '*') {
+          advance(lexer);
+          depth++;
+        }
         break;
       case '*':
         if (last) {
@@ -414,7 +418,8 @@ static bool scan_comment(Scanner *scanner, TSLexer *lexer) {
         }
         if (lexer->lookahead == ')') {
           advance(lexer);
-          return true;
+          if (depth == 0) return true;
+          depth--;
         }
         break;
       case '\'':

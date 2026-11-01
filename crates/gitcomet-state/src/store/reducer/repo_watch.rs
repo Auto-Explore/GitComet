@@ -4,6 +4,7 @@
 use super::util;
 use crate::model::{AppState, RepoId};
 use crate::msg::{Effect, RepoWatchDegradedReason};
+use crate::store::reducer::prepared::ReducerInputs;
 use std::sync::Arc;
 
 pub(super) fn acquire_lease(state: &mut AppState, repo_id: RepoId, lifetime: u64) -> Vec<Effect> {
@@ -40,7 +41,11 @@ pub(super) fn release_lease(state: &mut AppState, repo_id: RepoId, lifetime: u64
     Vec::new()
 }
 
-pub(super) fn watch_degraded(state: &mut AppState, reason: RepoWatchDegradedReason) -> Vec<Effect> {
+pub(super) fn watch_degraded(
+    inputs: &ReducerInputs,
+    state: &mut AppState,
+    reason: RepoWatchDegradedReason,
+) -> Vec<Effect> {
     let message = match reason {
         crate::msg::RepoWatchDegradedReason::IgnorePolicyFailed =>
             "Live file watching is limited because repository ignore rules could not be read. Changes refresh when the window regains focus; watching will retry automatically.".into(),
@@ -57,7 +62,12 @@ pub(super) fn watch_degraded(state: &mut AppState, reason: RepoWatchDegradedReas
             )
         }
     };
-    util::push_notification(state, crate::model::AppNotificationKind::Warning, message);
+    util::push_notification(
+        inputs,
+        state,
+        crate::model::AppNotificationKind::Warning,
+        message,
+    );
     Vec::new()
 }
 
@@ -97,7 +107,7 @@ pub(super) fn worktree_changed(
 ) -> Vec<Effect> {
     let Some(repo) = state
         .repos
-        .iter()
+        .iter_mut()
         .find(|repo| repo.id == repo_id && repo.lifetime() == lifetime)
     else {
         return Vec::new();
@@ -108,16 +118,15 @@ pub(super) fn worktree_changed(
         .as_ref()
         .is_some_and(|inline| {
             inline.submodule_repo_path == path
-                && (change.index
-                    || change.git_state
-                    || change.text_attributes
-                    || change.worktree
-                        && inline
-                            .target
-                            .file_path()
-                            .is_none_or(|file| change.paths.may_contain(file)))
+                && super::external_and_history::external_change_reloads_diff(
+                    &inline.target,
+                    &change,
+                )
         });
-    let mut effects = super::effects::load_worktree_dirty(state, repo_id);
+    let mut effects: Vec<_> =
+        super::effects::request_worktree_dirty_path_effect(repo, path.clone())
+            .into_iter()
+            .collect();
     if refresh_diff {
         effects
             .extend(super::diff_selection::refresh_inline_submodule_selected_diff(state, repo_id));

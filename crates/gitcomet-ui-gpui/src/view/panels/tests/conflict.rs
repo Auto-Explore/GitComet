@@ -60,7 +60,7 @@ fn seed_conflict_scroll_matrix_state(
     });
 }
 
-fn reset_conflict_scroll_matrix_offsets(pane: &mut MainPaneView) {
+fn reset_conflict_scroll_matrix_offsets(pane: &mut DiffRenderer) {
     reset_uniform_list_offsets(&[
         &pane.conflict_resolver_diff_scroll,
         &pane.conflict_preview_ours_scroll,
@@ -75,17 +75,20 @@ fn reset_conflict_scroll_matrix_offsets(pane: &mut MainPaneView) {
     );
 }
 
+// Use a .txt path for geometry and outline tests so the large document does
+// not also schedule HTML parsing. Syntax regressions use .html explicitly.
 struct SyntheticLargeConflictFixture {
+    _directory: tempfile::TempDir,
     workdir: std::path::PathBuf,
     file_rel: std::path::PathBuf,
     abs_path: std::path::PathBuf,
     fixture_line_count: usize,
     conflict_block_count: usize,
     first_conflict_line: u32,
-    base_text: String,
-    ours_text: String,
-    theirs_text: String,
-    current_text: String,
+    base_text: Arc<str>,
+    ours_text: Arc<str>,
+    theirs_text: Arc<str>,
+    current_text: Arc<str>,
 }
 
 impl SyntheticLargeConflictFixture {
@@ -104,88 +107,84 @@ impl SyntheticLargeConflictFixture {
             "synthetic large conflict fixture requires at least one conflict block"
         );
 
-        let workdir = std::env::temp_dir().join(format!(
-            "gitcomet_ui_test_{}_{}",
-            std::process::id(),
-            workdir_label
-        ));
+        let directory = tempfile::Builder::new()
+            .prefix(&format!("gitcomet_{workdir_label}_"))
+            .tempdir()
+            .unwrap();
+        let workdir = directory.path().to_path_buf();
         let file_rel = std::path::PathBuf::from(file_rel);
         let abs_path = workdir.join(&file_rel);
 
-        let mut base_lines = vec![
-            "<!doctype html>".to_string(),
-            "<html lang=\"en\">".to_string(),
-            "<body class=\"fixture-root\">".to_string(),
-        ];
-        let mut ours_lines = base_lines.clone();
-        let mut theirs_lines = base_lines.clone();
-        let mut current_lines = base_lines.clone();
-
-        let remaining_context = fixture_line_count
-            .saturating_sub(base_lines.len())
-            .saturating_sub(conflict_block_count);
+        let capacity = fixture_line_count.saturating_mul(128);
+        let header = "<!doctype html>\n<html lang=\"en\">\n<body class=\"fixture-root\">";
+        let mut base_text = String::with_capacity(capacity);
+        let mut ours_text = String::with_capacity(capacity);
+        let mut theirs_text = String::with_capacity(capacity);
+        let mut current_text =
+            String::with_capacity(capacity.saturating_add(conflict_block_count * 160));
+        for text in [
+            &mut base_text,
+            &mut ours_text,
+            &mut theirs_text,
+            &mut current_text,
+        ] {
+            text.push_str(header);
+        }
+        let remaining_context = fixture_line_count - 3 - conflict_block_count;
         let context_per_slot = remaining_context / conflict_block_count;
         let context_remainder = remaining_context % conflict_block_count;
         let mut next_context_row = 0usize;
+        let mut side_line_count = 3usize;
         let mut first_conflict_line = None;
-
         for conflict_ix in 0..conflict_block_count {
-            let base_line = format!(
+            let base = format!(
                 "<main id=\"choice-{conflict_ix}\" data-side=\"base\">base {conflict_ix}</main>"
             );
-            let ours_line = format!(
+            let ours = format!(
                 "<main id=\"choice-{conflict_ix}\" data-side=\"ours\">ours {conflict_ix}</main>"
             );
-            let theirs_line = format!(
+            let theirs = format!(
                 "<main id=\"choice-{conflict_ix}\" data-side=\"theirs\">theirs {conflict_ix}</main>"
             );
-            let conflict_line =
-                u32::try_from(ours_lines.len().saturating_add(1)).unwrap_or(u32::MAX);
-            first_conflict_line.get_or_insert(conflict_line);
-
-            base_lines.push(base_line);
-            ours_lines.push(ours_line.clone());
-            theirs_lines.push(theirs_line.clone());
-            current_lines.push("<<<<<<< ours".to_string());
-            current_lines.push(ours_line);
-            current_lines.push("=======".to_string());
-            current_lines.push(theirs_line);
-            current_lines.push(">>>>>>> theirs".to_string());
-
+            first_conflict_line
+                .get_or_insert(u32::try_from(side_line_count + 1).unwrap_or(u32::MAX));
+            append_synthetic_conflict_line(&mut base_text, &base);
+            append_synthetic_conflict_line(&mut ours_text, &ours);
+            append_synthetic_conflict_line(&mut theirs_text, &theirs);
+            for line in ["<<<<<<< ours", &ours, "=======", &theirs, ">>>>>>> theirs"] {
+                append_synthetic_conflict_line(&mut current_text, line);
+            }
             let slot_lines = context_per_slot + usize::from(conflict_ix < context_remainder);
             append_synthetic_large_conflict_context(
-                &mut base_lines,
-                &mut ours_lines,
-                &mut theirs_lines,
-                &mut current_lines,
+                &mut base_text,
+                &mut ours_text,
+                &mut theirs_text,
+                &mut current_text,
                 &mut next_context_row,
                 slot_lines,
             );
+            side_line_count += 1 + slot_lines;
         }
-
-        assert_eq!(base_lines.len(), fixture_line_count);
-        assert_eq!(ours_lines.len(), fixture_line_count);
-        assert_eq!(theirs_lines.len(), fixture_line_count);
-
+        assert_eq!(side_line_count, fixture_line_count);
         Self {
+            _directory: directory,
             workdir,
             file_rel,
             abs_path,
             fixture_line_count,
             conflict_block_count,
             first_conflict_line: first_conflict_line.unwrap_or(1),
-            base_text: base_lines.join("\n"),
-            ours_text: ours_lines.join("\n"),
-            theirs_text: theirs_lines.join("\n"),
-            current_text: current_lines.join("\n"),
+            base_text: base_text.into(),
+            ours_text: ours_text.into(),
+            theirs_text: theirs_text.into(),
+            current_text: current_text.into(),
         }
     }
 
     fn write(&self) {
-        let _ = std::fs::remove_dir_all(&self.workdir);
         std::fs::create_dir_all(self.abs_path.parent().expect("fixture file parent"))
             .expect("create fixture dir");
-        std::fs::write(&self.abs_path, &self.current_text).expect("write fixture");
+        std::fs::write(&self.abs_path, self.current_text.as_bytes()).expect("write fixture");
     }
 
     fn repo_state(
@@ -211,9 +210,9 @@ impl SyntheticLargeConflictFixture {
         repo.conflict_state.conflict_session = Some(ConflictSession::from_merged_text(
             self.file_rel.clone(),
             gitcomet_core::domain::FileConflictKind::BothModified,
-            ConflictPayload::Text(self.base_text.clone().into()),
-            ConflictPayload::Text(self.ours_text.clone().into()),
-            ConflictPayload::Text(self.theirs_text.clone().into()),
+            ConflictPayload::Text(Arc::clone(&self.base_text)),
+            ConflictPayload::Text(Arc::clone(&self.ours_text)),
+            ConflictPayload::Text(Arc::clone(&self.theirs_text)),
             &self.current_text,
         ));
         repo
@@ -224,36 +223,44 @@ impl SyntheticLargeConflictFixture {
     }
 }
 
+fn append_synthetic_conflict_line(text: &mut String, line: &str) {
+    if !text.is_empty() {
+        text.push('\n');
+    }
+    text.push_str(line);
+}
+
 fn append_synthetic_large_conflict_context(
-    base_lines: &mut Vec<String>,
-    ours_lines: &mut Vec<String>,
-    theirs_lines: &mut Vec<String>,
-    current_lines: &mut Vec<String>,
+    base: &mut String,
+    ours: &mut String,
+    theirs: &mut String,
+    current: &mut String,
     next_context_row: &mut usize,
     count: usize,
 ) {
+    use std::fmt::Write as _;
+    let mut line = String::with_capacity(128);
     for _ in 0..count {
         let row = *next_context_row;
-        let line = format!(
-            "<section id=\"panel-{row}\" data-row=\"{row}\"><div class=\"copy\">row {row}</div></section>"
-        );
-        base_lines.push(line.clone());
-        ours_lines.push(line.clone());
-        theirs_lines.push(line.clone());
-        current_lines.push(line);
+        line.clear();
+        write!(line, "<section id=\"panel-{row}\" data-row=\"{row}\"><div class=\"copy\">row {row}</div></section>").unwrap();
+        for text in [&mut *base, &mut *ours, &mut *theirs, &mut *current] {
+            append_synthetic_conflict_line(text, &line);
+        }
         *next_context_row = next_context_row.saturating_add(1);
     }
 }
 
 struct SyntheticWholeFileConflictFixture {
+    _directory: tempfile::TempDir,
     workdir: std::path::PathBuf,
     file_rel: std::path::PathBuf,
     abs_path: std::path::PathBuf,
     line_count: usize,
-    base_text: String,
-    ours_text: String,
-    theirs_text: String,
-    current_text: String,
+    base_text: Arc<str>,
+    ours_text: Arc<str>,
+    theirs_text: Arc<str>,
+    current_text: Arc<str>,
 }
 
 impl SyntheticWholeFileConflictFixture {
@@ -263,61 +270,51 @@ impl SyntheticWholeFileConflictFixture {
             "whole-file conflict fixture needs room for html wrapper lines"
         );
 
-        let workdir = std::env::temp_dir().join(format!(
-            "gitcomet_ui_test_{}_{}",
-            std::process::id(),
-            workdir_label
-        ));
+        let directory = tempfile::Builder::new()
+            .prefix(&format!("gitcomet_{workdir_label}_"))
+            .tempdir()
+            .unwrap();
+        let workdir = directory.path().to_path_buf();
         let file_rel = std::path::PathBuf::from(file_rel);
         let abs_path = workdir.join(&file_rel);
 
         let build_side = |side: &str| {
-            let mut lines = vec![
-                "<!doctype html>".to_string(),
-                "<html lang=\"en\">".to_string(),
-                format!("<body class=\"whole-file-{side}\">"),
-            ];
-            let middle_count = line_count.saturating_sub(5);
-            for row in 0..middle_count {
-                lines.push(format!(
-                    "<section id=\"panel-{row}\" data-side=\"{side}\"><div>{side} {row}</div></section>"
-                ));
+            use std::fmt::Write as _;
+            let mut text = String::with_capacity(line_count.saturating_mul(128));
+            write!(
+                text,
+                "<!doctype html>\n<html lang=\"en\">\n<body class=\"whole-file-{side}\">"
+            )
+            .unwrap();
+            for row in 0..line_count.saturating_sub(5) {
+                write!(text, "\n<section id=\"panel-{row}\" data-side=\"{side}\"><div>{side} {row}</div></section>").unwrap();
             }
-            lines.push("</body>".to_string());
-            lines.push("</html>".to_string());
-            lines
+            text.push_str("\n</body>\n</html>");
+            assert_eq!(text.lines().count(), line_count);
+            text
         };
-
-        let base_lines = build_side("base");
-        let ours_lines = build_side("ours");
-        let theirs_lines = build_side("theirs");
-        assert_eq!(base_lines.len(), line_count);
-        assert_eq!(ours_lines.len(), line_count);
-        assert_eq!(theirs_lines.len(), line_count);
-
-        let base_text = base_lines.join("\n");
-        let ours_text = ours_lines.join("\n");
-        let theirs_text = theirs_lines.join("\n");
+        let base_text = build_side("base");
+        let ours_text = build_side("ours");
+        let theirs_text = build_side("theirs");
         let current_text =
             format!("<<<<<<< ours\n{ours_text}\n=======\n{theirs_text}\n>>>>>>> theirs\n");
-
         Self {
+            _directory: directory,
             workdir,
             file_rel,
             abs_path,
             line_count,
-            base_text,
-            ours_text,
-            theirs_text,
-            current_text,
+            base_text: base_text.into(),
+            ours_text: ours_text.into(),
+            theirs_text: theirs_text.into(),
+            current_text: current_text.into(),
         }
     }
 
     fn write(&self) {
-        let _ = std::fs::remove_dir_all(&self.workdir);
         std::fs::create_dir_all(self.abs_path.parent().expect("fixture file parent"))
             .expect("create fixture dir");
-        std::fs::write(&self.abs_path, &self.current_text).expect("write fixture");
+        std::fs::write(&self.abs_path, self.current_text.as_bytes()).expect("write fixture");
     }
 
     fn repo_state(
@@ -343,9 +340,9 @@ impl SyntheticWholeFileConflictFixture {
         repo.conflict_state.conflict_session = Some(ConflictSession::from_merged_text(
             self.file_rel.clone(),
             gitcomet_core::domain::FileConflictKind::BothModified,
-            ConflictPayload::Text(self.base_text.clone().into()),
-            ConflictPayload::Text(self.ours_text.clone().into()),
-            ConflictPayload::Text(self.theirs_text.clone().into()),
+            ConflictPayload::Text(Arc::clone(&self.base_text)),
+            ConflictPayload::Text(Arc::clone(&self.ours_text)),
+            ConflictPayload::Text(Arc::clone(&self.theirs_text)),
             &self.current_text,
         ));
         repo
@@ -366,7 +363,7 @@ fn load_synthetic_whole_file_conflict(
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, _cx| {
+            this.diff_renderer.update(cx, |pane, _cx| {
                 pane.set_full_document_syntax_budget_override_for_tests(rows::DiffSyntaxBudget {
                     foreground_parse: std::time::Duration::ZERO,
                 });
@@ -379,7 +376,7 @@ fn load_synthetic_whole_file_conflict(
     });
 }
 
-fn assert_streamed_whole_file_two_way_state(pane: &MainPaneView, line_count: usize) -> usize {
+fn assert_streamed_whole_file_two_way_state(pane: &DiffRenderer, line_count: usize) -> usize {
     assert_eq!(
         pane.conflict_resolver.rendering_mode(),
         crate::view::conflict_resolver::ConflictRenderingMode::StreamedLargeFile,
@@ -446,7 +443,7 @@ struct ConflictScrollSnapshot {
     gutter: Pixels,
 }
 
-fn conflict_scroll_snapshot(pane: &MainPaneView) -> ConflictScrollSnapshot {
+fn conflict_scroll_snapshot(pane: &DiffRenderer) -> ConflictScrollSnapshot {
     ConflictScrollSnapshot {
         base: uniform_list_offset(&pane.conflict_resolver_diff_scroll).y,
         ours: uniform_list_offset(&pane.conflict_preview_ours_scroll).y,
@@ -460,7 +457,7 @@ fn read_conflict_scroll_snapshot(
     cx: &mut gpui::VisualTestContext,
     view: &gpui::Entity<super::super::GitCometView>,
 ) -> ConflictScrollSnapshot {
-    cx.update(|_window, app| conflict_scroll_snapshot(view.read(app).main_pane.read(app)))
+    cx.update(|_window, app| conflict_scroll_snapshot(view.read(app).diff_renderer.read(app)))
 }
 
 /// A multi-conflict fixture whose two sides have different line counts per
@@ -480,7 +477,9 @@ use navigation_and_search::{
     resolved_output_placeholder_protected_ranges_for_test,
 };
 
+mod action_origin;
 mod bootstrap;
 mod editing;
+mod plan_reload;
 mod previews;
 mod scrolling;

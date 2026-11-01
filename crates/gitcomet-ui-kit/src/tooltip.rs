@@ -54,6 +54,19 @@ pub fn dismiss_tooltips_on_mouse_down(cx: &mut App) {
 
 pub trait GitCometTooltipExt: gpui::StatefulInteractiveElement + Sized {
     fn gitcomet_tooltip(self, theme: AppTheme, text: SharedString) -> Self {
+        self.gitcomet_tooltip_keyed(theme, text, Vec::new())
+    }
+
+    /// A tooltip naming the control and its keyboard shortcuts, each drawn
+    /// as keycaps after the label; alternatives (`["F2", "Shift+F7"]`) are
+    /// separated by a slash. Keys within one shortcut are joined by `+`.
+    fn gitcomet_tooltip_keyed(
+        self,
+        theme: AppTheme,
+        text: SharedString,
+        shortcuts: Vec<SharedString>,
+    ) -> Self {
+        let shortcuts: std::rc::Rc<[SharedString]> = shortcuts.into();
         self.tooltip(move |_window, cx| {
             let epoch = current_tooltip_dismiss_epoch(cx);
             AnyView::from(cx.new(|cx| {
@@ -63,6 +76,7 @@ pub trait GitCometTooltipExt: gpui::StatefulInteractiveElement + Sized {
                 TooltipBubbleView {
                     theme,
                     text: text.clone(),
+                    shortcuts: shortcuts.clone(),
                     epoch,
                     _epoch_observer: epoch_observer,
                     _overlay_observer: overlay_observer,
@@ -77,6 +91,7 @@ impl<T: gpui::StatefulInteractiveElement> GitCometTooltipExt for T {}
 struct TooltipBubbleView {
     theme: AppTheme,
     text: SharedString,
+    shortcuts: std::rc::Rc<[SharedString]>,
     /// Dismiss epoch at build time; a later epoch means a click happened
     /// while this bubble was up, so it must disappear.
     epoch: u64,
@@ -85,7 +100,7 @@ struct TooltipBubbleView {
 }
 
 impl Render for TooltipBubbleView {
-    fn render(&mut self, _window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
         if current_tooltip_dismiss_epoch(cx) != self.epoch {
             return div();
         }
@@ -93,28 +108,66 @@ impl Render for TooltipBubbleView {
             return div();
         }
 
+        // Tests read a keyed tooltip as "Label (A / B)".
         #[cfg(any(test, feature = "test-support"))]
         VISIBLE_TOOLTIP_TEXT_FOR_TEST.with(|value| {
-            value.replace(Some(self.text.clone()));
+            let text = if self.shortcuts.is_empty() {
+                self.text.clone()
+            } else {
+                format!("{} ({})", self.text, self.shortcuts.join(" / ")).into()
+            };
+            value.replace(Some(text));
         });
 
         // Offset from the cursor hotspot, scaled so the bubble clears a
         // larger pointer.
         let ui_scale_percent = crate::ui_scale::current(cx).percent;
         let scaled_px = crate::ui_scale::scaler(ui_scale_percent);
+        let max_width =
+            (window.viewport_size().width - scaled_px(TOOLTIP_CURSOR_OFFSET_X_PX)).max(px(0.0));
         div()
+            .max_w(window.viewport_size().width)
             .pl(scaled_px(TOOLTIP_CURSOR_OFFSET_X_PX))
             .pt(scaled_px(TOOLTIP_CURSOR_OFFSET_Y_PX))
             .child(
                 div()
+                    .debug_selector(|| "tooltip_bubble".to_owned())
+                    .max_w(max_width)
                     .px_2()
                     .py_1()
                     .bg(self.theme.colors.tooltip.background)
+                    .border_1()
+                    .border_color(self.theme.colors.stroke.default)
                     .rounded(px(self.theme.radii.row))
-                    .shadow(crate::theme::shadow_popover(self.theme))
                     .text_size(self.theme.ui_text(12.0))
                     .text_color(self.theme.colors.tooltip.foreground)
-                    .child(self.text.clone()),
+                    .flex()
+                    .flex_wrap()
+                    .items_center()
+                    .gap(scaled_px(6.0))
+                    .child(div().min_w_0().child(self.text.clone()))
+                    .children(
+                        self.shortcuts
+                            .iter()
+                            .enumerate()
+                            .flat_map(|(ix, shortcut)| {
+                                let fg = self.theme.colors.tooltip.foreground;
+                                let separator = (ix > 0).then(|| {
+                                    div()
+                                        .text_color(crate::theme::with_alpha(fg, 0.6))
+                                        .child("/")
+                                        .into_any_element()
+                                });
+                                separator.into_iter().chain(std::iter::once(
+                                    crate::components::shortcut_keys_compact(
+                                        shortcut,
+                                        fg,
+                                        crate::ui_scale::UiScale::current(cx),
+                                    )
+                                    .into_any_element(),
+                                ))
+                            }),
+                    ),
             )
     }
 }

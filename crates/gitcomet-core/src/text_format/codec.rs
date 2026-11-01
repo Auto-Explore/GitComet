@@ -1,5 +1,5 @@
 use super::{LineEndingCounter, LineEndingStats, TextEncoding, TextFormat};
-use crate::error::{Error, ErrorKind};
+use crate::error::Error;
 use crate::services::CancellationToken;
 use encoding_rs::{CoderResult, EncoderResult};
 use std::borrow::Cow;
@@ -58,10 +58,6 @@ pub struct TranscodeStats {
     pub utf8_len: u64,
 }
 
-fn io_error(error: std::io::Error) -> Error {
-    Error::new(ErrorKind::Io(error.kind()))
-}
-
 /// Stream `reader` (in `format`) into `writer` as UTF-8 without a BOM.
 pub fn transcode_to_utf8(
     mut reader: impl Read,
@@ -90,7 +86,8 @@ pub fn transcode_to_utf8(
 
     loop {
         cancellation.check_cancelled()?;
-        let read = read_full(&mut reader, &mut input).map_err(io_error)?;
+        let read = read_full(&mut reader, &mut input)
+            .map_err(|error| Error::from(error).with_context("read text for decoding", None))?;
         let last = read < input.len();
         let mut chunk = &input[..read];
         if !bom_pending.is_empty() {
@@ -135,12 +132,16 @@ pub fn transcode_to_utf8(
         }
         line_endings.feed(&output);
         stats.utf8_len += output.len() as u64;
-        writer.write_all(&output).map_err(io_error)?;
+        writer
+            .write_all(&output)
+            .map_err(|error| Error::from(error).with_context("write decoded text", None))?;
         if last {
             break;
         }
     }
-    writer.flush().map_err(io_error)?;
+    writer
+        .flush()
+        .map_err(|error| Error::from(error).with_context("flush decoded text", None))?;
     stats.line_endings = line_endings.finish();
     stats.lossy = round_trip.is_some_and(|check| check.lossy);
     Ok(stats)
@@ -315,6 +316,7 @@ pub fn round_trips(raw: &[u8], decoded: &str, format: TextFormat) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::ErrorKind;
 
     fn fmt(encoding: TextEncoding, bom: bool) -> TextFormat {
         TextFormat { encoding, bom }

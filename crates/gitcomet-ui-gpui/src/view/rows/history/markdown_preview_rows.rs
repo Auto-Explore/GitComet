@@ -1,13 +1,14 @@
 use super::*;
 use crate::kit::interaction as controls;
+pub(in crate::view) use crate::view::markdown_preview::markdown_preview_row_marker;
 
 pub(in crate::view) const MARKDOWN_PREVIEW_BASE_FONT_PX: f32 = 13.0;
-pub(in crate::view) const MARKDOWN_PREVIEW_CONTENT_PAD_X_PX: f32 = 18.0;
-pub(in crate::view) const MARKDOWN_PREVIEW_INDENT_STEP_PX: f32 = 24.0;
+pub(in crate::view) const MARKDOWN_PREVIEW_CONTENT_PAD_X_PX: f32 = 12.0;
+pub(in crate::view) const MARKDOWN_PREVIEW_INDENT_STEP_PX: f32 = 16.0;
 pub(in crate::view) const MARKDOWN_PREVIEW_BLOCKQUOTE_BAR_WIDTH_PX: f32 = 4.0;
 pub(in crate::view) const MARKDOWN_PREVIEW_LIST_MARKER_MIN_WIDTH_PX: f32 = 22.0;
-pub(in crate::view) const MARKDOWN_PREVIEW_LIST_MARKER_GAP_PX: f32 = 10.0;
-pub(in crate::view) const MARKDOWN_PREVIEW_SHELL_PAD_X_PX: f32 = 12.0;
+pub(in crate::view) const MARKDOWN_PREVIEW_LIST_MARKER_GAP_PX: f32 = 6.0;
+pub(in crate::view) const MARKDOWN_PREVIEW_SHELL_PAD_X_PX: f32 = 8.0;
 
 pub(in crate::view) fn markdown_preview_scaled_px(value: f32, ui_scale_percent: u32) -> Pixels {
     crate::ui_scale::design_px_from_percent(value, ui_scale_percent)
@@ -53,7 +54,8 @@ impl MarkdownPreviewHoveredLink {
 pub(in crate::view) struct MarkdownRemoteImageAccess {
     pub(in crate::view) policy: RemoteMarkdownImagePolicy,
     pub(in crate::view) approved_urls: Arc<FxHashSet<SharedString>>,
-    pub(in crate::view) approval_view: Option<Entity<MainPaneView>>,
+    pub(in crate::view) approval_view:
+        Option<crate::view::markdown_interaction::MarkdownInteraction>,
 }
 
 impl Default for MarkdownRemoteImageAccess {
@@ -114,8 +116,12 @@ impl gpui::Element for MarkdownPreviewSharedHighlightsText {
         window: &mut Window,
         cx: &mut App,
     ) -> (gpui::LayoutId, Self::RequestLayoutState) {
-        let mut inner = gpui::StyledText::new(self.text.clone())
-            .with_default_highlights(&window.text_style(), self.highlights.iter().cloned());
+        let runs = crate::text_runs::text_runs_for_highlights(
+            &self.text,
+            &window.text_style(),
+            &self.highlights,
+        );
+        let mut inner = gpui::StyledText::new(self.text.clone()).with_runs(runs);
         let layout = inner.request_layout(id, inspector_id, window, cx);
         self.inner = Some(inner);
         layout
@@ -1068,9 +1074,7 @@ fn markdown_preview_blocked_image(
                         controls::ControlActivation::Nested,
                         move |_event, _window, cx| {
                             cx.stop_propagation();
-                            view.update(cx, |this, cx| {
-                                this.approve_remote_markdown_image(url.clone(), cx);
-                            });
+                            view.approve_image(url.clone(), cx);
                         },
                     )
                 },
@@ -1216,14 +1220,14 @@ pub(in crate::view) fn markdown_preview_image_placeholder_element(
 /// Gutter colour the flowing markdown preview marks a wholly added or removed
 /// file with, shared with the source preview so the two agree.
 pub(in crate::view) fn worktree_markdown_preview_bar_color(
-    this: &MainPaneView,
+    this: &DiffRenderer,
     theme: AppTheme,
 ) -> Option<gpui::Rgba> {
     worktree_preview_bar_color(this, theme)
 }
 
 pub(in crate::view) fn worktree_preview_bar_color(
-    this: &MainPaneView,
+    this: &DiffRenderer,
     theme: AppTheme,
 ) -> Option<gpui::Rgba> {
     let highlight_deleted_file = this.deleted_file_preview_abs_path().is_some();
@@ -1294,25 +1298,6 @@ pub(in crate::view) fn markdown_preview_row_styled_text(
     })
 }
 
-pub(in crate::view) fn markdown_preview_row_marker(
-    row: &MarkdownPreviewRow,
-) -> Option<SharedString> {
-    if let Some(label) = row.footnote_label.as_ref() {
-        return Some(format!("[^{}]:", label.as_ref()).into());
-    }
-
-    // A later paragraph or line of an item sits under the item's marker.
-    if row.continues_item {
-        return None;
-    }
-    match row.kind {
-        MarkdownPreviewRowKind::DetailsSummary => Some("v".into()),
-        MarkdownPreviewRowKind::ListItem { number: Some(n) } => Some(format!("{n}.").into()),
-        MarkdownPreviewRowKind::ListItem { number: None } => Some("•".into()),
-        _ => None,
-    }
-}
-
 pub(in crate::view) fn markdown_preview_alert_color(
     theme: AppTheme,
     kind: MarkdownAlertKind,
@@ -1320,7 +1305,10 @@ pub(in crate::view) fn markdown_preview_alert_color(
     match kind {
         MarkdownAlertKind::Note => theme.colors.accent.foreground,
         MarkdownAlertKind::Tip => theme.colors.status.success.foreground,
-        MarkdownAlertKind::Important => with_alpha(theme.colors.accent.foreground, 0.85),
+        MarkdownAlertKind::Important if theme.is_dark => {
+            with_alpha(theme.colors.accent.foreground, 0.85)
+        }
+        MarkdownAlertKind::Important => theme.colors.accent.foreground,
         MarkdownAlertKind::Warning => theme.colors.status.warning.foreground,
         MarkdownAlertKind::Caution => theme.colors.status.danger.foreground,
     }

@@ -68,7 +68,7 @@ fn semantic_conflict_navigation_handles_automatic_deltas_and_projection_rebuilds
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 assert!(pane.conflict_has_prev_delta());
                 assert!(pane.conflict_has_next_delta());
                 pane.conflict_jump_first(cx);
@@ -77,7 +77,7 @@ fn semantic_conflict_navigation_handles_automatic_deltas_and_projection_rebuilds
     });
     let (anchor, active, can_prev_conflict, can_next_conflict, can_first) =
         cx.update(|_window, app| {
-            let pane = view.read(app).main_pane.read(app);
+            let pane = view.read(app).diff_renderer.read(app);
             (
                 pane.conflict_resolver.nav_anchor,
                 pane.conflict_resolver.active_conflict,
@@ -89,7 +89,7 @@ fn semantic_conflict_navigation_handles_automatic_deltas_and_projection_rebuilds
     assert_eq!(anchor.unwrap().order_hint, 0);
     assert_eq!(active, None, "automatic deltas have no marker block");
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         let (has_base, selected) = pane
             .conflict_resolver_active_pick_state()
             .expect("the semantic automatic delta remains actionable");
@@ -128,7 +128,7 @@ fn semantic_conflict_navigation_handles_automatic_deltas_and_projection_rebuilds
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.conflict_jump_next(cx);
             });
         });
@@ -138,7 +138,7 @@ fn semantic_conflict_navigation_handles_automatic_deltas_and_projection_rebuilds
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.conflict_jump_last(cx);
             });
         });
@@ -146,16 +146,16 @@ fn semantic_conflict_navigation_handles_automatic_deltas_and_projection_rebuilds
     assert_eq!(active_conflict_ix(cx, &view), 1);
     assert_eq!(conflict_navigation_anchor(cx, &view), Some(3));
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert!(pane.conflict_has_prev_delta());
         assert!(!pane.conflict_has_next_delta());
     });
 
     // A block click resets the semantic anchor before subsequent F2/F3/F7
     // traversal, even when another target was selected previously.
-    let main_pane = cx.update(|_window, app| view.read(app).main_pane.clone());
+    let diff_renderer = cx.update(|_window, app| view.read(app).diff_renderer.clone());
     cx.update(|_window, app| {
-        main_pane.update(app, |pane, cx| {
+        diff_renderer.update(app, |pane, cx| {
             pane.conflict_resolver_select_conflict(0, cx);
             pane.conflict_resolver_toggle_collapse_context(cx);
             pane.conflict_resolver_toggle_hide_resolved(cx);
@@ -188,7 +188,7 @@ fn semantic_conflict_navigation_handles_automatic_deltas_and_projection_rebuilds
     // behavior, but the destination is selected through the semantic target
     // list (and therefore skips both automatic deltas).
     cx.update(|_window, app| {
-        main_pane.update(app, |pane, cx| {
+        diff_renderer.update(app, |pane, cx| {
             pane.conflict_resolver_pick_active_conflict(
                 crate::view::conflict_resolver::ConflictChoice::Ours,
                 cx,
@@ -205,7 +205,7 @@ fn semantic_conflict_navigation_handles_automatic_deltas_and_projection_rebuilds
     // Ctrl+Shift+3 is Choose C Everywhere, not "all unresolved conflicts".
     // It must replace both original conflicts and both automatic deltas.
     cx.update(|_window, app| {
-        main_pane.update(app, |pane, cx| {
+        diff_renderer.update(app, |pane, cx| {
             pane.conflict_resolver_set_view_mode(ConflictResolverViewMode::ThreeWay, cx);
         });
     });
@@ -271,7 +271,7 @@ fn diff_editor_staging_context_menu_restores_diff_panel_focus_for_f4(
         cx,
         &view,
         PopoverKind::DiffEditorMenu {
-            repo_id,
+            repo_id: Some(repo_id),
             area: DiffArea::Unstaged,
             path: Some(first.clone()),
             hunk_patch: Some("diff --git a/src/first.rs b/src/first.rs\n".into()),
@@ -785,4 +785,651 @@ fn detached_window_focus_conflict_quick_pick_uses_global_diff_shortcut_fallback(
         1,
         "expected conflict quick-pick key from detached focus to pick the first conflict and advance"
     );
+}
+
+#[gpui::test]
+fn conflict_resolver_ignores_plain_file_step_keys(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = RepoId(70578);
+    let commit_id = CommitId("abcdef0011223395".into());
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_conflict_plain_step_keys",
+        std::process::id()
+    ));
+    let first = std::path::PathBuf::from("src/a_conflicted.rs");
+    let second = std::path::PathBuf::from("src/b_conflicted.rs");
+    let mut repo = simple_conflict_repo(repo_id, &workdir, &commit_id, first.as_path());
+    let status = |path: &std::path::Path| gitcomet_core::domain::FileStatus {
+        path: path.to_path_buf(),
+        kind: gitcomet_core::domain::FileStatusKind::Conflicted,
+        conflict: Some(gitcomet_core::domain::FileConflictKind::BothModified),
+    };
+    repo.status = Loadable::Ready(
+        gitcomet_core::domain::RepoStatus {
+            staged: Arc::new(vec![]),
+            unstaged: Arc::new(vec![status(&first), status(&second)]),
+        }
+        .into(),
+    );
+    repo.status_rev = repo.status_rev.wrapping_add(1);
+    repo.diff_state.diff_target = Some(DiffTarget::working_tree(first.clone(), DiffArea::Unstaged));
+
+    apply_state(cx, &view, app_state_with_active_repo(repo));
+    bind_app_keys_for_test(cx);
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "conflict resolver for the plain step keys",
+        |pane| pane.conflict_resolver.path.as_deref() == Some(first.as_path()),
+        |pane| format!("path={:?}", pane.conflict_resolver.path),
+    );
+    focus_diff_panel(cx, &view);
+
+    let target_path = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|_window, app| {
+            view.read(app).store.snapshot().repos[0]
+                .diff_state
+                .diff_target
+                .as_ref()
+                .and_then(|target| match target {
+                    DiffTarget::WorkingTree { path, .. } => Some(path.clone()),
+                    _ => None,
+                })
+        })
+    };
+    for key in ["down", "end"] {
+        cx.simulate_keystrokes(key);
+        draw_and_drain_test_window(cx);
+        assert_eq!(
+            target_path(cx),
+            Some(first.clone()),
+            "`{key}` must not move"
+        );
+    }
+
+    // A focused status section sends the same keys to the diff; they must not
+    // leave the resolver either.
+    cx.update(|window, app| {
+        let focus = view
+            .read(app)
+            .details_pane
+            .read(app)
+            .status_section_focus_handle(StatusSection::CombinedUnstaged)
+            .clone();
+        window.focus(&focus, app);
+        let _ = window.draw(app);
+    });
+    for key in ["down", "end"] {
+        cx.simulate_keystrokes(key);
+        draw_and_drain_test_window(cx);
+        assert_eq!(
+            target_path(cx),
+            Some(first.clone()),
+            "`{key}` in the status section must not move"
+        );
+    }
+    cx.simulate_keystrokes("f4");
+    draw_and_drain_test_window(cx);
+    wait_until_store_diff_target_path(cx, &view, second.as_path());
+}
+
+/// The bottom bar's Stage is Space by another route: it stages the shown file
+/// and opens the next one in its section, then hands focus back to the diff
+/// so the next Space carries on.
+#[gpui::test]
+fn the_bar_stage_button_stages_and_advances_like_space(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = RepoId(70565);
+    let commit_id = CommitId("abcdef0011223389".into());
+    let workdir =
+        std::env::temp_dir().join(format!("gitcomet_ui_test_{}_bar_stage", std::process::id()));
+    let first = std::path::PathBuf::from("src/first.rs");
+    let second = std::path::PathBuf::from("src/second.rs");
+    let repo = simple_worktree_repo(
+        repo_id,
+        &workdir,
+        &commit_id,
+        &[first.clone(), second.clone()],
+        &first,
+    );
+    apply_state(cx, &view, app_state_with_active_repo(repo));
+    draw_and_drain_test_window(cx);
+
+    assert_eq!(diff_bar_stage_label(cx, &view).as_deref(), Some("Stage"));
+    assert_eq!(
+        diff_bar_position(cx, &view).as_deref(),
+        Some("1 of 2 files")
+    );
+    let button = cx
+        .debug_bounds("diff_bar_stage")
+        .expect("a working-tree file offers Stage");
+    cx.simulate_click(button.center(), Modifiers::default());
+    draw_and_drain_test_window(cx);
+    wait_until_store_diff_target_path(cx, &view, second.as_path());
+    sync_store_snapshot(cx, &view);
+
+    assert_eq!(active_worktree_diff_target_path(cx, &view), Some(second));
+    assert!(
+        cx.update(|window, app| {
+            let diff_renderer = view.read(app).diff_renderer.clone();
+            diff_renderer
+                .read(app)
+                .diff_panel_focus_handle
+                .is_focused(window)
+        }),
+        "the click hands focus back to the diff"
+    );
+}
+
+/// A staged file offers Unstage.
+#[gpui::test]
+fn the_bar_offers_unstage_for_a_staged_file(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = RepoId(70566);
+    let commit_id = CommitId("abcdef001122338a".into());
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_bar_unstage",
+        std::process::id()
+    ));
+    let staged = std::path::PathBuf::from("src/staged.rs");
+    let mut repo = simple_worktree_repo(
+        repo_id,
+        &workdir,
+        &commit_id,
+        std::slice::from_ref(&staged),
+        &staged,
+    );
+    repo.status = Loadable::Ready(
+        gitcomet_core::domain::RepoStatus {
+            staged: std::sync::Arc::new(vec![gitcomet_core::domain::FileStatus {
+                path: staged.clone(),
+                kind: gitcomet_core::domain::FileStatusKind::Modified,
+                conflict: None,
+            }]),
+            unstaged: std::sync::Arc::new(vec![]),
+        }
+        .into(),
+    );
+    let target = DiffTarget::working_tree(staged, DiffArea::Staged);
+    repo.diff_state.diff_target = Some(target.clone());
+    repo.diff_state.diff = Loadable::Ready(simple_hunk_diff(target).into());
+    repo.diff_state.diff_rev = 2;
+    repo.diff_state.diff_state_rev = repo.diff_state.diff_state_rev.wrapping_add(1);
+    apply_state(cx, &view, app_state_with_active_repo(repo));
+    draw_and_drain_test_window(cx);
+
+    assert_eq!(diff_bar_stage_label(cx, &view).as_deref(), Some("Unstage"));
+    assert_eq!(diff_bar_position(cx, &view).as_deref(), Some("1 of 1 file"));
+}
+
+/// With several rows selected, the button names how many it takes, and a
+/// click consumes the selection the way Space does.
+#[gpui::test]
+fn the_bar_stage_button_takes_the_selected_files(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = RepoId(70567);
+    let commit_id = CommitId("abcdef001122338b".into());
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_bar_stage_selection",
+        std::process::id()
+    ));
+    let first = std::path::PathBuf::from("src/first.rs");
+    let second = std::path::PathBuf::from("src/second.rs");
+    let third = std::path::PathBuf::from("src/third.rs");
+    let repo = simple_worktree_repo(
+        repo_id,
+        &workdir,
+        &commit_id,
+        &[first.clone(), second.clone(), third],
+        &first,
+    );
+    apply_state(cx, &view, app_state_with_active_repo(repo));
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.details_pane.update(cx, |pane, cx| {
+                pane.status_multi_selection.insert(
+                    repo_id,
+                    StatusMultiSelection {
+                        unstaged: vec![first.clone(), second.clone()],
+                        unstaged_anchor: Some(first.clone()),
+                        ..Default::default()
+                    },
+                );
+                cx.notify();
+            });
+        });
+    });
+    draw_and_drain_test_window(cx);
+
+    assert_eq!(
+        diff_bar_stage_label(cx, &view).as_deref(),
+        Some("Stage (2)")
+    );
+    let button = cx.debug_bounds("diff_bar_stage").expect("the Stage button");
+    cx.simulate_click(button.center(), Modifiers::default());
+    draw_and_drain_test_window(cx);
+    assert!(
+        cx.update(|_window, app| {
+            !view
+                .read(app)
+                .details_pane
+                .read(app)
+                .status_multi_selection
+                .contains_key(&repo_id)
+        }),
+        "staging the selection must consume it"
+    );
+}
+
+/// A mergetool window's resolver saves from the bottom bar too, with Save &
+/// close as its only save: it writes the merge for git and exits.
+#[gpui::test]
+fn a_mergetool_resolver_closes_from_the_bottom_bar(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    let repo_id = RepoId(70577);
+    let commit_id = CommitId("abcdef0011223394".into());
+    let workdir = tempfile::tempdir().unwrap();
+    let path = std::path::PathBuf::from("conflicted.rs");
+    let repo = simple_conflict_repo(repo_id, workdir.path(), &commit_id, path.as_path());
+    let Loadable::Ready(Some(file)) = &repo.conflict_state.conflict_file else {
+        panic!("the fixture holds a conflict file");
+    };
+    std::fs::write(workdir.path().join(&path), file.current.as_deref().unwrap()).unwrap();
+    apply_state(cx, &view, app_state_with_active_repo(repo));
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "conflict resolver for the mergetool bar",
+        |pane| {
+            pane.conflict_resolver.path.as_deref() == Some(path.as_path())
+                && pane.conflict_resolver_conflict_count() == 2
+        },
+        |pane| format!("path={:?}", pane.conflict_resolver.path),
+    );
+    let exit_code = Arc::new(std::sync::atomic::AtomicI32::new(-1));
+    let diff_renderer = cx.update(|_window, app| view.read(app).diff_renderer.clone());
+    cx.update(|_window, app| {
+        diff_renderer.update(app, |pane, cx| {
+            pane.view_mode = GitCometViewMode::FocusedMergetool;
+            pane.focused_mergetool_exit_code = Some(Arc::clone(&exit_code));
+            cx.notify();
+        });
+    });
+    draw_and_drain_test_window(cx);
+
+    let bar = cx
+        .debug_bounds("diff_bottom_bar")
+        .expect("the mergetool window shows a bottom bar for its save");
+    let close = cx
+        .debug_bounds("conflict_save_close_frame")
+        .expect("a framed Save & close");
+    assert!(bar.contains(&close.center()), "{close:?} {bar:?}");
+    assert!(cx.debug_bounds("conflict_save").is_none());
+    assert!(cx.debug_bounds("conflict_save_stage").is_none());
+
+    cx.update(|_window, app| {
+        diff_renderer.update(app, |pane, cx| {
+            for ix in 0..2 {
+                pane.conflict_resolver_pick_at(
+                    ix,
+                    crate::view::conflict_resolver::ConflictChoice::Ours,
+                    cx,
+                );
+            }
+        });
+    });
+    draw_and_drain_test_window(cx);
+    let close = cx
+        .debug_bounds("conflict_save_close")
+        .expect("Save & close");
+    cx.simulate_click(close.center(), Modifiers::default());
+    cx.run_until_parked();
+    assert_eq!(
+        exit_code.load(std::sync::atomic::Ordering::SeqCst),
+        0,
+        "Save & close exits as a resolved merge"
+    );
+    assert_eq!(
+        std::fs::read_to_string(workdir.path().join(&path)).unwrap(),
+        "context before\nours one\nmiddle context\nours two\n"
+    );
+}
+
+/// While the conflict file loads the resolver output is empty, so the bar
+/// offers no save that would write it over the file; the saves come with it.
+#[gpui::test]
+fn the_bar_offers_no_save_while_the_conflict_loads(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    let repo_id = RepoId(70572);
+    let commit_id = CommitId("abcdef0011223390".into());
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_bar_save_while_loading",
+        std::process::id()
+    ));
+    let path = std::path::PathBuf::from("src/conflicted.rs");
+    let mut loaded = simple_conflict_repo(repo_id, &workdir, &commit_id, path.as_path());
+    let mut loading = loaded.clone();
+    loading.conflict_state.conflict_file = Loadable::Loading;
+    loading.conflict_state.conflict_session = None;
+    loaded.conflict_state.conflict_rev += 1;
+    apply_state(cx, &view, app_state_with_active_repo(loading));
+    for _ in 0..3 {
+        draw_and_drain_test_window(cx);
+    }
+    assert!(cx.debug_bounds("diff_bottom_bar").is_some());
+    assert!(cx.debug_bounds("conflict_save").is_none());
+    assert!(cx.debug_bounds("conflict_save_stage").is_none());
+
+    apply_state(cx, &view, app_state_with_active_repo(loaded));
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "conflict resolver loaded",
+        |pane| pane.conflict_resolver.path.as_deref() == Some(path.as_path()),
+        |pane| format!("path={:?}", pane.conflict_resolver.path),
+    );
+    draw_and_drain_test_window(cx);
+    assert!(cx.debug_bounds("conflict_save_stage").is_some());
+}
+
+/// Conflict markers typed back into a resolved output refuse the save, so
+/// the bar shows Save & stage disabled, not live with a click that is refused.
+#[gpui::test]
+fn markers_left_in_the_output_disable_the_bar_saves(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    let repo_id = RepoId(70573);
+    let commit_id = CommitId("abcdef0011223391".into());
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_bar_save_markers",
+        std::process::id()
+    ));
+    let path = std::path::PathBuf::from("src/conflicted.rs");
+    let repo = simple_conflict_repo(repo_id, &workdir, &commit_id, path.as_path());
+    apply_state(cx, &view, app_state_with_active_repo(repo));
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "conflict resolver with both conflicts",
+        |pane| {
+            pane.conflict_resolver.path.as_deref() == Some(path.as_path())
+                && pane.conflict_resolver_conflict_count() == 2
+        },
+        |pane| format!("path={:?}", pane.conflict_resolver.path),
+    );
+    let diff_renderer = cx.update(|_window, app| view.read(app).diff_renderer.clone());
+    cx.update(|_window, app| {
+        diff_renderer.update(app, |pane, cx| {
+            for ix in 0..2 {
+                pane.conflict_resolver_pick_at(
+                    ix,
+                    crate::view::conflict_resolver::ConflictChoice::Ours,
+                    cx,
+                );
+            }
+        });
+    });
+    draw_and_drain_test_window(cx);
+    let raised = cx.update(|_window, app| diff_renderer.read(app).theme.colors.surface.raised);
+    let disabled = cx.update(|_window, app| diff_renderer.read(app).theme.disabled_color(raised));
+    let fills = |cx: &mut gpui::VisualTestContext| {
+        gitcomet_ui_kit::test_support::painted_fills_inside(cx, "conflict_save_stage_frame")
+    };
+    let has = |fills: &[gpui::Rgba], color| {
+        fills
+            .iter()
+            .any(|fill| gitcomet_ui_kit::test_support::color_close(*fill, color))
+    };
+    let resolved = fills(cx);
+    assert!(
+        has(&resolved, raised),
+        "every conflict picked: {resolved:?}"
+    );
+
+    cx.update(|_window, app| {
+        diff_renderer.update(app, |pane, cx| {
+            pane.conflict_resolver_input.update(cx, |input, cx| {
+                let end = input.text().len();
+                input.replace_utf8_range(
+                    end..end,
+                    "<<<<<<< ours\nmine\n=======\nyours\n>>>>>>> theirs\n",
+                    cx,
+                );
+            });
+        });
+    });
+    draw_and_drain_test_window(cx);
+    let with_markers = fills(cx);
+    assert!(has(&with_markers, disabled), "{with_markers:?}");
+    assert!(!has(&with_markers, raised), "{with_markers:?}");
+}
+
+/// A conflicted file opened read-only, as from the file browser, or in the
+/// editor shows that view, so the header carries none of the resolver's controls.
+#[gpui::test]
+fn a_read_only_view_of_a_conflicted_file_has_no_resolver_header(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    let repo_id = RepoId(70575);
+    let commit_id = CommitId("abcdef0011223392".into());
+    let directory = tempfile::tempdir().unwrap();
+    let path = std::path::PathBuf::from("conflicted.rs");
+    std::fs::write(directory.path().join(&path), "contents\n").unwrap();
+    let repo = |content_preview, edit_mode| {
+        let mut repo = simple_conflict_repo(repo_id, directory.path(), &commit_id, &path);
+        repo.diff_state.content_preview = content_preview;
+        repo.diff_state.edit_mode = edit_mode;
+        repo
+    };
+
+    apply_state(cx, &view, app_state_with_active_repo(repo(false, false)));
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "conflict resolver",
+        |pane| pane.conflict_resolver.path.as_deref() == Some(path.as_path()),
+        |pane| format!("path={:?}", pane.conflict_resolver.path),
+    );
+    draw_and_drain_test_window(cx);
+    assert!(cx.debug_bounds("conflict_last").is_some());
+    assert!(cx.debug_bounds("mergetool_settings_menu").is_some());
+
+    for (content_preview, edit_mode) in [(true, false), (true, true)] {
+        apply_state(
+            cx,
+            &view,
+            app_state_with_active_repo(repo(content_preview, edit_mode)),
+        );
+        for _ in 0..3 {
+            draw_and_drain_test_window(cx);
+        }
+        assert!(
+            cx.debug_bounds("conflict_last").is_none(),
+            "editing: {edit_mode}"
+        );
+        assert!(
+            cx.debug_bounds("mergetool_settings_menu").is_none(),
+            "editing: {edit_mode}"
+        );
+        assert!(
+            cx.debug_bounds("diff_action_menu").is_some(),
+            "editing: {edit_mode}"
+        );
+    }
+}
+
+/// Keys follow the view on screen: the merge tool keeps the editor off and
+/// steps conflicts, and a read-only view of the same file edits on Alt+E, as
+/// its header's Edit offers, with no hidden conflicts to step.
+#[gpui::test]
+fn keys_on_a_read_only_view_of_a_conflicted_file_act_on_that_view(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    let repo_id = RepoId(70576);
+    let commit_id = CommitId("abcdef0011223393".into());
+    let directory = tempfile::tempdir().unwrap();
+    let path = std::path::PathBuf::from("conflicted.rs");
+    std::fs::write(directory.path().join(&path), "contents\n").unwrap();
+    let repo = |content_preview| {
+        let mut repo = simple_conflict_repo(repo_id, directory.path(), &commit_id, &path);
+        repo.diff_state.content_preview = content_preview;
+        repo
+    };
+    let diff_renderer = cx.update(|_window, app| view.read(app).diff_renderer.clone());
+    let press = |cx: &mut gpui::VisualTestContext, chord: &str| -> bool {
+        let keystroke = gpui::Keystroke::parse(chord).expect("valid chord");
+        cx.update(|window, app| {
+            diff_renderer.update(app, |pane, cx| {
+                pane.handle_diff_shortcut(&keystroke, window, cx)
+            })
+        })
+    };
+
+    apply_state(cx, &view, app_state_with_active_repo(repo(false)));
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "conflict resolver with its conflicts",
+        |pane| {
+            pane.conflict_resolver.path.as_deref() == Some(path.as_path())
+                && !pane.conflict_resolver.nav_targets.is_empty()
+        },
+        |pane| format!("path={:?}", pane.conflict_resolver.path),
+    );
+    assert!(!press(cx, "alt-e"), "the merge tool keeps the editor off");
+    assert!(press(cx, "shift-f3"), "the merge tool steps its conflicts");
+
+    apply_state(cx, &view, app_state_with_active_repo(repo(true)));
+    for _ in 0..3 {
+        draw_and_drain_test_window(cx);
+    }
+    assert!(
+        !press(cx, "shift-f3"),
+        "the preview has no conflicts to step"
+    );
+    assert!(
+        press(cx, "alt-e"),
+        "the preview edits, as its header offers"
+    );
+}
+
+/// Editing owns the bottom-right action: staging must disappear for either area.
+#[gpui::test]
+fn edit_mode_hides_stage_and_unstage(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    let repo_id = RepoId(70569);
+    let commit_id = CommitId("abcdef001122338d".into());
+    let directory = tempfile::tempdir().unwrap();
+    let path = std::path::PathBuf::from("file.rs");
+    std::fs::write(directory.path().join(&path), "contents\n").unwrap();
+    for area in [DiffArea::Unstaged, DiffArea::Staged] {
+        for editing in [false, true, false] {
+            let mut repo = simple_worktree_repo(
+                repo_id,
+                directory.path(),
+                &commit_id,
+                std::slice::from_ref(&path),
+                &path,
+            );
+            let target = DiffTarget::working_tree(path.clone(), area);
+            repo.diff_state.diff_target = Some(target.clone());
+            repo.diff_state.diff = Loadable::Ready(simple_hunk_diff(target).into());
+            repo.diff_state.edit_mode = editing;
+            repo.diff_state.content_preview = editing;
+            apply_state(cx, &view, app_state_with_active_repo(repo));
+            draw_and_drain_test_window(cx);
+            assert_eq!(
+                cx.debug_bounds("diff_bar_stage").is_some(),
+                !editing,
+                "{area:?}, editing: {editing}"
+            );
+        }
+    }
+}
+
+/// A file opened read-only, as from the file browser, is not a diff: no Stage
+/// on the bar, and neither Space nor Ctrl+S stages it.
+#[gpui::test]
+fn a_read_only_file_view_offers_no_staging(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    let repo_id = RepoId(70570);
+    let commit_id = CommitId("abcdef001122338e".into());
+    let directory = tempfile::tempdir().unwrap();
+    let first = std::path::PathBuf::from("first.rs");
+    let second = std::path::PathBuf::from("second.rs");
+    for path in [&first, &second] {
+        std::fs::write(directory.path().join(path), "contents\n").unwrap();
+    }
+    let repo = |content_preview| {
+        let mut repo = simple_worktree_repo(
+            repo_id,
+            directory.path(),
+            &commit_id,
+            &[first.clone(), second.clone()],
+            &first,
+        );
+        repo.diff_state.content_preview = content_preview;
+        repo
+    };
+
+    // The same file shown as a diff offers Stage.
+    apply_state(cx, &view, app_state_with_active_repo(repo(false)));
+    draw_and_drain_test_window(cx);
+    assert_eq!(diff_bar_stage_label(cx, &view).as_deref(), Some("Stage"));
+
+    apply_state(cx, &view, app_state_with_active_repo(repo(true)));
+    draw_and_drain_test_window(cx);
+    assert!(
+        cx.debug_bounds("diff_bar_stage").is_none(),
+        "the read-only view has nothing to stage"
+    );
+
+    bind_app_keys_and_global_diff_fallback_for_test(cx);
+    focus_diff_panel(cx, &view);
+    for keys in ["space", "ctrl-s"] {
+        cx.simulate_keystrokes(keys);
+        draw_and_drain_test_window(cx);
+        crate::view::test_support::drain_store_worker(&view, cx);
+        sync_store_snapshot(cx, &view);
+        // Staging would have advanced to the next file.
+        assert_eq!(
+            active_worktree_diff_target_path(cx, &view),
+            Some(first.clone()),
+            "{keys} must not stage the read-only file"
+        );
+    }
 }

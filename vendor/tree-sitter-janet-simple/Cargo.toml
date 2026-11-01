@@ -1,0 +1,33 @@
+# No crates.io release. Taken from difftastic 0.71.0's
+# vendored_parsers/tree-sitter-janet-simple (tag tarball sha256
+# d6afd26103c6492a91307dc6779c7dd0ca4d4c85499f81d7dc53fdfa5107331d), which is
+# https://github.com/sogaiu/tree-sitter-janet-simple at
+# e6c04e4b243cf3e5aca8f201e48926a72cc18334. COPYING.txt is upstream's CC0-1.0
+# dedication, added at 81f17db9a8ab0a97ff20986ef9065eb628db7408, after that revision.
+# `src/` is difftastic's copy verbatim, including its own `tree_sitter/` headers: its
+# ABI 13 parser predates the generated-parser headers in vendor/tree-sitter-headers.
+# `queries/highlights.scm` is the copy difftastic ships, read by vendor/difftastic
+# (`HIGHLIGHTS_QUERY`). `bindings/rust/lib.rs` follows the repo template, since
+# upstream's binds `tree-sitter` directly.
+[package]
+name = "tree-sitter-janet-simple"
+description = "Janet grammar for the tree-sitter parsing library"
+version = "0.0.3"
+repository = "https://github.com/sogaiu/tree-sitter-janet-simple"
+edition = "2021"
+license = "CC0-1.0"
+publish = false
+
+build = "bindings/rust/build.rs"
+
+[lib]
+path = "bindings/rust/lib.rs"
+
+[dependencies]
+tree-sitter-language = "0.1"
+
+[build-dependencies]
+tree-sitter-build = { path = "../tree-sitter-build" }
+
+[dev-dependencies]
+tree-sitter = "0.27.0"

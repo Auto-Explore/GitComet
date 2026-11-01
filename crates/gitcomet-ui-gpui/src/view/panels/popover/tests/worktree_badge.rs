@@ -10,6 +10,7 @@ use std::path::PathBuf;
 
 fn worktree(path: &str, branch: Option<&str>, head: Option<&str>) -> Worktree {
     Worktree {
+        bare: false,
         path: PathBuf::from(path),
         head: head.map(|h| CommitId(std::sync::Arc::from(h))),
         branch: branch.map(str::to_string),
@@ -39,6 +40,74 @@ fn repo_with_worktrees(repo_id: RepoId) -> RepoState {
         ),
     ]));
     repo
+}
+
+#[gpui::test]
+fn worktree_folder_location_is_cached_until_menu_reopens(cx: &mut gpui::TestAppContext) {
+    let repo_id = RepoId(1);
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("checkout");
+    std::fs::create_dir(&path).unwrap();
+    let (view, cx) = open_worktree_badge_picker(cx, repo_with_worktrees(repo_id), repo_id);
+    let host = cx.update(|_window, app| view.read(app).popover_host.clone());
+    let kind = PopoverKind::worktree(
+        repo_id,
+        WorktreePopoverKind::Menu {
+            path: path.clone(),
+            branch: None,
+        },
+    );
+    let open = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|window, app| {
+            host.update(app, |host, cx| {
+                host.open_popover_at(
+                    kind.clone(),
+                    gpui::point(gpui::px(120.0), gpui::px(72.0)),
+                    window,
+                    cx,
+                );
+            })
+        });
+        cx.run_until_parked();
+    };
+    let disabled = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|_window, app| {
+            host.update(app, |host, cx| {
+                host.context_menu_model(&kind, cx)
+                    .unwrap()
+                    .items
+                    .iter()
+                    .find_map(|item| match item {
+                        ContextMenuItem::Entry {
+                            action, disabled, ..
+                        } if matches!(
+                            action.as_ref(),
+                            ContextMenuAction::OpenRepositoryLocation { .. }
+                        ) =>
+                        {
+                            Some(*disabled)
+                        }
+                        _ => None,
+                    })
+                    .unwrap()
+            })
+        })
+    };
+    open(cx);
+    assert!(!disabled(cx));
+    std::fs::remove_dir(&path).unwrap();
+    for _ in 0..3 {
+        redraw(cx);
+        assert!(
+            !disabled(cx),
+            "repainting a menu must not check the filesystem again"
+        );
+    }
+    open(cx);
+    assert!(
+        disabled(cx),
+        "reopening must refresh the cached availability"
+    );
 }
 
 /// Opens the workspace badge picker over a state containing `repo`.
@@ -76,41 +145,6 @@ fn open_worktree_badge_picker(
     redraw(cx);
 
     (view, cx)
-}
-
-#[test]
-fn suggested_worktree_path_places_new_worktrees_beside_the_current_one() {
-    let repo = repo_with_worktrees(RepoId(1));
-
-    assert_eq!(
-        PathBuf::from(worktree_badge_picker::suggested_worktree_path(
-            &repo, "feature"
-        )),
-        PathBuf::from("/tmp/ws").join("feature")
-    );
-}
-
-#[test]
-fn suggested_worktree_path_flattens_branch_shaped_queries() {
-    // "feat/x" as a folder would nest a directory inside the parent.
-    let repo = repo_with_worktrees(RepoId(1));
-
-    assert_eq!(
-        PathBuf::from(worktree_badge_picker::suggested_worktree_path(
-            &repo, "feat/x"
-        )),
-        PathBuf::from("/tmp/ws").join("feat-x")
-    );
-}
-
-#[test]
-fn suggested_worktree_path_is_blank_without_a_query() {
-    let repo = repo_with_worktrees(RepoId(1));
-
-    assert_eq!(
-        worktree_badge_picker::suggested_worktree_path(&repo, "   "),
-        ""
-    );
 }
 
 #[gpui::test]
@@ -351,24 +385,25 @@ fn worktree_badge_picker_create_row_opens_the_add_dialog_prefilled(cx: &mut gpui
         "create row should hand off to the Add-worktree dialog, got {kind:?}"
     );
 
-    let (path, reference) = cx.update(|_window, app| {
+    let (path, reference, create_branch, new_branch) = cx.update(|_window, app| {
         let host = view.read(app).popover_host.read(app);
         (
             host.worktree_path_input_text_for_tests(app),
             host.worktree_ref_source_target_for_tests().to_string(),
+            host.worktree_add_create_branch,
+            host.worktree_new_branch_input.read(app).text().to_string(),
         )
     });
     assert_eq!(
         PathBuf::from(path),
-        PathBuf::from("/tmp/ws").join("shiny"),
-        "path should be prefilled from query"
+        PathBuf::from("/tmp/ws/main"),
+        "the folder starts as the current worktree's path"
     );
-    // `git worktree add <path> main` fails when main is checked out elsewhere;
-    // with no reference git creates a new branch off HEAD, which is intended.
-    assert_eq!(
-        reference, "",
-        "must not prefill a reference that is already checked out"
-    );
+    // A new branch off the head the row's "based on <head>" label names; git
+    // would refuse to check `main` itself out a second time.
+    assert_eq!(reference, "main");
+    assert!(create_branch);
+    assert_eq!(new_branch, "shiny");
 }
 
 /// The action-bar badges themselves: rendering, labels, and the popovers they open.
@@ -407,6 +442,7 @@ mod badges {
         repo.remotes = Loadable::Ready(Arc::new(vec![Remote {
             name: "origin".to_string(),
             url: None,
+            default_branch: None,
         }]));
         repo.remote_branches = Loadable::Ready(Arc::new(vec![RemoteBranch {
             remote: "origin".to_string(),
@@ -593,7 +629,6 @@ mod badges {
                 "upstream_badge",
                 "pull",
                 "push",
-                "terminal",
                 "create_branch",
                 "stash",
             ] {
@@ -917,7 +952,6 @@ impl GitBackend for RecordingOpenBackend {
 fn review_regression_picking_a_worktree_open_elsewhere_uses_the_invoking_window(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     cx.update(|app| crate::workspaces::initialize_for_test(app, Vec::new()));
     let feature = std::env::temp_dir().join("ws/feature");
 

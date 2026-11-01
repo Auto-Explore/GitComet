@@ -15,7 +15,7 @@ use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Identity of a live filesystem document, independent of repository tabs.
 /// Revision previews retain their separate Git revision identities.
@@ -43,15 +43,7 @@ pub struct OperationId(pub u64);
 
 impl OperationId {
     pub fn allocate() -> Self {
-        static NEXT: std::sync::OnceLock<AtomicU64> = std::sync::OnceLock::new();
-        let next = NEXT.get_or_init(|| {
-            let time = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_nanos() as u64;
-            AtomicU64::new((time ^ u64::from(std::process::id()).rotate_left(32)).max(1))
-        });
-        Self(next.fetch_add(1, Ordering::Relaxed))
+        Self(gitcomet_base::next_operation_id())
     }
 }
 

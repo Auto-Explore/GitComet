@@ -75,6 +75,10 @@ impl UiRuntime {
         matches!(self.mode, UiRuntimeMode::Live)
     }
 
+    pub const fn uses_spinner_animation(self) -> bool {
+        matches!(self.mode, UiRuntimeMode::Live)
+    }
+
     pub const fn uses_repo_tab_spinner_delay(self) -> bool {
         matches!(self.mode, UiRuntimeMode::Live)
     }

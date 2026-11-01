@@ -7,6 +7,10 @@ pub enum FetchMsg {
     All {
         repo_id: RepoId,
     },
+    Remote {
+        repo_id: RepoId,
+        remote: String,
+    },
     Refspecs {
         repo_id: RepoId,
         remote: String,

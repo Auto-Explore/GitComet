@@ -748,7 +748,6 @@ mod spawn_launch_tests {
     /// by `background_spawn`'s `Send` bound at the type level instead.
     #[gpui::test]
     fn spawn_launch_defers_the_launch_out_of_the_calling_handler(cx: &mut gpui::TestAppContext) {
-        let _visual_guard = crate::test_support::lock_visual_test();
         let launched = Arc::new(AtomicBool::new(false));
         let (view, cx) = cx.add_window_view(|_window, _cx| LaunchProbe {
             on_result_ran: false,

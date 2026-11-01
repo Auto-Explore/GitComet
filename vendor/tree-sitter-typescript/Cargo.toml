@@ -33,9 +33,9 @@
 # outside the repository, copy the licence text from
 # https://github.com/tree-sitter/tree-sitter-typescript first.
 #
-# `queries/` is deliberately not vendored, matching vendor/tree-sitter-vue.
-# GitComet keeps its own queries in
-# crates/gitcomet-ui-gpui/src/view/rows/diff_text/queries/.
+# `queries/highlights.scm` is the 0.23.2 release's, vendored for vendor/difftastic
+# (`HIGHLIGHTS_QUERY`). GitComet's highlighter keeps its own queries in
+# crates/gitcomet-syntax/src/queries/.
 [package]
 name = "tree-sitter-typescript"
 description = "TypeScript and TSX grammars for tree-sitter"

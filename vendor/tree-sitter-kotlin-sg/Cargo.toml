@@ -29,11 +29,11 @@
 # and the `tree_sitter/` headers come from vendor/tree-sitter-headers -- see the
 # README there.
 #
-# `queries/` *is* vendored here, unlike most of vendor/: GitComet reads this
-# grammar's upstream query consts rather than authoring its own, so dropping the
-# directory would compile them out (`vendor/tree-sitter-build` sets the
-# `with_*_query` cfgs from the files that are present) and the language would go
-# uncoloured.
+# `queries/` is vendored because GitComet reads this grammar's upstream query
+# consts rather than authoring its own, and vendor/difftastic reads
+# `HIGHLIGHTS_QUERY`; dropping the directory would compile them out
+# (`vendor/tree-sitter-build` sets the `with_*_query` cfgs from the files that are
+# present) and the language would go uncoloured.
 [package]
 name = "tree-sitter-kotlin-sg"
 description = "Kotlin grammar for the tree-sitter parsing library"

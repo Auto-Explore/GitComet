@@ -8,7 +8,7 @@ use crate::view::markdown_preview::{
     MarkdownChangeHint, MarkdownInlineSpan, MarkdownInlineStyle, MarkdownPreviewRow,
     MarkdownPreviewRowKind,
 };
-use crate::view::panes::main::diff_search::{DiffSearchMatcher, DiffSearchOptions};
+use crate::view::panes::diff::diff_search::{DiffSearchMatcher, DiffSearchOptions};
 use gpui::{Bounds, point, px, size};
 use std::sync::Arc;
 
@@ -18,6 +18,9 @@ fn row(text: &str, spans: Vec<MarkdownInlineSpan>) -> MarkdownPreviewRow {
         text: text.to_string().into(),
         inline_spans: Arc::new(spans),
         code_language: None,
+        diagram: None,
+        details: None,
+        ordered_list_start: None,
         source_line_range: 0..1,
         change_hint: MarkdownChangeHint::None,
         indent_level: 0,

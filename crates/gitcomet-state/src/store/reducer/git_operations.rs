@@ -1,13 +1,13 @@
 //! Git operation lifecycle: hook activity around an operation's completion,
 //! and cancelling a running operation.
 
-use super::{external_and_history, git_hook_activity, reduce};
+use super::{external_and_history, git_hook_activity, reduce_prepared};
 use crate::model::{AppState, GitOperationOuterOutcome, RepoId};
+use crate::msg::ControlEffect;
 use crate::msg::{Effect, InternalMsg, Msg};
+use crate::store::reducer::prepared::ReducerInputs;
+use crate::store::repository_runtime::RepositoryRuntimes;
 use gitcomet_core::git_operation::{GitOperationEvent, GitOperationId};
-use gitcomet_core::services::GitRepository;
-use rustc_hash::FxHashMap;
-use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 use std::time::{Duration, SystemTime};
 
@@ -22,10 +22,10 @@ pub(super) fn cancel_git_operation(
         .find(|repo| repo.id == repo_id)
         .is_some_and(|repo| git_hook_activity::request_cancel(repo, operation_id));
     requested
-        .then_some(Effect::CancelGitOperation {
+        .then_some(Effect::Control(ControlEffect::CancelGitOperation {
             repo_id,
             operation_id,
-        })
+        }))
         .into_iter()
         .collect()
 }
@@ -58,7 +58,8 @@ pub(super) fn git_operation_event(
 }
 
 pub(super) fn git_operation_finished(
-    repos: &mut FxHashMap<RepoId, Arc<dyn GitRepository>>,
+    inputs: &ReducerInputs,
+    repos: &mut RepositoryRuntimes,
     id_alloc: &AtomicU64,
     state: &mut AppState,
     repo_id: RepoId,
@@ -114,16 +115,16 @@ pub(super) fn git_operation_finished(
         })
         .flatten();
     if let Some(repo) = state.repos.iter_mut().find(|repo| repo.id == repo_id) {
-        repo.feedback.command_log_operation_id = is_reportable.then_some(operation_id);
+        repo.feedback_mut().command_log_operation_id = is_reportable.then_some(operation_id);
     }
 
-    let mut effects = reduce(repos, id_alloc, state, Msg::Internal(*message));
+    let mut effects = reduce_prepared(inputs, repos, id_alloc, state, Msg::Internal(*message));
 
     if let Some(repo) = state.repos.iter_mut().find(|repo| repo.id == repo_id) {
-        repo.feedback.command_log_operation_id = None;
+        repo.feedback_mut().command_log_operation_id = None;
         if let Some((entries, seq)) = previous_diagnostics {
-            repo.feedback.diagnostics = entries;
-            repo.feedback.diagnostics_seq = seq;
+            repo.feedback_mut().diagnostics = entries;
+            repo.feedback_mut().diagnostics_seq = seq;
         }
         git_hook_activity::finished(repo, operation_id, outer_outcome, duration);
     }
@@ -136,7 +137,7 @@ pub(super) fn git_operation_finished(
         // retained panes. Explicit Reload would discard history and
         // selection after the nested action already refreshed them.
         effects.extend(external_and_history::repo_externally_changed(
-            repos,
+            inputs,
             state,
             repo_id,
             crate::msg::RepoExternalChange::all(),

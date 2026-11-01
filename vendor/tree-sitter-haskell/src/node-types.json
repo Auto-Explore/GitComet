@@ -228,7 +228,7 @@
         "named": true
       },
       {
-        "type": "type_synomym",
+        "type": "type_synonym",
         "named": true
       }
     ]
@@ -5756,7 +5756,7 @@
     "fields": {}
   },
   {
-    "type": "type_synomym",
+    "type": "type_synonym",
     "named": true,
     "fields": {
       "name": {
@@ -6003,10 +6003,6 @@
   },
   {
     "type": "(",
-    "named": false
-  },
-  {
-    "type": "(#",
     "named": false
   },
   {

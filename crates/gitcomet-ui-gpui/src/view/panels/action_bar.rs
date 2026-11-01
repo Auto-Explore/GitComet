@@ -1,6 +1,12 @@
+use super::bar_items::{self, BarItemOwner, BarItems, ExtensionBarItem, RelocatedBarItems};
 use super::*;
+use crate::kit::interaction::{self as controls, ControlInteractionExt as _};
+use crate::view::repository_views::{MORE_VIEWS_INVOKER, RoutedArea, ViewTabs};
+use gitcomet_extension_api::{BarItemLocation, BuiltinBarItem};
 use rustc_hash::FxHasher;
+use std::cell::RefCell;
 use std::hash::{Hash, Hasher};
+use std::rc::Rc;
 use std::sync::Arc;
 
 const ACTION_BAR_HEIGHT_PX: f32 = components::CONTROL_HEIGHT_PX + 12.0;
@@ -85,11 +91,18 @@ fn tight_badge_label_max_chars(ui_density: crate::appearance::UiDensity) -> usiz
     }
 }
 
-fn secondary_action_label(density: ActionBarDensity, label: &'static str) -> &'static str {
-    if density == ActionBarDensity::Compact {
-        ""
-    } else {
-        label
+/// Branch and Stash name themselves unless the bar is compact, or
+/// condensed beside the repository's view tabs, which need the room more;
+/// their tooltips name them then.
+fn secondary_action_label(
+    density: ActionBarDensity,
+    beside_view_tabs: bool,
+    label: &'static str,
+) -> &'static str {
+    match density {
+        ActionBarDensity::Compact => "",
+        ActionBarDensity::Condensed if beside_view_tabs => "",
+        _ => label,
     }
 }
 
@@ -174,6 +187,7 @@ fn file_browsing_badge(repo: &RepoState) -> Option<(SharedString, SharedString)>
                 format!("commit {sha}"),
             )
         }
+        None if repo.is_bare() => ("HEAD".to_string(), "HEAD (no committed files)".to_string()),
         None => ("Working tree".to_string(), "the working tree".to_string()),
     };
     Some((
@@ -186,16 +200,7 @@ fn head_branch_tracking_upstream_name(
     head_branch: &Loadable<String>,
     branches: &Loadable<Arc<Vec<Branch>>>,
 ) -> Option<String> {
-    let Loadable::Ready(head) = head_branch else {
-        return None;
-    };
-    let Loadable::Ready(branches) = branches else {
-        return None;
-    };
-    branches
-        .iter()
-        .find(|branch| branch.name == *head)
-        .and_then(|branch| branch.upstream.as_ref())
+    head_branch_upstream(head_branch, branches)
         .map(|upstream| format!("{}/{}", upstream.remote, upstream.branch))
 }
 
@@ -234,6 +239,9 @@ fn push_tooltip_text(push_count: usize, tracking_branch_name: Option<&str>) -> S
 }
 
 pub(in super::super) struct ActionBarView {
+    pub(super) relocated_items: RelocatedBarItems,
+    extension_items: Vec<ExtensionBarItem>,
+    active_view: gitcomet_extension_api::ViewTarget,
     /// Set while an extension's repository view is selected.
     extension_navigation: Option<(
         gitcomet_extension_api::RepositoryViewContext,
@@ -241,6 +249,8 @@ pub(in super::super) struct ActionBarView {
     )>,
     /// That view's action-bar context.
     extension_slot: Option<gpui::AnyView>,
+    /// The repository's views as tabs, while an extension registers any.
+    view_tabs: Option<ViewTabs>,
     store: Arc<AppStore>,
     state: Arc<AppState>,
     theme: AppTheme,
@@ -249,7 +259,7 @@ pub(in super::super) struct ActionBarView {
     notify_fingerprint: u64,
     active_context_menu_invoker: Option<SharedString>,
     open_terminal_repo_ids: FxHashSet<RepoId>,
-    action_bar_terminal_target: ActionBarTerminalTarget,
+    terminal_button_target: TerminalButtonTarget,
 }
 
 impl ActionBarView {
@@ -261,6 +271,8 @@ impl ActionBarView {
             && let Some(repo) = state.repos.iter().find(|r| r.id == repo_id)
         {
             repo.open_rev.hash(&mut hasher);
+            repo.repository_mode.hash(&mut hasher);
+            std::mem::discriminant(&repo.bare_mode_conversion).hash(&mut hasher);
             repo.head_branch_rev.hash(&mut hasher);
             repo.branches_rev.hash(&mut hasher);
             repo.remotes_rev.hash(&mut hasher);
@@ -304,8 +316,12 @@ impl ActionBarView {
         });
 
         Self {
+            relocated_items: Vec::new(),
+            extension_items: Vec::new(),
+            active_view: gitcomet_extension_api::ViewTarget::History,
             extension_navigation: None,
             extension_slot: None,
+            view_tabs: None,
             store,
             state,
             theme,
@@ -314,13 +330,55 @@ impl ActionBarView {
             notify_fingerprint,
             active_context_menu_invoker: None,
             open_terminal_repo_ids: FxHashSet::default(),
-            action_bar_terminal_target: ActionBarTerminalTarget::default(),
+            terminal_button_target: TerminalButtonTarget::default(),
         }
     }
 
     pub(in super::super) fn set_theme(&mut self, theme: AppTheme, cx: &mut gpui::Context<Self>) {
         self.theme = theme;
         cx.notify();
+    }
+
+    pub(in crate::view) fn set_extension_items(
+        &mut self,
+        items: Vec<ExtensionBarItem>,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.extension_items = items;
+        cx.notify();
+    }
+
+    pub(in crate::view) fn set_active_view(
+        &mut self,
+        view: gitcomet_extension_api::ViewTarget,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.active_view != view {
+            self.active_view = view;
+            cx.notify();
+        }
+    }
+
+    pub(in crate::view) fn set_open_terminal_repo_ids(
+        &mut self,
+        next: FxHashSet<RepoId>,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.open_terminal_repo_ids != next {
+            self.open_terminal_repo_ids = next;
+            cx.notify();
+        }
+    }
+
+    pub(in crate::view) fn set_terminal_button_target(
+        &mut self,
+        target: TerminalButtonTarget,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.terminal_button_target != target {
+            self.terminal_button_target = target;
+            cx.notify();
+        }
     }
 
     pub(in crate::view) fn set_extension_navigation(
@@ -338,6 +396,136 @@ impl ActionBarView {
         self.extension_navigation = navigation;
         self.extension_slot = slot;
         cx.notify();
+    }
+
+    pub(in crate::view) fn set_view_tabs(
+        &mut self,
+        tabs: Option<ViewTabs>,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.view_tabs == tabs {
+            return;
+        }
+        self.view_tabs = tabs;
+        cx.notify();
+    }
+
+    /// Shows History (`None`) or view `index`. Deferred: the root updates
+    /// this bar as the selection changes.
+    fn select_view(&self, index: Option<usize>, window: &mut Window, cx: &mut gpui::Context<Self>) {
+        let root = self.root_view.clone();
+        window.defer(cx, move |window, cx| {
+            let _ = root.update(cx, |root, cx| {
+                root.select_routed_view(RoutedArea::Main, index, window, cx)
+            });
+        });
+    }
+
+    /// The repository's views as tabs: History and each registered view,
+    /// then one tab for those listed under More, which names the selected
+    /// one. Labels give way to icons where the bar is compact.
+    fn view_tabs(
+        &self,
+        tabs: &ViewTabs,
+        labelled: bool,
+        open: bool,
+        cx: &mut gpui::Context<Self>,
+    ) -> gpui::Stateful<gpui::Div> {
+        let theme = self.theme;
+        let ui_scale = crate::ui_scale::UiScale::current(cx);
+        let mut group = div()
+            .id("repository_view_tabs")
+            .debug_selector(|| "repository_view_tabs".to_string())
+            .flex()
+            .flex_none()
+            .items_center()
+            .h_full();
+        let history = (
+            None,
+            SharedString::from("History"),
+            Some(SharedString::from("icons/history.svg")),
+        );
+        let entries = std::iter::once(history).chain(
+            tabs.views
+                .iter()
+                .filter(|view| !view.under_more)
+                .map(|view| (Some(view.index), view.title.clone(), view.icon.clone())),
+        );
+        for (index, title, icon) in entries {
+            let id = index.map_or_else(
+                || "repository_view_history".to_string(),
+                |index| format!("repository_view_{index}"),
+            );
+            let mut tab = components::BarTab::new(id).selected(tabs.selected == index);
+            if let Some(icon) = icon {
+                tab = tab.icon(icon);
+            }
+            if labelled {
+                tab = tab.label(title.clone());
+            }
+            let tab = tab.render(theme, ui_scale).on_activate(
+                false,
+                controls::ControlActivation::ManagedFocus,
+                cx.listener(move |this, _, window, cx| this.select_view(index, window, cx)),
+            );
+            // An icon alone is named in its tooltip.
+            group = group.child(if labelled {
+                tab
+            } else {
+                tab.gitcomet_tooltip(theme, title)
+            });
+        }
+        let mut more = tabs.views.iter().filter(|view| view.under_more).peekable();
+        if more.peek().is_none() {
+            return group;
+        }
+        let shown = more.find(|view| Some(view.index) == tabs.selected);
+        let mut tab = components::BarTab::new(MORE_VIEWS_INVOKER)
+            .selected(shown.is_some())
+            .open(open)
+            .end_icon("icons/chevron_down.svg");
+        match shown {
+            Some(view) => {
+                if let Some(icon) = view.icon.clone() {
+                    tab = tab.icon(icon);
+                }
+                if labelled {
+                    tab = tab.label(view.title.clone());
+                }
+            }
+            None if labelled => tab = tab.label("More"),
+            None => tab = tab.icon("icons/more_vertical.svg"),
+        }
+        // The menu opens below the tab, so keep where it was drawn.
+        let drawn: Rc<RefCell<Option<Bounds<Pixels>>>> = Rc::default();
+        let painted = Rc::clone(&drawn);
+        let tab = tab
+            .render(theme, ui_scale)
+            .on_activate(
+                false,
+                controls::ControlActivation::ManagedFocus,
+                cx.listener(move |this, e: &ClickEvent, window, cx| {
+                    let anchor = (*drawn.borrow())
+                        .unwrap_or_else(|| Bounds::new(e.position(), gpui::size(px(0.0), px(0.0))));
+                    let root = this.root_view.clone();
+                    window.defer(cx, move |window, cx| {
+                        let _ = root
+                            .update(cx, |root, cx| root.open_more_views_menu(anchor, window, cx));
+                    });
+                }),
+            )
+            .gitcomet_tooltip(theme, "More views".into());
+        group.child(
+            div()
+                .flex()
+                .h_full()
+                .on_children_prepainted(move |children, _window, _cx| {
+                    if let Some(bounds) = children.first() {
+                        *painted.borrow_mut() = Some(*bounds);
+                    }
+                })
+                .child(tab),
+        )
     }
 
     fn extension_navigate(&self, forward: bool, cx: &mut gpui::Context<Self>) -> bool {
@@ -375,30 +563,6 @@ impl ActionBarView {
         cx.notify();
     }
 
-    pub(in super::super) fn set_open_terminal_repo_ids(
-        &mut self,
-        next: FxHashSet<RepoId>,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        if self.open_terminal_repo_ids == next {
-            return;
-        }
-        self.open_terminal_repo_ids = next;
-        cx.notify();
-    }
-
-    pub(in super::super) fn set_action_bar_terminal_target(
-        &mut self,
-        target: ActionBarTerminalTarget,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        if self.action_bar_terminal_target == target {
-            return;
-        }
-        self.action_bar_terminal_target = target;
-        cx.notify();
-    }
-
     fn active_repo_id(&self) -> Option<RepoId> {
         self.state.active_repo
     }
@@ -433,23 +597,17 @@ impl ActionBarView {
             root.open_popover_for_bounds(kind, anchor_bounds, window, cx);
         });
     }
-
-    fn push_toast(
-        &mut self,
-        kind: components::ToastKind,
-        message: String,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        let _ = self.root_view.update(cx, |root, cx| {
-            root.push_toast(kind, message, cx);
-        });
-    }
 }
 
-impl Render for ActionBarView {
-    fn render(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
+impl BarItemOwner for ActionBarView {
+    fn bar_items(
+        &mut self,
+        action_bar: bool,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> BarItems {
+        let mut items = BarItems::new(cx);
         let theme = self.theme;
-        let action_bar_height = action_bar_height(cx);
         let ui_scale_percent = crate::ui_scale::current(cx).percent;
         let scaled_px = crate::ui_scale::scaler(ui_scale_percent);
         let density = action_bar_density(
@@ -469,7 +627,17 @@ impl Render for ActionBarView {
             ActionBarDensity::Condensed => CONDENSED_BADGE_LABEL_MAX_CHARS,
             ActionBarDensity::Wide => BADGE_LABEL_MAX_CHARS,
         };
-        let action_label = |label: &'static str| secondary_action_label(density, label);
+        let beside_view_tabs = self.view_tabs.is_some()
+            && items
+                .location(BuiltinBarItem::RepositoryViews)
+                .is_action_bar();
+        let action_label = |label: &'static str| {
+            if action_bar {
+                secondary_action_label(density, beside_view_tabs, label)
+            } else {
+                ""
+            }
+        };
         // Two independent things called density: the responsive breakpoint above
         // picks the base gap from the viewport, then the user's density setting
         // ramps it.
@@ -489,11 +657,6 @@ impl Render for ActionBarView {
         // Text in the three picker badges gives way before actions do. Keep
         // enough room for the icon and an ellipsis even at the narrowest size.
         let badge_min_width = scaled_px(theme.metrics.row_height(22.0, 32.0) + 28.0);
-        let action_bar_padding_x = if dense_spacing {
-            scaled_px(4.0)
-        } else {
-            scaled_px(8.0)
-        };
         let merge_abort_label = if dense_spacing {
             "Abort"
         } else {
@@ -505,15 +668,17 @@ impl Render for ActionBarView {
             if theme.is_dark { 0.72 } else { 0.82 },
         );
         let icon = |path: &'static str, color: gpui::Rgba| svg_icon(path, color, scaled_px(14.0));
-        let spinner =
-            |id: (&'static str, u64), color: gpui::Rgba| svg_spinner(id, color, scaled_px(14.0));
+        let spinner = |id: (&'static str, u64), color: gpui::Rgba| {
+            components::ButtonSlot::spinner(id, color, scaled_px(14.0))
+        };
         let count_badge = |count: usize, color: gpui::Rgba| {
-            div()
-                .text_size(theme.ui_text(12.0))
-                .font_weight(FontWeight::BOLD)
-                .text_color(color)
-                .child(count.to_string())
-                .into_any_element()
+            components::ButtonSlot::custom(move |disabled| {
+                div()
+                    .text_size(theme.ui_text(12.0))
+                    .font_weight(FontWeight::BOLD)
+                    .text_color(theme.disabled_color_if(disabled, color))
+                    .child(count.to_string())
+            })
         };
 
         // Workspace, branch and historical badges all light up while their own
@@ -585,14 +750,17 @@ impl Render for ActionBarView {
             .active_repo()
             .and_then(|repo| head_branch_tracking_upstream_name(&repo.head_branch, &repo.branches));
         let active_repo_key = self.active_repo_id().map(|id| id.0).unwrap_or(0);
+        let is_bare = self.active_repo().is_some_and(RepoState::is_bare);
         let can_stash = self
             .active_repo()
             .map(|repo| {
-                repo.worktree_status_entries()
-                    .is_some_and(|entries| !entries.is_empty())
-                    || repo
-                        .staged_status_entries()
+                !repo.is_bare()
+                    && (repo
+                        .worktree_status_entries()
                         .is_some_and(|entries| !entries.is_empty())
+                        || repo
+                            .staged_status_entries()
+                            .is_some_and(|entries| !entries.is_empty()))
             })
             .unwrap_or(false);
 
@@ -641,7 +809,7 @@ impl Render for ActionBarView {
                 theme,
                 format!(
                     "Navigate Back ({})",
-                    crate::view::shortcut_labels::alt_shortcut("Left")
+                    crate::kit::components::alt_shortcut("Left")
                 )
                 .into(),
             );
@@ -668,7 +836,7 @@ impl Render for ActionBarView {
                 theme,
                 format!(
                     "Navigate Forward ({})",
-                    crate::view::shortcut_labels::alt_shortcut("Right")
+                    crate::kit::components::alt_shortcut("Right")
                 )
                 .into(),
             );
@@ -736,7 +904,9 @@ impl Render for ActionBarView {
             let is_active = active_invoker
                 .as_ref()
                 .is_some_and(|id| id.as_ref() == invoker.as_ref());
-            let tooltip: SharedString = if detached {
+            let tooltip: SharedString = if repo.is_bare() {
+                format!("HEAD: {head}\n{}", gitcomet_core::domain::WORKING_TREE_REQUIRED_MESSAGE).into()
+            } else if detached {
                 "Detached HEAD — click to check out a branch".into()
             } else if let Some((base, _)) = adjusted {
                 format!("On git-annex adjusted branch {head}; commits propagate to {base} through git-annex sync, pull and push").into()
@@ -750,6 +920,7 @@ impl Render for ActionBarView {
                     .style(components::ButtonStyle::Subtle)
                     .open(is_active)
                     .selected_bg(menu_selected_bg)
+                    .disabled(repo.is_bare())
                     .on_click_with_bounds(theme, cx, move |this, _e, bounds, window, cx| {
                         this.open_popover_for_bounds(
                             (PopoverKind::BranchPicker {
@@ -841,9 +1012,9 @@ impl Render for ActionBarView {
         let mut pull_main = components::Button::new("pull_main", if tight { "" } else { "Pull" })
             .busy(pull_loading)
             .start_slot(if pull_loading {
-                spinner(("pull_spinner", active_repo_key), pull_color).into_any_element()
+                spinner(("pull_spinner", active_repo_key), pull_color)
             } else {
-                icon("icons/arrow_down.svg", pull_color).into_any_element()
+                icon("icons/arrow_down.svg", pull_color).into()
             })
             .style(components::ButtonStyle::Subtle);
         if pull_count > 0 {
@@ -855,9 +1026,10 @@ impl Render for ActionBarView {
             .as_ref()
             .is_some_and(|id| id.as_ref() == pull_picker_invoker.as_ref());
         let pull_tracking_branch_name = tracking_branch_name.clone();
-        let pull_available = self
+        let pull_unavailable = self
             .active_repo()
-            .is_some_and(|repo| pull_enabled(repo, &self.state.large_file_settings));
+            .and_then(|repo| pull_unavailable_reason(repo, &self.state.large_file_settings));
+        let pull_available = self.active_repo().is_some() && pull_unavailable.is_none();
         let pull_menu_icon_color = if pull_picker_active {
             theme.colors.accent.foreground
         } else {
@@ -879,22 +1051,17 @@ impl Render for ActionBarView {
                     pull_menu,
                     theme,
                     cx,
-                    |this, _e, _w, cx| {
+                    |this, _e, _w, _cx| {
                         let Some(repo) = this.active_repo() else {
                             return;
                         };
                         let repo_id = repo.id;
-                        match pull_request(repo, &this.state.large_file_settings) {
-                            PullRequest::Pull => this.store.dispatch(Msg::Pull {
+                        if pull_unavailable_reason(repo, &this.state.large_file_settings).is_none()
+                        {
+                            this.store.dispatch(Msg::Pull {
                                 repo_id,
                                 mode: PullMode::Default,
-                            }),
-                            PullRequest::NoRemotes => this.push_toast(
-                                components::ToastKind::Error,
-                                "Cannot pull: no remotes configured".to_string(),
-                                cx,
-                            ),
-                            PullRequest::NotReady => {}
+                            });
                         }
                     },
                     move |this, _e, bounds, window, cx| {
@@ -911,7 +1078,10 @@ impl Render for ActionBarView {
             )
             .gitcomet_tooltip(
                 theme,
-                pull_tooltip_text(pull_count, pull_tracking_branch_name.as_deref()),
+                match pull_unavailable {
+                    Some(reason) => reason.into(),
+                    None => pull_tooltip_text(pull_count, pull_tracking_branch_name.as_deref()),
+                },
             );
 
         let push_color = if push_count > 0 {
@@ -919,39 +1089,12 @@ impl Render for ActionBarView {
         } else {
             icon_muted
         };
-        let terminal_opens_external =
-            self.action_bar_terminal_target == ActionBarTerminalTarget::External;
-        let terminal_is_open = !terminal_opens_external
-            && self
-                .active_repo_id()
-                .is_some_and(|repo_id| self.open_terminal_repo_ids.contains(&repo_id));
-        let terminal_tooltip: SharedString = if terminal_opens_external {
-            "Open external terminal".into()
-        } else if terminal_is_open {
-            "Hide terminal".into()
-        } else {
-            "Show terminal".into()
-        };
-        let terminal = div().debug_selector(|| "terminal".to_string()).child(
-            components::Button::new("terminal", action_label("Terminal"))
-                .start_slot(icon("icons/terminal.svg", icon_primary))
-                .style(components::ButtonStyle::Subtle)
-                .selected(terminal_is_open)
-                .selected_bg(menu_selected_bg)
-                .disabled(self.active_repo_id().is_none())
-                .on_click(theme, cx, move |this, _e, window, cx| {
-                    let _ = this.root_view.update(cx, |root, cx| {
-                        root.activate_terminal_button_for_active_repo(window, cx);
-                    });
-                })
-                .gitcomet_tooltip(theme, terminal_tooltip),
-        );
         let mut push_main = components::Button::new("push_main", if tight { "" } else { "Push" })
             .busy(push_loading)
             .start_slot(if push_loading {
-                spinner(("push_spinner", active_repo_key), push_color).into_any_element()
+                spinner(("push_spinner", active_repo_key), push_color)
             } else {
-                icon("icons/arrow_up.svg", push_color).into_any_element()
+                icon("icons/arrow_up.svg", push_color).into()
             })
             .style(components::ButtonStyle::Subtle);
         if push_count > 0 {
@@ -963,12 +1106,10 @@ impl Render for ActionBarView {
             .as_ref()
             .is_some_and(|id| id.as_ref() == push_picker_invoker.as_ref());
         let push_tracking_branch_name = tracking_branch_name.clone();
-        let push_request_ready = self.active_repo().is_some_and(|repo| {
-            !matches!(
-                push_request(repo, &self.state.large_file_settings),
-                PushRequest::NotReady
-            )
+        let push_unavailable = self.active_repo().and_then(|repo| {
+            push_request(repo, &self.state.large_file_settings).unavailable_reason()
         });
+        let push_available = self.active_repo().is_some() && push_unavailable.is_none();
         let push_menu_icon_color = if push_picker_active {
             theme.colors.accent.foreground
         } else {
@@ -986,7 +1127,7 @@ impl Render for ActionBarView {
             .debug_selector(|| "push".to_string())
             .child(
                 components::SplitButton::action_menu(
-                    push_main.disabled(!push_request_ready),
+                    push_main.disabled(!push_available),
                     push_menu,
                     theme,
                     cx,
@@ -1007,14 +1148,7 @@ impl Render for ActionBarView {
                                 window,
                                 cx,
                             ),
-                            PushRequest::NoRemotes => {
-                                this.push_toast(
-                                    components::ToastKind::Error,
-                                    "Cannot push: no remotes configured".to_string(),
-                                    cx,
-                                );
-                            }
-                            PushRequest::NotReady => {}
+                            PushRequest::NoRemotes | PushRequest::NotReady => {}
                         }
                     },
                     move |this, _e, bounds, window, cx| {
@@ -1031,7 +1165,10 @@ impl Render for ActionBarView {
             )
             .gitcomet_tooltip(
                 theme,
-                push_tooltip_text(push_count, push_tracking_branch_name.as_deref()),
+                match push_unavailable {
+                    Some(reason) => reason.into(),
+                    None => push_tooltip_text(push_count, push_tracking_branch_name.as_deref()),
+                },
             );
 
         let stash_prompt_invoker: SharedString = "stash_btn".into();
@@ -1056,7 +1193,9 @@ impl Render for ActionBarView {
                 })
                 .gitcomet_tooltip(
                     theme,
-                    if can_stash {
+                    if is_bare {
+                        gitcomet_core::domain::WORKING_TREE_REQUIRED_MESSAGE.into()
+                    } else if can_stash {
                         "Create stash".into()
                     } else {
                         "No changes to stash".into()
@@ -1121,32 +1260,74 @@ impl Render for ActionBarView {
             .child(pull)
             .child(push);
 
-        let left_group = div()
-            .debug_selector(|| "left_action_group".to_string())
-            .flex()
-            .items_center()
-            .gap(action_group_gap)
-            .flex_1()
-            .min_w(px(0.0))
-            .overflow_hidden()
-            .child(global_nav);
-        // A selected extension view brings its own context; History's branch,
-        // tracking and merge controls stay with History.
-        let left_group = if self.extension_navigation.is_some() {
-            left_group.children(self.extension_slot.clone().map(|slot| {
-                div()
-                    .debug_selector(|| "extension_action_bar".to_string())
-                    .flex()
-                    .items_center()
-                    .flex_1()
-                    .min_w(px(0.0))
-                    .child(slot)
-            }))
+        items.push(BuiltinBarItem::Navigation, global_nav);
+        if (self.extension_navigation.is_none() || is_bare)
+            && let Some(badge) = worktree_badge
+        {
+            items.push(BuiltinBarItem::Worktree, badge);
+        }
+        if let Some(repo) = self.active_repo().filter(|repo| repo.is_bare()) {
+            let repo_id = repo.id;
+            let busy = repo.bare_mode_conversion.is_busy();
+            let invoker: SharedString = "repository_mode_badge".into();
+            let is_active = active_invoker.as_deref() == Some(invoker.as_ref());
+            items.push(
+                BuiltinBarItem::RepositoryMode,
+                components::Button::new("repository_mode_badge", "Git Bare")
+                    .style(components::ButtonStyle::Subtle)
+                    .open(is_active)
+                    .selected_bg(menu_selected_bg)
+                    .busy(busy)
+                    .on_click_with_bounds(theme, cx, move |this, _, bounds, window, cx| {
+                        let kind = if this
+                            .active_repo()
+                            .is_some_and(|repo| repo.bare_mode_conversion.is_busy())
+                        {
+                            RepoPopoverKind::DisableBareModeConfirm
+                        } else {
+                            RepoPopoverKind::RepositoryModeMenu
+                        };
+                        this.open_popover_for_bounds(
+                            PopoverKind::Repo { repo_id, kind }.invoked_by(invoker.clone()),
+                            bounds,
+                            window,
+                            cx,
+                        );
+                    })
+                    .debug_selector(|| "repository_mode_badge".to_owned())
+                    .gitcomet_tooltip(
+                        theme,
+                        if busy {
+                            "Disabling bare mode; waiting for verified reopening.".into()
+                        } else {
+                            super::popover::bare_mode::BARE_MODE_TOOLTIP.into()
+                        },
+                    ),
+            );
+        }
+        // The selected view owns its context and visibility, in either bar.
+        if self.extension_navigation.is_some() {
+            if let Some(slot) = self.extension_slot.clone() {
+                items.push(
+                    BuiltinBarItem::ViewContext,
+                    div()
+                        .debug_selector(|| "extension_action_bar".to_string())
+                        .flex()
+                        .items_center()
+                        .flex_1()
+                        .min_w(px(0.0))
+                        .child(slot),
+                );
+            }
         } else {
-            left_group
-                .children(worktree_badge)
-                .child(tracking_actions)
-                .children(historical_badge)
+            items.push(BuiltinBarItem::Tracking, tracking_actions);
+            if let Some(badge) = historical_badge {
+                items.push(BuiltinBarItem::HistoricalBrowse, badge);
+            }
+            let operation_controls = div()
+                .flex()
+                .items_center()
+                .gap(action_group_gap)
                 .when(is_merging, |d| {
                     d.child(
                         div()
@@ -1165,6 +1346,7 @@ impl Render for ActionBarView {
                             .child(
                                 components::Button::new("abort_merge", merge_abort_label)
                                     .style(components::ButtonStyle::Danger)
+                                    .disabled(is_bare)
                                     .on_click(theme, cx, |this, e: &ClickEvent, window, cx| {
                                         if let Some(repo_id) = this.active_repo_id() {
                                             this.open_popover_at(
@@ -1174,6 +1356,13 @@ impl Render for ActionBarView {
                                                 cx,
                                             );
                                         }
+                                    })
+                                    .when(is_bare, |button| {
+                                        button.gitcomet_tooltip(
+                                            theme,
+                                            gitcomet_core::domain::WORKING_TREE_REQUIRED_MESSAGE
+                                                .into(),
+                                        )
                                     }),
                             ),
                     )
@@ -1195,7 +1384,7 @@ impl Render for ActionBarView {
                             .child(
                                 components::Button::new(banner.abort_id, "Abort")
                                     .style(components::ButtonStyle::Danger)
-                                    .disabled(sequencer_step_busy)
+                                    .disabled(is_bare || sequencer_step_busy)
                                     .on_click(theme, cx, |this, e: &ClickEvent, window, cx| {
                                         if let Some(repo_id) = this.active_repo_id() {
                                             this.open_popover_at(
@@ -1206,15 +1395,26 @@ impl Render for ActionBarView {
                                             );
                                         }
                                     })
-                                    .when(sequencer_step_busy, |button| {
-                                        button
-                                            .gitcomet_tooltip(theme, SEQUENCER_BUSY_TOOLTIP.into())
+                                    .when(is_bare || sequencer_step_busy, |button| {
+                                        button.gitcomet_tooltip(
+                                            theme,
+                                            if is_bare {
+                                                gitcomet_core::domain::WORKING_TREE_REQUIRED_MESSAGE
+                                                    .into()
+                                            } else {
+                                                SEQUENCER_BUSY_TOOLTIP.into()
+                                            },
+                                        )
                                     }),
                             )
                             .child(
                                 components::Button::new(banner.continue_id, "Continue")
                                     .style(components::ButtonStyle::Outlined)
-                                    .disabled(rebase_has_unstaged_conflicts || sequencer_step_busy)
+                                    .disabled(
+                                        is_bare
+                                            || rebase_has_unstaged_conflicts
+                                            || sequencer_step_busy,
+                                    )
                                     .on_click(theme, cx, |this, _e, _w, _cx| {
                                         if let Some(repo_id) = this.active_repo_id() {
                                             this.store.dispatch(Msg::RebaseContinue { repo_id });
@@ -1222,7 +1422,10 @@ impl Render for ActionBarView {
                                     })
                                     .gitcomet_tooltip(
                                         theme,
-                                        if sequencer_step_busy {
+                                        if is_bare {
+                                            gitcomet_core::domain::WORKING_TREE_REQUIRED_MESSAGE
+                                                .into()
+                                        } else if sequencer_step_busy {
                                             SEQUENCER_BUSY_TOOLTIP.into()
                                         } else if rebase_has_unstaged_conflicts {
                                             "Resolve all conflicts before continuing".into()
@@ -1232,30 +1435,123 @@ impl Render for ActionBarView {
                                     ),
                             ),
                     )
-                })
-        };
+                });
+            if is_merging || sequencer_banner.is_some() {
+                items.push(BuiltinBarItem::OperationControls, operation_controls);
+            }
+        }
 
+        // The repository's views lead the right group, a divider apart from
+        // the actions that act on the repository.
+        let more_open = active_invoker.as_deref() == Some(MORE_VIEWS_INVOKER);
+        let view_tabs = self.view_tabs.clone().map(|tabs| {
+            div()
+                .flex()
+                .flex_none()
+                .items_center()
+                .h_full()
+                .gap(action_group_gap)
+                .child(self.view_tabs(&tabs, density != ActionBarDensity::Compact, more_open, cx))
+                .child(
+                    div()
+                        .flex_none()
+                        .w(px(1.0))
+                        .h(scaled_px(17.0))
+                        .bg(theme.colors.stroke.subtle),
+                )
+        });
+
+        if let Some(tabs) = view_tabs {
+            items.push(BuiltinBarItem::RepositoryViews, tabs);
+        }
+        let terminal_opens_external = self.terminal_button_target == TerminalButtonTarget::External;
+        let terminal_is_open = !terminal_opens_external
+            && self
+                .active_repo_id()
+                .is_some_and(|repo| self.open_terminal_repo_ids.contains(&repo));
+        let terminal = div().debug_selector(|| "terminal".to_string()).child(
+            components::Button::new("terminal", action_label("Terminal"))
+                .start_slot(icon("icons/terminal.svg", icon_primary))
+                .style(components::ButtonStyle::Subtle)
+                .selected(terminal_is_open)
+                .selected_bg(menu_selected_bg)
+                .disabled(self.active_repo_id().is_none())
+                .on_click(theme, cx, |this, _, window, cx| {
+                    let _ = this.root_view.update(cx, |root, cx| {
+                        root.activate_terminal_button_for_active_repo(window, cx);
+                    });
+                })
+                .gitcomet_tooltip(
+                    theme,
+                    if terminal_opens_external {
+                        "Open external terminal".into()
+                    } else if terminal_is_open {
+                        "Hide terminal".into()
+                    } else {
+                        "Show terminal".into()
+                    },
+                ),
+        );
+        items.push(BuiltinBarItem::Terminal, terminal);
+        items.push(BuiltinBarItem::CreateBranch, create_branch);
+        items.push(BuiltinBarItem::Stash, stash);
+        items.extensions(&self.extension_items, &self.active_view);
+        items
+    }
+}
+
+impl Render for ActionBarView {
+    fn render(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
+        let mut items = self.bar_items(true, window, cx);
+        let theme = self.theme;
+        let scale = crate::ui_scale::UiScale::current(cx);
+        let density =
+            action_bar_density(window.viewport_size().width, scale.percent(), theme.metrics);
+        let dense = density != ActionBarDensity::Wide;
+        let tight = tight_action_bar(density, theme.metrics.density);
+        let gap = scale.px(if tight {
+            4.0
+        } else {
+            theme.metrics.ramp(if dense { 4.0 } else { 8.0 }, 6.0)
+        });
         div()
             .debug_selector(|| "action_bar".to_string())
             .w_full()
-            .h(action_bar_height)
+            .h(action_bar_height(cx))
             .flex_none()
             .flex()
             .items_center()
             .justify_between()
-            .px(action_bar_padding_x)
+            .px(scale.px(if dense { 4.0 } else { 8.0 }))
             .bg(theme.colors.surface.chrome)
-            .child(left_group)
+            .child(
+                div()
+                    .debug_selector(|| "left_action_group".to_string())
+                    .flex()
+                    .items_center()
+                    .gap(gap)
+                    .flex_1()
+                    .min_w(px(0.0))
+                    .overflow_hidden()
+                    .children(items.take(BarItemLocation::ActionBarStart))
+                    .children(bar_items::placed_views(
+                        &self.relocated_items,
+                        BarItemLocation::ActionBarStart,
+                    )),
+            )
             .child(
                 div()
                     .debug_selector(|| "right_action_group".to_string())
                     .flex()
                     .items_center()
-                    .gap(action_group_gap)
+                    .gap(gap)
                     .flex_none()
-                    .child(terminal)
-                    .child(create_branch)
-                    .child(stash),
+                    .h_full()
+                    .children(items.take(BarItemLocation::ActionBarEnd))
+                    .children(bar_items::placed_views(
+                        &self.relocated_items,
+                        BarItemLocation::ActionBarEnd,
+                    )),
             )
     }
 }
@@ -1318,6 +1614,13 @@ mod tests {
             file_browsing_badge(&repo).expect("browsing still has an exit control");
         assert_eq!(label, "Working tree");
         assert!(tooltip.contains("Exit file browsing"));
+        repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::Bare);
+        let (label, tooltip) = file_browsing_badge(&repo).unwrap();
+        assert_eq!(label, "HEAD");
+        assert_eq!(
+            tooltip,
+            "Browsing HEAD (no committed files). Click for history or Exit file browsing."
+        );
         repo.file_browser.active = false;
         assert!(file_browsing_badge(&repo).is_none());
     }
@@ -1406,16 +1709,30 @@ mod tests {
     #[test]
     fn secondary_action_labels_remain_visible_in_condensed_mode() {
         assert_eq!(
-            secondary_action_label(ActionBarDensity::Compact, "Terminal"),
+            secondary_action_label(ActionBarDensity::Compact, false, "Stash"),
             ""
         );
         assert_eq!(
-            secondary_action_label(ActionBarDensity::Condensed, "Terminal"),
-            "Terminal"
+            secondary_action_label(ActionBarDensity::Condensed, false, "Stash"),
+            "Stash"
         );
         assert_eq!(
-            secondary_action_label(ActionBarDensity::Wide, "Terminal"),
-            "Terminal"
+            secondary_action_label(ActionBarDensity::Wide, false, "Stash"),
+            "Stash"
+        );
+    }
+
+    /// Beside the repository's view tabs the condensed bar gives the badges
+    /// the room the labels took.
+    #[test]
+    fn secondary_action_labels_give_way_to_view_tabs_below_wide() {
+        assert_eq!(
+            secondary_action_label(ActionBarDensity::Condensed, true, "Stash"),
+            ""
+        );
+        assert_eq!(
+            secondary_action_label(ActionBarDensity::Wide, true, "Stash"),
+            "Stash"
         );
     }
 

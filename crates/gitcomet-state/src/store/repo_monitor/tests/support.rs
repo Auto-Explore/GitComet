@@ -111,18 +111,18 @@ impl TestRules {
         mpsc::Receiver<MonitorMsg>,
     ) {
         let (tx, rx) = mpsc::channel();
-        let (watcher, outcome) = self
-            .state
-            .setup(
-                root,
-                &*self.backend,
-                RepoId(1),
-                &tx,
-                &Arc::new(AtomicBool::new(true)),
-                &mut self.config,
-                false,
-            )
-            .expect("watcher setup must succeed");
+        let setup = self.state.setup(
+            root,
+            &*self.backend,
+            RepoId(1),
+            &tx,
+            &Arc::new(AtomicBool::new(true)),
+            &mut self.config,
+            false,
+        );
+        let WatchSetup::Ready(watcher, outcome) = setup else {
+            panic!("watcher setup must succeed");
+        };
         (watcher, outcome, rx)
     }
 }

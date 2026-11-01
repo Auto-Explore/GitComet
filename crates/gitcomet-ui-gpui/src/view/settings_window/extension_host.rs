@@ -21,6 +21,8 @@ struct SettingsHost {
     open: Cell<bool>,
     theme: Cell<AppTheme>,
     notifier: HostNotifier,
+    diff_environment: crate::view::hosted::environment::DiffPaneEnvironment,
+    _tooltip: Entity<TooltipHost>,
 }
 
 impl SettingsExtensions {
@@ -54,6 +56,22 @@ impl SettingsExtensions {
             }
         });
         let window = window.window_handle();
+        let tooltip = cx.new(|_| TooltipHost::new(theme));
+        let diff_environment = crate::view::hosted::environment::DiffPaneEnvironment {
+            services: crate::view::panes::diff::services::DiffServices {
+                store: crate::view::pane_store::PaneStore::read_only(),
+                commands: Default::default(),
+                documents: crate::view::documents::buffers::DocumentOwner::new(
+                    std::sync::Weak::new(),
+                    cx,
+                ),
+                tooltip: tooltip.downgrade(),
+            },
+            preferences: crate::view::hosted::environment::DiffPreferences::Fixed(
+                Default::default(),
+            ),
+            window,
+        };
         let host = Rc::new_cyclic(|weak| SettingsHost {
             weak: weak.clone(),
             view: cx.weak_entity(),
@@ -61,6 +79,8 @@ impl SettingsExtensions {
             open: Cell::new(true),
             theme: Cell::new(theme),
             notifier,
+            diff_environment,
+            _tooltip: tooltip,
         });
         let instances: Rc<RefCell<Vec<Box<dyn WindowExtension>>>> = Rc::default();
         let opening_host = Rc::downgrade(&host);
@@ -238,7 +258,13 @@ impl WindowHostImpl for SettingsHost {
     ) -> Result<DiffPane, HostError> {
         let host = self.handle()?;
         let entity = cx.new(|cx| {
-            crate::view::hosted::diff_pane::DiffPaneView::snapshot(host, snapshot, options, cx)
+            crate::view::hosted::diff_pane::DiffPaneView::snapshot(
+                host,
+                self.diff_environment.clone(),
+                snapshot,
+                options,
+                cx,
+            )
         });
         Ok(DiffPane::new(Rc::new(
             crate::view::hosted::diff_pane::HostedDiffPane { entity },
@@ -306,6 +332,14 @@ impl WindowHostImpl for SettingsHost {
     }
     fn is_current(&self, _: &RepositoryHandle, _: &App) -> bool {
         false
+    }
+    fn open_workspace(
+        &self,
+        paths: Vec<std::path::PathBuf>,
+        cx: &mut App,
+    ) -> Result<WindowHost, HostError> {
+        self.live()?;
+        crate::app::open_extension_workspace(paths, cx)
     }
     fn dispatch(&self, _: Msg, _: &mut App) -> Result<(), HostError> {
         self.unsupported()
@@ -420,51 +454,65 @@ struct SettingsMenu {
 impl Render for SettingsMenu {
     fn render(&mut self, _: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
         let ui_scale = crate::ui_scale::UiScale::current(cx);
-        div()
-            .flex()
-            .flex_col()
-            .children(self.items.iter().enumerate().map(|(index, item)| {
-                match item {
-                    HostedMenuItem::Header(label) => {
-                        div().px_2().child(label.clone()).into_any_element()
-                    }
-                    HostedMenuItem::Separator => div()
-                        .h(px(1.0))
-                        .bg(self.theme.colors.stroke.subtle)
+        components::context_menu(
+            self.theme,
+            div()
+                .flex()
+                .flex_col()
+                .children(self.items.iter().enumerate().map(|(index, item)| {
+                    match item {
+                        HostedMenuItem::Header(label) => components::context_menu_header(
+                            self.theme,
+                            ui_scale,
+                            label.clone(),
+                            None,
+                            cx,
+                        )
                         .into_any_element(),
-                    HostedMenuItem::Action {
-                        action,
-                        icon,
-                        disabled,
-                        ..
-                    } => {
-                        let action = action.clone();
-                        let parent = self.parent.clone();
-                        let mut button = components::Button::new(
-                            format!("settings_hosted_action_{index}"),
-                            action.label().clone(),
-                        );
-                        if let Some(icon) = icon.clone() {
-                            button = button.start_slot(crate::view::icons::svg_icon(
-                                icon,
-                                self.theme.colors.foreground.secondary,
-                                ui_scale.px(14.0),
-                            ));
+                        HostedMenuItem::Separator => {
+                            components::context_menu_separator(self.theme, ui_scale)
+                                .into_any_element()
                         }
-                        button
+                        HostedMenuItem::Action {
+                            action,
+                            icon,
+                            disabled,
+                            tooltip,
+                            ..
+                        } => {
+                            let action = action.clone();
+                            let parent = self.parent.clone();
+                            let icon = match icon {
+                                Some(path) => components::ContextMenuIconSlot::Icon(path.clone()),
+                                None => components::ContextMenuIconSlot::None,
+                            };
+                            components::ContextMenuEntry::new(
+                                format!("settings_hosted_action_{index}"),
+                                action.label().clone(),
+                            )
+                            .icon(icon)
+                            .tone(components::ContextMenuTone::Neutral)
                             .disabled(*disabled)
-                            .on_click(self.theme, cx, move |_, _, window, cx| {
+                            .on_select(self.theme, ui_scale, cx, move |_, _, window, cx| {
                                 let _ = parent
                                     .update(cx, |view, cx| view.close_hosted_dialog(window, cx));
                                 action.invoke(cx);
                             })
+                            .debug_selector(move || format!("settings_hosted_action_{index}"))
+                            .when_some(tooltip.clone(), |row, text| {
+                                row.gitcomet_tooltip(self.theme, text)
+                            })
                             .into_any_element()
+                        }
+                        _ => gpui::Empty.into_any_element(),
                     }
-                    _ => gpui::Empty.into_any_element(),
-                }
-            }))
+                })),
+        )
     }
 }
+
+#[cfg(test)]
+mod tests;
 
 pub(super) struct SettingsDialog {
     pub id: u64,
@@ -473,6 +521,7 @@ pub(super) struct SettingsDialog {
     pub anchor: Option<gpui::Point<gpui::Pixels>>,
     pub focus: gpui::FocusHandle,
     previous_focus: Option<gpui::FocusHandle>,
+    application_close_prompt: bool,
 }
 impl SettingsHost {
     fn present(
@@ -489,6 +538,11 @@ impl SettingsHost {
         cx.defer(move |cx| {
             let _ = window.update(cx, |_, window, cx| {
                 let content = content(window, cx);
+                // Read before a button callback can hold the prompt entity's mutable lease.
+                let application_close_prompt = content
+                    .clone()
+                    .downcast::<super::close_guards::SettingsClosePrompt>()
+                    .is_ok_and(|prompt| prompt.read(cx).scope == CloseScope::Application);
                 let _ = view.update(cx, |view, cx| {
                     let focus = cx.focus_handle();
                     let previous_focus = view
@@ -504,6 +558,7 @@ impl SettingsHost {
                         anchor,
                         focus,
                         previous_focus,
+                        application_close_prompt,
                     });
                     cx.notify();
                 });
@@ -529,6 +584,21 @@ impl SettingsHost {
 }
 impl SettingsWindowView {
     pub(super) fn close_hosted_dialog(
+        &mut self,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self
+            .extension_dialog
+            .as_ref()
+            .is_some_and(|dialog| dialog.application_close_prompt)
+        {
+            crate::app::cancel_pending_restart(cx);
+        }
+        self.close_resolved_hosted_dialog(window, cx);
+    }
+
+    pub(super) fn close_resolved_hosted_dialog(
         &mut self,
         window: &mut Window,
         cx: &mut gpui::Context<Self>,

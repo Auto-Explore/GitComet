@@ -2,10 +2,88 @@
 
 use super::{CommitSignatureMap, Loadable, RepoState, Shared};
 use gitcomet_core::domain::*;
+use gitcomet_core::services::{HistoryRefFilter, HistoryWalk};
 use rustc_hash::FxHashSet;
-use std::collections::VecDeque;
+use std::collections::{BTreeSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::Arc;
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct FileHistoryRequestId(pub(crate) u64);
+
+impl HistoryState {
+    /// The change list on screen for a commit or comparison target, while it
+    /// is that target's: the commit's details, or the comparison's files.
+    pub fn listed_files(&self, target: &DiffTarget) -> Option<&[CommitFileChange]> {
+        match target {
+            DiffTarget::Commit { commit_id, .. } => {
+                let Loadable::Ready(details) = &self.commit_details else {
+                    return None;
+                };
+                (&details.id == commit_id).then_some(details.files.as_slice())
+            }
+            DiffTarget::CommitRange {
+                from_commit_id,
+                to_commit_id,
+                ..
+            } => {
+                let range = self.range_selection.as_ref()?;
+                if range.diff_from() != from_commit_id || &range.to != to_commit_id {
+                    return None;
+                }
+                let Loadable::Ready(files) = &self.range_files else {
+                    return None;
+                };
+                Some(files.as_slice())
+            }
+            DiffTarget::WorkingTree { .. } => None,
+        }
+    }
+
+    /// The listed change a single-file commit or comparison target shows.
+    pub fn committed_file_change(&self, target: &DiffTarget) -> Option<&CommitFileChange> {
+        let path = match target {
+            DiffTarget::Commit { path, .. }
+            | DiffTarget::CommitRange {
+                path: Some(path), ..
+            } => path,
+            DiffTarget::CommitRange { path: None, .. } | DiffTarget::WorkingTree { .. } => {
+                return None;
+            }
+        };
+        self.listed_files(target)?
+            .iter()
+            .find(|file| &file.path == path)
+    }
+
+    pub(crate) fn clear_file_history(&mut self) {
+        self.file_history_path = None;
+        self.file_history = Loadable::NotLoaded;
+    }
+
+    pub(crate) fn begin_file_history(&mut self, path: PathBuf) -> FileHistoryRequestId {
+        self.file_history_request =
+            FileHistoryRequestId(self.file_history_request.0.wrapping_add(1));
+        self.file_history_path = Some(path);
+        self.file_history = Loadable::Loading;
+        self.file_history_request
+    }
+
+    pub(crate) fn accepts_file_history(
+        &self,
+        request: FileHistoryRequestId,
+        path: &std::path::Path,
+        cursor: Option<&LogCursor>,
+    ) -> bool {
+        self.file_history_request == request
+            && self.file_history_path.as_deref() == Some(path)
+            && match (cursor, &self.file_history) {
+                (None, Loadable::Loading) => true,
+                (Some(cursor), Loadable::Ready(page)) => page.next_cursor.as_ref() == Some(cursor),
+                _ => false,
+            }
+    }
+}
 
 #[derive(Clone, Debug)]
 pub struct HistoryState {
@@ -16,6 +94,11 @@ pub struct HistoryState {
     /// Case-insensitive author filter for the history, or `None` for all
     /// authors. Matches the author name shown in the UI.
     pub history_author_filter: Option<String>,
+    /// The refs the history walk starts from, empty for the normal walk.
+    pub history_focus: HistoryFocusSet,
+    /// Ref namespaces the all-branches walk leaves out: the app-wide setting,
+    /// copied into every repository so its walk carries it.
+    pub hidden_refs: HistoryRefFilter,
     pub log: Loadable<Shared<LogPage>>,
     pub retained_log_while_loading: Option<Shared<LogPage>>,
     pub log_loading_more: bool,
@@ -27,6 +110,7 @@ pub struct HistoryState {
     pub log_rev: u64,
     pub file_history_path: Option<PathBuf>,
     pub file_history: Loadable<Shared<LogPage>>,
+    file_history_request: FileHistoryRequestId,
     pub selected_commit: Option<CommitId>,
     pub selected_commit_rev: u64,
     /// Last processed UI selection request, even when it did not change focus.
@@ -58,6 +142,7 @@ pub struct HistoryState {
     pub multi_selection: CommitMultiSelection,
     selected_ids: Arc<FxHashSet<CommitId>>,
     squash_cache: Option<Arc<HistorySquashCache>>,
+    reword_position_cache: Option<Arc<CommitRewordPositionCache>>,
     /// Active "compare two points" selection: when two commits are selected (or
     /// a mark/compare pair is chosen), this holds the ordered `from`/`to` pair
     /// and the changed-file list between them. `None` when no comparison is
@@ -145,6 +230,25 @@ struct HistorySquashCache {
     plan: Option<gitcomet_core::squash::SquashPlan>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct CommitRewordPositionKey {
+    target: CommitId,
+    head: Option<CommitId>,
+    log_rev: u64,
+    snapshot: Option<gitcomet_core::services::HistorySnapshot>,
+    page: usize,
+    index: usize,
+}
+
+#[derive(Clone, Debug)]
+struct CommitRewordPositionCache {
+    key: CommitRewordPositionKey,
+    // Pin identities used by the key while older snapshots are still visible.
+    _page: Option<Shared<LogPage>>,
+    _index: Option<gitcomet_core::history_index::HistoryIndexHandle>,
+    position: gitcomet_core::squash::FirstParentPosition,
+}
+
 impl HistoryState {
     #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
@@ -169,6 +273,8 @@ impl Default for HistoryState {
             find: Default::default(),
             history_scope: LogScope::default(),
             history_author_filter: None,
+            history_focus: HistoryFocusSet::default(),
+            hidden_refs: HistoryRefFilter::default(),
             log: Loadable::NotLoaded,
             retained_log_while_loading: None,
             log_loading_more: false,
@@ -177,6 +283,7 @@ impl Default for HistoryState {
             log_rev: 0,
             file_history_path: None,
             file_history: Loadable::NotLoaded,
+            file_history_request: FileHistoryRequestId::default(),
             selected_commit: None,
             selected_commit_rev: 0,
             selection_ack: None,
@@ -196,6 +303,7 @@ impl Default for HistoryState {
             multi_selection: CommitMultiSelection::default(),
             selected_ids: Arc::new(FxHashSet::default()),
             squash_cache: None,
+            reword_position_cache: None,
             range_selection: None,
             worktree_selection: None,
             worktree_selection_rev: 0,
@@ -494,12 +602,58 @@ impl RepoState {
         self.history_state.log_scan_progress = scanned;
     }
 
+    /// Remotes the history graph leaves out, from the shared repository
+    /// preferences.
+    pub fn history_hidden_remotes(&self) -> &BTreeSet<String> {
+        static NONE: BTreeSet<String> = BTreeSet::new();
+        self.shared_preferences.as_ref().map_or(&NONE, |snapshot| {
+            &snapshot.preferences.history_hidden_remotes
+        })
+    }
+
+    /// The remote branches the history graph shows: the loaded ones, without
+    /// the hidden remotes'.
+    pub fn history_remote_branches_iter(&self) -> impl Iterator<Item = &RemoteBranch> {
+        let hidden = self.history_hidden_remotes();
+        self.remote_branches
+            .ready()
+            .into_iter()
+            .flat_map(|branches| branches.iter())
+            .filter(move |branch| !hidden.contains(&branch.remote))
+    }
+
+    /// [`Self::history_remote_branches_iter`] as an owned list, shared with the
+    /// loaded one while nothing is hidden.
+    pub fn history_remote_branches(&self) -> Shared<Vec<RemoteBranch>> {
+        match &self.remote_branches {
+            Loadable::Ready(branches) if self.history_hidden_remotes().is_empty() => {
+                Shared::clone(branches)
+            }
+            _ => Shared::new(self.history_remote_branches_iter().cloned().collect()),
+        }
+    }
+
+    /// What the history pane walks: its mode, without the hidden remotes and
+    /// ref namespaces.
+    pub fn history_walk(&self) -> HistoryWalk {
+        HistoryWalk::new(
+            self.history_state.history_scope,
+            self.history_hidden_remotes().iter().map(String::as_str),
+        )
+        .with_hidden_refs(self.history_state.hidden_refs.clone())
+    }
+
     pub(crate) fn set_log_scope(&mut self, scope: LogScope) {
         if self.history_state.history_scope == scope {
             return;
         }
-        self.history_state.indexed.reset_query();
         self.history_state.history_scope = scope;
+        self.reset_history_readers();
+    }
+
+    /// The walk changed: drop the index query and authors read for the old one.
+    pub(crate) fn reset_history_readers(&mut self) {
+        self.history_state.indexed.reset_query();
         self.history_state.authors.cancellation.cancel();
         self.bump_log_revs();
     }
@@ -510,6 +664,16 @@ impl RepoState {
         }
         self.history_state.indexed.reset_query();
         self.history_state.history_author_filter = author;
+        self.bump_log_revs();
+    }
+
+    pub(crate) fn set_history_focus(&mut self, focus: HistoryFocusSet) {
+        if self.history_state.history_focus == focus {
+            return;
+        }
+        self.history_state.indexed.reset_query();
+        self.history_state.history_focus = focus;
+        self.history_state.authors.cancellation.cancel();
         self.bump_log_revs();
     }
 
@@ -732,6 +896,106 @@ impl RepoState {
         )
     }
 
+    fn commit_reword_position_key(&self) -> Option<CommitRewordPositionKey> {
+        Some(CommitRewordPositionKey {
+            target: self.history_state.selected_commit.clone()?,
+            head: self.head_commit_id(),
+            log_rev: self.log_rev,
+            snapshot: self.history_state.log_snapshot.clone(),
+            page: match &self.log {
+                Loadable::Ready(page) => Arc::as_ptr(page) as usize,
+                _ => 0,
+            },
+            index: self
+                .history_state
+                .indexed
+                .index
+                .as_ref()
+                .filter(|index| Some(&index.snapshot) == self.history_state.log_snapshot.as_ref())
+                .map_or(0, |index| Arc::as_ptr(index) as usize),
+        })
+    }
+
+    /// Walk the selected commit's topology on the store worker, once per
+    /// target, HEAD or topology change, before publishing the snapshot.
+    pub(crate) fn prepare_commit_reword_position(&mut self) {
+        let Some(key) = self.commit_reword_position_key() else {
+            self.history_state.reword_position_cache = None;
+            return;
+        };
+        if self
+            .history_state
+            .reword_position_cache
+            .as_ref()
+            .is_some_and(|cache| cache.key == key)
+        {
+            return;
+        }
+        let position = self.compute_commit_reword_position(&key.target, key.head.as_ref());
+        self.history_state.reword_position_cache = Some(Arc::new(CommitRewordPositionCache {
+            key,
+            _page: match &self.log {
+                Loadable::Ready(page) => Some(page.clone()),
+                _ => None,
+            },
+            _index: self.history_state.indexed.index.clone(),
+            position,
+        }));
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn prepare_commit_reword_position_for_test(&mut self) {
+        self.prepare_commit_reword_position();
+    }
+
+    /// The selected commit's prepared first-parent position. Rendering never
+    /// walks history: an absent or stale cache conservatively returns
+    /// `NotFound`, except that HEAD itself needs no topology lookup.
+    pub fn first_parent_position_from_head(
+        &self,
+        commit_id: &CommitId,
+    ) -> gitcomet_core::squash::FirstParentPosition {
+        use gitcomet_core::squash::FirstParentPosition;
+        if self.head_commit_id().as_ref() == Some(commit_id) {
+            return FirstParentPosition::Linear { distance: 0 };
+        }
+        if let Some(cache) = &self.history_state.reword_position_cache
+            && &cache.key.target == commit_id
+            && self.commit_reword_position_key().as_ref() == Some(&cache.key)
+        {
+            return cache.position;
+        }
+        FirstParentPosition::NotFound
+    }
+
+    fn compute_commit_reword_position(
+        &self,
+        commit_id: &CommitId,
+        head: Option<&CommitId>,
+    ) -> gitcomet_core::squash::FirstParentPosition {
+        use gitcomet_core::squash::FirstParentPosition;
+        let Some(head) = head else {
+            return FirstParentPosition::NotFound;
+        };
+        if head == commit_id {
+            return FirstParentPosition::Linear { distance: 0 };
+        }
+        if let Some(index) = self
+            .history_state
+            .indexed
+            .index
+            .as_ref()
+            .filter(|index| Some(&index.snapshot) == self.history_state.log_snapshot.as_ref())
+        {
+            return gitcomet_core::squash::first_parent_position_indexed(index, head, commit_id);
+        }
+        let Loadable::Ready(page) = &self.log else {
+            return FirstParentPosition::NotFound;
+        };
+        gitcomet_core::squash::first_parent_position(&page.commits, head, commit_id)
+    }
+
     pub(crate) fn set_commit_multi_selection(&mut self, v: CommitMultiSelection) {
         if self.history_state.multi_selection == v {
             return;
@@ -794,3 +1058,6 @@ impl RepoState {
             self.history_state.commit_signatures_rev.wrapping_add(1);
     }
 }
+
+#[cfg(test)]
+mod reword_tests;

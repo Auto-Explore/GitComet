@@ -1,0 +1,10 @@
+disallowed-types = [
+    { path = "std::collections::HashMap", reason = "use DftHashMap" },
+    { path = "std::collections::HashSet", reason = "use DftHashSet" },
+]
+disallowed-methods = [
+    { path = "std::env::var", reason = "the host passes every option through api::compare" },
+    { path = "std::env::var_os", reason = "the host passes every option through api::compare" },
+    { path = "std::env::vars", reason = "the host passes every option through api::compare" },
+    { path = "std::env::vars_os", reason = "the host passes every option through api::compare" },
+]

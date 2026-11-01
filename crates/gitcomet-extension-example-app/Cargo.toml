@@ -15,7 +15,7 @@ workspace = true
 [dependencies]
 gitcomet-app = { workspace = true, features = ["ui-gpui", "gix"] }
 gitcomet-core = { workspace = true }
-gitcomet-extension-example = { path = "../gitcomet-extension-example" }
+gitcomet-extension-example = { workspace = true }
 
 [dev-dependencies]
 gitcomet-ui-gpui = { workspace = true }

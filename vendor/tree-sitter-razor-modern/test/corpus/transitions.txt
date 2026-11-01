@@ -1,0 +1,97 @@
+====================
+Explicit delimited transition
+====================
+
+@for (var i = 0; i < people.Length; i++)
+{
+    var person = people[i];
+    <text>Name: @person.Name</text>
+}
+
+----
+
+(compilation_unit
+  (razor_for
+    (variable_declaration
+      (implicit_type)
+      (variable_declarator
+        (identifier)
+        (integer_literal)))
+    (binary_expression
+      (identifier)
+      (member_access_expression
+        (identifier)
+        (identifier)))
+    (postfix_unary_expression
+      (identifier))
+    (local_declaration_statement
+      (variable_declaration
+        (implicit_type)
+        (variable_declarator
+          (identifier)
+          (element_access_expression
+            (identifier)
+            (bracketed_argument_list
+              (argument
+                (identifier)))))))
+    (element
+      (html_text)
+      (razor_implicit_expression
+        (member_access_expression
+          (identifier)
+          (identifier))))))
+
+====================
+Explicit Line Transition
+====================
+
+@for (var i = 0; i < people.Length; i++)
+{
+    var person = people[i];
+    @:Name: @person.Name
+}
+
+------
+
+(compilation_unit
+  (razor_for
+    (variable_declaration
+      (implicit_type)
+      (variable_declarator
+        (identifier)
+        (integer_literal)))
+    (binary_expression
+      (identifier)
+      (member_access_expression
+        (identifier)
+        (identifier)))
+    (postfix_unary_expression
+      (identifier))
+    (local_declaration_statement
+      (variable_declaration
+        (implicit_type)
+        (variable_declarator
+          (identifier)
+          (element_access_expression
+            (identifier)
+            (bracketed_argument_list
+              (argument
+                (identifier)))))))
+    (explicit_line_transition
+      (razor_line_markup
+        (razor_implicit_expression
+          (member_access_expression
+            (identifier)
+            (identifier)))))))
+
+====================
+Top level explicit line transition
+====================
+
+@: hello <em>world</em>
+
+------
+
+(compilation_unit
+  (explicit_line_transition
+    (razor_line_markup)))

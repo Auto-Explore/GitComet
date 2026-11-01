@@ -5,7 +5,7 @@
 # Cargo.toml) is a hard requirement, and is enforced by
 # `vendored_vue_grammar_is_abi_compatible_with_workspace_tree_sitter` and
 # `vendored_vue_grammar_parses_with_workspace_tree_sitter` in
-# crates/gitcomet-ui-gpui/src/view/rows/diff_text/syntax.rs. Depending on
+# crates/gitcomet-syntax/src/tests/grammar_compat.rs. Depending on
 # `tree-sitter-language` rather than `tree-sitter` is what keeps that true: the
 # grammar exposes a bare `LanguageFn` and is bound to whichever tree-sitter
 # version the workspace resolves, so upgrading tree-sitter needs no change here
@@ -18,7 +18,7 @@
 # this is a one-line call into it.
 #
 # `queries/` is deliberately not vendored. GitComet keeps its own Vue queries in
-# crates/gitcomet-ui-gpui/src/view/rows/diff_text/queries/, and leaving the
+# crates/gitcomet-syntax/src/queries/, and leaving the
 # directory absent keeps the `with_*_query` cfgs off -- `tree-sitter-build` still
 # declares them, because this lib.rs is verbatim and references all four -- so the
 # optional query consts in lib.rs compile out.

@@ -18,11 +18,10 @@
 # tree-sitter-cli 0.26.13 (ABI 15) and the `tree_sitter/` headers come from
 # vendor/tree-sitter-headers -- see the README there.
 #
-# `queries/` is deliberately not vendored, matching vendor/tree-sitter-vue.
-# GitComet keeps its own Ruby query in
-# crates/gitcomet-ui-gpui/src/view/rows/diff_text/queries/ruby_highlights.scm,
-# which drops upstream's unevaluated `#is-not? local` rule -- a separate fix, in
-# a separate place, for a separate bug.
+# `queries/highlights.scm` is the 0.23.1 release's, vendored for vendor/difftastic
+# (`HIGHLIGHTS_QUERY`). GitComet's highlighter keeps its own Ruby query in
+# crates/gitcomet-syntax/src/queries/ruby_highlights.scm, which drops upstream's
+# unevaluated `#is-not? local` rule.
 [package]
 name = "tree-sitter-ruby"
 description = "Ruby grammar for the tree-sitter parsing library"

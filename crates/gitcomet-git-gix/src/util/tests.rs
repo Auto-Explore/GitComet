@@ -1,4 +1,37 @@
 use super::*;
+use crate::test_support::git_success;
+
+#[cfg(windows)]
+#[test]
+fn windows_tree_termination_helper_stops_a_running_process_without_a_console() {
+    // No `cmd /C` wrapper: its `ping` could start after taskkill walks the
+    // tree, outlive the test and keep the test's inherited output pipes open.
+    let mut command = Command::new("ping.exe");
+    configure_background_command(&mut command);
+    let mut child = command
+        .args(["-n", "30", "127.0.0.1"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("start the synthetic process");
+    let result = gitcomet_win32_window_utils::terminate_process_tree(child.id());
+    // Windows termination is asynchronous; helper exit is not a notification
+    // that the target has finished exiting.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let already_exited = loop {
+        let status = child.try_wait().expect("query the process");
+        if status.is_some() || Instant::now() >= deadline {
+            break status;
+        }
+        thread::sleep(Duration::from_millis(10));
+    };
+    // Keep failure paths from leaving the synthetic process running.
+    let _ = child.kill();
+    let _ = child.wait();
+    result.expect("run the process-tree termination helper");
+    assert!(already_exited.is_some_and(|status| !status.success()));
+}
 
 #[test]
 fn fnv_preserves_existing_cache_hashes() {
@@ -250,18 +283,6 @@ fn sleep_command(seconds: u64) -> Command {
     shell_command(&format!("Start-Sleep -Seconds {seconds}"))
 }
 
-fn run_git_test_setup(workdir: &Path, args: &[&str]) {
-    let mut cmd = git_workdir_cmd_for(workdir);
-    cmd.args(args);
-    let output = cmd.output().expect("test Git command should start");
-    assert!(
-        output.status.success(),
-        "git {} failed: {}",
-        args.join(" "),
-        String::from_utf8_lossy(&output.stderr)
-    );
-}
-
 fn write_test_hook(workdir: &Path, name: &str, script: &str) {
     let hooks = workdir.join(".githooks");
     std::fs::create_dir_all(&hooks).expect("create test hooks directory");
@@ -296,7 +317,7 @@ fn hook_free_commands_do_not_enable_trace2() {
         vec!["--no-optional-locks", "config", "--get", "core.editor"],
         vec!["config", "get", "user.name"],
     ] {
-        let mut cmd = Command::new("git");
+        let mut cmd = gitcomet_core::test_support::git_fixture::git_command();
         cmd.args(args);
         assert!(Trace2Monitor::start(&mut cmd, Some(&operation), &LivenessClock::new()).is_none());
         assert!(!cmd.get_envs().any(|(key, _)| key == "GIT_TRACE2_EVENT"));
@@ -311,7 +332,7 @@ fn hook_free_commands_do_not_enable_trace2() {
         vec!["custom-alias"],
         vec!["-C"],
     ] {
-        let mut cmd = Command::new("git");
+        let mut cmd = gitcomet_core::test_support::git_fixture::git_command();
         cmd.args(args);
         assert!(!command_is_known_hook_free(&cmd));
         assert!(Trace2Monitor::start(&mut cmd, Some(&operation), &LivenessClock::new()).is_some());
@@ -369,7 +390,7 @@ fn trace2_monitor_finish_and_drop_drain_the_final_unterminated_event() {
         let context = GitOperationContext::new("trace drain", move |_, event| {
             sender.send(event).unwrap();
         });
-        let mut cmd = Command::new("git");
+        let mut cmd = gitcomet_core::test_support::git_fixture::git_command();
         let monitor =
             Trace2Monitor::start(&mut cmd, Some(&context), &LivenessClock::new()).unwrap();
         std::fs::write(
@@ -397,14 +418,14 @@ fn trace2_monitor_finish_and_drop_drain_the_final_unterminated_event() {
 #[test]
 fn operation_context_reports_real_hooks_output_and_exit_codes() {
     let repo = tempfile::tempdir().expect("create test repository");
-    run_git_test_setup(repo.path(), &["init", "--quiet"]);
-    run_git_test_setup(repo.path(), &["config", "user.name", "GitComet Test"]);
-    run_git_test_setup(
+    git_success(repo.path(), &["init", "--quiet"]);
+    git_success(repo.path(), &["config", "user.name", "GitComet Test"]);
+    git_success(
         repo.path(),
         &["config", "user.email", "gitcomet@example.invalid"],
     );
-    run_git_test_setup(repo.path(), &["config", "commit.gpgsign", "false"]);
-    run_git_test_setup(repo.path(), &["config", "core.hooksPath", ".githooks"]);
+    git_success(repo.path(), &["config", "commit.gpgsign", "false"]);
+    git_success(repo.path(), &["config", "core.hooksPath", ".githooks"]);
     write_test_hook(
         repo.path(),
         "pre-commit",
@@ -416,7 +437,7 @@ fn operation_context_reports_real_hooks_output_and_exit_codes() {
         "#!/bin/sh\nprintf 'post-commit stdout\\n'\nprintf 'post-commit stderr\\n' >&2\nexit 7\n",
     );
     std::fs::write(repo.path().join("file.txt"), "content\n").expect("write test file");
-    run_git_test_setup(repo.path(), &["add", "--", "file.txt"]);
+    git_success(repo.path(), &["add", "--", "file.txt"]);
 
     let events = Arc::new(Mutex::new(Vec::<GitOperationEvent>::new()));
     let captured = Arc::clone(&events);
@@ -474,6 +495,33 @@ fn operation_context_reports_real_hooks_output_and_exit_codes() {
 }
 
 #[test]
+fn metadata_output_keeps_status_and_bytes_without_operation_events() {
+    let (sender, receiver) = mpsc::channel();
+    let operation = GitOperationContext::new("metadata", move |_, event| {
+        sender.send(event).unwrap();
+    });
+    let _scope = git_operation::attach(&operation);
+    let output = run_git_metadata_output(failing_command_with_streams(), "git metadata").unwrap();
+    assert_eq!(output.status.code(), Some(7));
+    assert_eq!(output.stdout, b"out");
+    assert_eq!(output.stderr, b"err");
+    assert!(receiver.try_iter().next().is_none());
+}
+
+#[test]
+fn metadata_output_observes_attached_cancellation_before_spawn() {
+    let operation = GitOperationContext::new("metadata", |_, _| {});
+    let _scope = git_operation::attach(&operation);
+    assert!(git_operation::cancel(operation.id()));
+    let error = run_git_metadata_output(
+        Command::new("gitcomet-command-that-must-not-be-spawned"),
+        "git metadata",
+    )
+    .unwrap_err();
+    assert!(matches!(error.kind(), ErrorKind::Cancelled));
+}
+
+#[test]
 fn run_git_with_output_failure_preserves_structured_details() {
     let err = run_git_with_output(failing_command_with_streams(), "git synthetic")
         .expect_err("expected failing command");
@@ -487,6 +535,7 @@ fn run_git_with_output_failure_preserves_structured_details() {
             assert_eq!(failure.stderr(), b"err");
             assert_eq!(failure.detail(), Some("err"));
             assert_eq!(failure.to_string(), "git synthetic failed: err");
+            assert_eq!(failure.auth_outcome(), Some(&AuthOutcome::NotRequested));
         }
         other => panic!("expected structured git failure, got {other:?}"),
     }
@@ -607,6 +656,59 @@ fn classifies_git_lfs_failures_from_stderr() {
     );
 }
 
+#[test]
+fn classifies_local_overwrites_independently_of_auth_prompt_diagnostics() {
+    for stderr in [
+        "error: Your local changes to the following files would be overwritten by merge:\n file.txt\nPlease commit your changes or stash them before you merge.\nAborting\nSSH key passphrase prompt:\nEnter passphrase for key 'C:/Users/test/.ssh/id_ed25519':",
+        "error: The following untracked working tree files would be overwritten by checkout:\n file.txt",
+    ] {
+        assert_eq!(
+            classify_git_failure(stderr),
+            GitFailureId::WorktreeWouldBeOverwritten
+        );
+    }
+}
+
+#[test]
+fn classifies_worktree_removal_refusals() {
+    for (stderr, blocker) in [
+        (
+            "fatal: '/tmp/linked' contains modified or untracked files, use --force to delete it",
+            WorktreeRemovalBlocker::Changes,
+        ),
+        (
+            "fatal: working trees containing submodules cannot be moved or removed",
+            WorktreeRemovalBlocker::Submodules,
+        ),
+    ] {
+        assert_eq!(
+            classify_git_failure(stderr),
+            GitFailureId::WorktreeRemovalBlocked(blocker),
+            "{stderr}"
+        );
+    }
+}
+
+#[test]
+fn parsed_stdout_failure_preserves_authoritative_auth_outcome() {
+    let error = run_git_parsed_stdout(
+        failing_command_with_streams(),
+        "git synthetic",
+        false,
+        |mut stdout| {
+            let mut bytes = Vec::new();
+            stdout.read_to_end(&mut bytes).unwrap();
+            Ok(bytes)
+        },
+    )
+    .expect_err("the process failed after producing stdout");
+    let ErrorKind::Git(failure) = error.kind() else {
+        panic!("expected structured failure: {error:?}");
+    };
+    assert_eq!(failure.exit_code(), Some(7));
+    assert_eq!(failure.auth_outcome(), Some(&AuthOutcome::NotRequested));
+}
+
 /// Real stderr: the LFS hooks' own message, dash's (Debian/Ubuntu `sh`)
 /// missing-command form, and a present git-lfs reporting a missing object,
 /// whose "no such file or directory" is about the object, not the binary.
@@ -664,6 +766,29 @@ fn run_command_with_timeout_returns_structured_timeout_failure() {
 }
 
 #[test]
+fn git_timeout_reason_survives_nonempty_output() {
+    let error = git_timeout_error(
+        "git -C /repo pull --rebase --no-prune -- origin refs/heads/main",
+        Duration::from_secs(300),
+        None,
+        b"Updating abc123..def456\n".to_vec(),
+        b"Receiving objects: 45%\r".to_vec(),
+    );
+    let ErrorKind::Git(failure) = error.kind() else {
+        panic!("expected structured timeout: {error:?}");
+    };
+    assert_eq!(failure.id(), GitFailureId::Timeout);
+    assert_eq!(
+        failure.detail(),
+        Some(
+            "after 300 seconds without output or progress (set GITCOMET_GIT_COMMAND_TIMEOUT_SECS to override)"
+        )
+    );
+    assert_eq!(failure.stdout(), b"Updating abc123..def456\n");
+    assert_eq!(failure.stderr(), b"Receiving objects: 45%\r");
+}
+
+#[test]
 fn git_command_wait_poll_is_short_for_fast_commands_and_capped_for_slow_ones() {
     assert_eq!(
         git_command_wait_poll(Duration::from_micros(500), Duration::from_secs(1)),
@@ -715,10 +840,8 @@ fn checkout_that_brings_in_lfs_stays_alive_through_its_progress_file() {
     let dir = tempfile::tempdir().unwrap();
     let workdir = dir.path();
     let git = |args: &[&str]| {
-        let mut cmd = Command::new("git");
-        cmd.env("GIT_CONFIG_GLOBAL", "/dev/null")
-            .env("GIT_CONFIG_NOSYSTEM", "1")
-            .args(["-c", "user.name=t", "-c", "user.email=t@t", "-C"])
+        let mut cmd = crate::test_support::git_command();
+        cmd.args(["-c", "user.name=t", "-c", "user.email=t@t", "-C"])
             .arg(workdir)
             .args(args);
         assert!(cmd.status().unwrap().success(), "{args:?}");
@@ -738,10 +861,7 @@ fn checkout_that_brings_in_lfs_stays_alive_through_its_progress_file() {
          echo \"download $i/6 1/1 a.bin\" >> \"$GIT_LFS_PROGRESS\"; fi; sleep 0.25; done; cat",
     ]);
     git(&["config", "filter.lfs.required", "true"]);
-    let repo = crate::repo::GixRepo::new(
-        workdir.to_path_buf(),
-        gix::open(workdir).unwrap().into_sync(),
-    );
+    let repo = crate::test_support::open_repo(workdir);
     let worktree = dir.path().join("wt");
     let worktree_arg = worktree.to_str().unwrap();
     for (label, args, checked_out) in [
@@ -753,9 +873,7 @@ fn checkout_that_brings_in_lfs_stays_alive_through_its_progress_file() {
         ("git checkout", vec!["checkout", "-q", "assets"], workdir),
     ] {
         let mut cmd = repo.git_workdir_cmd();
-        cmd.env("GIT_CONFIG_GLOBAL", "/dev/null")
-            .env("GIT_CONFIG_NOSYSTEM", "1")
-            .args(&args);
+        cmd.args(&args);
         run_command_with_timeout(cmd, label, Duration::from_millis(600), None)
             .unwrap_or_else(|e| panic!("progress lines keep `{label}` alive: {e}"));
         assert_eq!(
@@ -768,7 +886,7 @@ fn checkout_that_brings_in_lfs_stays_alive_through_its_progress_file() {
 #[test]
 fn submodule_and_worktree_checkouts_may_transfer_lfs_content() {
     for args in [["submodule", "update"], ["worktree", "add"]] {
-        let mut cmd = Command::new("git");
+        let mut cmd = gitcomet_core::test_support::git_fixture::git_command();
         cmd.args(args);
         assert!(may_transfer_lfs_content(&cmd), "{args:?}");
     }
@@ -809,15 +927,18 @@ fn lfs_progress_monitor_reports_lines_and_keeps_the_command_alive() {
         sender.send(event).unwrap();
     });
     let liveness = LivenessClock::new();
-    let mut cmd = Command::new("git");
+    let mut cmd = gitcomet_core::test_support::git_fixture::git_command();
     cmd.args(["lfs", "pull"]);
     let mut monitor = LfsProgressMonitor::start(&mut cmd, Some(&context), &liveness)
         .expect("lfs commands are monitored");
     thread::sleep(Duration::from_millis(40));
+    let written = Instant::now();
     std::fs::write(&monitor._path, "download 1/2 500/1000 a.bin\n").unwrap();
     monitor.stop();
+    // Bounded by the time since the write, not a fixed 40 ms: a loaded runner
+    // can stall between the touch and this check. The clock keeps whole ms.
     assert!(
-        liveness.idle() < Duration::from_millis(40),
+        liveness.idle() <= written.elapsed() + Duration::from_millis(1),
         "a line counts as activity"
     );
     let events: Vec<_> = receiver.try_iter().collect();
@@ -829,7 +950,7 @@ fn lfs_progress_monitor_reports_lines_and_keeps_the_command_alive() {
         "{events:?}"
     );
 
-    let mut status = Command::new("git");
+    let mut status = gitcomet_core::test_support::git_fixture::git_command();
     status.arg("status");
     assert!(LfsProgressMonitor::start(&mut status, None, &liveness).is_none());
 }
@@ -1045,27 +1166,27 @@ fn parse_remote_branches_handles_pull_ref_prefixes_from_gitpython_fixture() {
 
 #[test]
 fn command_may_require_auth_detects_auth_related_git_commands() {
-    let mut push = Command::new("git");
+    let mut push = gitcomet_core::test_support::git_fixture::git_command();
     push.args(["-C", "/tmp/repo", "push", "origin", "main"]);
     assert!(command_may_require_auth(&push));
 
-    let mut fetch = Command::new("git");
+    let mut fetch = gitcomet_core::test_support::git_fixture::git_command();
     fetch.args(["-c", "color.ui=false", "fetch", "--all"]);
     assert!(command_may_require_auth(&fetch));
 
-    let mut ls_remote = Command::new("git");
+    let mut ls_remote = gitcomet_core::test_support::git_fixture::git_command();
     ls_remote.args(["ls-remote", "origin"]);
     assert!(command_may_require_auth(&ls_remote));
 
-    let mut commit = Command::new("git");
+    let mut commit = gitcomet_core::test_support::git_fixture::git_command();
     commit.args(["commit", "-m", "msg"]);
     assert!(command_may_require_auth(&commit));
 
-    let mut status = Command::new("git");
+    let mut status = gitcomet_core::test_support::git_fixture::git_command();
     status.args(["-C", "/tmp/repo", "status", "--short"]);
     assert!(!command_may_require_auth(&status));
 
-    let mut log = Command::new("git");
+    let mut log = gitcomet_core::test_support::git_fixture::git_command();
     log.args(["log", "--oneline", "-n", "1"]);
     assert!(!command_may_require_auth(&log));
 }
@@ -1083,7 +1204,7 @@ fn command_may_require_auth_covers_ssh_signing_commands() {
         vec!["commit", "--no-verify", "-F", "MERGE_MSG"],
         vec!["am", "--3way"],
     ] {
-        let mut cmd = Command::new("git");
+        let mut cmd = gitcomet_core::test_support::git_fixture::git_command();
         cmd.arg("-C").arg("/tmp/repo").args(&args);
         assert!(
             command_may_require_auth(&cmd),
@@ -1185,13 +1306,13 @@ fn repository_git_commands_do_not_start_auto_maintenance() {
     let repo = tempfile::tempdir().expect("tempdir");
     let trace_dir = tempfile::tempdir().expect("trace tempdir");
     let trace = trace_dir.path().join("trace2.json");
-    run_git_test_setup(repo.path(), &["init", "--quiet"]);
+    git_success(repo.path(), &["init", "--quiet"]);
     for (key, value) in [
         ("user.name", "Test"),
         ("user.email", "test@example.com"),
         ("commit.gpgsign", "false"),
     ] {
-        run_git_test_setup(repo.path(), &["config", key, value]);
+        git_success(repo.path(), &["config", key, value]);
     }
 
     let output = git_workdir_cmd_for(repo.path())
@@ -1215,8 +1336,8 @@ fn repository_git_commands_do_not_start_auto_maintenance() {
 #[test]
 fn repository_config_cannot_reenable_the_ext_protocol() {
     let repo = tempfile::tempdir().expect("tempdir");
-    run_git_test_setup(repo.path(), &["init", "--quiet"]);
-    run_git_test_setup(repo.path(), &["config", "protocol.ext.allow", "always"]);
+    git_success(repo.path(), &["init", "--quiet"]);
+    git_success(repo.path(), &["config", "protocol.ext.allow", "always"]);
 
     let mut cmd = git_workdir_cmd_for(repo.path());
     // Git's refusal text is translated; assert on the exit status.
@@ -1235,8 +1356,9 @@ fn repository_config_cannot_reenable_the_ext_protocol() {
 #[test]
 fn configure_git_auth_prompt_sets_username_password_env() {
     let askpass = create_askpass_script().expect("askpass script creation");
-    let mut cmd = Command::new("git");
+    let mut cmd = gitcomet_core::test_support::git_fixture::git_command();
     let auth = PromptAuth::Explicit(StagedGitAuth {
+        challenge: None,
         kind: GitAuthKind::UsernamePassword,
         username: Some("alice".to_string()),
         secret: "secret-token".to_string(),
@@ -1297,9 +1419,10 @@ fn configure_git_auth_prompt_sets_username_password_env() {
 #[test]
 fn configure_git_auth_prompt_sets_passphrase_env_and_removes_username() {
     let askpass = create_askpass_script().expect("askpass script creation");
-    let mut cmd = Command::new("git");
+    let mut cmd = gitcomet_core::test_support::git_fixture::git_command();
     cmd.env(GITCOMET_AUTH_USERNAME_ENV, "legacy-user");
     let auth = PromptAuth::Explicit(StagedGitAuth {
+        challenge: None,
         kind: GitAuthKind::Passphrase,
         username: None,
         secret: "ssh-passphrase".to_string(),
@@ -1321,7 +1444,7 @@ fn configure_git_auth_prompt_sets_passphrase_env_and_removes_username() {
 #[test]
 fn configure_git_auth_prompt_sets_cached_passphrase_env_and_removes_username() {
     let askpass = create_askpass_script().expect("askpass script creation");
-    let mut cmd = Command::new("git");
+    let mut cmd = gitcomet_core::test_support::git_fixture::git_command();
     cmd.env(GITCOMET_AUTH_USERNAME_ENV, "legacy-user");
     let auth = PromptAuth::CachedPassphrases(vec![
         CachedPassphraseEntry {
@@ -1367,9 +1490,10 @@ fn configure_git_auth_prompt_sets_cached_passphrase_env_and_removes_username() {
 #[test]
 fn configure_git_auth_prompt_sets_host_verification_env_and_removes_username() {
     let askpass = create_askpass_script().expect("askpass script creation");
-    let mut cmd = Command::new("git");
+    let mut cmd = gitcomet_core::test_support::git_fixture::git_command();
     cmd.env(GITCOMET_AUTH_USERNAME_ENV, "legacy-user");
     let auth = PromptAuth::Explicit(StagedGitAuth {
+        challenge: None,
         kind: GitAuthKind::HostVerification,
         username: None,
         secret: "yes".to_string(),
@@ -1391,7 +1515,7 @@ fn configure_git_auth_prompt_sets_host_verification_env_and_removes_username() {
 #[test]
 fn configure_git_auth_prompt_without_staged_auth_clears_auth_env() {
     let askpass = create_askpass_script().expect("askpass script creation");
-    let mut cmd = Command::new("git");
+    let mut cmd = gitcomet_core::test_support::git_fixture::git_command();
     cmd.env(GITCOMET_AUTH_KIND_ENV, "legacy-kind");
     cmd.env(GITCOMET_AUTH_USERNAME_ENV, "legacy-user");
     cmd.env(GITCOMET_AUTH_SECRET_ENV, "legacy-secret");
@@ -1458,6 +1582,27 @@ fn run_git_with_stdin_capture_respects_cancellation() {
         },
         Ok(_) => panic!("expected cancellation error, but command succeeded"),
     }
+}
+
+#[test]
+fn command_spawn_error_preserves_the_executable_and_io_cause() {
+    let directory = tempfile::tempdir().unwrap();
+    let executable = directory.path().join("missing-git");
+    let error = run_git_raw_output(Command::new(&executable), "git status").unwrap_err();
+
+    assert!(matches!(
+        error.kind(),
+        ErrorKind::Io(io::ErrorKind::NotFound)
+    ));
+    let source = std::error::Error::source(&error)
+        .unwrap()
+        .downcast_ref::<io::Error>()
+        .unwrap();
+    assert_eq!(source.kind(), io::ErrorKind::NotFound);
+    assert!(source.raw_os_error().is_some());
+    let context = error.context().unwrap();
+    assert_eq!(context.operation(), "git status");
+    assert_eq!(context.path(), Some(executable.as_path()));
 }
 
 #[test]

@@ -34,11 +34,6 @@ pub(super) struct PickerRowMenu {
 #[derive(Clone)]
 pub(super) enum PickerRowMenuTarget {
     Repo(repo_picker::RepoPickerEntry),
-    FileHistoryCommit {
-        repo_id: RepoId,
-        commit_id: CommitId,
-        path: std::path::PathBuf,
-    },
     /// A row of the branch badge's checkout picker. Reuses the menu the branch's
     /// sidebar row opens, so the two offer the same actions by construction.
     Branch {
@@ -59,11 +54,6 @@ impl PickerRowMenuTarget {
     fn model(&self, this: &PopoverHost, cx: &gpui::Context<PopoverHost>) -> ContextMenuModel {
         match self {
             Self::Repo(entry) => this.repo_picker_row_menu_model(entry),
-            Self::FileHistoryCommit {
-                repo_id,
-                commit_id,
-                path,
-            } => context_menu::file_history_commit::model(this, *repo_id, commit_id, path),
             Self::Branch { .. } | Self::Worktree { .. } => self
                 .popover_kind(this)
                 .and_then(|kind| this.context_menu_model(&kind, cx))
@@ -74,7 +64,7 @@ impl PickerRowMenuTarget {
     /// The popover whose menu this row borrows, for the targets that borrow one.
     fn popover_kind(&self, this: &PopoverHost) -> Option<PopoverKind> {
         match self {
-            Self::Repo(_) | Self::FileHistoryCommit { .. } => None,
+            Self::Repo(_) => None,
             Self::Branch { repo_id, row } => match row {
                 branch_picker::BranchPickerNavTarget::Ref(name) => Some(PopoverKind::BranchMenu {
                     repo_id: *repo_id,
@@ -93,20 +83,7 @@ impl PickerRowMenuTarget {
             },
             Self::Worktree { repo_id, row } => match row {
                 worktree_badge_picker::WorktreeBadgeRow::Worktree(path) => {
-                    // The sidebar's menu names the branch checked out in the
-                    // worktree, so look it up the same way its rows do.
-                    let branch = this
-                        .state
-                        .repos
-                        .iter()
-                        .find(|repo| repo.id == *repo_id)
-                        .and_then(|repo| match &repo.worktrees {
-                            Loadable::Ready(worktrees) => worktrees
-                                .iter()
-                                .find(|worktree| &worktree.path == path)
-                                .and_then(|worktree| worktree.branch.clone()),
-                            _ => None,
-                        });
+                    let branch = worktree_picker::worktree_branch_for_path(this, *repo_id, path);
                     Some(PopoverKind::worktree(
                         *repo_id,
                         WorktreePopoverKind::Menu {
@@ -128,7 +105,6 @@ impl PickerRowMenuTarget {
     pub(super) fn has_menu(&self, this: &PopoverHost) -> bool {
         match self {
             Self::Repo(entry) => !this.repo_picker_row_menu_model(entry).items.is_empty(),
-            Self::FileHistoryCommit { .. } => true,
             Self::Branch { .. } | Self::Worktree { .. } => self.popover_kind(this).is_some(),
         }
     }
@@ -142,13 +118,6 @@ impl PickerRowMenuTarget {
                 .0
                 .iter()
                 .position(|candidate| candidate == entry),
-            Self::FileHistoryCommit { commit_id, .. } => {
-                let rows = file_history::cached(this, query);
-                rows.layout
-                    .item_indices
-                    .iter()
-                    .position(|ix| rows.payloads.get(*ix) == Some(commit_id))
-            }
             Self::Branch { row, .. } => branch_picker::nav_targets(this, query)
                 .iter()
                 .position(|candidate| candidate == row),
@@ -165,7 +134,6 @@ impl PickerRowMenuTarget {
     /// entries that take you somewhere else are the exceptions.
     fn keeps_picker_open(&self, action: &ContextMenuAction) -> bool {
         match self {
-            Self::FileHistoryCommit { .. } => matches!(action, ContextMenuAction::CopyText { .. }),
             Self::Repo(_) => matches!(
                 action,
                 ContextMenuAction::PinRepository { .. }
@@ -246,6 +214,8 @@ pub(super) fn open(
     position: gpui::Point<gpui::Pixels>,
     cx: &mut gpui::Context<PopoverHost>,
 ) {
+    let kind = target.popover_kind(this);
+    this.prepare_worktree_menu_location(kind.as_ref(), cx);
     this.picker_row_menu = Some(PickerRowMenu {
         target,
         position,
@@ -278,6 +248,7 @@ pub(super) fn close(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
         // whatever the arrow keys were on alone.
         return;
     };
+    this.prepare_worktree_menu_location(None, cx);
     // The rows can have been re-filtered, re-sorted or closed out from under the
     // menu while it floated over them, so look the invoking row up again rather
     // than trusting the index it had when the menu opened. Gone means gone: a
@@ -311,6 +282,7 @@ pub(super) fn close_on_query_change(
 /// this drops the selection: pinning, closing and forgetting all reorder the
 /// rows, so the invoking row's index no longer names the same repository.
 fn close_for_action(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>) {
+    this.prepare_worktree_menu_location(None, cx);
     this.picker_row_menu = None;
     if let Some(index) = this.open_picker_selected_index() {
         *index = None;
@@ -434,17 +406,18 @@ pub(super) fn layer(
                 if !disabled {
                     nav_ix += 1;
                 }
-                let icon_slot = match icon {
-                    Some(icon) => components::ContextMenuIconSlot::Icon(icon),
-                    None if reserve_icon_column => components::ContextMenuIconSlot::Reserved,
-                    None => components::ContextMenuIconSlot::None,
-                };
+                let (icon_slot, tone) = crate::view::menu_presentation::entry_presentation(
+                    label.as_ref(),
+                    icon,
+                    reserve_icon_column,
+                );
                 list = list.child(
                     components::ContextMenuEntry::new(
                         ("picker_row_action", ix),
                         components::ContextMenuText::new(label),
                     )
                     .icon(icon_slot)
+                    .tone(tone)
                     .disabled(disabled)
                     .selected(selected)
                     .on_select(theme, ui_scale_percent, cx, move |this, _e, window, cx| {

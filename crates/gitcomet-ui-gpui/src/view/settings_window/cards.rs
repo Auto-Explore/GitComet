@@ -5,6 +5,11 @@
 use super::*;
 use crate::kit::interaction::{self as controls, ControlInteractionExt as _};
 
+/// What the master switch hides, and why it is on by default.
+const HIDDEN_REFS_TOOLTIP: &str = "Refs that coding agents, review systems and Git's own bookkeeping \
+     write next to your branches.\nHiding them keeps All branches readable, and new ones no longer \
+     rebuild the history index.";
+
 impl SettingsWindowView {
     pub(super) fn category_card(
         &mut self,
@@ -40,7 +45,10 @@ impl SettingsWindowView {
     ) -> Stateful<gpui::Div> {
         let card = self.card("settings_window_general", "General", theme);
         let card = self.general_integration_rows(card, theme, cx);
-        self.general_date_time_rows(card, theme, cx)
+        let card = self.general_date_time_rows(card, theme, cx);
+        #[cfg(target_os = "windows")]
+        let card = self.graphics_renderer_rows(card, theme, cx);
+        card
     }
 
     fn general_integration_rows(
@@ -161,9 +169,14 @@ impl SettingsWindowView {
             let browse_button =
                 components::Button::new("settings_window_external_code_editor_browse", "Browse")
                     .style(components::ButtonStyle::Outlined)
-                    .on_click(theme, cx, |_this, _e, window, cx| {
+                    .on_click(theme, cx, |this, _e, window, cx| {
                         let view = cx.weak_entity();
-                        let rx = cx.prompt_for_paths(custom_external_editor_path_prompt_options());
+                        let directory = crate::view::path_prompt::folder_of_existing_entry(
+                            this.external_editor_custom_path_input.read(cx).text(),
+                        );
+                        let rx = cx.prompt_for_paths(custom_external_editor_path_prompt_options(
+                            directory,
+                        ));
 
                         window
                             .spawn(cx, async move |cx| {
@@ -383,15 +396,15 @@ impl SettingsWindowView {
                 }),
             );
 
-        let terminal_action_bar_row = self
+        let terminal_button_row = self
             .summary_row(
-                "settings_window_terminal_action_bar",
-                "Action bar terminal button opens",
+                "settings_window_terminal_button",
+                "Terminal button opens",
                 self.terminal_preferences
-                    .action_bar_terminal_target
+                    .terminal_button_target
                     .label()
                     .into(),
-                self.expanded_section == Some(SettingsSection::TerminalActionBar),
+                self.expanded_section == Some(SettingsSection::TerminalButton),
                 theme,
             )
             .border_color(no_separator)
@@ -399,7 +412,7 @@ impl SettingsWindowView {
                 false,
                 controls::ControlActivation::Action,
                 cx.listener(|this, _e: &ClickEvent, _window, cx| {
-                    this.toggle_section(SettingsSection::TerminalActionBar, cx);
+                    this.toggle_section(SettingsSection::TerminalButton, cx);
                 }),
             );
 
@@ -587,8 +600,8 @@ impl SettingsWindowView {
             }
         }
 
-        terminal_card = terminal_card.child(terminal_action_bar_row);
-        if self.expanded_section == Some(SettingsSection::TerminalActionBar) {
+        terminal_card = terminal_card.child(terminal_button_row);
+        if self.expanded_section == Some(SettingsSection::TerminalButton) {
             terminal_card = terminal_card
                 .child(
                     div()
@@ -597,7 +610,7 @@ impl SettingsWindowView {
                         .text_size(theme.ui_text(12.0))
                         .text_color(theme.colors.foreground.secondary)
                         .child(
-                            "Choose what the action bar terminal button opens. Global shortcuts for each can be configured separately.",
+                            "Choose what the terminal button opens. Global shortcuts for each can be configured separately.",
                         ),
                 )
                 .child(
@@ -608,17 +621,17 @@ impl SettingsWindowView {
                         .gap_1()
                         .child(
                             self.option_row(
-                                "settings_window_terminal_action_bar_embedded",
-                                ActionBarTerminalTarget::Embedded.label(),
+                                "settings_window_terminal_button_embedded",
+                                TerminalButtonTarget::Embedded.label(),
                                 Some("Toggle the embedded terminal panel".into()),
-                                self.terminal_preferences.action_bar_terminal_target
-                                    == ActionBarTerminalTarget::Embedded,
+                                self.terminal_preferences.terminal_button_target
+                                    == TerminalButtonTarget::Embedded,
                                 theme,
                             )
                             .on_activate(false, controls::ControlActivation::Action, cx.listener(
                                 |this, _e: &ClickEvent, _window, cx| {
-                                    this.set_action_bar_terminal_target(
-                                        ActionBarTerminalTarget::Embedded,
+                                    this.set_terminal_button_target(
+                                        TerminalButtonTarget::Embedded,
                                         cx,
                                     );
                                 },
@@ -626,17 +639,17 @@ impl SettingsWindowView {
                         )
                         .child(
                             self.option_row(
-                                "settings_window_terminal_action_bar_external",
-                                ActionBarTerminalTarget::External.label(),
+                                "settings_window_terminal_button_external",
+                                TerminalButtonTarget::External.label(),
                                 Some("Launch the external terminal".into()),
-                                self.terminal_preferences.action_bar_terminal_target
-                                    == ActionBarTerminalTarget::External,
+                                self.terminal_preferences.terminal_button_target
+                                    == TerminalButtonTarget::External,
                                 theme,
                             )
                             .on_activate(false, controls::ControlActivation::Action, cx.listener(
                                 |this, _e: &ClickEvent, _window, cx| {
-                                    this.set_action_bar_terminal_target(
-                                        ActionBarTerminalTarget::External,
+                                    this.set_terminal_button_target(
+                                        TerminalButtonTarget::External,
                                         cx,
                                     );
                                 },
@@ -702,25 +715,31 @@ impl SettingsWindowView {
 
         let update_check_locked = crate::view::update_checks_disabled_by_environment();
         let update_check_effective = self.check_for_updates_on_startup && !update_check_locked;
-        let mut update_check_row = self
-            .toggle_row(
-                "settings_window_check_for_updates_on_startup",
-                "Automatically check for updates on startup",
+        let update_check_id = "settings_window_check_for_updates_on_startup";
+        let update_check_label = "Automatically check for updates on startup";
+        let update_check_row = if update_check_locked {
+            self.disabled_toggle_row(
+                update_check_id,
+                update_check_label,
                 update_check_effective,
                 theme,
             )
-            .border_color(no_separator);
-        if update_check_locked {
-            update_check_row = update_check_row.opacity(0.6).cursor(CursorStyle::Arrow);
         } else {
-            update_check_row = update_check_row.on_activate(
+            self.toggle_row(
+                update_check_id,
+                update_check_label,
+                update_check_effective,
+                theme,
+            )
+            .on_activate(
                 false,
                 controls::ControlActivation::Action,
                 cx.listener(|this, _e: &ClickEvent, _window, cx| {
                     this.set_check_for_updates_on_startup(!this.check_for_updates_on_startup, cx);
                 }),
-            );
+            )
         }
+        .border_color(no_separator);
 
         let mut security_privacy_card = self
             .card(
@@ -870,7 +889,7 @@ impl SettingsWindowView {
             .summary_row(
                 "settings_window_file_list_layout",
                 "Changed-file lists",
-                self.file_list_layout.settings_label().into(),
+                self.file_list_layout.label().into(),
                 self.expanded_section == Some(SettingsSection::FileListLayout),
                 theme,
             )
@@ -880,6 +899,23 @@ impl SettingsWindowView {
                 controls::ControlActivation::Action,
                 cx.listener(|this, _e: &ClickEvent, _window, cx| {
                     this.toggle_section(SettingsSection::FileListLayout, cx);
+                }),
+            );
+
+        let file_list_sort_row = self
+            .summary_row(
+                "settings_window_file_list_sort",
+                "Changed-file sort",
+                self.file_list_sort.label().into(),
+                self.expanded_section == Some(SettingsSection::FileListSort),
+                theme,
+            )
+            .border_color(no_separator)
+            .on_activate(
+                false,
+                controls::ControlActivation::Action,
+                cx.listener(|this, _e: &ClickEvent, _window, cx| {
+                    this.toggle_section(SettingsSection::FileListSort, cx);
                 }),
             );
 
@@ -950,6 +986,40 @@ impl SettingsWindowView {
                 "settings_window_file_list_layout_scrollbar",
                 self.file_list_layout_scroll.clone(),
                 FILE_LIST_LAYOUT_OPTIONS.len(),
+                SETTINGS_DROPDOWN_DETAIL_ROW_HEIGHT_PX,
+                SETTINGS_DROPDOWN_DETAIL_LIST_EXTRA_HEIGHT_PX,
+                list,
+                theme,
+            ));
+        }
+
+        change_tracking_card = change_tracking_card.child(file_list_sort_row);
+
+        if self.expanded_section == Some(SettingsSection::FileListSort) {
+            let list = uniform_list(
+                "settings_window_file_list_sort_list",
+                FILE_LIST_SORT_OPTIONS.len(),
+                cx.processor(Self::render_file_list_sort_option_rows),
+            )
+            .w_full()
+            .min_w(px(0.0))
+            .h_full()
+            .min_h(px(0.0))
+            .track_scroll(&self.file_list_sort_scroll)
+            .on_scroll_wheel({
+                let scroll = self.file_list_sort_scroll.clone();
+                move |event, window, cx| {
+                    if uniform_list_should_stop_scroll_propagation(&scroll, event, window) {
+                        cx.stop_propagation();
+                    }
+                }
+            });
+            let list = restrict_scroll_to_vertical_axis(list).into_any_element();
+            change_tracking_card = change_tracking_card.child(self.dropdown_list_container(
+                "settings_window_file_list_sort_list_container",
+                "settings_window_file_list_sort_scrollbar",
+                self.file_list_sort_scroll.clone(),
+                FILE_LIST_SORT_OPTIONS.len(),
                 SETTINGS_DROPDOWN_DETAIL_ROW_HEIGHT_PX,
                 SETTINGS_DROPDOWN_DETAIL_LIST_EXTRA_HEIGHT_PX,
                 list,
@@ -1070,9 +1140,47 @@ impl SettingsWindowView {
                 }),
             );
 
-        let mut diff_card = self
-            .card("settings_window_diff_card", "Diff", theme)
-            .child(diff_content_mode_row);
+        let mut diff_card = self.card("settings_window_diff_card", "Diff", theme).child(
+            self.summary_row(
+                "settings_window_diff_engine",
+                "Diff engine",
+                self.diff_engine.label().into(),
+                self.expanded_section == Some(SettingsSection::DiffEngine),
+                theme,
+            )
+            .on_activate(
+                false,
+                controls::ControlActivation::Action,
+                cx.listener(|this, _: &ClickEvent, _, cx| {
+                    this.toggle_section(SettingsSection::DiffEngine, cx)
+                }),
+            ),
+        );
+        if self.expanded_section == Some(SettingsSection::DiffEngine) {
+            for engine in DiffEngine::ALL {
+                let detail = match engine {
+                    DiffEngine::LineByLine => "Compare changed lines and words",
+                    DiffEngine::Difftastic => "Compare syntax; works in Split and Inline views",
+                };
+                diff_card = diff_card.child(
+                    self.setting_option_row(
+                        format!("settings_window_diff_engine_{}", engine.key()),
+                        engine.label(),
+                        Some(detail.into()),
+                        self.diff_engine == engine,
+                        theme,
+                    )
+                    .on_activate(
+                        false,
+                        controls::ControlActivation::Action,
+                        cx.listener(move |this, _: &ClickEvent, _, cx| {
+                            this.set_diff_engine(engine, cx)
+                        }),
+                    ),
+                );
+            }
+        }
+        diff_card = diff_card.child(diff_content_mode_row);
 
         if self.expanded_section == Some(SettingsSection::DiffContentMode) {
             let list = uniform_list(
@@ -1370,35 +1478,12 @@ impl SettingsWindowView {
                 self.history_show_tags,
                 theme,
             )
-            .border_color(if self.history_show_tags {
-                settings_row_separator_color(theme)
-            } else {
-                no_separator
-            })
-            .on_activate(
-                false,
-                controls::ControlActivation::Action,
-                cx.listener(|this, _e: &ClickEvent, _window, cx| {
-                    this.set_history_show_tags(!this.history_show_tags, cx);
-                }),
-            );
-
-        let auto_fetch_tags_row = self
-            .summary_row(
-                "settings_window_git_log_tag_fetch_mode",
-                "Automatically fetch tags",
-                git_log_tag_fetch_mode_label(self.history_tag_fetch_mode).into(),
-                self.expanded_section == Some(SettingsSection::GitLogTagFetch),
-                theme,
-            )
             .border_color(no_separator)
             .on_activate(
                 false,
                 controls::ControlActivation::Action,
                 cx.listener(|this, _e: &ClickEvent, _window, cx| {
-                    if this.history_show_tags {
-                        this.toggle_section(SettingsSection::GitLogTagFetch, cx);
-                    }
+                    this.set_history_show_tags(!this.history_show_tags, cx);
                 }),
             );
 
@@ -1491,6 +1576,7 @@ impl SettingsWindowView {
             git_log_card = git_log_card.child(options);
         }
 
+        git_log_card = self.git_log_hidden_refs_rows(git_log_card, theme, cx);
         git_log_card = git_log_card.child(history_columns_row);
 
         if self.expanded_section == Some(SettingsSection::GitLogColumns) {
@@ -1600,9 +1686,10 @@ impl SettingsWindowView {
                             false,
                             controls::ControlActivation::Action,
                             cx.listener(|this, _e: &ClickEvent, _window, cx| {
-                                this.update_main_windows(cx, |view, _window, cx| {
-                                    view.reset_history_column_widths(cx);
-                                });
+                                this.broadcast_preference(
+                                    PreferenceChange::ResetHistoryColumnWidths,
+                                    cx,
+                                );
                                 cx.notify();
                             }),
                         ),
@@ -1610,65 +1697,188 @@ impl SettingsWindowView {
             );
         }
 
+        git_log_card = git_log_card.child(
+            self.toggle_row(
+                "settings_window_git_log_show_graph_gradient",
+                "Show graph gradient",
+                self.history_show_graph_gradient,
+                theme,
+            )
+            .on_activate(
+                false,
+                controls::ControlActivation::Action,
+                cx.listener(|this, _e: &ClickEvent, _window, cx| {
+                    this.set_history_show_graph_gradient(!this.history_show_graph_gradient, cx);
+                }),
+            ),
+        );
         git_log_card = git_log_card.child(highlight_commit_chain_row);
         git_log_card = git_log_card.child(files_follow_selected_commit_row);
         git_log_card = git_log_card.child(relative_dates_row);
         git_log_card = git_log_card.child(verify_commit_signatures_row);
-        git_log_card = git_log_card.child(show_history_tags_row);
-        if self.history_show_tags {
-            git_log_card = git_log_card.child(auto_fetch_tags_row);
+        git_log_card.child(show_history_tags_row)
+    }
 
-            if self.expanded_section == Some(SettingsSection::GitLogTagFetch) {
-                git_log_card = git_log_card.child(
-                    self.detail_container(
-                        "settings_window_git_log_tag_fetch_container",
-                        theme,
-                    )
-                    .child(
-                        self.option_row(
-                            "settings_window_git_log_tag_fetch_mode_activation",
-                            "On repository activation",
-                            Some(
-                                "Fetch local and remote tags in the background when a repository becomes active."
-                                    .into(),
-                            ),
-                            self.history_tag_fetch_mode
-                                == GitLogTagFetchMode::OnRepositoryActivation,
-                            theme,
-                        )
-                        .on_activate(false, controls::ControlActivation::Action, cx.listener(
-                            |this, _e: &ClickEvent, _window, cx| {
-                                this.set_history_tag_fetch_mode(
-                                    GitLogTagFetchMode::OnRepositoryActivation,
-                                    cx,
-                                );
-                            },
-                        )),
-                    )
-                    .child(
-                        self.option_row(
-                            "settings_window_git_log_tag_fetch_mode_disabled",
-                            "Disabled",
-                            Some(
-                                "Skip automatic tag fetching on repository activation."
-                                    .into(),
-                            ),
-                            self.history_tag_fetch_mode == GitLogTagFetchMode::Disabled,
-                            theme,
-                        )
-                        .on_activate(false, controls::ControlActivation::Action, cx.listener(
-                            |this, _e: &ClickEvent, _window, cx| {
-                                this.set_history_tag_fetch_mode(
-                                    GitLogTagFetchMode::Disabled,
-                                    cx,
-                                );
-                            },
-                        )),
-                    ),
-                );
-            }
+    /// The "Hidden refs" summary row and, expanded, its presets and custom
+    /// namespaces. A preset the product always hides shows locked on.
+    fn git_log_hidden_refs_rows(
+        &self,
+        card: Stateful<gpui::Div>,
+        theme: AppTheme,
+        cx: &mut gpui::Context<Self>,
+    ) -> Stateful<gpui::Div> {
+        use gitcomet_state::model::PresetVisibility;
+
+        let presets = gitcomet_core::identity::current().history_ref_presets();
+        let settings = &self.hidden_ref_settings;
+        let expanded = self.expanded_section == Some(SettingsSection::GitLogHiddenRefs);
+        let card = card.child(
+            self.summary_row(
+                "settings_window_git_log_hidden_refs",
+                "Hidden refs",
+                hidden_refs_summary(settings, presets, &self.fixed_hidden_refs),
+                expanded,
+                theme,
+            )
+            .on_activate(
+                false,
+                controls::ControlActivation::Action,
+                cx.listener(|this, _e: &ClickEvent, _window, cx| {
+                    this.toggle_section(SettingsSection::GitLogHiddenRefs, cx);
+                }),
+            ),
+        );
+        if !expanded {
+            return card;
         }
-        git_log_card
+
+        let mut detail = self
+            .detail_container("settings_window_git_log_hidden_refs_container", theme)
+            .child(
+                self.toggle_row(
+                    "settings_window_git_log_hidden_refs_enabled",
+                    "Hide tool and bookkeeping refs",
+                    settings.enabled,
+                    theme,
+                )
+                .gitcomet_tooltip(theme, HIDDEN_REFS_TOOLTIP.into())
+                .on_activate(
+                    false,
+                    controls::ControlActivation::Action,
+                    cx.listener(|this, _e: &ClickEvent, _window, cx| {
+                        let mut next = this.hidden_ref_settings.clone();
+                        next.enabled = !next.enabled;
+                        this.set_hidden_ref_settings(next, cx);
+                    }),
+                ),
+            );
+        // Fixed presets stay listed with the switch off: the product still
+        // hides them, and the summary counts them.
+        for preset in presets {
+            let id = format!("settings_window_git_log_hidden_ref_preset_{}", preset.id);
+            let label = format!("{} ({})", preset.label, preset.prefixes.join(", "));
+            let tooltip = SharedString::from(preset.description);
+            let hidden = match settings.preset_visibility(preset, &self.fixed_hidden_refs) {
+                PresetVisibility::Fixed => {
+                    detail = detail.child(
+                        self.disabled_toggle_row(id, label, true, theme)
+                            .gitcomet_tooltip(theme, tooltip),
+                    );
+                    continue;
+                }
+                _ if !settings.enabled => continue,
+                PresetVisibility::Hidden => true,
+                PresetVisibility::Shown => false,
+            };
+            detail = detail.child(
+                self.toggle_row(id, label, hidden, theme)
+                    .gitcomet_tooltip(theme, tooltip)
+                    .on_activate(
+                        false,
+                        controls::ControlActivation::Action,
+                        cx.listener(move |this, _e: &ClickEvent, _window, cx| {
+                            this.set_hidden_ref_preset(preset, !hidden, cx);
+                        }),
+                    ),
+            );
+        }
+        if settings.enabled {
+            detail = self.hidden_ref_custom_namespace_rows(detail, theme, cx);
+        }
+        card.child(
+            detail.child(
+                div()
+                    .px_2()
+                    .pb_2()
+                    .text_size(theme.ui_text(12.0))
+                    .text_color(theme.colors.foreground.secondary)
+                    .child(
+                        "Refs in these namespaces do not start the All branches walk. \
+                         Commits that a shown branch reaches stay visible.",
+                    ),
+            ),
+        )
+    }
+
+    /// The user's own namespaces, then the field that adds one.
+    fn hidden_ref_custom_namespace_rows(
+        &self,
+        mut detail: Stateful<gpui::Div>,
+        theme: AppTheme,
+        cx: &mut gpui::Context<Self>,
+    ) -> Stateful<gpui::Div> {
+        // Keyed by the prefix, so removing one never hands its row state on.
+        for prefix in self.hidden_ref_settings.custom_prefixes() {
+            let id = format!(
+                "settings_window_git_log_hidden_ref_custom_{}",
+                prefix.as_str()
+            );
+            let remove_prefix = prefix.clone();
+            detail = detail.child(
+                self.info_row(
+                    id.clone(),
+                    prefix.as_str().to_owned(),
+                    components::Button::new(format!("{id}_remove"), "Remove")
+                        .style(components::ButtonStyle::Outlined)
+                        .on_click(theme, cx, move |this, _e, _window, cx| {
+                            this.remove_hidden_ref_prefix(&remove_prefix, cx);
+                        }),
+                    theme,
+                ),
+            );
+        }
+        detail = detail.child(
+            div()
+                .px_2()
+                .pt_1()
+                .pb_1()
+                .w_full()
+                .min_w(px(0.0))
+                .flex()
+                .items_center()
+                .gap_2()
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w(px(0.0))
+                        .child(self.hidden_ref_prefix_input.clone()),
+                )
+                .child(
+                    components::Button::new("settings_window_git_log_hidden_ref_add", "Add")
+                        .style(components::ButtonStyle::Outlined)
+                        .on_click(theme, cx, |this, _e, _window, cx| {
+                            this.add_hidden_ref_prefix(cx);
+                        }),
+                ),
+        );
+        if let Some(error) = self.hidden_ref_prefix_error {
+            detail = detail.child(self.field_error(
+                "settings_window_git_log_hidden_ref_error",
+                error.to_string(),
+                theme,
+            ));
+        }
+        detail
     }
 
     fn remotes_card(&self, theme: AppTheme, cx: &mut gpui::Context<Self>) -> Stateful<gpui::Div> {
@@ -1677,8 +1887,48 @@ impl SettingsWindowView {
             .card("settings_window_remotes_card", "Remotes", theme)
             .child(
                 self.toggle_row(
+                    "settings_window_auto_fetch_enabled",
+                    "Automatically fetch repositories",
+                    self.auto_fetch.enabled,
+                    theme,
+                )
+                .on_activate(false, controls::ControlActivation::Action, cx.listener(
+                    |this, _e: &ClickEvent, _window, cx| {
+                        this.set_auto_fetch_enabled(!this.auto_fetch.enabled, cx);
+                    },
+                )),
+            )
+            .child(self.info_row(
+                "settings_window_auto_fetch_interval",
+                "Fetch interval (minutes)",
+                div()
+                    .w(ui_scale::design_px(AUTO_FETCH_INTERVAL_INPUT_WIDTH_PX, cx))
+                    .child(self.auto_fetch_interval_input.clone()),
+                theme,
+            ))
+            .when_some(self.auto_fetch_interval_error, |card, error| {
+                card.child(self.field_error(
+                    "settings_window_auto_fetch_interval_error",
+                    error,
+                    theme,
+                ))
+            })
+            .child(
+                div()
+                    .debug_selector(|| "settings_window_auto_fetch_help".to_string())
+                    .px_2()
+                    .pb_2()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .text_size(theme.ui_text(12.0))
+                    .text_color(theme.colors.foreground.secondary)
+                    .children(auto_fetch_help()),
+            )
+            .child(
+                self.toggle_row(
                     "settings_window_prune_deleted_remote_branches",
-                    "Automatically prune deleted remote branches on every fetch",
+                    "Prune deleted remote branches during Fetch All",
                     self.prune_deleted_remote_branches_on_fetch,
                     theme,
                 )
@@ -1699,7 +1949,42 @@ impl SettingsWindowView {
                     .text_size(theme.ui_text(12.0))
                     .text_color(theme.colors.foreground.secondary)
                     .child(
-                        "Also applies to the fetch performed by Pull and Pull into current. Local branches whose fetched upstream was deleted are unlinked, but local branches and tags are never deleted.",
+                        "Fetch All unlinks local branches whose fetched upstream was deleted, but preserves local branches and tags. Pull fetches only its upstream; Pull into current fetches only the selected branch. Neither prunes remote branches.",
+                    ),
+            )
+            .child(
+                self.toggle_row(
+                    "settings_window_auto_fetch_tags",
+                    "Automatically fetch tags",
+                    self.history_tag_fetch_mode == GitLogTagFetchMode::OnRepositoryActivation,
+                    theme,
+                )
+                .border_color(no_separator)
+                .on_activate(false, controls::ControlActivation::Action, cx.listener(
+                    |this, _e: &ClickEvent, _window, cx| {
+                        this.set_history_tag_fetch_mode(
+                            match this.history_tag_fetch_mode {
+                                GitLogTagFetchMode::OnRepositoryActivation => {
+                                    GitLogTagFetchMode::Disabled
+                                }
+                                GitLogTagFetchMode::Disabled => {
+                                    GitLogTagFetchMode::OnRepositoryActivation
+                                }
+                            },
+                            cx,
+                        );
+                    },
+                )),
+            )
+            .child(
+                div()
+                    .debug_selector(|| "settings_window_auto_fetch_tags_help".to_string())
+                    .px_2()
+                    .pb_2()
+                    .text_size(theme.ui_text(12.0))
+                    .text_color(theme.colors.foreground.secondary)
+                    .child(
+                        "When a repository becomes active, ask each of its remotes which tags it has, so tag menus show whether a tag is pushed. This contacts every remote of the repository.",
                     ),
             )
     }
@@ -1902,13 +2187,17 @@ impl SettingsWindowView {
             let browse_button =
                 components::Button::new("settings_window_git_executable_browse", "Browse")
                     .style(components::ButtonStyle::Outlined)
-                    .on_click(theme, cx, |_this, _e, window, cx| {
+                    .on_click(theme, cx, |this, _e, window, cx| {
                         let view = cx.weak_entity();
+                        let directory = crate::view::path_prompt::folder_of_existing_entry(
+                            this.git_executable_input.read(cx).text(),
+                        );
                         let rx = cx.prompt_for_paths(gpui::PathPromptOptions {
                             files: true,
                             directories: false,
                             multiple: false,
                             prompt: Some("Select Git executable".into()),
+                            directory,
                         });
 
                         window
@@ -2160,4 +2449,26 @@ impl SettingsWindowView {
                 ),
             )
     }
+}
+
+/// How automatic fetch schedules itself, and what it does to spare remote
+/// servers. Kept in step with docs/automatic-fetch.md.
+pub(super) fn auto_fetch_help() -> [String; 2] {
+    [
+        format!(
+            "Fetches all remotes at this interval while {} is running, in every open \
+             workspace, without pulling. Repositories fetched within the interval, including \
+             from the command line, wait until it has passed. Worktrees of one repository \
+             share a fetch.",
+            crate::view::product_name()
+        ),
+        format!(
+            "To limit load on remote servers, background tabs that find no new commits wait \
+             up to {}× the interval, fetches to the same server are spaced out, unreachable \
+             servers are retried with growing delays, and a failed sign-in pauses automatic \
+             fetching from that server until you use Fetch all. Nothing is fetched while a \
+             sign-in dialog is open.",
+            gitcomet_state::model::AUTO_FETCH_QUIET_MAX_MULTIPLIER
+        ),
+    ]
 }

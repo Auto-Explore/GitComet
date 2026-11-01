@@ -29,6 +29,8 @@ PAIR_INVARIANT_FIELDS = (
     "toolchain.rustc", "toolchain.cargo_lock_sha256", "build",
     "machine.cpu_model", "machine.kernel", "machine.cpu_governor", "machine.cpu_boost",
     "gpu.cards", "gpu.vulkan", "gpu.nvidia", "display.session_type", "allocator", "git.version",
+    "gpu.native", "git.lfs", "git.annex", "machine.windows_power_scheme",
+    "machine.windows_power_overlay", "display.windows_native",
 )
 
 
@@ -59,13 +61,22 @@ def sha256_file(path):
 
 def source_info():
     diff = subprocess.run(["git", "-C", str(ROOT), "diff", "HEAD", "--binary"], capture_output=True)
-    untracked = run(["git", "-C", str(ROOT), "ls-files", "--others", "--exclude-standard"])
+    untracked = subprocess.run(["git", "-C", str(ROOT), "ls-files", "--others", "--exclude-standard", "-z"],capture_output=True)
+    names = [os.fsdecode(name) for name in untracked.stdout.split(b"\0") if name]
+    hashes = {}
+    for name in names:
+        path = ROOT / name
+        try:
+            hashes[name] = hashlib.sha256(os.fsencode(os.readlink(path))).hexdigest() if path.is_symlink() else sha256_file(path)
+        except OSError as error:
+            hashes[name] = {"unavailable":str(error)}
     return {
         "revision": run(["git", "-C", str(ROOT), "rev-parse", "HEAD"]),
         "branch": run(["git", "-C", str(ROOT), "symbolic-ref", "--short", "-q", "HEAD"]),
         "patch_sha256": hashlib.sha256(diff.stdout).hexdigest(),
         "patch_bytes": len(diff.stdout),
-        "untracked_files": untracked.splitlines() if isinstance(untracked, str) and untracked else [],
+        "untracked_files": names, "untracked_sha256": hashes,
+        "untracked_list_error": None if untracked.returncode == 0 else os.fsdecode(untracked.stderr),
     }
 
 
@@ -119,12 +130,17 @@ def machine_info():
     meminfo = {line.split(":")[0]: line.split(":")[1].strip()
                for line in (read("/proc/meminfo") or "").splitlines() if ":" in line}
     loadavg = read("/proc/loadavg")
-    return {
+    if platform.system() == "Darwin":
+        model = run(["sysctl", "-n", "machdep.cpu.brand_string"])
+        meminfo["MemTotal"] = run(["sysctl", "-n", "hw.memsize"])
+    elif platform.system() == "Windows":
+        model = run(["powershell", "-NoProfile", "-Command", "(Get-CimInstance Win32_Processor).Name"])
+    result = {
         "hostname": platform.node(),
         "cpu_model": model,
         "logical_cpus": os.cpu_count(),
         "kernel": platform.release(),
-        "os": read("/etc/os-release"),
+        "os": read("/etc/os-release") or platform.platform(),
         "cpu_governor": read("/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor"),
         "cpu_driver": read("/sys/devices/system/cpu/cpu0/cpufreq/scaling_driver"),
         "cpu_boost": read("/sys/devices/system/cpu/cpufreq/boost"),
@@ -137,6 +153,11 @@ def machine_info():
         "loadavg": loadavg,
         "thermal": parse_json(run(["sensors", "-j"])),
     }
+    if platform.system() == "Windows":
+        import perf_windows_environment
+        result["windows_power_scheme"] = run(["powercfg", "/getactivescheme"])
+        result["windows_power_overlay"] = perf_windows_environment.power_overlay()
+    return result
 
 
 def busy_processes(limit=8):
@@ -159,6 +180,11 @@ def gpu_info():
         cards.append({"card": card.name, "vendor": read(device / "vendor"), "device": read(device / "device"),
                       "driver": driver.resolve().name if driver.exists() else None})
     info = {"cards": cards}
+    if platform.system() == "Darwin":
+        info["native"] = parse_json(run(["system_profiler", "SPDisplaysDataType", "-json"]))
+    elif platform.system() == "Windows":
+        info["native"] = parse_json(run(["powershell", "-NoProfile", "-Command",
+            "Get-CimInstance Win32_VideoController | Select-Object Name,DriverVersion | ConvertTo-Json"]))
     if shutil.which("nvidia-smi"):
         # Model and driver identify the setup; clocks and temperature are
         # state at capture time and differ between any two captures.
@@ -177,6 +203,9 @@ def display_info():
     info = {key.lower(): os.environ.get(key) for key in
             ("XDG_SESSION_TYPE", "WAYLAND_DISPLAY", "DISPLAY", "XDG_CURRENT_DESKTOP")}
     info["session_type"] = info.pop("xdg_session_type")
+    if platform.system() == "Windows":
+        import perf_windows_environment
+        info.update(session_type="windows-desktop", windows_native=perf_windows_environment.displays())
     if shutil.which("xrandr") and os.environ.get("DISPLAY"):
         modes = run(["xrandr", "--current"])
         if isinstance(modes, str):
@@ -191,6 +220,7 @@ def git_info():
         "version": run(["git", "--version"]),
         "config": run(["git", "config", "--list", "--show-origin"]),
         "lfs": run(["git", "lfs", "version"]),
+        "annex": run(["git", "annex", "version", "--raw"]),
     }
 
 
@@ -230,7 +260,23 @@ def compare(first, second):
     invalidating = [field for field in PAIR_INVARIANT_FIELDS if lookup(first, field) != lookup(second, field)]
     return {"invalidating": invalidating,
             "source_differs": lookup(first, "source.revision") != lookup(second, "source.revision")
-            or lookup(first, "source.patch_sha256") != lookup(second, "source.patch_sha256")}
+            or lookup(first, "source.patch_sha256") != lookup(second, "source.patch_sha256")
+            or lookup(first, "source.untracked_sha256") != lookup(second, "source.untracked_sha256")}
+
+
+def readable(data):
+    """Frozen plain-text companion for the machine-readable environment."""
+    lines = [f"Captured UTC: {time.strftime('%Y-%m-%d %H:%M:%S',time.gmtime(data.get('captured_unix_ms',0)/1000))}",
+             f"Source: {lookup(data,'source.revision')}; patch {lookup(data,'source.patch_sha256')}",
+             f"CPU: {lookup(data,'machine.cpu_model')}", f"OS: {lookup(data,'machine.os')}",
+             f"Windows active power scheme: {lookup(data,'machine.windows_power_scheme')}",
+             f"Windows effective power overlay: {json.dumps(lookup(data,'machine.windows_power_overlay'))}",
+             f"GPU/driver: {json.dumps(lookup(data,'gpu.native'))}",
+             f"Display: {json.dumps(lookup(data,'display.windows_native'))}",
+             "GPU clocks/thermals and VRR state: unavailable unless captured by a separate authorized collector."]
+    lines += [f"Binary {name}: {entry.get('path')} SHA256={entry.get('sha256')}" for name,entry in data.get('binaries',{}).items()]
+    lines += [f"Untracked source {name}: SHA256={digest}" for name,digest in data.get('source',{}).get('untracked_sha256',{}).items()]
+    return "\n".join(lines)+"\n"
 
 
 def pairs(values, flag):
@@ -261,6 +307,7 @@ def main():
     data = collect(pairs(args.binary, "--binary"), (), args.cargo_profile, args.features, args.command)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    args.output.with_suffix(".txt").write_text(readable(data),encoding="utf-8")
 
 
 if __name__ == "__main__":

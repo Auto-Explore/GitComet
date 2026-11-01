@@ -34,9 +34,11 @@ impl StoreWorkerCommand {
 
 pub(super) enum StoreWorkerCommand {
     Msg(Box<Msg>),
+    SetAutoFetchAllowed(bool),
     /// A message sent while operation tracing is on, carrying the sender's
     /// operation and enqueue time. Handled exactly like [`Self::Msg`].
     Traced(Box<Msg>, op_trace::Stamp),
+    ActivationRefresh(Box<super::repo_monitor::CheckedActivation>),
     Shutdown,
     Repository {
         repo_id: RepoId,
@@ -52,6 +54,14 @@ pub(super) enum StoreWorkerCommand {
     /// repositories that do not test watching stay free of watcher refreshes.
     #[cfg(any(test, feature = "test-support"))]
     DisableRepoMonitorsForTest,
+    /// An ordering barrier, never a priority control command.
+    #[cfg(any(test, feature = "test-support"))]
+    BarrierForTest(mpsc::Sender<u64>),
+    #[cfg(test)]
+    RepoMonitorBarrierForTest {
+        repo_id: RepoId,
+        reply: mpsc::Sender<()>,
+    },
 }
 
 #[derive(Clone)]
@@ -64,19 +74,98 @@ enum StoreWorkerSenderInner {
 #[derive(Clone)]
 pub(super) struct StoreWorkerSender {
     inner: StoreWorkerSenderInner,
+    pub(super) preferences: Arc<super::repository_preferences::PreferenceHub>,
+    pub(super) auto_fetch: Arc<super::auto_fetch::AutoFetchCoordinator>,
+    pub(super) auto_fetch_allowed: Arc<AtomicBool>,
+    pub(super) filesystem: &'static std::sync::Mutex<gitcomet_core::filesystem::Filesystem>,
     alive: Arc<AtomicBool>,
     store_id: StoreInstanceId,
     repo_load_guard: Option<RepoLoadGuard>,
     cancellation: Option<CancellationToken>,
+    #[cfg(any(test, feature = "test-support"))]
+    pub(super) test_tasks: Arc<super::test_support::TestTasks>,
 }
 
 #[derive(Clone)]
 struct RepoLoadGuard {
     repo_id: RepoId,
-    load_epoch: u64,
+    load_epoch: crate::model::RepoLoadEpoch,
 }
 
 impl StoreWorkerSender {
+    pub(super) fn refresh_other_tracking(&self, repo_id: RepoId, repo: &dyn GitRepository) {
+        self.auto_fetch.refresh_other_subscribers(
+            self.store_id.get(),
+            repo_id,
+            &repo.spec().workdir,
+            &super::auto_fetch::repository_key(repo),
+        );
+    }
+
+    pub(super) fn set_auto_fetch_allowed(&self, allowed: bool) {
+        match &self.inner {
+            StoreWorkerSenderInner::Command(tx) => {
+                let _ = tx.send(StoreWorkerCommand::SetAutoFetchAllowed(allowed));
+            }
+            #[cfg(test)]
+            StoreWorkerSenderInner::MsgForTest(_) => {}
+        }
+    }
+
+    pub(super) fn sync_auto_fetch(
+        &self,
+        registrations: Vec<super::auto_fetch::Registration>,
+        settings: crate::model::RemoteSettings,
+        sign_in_open: bool,
+        backend: &Arc<dyn gitcomet_core::services::GitBackend>,
+    ) {
+        if !self.is_alive() {
+            self.auto_fetch.unsubscribe(self.store_id.get());
+            return;
+        }
+        let inner = self.inner.clone();
+        let alive = Arc::downgrade(&self.alive);
+        let sink = Arc::new(move |event| {
+            if !alive
+                .upgrade()
+                .is_some_and(|alive| alive.load(Ordering::Acquire))
+            {
+                return;
+            }
+            let message = match event {
+                super::auto_fetch::Event::Updated {
+                    repo_id,
+                    lifetime,
+                    revision,
+                    snapshot,
+                    result,
+                } => crate::msg::InternalMsg::AutoFetchUpdated {
+                    repo_id,
+                    lifetime,
+                    revision,
+                    snapshot,
+                    result,
+                },
+                super::auto_fetch::Event::Refresh { repo_id, lifetime } => {
+                    crate::msg::InternalMsg::AutoFetchRefresh { repo_id, lifetime }
+                }
+            };
+            match &inner {
+                StoreWorkerSenderInner::Command(tx) => {
+                    let _ = tx.send(StoreWorkerCommand::Msg(Box::new(Msg::Internal(message))));
+                }
+                #[cfg(test)]
+                StoreWorkerSenderInner::MsgForTest(tx) => {
+                    let _ = tx.send(Msg::Internal(message));
+                }
+            }
+        });
+        self.auto_fetch
+            .set_sign_in_open(self.store_id.get(), sign_in_open);
+        self.auto_fetch
+            .sync(self.store_id.get(), registrations, settings, backend, sink);
+    }
+
     pub(super) fn repository(
         &self,
         repo_id: RepoId,
@@ -105,13 +194,38 @@ impl StoreWorkerSender {
         tx: mpsc::Sender<StoreWorkerCommand>,
         alive: Arc<AtomicBool>,
         store_id: StoreInstanceId,
+        preferences: Arc<super::repository_preferences::PreferenceHub>,
+        auto_fetch: Arc<super::auto_fetch::AutoFetchCoordinator>,
+        filesystem: &'static std::sync::Mutex<gitcomet_core::filesystem::Filesystem>,
     ) -> Self {
+        super::repository_registry::subscribe(store_id.get(), Arc::downgrade(&alive), tx.clone());
+        let subscriber_tx = tx.clone();
+        let subscriber_alive = Arc::downgrade(&alive);
+        preferences.subscribe(
+            store_id.get(),
+            Box::new(move |snapshot| {
+                subscriber_alive
+                    .upgrade()
+                    .is_some_and(|alive| alive.load(Ordering::Acquire))
+                    && subscriber_tx
+                        .send(StoreWorkerCommand::Msg(Box::new(
+                            Msg::ApplyRepositoryPreferences(snapshot),
+                        )))
+                        .is_ok()
+            }),
+        );
         Self {
+            preferences,
+            auto_fetch,
+            auto_fetch_allowed: Arc::new(AtomicBool::new(true)),
+            filesystem,
             inner: StoreWorkerSenderInner::Command(tx),
             alive,
             store_id,
             repo_load_guard: None,
             cancellation: None,
+            #[cfg(any(test, feature = "test-support"))]
+            test_tasks: Arc::default(),
         }
     }
 
@@ -119,10 +233,38 @@ impl StoreWorkerSender {
     pub(super) fn for_test_msg_sender(tx: mpsc::Sender<Msg>) -> Self {
         Self {
             inner: StoreWorkerSenderInner::MsgForTest(tx),
+            preferences: super::repository_preferences::PreferenceHub::new(None),
+            auto_fetch: super::auto_fetch::AutoFetchCoordinator::new(),
+            auto_fetch_allowed: Arc::new(AtomicBool::new(true)),
+            filesystem: super::isolated_filesystem(),
             alive: Arc::new(AtomicBool::new(true)),
             store_id: StoreInstanceId(0),
             repo_load_guard: None,
             cancellation: None,
+            test_tasks: Arc::default(),
+        }
+    }
+
+    pub(super) fn refresh_open_preferences(&self, msg: &mut Msg) {
+        fn refresh(
+            message: &mut crate::msg::InternalMsg,
+            hub: &super::repository_preferences::PreferenceHub,
+        ) {
+            match message {
+                crate::msg::InternalMsg::RepoLoadFinished { message, .. } => refresh(message, hub),
+                crate::msg::InternalMsg::RepoOpenedOk {
+                    preferences: Some(snapshot),
+                    ..
+                } => {
+                    if let Some(latest) = hub.latest(&snapshot.key) {
+                        *snapshot = latest;
+                    }
+                }
+                _ => {}
+            }
+        }
+        if let Msg::Internal(message) = msg {
+            refresh(message, &self.preferences);
         }
     }
 
@@ -143,7 +285,7 @@ impl StoreWorkerSender {
     pub(super) fn with_repo_load_guard(
         &self,
         repo_id: RepoId,
-        load_epoch: u64,
+        load_epoch: crate::model::RepoLoadEpoch,
         cancellation: CancellationToken,
     ) -> Self {
         let mut guarded = self.clone();
@@ -184,6 +326,33 @@ impl StoreWorkerSender {
 
     pub(super) fn send_repo_monitor_or_log(&self, msg: Msg, context: &'static str) {
         self.send_or_log(msg, SendFailureKind::RepoMonitorMessage, context, true);
+    }
+
+    pub(super) fn send_activation_refresh_or_log(
+        &self,
+        refresh: super::repo_monitor::CheckedActivation,
+    ) {
+        if !self.is_alive() {
+            return;
+        }
+        match &self.inner {
+            StoreWorkerSenderInner::Command(tx) => {
+                send_diagnostics::send_or_log(
+                    tx,
+                    StoreWorkerCommand::ActivationRefresh(Box::new(refresh)),
+                    SendFailureKind::RepoMonitorMessage,
+                    "checked repository activation",
+                );
+            }
+            #[cfg(test)]
+            StoreWorkerSenderInner::MsgForTest(_) => self.send_repo_monitor_or_log(
+                Msg::RepoExternallyChanged {
+                    repo_id: refresh.repo_id,
+                    change: refresh.change,
+                },
+                "checked repository activation test",
+            ),
+        }
     }
 
     fn wrap_effect_message(&self, msg: Msg) -> Msg {
@@ -250,6 +419,9 @@ impl StoreWorkerSender {
         if !self.alive.swap(false, Ordering::AcqRel) {
             return;
         }
+        self.preferences.unsubscribe(self.store_id.get());
+        self.auto_fetch.unsubscribe(self.store_id.get());
+        super::repository_registry::unsubscribe(self.store_id.get());
 
         match &self.inner {
             StoreWorkerSenderInner::Command(tx) => {
@@ -258,6 +430,28 @@ impl StoreWorkerSender {
             #[cfg(test)]
             StoreWorkerSenderInner::MsgForTest(_) => {}
         }
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub(super) fn barrier_for_test(&self) -> mpsc::Receiver<u64> {
+        let (reply, receive) = mpsc::channel();
+        if self.is_alive()
+            && let StoreWorkerSenderInner::Command(sender) = &self.inner
+        {
+            let _ = sender.send(StoreWorkerCommand::BarrierForTest(reply));
+        }
+        receive
+    }
+
+    #[cfg(test)]
+    pub(super) fn repo_monitor_barrier_for_test(&self, repo_id: RepoId) -> mpsc::Receiver<()> {
+        let (reply, receive) = mpsc::channel();
+        if self.is_alive()
+            && let StoreWorkerSenderInner::Command(sender) = &self.inner
+        {
+            let _ = sender.send(StoreWorkerCommand::RepoMonitorBarrierForTest { repo_id, reply });
+        }
+        receive
     }
 
     #[cfg(any(test, feature = "test-support"))]

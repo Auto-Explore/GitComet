@@ -59,13 +59,20 @@ pub(in crate::view) struct GroupedRows {
 }
 
 impl GroupedRows {
+    /// The row of each header, ascending.
+    pub(in crate::view) fn headers(&self) -> Arc<[usize]> {
+        self.headers.iter().copied().collect()
+    }
+
     /// The header of the group holding `row`.
+    #[cfg(test)]
     pub(in crate::view) fn header_for(&self, row: usize) -> Option<usize> {
         let after = self.headers.partition_point(|&header| header <= row);
         after.checked_sub(1).map(|ix| self.headers[ix])
     }
 
     /// The first header below `row`.
+    #[cfg(test)]
     pub(in crate::view) fn next_header(&self, row: usize) -> Option<usize> {
         let after = self.headers.partition_point(|&header| header <= row);
         self.headers.get(after).copied()
@@ -302,6 +309,16 @@ impl FileListController {
         grouped
     }
 
+    /// Which groups are collapsed, by group index.
+    pub(in crate::view) fn collapsed_groups(&self) -> &[bool] {
+        &self.collapsed_groups
+    }
+
+    /// The change-kind groups' labels, for a built-in list grouped by kind.
+    pub(in crate::view) fn kind_labels(&self) -> Arc<[SharedString]> {
+        Arc::clone(&self.kind_labels)
+    }
+
     pub(in crate::view) fn toggle_group(&mut self, group: usize) {
         if let Some(collapsed) = self.collapsed_groups.get_mut(group) {
             *collapsed = !*collapsed;
@@ -378,19 +395,29 @@ impl FileListController {
         let key = self.projection_key();
         let files = Arc::clone(&self.files);
         let sort = self.sort;
+        let kinds = Arc::clone(&self.kind_labels);
         self.plan_cache.plan_for(
             key,
-            self.plan_layout(),
-            &self.collapsed,
-            shown.len(),
+            crate::view::rows::PlanShape {
+                layout: self.plan_layout(),
+                collapsed: &self.collapsed,
+                collapsed_groups: &self.collapsed_groups,
+                file_count: shown.len(),
+            },
             || {
                 FileTree::build(
                     shown.iter().map(|&ix| FileTreeItem {
                         path: &files[ix].path,
-                        additions: files[ix].additions,
-                        deletions: files[ix].deletions,
+                        additions: files[ix].line_stats.additions,
+                        deletions: files[ix].line_stats.deletions,
                     }),
                     sort,
+                )
+            },
+            || {
+                (
+                    shown.iter().map(|&ix| group_of(files[ix].kind)).collect(),
+                    kinds,
                 )
             },
         )
@@ -451,6 +478,38 @@ impl FileListController {
             .find(|change| change.path == path)?;
         self.selected = Some(change.path.clone());
         Some(change)
+    }
+
+    /// Select and reveal a file in the current sort/filter/layout. Folded
+    /// directories and groups are expanded before returning its visible row.
+    pub(in crate::view) fn select_revealed(
+        &mut self,
+        path: &Path,
+    ) -> Option<(CommitFileChange, usize)> {
+        let change = self.select(path)?;
+        let shown = self.shown();
+        let ordinal = shown.iter().position(|&ix| self.files[ix].path == path)?;
+        let row = if self.mode == FileListMode::Grouped {
+            let buckets = self.buckets();
+            let group = buckets
+                .groups
+                .iter()
+                .position(|items| items.contains(&ordinal))?;
+            if let Some(collapsed) = self.collapsed_groups.get_mut(group) {
+                *collapsed = false;
+            }
+            self.grouped()
+                .rows
+                .iter()
+                .position(|row| *row == GroupedRow::File { ordinal })?
+        } else {
+            let ordinal = crate::view::rows::FileOrdinal(ordinal);
+            for chain in self.plan().reveal(ordinal) {
+                self.collapsed.expand(&chain);
+            }
+            self.plan().row_ix_for_ordinal(ordinal)?.0
+        };
+        Some((change, row))
     }
 
     pub(in crate::view) fn selected(&self) -> Option<CommitFileChange> {

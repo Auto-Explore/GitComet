@@ -1,9 +1,11 @@
 //! Git's maintenance recommendation, and the runs the user starts from it.
 use crate::model::{AppState, MaintenanceSettings, RepoId, RepoState};
 use crate::msg::{Effect, RepoExternalChange};
+use crate::msg::{PersistenceEffect, RepoCommandEffect};
+use crate::store::reducer::prepared::ReducerInputs;
 use std::path::Path;
 use std::sync::Arc;
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
 
 /// Focus and tab switches ask for a check at most this often; the daily limit
 /// is the effect's, kept in the session file.
@@ -37,22 +39,28 @@ fn running_on(state: &AppState, common_dir: &Path) -> bool {
         .any(|repo| repo.common_dir.as_deref() == Some(common_dir) && repo.maintenance.running)
 }
 
-pub(in crate::store) fn request_check(state: &mut AppState, repo_id: RepoId) -> Option<Effect> {
+pub(in crate::store) fn request_check(
+    inputs: &ReducerInputs,
+    state: &mut AppState,
+    repo_id: RepoId,
+) -> Option<Effect> {
     let settings = state.maintenance_settings;
     request_check_for(
+        inputs,
         settings,
         state.repos.iter_mut().find(|repo| repo.id == repo_id)?,
     )
 }
 
 pub(super) fn request_check_for(
+    inputs: &ReducerInputs,
     settings: MaintenanceSettings,
     repo: &mut RepoState,
 ) -> Option<Effect> {
     if !settings.recommend {
         return None;
     }
-    let now = SystemTime::now();
+    let now = inputs.now();
     let repo_id = repo.id;
     let maintenance = &mut repo.maintenance;
     let asked_recently = maintenance.check_requested_at.is_some_and(|at| {
@@ -64,7 +72,9 @@ pub(super) fn request_check_for(
         return None;
     }
     maintenance.check_requested_at = Some(now);
-    Some(Effect::CheckRepoMaintenance { repo_id })
+    Some(Effect::RepoCommand(
+        RepoCommandEffect::CheckRepoMaintenance { repo_id },
+    ))
 }
 
 pub(super) fn checked(state: &mut AppState, repo_id: RepoId, needed: bool) -> Vec<Effect> {
@@ -98,9 +108,11 @@ pub(super) fn snooze(state: &mut AppState, repo_id: RepoId) -> Vec<Effect> {
     for repo in same_repository(state, &common_dir) {
         repo.maintenance.recommended = false;
     }
-    vec![Effect::PersistRepoMaintenanceSnooze {
-        common_dir: common_dir.to_path_buf(),
-    }]
+    vec![Effect::Persistence(
+        PersistenceEffect::PersistRepoMaintenanceSnooze {
+            common_dir: common_dir.to_path_buf(),
+        },
+    )]
 }
 
 pub(super) fn start(state: &mut AppState, repo_id: RepoId) -> Vec<Effect> {
@@ -118,7 +130,24 @@ pub(super) fn start(state: &mut AppState, repo_id: RepoId) -> Vec<Effect> {
     };
     repo.maintenance.running = true;
     repo.bump_ops_rev();
-    vec![Effect::RunMaintenance { repo_id }]
+    vec![Effect::RepoCommand(RepoCommandEffect::RunMaintenance {
+        repo_id,
+    })]
+}
+
+pub(super) fn change_is_deferred(
+    state: &AppState,
+    repo_id: RepoId,
+    finishing: Option<RepoId>,
+) -> bool {
+    let Some(common_dir) = common_dir(state, repo_id) else {
+        return false;
+    };
+    state.repos.iter().any(|repo| {
+        repo.common_dir.as_deref() == Some(common_dir.as_ref())
+            && repo.maintenance.running
+            && Some(repo.id) != finishing
+    })
 }
 
 /// While maintenance rewrites a repository's packs, watcher refreshes of its
@@ -129,10 +158,7 @@ pub(super) fn defer_external_change(
     repo_id: RepoId,
     change: &RepoExternalChange,
 ) -> bool {
-    let Some(common_dir) = common_dir(state, repo_id) else {
-        return false;
-    };
-    if !running_on(state, &common_dir) {
+    if !change_is_deferred(state, repo_id, None) {
         return false;
     }
     let Some(repo) = state.repos.iter_mut().find(|repo| repo.id == repo_id) else {

@@ -443,6 +443,7 @@ fn status_file_menu_hides_permalink_for_local_only_branch(cx: &mut gpui::TestApp
             repo.remotes = Loadable::Ready(Arc::new(vec![gitcomet_core::domain::Remote {
                 name: "origin".to_string(),
                 url: Some("git@github.com:Auto-Explore/GitComet.git".to_string()),
+                default_branch: None,
             }]));
             repo.remote_branches =
                 Loadable::Ready(Arc::new(vec![gitcomet_core::domain::RemoteBranch {
@@ -523,6 +524,7 @@ fn status_file_menu_offers_permalink_for_pushed_branch(cx: &mut gpui::TestAppCon
             repo.remotes = Loadable::Ready(Arc::new(vec![gitcomet_core::domain::Remote {
                 name: "origin".to_string(),
                 url: Some("git@github.com:Auto-Explore/GitComet.git".to_string()),
+                default_branch: None,
             }]));
             repo.remote_branches =
                 Loadable::Ready(Arc::new(vec![gitcomet_core::domain::RemoteBranch {

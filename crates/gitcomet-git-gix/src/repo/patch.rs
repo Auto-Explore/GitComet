@@ -1,7 +1,7 @@
 use super::GixRepo;
 use crate::util::{run_git_capture_bytes, run_git_with_output};
 use gitcomet_core::domain::CommitId;
-use gitcomet_core::error::{Error, ErrorKind};
+use gitcomet_core::error::Error;
 use gitcomet_core::services::{CommandOutput, Result};
 use std::io::Write;
 use std::path::Path;
@@ -9,9 +9,11 @@ use tempfile::NamedTempFile;
 
 /// `patch` in a temp file for `git apply`, which reads it by path.
 pub(super) fn write_patch_file(patch: &[u8]) -> Result<NamedTempFile> {
-    let mut file = NamedTempFile::new().map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
-    file.write_all(patch)
-        .map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
+    let mut file = NamedTempFile::new()
+        .map_err(|error| Error::from(error).with_context("create temporary Git input", None))?;
+    file.write_all(patch).map_err(|error| {
+        Error::from(error).with_context("write temporary Git input", Some(file.path()))
+    })?;
     Ok(file)
 }
 
@@ -44,7 +46,8 @@ impl GixRepo {
         // The bytes as git wrote them: file content in any encoding must reach
         // the patch file unchanged, or `git am` cannot apply it.
         let patch = run_git_capture_bytes(cmd, &format!("git format-patch -1 {sha} --stdout"))?;
-        std::fs::write(dest, patch).map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
+        std::fs::write(dest, patch)
+            .map_err(|error| Error::from(error).with_context("export patch", Some(dest)))?;
         Ok(CommandOutput {
             command: format!("Export patch {sha}"),
             stdout: format!("Saved patch to {}", dest.display()),

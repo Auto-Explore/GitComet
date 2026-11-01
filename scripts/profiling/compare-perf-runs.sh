@@ -197,6 +197,9 @@ metric_column_stem() {
     sidecar:first_interactive_ms)
       printf 'fi_ms\n'
       ;;
+    sidecar:active_repo_ready_ms)
+      printf 'repo_ready_ms\n'
+      ;;
     sidecar:*)
       printf '%s\n' "${1#sidecar:}"
       ;;
@@ -758,6 +761,7 @@ if [[ ${#metrics[@]} -eq 0 ]]; then
     "net_alloc_bytes"
     "first_paint_ms"
     "first_interactive_ms"
+    "active_repo_ready_ms"
     "first_paint_alloc_bytes"
     "first_interactive_alloc_bytes"
   )

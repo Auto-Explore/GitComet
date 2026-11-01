@@ -37,7 +37,7 @@ impl Files {
                             std::path::PathBuf::from(format!("src/file_{ix}.rs")),
                             FileStatusKind::Modified,
                         )
-                        .with_line_counts(Some(1), Some(0))
+                        .with_line_stats((Some(1), Some(0)).into())
                     })
                     .collect(),
             )),
@@ -71,6 +71,39 @@ fn draw_comparison_view(
     gpui::Entity<super::super::GitCometView>,
     &mut gpui::VisualTestContext,
 ) {
+    // Oldest is the base, newest the tip — the same ordering the reducer
+    // produces for either flow.
+    let range = RangeSelection {
+        from: CommitId(sha(commit_count.saturating_sub(1)).into()),
+        to: Some(CommitId(sha(0).into())),
+        from_label: "base".into(),
+        to_label: "tip".into(),
+        options: Default::default(),
+        base: None,
+    };
+    draw_details(
+        cx,
+        repo_id,
+        commit_count,
+        &(0..selected).collect::<Vec<_>>(),
+        Some(range),
+        files,
+    )
+}
+
+/// Draw the details pane over a log of `commit_count` commits, with the log
+/// rows `selected` multi-selected and `range` as the active comparison.
+fn draw_details<'a>(
+    cx: &'a mut gpui::TestAppContext,
+    repo_id: RepoId,
+    commit_count: usize,
+    selected: &[usize],
+    range: Option<RangeSelection>,
+    files: Files,
+) -> (
+    gpui::Entity<super::super::GitCometView>,
+    &'a mut gpui::VisualTestContext,
+) {
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
@@ -80,6 +113,7 @@ fn draw_comparison_view(
         view.update(app, |this, cx| {
             let mut repo = opening_repo_state(repo_id, Path::new("/tmp/repo-range-compare"));
             repo.open = Loadable::Ready(());
+            repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
             repo.head_branch = Loadable::Ready("main".into());
             repo.status = Loadable::Ready(gitcomet_core::domain::RepoStatus::default().into());
             repo.log = Loadable::Ready(Arc::new(gitcomet_core::domain::LogPage {
@@ -88,22 +122,14 @@ fn draw_comparison_view(
             }));
             repo.log_rev = 1;
             repo.history_state.multi_selection = CommitMultiSelection {
-                commits: (0..selected)
-                    .map(|ix| CommitId(sha(ix).into()))
+                commits: selected
+                    .iter()
+                    .map(|&ix| CommitId(sha(ix).into()))
                     .collect::<Vec<_>>()
                     .into(),
                 ..Default::default()
             };
-            // Oldest is the base, newest the tip — the same ordering the
-            // reducer produces for either flow.
-            repo.history_state.range_selection = Some(RangeSelection {
-                from: CommitId(sha(commit_count.saturating_sub(1)).into()),
-                to: Some(CommitId(sha(0).into())),
-                from_label: "base".into(),
-                to_label: "tip".into(),
-                options: Default::default(),
-                base: None,
-            });
+            repo.history_state.range_selection = range;
             repo.history_state.range_files = files.into_loadable();
 
             let next_state = app_state_with_repo(repo, repo_id);
@@ -117,6 +143,25 @@ fn draw_comparison_view(
         let _ = window.draw(app);
     });
     (view, cx)
+}
+
+/// Commits that are not consecutive have no merged diff, so the reducer opens
+/// no comparison for them. The pane lists them and says why there is no diff,
+/// rather than leaving a list that reads as if the diff were still to come.
+#[gpui::test]
+fn a_selection_without_a_merged_diff_says_why(cx: &mut gpui::TestAppContext) {
+    let (_, cx) = draw_details(cx, RepoId(76), 3, &[0, 2], None, Files::Loading);
+
+    assert!(
+        cx.debug_bounds("multi_commit_no_merged_diff").is_some(),
+        "expected the hint that only consecutive commits have a combined diff"
+    );
+    assert!(cx.debug_bounds("commit_multi_row_0").is_some());
+    assert!(cx.debug_bounds("commit_multi_row_1").is_some());
+    assert!(
+        cx.debug_bounds("range_comparison_body").is_none(),
+        "no comparison body without a comparison"
+    );
 }
 
 /// A range comparison started via "mark + compare" (or a branch/tag/worktree
@@ -367,6 +412,7 @@ mod worktree_uncommitted {
             view.update(app, |this, cx| {
                 let mut repo = opening_repo_state(repo_id, Path::new("/tmp/repo-worktree"));
                 repo.open = Loadable::Ready(());
+                repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
                 repo.head_branch = Loadable::Ready("main".into());
                 repo.status = Loadable::Ready(gitcomet_core::domain::RepoStatus::default().into());
                 repo.log = Loadable::Ready(Arc::new(gitcomet_core::domain::LogPage {
@@ -390,6 +436,53 @@ mod worktree_uncommitted {
             let _ = window.draw(app);
         });
         cx
+    }
+
+    /// A linked worktree's rows carry the edit its scan computed, which the
+    /// Edits sort orders by, not just the counts.
+    #[gpui::test]
+    fn worktree_file_rows_keep_their_edit(cx: &mut gpui::TestAppContext) {
+        let repo_id = RepoId(98);
+        let mut signed = gitcomet_core::edit_signature::EditSignatureBuilder::default();
+        let additions = signed.added_lines(b"fn added() {}\n");
+        let stats = gitcomet_core::domain::LineStats {
+            additions: Some(additions),
+            deletions: Some(0),
+            edit: signed.finish(),
+        };
+        let mut line_stats = gitcomet_core::domain::UncommittedLineStats::default();
+        line_stats
+            .unstaged
+            .insert(std::path::PathBuf::from("a.rs"), stats);
+        let summary = WorktreeDirtySummary {
+            path: std::path::PathBuf::from("/tmp/linked-worktree-edits"),
+            head: Some(CommitId(sha(0).into())),
+            branch: Some("side".into()),
+            detached: false,
+            added: 0,
+            modified: 1,
+            deleted: 0,
+            staged: Vec::new(),
+            unstaged: vec![file("a.rs", FileStatusKind::Modified)],
+            line_stats,
+        };
+        let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+        let (view, cx) = cx.add_window_view(|window, cx| {
+            super::super::super::GitCometView::new(store, events, None, window, cx)
+        });
+
+        let edit = cx.update(|_window, app| {
+            view.read(app)
+                .details_pane
+                .read(app)
+                .cached_worktree_file_inputs(repo_id, 0, &summary)
+                .files[0]
+                .line_stats
+                .edit
+        });
+
+        assert!(stats.edit.is_some());
+        assert_eq!(edit, stats.edit);
     }
 
     /// `selected_ix` indexes the entry list the reducer re-derives from the
@@ -427,6 +520,7 @@ mod worktree_uncommitted {
             view.update(app, |this, cx| {
                 let mut repo = opening_repo_state(repo_id, Path::new("/tmp/repo-worktree-sort"));
                 repo.open = Loadable::Ready(());
+                repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
                 repo.head_branch = Loadable::Ready("main".into());
                 repo.status = Loadable::Ready(gitcomet_core::domain::RepoStatus::default().into());
                 repo.worktree_dirty = Loadable::Ready(Arc::new(vec![summary.clone()]));
@@ -521,11 +615,11 @@ mod worktree_uncommitted {
             view.update(app, |this, cx| {
                 let mut repo = opening_repo_state(repo_id, Path::new("/tmp/repo-worktree-nav"));
                 repo.open = Loadable::Ready(());
+                repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
                 repo.head_branch = Loadable::Ready("main".into());
                 repo.status = Loadable::Ready(gitcomet_core::domain::RepoStatus::default().into());
                 repo.worktree_dirty = Loadable::Ready(Arc::new(vec![summary.clone()]));
                 repo.history_state.worktree_selection = Some(worktree_path.clone());
-                repo.diff_state.diff_target = Some(target.clone());
                 repo.diff_state.inline_submodule_diff =
                     Some(gitcomet_state::model::InlineSubmoduleDiffState {
                         origin: gitcomet_state::model::ForeignDiffOrigin::Worktree {
@@ -580,8 +674,8 @@ mod worktree_uncommitted {
         direction: i8,
     ) -> bool {
         cx.update(|window, app| {
-            let main_pane = view.read(app).main_pane.clone();
-            main_pane.update(app, |pane, cx| {
+            let diff_renderer = view.read(app).diff_renderer.clone();
+            diff_renderer.update(app, |pane, cx| {
                 pane.try_select_adjacent_diff_file(repo_id, direction, window, cx)
             })
         })
@@ -619,8 +713,11 @@ mod worktree_uncommitted {
         let (view, cx) =
             draw_sorted_worktree_inline_diff(cx, repo_id, 2, crate::view::FileListLayout::Flat);
 
-        assert!(cx.debug_bounds("diff_prev_file").is_none());
-        assert!(cx.debug_bounds("diff_next_file").is_some());
+        assert_eq!(drawn_file_arrows(cx, &view), Some((false, true)));
+        assert_eq!(
+            diff_bar_position(cx, &view).as_deref(),
+            Some("1 of 3 files")
+        );
         assert!(
             navigate_worktree_inline_diff(cx, &view, repo_id, 1),
             "next-file from the first drawn row should move"
@@ -640,8 +737,11 @@ mod worktree_uncommitted {
         let (view, cx) =
             draw_sorted_worktree_inline_diff(cx, repo_id, 0, crate::view::FileListLayout::Flat);
 
-        assert!(cx.debug_bounds("diff_prev_file").is_some());
-        assert!(cx.debug_bounds("diff_next_file").is_none());
+        assert_eq!(drawn_file_arrows(cx, &view), Some((true, false)));
+        assert_eq!(
+            diff_bar_position(cx, &view).as_deref(),
+            Some("3 of 3 files")
+        );
         assert!(
             !navigate_worktree_inline_diff(cx, &view, repo_id, 1),
             "next-file from the last drawn row must not jump back up the list"
@@ -657,8 +757,7 @@ mod worktree_uncommitted {
         let (view, cx) =
             draw_sorted_worktree_inline_diff(cx, repo_id, 2, crate::view::FileListLayout::Tree);
 
-        assert!(cx.debug_bounds("diff_prev_file").is_none());
-        assert!(cx.debug_bounds("diff_next_file").is_some());
+        assert_eq!(drawn_file_arrows(cx, &view), Some((false, true)));
         assert!(
             navigate_worktree_inline_diff(cx, &view, repo_id, 1),
             "next-file from the first drawn row should move in tree layout too"
@@ -675,8 +774,7 @@ mod worktree_uncommitted {
         let (view, cx) =
             draw_sorted_worktree_inline_diff(cx, RepoId(101), 2, crate::view::FileListLayout::Flat);
         draw_and_drain_test_window(cx);
-        assert!(cx.debug_bounds("diff_prev_file").is_none());
-        assert!(cx.debug_bounds("diff_next_file").is_some());
+        assert_eq!(drawn_file_arrows(cx, &view), Some((false, true)));
         cx.update(|_window, app| {
             view.read(app).details_pane.clone().update(app, |pane, cx| {
                 pane.set_file_list_sort(
@@ -687,8 +785,7 @@ mod worktree_uncommitted {
             });
         });
         draw_and_drain_test_window(cx);
-        assert!(cx.debug_bounds("diff_prev_file").is_some());
-        assert!(cx.debug_bounds("diff_next_file").is_none());
+        assert_eq!(drawn_file_arrows(cx, &view), Some((true, false)));
         for (filter, has_previous) in [
             (crate::view::rows::CommitFileFilter::Added, false),
             (crate::view::rows::CommitFileFilter::All, true),
@@ -703,14 +800,16 @@ mod worktree_uncommitted {
                 });
             });
             draw_and_drain_test_window(cx);
-            assert_eq!(cx.debug_bounds("diff_prev_file").is_some(), has_previous);
+            assert_eq!(
+                drawn_file_arrows(cx, &view).is_some_and(|(previous, _)| previous),
+                has_previous
+            );
         }
     }
 
     #[gpui::test]
     fn worktree_filters_activate_on_key_release_like_other_controls(cx: &mut gpui::TestAppContext) {
         use crate::view::rows::{CommitFileFilter, FileListId};
-        let _guard = crate::test_support::lock_visual_test();
         let cx = draw_worktree(
             cx,
             RepoId(103),

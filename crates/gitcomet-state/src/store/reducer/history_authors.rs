@@ -19,6 +19,8 @@ pub(super) fn reduce(state: &mut AppState, event: HistoryAuthorsMsg) -> Vec<Effe
                 return Vec::new();
             }
             let source = HistoryAuthorsState::source_for(repo);
+            let walk = source.0.clone();
+            let focus = repo.history_state.history_focus.clone();
             let authors = &mut repo.history_state.authors;
             authors.cancellation.cancel();
             authors.cancellation = CancellationToken::new();
@@ -29,7 +31,8 @@ pub(super) fn reduce(state: &mut AppState, event: HistoryAuthorsMsg) -> Vec<Effe
             vec![Effect::HistoryAuthors(HistoryAuthorsEffect {
                 repo_id,
                 seq: authors.seq,
-                mode: repo.history_state.history_scope,
+                walk,
+                focus,
                 cancellation: authors.cancellation.clone(),
             })]
         }
@@ -148,7 +151,7 @@ mod tests {
         state.repos[0].set_log_scope(HistoryMode::MergesOnly);
         assert!(old.cancellation.is_cancelled());
         let next = request(&mut state);
-        assert_eq!(next.mode, HistoryMode::MergesOnly);
+        assert_eq!(next.walk.mode(), HistoryMode::MergesOnly);
         complete(&mut state, &old, &["stale"]);
         assert!(matches!(
             state.repos[0].history_state.authors.names,

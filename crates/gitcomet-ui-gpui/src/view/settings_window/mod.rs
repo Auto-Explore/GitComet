@@ -1,6 +1,8 @@
 use super::*;
 use crate::appearance::{Appearance, FontRole, UiDensity};
+use crate::preference_writer::PreferenceWriter;
 use crate::ui_scale;
+use crate::view::preference_change::PreferenceChange;
 use gitcomet_core::domain::HistoryMode;
 use gitcomet_core::process::{
     GitExecutablePreference, GitRuntimeState, current_git_runtime, select_git_executable_path,
@@ -9,12 +11,13 @@ use gitcomet_core::signing_tools::{
     DEFAULT_GPG_PROGRAM, DEFAULT_SSH_KEYGEN_PROGRAM, SigningTool, SigningToolAvailability,
     SigningToolsState,
 };
-use gitcomet_state::model::{DefaultTagType, GitLogTagFetchMode};
+use gitcomet_state::model::{
+    AutoFetchInterval, AutoFetchSettings, DefaultTagType, GitLogTagFetchMode,
+};
 use gitcomet_state::session::ExternalCodeEditorSetting;
 use gpui::{Stateful, TitlebarOptions, WindowBounds, WindowDecorations, WindowOptions};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, OnceLock};
 
 const SETTINGS_WINDOW_MIN_WIDTH_PX: f32 = 620.0;
 const SETTINGS_WINDOW_MIN_HEIGHT_PX: f32 = 460.0;
@@ -26,6 +29,7 @@ const SETTINGS_DROPDOWN_COMPACT_LIST_EXTRA_HEIGHT_PX: f32 = 20.0;
 const SETTINGS_DROPDOWN_DETAIL_ROW_HEIGHT_PX: f32 = 42.0;
 const SETTINGS_DROPDOWN_DETAIL_LIST_EXTRA_HEIGHT_PX: f32 = 24.0;
 const SETTINGS_DROPDOWN_DENSE_DETAIL_ROW_HEIGHT_PX: f32 = 28.0;
+const AUTO_FETCH_INTERVAL_INPUT_WIDTH_PX: f32 = 80.0;
 
 fn settings_window_title() -> String {
     format!("Settings: {}", crate::view::product_name())
@@ -65,58 +69,9 @@ fn url_label(url: &str) -> SharedString {
         .into()
 }
 
-#[derive(Clone, Default)]
-struct ExternalEditorPreferencePersistQueue {
-    latest_sequence: Arc<AtomicU64>,
-    write_lock: Arc<Mutex<()>>,
-}
+static EXTERNAL_EDITOR_PREFERENCE_PERSIST_QUEUE: OnceLock<PreferenceWriter> = OnceLock::new();
 
-impl ExternalEditorPreferencePersistQueue {
-    fn next_sequence(&self) -> u64 {
-        self.latest_sequence
-            .fetch_add(1, Ordering::AcqRel)
-            .wrapping_add(1)
-    }
-
-    fn persist_if_latest(
-        &self,
-        sequence: u64,
-        setting: Option<ExternalCodeEditorSetting>,
-    ) -> std::io::Result<bool> {
-        let _guard = self
-            .write_lock
-            .lock()
-            .unwrap_or_else(|err| err.into_inner());
-        if self.latest_sequence.load(Ordering::Acquire) != sequence {
-            return Ok(false);
-        }
-        session::persist_ui_settings(external_editor_preference_settings(setting))?;
-        Ok(true)
-    }
-
-    #[cfg(test)]
-    fn persist_to_path_if_latest(
-        &self,
-        sequence: u64,
-        setting: Option<ExternalCodeEditorSetting>,
-        path: &std::path::Path,
-    ) -> std::io::Result<bool> {
-        let _guard = self
-            .write_lock
-            .lock()
-            .unwrap_or_else(|err| err.into_inner());
-        if self.latest_sequence.load(Ordering::Acquire) != sequence {
-            return Ok(false);
-        }
-        session::persist_ui_settings_to_path(external_editor_preference_settings(setting), path)?;
-        Ok(true)
-    }
-}
-
-static EXTERNAL_EDITOR_PREFERENCE_PERSIST_QUEUE: OnceLock<ExternalEditorPreferencePersistQueue> =
-    OnceLock::new();
-
-fn external_editor_preference_persist_queue() -> &'static ExternalEditorPreferencePersistQueue {
+fn external_editor_preference_persist_queue() -> &'static PreferenceWriter {
     EXTERNAL_EDITOR_PREFERENCE_PERSIST_QUEUE.get_or_init(Default::default)
 }
 
@@ -129,12 +84,15 @@ fn external_editor_preference_settings(
     }
 }
 
-fn custom_external_editor_path_prompt_options() -> gpui::PathPromptOptions {
+fn custom_external_editor_path_prompt_options(
+    directory: Option<std::path::PathBuf>,
+) -> gpui::PathPromptOptions {
     gpui::PathPromptOptions {
         files: true,
         directories: true,
         multiple: false,
         prompt: Some("Select external code editor".into()),
+        directory,
     }
 }
 
@@ -161,6 +119,49 @@ const FILE_LIST_LAYOUT_OPTIONS: &[(&str, FileListLayout, &str)] = &[
         "settings_window_file_list_layout_tree",
         FileListLayout::Tree,
         "Group changed files under their folders",
+    ),
+    (
+        "settings_window_file_list_layout_groups",
+        FileListLayout::Groups,
+        "Group changed files by kind, or by the groups a view defines",
+    ),
+];
+
+const FILE_LIST_SORT_OPTIONS: &[(&str, crate::view::rows::CommitFileSort, &str)] = &[
+    (
+        "settings_window_file_list_sort_path_ascending",
+        crate::view::rows::CommitFileSort::PathAscending,
+        "A to Z by path",
+    ),
+    (
+        "settings_window_file_list_sort_path_descending",
+        crate::view::rows::CommitFileSort::PathDescending,
+        "Z to A by path",
+    ),
+    (
+        "settings_window_file_list_sort_file_type_ascending",
+        crate::view::rows::CommitFileSort::FileTypeAscending,
+        "Together by extension, A to Z",
+    ),
+    (
+        "settings_window_file_list_sort_file_type_descending",
+        crate::view::rows::CommitFileSort::FileTypeDescending,
+        "Together by extension, Z to A",
+    ),
+    (
+        "settings_window_file_list_sort_edit_size_smallest",
+        crate::view::rows::CommitFileSort::EditSizeAscending,
+        "Fewest changed lines first",
+    ),
+    (
+        "settings_window_file_list_sort_edit_size_largest",
+        crate::view::rows::CommitFileSort::EditSizeDescending,
+        "Most changed lines first",
+    ),
+    (
+        "settings_window_file_list_sort_edits",
+        crate::view::rows::CommitFileSort::Edits,
+        "Files changed the same way together, the most repeated first",
     ),
 ];
 
@@ -311,6 +312,8 @@ fn remote_url_policy_settings_label(policy: RemoteUrlPolicy) -> String {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum SettingsSection {
+    #[cfg(target_os = "windows")]
+    GraphicsRenderer,
     UiScale,
     WindowControls,
     BrowserOpenTarget,
@@ -320,17 +323,19 @@ enum SettingsSection {
     DateFormat,
     Timezone,
     TerminalExternal,
-    TerminalActionBar,
+    TerminalButton,
     ChangeTracking,
     FileListLayout,
+    FileListSort,
     DiffContentMode,
+    DiffEngine,
     Diff,
     DiffViewMode,
     DiffTabSize,
     GitLogDefaultMode,
     GitLogColumns,
     GitLogBranchNames,
-    GitLogTagFetch,
+    GitLogHiddenRefs,
     AllowedRemoteProtocols,
     RemoteMarkdownImages,
     WorkspaceTheme,
@@ -342,6 +347,8 @@ impl SettingsSection {
     /// mapping keeps the visible page and the expanded row in sync.
     fn category(self) -> SettingsCategory {
         match self {
+            #[cfg(target_os = "windows")]
+            Self::GraphicsRenderer => SettingsCategory::General,
             Self::UiScale | Self::WindowControls | Self::UiFont | Self::EditorFont => {
                 SettingsCategory::Appearance
             }
@@ -349,16 +356,18 @@ impl SettingsSection {
             | Self::ExternalCodeEditor
             | Self::DateFormat
             | Self::Timezone => SettingsCategory::General,
-            Self::TerminalExternal | Self::TerminalActionBar => SettingsCategory::Terminal,
+            Self::TerminalExternal | Self::TerminalButton => SettingsCategory::Terminal,
             Self::ChangeTracking => SettingsCategory::ChangeTracking,
-            Self::FileListLayout => SettingsCategory::ChangeTracking,
-            Self::DiffContentMode | Self::Diff | Self::DiffViewMode | Self::DiffTabSize => {
-                SettingsCategory::Diff
-            }
+            Self::FileListLayout | Self::FileListSort => SettingsCategory::ChangeTracking,
+            Self::DiffEngine
+            | Self::DiffContentMode
+            | Self::Diff
+            | Self::DiffViewMode
+            | Self::DiffTabSize => SettingsCategory::Diff,
             Self::GitLogDefaultMode
             | Self::GitLogColumns
             | Self::GitLogBranchNames
-            | Self::GitLogTagFetch => SettingsCategory::GitLog,
+            | Self::GitLogHiddenRefs => SettingsCategory::GitLog,
             Self::AllowedRemoteProtocols | Self::RemoteMarkdownImages => {
                 SettingsCategory::SecurityPrivacy
             }
@@ -495,26 +504,30 @@ impl SettingsCategory {
                  git+ssh ssh+git remote markdown images load image tracking pixels updates \
                  automatically check updates startup"
             }
-            Self::Terminal => "terminal external terminal action bar terminal button opens",
+            Self::Terminal => "terminal external terminal button opens status bar",
             Self::ChangeTracking => "change tracking untracked files",
             Self::Diff => {
-                "diff mode scroll sync show whitespace changes reveal whitespace characters \
+                "diff engine difftastic structural line by line mode scroll sync show whitespace changes reveal whitespace characters \
                  word wrap show line numbers unified split"
             }
             Self::FileEditing => {
                 "file editing edit file auto save autosave save automatically editor"
             }
             Self::GitLog => {
-                "git log default history mode history columns relative dates show tags graph \
+                "git log default history mode history columns relative dates show tags graph gradient fade glow \
                  author sha files tab follows selected commit browse repository file browsing start exit \
-                 verify commit signatures verification signing key trust"
+                 verify commit signatures verification signing key trust hidden refs namespaces \
+                 checkpoints pull requests notes agent tools"
             }
-            Self::Remotes => "remotes remote fetch pull prune deleted branches automatically ghost",
+            Self::Remotes => {
+                "remotes remote fetch pull prune deleted branches automatically automatic fetch auto fetch background interval minutes ghost \
+                 automatically fetch tags remote tags"
+            }
             Self::LargeFiles => {
                 "large files git lfs git-annex annex synced branches adjusted branch pull push \
                  sync content"
             }
-            Self::Tags => "tags automatically fetch tags",
+            Self::Tags => "tags default tag type lightweight annotated",
             Self::Maintenance => {
                 "maintenance recommend repository gc garbage collection repack pack packs \
                  loose objects optimize optimise housekeeping"
@@ -536,6 +549,12 @@ impl SettingsCategory {
     fn matches_query(self, query: &str) -> bool {
         let query = query.trim().to_lowercase();
         if query.is_empty() {
+            return true;
+        }
+        #[cfg(target_os = "windows")]
+        if self == Self::General
+            && "graphics renderer directx 11 directx 12 dx11 dx12 compatibility".contains(&query)
+        {
             return true;
         }
         self.search_haystack().contains(query.as_str())
@@ -605,7 +624,7 @@ pub(crate) struct SettingsWindowView {
     ui_scale_percent: u32,
     /// The "Default UI scale" setting.
     default_ui_scale_percent: u32,
-    pub(super) window_controls_mode: crate::window_controls::WindowControlsMode,
+    pub(super) window_controls_mode: crate::kit::window_chrome::controls::WindowControlsMode,
     pub(super) browser_open_target: crate::app::BrowserOpenTarget,
     appearance_metrics: Appearance,
     font_size_inputs: [Entity<components::TextInput>; 3],
@@ -625,6 +644,7 @@ pub(crate) struct SettingsWindowView {
     timezone_scroll: UniformListScrollHandle,
     change_tracking_scroll: UniformListScrollHandle,
     file_list_layout_scroll: UniformListScrollHandle,
+    file_list_sort_scroll: UniformListScrollHandle,
     diff_content_mode_scroll: UniformListScrollHandle,
     diff_scroll_sync_scroll: UniformListScrollHandle,
     diff_tab_size_scroll: UniformListScrollHandle,
@@ -636,12 +656,14 @@ pub(crate) struct SettingsWindowView {
     show_timezone: bool,
     change_tracking_view: ChangeTrackingView,
     file_list_layout: FileListLayout,
+    file_list_sort: crate::view::rows::CommitFileSort,
     terminal_preferences: TerminalPreferences,
     terminal_external_program_input: Entity<components::TextInput>,
     terminal_external_args_input: Entity<components::TextInput>,
     terminal_status: Option<TerminalSettingsStatus>,
     diff_content_mode: DiffContentMode,
     diff_whitespace_mode: DiffWhitespaceMode,
+    diff_engine: DiffEngine,
     diff_view_mode: DiffViewMode,
     diff_reveal_whitespace_chars: bool,
     diff_word_wrap: bool,
@@ -654,6 +676,7 @@ pub(crate) struct SettingsWindowView {
     diff_scroll_sync: DiffScrollSync,
     history_branch_names: HistoryBranchNamesMode,
     history_show_graph: bool,
+    history_show_graph_gradient: bool,
     history_show_author: bool,
     history_show_date: bool,
     history_show_sha: bool,
@@ -666,7 +689,17 @@ pub(crate) struct SettingsWindowView {
     default_history_mode: HistoryMode,
     default_tag_type: DefaultTagType,
     prune_deleted_remote_branches_on_fetch: bool,
+    auto_fetch: AutoFetchSettings,
+    auto_fetch_interval_input: Entity<components::TextInput>,
+    auto_fetch_interval_error: Option<&'static str>,
+    _auto_fetch_interval_subscriptions: Vec<gpui::Subscription>,
     large_file_settings: gitcomet_state::model::LargeFileSettings,
+    hidden_ref_settings: gitcomet_state::model::HiddenRefSettings,
+    /// The product's always-hidden floor, as repositories open with it.
+    fixed_hidden_refs: gitcomet_core::services::HistoryRefFilter,
+    hidden_ref_prefix_input: Entity<components::TextInput>,
+    hidden_ref_prefix_error: Option<gitcomet_state::model::HiddenRefPrefixError>,
+    _hidden_ref_prefix_subscriptions: Vec<gpui::Subscription>,
     recommend_repo_maintenance: bool,
     current_view: SettingsView,
     selected_category: SettingsCategory,
@@ -684,6 +717,8 @@ pub(crate) struct SettingsWindowView {
     signing_tools_probe: Option<gpui::Task<()>>,
     signing_tools_cancellation: gitcomet_core::services::CancellationToken,
     large_file_tools_probe: Option<gpui::Task<()>>,
+    large_file_tools_closed: bool,
+    _large_file_tools_window_closed: gpui::Subscription,
     large_file_tools_cancellation: gitcomet_core::services::CancellationToken,
     git_executable_mode: GitExecutableMode,
     git_custom_path_draft: String,
@@ -699,7 +734,7 @@ pub(crate) struct SettingsWindowView {
     workspace_name_input: Entity<components::TextInput>,
     workspace_delete_confirm: Option<gitcomet_state::session::WorkspaceId>,
     hover_resize_edge: Option<ResizeEdge>,
-    title_drag_state: chrome::TitleBarDragState,
+    title_drag_state: crate::kit::window_chrome::TitleBarDragState,
     _git_executable_input_subscription: gpui::Subscription,
     _external_editor_custom_path_input_subscription: gpui::Subscription,
     _external_editor_custom_arguments_input_subscription: gpui::Subscription,
@@ -875,7 +910,7 @@ fn settings_window_titlebar_options() -> TitlebarOptions {
         // caption on top of the custom settings header.
         appears_transparent: cfg!(any(target_os = "macos", target_os = "windows")),
         traffic_light_position: cfg!(target_os = "macos")
-            .then_some(chrome::macos_traffic_light_position()),
+            .then_some(crate::kit::window_chrome::macos_traffic_light_position()),
     }
 }
 
@@ -888,7 +923,7 @@ fn settings_window_client_inset_for_scale(ui_scale_percent: u32) -> Pixels {
     if cfg!(target_os = "windows") {
         px(0.0)
     } else {
-        chrome::client_side_decoration_inset(ui_scale_percent)
+        crate::kit::window_chrome::client_side_decoration_inset(ui_scale_percent)
     }
 }
 
@@ -901,7 +936,7 @@ fn settings_window_frame(
     if cfg!(target_os = "windows") {
         content
     } else {
-        chrome::window_frame(theme, decorations, content, None, ui_scale_percent)
+        crate::kit::window_chrome::window_frame(theme, decorations, content, None, ui_scale_percent)
     }
 }
 
@@ -1005,10 +1040,16 @@ fn history_columns_settings_label(
     }
 }
 
-fn git_log_tag_fetch_mode_label(mode: GitLogTagFetchMode) -> &'static str {
-    match mode {
-        GitLogTagFetchMode::OnRepositoryActivation => "On repository activation",
-        GitLogTagFetchMode::Disabled => "Disabled",
+fn hidden_refs_summary(
+    settings: &gitcomet_state::model::HiddenRefSettings,
+    presets: &[gitcomet_core::identity::HistoryRefPreset],
+    fixed: &gitcomet_core::services::HistoryRefFilter,
+) -> SharedString {
+    match settings.hidden_count(presets, fixed) {
+        0 if !settings.enabled => "Off".into(),
+        0 => "None".into(),
+        1 => "1 namespace".into(),
+        count => format!("{count} namespaces").into(),
     }
 }
 
@@ -1048,8 +1089,7 @@ impl SettingsWindowView {
         let ui_preferences = UiPreferences::from_session(&ui_session);
         crate::session_ui::initialize_appearance(&ui_session, cx);
         let ui_scale = crate::session_ui::ui_scale(&ui_session, cx);
-        let window_controls =
-            crate::window_controls::current_or_initialize_from_session(&ui_session, cx);
+        let window_controls = crate::session_ui::window_controls(&ui_session, cx);
         let browser_open_target = ui_session
             .browser_open_target
             .as_deref()
@@ -1062,10 +1102,12 @@ impl SettingsWindowView {
         let show_timezone = ui_preferences.appearance.show_timezone;
         let change_tracking_view = ui_preferences.change_tracking.view;
         let file_list_layout = ui_preferences.file_lists.layout;
+        let file_list_sort = ui_preferences.file_lists.sort;
         let terminal_preferences = ui_preferences.terminal.clone();
         let diff_scroll_sync = ui_preferences.diff.scroll_sync;
         let diff_content_mode = ui_preferences.diff.content_mode;
         let diff_whitespace_mode = ui_preferences.diff.whitespace_mode;
+        let diff_engine = ui_preferences.diff.engine;
         let diff_view_mode = ui_preferences.diff.view_mode;
         let diff_reveal_whitespace_chars = ui_preferences.diff.reveal_whitespace_chars;
         let diff_word_wrap = ui_preferences.diff.word_wrap;
@@ -1077,6 +1119,7 @@ impl SettingsWindowView {
         let check_for_updates_on_startup = ui_preferences.security.check_for_updates_on_startup;
         let history_branch_names = ui_preferences.history.branch_names;
         let history_show_graph = ui_preferences.history.show_graph;
+        let history_show_graph_gradient = ui_preferences.history.show_graph_gradient;
         let history_show_author = ui_preferences.history.show_author;
         let history_show_date = ui_preferences.history.show_date;
         let history_show_sha = ui_preferences.history.show_sha;
@@ -1091,7 +1134,9 @@ impl SettingsWindowView {
         let prune_deleted_remote_branches_on_fetch = ui_preferences
             .remotes
             .prune_deleted_remote_branches_on_fetch;
+        let auto_fetch = ui_preferences.remotes.auto_fetch;
         let large_file_settings = ui_preferences.large_files;
+        let hidden_ref_settings = ui_preferences.history.hidden_ref_settings.clone();
         let recommend_repo_maintenance = ui_preferences.maintenance.recommend;
         let external_editor_setting = initial_external_editor_setting(&ui_session);
         // Only the saved editor's entry is needed to render the summary row;
@@ -1161,7 +1206,6 @@ impl SettingsWindowView {
                 window,
                 cx,
             );
-            input.set_theme(theme, cx);
             input.set_text(terminal_preferences.external_terminal_program.clone(), cx);
             input
         });
@@ -1176,7 +1220,6 @@ impl SettingsWindowView {
                 window,
                 cx,
             );
-            input.set_theme(theme, cx);
             input.set_line_height(Some(px(20.0)), cx);
             input.set_text(terminal_preferences.external_args_multiline(), cx);
             input
@@ -1275,7 +1318,7 @@ impl SettingsWindowView {
                 cx.notify();
             });
         let search_input = cx.new(|cx| {
-            let mut input = components::TextInput::new(
+            components::TextInput::new(
                 components::TextInputOptions {
                     placeholder: "Search".into(),
                     leading_icon: Some("icons/zoom.svg"),
@@ -1283,9 +1326,7 @@ impl SettingsWindowView {
                 },
                 window,
                 cx,
-            );
-            input.set_theme(theme, cx);
-            input
+            )
         });
         let search_input_subscription = cx.observe(&search_input, |this, input, cx| {
             let next = input.read(cx).text().to_string();
@@ -1340,7 +1381,6 @@ impl SettingsWindowView {
                 let mut input =
                     components::TextInput::new(components::TextInputOptions::default(), window, cx);
                 input.set_text(appearance_metrics.size(role).to_string(), cx);
-                input.set_theme(theme, cx);
                 input
             })
         });
@@ -1358,6 +1398,57 @@ impl SettingsWindowView {
             })
             .collect();
 
+        let auto_fetch_interval_input = cx.new(|cx| {
+            let mut input =
+                components::TextInput::new(components::TextInputOptions::default(), window, cx);
+            input.set_submit_on_enter(true);
+            input.set_text(auto_fetch.interval.minutes().to_string(), cx);
+            input
+        });
+        let interval_focus = auto_fetch_interval_input.read(cx).focus_handle();
+        let hidden_ref_prefix_input = cx.new(|cx| {
+            let mut input = components::TextInput::new(
+                components::TextInputOptions {
+                    placeholder: "refs/review".into(),
+                    ..Default::default()
+                },
+                window,
+                cx,
+            );
+            input.set_submit_on_enter(true);
+            input
+        });
+        // Enter adds the rule and Escape drops the draft; typing never applies
+        // anything, since each change restarts every all-branches walk.
+        let hidden_ref_prefix_subscriptions =
+            vec![cx.observe(&hidden_ref_prefix_input, |this, input, cx| {
+                let (enter, escape) = input.update(cx, |input, _| {
+                    (input.take_enter_pressed(), input.take_escape_pressed())
+                });
+                if enter {
+                    this.add_hidden_ref_prefix(cx);
+                } else if escape {
+                    this.clear_hidden_ref_prefix_input(cx);
+                }
+            })];
+        let auto_fetch_interval_subscriptions = vec![
+            cx.observe(&auto_fetch_interval_input, |this, input, cx| {
+                let (enter, escape) = input.update(cx, |input, _| {
+                    (input.take_enter_pressed(), input.take_escape_pressed())
+                });
+                if enter {
+                    this.commit_auto_fetch_interval(cx);
+                } else if escape {
+                    this.reset_auto_fetch_interval_input(cx);
+                }
+            }),
+            cx.on_blur(&interval_focus, window, |_this, window, cx| {
+                cx.defer_in(window, |this, _window, cx| {
+                    this.commit_auto_fetch_interval(cx);
+                });
+            }),
+        ];
+
         let selected_workspace = crate::workspaces::active_workspace_id(cx).or_else(|| {
             crate::workspaces::workspaces(cx)
                 .first()
@@ -1369,6 +1460,17 @@ impl SettingsWindowView {
             .unwrap_or_default();
         workspace_name_input.update(cx, |input, cx| {
             input.set_text(workspace_name_draft.clone(), cx);
+        });
+        let closing_view = cx.weak_entity();
+        let probe_window = window.window_handle().window_id();
+        let large_file_tools_window_closed = cx.on_window_closed(move |cx, closed| {
+            if closed == probe_window {
+                let _ = closing_view.update(cx, |view, _| {
+                    view.large_file_tools_closed = true;
+                    view.large_file_tools_cancellation.cancel();
+                    view.large_file_tools_probe = None;
+                });
+            }
         });
         Self {
             extension_window: extension_host::SettingsExtensions::new(window, theme, cx),
@@ -1399,6 +1501,7 @@ impl SettingsWindowView {
             timezone_scroll: UniformListScrollHandle::default(),
             change_tracking_scroll: UniformListScrollHandle::default(),
             file_list_layout_scroll: UniformListScrollHandle::default(),
+            file_list_sort_scroll: UniformListScrollHandle::default(),
             diff_content_mode_scroll: UniformListScrollHandle::default(),
             diff_scroll_sync_scroll: UniformListScrollHandle::default(),
             diff_tab_size_scroll: UniformListScrollHandle::default(),
@@ -1410,12 +1513,14 @@ impl SettingsWindowView {
             show_timezone,
             change_tracking_view,
             file_list_layout,
+            file_list_sort,
             terminal_preferences,
             terminal_external_program_input,
             terminal_external_args_input,
             terminal_status: None,
             diff_content_mode,
             diff_whitespace_mode,
+            diff_engine,
             diff_view_mode,
             diff_reveal_whitespace_chars,
             diff_word_wrap,
@@ -1428,6 +1533,7 @@ impl SettingsWindowView {
             diff_scroll_sync,
             history_branch_names,
             history_show_graph,
+            history_show_graph_gradient,
             history_show_author,
             history_show_date,
             history_show_sha,
@@ -1440,7 +1546,19 @@ impl SettingsWindowView {
             default_history_mode,
             default_tag_type,
             prune_deleted_remote_branches_on_fetch,
+            auto_fetch,
+            auto_fetch_interval_input,
+            auto_fetch_interval_error: None,
+            _auto_fetch_interval_subscriptions: auto_fetch_interval_subscriptions,
             large_file_settings,
+            hidden_ref_settings,
+            fixed_hidden_refs: gitcomet_core::services::RepositoryOptions::for_identity(
+                gitcomet_core::identity::current(),
+            )
+            .history_ref_filter,
+            hidden_ref_prefix_input,
+            hidden_ref_prefix_error: None,
+            _hidden_ref_prefix_subscriptions: hidden_ref_prefix_subscriptions,
             recommend_repo_maintenance,
             current_view: SettingsView::Root,
             selected_category: SettingsCategory::General,
@@ -1455,6 +1573,8 @@ impl SettingsWindowView {
             signing_tools_probe,
             signing_tools_cancellation: Default::default(),
             large_file_tools_probe: None,
+            large_file_tools_closed: false,
+            _large_file_tools_window_closed: large_file_tools_window_closed,
             large_file_tools_cancellation: Default::default(),
             git_executable_mode,
             git_custom_path_draft,
@@ -1466,7 +1586,7 @@ impl SettingsWindowView {
             external_editor_custom_arguments_input,
             expanded_section: None,
             hover_resize_edge: None,
-            title_drag_state: chrome::TitleBarDragState::default(),
+            title_drag_state: crate::kit::window_chrome::TitleBarDragState::default(),
             _git_executable_input_subscription: git_executable_input_subscription,
             _external_editor_custom_path_input_subscription:
                 external_editor_custom_path_input_subscription,
@@ -1588,6 +1708,8 @@ mod cards;
 pub(crate) mod close_guards;
 mod extension_host;
 mod extension_pages;
+#[cfg(target_os = "windows")]
+mod graphics_renderer;
 mod prefs;
 mod render;
 mod rows;

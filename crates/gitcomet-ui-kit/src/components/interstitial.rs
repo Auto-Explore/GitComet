@@ -8,8 +8,7 @@ use crate::theme::{AppTheme, with_alpha};
 use crate::ui_scale::UiScale;
 use gpui::prelude::*;
 use gpui::{
-    AnyElement, Background, CursorStyle, Div, FontWeight, SharedString, Stateful, StyleRefinement,
-    div, point, px,
+    AnyElement, Background, Div, FontWeight, SharedString, Stateful, StyleRefinement, div, px,
 };
 
 /// The card's widest extent, before scaling.
@@ -54,7 +53,6 @@ pub fn interstitial_cta_button(
         .text_size(theme.ui_text(13.0))
         .font_weight(FontWeight::BOLD)
         .text_color(colors.text)
-        .cursor(CursorStyle::PointingHand)
         .whitespace_nowrap()
         .child(svg_icon(icon, colors.text, ui_scale.px(14.0)))
         .child(label.into())
@@ -117,18 +115,6 @@ pub fn interstitial(
                 .border_1()
                 .border_color(border_glow)
                 .rounded(px(theme.radii.panel))
-                .shadow(vec![gpui::BoxShadow {
-                    color: gpui::rgba(if theme.is_dark {
-                        0x00000052
-                    } else {
-                        0x171a3b14
-                    })
-                    .into(),
-                    offset: point(px(0.0), px(22.0)),
-                    blur_radius: px(52.0),
-                    spread_radius: px(0.0),
-                    inset: false,
-                }])
                 .p_4()
                 .child(content),
         )
@@ -176,7 +162,6 @@ mod tests {
     /// the theme's interstitial colours, light and dark.
     #[gpui::test]
     fn call_to_action_buttons_paint_the_themes_interstitial_colors(cx: &mut gpui::TestAppContext) {
-        let _guard = crate::test_support::lock_visual_test();
         for theme in [AppTheme::gitcomet_dark(), AppTheme::gitcomet_light()] {
             let (_view, cx) = cx.add_window_view(|_, _| Ctas { theme });
             // The pointer starts at the origin, over the first button.

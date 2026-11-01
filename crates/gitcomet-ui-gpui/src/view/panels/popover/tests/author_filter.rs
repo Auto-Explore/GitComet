@@ -229,3 +229,130 @@ fn author_catalog_from_another_scope_is_not_offered(cx: &mut gpui::TestAppContex
     });
     assert_eq!(suggestion_names(&names), ["Current branch author"]);
 }
+
+/// The caret blinks every 800 ms for ten seconds after each keystroke,
+/// notifying the search box as typing does. The picker works out its navigation
+/// targets only for a new query or a navigation key; each blink used to rebuild
+/// every author row for them and redraw the popover.
+#[gpui::test]
+fn author_navigation_targets_wait_for_a_new_query(cx: &mut gpui::TestAppContext) {
+    let _cache_guard = crate::view::enable_stable_cached_views_for_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        window.activate();
+        GitCometView::new(store, events, None, window, cx)
+    });
+    let repo_id = RepoId(9005);
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            let repo = repo_with_authors(repo_id, 1, &["Bob", "Alice", "Carol"]);
+            push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+            this.popover_host.update(cx, |host, cx| {
+                host.open_popover_at(
+                    PopoverKind::HistoryAuthorFilter { repo_id },
+                    gpui::point(px(72.0), px(72.0)),
+                    window,
+                    cx,
+                );
+            });
+        });
+        let _ = window.draw(app);
+    });
+    let search = cx.update(|_window, app| {
+        view.read(app)
+            .popover_host
+            .read(app)
+            .history_author_filter_search_input_for_test()
+            .cloned()
+            .expect("the author filter's search box")
+    });
+    author_filter::take_nav_target_builds_for_tests();
+
+    cx.update(|window, app| {
+        search.update(app, |_, cx| cx.notify());
+        let _ = window.draw(app);
+    });
+    assert_eq!(author_filter::take_nav_target_builds_for_tests(), 0);
+
+    cx.update(|window, app| {
+        search.update(app, |input, cx| input.set_text("bo", cx));
+        let _ = window.draw(app);
+    });
+    assert_eq!(
+        author_filter::take_nav_target_builds_for_tests(),
+        1,
+        "a new query works them out again"
+    );
+}
+
+/// The popover redraws whenever its search box does, a caret blink included,
+/// and building a row for each of 30,000 authors takes 3.3 ms. The rows are
+/// built once per author list and active filter, and reused until either
+/// changes.
+#[gpui::test]
+fn author_rows_are_reused_until_their_data_changes(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let repo_id = RepoId(9006);
+    let push =
+        |cx: &mut gpui::VisualTestContext, log_rev, authors: &[&str], filter: Option<&str>| {
+            cx.update(|_window, app| {
+                view.update(app, |this, cx| {
+                    let mut repo = repo_with_authors(repo_id, log_rev, authors);
+                    repo.history_state.history_author_filter = filter.map(str::to_owned);
+                    push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+                });
+            });
+        };
+    let rows = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|_window, app| {
+            view.update(app, |this, cx| {
+                this.popover_host
+                    .update(cx, |host, _cx| author_filter::cached(host, repo_id, ""))
+            })
+        })
+    };
+
+    push(cx, 1, &["Bob", "Alice"], None);
+    let first = rows(cx);
+    assert!(std::rc::Rc::ptr_eq(&first, &rows(cx)), "nothing changed");
+
+    push(cx, 2, &["Bob", "Alice", "Carol"], None);
+    let grown = rows(cx);
+    assert_eq!(grown.items.len(), 4, "a new author is a new row");
+
+    push(cx, 2, &["Bob", "Alice", "Carol"], Some("Bob"));
+    let filtered = rows(cx);
+    assert!(!std::rc::Rc::ptr_eq(&grown, &filtered));
+    assert_eq!(
+        filtered.marked_index,
+        Some(2),
+        "the active filter's row is marked"
+    );
+
+    // Every other input of the author list keys the rows as well. The bumps
+    // add up, so each push differs from the last by one input.
+    let mut repo = repo_with_authors(repo_id, 2, &["Bob", "Alice", "Carol"]);
+    repo.history_state.history_author_filter = Some("Bob".to_owned());
+    let mut previous = filtered;
+    for (label, bump) in [
+        (
+            "author catalog",
+            (|repo| repo.history_state.authors.rev += 1) as fn(&mut RepoState),
+        ),
+        ("history scope", |repo| {
+            repo.history_state.history_scope = gitcomet_core::domain::HistoryMode::FirstParent
+        }),
+    ] {
+        bump(&mut repo);
+        cx.update(|_window, app| {
+            view.update(app, |this, cx| {
+                push_test_state(this, app_state_with_repo(repo.clone(), repo_id), cx);
+            });
+        });
+        let rebuilt = rows(cx);
+        assert!(!std::rc::Rc::ptr_eq(&previous, &rebuilt), "{label}");
+        previous = rebuilt;
+    }
+}

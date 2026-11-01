@@ -36,7 +36,7 @@ impl SettingsWindowView {
         }
     }
 
-    fn confirm_close(
+    pub(super) fn confirm_close(
         &self,
         scope: CloseScope,
         reasons: Vec<SharedString>,
@@ -67,8 +67,8 @@ impl SettingsWindowView {
     }
 }
 
-struct SettingsClosePrompt {
-    scope: CloseScope,
+pub(super) struct SettingsClosePrompt {
+    pub(super) scope: CloseScope,
     reasons: Vec<SharedString>,
     theme: AppTheme,
     parent: gpui::WeakEntity<SettingsWindowView>,
@@ -116,12 +116,12 @@ impl Render for SettingsClosePrompt {
                             self.theme,
                             cx,
                             move |_, _, window, cx| {
-                                let _ = parent
-                                    .update(cx, |view, cx| view.close_hosted_dialog(window, cx));
+                                let _ = parent.update(cx, |view, cx| {
+                                    view.close_resolved_hosted_dialog(window, cx)
+                                });
                                 if scope == CloseScope::Application {
-                                    cx.defer(|cx| {
-                                        crate::app::mark_clean_shutdown_requested(cx);
-                                        cx.quit();
+                                    cx.defer(move |cx| {
+                                        crate::app::finish_quit_or_restart(cx);
                                     });
                                 } else {
                                     crate::app::mark_clean_shutdown_if_last_window(cx);
@@ -182,7 +182,6 @@ mod tests {
 
     #[gpui::test]
     fn settings_close_and_quit_include_extension_guards(cx: &mut gpui::TestAppContext) {
-        let _guard = crate::test_support::lock_visual_test();
         struct Guard(Rc<Cell<usize>>);
         impl Extension for Guard {
             fn id(&self) -> ExtensionId {

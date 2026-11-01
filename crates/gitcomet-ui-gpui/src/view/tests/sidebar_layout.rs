@@ -118,10 +118,12 @@ fn remote_headers_include_remotes_with_no_branches() {
         Remote {
             name: "origin".to_string(),
             url: Some("https://example.com/origin.git".to_string()),
+            default_branch: None,
         },
         Remote {
             name: "upstream".to_string(),
             url: Some("https://example.com/upstream.git".to_string()),
+            default_branch: None,
         },
     ]));
     repo.remote_branches = Loadable::Ready(Arc::new(vec![RemoteBranch {
@@ -336,6 +338,7 @@ fn remote_section_excludes_upstream_without_remote_tracking_ref() {
     repo.remotes = Loadable::Ready(Arc::new(vec![Remote {
         name: "origin".to_string(),
         url: Some("https://example.com/origin.git".to_string()),
+        default_branch: None,
     }]));
     repo.remote_branches = Loadable::Ready(Arc::new(Vec::new()));
 
@@ -364,6 +367,7 @@ fn branch_sidebar_defaults_secondary_sections_to_collapsed() {
         },
     );
     repo.worktrees = Loadable::Ready(Arc::new(vec![Worktree {
+        bare: false,
         path: PathBuf::from("linked-worktree"),
         head: None,
         branch: Some("main".to_string()),
@@ -562,6 +566,7 @@ fn branch_sidebar_collapses_branch_sections_without_hiding_other_sections() {
         target: CommitId("deadbeef".into()),
     }]));
     repo.worktrees = Loadable::Ready(Arc::new(vec![Worktree {
+        bare: false,
         path: PathBuf::from("linked-worktree"),
         head: None,
         branch: Some("main".to_string()),
@@ -1092,7 +1097,6 @@ fn merge_view_temporarily_collapses_and_restores_sidebar(cx: &mut gpui::TestAppC
 
 #[gpui::test]
 fn sidebar_resize_handle_straddles_the_content_card_edge(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_view = store.clone();
     let (view, cx) = cx
@@ -1119,7 +1123,6 @@ fn sidebar_resize_handle_straddles_the_content_card_edge(cx: &mut gpui::TestAppC
 
 #[gpui::test]
 fn pane_resize_grips_paint_on_hover_in_the_application_layout(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_view = store.clone();
     let (view, cx) = cx
@@ -1177,7 +1180,6 @@ fn pane_resize_grips_paint_on_hover_in_the_application_layout(cx: &mut gpui::Tes
 
 #[gpui::test]
 fn collapsed_files_popover_uses_branch_style_rows_and_scrolls(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_view = store.clone();
     let (view, cx) = cx
@@ -1205,10 +1207,7 @@ fn collapsed_files_popover_uses_branch_style_rows_and_scrolls(cx: &mut gpui::Tes
             this.open_sidebar_collapsed_popover(CollapsedSidebarSection::Files, cx);
         });
     });
-    pump_for(
-        cx,
-        Duration::from_millis(PANE_COLLAPSE_ANIM_MS.saturating_add(180)),
-    );
+    finish_pane_transitions(cx, &view);
 
     let panel = cx
         .debug_bounds("collapsed_sidebar_popover")
@@ -1245,7 +1244,6 @@ fn collapsed_files_popover_uses_branch_style_rows_and_scrolls(cx: &mut gpui::Tes
 
 #[gpui::test]
 fn collapsed_branch_popover_search_keeps_its_section_scope(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_view = store.clone();
     let (view, cx) = cx.add_window_view(|window, cx| {
@@ -1274,10 +1272,7 @@ fn collapsed_branch_popover_search_keeps_its_section_scope(cx: &mut gpui::TestAp
             this.open_sidebar_collapsed_popover(CollapsedSidebarSection::Local, cx);
         });
     });
-    pump_for(
-        cx,
-        Duration::from_millis(PANE_COLLAPSE_ANIM_MS.saturating_add(180)),
-    );
+    finish_pane_transitions(cx, &view);
 
     assert!(
         cx.debug_bounds("sidebar_branches_search").is_none(),
@@ -1351,7 +1346,6 @@ fn collapsed_branch_popover_search_keeps_its_section_scope(cx: &mut gpui::TestAp
 
 #[gpui::test]
 fn collapsed_worktrees_popover_offers_its_section_menu(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_view = store.clone();
     let (view, cx) = cx
@@ -1371,10 +1365,7 @@ fn collapsed_worktrees_popover_offers_its_section_menu(cx: &mut gpui::TestAppCon
             this.open_sidebar_collapsed_popover(CollapsedSidebarSection::Worktrees, cx);
         });
     });
-    pump_for(
-        cx,
-        Duration::from_millis(PANE_COLLAPSE_ANIM_MS.saturating_add(180)),
-    );
+    finish_pane_transitions(cx, &view);
 
     let panel = cx
         .debug_bounds("collapsed_sidebar_popover")
@@ -1418,7 +1409,6 @@ fn collapsed_worktrees_popover_offers_its_section_menu(cx: &mut gpui::TestAppCon
 
 #[gpui::test]
 fn collapsed_files_popover_offers_the_files_settings_menu(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_view = store.clone();
     let (view, cx) = cx
@@ -1432,10 +1422,7 @@ fn collapsed_files_popover_offers_the_files_settings_menu(cx: &mut gpui::TestApp
             this.open_sidebar_collapsed_popover(CollapsedSidebarSection::Files, cx);
         });
     });
-    pump_for(
-        cx,
-        Duration::from_millis(PANE_COLLAPSE_ANIM_MS.saturating_add(180)),
-    );
+    finish_pane_transitions(cx, &view);
 
     let button = cx
         .debug_bounds("collapsed_popover_section_menu")
@@ -1500,7 +1487,6 @@ fn cubic_bezier_matches_a_linear_curve_for_the_identity_control_points() {
 fn locate_open_file_switches_to_files_and_expands_its_folders(cx: &mut gpui::TestAppContext) {
     // The action is reachable from a shortcut, the app menu and the palette, so
     // it has to work with the sidebar on Branches and the folders collapsed.
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_view = store.clone();
     let (view, cx) = cx
@@ -1560,8 +1546,7 @@ fn locate_open_file_switches_to_files_and_expands_its_folders(cx: &mut gpui::Tes
 }
 
 #[gpui::test]
-fn sidebar_tabs_grow_with_density_at_each_ui_scale(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
+fn sidebar_tabs_grow_vertically_with_density_at_each_ui_scale(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_view = store.clone();
     let (view, cx) = cx
@@ -1605,8 +1590,8 @@ fn sidebar_tabs_grow_with_density_at_each_ui_scale(cx: &mut gpui::TestAppContext
             if let Some(previous) = previous {
                 for (current, previous) in sizes.iter().zip(previous) {
                     assert!(
-                        current.width > previous.width,
-                        "tab width must grow at {density:?}"
+                        current.width >= previous.width,
+                        "tab width must not shrink at {density:?}"
                     );
                     assert!(
                         current.height > previous.height,
@@ -1623,7 +1608,6 @@ fn sidebar_tabs_grow_with_density_at_each_ui_scale(cx: &mut gpui::TestAppContext
 fn each_sidebar_tab_keeps_its_own_locate_button_present(cx: &mut gpui::TestAppContext) {
     // The trailing action stays put as its data becomes available; switching
     // tabs swaps it for the action belonging to that tree.
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_view = store.clone();
     let (view, cx) = cx
@@ -1669,7 +1653,6 @@ fn each_sidebar_tab_keeps_its_own_locate_button_present(cx: &mut gpui::TestAppCo
 fn active_branch_locate_button_expands_scrolls_and_selects_like_its_row(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_view = store.clone();
     let (view, cx) = cx
@@ -1802,7 +1785,6 @@ fn active_branch_locate_button_expands_scrolls_and_selects_like_its_row(
 #[gpui::test]
 fn the_file_explorer_and_the_branch_tree_share_one_row_height(cx: &mut gpui::TestAppContext) {
     use crate::appearance::{Appearance, UiDensity};
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_view = store.clone();
     let (view, cx) = cx
@@ -1873,7 +1855,6 @@ fn the_file_explorer_and_the_branch_tree_share_one_row_height(cx: &mut gpui::Tes
 
 #[gpui::test]
 fn file_explorer_pins_and_marks_files_with_unsaved_editor_buffers(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_view = store.clone();
     let (view, cx) = cx
@@ -1906,22 +1887,12 @@ fn file_explorer_pins_and_marks_files_with_unsaved_editor_buffers(cx: &mut gpui:
     // a file edited and navigated away from is the one hardest to find again.
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
-                pane.file_editor_stash.insert(
-                    pane.document_identity(RepoId(1), std::path::Path::new("b.rs"))
-                        .unwrap(),
-                    crate::view::panes::main::StashedFileEdit {
-                        text: SharedString::from("edited\n"),
-                        text_format: None,
-                        source_text_format: None,
-                        cursor: 0,
-                        text_fingerprint: 1,
-                        saved_fingerprint: 2,
-                        first_dirty_line: Some(0),
-                        disk: Default::default(),
-                    },
-                );
-                pane.sync_unsaved_file_edits_rev(cx);
+            this.diff_renderer.update(cx, |pane, cx| {
+                let identity = pane
+                    .document_identity(RepoId(1), std::path::Path::new("b.rs"))
+                    .unwrap();
+                pane.editor_documents
+                    .retain_for_tests(identity, RepoId(1), "edited\n".into(), cx);
             });
         });
     });
@@ -1953,7 +1924,7 @@ fn file_explorer_pins_and_marks_files_with_unsaved_editor_buffers(cx: &mut gpui:
     // Discarding through the same entry point the row's button uses clears it.
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.discard_file_edits_for(RepoId(1), &PathBuf::from("b.rs"), cx);
             });
         });
@@ -1975,7 +1946,6 @@ fn file_explorer_pins_and_marks_files_with_unsaved_editor_buffers(cx: &mut gpui:
 /// attached. This drives the real row to catch a regression back to that.
 #[gpui::test]
 fn right_clicking_a_folder_row_opens_the_folder_context_menu(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_view = store.clone();
     let (view, cx) = cx
@@ -2045,7 +2015,6 @@ fn right_clicking_a_folder_row_opens_the_folder_context_menu(cx: &mut gpui::Test
 /// look like the edits were lost.
 #[gpui::test]
 fn clicking_a_file_with_unsaved_edits_opens_the_editor(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_view = store.clone();
     let (view, cx) = cx
@@ -2090,22 +2059,12 @@ fn clicking_a_file_with_unsaved_edits_opens_the_editor(cx: &mut gpui::TestAppCon
     // Now give `b.rs` an unsaved buffer and click it in the tree.
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
-                pane.file_editor_stash.insert(
-                    pane.document_identity(RepoId(1), std::path::Path::new("b.rs"))
-                        .unwrap(),
-                    crate::view::panes::main::StashedFileEdit {
-                        text: SharedString::from("edited\n"),
-                        text_format: None,
-                        source_text_format: None,
-                        cursor: 0,
-                        text_fingerprint: 1,
-                        saved_fingerprint: 2,
-                        first_dirty_line: Some(0),
-                        disk: Default::default(),
-                    },
-                );
-                pane.sync_unsaved_file_edits_rev(cx);
+            this.diff_renderer.update(cx, |pane, cx| {
+                let identity = pane
+                    .document_identity(RepoId(1), std::path::Path::new("b.rs"))
+                    .unwrap();
+                pane.editor_documents
+                    .retain_for_tests(identity, RepoId(1), "edited\n".into(), cx);
             });
         });
     });
@@ -2154,7 +2113,6 @@ fn clicking_a_file_with_unsaved_edits_opens_the_editor(cx: &mut gpui::TestAppCon
 
 #[gpui::test]
 fn sidebar_worktree_badges_share_one_right_edge_near_the_pane_edge(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_view = store.clone();
     let (view, cx) = cx
@@ -2168,6 +2126,7 @@ fn sidebar_worktree_badges_share_one_right_edge_near_the_pane_edge(cx: &mut gpui
         divergence: None,
     };
     let worktree = |path: &str, branch: &str| gitcomet_core::domain::Worktree {
+        bare: false,
         path: PathBuf::from(path),
         head: None,
         branch: Some(branch.to_string()),
@@ -2233,7 +2192,6 @@ fn sidebar_worktree_badges_share_one_right_edge_near_the_pane_edge(cx: &mut gpui
 fn right_clicking_a_branch_group_row_opens_the_group_context_menu(cx: &mut gpui::TestAppContext) {
     // Measures Compact layout; a fresh session now defaults to Comfortable.
     cx.update(crate::appearance::pin_compact_for_test);
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_view = store.clone();
     let (view, cx) = cx
@@ -2305,7 +2263,6 @@ fn right_clicking_a_branch_group_row_opens_the_group_context_menu(cx: &mut gpui:
 
 #[gpui::test]
 fn native_file_drop_moves_before_acknowledgement_and_can_be_undone(cx: &mut gpui::TestAppContext) {
-    let _guard = crate::test_support::lock_visual_test();
     let directory = tempfile::tempdir().unwrap();
     let repository = directory.path().join("repository");
     let destination = repository.join("target");
@@ -2328,6 +2285,7 @@ fn native_file_drop_moves_before_acknowledgement_and_can_be_undone(cx: &mut gpui
     }]));
     state.repos[0].file_browser.bump_rev();
     store.replace_snapshot_for_test(Arc::new(state));
+    test_support::install_working_tree_repositories(&store);
     sync_view_snapshot(cx, &view);
     let position = cx.debug_bounds("file_browser_row_0").unwrap().center();
     dispatch_file_drop(
@@ -2388,7 +2346,6 @@ fn native_file_drop_moves_before_acknowledgement_and_can_be_undone(cx: &mut gpui
 fn explorer_selection_keyboard_cut_and_document_navigation_are_focus_scoped(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store.clone(), events, None, window, cx));
@@ -2521,10 +2478,7 @@ fn explorer_selection_keyboard_cut_and_document_navigation_are_focus_scoped(
     cx.update(|_, app| {
         view.update(app, |_, cx| {
             let files = crate::clipboard::read_files(cx).unwrap();
-            assert_eq!(
-                files.intent,
-                gitcomet_core::filesystem::TransferIntent::Move
-            );
+            assert_eq!(files.intent, gpui::FileTransferOperation::Move);
             assert_eq!(files.paths.len(), 3);
         })
     });
@@ -2533,7 +2487,7 @@ fn explorer_selection_keyboard_cut_and_document_navigation_are_focus_scoped(
         view.update(app, |_, cx| {
             assert_eq!(
                 crate::clipboard::read_files(cx).unwrap().intent,
-                gitcomet_core::filesystem::TransferIntent::Copy
+                gpui::FileTransferOperation::Copy
             )
         })
     });
@@ -2562,7 +2516,6 @@ fn explorer_selection_keyboard_cut_and_document_navigation_are_focus_scoped(
 
 #[gpui::test]
 fn explorer_ctrl_x_after_a_plain_click_cuts_the_clicked_file(cx: &mut gpui::TestAppContext) {
-    let _guard = crate::test_support::lock_visual_test();
     let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
     let (store, events) = AppStore::new_test(Arc::clone(&backend));
     let (view, cx) =
@@ -2635,10 +2588,7 @@ fn explorer_ctrl_x_after_a_plain_click_cuts_the_clicked_file(cx: &mut gpui::Test
             view.update(app, |_, cx| {
                 let files =
                     crate::clipboard::read_files(cx).expect("the cut reached the clipboard");
-                assert_eq!(
-                    files.intent,
-                    gitcomet_core::filesystem::TransferIntent::Move
-                );
+                assert_eq!(files.intent, gpui::FileTransferOperation::Move);
                 assert_eq!(files.paths, vec![workdir.join("a.txt")]);
             })
         });
@@ -2657,8 +2607,10 @@ fn explorer_ctrl_x_after_a_plain_click_cuts_the_clicked_file(cx: &mut gpui::Test
 fn explorer_chevron_click_keeps_the_selection_and_keyboard_paste_uses_focused_folder(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    // The installed test repository cannot list files, so a watcher reload
+    // swaps the seeded rows for an error. FSEvents replays the setup writes.
+    store.disable_repo_monitors_for_test();
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store.clone(), events, None, window, cx));
     let directory = tempfile::tempdir().unwrap();
@@ -2685,6 +2637,7 @@ fn explorer_chevron_click_keeps_the_selection_and_keyboard_paste_uses_focused_fo
     ]));
     state.repos[0].file_browser.bump_rev();
     store.replace_snapshot_for_test(Arc::new(state));
+    test_support::install_working_tree_repositories(&store);
     sync_view_snapshot(cx, &view);
     let primary = gpui::Modifiers {
         control: !cfg!(target_os = "macos"),
@@ -2831,8 +2784,10 @@ fn explorer_chevron_click_keeps_the_selection_and_keyboard_paste_uses_focused_fo
 
 #[gpui::test]
 fn explorer_folder_row_click_selects_focuses_and_toggles(cx: &mut gpui::TestAppContext) {
-    let _guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    // The installed test repository cannot list files, so a watcher reload
+    // swaps the seeded rows for an error. FSEvents replays the setup writes.
+    store.disable_repo_monitors_for_test();
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store.clone(), events, None, window, cx));
     let directory = tempfile::tempdir().unwrap();
@@ -2859,6 +2814,7 @@ fn explorer_folder_row_click_selects_focuses_and_toggles(cx: &mut gpui::TestAppC
     ]));
     state.repos[0].file_browser.bump_rev();
     store.replace_snapshot_for_test(Arc::new(state));
+    test_support::install_working_tree_repositories(&store);
     sync_view_snapshot(cx, &view);
     let primary = gpui::Modifiers {
         control: !cfg!(target_os = "macos"),
@@ -2948,7 +2904,6 @@ fn explorer_folder_row_click_selects_focuses_and_toggles(cx: &mut gpui::TestAppC
 fn explorer_external_drop_writes_to_highlighted_folder_in_sidebar_and_popup(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store.clone(), events, None, window, cx));
@@ -2956,35 +2911,39 @@ fn explorer_external_drop_writes_to_highlighted_folder_in_sidebar_and_popup(
     let external = tempfile::tempdir().unwrap();
     std::fs::create_dir(directory.path().join("destination")).unwrap();
     std::fs::write(directory.path().join("destination/keep.txt"), "keep").unwrap();
+    // Built once: a fresh repo lifetime per pass would leave the first pass's
+    // handle installed, and the store retires it as stale before the drop.
+    let mut seeded = view_state_with_active_ready_repo(RepoId(1));
+    seeded.repos[0].spec.workdir = directory.path().to_path_buf();
+    seeded.sidebar_mode = gitcomet_state::model::SidebarMode::Files;
+    seeded.repos[0].file_browser.entries = Loadable::Ready(Arc::new(vec![
+        FileEntry {
+            name: "destination".into(),
+            path: Arc::new("destination".into()),
+            kind: FileEntryKind::Directory,
+            depth: 0,
+            ignored: false,
+        },
+        FileEntry {
+            name: "keep.txt".into(),
+            path: Arc::new("destination/keep.txt".into()),
+            kind: FileEntryKind::File,
+            depth: 1,
+            ignored: false,
+        },
+    ]));
+    seeded.repos[0]
+        .file_browser
+        .expanded_dirs
+        .insert(Arc::new(PathBuf::from("destination")));
     for popup in [false, true] {
         let name = if popup { "popup.txt" } else { "sidebar.txt" };
         let source = external.path().join(name);
         std::fs::write(&source, "dropped content").unwrap();
-        let mut state = view_state_with_active_ready_repo(RepoId(1));
-        state.repos[0].spec.workdir = directory.path().to_path_buf();
-        state.sidebar_mode = gitcomet_state::model::SidebarMode::Files;
-        state.repos[0].file_browser.entries = Loadable::Ready(Arc::new(vec![
-            FileEntry {
-                name: "destination".into(),
-                path: Arc::new("destination".into()),
-                kind: FileEntryKind::Directory,
-                depth: 0,
-                ignored: false,
-            },
-            FileEntry {
-                name: "keep.txt".into(),
-                path: Arc::new("destination/keep.txt".into()),
-                kind: FileEntryKind::File,
-                depth: 1,
-                ignored: false,
-            },
-        ]));
-        state.repos[0]
-            .file_browser
-            .expanded_dirs
-            .insert(Arc::new(PathBuf::from("destination")));
+        let mut state = seeded.clone();
         state.repos[0].file_browser.bump_rev();
         store.replace_snapshot_for_test(Arc::new(state));
+        test_support::install_working_tree_repositories(&store);
         sync_view_snapshot(cx, &view);
         if popup {
             cx.update(|_, app| {

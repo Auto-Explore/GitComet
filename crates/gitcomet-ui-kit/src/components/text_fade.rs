@@ -61,7 +61,7 @@ impl FadingText {
             .w(ui_scale.px(FADE_WIDTH_PX))
             .bg(fade_gradient(self.bg));
         if let Some((group, hover_bg)) = self.hover {
-            fade = fade.group_hover(group, move |s| s.bg(fade_gradient(hover_bg)));
+            fade = fade.group_hover_style(group, move |s| s.bg(fade_gradient(hover_bg)));
         }
 
         div()

@@ -36,6 +36,62 @@ pub struct DifftoolRunResult {
     pub exit_code: i32,
 }
 
+#[cfg(feature = "ui-gpui-runtime")]
+pub(crate) fn focused_input(
+    config: &DifftoolConfig,
+    patch: String,
+) -> gitcomet_ui_gpui::FocusedDiffInput {
+    use gitcomet_ui_gpui::FocusedDiffInput;
+    if patch
+        .lines()
+        .any(|line| line.starts_with("old mode ") || line.starts_with("new mode "))
+    {
+        return FocusedDiffInput::Patch(patch);
+    }
+    match (
+        focused_source(&config.local),
+        focused_source(&config.remote),
+    ) {
+        (Ok(Some(old)), Ok(Some(new)))
+            if old.starts_with('\u{feff}') == new.starts_with('\u{feff}') =>
+        {
+            FocusedDiffInput::FilePair {
+                path: config
+                    .display_path
+                    .as_ref()
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| config.remote.clone()),
+                old: old.into(),
+                new: new.into(),
+            }
+        }
+        (old, new) => {
+            for error in [old, new].into_iter().filter_map(Result::err) {
+                log::warn!("Focused diff uses patch input: {error}");
+            }
+            FocusedDiffInput::Patch(patch)
+        }
+    }
+}
+
+#[cfg(any(feature = "ui-gpui-runtime", test))]
+fn focused_source(path: &Path) -> std::io::Result<Option<String>> {
+    use std::io::Read;
+    let limit = gitcomet_core::patch_action::SOURCE_BYTE_LIMIT;
+    let metadata = fs::symlink_metadata(path)?;
+    if !metadata.is_file() || metadata.len() > limit as u64 {
+        return Ok(None);
+    }
+    let mut bytes = Vec::new();
+    fs::File::open(path)?
+        .take(limit as u64 + 1)
+        .read_to_end(&mut bytes)?;
+    if bytes.len() > limit || bytes.contains(&0) {
+        return Ok(None);
+    }
+    Ok(String::from_utf8(bytes).ok())
+}
+
 /// Execute difftool mode by delegating to `git diff --no-index`.
 ///
 /// Git exits with code `1` when files differ, which is not an operational
@@ -45,7 +101,10 @@ pub fn run_difftool(config: &DifftoolConfig) -> Result<DifftoolRunResult, String
     let prepared_inputs = prepare_diff_inputs(config)?;
 
     let mut cmd = git_command();
-    cmd.arg("diff").arg("--no-index").arg("--no-ext-diff");
+    cmd.arg("diff")
+        .arg("--no-index")
+        .arg("--no-ext-diff")
+        .arg("--no-color");
     // When launched from `git difftool`, Git sets `GIT_EXTERNAL_DIFF` to its
     // helper. Remove it so this nested `git diff --no-index` cannot recurse.
     cmd.env_remove("GIT_EXTERNAL_DIFF");
@@ -60,6 +119,10 @@ pub fn run_difftool(config: &DifftoolConfig) -> Result<DifftoolRunResult, String
         .map_err(|e| io_err!("launch `git diff --no-index`", e))?;
 
     let status_code = output.status.code();
+    // `--no-index` exits 1 both when the inputs differ and when it refuses a
+    // path before diffing. A refusal prints no diff and says why on stderr; a
+    // difference prints a diff, or nothing when textconv makes both sides equal.
+    let differs = !output.stdout.is_empty() || output.stderr.is_empty();
     let mut stdout = decode_unified_diff_output(output.stdout);
     let stderr = bytes_to_text_preserving_utf8(&output.stderr);
 
@@ -73,7 +136,7 @@ pub fn run_difftool(config: &DifftoolConfig) -> Result<DifftoolRunResult, String
             stderr,
             exit_code: exit_code::SUCCESS,
         }),
-        Some(1) if !has_git_error_prefix(&stderr) => Ok(DifftoolRunResult {
+        Some(1) if differs => Ok(DifftoolRunResult {
             stdout,
             stderr,
             exit_code: exit_code::SUCCESS,
@@ -554,13 +617,6 @@ fn write_symlink_target(dst: &Path, target: &Path) -> std::io::Result<()> {
     }
 }
 
-fn has_git_error_prefix(stderr: &str) -> bool {
-    stderr
-        .lines()
-        .map(str::trim_start)
-        .any(|line| line.starts_with("error:") || line.starts_with("fatal:"))
-}
-
 fn push_labeled_header_line(out: &mut String, prefix: &str, label: &str, segment: &str) {
     out.push_str(prefix);
     out.push(' ');
@@ -676,6 +732,94 @@ mod tests {
     }
 
     #[test]
+    fn focused_source_preserves_full_text_crlf_unicode_and_missing_newline() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("input.rs");
+        let text = "fn main() {\r\n    println!(\"héllo\");\r\n}";
+        fs::write(&path, text).unwrap();
+        assert_eq!(focused_source(&path).unwrap().as_deref(), Some(text));
+    }
+
+    #[test]
+    fn focused_source_keeps_binary_large_and_directory_inputs_on_patch_path() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(focused_source(dir.path()).unwrap(), None);
+        let path = dir.path().join("input");
+        fs::write(&path, [0, 1, 2, 0]).unwrap();
+        assert_eq!(focused_source(&path).unwrap(), None);
+        fs::write(
+            &path,
+            vec![b'a'; gitcomet_core::patch_action::SOURCE_BYTE_LIMIT + 1],
+        )
+        .unwrap();
+        assert_eq!(focused_source(&path).unwrap(), None);
+        fs::remove_file(&path).unwrap();
+        assert!(focused_source(&path).is_err());
+    }
+
+    #[test]
+    #[cfg(feature = "ui-gpui-runtime")]
+    fn focused_input_retains_language_path_and_uses_patch_for_directories() {
+        let dir = tempfile::tempdir().unwrap();
+        let old = dir.path().join("before");
+        let new = dir.path().join("after");
+        fs::write(&old, "fn a() {}\n").unwrap();
+        fs::write(&new, "fn b() {}\n").unwrap();
+        let mut config = config(old, new);
+        config.display_path = Some("src/code.rs".into());
+        match focused_input(&config, "patch".into()) {
+            gitcomet_ui_gpui::FocusedDiffInput::FilePair { path, old, new } => {
+                assert_eq!(path, PathBuf::from("src/code.rs"));
+                assert_eq!(&*old, "fn a() {}\n");
+                assert_eq!(&*new, "fn b() {}\n");
+            }
+            gitcomet_ui_gpui::FocusedDiffInput::Patch(_) => {
+                panic!("regular text needs full sources")
+            }
+        }
+        config.local = dir.path().into();
+        config.remote = dir.path().into();
+        assert!(
+            matches!(focused_input(&config, "patch".into()), gitcomet_ui_gpui::FocusedDiffInput::Patch(text) if text == "patch")
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "ui-gpui-runtime")]
+    fn focused_input_preserves_bom_changes_in_the_patch() {
+        let dir = tempfile::tempdir().unwrap();
+        let old = dir.path().join("old.rs");
+        let new = dir.path().join("new.rs");
+        fs::write(&old, "\u{feff}fn main() {}\n").unwrap();
+        fs::write(&new, "fn main() {}\n").unwrap();
+        let config = config(old, new);
+        let patch = run_difftool(&config).unwrap().stdout;
+        assert!(!patch.is_empty());
+        assert!(
+            matches!(focused_input(&config, patch.clone()), gitcomet_ui_gpui::FocusedDiffInput::Patch(text) if text == patch)
+        );
+    }
+
+    #[test]
+    #[cfg(all(unix, feature = "ui-gpui-runtime"))]
+    fn focused_input_preserves_mode_only_changes_in_the_patch() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let old = dir.path().join("old.rs");
+        let new = dir.path().join("new.rs");
+        fs::write(&old, "fn main() {}\n").unwrap();
+        fs::write(&new, "fn main() {}\n").unwrap();
+        fs::set_permissions(&old, fs::Permissions::from_mode(0o644)).unwrap();
+        fs::set_permissions(&new, fs::Permissions::from_mode(0o755)).unwrap();
+        let config = config(old, new);
+        let patch = run_difftool(&config).unwrap().stdout;
+        assert!(patch.contains("old mode 100644\nnew mode 100755"));
+        assert!(
+            matches!(focused_input(&config, patch.clone()), gitcomet_ui_gpui::FocusedDiffInput::Patch(text) if text == patch)
+        );
+    }
+
+    #[test]
     fn run_difftool_identical_files_returns_success_with_no_diff() {
         let tmp = tempfile::tempdir().unwrap();
         let left = tmp.path().join("left.txt");
@@ -756,6 +900,64 @@ mod tests {
                 || err.contains("Failed to read metadata for local path")
                 || err.contains("failed with exit code"),
             "unexpected error message: {err}"
+        );
+    }
+
+    /// A refused input exits 1 like a difference does, but prints no diff;
+    /// its translated message must not read as one.
+    #[cfg(unix)]
+    #[test]
+    fn run_difftool_reports_a_git_error_in_any_locale() {
+        gitcomet_core::test_support::localized_git::run(
+            module_path!(),
+            "run_difftool_reports_a_git_error_in_any_locale",
+            r#"#!/bin/sh
+for argument in "$@"; do
+    if [ "$argument" = --no-index ]; then
+        printf '%s\n' 'Fehler: konnte right.txt nicht lesen: Keine Berechtigung' >&2
+        exit 1
+    fi
+done
+exec git "$@"
+"#,
+            || {
+                let tmp = tempfile::tempdir().unwrap();
+                let left = tmp.path().join("left.txt");
+                let right = tmp.path().join("right.txt");
+                write_file(&left, "left\n");
+                write_file(&right, "right\n");
+
+                run_difftool(&config(left, right)).expect_err("a Git error is not a diff");
+            },
+        );
+    }
+
+    /// A textconv driver can render two different files alike: Git then exits
+    /// 1 with no diff and no message.
+    #[cfg(unix)]
+    #[test]
+    fn run_difftool_treats_a_silent_exit_1_as_a_difference() {
+        gitcomet_core::test_support::localized_git::run(
+            module_path!(),
+            "run_difftool_treats_a_silent_exit_1_as_a_difference",
+            r#"#!/bin/sh
+for argument in "$@"; do
+    if [ "$argument" = --no-index ]; then
+        exit 1
+    fi
+done
+exec git "$@"
+"#,
+            || {
+                let tmp = tempfile::tempdir().unwrap();
+                let left = tmp.path().join("left.docx");
+                let right = tmp.path().join("right.docx");
+                write_file(&left, "left\n");
+                write_file(&right, "right\n");
+
+                let result = run_difftool(&config(left, right)).expect("not an error");
+                assert_eq!(result.exit_code, exit_code::SUCCESS);
+            },
         );
     }
 
@@ -1067,22 +1269,6 @@ mod tests {
         let got = apply_labels_to_unified_diff_headers(input, "LEFT", "RIGHT");
         assert_eq!(got.matches("--- LEFT").count(), 2);
         assert_eq!(got.matches("+++ RIGHT").count(), 2);
-    }
-
-    #[test]
-    fn has_git_error_prefix_detects_error_and_fatal_diagnostics() {
-        assert!(has_git_error_prefix("error: unable to read file"));
-        assert!(has_git_error_prefix(
-            "warning: context\nfatal: cannot stat '/tmp/missing'"
-        ));
-    }
-
-    #[test]
-    fn has_git_error_prefix_ignores_non_error_output() {
-        assert!(!has_git_error_prefix(
-            "diff --git a/file b/file\nindex 1..2 100644"
-        ));
-        assert!(!has_git_error_prefix("warning: textconv failed"));
     }
 
     // ── Subdirectory invocation ─────────────────────────────────────

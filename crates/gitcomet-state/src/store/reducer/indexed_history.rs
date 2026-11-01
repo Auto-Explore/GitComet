@@ -83,6 +83,7 @@ pub(super) fn reduce(state: &mut AppState, event: Event) -> Vec<Effect> {
             let Some(snapshot) = repo.history_state.log_snapshot.clone() else {
                 return Vec::new();
             };
+            let walk = repo.history_walk();
             let history = &mut repo.history_state.indexed;
             if history.requested.as_ref() == Some(&snapshot) && history.epoch == repo.load_epoch {
                 return Vec::new();
@@ -112,8 +113,9 @@ pub(super) fn reduce(state: &mut AppState, event: Event) -> Vec<Effect> {
                 return vec![Effect::IndexedHistory(Work::Build {
                     repo_id,
                     seq: history.seq,
-                    mode: repo.history_state.history_scope,
+                    walk,
                     author: repo.history_state.history_author_filter.clone(),
+                    focus: repo.history_state.history_focus.clone(),
                     cancellation: history.cancellation.clone(),
                 })];
             }
@@ -122,7 +124,6 @@ pub(super) fn reduce(state: &mut AppState, event: Event) -> Vec<Effect> {
             let history = &mut repo.history_state.indexed;
             if seq == history.seq && history.loading && history.epoch == repo.load_epoch {
                 history.progress = Some(progress);
-                history.rev = history.rev.wrapping_add(1);
                 history.status_rev = history.status_rev.wrapping_add(1);
             }
         }
@@ -152,8 +153,16 @@ pub(super) fn reduce(state: &mut AppState, event: Event) -> Vec<Effect> {
                     history.rev = history.rev.wrapping_add(1);
                     history.status_rev = history.status_rev.wrapping_add(1);
                     let reveal = repo.history_state.reveal_target.clone();
+                    let reword_target = repo
+                        .history_state
+                        .selected_commit
+                        .as_ref()
+                        .filter(|id| repo.reword.retains_selected_commit(id))
+                        .cloned();
                     let survives = |id: &gitcomet_core::domain::CommitId| {
-                        reveal.as_ref() == Some(id) || index.position(id.as_ref()).is_some()
+                        reveal.as_ref() == Some(id)
+                            || reword_target.as_ref() == Some(id)
+                            || index.position(id.as_ref()).is_some()
                     };
                     let mut selection = repo.history_state.multi_selection.clone();
                     if selection.commits.iter().any(|id| !survives(id)) {
@@ -298,7 +307,6 @@ pub(super) fn reduce(state: &mut AppState, event: Event) -> Vec<Effect> {
                 {
                     history.lru.retain(|entry| *entry != start);
                     history.lru.push_back(start);
-                    let range = Arc::new(range);
                     history.ranges.insert(start, range.clone());
                     history.ranges_rev = history.ranges_rev.wrapping_add(1);
                     while history.ranges.len() > HISTORY_ROW_CACHE_LIMIT / HISTORY_BLOCK_SIZE {
@@ -361,7 +369,8 @@ mod tests {
     use crate::msg::CommitSelectMode;
     use gitcomet_core::domain::{Commit, LogScope, RepoSpec};
     use gitcomet_core::history_index::{
-        HistoryIndexBuilder, HistoryIndexHandle, HistoryProjection, HistoryRange,
+        HistoryIndexBuilder, HistoryIndexHandle, HistoryIndexProgress, HistoryProjection,
+        HistoryRange,
     };
     use gitcomet_core::services::HistorySnapshot;
 
@@ -429,7 +438,7 @@ mod tests {
             seq,
             snapshot: index.snapshot.clone(),
             start,
-            result: Ok(HistoryRange {
+            result: Ok(Arc::new(HistoryRange {
                 snapshot: index.snapshot.clone(),
                 start,
                 commits: (start..(start + 256).min(index.len()))
@@ -441,8 +450,27 @@ mod tests {
                         time: std::time::UNIX_EPOCH,
                     })
                     .collect(),
-            }),
+            })),
         }
+    }
+
+    #[test]
+    fn delivered_range_keeps_the_backend_allocation() {
+        let (mut state, index) = fixture();
+        let work = request(&mut state, &index, vec![0]).remove(0);
+        let event = loaded(work);
+        let Event::RangeLoaded {
+            result: Ok(block), ..
+        } = &event
+        else {
+            panic!()
+        };
+        let block = block.clone();
+        reduce(&mut state, event);
+        assert!(Arc::ptr_eq(
+            &block,
+            &state.repos[0].history_state.indexed.ranges[&0]
+        ));
     }
 
     #[test]
@@ -519,7 +547,7 @@ mod tests {
             result: Ok(range), ..
         } = &mut malformed
         {
-            range.commits[0].id = index.commit_id(0).unwrap();
+            Arc::make_mut(range).commits[0].id = index.commit_id(0).unwrap();
         }
         assert!(reduce(&mut state, malformed).is_empty());
         assert!(
@@ -577,7 +605,7 @@ mod tests {
             result: Ok(range), ..
         } = &mut event
         {
-            range.commits.pop();
+            Arc::make_mut(range).commits.pop();
         }
         reduce(&mut state, event);
         assert!(
@@ -764,6 +792,46 @@ mod tests {
         assert!(state.repos[0].history_state.multi_selection.is_multi());
     }
     #[test]
+    fn a_selection_with_a_gap_opens_no_comparison_until_the_gap_closes() {
+        let (mut state, index) = fixture();
+        reduce(
+            &mut state,
+            Event::Publish {
+                repo_id: RepoId(1),
+                index: index.clone(),
+            },
+        );
+        request(&mut state, &index, vec![9984]);
+        let projection = HistoryProjection::new(index.clone(), vec![]);
+        let select = |state: &mut AppState, row: usize, mode| {
+            reduce(
+                state,
+                Event::Select {
+                    request_id: None,
+                    repo_id: RepoId(1),
+                    projection: projection.clone(),
+                    commit_id: index.commit_id(row).unwrap(),
+                    mode,
+                },
+            );
+        };
+
+        select(&mut state, 10_000, CommitSelectMode::Single);
+        select(&mut state, 10_002, CommitSelectMode::Toggle);
+        assert!(state.repos[0].history_state.multi_selection.is_multi());
+        assert_eq!(state.repos[0].history_state.range_selection, None);
+
+        select(&mut state, 10_001, CommitSelectMode::Toggle);
+        let range = state.repos[0]
+            .history_state
+            .range_selection
+            .as_ref()
+            .expect("consecutive commits open a comparison");
+        assert_eq!(range.to, index.commit_id(10_000));
+        assert_eq!(range.from, index.commit_id(10_003).unwrap());
+    }
+
+    #[test]
     fn query_change_invalidates_generations_even_when_switching_back() {
         let (mut state, _) = fixture();
         state.repos[0].history_state.indexed.index = None;
@@ -789,6 +857,34 @@ mod tests {
         );
         assert_eq!(state.repos[0].history_state.indexed.rev, rev);
         assert!(state.repos[0].history_state.indexed.loading);
+    }
+
+    #[test]
+    fn progress_moves_the_status_revision_and_leaves_rows_alone() {
+        let (mut state, _) = fixture();
+        state.repos[0].history_state.indexed.index = None;
+        let work = reduce(&mut state, Event::Ensure { repo_id: RepoId(1) }).remove(0);
+        let Effect::IndexedHistory(Work::Build { seq, .. }) = work else {
+            panic!()
+        };
+        let indexed = &state.repos[0].history_state.indexed;
+        let (rev, status_rev) = (indexed.rev, indexed.status_rev);
+        let progress = HistoryIndexProgress {
+            scanned: 2048,
+            matched: 2000,
+        };
+        reduce(
+            &mut state,
+            Event::Progress {
+                repo_id: RepoId(1),
+                seq,
+                progress: progress.clone(),
+            },
+        );
+        let indexed = &state.repos[0].history_state.indexed;
+        assert_eq!(indexed.progress, Some(progress));
+        assert_eq!(indexed.status_rev, status_rev.wrapping_add(1));
+        assert_eq!(indexed.rev, rev);
     }
 }
 

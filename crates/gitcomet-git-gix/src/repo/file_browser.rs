@@ -92,11 +92,7 @@ impl gix::dir::walk::Delegate for CollectWorktreePaths {
         };
 
         // Staging areas the filesystem service may leave in a worktree.
-        if entry
-            .rela_path
-            .split(|byte| *byte == b'/')
-            .any(gitcomet_core::path_utils::is_service_owned_name)
-        {
+        if gitcomet_core::path_utils::has_service_owned_git_component(&entry.rela_path) {
             return gix::dir::walk::Action::Continue(());
         }
         let path = entry.rela_path.to_string();
@@ -275,11 +271,10 @@ fn collect_tree_entries(
 
 #[cfg(test)]
 mod tests {
-    use super::GixRepo;
+    use crate::test_support::{git_stdout, git_success, init_test_repo, open_repo, write_file};
     use gitcomet_core::domain::{CommitId, FileEntry, FileEntryKind};
     use std::fs;
     use std::path::Path;
-    use std::process::Command;
 
     fn paths_of(entries: &[FileEntry]) -> Vec<String> {
         entries
@@ -288,49 +283,10 @@ mod tests {
             .collect()
     }
 
-    fn git_success(workdir: &Path, args: &[&str]) {
-        let output = Command::new("git")
-            .arg("-C")
-            .arg(workdir)
-            .args(args)
-            .output()
-            .expect("git command to run");
-        assert!(
-            output.status.success(),
-            "git {:?} failed\nstdout:\n{}\nstderr:\n{}",
-            args,
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
-
-    fn init_test_repo(workdir: &Path) {
-        git_success(workdir, &["init"]);
-        for args in [
-            ["config", "user.name", "Test User"].as_slice(),
-            ["config", "user.email", "test@example.com"].as_slice(),
-        ] {
-            git_success(workdir, args);
-        }
-    }
-
-    fn write_file(workdir: &Path, relative: &str, contents: &str) {
-        let path = workdir.join(relative);
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent).expect("create parent directories");
-        }
-        fs::write(path, contents).expect("write file");
-    }
-
     fn commit_file(workdir: &Path, path: &str, contents: &str, message: &str) {
         write_file(workdir, path, contents);
         git_success(workdir, &["add", path]);
         git_success(workdir, &["commit", "-m", message]);
-    }
-
-    fn open_repo(workdir: &Path) -> GixRepo {
-        let thread_safe_repo = gix::open(workdir).expect("open repo").into_sync();
-        GixRepo::new(workdir.to_path_buf(), thread_safe_repo)
     }
 
     #[test]
@@ -448,17 +404,7 @@ mod tests {
 
         let head_entries = repo.list_worktree_files_impl().expect("head tree");
 
-        let output = Command::new("git")
-            .arg("-C")
-            .arg(workdir)
-            .args(["rev-parse", "HEAD"])
-            .output()
-            .expect("rev-parse");
-        let head_sha = String::from_utf8(output.stdout)
-            .expect("utf8")
-            .trim()
-            .to_string();
-        let commit_id = CommitId(head_sha.into());
+        let commit_id = CommitId(git_stdout(workdir, &["rev-parse", "HEAD"]).into());
 
         let commit_entries = repo
             .list_tree_files_at_commit_impl(&commit_id)
@@ -481,17 +427,7 @@ mod tests {
 
         commit_file(workdir, "only_in_first.txt", "first", "first commit");
 
-        let output = Command::new("git")
-            .arg("-C")
-            .arg(workdir)
-            .args(["rev-parse", "HEAD"])
-            .output()
-            .expect("rev-parse");
-        let first_sha = String::from_utf8(output.stdout)
-            .expect("utf8")
-            .trim()
-            .to_string();
-        let first_commit_id = CommitId(first_sha.into());
+        let first_commit_id = CommitId(git_stdout(workdir, &["rev-parse", "HEAD"]).into());
 
         commit_file(workdir, "added_later.txt", "later", "second commit");
 

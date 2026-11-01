@@ -1,0 +1,15 @@
+%%{init: {"theme":"dark"}}%%
+requirementDiagram
+  requirement req1 {
+    id: 1
+    text: LoginUpdated
+    risk: medium
+    verifymethod: test
+  }
+  requirement req2 {
+    id: 2
+    text: Session
+    risk: low
+    verifymethod: inspection
+  }
+  req1 - satisfies -> req2

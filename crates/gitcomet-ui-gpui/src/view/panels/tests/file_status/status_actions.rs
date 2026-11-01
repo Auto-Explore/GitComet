@@ -6,7 +6,6 @@ use super::*;
 fn status_file_right_click_opens_menu_without_opening_diff_or_changing_selection(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_view = store.clone();
     let (view, cx) = cx.add_window_view(|window, cx| {
@@ -318,7 +317,6 @@ fn stage_all_asks_before_staging_unresolved_conflicts(cx: &mut gpui::TestAppCont
 /// The folder covers its whole subtree, nested collapsed folders included.
 #[gpui::test]
 fn status_folder_stage_covers_the_subtree_and_ignores_the_selection(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -377,7 +375,6 @@ fn status_folder_stage_covers_the_subtree_and_ignores_the_selection(cx: &mut gpu
 /// must not be swept in.
 #[gpui::test]
 fn status_folder_paths_do_not_capture_a_name_prefixed_sibling(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -416,7 +413,6 @@ fn status_folder_actions_keep_non_utf8_directory_paths(cx: &mut gpui::TestAppCon
     use std::ffi::OsStr;
     use std::os::unix::ffi::OsStrExt;
 
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -541,7 +537,6 @@ fn folder_stage_button_stages(
 /// assertion below cannot pass just because the button was never hit.
 #[gpui::test]
 fn folder_stage_button_stages_on_a_left_click(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     assert!(folder_stage_button_stages(
         cx,
         gitcomet_state::model::RepoId(680),
@@ -552,7 +547,6 @@ fn folder_stage_button_stages_on_a_left_click(cx: &mut gpui::TestAppContext) {
 /// A right click opens the context menu; it must not stage the subtree.
 #[gpui::test]
 fn folder_stage_button_ignores_a_right_click(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     assert!(!folder_stage_button_stages(
         cx,
         gitcomet_state::model::RepoId(681),

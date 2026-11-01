@@ -1,0 +1,257 @@
+=======================================
+Page directive without a route template
+=======================================
+@page
+@model IndexModel
+
+---
+
+(compilation_unit
+  (razor_page_directive)
+  (razor_model_directive
+    (identifier)))
+
+====================================
+Page directive with a route template
+====================================
+@page "{sourceServerId:long}"
+@model ObjectBrowserModel
+
+---
+
+(compilation_unit
+  (razor_page_directive
+    (string_literal
+      (string_literal_content)))
+  (razor_model_directive
+    (identifier)))
+
+===================================
+Model directive with a generic type
+===================================
+@model IEnumerable<ExampleApp.Web.Item>
+
+---
+
+(compilation_unit
+  (razor_model_directive
+    (generic_name
+      (identifier)
+      (type_argument_list
+        (qualified_name
+          (qualified_name
+            (identifier)
+            (identifier))
+          (identifier))))))
+
+=====================
+Using directive forms
+=====================
+@using System.Linq
+@using static System.Math
+@using Alias = System.Collections.Generic.List<int>
+
+---
+
+(compilation_unit
+  (razor_using_directive
+    (qualified_name
+      (identifier)
+      (identifier)))
+  (razor_using_directive
+    (qualified_name
+      (identifier)
+      (identifier)))
+  (razor_using_directive
+    (identifier)
+    (qualified_name
+      (qualified_name
+        (qualified_name
+          (identifier)
+          (identifier))
+        (identifier))
+      (generic_name
+        (identifier)
+        (type_argument_list
+          (predefined_type))))))
+
+====================
+Inject directive
+====================
+@inject IHostEnvironment HostEnvironment
+@inject Microsoft.Extensions.Configuration.IConfiguration Configuration
+
+---
+
+(compilation_unit
+  (razor_inject_directive
+    (variable_declaration
+      (identifier)
+      (variable_declarator
+        (identifier))))
+  (razor_inject_directive
+    (variable_declaration
+      (qualified_name
+        (qualified_name
+          (qualified_name
+            (identifier)
+            (identifier))
+          (identifier))
+        (identifier))
+      (variable_declarator
+        (identifier)))))
+
+=================================
+Inherits and namespace directives
+=================================
+@inherits ExampleApp.Web.CustomBase<TModel>
+@namespace ExampleApp.Web.Pages
+
+---
+
+(compilation_unit
+  (razor_inherits_directive
+    (qualified_name
+      (qualified_name
+        (identifier)
+        (identifier))
+      (generic_name
+        (identifier)
+        (type_argument_list
+          (identifier)))))
+  (razor_namespace_directive
+    (qualified_name
+      (qualified_name
+        (identifier)
+        (identifier))
+      (identifier))))
+
+=====================
+Tag helper directives
+=====================
+@addTagHelper *, Microsoft.AspNetCore.Mvc.TagHelpers
+@addTagHelper *, ExampleApp.Web
+
+---
+
+(compilation_unit
+  (razor_addtaghelper_directive
+    (taghelper_wildcard)
+    (qualified_name
+      (qualified_name
+        (qualified_name
+          (identifier)
+          (identifier))
+        (identifier))
+      (identifier)))
+  (razor_addtaghelper_directive
+    (taghelper_wildcard)
+    (qualified_name
+      (identifier)
+      (identifier))))
+
+=============================
+Section directive with markup
+=============================
+@section Scripts {
+    <script src="~/js/site.js"></script>
+}
+
+---
+
+(compilation_unit
+  (razor_section
+    (identifier)
+    (element)))
+
+====================
+Functions directive
+====================
+@functions {
+    public string Greeting(string name)
+    {
+        return "Hello, " + name;
+    }
+}
+
+---
+
+(compilation_unit
+  (razor_block
+    (method_declaration
+      (modifier)
+      (predefined_type)
+      (identifier)
+      (parameter_list
+        (parameter
+          (predefined_type)
+          (identifier)))
+      (block
+        (return_statement
+          (binary_expression
+            (string_literal
+              (string_literal_content))
+            (identifier)))))))
+
+======================================
+Code directive with a field and method
+======================================
+@code {
+    private int count;
+
+    private void Increment()
+    {
+        count++;
+    }
+}
+
+---
+
+(compilation_unit
+  (razor_block
+    (field_declaration
+      (modifier)
+      (variable_declaration
+        (predefined_type)
+        (variable_declarator
+          (identifier))))
+    (method_declaration
+      (modifier)
+      (predefined_type)
+      (identifier)
+      (parameter_list)
+      (block
+        (expression_statement
+          (postfix_unary_expression
+            (identifier)))))))
+
+=============================
+Directives followed by markup
+=============================
+@page
+@model IndexModel
+@{
+    ViewData["Title"] = "Home";
+}
+
+<h1>Home</h1>
+
+---
+
+(compilation_unit
+  (razor_page_directive)
+  (razor_model_directive
+    (identifier))
+  (razor_block
+    (expression_statement
+      (assignment_expression
+        (element_access_expression
+          (identifier)
+          (bracketed_argument_list
+            (argument
+              (string_literal
+                (string_literal_content)))))
+        (string_literal
+          (string_literal_content)))))
+  (element
+    (html_text)))

@@ -96,11 +96,15 @@ pub(crate) fn has_modules(repo: &gix::Repository) -> Result<bool> {
         return Ok(true);
     }
     if let Some(path) = repo.modules_path() {
-        match std::fs::symlink_metadata(path) {
+        match std::fs::symlink_metadata(&path) {
             Ok(m) if m.is_file() => return Ok(true),
             Ok(_) => {}
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => return Err(failure(e)),
+            Err(error) => {
+                return Err(failure(&error)
+                    .with_source(error)
+                    .with_context("read Git modules metadata", Some(&path)));
+            }
         }
     }
     Ok(repo
@@ -163,7 +167,7 @@ pub(crate) fn diff_tree_to_tree<'r>(
         &mut cache,
         &mut Default::default(),
         &repo.objects,
-        |change| -> gix::ExnResult<_> {
+        |change| -> gix::Result<_> {
             changes.push(change.into_owned());
             Ok(std::ops::ControlFlow::Continue(()))
         },

@@ -5,6 +5,7 @@ use super::*;
 pub(super) fn install_app_actions(cx: &mut App, backend: Arc<dyn GitBackend>) {
     crate::window_focus::observe_tab_navigation(cx).detach();
     install_global_diff_shortcut_fallback(cx);
+    install_global_diff_navigation_actions(cx);
 
     let new_window_backend = Arc::clone(&backend);
     cx.on_action(move |_: &NewWindow, cx| {
@@ -120,7 +121,7 @@ pub(super) fn install_app_actions(cx: &mut App, backend: Arc<dyn GitBackend>) {
         cx.defer(|cx| {
             if let Some(window) = cx.active_window() {
                 let _ = window.update(cx, |_root, window, _cx| {
-                    toggle_window_zoom(window);
+                    crate::kit::window_chrome::toggle_window_zoom(window);
                 });
             }
         });
@@ -143,6 +144,8 @@ pub(super) fn install_app_actions(cx: &mut App, backend: Arc<dyn GitBackend>) {
         }
     });
     cx.on_window_closed(ui_scale::forget_window).detach();
+    cx.on_window_closed(crate::theme::forget_window_theme)
+        .detach();
     cx.on_action(|_: &Hide, cx| cx.defer(|cx| cx.hide()));
     cx.on_action(|_: &HideOthers, cx| cx.defer(|cx| cx.hide_other_apps()));
     cx.on_action(|_: &ShowAll, cx| cx.defer(|cx| cx.unhide_other_apps()));
@@ -156,6 +159,48 @@ fn step_window_ui_scale(cx: &mut App, step: fn(u32) -> u32) {
     cx.defer(move |cx| {
         let next = step(ui_scale::percent_for_window(cx, window_id));
         set_window_ui_scale_percent(cx, window_id, Some(next));
+    });
+}
+
+/// Navigation also reaches a visible diff when focus is outside the
+/// window's view tree. A window handler stops propagation when it acts.
+pub(super) fn install_global_diff_navigation_actions(cx: &mut App) {
+    cx.on_action(|_: &DiffPrevFile, cx| {
+        defer_global_diff_navigation(cx, |view, cx| {
+            view.defer_adjacent_diff_file_navigation(-1, cx);
+        });
+    });
+    cx.on_action(|_: &DiffNextFile, cx| {
+        defer_global_diff_navigation(cx, |view, cx| {
+            view.defer_adjacent_diff_file_navigation(1, cx);
+        });
+    });
+    cx.on_action(|_: &DiffPrevChange, cx| {
+        defer_global_diff_navigation(cx, |view, cx| {
+            view.defer_diff_change_navigation(true, cx);
+        });
+    });
+    cx.on_action(|_: &DiffNextChange, cx| {
+        defer_global_diff_navigation(cx, |view, cx| {
+            view.defer_diff_change_navigation(false, cx);
+        });
+    });
+}
+
+fn defer_global_diff_navigation(
+    cx: &mut App,
+    navigate: impl FnOnce(&mut GitCometView, &mut gpui::Context<GitCometView>) + 'static,
+) {
+    // Capture the dispatching window before deferring. A keystroke belongs
+    // to that window even if native activation has not caught up yet.
+    let window_id = cx
+        .current_window_id()
+        .or_else(|| cx.active_window().map(|window| window.window_id()));
+    let Some(window) = window_id.and_then(|id| normal_gitcomet_window_by_id(cx, id)) else {
+        return;
+    };
+    cx.defer(move |cx| {
+        let _ = window.view.update(cx, navigate);
     });
 }
 
@@ -189,7 +234,7 @@ pub(super) fn install_global_diff_shortcut_fallback(cx: &mut App) {
         };
 
         let handled = entry
-            .main_pane
+            .diff_renderer
             .update(cx, |pane, cx| {
                 let handled = pane.handle_diff_shortcut(&event.keystroke, window, cx);
                 if handled {
@@ -240,6 +285,10 @@ pub(super) fn bind_app_keys(cx: &mut App) {
         KeyBinding::new("secondary-q", Quit, None),
         KeyBinding::new("f1", DiffPrevFile, None),
         KeyBinding::new("f4", DiffNextFile, None),
+        KeyBinding::new("alt-left", DiffPrevFile, None),
+        KeyBinding::new("alt-right", DiffNextFile, None),
+        KeyBinding::new("alt-up", DiffPrevChange, None),
+        KeyBinding::new("alt-down", DiffNextChange, None),
         KeyBinding::new("f2", DiffPrevSearchMatchOrChange, None),
         KeyBinding::new("f3", DiffNextSearchMatchOrChange, None),
         #[cfg(target_os = "macos")]
@@ -450,6 +499,10 @@ pub(super) fn bind_text_input_keys(cx: &mut App) {
         KeyBinding::new("ctrl-v", crate::kit::Paste, Some("TextInput")),
         KeyBinding::new("cmd-c", crate::kit::Copy, Some("TextInput")),
         KeyBinding::new("ctrl-c", crate::kit::Copy, Some("TextInput")),
+        KeyBinding::new("cmd-a", crate::kit::SelectAll, Some("MarkdownPreview")),
+        KeyBinding::new("ctrl-a", crate::kit::SelectAll, Some("MarkdownPreview")),
+        KeyBinding::new("cmd-c", crate::kit::Copy, Some("MarkdownPreview")),
+        KeyBinding::new("ctrl-c", crate::kit::Copy, Some("MarkdownPreview")),
         KeyBinding::new("cmd-x", crate::kit::Cut, Some("TextInput")),
         KeyBinding::new("ctrl-x", crate::kit::Cut, Some("TextInput")),
         KeyBinding::new("cmd-z", crate::kit::Undo, Some("TextInput")),

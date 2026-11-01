@@ -6,9 +6,14 @@ fn resolve(
 ) -> impl Fn(&mut PopoverHost, &ClickEvent, &mut Window, &mut gpui::Context<PopoverHost>) + 'static
 {
     move |this, _e, window, cx| {
-        let _ = this.root_view.update(cx, |root, cx| {
-            root.resolve_delete_permanently(prompt_id, confirmed, window, cx);
-        });
+        let _ = this.root_view.request(
+            RootRequest::ResolveDeletePermanently {
+                prompt_id,
+                confirmed,
+            },
+            Some(window),
+            cx,
+        );
         this.close_popover_and_restore_focus(window, cx);
     }
 }

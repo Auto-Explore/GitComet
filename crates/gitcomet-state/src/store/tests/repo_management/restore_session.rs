@@ -1,9 +1,11 @@
 use super::*;
+use crate::msg::PersistenceEffect;
+use crate::store::repository_runtime::RepositoryRuntimes;
 
 #[test]
 fn pr530_restore_preserves_repositories_opened_while_waiting_for_git() {
     for external_drop in [false, true] {
-        let mut repos = FxHashMap::default();
+        let mut repos = RepositoryRuntimes::default();
         let id_alloc = AtomicU64::new(1);
         let mut state = AppState::test_default();
         let incoming = std::env::temp_dir().join("pr530-incoming");
@@ -46,7 +48,7 @@ fn pr530_restore_preserves_repositories_opened_while_waiting_for_git() {
 
 #[test]
 fn remote_branches_loaded_sets_state() {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(2);
     let mut state = AppState::test_default();
     state.repos.push(RepoState::new_opening(
@@ -84,7 +86,7 @@ fn remote_branches_loaded_sets_state() {
 
 #[test]
 fn restore_session_opens_only_active_repo_and_selects_active_repo() {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
 
@@ -124,7 +126,10 @@ fn restore_session_opens_only_active_repo_and_selects_active_repo() {
     assert_eq!(
         effects
             .iter()
-            .filter(|e| matches!(e, Effect::PersistSession { .. }))
+            .filter(|e| matches!(
+                e,
+                Effect::Persistence(PersistenceEffect::PersistSession { .. })
+            ))
             .count(),
         1
     );
@@ -160,7 +165,7 @@ fn restore_session_opens_only_active_repo_and_selects_active_repo() {
 
 #[test]
 fn selecting_inactive_restored_repo_cancels_previous_load_and_starts_open() {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
 
@@ -235,7 +240,7 @@ fn selecting_inactive_restored_repo_cancels_previous_load_and_starts_open() {
 
 #[test]
 fn selecting_third_restored_repo_while_second_is_opening_cancels_second_open() {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
 
@@ -268,7 +273,11 @@ fn selecting_third_restored_repo_while_second_is_opening_cancels_second_open() {
         Msg::SetActiveRepo { repo_id: repo2 },
     );
     assert_eq!(state.active_repo, Some(repo2));
-    assert!(has_cancel_repo_loads_effect(&effects, repo1, 0));
+    assert!(has_cancel_repo_loads_effect(
+        &effects,
+        repo1,
+        crate::model::RepoLoadEpoch::default()
+    ));
     assert!(effects.iter().any(|effect| matches!(
         effect,
         Effect::OpenRepo { repo_id, .. } if *repo_id == repo2
@@ -315,7 +324,7 @@ fn selecting_third_restored_repo_while_second_is_opening_cancels_second_open() {
 
 #[test]
 fn restore_session_resolves_history_mode_precedence_per_repository() {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
 
@@ -393,7 +402,10 @@ fn restore_session_resolves_history_mode_precedence_per_repository() {
     let updates = effects
         .iter()
         .find_map(|effect| match effect {
-            Effect::PersistRepoHistoryModesBatch { updates, .. } => Some(updates),
+            Effect::Persistence(PersistenceEffect::PersistRepoHistoryModesBatch {
+                updates,
+                ..
+            }) => Some(updates),
             _ => None,
         })
         .expect("expected async history mode batch persist effect");

@@ -316,6 +316,10 @@ impl DetailsPaneView {
         if loading || StatusSectionEntries::from_repo(repo, section).is_none() {
             return true;
         }
+        if let Some(step) = DiffFileStep::from_keystroke(keystroke) {
+            self.defer_status_file_step(repo_id, step, window, cx);
+            return true;
+        }
         if keystroke.key == "a" {
             let paths = self.status_display_order_paths(repo_id, section);
             let order_rev = self.status_anchor_order_rev(repo, section);
@@ -330,6 +334,12 @@ impl DetailsPaneView {
             || (keystroke.key == "s" && area != DiffArea::Unstaged)
             || (keystroke.key == "u" && area != DiffArea::Staged)
         {
+            return true;
+        }
+        if keystroke.key == "space"
+            && let Some(target) = self.status_section_stage_and_advance_target(repo_id, section)
+        {
+            self.defer_status_stage_and_advance(repo_id, section, target, window, cx);
             return true;
         }
         let paths = self.status_section_action_selection(repo_id, section).paths;
@@ -353,6 +363,35 @@ impl DetailsPaneView {
             }
         }
         true
+    }
+
+    /// Space shares the diff pane's advance action only when this section's
+    /// single-file action targets the shown diff. Edited selections can target
+    /// other files, and an explicitly empty selection must remain a no-op.
+    pub(in crate::view) fn status_section_stage_and_advance_target(
+        &self,
+        repo_id: RepoId,
+        section: StatusSection,
+    ) -> Option<DiffTarget> {
+        let repo = self.active_repo().filter(|repo| repo.id == repo_id)?;
+        let loading = match section.diff_area() {
+            DiffArea::Unstaged => repo.worktree_status_is_loading(),
+            DiffArea::Staged => repo.staged_status_is_loading(),
+        };
+        if loading
+            || repo.local_actions_in_flight > 0
+            || repo.diff_state.inline_submodule_diff.is_some()
+        {
+            return None;
+        }
+        StatusSectionEntries::from_repo(repo, section)?;
+        let target = repo.diff_state.diff_target.as_ref()?;
+        let DiffTarget::WorkingTree { path, area, .. } = target else {
+            return None;
+        };
+        let selection = self.status_section_action_selection(repo_id, section);
+        (*area == section.diff_area() && selection.paths == std::slice::from_ref(path))
+            .then(|| target.clone())
     }
 
     pub(super) fn status_section_action_selection(

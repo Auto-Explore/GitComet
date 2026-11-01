@@ -8,6 +8,7 @@ use std::sync::{
 use std::time::{Duration, Instant};
 
 static SEND_FAILURE_COUNTER_TEST_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+const STORE_WAIT_TIMEOUT: Duration = Duration::from_secs(10);
 
 fn send_failure_counter_test_lock() -> MutexGuard<'static, ()> {
     SEND_FAILURE_COUNTER_TEST_LOCK
@@ -27,7 +28,7 @@ fn wait_for_store_snapshot(
     label: &str,
     predicate: impl Fn(&AppState) -> bool,
 ) -> Arc<AppState> {
-    let deadline = Instant::now() + Duration::from_secs(2);
+    let deadline = Instant::now() + STORE_WAIT_TIMEOUT;
     loop {
         let snapshot = store.snapshot();
         if predicate(&snapshot) {
@@ -69,11 +70,18 @@ impl GitRepository for ReadyOpenRepo {
         &self,
         _limit: usize,
         _cursor: Option<&LogCursor>,
+        cancellation: &gitcomet_core::services::CancellationToken,
     ) -> Result<std::sync::Arc<LogPage>> {
-        Ok(std::sync::Arc::new(LogPage {
-            commits: Vec::new(),
-            next_cursor: None,
-        }))
+        cancellation.check_cancelled()?;
+        let result: Result<std::sync::Arc<LogPage>> = {
+            Ok(std::sync::Arc::new(LogPage {
+                commits: Vec::new(),
+                next_cursor: None,
+            }))
+        };
+        let result = result?;
+        cancellation.check_cancelled()?;
+        Ok(result)
     }
 
     fn commit_details(&self, id: &CommitId) -> Result<CommitDetails> {
@@ -94,15 +102,29 @@ impl GitRepository for ReadyOpenRepo {
         Ok(Vec::new())
     }
 
-    fn current_branch(&self) -> Result<String> {
-        Ok("main".to_string())
+    fn current_branch(
+        &self,
+        cancellation: &gitcomet_core::services::CancellationToken,
+    ) -> Result<String> {
+        cancellation.check_cancelled()?;
+        let result: Result<String> = { Ok("main".to_string()) };
+        let result = result?;
+        cancellation.check_cancelled()?;
+        Ok(result)
     }
 
-    fn list_branches(&self) -> Result<Vec<Branch>> {
-        Ok(Vec::new())
+    fn list_branches(
+        &self,
+        cancellation: &gitcomet_core::services::CancellationToken,
+    ) -> Result<Vec<Branch>> {
+        cancellation.check_cancelled()?;
+        let result: Result<Vec<Branch>> = { Ok(Vec::new()) };
+        let result = result?;
+        cancellation.check_cancelled()?;
+        Ok(result)
     }
 
-    fn list_tags_cancellable(
+    fn list_tags(
         &self,
         _cancellation: &CancellationToken,
     ) -> Result<Vec<gitcomet_core::domain::Tag>> {
@@ -112,16 +134,37 @@ impl GitRepository for ReadyOpenRepo {
         Ok(Vec::new())
     }
 
-    fn list_remotes(&self) -> Result<Vec<Remote>> {
-        Ok(Vec::new())
+    fn list_remotes(
+        &self,
+        cancellation: &gitcomet_core::services::CancellationToken,
+    ) -> Result<Vec<Remote>> {
+        cancellation.check_cancelled()?;
+        let result: Result<Vec<Remote>> = { Ok(Vec::new()) };
+        let result = result?;
+        cancellation.check_cancelled()?;
+        Ok(result)
     }
 
-    fn list_remote_branches(&self) -> Result<Vec<RemoteBranch>> {
-        Ok(Vec::new())
+    fn list_remote_branches(
+        &self,
+        cancellation: &gitcomet_core::services::CancellationToken,
+    ) -> Result<Vec<RemoteBranch>> {
+        cancellation.check_cancelled()?;
+        let result: Result<Vec<RemoteBranch>> = { Ok(Vec::new()) };
+        let result = result?;
+        cancellation.check_cancelled()?;
+        Ok(result)
     }
 
-    fn status(&self) -> Result<RepoStatus> {
-        Ok(RepoStatus::default())
+    fn status(
+        &self,
+        cancellation: &gitcomet_core::services::CancellationToken,
+    ) -> Result<RepoStatus> {
+        cancellation.check_cancelled()?;
+        let result: Result<RepoStatus> = { Ok(RepoStatus::default()) };
+        let result = result?;
+        cancellation.check_cancelled()?;
+        Ok(result)
     }
 
     fn diff_unified(&self, _target: &DiffTarget) -> Result<String> {
@@ -146,8 +189,15 @@ impl GitRepository for ReadyOpenRepo {
     fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
         Ok(())
     }
-    fn stash_list(&self) -> Result<Vec<StashEntry>> {
-        Ok(Vec::new())
+    fn stash_list(
+        &self,
+        cancellation: &gitcomet_core::services::CancellationToken,
+    ) -> Result<Vec<StashEntry>> {
+        cancellation.check_cancelled()?;
+        let result: Result<Vec<StashEntry>> = { Ok(Vec::new()) };
+        let result = result?;
+        cancellation.check_cancelled()?;
+        Ok(result)
     }
     fn stash_apply(&self, _index: usize) -> Result<()> {
         Ok(())
@@ -164,11 +214,13 @@ impl GitRepository for ReadyOpenRepo {
     fn commit(&self, _message: &str) -> Result<()> {
         Ok(())
     }
-    fn fetch_all(&self) -> Result<()> {
-        Ok(())
+    fn fetch_all(&self, _prune: bool) -> Result<gitcomet_core::services::CommandOutput> {
+        let result: Result<()> = { Ok(()) };
+        result.map(|()| gitcomet_core::services::CommandOutput::empty_success("git fetch --all"))
     }
-    fn pull(&self, _mode: PullMode) -> Result<()> {
-        Ok(())
+    fn pull(&self, _mode: PullMode) -> Result<gitcomet_core::services::CommandOutput> {
+        let result: Result<()> = { Ok(()) };
+        result.map(|()| gitcomet_core::services::CommandOutput::empty_success("git pull"))
     }
     fn push(&self) -> Result<()> {
         Ok(())
@@ -212,7 +264,8 @@ impl GitBackend for BlockingOpenBackend {
 }
 
 struct SelectiveBlockingOpenBackend {
-    started_tx: mpsc::Sender<PathBuf>,
+    started_tx: mpsc::Sender<(PathBuf, CancellationToken)>,
+    allow_cancellation: Arc<AtomicBool>,
     release: Arc<(Mutex<bool>, Condvar)>,
 }
 
@@ -226,16 +279,7 @@ impl SelectiveBlockingOpenBackend {
 
 impl GitBackend for SelectiveBlockingOpenBackend {
     fn open(&self, path: &Path) -> std::result::Result<Arc<dyn GitRepository>, Error> {
-        let workdir = path.to_path_buf();
-        let _ = self.started_tx.send(workdir.clone());
-        if Self::should_block(&workdir) {
-            let (lock, condvar) = &*self.release;
-            let mut released = lock.lock().unwrap_or_else(|e| e.into_inner());
-            while !*released {
-                released = condvar.wait(released).unwrap_or_else(|e| e.into_inner());
-            }
-        }
-        Ok(Arc::new(ReadyOpenRepo::new(workdir)))
+        self.open_cancellable(path, &CancellationToken::new())
     }
 
     fn open_cancellable(
@@ -245,12 +289,18 @@ impl GitBackend for SelectiveBlockingOpenBackend {
     ) -> std::result::Result<Arc<dyn GitRepository>, Error> {
         cancellation.check_cancelled()?;
         let workdir = path.to_path_buf();
-        let _ = self.started_tx.send(workdir.clone());
+        let _ = self
+            .started_tx
+            .send((workdir.clone(), cancellation.clone()));
         if Self::should_block(&workdir) {
             let (lock, condvar) = &*self.release;
             let mut released = lock.lock().unwrap_or_else(|e| e.into_inner());
             while !*released {
-                cancellation.check_cancelled()?;
+                // Hold every worker until the test has saturated the pool and
+                // queued the next open, even if an earlier tab is cancelled.
+                if self.allow_cancellation.load(Ordering::Acquire) {
+                    cancellation.check_cancelled()?;
+                }
                 let (next_released, _) = condvar
                     .wait_timeout(released, Duration::from_millis(10))
                     .unwrap_or_else(|e| e.into_inner());
@@ -317,11 +367,18 @@ impl GitRepository for BlockingDiffRepo {
         &self,
         _limit: usize,
         _cursor: Option<&LogCursor>,
+        cancellation: &gitcomet_core::services::CancellationToken,
     ) -> Result<std::sync::Arc<LogPage>> {
-        Ok(std::sync::Arc::new(LogPage {
-            commits: Vec::new(),
-            next_cursor: None,
-        }))
+        cancellation.check_cancelled()?;
+        let result: Result<std::sync::Arc<LogPage>> = {
+            Ok(std::sync::Arc::new(LogPage {
+                commits: Vec::new(),
+                next_cursor: None,
+            }))
+        };
+        let result = result?;
+        cancellation.check_cancelled()?;
+        Ok(result)
     }
 
     fn commit_details(&self, id: &CommitId) -> Result<CommitDetails> {
@@ -342,24 +399,59 @@ impl GitRepository for BlockingDiffRepo {
         Ok(Vec::new())
     }
 
-    fn current_branch(&self) -> Result<String> {
-        Ok("main".to_string())
+    fn current_branch(
+        &self,
+        cancellation: &gitcomet_core::services::CancellationToken,
+    ) -> Result<String> {
+        cancellation.check_cancelled()?;
+        let result: Result<String> = { Ok("main".to_string()) };
+        let result = result?;
+        cancellation.check_cancelled()?;
+        Ok(result)
     }
 
-    fn list_branches(&self) -> Result<Vec<Branch>> {
-        Ok(Vec::new())
+    fn list_branches(
+        &self,
+        cancellation: &gitcomet_core::services::CancellationToken,
+    ) -> Result<Vec<Branch>> {
+        cancellation.check_cancelled()?;
+        let result: Result<Vec<Branch>> = { Ok(Vec::new()) };
+        let result = result?;
+        cancellation.check_cancelled()?;
+        Ok(result)
     }
 
-    fn list_remotes(&self) -> Result<Vec<Remote>> {
-        Ok(Vec::new())
+    fn list_remotes(
+        &self,
+        cancellation: &gitcomet_core::services::CancellationToken,
+    ) -> Result<Vec<Remote>> {
+        cancellation.check_cancelled()?;
+        let result: Result<Vec<Remote>> = { Ok(Vec::new()) };
+        let result = result?;
+        cancellation.check_cancelled()?;
+        Ok(result)
     }
 
-    fn list_remote_branches(&self) -> Result<Vec<RemoteBranch>> {
-        Ok(Vec::new())
+    fn list_remote_branches(
+        &self,
+        cancellation: &gitcomet_core::services::CancellationToken,
+    ) -> Result<Vec<RemoteBranch>> {
+        cancellation.check_cancelled()?;
+        let result: Result<Vec<RemoteBranch>> = { Ok(Vec::new()) };
+        let result = result?;
+        cancellation.check_cancelled()?;
+        Ok(result)
     }
 
-    fn status(&self) -> Result<RepoStatus> {
-        Ok(RepoStatus::default())
+    fn status(
+        &self,
+        cancellation: &gitcomet_core::services::CancellationToken,
+    ) -> Result<RepoStatus> {
+        cancellation.check_cancelled()?;
+        let result: Result<RepoStatus> = { Ok(RepoStatus::default()) };
+        let result = result?;
+        cancellation.check_cancelled()?;
+        Ok(result)
     }
 
     fn diff_unified(&self, _target: &DiffTarget) -> Result<String> {
@@ -370,13 +462,21 @@ impl GitRepository for BlockingDiffRepo {
     fn diff_file_text(
         &self,
         _target: &DiffTarget,
+        _encoding: Option<gitcomet_core::text_format::TextEncoding>,
+        cancellation: &gitcomet_core::services::CancellationToken,
     ) -> Result<Option<gitcomet_core::domain::FileDiffText>> {
-        self.wait_for_release("diff_file_text");
-        Ok(Some(gitcomet_core::domain::FileDiffText::new(
-            PathBuf::from("tracked.txt"),
-            Some("old\n".to_string()),
-            Some("new\n".to_string()),
-        )))
+        cancellation.check_cancelled()?;
+        let result: Result<Option<gitcomet_core::domain::FileDiffText>> = {
+            self.wait_for_release("diff_file_text");
+            Ok(Some(gitcomet_core::domain::FileDiffText::new(
+                PathBuf::from("tracked.txt"),
+                Some("old\n".to_string()),
+                Some("new\n".to_string()),
+            )))
+        };
+        let result = result?;
+        cancellation.check_cancelled()?;
+        Ok(result)
     }
 
     fn create_branch(&self, _name: &str, _target: &CommitId) -> Result<()> {
@@ -397,8 +497,15 @@ impl GitRepository for BlockingDiffRepo {
     fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
         Ok(())
     }
-    fn stash_list(&self) -> Result<Vec<StashEntry>> {
-        Ok(Vec::new())
+    fn stash_list(
+        &self,
+        cancellation: &gitcomet_core::services::CancellationToken,
+    ) -> Result<Vec<StashEntry>> {
+        cancellation.check_cancelled()?;
+        let result: Result<Vec<StashEntry>> = { Ok(Vec::new()) };
+        let result = result?;
+        cancellation.check_cancelled()?;
+        Ok(result)
     }
     fn stash_apply(&self, _index: usize) -> Result<()> {
         Ok(())
@@ -415,11 +522,13 @@ impl GitRepository for BlockingDiffRepo {
     fn commit(&self, _message: &str) -> Result<()> {
         Ok(())
     }
-    fn fetch_all(&self) -> Result<()> {
-        Ok(())
+    fn fetch_all(&self, _prune: bool) -> Result<gitcomet_core::services::CommandOutput> {
+        let result: Result<()> = { Ok(()) };
+        result.map(|()| gitcomet_core::services::CommandOutput::empty_success("git fetch --all"))
     }
-    fn pull(&self, _mode: PullMode) -> Result<()> {
-        Ok(())
+    fn pull(&self, _mode: PullMode) -> Result<gitcomet_core::services::CommandOutput> {
+        let result: Result<()> = { Ok(()) };
+        result.map(|()| gitcomet_core::services::CommandOutput::empty_success("git pull"))
     }
     fn push(&self) -> Result<()> {
         Ok(())
@@ -442,9 +551,13 @@ fn dispatch_increments_failure_counter_when_channel_is_disconnected() {
         command_tx,
         Arc::new(std::sync::atomic::AtomicBool::new(true)),
         super::worker_channel::StoreInstanceId::next(),
+        crate::store::repository_preferences::PreferenceHub::new(None),
+        crate::store::auto_fetch::AutoFetchCoordinator::new(),
+        crate::store::isolated_filesystem(),
     );
 
     let store = AppStore {
+        commit_identity: Arc::new(RwLock::new(None)),
         backend: Arc::new(FailingBackend),
         state: Arc::new(RwLock::new(Arc::new(AppState::test_default()))),
         publication: Default::default(),
@@ -468,8 +581,12 @@ fn concurrent_last_app_store_drops_shutdown_worker_once() {
         command_tx,
         Arc::clone(&alive),
         super::worker_channel::StoreInstanceId::next(),
+        crate::store::repository_preferences::PreferenceHub::new(None),
+        crate::store::auto_fetch::AutoFetchCoordinator::new(),
+        crate::store::isolated_filesystem(),
     );
     let store = AppStore {
+        commit_identity: Arc::new(RwLock::new(None)),
         backend: Arc::new(FailingBackend),
         state: Arc::new(RwLock::new(Arc::new(AppState::test_default()))),
         publication: Default::default(),
@@ -501,10 +618,18 @@ fn concurrent_last_app_store_drops_shutdown_worker_once() {
         .expect("expected final AppStore drop to send worker shutdown")
     {
         super::worker_channel::StoreWorkerCommand::Shutdown => {}
+        super::worker_channel::StoreWorkerCommand::BarrierForTest(_)
+        | super::worker_channel::StoreWorkerCommand::RepoMonitorBarrierForTest { .. } => {
+            panic!("expected shutdown command, got worker barrier")
+        }
         super::worker_channel::StoreWorkerCommand::Repository { .. } => {
             panic!("expected shutdown command, got repository read")
         }
+        super::worker_channel::StoreWorkerCommand::ActivationRefresh(_) => {
+            panic!("expected shutdown command, got checked repository activation")
+        }
         super::worker_channel::StoreWorkerCommand::Msg(_)
+        | super::worker_channel::StoreWorkerCommand::SetAutoFetchAllowed(_)
         | super::worker_channel::StoreWorkerCommand::Traced(..) => {
             panic!("expected shutdown command, got message command")
         }
@@ -649,26 +774,33 @@ fn switching_away_from_saturated_open_repos_does_not_block_next_open() {
     let temp = tempfile::tempdir().expect("create tempdir for open cancellation test");
     let repo_a = temp.path().join("repo-a");
     let repo_c = temp.path().join("repo-c");
-    let expected_repo_c = canonicalize_or_original(repo_c.clone());
-    let blocked_count = super::executor::default_worker_threads().max(1);
+    let blocked_count = super::executor::repo_load_worker_threads();
     let blocked_paths: Vec<PathBuf> = (0..blocked_count)
         .map(|ix| temp.path().join(format!("blocked-{ix}")))
         .collect();
+    for path in [&repo_a, &repo_c].into_iter().chain(&blocked_paths) {
+        std::fs::create_dir_all(path).expect("create mock repo directory");
+    }
+    let expected_repo_c = canonicalize_or_original(repo_c.clone());
 
-    let (started_tx, started_rx) = mpsc::channel::<PathBuf>();
+    let (started_tx, started_rx) = mpsc::channel::<(PathBuf, CancellationToken)>();
+    let allow_cancellation = Arc::new(AtomicBool::new(false));
     let release = Arc::new((Mutex::new(false), Condvar::new()));
     let _release_guard = BlockingOpenReleaseGuard {
         release: Arc::clone(&release),
     };
     let backend: Arc<dyn GitBackend> = Arc::new(SelectiveBlockingOpenBackend {
         started_tx,
+        allow_cancellation: Arc::clone(&allow_cancellation),
         release: Arc::clone(&release),
     });
     let (store, event_rx) = AppStore::new_test(backend);
+    // Native watcher startup and refreshes are unrelated to executor cancellation.
+    store.disable_repo_monitors_for_test();
 
     store.dispatch(Msg::OpenRepo(repo_a));
     started_rx
-        .recv_timeout(Duration::from_secs(1))
+        .recv_timeout(STORE_WAIT_TIMEOUT)
         .expect("initial repo open did not start");
     wait_for_store_snapshot(&store, &event_rx, "repo A to open", |state| {
         state
@@ -677,31 +809,51 @@ fn switching_away_from_saturated_open_repos_does_not_block_next_open() {
             .any(|repo| repo.id == RepoId(1) && matches!(repo.open, Loadable::Ready(())))
     });
 
+    let mut cancellations = Vec::with_capacity(blocked_count);
     for path in &blocked_paths {
         store.dispatch(Msg::OpenRepo(path.clone()));
-        let started = started_rx
-            .recv_timeout(Duration::from_secs(1))
+        let (started, cancellation) = started_rx
+            .recv_timeout(STORE_WAIT_TIMEOUT)
             .expect("blocked repo open did not start");
-        assert!(
-            SelectiveBlockingOpenBackend::should_block(&started),
-            "expected a blocked repo open to start, got {}",
-            started.display()
-        );
+        assert_eq!(started, canonicalize_or_original(path.clone()));
+        cancellations.push(cancellation);
     }
 
     store.dispatch(Msg::SetActiveRepo { repo_id: RepoId(1) });
-    wait_for_store_snapshot(
-        &store,
-        &event_rx,
-        "repo A to become active again",
-        |state| state.active_repo == Some(RepoId(1)),
+    // Published state precedes effect dispatch. The barrier also waits for the
+    // cancellation effects, while the mock still occupies every repo-load worker.
+    store
+        .barrier_for_test()
+        .recv_timeout(STORE_WAIT_TIMEOUT)
+        .expect("switching repos was blocked by the saturated repo-load pool");
+    assert_eq!(store.snapshot().active_repo, Some(RepoId(1)));
+    assert!(
+        cancellations.iter().all(CancellationToken::is_cancelled),
+        "switching away must cancel every blocked repo open"
     );
 
     store.dispatch(Msg::OpenRepo(repo_c));
-    let started = started_rx
-        .recv_timeout(Duration::from_secs(1))
+    store
+        .barrier_for_test()
+        .recv_timeout(STORE_WAIT_TIMEOUT)
+        .expect("queueing the next open was blocked by the saturated repo-load pool");
+    // Only cancellation may free the workers: the release guard remains armed
+    // for panic cleanup. The timeout is a deadlock guard, not a latency assertion.
+    allow_cancellation.store(true, Ordering::Release);
+    release.1.notify_all();
+    let (started, _) = started_rx
+        .recv_timeout(STORE_WAIT_TIMEOUT)
         .expect("next repo open was blocked behind cancelled opening repos");
     assert_eq!(started, expected_repo_c);
+    wait_for_store_snapshot(&store, &event_rx, "repo C to open", |state| {
+        state.repos.iter().any(|repo| {
+            repo.spec.workdir == expected_repo_c && matches!(repo.open, Loadable::Ready(()))
+        })
+    });
+    store
+        .shutdown_for_test()
+        .recv_timeout(STORE_WAIT_TIMEOUT)
+        .expect("store tasks did not stop after the cancelled opens");
 }
 
 #[test]

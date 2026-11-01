@@ -4,10 +4,10 @@ use super::*;
 
 #[gpui::test]
 fn clicking_a_badge_opens_its_menu_without_arming_a_selection(cx: &mut gpui::TestAppContext) {
+    gitcomet_ui_kit::test_support::use_real_text_backend(cx);
     // The row under a picture also listens for a left press, so without the
     // picture stopping propagation the click opens the menu *and* starts a
     // drag-selection behind it.
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -59,7 +59,7 @@ fn clicking_a_badge_opens_its_menu_without_arming_a_selection(cx: &mut gpui::Tes
                 "clicking a badge opens its link menu, got {popover:?}"
             );
             assert!(
-                !this.main_pane.read(cx).diff_text_selecting,
+                !this.diff_renderer.read(cx).diff_text_selecting,
                 "and the row underneath must not have started selecting text"
             );
         });
@@ -70,7 +70,7 @@ fn clicking_a_badge_opens_its_menu_without_arming_a_selection(cx: &mut gpui::Tes
 
 #[gpui::test]
 fn ctrl_clicking_a_linked_badge_opens_the_browser(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
+    gitcomet_ui_kit::test_support::use_real_text_backend(cx);
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -104,13 +104,13 @@ fn ctrl_clicking_a_linked_badge_opens_the_browser(cx: &mut gpui::TestAppContext)
             "markdown_preview_inline_image_{source_byte}"
         )))
         .expect("the badge is drawn");
-    crate::view::panes::main::take_opened_web_links_for_tests();
+    crate::view::panes::diff::take_opened_web_links_for_tests();
 
     simulate_modified_click(cx, badge.center(), 1, Modifiers::secondary_key());
     cx.run_until_parked();
 
     assert_eq!(
-        crate::view::panes::main::take_opened_web_links_for_tests(),
+        crate::view::panes::diff::take_opened_web_links_for_tests(),
         vec!["https://example.com/badge".to_string()],
         "Ctrl/Cmd+click follows the link the badge wraps"
     );
@@ -119,7 +119,7 @@ fn ctrl_clicking_a_linked_badge_opens_the_browser(cx: &mut gpui::TestAppContext)
         let popover = this.popover_host.read(app).popover_kind_for_tests();
         assert!(popover.is_none(), "without a menu, got {popover:?}");
         assert!(
-            !this.main_pane.read(app).diff_text_selecting,
+            !this.diff_renderer.read(app).diff_text_selecting,
             "and without arming a selection"
         );
     });
@@ -129,14 +129,14 @@ fn ctrl_clicking_a_linked_badge_opens_the_browser(cx: &mut gpui::TestAppContext)
 
 #[gpui::test]
 fn linked_blocked_image_menu_loads_one_image_only_in_ask_mode(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
+    gitcomet_ui_kit::test_support::use_real_text_backend(cx);
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
     });
     cx.update(|_window, app| {
-        let main_pane = view.read(app).main_pane.clone();
-        main_pane.update(app, |pane, cx| {
+        let diff_renderer = view.read(app).diff_renderer.clone();
+        diff_renderer.update(app, |pane, cx| {
             pane.set_remote_markdown_image_policy(
                 crate::view::RemoteMarkdownImagePolicy::AskBeforeLoading,
                 cx,
@@ -211,16 +211,16 @@ fn linked_blocked_image_menu_loads_one_image_only_in_ask_mode(cx: &mut gpui::Tes
     cx.run_until_parked();
 
     cx.update(|_window, app| {
-        let main_pane = view.read(app).main_pane.read(app);
-        assert_eq!(main_pane.remote_markdown_images.approved_urls.len(), 1);
+        let diff_renderer = view.read(app).diff_renderer.read(app);
+        assert_eq!(diff_renderer.remote_markdown_images.approved_urls.len(), 1);
         assert!(
-            main_pane
+            diff_renderer
                 .remote_markdown_images
                 .approved_urls
                 .contains(first_image_url)
         );
         assert!(
-            !main_pane
+            !diff_renderer
                 .remote_markdown_images
                 .approved_urls
                 .contains(second_image_url),
@@ -229,8 +229,8 @@ fn linked_blocked_image_menu_loads_one_image_only_in_ask_mode(cx: &mut gpui::Tes
     });
 
     cx.update(|_window, app| {
-        let main_pane = view.read(app).main_pane.clone();
-        main_pane.update(app, |pane, cx| {
+        let diff_renderer = view.read(app).diff_renderer.clone();
+        diff_renderer.update(app, |pane, cx| {
             pane.set_remote_markdown_image_policy(
                 crate::view::RemoteMarkdownImagePolicy::NeverLoad,
                 cx,
@@ -256,8 +256,13 @@ fn linked_blocked_image_menu_loads_one_image_only_in_ask_mode(cx: &mut gpui::Tes
         "Never mode must not offer any path to approve the remote image"
     );
     cx.update(|_window, app| {
-        let main_pane = view.read(app).main_pane.read(app);
-        assert!(main_pane.remote_markdown_images.approved_urls.is_empty());
+        let diff_renderer = view.read(app).diff_renderer.read(app);
+        assert!(
+            diff_renderer
+                .remote_markdown_images
+                .approved_urls
+                .is_empty()
+        );
         let popover = view
             .read(app)
             .popover_host
@@ -277,11 +282,10 @@ fn linked_blocked_image_menu_loads_one_image_only_in_ask_mode(cx: &mut gpui::Tes
 
 #[gpui::test]
 fn copying_a_link_address_says_that_it_was_copied(cx: &mut gpui::TestAppContext) {
+    gitcomet_ui_kit::test_support::use_real_text_backend(cx);
     // Nothing on screen changes when a link's address goes to the clipboard —
     // the document shows the link's text, never its destination — so the copy
     // has to say so or the reader cannot tell it happened.
-    let _visual_guard = lock_visual_test();
-    let _clipboard_guard = lock_clipboard_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -368,7 +372,7 @@ fn copying_a_link_address_says_that_it_was_copied(cx: &mut gpui::TestAppContext)
 
 #[gpui::test]
 fn clicking_a_markdown_preview_link_opens_the_open_in_browser_menu(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
+    gitcomet_ui_kit::test_support::use_real_text_backend(cx);
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -393,7 +397,7 @@ fn clicking_a_markdown_preview_link_opens_the_open_in_browser_menu(cx: &mut gpui
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            let link = this.main_pane.read(cx).markdown_preview_link_span_at(
+            let link = this.diff_renderer.read(cx).markdown_preview_link_span_at(
                 0,
                 DiffTextRegion::Inline,
                 on_link,
@@ -454,15 +458,15 @@ fn first_wrap_offset(
     row_ix: usize,
 ) -> usize {
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         let hitbox = pane
             .diff_text_hitboxes
             .get(&(row_ix, DiffTextRegion::Inline))
             .expect("the row is drawn");
         let layout = &hitbox.wrapped.as_ref().expect("a wrapping row").layout;
         let line = layout.line_layout_for_index(0).expect("laid out");
-        let boundary = line.wrap_boundaries().first().expect("the row wraps");
-        line.unwrapped_layout.runs[boundary.run_ix].glyphs[boundary.glyph_ix].index
+        assert!(line.line_count() > 1, "the row wraps");
+        line.visual_lines()[0].text_range.end
     })
 }
 
@@ -474,7 +478,7 @@ fn link_points_by_line(
     url: &str,
 ) -> Vec<gpui::Point<Pixels>> {
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         let hitbox = pane
             .diff_text_hitboxes
             .get(&(row_ix, DiffTextRegion::Inline))
@@ -508,11 +512,11 @@ fn link_points_by_line(
 
 #[gpui::test]
 fn a_link_menu_opens_under_the_words_on_the_line_clicked(cx: &mut gpui::TestAppContext) {
+    gitcomet_ui_kit::test_support::use_real_text_backend(cx);
     // gpui puts an offset at a wrap boundary at the end of the line above, so
     // a link that began a visual line hung its menu off the far end of the
     // previous one; a link over two lines hung it off its first part wherever
     // it was clicked.
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -532,8 +536,9 @@ fn a_link_menu_opens_under_the_words_on_the_line_clicked(cx: &mut gpui::TestAppC
     let per_line = wrap / "word ".len();
     probe.cleanup();
 
-    // The same words, so the lines break in the same places: the first link
-    // starts the second line, the second begins at the end of the first.
+    // Preserve the probe's displayed words exactly. Proportional fonts do not
+    // give "word" and "link" the same advance, so substituting different labels
+    // would not guarantee either of the wrap boundaries this regression needs.
     let at_wrap = "https://example.com/at-wrap";
     let across = "https://example.com/across";
     let fixture = RenderedPreviewFixture::open(
@@ -542,30 +547,42 @@ fn a_link_menu_opens_under_the_words_on_the_line_clicked(cx: &mut gpui::TestAppC
         gitcomet_state::model::RepoId(8844),
         "markdown_link_menu_wrap",
         &format!(
-            "{}[link at wrap]({at_wrap}) {}\n\n{}[link link link]({across}) {}\n",
+            "{}[word]({at_wrap}) {}\n\n{}[word word word]({across}) {}\n",
             words(per_line),
             words(30),
             words(per_line - 1),
             words(30),
         ),
     );
-    let row_with = |text: &str| {
+    let row_with = |text: String| {
         fixture
             .document
             .rows
             .iter()
-            .position(|row| row.text.contains(text))
+            .position(|row| row.text.as_ref() == text.trim_end())
             .expect("the paragraph")
     };
     for (row_ix, url, lines) in [
-        (row_with("link at wrap"), at_wrap, 1),
-        (row_with("link link link"), across, 2),
+        (
+            row_with(format!("{}word {}", words(per_line), words(30))),
+            at_wrap,
+            1,
+        ),
+        (
+            row_with(format!(
+                "{}word word word {}",
+                words(per_line - 1),
+                words(30)
+            )),
+            across,
+            2,
+        ),
     ] {
         let points = link_points_by_line(cx, &view, row_ix, url);
         assert_eq!(points.len(), lines, "{url} is on {lines} visual line(s)");
         let row_top = cx.update(|_window, app| {
             view.read(app)
-                .main_pane
+                .diff_renderer
                 .read(app)
                 .diff_text_hitbox_bounds_for_tests(row_ix, DiffTextRegion::Inline)
                 .expect("the row is drawn")
@@ -600,7 +617,7 @@ fn a_link_menu_opens_under_the_words_on_the_line_clicked(cx: &mut gpui::TestAppC
 
 #[gpui::test]
 fn ctrl_clicking_a_web_link_opens_the_browser_without_a_menu(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
+    gitcomet_ui_kit::test_support::use_real_text_backend(cx);
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -617,13 +634,13 @@ fn ctrl_clicking_a_web_link_opens_the_browser_without_a_menu(cx: &mut gpui::Test
         .debug_bounds("markdown_preview_text_box_0")
         .expect("expected preview text bounds");
     let on_link = point(text_bounds.left() + px(4.0), text_bounds.center().y);
-    crate::view::panes::main::take_opened_web_links_for_tests();
+    crate::view::panes::diff::take_opened_web_links_for_tests();
 
     simulate_modified_click(cx, on_link, 1, Modifiers::secondary_key());
     cx.run_until_parked();
 
     assert_eq!(
-        crate::view::panes::main::take_opened_web_links_for_tests(),
+        crate::view::panes::diff::take_opened_web_links_for_tests(),
         vec!["https://example.com/docs".to_string()],
         "Ctrl/Cmd+click opens the link in the browser"
     );
@@ -632,7 +649,7 @@ fn ctrl_clicking_a_web_link_opens_the_browser_without_a_menu(cx: &mut gpui::Test
         let popover = this.popover_host.read(app).popover_kind_for_tests();
         assert!(popover.is_none(), "and skips the menu, got {popover:?}");
         assert!(
-            !this.main_pane.read(app).diff_text_has_selection(),
+            !this.diff_renderer.read(app).diff_text_has_selection(),
             "following the link is not a text selection"
         );
     });
@@ -641,7 +658,7 @@ fn ctrl_clicking_a_web_link_opens_the_browser_without_a_menu(cx: &mut gpui::Test
     simulate_counted_click(cx, on_link, 1);
     cx.run_until_parked();
     assert!(
-        crate::view::panes::main::take_opened_web_links_for_tests().is_empty(),
+        crate::view::panes::diff::take_opened_web_links_for_tests().is_empty(),
         "a plain click opens nothing by itself"
     );
     let popover = popover_kind(cx, &view);
@@ -676,7 +693,7 @@ fn click_open_in_gitcomet(cx: &mut gpui::VisualTestContext) {
 
 #[gpui::test]
 fn clicking_a_local_markdown_link_offers_open_in_gitcomet(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
+    gitcomet_ui_kit::test_support::use_real_text_backend(cx);
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -778,7 +795,7 @@ fn clicking_a_local_markdown_link_offers_open_in_gitcomet(cx: &mut gpui::TestApp
 
 #[gpui::test]
 fn a_local_link_to_a_missing_file_shows_a_disabled_entry(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
+    gitcomet_ui_kit::test_support::use_real_text_backend(cx);
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -829,7 +846,7 @@ fn a_local_link_to_a_missing_file_shows_a_disabled_entry(cx: &mut gpui::TestAppC
             "a greyed-out entry does not close the menu, got {popover:?}"
         );
         let target = this
-            .main_pane
+            .diff_renderer
             .read(app)
             .active_repo()
             .and_then(|repo| repo.diff_state.diff_target.clone());
@@ -848,7 +865,7 @@ fn a_local_link_to_a_missing_file_shows_a_disabled_entry(cx: &mut gpui::TestAppC
 
 #[gpui::test]
 fn ctrl_clicking_a_local_link_opens_the_file_without_a_menu(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
+    gitcomet_ui_kit::test_support::use_real_text_backend(cx);
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -910,7 +927,7 @@ fn ctrl_clicking_a_local_link_opens_the_file_without_a_menu(cx: &mut gpui::TestA
 
 #[gpui::test]
 fn ctrl_clicking_a_link_to_a_missing_file_still_opens_the_menu(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
+    gitcomet_ui_kit::test_support::use_real_text_backend(cx);
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -946,7 +963,7 @@ fn ctrl_clicking_a_link_to_a_missing_file_still_opens_the_menu(cx: &mut gpui::Te
 
 #[gpui::test]
 fn a_root_relative_link_resolves_from_the_repo_root(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
+    gitcomet_ui_kit::test_support::use_real_text_backend(cx);
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -994,9 +1011,9 @@ fn a_root_relative_link_resolves_from_the_repo_root(cx: &mut gpui::TestAppContex
 fn a_link_in_a_commit_preview_is_offered_even_when_the_worktree_lost_the_file(
     cx: &mut gpui::TestAppContext,
 ) {
+    gitcomet_ui_kit::test_support::use_real_text_backend(cx);
     // The worktree is not the tree the document came from: a file deleted
     // since that commit is still there to read.
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -1024,7 +1041,7 @@ fn a_link_in_a_commit_preview_is_offered_even_when_the_worktree_lost_the_file(
     cx.run_until_parked();
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         let kind = pane.markdown_preview_link_popover_kind(
             DiffTextRegion::Inline,
             0,
@@ -1053,7 +1070,7 @@ fn a_link_in_a_commit_preview_is_offered_even_when_the_worktree_lost_the_file(
 #[cfg(unix)]
 #[gpui::test]
 fn a_local_link_through_a_symlink_out_of_the_repo_is_inert(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
+    gitcomet_ui_kit::test_support::use_real_text_backend(cx);
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -1097,7 +1114,7 @@ fn a_local_link_through_a_symlink_out_of_the_repo_is_inert(cx: &mut gpui::TestAp
             popover.is_none(),
             "a symlink must not carry a link out of the repository, got {popover:?}"
         );
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert_eq!(
             pane.markdown_preview_link_popover_kind(
                 DiffTextRegion::Inline,
@@ -1118,16 +1135,16 @@ fn a_local_link_through_a_symlink_out_of_the_repo_is_inert(cx: &mut gpui::TestAp
 fn a_linked_blocked_image_whose_link_cannot_open_still_loads_on_click(
     cx: &mut gpui::TestAppContext,
 ) {
+    gitcomet_ui_kit::test_support::use_real_text_backend(cx);
     // `./` names no file, so there is no menu to carry Load image: the click
     // must approve the picture directly, as it did before local links opened.
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
     });
     cx.update(|_window, app| {
-        let main_pane = view.read(app).main_pane.clone();
-        main_pane.update(app, |pane, cx| {
+        let diff_renderer = view.read(app).diff_renderer.clone();
+        diff_renderer.update(app, |pane, cx| {
             pane.set_remote_markdown_image_policy(
                 crate::view::RemoteMarkdownImagePolicy::AskBeforeLoading,
                 cx,
@@ -1165,16 +1182,16 @@ fn a_linked_blocked_image_whose_link_cannot_open_still_loads_on_click(
             popover.is_none(),
             "an inert link opens no menu, got {popover:?}"
         );
-        let main_pane = this.main_pane.read(app);
+        let diff_renderer = this.diff_renderer.read(app);
         assert!(
-            main_pane
+            diff_renderer
                 .remote_markdown_images
                 .approved_urls
                 .contains(first_image_url),
             "the click approves the picture it landed on"
         );
         assert!(
-            !main_pane
+            !diff_renderer
                 .remote_markdown_images
                 .approved_urls
                 .contains(second_image_url),
@@ -1211,7 +1228,7 @@ fn point_on_link_in_row(
         .collect();
     assert!(!boxes.is_empty(), "row {row_ix} draws no text");
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         for text_box in &boxes {
             let mut y = text_box.top() + px(2.0);
             while y < text_box.bottom() {
@@ -1235,7 +1252,7 @@ fn point_on_link_in_row(
 
 #[gpui::test]
 fn clicking_an_anchor_link_in_a_table_scrolls_to_the_heading(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
+    gitcomet_ui_kit::test_support::use_real_text_backend(cx);
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -1268,9 +1285,9 @@ fn clicking_an_anchor_link_in_a_table_scrolls_to_the_heading(cx: &mut gpui::Test
     cx.run_until_parked();
     let notified = std::rc::Rc::new(std::cell::Cell::new(0usize));
     let _subscription = cx.update(|_window, app| {
-        let main_pane = view.read(app).main_pane.clone();
+        let diff_renderer = view.read(app).diff_renderer.clone();
         let notified = std::rc::Rc::clone(&notified);
-        app.observe(&main_pane, move |_, _| notified.set(notified.get() + 1))
+        app.observe(&diff_renderer, move |_, _| notified.set(notified.get() + 1))
     });
     cx.update(|window, app| {
         window.simulate_next_frame(app);
@@ -1288,7 +1305,7 @@ fn clicking_an_anchor_link_in_a_table_scrolls_to_the_heading(cx: &mut gpui::Test
             popover.is_none(),
             "an anchor opens no menu, got {popover:?}"
         );
-        let pane = this.main_pane.read(app);
+        let pane = this.diff_renderer.read(app);
         assert!(
             !pane.diff_text_has_selection(),
             "following the link is not a text selection"
@@ -1323,7 +1340,7 @@ fn clicking_an_anchor_link_in_a_table_scrolls_to_the_heading(cx: &mut gpui::Test
 
 #[gpui::test]
 fn ctrl_clicking_an_anchor_link_scrolls_to_the_heading(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
+    gitcomet_ui_kit::test_support::use_real_text_backend(cx);
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -1358,7 +1375,7 @@ fn ctrl_clicking_an_anchor_link_scrolls_to_the_heading(cx: &mut gpui::TestAppCon
             popover.is_none(),
             "an anchor opens no menu, got {popover:?}"
         );
-        let pane = this.main_pane.read(app);
+        let pane = this.diff_renderer.read(app);
         let scroll = pane.worktree_preview_scroll.0.borrow().base_handle.clone();
         assert!(
             scroll.offset().y < px(0.0),
@@ -1371,7 +1388,7 @@ fn ctrl_clicking_an_anchor_link_scrolls_to_the_heading(cx: &mut gpui::TestAppCon
 
 #[gpui::test]
 fn an_anchor_link_without_a_heading_is_plain_text(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
+    gitcomet_ui_kit::test_support::use_real_text_backend(cx);
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -1400,7 +1417,7 @@ fn an_anchor_link_without_a_heading_is_plain_text(cx: &mut gpui::TestAppContext)
         let this = view.read(app);
         let popover = this.popover_host.read(app).popover_kind_for_tests();
         assert!(popover.is_none(), "nothing to open, got {popover:?}");
-        let pane = this.main_pane.read(app);
+        let pane = this.diff_renderer.read(app);
         assert_eq!(pane.markdown_interaction.reveal.pending(), None);
         assert_eq!(
             pane.worktree_preview_scroll
@@ -1419,6 +1436,7 @@ fn an_anchor_link_without_a_heading_is_plain_text(cx: &mut gpui::TestAppContext)
 
 #[gpui::test]
 fn an_anchor_link_scrolls_the_rendered_markdown_diff(cx: &mut gpui::TestAppContext) {
+    gitcomet_ui_kit::test_support::use_real_text_backend(cx);
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -1438,7 +1456,7 @@ fn an_anchor_link_scrolls_the_rendered_markdown_diff(cx: &mut gpui::TestAppConte
 
     let followed = cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 reset_uniform_list_offsets(&[&pane.diff_scroll]);
                 assert!(
                     !pane.scroll_markdown_preview_to_anchor(
@@ -1460,7 +1478,7 @@ fn an_anchor_link_scrolls_the_rendered_markdown_diff(cx: &mut gpui::TestAppConte
     draw_and_drain_test_window(cx);
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert!(
             uniform_list_offset(&pane.diff_scroll).y < px(0.0),
             "the rendered diff scrolls to the heading, offset stayed at {:?}",
@@ -1477,7 +1495,7 @@ fn hovered_link(
 ) -> Option<crate::view::rows::MarkdownPreviewHoveredLink> {
     cx.update(|_window, app| {
         view.read(app)
-            .main_pane
+            .diff_renderer
             .read(app)
             .markdown_interaction
             .hovered_link
@@ -1496,9 +1514,9 @@ fn move_mouse(cx: &mut gpui::VisualTestContext, position: gpui::Point<Pixels>, h
 
 #[gpui::test]
 fn hovering_a_link_underlines_it_and_shows_the_pointer(cx: &mut gpui::TestAppContext) {
+    gitcomet_ui_kit::test_support::use_real_text_backend(cx);
     use crate::view::rows::MarkdownPreviewHoveredLink;
 
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -1581,7 +1599,7 @@ fn hovering_a_link_underlines_it_and_shows_the_pointer(cx: &mut gpui::TestAppCon
 
 #[gpui::test]
 fn hovering_a_link_in_the_rendered_diff_tracks_it(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
+    gitcomet_ui_kit::test_support::use_real_text_backend(cx);
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -1599,7 +1617,7 @@ fn hovering_a_link_in_the_rendered_diff_tracks_it(cx: &mut gpui::TestAppContext)
         &new_text,
     );
     let link_row = cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         let gitcomet_state::model::Loadable::Ready(preview) = &pane.diff_markdown.preview else {
             panic!("the preview is ready");
         };
@@ -1635,7 +1653,7 @@ fn point_on_link_in_cell(
         )))
         .unwrap_or_else(|| panic!("cell {column} of row {row_ix} draws text"));
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         let y = text_box.center().y;
         let mut x = text_box.left();
         while x < text_box.right() {
@@ -1654,14 +1672,14 @@ fn point_on_link_in_cell(
 
 #[gpui::test]
 fn a_blocked_image_linked_to_an_anchor_still_loads_on_click(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
+    gitcomet_ui_kit::test_support::use_real_text_backend(cx);
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
     });
     cx.update(|_window, app| {
-        let main_pane = view.read(app).main_pane.clone();
-        main_pane.update(app, |pane, cx| {
+        let diff_renderer = view.read(app).diff_renderer.clone();
+        diff_renderer.update(app, |pane, cx| {
             pane.set_remote_markdown_image_policy(
                 crate::view::RemoteMarkdownImagePolicy::AskBeforeLoading,
                 cx,
@@ -1696,7 +1714,7 @@ fn a_blocked_image_linked_to_an_anchor_still_loads_on_click(cx: &mut gpui::TestA
     cx.update(|_window, app| {
         assert!(
             view.read(app)
-                .main_pane
+                .diff_renderer
                 .read(app)
                 .remote_markdown_images
                 .approved_urls
@@ -1710,7 +1728,7 @@ fn a_blocked_image_linked_to_an_anchor_still_loads_on_click(cx: &mut gpui::TestA
 
 #[gpui::test]
 fn a_linked_image_on_the_new_side_follows_the_new_documents_anchor(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
+    gitcomet_ui_kit::test_support::use_real_text_backend(cx);
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -1733,7 +1751,7 @@ fn a_linked_image_on_the_new_side_follows_the_new_documents_anchor(cx: &mut gpui
         DiffViewMode::Split,
     );
     let (source_byte, heading_row) = cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         let gitcomet_state::model::Loadable::Ready(preview) = &pane.diff_markdown.preview else {
             panic!("the preview is ready");
         };
@@ -1748,7 +1766,7 @@ fn a_linked_image_on_the_new_side_follows_the_new_documents_anchor(cx: &mut gpui
     // click can move the view.
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.diff_scroll
                     .0
                     .borrow()
@@ -1774,7 +1792,7 @@ fn a_linked_image_on_the_new_side_follows_the_new_documents_anchor(cx: &mut gpui
     }
 
     let (viewport, heading) = cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         (
             pane.diff_scroll.0.borrow().base_handle.bounds(),
             pane.diff_text_hitbox_bounds_for_tests(heading_row, DiffTextRegion::SplitRight),
@@ -1791,7 +1809,7 @@ fn a_linked_image_on_the_new_side_follows_the_new_documents_anchor(cx: &mut gpui
 
 #[gpui::test]
 fn a_link_on_the_old_side_of_a_commit_diff_opens_the_parent_version(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
+    gitcomet_ui_kit::test_support::use_real_text_backend(cx);
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -1830,8 +1848,8 @@ fn a_link_on_the_old_side_of_a_commit_diff_opens_the_parent_version(cx: &mut gpu
     cx.run_until_parked();
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
-                pane.diff_markdown.cache_repo_id = Some(repo_id);
+            this.diff_renderer.update(cx, |pane, cx| {
+                pane.diff_markdown.cache_repo_id = Some(repo_id.into());
                 pane.diff_markdown.cache_rev = 1;
                 pane.diff_markdown.cache_target = Some(target.clone());
                 pane.diff_markdown.preview = gitcomet_state::model::Loadable::Ready(Arc::new(
@@ -1850,7 +1868,7 @@ fn a_link_on_the_old_side_of_a_commit_diff_opens_the_parent_version(cx: &mut gpu
         draw_and_drain_test_window(cx);
     }
     let row = cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert!(pane.is_markdown_preview_active(), "the commit diff renders");
         let gitcomet_state::model::Loadable::Ready(preview) = &pane.diff_markdown.preview else {
             panic!("the preview is ready");
@@ -1907,7 +1925,7 @@ fn a_link_on_the_old_side_of_a_commit_diff_opens_the_parent_version(cx: &mut gpu
 
 #[gpui::test]
 fn hovering_a_link_that_cannot_open_shows_no_pointer(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
+    gitcomet_ui_kit::test_support::use_real_text_backend(cx);
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -1942,7 +1960,7 @@ fn hovering_a_link_that_cannot_open_shows_no_pointer(cx: &mut gpui::TestAppConte
 
 #[gpui::test]
 fn moving_between_links_in_one_table_row_keeps_the_new_hover(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
+    gitcomet_ui_kit::test_support::use_real_text_backend(cx);
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -1983,7 +2001,7 @@ fn moving_between_links_in_one_table_row_keeps_the_new_hover(cx: &mut gpui::Test
 
 #[gpui::test]
 fn image_paths_resolve_within_the_repository_like_links(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
+    gitcomet_ui_kit::test_support::use_real_text_backend(cx);
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -2051,9 +2069,9 @@ fn image_paths_resolve_within_the_repository_like_links(cx: &mut gpui::TestAppCo
 fn a_link_on_the_old_copy_of_a_modified_paragraph_opens_the_parent_version(
     cx: &mut gpui::TestAppContext,
 ) {
+    gitcomet_ui_kit::test_support::use_real_text_backend(cx);
     // The inline diff shows a paragraph that changed in part twice, old copy
     // first; both copies are marked modified, not removed and added.
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -2092,8 +2110,8 @@ fn a_link_on_the_old_copy_of_a_modified_paragraph_opens_the_parent_version(
     cx.run_until_parked();
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
-                pane.diff_markdown.cache_repo_id = Some(repo_id);
+            this.diff_renderer.update(cx, |pane, cx| {
+                pane.diff_markdown.cache_repo_id = Some(repo_id.into());
                 pane.diff_markdown.cache_rev = 1;
                 pane.diff_markdown.cache_target = Some(target.clone());
                 pane.diff_markdown.preview = gitcomet_state::model::Loadable::Ready(Arc::new(
@@ -2112,7 +2130,7 @@ fn a_link_on_the_old_copy_of_a_modified_paragraph_opens_the_parent_version(
         draw_and_drain_test_window(cx);
     }
     let old_row = cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         let gitcomet_state::model::Loadable::Ready(preview) = &pane.diff_markdown.preview else {
             panic!("the preview is ready");
         };
@@ -2137,10 +2155,10 @@ fn a_link_on_the_old_copy_of_a_modified_paragraph_opens_the_parent_version(
 
 #[gpui::test]
 fn moving_over_a_link_that_goes_nowhere_checks_it_once(cx: &mut gpui::TestAppContext) {
+    gitcomet_ui_kit::test_support::use_real_text_backend(cx);
     // A link to no heading stays plain words; working that out slugs every
     // heading (or, for a file link, stats the disk), so it is done once per
     // link the pointer enters, not on every move across it.
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -2157,13 +2175,13 @@ fn moving_over_a_link_that_goes_nowhere_checks_it_once(cx: &mut gpui::TestAppCon
         .debug_bounds("markdown_preview_text_box_0")
         .expect("the row's text box");
 
-    crate::view::panes::main::take_link_followability_checks_for_tests();
+    crate::view::panes::diff::take_link_followability_checks_for_tests();
     for step in 0..6 {
         move_mouse(cx, point(on_link.x + px(step as f32), on_link.y), false);
     }
     assert_eq!(hovered_link(cx, &view), None, "the dead link stays plain");
     assert_eq!(
-        crate::view::panes::main::take_link_followability_checks_for_tests(),
+        crate::view::panes::diff::take_link_followability_checks_for_tests(),
         1,
         "the link is checked when the pointer enters it"
     );
@@ -2173,7 +2191,7 @@ fn moving_over_a_link_that_goes_nowhere_checks_it_once(cx: &mut gpui::TestAppCon
     move_mouse(cx, point(text_box.left() + px(2.0), on_link.y), false);
     move_mouse(cx, on_link, false);
     assert_eq!(
-        crate::view::panes::main::take_link_followability_checks_for_tests(),
+        crate::view::panes::diff::take_link_followability_checks_for_tests(),
         1,
         "re-entering the link checks it once more"
     );

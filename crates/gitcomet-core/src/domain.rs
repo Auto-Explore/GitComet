@@ -21,6 +21,81 @@ pub struct RepoSpec {
     pub workdir: PathBuf,
 }
 
+pub const WORKING_TREE_REQUIRED_MESSAGE: &str = "Requires a working tree; this repository is bare.";
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+pub enum RepositoryMode {
+    WorkingTree,
+    Bare,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+pub enum RepositoryRequirement {
+    Repository,
+    WorkingTree,
+}
+
+impl RepositoryRequirement {
+    pub fn is_satisfied_by(self, mode: RepositoryMode) -> bool {
+        match (self, mode) {
+            (Self::Repository, _) | (Self::WorkingTree, RepositoryMode::WorkingTree) => true,
+            (Self::WorkingTree, RepositoryMode::Bare) => false,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BareConversionLayout {
+    ExistingCheckout,
+    BareDirectory,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum BareConversionHead {
+    Branch {
+        name: String,
+        commit: Option<CommitId>,
+    },
+    Detached {
+        commit: CommitId,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BareConversionPreview {
+    pub root: PathBuf,
+    pub layout: BareConversionLayout,
+    pub head: BareConversionHead,
+    pub affected_roots: Vec<PathBuf>,
+    identity: u64,
+}
+
+impl BareConversionPreview {
+    pub fn new(
+        root: PathBuf,
+        layout: BareConversionLayout,
+        head: BareConversionHead,
+        affected_roots: Vec<PathBuf>,
+    ) -> Self {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        Self {
+            root,
+            layout,
+            head,
+            affected_roots,
+            identity: NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BareModeDisabled {
+    pub root: PathBuf,
+    pub affected_roots: Vec<PathBuf>,
+    pub old_common_dir: PathBuf,
+    pub new_common_dir: PathBuf,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct CommitId(pub Arc<str>);
 
@@ -119,6 +194,215 @@ impl HistoryMode {
 
 pub type LogScope = HistoryMode;
 
+/// A "focus" history filter: the walk is seeded from one ref — or from one
+/// remote's branches — instead of from HEAD or from every ref.
+///
+/// Focus is orthogonal to [`HistoryMode`]: the mode still decides *how* the walk
+/// runs (first-parent, no merges, …), focus decides *where it starts*. A focused
+/// walk therefore shows exactly the commits reachable from the chosen ref, which
+/// is what makes one branch's line of development readable in a busy repository.
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Hash)]
+pub enum HistoryFocus {
+    /// `refs/heads/<name>`.
+    LocalBranch { name: Arc<str> },
+    /// `refs/remotes/<remote>/<branch>`.
+    RemoteBranch { remote: Arc<str>, branch: Arc<str> },
+    /// Every branch under `refs/remotes/<remote>/`.
+    Remote { name: Arc<str> },
+}
+
+impl HistoryFocus {
+    pub fn local_branch(name: impl AsRef<str>) -> Self {
+        Self::LocalBranch {
+            name: Arc::from(name.as_ref()),
+        }
+    }
+
+    pub fn remote_branch(remote: impl AsRef<str>, branch: impl AsRef<str>) -> Self {
+        Self::RemoteBranch {
+            remote: Arc::from(remote.as_ref()),
+            branch: Arc::from(branch.as_ref()),
+        }
+    }
+
+    pub fn remote(name: impl AsRef<str>) -> Self {
+        Self::Remote {
+            name: Arc::from(name.as_ref()),
+        }
+    }
+
+    /// What the user sees: the branch name, `remote/branch`, or the remote.
+    pub fn label(&self) -> String {
+        match self {
+            Self::LocalBranch { name } => name.to_string(),
+            Self::RemoteBranch { remote, branch } => format!("{remote}/{branch}"),
+            Self::Remote { name } => name.to_string(),
+        }
+    }
+
+    /// The full ref name a single-ref focus names, or `None` for a whole remote,
+    /// which has no one ref.
+    pub fn ref_name(&self) -> Option<String> {
+        match self {
+            Self::LocalBranch { name } => Some(format!("refs/heads/{name}")),
+            Self::RemoteBranch { remote, branch } => {
+                Some(format!("refs/remotes/{remote}/{branch}"))
+            }
+            Self::Remote { .. } => None,
+        }
+    }
+}
+
+/// The set of refs the history is focused on, empty when it is not focused.
+///
+/// Focus is a set rather than a single ref because the gesture is a per-ref
+/// toggle: focusing two branches seeds the walk from both and shows the union of
+/// what they reach, which is how you compare two lines of development without
+/// the rest of the repository in the way.
+///
+/// Kept sorted and deduplicated so two sets built in different orders are the
+/// same value — walk caches and snapshots are keyed on it.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Hash)]
+pub struct HistoryFocusSet(Arc<[HistoryFocus]>);
+
+impl HistoryFocusSet {
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    pub fn contains(&self, target: &HistoryFocus) -> bool {
+        self.0.contains(target)
+    }
+
+    pub fn iter(&self) -> impl ExactSizeIterator<Item = &HistoryFocus> {
+        self.0.iter()
+    }
+
+    pub fn as_slice(&self) -> &[HistoryFocus] {
+        &self.0
+    }
+
+    /// The one target, when exactly one is focused.
+    pub fn single(&self) -> Option<&HistoryFocus> {
+        match self.0.as_ref() {
+            [only] => Some(only),
+            _ => None,
+        }
+    }
+
+    /// Whether the walk this set seeds includes `target`: held outright, or — for
+    /// a remote branch — held through its whole remote. This, not
+    /// [`Self::contains`], is what "is this ref focused" means to the user.
+    pub fn covers(&self, target: &HistoryFocus) -> bool {
+        match target {
+            HistoryFocus::LocalBranch { name } => self.covers_local_branch(name),
+            HistoryFocus::RemoteBranch { remote, branch } => {
+                self.covers_remote_branch(remote, branch)
+            }
+            HistoryFocus::Remote { .. } => self.contains(target),
+        }
+    }
+
+    /// [`Self::covers`] for `refs/heads/<name>`, without building a target.
+    /// The sidebar asks this for every row it paints.
+    pub fn covers_local_branch(&self, name: &str) -> bool {
+        self.iter().any(|held| {
+            matches!(held, HistoryFocus::LocalBranch { name: held } if held.as_ref() == name)
+        })
+    }
+
+    /// [`Self::covers`] for `refs/remotes/<remote>/<branch>`, without building
+    /// a target.
+    pub fn covers_remote_branch(&self, remote: &str, branch: &str) -> bool {
+        self.iter().any(|held| match held {
+            HistoryFocus::RemoteBranch {
+                remote: held_remote,
+                branch: held_branch,
+            } => held_remote.as_ref() == remote && held_branch.as_ref() == branch,
+            HistoryFocus::Remote { name } => name.as_ref() == remote,
+            HistoryFocus::LocalBranch { .. } => false,
+        })
+    }
+
+    /// This set with every one of `targets` focused, or with every one of them
+    /// unfocused. Per-ref toggles, group entries and the sidebar's eyes all go
+    /// through this.
+    ///
+    /// Unfocusing a remote branch that is only focused because its whole remote
+    /// is has no entry of its own to drop. The remote's entry is swapped for its
+    /// other branches instead, as listed by `remote_branches`, so the rest of that
+    /// remote stays in view.
+    pub fn with_refs_focused(
+        &self,
+        targets: &[HistoryFocus],
+        focused: bool,
+        remote_branches: impl Fn(&str) -> Vec<String>,
+    ) -> Self {
+        if focused {
+            return Self::from_iter(
+                self.iter().cloned().chain(
+                    targets
+                        .iter()
+                        .filter(|target| !self.covers(target))
+                        .cloned(),
+                ),
+            );
+        }
+        let mut kept = Vec::with_capacity(self.len());
+        for held in self.iter() {
+            if targets.contains(held) {
+                continue;
+            }
+            if let HistoryFocus::Remote { name } = held {
+                let loses_a_branch = targets.iter().any(|target| {
+                    matches!(target, HistoryFocus::RemoteBranch { remote, .. } if remote == name)
+                });
+                if loses_a_branch {
+                    kept.extend(
+                        remote_branches(name)
+                            .into_iter()
+                            .map(|branch| HistoryFocus::remote_branch(name, branch))
+                            .filter(|branch| !targets.contains(branch)),
+                    );
+                    continue;
+                }
+            }
+            kept.push(held.clone());
+        }
+        Self::from_iter(kept)
+    }
+
+    /// This set without the targets `keep` rejects. Used to drop refs that have
+    /// been deleted while leaving the rest of the focus intact.
+    pub fn retaining(&self, keep: impl FnMut(&HistoryFocus) -> bool) -> Self {
+        let mut keep = keep;
+        Self::from_iter(self.iter().filter(|target| keep(target)).cloned())
+    }
+
+    /// Whether a walk in `mode`, seeded by this set, is guaranteed to have HEAD
+    /// as its first commit.
+    ///
+    /// The guarantee belongs to the mode and the seed together: a focused walk
+    /// starts at the focused refs, so its first row says nothing about HEAD even
+    /// under a mode that would otherwise promise it.
+    pub fn head_is_first(&self, mode: HistoryMode) -> bool {
+        self.is_empty() && mode.guarantees_head_visibility()
+    }
+}
+
+impl FromIterator<HistoryFocus> for HistoryFocusSet {
+    fn from_iter<T: IntoIterator<Item = HistoryFocus>>(iter: T) -> Self {
+        let mut targets: Vec<_> = iter.into_iter().collect();
+        targets.sort();
+        targets.dedup();
+        Self(Arc::from(targets))
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CommitDetails {
     pub id: CommitId,
@@ -140,7 +424,7 @@ pub struct CommitDetails {
 ///
 /// `E` (key missing) and `N` (unsigned) have no variant: both mean "no badge",
 /// and are represented by the absence of a [`CommitSignature`].
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum SignatureStatus {
     /// `G` — good signature from a certified key.
     Good,
@@ -176,7 +460,7 @@ impl SignatureStatus {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum SignatureFormat {
     OpenPgp,
     Ssh,
@@ -239,7 +523,7 @@ impl SignatureFormats {
 
 /// A verified commit signature. Only built for commits that earn a badge, so
 /// "absent from the signature map" and "no badge" are the same thing.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct CommitSignature {
     pub status: SignatureStatus,
     pub format: SignatureFormat,
@@ -302,11 +586,10 @@ pub struct CommitFileChange {
     pub path: PathBuf,
     pub kind: FileStatusKind,
     pub is_submodule: bool,
-    /// Added line count; `None` for binary files, submodules, or when the
-    /// commit was too large to compute per-file stats.
-    pub additions: Option<u32>,
-    /// Removed line count; `None` under the same conditions as `additions`.
-    pub deletions: Option<u32>,
+    /// Added and removed lines and the edit. Against the working tree the
+    /// edit can be missing while git counted the lines: past the file cap, or
+    /// when the file was left unread for the reasons [`LineStats`] lists.
+    pub line_stats: LineStats,
     /// Set when the new side (or the old side of a deletion) is a Git LFS
     /// pointer or git-annex key.
     pub large_file: Option<crate::large_files::LargeFileState>,
@@ -327,8 +610,7 @@ impl CommitFileChange {
             path,
             kind,
             is_submodule: false,
-            additions: None,
-            deletions: None,
+            line_stats: LineStats::UNKNOWN,
             old_path: None,
             old_id: None,
             new_id: None,
@@ -343,9 +625,8 @@ impl CommitFileChange {
         self
     }
 
-    pub fn with_line_counts(mut self, additions: Option<u32>, deletions: Option<u32>) -> Self {
-        self.additions = additions;
-        self.deletions = deletions;
+    pub fn with_line_stats(mut self, line_stats: LineStats) -> Self {
+        self.line_stats = line_stats;
         self
     }
 
@@ -418,22 +699,46 @@ pub struct RemoteTag {
     pub target: CommitId,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct Upstream {
     pub remote: String,
     pub branch: String,
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash)]
 pub struct UpstreamDivergence {
     pub ahead: usize,
     pub behind: usize,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+pub enum HeadTracking {
+    Detached,
+    Untracked {
+        branch: String,
+    },
+    Tracking {
+        branch: String,
+        upstream: Upstream,
+        divergence: Option<UpstreamDivergence>,
+    },
+}
+
+impl HeadTracking {
+    pub fn divergence(&self) -> Option<UpstreamDivergence> {
+        match self {
+            Self::Tracking { divergence, .. } => *divergence,
+            Self::Detached | Self::Untracked { .. } => None,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Remote {
     pub name: String,
     pub url: Option<String>,
+    /// The branch `refs/remotes/<name>/HEAD` points at, when the remote has one.
+    pub default_branch: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -463,6 +768,7 @@ pub struct FileEntry {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Worktree {
     pub path: PathBuf,
+    pub bare: bool,
     pub head: Option<CommitId>,
     pub branch: Option<String>,
     pub detached: bool,
@@ -577,18 +883,24 @@ pub struct FileStatus {
     pub conflict: Option<FileConflictKind>,
 }
 
-/// `None` means unknown: binary, over the size cap, or not reported by git at
-/// all — an untracked file is in neither index lane.
+/// `None` means unknown: binary, a submodule, over the size cap, in a change
+/// set over the file cap, unreadable or gone when read, or content left unread
+/// (an LFS or annex payload).
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct LineStats {
     pub additions: Option<u32>,
     pub deletions: Option<u32>,
+    /// The edit as text, for ordering files changed the same way together;
+    /// `None` when the counts are unknown, nothing in the text changed, or
+    /// the counts came from git without the text.
+    pub edit: Option<crate::edit_signature::EditSignature>,
 }
 
 impl LineStats {
     pub const UNKNOWN: Self = Self {
         additions: None,
         deletions: None,
+        edit: None,
     };
 }
 
@@ -597,6 +909,7 @@ impl From<(Option<u32>, Option<u32>)> for LineStats {
         Self {
             additions,
             deletions,
+            edit: None,
         }
     }
 }
@@ -1101,8 +1414,9 @@ impl DiffSectionFormats {
         let mut old = ContentSniffer::new();
         let mut new = ContentSniffer::new();
         let mut headers = ContentSniffer::new();
+        let mut classifier = UnifiedLineClassifier::default();
         for line in section.split_inclusive(|&byte| byte == b'\n') {
-            match Diff::classify_unified_line_bytes(line) {
+            match classifier.classify(line) {
                 DiffLineKind::Remove => old.feed(&line[1..]),
                 DiffLineKind::Add => new.feed(&line[1..]),
                 DiffLineKind::Context if line.starts_with(b" ") => {
@@ -1592,21 +1906,136 @@ pub enum DiffLineKind {
     Context,
 }
 
-impl Diff {
-    pub const MAX_UNIFIED_BYTES: u64 = 64 * 1024 * 1024;
-    pub const MAX_UNIFIED_LINES: usize = 1_000_000;
-    /// Start of the row appended when a diff was cut at a display limit.
-    pub const TRUNCATION_NOTICE_PREFIX: &'static str = "... diff truncated";
+/// One side's range in a hunk header, `-l,s` or `+l,s`; an omitted count is 1.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct UnifiedHunkRange {
+    pub(crate) start: u32,
+    pub(crate) count: u32,
+}
 
-    fn line_capacity_from_bytes(bytes: &[u8]) -> usize {
-        if bytes.is_empty() {
-            return 0;
+/// A `@@ -l,s +l,s @@` hunk header, or a combined `@@@ -l,s -l,s +l,s @@@`
+/// one with a range per parent.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct UnifiedHunkHeader {
+    pub(crate) parents: SmallVec<[UnifiedHunkRange; 2]>,
+    pub(crate) result: UnifiedHunkRange,
+}
+
+pub(crate) fn parse_unified_hunk_header(raw: &[u8]) -> Option<UnifiedHunkHeader> {
+    let marker_len = raw.iter().take_while(|byte| **byte == b'@').count();
+    if marker_len < 2 {
+        return None;
+    }
+    let rest = raw[marker_len..].strip_prefix(b" ")?;
+    // Ranges never contain `@`, so the next marker is the closing one.
+    let end = memchr::memmem::find(rest, &raw[..marker_len])?;
+    let ranges = std::str::from_utf8(rest[..end].strip_suffix(b" ")?).ok()?;
+    let parse_range = |range: &str| {
+        let (start, count) = match range.split_once(',') {
+            Some((start, count)) => (start, count.parse().ok()?),
+            None => (range, 1),
+        };
+        Some(UnifiedHunkRange {
+            start: start.parse().ok()?,
+            count,
+        })
+    };
+    let mut parents = SmallVec::new();
+    let mut result = None;
+    for token in ranges.split(' ') {
+        if let Some(range) = token.strip_prefix('-')
+            && result.is_none()
+        {
+            parents.push(parse_range(range)?);
+        } else if let Some(range) = token.strip_prefix('+')
+            && result.is_none()
+        {
+            result = Some(parse_range(range)?);
+        } else {
+            return None;
         }
+    }
+    (parents.len() == marker_len - 1).then_some(UnifiedHunkHeader {
+        parents,
+        result: result?,
+    })
+}
 
-        memchr::memchr_iter(b'\n', bytes).count() + usize::from(!bytes.ends_with(b"\n"))
+/// Classifies `git diff` lines in order. A hunk header counts the hunk's
+/// lines, and until they are used up every line is content: a removed
+/// `-- comment` reads `--- comment` and an added `++ x` reads `+++ x`, which
+/// out of context look like file headers.
+#[derive(Default)]
+struct UnifiedLineClassifier {
+    /// Lines still to come in the current hunk from each parent (one for a
+    /// plain diff, one per parent for a combined one).
+    parents_remaining: SmallVec<[u32; 2]>,
+    /// Lines still to come in the current hunk from the result.
+    result_remaining: u32,
+}
+
+impl UnifiedLineClassifier {
+    fn classify(&mut self, raw: &[u8]) -> DiffLineKind {
+        if self.in_hunk() {
+            if let Some(kind) = self.classify_hunk_line(raw) {
+                return kind;
+            }
+            self.parents_remaining.clear();
+            self.result_remaining = 0;
+        }
+        let kind = Self::classify_outside_hunk(raw);
+        if kind == DiffLineKind::Hunk
+            && let Some(header) = parse_unified_hunk_header(raw)
+        {
+            self.parents_remaining = header.parents.iter().map(|range| range.count).collect();
+            self.result_remaining = header.result.count;
+        }
+        kind
     }
 
-    fn classify_unified_line_bytes(raw: &[u8]) -> DiffLineKind {
+    fn in_hunk(&self) -> bool {
+        self.result_remaining > 0 || self.parents_remaining.iter().any(|count| *count > 0)
+    }
+
+    /// A hunk line's kind by its first column, or `None` when the line cannot
+    /// be hunk content and the hunk ended early. A combined diff has a column
+    /// per parent: a line belongs to each parent whose column is not `+`, and
+    /// to the result unless a column is `-`.
+    fn classify_hunk_line(&mut self, raw: &[u8]) -> Option<DiffLineKind> {
+        if raw.first() == Some(&b'\\') {
+            return Some(DiffLineKind::Context);
+        }
+        // A tool that trims trailing whitespace leaves an empty context line.
+        let blank = raw.first().is_none_or(|byte| matches!(byte, b'\r' | b'\n'));
+        let columns: &[u8] = if blank {
+            &[]
+        } else {
+            raw.get(..self.parents_remaining.len())?
+        };
+        if !columns
+            .iter()
+            .all(|column| matches!(column, b' ' | b'-' | b'+'))
+        {
+            return None;
+        }
+        for (ix, remaining) in self.parents_remaining.iter_mut().enumerate() {
+            if columns.get(ix) != Some(&b'+') {
+                *remaining = remaining.saturating_sub(1);
+            }
+        }
+        if !columns.contains(&b'-') {
+            self.result_remaining = self.result_remaining.saturating_sub(1);
+        }
+        Some(match columns.first() {
+            Some(b'-') => DiffLineKind::Remove,
+            Some(b'+') => DiffLineKind::Add,
+            _ => DiffLineKind::Context,
+        })
+    }
+
+    /// Outside a hunk, a line's prefix decides; inside one this would misread
+    /// content (see the type's doc).
+    fn classify_outside_hunk(raw: &[u8]) -> DiffLineKind {
         match raw.first().copied() {
             Some(b'@') if raw.starts_with(b"@@") => DiffLineKind::Hunk,
             Some(b'd') if raw.starts_with(b"diff ") || raw.starts_with(b"deleted file mode ") => {
@@ -1626,12 +2055,20 @@ impl Diff {
             _ => DiffLineKind::Context,
         }
     }
+}
 
-    fn parsed_unified_line(raw: &str) -> DiffLine {
-        DiffLine {
-            kind: Self::classify_unified_line_bytes(raw.as_bytes()),
-            text: SharedLineText::from(raw),
+impl Diff {
+    pub const MAX_UNIFIED_BYTES: u64 = 64 * 1024 * 1024;
+    pub const MAX_UNIFIED_LINES: usize = 1_000_000;
+    /// Start of the row appended when a diff was cut at a display limit.
+    pub const TRUNCATION_NOTICE_PREFIX: &'static str = "... diff truncated";
+
+    fn line_capacity_from_bytes(bytes: &[u8]) -> usize {
+        if bytes.is_empty() {
+            return 0;
         }
+
+        memchr::memchr_iter(b'\n', bytes).count() + usize::from(!bytes.ends_with(b"\n"))
     }
 
     fn trim_unified_line_bytes(raw: &[u8]) -> &[u8] {
@@ -1642,6 +2079,7 @@ impl Diff {
         let storage = Arc::new(SharedLineTextStorage { text, raw: None });
         let bytes = storage.text.as_bytes();
         let mut lines = Vec::with_capacity(Self::line_capacity_from_bytes(bytes));
+        let mut classifier = UnifiedLineClassifier::default();
 
         let mut start = 0usize;
         while start < bytes.len() {
@@ -1651,7 +2089,7 @@ impl Diff {
             };
             let raw_end = Self::trim_unified_line_bytes(&bytes[start..line_end]).len() + start;
             lines.push(DiffLine {
-                kind: Self::classify_unified_line_bytes(&bytes[start..raw_end]),
+                kind: classifier.classify(&bytes[start..raw_end]),
                 text: SharedLineText::from_storage(&storage, start..raw_end),
             });
             if line_end == bytes.len() {
@@ -1694,13 +2132,14 @@ impl Diff {
         let mut text = String::with_capacity(bytes.len() + bytes.len() / 4);
         let mut ranges = Vec::with_capacity(Self::line_capacity_from_bytes(&bytes));
         let mut kinds = Vec::with_capacity(ranges.capacity());
+        let mut classifier = UnifiedLineClassifier::default();
         for (section, section_format) in sections.into_iter().zip(section_formats) {
             let mut start = section.start;
             while start < section.end {
                 let line_end = memchr(b'\n', &bytes[start..section.end])
                     .map_or(section.end, |offset| start + offset);
                 let line = Self::trim_unified_line_bytes(&bytes[start..line_end]);
-                let kind = Self::classify_unified_line_bytes(line);
+                let kind = classifier.classify(line);
                 let text_start = text.len();
                 Self::decode_unified_line(line, kind, section_format, &mut text);
                 ranges.push(RawLineRange {
@@ -1798,17 +2237,6 @@ impl Diff {
             }
             _ => decode_into(line, TextFormat::UTF_8, out),
         }
-    }
-
-    pub fn from_unified_iter<'a>(
-        target: DiffTarget,
-        lines: impl IntoIterator<Item = &'a str>,
-    ) -> Self {
-        let mut out = Vec::new();
-        for raw in lines {
-            out.push(Self::parsed_unified_line(raw));
-        }
-        Self { target, lines: out }
     }
 
     /// Read a unified diff, cutting it at the display limits rather than failing.
@@ -2461,7 +2889,63 @@ index 0000000..1111111 100644
         );
 
         assert_eq!(diff.lines[1].kind, DiffLineKind::Remove);
-        assert_eq!(diff.lines[2].kind, DiffLineKind::Header);
+        assert_eq!(diff.lines[2].kind, DiffLineKind::Add);
+    }
+
+    /// A removed `-- comment` reads `--- comment` and an added `++ x` reads
+    /// `+++ x`. The hunk's counts make them content; read as file headers they
+    /// were hidden from the diff view and swept into line-level staging.
+    #[test]
+    fn diff_from_unified_reads_header_lookalikes_inside_a_hunk_as_content() {
+        let target = DiffTarget::working_tree(PathBuf::from("q.sql"), DiffArea::Unstaged);
+        let text = "\
+diff --git a/q.sql b/q.sql
+index 1111111..2222222 100644
+--- a/q.sql
++++ b/q.sql
+@@ -1,3 +1,3 @@ create
+ select 1;
+--- old comment
++++ new comment
+ select 2;
+diff --git a/r.sql b/r.sql
+index 3333333..4444444 100644
+--- a/r.sql
++++ b/r.sql
+@@ -1 +1 @@
+-x
+\\ No newline at end of file
++y
+";
+        use DiffLineKind::{Add, Context, Header, Hunk, Remove};
+        let expected = vec![
+            Header, Header, Header, Header, Hunk, Context, Remove, Add, Context, Header, Header,
+            Header, Header, Hunk, Remove, Context, Add,
+        ];
+        let kinds = |diff: Diff| diff.lines.iter().map(|line| line.kind).collect::<Vec<_>>();
+
+        assert_eq!(kinds(Diff::from_unified(target.clone(), text)), expected);
+        let combined = Diff::from_unified(
+            target.clone(),
+            "diff --cc q.sql\n@@@ -1,2 -1,2 +1,1 @@@\n  keep\n--- dropped by both\n",
+        );
+        assert_eq!(kinds(combined), vec![Header, Hunk, Context, Remove]);
+        // A Latin-1 byte takes the per-line decoding path.
+        let latin1 = text
+            .replace("old comment", "old comment \u{1}")
+            .into_bytes();
+        let latin1: Vec<u8> = latin1
+            .into_iter()
+            .map(|byte| if byte == 1 { 0xE9 } else { byte })
+            .collect();
+        assert_eq!(
+            kinds(Diff::from_unified_bytes(
+                target,
+                latin1,
+                DiffSectionFormats::sniff
+            )),
+            expected
+        );
     }
 
     #[test]
@@ -2546,6 +3030,169 @@ mod file_status_count_tests {
                 ..clean
             }
             .is_dirty()
+        );
+    }
+}
+
+#[cfg(test)]
+mod history_focus_tests {
+    use super::*;
+
+    #[test]
+    fn history_focus_names_the_ref_it_seeds_from() {
+        assert_eq!(
+            HistoryFocus::local_branch("feature").ref_name().as_deref(),
+            Some("refs/heads/feature")
+        );
+        assert_eq!(
+            HistoryFocus::remote_branch("origin", "feature/awesome")
+                .ref_name()
+                .as_deref(),
+            Some("refs/remotes/origin/feature/awesome")
+        );
+        // A whole remote is many refs, so it names none of them.
+        assert_eq!(HistoryFocus::remote("origin").ref_name(), None);
+
+        assert_eq!(HistoryFocus::local_branch("feature").label(), "feature");
+        assert_eq!(
+            HistoryFocus::remote_branch("origin", "feature").label(),
+            "origin/feature"
+        );
+        assert_eq!(HistoryFocus::remote("origin").label(), "origin");
+    }
+
+    /// The modes that promise HEAD is the first commit only promise it for a
+    /// walk seeded from HEAD; a focus seeds it somewhere else.
+    #[test]
+    fn a_focus_withdraws_the_head_is_first_guarantee() {
+        let empty = HistoryFocusSet::default();
+        let focused = HistoryFocusSet::from_iter([HistoryFocus::local_branch("feature")]);
+        for mode in [
+            HistoryMode::FullReachable,
+            HistoryMode::FirstParent,
+            HistoryMode::NoMerges,
+            HistoryMode::MergesOnly,
+            HistoryMode::AllBranches,
+        ] {
+            assert_eq!(
+                empty.head_is_first(mode),
+                mode.guarantees_head_visibility(),
+                "an unfocused walk keeps whatever the mode promises"
+            );
+            assert!(
+                !focused.head_is_first(mode),
+                "a focused walk promises nothing about HEAD under {mode:?}"
+            );
+        }
+    }
+
+    fn no_remote_branches(_: &str) -> Vec<String> {
+        Vec::new()
+    }
+
+    /// Per-ref toggles and group entries add and remove targets in bulk without
+    /// disturbing the others.
+    #[test]
+    fn focusing_and_unfocusing_refs_leaves_the_others_alone() {
+        let main = HistoryFocus::local_branch("main");
+        let feature = HistoryFocus::local_branch("feature");
+        let origin = HistoryFocus::remote("origin");
+
+        let set = HistoryFocusSet::default().with_refs_focused(
+            &[main.clone(), feature.clone()],
+            true,
+            no_remote_branches,
+        );
+        assert_eq!(set.len(), 2);
+        assert!(set.contains(&main) && set.contains(&feature));
+        assert!(!set.contains(&origin));
+
+        let set = set.with_refs_focused(std::slice::from_ref(&main), false, no_remote_branches);
+        assert_eq!(set.len(), 1, "unfocusing one target removes just that one");
+        assert!(set.contains(&feature));
+
+        assert!(
+            set.with_refs_focused(std::slice::from_ref(&feature), false, no_remote_branches)
+                .is_empty()
+        );
+    }
+
+    /// A whole remote focuses every branch under it, so those branches read as
+    /// focused even though the set holds no entry for them.
+    #[test]
+    fn a_focused_remote_covers_its_branches_only() {
+        let set = HistoryFocusSet::from_iter([
+            HistoryFocus::remote("origin"),
+            HistoryFocus::local_branch("main"),
+        ]);
+        assert!(set.covers(&HistoryFocus::remote_branch("origin", "feature")));
+        assert!(set.covers_remote_branch("origin", "feature"));
+        assert!(!set.covers_remote_branch("upstream", "feature"));
+        assert!(set.covers_local_branch("main"));
+        assert!(
+            !set.covers_local_branch("origin"),
+            "a remote never covers a local branch that shares its name"
+        );
+        assert!(!set.covers(&HistoryFocus::remote("upstream")));
+    }
+
+    /// Focusing a branch its remote already covers adds nothing: the set stays
+    /// the same value, so the walk is not restarted for no reason.
+    #[test]
+    fn focusing_an_already_covered_branch_changes_nothing() {
+        let set = HistoryFocusSet::from_iter([HistoryFocus::remote("origin")]);
+        assert_eq!(
+            set.with_refs_focused(
+                &[HistoryFocus::remote_branch("origin", "feature")],
+                true,
+                no_remote_branches,
+            ),
+            set
+        );
+    }
+
+    /// Unfocusing one branch of a focused remote keeps the rest of the remote in
+    /// view: the remote's entry becomes its remaining branches.
+    #[test]
+    fn unfocusing_a_branch_under_a_focused_remote_keeps_its_siblings() {
+        let set = HistoryFocusSet::from_iter([
+            HistoryFocus::remote("origin"),
+            HistoryFocus::remote("upstream"),
+        ]);
+        let origin_branches = |remote: &str| -> Vec<String> {
+            assert_eq!(
+                remote, "origin",
+                "only the remote losing a branch is listed"
+            );
+            vec!["main".into(), "feat/a".into(), "feat/b".into()]
+        };
+
+        let set = set.with_refs_focused(
+            &[
+                HistoryFocus::remote_branch("origin", "feat/a"),
+                HistoryFocus::remote_branch("origin", "feat/b"),
+            ],
+            false,
+            origin_branches,
+        );
+        assert_eq!(
+            set,
+            HistoryFocusSet::from_iter([
+                HistoryFocus::remote_branch("origin", "main"),
+                HistoryFocus::remote("upstream"),
+            ])
+        );
+    }
+
+    /// Two sets built in different orders are the same value; walk caches and
+    /// snapshots are keyed on it, so a reorder must not look like a change.
+    #[test]
+    fn set_identity_ignores_insertion_order_and_duplicates() {
+        let a = HistoryFocus::local_branch("a");
+        let b = HistoryFocus::local_branch("b");
+        assert_eq!(
+            HistoryFocusSet::from_iter([a.clone(), b.clone()]),
+            HistoryFocusSet::from_iter([b.clone(), a.clone(), a.clone()])
         );
     }
 }

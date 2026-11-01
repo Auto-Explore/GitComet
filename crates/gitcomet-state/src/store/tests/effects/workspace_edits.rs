@@ -102,7 +102,12 @@ impl GitRepository for WorkspaceRepo {
         &self.spec
     }
 
-    fn log_head_page(&self, _limit: usize, _cursor: Option<&LogCursor>) -> Result<Arc<LogPage>> {
+    fn log_head_page(
+        &self,
+        _limit: usize,
+        _cursor: Option<&LogCursor>,
+        _cancellation: &gitcomet_core::services::CancellationToken,
+    ) -> Result<Arc<LogPage>> {
         unexpected("log_head_page")
     }
 
@@ -114,23 +119,23 @@ impl GitRepository for WorkspaceRepo {
         unexpected("reflog_head")
     }
 
-    fn current_branch(&self) -> Result<String> {
+    fn current_branch(&self, _cancellation: &gitcomet_core::services::CancellationToken) -> Result<String> {
         unexpected("current_branch")
     }
 
-    fn list_branches(&self) -> Result<Vec<Branch>> {
+    fn list_branches(&self, _cancellation: &gitcomet_core::services::CancellationToken) -> Result<Vec<Branch>> {
         unexpected("list_branches")
     }
 
-    fn list_remotes(&self) -> Result<Vec<Remote>> {
+    fn list_remotes(&self, _cancellation: &gitcomet_core::services::CancellationToken) -> Result<Vec<Remote>> {
         unexpected("list_remotes")
     }
 
-    fn list_remote_branches(&self) -> Result<Vec<RemoteBranch>> {
+    fn list_remote_branches(&self, _cancellation: &gitcomet_core::services::CancellationToken) -> Result<Vec<RemoteBranch>> {
         unexpected("list_remote_branches")
     }
 
-    fn status(&self) -> Result<RepoStatus> {
+    fn status(&self, _cancellation: &gitcomet_core::services::CancellationToken) -> Result<RepoStatus> {
         unexpected("status")
     }
 
@@ -167,7 +172,7 @@ impl GitRepository for WorkspaceRepo {
         unexpected("stash_create")
     }
 
-    fn stash_list(&self) -> Result<Vec<StashEntry>> {
+    fn stash_list(&self, _cancellation: &gitcomet_core::services::CancellationToken) -> Result<Vec<StashEntry>> {
         unexpected("stash_list")
     }
 
@@ -191,11 +196,11 @@ impl GitRepository for WorkspaceRepo {
         unexpected("commit")
     }
 
-    fn fetch_all(&self) -> Result<()> {
+    fn fetch_all(&self, _prune: bool) -> Result<gitcomet_core::services::CommandOutput> {
         unexpected("fetch_all")
     }
 
-    fn pull(&self, _mode: PullMode) -> Result<()> {
+    fn pull(&self, _mode: PullMode) -> Result<gitcomet_core::services::CommandOutput> {
         unexpected("pull")
     }
 
@@ -307,25 +312,25 @@ impl GitRepository for WorkspaceRepo {
 
 const REPO_ID: RepoId = RepoId(11);
 
-fn repos_with(repo: Arc<dyn GitRepository>) -> FxHashMap<RepoId, Arc<dyn GitRepository>> {
-    let mut repos = FxHashMap::default();
-    repos.insert(REPO_ID, repo);
+fn repos_with(repo: Arc<dyn GitRepository>) -> RepositoryRuntimes {
+    let mut repos = RepositoryRuntimes::default();
+    repos.attach_repository_for_test(REPO_ID, repo);
     repos
 }
 
 /// Schedule one workspace effect and return the message it answers with.
-fn schedule(repo: &FxHashMap<RepoId, Arc<dyn GitRepository>>, effect: Effect) -> Msg {
+fn schedule(mut repo: RepositoryRuntimes, effect: Effect) -> Msg {
     let executor = super::super::executor::TaskExecutor::new(1);
     let backend: Arc<dyn GitBackend> = Arc::new(Backend);
     let (msg_tx, msg_rx) = std::sync::mpsc::channel::<Msg>();
-    schedule_effect_for_test(&executor, &executor, &backend, repo, msg_tx, effect);
+    schedule_effect_for_test(&executor, &executor, &backend, &mut repo, msg_tx, effect);
     recv_effect_message(&msg_rx, std::time::Duration::from_secs(10)).expect("no message came back")
 }
 
 /// Realize one edit and return what it produced.
 fn apply(repo: &Arc<WorkspaceRepo>, edit: WorkspaceEdit) -> Result<CommitOperationOutcome> {
     let msg = schedule(
-        &repos_with(repo.clone()),
+        repos_with(repo.clone()),
         Effect::ApplyWorkspaceEdit {
             repo_id: REPO_ID,
             edit,
@@ -832,7 +837,7 @@ fn assigning_a_file_writes_it_through_the_index() {
     let repo = Arc::new(WorkspaceRepo::new(vec![applied("api")]));
     let path = PathBuf::from("src/api.rs");
     let msg = schedule(
-        &repos_with(repo.clone()),
+        repos_with(repo.clone()),
         Effect::AssignWorkspaceFile {
             repo_id: REPO_ID,
             path: path.clone(),
@@ -871,7 +876,7 @@ fn assigning_one_hunk_splits_the_file_it_belongs_to() {
 
     for branch in ["api", "ui"] {
         let msg = schedule(
-            &repos_with(repo.clone()),
+            repos_with(repo.clone()),
             Effect::AssignWorkspaceFile {
                 repo_id: REPO_ID,
                 path: path.clone(),
@@ -916,7 +921,7 @@ fn assigning_a_file_whole_replaces_the_split_it_had() {
     let hunk = gitcomet_core::workspace::HunkFingerprint::of(&["NEW\n"], 1);
 
     schedule(
-        &repos_with(repo.clone()),
+        repos_with(repo.clone()),
         Effect::AssignWorkspaceFile {
             repo_id: REPO_ID,
             path: path.clone(),
@@ -925,7 +930,7 @@ fn assigning_a_file_whole_replaces_the_split_it_had() {
         },
     );
     schedule(
-        &repos_with(repo.clone()),
+        repos_with(repo.clone()),
         Effect::AssignWorkspaceFile {
             repo_id: REPO_ID,
             path: path.clone(),
@@ -952,7 +957,7 @@ fn assigning_a_file_whole_replaces_the_split_it_had() {
 fn pushing_a_virtual_branch_reports_the_branch_it_pushed() {
     let repo = Arc::new(WorkspaceRepo::new(vec![applied("api")]));
     let msg = schedule(
-        &repos_with(repo.clone()),
+        repos_with(repo.clone()),
         Effect::PushWorkspaceBranch {
             repo_id: REPO_ID,
             name: "api".into(),
@@ -978,7 +983,7 @@ fn an_edit_for_a_repository_that_is_gone_is_reported_not_dropped() {
     // task up. The reply still has to come back, or the busy flag the reducer
     // set on the way in is never cleared.
     let msg = schedule(
-        &FxHashMap::default(),
+        RepositoryRuntimes::default(),
         Effect::ApplyWorkspaceEdit {
             repo_id: RepoId(404),
             edit: WorkspaceEdit::Create { name: "api".into() },
@@ -1000,7 +1005,7 @@ fn an_edit_for_a_repository_that_is_gone_is_reported_not_dropped() {
 #[test]
 fn an_assignment_for_a_repository_that_is_gone_is_reported_not_dropped() {
     let msg = schedule(
-        &FxHashMap::default(),
+        RepositoryRuntimes::default(),
         Effect::AssignWorkspaceFile {
             repo_id: RepoId(404),
             path: PathBuf::from("src/api.rs"),

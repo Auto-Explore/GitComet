@@ -1,5 +1,5 @@
 use crate::repo::GixRepo;
-use gitcomet_core::error::{Error, ErrorKind};
+use gitcomet_core::error::Error;
 use gitcomet_core::path_utils::strip_windows_verbatim_prefix;
 use gitcomet_core::services::{
     CancellationToken, GitBackend, GitRepository, Result, WorktreeIgnoreMatcher,
@@ -9,16 +9,68 @@ use std::sync::{Arc, Mutex, Weak};
 
 pub struct GixBackend;
 
-/// Every repository this process opened: each window and worktree scan holds
-/// its own store, and a maintenance run must release them all.
+/// Weak working-tree registrations. Matching windows reuse a handle; common
+/// repository maintenance also refreshes compatible and incompatible stores
+/// held by its other working trees.
 static OPEN_REPOS: Mutex<Vec<Weak<GixRepo>>> = Mutex::new(Vec::new());
 
-fn register_open_repo(repo: &Arc<GixRepo>) {
+fn reuse_or_register(repo: GixRepo) -> Arc<GixRepo> {
     let mut open = OPEN_REPOS
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     open.retain(|repo| repo.strong_count() > 0);
-    open.push(Arc::downgrade(repo));
+    if let Some(existing) = open.iter().filter_map(Weak::upgrade).find(|existing| {
+        existing.identity == repo.identity
+            && existing.options == repo.options
+            && existing.has_same_opened_mode(&repo)
+            && existing.ensure_current().is_ok()
+    }) {
+        return existing;
+    }
+    let repo = Arc::new(repo);
+    open.push(Arc::downgrade(&repo));
+    repo
+}
+
+/// Called under the common repository's maintenance lock. Active readers own
+/// their old stores until they finish; all persistent owners switch together.
+pub(crate) fn refresh_common_stores(origin: &GixRepo, common: u64) -> Result<()> {
+    let open = OPEN_REPOS
+        .lock()
+        .expect("open repositories")
+        .iter()
+        .filter_map(Weak::upgrade)
+        .filter(|repo| repo.common_identity() == common)
+        .collect::<Vec<_>>();
+    let result = origin.refresh_object_store();
+    for repo in open {
+        if !std::ptr::eq(origin, &*repo) {
+            let _ = repo.refresh_object_store();
+        }
+    }
+    result
+}
+
+pub(crate) fn release_conversion_stores(origin: &GixRepo) -> Result<()> {
+    let common = origin.common_identity();
+    let open = OPEN_REPOS
+        .lock()
+        .expect("open repositories")
+        .iter()
+        .filter_map(Weak::upgrade)
+        .filter(|repo| repo.common_identity() == common)
+        .collect::<Vec<_>>();
+    origin.release_conversion_store()?;
+    for repo in &open {
+        if !std::ptr::eq(origin, &**repo) {
+            repo.release_conversion_store()?;
+        }
+    }
+    origin.release_conversion_identities();
+    for repo in open {
+        repo.release_conversion_identities();
+    }
+    Ok(())
 }
 
 impl Default for GixBackend {
@@ -38,28 +90,28 @@ impl GixBackend {
             cancellation.check_cancelled()?;
         }
 
-        let workdir = strip_windows_verbatim_prefix(
-            workdir
-                .canonicalize()
-                .map_err(|e| Error::new(ErrorKind::Io(e.kind())))?,
-        );
+        crate::repo::bare::recover_before_open(workdir, cancellation)?;
+        let workdir = strip_windows_verbatim_prefix(workdir.canonicalize().map_err(|error| {
+            Error::from(error).with_context("canonicalize repository", Some(workdir))
+        })?);
         if let Some(cancellation) = cancellation {
             cancellation.check_cancelled()?;
         }
 
         let repo = crate::open::open_worktree_repo(&workdir)
-            .map_err(|e| crate::open::map_open_error(e, "gix open"))?;
+            .map_err(|e| crate::open::map_open_error(e, "gix open", &workdir))?;
+        let _discovery = crate::repo::bare::discovery_lock(repo.common_dir())?;
         crate::refs::validate_open(&repo, cancellation)?;
         if let Some(cancellation) = cancellation {
             cancellation.check_cancelled()?;
         }
 
-        let repo = Arc::new(GixRepo::new_with_options(
+        gitcomet_core::history_perf::register_shared_memory_provider(crate::shared_history_memory);
+        let repo = reuse_or_register(GixRepo::new_with_options(
             workdir,
             repo.into_sync(),
             options.clone(),
-        ));
-        register_open_repo(&repo);
+        )?);
         Ok(repo)
     }
 }
@@ -101,8 +153,12 @@ impl GitBackend for GixBackend {
             .iter()
             .filter_map(Weak::upgrade)
             .collect::<Vec<_>>();
+        let mut released = std::collections::HashSet::new();
         for repo in open {
-            if repo.common_dir_impl() == common_dir {
+            if repo.common_dir_impl() == common_dir && released.insert(repo.common_identity()) {
+                let Ok(_operation) = repo.operation_lease() else {
+                    continue;
+                };
                 let _ = repo.reopen_object_store();
             }
         }

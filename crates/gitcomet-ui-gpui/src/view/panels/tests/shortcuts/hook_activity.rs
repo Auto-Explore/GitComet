@@ -26,6 +26,7 @@ fn running_hook_activity(operation_id: u64) -> GitHookOperation {
         time: std::time::SystemTime::UNIX_EPOCH + Duration::from_secs(operation_id),
         duration: None,
         status: GitHookOperationStatus::Running,
+        handled_by_prompt: false,
         hooks: vec![gitcomet_state::model::GitHookRun {
             id: gitcomet_core::git_operation::HookExecutionId {
                 sid: Arc::from("ui-test"),
@@ -45,6 +46,7 @@ fn running_hook_activity(operation_id: u64) -> GitHookOperation {
         output_bytes: output.len(),
         output_truncated: false,
         latest_line: "checking file 79".to_string(),
+        command: None,
         command_started: false,
         transfer: None,
         progress_lane: false,
@@ -83,8 +85,8 @@ fn silent_annex_command_exposes_stop_without_hooks_or_progress(cx: &mut gpui::Te
     operation.latest_line.clear();
     operation.label = "annex sync".into();
     operation.command_started = true;
-    repo.feedback.hook_activity = vec![operation];
-    repo.feedback.hook_activity_rev += 1;
+    repo.feedback_mut().hook_activity = vec![operation];
+    repo.feedback_mut().hook_activity_rev += 1;
     apply_state(cx, &view, app_state_with_active_repo(repo));
     draw_and_drain_test_window(cx);
     let stop = cx
@@ -122,8 +124,8 @@ fn lfs_transfer_without_hooks_opens_activity_and_shows_progress(cx: &mut gpui::T
         name: "a.bin".into(),
     });
     operation.latest_line = operation.transfer.as_ref().unwrap().summary();
-    repo.feedback.hook_activity = vec![operation];
-    repo.feedback.hook_activity_rev = 1;
+    repo.feedback_mut().hook_activity = vec![operation];
+    repo.feedback_mut().hook_activity_rev = 1;
     apply_state(cx, &view, app_state_with_active_repo(repo));
     draw_and_drain_test_window(cx);
     assert!(
@@ -167,7 +169,6 @@ fn drag_activity_text(cx: &mut gpui::VisualTestContext, key: &'static str) {
 
 #[gpui::test]
 fn hook_activity_text_selects_copies_and_keeps_run_clicks(cx: &mut gpui::TestAppContext) {
-    let _guard = crate::test_support::lock_clipboard_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -186,8 +187,8 @@ fn hook_activity_text_selects_copies_and_keeps_run_clicks(cx: &mut gpui::TestApp
     latest.context = Some("Check café and 日本語".into());
     latest.duration = Some(Duration::from_secs(1));
     latest.hooks[0].duration = Some(Duration::from_millis(50));
-    repo.feedback.hook_activity = vec![older, latest];
-    repo.feedback.hook_activity_rev = 1;
+    repo.feedback_mut().hook_activity = vec![older, latest];
+    repo.feedback_mut().hook_activity_rev = 1;
     apply_state(cx, &view, app_state_with_active_repo(repo.clone()));
     draw_and_drain_test_window(cx);
 
@@ -273,7 +274,6 @@ fn hook_activity_text_selects_copies_and_keeps_run_clicks(cx: &mut gpui::TestApp
 
 #[gpui::test]
 fn hook_activity_live_output_preserves_selection_and_view(cx: &mut gpui::TestAppContext) {
-    let _guard = crate::test_support::lock_clipboard_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -285,8 +285,10 @@ fn hook_activity_live_output_preserves_selection_and_view(cx: &mut gpui::TestApp
         &CommitId("722".into()),
     );
     apply_state(cx, &view, app_state_with_active_repo(repo.clone()));
-    repo.feedback.hook_activity.push(running_hook_activity(722));
-    repo.feedback.hook_activity_rev = 1;
+    repo.feedback_mut()
+        .hook_activity
+        .push(running_hook_activity(722));
+    repo.feedback_mut().hook_activity_rev = 1;
     apply_state(cx, &view, app_state_with_active_repo(repo.clone()));
     draw_and_drain_test_window(cx);
     let input = activity_text(cx, &view, "output_722");
@@ -311,14 +313,14 @@ fn hook_activity_live_output_preserves_selection_and_view(cx: &mut gpui::TestApp
             .hook_activity_output_offset_for_test()
     });
     let more = "new café output\n".repeat(10);
-    Arc::make_mut(&mut repo.feedback.hook_activity[0].output).push_back(
+    Arc::make_mut(&mut repo.feedback_mut().hook_activity[0].output).push_back(
         gitcomet_state::model::GitHookOutputChunk {
             stream: gitcomet_core::git_operation::GitOutputStream::Stdout,
             text: Arc::from(more.as_str()),
         },
     );
-    repo.feedback.hook_activity[0].output_bytes += more.len();
-    repo.feedback.hook_activity_rev += 1;
+    repo.feedback_mut().hook_activity[0].output_bytes += more.len();
+    repo.feedback_mut().hook_activity_rev += 1;
     apply_state(cx, &view, app_state_with_active_repo(repo.clone()));
     draw_and_drain_test_window(cx);
     assert_eq!(
@@ -358,14 +360,14 @@ fn hook_activity_live_output_preserves_selection_and_view(cx: &mut gpui::TestApp
             input.set_selected_range(0..5, false, window, cx)
         })
     });
-    repo.feedback.hook_activity[0].output = Arc::new(std::collections::VecDeque::from([
+    repo.feedback_mut().hook_activity[0].output = Arc::new(std::collections::VecDeque::from([
         gitcomet_state::model::GitHookOutputChunk {
             stream: gitcomet_core::git_operation::GitOutputStream::Stdout,
             text: Arc::from("retained output\n"),
         },
     ]));
-    repo.feedback.hook_activity[0].output_truncated = true;
-    repo.feedback.hook_activity_rev += 1;
+    repo.feedback_mut().hook_activity[0].output_truncated = true;
+    repo.feedback_mut().hook_activity_rev += 1;
     apply_state(cx, &view, app_state_with_active_repo(repo));
     draw_and_drain_test_window(cx);
     assert!(cx.update(|_, app| input.read(app).selected_range().is_empty()));
@@ -474,7 +476,6 @@ fn hook_activity_minimized_indicator_is_repository_specific(cx: &mut gpui::TestA
 
 #[gpui::test]
 fn hook_activity_text_layout_and_selected_fill_across_appearances(cx: &mut gpui::TestAppContext) {
-    let _guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -491,8 +492,8 @@ fn hook_activity_text_layout_and_selected_fill_across_appearances(cx: &mut gpui:
     operation.hooks[0].name = "reference-transaction".into();
     operation.hooks[0].status = GitHookRunStatus::Succeeded;
     operation.hooks[0].duration = Some(Duration::from_millis(207));
-    repo.feedback.hook_activity.push(operation);
-    repo.feedback.hook_activity_rev = 1;
+    repo.feedback_mut().hook_activity.push(operation);
+    repo.feedback_mut().hook_activity_rev = 1;
     apply_state(cx, &view, app_state_with_active_repo(repo));
     for theme in [AppTheme::gitcomet_dark(), AppTheme::gitcomet_light()] {
         for density in [
@@ -617,10 +618,10 @@ fn hook_activity_dialog_only_hides_progress_for_its_own_repository(cx: &mut gpui
         hook_activity_state_for_two_repos(first_id, first.clone(), second.clone()),
     );
     first
-        .feedback
+        .feedback_mut()
         .hook_activity
         .push(running_hook_activity(718));
-    first.feedback.hook_activity_rev = 1;
+    first.feedback_mut().hook_activity_rev = 1;
     apply_state(
         cx,
         &view,
@@ -633,10 +634,10 @@ fn hook_activity_dialog_only_hides_progress_for_its_own_repository(cx: &mut gpui
     );
 
     second
-        .feedback
+        .feedback_mut()
         .hook_activity
         .push(running_hook_activity(719));
-    second.feedback.hook_activity_rev = 1;
+    second.feedback_mut().hook_activity_rev = 1;
     apply_state(
         cx,
         &view,
@@ -701,10 +702,10 @@ fn hook_activity_dialog_only_suppresses_completion_for_its_own_repository(
         hook_activity_state_for_two_repos(first_id, first.clone(), second.clone()),
     );
     first
-        .feedback
+        .feedback_mut()
         .hook_activity
         .push(running_hook_activity(720));
-    first.feedback.hook_activity_rev = 1;
+    first.feedback_mut().hook_activity_rev = 1;
     apply_state(
         cx,
         &view,
@@ -713,20 +714,20 @@ fn hook_activity_dialog_only_suppresses_completion_for_its_own_repository(
     draw_and_drain_test_window(cx);
 
     second
-        .feedback
+        .feedback_mut()
         .hook_activity
         .push(running_hook_activity(721));
-    second.feedback.hook_activity_rev = 1;
+    second.feedback_mut().hook_activity_rev = 1;
     apply_state(
         cx,
         &view,
         hook_activity_state_for_two_repos(first_id, first.clone(), second.clone()),
     );
-    second.feedback.hook_activity[0].status = GitHookOperationStatus::Succeeded;
-    second.feedback.hook_activity[0].duration = Some(Duration::from_secs(1));
-    second.feedback.hook_activity[0].hooks[0].status = GitHookRunStatus::Succeeded;
-    second.feedback.hook_activity[0].hooks[0].duration = Some(Duration::from_secs(1));
-    second.feedback.hook_activity_rev = 2;
+    second.feedback_mut().hook_activity[0].status = GitHookOperationStatus::Succeeded;
+    second.feedback_mut().hook_activity[0].duration = Some(Duration::from_secs(1));
+    second.feedback_mut().hook_activity[0].hooks[0].status = GitHookRunStatus::Succeeded;
+    second.feedback_mut().hook_activity[0].hooks[0].duration = Some(Duration::from_secs(1));
+    second.feedback_mut().hook_activity_rev = 2;
     apply_state(
         cx,
         &view,
@@ -786,11 +787,11 @@ fn hook_activity_auto_opens_centered_and_minimizes_to_compact_progress(
 
     let mut repo_with_hook = repo.clone();
     repo_with_hook
-        .feedback
+        .feedback_mut()
         .hook_activity
         .push(running_hook_activity(714));
     let hook_template = repo_with_hook.feedback.hook_activity[0].hooks[0].clone();
-    repo_with_hook.feedback.hook_activity[0]
+    repo_with_hook.feedback_mut().hook_activity[0]
         .hooks
         .extend((2..=18).map(|child_id| {
             let mut hook = hook_template.clone();
@@ -802,7 +803,7 @@ fn hook_activity_auto_opens_centered_and_minimizes_to_compact_progress(
             };
             hook
         }));
-    repo_with_hook.feedback.hook_activity_rev = 1;
+    repo_with_hook.feedback_mut().hook_activity_rev = 1;
     apply_state(
         cx,
         &view,
@@ -990,15 +991,16 @@ fn hook_activity_auto_opens_centered_and_minimizes_to_compact_progress(
         "scrolling up should pause automatic output following"
     );
     let additional_output = "one more check completed\n";
-    Arc::make_mut(&mut repo_with_hook.feedback.hook_activity[0].output).push_back(
+    Arc::make_mut(&mut repo_with_hook.feedback_mut().hook_activity[0].output).push_back(
         gitcomet_state::model::GitHookOutputChunk {
             stream: gitcomet_core::git_operation::GitOutputStream::Stdout,
             text: Arc::from(additional_output),
         },
     );
-    repo_with_hook.feedback.hook_activity[0].output_bytes += additional_output.len();
-    repo_with_hook.feedback.hook_activity[0].latest_line = "one more check completed".to_string();
-    repo_with_hook.feedback.hook_activity_rev = 2;
+    repo_with_hook.feedback_mut().hook_activity[0].output_bytes += additional_output.len();
+    repo_with_hook.feedback_mut().hook_activity[0].latest_line =
+        "one more check completed".to_string();
+    repo_with_hook.feedback_mut().hook_activity_rev = 2;
     apply_state(
         cx,
         &view,
@@ -1079,7 +1081,7 @@ fn hook_activity_auto_opens_centered_and_minimizes_to_compact_progress(
         "the minimized hook progress toast must have a fixed 300px width (actual={compact_width})"
     );
 
-    repo_with_hook.feedback.hook_activity_rev = 3;
+    repo_with_hook.feedback_mut().hook_activity_rev = 3;
     apply_state(
         cx,
         &view,
@@ -1090,11 +1092,11 @@ fn hook_activity_auto_opens_centered_and_minimizes_to_compact_progress(
         "updates in the same Git operation chain must remain minimized"
     );
 
-    repo_with_hook.feedback.hook_activity[0].status = GitHookOperationStatus::Succeeded;
-    repo_with_hook.feedback.hook_activity[0].duration = Some(Duration::from_secs(1));
-    repo_with_hook.feedback.hook_activity[0].hooks[0].status = GitHookRunStatus::Succeeded;
-    repo_with_hook.feedback.hook_activity[0].hooks[0].duration = Some(Duration::from_secs(1));
-    repo_with_hook.feedback.hook_activity_rev = 4;
+    repo_with_hook.feedback_mut().hook_activity[0].status = GitHookOperationStatus::Succeeded;
+    repo_with_hook.feedback_mut().hook_activity[0].duration = Some(Duration::from_secs(1));
+    repo_with_hook.feedback_mut().hook_activity[0].hooks[0].status = GitHookRunStatus::Succeeded;
+    repo_with_hook.feedback_mut().hook_activity[0].hooks[0].duration = Some(Duration::from_secs(1));
+    repo_with_hook.feedback_mut().hook_activity_rev = 4;
     apply_state(
         cx,
         &view,
@@ -1110,10 +1112,10 @@ fn hook_activity_auto_opens_centered_and_minimizes_to_compact_progress(
     );
 
     repo_with_hook
-        .feedback
+        .feedback_mut()
         .hook_activity
         .push(running_hook_activity(715));
-    repo_with_hook.feedback.hook_activity_rev = 5;
+    repo_with_hook.feedback_mut().hook_activity_rev = 5;
     apply_state(
         cx,
         &view,
@@ -1171,15 +1173,15 @@ fn hook_activity_auto_opens_centered_and_minimizes_to_compact_progress(
         "the active hook should return to compact progress after X closes Activity"
     );
 
-    repo_with_hook.feedback.hook_activity[1].status = GitHookOperationStatus::Succeeded;
-    repo_with_hook.feedback.hook_activity[1].duration = Some(Duration::from_secs(1));
-    repo_with_hook.feedback.hook_activity[1].hooks[0].status = GitHookRunStatus::Succeeded;
-    repo_with_hook.feedback.hook_activity[1].hooks[0].duration = Some(Duration::from_secs(1));
+    repo_with_hook.feedback_mut().hook_activity[1].status = GitHookOperationStatus::Succeeded;
+    repo_with_hook.feedback_mut().hook_activity[1].duration = Some(Duration::from_secs(1));
+    repo_with_hook.feedback_mut().hook_activity[1].hooks[0].status = GitHookRunStatus::Succeeded;
+    repo_with_hook.feedback_mut().hook_activity[1].hooks[0].duration = Some(Duration::from_secs(1));
     repo_with_hook
-        .feedback
+        .feedback_mut()
         .hook_activity
         .push(running_hook_activity(716));
-    repo_with_hook.feedback.hook_activity_rev = 6;
+    repo_with_hook.feedback_mut().hook_activity_rev = 6;
     apply_state(
         cx,
         &view,
@@ -1198,10 +1200,10 @@ fn hook_activity_auto_opens_centered_and_minimizes_to_compact_progress(
     );
 
     repo_with_hook
-        .feedback
+        .feedback_mut()
         .hook_activity
         .push(running_hook_activity(717));
-    repo_with_hook.feedback.hook_activity_rev = 7;
+    repo_with_hook.feedback_mut().hook_activity_rev = 7;
     apply_state(
         cx,
         &view,
@@ -1255,8 +1257,10 @@ fn hook_activity_stays_minimized_when_another_overlay_blocks_auto_open(
         "expected a pre-existing overlay before the hook starts"
     );
 
-    repo.feedback.hook_activity.push(running_hook_activity(717));
-    repo.feedback.hook_activity_rev = 1;
+    repo.feedback_mut()
+        .hook_activity
+        .push(running_hook_activity(717));
+    repo.feedback_mut().hook_activity_rev = 1;
     apply_state(cx, &view, app_state_with_active_repo(repo.clone()));
     assert!(
         cx.debug_bounds("hook_activity_panel").is_none(),
@@ -1274,7 +1278,7 @@ fn hook_activity_stays_minimized_when_another_overlay_blocks_auto_open(
         "expected the blocking overlay to close"
     );
 
-    repo.feedback.hook_activity_rev = 2;
+    repo.feedback_mut().hook_activity_rev = 2;
     apply_state(cx, &view, app_state_with_active_repo(repo));
     assert!(
         cx.debug_bounds("hook_activity_panel").is_none(),
@@ -1299,11 +1303,13 @@ fn running_fetch(operation_id: u64, percent: Option<u8>) -> GitHookOperation {
         time: std::time::SystemTime::UNIX_EPOCH,
         duration: None,
         status: GitHookOperationStatus::Running,
+        handled_by_prompt: false,
         hooks: Vec::new(),
         output: Default::default(),
         output_bytes: 0,
         output_truncated: false,
         latest_line: String::new(),
+        command: None,
         command_started: false,
         transfer: None,
         progress_lane: true,
@@ -1330,10 +1336,10 @@ fn operation_progress_card_shows_git_meter_and_stops_the_operation(cx: &mut gpui
         )),
         &CommitId("7317317317317317".into()),
     );
-    repo.feedback
+    repo.feedback_mut()
         .hook_activity
         .push(running_fetch(731, Some(45)));
-    repo.feedback.hook_activity_rev = 1;
+    repo.feedback_mut().hook_activity_rev = 1;
     apply_state(cx, &view, app_state_with_active_repo(repo.clone()));
     draw_and_drain_test_window(cx);
 
@@ -1369,11 +1375,176 @@ fn operation_progress_card_shows_git_meter_and_stops_the_operation(cx: &mut gpui
     });
     assert_eq!(status, Some(GitHookOperationStatus::Cancelling));
 
-    repo.feedback.hook_activity.clear();
-    repo.feedback.hook_activity_rev = 2;
+    repo.feedback_mut().hook_activity.clear();
+    repo.feedback_mut().hook_activity_rev = 2;
     apply_state(cx, &view, app_state_with_active_repo(repo));
     draw_and_drain_test_window(cx);
     assert!(cx.debug_bounds("operation_progress_toast_731").is_none());
+}
+
+#[gpui::test]
+fn pull_monitor_opens_exact_command_details_and_can_stop_while_silent(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let repo_id = RepoId(751);
+    let mut repo = shortcut_fixture_repo(
+        repo_id,
+        &std::env::temp_dir().join("pull-monitor"),
+        &CommitId("751".into()),
+    );
+    apply_state(cx, &view, app_state_with_active_repo(repo.clone()));
+    let command = "git -C '/work/repository with spaces' pull --progress --rebase --no-prune -- origin refs/heads/feature/long-upstream-branch-name";
+    let mut pull = running_fetch(751, None);
+    pull.label = "Pull".into();
+    pull.context = Some("origin/feature → topic · rebase".into());
+    pull.time = std::time::SystemTime::now();
+    pull.command = Some(Arc::from(command));
+    let mut newer = pull.clone();
+    newer.id = GitOperationId(752);
+    newer.status = GitHookOperationStatus::Succeeded;
+    newer.command = Some(Arc::from("git pull --ff-only -- origin refs/heads/other"));
+    repo.feedback_mut().hook_activity = vec![pull, newer];
+    repo.feedback_mut().hook_activity_rev = 1;
+    apply_state(cx, &view, app_state_with_active_repo(repo));
+    draw_and_drain_test_window(cx);
+
+    assert!(cx.debug_bounds("operation_progress_toast_751").is_some());
+    assert!(cx.debug_bounds("operation_progress_bar_751").is_none());
+    assert!(cx.debug_bounds("hook_activity_panel").is_none());
+    let details = cx
+        .debug_bounds("operation_progress_details_751")
+        .expect("Pull details");
+    cx.simulate_click(details.center(), Modifiers::default());
+    draw_and_drain_test_window(cx);
+
+    assert!(cx.debug_bounds("hook_activity_command_751").is_some());
+    assert!(cx.debug_bounds("hook_activity_command_752").is_none());
+    assert!(cx.debug_bounds("hook_activity_hooks_container").is_none());
+    assert!(cx.debug_bounds("operation_progress_toast_751").is_none());
+    let input = activity_text(cx, &view, "command_751");
+    assert_eq!(
+        cx.update(|_, app| input.read(app).text().to_string()),
+        command
+    );
+    let copy = cx.debug_bounds("hook_activity_copy_command_751").unwrap();
+    cx.simulate_click(copy.center(), Modifiers::default());
+    assert_eq!(
+        cx.read_from_clipboard()
+            .and_then(|item| item.text())
+            .as_deref(),
+        Some(command)
+    );
+
+    let close = cx.debug_bounds("hook_activity_close").unwrap();
+    cx.simulate_click(close.center(), Modifiers::default());
+    draw_and_drain_test_window(cx);
+    assert!(cx.debug_bounds("operation_progress_toast_751").is_some());
+    let details = cx.debug_bounds("operation_progress_details_751").unwrap();
+    cx.simulate_click(details.center(), Modifiers::default());
+    draw_and_drain_test_window(cx);
+
+    let stop = cx
+        .debug_bounds("hook_activity_stop_751")
+        .expect("Stop while Pull is silent");
+    cx.simulate_click(stop.center(), Modifiers::default());
+    sync_store_when(cx, &view, "Pull cancellation", |state| {
+        state.repos[0].feedback.hook_activity[0].status == GitHookOperationStatus::Cancelling
+    });
+    assert_eq!(
+        cx.update(|_, app| view.read(app).state.repos[0].feedback.hook_activity[1].status),
+        GitHookOperationStatus::Succeeded
+    );
+}
+
+#[gpui::test]
+fn pull_keeps_a_direct_stop_control_when_another_repository_starts_hooks(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let repo_id = RepoId(753);
+    let mut repo = shortcut_fixture_repo(
+        repo_id,
+        &std::env::temp_dir().join("pull-hook-monitor"),
+        &CommitId("753".into()),
+    );
+    apply_state(cx, &view, app_state_with_active_repo(repo.clone()));
+    let mut pull = running_hook_activity(753);
+    pull.label = "Pull".into();
+    pull.context = Some("origin/main → topic".into());
+    pull.progress_lane = true;
+    pull.command = Some(Arc::from(
+        "git pull --rebase --no-prune -- origin refs/heads/main",
+    ));
+    repo.feedback_mut().hook_activity = vec![pull];
+    repo.feedback_mut().hook_activity_rev = 1;
+    apply_state(cx, &view, app_state_with_active_repo(repo.clone()));
+    draw_and_drain_test_window(cx);
+    let minimize = cx
+        .debug_bounds("hook_activity_minimize")
+        .expect("hook activity opens");
+    cx.simulate_click(minimize.center(), Modifiers::default());
+    draw_and_drain_test_window(cx);
+    let mut other = shortcut_fixture_repo(
+        RepoId(754),
+        &std::env::temp_dir().join("other-hook-monitor"),
+        &CommitId("754".into()),
+    );
+    let mut other_pull = running_hook_activity(754);
+    other_pull.label = "Pull".into();
+    other_pull.context = Some("upstream/release → release".into());
+    other_pull.progress_lane = true;
+    other_pull.command = Some(Arc::from(
+        "git pull --rebase --no-prune -- upstream refs/heads/release",
+    ));
+    other.feedback_mut().hook_activity = vec![other_pull];
+    other.feedback_mut().hook_activity_rev = 1;
+    apply_state(
+        cx,
+        &view,
+        hook_activity_state_for_two_repos(repo_id, repo, other),
+    );
+    draw_and_drain_test_window(cx);
+    if let Some(minimize) = cx.debug_bounds("hook_activity_minimize") {
+        cx.simulate_click(minimize.center(), Modifiers::default());
+        draw_and_drain_test_window(cx);
+    }
+    assert!(cx.debug_bounds("operation_progress_toast_753").is_some());
+    assert!(cx.debug_bounds("operation_progress_toast_754").is_some());
+    assert!(cx.debug_bounds("operation_progress_stop_754").is_some());
+    let monitors = cx.update(|_, app| {
+        view.read(app)
+            .toast_host
+            .read(app)
+            .operation_progress_for_tests()
+            .to_vec()
+    });
+    assert_eq!(monitors.len(), 2);
+    assert_eq!(
+        monitors[0].subtitle,
+        "pull-hook-monitor · origin/main → topic"
+    );
+    assert_eq!(
+        monitors[1].subtitle,
+        "other-hook-monitor · upstream/release → release"
+    );
+    assert_eq!(monitors[0].phase(), "Running pre-commit hook");
+    assert_eq!(monitors[0].percent_label(), None);
+    let stop = cx
+        .debug_bounds("operation_progress_stop_753")
+        .expect("each Pull retains its own Stop");
+    cx.simulate_click(stop.center(), Modifiers::default());
+    sync_store_when(cx, &view, "Pull hook cancellation", |state| {
+        state.repos[0].feedback.hook_activity[0].status == GitHookOperationStatus::Cancelling
+    });
+    assert_eq!(
+        cx.update(|_, app| view.read(app).state.repos[1].feedback.hook_activity[0].status),
+        GitHookOperationStatus::Running
+    );
 }
 
 #[gpui::test]
@@ -1393,8 +1564,8 @@ fn hook_runs_stay_out_of_the_operation_progress_lane(cx: &mut gpui::TestAppConte
     );
     let mut with_hook = running_hook_activity(732);
     with_hook.progress_lane = true;
-    repo.feedback.hook_activity.push(with_hook);
-    repo.feedback.hook_activity_rev = 1;
+    repo.feedback_mut().hook_activity.push(with_hook);
+    repo.feedback_mut().hook_activity_rev = 1;
     apply_state(cx, &view, app_state_with_active_repo(repo));
     draw_and_drain_test_window(cx);
 
@@ -1475,6 +1646,8 @@ fn maintenance_recommendation_stays_until_answered(cx: &mut gpui::TestAppContext
 #[test]
 fn maintenance_progress_card_explains_the_wait() {
     let progress = super::super::operation_progress::OperationProgress {
+        command: None,
+        latest_line: String::new(),
         repo_id: RepoId(1),
         operation_id: GitOperationId(1),
         label: "Maintenance".to_string(),

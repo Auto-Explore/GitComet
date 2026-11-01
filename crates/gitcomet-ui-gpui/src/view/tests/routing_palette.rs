@@ -119,6 +119,7 @@ fn live_upstream_requires_the_exact_loaded_remote_tracking_ref() {
         Loadable::Ready(Arc::new(vec![Remote {
             name: "origin".to_string(),
             url: None,
+            default_branch: None,
         }])),
     );
     repo.remote_branches = Loadable::Ready(Arc::new(vec![RemoteBranch {
@@ -128,12 +129,13 @@ fn live_upstream_requires_the_exact_loaded_remote_tracking_ref() {
     }]));
 
     assert!(head_branch_has_live_upstream(&repo));
-    assert!(pull_enabled(&repo, &Default::default()));
-    assert_eq!(pull_request(&repo, &Default::default()), PullRequest::Pull);
+    assert_eq!(pull_unavailable_reason(&repo, &Default::default()), None);
 }
 
+/// "Create new" configures an upstream before the branch exists remotely;
+/// pulling it would fail with "couldn't find remote ref".
 #[test]
-fn configured_but_unpushed_upstream_is_a_push_target_without_being_live() {
+fn configured_but_unpushed_upstream_is_a_push_target_without_being_pullable() {
     let mut repo = repo_with_push_state(
         Some(Upstream {
             remote: "origin".to_string(),
@@ -142,17 +144,16 @@ fn configured_but_unpushed_upstream_is_a_push_target_without_being_live() {
         Loadable::Ready(Arc::new(vec![Remote {
             name: "origin".to_string(),
             url: None,
+            default_branch: None,
         }])),
     );
     repo.remote_branches = Loadable::Ready(Arc::new(Vec::new()));
 
     assert_eq!(push_request(&repo, &Default::default()), PushRequest::Push);
     assert!(!head_branch_has_live_upstream(&repo));
-    assert!(!pull_enabled(&repo, &Default::default()));
     assert_eq!(
-        pull_request(&repo, &Default::default()),
-        PullRequest::NotReady,
-        "Pull must stay disabled until the configured branch exists remotely"
+        pull_unavailable_reason(&repo, &Default::default()),
+        Some("Push this branch to its upstream first")
     );
 }
 
@@ -164,10 +165,12 @@ fn push_request_offers_standard_remote_for_untracked_branch() {
             Remote {
                 name: "backup".to_string(),
                 url: None,
+                default_branch: None,
             },
             Remote {
                 name: "origin".to_string(),
                 url: None,
+                default_branch: None,
             },
         ])),
     );
@@ -188,6 +191,7 @@ fn push_request_uses_first_remote_when_origin_is_absent() {
         Loadable::Ready(Arc::new(vec![Remote {
             name: "upstream".to_string(),
             url: None,
+            default_branch: None,
         }])),
     );
 
@@ -208,6 +212,7 @@ fn push_request_on_an_annex_adjusted_branch_never_offers_set_upstream() {
         Loadable::Ready(Arc::new(vec![Remote {
             name: "origin".to_string(),
             url: None,
+            default_branch: None,
         }])),
     );
     let head = "adjusted/main(unlocked)".to_string();
@@ -263,6 +268,22 @@ fn push_request_distinguishes_no_remotes_from_loading_data() {
         push_request(&loading, &Default::default()),
         PushRequest::NotReady
     );
+    assert_eq!(
+        PushRequest::NoRemotes.unavailable_reason(),
+        Some("Add a remote to push to first")
+    );
+    assert_eq!(
+        PushRequest::NotReady.unavailable_reason(),
+        Some("The repository is still loading")
+    );
+    assert_eq!(PushRequest::Push.unavailable_reason(), None);
+    assert_eq!(
+        PushRequest::SetUpstream {
+            remote: "origin".into()
+        }
+        .unavailable_reason(),
+        None
+    );
 }
 
 #[test]
@@ -294,39 +315,67 @@ fn a_selected_remote_branch_is_invalidated_only_after_a_ready_refresh_omits_it()
     assert!(selected_remote_branch_is_missing(&state, Some(&selected)));
 }
 
+/// Regression: Pull was enabled for a never-pushed branch, and Git failed with
+/// "couldn't find remote ref refs/heads/<branch>". A remote branch of the same
+/// name is not an upstream either.
 #[test]
-fn pull_request_offers_a_pull_for_a_branch_that_was_never_pushed() {
-    let repo = repo_with_push_state(
+fn pull_is_unavailable_for_a_branch_without_an_upstream() {
+    let mut repo = repo_with_push_state(
         None,
         Loadable::Ready(Arc::new(vec![Remote {
             name: "origin".to_string(),
             url: None,
+            default_branch: None,
         }])),
     );
+    repo.remote_branches = Loadable::Ready(Arc::new(vec![RemoteBranch {
+        remote: "origin".to_string(),
+        name: "feature".to_string(),
+        target: CommitId("remote-feature".into()),
+    }]));
 
-    assert!(!head_branch_has_live_upstream(&repo));
-    assert!(!pull_enabled(&repo, &Default::default()));
     assert_eq!(
-        pull_request(&repo, &Default::default()),
-        PullRequest::Pull,
-        "the backend pulls from the preferred remote and sets the upstream"
+        pull_unavailable_reason(&repo, &Default::default()),
+        Some("Set an upstream for this branch first")
     );
 }
 
 #[test]
-fn pull_request_allows_a_detached_head_and_reports_a_repo_without_remotes() {
-    let mut detached = repo_with_push_state(None, Loadable::Loading);
+fn pull_needs_a_loaded_working_tree_branch_whose_upstream_is_live() {
+    let reason = |repo: &RepoState| pull_unavailable_reason(repo, &Default::default());
+    let mut tracked = repo_with_push_state(
+        Some(Upstream {
+            remote: "origin".to_string(),
+            branch: "feature".to_string(),
+        }),
+        Loadable::Ready(Arc::new(Vec::new())),
+    );
+    tracked.remote_branches = Loadable::Ready(Arc::new(vec![RemoteBranch {
+        remote: "origin".to_string(),
+        name: "feature".to_string(),
+        target: CommitId("remote-feature".into()),
+    }]));
+    assert_eq!(reason(&tracked), None);
+
+    let mut detached = tracked.clone();
     detached.head_branch = Loadable::Ready("HEAD".to_string());
     assert!(head_is_detached(&detached));
     assert_eq!(
-        pull_request(&detached, &Default::default()),
-        PullRequest::Pull
+        reason(&detached),
+        Some("HEAD is detached — check out a branch first")
     );
-
-    let no_remotes = repo_with_push_state(None, Loadable::Ready(Arc::new(Vec::new())));
+    let mut loading = [tracked.clone(), tracked.clone(), tracked.clone()];
+    loading[0].head_branch = Loadable::Loading;
+    loading[1].branches = Loadable::Loading;
+    loading[2].remote_branches = Loadable::Loading;
+    for repo in &loading {
+        assert_eq!(reason(repo), Some(REPOSITORY_LOADING_REASON));
+    }
+    let mut bare = tracked;
+    bare.repository_mode = Some(gitcomet_core::domain::RepositoryMode::Bare);
     assert_eq!(
-        pull_request(&no_remotes, &Default::default()),
-        PullRequest::NoRemotes
+        reason(&bare),
+        Some(gitcomet_core::domain::WORKING_TREE_REQUIRED_MESSAGE)
     );
 }
 
@@ -359,7 +408,6 @@ fn a_selected_remote_branch_survives_a_remote_name_containing_a_slash() {
 
 #[gpui::test]
 fn command_palette_opens_from_detached_focus_on_loading_repo_tabs(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
     let (store, events) = AppStore::new_test(Arc::clone(&backend));
     let store_for_view = store.clone();
@@ -394,7 +442,6 @@ fn command_palette_opens_from_detached_focus_on_loading_repo_tabs(cx: &mut gpui:
 
 #[gpui::test]
 fn command_palette_reopens_after_tab_switch_and_close_cycles(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
     let (store, events) = AppStore::new_test(Arc::clone(&backend));
     let store_for_view = store.clone();
@@ -444,7 +491,6 @@ fn command_palette_reopens_after_tab_switch_and_close_cycles(cx: &mut gpui::Test
 
 #[gpui::test]
 fn command_palette_opens_commit_prompt_for_clean_repo(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
     let (store, events) = AppStore::new_test(Arc::clone(&backend));
     let store_for_view = store.clone();
@@ -480,7 +526,6 @@ fn command_palette_opens_commit_prompt_for_clean_repo(cx: &mut gpui::TestAppCont
 
 #[gpui::test]
 fn command_palette_rename_branch_opens_prompt_for_current_branch(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_view = store.clone();
     let (view, cx) = cx
@@ -517,7 +562,6 @@ fn command_palette_rename_branch_opens_prompt_for_current_branch(cx: &mut gpui::
 fn command_palette_stage_all_asks_before_staging_unresolved_conflicts(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_view = store.clone();
     let (view, cx) = cx
@@ -586,7 +630,6 @@ fn command_palette_stage_all_asks_before_staging_unresolved_conflicts(
 fn command_palette_close_falls_back_to_diff_panel_when_saved_focus_is_stale(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
     let (store, events) = AppStore::new_test(Arc::clone(&backend));
     let store_for_view = store.clone();
@@ -601,7 +644,7 @@ fn command_palette_close_falls_back_to_diff_panel_when_saved_focus_is_stale(
     cx.update(|window, app| {
         let focus = view
             .read(app)
-            .main_pane
+            .diff_renderer
             .read(app)
             .diff_panel_focus_handle
             .clone();
@@ -633,7 +676,7 @@ fn command_palette_close_falls_back_to_diff_panel_when_saved_focus_is_stale(
 
     let diff_focus = cx.update(|_window, app| {
         view.read(app)
-            .main_pane
+            .diff_renderer
             .read(app)
             .diff_panel_focus_handle
             .clone()
@@ -688,15 +731,51 @@ fn window_activation_dispatch_is_throttled_per_repo() {
 }
 
 #[test]
+fn opening_repository_satisfies_initial_window_activation_refresh() {
+    let repo_id = RepoId(1);
+    let state = view_state_with_active_ready_repo(repo_id);
+    let mut recent = FxHashMap::default();
+    let now = Instant::now();
+    note_opened_repos_for_activation(&AppState::test_default(), &state, &mut recent, now);
+    assert!(repo_activation_msg(&state, &mut recent, now).is_none());
+
+    // Unrelated snapshots must not postpone a genuine later focus refresh.
+    note_opened_repos_for_activation(&state, &state, &mut recent, now + REPO_ACTIVATION_THROTTLE);
+    assert!(repo_activation_msg(&state, &mut recent, now + REPO_ACTIVATION_THROTTLE).is_some());
+    note_opened_repos_for_activation(&state, &AppState::test_default(), &mut recent, now);
+    assert!(
+        recent.is_empty(),
+        "closed repository IDs must not accumulate"
+    );
+}
+
+#[test]
+fn opening_repository_does_not_throttle_focus_until_its_load_starts() {
+    let repo_id = RepoId(1);
+    let mut state = view_state_with_active_ready_repo(repo_id);
+    state.repos[0].open = Loadable::Loading;
+    let mut recent = FxHashMap::default();
+    let now = Instant::now();
+    note_opened_repos_for_activation(&AppState::test_default(), &state, &mut recent, now);
+    assert!(recent.is_empty());
+    let ready = view_state_with_active_ready_repo(repo_id);
+    note_opened_repos_for_activation(&state, &ready, &mut recent, now);
+    assert!(repo_activation_msg(&ready, &mut recent, now).is_none());
+}
+
+#[test]
 fn window_grab_suppresses_the_activation_it_caused() {
     // Dragging the title bar or a resize edge hands focus to the compositor for
     // the duration of the grab, which GPUI reports as a deactivate → activate
     // pair. Treating that as a return to the app refreshed the whole repo on
     // every window move/resize.
     let now = Instant::now();
-    crate::app::note_window_grab_started();
+    crate::kit::window_chrome::note_window_grab_started();
 
-    let armed = crate::app::take_window_grab_started_within(now, WINDOW_GRAB_DEACTIVATE_GRACE);
+    let armed = crate::kit::window_chrome::take_window_grab_started_within(
+        now,
+        WINDOW_GRAB_DEACTIVATE_GRACE,
+    );
     assert!(armed, "a fresh grab must claim the deactivation it caused");
 
     let mut suppressed_at = Some(now);
@@ -715,14 +794,17 @@ fn stale_window_grab_does_not_suppress_a_later_activation() {
     // A grab the compositor ignored (bad serial, unsupported protocol) must not
     // leave suppression armed for an unrelated alt-tab minutes later.
     let now = Instant::now();
-    crate::app::note_window_grab_started();
+    crate::kit::window_chrome::note_window_grab_started();
 
-    assert!(!crate::app::take_window_grab_started_within(
+    assert!(!crate::kit::window_chrome::take_window_grab_started_within(
         now + WINDOW_GRAB_DEACTIVATE_GRACE + Duration::from_millis(1),
         WINDOW_GRAB_DEACTIVATE_GRACE,
     ));
     assert!(
-        !crate::app::take_window_grab_started_within(now, WINDOW_GRAB_DEACTIVATE_GRACE),
+        !crate::kit::window_chrome::take_window_grab_started_within(
+            now,
+            WINDOW_GRAB_DEACTIVATE_GRACE
+        ),
         "the stale marker must have been cleared, not left armed"
     );
 }
@@ -870,7 +952,6 @@ fn focused_mergetool_keeps_titlebar_actions_without_repo_tabs_or_command_palette
 
 #[gpui::test]
 fn window_deactivation_clears_live_pointer_feedback(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (_view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -894,7 +975,6 @@ fn window_deactivation_clears_live_pointer_feedback(cx: &mut gpui::TestAppContex
 fn reveal_commit_reissues_its_lookup_against_a_newly_active_repository(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
     let (store, events) = AppStore::new_test(Arc::clone(&backend));
     let store_for_view = store.clone();
@@ -938,7 +1018,6 @@ fn reveal_commit_reissues_its_lookup_against_a_newly_active_repository(
 /// lower modal when the upper is dismissed.
 #[gpui::test]
 fn reveal_commit_and_the_command_palette_never_stack(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
     let (store, events) = AppStore::new_test(Arc::clone(&backend));
     let store_for_view = store.clone();
@@ -982,7 +1061,6 @@ fn reveal_commit_and_the_command_palette_never_stack(cx: &mut gpui::TestAppConte
 
 #[gpui::test]
 fn reveal_commit_dialog_opens_on_secondary_g_and_takes_focus(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
     let (store, events) = AppStore::new_test(Arc::clone(&backend));
     let store_for_view = store.clone();
@@ -1028,7 +1106,6 @@ fn reveal_commit_dialog_opens_on_secondary_g_and_takes_focus(cx: &mut gpui::Test
 /// can drift apart.
 #[gpui::test]
 fn reveal_commit_dialog_toggles_and_escapes_without_latching(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
     let (store, events) = AppStore::new_test(Arc::clone(&backend));
     let store_for_view = store.clone();
@@ -1063,7 +1140,6 @@ fn reveal_commit_dialog_toggles_and_escapes_without_latching(cx: &mut gpui::Test
 /// already can be a tag, and that is where asking starts.
 #[gpui::test]
 fn reveal_commit_asks_git_only_once_the_query_could_be_a_reference(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
     let (store, events) = AppStore::new_test(Arc::clone(&backend));
     let store_for_view = store.clone();
@@ -1106,7 +1182,6 @@ fn reveal_commit_asks_git_only_once_the_query_could_be_a_reference(cx: &mut gpui
 /// full id, so the history walk matches loaded rows outright.
 #[gpui::test]
 fn reveal_commit_enter_reveals_the_resolved_full_id(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
     let (store, events) = AppStore::new_test(Arc::clone(&backend));
     let store_for_view = store.clone();
@@ -1160,6 +1235,14 @@ fn reveal_commit_enter_reveals_the_resolved_full_id(cx: &mut gpui::TestAppContex
         !reveal_commit_is_open(cx, &view),
         "activating a result should close the dialog"
     );
+    // The reveal is reduced on the store's worker thread, which
+    // `run_until_parked` does not wait for.
+    wait_until("store reveal target after Enter", || {
+        store.snapshot().repos[0]
+            .history_state
+            .reveal_target
+            .is_some()
+    });
     assert_eq!(
         store.snapshot().repos[0]
             .history_state
@@ -1203,7 +1286,6 @@ fn open_palette_on_ready_repo(
 /// greyed out, with a hover tooltip saying why — and Enter does nothing.
 #[gpui::test]
 fn command_palette_keeps_unavailable_commands_listed_with_a_reason(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (_store, view, cx) = open_palette_on_ready_repo(cx, false);
 
     cx.simulate_input("abort merge");
@@ -1244,7 +1326,6 @@ fn command_palette_keeps_unavailable_commands_listed_with_a_reason(cx: &mut gpui
 /// through the action bar's own confirmation.
 #[gpui::test]
 fn command_palette_enables_abort_merge_during_a_merge(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (_store, view, cx) = open_palette_on_ready_repo(cx, true);
 
     cx.simulate_input("abort merge");

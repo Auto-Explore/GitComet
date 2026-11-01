@@ -22,30 +22,37 @@ impl DetailsPaneView {
         // frame or two, and this view has nothing to render without it.
         let has_worktree_selection = self.selected_worktree_summary().is_some();
         if let (Some(repo_id), true) = (active_repo_id, has_worktree_selection) {
+            self.retain_commit_reword_for(None, cx);
             return self.worktree_uncommitted_view(repo_id, cx);
         }
 
-        // An active two-point comparison takes precedence over both the single
-        // and multi commit-detail views: show the range's changed files.
-        let has_range_comparison = self
+        // A comparison takes precedence over the single commit's details. A
+        // two-point range shows the range's changed files.
+        let comparison = self
             .active_repo()
-            .is_some_and(|repo| repo.history_state.range_selection.is_some());
-        if let (Some(repo_id), true) = (active_repo_id, has_range_comparison) {
-            return self.range_comparison_view(repo_id, cx);
-        }
-
-        let multi_count = self
-            .active_repo()
-            .filter(|repo| repo.history_state.multi_selection.is_multi())
-            .map(|repo| repo.history_state.multi_selection.commits.len());
-        if let (Some(repo_id), Some(count)) = (active_repo_id, multi_count) {
-            return self.multi_commit_details_view(repo_id, count, cx);
+            .filter(|repo| Self::shows_comparison(repo))
+            .map(|repo| {
+                (
+                    repo.id,
+                    repo.history_state.range_selection.is_some(),
+                    repo.history_state.multi_selection.commits.len(),
+                )
+            });
+        if let Some((repo_id, range, count)) = comparison {
+            self.retain_commit_reword_for(None, cx);
+            return if range {
+                self.range_comparison_view(repo_id, cx)
+            } else {
+                self.multi_commit_details_view(repo_id, count, cx)
+            };
         }
 
         if let (Some(repo_id), Some(selected_id)) = (active_repo_id, selected_id) {
+            self.retain_commit_reword_for(Some((repo_id, &selected_id)), cx);
             return self.single_commit_details_view(repo_id, selected_id, cx);
         }
 
+        self.retain_commit_reword_for(None, cx);
         self.status_sections_view(cx)
     }
 
@@ -193,7 +200,20 @@ impl DetailsPaneView {
                         cx,
                     );
 
-                    let message = self.commit_details_message_view(theme, repo_id);
+                    let message = if current {
+                        let availability = self
+                            .active_repo()
+                            .map(|repo| commit_reword_availability(repo, details));
+                        self.commit_details_message_section(
+                            theme,
+                            repo_id,
+                            details,
+                            availability.as_ref(),
+                            cx,
+                        )
+                    } else {
+                        self.commit_details_message_view(theme, repo_id)
+                    };
 
                     div()
                         .flex()

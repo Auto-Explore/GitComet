@@ -44,12 +44,11 @@ impl Render for ReviewCounter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gitcomet_ui_kit::test_support::{lock_visual_test, refresh_and_draw};
+    use gitcomet_ui_kit::test_support::refresh_and_draw;
     use gpui::Modifiers;
 
     #[gpui::test]
     fn a_kit_button_counts_clicks(cx: &mut gpui::TestAppContext) {
-        let _guard = lock_visual_test();
         let (view, cx) = cx.add_window_view(|_, _| ReviewCounter::new(AppTheme::gitcomet_dark()));
         refresh_and_draw(cx);
         let bounds = cx

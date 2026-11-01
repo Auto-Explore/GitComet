@@ -1,9 +1,10 @@
 use super::*;
 use crate::kit::click::PointerClickExt as _;
+use gitcomet_ui_kit::text_layout::TextLayoutExt as _;
 use rustc_hash::FxHasher;
 
 fn diff_text_empty_space_surface(
-    view: Entity<MainPaneView>,
+    view: Entity<DiffRenderer>,
     region: DiffTextRegion,
 ) -> gpui::Stateful<gpui::Div> {
     let left_view = view.clone();
@@ -48,7 +49,7 @@ fn diff_text_trailing_space_height(
 /// so the surface counteracts horizontal scrolling and is clipped by the list's
 /// own content mask and padding.
 pub(super) struct DiffTextEmptySpaceDecoration {
-    pub(super) view: Entity<MainPaneView>,
+    pub(super) view: Entity<DiffRenderer>,
     pub(super) region: DiffTextRegion,
 }
 
@@ -92,7 +93,7 @@ impl gpui::UniformListDecoration for DiffTextEmptySpaceDecoration {
 /// places this immediately after the complete body, so pictures and other
 /// non-text blocks remain outside the hit area.
 pub(super) fn flowing_diff_text_empty_space(
-    view: Entity<MainPaneView>,
+    view: Entity<DiffRenderer>,
     region: DiffTextRegion,
 ) -> AnyElement {
     diff_text_empty_space_surface(view, region)
@@ -106,7 +107,7 @@ pub(super) fn flowing_diff_text_empty_space(
 /// be measured. Keep its empty-state presentation, but make the document
 /// viewport itself behave as the sole EOF position.
 pub(super) fn empty_diff_text_document(
-    view: Entity<MainPaneView>,
+    view: Entity<DiffRenderer>,
     region: DiffTextRegion,
     child: AnyElement,
 ) -> AnyElement {
@@ -132,7 +133,7 @@ pub(super) fn empty_diff_text_document(
 }
 
 pub(super) struct DiffTextSelectionTracker {
-    pub(super) view: Entity<MainPaneView>,
+    pub(super) view: crate::view::markdown_interaction::MarkdownInteraction,
 }
 
 impl IntoElement for DiffTextSelectionTracker {
@@ -194,16 +195,7 @@ impl Element for DiffTextSelectionTracker {
             if phase != gpui::DispatchPhase::Bubble {
                 return;
             }
-            view_for_move.update(cx, |this, cx| {
-                if !this.diff_text_selecting {
-                    return;
-                }
-                let before = this.diff_text_head;
-                this.update_diff_text_selection_from_mouse(event.position);
-                if this.diff_text_head != before {
-                    cx.notify();
-                }
-            });
+            view_for_move.selection_move(event.position, cx);
         });
 
         let view_for_up = self.view.clone();
@@ -214,12 +206,7 @@ impl Element for DiffTextSelectionTracker {
             if event.button != MouseButton::Left {
                 return;
             }
-            view_for_up.update(cx, |this, cx| {
-                if this.diff_text_selecting {
-                    this.end_diff_text_selection();
-                    cx.notify();
-                }
-            });
+            view_for_up.selection_end(cx);
         });
     }
 }
@@ -227,7 +214,7 @@ impl Element for DiffTextSelectionTracker {
 /// section 30 split: zero-size element that ends a conflict row-drag on mouse-up
 /// anywhere in the window (per-row handlers cover extend inside the columns).
 pub(super) struct ConflictRowSelectionTracker {
-    pub(super) view: Entity<MainPaneView>,
+    pub(super) view: Entity<DiffRenderer>,
 }
 
 impl IntoElement for ConflictRowSelectionTracker {
@@ -310,7 +297,7 @@ impl Element for ConflictRowSelectionTracker {
 }
 
 pub(super) struct DiffTextSelectionOverlay {
-    pub(super) view: Entity<MainPaneView>,
+    pub(super) view: Entity<DiffRenderer>,
     pub(super) visible_ix: usize,
     pub(super) region: DiffTextRegion,
     pub(super) text: SharedString,
@@ -406,10 +393,9 @@ impl Element for DiffTextSelectionOverlay {
                     strikethrough: None,
                     letter_spacing: style.letter_spacing,
                 };
-                let layout =
-                    window
-                        .text_system()
-                        .shape_line(self.text.clone(), font_size, &[run], None);
+                let layout = window
+                    .text_system()
+                    .shape_line(self.text.clone(), font_size, &[run]);
                 let x0 = selection
                     .as_ref()
                     .map(|r| layout.x_for_index(r.start.min(self.text.len())));
@@ -424,13 +410,13 @@ impl Element for DiffTextSelectionOverlay {
             && x1 > x0
         {
             let color = self.view.read(cx).diff_text_selection_color();
-            window.paint_quad(fill(
-                Bounds::from_corners(
+            window.paint_quad(
+                PaintQuad::new(Bounds::from_corners(
                     point(bounds.left() + x0, bounds.top()),
                     point(bounds.left() + x1, bounds.bottom()),
-                ),
-                color,
-            ));
+                ))
+                .background(color),
+            );
         }
 
         let (source_visible_ix, visual_range) = self
@@ -438,6 +424,7 @@ impl Element for DiffTextSelectionOverlay {
             .read(cx)
             .diff_text_visual_source_range_for_region(self.visible_ix, self.region);
         let hitbox = DiffTextHitbox {
+            atomic: false,
             bounds,
             layout_key,
             source_visible_ix,

@@ -1,13 +1,23 @@
+use crate::msg::RepoCommandEffect;
+use crate::store::reducer::prepared::ReducerInputs;
+use crate::store::repository_runtime::RepositoryRuntimes;
 mod actions_emit_effects;
 mod auth;
+pub(super) use auth::detect_auth_prompt_kind;
+mod auto_fetch;
+mod bare_conversion;
 mod branch_exists_prompt;
 #[cfg(test)]
 mod comparison_tests;
 mod conflict_interactions;
+mod conflict_load;
+mod conflict_region_commands;
+mod conflict_region_mapping;
 mod diff_selection;
 mod diff_session;
 mod effects;
 mod external_and_history;
+mod file_history;
 mod filesystem;
 mod git_hook_activity;
 mod git_operations;
@@ -22,17 +32,24 @@ mod loads;
 pub(super) mod maintenance;
 #[cfg(test)]
 mod nav_history_tests;
+pub(super) mod prepared;
 mod repo_management;
 mod repo_watch;
+mod repository_preferences;
+mod reword;
 mod settings;
 mod submodule_trust;
+#[cfg(test)]
+pub(super) mod test_inputs;
 mod util;
 mod workspace;
+mod worktree_removal;
 
 use crate::model::{AppState, Loadable, RepoId};
-use crate::msg::{CheckoutRequest, ConflictRegionChoice, Effect, Msg, RepoPath, RepoPathList};
+use crate::msg::{
+    CheckoutRequest, ConflictRegionChoice, Effect, Msg, RepoPath, RepoPathList, WorktreeSaveBaseline,
+};
 use auth::{annex_adjusted_refusal, annex_takeover};
-use gitcomet_core::services::GitRepository;
 use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
 use std::sync::Arc;
@@ -55,20 +72,8 @@ pub(super) fn normalize_repo_path(path: std::path::PathBuf) -> std::path::PathBu
     util::normalize_repo_path(path)
 }
 
-fn normalize_repo_relative_path(
-    repo_workdir: &std::path::Path,
-    path: std::path::PathBuf,
-) -> std::path::PathBuf {
-    let path = if path.is_relative() {
-        repo_workdir.join(path)
-    } else {
-        path
-    };
-    util::canonicalize_path(path)
-}
-
 fn cache_selected_deleted_gitlink(
-    repos: &FxHashMap<RepoId, Arc<dyn GitRepository>>,
+    inputs: &ReducerInputs,
     state: &mut AppState,
     repo_id: RepoId,
     target: &gitcomet_core::domain::DiffTarget,
@@ -80,14 +85,14 @@ fn cache_selected_deleted_gitlink(
         return;
     }
 
-    refresh_head_gitlink_path(repos, state, repo_id, path);
+    refresh_head_gitlink_path(inputs, state, repo_id, path);
 }
 
 /// Whether classifying `path` against HEAD can still change what is rendered.
 ///
-/// `refresh_head_gitlink_path` opens the repository and peels HEAD, so it is
-/// real filesystem work on the store worker while the state write lock is held.
-/// `diff_target_is_submodule` only consults the cache for `Deleted` entries, so
+/// HEAD classification is prepared on the store worker before taking the
+/// state write lock. Its result is applied at the original planning point.
+/// Submodule classification only consults the cache for `Deleted` entries, so
 /// for any other kind the lookup is pure waste — and this runs on every
 /// external git-state event, which arrive in bursts during a fetch or rebase.
 ///
@@ -103,6 +108,14 @@ fn head_gitlink_lookup_is_worth_it(
     let Some(repo) = state.repos.iter().find(|repo| repo.id == repo_id) else {
         return false;
     };
+    head_gitlink_lookup_is_worth_it_for(repo, area, path)
+}
+
+fn head_gitlink_lookup_is_worth_it_for(
+    repo: &crate::model::RepoState,
+    area: gitcomet_core::domain::DiffArea,
+    path: &std::path::Path,
+) -> bool {
     match repo.status_entries_for_area(area) {
         Some(entries) => entries
             .iter()
@@ -113,18 +126,15 @@ fn head_gitlink_lookup_is_worth_it(
 }
 
 fn refresh_head_gitlink_path(
-    repos: &FxHashMap<RepoId, Arc<dyn GitRepository>>,
+    inputs: &ReducerInputs,
     state: &mut AppState,
     repo_id: RepoId,
     path: &std::path::Path,
 ) {
-    let Some(is_gitlink) = repos
-        .get(&repo_id)
-        .and_then(|repo| repo.head_path_is_gitlink(path).ok())
-    else {
+    let Some(repo) = state.repos.iter_mut().find(|repo| repo.id == repo_id) else {
         return;
     };
-    let Some(repo) = state.repos.iter_mut().find(|repo| repo.id == repo_id) else {
+    let Some(is_gitlink) = inputs.head_gitlink(repo, path) else {
         return;
     };
     if is_gitlink {
@@ -134,18 +144,14 @@ fn refresh_head_gitlink_path(
     }
 }
 
-fn refresh_selected_head_gitlink(
-    repos: &FxHashMap<RepoId, Arc<dyn GitRepository>>,
-    state: &mut AppState,
-    repo_id: RepoId,
-) {
+fn refresh_selected_head_gitlink(inputs: &ReducerInputs, state: &mut AppState, repo_id: RepoId) {
     let selected = state
         .repos
         .iter()
         .find(|repo| repo.id == repo_id)
         .and_then(|repo| repo.diff_state.diff_target.clone());
     if let Some(target) = selected {
-        cache_selected_deleted_gitlink(repos, state, repo_id, &target);
+        cache_selected_deleted_gitlink(inputs, state, repo_id, &target);
     }
 }
 
@@ -162,24 +168,25 @@ fn begin_local_action(state: &mut AppState, repo_id: RepoId) {
 /// [`crate::msg::RepoCommandKind`] in `repo_command_finished`.
 fn sequencer_effect_repo(effect: &Effect) -> Option<RepoId> {
     match effect {
-        Effect::MergeRef { repo_id, .. }
-        | Effect::SquashRef { repo_id, .. }
-        | Effect::SquashCommits { repo_id, .. }
-        | Effect::Reset { repo_id, .. }
-        | Effect::Rebase { repo_id, .. }
-        | Effect::RebaseContinue { repo_id, .. }
-        | Effect::RebaseAbort { repo_id }
-        | Effect::InteractiveRebase { repo_id, .. }
-        | Effect::InteractiveCherryPick { repo_id, .. }
-        | Effect::CherryPickCommit { repo_id, .. }
-        | Effect::RevertCommit { repo_id, .. }
+        Effect::RepoCommand(RepoCommandEffect::MergeRef { repo_id, .. })
+        | Effect::RepoCommand(RepoCommandEffect::SquashRef { repo_id, .. })
+        | Effect::RepoCommand(RepoCommandEffect::SquashCommits { repo_id, .. })
+        | Effect::RepoCommand(RepoCommandEffect::RewordCommit { repo_id, .. })
+        | Effect::RepoCommand(RepoCommandEffect::Reset { repo_id, .. })
+        | Effect::RepoCommand(RepoCommandEffect::Rebase { repo_id, .. })
+        | Effect::RepoCommand(RepoCommandEffect::RebaseContinue { repo_id, .. })
+        | Effect::RepoCommand(RepoCommandEffect::RebaseAbort { repo_id })
+        | Effect::RepoCommand(RepoCommandEffect::InteractiveRebase { repo_id, .. })
+        | Effect::RepoCommand(RepoCommandEffect::InteractiveCherryPick { repo_id, .. })
+        | Effect::RepoCommand(RepoCommandEffect::CherryPickCommit { repo_id, .. })
+        | Effect::RepoCommand(RepoCommandEffect::RevertCommit { repo_id, .. })
         // Its commit step can wait on a signer after the worktree changed.
-        | Effect::ApplyFileChange {
+        | Effect::RepoCommand(RepoCommandEffect::ApplyFileChange {
             repo_id,
             commit: true,
             ..
-        }
-        | Effect::MergeAbort { repo_id } => Some(*repo_id),
+        })
+        | Effect::RepoCommand(RepoCommandEffect::MergeAbort { repo_id }) => Some(*repo_id),
         _ => None,
     }
 }
@@ -199,7 +206,7 @@ fn track_sequencer_effects(state: &mut AppState, effects: &[Effect]) {
 /// signer, and an Abort then would reset under the commit. Only such commands
 /// count — a merge tool or a submodule clone can run for minutes without
 /// touching it.
-fn sequencer_step_blocked(state: &mut AppState, repo_id: RepoId) -> bool {
+fn sequencer_step_blocked(inputs: &ReducerInputs, state: &mut AppState, repo_id: RepoId) -> bool {
     let busy = state
         .repos
         .iter()
@@ -207,6 +214,7 @@ fn sequencer_step_blocked(state: &mut AppState, repo_id: RepoId) -> bool {
         .is_some_and(|repo| repo.sequencer_actions_in_flight > 0);
     if busy {
         util::push_notification(
+            inputs,
             state,
             crate::model::AppNotificationKind::Warning,
             "Wait for the running Git operation to finish, then continue or abort.".to_string(),
@@ -236,6 +244,8 @@ pub(crate) fn msg_requires_available_git(msg: &Msg) -> bool {
     matches!(
         msg,
         Msg::OpenRepo(_)
+            | Msg::PreviewDisableBareMode { .. }
+            | Msg::DisableBareMode { .. }
             | Msg::OpenRepoFromExternalDrop(_)
             | Msg::RestoreSession { .. }
             | Msg::ReloadRepo { .. }
@@ -243,6 +253,9 @@ pub(crate) fn msg_requires_available_git(msg: &Msg) -> bool {
             | Msg::RepoExternallyChanged { .. }
             | Msg::SetHistoryScope { .. }
             | Msg::SetHistoryAuthorFilter { .. }
+            | Msg::SetHistoryFocus { .. }
+            | Msg::ToggleHistoryFocus { .. }
+            | Msg::FocusHistoryRefs { .. }
             | Msg::LoadMoreHistory { .. }
             | Msg::SelectCommit { .. }
             | Msg::CompareCommitRange { .. }
@@ -284,6 +297,7 @@ pub(crate) fn msg_requires_available_git(msg: &Msg) -> bool {
             | Msg::GlobalNavBack { .. }
             | Msg::GlobalNavForward { .. }
             | Msg::StageHunk { .. }
+            | Msg::ApplyPreparedDiffPatch { .. }
             | Msg::UnstageHunk { .. }
             | Msg::ApplyWorktreePatch { .. }
             | Msg::CheckoutBranch { .. }
@@ -322,6 +336,7 @@ pub(crate) fn msg_requires_available_git(msg: &Msg) -> bool {
             | Msg::CommitAmend { .. }
             | Msg::SafePushAfterCommit { .. }
             | Msg::Fetch(crate::msg::FetchMsg::All { .. })
+            | Msg::Fetch(crate::msg::FetchMsg::Remote { .. })
             | Msg::Fetch(crate::msg::FetchMsg::Refspecs { .. })
             | Msg::PruneMergedBranches { .. }
             | Msg::PruneLocalTags { .. }
@@ -343,6 +358,8 @@ pub(crate) fn msg_requires_available_git(msg: &Msg) -> bool {
             | Msg::Reset { .. }
             | Msg::PrepareSquash { .. }
             | Msg::SquashCommits { .. }
+            | Msg::RewordCommit { .. }
+            | Msg::ContinueRewordCommit { .. }
             | Msg::Rebase { .. }
             | Msg::RebaseContinue { .. }
             | Msg::RebaseAbort { .. }
@@ -369,48 +386,67 @@ pub(crate) fn msg_requires_available_git(msg: &Msg) -> bool {
 
 #[cfg(test)]
 pub(super) fn push_diagnostic(
+    inputs: &ReducerInputs,
     repo_state: &mut crate::model::RepoState,
     kind: crate::model::DiagnosticKind,
     message: String,
 ) {
-    util::push_diagnostic(repo_state, kind, message)
+    util::push_diagnostic(inputs, repo_state, kind, message)
 }
 
 #[cfg(test)]
 pub(super) fn handle_session_persist_result(
+    inputs: &ReducerInputs,
     state: &mut crate::model::AppState,
     repo_id: Option<crate::model::RepoId>,
     action: &'static str,
     result: std::io::Result<()>,
 ) {
-    util::handle_session_persist_result(state, repo_id, action, result)
+    util::handle_session_persist_result(inputs, state, repo_id, action, result)
 }
 
 /// Record an error for the UI to show: on its repo when there is one still
 /// open, else as an app notification.
-fn report_error(state: &mut AppState, repo_id: Option<RepoId>, message: String) {
+fn report_error(
+    inputs: &ReducerInputs,
+    state: &mut AppState,
+    repo_id: Option<RepoId>,
+    message: String,
+) {
     if message.trim().is_empty() {
         return;
     }
     match repo_id.and_then(|repo_id| state.repos.iter_mut().find(|r| r.id == repo_id)) {
-        Some(repo_state) => {
-            util::push_diagnostic(repo_state, crate::model::DiagnosticKind::Error, message)
-        }
-        None => util::push_notification(state, crate::model::AppNotificationKind::Error, message),
+        Some(repo_state) => util::push_diagnostic(
+            inputs,
+            repo_state,
+            crate::model::DiagnosticKind::Error,
+            message,
+        ),
+        None => util::push_notification(
+            inputs,
+            state,
+            crate::model::AppNotificationKind::Error,
+            message,
+        ),
     }
 }
 
+/// Switches the active tab. `unchanged` reports that the target's file monitor
+/// kept running while it was inactive and saw no change, so its retained state
+/// is current and the refresh a switch normally starts can be skipped.
 pub(crate) fn fill_set_active_repo_inline(
-    repos: &FxHashMap<RepoId, Arc<dyn GitRepository>>,
+    inputs: &ReducerInputs,
     state: &mut AppState,
     repo_id: RepoId,
+    unchanged: bool,
     effects: &mut SetActiveRepoEffects,
 ) {
     // The store handles tab switches on this inline path instead of calling
     // `reduce`, so bracket the mutation with the same navigation reconciliation
     // and state finalizers the ordinary reducer wrapper applies.
     reconcile_active_nav_history(state, false);
-    repo_management::fill_set_active_repo_inline(repos, state, repo_id, effects);
+    repo_management::fill_set_active_repo_inline(inputs, state, repo_id, unchanged, effects);
     effects::follow_history_selection(state, effects);
     finalize_reduced_state(state, Some(false));
 }
@@ -430,7 +466,7 @@ pub(crate) fn fill_reorder_repo_tabs_inline(
 // helper in `store/mod.rs` so that the inline reduce path can be measured.
 #[cfg(feature = "benchmarks")]
 pub(crate) fn fill_select_diff_inline(
-    repos: &FxHashMap<RepoId, Arc<dyn GitRepository>>,
+    inputs: &ReducerInputs,
     state: &mut AppState,
     repo_id: RepoId,
     target: gitcomet_core::domain::DiffTarget,
@@ -442,7 +478,7 @@ pub(crate) fn fill_select_diff_inline(
     } else {
         diff_selection::ContentViewMode::Diff
     };
-    diff_selection::fill_select_diff_inline(repos, state, repo_id, target, mode, effects)
+    diff_selection::fill_select_diff_inline(inputs, state, repo_id, target, mode, effects)
 }
 
 #[inline]
@@ -452,6 +488,9 @@ pub(crate) fn fill_stage_path_inline(
     path: std::path::PathBuf,
     effects: &mut SinglePathActionEffects,
 ) {
+    if refuse_bare_worktree_action(state, repo_id) {
+        return;
+    }
     begin_local_action(state, repo_id);
     effects.push(Effect::StagePath { repo_id, path });
 }
@@ -463,6 +502,9 @@ pub(crate) fn fill_stage_paths_inline(
     paths: RepoPathList,
     effects: &mut BatchPathActionEffects,
 ) {
+    if refuse_bare_worktree_action(state, repo_id) {
+        return;
+    }
     begin_local_action(state, repo_id);
     effects.push(Effect::StagePaths { repo_id, paths });
 }
@@ -474,6 +516,9 @@ pub(crate) fn fill_unstage_path_inline(
     path: std::path::PathBuf,
     effects: &mut SinglePathActionEffects,
 ) {
+    if refuse_bare_worktree_action(state, repo_id) {
+        return;
+    }
     begin_local_action(state, repo_id);
     effects.push(Effect::UnstagePath { repo_id, path });
 }
@@ -485,6 +530,9 @@ pub(crate) fn fill_unstage_paths_inline(
     paths: RepoPathList,
     effects: &mut BatchPathActionEffects,
 ) {
+    if refuse_bare_worktree_action(state, repo_id) {
+        return;
+    }
     begin_local_action(state, repo_id);
     effects.push(Effect::UnstagePaths { repo_id, paths });
 }
@@ -497,6 +545,9 @@ pub(crate) fn set_conflict_region_choice_inline(
     region_index: usize,
     choice: ConflictRegionChoice,
 ) {
+    if refuse_bare_worktree_action(state, repo_id) {
+        return;
+    }
     conflict_interactions::set_region_choice_inline(state, repo_id, path, region_index, choice);
 }
 
@@ -506,15 +557,57 @@ pub(crate) fn reset_conflict_resolutions_inline(
     repo_id: RepoId,
     path: RepoPath,
 ) {
+    if refuse_bare_worktree_action(state, repo_id) {
+        return;
+    }
     conflict_interactions::reset_resolutions_inline(state, repo_id, path);
 }
 
+/// Records each selected diff's one side as planning its load does, for a
+/// state built by hand rather than reduced.
+#[cfg(any(test, feature = "test-support"))]
+pub(super) fn record_planned_one_sided_sides(state: &mut AppState) {
+    let repos = RepositoryRuntimes::default();
+    for ix in 0..state.repos.len() {
+        let Some(target) = state.repos[ix].diff_state.diff_target.clone() else {
+            continue;
+        };
+        // A conflict opens the merge tool, which plans no load and has no side.
+        if util::selected_conflict_target(&state.repos[ix], &target).is_some() {
+            state.repos[ix].diff_state.one_sided_side = None;
+            continue;
+        }
+        let message = Msg::SelectDiff {
+            repo_id: state.repos[ix].id,
+            target: target.clone(),
+        };
+        let (_, inputs) = prepared::PreparedReduction::new(message, state, &repos).into_parts();
+        let side = util::selected_diff_load_plan(&inputs, &state.repos[ix], &target).one_sided_side;
+        state.repos[ix].diff_state.one_sided_side = side;
+    }
+}
+
+#[cfg(any(test, feature = "benchmarks"))]
 pub(super) fn reduce(
-    repos: &mut FxHashMap<RepoId, Arc<dyn GitRepository>>,
+    repos: &mut RepositoryRuntimes,
+    id_alloc: &AtomicU64,
+    state: &mut AppState,
+    message: Msg,
+) -> Vec<Effect> {
+    let (message, inputs) = prepared::PreparedReduction::new(message, state, repos).into_parts();
+    reduce_prepared(&inputs, repos, id_alloc, state, message)
+}
+
+pub(super) fn reduce_prepared(
+    inputs: &ReducerInputs,
+    repos: &mut RepositoryRuntimes,
     id_alloc: &AtomicU64,
     state: &mut AppState,
     msg: Msg,
 ) -> Vec<Effect> {
+    if refuse_for_repository_requirement(inputs, state, &msg) {
+        return Vec::new();
+    }
     // History shows the repository's own worktree; a linked worktree's file
     // belongs to a hosted session, never to History's selection.
     if let Msg::SelectDiff { target, .. } = &msg
@@ -560,7 +653,7 @@ pub(super) fn reduce(
         reconcile_active_nav_history(state, false);
     }
 
-    let mut effects = reduce_inner(repos, id_alloc, state, msg);
+    let mut effects = reduce_inner(inputs, repos, id_alloc, state, msg);
     track_sequencer_effects(state, &effects);
     effects::follow_history_selection(state, &mut effects);
 
@@ -576,6 +669,82 @@ pub(super) fn reduce(
     effects
 }
 
+/// Whether `msg` must be dropped because its repository cannot serve it: Git
+/// waits out a bare-mode conversion, and a bare repository has no working
+/// tree. Authentication replay checks this too, since it skips
+/// `reduce_prepared`.
+fn refuse_for_repository_requirement(
+    inputs: &ReducerInputs,
+    state: &mut AppState,
+    msg: &Msg,
+) -> bool {
+    let Some((repo_id, requirement)) = msg.repository_requirement() else {
+        return false;
+    };
+    let converting = msg_requires_available_git(msg)
+        && state
+            .repos
+            .iter()
+            .find(|repo| repo.id == repo_id)
+            .is_some_and(|repo| {
+                matches!(
+                    repo.bare_mode_conversion,
+                    crate::model::BareModeConversionState::Converting
+                        | crate::model::BareModeConversionState::Reopening
+                )
+            });
+    let refused = converting || {
+        let annex_routes_pull = matches!(msg, Msg::Pull { .. })
+            && state
+                .repos
+                .iter()
+                .find(|repo| repo.id == repo_id)
+                .is_some_and(|repo| repo.annex_takes_over_pull_push(&state.large_file_settings));
+        let refused = !annex_routes_pull
+            && requirement == gitcomet_core::domain::RepositoryRequirement::WorkingTree
+            && refuse_bare_worktree_action(state, repo_id);
+        if refused {
+            report_error(
+                inputs,
+                state,
+                Some(repo_id),
+                gitcomet_core::domain::WORKING_TREE_REQUIRED_MESSAGE.to_string(),
+            );
+        }
+        refused
+    };
+    if refused
+        && let Msg::SaveWorktreeFile {
+            completion: Some(completion),
+            ..
+        } = msg
+    {
+        let _ = completion.try_send(false);
+    }
+    refused
+}
+
+fn refuse_bare_worktree_action(state: &mut AppState, repo_id: RepoId) -> bool {
+    let Some(repo) = state.repos.iter_mut().find(|repo| repo.id == repo_id) else {
+        return false;
+    };
+    if matches!(
+        repo.bare_mode_conversion,
+        crate::model::BareModeConversionState::Converting
+            | crate::model::BareModeConversionState::Reopening
+    ) {
+        repo.feedback_mut().last_error =
+            Some("Wait for bare mode conversion to finish.".to_string());
+        return true;
+    }
+    if !repo.is_bare() {
+        return false;
+    }
+    repo.feedback_mut().last_error =
+        Some(gitcomet_core::domain::WORKING_TREE_REQUIRED_MESSAGE.to_string());
+    true
+}
+
 /// Apply invariants that must hold whenever a reducer mutation is published.
 ///
 /// Control-message fast paths call this too, so adding a finalizer here keeps
@@ -587,6 +756,7 @@ fn finalize_reduced_state(state: &mut AppState, nav_push: Option<bool>) {
     effects::retire_orphaned_worktree_diffs(state);
     for repo in &mut state.repos {
         repo.prepare_history_squash_plan();
+        repo.prepare_commit_reword_position();
     }
     // A closed repository's leases go with it; releasing them later is a
     // no-op. Free when nothing is leased.
@@ -677,18 +847,53 @@ fn reconcile_active_nav_history(state: &mut AppState, push: bool) {
 }
 
 fn reduce_inner(
-    repos: &mut FxHashMap<RepoId, Arc<dyn GitRepository>>,
+    inputs: &ReducerInputs,
+    repos: &mut RepositoryRuntimes,
     id_alloc: &AtomicU64,
     state: &mut AppState,
     msg: Msg,
 ) -> Vec<Effect> {
-    if msg_requires_available_git(&msg) && !state.git_runtime.is_available() {
+    if msg_requires_available_git(&msg)
+        && !state.git_runtime.is_available()
+        && !matches!(
+            msg,
+            Msg::RewordCommit { .. }
+                | Msg::ContinueRewordCommit { .. }
+                | Msg::RebaseContinue { .. }
+        )
+    {
         return Vec::new();
     }
 
     match msg {
+        Msg::PreviewDisableBareMode { repo_id } => bare_conversion::preview(state, repo_id),
+        Msg::DisableBareMode { repo_id, preview } => {
+            bare_conversion::disable(state, repo_id, preview)
+        }
+        Msg::ClearBareConversionPreview { repo_id } => bare_conversion::clear(state, repo_id),
+        Msg::Internal(crate::msg::InternalMsg::BareConversionPreviewLoaded { repo_id, result }) => {
+            bare_conversion::preview_loaded(inputs, state, repo_id, result)
+        }
+        Msg::Internal(crate::msg::InternalMsg::QuiesceRepository {
+            common_dir,
+            cancellation,
+            reply,
+        }) => {
+            if cancellation.is_cancelled() {
+                return vec![Effect::Control(
+                    crate::msg::ControlEffect::RepositoryQuiesced { reply },
+                )];
+            }
+            bare_conversion::quiesce(repos, state, &common_dir, reply)
+        }
+        Msg::Internal(crate::msg::InternalMsg::BareModeDisabled { common_dir, result }) => {
+            bare_conversion::finished(inputs, repos, state, &common_dir, result)
+        }
+        Msg::Internal(crate::msg::InternalMsg::RepositoryModeLoaded { repo_id, result }) => {
+            bare_conversion::mode_loaded(inputs, repos, state, repo_id, result)
+        }
         Msg::OpenDocumentRepository { path, activate } => {
-            repo_management::open_document_repository(repos, id_alloc, state, path, activate)
+            repo_management::open_document_repository(inputs, id_alloc, state, path, activate)
         }
         Msg::RememberDocumentInRepository { repo_id, path } => {
             if let Some(repo) = state.repos.iter_mut().find(|r| r.id == repo_id) {
@@ -703,14 +908,13 @@ fn reduce_inner(
             vec![]
         }
         Msg::FilesystemRequest(request) => {
-            if state.filesystem.pending.contains_key(&request.id) {
+            if !state.filesystem.pending.insert(request.id) {
                 return vec![];
             }
-            state.filesystem.pending.insert(request.id, request.clone());
             vec![Effect::Filesystem(request)]
         }
         Msg::FilesystemProgress(progress) => {
-            if state.filesystem.pending.contains_key(&progress.id) {
+            if state.filesystem.pending.contains(&progress.id) {
                 state.filesystem.progress = Some(progress);
             }
             vec![]
@@ -736,11 +940,11 @@ fn reduce_inner(
             }
             state.filesystem.undo_available = result.undo_available;
             state.filesystem.redo_available = result.redo_available;
-            let effects = filesystem::paths_changed(state, &result.changes);
+            let effects = filesystem::paths_changed(inputs, state, &result.changes);
             state.filesystem.completed.push_back(result);
             effects
         }
-        Msg::FilesystemPathsChanged(changes) => filesystem::paths_changed(state, &changes),
+        Msg::FilesystemPathsChanged(changes) => filesystem::paths_changed(inputs, state, &changes),
         Msg::SelectExplorerPath {
             repo_id,
             path,
@@ -775,33 +979,10 @@ fn reduce_inner(
             repo_id,
             hidden,
             ignored,
-        } => {
-            if let Some(repo) = state.repos.iter_mut().find(|r| r.id == repo_id) {
-                repo.file_browser.show_hidden = hidden;
-                repo.file_browser.show_ignored = ignored;
-                if !ignored {
-                    repo.file_browser.pending_recursive_expansions.clear();
-                }
-                // Keyboard actions must not reach rows that just disappeared.
-                if !hidden {
-                    let revealed = &repo.file_browser.revealed_paths;
-                    repo.file_browser.selection.retain(|path| {
-                        !crate::explorer::is_hidden_path(path)
-                            || revealed.iter().any(|shown| shown.starts_with(path))
-                    });
-                }
-                repo.file_browser.stale = true;
-                repo.file_browser.bump_rev();
-                return vec![Effect::LoadFileBrowser {
-                    repo_id,
-                    source: repo.file_browser.source.clone(),
-                }];
-            }
-            vec![]
-        }
-        Msg::OpenRepo(path) => repo_management::open_repo(repos, id_alloc, state, path),
+        } => repository_preferences::set_explorer_visibility(state, repo_id, hidden, ignored),
+        Msg::OpenRepo(path) => repo_management::open_repo(inputs, id_alloc, state, path),
         Msg::OpenRepoFromExternalDrop(path) => {
-            repo_management::open_repo_from_external_drop(repos, id_alloc, state, path)
+            repo_management::open_repo_from_external_drop(inputs, id_alloc, state, path)
         }
         Msg::AcknowledgeRepoOpenFailures { through_revision } => {
             if state
@@ -814,29 +995,60 @@ fn reduce_inner(
             }
             Vec::new()
         }
+        Msg::AcknowledgeNotifications { through_seq } => {
+            state.acknowledge_notifications(through_seq);
+            Vec::new()
+        }
+        Msg::AcknowledgeRepoFeedback {
+            repo_id,
+            lifetime,
+            diagnostics_through_seq,
+            command_log_through_seq,
+        } => {
+            if let Some(repo_state) = state
+                .repos
+                .iter_mut()
+                .find(|r| r.id == repo_id && r.lifetime() == lifetime)
+            {
+                // Copying shared feedback only pays off when entries drop.
+                let feedback = &repo_state.feedback;
+                if feedback.diagnostics_after(diagnostics_through_seq).len()
+                    < feedback.diagnostics.len()
+                    || feedback.command_log_after(command_log_through_seq).len()
+                        < feedback.command_log.len()
+                {
+                    repo_state
+                        .feedback_mut()
+                        .acknowledge(diagnostics_through_seq, command_log_through_seq);
+                }
+            }
+            Vec::new()
+        }
         Msg::RestoreSession {
             open_repos,
             active_repo,
-        } => repo_management::restore_session(repos, id_alloc, state, open_repos, active_repo),
+        } => repo_management::restore_session(inputs, id_alloc, state, open_repos, active_repo),
         Msg::AcquireWatchLease { repo_id, lifetime } => {
             repo_watch::acquire_lease(state, repo_id, lifetime)
         }
         Msg::ReleaseWatchLease { repo_id, lifetime } => {
             repo_watch::release_lease(state, repo_id, lifetime)
         }
-        Msg::CloseRepo { repo_id } => repo_management::close_repo(repos, state, repo_id),
-        Msg::MoveRepoOut { repo_id } => repo_management::move_repo_out(repos, state, repo_id),
+        Msg::CloseRepo { repo_id } => repo_management::close_repo(inputs, repos, state, repo_id),
+        Msg::MoveRepoOut { repo_id } => {
+            repo_management::move_repo_out(inputs, repos, state, repo_id)
+        }
         Msg::CloseRepos {
             repo_ids,
             activate_after,
-        } => repo_management::close_repos(repos, state, repo_ids, activate_after),
+        } => repo_management::close_repos(inputs, repos, state, repo_ids, activate_after),
         Msg::ReportError { repo_id, message } => {
-            report_error(state, repo_id, message);
+            report_error(inputs, state, repo_id, message);
             Vec::new()
         }
         Msg::DismissRepoError { repo_id } => {
             if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
-                repo_state.feedback.last_error = None;
+                repo_state.feedback_mut().last_error = None;
             }
             Vec::new()
         }
@@ -844,10 +1056,27 @@ fn reduce_inner(
             repo_id,
             operation_id,
         } => git_operations::cancel_git_operation(state, repo_id, operation_id),
-        Msg::SubmitAuthPrompt { username, secret } => {
-            auth::submit_auth_prompt(repos, id_alloc, state, username, secret)
-        }
+        Msg::SubmitAuthPrompt {
+            generation,
+            username,
+            secret,
+        } => auth::submit_auth_prompt(inputs, repos, id_alloc, state, generation, username, secret),
         Msg::CancelAuthPrompt => auth::cancel_auth_prompt(state),
+        Msg::Internal(crate::msg::InternalMsg::AutoFetchUpdated {
+            repo_id,
+            lifetime,
+            revision,
+            snapshot,
+            result,
+        }) => auto_fetch::updated(inputs, state, repo_id, lifetime, revision, snapshot, result),
+        Msg::Internal(crate::msg::InternalMsg::AutoFetchRefresh { repo_id, lifetime }) => {
+            auto_fetch::refresh(state, repo_id, lifetime)
+        }
+        Msg::Internal(crate::msg::InternalMsg::AuthPromptValidated {
+            generation,
+            result,
+            auth,
+        }) => auth::auth_prompt_validated(inputs, repos, id_alloc, state, generation, result, auth),
         Msg::SetGitRuntimeState(runtime) => settings::set_git_runtime_state(state, runtime),
         Msg::SetCommitSignatureTargets {
             repo_id,
@@ -869,12 +1098,13 @@ fn reduce_inner(
         ),
         Msg::SetRemoteSettings(settings) => settings::set_remote_settings(state, settings),
         Msg::SetLargeFileSettings(settings) => settings::set_large_file_settings(state, settings),
+        Msg::SetHistoryHiddenRefs(filter) => settings::set_history_hidden_refs(state, filter),
         Msg::SetMaintenanceSettings(settings) => maintenance::set_settings(state, settings),
         Msg::SetFileBrowserSettings(settings) => {
             effects::set_file_browser_settings(state, settings)
         }
         Msg::SetDefaultTagType(tag_type) => settings::set_default_tag_type(state, tag_type),
-        Msg::SetActiveRepo { repo_id } => repo_management::set_active_repo(repos, state, repo_id),
+        Msg::SetActiveRepo { repo_id } => repo_management::set_active_repo(inputs, state, repo_id),
         Msg::ReorderRepoTabs {
             repo_id,
             insert_before,
@@ -907,6 +1137,7 @@ fn reduce_inner(
             duration,
             message,
         }) => git_operations::git_operation_finished(
+            inputs,
             repos,
             id_alloc,
             state,
@@ -922,6 +1153,7 @@ fn reduce_inner(
             error,
         }) => {
             util::handle_session_persist_result(
+                inputs,
                 state,
                 repo_id,
                 action,
@@ -929,7 +1161,7 @@ fn reduce_inner(
             );
             Vec::new()
         }
-        Msg::ReloadRepo { repo_id } => external_and_history::reload_repo(repos, state, repo_id),
+        Msg::ReloadRepo { repo_id } => external_and_history::reload_repo(inputs, state, repo_id),
         Msg::RepoActivated { .. } => Vec::new(),
         Msg::WatchWorktree {
             repo_id,
@@ -944,12 +1176,29 @@ fn reduce_inner(
             change,
         } => repo_watch::worktree_changed(state, repo_id, lifetime, path, change),
         Msg::RepoExternallyChanged { repo_id, change } => {
-            external_and_history::repo_externally_changed(repos, state, repo_id, change)
+            external_and_history::repo_externally_changed(inputs, state, repo_id, change)
         }
-        Msg::RepoWatchDegraded { repo_id: _, reason } => repo_watch::watch_degraded(state, reason),
+        Msg::RepoWatchDegraded { repo_id: _, reason } => {
+            repo_watch::watch_degraded(inputs, state, reason)
+        }
+        Msg::UpdateRepositoryPreference { repo_id, update } => {
+            repository_preferences::update(state, repo_id, update)
+        }
+        Msg::ApplyRepositoryPreferences(snapshot) => repository_preferences::apply(state, snapshot),
         Msg::SetHistoryScope { repo_id, scope } => {
             external_and_history::set_history_scope(state, repo_id, scope)
         }
+        Msg::SetHistoryFocus { repo_id, focus } => {
+            external_and_history::set_history_focus(state, repo_id, focus)
+        }
+        Msg::ToggleHistoryFocus { repo_id, target } => {
+            external_and_history::toggle_history_focus(state, repo_id, target)
+        }
+        Msg::FocusHistoryRefs {
+            repo_id,
+            targets,
+            focused,
+        } => external_and_history::focus_history_refs(state, repo_id, &targets, focused),
         Msg::SetHistoryAuthorFilter { repo_id, author } => {
             external_and_history::set_history_author_filter(state, repo_id, author)
         }
@@ -1033,13 +1282,13 @@ fn reduce_inner(
         } => effects::compare_with_marked(state, repo_id, commit_id, label),
         Msg::ClearComparisonMark { repo_id } => effects::clear_comparison_mark(state, repo_id),
         Msg::SelectDiff { repo_id, target } => {
-            diff_selection::select_diff(repos, state, repo_id, target)
+            diff_selection::select_diff(inputs, state, repo_id, target)
         }
         Msg::SetTextOverride {
             repo_id,
             path,
             value,
-        } => diff_selection::set_text_override(state, repo_id, path, value),
+        } => diff_selection::set_text_override(inputs, state, repo_id, path, value),
         Msg::OpenInlineSubmoduleDiff {
             repo_id,
             origin,
@@ -1075,7 +1324,7 @@ fn reduce_inner(
             repo_id,
             path,
             mode,
-        } => effects::load_conflict_file(state, repo_id, path, mode),
+        } => conflict_load::load_conflict_file(state, repo_id, path, mode),
         Msg::LoadReflog { repo_id } => effects::load_reflog(state, repo_id),
         Msg::LoadHoverCommitMessage { repo_id, commit_id } => {
             effects::load_hover_commit_message(state, repo_id, commit_id)
@@ -1087,7 +1336,7 @@ fn reduce_inner(
             repo_id,
             path,
             limit,
-        } => effects::load_file_history(state, repo_id, path, limit),
+        } => file_history::load_file_history(state, repo_id, path, limit),
         Msg::LoadBlame {
             repo_id,
             path,
@@ -1127,12 +1376,12 @@ fn reduce_inner(
             repo_id,
             source,
             path,
-        } => diff_selection::open_file_content(repos, state, repo_id, source, path),
+        } => diff_selection::open_file_content(inputs, state, repo_id, source, path),
         Msg::OpenFileEditor { repo_id, path } => {
-            diff_selection::open_file_editor(repos, state, repo_id, path)
+            diff_selection::open_file_editor(inputs, state, repo_id, path)
         }
         Msg::ExitDiffEditMode { repo_id } => {
-            diff_selection::exit_diff_edit_mode(repos, state, repo_id)
+            diff_selection::exit_diff_edit_mode(inputs, state, repo_id)
         }
         Msg::OpenFileAtCommitParent {
             repo_id,
@@ -1177,21 +1426,64 @@ fn reduce_inner(
         } => effects::resolve_commit_lookup(state, repo_id, reference, purpose),
         Msg::ResetBrowseToLive { repo_id } => effects::reset_browse_to_live(state, repo_id),
         Msg::ViewerNavBack { repo_id } => {
-            diff_selection::viewer_nav(repos, state, repo_id, crate::model::ViewNavDir::Back)
+            diff_selection::viewer_nav(inputs, state, repo_id, crate::model::ViewNavDir::Back)
         }
         Msg::ViewerNavForward { repo_id } => {
-            diff_selection::viewer_nav(repos, state, repo_id, crate::model::ViewNavDir::Forward)
+            diff_selection::viewer_nav(inputs, state, repo_id, crate::model::ViewNavDir::Forward)
         }
         Msg::GlobalNavBack { repo_id } => {
-            diff_selection::global_nav(repos, state, repo_id, crate::model::ViewNavDir::Back)
+            diff_selection::global_nav(inputs, state, repo_id, crate::model::ViewNavDir::Back)
         }
         Msg::GlobalNavForward { repo_id } => {
-            diff_selection::global_nav(repos, state, repo_id, crate::model::ViewNavDir::Forward)
+            diff_selection::global_nav(inputs, state, repo_id, crate::model::ViewNavDir::Forward)
         }
         Msg::SetSidebarMode { mode } => effects::set_sidebar_mode(state, mode),
         Msg::StageHunk { repo_id, patch } => {
             begin_local_action(state, repo_id);
             diff_selection::stage_hunk(repo_id, patch)
+        }
+        Msg::ApplyPreparedDiffPatch {
+            repo_id,
+            lifetime,
+            view,
+            file_rev,
+            generation,
+            prepared,
+        } => {
+            let valid = state
+                .repos
+                .iter()
+                .find(|repo| repo.id == repo_id)
+                .is_some_and(|repo| {
+                    repo.local_actions_in_flight == 0
+                        && repo.matches_diff_origin(
+                            lifetime,
+                            view,
+                            file_rev,
+                            generation,
+                            prepared.target(),
+                        )
+                });
+            if !valid {
+                util::push_notification(
+                    inputs,
+                    state,
+                    crate::model::AppNotificationKind::Error,
+                    gitcomet_core::patch_action::PatchActionError::Stale.to_string(),
+                );
+                return Vec::new();
+            }
+            begin_local_action(state, repo_id);
+            vec![Effect::RepoCommand(
+                crate::msg::RepoCommandEffect::ApplyPreparedDiffPatch {
+                    repo_id,
+                    lifetime,
+                    view,
+                    file_rev,
+                    generation,
+                    prepared,
+                },
+            )]
         }
         Msg::UnstageHunk { repo_id, patch } => {
             begin_local_action(state, repo_id);
@@ -1211,6 +1503,7 @@ fn reduce_inner(
                 // part of this checkout. The branch exists already, which is
                 // what lets the leave put the directory straight on it.
                 return workspace::leave_for_checkout(
+                    inputs,
                     state,
                     repo_id,
                     Some(name.clone()),
@@ -1235,6 +1528,7 @@ fn reduce_inner(
                 // what creates it — so the leave goes back to the branch the
                 // workspace remembers and the checkout runs after it.
                 return workspace::leave_for_checkout(
+                    inputs,
                     state,
                     repo_id,
                     None,
@@ -1263,6 +1557,7 @@ fn reduce_inner(
                 // A commit is always there to check out, so the leave can take
                 // the working directory straight to it.
                 return workspace::leave_for_checkout(
+                    inputs,
                     state,
                     repo_id,
                     Some(commit_id.to_string()),
@@ -1332,6 +1627,12 @@ fn reduce_inner(
             branch_exists_prompt::resolve(state, prompt, choice)
         }
         Msg::ShowBranchExistsPrompt { prompt } => branch_exists_prompt::show(state, prompt),
+        Msg::DismissForceDeleteBranchPrompt { prompt } => {
+            if state.force_delete_branch_prompt.as_ref() == Some(&prompt) {
+                state.force_delete_branch_prompt = None;
+            }
+            Vec::new()
+        }
         Msg::RenameBranch {
             repo_id,
             old_name,
@@ -1354,6 +1655,14 @@ fn reduce_inner(
             actions_emit_effects::delete_branch(repo_id, name)
         }
         Msg::ForceDeleteBranch { repo_id, name } => {
+            // Forcing answers the prompt that offered it.
+            if state
+                .force_delete_branch_prompt
+                .as_ref()
+                .is_some_and(|prompt| prompt.repo_id == repo_id && prompt.name == name)
+            {
+                state.force_delete_branch_prompt = None;
+            }
             begin_local_action(state, repo_id);
             actions_emit_effects::force_delete_branch(repo_id, name)
         }
@@ -1391,34 +1700,57 @@ fn reduce_inner(
         Msg::AddWorktree {
             repo_id,
             path,
-            reference,
+            checkout,
+            open_after,
         } => {
             if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
                 repo_state.worktrees_in_flight = repo_state.worktrees_in_flight.saturating_add(1);
             }
-            actions_emit_effects::add_worktree(repo_id, path, reference)
+            actions_emit_effects::add_worktree(repo_id, path, checkout, open_after)
         }
-        Msg::RemoveWorktree { repo_id, path } => {
+        Msg::RemoveWorktree {
+            repo_id,
+            path,
+            delete_branch,
+        } => {
             let normalized_path = if let Some(repo_state) =
                 state.repos.iter_mut().find(|r| r.id == repo_id)
             {
                 repo_state.worktrees_in_flight = repo_state.worktrees_in_flight.saturating_add(1);
-                normalize_repo_relative_path(&repo_state.spec.workdir, path)
+                path
             } else {
                 path
             };
-            actions_emit_effects::remove_worktree(repo_id, normalized_path)
+            actions_emit_effects::remove_worktree(repo_id, normalized_path, delete_branch)
         }
-        Msg::ForceRemoveWorktree { repo_id, path } => {
+        Msg::ForceRemoveWorktree {
+            repo_id,
+            path,
+            delete_branch,
+        } => {
+            // Forcing answers the prompt that offered it.
+            if state
+                .force_remove_worktree_prompt
+                .as_ref()
+                .is_some_and(|prompt| prompt.repo_id == repo_id && prompt.path == path)
+            {
+                state.force_remove_worktree_prompt = None;
+            }
             let normalized_path = if let Some(repo_state) =
                 state.repos.iter_mut().find(|r| r.id == repo_id)
             {
                 repo_state.worktrees_in_flight = repo_state.worktrees_in_flight.saturating_add(1);
-                normalize_repo_relative_path(&repo_state.spec.workdir, path)
+                path
             } else {
                 path
             };
-            actions_emit_effects::force_remove_worktree(repo_id, normalized_path)
+            actions_emit_effects::force_remove_worktree(repo_id, normalized_path, delete_branch)
+        }
+        Msg::DismissForceRemoveWorktreePrompt { prompt } => {
+            if state.force_remove_worktree_prompt.as_ref() == Some(&prompt) {
+                state.force_remove_worktree_prompt = None;
+            }
+            Vec::new()
         }
         Msg::AddSubmodule {
             repo_id,
@@ -1505,22 +1837,26 @@ fn reduce_inner(
             stage,
             completion,
         } => {
-            let expected_contents = expected_contents.or_else(|| {
-                state.repos.iter().find(|r| r.id == repo_id).and_then(|r| {
-                    match &r.conflict_state.conflict_file {
-                        crate::model::Loadable::Ready(Some(file))
-                            if file.path.as_path() == path =>
-                        {
-                            file.current_bytes.clone().or_else(|| {
-                                file.current
-                                    .as_ref()
-                                    .map(|text| Arc::<[u8]>::from(text.as_bytes()))
-                            })
+            let expected_contents = match expected_contents {
+                WorktreeSaveBaseline::DeriveFromLoadedConflict => {
+                    state.repos.iter().find(|r| r.id == repo_id).and_then(|r| {
+                        match &r.conflict_state.conflict_file {
+                            crate::model::Loadable::Ready(Some(file))
+                                if file.path.as_path() == path =>
+                            {
+                                file.current_bytes.clone().or_else(|| {
+                                    file.current
+                                        .as_ref()
+                                        .map(|text| Arc::<[u8]>::from(text.as_bytes()))
+                                })
+                            }
+                            _ => None,
                         }
-                        _ => None,
-                    }
-                })
-            });
+                    })
+                }
+                WorktreeSaveBaseline::Absent => None,
+                WorktreeSaveBaseline::Present(contents) => Some(contents),
+            };
             begin_local_action(state, repo_id);
             actions_emit_effects::save_worktree_file(
                 repo_id,
@@ -1536,7 +1872,7 @@ fn reduce_inner(
             actions_emit_effects::append_gitignore_patterns(repo_id, patterns)
         }
         Msg::RunLargeFileCommand { repo_id, command } => {
-            actions_emit_effects::run_large_file_command(repos, state, repo_id, command)
+            actions_emit_effects::run_large_file_command(inputs, repos, state, repo_id, command)
         }
         Msg::LoadAnnexWhereis { repo_id, keys } => {
             let Some(repo) = state.repos.iter_mut().find(|repo| repo.id == repo_id) else {
@@ -1599,7 +1935,9 @@ fn reduce_inner(
         }
         Msg::AppendGitattributesRule { repo_id, rule } => {
             begin_local_action(state, repo_id);
-            vec![Effect::AppendGitattributesRule { repo_id, rule }]
+            vec![Effect::RepoCommand(
+                RepoCommandEffect::AppendGitattributesRule { repo_id, rule },
+            )]
         }
         Msg::Commit {
             repo_id,
@@ -1612,13 +1950,16 @@ fn reduce_inner(
             push_after_commit,
         } => auth::commit_amend(state, repo_id, message, push_after_commit),
         Msg::SafePushAfterCommit { repo_id, context } => {
-            match annex_takeover(repos, state, repo_id, false) {
+            match annex_takeover(inputs, repos, state, repo_id, false) {
                 Some(effects) => effects,
                 None => actions_emit_effects::safe_push_after_commit(repo_id, context),
             }
         }
         Msg::Fetch(crate::msg::FetchMsg::All { repo_id }) => {
             actions_emit_effects::fetch_all(repos, state, repo_id)
+        }
+        Msg::Fetch(crate::msg::FetchMsg::Remote { repo_id, remote }) => {
+            actions_emit_effects::fetch_remote(repos, state, repo_id, remote)
         }
         Msg::Fetch(crate::msg::FetchMsg::Refspecs {
             repo_id,
@@ -1636,7 +1977,7 @@ fn reduce_inner(
         Msg::Internal(crate::msg::InternalMsg::RepoMaintenanceChecked { repo_id, needed }) => {
             maintenance::checked(state, repo_id, needed)
         }
-        Msg::Pull { repo_id, mode } => match annex_takeover(repos, state, repo_id, true) {
+        Msg::Pull { repo_id, mode } => match annex_takeover(inputs, repos, state, repo_id, true) {
             Some(effects) => effects,
             None => actions_emit_effects::pull(repos, state, repo_id, mode),
         },
@@ -1644,26 +1985,26 @@ fn reduce_inner(
             repo_id,
             remote,
             branch,
-        } => match annex_adjusted_refusal(state, repo_id, "Pull from another branch") {
+        } => match annex_adjusted_refusal(inputs, state, repo_id, "Pull from another branch") {
             Some(effects) => effects,
             None => actions_emit_effects::pull_branch(repos, state, repo_id, remote, branch),
         },
         Msg::MergeRef { repo_id, reference } => {
-            if let Some(effects) = annex_adjusted_refusal(state, repo_id, "Merge") {
+            if let Some(effects) = annex_adjusted_refusal(inputs, state, repo_id, "Merge") {
                 return effects;
             }
             begin_local_action(state, repo_id);
             actions_emit_effects::merge_ref(repo_id, reference)
         }
         Msg::SquashRef { repo_id, reference } => {
-            if let Some(effects) = annex_adjusted_refusal(state, repo_id, "Squash merge") {
+            if let Some(effects) = annex_adjusted_refusal(inputs, state, repo_id, "Squash merge") {
                 return effects;
             }
             begin_local_action(state, repo_id);
             actions_emit_effects::squash_ref(repo_id, reference)
         }
         Msg::PushWithTags { repo_id, request } => {
-            match annex_adjusted_refusal(state, repo_id, "Push with tags") {
+            match annex_adjusted_refusal(inputs, state, repo_id, "Push with tags") {
                 Some(effects) => effects,
                 None => actions_emit_effects::push_with_tags(repos, state, repo_id, request),
             }
@@ -1679,7 +2020,7 @@ fn reduce_inner(
             generation,
             result,
         }) => loads::tag_push_preview_loaded(state, repo_id, mode, generation, result),
-        Msg::Push { repo_id } => match annex_takeover(repos, state, repo_id, false) {
+        Msg::Push { repo_id } => match annex_takeover(inputs, repos, state, repo_id, false) {
             Some(effects) => effects,
             None => actions_emit_effects::push(repos, state, repo_id),
         },
@@ -1687,18 +2028,20 @@ fn reduce_inner(
             repo_id,
             target,
             set_upstream,
-        } => match annex_takeover(repos, state, repo_id, false) {
+        } => match annex_takeover(inputs, repos, state, repo_id, false) {
             Some(effects) => effects,
             None => {
                 actions_emit_effects::push_after_commit(repos, state, repo_id, target, set_upstream)
             }
         },
-        Msg::ForcePush { repo_id } => match annex_adjusted_refusal(state, repo_id, "Force push") {
-            Some(effects) => effects,
-            None => actions_emit_effects::force_push(repos, state, repo_id),
-        },
+        Msg::ForcePush { repo_id } => {
+            match annex_adjusted_refusal(inputs, state, repo_id, "Force push") {
+                Some(effects) => effects,
+                None => actions_emit_effects::force_push(repos, state, repo_id),
+            }
+        }
         Msg::ForcePushWithLease { repo_id, lease } => {
-            match annex_adjusted_refusal(state, repo_id, "Force push") {
+            match annex_adjusted_refusal(inputs, state, repo_id, "Force push") {
                 Some(effects) => effects,
                 None => actions_emit_effects::force_push_with_lease(repos, state, repo_id, lease),
             }
@@ -1708,7 +2051,7 @@ fn reduce_inner(
             repo_id,
             remote,
             branch,
-        } => match annex_takeover(repos, state, repo_id, false) {
+        } => match annex_takeover(inputs, repos, state, repo_id, false) {
             Some(effects) => effects,
             None => actions_emit_effects::push_set_upstream(repos, state, repo_id, remote, branch),
         },
@@ -1755,6 +2098,7 @@ fn reduce_inner(
             message,
             count,
         } => actions_emit_effects::squash_commits(
+            inputs,
             state,
             repo_id,
             oldest,
@@ -1762,19 +2106,49 @@ fn reduce_inner(
             message,
             count,
         ),
+        Msg::RewordCommit {
+            repo_id,
+            request_id,
+            commit_id,
+            message,
+        } => reword::start(inputs, state, repo_id, request_id, commit_id, message),
+        Msg::ContinueRewordCommit {
+            repo_id,
+            request_id,
+        } => reword::resume(inputs, state, repo_id, request_id),
+        Msg::DismissRewordCommit {
+            repo_id,
+            request_id,
+        } => {
+            if let Some(repo) = state.repos.iter_mut().find(|repo| repo.id == repo_id) {
+                repo.reword.dismiss(request_id);
+            }
+            Vec::new()
+        }
         Msg::Rebase { repo_id, onto } => {
             begin_local_action(state, repo_id);
             actions_emit_effects::rebase(repo_id, onto)
         }
         Msg::RebaseContinue { repo_id } => {
-            if sequencer_step_blocked(state, repo_id) {
+            if let Some(request_id) = state
+                .repos
+                .iter()
+                .find(|repo| repo.id == repo_id)
+                .and_then(|repo| repo.reword.continuation)
+            {
+                return reword::resume(inputs, state, repo_id, request_id);
+            }
+            if !state.git_runtime.is_available() {
+                return Vec::new();
+            }
+            if sequencer_step_blocked(inputs, state, repo_id) {
                 return Vec::new();
             }
             begin_local_action(state, repo_id);
             actions_emit_effects::rebase_continue(repo_id)
         }
         Msg::RebaseAbort { repo_id } => {
-            if sequencer_step_blocked(state, repo_id) {
+            if sequencer_step_blocked(inputs, state, repo_id) {
                 return Vec::new();
             }
             begin_local_action(state, repo_id);
@@ -1819,7 +2193,7 @@ fn reduce_inner(
         Msg::CancelInteractiveCherryPickSetup { repo_id } => {
             actions_emit_effects::cancel_interactive_cherry_pick_setup(state, repo_id)
         }
-        Msg::MergeAbort { repo_id } if sequencer_step_blocked(state, repo_id) => Vec::new(),
+        Msg::MergeAbort { repo_id } if sequencer_step_blocked(inputs, state, repo_id) => Vec::new(),
         Msg::MergeAbort { repo_id } => {
             begin_local_action(state, repo_id);
             actions_emit_effects::merge_abort(repo_id)
@@ -1895,15 +2269,18 @@ fn reduce_inner(
             unresolved_after,
             stats,
         } => conflict_interactions::record_autosolve_telemetry(
+            inputs,
             state,
             repo_id,
-            path,
-            mode,
-            total_conflicts_before,
-            total_conflicts_after,
-            unresolved_before,
-            unresolved_after,
-            stats,
+            conflict_interactions::AutosolveTelemetry {
+                path,
+                mode,
+                total_conflicts_before,
+                total_conflicts_after,
+                unresolved_before,
+                unresolved_after,
+                stats,
+            },
         ),
         Msg::ConflictSetHideResolved {
             repo_id,
@@ -1925,44 +2302,57 @@ fn reduce_inner(
         Msg::ConflictToggleRegionSource {
             repo_id,
             path,
+            origin,
             region_index,
             source,
-        } => {
-            conflict_interactions::toggle_region_source(state, repo_id, path, region_index, source)
-        }
-        Msg::ConflictReplaceRegionSelection {
-            repo_id,
-            path,
-            region_index,
-            selection,
-        } => conflict_interactions::replace_region_selection(
+        } => conflict_region_commands::toggle_region_source(
             state,
             repo_id,
             path,
+            origin,
+            region_index,
+            source,
+        ),
+        Msg::ConflictReplaceRegionSelection {
+            repo_id,
+            path,
+            origin,
+            region_index,
+            selection,
+        } => conflict_region_commands::replace_region_selection(
+            state,
+            repo_id,
+            path,
+            origin,
             region_index,
             selection,
         ),
         Msg::ConflictTogglePlanBlockSource {
             repo_id,
             path,
+            origin,
             block_id,
             source,
-        } => {
-            conflict_interactions::toggle_plan_block_source(state, repo_id, path, block_id, source)
-        }
+        } => conflict_interactions::toggle_plan_block_source(
+            state, repo_id, path, &origin, block_id, source,
+        ),
         Msg::ConflictReplacePlanBlockSelection {
             repo_id,
             path,
+            origin,
             block_id,
             selection,
         } => conflict_interactions::replace_plan_block_selection(
-            state, repo_id, path, block_id, selection,
+            state, repo_id, path, &origin, block_id, selection,
         ),
         Msg::ConflictSyncRegionResolutions {
             repo_id,
             path,
+            origin,
             updates,
-        } => conflict_interactions::sync_region_resolutions(state, repo_id, path, updates),
+        } => {
+            conflict_region_commands::sync_region_resolutions(state, repo_id, path, origin, updates)
+        }
         Msg::ConflictApplyAutosolve {
             repo_id,
             path,
@@ -2055,34 +2445,49 @@ fn reduce_inner(
             actions_emit_effects::drop_stash(repo_id, index)
         }
         Msg::Internal(crate::msg::InternalMsg::RepoOpenedOk {
+            repository_mode,
+            head_commit,
             repo_id,
             spec,
             repo,
-        }) => repo_management::repo_opened_ok(repos, state, repo_id, spec, repo),
+            preferences,
+        }) => repo_management::repo_opened_ok(
+            inputs,
+            repos,
+            state,
+            repo_id,
+            spec,
+            repo,
+            preferences,
+            repository_mode,
+            head_commit,
+        ),
         Msg::Internal(crate::msg::InternalMsg::RepoLoadFinished {
             repo_id,
             load_epoch,
             message,
-        }) => loads::repo_load_finished(repos, id_alloc, state, repo_id, load_epoch, message),
+        }) => {
+            loads::repo_load_finished(inputs, repos, id_alloc, state, repo_id, load_epoch, message)
+        }
         Msg::Internal(crate::msg::InternalMsg::RepoOpenedErr {
             repo_id,
             spec,
             error,
-        }) => repo_management::repo_opened_err(repos, state, repo_id, spec, error),
+        }) => repo_management::repo_opened_err(inputs, repos, state, repo_id, spec, error),
         Msg::Internal(crate::msg::InternalMsg::BranchesLoaded { repo_id, result }) => {
-            effects::branches_loaded(state, repo_id, result)
+            effects::branches_loaded(inputs, state, repo_id, result)
         }
         Msg::Internal(crate::msg::InternalMsg::RemotesLoaded { repo_id, result }) => {
-            effects::remotes_loaded(state, repo_id, result)
+            effects::remotes_loaded(inputs, state, repo_id, result)
         }
         Msg::Internal(crate::msg::InternalMsg::RemoteBranchesLoaded { repo_id, result }) => {
-            effects::remote_branches_loaded(state, repo_id, result)
+            effects::remote_branches_loaded(inputs, state, repo_id, result)
         }
         Msg::Internal(crate::msg::InternalMsg::WorktreeStatusLoaded { repo_id, result }) => {
-            effects::worktree_status_loaded(state, repo_id, result)
+            effects::worktree_status_loaded(inputs, state, repo_id, result)
         }
         Msg::Internal(crate::msg::InternalMsg::StagedStatusLoaded { repo_id, result }) => {
-            effects::staged_status_loaded(state, repo_id, result)
+            effects::staged_status_loaded(inputs, state, repo_id, result)
         }
         Msg::Internal(crate::msg::InternalMsg::UncommittedLineStatsLoaded {
             repo_id,
@@ -2093,16 +2498,19 @@ fn reduce_inner(
             effects::uncommitted_line_stats_loaded(state, repo_id, generation, result, large_files)
         }
         Msg::Internal(crate::msg::InternalMsg::LargeFileSupportLoaded { repo_id, result }) => {
-            effects::large_file_support_loaded(state, repo_id, result)
+            effects::large_file_support_loaded(inputs, state, repo_id, result)
         }
         Msg::Internal(crate::msg::InternalMsg::StatusLoaded { repo_id, result }) => {
-            effects::status_loaded(state, repo_id, result)
+            effects::status_loaded(inputs, state, repo_id, result)
         }
         Msg::Internal(crate::msg::InternalMsg::HeadBranchLoaded { repo_id, result }) => {
-            effects::head_branch_loaded(state, repo_id, result)
+            effects::head_branch_loaded(inputs, state, repo_id, result)
         }
         Msg::Internal(crate::msg::InternalMsg::UpstreamDivergenceLoaded { repo_id, result }) => {
-            effects::upstream_divergence_loaded(state, repo_id, result)
+            effects::upstream_divergence_loaded(inputs, state, repo_id, result)
+        }
+        Msg::Internal(crate::msg::InternalMsg::HeadTrackingLoaded { repo_id, result }) => {
+            effects::head_tracking_loaded(inputs, state, repo_id, result)
         }
         Msg::IndexedHistory(event) => indexed_history::reduce(state, event),
         Msg::DiffSession(event) => diff_session::reduce(state, event),
@@ -2114,7 +2522,7 @@ fn reduce_inner(
             scope,
             cursor,
             result,
-        }) => external_and_history::log_loaded(state, repo_id, seq, scope, cursor, result),
+        }) => external_and_history::log_loaded(inputs, state, repo_id, seq, scope, cursor, result),
         Msg::Internal(crate::msg::InternalMsg::LogChunkLoaded {
             repo_id,
             seq,
@@ -2122,25 +2530,27 @@ fn reduce_inner(
             scanned,
         }) => external_and_history::log_chunk_loaded(state, repo_id, seq, commits, scanned),
         Msg::Internal(crate::msg::InternalMsg::TagsLoaded { repo_id, result }) => {
-            effects::tags_loaded(state, repo_id, result)
+            effects::tags_loaded(inputs, state, repo_id, result)
         }
         Msg::Internal(crate::msg::InternalMsg::RemoteTagsLoaded { repo_id, result }) => {
-            effects::remote_tags_loaded(state, repo_id, result)
+            effects::remote_tags_loaded(inputs, state, repo_id, result)
         }
         Msg::Internal(crate::msg::InternalMsg::StashesLoaded { repo_id, result }) => {
-            effects::stashes_loaded(state, repo_id, result)
+            effects::stashes_loaded(inputs, state, repo_id, result)
         }
         Msg::Internal(crate::msg::InternalMsg::ReflogLoaded { repo_id, result }) => {
-            effects::reflog_loaded(state, repo_id, result)
+            effects::reflog_loaded(inputs, state, repo_id, result)
         }
         Msg::Internal(crate::msg::InternalMsg::RebaseStateLoaded { repo_id, result }) => {
-            external_and_history::rebase_state_loaded(state, repo_id, result)
+            external_and_history::rebase_state_loaded(inputs, state, repo_id, result)
         }
         Msg::Internal(crate::msg::InternalMsg::InteractiveRebaseSetupLoaded {
             repo_id,
             base,
             result,
-        }) => external_and_history::interactive_rebase_setup_loaded(state, repo_id, base, result),
+        }) => external_and_history::interactive_rebase_setup_loaded(
+            inputs, state, repo_id, base, result,
+        ),
         Msg::Internal(crate::msg::InternalMsg::InteractiveCherryPickMessagesLoaded {
             repo_id,
             requested_ids,
@@ -2169,7 +2579,7 @@ fn reduce_inner(
             Vec::new()
         }
         Msg::Internal(crate::msg::InternalMsg::MergeCommitMessageLoaded { repo_id, result }) => {
-            external_and_history::merge_commit_message_loaded(state, repo_id, result)
+            external_and_history::merge_commit_message_loaded(inputs, state, repo_id, result)
         }
         Msg::Internal(crate::msg::InternalMsg::HoverCommitMessageLoaded {
             repo_id,
@@ -2177,40 +2587,50 @@ fn reduce_inner(
             result,
         }) => effects::hover_commit_message_loaded(state, repo_id, commit_id, result),
         Msg::Internal(crate::msg::InternalMsg::FileHistoryLoaded {
+            request,
             repo_id,
             path,
             cursor,
             result,
-        }) => effects::file_history_loaded(state, repo_id, path, cursor, result),
+        }) => {
+            file_history::file_history_loaded(inputs, state, repo_id, request, path, cursor, result)
+        }
         Msg::Internal(crate::msg::InternalMsg::BlameLoaded {
             repo_id,
             path,
             source,
             result,
-        }) => effects::blame_loaded(state, repo_id, path, source, result),
+        }) => effects::blame_loaded(inputs, state, repo_id, path, source, result),
         Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
+            request,
             repo_id,
             path,
             result,
             conflict_session,
-        }) => effects::conflict_file_loaded(
+        }) => conflict_load::conflict_file_loaded(
+            inputs,
             state,
             repo_id,
+            request,
             path,
             *result,
             conflict_session.map(|session| *session),
         ),
-        Msg::Internal(crate::msg::InternalMsg::WorktreesLoaded { repo_id, result }) => {
-            effects::worktrees_loaded(state, repo_id, result)
-        }
-        Msg::Internal(crate::msg::InternalMsg::WorktreeDirtyLoaded { repo_id, result }) => {
-            effects::worktree_dirty_loaded(state, repo_id, result)
-        }
+        Msg::Internal(crate::msg::InternalMsg::WorktreesLoaded {
+            repo_id,
+            read,
+            result,
+        }) => effects::worktrees_loaded(inputs, state, repo_id, read, result),
+        Msg::Internal(crate::msg::InternalMsg::WorktreeDirtyLoaded {
+            repo_id,
+            scope,
+            result,
+        }) => effects::worktree_dirty_loaded(state, repo_id, scope, result),
         Msg::Internal(crate::msg::InternalMsg::RefMetadataLoaded { repo_id, result }) => {
             effects::ref_metadata_loaded(state, repo_id, result)
         }
         Msg::Internal(crate::msg::InternalMsg::SubmodulesLoaded { repo_id, result }) => {
-            effects::submodules_loaded(state, repo_id, result)
+            effects::submodules_loaded(inputs, state, repo_id, result)
         }
         Msg::Internal(crate::msg::InternalMsg::FileBrowserLoaded {
             cancellation,
@@ -2221,7 +2641,7 @@ fn reduce_inner(
             if cancellation.is_some_and(|token| token.is_cancelled()) {
                 Vec::new()
             } else {
-                effects::file_browser_loaded(repos, state, repo_id, source, result)
+                effects::file_browser_loaded(inputs, state, repo_id, source, result)
             }
         }
         Msg::Internal(crate::msg::InternalMsg::SubmoduleAddTrustChecked {
@@ -2233,21 +2653,21 @@ fn reduce_inner(
             force,
             result,
         }) => submodule_trust::add_trust_checked(
-            state, repo_id, url, path, branch, name, force, result,
+            inputs, state, repo_id, url, path, branch, name, force, result,
         ),
         Msg::Internal(crate::msg::InternalMsg::SubmoduleUpdateTrustChecked { repo_id, result }) => {
-            submodule_trust::update_trust_checked(state, repo_id, result)
+            submodule_trust::update_trust_checked(inputs, state, repo_id, result)
         }
         Msg::Internal(crate::msg::InternalMsg::SubmoduleLoadTrustChecked {
             repo_id,
             path,
             result,
-        }) => submodule_trust::load_trust_checked(state, repo_id, path, result),
+        }) => submodule_trust::load_trust_checked(inputs, state, repo_id, path, result),
         Msg::Internal(crate::msg::InternalMsg::CommitDetailsLoaded {
             repo_id,
             commit_id,
             result,
-        }) => effects::commit_details_loaded(state, repo_id, commit_id, result),
+        }) => effects::commit_details_loaded(inputs, state, repo_id, commit_id, result),
         Msg::Internal(crate::msg::InternalMsg::CommitSignaturesVerified {
             repo_id,
             epoch,
@@ -2258,7 +2678,7 @@ fn reduce_inner(
             repo_id,
             reference,
             result,
-        }) => effects::commit_reveal_resolved(state, repo_id, reference, result),
+        }) => effects::commit_reveal_resolved(inputs, state, repo_id, reference, result),
         Msg::Internal(crate::msg::InternalMsg::CommitLookupResolved {
             repo_id,
             reference,
@@ -2272,13 +2692,13 @@ fn reduce_inner(
             to,
             request,
             result,
-        }) => effects::range_files_loaded(state, repo_id, from, to, request, result),
+        }) => effects::range_files_loaded(inputs, state, repo_id, from, to, request, result),
         Msg::Internal(crate::msg::InternalMsg::SquashMessagePreviewLoaded {
             repo_id,
             oldest,
             head,
             result,
-        }) => effects::squash_message_preview_loaded(state, repo_id, oldest, head, result),
+        }) => effects::squash_message_preview_loaded(inputs, state, repo_id, oldest, head, result),
         Msg::Internal(crate::msg::InternalMsg::SquashRebaseSetupLoaded {
             repo_id,
             base,
@@ -2289,62 +2709,67 @@ fn reduce_inner(
             count,
             result,
         }) => effects::squash_rebase_setup_loaded(
+            inputs,
             state,
             repo_id,
-            base,
-            actual_head,
-            selected_ids,
-            reword_id,
-            message,
-            count,
+            effects::SquashRebaseSetup {
+                base,
+                actual_head,
+                selected_ids,
+                reword_id,
+                message,
+                count,
+            },
             result,
         ),
         Msg::Internal(crate::msg::InternalMsg::RecentCommitMessagesLoaded {
             repo_id,
             request_rev,
             result,
-        }) => effects::recent_commit_messages_loaded(state, repo_id, request_rev, result),
+        }) => effects::recent_commit_messages_loaded(inputs, state, repo_id, request_rev, result),
         Msg::Internal(crate::msg::InternalMsg::DiffLoaded {
             repo_id,
             target,
             result,
-        }) => diff_selection::diff_loaded(state, repo_id, target, result),
+        }) => diff_selection::diff_loaded(inputs, state, repo_id, target, result),
         Msg::Internal(crate::msg::InternalMsg::DiffFileLoaded {
             repo_id,
             target,
             result,
-        }) => diff_selection::diff_file_loaded(state, repo_id, target, result),
+        }) => diff_selection::diff_file_loaded(inputs, state, repo_id, target, result),
         Msg::Internal(crate::msg::InternalMsg::TextAttributesLoaded {
             repo_id,
             target,
             result,
-        }) => diff_selection::text_attributes_loaded(state, repo_id, target, result),
+        }) => diff_selection::text_attributes_loaded(inputs, state, repo_id, target, result),
         Msg::Internal(crate::msg::InternalMsg::DiffPreviewTextFileLoaded {
             repo_id,
             target,
             side,
             result,
-        }) => diff_selection::diff_preview_text_file_loaded(state, repo_id, target, side, result),
+        }) => diff_selection::diff_preview_text_file_loaded(
+            inputs, state, repo_id, target, side, result,
+        ),
         Msg::Internal(crate::msg::InternalMsg::SubmoduleSummaryLoaded {
             repo_id,
             target,
             result,
-        }) => diff_selection::submodule_summary_loaded(state, repo_id, target, result),
+        }) => diff_selection::submodule_summary_loaded(inputs, state, repo_id, target, result),
         Msg::Internal(crate::msg::InternalMsg::InlineSubmoduleDiffLoaded {
             repo_id,
             inline_rev,
             target,
             result,
-        }) => {
-            diff_selection::inline_submodule_diff_loaded(state, repo_id, inline_rev, target, result)
-        }
+        }) => diff_selection::inline_submodule_diff_loaded(
+            inputs, state, repo_id, inline_rev, target, result,
+        ),
         Msg::Internal(crate::msg::InternalMsg::InlineSubmoduleDiffFileLoaded {
             repo_id,
             inline_rev,
             target,
             result,
         }) => diff_selection::inline_submodule_diff_file_loaded(
-            state, repo_id, inline_rev, target, result,
+            inputs, state, repo_id, inline_rev, target, result,
         ),
         Msg::Internal(crate::msg::InternalMsg::InlineSubmoduleDiffFileImageLoaded {
             repo_id,
@@ -2352,28 +2777,31 @@ fn reduce_inner(
             target,
             result,
         }) => diff_selection::inline_submodule_diff_file_image_loaded(
-            state, repo_id, inline_rev, target, result,
+            inputs, state, repo_id, inline_rev, target, result,
         ),
         Msg::Internal(crate::msg::InternalMsg::DiffFileImageLoaded {
             repo_id,
             target,
             result,
-        }) => diff_selection::diff_file_image_loaded(state, repo_id, target, result),
+        }) => diff_selection::diff_file_image_loaded(inputs, state, repo_id, target, result),
         Msg::Internal(crate::msg::InternalMsg::RepoActionFinished {
             repo_id,
             action,
             result,
-        }) => external_and_history::repo_action_finished(repos, state, repo_id, action, result),
+        }) => external_and_history::repo_action_finished(inputs, state, repo_id, action, result),
         Msg::Internal(crate::msg::InternalMsg::RepoPathsActionFinished {
             repo_id,
             action,
             paths,
             result,
         }) => external_and_history::repo_paths_action_finished(
-            repos, state, repo_id, action, paths, result,
+            inputs, state, repo_id, action, paths, result,
         ),
         Msg::Internal(crate::msg::InternalMsg::BranchAlreadyExists { action, prompt }) => {
-            external_and_history::branch_already_exists(repos, state, action, prompt)
+            external_and_history::branch_already_exists(inputs, state, action, prompt)
+        }
+        Msg::Internal(crate::msg::InternalMsg::BranchNotFullyMerged { repo_id, name }) => {
+            external_and_history::branch_not_fully_merged(inputs, state, repo_id, name)
         }
         Msg::Internal(crate::msg::InternalMsg::RepoActionFinishedInWorktree {
             repo_id,
@@ -2381,7 +2809,7 @@ fn reduce_inner(
             worktree_path,
             result,
         }) => external_and_history::repo_action_finished_in_worktree(
-            repos,
+            inputs,
             id_alloc,
             state,
             repo_id,
@@ -2390,23 +2818,24 @@ fn reduce_inner(
             result,
         ),
         Msg::Internal(crate::msg::InternalMsg::CommitFinished { repo_id, result }) => {
-            auth::commit_finished(repos, state, repo_id, result, false)
+            auth::commit_finished(inputs, repos, state, repo_id, result, false)
         }
         Msg::Internal(crate::msg::InternalMsg::CommitAmendFinished { repo_id, result }) => {
-            auth::commit_finished(repos, state, repo_id, result, true)
+            auth::commit_finished(inputs, repos, state, repo_id, result, true)
         }
         Msg::Internal(crate::msg::InternalMsg::SafePushAfterCommitFinished {
             repo_id,
             context,
             auth,
             result,
-        }) => auth::safe_push_after_commit_finished(repos, state, repo_id, context, auth, result),
+        }) => auth::safe_push_after_commit_finished(
+            inputs, repos, state, repo_id, context, auth, result,
+        ),
         Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
             repo_id,
             command,
             result,
-        }) => auth::repo_command_finished(repos, state, repo_id, command, result),
-
+        }) => auth::repo_command_finished(inputs, repos, id_alloc, state, repo_id, command, result),
         // ── Workspace ───────────────────────────────────────────
         Msg::LoadWorkspace { repo_id } => workspace::load_workspace(state, repo_id),
         Msg::ApplyWorkspaceEdit { repo_id, edit } => {
@@ -2421,9 +2850,9 @@ fn reduce_inner(
             repo_id,
             name,
             message,
-        } => workspace::commit_branch(state, repo_id, name, message),
+        } => workspace::commit_branch(inputs, state, repo_id, name, message),
         Msg::CommitWorkspaceFile { repo_id, path } => {
-            workspace::commit_single_file(state, repo_id, path)
+            workspace::commit_single_file(inputs, state, repo_id, path)
         }
         Msg::DismissWorkspaceConflict { repo_id } => workspace::dismiss_conflict(state, repo_id),
         Msg::PushWorkspaceBranch { repo_id, name } => workspace::push_branch(state, repo_id, name),
@@ -2432,29 +2861,29 @@ fn reduce_inner(
             result,
             assignments,
             workspace_commit,
-        }) => workspace::workspace_loaded(state, repo_id, result, assignments, workspace_commit),
+        }) => workspace::workspace_loaded(inputs, state, repo_id, result, assignments, workspace_commit),
         Msg::Internal(crate::msg::InternalMsg::WorkspaceEditFinished {
             repo_id,
             edit,
             result,
-        }) => workspace::workspace_edit_finished(state, repo_id, edit, result),
+        }) => workspace::workspace_edit_finished(inputs, state, repo_id, edit, result),
         Msg::Internal(crate::msg::InternalMsg::WorkspaceActiveFinished {
             repo_id,
             active,
             checkout_base,
             result,
-        }) => workspace::workspace_active_finished(state, repo_id, active, checkout_base, result),
+        }) => workspace::workspace_active_finished(inputs, state, repo_id, active, checkout_base, result),
         Msg::Internal(crate::msg::InternalMsg::WorkspaceAssignFinished {
             repo_id,
             path,
             hunk,
             branch,
             result,
-        }) => workspace::workspace_assign_finished(state, repo_id, path, hunk, branch, result),
+        }) => workspace::workspace_assign_finished(inputs, state, repo_id, path, hunk, branch, result),
         Msg::Internal(crate::msg::InternalMsg::WorkspacePushFinished {
             repo_id,
             name,
             result,
-        }) => workspace::workspace_push_finished(state, repo_id, name, result),
+        }) => workspace::workspace_push_finished(inputs, state, repo_id, name, result),
     }
 }

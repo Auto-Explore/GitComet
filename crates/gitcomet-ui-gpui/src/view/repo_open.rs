@@ -188,6 +188,16 @@ impl GitCometView {
         let Some(repo_id) = self.repo_id_for_path(path) else {
             return false;
         };
+        self.activate_repo(repo_id, cx)
+    }
+
+    /// Shows the repository canvas with `repo_id` active. Whether anything
+    /// changed: the document viewer left, or another repository was chosen.
+    pub(in crate::view) fn activate_repo(
+        &mut self,
+        repo_id: RepoId,
+        cx: &mut gpui::Context<Self>,
+    ) -> bool {
         let was_document = self.documents_active;
         self.show_repository_canvas(cx);
         if self.state.active_repo == Some(repo_id) {
@@ -210,7 +220,27 @@ impl GitCometView {
     ) {
         if self.repo_id_for_path(&path).is_some() {
             self.activate_repo_path(&path, cx);
-        } else if self
+            return;
+        }
+
+        // The worker can finish restoration before its snapshot reaches the
+        // view. Select that ready tab directly: OpenRepo would refresh its
+        // log/HEAD/divergence again, despite the just-completed initial load.
+        let snapshot = self.store.snapshot();
+        if let Some(repo) = snapshot
+            .repos
+            .iter()
+            .find(|repo| repo.spec.workdir == path && matches!(repo.open, Loadable::Ready(_)))
+        {
+            self.show_repository_canvas(cx);
+            if snapshot.active_repo != Some(repo.id) {
+                self.store.dispatch(Msg::SetActiveRepo { repo_id: repo.id });
+            }
+            cx.notify();
+            return;
+        }
+
+        if self
             .pending_repo_open_reservations
             .get(&path)
             .is_some_and(|pending| !pending.persist_in_workspace)
@@ -326,18 +356,7 @@ impl GitCometView {
         else {
             return false;
         };
-
-        let was_document = self.documents_active;
-        self.show_repository_canvas(cx);
-        if self.state.active_repo == Some(next_repo_id) {
-            return was_document;
-        }
-
-        self.store.dispatch(Msg::SetActiveRepo {
-            repo_id: next_repo_id,
-        });
-        cx.notify();
-        true
+        self.activate_repo(next_repo_id, cx)
     }
 
     pub(crate) fn open_repo_path(
@@ -404,7 +423,7 @@ impl GitCometView {
         // The window no longer claims the deleted id, in its syncs or the
         // window registry. A stale snapshot that still lists repositories can
         // briefly create an anonymous workspace; it goes once they close.
-        self.workspace_id = None;
+        self.set_workspace_id(None, cx);
         self.pending_repo_open_reservations.clear();
         self.pending_repo_open_active = None;
         let repo_ids: Vec<RepoId> = self
@@ -450,7 +469,7 @@ impl GitCometView {
         self.set_sidebar_collapsed(layout.sidebar_collapsed, cx);
         self.clamp_pane_widths_to_window();
 
-        self.workspace_id = Some(workspace.id);
+        self.set_workspace_id(Some(workspace.id), cx);
         self.persisted_workspace_repo_paths
             .clone_from(&workspace.repositories);
         self.persisted_workspace_active_repository
@@ -520,6 +539,14 @@ impl GitCometView {
         patch: std::path::PathBuf,
         cx: &mut gpui::Context<Self>,
     ) {
+        if self.active_repo().is_some_and(RepoState::is_bare) {
+            self.push_toast(
+                components::ToastKind::Warning,
+                gitcomet_core::domain::WORKING_TREE_REQUIRED_MESSAGE.into(),
+                cx,
+            );
+            return;
+        }
         let Some(repo_id) = self.state.active_repo else {
             return;
         };
@@ -535,6 +562,7 @@ impl GitCometView {
             directories: true,
             multiple: false,
             prompt: Some("Open Git Repository".into()),
+            directory: None,
         });
 
         window
@@ -569,6 +597,7 @@ impl GitCometView {
             directories: true,
             multiple: false,
             prompt: Some("Initialize Git Repository".into()),
+            directory: None,
         });
 
         window

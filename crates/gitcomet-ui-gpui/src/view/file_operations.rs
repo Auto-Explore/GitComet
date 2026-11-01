@@ -1,12 +1,35 @@
 use super::*;
 use gitcomet_core::filesystem::{
     Conflict, ConflictChoice, ConflictResolution, ItemOutcome, Operation, OperationId, Request,
+    TransferIntent,
 };
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::{Path, PathBuf};
 
 #[cfg(test)]
 mod tests;
+
+/// The clipboard's copy or move as a filesystem transfer intent.
+pub(in crate::view) fn transfer_intent(operation: gpui::FileTransferOperation) -> TransferIntent {
+    match operation {
+        gpui::FileTransferOperation::Copy => TransferIntent::Copy,
+        gpui::FileTransferOperation::Move => TransferIntent::Move,
+    }
+}
+
+/// A filesystem transfer intent as the clipboard's copy or move.
+pub(in crate::view) fn transfer_operation(intent: TransferIntent) -> gpui::FileTransferOperation {
+    match intent {
+        TransferIntent::Copy => gpui::FileTransferOperation::Copy,
+        TransferIntent::Move => gpui::FileTransferOperation::Move,
+    }
+}
+
+/// Spelled as the filesystem service reports completed sources, so a path
+/// reached through a symlink or a Windows 8.3 name still matches.
+pub(in crate::view) fn service_identity(path: &Path) -> PathBuf {
+    gitcomet_core::filesystem::absolute_identity(path).unwrap_or_else(|_| path.to_path_buf())
+}
 
 /// The file-operation dialog on screen. The popover carries display data only;
 /// the request it answers stays here.
@@ -162,7 +185,8 @@ impl GitCometView {
             crate::clipboard::PasteReceipt::from_drop(
                 request.operation.sources().to_vec(),
                 transfer,
-                completion_intent,
+                transfer_operation(completion_intent),
+                service_identity,
             ),
         );
         self.submit_filesystem_operation(request, None, window, cx);
@@ -342,7 +366,12 @@ impl GitCometView {
             && let Operation::Transfer {
                 sources, intent, ..
             } = &request.operation
-            && let Some(paste) = crate::clipboard::capture_paste(cx, sources, *intent)
+            && let Some(paste) = crate::clipboard::capture_paste(
+                cx,
+                sources,
+                transfer_operation(*intent),
+                service_identity,
+            )
         {
             self.file_operations
                 .pastes

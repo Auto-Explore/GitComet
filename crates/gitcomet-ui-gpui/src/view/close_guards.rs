@@ -133,22 +133,12 @@ impl GitCometView {
         // fails, no write was dispatched and the dirty buffer needs the
         // Save/Discard prompt below.
         let moving_repo = action.moving_repo();
-        let writes_pending = self.main_pane.update(cx, |pane, cx| {
-            if moving_repo.is_none_or(|repo_id| {
-                pane.file_editor_key
-                    .as_ref()
-                    .and_then(|key| pane.document_repo_path(key))
-                    .is_some_and(|(editing_repo, _)| editing_repo == repo_id)
-            }) {
-                // Moving is an automatic flush, not permission to overwrite a
-                // disk conflict. Dirty stashed buffers can also be held behind
-                // a conflict, so leave those for the explicit Save/Discard prompt.
-                pane.flush_file_editor_buffer(cx);
-            }
-            // Failed saves and dirty stashes are unsaved edits. Only an actual
-            // queued save should delay the dialog and retry the action.
-            pane.file_editor_saves_block_action(&action)
-        });
+        let writes_pending = self
+            .ui_model
+            .read(cx)
+            .documents
+            .clone()
+            .flush(moving_repo, cx);
         if writes_pending {
             self.retry_once_file_edit_writes_drain(action, cx);
             return true;
@@ -197,29 +187,12 @@ impl GitCometView {
     ) {
         self.pending_unsaved_file_edits_prompt = None;
         let moving_repo = action.moving_repo();
-        let saved = self.main_pane.update(cx, |pane, cx| {
-            if save && let Some(repo_id) = moving_repo {
-                pane.save_file_edits_for_repo(repo_id, cx)
-            } else if save {
-                pane.save_all_file_edits(cx)
-            } else if let Some(repo_id) = moving_repo {
-                pane.discard_file_edits_for_repo(repo_id, cx);
-                true
-            } else {
-                pane.discard_all_file_edits(cx);
-                true
-            }
-        });
-        // Documents belong to the window, not to a repository being moved.
-        if moving_repo.is_none() {
-            self.documents.update(cx, |documents, cx| {
-                if save {
-                    documents.save_all(cx);
-                } else {
-                    documents.discard_all(cx);
-                }
-            });
-        }
+        let saved = self
+            .ui_model
+            .read(cx)
+            .documents
+            .clone()
+            .resolve(moving_repo, None, save, cx);
 
         if !saved {
             return;
@@ -242,15 +215,44 @@ impl GitCometView {
         moving_repo: Option<RepoId>,
         cx: &gpui::App,
     ) -> Vec<SharedString> {
-        let pane = self.main_pane.read(cx);
-        moving_repo.map_or_else(
-            || {
-                let mut files = pane.unsaved_file_edit_labels();
-                files.extend(self.documents.read(cx).unsaved_labels(cx));
-                files
-            },
-            |repo_id| pane.unsaved_file_edit_labels_for_repo(repo_id),
-        )
+        let mut repository_files = Vec::new();
+        let mut detached_files = Vec::new();
+        for (identity, repository) in self.ui_model.read(cx).documents.unsaved_documents() {
+            if moving_repo.is_some_and(|moving| repository != Some(moving)) {
+                continue;
+            }
+            let repo = repository.and_then(|id| self.state.repos.iter().find(|repo| repo.id == id));
+            let label = if let Some(repo) = repo {
+                let path = identity
+                    .0
+                    .strip_prefix(&repo.spec.workdir)
+                    .unwrap_or(&identity.0);
+                if moving_repo.is_none() && self.state.repos.len() > 1 {
+                    format!(
+                        "{} — {}",
+                        repo.spec
+                            .workdir
+                            .file_name()
+                            .unwrap_or_default()
+                            .to_string_lossy(),
+                        path.display()
+                    )
+                } else {
+                    path.display().to_string()
+                }
+            } else {
+                identity.0.display().to_string()
+            };
+            if repository.is_some() {
+                repository_files.push(label.into());
+            } else {
+                detached_files.push(label.into());
+            }
+        }
+        repository_files.sort();
+        repository_files.dedup();
+        repository_files.extend(detached_files);
+        repository_files
     }
 
     /// Filesystem work outside the editor that closing must not cut short.
@@ -258,7 +260,7 @@ impl GitCometView {
         super::native_transfers::active(cx)
             || self.file_operations.has_pending()
             || !self.state.filesystem.pending.is_empty()
-            || !self.documents.read(cx).saves_drained(cx)
+            || !self.ui_model.read(cx).documents.saves_drained(None)
     }
 
     /// Wait for receipts from the exact editor writes, rather than assuming an
@@ -276,17 +278,8 @@ impl GitCometView {
                     .timer(UNSAVED_FILE_EDITS_FLUSH_POLL)
                     .await;
                 let timed_out = cx.background_executor().now() >= deadline;
-                let Ok(pending) = view.update(cx, |this, cx| {
-                    let action = this
-                        .pending_file_edits_action
-                        .as_ref()
-                        .expect("pending save action");
-                    this.filesystem_writes_pending(cx)
-                        || this
-                            .main_pane
-                            .read(cx)
-                            .file_editor_saves_block_action(action)
-                }) else {
+                let Ok(pending) = view.update(cx, |this, cx| this.filesystem_writes_pending(cx))
+                else {
                     return;
                 };
                 if !pending {
@@ -316,10 +309,29 @@ impl GitCometView {
                     let mut files = this.unsaved_file_edit_labels_for(moving_repo, cx);
                     let waiting_for_writes = files.is_empty();
                     if waiting_for_writes && let Some(repo_id) = moving_repo {
+                        let workdir = this
+                            .state
+                            .repos
+                            .iter()
+                            .find(|repo| repo.id == repo_id)
+                            .map(|repo| &repo.spec.workdir);
                         files = this
-                            .main_pane
+                            .ui_model
                             .read(cx)
-                            .pending_file_edit_labels_for_repo(repo_id);
+                            .documents
+                            .pending_paths(repo_id)
+                            .into_iter()
+                            .map(|path| {
+                                workdir
+                                    .and_then(|workdir| path.strip_prefix(workdir).ok())
+                                    .unwrap_or(&path)
+                                    .display()
+                                    .to_string()
+                                    .into()
+                            })
+                            .collect();
+                        files.sort();
+                        files.dedup();
                     }
                     if files.is_empty() {
                         return false;

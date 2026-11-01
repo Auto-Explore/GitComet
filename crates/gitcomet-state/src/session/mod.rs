@@ -1,14 +1,17 @@
-use crate::model::{AppState, DefaultTagType, GitLogTagFetchMode, RepoId};
-use gitcomet_core::domain::{HistoryMode, LogScope};
+use crate::model::{
+    AppState, AutoFetchInterval, DefaultTagType, GitLogTagFetchMode, HiddenRefPrefix,
+    HiddenRefSettings, RepoId,
+};
+use gitcomet_core::domain::{HistoryFocus, HistoryFocusSet, HistoryMode, LogScope};
 use gitcomet_core::platform::dirs;
-use rustc_hash::{FxHashMap, FxHashSet};
+use rustc_hash::FxHashSet;
 use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::{env, fs, io};
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -38,7 +41,10 @@ pub struct UiSession {
     pub sidebar_collapsed: Option<bool>,
     pub theme_mode: Option<String>,
     pub ui_scale_percent: Option<u32>,
+    pub image_sampling_mode: Option<String>,
+    pub image_smooth_filter: Option<String>,
     pub window_controls_mode: Option<String>,
+    pub windows_renderer: Option<String>,
     pub browser_open_target: Option<String>,
     pub ui_density: Option<String>,
     pub ui_font_size_px: Option<u32>,
@@ -52,9 +58,11 @@ pub struct UiSession {
     pub show_timezone: Option<bool>,
     pub change_tracking_view: Option<String>,
     pub file_list_layout: Option<String>,
+    pub file_list_sort: Option<String>,
     pub diff_scroll_sync: Option<String>,
     pub diff_content_mode: Option<String>,
     pub diff_whitespace_mode: Option<String>,
+    pub diff_engine: Option<String>,
     pub diff_view_mode: Option<String>,
     pub annotate_enabled: Option<bool>,
     pub diff_reveal_whitespace_chars: Option<bool>,
@@ -75,6 +83,7 @@ pub struct UiSession {
     pub untracked_height: Option<u32>,
     pub history_branch_names: Option<String>,
     pub history_show_graph: Option<bool>,
+    pub history_show_graph_gradient: Option<bool>,
     pub history_show_author: Option<bool>,
     pub history_show_date: Option<bool>,
     pub history_show_sha: Option<bool>,
@@ -91,10 +100,15 @@ pub struct UiSession {
     pub annex_pull_push_on_adjusted: Option<bool>,
     pub annex_sync_content: Option<bool>,
     pub history_tag_fetch_mode: Option<GitLogTagFetchMode>,
+    pub history_hidden_refs_enabled: Option<bool>,
+    pub history_hidden_ref_presets: Option<BTreeMap<String, bool>>,
+    pub history_hidden_ref_prefixes: Option<Vec<String>>,
     pub default_history_mode: Option<HistoryMode>,
     pub commit_push_after_enabled: Option<bool>,
     pub default_tag_type: Option<DefaultTagType>,
     pub fetch_prune_deleted_remote_branches: Option<bool>,
+    pub auto_fetch_enabled: Option<bool>,
+    pub auto_fetch_interval_minutes: Option<AutoFetchInterval>,
     pub recommend_repo_maintenance: Option<bool>,
     pub git_executable_path: Option<PathBuf>,
     pub external_code_editor: Option<ExternalCodeEditorSetting>,
@@ -119,6 +133,19 @@ struct UiSessionFileV1 {
     active_repo: Option<String>,
 }
 
+/// An unknown or malformed value falls back to its default.
+fn lenient<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::de::DeserializeOwned + Default,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    Ok(serde_json::from_value(value).unwrap_or_default())
+}
+
+/// Every field but `version` loads leniently: a value this build cannot
+/// parse (a newer setting's variant, say) resets only that value, never the
+/// session.
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub(crate) struct UiSessionFile {
     version: u32,
@@ -129,92 +156,206 @@ pub(crate) struct UiSessionFile {
         deserialize_with = "lenient_workspaces"
     )]
     workspaces: Option<Vec<WorkspaceFile>>,
+    #[serde(default, deserialize_with = "lenient")]
     open_repos: Vec<String>,
+    #[serde(default, deserialize_with = "lenient")]
     active_repo: Option<String>,
+    #[serde(default, deserialize_with = "lenient")]
     recent_repos: Option<Vec<String>>,
+    #[serde(default, deserialize_with = "lenient")]
     recent_documents: Option<Vec<String>>,
+    #[serde(default, deserialize_with = "lenient")]
     pinned_repos: Option<Vec<String>>,
+    #[serde(default, deserialize_with = "lenient")]
     repo_picker_sort: Option<String>,
+    #[serde(default, deserialize_with = "lenient")]
     repo_picker_collapsed_sections: Option<BTreeSet<String>>,
+    #[serde(default, deserialize_with = "lenient")]
     repo_sidebar_collapsed_items: Option<BTreeMap<String, BTreeSet<String>>>,
+    #[serde(default, deserialize_with = "lenient")]
     repo_sidebar_pinned_branches: Option<BTreeMap<String, BTreeSet<String>>>,
+    #[serde(default, deserialize_with = "lenient")]
     window_width: Option<u32>,
+    #[serde(default, deserialize_with = "lenient")]
     window_height: Option<u32>,
+    #[serde(default, deserialize_with = "lenient")]
     mergetool_window_width: Option<u32>,
+    #[serde(default, deserialize_with = "lenient")]
     mergetool_window_height: Option<u32>,
+    #[serde(default, deserialize_with = "lenient")]
     sidebar_width: Option<u32>,
+    #[serde(default, deserialize_with = "lenient")]
     details_width: Option<u32>,
+    #[serde(default, deserialize_with = "lenient")]
     sidebar_collapsed: Option<bool>,
+    #[serde(default, deserialize_with = "lenient")]
     theme_mode: Option<String>,
+    #[serde(default, deserialize_with = "lenient")]
     ui_scale_percent: Option<u32>,
+    #[serde(default, deserialize_with = "lenient")]
+    image_sampling_mode: Option<String>,
+    #[serde(default, deserialize_with = "lenient")]
+    image_smooth_filter: Option<String>,
+    #[serde(default, deserialize_with = "lenient")]
     window_controls_mode: Option<String>,
+    #[serde(default, deserialize_with = "lenient")]
+    windows_renderer: Option<String>,
+    #[serde(default, deserialize_with = "lenient")]
     browser_open_target: Option<String>,
+    #[serde(default, deserialize_with = "lenient")]
     ui_density: Option<String>,
+    #[serde(default, deserialize_with = "lenient")]
     ui_font_size_px: Option<u32>,
+    #[serde(default, deserialize_with = "lenient")]
     editor_font_size_px: Option<u32>,
+    #[serde(default, deserialize_with = "lenient")]
     markdown_preview_font_size_px: Option<u32>,
+    #[serde(default, deserialize_with = "lenient")]
     ui_font_family: Option<String>,
+    #[serde(default, deserialize_with = "lenient")]
     editor_font_family: Option<String>,
+    #[serde(default, deserialize_with = "lenient")]
     use_font_ligatures: Option<bool>,
+    #[serde(default, deserialize_with = "lenient")]
     date_time_format: Option<String>,
+    #[serde(default, deserialize_with = "lenient")]
     timezone: Option<String>,
+    #[serde(default, deserialize_with = "lenient")]
     show_timezone: Option<bool>,
+    #[serde(default, deserialize_with = "lenient")]
     change_tracking_view: Option<String>,
+    #[serde(default, deserialize_with = "lenient")]
     file_list_layout: Option<String>,
+    #[serde(default, deserialize_with = "lenient")]
+    file_list_sort: Option<String>,
+    #[serde(default, deserialize_with = "lenient")]
     diff_scroll_sync: Option<String>,
+    #[serde(default, deserialize_with = "lenient")]
     diff_content_mode: Option<String>,
+    #[serde(default, deserialize_with = "lenient")]
     diff_whitespace_mode: Option<String>,
+    #[serde(default, deserialize_with = "lenient")]
+    diff_engine: Option<String>,
+    #[serde(default, deserialize_with = "lenient")]
     diff_view_mode: Option<String>,
+    #[serde(default, deserialize_with = "lenient")]
     annotate_enabled: Option<bool>,
+    #[serde(default, deserialize_with = "lenient")]
     diff_reveal_whitespace_chars: Option<bool>,
+    #[serde(default, deserialize_with = "lenient")]
     diff_word_wrap: Option<bool>,
+    #[serde(default, deserialize_with = "lenient")]
     diff_tab_size: Option<u8>,
+    #[serde(default, deserialize_with = "lenient")]
     diff_show_line_numbers: Option<bool>,
+    #[serde(default, deserialize_with = "lenient")]
     remote_markdown_image_policy: Option<String>,
+    #[serde(default, deserialize_with = "lenient")]
     allowed_remote_protocols: Option<BTreeSet<String>>,
+    #[serde(default, deserialize_with = "lenient")]
     check_for_updates_on_startup: Option<bool>,
+    #[serde(default, deserialize_with = "lenient")]
     auto_save_file_edits: Option<bool>,
+    #[serde(default, deserialize_with = "lenient")]
     mergetool_auto_advance: Option<bool>,
+    #[serde(default, deserialize_with = "lenient")]
     mergetool_collapse_unchanged: Option<bool>,
+    #[serde(default, deserialize_with = "lenient")]
     mergetool_output_scroll_sync: Option<bool>,
+    #[serde(default, deserialize_with = "lenient")]
     mergetool_show_line_numbers: Option<bool>,
+    #[serde(default, deserialize_with = "lenient")]
     mergetool_view_three_way: Option<bool>,
+    #[serde(default, deserialize_with = "lenient")]
     change_tracking_height: Option<u32>,
+    #[serde(default, deserialize_with = "lenient")]
     untracked_height: Option<u32>,
+    #[serde(default, deserialize_with = "lenient")]
     history_branch_names: Option<String>,
+    #[serde(default, deserialize_with = "lenient")]
     history_show_graph: Option<bool>,
+    #[serde(default, deserialize_with = "lenient")]
+    history_show_graph_gradient: Option<bool>,
+    #[serde(default, deserialize_with = "lenient")]
     history_show_author: Option<bool>,
+    #[serde(default, deserialize_with = "lenient")]
     history_show_date: Option<bool>,
+    #[serde(default, deserialize_with = "lenient")]
     history_show_sha: Option<bool>,
+    #[serde(default, deserialize_with = "lenient")]
     terminal_external_mode: Option<String>,
+    #[serde(default, deserialize_with = "lenient")]
     terminal_external_program: Option<String>,
+    #[serde(default, deserialize_with = "lenient")]
     terminal_external_args: Option<Vec<String>>,
+    #[serde(default, deserialize_with = "lenient")]
     terminal_action_bar_target: Option<String>,
+    #[serde(default, deserialize_with = "lenient")]
     history_show_tags: Option<bool>,
+    #[serde(default, deserialize_with = "lenient")]
     history_verify_commit_signatures: Option<bool>,
+    #[serde(default, deserialize_with = "lenient")]
     history_verify_commit_signatures_opt_in: Option<bool>,
+    #[serde(default, deserialize_with = "lenient")]
     history_relative_dates: Option<bool>,
+    #[serde(default, deserialize_with = "lenient")]
     history_highlight_commit_chain: Option<bool>,
+    #[serde(default, deserialize_with = "lenient")]
     file_browser_follow_selected_commit: Option<bool>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient")]
     annex_hide_bookkeeping_refs: Option<bool>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient")]
     annex_pull_push_on_adjusted: Option<bool>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient")]
     annex_sync_content: Option<bool>,
+    #[serde(default, deserialize_with = "lenient")]
     history_tag_fetch_mode: Option<GitLogTagFetchMode>,
+    #[serde(default, deserialize_with = "lenient")]
+    history_hidden_refs_enabled: Option<bool>,
+    #[serde(default, deserialize_with = "lenient")]
+    history_hidden_ref_presets: Option<BTreeMap<String, bool>>,
+    #[serde(default, deserialize_with = "lenient")]
+    history_hidden_ref_prefixes: Option<Vec<String>>,
+    #[serde(default, deserialize_with = "lenient")]
     default_history_mode: Option<HistoryModeSetting>,
+    #[serde(default, deserialize_with = "lenient")]
     commit_push_after_enabled: Option<bool>,
+    #[serde(default, deserialize_with = "lenient")]
     default_tag_type: Option<DefaultTagType>,
+    #[serde(default, deserialize_with = "lenient")]
     fetch_prune_deleted_remote_branches: Option<bool>,
+    #[serde(default, deserialize_with = "lenient")]
+    auto_fetch_enabled: Option<bool>,
+    #[serde(default, deserialize_with = "lenient")]
+    auto_fetch_interval_minutes: Option<AutoFetchInterval>,
+    #[serde(default, deserialize_with = "lenient")]
     recommend_repo_maintenance: Option<bool>,
+    #[serde(default, deserialize_with = "lenient")]
     git_executable_path: Option<String>,
+    #[serde(default, deserialize_with = "lenient")]
     external_code_editor: Option<ExternalCodeEditorSettingFile>,
+    #[serde(
+        default,
+        deserialize_with = "repository_preferences::lenient_preferences"
+    )]
+    repository_preferences: BTreeMap<String, crate::model::SharedRepositoryPreferences>,
+    #[serde(default, deserialize_with = "lenient")]
     repo_history_modes: Option<BTreeMap<String, HistoryModeSetting>>,
+    #[serde(default, deserialize_with = "lenient")]
     repo_history_scopes: Option<BTreeMap<String, HistoryScopeSetting>>,
+    #[serde(default, deserialize_with = "lenient")]
     repo_history_author_filters: Option<BTreeMap<String, Option<String>>>,
-    #[serde(skip_serializing)]
+    // Focus was called "solo" while it was in development; the alias keeps
+    // sessions written by those builds readable.
+    #[serde(
+        default,
+        alias = "repo_history_solos",
+        deserialize_with = "history_mode::deserialize_repo_history_focus"
+    )]
+    repo_history_focus: Option<BTreeMap<String, Vec<HistoryFocusSetting>>>,
+    #[serde(skip_serializing, default, deserialize_with = "lenient")]
     repo_fetch_prune_deleted_remote_tracking_branches: Option<BTreeMap<String, bool>>,
+    #[serde(default, deserialize_with = "lenient")]
     survey_prompt: Option<SurveyPromptSession>,
     #[serde(default, deserialize_with = "lenient_repo_maintenance")]
     repo_maintenance: Option<BTreeMap<String, RepoMaintenanceSession>>,
@@ -243,7 +384,8 @@ const SESSION_FILE_VERSION_V2: u32 = 2;
 const SESSION_FILE_VERSION_V3: u32 = 3;
 const SESSION_FILE_VERSION_V4: u32 = 4;
 const SESSION_FILE_VERSION_V5: u32 = 5;
-const CURRENT_SESSION_FILE_VERSION: u32 = SESSION_FILE_VERSION_V5;
+const SESSION_FILE_VERSION_V6: u32 = 6;
+const CURRENT_SESSION_FILE_VERSION: u32 = SESSION_FILE_VERSION_V6;
 const LEGACY_WORKSPACE_ID: WorkspaceId =
     WorkspaceId::from_u128(0x4749_5443_4f4d_4554_0000_0000_0000_0001);
 const MAX_RECENT_REPOS: usize = 15;
@@ -264,6 +406,30 @@ pub fn load() -> UiSession {
     };
 
     load_from_path(&path)
+}
+
+/// The session file's size and modification time.
+pub type SessionFileStamp = (u64, std::time::SystemTime);
+
+/// The session, unless the file's stamp still equals `stamp`, which is then
+/// updated. A `stat` instead of a parse for callers polling for external
+/// writes (the macOS recent-repositories menu).
+pub fn load_if_changed(stamp: &mut Option<SessionFileStamp>) -> Option<UiSession> {
+    load_from_path_if_changed(&default_session_file_path()?, stamp)
+}
+
+fn load_from_path_if_changed(
+    path: &Path,
+    stamp: &mut Option<SessionFileStamp>,
+) -> Option<UiSession> {
+    let current = fs::metadata(path)
+        .ok()
+        .and_then(|metadata| Some((metadata.len(), metadata.modified().ok()?)));
+    if current == *stamp {
+        return None;
+    }
+    *stamp = current;
+    Some(load_from_path(path))
 }
 
 pub fn load_from_path(path: &Path) -> UiSession {
@@ -353,7 +519,10 @@ pub fn load_from_path(path: &Path) -> UiSession {
             .or(file.sidebar_collapsed),
         theme_mode: file.theme_mode,
         ui_scale_percent: file.ui_scale_percent,
+        image_sampling_mode: file.image_sampling_mode,
+        image_smooth_filter: file.image_smooth_filter,
         window_controls_mode: file.window_controls_mode,
+        windows_renderer: file.windows_renderer,
         browser_open_target: file.browser_open_target,
         ui_density: file.ui_density,
         ui_font_size_px: file.ui_font_size_px,
@@ -367,9 +536,11 @@ pub fn load_from_path(path: &Path) -> UiSession {
         show_timezone: file.show_timezone,
         change_tracking_view: file.change_tracking_view,
         file_list_layout: file.file_list_layout,
+        file_list_sort: file.file_list_sort,
         diff_scroll_sync: file.diff_scroll_sync,
         diff_content_mode: file.diff_content_mode,
         diff_whitespace_mode: file.diff_whitespace_mode,
+        diff_engine: file.diff_engine,
         diff_view_mode: file.diff_view_mode,
         annotate_enabled: file.annotate_enabled,
         diff_reveal_whitespace_chars: file.diff_reveal_whitespace_chars,
@@ -395,6 +566,7 @@ pub fn load_from_path(path: &Path) -> UiSession {
             .or(file.untracked_height),
         history_branch_names: file.history_branch_names,
         history_show_graph: file.history_show_graph,
+        history_show_graph_gradient: file.history_show_graph_gradient,
         history_show_author: file.history_show_author,
         history_show_date: file.history_show_date,
         history_show_sha: file.history_show_sha,
@@ -411,10 +583,15 @@ pub fn load_from_path(path: &Path) -> UiSession {
         annex_pull_push_on_adjusted: file.annex_pull_push_on_adjusted,
         annex_sync_content: file.annex_sync_content,
         history_tag_fetch_mode: file.history_tag_fetch_mode,
+        history_hidden_refs_enabled: file.history_hidden_refs_enabled,
+        history_hidden_ref_presets: file.history_hidden_ref_presets,
+        history_hidden_ref_prefixes: file.history_hidden_ref_prefixes,
         default_history_mode: file.default_history_mode.map(Into::into),
         commit_push_after_enabled: file.commit_push_after_enabled,
         default_tag_type: file.default_tag_type,
         fetch_prune_deleted_remote_branches: file.fetch_prune_deleted_remote_branches,
+        auto_fetch_enabled: file.auto_fetch_enabled,
+        auto_fetch_interval_minutes: file.auto_fetch_interval_minutes,
         recommend_repo_maintenance: file.recommend_repo_maintenance,
         git_executable_path: file
             .git_executable_path
@@ -430,6 +607,7 @@ pub(crate) struct RepoSessionPreferences {
     pub(crate) repo_history_modes: BTreeMap<String, HistoryMode>,
     pub(crate) repo_history_scopes: BTreeMap<String, LogScope>,
     pub(crate) repo_history_author_filters: BTreeMap<String, Option<String>>,
+    pub(crate) repo_history_focus: BTreeMap<String, HistoryFocusSet>,
 }
 
 #[cfg(test)]
@@ -494,10 +672,19 @@ pub(crate) fn update_session_file(
     update: impl FnOnce(&mut UiSessionFile) -> SessionUpdate,
 ) -> io::Result<()> {
     with_session_file_persist_lock(|| {
-        let mut file = load_file(path).unwrap_or_default();
+        let stored = load_stored(path)?;
+        let backup = replaced_session_backup_suffix(&stored);
+        let (mut file, previous) = match stored {
+            StoredSession::Absent => (UiSessionFile::default(), Vec::new()),
+            StoredSession::Read { file, bytes, .. } => (*file, bytes),
+            StoredSession::Unreadable { bytes, .. } => (UiSessionFile::default(), bytes),
+        };
         match update(&mut file) {
             SessionUpdate::Unchanged => Ok(()),
             SessionUpdate::Write => {
+                if let Some(suffix) = backup {
+                    back_up_replaced_session(path, &suffix, &previous)?;
+                }
                 file.version = CURRENT_SESSION_FILE_VERSION;
                 persist_to_path(path, &file)
             }
@@ -505,34 +692,85 @@ pub(crate) fn update_session_file(
     })
 }
 
-/// On-disk version `load_file` last read per path, so the write that follows
-/// can skip the backup check's re-read.
-static LOADED_SESSION_VERSIONS: OnceLock<Mutex<FxHashMap<PathBuf, u32>>> = OnceLock::new();
-
-fn loaded_session_versions() -> MutexGuard<'static, FxHashMap<PathBuf, u32>> {
-    LOADED_SESSION_VERSIONS
-        .get_or_init(Default::default)
-        .lock()
-        .unwrap_or_else(|err| err.into_inner())
+/// What is at the session path before a write.
+enum StoredSession {
+    Absent,
+    Read {
+        version: u32,
+        file: Box<UiSessionFile>,
+        bytes: Vec<u8>,
+    },
+    /// Present but not loadable here: not JSON, or a newer version.
+    Unreadable {
+        version: Option<u32>,
+        bytes: Vec<u8>,
+    },
 }
 
-fn loaded_session_version(path: &Path) -> Option<u32> {
-    loaded_session_versions().get(path).copied()
+/// A file that exists but cannot be read is an error, not an absent file:
+/// a write would replace it with nothing to carry over or back up.
+fn load_stored(path: &Path) -> io::Result<StoredSession> {
+    let bytes = match fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(StoredSession::Absent),
+        Err(error) => return Err(error),
+    };
+    let value = serde_json::from_slice::<serde_json::Value>(&bytes).ok();
+    let version = value.as_ref().map(session_value_version);
+    Ok(match value.and_then(parse_session_value) {
+        Some((version, file)) => StoredSession::Read {
+            version,
+            file: Box::new(file),
+            bytes,
+        },
+        None => StoredSession::Unreadable { version, bytes },
+    })
 }
 
 fn load_file(path: &Path) -> Option<UiSessionFile> {
-    let value = fs::read_to_string(path)
-        .ok()
-        .and_then(|contents| serde_json::from_str::<serde_json::Value>(&contents).ok());
-    let Some(value) = value else {
-        loaded_session_versions().remove(path);
-        return None;
-    };
-    let version = value
-        .get("version")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(SESSION_FILE_VERSION_V1 as u64) as u32;
-    loaded_session_versions().insert(path.to_path_buf(), version);
+    match load_stored(path) {
+        Ok(StoredSession::Read { file, .. }) => Some(*file),
+        Ok(StoredSession::Absent | StoredSession::Unreadable { .. }) | Err(_) => None,
+    }
+}
+
+/// The backup a write keeps of the file it replaces without carrying it
+/// over: an older format (so a downgrade can recover it), a newer build's
+/// file, or one this build cannot read at all.
+fn replaced_session_backup_suffix(stored: &StoredSession) -> Option<String> {
+    match stored {
+        StoredSession::Absent => None,
+        StoredSession::Read { version, .. } => {
+            (*version < CURRENT_SESSION_FILE_VERSION).then(|| format!(".v{version}.bak"))
+        }
+        StoredSession::Unreadable {
+            version: Some(version),
+            ..
+        } if *version > CURRENT_SESSION_FILE_VERSION => Some(format!(".v{version}.bak")),
+        StoredSession::Unreadable { .. } => Some(".unreadable.bak".to_string()),
+    }
+}
+
+/// Keeps the first copy only: later writes of the same kind do not replace it.
+fn back_up_replaced_session(path: &Path, suffix: &str, previous: &[u8]) -> io::Result<()> {
+    let mut backup_name = path.as_os_str().to_os_string();
+    backup_name.push(suffix);
+    let backup_path = PathBuf::from(backup_name);
+    if backup_path.exists() {
+        return Ok(());
+    }
+    gitcomet_core::fs_utils::write_private_file(&backup_path, previous)?;
+    eprintln!(
+        "Kept the previous session file this version cannot carry over at {}",
+        backup_path.display()
+    );
+    Ok(())
+}
+
+/// The on-disk version and the migrated file, or `None` when this build
+/// cannot read it: an unknown (newer) version or a shape that fails to parse.
+fn parse_session_value(value: serde_json::Value) -> Option<(u32, UiSessionFile)> {
+    let version = session_value_version(&value);
     let mut file = match version {
         SESSION_FILE_VERSION_V1 => {
             let file: UiSessionFileV1 = serde_json::from_value(value).ok()?;
@@ -547,9 +785,10 @@ fn load_file(path: &Path) -> Option<UiSessionFile> {
             let file = serde_json::from_value::<UiSessionFile>(value).ok()?;
             Some(migrate_v2_file(file))
         }
-        SESSION_FILE_VERSION_V3 | SESSION_FILE_VERSION_V4 | SESSION_FILE_VERSION_V5 => {
-            serde_json::from_value::<UiSessionFile>(value).ok()
-        }
+        SESSION_FILE_VERSION_V3
+        | SESSION_FILE_VERSION_V4
+        | SESSION_FILE_VERSION_V5
+        | SESSION_FILE_VERSION_V6 => serde_json::from_value::<UiSessionFile>(value).ok(),
         _ => None,
     }?;
     file = migrate_legacy_repo_fetch_prune_setting(file);
@@ -561,12 +800,19 @@ fn load_file(path: &Path) -> Option<UiSessionFile> {
         .unwrap_or(false);
     file.history_verify_commit_signatures = Some(enabled);
     file.history_verify_commit_signatures_opt_in = Some(enabled);
-    Some(file)
+    Some((version, file))
+}
+
+/// A version-1 file has no `version` field.
+fn session_value_version(value: &serde_json::Value) -> u32 {
+    value
+        .get("version")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(SESSION_FILE_VERSION_V1 as u64) as u32
 }
 
 fn persist_to_path(path: &Path, session: &impl Serialize) -> io::Result<()> {
     let contents = serde_json::to_vec(session).expect("serializing session file should succeed");
-    preserve_previous_version_session_backup(path, &contents)?;
     // Records every open repository path; keep it owner-only.
     gitcomet_core::fs_utils::write_private_file(path, &contents)
 }
@@ -663,7 +909,7 @@ pub use extensions::{
     check_extension_namespace_size, extension_namespace, extension_namespace_from_path,
     persist_extension_namespace, persist_extension_namespace_to_path,
 };
-use history_mode::{HistoryModeSetting, HistoryScopeSetting};
+use history_mode::{HistoryFocusSetting, HistoryModeSetting, HistoryScopeSetting};
 use maintenance::{RepoMaintenanceSession, lenient_repo_maintenance};
 use parse::*;
 use survey::{SurveyPromptSession, current_unix_seconds};
@@ -700,3 +946,9 @@ pub(crate) use repos::load_repo_session_preferences_from_path;
 
 #[cfg(test)]
 mod tests;
+
+mod repository_preferences;
+pub(crate) use repository_preferences::{
+    initialize_repository_preferences, persist_repository_preference_updates,
+    rekey_repository_preferences,
+};

@@ -23,6 +23,13 @@ const COMPARISON_CARDS_MAX_BODY_FRACTION: f32 = 0.5;
 pub(super) const RANGE_FILES_SECTION_MIN_HEIGHT_PX: f32 = 70.0;
 
 impl DetailsPaneView {
+    /// Whether the pane compares commits (a range, or a multi-selection): the
+    /// one view that shows loaded history rows.
+    pub(in crate::view) fn shows_comparison(repo: &RepoState) -> bool {
+        repo.history_state.range_selection.is_some()
+            || repo.history_state.multi_selection.is_multi()
+    }
+
     /// Selected IDs in displayed history order, independent of the bounded
     /// metadata cache. Missing metadata must not shrink the selection's cards.
     pub(super) fn multi_selected_commit_ids_in_log_order(repo: &RepoState) -> Vec<CommitId> {
@@ -446,6 +453,13 @@ impl DetailsPaneView {
                     .gitcomet_tooltip(theme, "Close commit details".into()),
             );
 
+        // A multi-selection without a comparison has no merged diff: only
+        // consecutive commits have one diff holding exactly their changes.
+        let no_diff_hint = div()
+            .debug_selector(|| "multi_commit_no_merged_diff".to_string())
+            .text_size(theme.ui_text(14.0))
+            .text_color(theme.colors.foreground.secondary)
+            .child("Select consecutive commits to see their combined changes.");
         let body = self.commit_cards_list(repo_id, count, cx);
 
         div()
@@ -463,10 +477,12 @@ impl DetailsPaneView {
                     .relative()
                     .flex()
                     .flex_col()
+                    .gap_2()
                     .flex_1()
                     .h_full()
                     .min_h(px(0.0))
                     .p_2()
+                    .child(no_diff_hint)
                     .child(body),
             )
             .into_any_element()

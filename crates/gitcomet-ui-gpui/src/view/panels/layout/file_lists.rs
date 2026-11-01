@@ -2,6 +2,7 @@
 //! committed-files section.
 
 use super::*;
+use crate::kit::click::PointerClickExt as _;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum CommitFileFilterLabels {
@@ -130,11 +131,17 @@ impl DetailsPaneView {
                 CommitFileFilterLabels::Full => full_label.clone(),
                 CommitFileFilterLabels::Compact => count.to_string(),
             };
-            let icon_color = commit_file_filter_color(filter, theme);
+            let interaction = InteractionStyle::new(theme)
+                .selection_outline(false)
+                .dim_when_disabled(true);
+            let state = InteractionState::default()
+                .selected(selected, theme.colors.interaction.selected_background)
+                .disabled(disabled);
+            let icon_color = interaction.color(commit_file_filter_color(filter, theme), state);
             let selected_border = if theme.is_dark {
                 gpui::rgba(0x00000000)
             } else {
-                theme.colors.interaction.selected_indicator
+                interaction.color(theme.colors.interaction.selected_indicator, state)
             };
             let tab = div()
                 .id((SharedString::from(format!("{id_prefix}_filter_tab")), ix))
@@ -155,20 +162,16 @@ impl DetailsPaneView {
                 })
                 .text_size(theme.ui_text(12.0))
                 .whitespace_nowrap()
-                .text_color(if selected {
-                    theme.colors.interaction.selected_foreground
-                } else {
-                    theme.colors.foreground.secondary
-                })
+                .text_color(interaction.color(
+                    if selected {
+                        theme.colors.interaction.selected_foreground
+                    } else {
+                        theme.colors.foreground.secondary
+                    },
+                    state,
+                ))
                 .tab_index(0)
-                .control_interaction(
-                    InteractionStyle::new(theme)
-                        .selection_outline(false)
-                        .disabled_opacity(0.5),
-                    InteractionState::default()
-                        .selected(selected, theme.colors.interaction.selected_background)
-                        .disabled(disabled),
-                )
+                .control_interaction(interaction, state)
                 .child(svg_icon(
                     filter.icon(),
                     icon_color,
@@ -207,21 +210,43 @@ impl DetailsPaneView {
         let layout = self.file_list_layout_for(repo_id, list);
         let icon_color = theme.colors.foreground.secondary;
 
-        let layout_button = components::Button::new(format!("{id_prefix}_layout_button"), "")
-            .style(components::ButtonStyle::Transparent)
-            .disabled(disabled)
-            .start_slot(svg_icon(layout.icon(), icon_color, ui_scale.px(14.0)))
-            .on_click(theme, cx, move |this, event, _window, cx| {
-                if !event.standard_click() {
+        // One icon in the layout's shape: a click steps to the next layout,
+        // a right click offers them all.
+        let layout_invoker: SharedString = format!("{id_prefix}_layout_button").into();
+        let layout_open = self.active_context_menu_invoker.as_ref() == Some(&layout_invoker);
+        let layout_button = components::list_layout_button(
+            format!("{id_prefix}_layout_button"),
+            layout,
+            theme,
+            ui_scale,
+        )
+        .disabled(disabled)
+        .open(layout_open)
+        .on_click(theme, cx, move |this, event, _window, cx| {
+            if !event.standard_click() {
+                return;
+            }
+            this.toggle_file_list_layout(repo_id, list, cx);
+        })
+        .on_pointer_click(
+            MouseButton::Right,
+            cx.listener(move |this, e: &MouseDownEvent, window, cx| {
+                cx.stop_propagation();
+                if disabled {
                     return;
                 }
-                this.toggle_file_list_layout(repo_id, list, cx);
-            })
-            .debug_selector(move || format!("{id_prefix}_layout_button"))
-            .gitcomet_tooltip(
-                theme,
-                format!("Layout: {} — click to switch", layout.label()).into(),
-            );
+                this.open_popover_at(
+                    PopoverKind::FileListLayoutMenu { repo_id, list }
+                        .invoked_by(layout_invoker.clone()),
+                    e.position,
+                    window,
+                    cx,
+                );
+                cx.notify();
+            }),
+        )
+        .debug_selector(move || format!("{id_prefix}_layout_button"))
+        .gitcomet_tooltip(theme, layout.tooltip());
 
         let sort_button = components::Button::new(format!("{id_prefix}_sort_button"), "")
             .style(components::ButtonStyle::Transparent)

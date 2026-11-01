@@ -7,7 +7,9 @@
 //! reports what actually happened. A failed apply therefore leaves the UI
 //! showing the truth rather than a branch the user thinks exists.
 
+use super::prepared::ReducerInputs;
 use super::util::{push_diagnostic, push_notification};
+use crate::msg::{ReferenceEffect, StatusEffect};
 use crate::model::{
     AppNotificationKind, AppState, DiagnosticKind, Loadable, RepoId, RepoState, WorkspaceEdit,
 };
@@ -112,6 +114,7 @@ fn apply_edit(
 
 /// Commit every file assigned to `name`.
 pub(super) fn commit_branch(
+    inputs: &ReducerInputs,
     state: &mut AppState,
     repo_id: RepoId,
     name: String,
@@ -138,6 +141,7 @@ pub(super) fn commit_branch(
         .collect();
     if paths.is_empty() {
         push_notification(
+            inputs,
             state,
             AppNotificationKind::Info,
             format!("No files are assigned to '{name}'"),
@@ -153,6 +157,7 @@ pub(super) fn commit_branch(
 /// A file with no branch has nowhere to go, so the message says so instead of
 /// committing it to the workspace branch, which is never a user commit target.
 pub(super) fn commit_single_file(
+    inputs: &ReducerInputs,
     state: &mut AppState,
     repo_id: RepoId,
     path: PathBuf,
@@ -171,6 +176,7 @@ pub(super) fn commit_single_file(
     };
     let Some(branch) = branch else {
         push_notification(
+            inputs,
             state,
             AppNotificationKind::Info,
             format!(
@@ -314,6 +320,7 @@ fn begin_leave(repo: &mut RepoState) -> bool {
 /// has to create its branch needs). `then` runs only once the leave has been
 /// reported, so the two moves cannot be split by a failure in between.
 pub(super) fn leave_for_checkout(
+    inputs: &ReducerInputs,
     state: &mut AppState,
     repo_id: RepoId,
     checkout_base: Option<String>,
@@ -330,6 +337,7 @@ pub(super) fn leave_for_checkout(
     let may_leave = begin_leave(repo);
     if !may_leave {
         push_notification(
+            inputs,
             state,
             AppNotificationKind::Info,
             "The workspace is busy; try changing branch again in a moment.".to_string(),
@@ -350,6 +358,7 @@ pub(super) fn leave_for_checkout(
 /// never moved HEAD, and pretending it had would make the next leave try to
 /// undo a switch that never happened.
 pub(super) fn workspace_active_finished(
+    inputs: &ReducerInputs,
     state: &mut AppState,
     repo_id: RepoId,
     active: bool,
@@ -364,6 +373,7 @@ pub(super) fn workspace_active_finished(
     if let Err(error) = result {
         repo.workspace.bump_rev();
         push_notification(
+            inputs,
             state,
             AppNotificationKind::Error,
             if active {
@@ -381,8 +391,8 @@ pub(super) fn workspace_active_finished(
     // Leaving changes which branch HEAD is on, and entering changes the files,
     // so the ordinary views have to catch up either way.
     vec![
-        Effect::LoadWorktreeStatus { repo_id },
-        Effect::LoadBranches { repo_id },
+        Effect::Status(StatusEffect::LoadWorktreeStatus { repo_id }),
+        Effect::References(ReferenceEffect::LoadBranches { repo_id }),
     ]
 }
 
@@ -439,6 +449,7 @@ pub(super) fn dismiss_conflict(state: &mut AppState, repo_id: RepoId) -> Vec<Eff
 // ── Backend replies ─────────────────────────────────────────────
 
 pub(super) fn workspace_loaded(
+    inputs: &ReducerInputs,
     state: &mut AppState,
     repo_id: RepoId,
     result: gitcomet_core::services::Result<WorkspaceState>,
@@ -488,6 +499,7 @@ pub(super) fn workspace_loaded(
     let mut effects = Vec::new();
     if let Err(error) = result {
         push_notification(
+            inputs,
             state,
             AppNotificationKind::Error,
             format!("Could not load the workspace: {error}"),
@@ -495,11 +507,12 @@ pub(super) fn workspace_loaded(
     }
     // A branch the workspace does not know about yet cannot be applied, so the
     // view needs the ordinary branch list alongside the workspace.
-    effects.push(Effect::LoadBranches { repo_id });
+    effects.push(Effect::References(ReferenceEffect::LoadBranches { repo_id }));
     effects
 }
 
 pub(super) fn workspace_edit_finished(
+    inputs: &ReducerInputs,
     state: &mut AppState,
     repo_id: RepoId,
     edit: WorkspaceEdit,
@@ -524,7 +537,7 @@ pub(super) fn workspace_edit_finished(
             paths: Arc::new(conflict_paths(&message)),
             message,
         });
-        push_diagnostic(repo, DiagnosticKind::Error, error.to_string());
+        push_diagnostic(inputs, repo, DiagnosticKind::Error, error.to_string());
         // The edit did not happen, so the cached state is stale in the other
         // direction: reload rather than guess what survived.
         return vec![Effect::LoadWorkspace { repo_id }];
@@ -534,12 +547,13 @@ pub(super) fn workspace_edit_finished(
     vec![
         Effect::LoadWorkspace { repo_id },
         // A commit or an apply can change what the working tree reports.
-        Effect::LoadWorktreeStatus { repo_id },
-        Effect::LoadBranches { repo_id },
+        Effect::Status(StatusEffect::LoadWorktreeStatus { repo_id }),
+        Effect::References(ReferenceEffect::LoadBranches { repo_id }),
     ]
 }
 
 pub(super) fn workspace_assign_finished(
+    inputs: &ReducerInputs,
     state: &mut AppState,
     repo_id: RepoId,
     path: PathBuf,
@@ -555,6 +569,7 @@ pub(super) fn workspace_assign_finished(
     if let Err(error) = result {
         repo.workspace.bump_rev();
         push_notification(
+            inputs,
             state,
             AppNotificationKind::Error,
             format!("Could not assign '{}': {error}", path.display()),
@@ -576,6 +591,7 @@ pub(super) fn workspace_assign_finished(
 }
 
 pub(super) fn workspace_push_finished(
+    inputs: &ReducerInputs,
     state: &mut AppState,
     repo_id: RepoId,
     name: String,
@@ -589,12 +605,14 @@ pub(super) fn workspace_push_finished(
 
     match result {
         Ok(_) => {
-            push_notification(state, AppNotificationKind::Info, format!("Pushed '{name}'"));
-            vec![Effect::LoadBranches { repo_id }]
+            push_notification(inputs,
+            state, AppNotificationKind::Info, format!("Pushed '{name}'"));
+            vec![Effect::References(ReferenceEffect::LoadBranches { repo_id })]
         }
         Err(error) => {
             push_notification(
-                state,
+                inputs,
+            state,
                 AppNotificationKind::Error,
                 format!("Could not push '{name}': {error}"),
             );
@@ -717,6 +735,7 @@ mod tests {
                 .into(),
         ));
         workspace_edit_finished(
+            &crate::store::reducer::test_inputs::clock(),
             &mut state,
             RepoId(1),
             WorkspaceEdit::SetApplied {
@@ -745,6 +764,7 @@ mod tests {
                 .into(),
         ));
         workspace_edit_finished(
+            &crate::store::reducer::test_inputs::clock(),
             &mut state,
             RepoId(1),
             WorkspaceEdit::SetApplied {
@@ -775,6 +795,7 @@ mod tests {
 
         // `repo_with_workspace` has api and ui, so `removed` is the odd one out.
         workspace_loaded(
+            &crate::store::reducer::test_inputs::clock(),
             &mut state,
             RepoId(1),
             Ok(WorkspaceState::new("main").with_branches(vec![VirtualBranch::new("api")])),
@@ -799,6 +820,7 @@ mod tests {
         index.set(PathBuf::from("clean.rs"), Some("api".into()));
 
         workspace_loaded(
+            &crate::store::reducer::test_inputs::clock(),
             &mut state,
             RepoId(1),
             Ok(WorkspaceState::new("main").with_branches(vec![VirtualBranch::new("api")])),
@@ -835,7 +857,7 @@ mod tests {
         ));
 
         let effects = super::super::repo_management::set_active_repo(
-            &rustc_hash::FxHashMap::default(),
+            &crate::store::reducer::test_inputs::clock(),
             &mut state,
             RepoId(2),
         );
@@ -865,7 +887,7 @@ mod tests {
         ));
 
         let effects = super::super::repo_management::set_active_repo(
-            &rustc_hash::FxHashMap::default(),
+            &crate::store::reducer::test_inputs::clock(),
             &mut state,
             RepoId(2),
         );
@@ -959,7 +981,8 @@ mod tests {
     fn a_finished_switch_records_where_the_working_directory_is() {
         let mut state = repo_with_workspace();
         state.repos[0].workspace.busy.switching = true;
-        workspace_active_finished(&mut state, RepoId(1), true, Some("main".into()), Ok(()));
+        workspace_active_finished(&crate::store::reducer::test_inputs::clock(),
+            &mut state, RepoId(1), true, Some("main".into()), Ok(()));
 
         let workspace = &state.repos[0].workspace;
         assert!(workspace.active);
@@ -972,7 +995,8 @@ mod tests {
         let mut state = repo_with_workspace();
         state.repos[0].workspace.active = true;
         state.repos[0].workspace.checkout_base = Some("main".into());
-        workspace_active_finished(&mut state, RepoId(1), false, None, Ok(()));
+        workspace_active_finished(&crate::store::reducer::test_inputs::clock(),
+            &mut state, RepoId(1), false, None, Ok(()));
 
         let workspace = &state.repos[0].workspace;
         assert!(!workspace.active);
@@ -990,6 +1014,7 @@ mod tests {
         let mut state = repo_with_workspace();
         state.repos[0].workspace.busy.switching = true;
         let effects = workspace_active_finished(
+            &crate::store::reducer::test_inputs::clock(),
             &mut state,
             RepoId(1),
             true,
@@ -1016,7 +1041,8 @@ mod tests {
         // Entering changes the files and leaving changes which branch HEAD is
         // on, so both ordinary views are now stale.
         let mut state = repo_with_workspace();
-        let effects = workspace_active_finished(&mut state, RepoId(1), true, None, Ok(()));
+        let effects = workspace_active_finished(&crate::store::reducer::test_inputs::clock(),
+            &mut state, RepoId(1), true, None, Ok(()));
         assert_ne!(
             state.repos[0].workspace.rev, 0,
             "the switch has to reach the cached presentation, which only sees this counter"
@@ -1024,12 +1050,12 @@ mod tests {
         assert!(
             effects
                 .iter()
-                .any(|effect| matches!(effect, Effect::LoadWorktreeStatus { repo_id: RepoId(1) }))
+                .any(|effect| matches!(effect, Effect::Status(StatusEffect::LoadWorktreeStatus { repo_id: RepoId(1) })))
         );
         assert!(
             effects
                 .iter()
-                .any(|effect| matches!(effect, Effect::LoadBranches { repo_id: RepoId(1) }))
+                .any(|effect| matches!(effect, Effect::References(ReferenceEffect::LoadBranches { repo_id: RepoId(1) })))
         );
     }
 
@@ -1041,6 +1067,7 @@ mod tests {
         state.repos[0].head_branch =
             Loadable::Ready(gitcomet_core::workspace::WORKSPACE_BRANCH.into());
         workspace_loaded(
+            &crate::store::reducer::test_inputs::clock(),
             &mut state,
             RepoId(1),
             Ok(WorkspaceState::new("main")),
@@ -1079,6 +1106,7 @@ mod tests {
     fn a_finished_assignment_lands_in_the_store_without_a_reload() {
         let mut state = repo_with_workspace();
         workspace_assign_finished(
+            &crate::store::reducer::test_inputs::clock(),
             &mut state,
             RepoId(1),
             PathBuf::from("a.rs"),
@@ -1101,6 +1129,7 @@ mod tests {
     fn a_failed_assignment_reloads_rather_than_guessing() {
         let mut state = repo_with_workspace();
         let effects = workspace_assign_finished(
+            &crate::store::reducer::test_inputs::clock(),
             &mut state,
             RepoId(1),
             PathBuf::from("a.rs"),
@@ -1121,7 +1150,8 @@ mod tests {
     #[test]
     fn committing_an_empty_message_is_refused() {
         let mut state = repo_with_workspace();
-        let effects = commit_branch(&mut state, RepoId(1), "api".into(), "   ".into());
+        let effects = commit_branch(&crate::store::reducer::test_inputs::clock(),
+            &mut state, RepoId(1), "api".into(), "   ".into());
         assert!(effects.is_empty());
         assert!(!state.repos[0].workspace.busy.committing);
     }
@@ -1129,7 +1159,8 @@ mod tests {
     #[test]
     fn committing_a_branch_with_no_assigned_files_is_refused() {
         let mut state = repo_with_workspace();
-        let effects = commit_branch(&mut state, RepoId(1), "api".into(), "Add API".into());
+        let effects = commit_branch(&crate::store::reducer::test_inputs::clock(),
+            &mut state, RepoId(1), "api".into(), "Add API".into());
         assert!(effects.is_empty());
     }
 
@@ -1140,7 +1171,8 @@ mod tests {
         index.set(PathBuf::from("a.rs"), Some("api".into()));
         state.repos[0].workspace.assignments = Arc::new(index);
 
-        let effects = commit_branch(&mut state, RepoId(1), "api".into(), "Add API".into());
+        let effects = commit_branch(&crate::store::reducer::test_inputs::clock(),
+            &mut state, RepoId(1), "api".into(), "Add API".into());
         assert_eq!(effects.len(), 1);
         match &effects[0] {
             Effect::ApplyWorkspaceEdit {
@@ -1160,6 +1192,7 @@ mod tests {
     fn a_failed_edit_records_a_conflict_and_reloads() {
         let mut state = repo_with_workspace();
         let effects = workspace_edit_finished(
+            &crate::store::reducer::test_inputs::clock(),
             &mut state,
             RepoId(1),
             WorkspaceEdit::SetApplied {
@@ -1182,6 +1215,7 @@ mod tests {
         let mut state = repo_with_workspace();
         state.repos[0].workspace.conflict = None;
         let effects = workspace_edit_finished(
+            &crate::store::reducer::test_inputs::clock(),
             &mut state,
             RepoId(1),
             WorkspaceEdit::SetApplied {
@@ -1193,7 +1227,7 @@ mod tests {
         assert!(
             effects
                 .iter()
-                .any(|effect| matches!(effect, Effect::LoadWorktreeStatus { .. }))
+                .any(|effect| matches!(effect, Effect::Status(StatusEffect::LoadWorktreeStatus { .. })))
         );
         assert!(
             effects
@@ -1221,6 +1255,7 @@ mod tests {
     fn a_failed_push_notifies_without_reloading() {
         let mut state = repo_with_workspace();
         let effects = workspace_push_finished(
+            &crate::store::reducer::test_inputs::clock(),
             &mut state,
             RepoId(1),
             "api".into(),
@@ -1255,6 +1290,7 @@ mod tests {
     fn conflict_from(message: &str) -> crate::model::WorkspaceConflict {
         let mut state = repo_with_workspace();
         workspace_edit_finished(
+            &crate::store::reducer::test_inputs::clock(),
             &mut state,
             RepoId(1),
             WorkspaceEdit::SetApplied {
@@ -1332,7 +1368,8 @@ mod tests {
         index.set(PathBuf::from("b.rs"), Some("api".into()));
         state.repos[0].workspace.assignments = Arc::new(index);
 
-        let effects = commit_single_file(&mut state, RepoId(1), PathBuf::from("a.rs"));
+        let effects = commit_single_file(&crate::store::reducer::test_inputs::clock(),
+            &mut state, RepoId(1), PathBuf::from("a.rs"));
         assert_eq!(effects.len(), 1);
         match &effects[0] {
             Effect::ApplyWorkspaceEdit {
@@ -1365,7 +1402,8 @@ mod tests {
     #[test]
     fn committing_a_file_that_is_on_no_branch_says_so_instead_of_committing_it_anywhere() {
         let mut state = repo_with_workspace();
-        let effects = commit_single_file(&mut state, RepoId(1), PathBuf::from("a.rs"));
+        let effects = commit_single_file(&crate::store::reducer::test_inputs::clock(),
+            &mut state, RepoId(1), PathBuf::from("a.rs"));
 
         assert!(effects.is_empty(), "there is nowhere for it to go");
         assert_eq!(state.notifications.len(), 1);
@@ -1396,7 +1434,8 @@ mod tests {
         );
         state.repos[0].workspace.assignments = Arc::new(index);
 
-        let effects = commit_single_file(&mut state, RepoId(1), PathBuf::from("a.rs"));
+        let effects = commit_single_file(&crate::store::reducer::test_inputs::clock(),
+            &mut state, RepoId(1), PathBuf::from("a.rs"));
 
         assert!(
             effects.is_empty(),
@@ -1414,7 +1453,8 @@ mod tests {
         index.set(PathBuf::from("a.rs"), Some("vanished".into()));
         state.repos[0].workspace.assignments = Arc::new(index);
 
-        let effects = commit_single_file(&mut state, RepoId(1), PathBuf::from("a.rs"));
+        let effects = commit_single_file(&crate::store::reducer::test_inputs::clock(),
+            &mut state, RepoId(1), PathBuf::from("a.rs"));
 
         assert!(effects.is_empty());
         assert_eq!(state.notifications.len(), 1);
@@ -1430,7 +1470,8 @@ mod tests {
         state.repos[0].workspace.assignments = Arc::new(index);
         state.repos[0].workspace.busy.mutating = true;
 
-        let effects = commit_single_file(&mut state, RepoId(1), PathBuf::from("a.rs"));
+        let effects = commit_single_file(&crate::store::reducer::test_inputs::clock(),
+            &mut state, RepoId(1), PathBuf::from("a.rs"));
 
         assert!(effects.is_empty());
         assert!(

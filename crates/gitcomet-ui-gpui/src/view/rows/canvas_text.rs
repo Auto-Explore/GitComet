@@ -85,7 +85,7 @@ pub(super) fn shaped_gutter_line(
         run.color = color.into_color();
         let shaped = window
             .text_system()
-            .shape_line(text.clone(), metrics.font_size, &[run], None);
+            .shape_line(text.clone(), metrics.font_size, &[run]);
 
         cache.borrow_mut().put(key, shaped.clone());
 
@@ -139,13 +139,13 @@ pub(super) fn paint_gutter_divider(
     window: &mut Window,
 ) {
     let x = gutter_bounds.left() + pad + line_no_width;
-    window.paint_quad(fill(
-        Bounds::new(
+    window.paint_quad(
+        PaintQuad::new(Bounds::new(
             point(x, gutter_bounds.top()),
             size(px(1.0), gutter_bounds.size.height),
-        ),
-        color,
-    ));
+        ))
+        .background(color),
+    );
 }
 
 pub(super) fn compute_runs(

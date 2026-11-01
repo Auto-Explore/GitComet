@@ -162,7 +162,8 @@ fn begin_log_for_test(store: &AppStore, repo_id: RepoId) -> gitcomet_state::mode
     let seq = repo
         .loads_in_flight
         .request_log(gitcomet_state::model::PendingLogLoad {
-            scope: repo.history_state.history_scope,
+            focus: Default::default(),
+            walk: repo.history_state.history_scope.into(),
             author: None,
             limit: 200,
             cursor: None,
@@ -290,18 +291,21 @@ fn listed_worktree_paths_by_branch_includes_closed_worktrees() {
     );
     repo.worktrees = Loadable::Ready(Arc::new(vec![
         Worktree {
+            bare: false,
             path: std::path::PathBuf::from("/tmp/repo"),
             head: None,
             branch: Some("main".to_string()),
             detached: false,
         },
         Worktree {
+            bare: false,
             path: std::path::PathBuf::from("/tmp/repo-feature"),
             head: None,
             branch: Some("feature".to_string()),
             detached: false,
         },
         Worktree {
+            bare: false,
             path: std::path::PathBuf::from("/tmp/repo-detached"),
             head: None,
             branch: None,
@@ -320,6 +324,50 @@ fn listed_worktree_paths_by_branch_includes_closed_worktrees() {
 }
 
 #[test]
+fn bare_head_is_not_a_checked_out_branch_and_linked_checkouts_remain_listed() {
+    let mut repo = RepoState::new_opening(
+        RepoId(1),
+        RepoSpec {
+            workdir: "/tmp/bare-branch-lookup".into(),
+        },
+    );
+    repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::Bare);
+    repo.head_branch = Loadable::Ready("main".into());
+    repo.worktrees = Loadable::Ready(Arc::new(vec![
+        Worktree {
+            bare: true,
+            path: repo.spec.workdir.clone(),
+            head: None,
+            branch: Some("main".into()),
+            detached: false,
+        },
+        Worktree {
+            bare: false,
+            path: "/tmp/linked-branch-lookup".into(),
+            head: None,
+            branch: Some("topic".into()),
+            detached: false,
+        },
+    ]));
+    assert_eq!(branch_checked_out_at(&repo, "main"), None);
+    assert!(active_worktree_paths_by_branch(&repo, &[repo.clone()]).is_empty());
+    assert_eq!(
+        branch_checked_out_at(&repo, "topic"),
+        Some("/tmp/linked-branch-lookup".into())
+    );
+    assert_eq!(listed_worktree_paths_by_branch(&repo).len(), 1);
+    let mut linked = RepoState::new_opening(
+        RepoId(2),
+        RepoSpec {
+            workdir: "/tmp/linked-branch-lookup".into(),
+        },
+    );
+    linked.worktrees = repo.worktrees.clone();
+    assert_eq!(branch_held_elsewhere(&linked, "main"), None);
+    assert!(listed_worktree_paths_by_branch(&linked).is_empty());
+}
+
+#[test]
 fn listed_worktree_paths_by_branch_prefers_first_branch_match() {
     let mut repo = RepoState::new_opening(
         RepoId(1),
@@ -329,12 +377,14 @@ fn listed_worktree_paths_by_branch_prefers_first_branch_match() {
     );
     repo.worktrees = Loadable::Ready(Arc::new(vec![
         Worktree {
+            bare: false,
             path: std::path::PathBuf::from("/tmp/repo-feature-a"),
             head: None,
             branch: Some("feature/shared".to_string()),
             detached: false,
         },
         Worktree {
+            bare: false,
             path: std::path::PathBuf::from("/tmp/repo-feature-b"),
             head: None,
             branch: Some("feature/shared".to_string()),
@@ -420,18 +470,21 @@ fn active_worktree_paths_by_branch_only_includes_open_worktrees() {
     );
     repo.worktrees = Loadable::Ready(Arc::new(vec![
         Worktree {
+            bare: false,
             path: std::path::PathBuf::from("/tmp/repo"),
             head: None,
             branch: Some("main".to_string()),
             detached: false,
         },
         Worktree {
+            bare: false,
             path: std::path::PathBuf::from("/tmp/repo-feature"),
             head: None,
             branch: Some("feature".to_string()),
             detached: false,
         },
         Worktree {
+            bare: false,
             path: std::path::PathBuf::from("/tmp/repo-detached"),
             head: None,
             branch: None,
@@ -476,6 +529,7 @@ fn active_worktree_paths_by_branch_skips_closed_worktrees() {
         },
     );
     repo.worktrees = Loadable::Ready(Arc::new(vec![Worktree {
+        bare: false,
         path: std::path::PathBuf::from("/tmp/repo-feature"),
         head: None,
         branch: Some("feature".to_string()),
@@ -496,6 +550,7 @@ fn active_worktree_paths_by_branch_uses_open_repo_head_branch_for_live_updates()
         },
     );
     repo.worktrees = Loadable::Ready(Arc::new(vec![Worktree {
+        bare: false,
         path: std::path::PathBuf::from("/tmp/repo-feature"),
         head: None,
         branch: Some("feature/old".to_string()),
@@ -529,6 +584,7 @@ fn active_worktree_paths_by_branch_falls_back_to_listed_branch_while_head_is_loa
         },
     );
     repo.worktrees = Loadable::Ready(Arc::new(vec![Worktree {
+        bare: false,
         path: std::path::PathBuf::from("/tmp/repo-feature"),
         head: None,
         branch: Some("feature/listed".to_string()),
@@ -559,6 +615,7 @@ fn active_worktree_paths_by_branch_hides_detached_open_worktrees() {
         },
     );
     repo.worktrees = Loadable::Ready(Arc::new(vec![Worktree {
+        bare: false,
         path: std::path::PathBuf::from("/tmp/repo-feature"),
         head: None,
         branch: Some("feature/old".to_string()),
@@ -590,12 +647,14 @@ fn active_worktree_paths_by_branch_keeps_first_listed_worktree_for_branch() {
     );
     repo.worktrees = Loadable::Ready(Arc::new(vec![
         Worktree {
+            bare: false,
             path: std::path::PathBuf::from("/tmp/repo-feature-a"),
             head: None,
             branch: Some("feature/shared".to_string()),
             detached: false,
         },
         Worktree {
+            bare: false,
             path: std::path::PathBuf::from("/tmp/repo-feature-b"),
             head: None,
             branch: Some("feature/shared".to_string()),
@@ -724,6 +783,7 @@ fn active_worktree_paths_matches_open_repo_by_workdir_path() {
         },
     );
     repo.worktrees = Loadable::Ready(Arc::new(vec![Worktree {
+        bare: false,
         path: std::path::PathBuf::from("/tmp/repo-feature"),
         head: None,
         branch: Some("feature/listed".to_string()),
@@ -973,7 +1033,6 @@ fn branch_click_history_reveal_target_preserves_a_slash_remote_identity() {
 
 #[gpui::test]
 fn branch_badges_are_static_and_worktree_badge_remains_interactive(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     // OpenRepo normalizes paths. Give it and the worktree list the same
     // native absolute paths, including on Windows and symlinked temp dirs.
     let worktrees_dir = tempfile::tempdir().expect("worktree fixture directory");
@@ -1045,20 +1104,23 @@ fn branch_badges_are_static_and_worktree_badge_remains_interactive(cx: &mut gpui
     }));
     store_for_assert.dispatch(Msg::Internal(InternalMsg::WorktreesLoaded {
         repo_id,
-        result: Ok(vec![
+        read: gitcomet_state::msg::WorktreeListRead::observation_for_test(),
+        result: Ok(std::sync::Arc::new(vec![
             Worktree {
+                bare: false,
                 path: repo_path,
                 head: None,
                 branch: Some("main".to_string()),
                 detached: false,
             },
             Worktree {
+                bare: false,
                 path: feature_path.clone(),
                 head: None,
                 branch: Some("feature".to_string()),
                 detached: false,
             },
-        ]),
+        ])),
     }));
     wait_until(cx, "sidebar badges loaded", |_cx| {
         let snapshot = store_for_assert.snapshot();
@@ -1380,7 +1442,6 @@ fn branch_badges_are_static_and_worktree_badge_remains_interactive(cx: &mut gpui
 
 #[gpui::test]
 fn branch_reveal_marks_the_branch_chip_on_the_revealed_history_row(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(BlockingBackend));
     let store_for_assert = store.clone();
     let (view, cx) =
@@ -1482,7 +1543,6 @@ fn branch_reveal_marks_the_branch_chip_on_the_revealed_history_row(cx: &mut gpui
 
 #[gpui::test]
 fn branch_reveal_routes_through_main_pane_and_selects_commit(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(BlockingBackend));
     let store_for_assert = store.clone();
     let (view, cx) =
@@ -1556,14 +1616,14 @@ fn branch_reveal_routes_through_main_pane_and_selects_commit(cx: &mut gpui::Test
     wait_until(cx, "history view active repo", |cx| {
         sync_view_for_tests(cx, &view);
         cx.update(|_window, app| {
-            let (sidebar_pane, main_pane) = {
+            let (sidebar_pane, diff_renderer) = {
                 let root = view.read(app);
-                (root.sidebar_pane.clone(), root.main_pane.clone())
+                (root.sidebar_pane.clone(), root.diff_renderer.clone())
             };
-            let history_view = main_pane.read(app).history_view.clone();
+            let history_view = view.read(app).main_pane.read(app).history_view.clone();
 
             sidebar_pane.read(app).active_repo_id() == Some(repo_id)
-                && main_pane.read(app).active_repo_id() == Some(repo_id)
+                && diff_renderer.read(app).active_repo_id() == Some(repo_id)
                 && history_view.read(app).active_repo_id() == Some(repo_id)
         })
     });
@@ -1598,7 +1658,6 @@ fn branch_reveal_routes_through_main_pane_and_selects_commit(cx: &mut gpui::Test
 fn branch_reveal_closes_open_history_refs_hover_without_reentrant_root_update(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(BlockingBackend));
     let store_for_assert = store.clone();
     let (view, cx) =
@@ -1688,7 +1747,6 @@ fn branch_reveal_closes_open_history_refs_hover_without_reentrant_root_update(
                 history_row_bounds,
                 hover_items.clone(),
                 history_row_bounds.center(),
-                window,
                 cx,
             );
         });

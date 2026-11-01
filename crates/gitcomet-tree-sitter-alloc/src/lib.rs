@@ -106,7 +106,7 @@ fn install_before_main() {
 /// a block allocated before that switch would later be freed through `mi_free`
 /// -- a foreign pointer, which corrupts the heap.
 ///
-/// That rule is not left to callers to remember. [`install_before_main`] runs it
+/// That rule is not left to callers to remember. `install_before_main` runs it
 /// from a `#[ctor]`, so in any binary linking this crate the switch happens
 /// while the process is still single-threaded and has executed no user code at
 /// all. `gitcomet-ui-gpui` additionally calls this from the lazy initialisers

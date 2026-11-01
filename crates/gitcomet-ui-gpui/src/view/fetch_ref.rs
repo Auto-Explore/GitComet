@@ -49,6 +49,9 @@ impl FetchRefPrompt {
 
 impl Render for FetchRefPrompt {
     fn render(&mut self, _window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
+        if let Some(root) = self.root.upgrade() {
+            self.theme = root.read(cx).theme;
+        }
         div().flex().flex_col().gap_2()
             .child("Remote")
             .child(self.remote.clone())
@@ -98,7 +101,6 @@ impl GitCometView {
                     )
                 });
                 remote.update(cx, |input, cx| {
-                    input.set_theme(theme, cx);
                     input.set_text(default_remote, cx);
                 });
                 let refspec = cx.new(|cx| {
@@ -111,7 +113,6 @@ impl GitCometView {
                         cx,
                     )
                 });
-                refspec.update(cx, |input, cx| input.set_theme(theme, cx));
                 window.focus(&refspec.read(cx).focus_handle(), cx);
                 cx.new(|_| FetchRefPrompt {
                     root,

@@ -1,8 +1,8 @@
 use crate::model::GitLogTagFetchMode;
 use crate::model::{
     BranchExistsPromptState, ConflictFileLoadMode, DefaultTagType, FileBrowserSettings,
-    GitOperationOuterOutcome, MaintenanceSettings, RemoteSettings, RepoId, SidebarDataRequest,
-    SidebarMode, WorkspaceEdit,
+    ForceDeleteBranchPrompt, ForceRemoveWorktreePrompt, GitOperationOuterOutcome,
+    MaintenanceSettings, RemoteSettings, RepoId, SidebarDataRequest, SidebarMode, WorkspaceEdit,
 };
 use gitcomet_core::auth::StagedGitAuth;
 use gitcomet_core::conflict_session::ConflictSession;
@@ -16,7 +16,7 @@ use gitcomet_core::services::{
     CheckoutRemoteBranchMode, CommandOutput, CommitOperationOutcome, ConflictSide, ForcePushLease,
     InteractiveRebaseEntry, PullMode, RemoteUrlKind, ResetMode, SafePushAfterCommitContext,
     SafePushAfterCommitDecision, SafePushAfterCommitTarget, SequencerState, SubmoduleTrustDecision,
-    SubmoduleTrustTarget,
+    SubmoduleTrustTarget, WorktreeCheckout,
 };
 use gitcomet_core::signing_tools::SigningToolsState;
 use std::path::PathBuf;
@@ -26,6 +26,40 @@ use std::time::{Duration, SystemTime};
 use super::repo_command_kind::RepoCommandKind;
 use super::repo_external_change::RepoExternalChange;
 use super::{RepoPath, RepoPathList};
+
+/// Orders worktree lists read by the explicit loader and the dirty scanner.
+/// Construct immediately before reading, inside the worker, so queue delays
+/// do not give an older snapshot precedence over a newer one.
+#[derive(Clone, Copy, Debug)]
+pub struct WorktreeListRead {
+    pub(crate) seq: u64,
+    pub(crate) completes_load: bool,
+}
+
+impl WorktreeListRead {
+    pub(crate) fn explicit() -> Self {
+        Self::start(true)
+    }
+
+    /// Inject a test observation without completing a real loader's request.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn observation_for_test() -> Self {
+        Self::from_dirty_scan()
+    }
+
+    pub(crate) fn from_dirty_scan() -> Self {
+        Self::start(false)
+    }
+
+    fn start(completes_load: bool) -> Self {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static NEXT_READ: AtomicU64 = AtomicU64::new(1);
+        Self {
+            seq: NEXT_READ.fetch_add(1, Ordering::Relaxed),
+            completes_load,
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RepoActionKind {
@@ -59,6 +93,47 @@ pub enum BranchExistsChoice {
 }
 
 impl RepoActionKind {
+    pub(crate) fn changes_tracking(self) -> bool {
+        matches!(
+            self,
+            Self::CheckoutBranch
+                | Self::CheckoutRemoteBranch
+                | Self::CheckoutCommit
+                | Self::CherryPickCommit
+                | Self::CreateBranch
+                | Self::CreateBranchAndCheckout
+                | Self::RenameBranch
+                | Self::DeleteBranch
+                | Self::ForceDeleteBranch
+                | Self::DeleteBranches
+        )
+    }
+
+    pub fn repository_requirement(self) -> RepositoryRequirement {
+        match self {
+            Self::CreateBranch
+            | Self::RenameBranch
+            | Self::DeleteBranch
+            | Self::ForceDeleteBranch
+            | Self::DeleteBranches => RepositoryRequirement::Repository,
+            Self::CheckoutBranch
+            | Self::CheckoutRemoteBranch
+            | Self::CheckoutCommit
+            | Self::CherryPickCommit
+            | Self::CreateBranchAndCheckout
+            | Self::StagePath
+            | Self::StagePaths
+            | Self::UnstagePath
+            | Self::UnstagePaths
+            | Self::DiscardWorktreeChangesPath
+            | Self::DiscardWorktreeChangesPaths
+            | Self::Stash
+            | Self::ApplyStash
+            | Self::PopStash
+            | Self::DropStash => RepositoryRequirement::WorkingTree,
+        }
+    }
+
     pub(crate) fn status_diff_area(self) -> Option<DiffArea> {
         match self {
             Self::StagePath | Self::StagePaths => Some(DiffArea::Unstaged),
@@ -185,20 +260,14 @@ pub struct ConflictRegionResolutionUpdate {
     pub resolution: gitcomet_core::conflict_session::ConflictRegionResolution,
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub struct ConflictAutosolveStats {
-    pub pass1: usize,
-    pub pass2_split: usize,
-    pub pass1_after_split: usize,
-    pub regex: usize,
-    pub history: usize,
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum WorktreeSaveBaseline {
+    DeriveFromLoadedConflict,
+    Absent,
+    Present(Arc<[u8]>),
 }
 
-impl ConflictAutosolveStats {
-    pub fn total_resolved(self) -> usize {
-        self.pass1 + self.pass2_split + self.pass1_after_split + self.regex + self.history
-    }
-}
+pub use gitcomet_core::conflict_session::ConflictAutosolveStats;
 
 /// Why the file-system watcher is in a degraded state (carried by [`Msg::RepoWatchDegraded`]).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -251,10 +320,11 @@ pub enum Msg {
         repo_id: RepoId,
         visible: Vec<PathBuf>,
     },
+    /// Only supplied flags change; omitted flags retain their current values.
     SetExplorerVisibility {
         repo_id: RepoId,
-        hidden: bool,
-        ignored: bool,
+        hidden: Option<bool>,
+        ignored: Option<bool>,
     },
     IndexedHistory(crate::indexed_history::IndexedHistoryMsg),
     DiffSession(crate::diff_session::DiffSessionMsg),
@@ -269,6 +339,21 @@ pub enum Msg {
     /// newer failures that arrived while the acknowledgement was queued.
     AcknowledgeRepoOpenFailures {
         through_revision: u64,
+    },
+    /// Release notifications the window has shown, retaining any pushed after
+    /// `through_seq` while the acknowledgement was queued. The store worker
+    /// applies it with its next state change rather than publishing for it.
+    AcknowledgeNotifications {
+        through_seq: u64,
+    },
+    /// Release the diagnostics and command results the window has shown for
+    /// this repository lifetime, retaining any appended after them. Applied
+    /// with the store's next state change, like `AcknowledgeNotifications`.
+    AcknowledgeRepoFeedback {
+        repo_id: RepoId,
+        lifetime: u64,
+        diagnostics_through_seq: u64,
+        command_log_through_seq: u64,
     },
     RestoreSession {
         open_repos: Vec<PathBuf>,
@@ -301,6 +386,7 @@ pub enum Msg {
         operation_id: GitOperationId,
     },
     SubmitAuthPrompt {
+        generation: u64,
         username: Option<String>,
         secret: String,
     },
@@ -323,6 +409,8 @@ pub enum Msg {
     SetMaintenanceSettings(MaintenanceSettings),
     SetFileBrowserSettings(FileBrowserSettings),
     SetLargeFileSettings(crate::model::LargeFileSettings),
+    /// The resolved hidden-refs setting; every all-branches walk leaves these out.
+    SetHistoryHiddenRefs(gitcomet_core::services::HistoryRefFilter),
     SetDefaultTagType(DefaultTagType),
     SetActiveRepo {
         repo_id: RepoId,
@@ -332,6 +420,16 @@ pub enum Msg {
         insert_before: Option<RepoId>,
     },
     ReloadRepo {
+        repo_id: RepoId,
+    },
+    PreviewDisableBareMode {
+        repo_id: RepoId,
+    },
+    DisableBareMode {
+        repo_id: RepoId,
+        preview: Arc<BareConversionPreview>,
+    },
+    ClearBareConversionPreview {
         repo_id: RepoId,
     },
     RepoActivated {
@@ -371,6 +469,11 @@ pub enum Msg {
         repo_id: RepoId,
         reason: RepoWatchDegradedReason,
     },
+    UpdateRepositoryPreference {
+        repo_id: RepoId,
+        update: crate::model::RepositoryPreferenceUpdate,
+    },
+    ApplyRepositoryPreferences(crate::model::RepositoryPreferencesSnapshot),
     SetHistoryScope {
         repo_id: RepoId,
         scope: LogScope,
@@ -380,6 +483,26 @@ pub enum Msg {
     SetHistoryAuthorFilter {
         repo_id: RepoId,
         author: Option<String>,
+    },
+    /// Focuses the history on a set of refs: the walk is reseeded from them, so
+    /// only the commits they reach remain. An empty set clears the focus.
+    SetHistoryFocus {
+        repo_id: RepoId,
+        focus: HistoryFocusSet,
+    },
+    /// Focuses `target`, or unfocuses it when the focus already covers it. The
+    /// per-ref menu entry and the sidebar's eye are toggles, and this is what
+    /// they send.
+    ToggleHistoryFocus {
+        repo_id: RepoId,
+        target: HistoryFocus,
+    },
+    /// Focuses every one of `targets`, or unfocuses every one of them. A branch
+    /// group's menu entries and eye send this with the group's members.
+    FocusHistoryRefs {
+        repo_id: RepoId,
+        targets: Vec<HistoryFocus>,
+        focused: bool,
     },
     LoadMoreHistory {
         repo_id: RepoId,
@@ -682,6 +805,14 @@ pub enum Msg {
         repo_id: RepoId,
         patch: ContentBytes,
     },
+    ApplyPreparedDiffPatch {
+        repo_id: RepoId,
+        lifetime: u64,
+        view: Option<crate::diff_session::DiffViewId>,
+        file_rev: u64,
+        generation: u64,
+        prepared: std::sync::Arc<gitcomet_core::patch_action::PreparedDiffPatch>,
+    },
     UnstageHunk {
         repo_id: RepoId,
         patch: ContentBytes,
@@ -747,6 +878,9 @@ pub enum Msg {
     ShowBranchExistsPrompt {
         prompt: BranchExistsPromptState,
     },
+    DismissForceDeleteBranchPrompt {
+        prompt: ForceDeleteBranchPrompt,
+    },
     RenameBranch {
         repo_id: RepoId,
         old_name: String,
@@ -792,15 +926,23 @@ pub enum Msg {
     AddWorktree {
         repo_id: RepoId,
         path: PathBuf,
-        reference: Option<String>,
+        checkout: WorktreeCheckout,
+        /// Open the new worktree in a tab once git has created it.
+        open_after: bool,
     },
     RemoveWorktree {
         repo_id: RepoId,
         path: PathBuf,
+        /// The local branch to delete once the worktree is gone.
+        delete_branch: Option<String>,
     },
     ForceRemoveWorktree {
         repo_id: RepoId,
         path: PathBuf,
+        delete_branch: Option<String>,
+    },
+    DismissForceRemoveWorktreePrompt {
+        prompt: ForceRemoveWorktreePrompt,
     },
     AddSubmodule {
         repo_id: RepoId,
@@ -874,8 +1016,7 @@ pub enum Msg {
         repo_id: RepoId,
         path: PathBuf,
         contents: ContentBytes,
-        /// Contents read by the caller, or `None` to use the loaded conflict baseline.
-        expected_contents: Option<Arc<[u8]>>,
+        expected_contents: WorktreeSaveBaseline,
         stage: bool,
         /// Reports whether this exact write succeeded. A closed channel also
         /// means failure; callers must not infer success from an idle queue.
@@ -1027,6 +1168,23 @@ pub enum Msg {
         message: String,
         count: usize,
     },
+    /// Replaces the message of `commit_id`: HEAD, or a commit on HEAD's
+    /// linear first-parent history. The backend re-validates the target.
+    RewordCommit {
+        repo_id: RepoId,
+        request_id: crate::model::RewordRequestId,
+        commit_id: CommitId,
+        message: String,
+    },
+    ContinueRewordCommit {
+        repo_id: RepoId,
+        request_id: crate::model::RewordRequestId,
+    },
+    /// Releases the editor's acknowledgment; does not cancel Git work.
+    DismissRewordCommit {
+        repo_id: RepoId,
+        request_id: crate::model::RewordRequestId,
+    },
     Rebase {
         repo_id: RepoId,
         onto: String,
@@ -1150,6 +1308,7 @@ pub enum Msg {
     ConflictToggleRegionSource {
         repo_id: RepoId,
         path: RepoPath,
+        origin: Arc<super::ConflictRegionOrigin>,
         region_index: usize,
         source: gitcomet_core::merge::MergeSource,
     },
@@ -1157,6 +1316,7 @@ pub enum Msg {
     ConflictReplaceRegionSelection {
         repo_id: RepoId,
         path: RepoPath,
+        origin: Arc<super::ConflictRegionOrigin>,
         region_index: usize,
         selection: gitcomet_core::merge::OrderedSelection,
     },
@@ -1166,6 +1326,7 @@ pub enum Msg {
     ConflictTogglePlanBlockSource {
         repo_id: RepoId,
         path: RepoPath,
+        origin: Arc<super::ConflictPlanOrigin>,
         block_id: gitcomet_core::merge::MergeBlockId,
         source: gitcomet_core::merge::MergeSource,
     },
@@ -1173,12 +1334,14 @@ pub enum Msg {
     ConflictReplacePlanBlockSelection {
         repo_id: RepoId,
         path: RepoPath,
+        origin: Arc<super::ConflictPlanOrigin>,
         block_id: gitcomet_core::merge::MergeBlockId,
         selection: gitcomet_core::merge::OrderedSelection,
     },
     ConflictSyncRegionResolutions {
         repo_id: RepoId,
         path: RepoPath,
+        origin: Arc<super::ConflictRegionOrigin>,
         updates: Vec<ConflictRegionResolutionUpdate>,
     },
     ConflictApplyAutosolve {
@@ -1288,6 +1451,40 @@ pub enum Msg {
 
 #[derive(strum::IntoStaticStr)]
 pub enum InternalMsg {
+    AutoFetchUpdated {
+        repo_id: RepoId,
+        lifetime: crate::model::RepoLifetime,
+        revision: u64,
+        snapshot: crate::model::RepoAutoFetchState,
+        result:
+            Option<Arc<gitcomet_core::services::Result<gitcomet_core::services::CommandOutput>>>,
+    },
+    AutoFetchRefresh {
+        repo_id: RepoId,
+        lifetime: crate::model::RepoLifetime,
+    },
+    QuiesceRepository {
+        common_dir: PathBuf,
+        cancellation: gitcomet_core::services::CancellationToken,
+        reply: std::sync::mpsc::Sender<()>,
+    },
+    RepositoryModeLoaded {
+        repo_id: RepoId,
+        result: Result<(RepositoryMode, Option<CommitId>), Error>,
+    },
+    BareConversionPreviewLoaded {
+        repo_id: RepoId,
+        result: Result<BareConversionPreview, Error>,
+    },
+    BareModeDisabled {
+        common_dir: PathBuf,
+        result: Result<BareModeDisabled, Error>,
+    },
+    AuthPromptValidated {
+        generation: u64,
+        result: gitcomet_core::auth::PassphraseValidation,
+        auth: StagedGitAuth,
+    },
     TagPushPreviewLoaded {
         repo_id: RepoId,
         mode: gitcomet_core::tag_push::TagPushMode,
@@ -1333,10 +1530,13 @@ pub enum InternalMsg {
     },
     RepoLoadFinished {
         repo_id: RepoId,
-        load_epoch: u64,
+        load_epoch: crate::model::RepoLoadEpoch,
         message: Box<InternalMsg>,
     },
     RepoOpenedOk {
+        repository_mode: RepositoryMode,
+        head_commit: Option<CommitId>,
+        preferences: Option<crate::model::RepositoryPreferencesSnapshot>,
         repo_id: RepoId,
         spec: RepoSpec,
         repo: Arc<dyn GitRepository>,
@@ -1388,6 +1588,10 @@ pub enum InternalMsg {
     UpstreamDivergenceLoaded {
         repo_id: RepoId,
         result: Result<Option<UpstreamDivergence>, Error>,
+    },
+    HeadTrackingLoaded {
+        repo_id: RepoId,
+        result: Result<gitcomet_core::domain::HeadTracking, Error>,
     },
     LogLoaded {
         repo_id: RepoId,
@@ -1466,6 +1670,7 @@ pub enum InternalMsg {
         result: Result<String, Error>,
     },
     FileHistoryLoaded {
+        request: crate::model::FileHistoryRequestId,
         repo_id: RepoId,
         path: PathBuf,
         /// The cursor the page was requested with: `None` for the first page,
@@ -1480,6 +1685,7 @@ pub enum InternalMsg {
         result: Result<Vec<gitcomet_core::services::BlameLine>, Error>,
     },
     ConflictFileLoaded {
+        request: crate::model::ConflictLoadRequestId,
         repo_id: RepoId,
         path: PathBuf,
         result: Box<Result<Option<crate::model::ConflictFile>, Error>>,
@@ -1487,10 +1693,12 @@ pub enum InternalMsg {
     },
     WorktreesLoaded {
         repo_id: RepoId,
-        result: Result<Vec<Worktree>, Error>,
+        read: WorktreeListRead,
+        result: Result<Arc<Vec<Worktree>>, Error>,
     },
     WorktreeDirtyLoaded {
         repo_id: RepoId,
+        scope: crate::model::WorktreeDirtyScope,
         result: Result<Vec<WorktreeDirtySummary>, Error>,
     },
     RefMetadataLoaded {
@@ -1660,6 +1868,11 @@ pub enum InternalMsg {
     BranchAlreadyExists {
         action: RepoActionKind,
         prompt: BranchExistsPromptState,
+    },
+    /// `git branch -d` refused `name` because it is not fully merged.
+    BranchNotFullyMerged {
+        repo_id: RepoId,
+        name: String,
     },
     /// The action was carried out in (or redirected to) another worktree that
     /// has the branch checked out; on success that worktree is opened.

@@ -54,10 +54,8 @@ impl PopoverHost {
                 self.branch_picker_selected_index = None;
                 if let Some(input) = &self.branch_picker_search_input {
                     let target = self.create_branch_source_target.clone();
-                    let theme = self.theme;
                     input.update(cx, |input, cx| {
                         input.clear_transient_key_presses();
-                        input.set_theme(theme, cx);
                         input.set_text(target, cx);
                         cx.notify();
                     });
@@ -71,10 +69,8 @@ impl PopoverHost {
                 self.branch_picker_selected_index = None;
                 if let Some(input) = &self.branch_picker_search_input {
                     let target = self.worktree_ref_source_target.clone();
-                    let theme = self.theme;
                     input.update(cx, |input, cx| {
                         input.clear_transient_key_presses();
-                        input.set_theme(theme, cx);
                         input.set_text(target, cx);
                         cx.notify();
                     });
@@ -98,10 +94,8 @@ impl PopoverHost {
             Some(PopoverKind::CreateBranchFromRefPrompt { .. }) => {
                 self.create_branch_source_target = name;
                 if let Some(input) = &self.branch_picker_search_input {
-                    let theme = self.theme;
                     input.update(cx, |input, cx| {
                         input.clear_transient_key_presses();
-                        input.set_theme(theme, cx);
                         input.set_text(self.create_branch_source_target.clone(), cx);
                         cx.notify();
                     });
@@ -127,10 +121,8 @@ impl PopoverHost {
             }) => {
                 self.worktree_ref_source_target = name;
                 if let Some(input) = &self.branch_picker_search_input {
-                    let theme = self.theme;
                     input.update(cx, |input, cx| {
                         input.clear_transient_key_presses();
-                        input.set_theme(theme, cx);
                         input.set_text(self.worktree_ref_source_target.clone(), cx);
                         cx.notify();
                     });
@@ -168,9 +160,11 @@ impl PopoverHost {
                 purpose: BranchPickerPurpose::Delete,
             }) => {
                 let is_centered = matches!(self.popover_anchor, Some(PopoverAnchor::Centered));
-                let _ = self.root_view.update(cx, |root, _| {
-                    root.pending_force_delete_branch_centered = is_centered;
-                });
+                self.root_view.request(
+                    RootRequest::SetForceDeleteBranchCentered(is_centered),
+                    None,
+                    cx,
+                );
                 self.store.dispatch(Msg::DeleteBranch { repo_id, name });
                 self.close_popover(cx);
             }
@@ -211,7 +205,16 @@ impl PopoverHost {
         &self,
         cx: &mut gpui::Context<Self>,
     ) -> bool {
-        self.create_branch_prompt_repo_and_target().is_some()
+        self.create_branch_prompt_repo_and_target()
+            .is_some_and(|(repo_id, _)| {
+                !self.create_branch_checkout_enabled
+                    || !self
+                        .state
+                        .repos
+                        .iter()
+                        .find(|repo| repo.id == repo_id)
+                        .is_some_and(RepoState::is_bare)
+            })
             && self
                 .create_branch_input
                 .read_with(cx, |input, _| is_submittable_branch_name(input.text()))
@@ -245,6 +248,9 @@ impl PopoverHost {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
+        if !self.can_submit_create_branch(cx) {
+            return;
+        }
         let Some((repo_id, target)) = self.create_branch_prompt_repo_and_target() else {
             return;
         };
@@ -415,7 +421,7 @@ impl PopoverHost {
             local_branch,
             mode,
         });
-        self.main_pane.update(cx, |pane, cx| {
+        self.diff_renderer.update(cx, |pane, cx| {
             pane.rebuild_diff_cache(cx);
             cx.notify();
         });

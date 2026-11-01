@@ -89,6 +89,64 @@ buffers remain available above recent documents even after history removal or
 eviction. A multiple-file drop records every successful file and displays the
 first one; later background replies cannot steal focus after another navigation.
 
+## Image previews
+
+Image files, image diffs, and image conflict previews support zoom and pan.
+The bottom bar provides Fit, Actual size, zoom steps from 1% to 6400%, and sampling
+controls. At 100%, one original image pixel occupies one physical screen pixel,
+independently of the application's UI scale. Drag or scroll to pan; hold Ctrl or
+Cmd while scrolling to zoom around the pointer. Double-click to fit.
+
+Auto uses the selected smooth filter below 300% and nearest neighbor at 300%
+and above. Smooth always uses Spline36, Robidoux, or Hann; Pixels always uses
+nearest neighbor. At 100%, all modes preserve original pixels. The default is
+Auto with Spline36. Sampling choices are shared across windows and repositories
+and survive restart. SVG previews remain vector-rendered and have no raster
+sampling selector. ICO files do not enlarge automatically in Fit mode.
+
+SVG text uses system and bundled fonts. Filtered SVGs render as a whole before
+tiling so shadows and offsets cross tile boundaries correctly. If that render
+would exceed the 16 MiB raster limit, the bounded preview remains visible with
+a detail-unavailable message; zooming out restores detailed rendering.
+
+Comparison panes share zoom and pan by default, with their top-left source
+coordinates aligned. Click Linked zoom & pan to inspect each pane independently:
+each image gets its own zoom percentage, zoom menu, Fit, and Actual size controls
+beneath it. Actual size sets zoom to 100%; Fit sizes the image to its pane.
+Linking again uses the last image you adjusted. Opening another file resets to
+Fit and Linked zoom & pan.
+For animated GIF and WebP files, Pause to inspect freezes the displayed frame
+and loads its original pixels; Resume returns to the bounded animation preview.
+With reduced motion turned on, animations stay on one frame at full detail and
+have no Pause control.
+If the visible image exceeds the 64 MiB tile cache, central tiles retain full
+detail and peripheral areas use the smaller preview. Reducing the pane size
+allows the entire view to fit within that budget.
+
+## Diagram previews
+
+Mermaid files (`.mmd`, `.mermaid`) and Mermaid code blocks in Markdown previews
+render as diagrams. A code block counts as Mermaid when its info string names
+`mermaid` (also as `language-mermaid` or `{.mermaid}`), or when it has none and
+its source reads as a Mermaid diagram.
+
+- **Size**: a diagram in a Markdown preview shows at its full height at 100%.
+  One taller than 320 px has a **Collapse diagram** bar under it that folds it
+  to 320 px; **Show full diagram** opens it again. Collapsing a diagram whose top
+  has scrolled out of view scrolls it back into view.
+- **Preview | Code**: the toggle above each Markdown diagram switches between the
+  diagram and its source. This choice and the collapse are kept for the session
+  per diagram source, so a diagram opens the same way after scrolling away, an
+  edit above it, or in another view of the same source.
+- **Zoom**: Ctrl or Cmd while scrolling zooms around the pointer, from 50% to
+  400%, one step per wheel notch or per 40 px of trackpad scrolling. Zooming
+  pans inside a Markdown diagram and leaves its height alone. Double-click
+  returns to 100%.
+- **Pan**: drag the diagram, or use the scrollbars that appear along each edge
+  the diagram runs past. A sideways swipe or Shift while scrolling pans
+  horizontally; in a Mermaid file, plain scrolling pans vertically too, while in
+  Markdown it scrolls the document. A diagram that fits its box stays inside it.
+
 ## Filesystem service and recovery
 
 `gitcomet-core::filesystem` owns typed requests, cancellation, progress, per-item

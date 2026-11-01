@@ -50,12 +50,30 @@ pub(super) struct HistoryBaseCacheRequest {
     pub(super) history_scope: LogScope,
     pub(super) log_source: usize,
     pub(super) history_author_filter: Option<String>,
+    pub(super) history_focus: gitcomet_core::domain::HistoryFocusSet,
     pub(super) head_branch_rev: u64,
     pub(super) detached_head_commit: Option<CommitId>,
     pub(super) head_branch_target: Option<CommitId>,
     pub(super) branches_rev: u64,
-    pub(super) remote_branches_rev: u64,
+    pub(super) remote_branches: HistoryRemoteBranchesKey,
     pub(super) stashes_rev: u64,
+}
+
+/// The remote branches the graph shows: the loaded list's revision and the
+/// remotes hidden from the history.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(super) struct HistoryRemoteBranchesKey {
+    pub(super) rev: u64,
+    pub(super) hidden: std::collections::BTreeSet<String>,
+}
+
+impl HistoryRemoteBranchesKey {
+    pub(super) fn of(repo: &RepoState) -> Self {
+        Self {
+            rev: repo.remote_branches_rev,
+            hidden: repo.history_hidden_remotes().clone(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -64,7 +82,7 @@ pub(super) struct HistoryDecorationCacheRequest {
     pub(super) head_branch_rev: u64,
     pub(super) detached_head_commit: Option<CommitId>,
     pub(super) branches_rev: u64,
-    pub(super) remote_branches_rev: u64,
+    pub(super) remote_branches: HistoryRemoteBranchesKey,
     pub(super) tags_rev: u64,
 }
 
@@ -174,6 +192,14 @@ impl HistoryVisibleIndices {
         match self {
             Self::All { len } => (visible_ix < *len).then_some(visible_ix),
             Self::Filtered(indices) => indices.get(visible_ix).copied(),
+        }
+    }
+
+    /// The row showing the page's commit `commit_ix`, if it is shown.
+    pub(in crate::view) fn visible_ix(&self, commit_ix: usize) -> Option<usize> {
+        match self {
+            Self::All { len } => (commit_ix < *len).then_some(commit_ix),
+            Self::Filtered(indices) => indices.binary_search(&commit_ix).ok(),
         }
     }
 
@@ -511,6 +537,36 @@ pub(in crate::view) fn history_text_hash(text: &str) -> u64 {
     hasher.finish()
 }
 
+/// Cached once with row presentation, including Unicode case expansion.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(in crate::view) struct HistoryAuthorVm {
+    name: HistoryTextVm,
+    pub(in crate::view) initials: HistoryTextVm,
+}
+
+impl HistoryAuthorVm {
+    pub(in crate::view) fn new(name: SharedString) -> Self {
+        let initials = HistoryTextVm::new(components::author_initials(name.as_ref()).into());
+        Self {
+            name: HistoryTextVm::new(name),
+            initials,
+        }
+    }
+}
+
+impl std::ops::Deref for HistoryAuthorVm {
+    type Target = HistoryTextVm;
+    fn deref(&self) -> &Self::Target {
+        &self.name
+    }
+}
+
+impl AsRef<str> for HistoryAuthorVm {
+    fn as_ref(&self) -> &str {
+        self.name.as_ref()
+    }
+}
+
 #[derive(Clone, Debug)]
 pub(in crate::view) struct HistoryWhenVm {
     time: SystemTime,
@@ -601,12 +657,82 @@ impl HistoryShortShaVm {
 
 #[derive(Clone, Debug)]
 pub(super) struct HistoryBaseRowVm {
-    pub(super) author: HistoryTextVm,
+    pub(super) author: HistoryAuthorVm,
+    /// Only the interior of a known, uninterrupted same-author lane run collapses.
+    pub(super) author_run_interior: bool,
     pub(super) summary: HistoryTextVm,
     pub(super) when: HistoryWhenVm,
     pub(super) short_sha: HistoryShortShaVm,
     pub(super) is_head: bool,
     pub(super) is_stash: bool,
+}
+
+/// Same-lane links farther apart than this never join a run. An indexed window
+/// carries this many rows of context on each side, so its block-aligned bounds
+/// cannot decide a row differently from the full history.
+pub(in crate::view) const HISTORY_AUTHOR_RUN_MAX_LINK_ROWS: usize =
+    gitcomet_core::history_index::HISTORY_BLOCK_SIZE;
+
+pub(in crate::view) struct HistoryAuthorRunRow<'a> {
+    pub(in crate::view) commit: &'a Commit,
+    pub(in crate::view) graph: &'a history_graph::GraphRow,
+    pub(in crate::view) is_stash: bool,
+}
+
+/// Follow commit edges rather than adjacent list rows: other lanes can interleave.
+/// Missing/filtered/unloaded neighbours conservatively keep their initials.
+pub(in crate::view) fn history_author_run_interiors(
+    rows: &[HistoryAuthorRunRow<'_>],
+    row_of: impl Fn(&CommitId) -> Option<usize>,
+) -> Vec<bool> {
+    let ordinary = |row: &HistoryAuthorRunRow<'_>| {
+        !row.is_stash
+            && !row.graph.is_merge
+            && row.graph.joins_in.is_empty()
+            && row.graph.edges_out.is_empty()
+    };
+    let mut neighbours = vec![0u8; rows.len()];
+    for (ix, row) in rows.iter().enumerate() {
+        let commit = row.commit;
+        if !ordinary(row) || commit.author.trim().is_empty() || commit.parent_ids.len() != 1 {
+            continue;
+        }
+        let Some(parent_ix) = row_of(&commit.parent_ids[0]) else {
+            continue;
+        };
+        if parent_ix <= ix || parent_ix - ix > HISTORY_AUTHOR_RUN_MAX_LINK_ROWS {
+            continue;
+        }
+        let parent = &rows[parent_ix];
+        if ordinary(parent)
+            && row.graph.node_col == parent.graph.node_col
+            && row.graph.node_color_ix == parent.graph.node_color_ix
+            && commit.author == parent.commit.author
+        {
+            neighbours[ix] |= 1;
+            neighbours[parent_ix] |= 2;
+        }
+    }
+    neighbours.into_iter().map(|links| links == 3).collect()
+}
+
+/// Resolve run boundaries once with the cached page, never during paint.
+pub(in crate::view) fn mark_history_author_runs(base: &mut HistoryBaseCache, page: &LogPage) {
+    let rows = base
+        .visible_indices
+        .iter()
+        .enumerate()
+        .map(|(ix, commit_ix)| HistoryAuthorRunRow {
+            commit: &page.commits[commit_ix],
+            graph: &base.graph_rows[ix],
+            is_stash: base.row_vms[ix].is_stash,
+        })
+        .collect::<Vec<_>>();
+    let interiors =
+        history_author_run_interiors(&rows, |id| base.visible_ix_by_commit.get(id).copied());
+    for (row, interior) in base.row_vms.iter_mut().zip(interiors) {
+        row.author_run_interior = interior;
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -1618,6 +1744,67 @@ pub(super) struct HistoryStashIdsCache {
     pub(super) ids: Arc<FxHashSet<CommitId>>,
 }
 
+/// Another worktree, marked on the commit it has checked out.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(in crate::view) struct HistoryWorktreeChip {
+    pub(in crate::view) path: std::path::PathBuf,
+    pub(in crate::view) label: SharedString,
+}
+
+pub(in crate::view) type HistoryWorktreeChipsByHead =
+    FxHashMap<CommitId, SmallVec<[HistoryWorktreeChip; 1]>>;
+
+/// Every other worktree with a HEAD, grouped by that commit in list order.
+pub(in crate::view) fn history_worktree_chips_by_head(
+    worktrees: &[gitcomet_core::domain::Worktree],
+    own_workdir: &std::path::Path,
+) -> HistoryWorktreeChipsByHead {
+    let mut chips = HistoryWorktreeChipsByHead::default();
+    for worktree in worktrees {
+        if worktree.path == own_workdir {
+            continue;
+        }
+        let Some(head) = &worktree.head else {
+            continue;
+        };
+        chips
+            .entry(head.clone())
+            .or_default()
+            .push(HistoryWorktreeChip {
+                path: worktree.path.clone(),
+                label: super::rows::sidebar::worktree_origin_label(
+                    worktree.branch.as_deref(),
+                    worktree.detached,
+                    &worktree.path,
+                ),
+            });
+    }
+    chips
+}
+
+/// The chips a commit's row shows. Dirty worktrees are left out: their chips
+/// sit on their changes rows.
+pub(in crate::view) fn history_commit_worktree_chips(
+    chips: &HistoryWorktreeChipsByHead,
+    commit_id: &CommitId,
+    dirty: &[gitcomet_core::domain::WorktreeDirtySummary],
+) -> SmallVec<[HistoryWorktreeChip; 1]> {
+    chips
+        .get(commit_id)
+        .into_iter()
+        .flatten()
+        .filter(|chip| !dirty.iter().any(|summary| summary.path == chip.path))
+        .cloned()
+        .collect()
+}
+
+#[derive(Clone, Debug)]
+pub(super) struct HistoryWorktreeChipsCache {
+    pub(super) repo_id: RepoId,
+    pub(super) worktrees_rev: u64,
+    pub(super) chips: Arc<HistoryWorktreeChipsByHead>,
+}
+
 impl GitCometView {
     #[cfg(any(test, feature = "benchmarks"))]
     pub(super) fn branch_sidebar_rows(repo: &RepoState) -> Vec<BranchSidebarRow> {
@@ -2450,5 +2637,28 @@ mod tests {
         let fingerprint_after = BranchSidebarFingerprint::from_repo(&repo);
 
         assert_ne!(fingerprint_before, fingerprint_after);
+    }
+}
+
+#[cfg(test)]
+mod author_initials_tests {
+    use super::*;
+    #[test]
+    fn history_author_initials_are_cached_with_their_hash() {
+        for (name, initials) in [
+            ("", "?"),
+            ("Élodie 李", "É李"),
+            ("ßeta", "SSE"),
+            ("Ada Lovelace", "AL"),
+        ] {
+            let author = HistoryAuthorVm::new(name.into());
+            assert_eq!(author.initials.as_ref(), initials);
+            assert_eq!(author.initials.text_hash(), history_text_hash(initials));
+            let clone = author.clone();
+            // Short SharedStrings are inline: cloning their cached value need
+            // not preserve its address and still performs no recomputation.
+            assert_eq!(clone.initials.shared(), author.initials.shared());
+            assert_eq!(clone.initials.text_hash(), author.initials.text_hash());
+        }
     }
 }

@@ -3,11 +3,13 @@ use super::*;
 #[derive(Clone, Copy)]
 enum Removal {
     Wheel,
+    CachedWheel,
     Programmatic,
     Replace,
     Empty,
     HostClear,
     RemoveSignature,
+    HideGraph,
 }
 
 fn tooltip_is_retracted_after_row_removal(
@@ -15,7 +17,6 @@ fn tooltip_is_retracted_after_row_removal(
     area: HistoryRowHoverArea,
     removal: Removal,
 ) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(BlockingBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -62,6 +63,14 @@ fn tooltip_is_retracted_after_row_removal(
         cx.debug_bounds("history_row_0").is_some()
     });
     let row = cx.debug_bounds("history_row_0").unwrap();
+    let _cache_guard = matches!(removal, Removal::CachedWheel)
+        .then(crate::view::enable_stable_cached_views_for_test);
+    cx.update(|_, app| view.update(app, |_, cx| cx.notify()));
+    for _ in 0..3 {
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+    }
     let history = cx.update(|_, app| view.read(app).main_pane.read(app).history_view.clone());
     // Exercise the canvas listener, including its actual cell bounds.
     let mut hover = None;
@@ -78,6 +87,12 @@ fn tooltip_is_retracted_after_row_removal(
     }
     let hover = hover.expect("requested tooltip cell should be hoverable");
     assert!(crate::view::test_support::tooltip_text(cx, &view).is_some());
+    if area == HistoryRowHoverArea::Author {
+        assert_eq!(
+            crate::view::test_support::tooltip_text(cx, &view).as_deref(),
+            Some("a")
+        );
+    }
     if matches!(removal, Removal::HostClear) {
         cx.update(|_, app| {
             let host = history.read(app).tooltip_host.upgrade().unwrap();
@@ -96,6 +111,11 @@ fn tooltip_is_retracted_after_row_removal(
     }
     match removal {
         Removal::HostClear => unreachable!(),
+        Removal::HideGraph => cx.update(|_, app| {
+            history.update(app, |history, cx| {
+                history.set_history_column_preferences(false, true, true, true, cx);
+            });
+        }),
         Removal::RemoveSignature => {
             let mut next = (*state).clone();
             next.repos[0].history_state.commit_signatures = Arc::default();
@@ -105,7 +125,7 @@ fn tooltip_is_retracted_after_row_removal(
                 ui_model.update(app, |model, cx| model.set_state(Arc::new(next), cx));
             });
         }
-        Removal::Wheel => cx.simulate_event(gpui::ScrollWheelEvent {
+        Removal::Wheel | Removal::CachedWheel => cx.simulate_event(gpui::ScrollWheelEvent {
             position: hover,
             delta: gpui::ScrollDelta::Pixels(point(px(0.0), px(-600.0))),
             ..Default::default()
@@ -144,7 +164,10 @@ fn tooltip_is_retracted_after_row_removal(
         let _ = window.draw(app);
     });
     cx.run_until_parked();
-    if matches!(removal, Removal::Wheel | Removal::Programmatic) {
+    if matches!(
+        removal,
+        Removal::Wheel | Removal::CachedWheel | Removal::Programmatic
+    ) {
         assert!(
             cx.debug_bounds("history_row_0").is_none(),
             "the owning row must leave the viewport"
@@ -164,6 +187,21 @@ fn tooltip_is_retracted_after_row_removal(
         None,
         "the removed row must not rearm the shared tooltip elsewhere"
     );
+}
+
+#[gpui::test]
+fn cached_history_canvas_tooltip_clears_after_scroll(cx: &mut gpui::TestAppContext) {
+    tooltip_is_retracted_after_row_removal(cx, HistoryRowHoverArea::Date, Removal::CachedWheel);
+}
+
+#[gpui::test]
+fn author_node_tooltip_clears_after_cached_scroll(cx: &mut gpui::TestAppContext) {
+    tooltip_is_retracted_after_row_removal(cx, HistoryRowHoverArea::Author, Removal::CachedWheel);
+}
+
+#[gpui::test]
+fn author_node_tooltip_clears_when_the_graph_is_hidden(cx: &mut gpui::TestAppContext) {
+    tooltip_is_retracted_after_row_removal(cx, HistoryRowHoverArea::Author, Removal::HideGraph);
 }
 
 #[gpui::test]

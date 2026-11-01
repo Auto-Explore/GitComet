@@ -3,6 +3,50 @@ use super::message::InternalMsg;
 impl std::fmt::Debug for InternalMsg {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            InternalMsg::AutoFetchUpdated {
+                repo_id,
+                lifetime,
+                revision,
+                snapshot,
+                ..
+            } => f
+                .debug_struct("AutoFetchUpdated")
+                .field("repo_id", repo_id)
+                .field("lifetime", lifetime)
+                .field("revision", revision)
+                .field("snapshot", snapshot)
+                .finish_non_exhaustive(),
+            InternalMsg::AutoFetchRefresh { repo_id, lifetime } => f
+                .debug_struct("AutoFetchRefresh")
+                .field("repo_id", repo_id)
+                .field("lifetime", lifetime)
+                .finish(),
+            InternalMsg::QuiesceRepository { common_dir, .. } => f
+                .debug_struct("QuiesceRepository")
+                .field("common_dir", common_dir)
+                .finish_non_exhaustive(),
+            InternalMsg::RepositoryModeLoaded { repo_id, result } => f
+                .debug_struct("RepositoryModeLoaded")
+                .field("repo_id", repo_id)
+                .field("result", result)
+                .finish(),
+            InternalMsg::BareConversionPreviewLoaded { repo_id, result } => f
+                .debug_struct("BareConversionPreviewLoaded")
+                .field("repo_id", repo_id)
+                .field("result", result)
+                .finish(),
+            InternalMsg::BareModeDisabled { common_dir, result } => f
+                .debug_struct("BareModeDisabled")
+                .field("common_dir", common_dir)
+                .field("result", result)
+                .finish(),
+            InternalMsg::AuthPromptValidated {
+                generation, result, ..
+            } => f
+                .debug_struct("AuthPromptValidated")
+                .field("generation", generation)
+                .field("result", result)
+                .finish_non_exhaustive(),
             InternalMsg::TagPushPreviewLoaded {
                 repo_id,
                 mode,
@@ -154,6 +198,11 @@ impl std::fmt::Debug for InternalMsg {
                 .field("repo_id", repo_id)
                 .field("result", result)
                 .finish(),
+            InternalMsg::HeadTrackingLoaded { repo_id, result } => f
+                .debug_struct("HeadTrackingLoaded")
+                .field("repo_id", repo_id)
+                .field("result", result)
+                .finish(),
             InternalMsg::UpstreamDivergenceLoaded { repo_id, result } => f
                 .debug_struct("UpstreamDivergenceLoaded")
                 .field("repo_id", repo_id)
@@ -266,12 +315,14 @@ impl std::fmt::Debug for InternalMsg {
                 .field("result", result)
                 .finish(),
             InternalMsg::FileHistoryLoaded {
+                request,
                 repo_id,
                 path,
                 cursor,
                 result,
             } => f
                 .debug_struct("FileHistoryLoaded")
+                .field("request", request)
                 .field("repo_id", repo_id)
                 .field("path", path)
                 .field("cursor", cursor)
@@ -290,24 +341,36 @@ impl std::fmt::Debug for InternalMsg {
                 .field("result", result)
                 .finish(),
             InternalMsg::ConflictFileLoaded {
+                request,
                 repo_id,
                 path,
                 result,
                 conflict_session,
             } => f
                 .debug_struct("ConflictFileLoaded")
+                .field("request", request)
                 .field("repo_id", repo_id)
                 .field("path", path)
                 .field("result", result)
                 .field("conflict_session", conflict_session)
                 .finish(),
-            InternalMsg::WorktreesLoaded { repo_id, result } => f
+            InternalMsg::WorktreesLoaded {
+                repo_id,
+                read,
+                result,
+            } => f
                 .debug_struct("WorktreesLoaded")
                 .field("repo_id", repo_id)
+                .field("read", read)
                 .field("result", result)
                 .finish(),
-            InternalMsg::WorktreeDirtyLoaded { repo_id, result } => f
+            InternalMsg::WorktreeDirtyLoaded {
+                repo_id,
+                scope,
+                result,
+            } => f
                 .debug_struct("WorktreeDirtyLoaded")
+                .field("scope", scope)
                 .field("repo_id", repo_id)
                 .field("result", result)
                 .finish(),
@@ -604,6 +667,11 @@ impl std::fmt::Debug for InternalMsg {
                 .debug_struct("BranchAlreadyExists")
                 .field("action", action)
                 .field("prompt", prompt)
+                .finish(),
+            InternalMsg::BranchNotFullyMerged { repo_id, name } => f
+                .debug_struct("BranchNotFullyMerged")
+                .field("repo_id", repo_id)
+                .field("name", name)
                 .finish(),
             InternalMsg::RepoActionFinishedInWorktree {
                 repo_id,

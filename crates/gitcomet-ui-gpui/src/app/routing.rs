@@ -876,6 +876,7 @@ pub(super) fn prompt_open_repository(cx: &mut App, backend: Arc<dyn GitBackend>)
         directories: true,
         multiple: false,
         prompt: Some("Open Git Repository".into()),
+        directory: None,
     });
 
     cx.spawn(async move |cx: &mut gpui::AsyncApp| {
@@ -927,7 +928,7 @@ pub(super) fn prompt_open_repository(cx: &mut App, backend: Arc<dyn GitBackend>)
 
 #[cfg(target_os = "macos")]
 pub(super) fn prompt_apply_patch(cx: &mut App) {
-    if find_normal_gitcomet_window(cx).is_none() {
+    if find_normal_gitcomet_window(cx).is_none() || normal_window_repository_is_bare(cx) {
         return;
     }
 
@@ -936,6 +937,7 @@ pub(super) fn prompt_apply_patch(cx: &mut App) {
         directories: false,
         multiple: false,
         prompt: Some("Select patch file".into()),
+        directory: None,
     });
 
     cx.spawn(async move |cx: &mut gpui::AsyncApp| {

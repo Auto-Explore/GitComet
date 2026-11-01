@@ -17,9 +17,9 @@
 # and the `tree_sitter/` headers come from vendor/tree-sitter-headers -- see the
 # README there.
 #
-# `queries/` is deliberately not vendored, matching vendor/tree-sitter-vue.
-# GitComet keeps its own queries in
-# crates/gitcomet-ui-gpui/src/view/rows/diff_text/queries/.
+# `queries/highlights.scm` is the 0.24.2 release's, vendored for vendor/difftastic
+# (`HIGHLIGHTS_QUERY`). GitComet's highlighter keeps its own queries in
+# crates/gitcomet-syntax/src/queries/.
 [package]
 name = "tree-sitter-rust"
 description = "Rust grammar for tree-sitter"

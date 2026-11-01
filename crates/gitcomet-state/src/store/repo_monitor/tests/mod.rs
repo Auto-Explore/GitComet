@@ -6,7 +6,6 @@ use super::*;
 use notify::EventKind;
 use notify::event::{AccessKind, AccessMode, CreateKind, DataChange, ModifyKind, RemoveKind};
 use std::fs;
-use std::process::Command;
 use std::sync::{OnceLock, atomic::AtomicBool, mpsc};
 
 struct IsolatedGitConfigEnv {
@@ -47,7 +46,7 @@ fn run_git(repo: &Path, args: &[&str]) {
         args.first().copied().unwrap_or("git"),
     );
     let env = isolated_git_config_env();
-    let output = Command::new("git")
+    let output = gitcomet_core::test_support::git_fixture::git_command()
         .env("GIT_CONFIG_NOSYSTEM", "1")
         .env("GIT_CONFIG_GLOBAL", &env.global_config)
         .env("HOME", &env.home_dir)
@@ -151,7 +150,7 @@ fn nested_submodule_lfs_cache_is_excluded() {
 #[test]
 fn ignored_gitignore_does_not_reload_policy() {
     let dir = unique_temp_dir("gitcomet-ignored-config");
-    let workdir = dir.path();
+    let workdir = &normalized(&dir.path().canonicalize().unwrap());
     init_repo_for_ignore_tests(workdir);
     fs::write(workdir.join(".gitignore"), "node_modules/\n").unwrap();
     fs::create_dir_all(workdir.join("node_modules/package")).unwrap();
@@ -551,7 +550,7 @@ fn access_events_do_not_trigger_refresh_loops() {
 #[test]
 fn gitignore_rules_match_git_semantics_for_nested_negation_and_anchoring() {
     let dir = unique_temp_dir("gitcomet-monitor-test");
-    let workdir = dir.path().join("repo");
+    let workdir = normalized(&dir.path().canonicalize().unwrap()).join("repo");
     init_repo_for_ignore_tests(&workdir);
     let git_dir = resolve_git_dir(&workdir);
 
@@ -604,7 +603,7 @@ fn gitignore_rules_match_git_semantics_for_nested_negation_and_anchoring() {
 #[test]
 fn tracked_paths_are_not_treated_as_ignored() {
     let dir = unique_temp_dir("gitcomet-monitor-test");
-    let workdir = dir.path().join("repo");
+    let workdir = normalized(&dir.path().canonicalize().unwrap()).join("repo");
     init_repo_for_ignore_tests(&workdir);
     let git_dir = resolve_git_dir(&workdir);
 
@@ -897,15 +896,6 @@ fn gitignore_lookup_stats_track_cache_hits_misses_and_matcher_failures() {
         after.fallback_count >= before.fallback_count.saturating_add(1),
         "disabling the matcher should count as matcher failure"
     );
-}
-
-#[test]
-fn panic_payload_to_string_handles_string_and_unknown_payloads() {
-    assert_eq!(
-        panic_payload_to_string(&"panic message".to_string()),
-        "panic message"
-    );
-    assert_eq!(panic_payload_to_string(&123usize), "unknown panic payload");
 }
 
 #[test]

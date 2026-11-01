@@ -28,7 +28,7 @@ where
 }
 
 fn run_git_capture(repo: &Path, args: &[&str]) -> Output {
-    let mut cmd = no_window_command("git");
+    let mut cmd = gitcomet_core::test_support::git_fixture::git_command();
     apply_isolated_git_config_env(&mut cmd);
     cmd.arg("-c")
         .arg("commit.gpgsign=false")

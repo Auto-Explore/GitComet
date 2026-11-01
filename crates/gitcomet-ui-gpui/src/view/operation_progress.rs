@@ -2,10 +2,9 @@
 use gitcomet_core::git_operation::GitOperationId;
 use gitcomet_core::git_progress::GitProgressMeter;
 use gitcomet_state::model::{GitHookOperation, GitHookOperationStatus, RepoId};
+use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
-/// A card appears once git reports a meter, or once the operation has run
-/// this long, so a quick fetch or maintenance never flashes one.
 const SHOW_AFTER: Duration = Duration::from_secs(2);
 
 /// Git recommends maintenance for a repository; its card asks the user.
@@ -31,6 +30,8 @@ pub(super) struct OperationProgress {
     pub(super) started: SystemTime,
     pub(super) cancelling: bool,
     pub(super) progress: Option<GitProgressMeter>,
+    pub(super) command: Option<Arc<str>>,
+    pub(super) latest_line: String,
 }
 
 impl OperationProgress {
@@ -50,16 +51,27 @@ impl OperationProgress {
             subtitle,
             started: operation.time,
             cancelling: operation.status == GitHookOperationStatus::Cancelling,
-            progress: operation.progress.clone(),
+            progress: operation.active_hook_name().map_or_else(
+                || operation.progress.clone(),
+                |name| {
+                    Some(GitProgressMeter {
+                        title: Arc::from(format!("Running {name} hook")),
+                        percent: None,
+                        estimated: false,
+                    })
+                },
+            ),
+            command: operation.command.clone(),
+            latest_line: operation.latest_line.clone(),
         }
     }
 
-    /// GitComet's own estimates (maintenance) start at once, so only git's
-    /// meters skip the wait.
     pub(super) fn is_visible(&self, now: SystemTime) -> bool {
-        self.progress
-            .as_ref()
-            .is_some_and(|progress| !progress.estimated)
+        self.label == "Pull"
+            || self
+                .progress
+                .as_ref()
+                .is_some_and(|progress| !progress.estimated)
             || now
                 .duration_since(self.started)
                 .is_ok_and(|elapsed| elapsed >= SHOW_AFTER)
@@ -131,6 +143,8 @@ mod tests {
             started: SystemTime::UNIX_EPOCH,
             cancelling: false,
             progress: meter,
+            command: None,
+            latest_line: String::new(),
         }
     }
 
@@ -153,6 +167,14 @@ mod tests {
             estimated: false,
         });
         assert!(quiet.is_visible(started));
+    }
+
+    #[test]
+    fn silent_pull_shows_immediately_without_an_invented_percentage() {
+        let pull = progress("Pull", None);
+        assert!(pull.is_visible(SystemTime::UNIX_EPOCH));
+        assert_eq!(pull.percent_label(), None);
+        assert_eq!(pull.elapsed(SystemTime::UNIX_EPOCH), "0s");
     }
 
     #[test]

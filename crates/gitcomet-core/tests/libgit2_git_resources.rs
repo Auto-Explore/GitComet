@@ -4,7 +4,6 @@ use gitcomet_core::merge_extraction::{
 };
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 fn resource_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -61,7 +60,7 @@ fn rehydrate_worktree_repo(name: &str) -> RehydratedRepo {
 }
 
 fn run_git_in_worktree(repo: &Path, args: &[&str]) -> String {
-    let output = Command::new("git")
+    let output = gitcomet_core::test_support::git_fixture::git_command()
         .args(args)
         .current_dir(repo)
         .output()
@@ -76,7 +75,7 @@ fn run_git_in_worktree(repo: &Path, args: &[&str]) -> String {
 }
 
 fn run_git_with_git_dir(git_dir: &Path, args: &[&str]) -> String {
-    let output = Command::new("git")
+    let output = gitcomet_core::test_support::git_fixture::git_command()
         .arg(format!("--git-dir={}", git_dir.display()))
         .args(args)
         .output()

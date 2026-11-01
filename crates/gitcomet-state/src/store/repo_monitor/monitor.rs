@@ -5,11 +5,80 @@ use crate::msg::ChangedPaths;
 
 pub(super) const MAX_WORKTREE_WATCH_DIRS: usize = 4096;
 
+#[cfg(windows)]
+fn metadata_discovery_required(policy: &PolicySnapshot) -> bool {
+    // Recursive native roots already cover metadata descendants. Preserve the
+    // old cross-pass deduplication when a Git root also contains the worktree.
+    policy
+        .git_roots
+        .iter()
+        .any(|root| policy.workdir.starts_with(root))
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum WatchSetupOutcome {
     Watching { failed_dirs: usize },
     WorktreeSubdirsSkipped { dir_count: usize },
     PolicyFailed,
+}
+
+pub(super) enum WatchSetup {
+    Ready(MonitorWatcher, WatchSetupOutcome),
+    Unavailable,
+    Cancelled,
+}
+
+#[cfg(test)]
+#[derive(Debug)]
+pub(super) struct StartupProgress {
+    pub phase: &'static str,
+    pub attempt: usize,
+    pub directories: usize,
+}
+
+#[cfg(test)]
+impl Default for StartupProgress {
+    fn default() -> Self {
+        Self {
+            phase: "worker-start",
+            attempt: 0,
+            directories: 0,
+        }
+    }
+}
+
+struct SetupPhase {
+    name: &'static str,
+    attempt: usize,
+    started: Option<Instant>,
+}
+impl SetupPhase {
+    fn new(config: &MonitorConfig, name: &'static str, attempt: usize) -> Self {
+        #[cfg(test)]
+        if let Some(progress) = &config.startup_progress {
+            let mut progress = progress.lock().unwrap_or_else(|e| e.into_inner());
+            progress.phase = name;
+            progress.attempt = attempt + 1;
+        }
+        let _ = config;
+        Self {
+            name,
+            attempt: attempt + 1,
+            started: repo_load_trace::enabled().then(Instant::now),
+        }
+    }
+}
+impl Drop for SetupPhase {
+    fn drop(&mut self) {
+        if let Some(started) = self.started {
+            repo_load_trace::trace!(
+                "repo_monitor_setup phase={} attempt={} elapsed_us={}",
+                self.name,
+                self.attempt,
+                started.elapsed().as_micros()
+            );
+        }
+    }
 }
 
 pub(super) struct MonitorConfig {
@@ -19,10 +88,20 @@ pub(super) struct MonitorConfig {
     pub recovery_interval: Duration,
     pub setup_passes: usize,
     pub dir_limit: usize,
+    pub enabled: Arc<AtomicBool>,
+    #[cfg(test)]
+    pub startup_progress: Option<Arc<std::sync::Mutex<StartupProgress>>>,
     pub before_registration: Option<Box<dyn FnMut() + Send>>,
     /// Set while a watch lease holds this repository: its changes are
     /// delivered even when another repository is active.
     pub leased: Arc<AtomicBool>,
+    /// Counts every change this monitor flushes, delivered or not. A monitor
+    /// kept running for an inactive repository drops its changes; an unchanged
+    /// count across the inactive stretch proves nothing changed meanwhile.
+    pub change_generation: Arc<AtomicU64>,
+    /// Coverage is incomplete (see `note_watch_outcome`), so an unchanged
+    /// count proves nothing.
+    pub degraded: Arc<AtomicBool>,
     pub worktree_owner: Option<(u64, PathBuf)>,
     #[cfg(test)]
     pub native_events: Option<Arc<AtomicU64>>,
@@ -38,8 +117,13 @@ impl Default for MonitorConfig {
             recovery_interval: DEGRADED_WATCH_RECHECK_INTERVAL,
             setup_passes: 3,
             dir_limit: MAX_WORKTREE_WATCH_DIRS,
+            enabled: Arc::new(AtomicBool::new(true)),
+            #[cfg(test)]
+            startup_progress: None,
             before_registration: None,
             leased: Arc::default(),
+            change_generation: Arc::default(),
+            degraded: Arc::default(),
             worktree_owner: None,
             #[cfg(test)]
             native_events: None,
@@ -119,22 +203,49 @@ impl MonitorState {
         enabled: &Arc<AtomicBool>,
         config: &mut MonitorConfig,
         mut reload: bool,
-    ) -> Option<(MonitorWatcher, WatchSetupOutcome)> {
+    ) -> WatchSetup {
         #[cfg(test)]
         let _timing = test_sync::WaitTiming::new("registration");
+        config.enabled = Arc::clone(enabled);
         for attempt in 0..config.setup_passes.max(1) {
+            if !enabled.load(Ordering::Relaxed) {
+                return WatchSetup::Cancelled;
+            }
             if reload {
+                let _phase = SetupPhase::new(config, "input-reload", attempt);
                 self.reload(workdir, backend, false);
             }
-            self.plan = WatchPlan::default();
+            if !enabled.load(Ordering::Relaxed) {
+                return WatchSetup::Cancelled;
+            }
+            #[cfg(test)]
+            if let Some(progress) = &config.startup_progress {
+                progress
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .directories = 0;
+            }
+            self.plan = WatchPlan {
+                #[cfg(test)]
+                discovery_work: self.plan.discovery_work,
+                ..WatchPlan::default()
+            };
             self.publish(PolicySnapshot::new(workdir, &self.inputs));
-            if let Some(hook) = &mut config.before_registration {
-                hook();
+            {
+                let _phase = SetupPhase::new(config, "before-registration", attempt);
+                if let Some(hook) = &mut config.before_registration {
+                    hook();
+                }
+            }
+            if !enabled.load(Ordering::Relaxed) {
+                return WatchSetup::Cancelled;
             }
             // Linux registers each directory in the BFS. Windows establishes
             // recursive root coverage first. macOS needs the final boundaries
             // before creating its streams; recursive coverage includes any
             // directories created during that scan as well.
+            #[cfg(not(target_os = "macos"))]
+            let _phase = SetupPhase::new(config, "native-registration", attempt);
             #[cfg(not(target_os = "macos"))]
             let (mut watcher, failures) = match MonitorWatcher::new(
                 repo_id,
@@ -149,43 +260,74 @@ impl MonitorState {
             ) {
                 Ok(result) => result,
                 Err(error) => {
+                    if !enabled.load(Ordering::Relaxed) {
+                        return WatchSetup::Cancelled;
+                    }
                     record_monitor_failure(MonitorFailureKind::Start, "create watcher", error);
-                    return None;
+                    return WatchSetup::Unavailable;
                 }
             };
             #[cfg(not(target_os = "macos"))]
             {
                 self.plan.failures += failures;
             }
+            #[cfg(not(target_os = "macos"))]
+            drop(_phase);
+            if !enabled.load(Ordering::Relaxed) {
+                return WatchSetup::Cancelled;
+            }
             let snapshot = self.snapshot();
             let mut roots: Vec<_> = snapshot.git_roots.iter().cloned().collect();
             roots.sort();
-            for (roots, worktree) in [(roots, false), (vec![workdir.to_path_buf()], true)] {
-                self.plan.walk(
-                    roots,
-                    worktree,
-                    &snapshot,
-                    &mut self.rules,
-                    &mut self.inputs,
-                    config.dir_limit,
-                    |path| {
-                        #[cfg(not(target_os = "macos"))]
-                        {
-                            watcher.add(path)
-                        }
-                        #[cfg(target_os = "macos")]
-                        {
-                            let _ = path;
-                            Ok(())
-                        }
-                    },
-                );
+            {
+                let _phase = SetupPhase::new(config, "directory-discovery", attempt);
+                for (roots, worktree) in [(roots, false), (vec![workdir.to_path_buf()], true)] {
+                    #[cfg(windows)]
+                    if !worktree && !metadata_discovery_required(&snapshot) {
+                        continue;
+                    }
+                    let complete = self.plan.walk_while(
+                        roots,
+                        worktree,
+                        &snapshot,
+                        &mut self.rules,
+                        &mut self.inputs,
+                        config.dir_limit,
+                        |path| {
+                            #[cfg(test)]
+                            if let Some(progress) = &config.startup_progress {
+                                progress
+                                    .lock()
+                                    .unwrap_or_else(|e| e.into_inner())
+                                    .directories += 1;
+                            }
+                            #[cfg(not(target_os = "macos"))]
+                            {
+                                watcher.add(path)
+                            }
+                            #[cfg(target_os = "macos")]
+                            {
+                                let _ = path;
+                                Ok(())
+                            }
+                        },
+                        || enabled.load(Ordering::Relaxed),
+                    );
+                    if !complete {
+                        return WatchSetup::Cancelled;
+                    }
+                }
+            }
+            if !enabled.load(Ordering::Relaxed) {
+                return WatchSetup::Cancelled;
             }
             let mut snapshot = PolicySnapshot::new(workdir, &self.inputs);
             snapshot
                 .excluded_roots
                 .extend(self.plan.boundaries.iter().cloned());
             self.publish(snapshot);
+            #[cfg(target_os = "macos")]
+            let _phase = SetupPhase::new(config, "native-registration", attempt);
             #[cfg(target_os = "macos")]
             let watcher = match MonitorWatcher::new(
                 repo_id,
@@ -203,24 +345,37 @@ impl MonitorState {
                     watcher
                 }
                 Err(error) => {
+                    if !enabled.load(Ordering::Relaxed) {
+                        return WatchSetup::Cancelled;
+                    }
                     record_monitor_failure(MonitorFailureKind::Start, "create watcher", error);
-                    return None;
+                    return WatchSetup::Unavailable;
                 }
             };
-            if !self.inputs.stamps.changed() && !self.inputs.indexes.changed() {
-                return Some((
+            #[cfg(target_os = "macos")]
+            drop(_phase);
+            if !enabled.load(Ordering::Relaxed) {
+                return WatchSetup::Cancelled;
+            }
+            let _phase = SetupPhase::new(config, "policy-revalidation", attempt);
+            let stable = !self.inputs.stamps.changed() && !self.inputs.indexes.changed();
+            if !enabled.load(Ordering::Relaxed) {
+                return WatchSetup::Cancelled;
+            }
+            if stable {
+                return WatchSetup::Ready(
                     watcher,
                     self.plan.outcome(&self.rules, &self.inputs, WATCH_MODE),
-                ));
+                );
             }
             if attempt + 1 == config.setup_passes.max(1) {
                 // Keep useful partial coverage and retry through ordinary input
                 // revalidation. No synthetic event can create a retry loop.
                 self.plan.failures += 1;
-                return Some((
+                return WatchSetup::Ready(
                     watcher,
                     self.plan.outcome(&self.rules, &self.inputs, WATCH_MODE),
-                ));
+                );
             }
             drop(watcher);
             reload = true;
@@ -249,7 +404,14 @@ impl MonitorState {
             .boundaries
             .extend(effect.new_ignored_dirs.iter().cloned());
         for (path, worktree) in &effect.dir_added {
-            self.plan.walk(
+            if !config.enabled.load(Ordering::Relaxed) {
+                return;
+            }
+            #[cfg(windows)]
+            if !worktree && !metadata_discovery_required(&snapshot) {
+                continue;
+            }
+            if !self.plan.walk_while(
                 [path.clone()],
                 *worktree,
                 &snapshot,
@@ -257,7 +419,13 @@ impl MonitorState {
                 &mut self.inputs,
                 config.dir_limit,
                 |dir| watcher.add(dir),
-            );
+                || config.enabled.load(Ordering::Relaxed),
+            ) {
+                return;
+            }
+        }
+        if !config.enabled.load(Ordering::Relaxed) {
+            return;
         }
         if self.plan.boundaries.len() != previous_boundaries
             || !effect.dir_added.is_empty()
@@ -518,11 +686,20 @@ pub(super) fn repo_monitor_thread(
         true,
     );
     let (mut watcher, mut outcome) = match initial {
-        Some((watcher, outcome)) => (Some(watcher), outcome),
-        None => (None, WatchSetupOutcome::Watching { failed_dirs: 1 }),
+        WatchSetup::Ready(watcher, outcome) => (Some(watcher), outcome),
+        WatchSetup::Unavailable => (None, WatchSetupOutcome::Watching { failed_dirs: 1 }),
+        WatchSetup::Cancelled => return,
     };
+    if !monitor_enabled.load(Ordering::Relaxed) {
+        return;
+    }
+    let change_generation = Arc::clone(&config.change_generation);
+    let degraded_flag = Arc::clone(&config.degraded);
     let mut degraded = false;
-    note_watch_outcome(&msg_tx, repo_id, &mut degraded, outcome);
+    note_watch_outcome(&msg_tx, repo_id, &mut degraded, &degraded_flag, outcome);
+    // Watching starts here: a change made during the setup walk is never
+    // reported, so a tab left before this point must not count as unchanged.
+    change_generation.fetch_add(1, Ordering::SeqCst);
     let mut last_recovery = degraded.then(Instant::now);
     let mut debouncer = DebouncedChange::new(config.debounce, config.max_delay);
     #[cfg(test)]
@@ -531,12 +708,24 @@ pub(super) fn repo_monitor_thread(
     let mut index_dirty = false;
     let mut rebuild = None;
     let mut idle_at = Instant::now() + config.idle_tick;
+    let mut activation_refresh = super::activation::ActivationRefresh::default();
     let leased = Arc::clone(&config.leased);
     let worktree_owner = config.worktree_owner.clone();
-    let flush = |change| {
-        let active = active_repo_id.load(Ordering::Relaxed);
+    let flush = |change, activation_context: Option<ActivationContext>| {
+        change_generation.fetch_add(1, Ordering::SeqCst);
+        let active = active_repo_id.load(Ordering::SeqCst);
         if active == repo_id.0 || leased.load(Ordering::Relaxed) {
             trace_repo_monitor_flush("flush", repo_id, &change, active);
+            if let Some(context) = activation_context
+                && worktree_owner.is_none()
+            {
+                msg_tx.send_activation_refresh_or_log(CheckedActivation {
+                    repo_id,
+                    context,
+                    change,
+                });
+                return;
+            }
             msg_tx.send_repo_monitor_or_log(
                 match &worktree_owner {
                     Some((lifetime, path)) => Msg::WorktreeExternallyChanged {
@@ -552,6 +741,9 @@ pub(super) fn repo_monitor_thread(
         }
     };
     loop {
+        if !monitor_enabled.load(Ordering::Relaxed) {
+            break;
+        }
         let now = Instant::now();
         let timeout = debouncer
             .next_timeout(now)
@@ -559,10 +751,14 @@ pub(super) fn repo_monitor_thread(
             .min(idle_at.saturating_duration_since(now));
         let mut due_change = None;
         let mut revalidate = false;
+        let mut refresh_on_activation = None;
         match monitor_rx.recv_timeout(timeout) {
             Ok(MonitorMsg::Stop) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
             #[cfg(test)]
             Ok(MonitorMsg::Barrier(tx)) => {
+                if !monitor_enabled.load(Ordering::Relaxed) {
+                    break;
+                }
                 let _ = tx.send(());
             }
             #[cfg(test)]
@@ -578,7 +774,12 @@ pub(super) fn repo_monitor_thread(
                 };
                 let _ = reply.send(result);
             }
+            #[cfg(test)]
             Ok(MonitorMsg::Revalidate) => revalidate = true,
+            Ok(MonitorMsg::RefreshOnActivation(context)) => {
+                revalidate = true;
+                refresh_on_activation = Some(context);
+            }
             Ok(MonitorMsg::Event(result)) => {
                 if !monitor_enabled.load(Ordering::Relaxed) {
                     break;
@@ -616,6 +817,7 @@ pub(super) fn repo_monitor_thread(
                                             &msg_tx,
                                             repo_id,
                                             &mut degraded,
+                                            &degraded_flag,
                                             outcome,
                                         );
                                         if degraded && !was_degraded {
@@ -649,7 +851,7 @@ pub(super) fn repo_monitor_thread(
                 }
                 if state.rules.failed && outcome != WatchSetupOutcome::PolicyFailed {
                     outcome = WatchSetupOutcome::PolicyFailed;
-                    note_watch_outcome(&msg_tx, repo_id, &mut degraded, outcome);
+                    note_watch_outcome(&msg_tx, repo_id, &mut degraded, &degraded_flag, outcome);
                     rebuild = Some("ignore-lookup");
                     due_change = debouncer
                         .push(RepoExternalChange::all(), Instant::now())
@@ -676,6 +878,17 @@ pub(super) fn repo_monitor_thread(
         #[cfg(not(test))]
         let drain_work = false;
         if due_change.is_some() || revalidate || idle || drain_work {
+            // Reuse the monitor's discovered inputs. Exact control contents
+            // complement its cheap metadata stamps when timestamps were kept.
+            let activation_probe = refresh_on_activation
+                .as_ref()
+                .map(|_| super::activation::ActivationRefresh::prepare(&workdir, &state.inputs));
+            if let Some(probe) = &activation_probe
+                && activation_refresh.needs_discovery(probe.as_ref())
+            {
+                policy_dirty = true;
+            }
+            let mut activation_snapshot = activation_probe.and_then(Result::ok);
             if state.inputs.stamps.changed() {
                 policy_dirty = true;
             }
@@ -732,13 +945,17 @@ pub(super) fn repo_monitor_thread(
                     &mut config,
                     !loaded,
                 ) {
-                    Some((new, result)) => {
+                    WatchSetup::Ready(new, result) => {
                         watcher = Some(new);
                         outcome = result;
                     }
-                    None => outcome = WatchSetupOutcome::Watching { failed_dirs: 1 },
+                    WatchSetup::Unavailable => {
+                        outcome = WatchSetupOutcome::Watching { failed_dirs: 1 }
+                    }
+                    WatchSetup::Cancelled => break,
                 }
-                note_watch_outcome(&msg_tx, repo_id, &mut degraded, outcome);
+                loaded = true;
+                note_watch_outcome(&msg_tx, repo_id, &mut degraded, &degraded_flag, outcome);
                 debouncer.take();
                 due_change = Some(RepoExternalChange {
                     verification_context: policy_dirty,
@@ -747,8 +964,47 @@ pub(super) fn repo_monitor_thread(
             }
             policy_dirty = false;
             index_dirty = false;
+            if let Some(context) = &refresh_on_activation {
+                if loaded
+                    && !activation_snapshot
+                        .as_ref()
+                        .is_some_and(|snapshot| snapshot.covers(&state.inputs))
+                {
+                    let current =
+                        super::activation::ActivationRefresh::prepare(&workdir, &state.inputs).ok();
+                    // Newly discovered paths need a snapshot too. Do not cache
+                    // a configuration that changed during that discovery as
+                    // though its new include/topology inputs were inspected.
+                    activation_snapshot = match (activation_snapshot, current) {
+                        (Some(previous), Some(current))
+                            if !previous.discovery_still_matches(&current) =>
+                        {
+                            None
+                        }
+                        (_, current) => current,
+                    };
+                }
+                if state.rules.failed {
+                    activation_snapshot = None;
+                }
+                let change = activation_refresh.complete(activation_snapshot, context.clone());
+                if !monitor_enabled.load(Ordering::Relaxed) {
+                    break;
+                }
+                repo_load_trace::trace!(
+                    "repo_activated_refresh repo_id={:?} git_state={} tags={}",
+                    repo_id,
+                    change.git_state,
+                    change.tags,
+                );
+                // The store validates this reply against current state before
+                // deciding whether linked checkouts need a dirty scan.
+                due_change = Some(
+                    due_change.map_or(change.clone(), |pending| merge_change(pending, change)),
+                );
+            }
             if let Some(change) = due_change {
-                flush(change);
+                flush(change, refresh_on_activation);
             }
         }
         #[cfg(test)]

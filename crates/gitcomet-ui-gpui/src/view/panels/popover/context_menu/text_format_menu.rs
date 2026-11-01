@@ -1,6 +1,6 @@
 use super::*;
 use crate::view::mod_helpers::TextFormatMenuSection;
-use crate::view::panes::main::TextEncodingMenuState;
+use crate::view::panes::diff::TextEncodingMenuState;
 use gitcomet_core::text_format::{LineEnding, TextEncoding};
 
 pub(super) fn model(
@@ -8,8 +8,42 @@ pub(super) fn model(
     section: TextFormatMenuSection,
     cx: &gpui::App,
 ) -> ContextMenuModel {
-    let pane = host.main_pane.read(cx);
+    let pane = host.diff_renderer.read(cx);
     match section {
+        TextFormatMenuSection::ImageSampling => {
+            image_sampling_model(crate::view::image_preview::Preferences::current(cx))
+        }
+        TextFormatMenuSection::ImageZoom => {
+            use crate::view::image_preview::Zoom;
+            let mut items = vec![
+                ContextMenuItem::Header("Image zoom".into()),
+                ContextMenuItem::Entry {
+                    label: "Fit".into(),
+                    icon: None,
+                    shortcut: Some("0".into()),
+                    disabled: false,
+                    action: Box::new(ContextMenuAction::ImageZoom { zoom: Zoom::Fit }),
+                },
+            ];
+            for percent in [
+                1, 2, 5, 10, 25, 50, 75, 100, 125, 150, 200, 300, 400, 800, 1600, 3200, 6400,
+            ] {
+                items.push(ContextMenuItem::Entry {
+                    label: if percent == 100 {
+                        "Actual size (100%)".into()
+                    } else {
+                        format!("{percent}%").into()
+                    },
+                    icon: None,
+                    shortcut: (percent == 100).then(|| "1".into()),
+                    disabled: false,
+                    action: Box::new(ContextMenuAction::ImageZoom {
+                        zoom: Zoom::Scale(f64::from(percent) / 100.0),
+                    }),
+                });
+            }
+            ContextMenuModel::new(items)
+        }
         TextFormatMenuSection::Encoding => match pane.text_encoding_menu_state() {
             Some(state) => encoding_model(&state),
             None => {
@@ -19,8 +53,9 @@ pub(super) fn model(
         TextFormatMenuSection::TabSize => {
             let (current, _) = pane.effective_tab_size();
             let chosen = pane.active_repo().and_then(|repo| {
-                let path = repo.diff_state.diff_target.as_ref()?.file_path()?;
-                repo.diff_state.text_override_for(path)?.tab_size
+                let diff = pane.bound_diff_state(repo);
+                let path = diff.diff_target.as_ref()?.file_path()?;
+                diff.text_override_for(path)?.tab_size
             });
             tab_size_model(current, chosen, pane.default_tab_size)
         }
@@ -35,6 +70,37 @@ pub(super) fn model(
             )
         }
     }
+}
+
+fn image_sampling_model(prefs: crate::view::image_preview::Preferences) -> ContextMenuModel {
+    use crate::view::image_preview::{ImageSamplingMode, ImageSmoothFilter};
+    let mut items = vec![
+        ContextMenuItem::Header("Image sampling".into()),
+        ContextMenuItem::Description(
+            "Auto uses nearest neighbor at 300% and above. 100% preserves original pixels.".into(),
+        ),
+    ];
+    for mode in ImageSamplingMode::ALL {
+        items.push(ContextMenuItem::Entry {
+            label: mode.label().into(),
+            icon: check(prefs.mode == *mode),
+            shortcut: None,
+            disabled: false,
+            action: Box::new(ContextMenuAction::SetImageSampling { mode: *mode }),
+        });
+    }
+    items.push(ContextMenuItem::Separator);
+    items.push(ContextMenuItem::Header("Smooth filter".into()));
+    for filter in ImageSmoothFilter::ALL {
+        items.push(ContextMenuItem::Entry {
+            label: filter.label().into(),
+            icon: check(prefs.filter == *filter),
+            shortcut: None,
+            disabled: prefs.mode == ImageSamplingMode::Pixels,
+            action: Box::new(ContextMenuAction::SetImageSmoothFilter { filter: *filter }),
+        });
+    }
+    ContextMenuModel::new(items)
 }
 
 fn check(enabled: bool) -> Option<SharedString> {
@@ -327,6 +393,36 @@ fn line_ending_model(editable: bool, policy: SharedString) -> ContextMenuModel {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pixel_mode_disables_smooth_filters_and_keeps_the_choice() {
+        use crate::view::image_preview::{ImageSamplingMode, ImageSmoothFilter, Preferences};
+        let model = image_sampling_model(Preferences {
+            mode: ImageSamplingMode::Pixels,
+            filter: ImageSmoothFilter::Hann,
+        });
+        let mut filters = 0;
+        for item in model.items {
+            if let ContextMenuItem::Entry {
+                disabled,
+                icon,
+                action,
+                ..
+            } = item
+            {
+                match *action {
+                    ContextMenuAction::SetImageSmoothFilter { filter } => {
+                        filters += 1;
+                        assert!(disabled);
+                        assert_eq!(icon.is_some(), filter == ImageSmoothFilter::Hann);
+                    }
+                    ContextMenuAction::SetImageSampling { .. } => assert!(!disabled),
+                    _ => panic!("unexpected image menu action"),
+                }
+            }
+        }
+        assert_eq!(filters, 3);
+    }
 
     fn state(chosen: Option<TextEncoding>) -> TextEncodingMenuState {
         TextEncodingMenuState {

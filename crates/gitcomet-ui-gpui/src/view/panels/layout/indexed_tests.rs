@@ -144,7 +144,6 @@ fn indexed_regression_comparison_handoff_keeps_order_when_range_rows_move() {
 fn indexed_regression_comparison_count_and_cache_survive_metadata_loading(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _guard = crate::test_support::lock_visual_test();
     let (repo, _) = fixture(&[301, 100, 300]);
     let (store, events) =
         gitcomet_state::store::AppStore::new_test(Arc::new(crate::view::test_support::TestBackend));
@@ -184,7 +183,6 @@ fn indexed_regression_comparison_count_and_cache_survive_metadata_loading(
 #[gpui::test]
 fn indexed_history_comparison_ignores_progress_and_unrelated_blocks(cx: &mut gpui::TestAppContext) {
     use gitcomet_core::history_perf::{self, Work};
-    let _guard = crate::test_support::lock_visual_test();
     let (mut repo, commits) = fixture(&[300, 301]);
     let (store, events) =
         gitcomet_state::store::AppStore::new_test(Arc::new(crate::view::test_support::TestBackend));
@@ -223,7 +221,6 @@ fn indexed_history_large_comparisons_prepare_order_once_and_only_build_visible_c
     cx: &mut gpui::TestAppContext,
 ) {
     use gitcomet_core::history_perf::{self, Work};
-    let _guard = crate::test_support::lock_visual_test();
     let (mut repo, commits) = fixture_with_count(&[], 100_000);
     repo.history_state.multi_selection.commits = Arc::new(
         commits

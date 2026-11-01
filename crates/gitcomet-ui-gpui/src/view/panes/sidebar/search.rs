@@ -285,21 +285,26 @@ impl SidebarPaneView {
         )
         .sidebar()
         .input(input)
-        .options(options, move |this: &mut Self, options, _, cx| {
-            if files {
-                this.file_search_options = options;
-                this.file_browser_scroll
-                    .scroll_to_item(0, gpui::ScrollStrategy::Top);
-            } else {
-                this.branch_search_options = options;
-                this.sticky_context = None;
-                this.pending_sidebar_navigation = None;
-                this.branches_scroll
-                    .scroll_to_item(0, gpui::ScrollStrategy::Top);
-                this.sync_popover_branch_filter(cx);
-            }
-            cx.notify();
-        })
+        .options(
+            components::search_toggles(options),
+            move |this: &mut Self, toggles, _, cx| {
+                let options = components::search_options(toggles);
+                if files {
+                    this.file_search_options = options;
+                    this.file_browser_scroll
+                        .scroll_to_item(0, gpui::ScrollStrategy::Top);
+                } else {
+                    this.branch_search_options = options;
+                    this.sticky_context = None;
+                    this.pending_sidebar_navigation = None;
+                    this.sidebar_scroll_animation = None;
+                    this.branches_scroll
+                        .scroll_to_item(0, gpui::ScrollStrategy::Top);
+                    this.sync_popover_branch_filter(cx);
+                }
+                cx.notify();
+            },
+        )
         .on_clear(move |this, _, cx| this.clear_sidebar_search(files, cx))
         .render(theme, scale, cx);
         div()
@@ -501,8 +506,15 @@ impl SidebarPaneView {
         self.clear_branch_filter(cx);
         if let sticky::NavigationTarget::Branch(BranchMenuTarget::Remote { remote, branch }) =
             &target
-            && let Some(path) = self.active_repo().map(|repo| repo.spec.workdir.clone())
+            && let Some((repo_id, path)) = self
+                .active_repo()
+                .map(|repo| (repo.id, repo.spec.workdir.clone()))
         {
+            let before = self
+                .sidebar_collapsed_items_by_repo
+                .get(&path)
+                .cloned()
+                .unwrap_or_default();
             let collapsed = self
                 .sidebar_collapsed_items_by_repo
                 .entry(path)
@@ -524,7 +536,7 @@ impl SidebarPaneView {
                 );
             }
             self.sidebar_presentation_cache = SidebarPresentationCache::default();
-            self.schedule_ui_settings_persist(cx);
+            self.publish_sidebar_collapse_changes(repo_id, &before);
             self.sync_popover_collapsed_items(cx);
         }
         self.pending_sidebar_navigation = Some(target);
@@ -539,7 +551,6 @@ mod tests {
 
     #[gpui::test]
     fn sidebar_files_search_shares_options_and_clears_on_close(cx: &mut gpui::TestAppContext) {
-        let _guard = crate::test_support::lock_visual_test();
         let (store, events) = AppStore::new_test(Arc::new(TestBackend));
         let (view, cx) = cx.add_window_view(|window, cx| {
             window.activate();
@@ -648,7 +659,6 @@ mod tests {
     fn sidebar_search_shares_query_options_visibility_and_focus_across_modes(
         cx: &mut gpui::TestAppContext,
     ) {
-        let _guard = crate::test_support::lock_visual_test();
         let (store, events) = AppStore::new_test(Arc::new(TestBackend));
         let (view, cx) = cx.add_window_view(|window, cx| {
             window.activate();
@@ -746,7 +756,6 @@ mod tests {
     fn sidebar_search_controls_fit_the_minimum_width_at_each_density_and_scale(
         cx: &mut gpui::TestAppContext,
     ) {
-        let _guard = crate::test_support::lock_visual_test();
         let (store, events) = AppStore::new_test(Arc::new(TestBackend));
         let (view, cx) =
             cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -849,7 +858,6 @@ mod tests {
     fn section_locators_use_current_context_and_preserve_minimized_mode(
         cx: &mut gpui::TestAppContext,
     ) {
-        let _guard = crate::test_support::lock_visual_test();
         let (store, events) = AppStore::new_test(Arc::new(TestBackend));
         let (view, cx) =
             cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));

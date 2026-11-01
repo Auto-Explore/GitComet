@@ -28,6 +28,8 @@ pub enum HostError {
     /// The request itself was refused, such as a URL scheme that may not be
     /// opened.
     InvalidRequest(SharedString),
+    /// The terminal tab has closed.
+    TerminalClosed,
 }
 
 impl fmt::Display for HostError {
@@ -35,6 +37,7 @@ impl fmt::Display for HostError {
         f.write_str(match self {
             Self::WindowClosed => "the window has closed",
             Self::RepositoryClosed => "the repository has closed",
+            Self::TerminalClosed => "the terminal has closed",
             Self::Unsupported => "this window does not support the request",
             Self::InvalidRequest(reason) => reason,
         })
@@ -42,6 +45,41 @@ impl fmt::Display for HostError {
 }
 
 impl std::error::Error for HostError {}
+
+/// A locally detected editor. An extension stores its stable id, never a shell command.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ExternalEditor {
+    pub id: String,
+    pub label: String,
+}
+
+/// A tab of the embedded terminal, unique in its window while it is open.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct TerminalId(u64);
+
+impl TerminalId {
+    /// For hosts; extensions receive ids from [`WindowHost::terminals`].
+    #[doc(hidden)]
+    pub fn new(id: u64) -> Self {
+        Self(id)
+    }
+
+    /// For hosts, to find the tab again.
+    #[doc(hidden)]
+    pub fn get(self) -> u64 {
+        self.0
+    }
+}
+
+/// One open tab of the embedded terminal.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TerminalTab {
+    pub repository: RepositoryHandle,
+    pub id: TerminalId,
+    /// The process the tab started, the user's shell; `None` when the
+    /// platform did not report it.
+    pub shell_pid: Option<u32>,
+}
 
 /// A repository in one window. `RepoId`s are per window and may be reused,
 /// so the handle also carries the repository's lifetime token; a handle
@@ -155,6 +193,38 @@ pub trait WindowHostImpl {
         target: crate::SettingsTarget,
         cx: &mut App,
     ) -> Result<(), HostError>;
+    /// Selects a panel tab and reveals its panel, after the current update.
+    fn show_panel_tab(
+        &self,
+        _repository: &RepositoryHandle,
+        _area: crate::PanelArea,
+        _tab: &ContributionId,
+        _cx: &mut App,
+    ) -> Result<(), HostError> {
+        Err(HostError::Unsupported)
+    }
+
+    fn show_details_tab(
+        &self,
+        repository: &RepositoryHandle,
+        tab: &ContributionId,
+        cx: &mut App,
+    ) -> Result<(), HostError> {
+        self.show_panel_tab(repository, crate::PanelArea::Details, tab, cx)
+    }
+
+    fn show_sidebar_tab(
+        &self,
+        repository: &RepositoryHandle,
+        tab: &ContributionId,
+        cx: &mut App,
+    ) -> Result<(), HostError> {
+        self.show_panel_tab(repository, crate::PanelArea::Sidebar, tab, cx)
+    }
+    /// A read-only view that renders markdown.
+    fn create_markdown_view(&self, _cx: &mut App) -> Result<crate::MarkdownView, HostError> {
+        Err(HostError::Unsupported)
+    }
     fn window_id(&self) -> WindowId;
 
     fn is_open(&self, cx: &App) -> bool;
@@ -252,6 +322,57 @@ pub trait WindowHostImpl {
     fn is_current(&self, repository: &RepositoryHandle, cx: &App) -> bool;
 
     /// Dispatches an existing message to the window's store.
+    fn set_commit_identity_resolver(
+        &self,
+        _resolver: Option<crate::CommitIdentityResolver>,
+        _cx: &mut App,
+    ) -> Result<(), HostError> {
+        Err(HostError::Unsupported)
+    }
+    fn set_branch_search(
+        &self,
+        _query: String,
+        _options: gitcomet_core::text_search::TextSearchOptions,
+        _cx: &mut App,
+    ) -> Result<(), HostError> {
+        Err(HostError::Unsupported)
+    }
+    fn external_editors(&self, _cx: &App) -> Vec<ExternalEditor> {
+        Vec::new()
+    }
+    fn set_external_editor(&self, _id: Option<String>, _cx: &mut App) -> Result<(), HostError> {
+        Err(HostError::Unsupported)
+    }
+    fn open_workspace(&self, _paths: Vec<PathBuf>, _cx: &mut App) -> Result<WindowHost, HostError> {
+        Err(HostError::Unsupported)
+    }
+    fn terminals(&self, _cx: &App) -> Vec<TerminalTab> {
+        Vec::new()
+    }
+    fn focus_terminal(&self, _terminal: &TerminalTab, _cx: &mut App) -> Result<(), HostError> {
+        Err(HostError::Unsupported)
+    }
+    fn reveal_commit(
+        &self,
+        _repository: &RepositoryHandle,
+        _commit: &gitcomet_core::domain::CommitId,
+        _cx: &mut App,
+    ) -> Result<(), HostError> {
+        Err(HostError::Unsupported)
+    }
+
+    /// See [`WindowHost::open_terminal`]; `command`, when given, is typed
+    /// with Enter into an embedded terminal's new tab.
+    fn open_terminal(
+        &self,
+        _repository: &RepositoryHandle,
+        _cwd: &Path,
+        _command: Option<&str>,
+        _cx: &mut App,
+    ) -> Result<(), HostError> {
+        Err(HostError::Unsupported)
+    }
+
     fn dispatch(&self, msg: Msg, cx: &mut App) -> Result<(), HostError>;
 
     /// Shows `content` in a modal dialog titled `title`, deferred to the next
@@ -271,12 +392,34 @@ pub trait WindowHostImpl {
         cx: &mut App,
     ) -> Result<DialogHandle, HostError>;
 
+    /// The host's standard actions for a changed-file row.
+    fn open_file_context_menu(
+        &self,
+        _repository: &RepositoryHandle,
+        _source: crate::ChangeSource,
+        _file: gitcomet_core::domain::CommitFileChange,
+        _anchor: gitcomet_ui_kit::gpui::Point<gitcomet_ui_kit::gpui::Pixels>,
+        _cx: &mut App,
+    ) -> Result<(), HostError> {
+        Err(HostError::Unsupported)
+    }
+
     fn open_menu(
         &self,
         anchor: gitcomet_ui_kit::gpui::Point<gitcomet_ui_kit::gpui::Pixels>,
         items: Vec<crate::HostedMenuItem>,
         cx: &mut App,
     ) -> Result<DialogHandle, HostError>;
+
+    fn open_menu_with_on_closed(
+        &self,
+        _anchor: gitcomet_ui_kit::gpui::Point<gitcomet_ui_kit::gpui::Pixels>,
+        _items: Vec<crate::HostedMenuItem>,
+        _on_closed: OnMenuClosed,
+        _cx: &mut App,
+    ) -> Result<DialogHandle, HostError> {
+        Err(HostError::Unsupported)
+    }
 
     fn toast(
         &self,
@@ -323,6 +466,9 @@ pub type WindowContent = Box<dyn FnOnce(&mut Window, &mut App) -> AnyView>;
 
 /// Runs once when a pop-out window closes, however it closes.
 pub type OnWindowClosed = Box<dyn FnOnce(&mut App)>;
+
+/// Runs once when a menu closes, however it closes.
+pub type OnMenuClosed = Box<dyn FnOnce(&mut App)>;
 
 /// What the host implements behind a [`PopOutWindow`].
 #[doc(hidden)]
@@ -409,6 +555,51 @@ impl WindowHost {
         self.0.open_settings_at(target, cx)
     }
 
+    /// Reveals a registered tab in a repository panel. Navigation is deferred
+    /// and checks the repository lifetime again before changing the panel.
+    pub fn show_panel_tab(
+        &self,
+        repository: &RepositoryHandle,
+        area: crate::PanelArea,
+        tab: &ContributionId,
+        cx: &mut App,
+    ) -> Result<(), HostError> {
+        self.check(repository, cx)?;
+        self.0.show_panel_tab(repository, area, tab, cx)
+    }
+
+    /// Selects details tab `tab` (a [`crate::DetailsTabDescriptor`] listed in
+    /// the current view) for `repository`, and shows the details pane if it
+    /// is hidden. [`HostError::Unsupported`] when no such tab is listed.
+    pub fn show_details_tab(
+        &self,
+        repository: &RepositoryHandle,
+        tab: &ContributionId,
+        cx: &mut App,
+    ) -> Result<(), HostError> {
+        self.check(repository, cx)?;
+        self.0.show_details_tab(repository, tab, cx)
+    }
+
+    /// Selects sidebar tab `tab` (a [`crate::SidebarTabDescriptor`] listed in
+    /// the current view) for `repository`, and shows the sidebar if it is
+    /// hidden. [`HostError::Unsupported`] when no such tab is listed.
+    pub fn show_sidebar_tab(
+        &self,
+        repository: &RepositoryHandle,
+        tab: &ContributionId,
+        cx: &mut App,
+    ) -> Result<(), HostError> {
+        self.check(repository, cx)?;
+        self.0.show_sidebar_tab(repository, tab, cx)
+    }
+
+    /// A read-only markdown view to place in the extension's own views; set
+    /// its text with [`crate::MarkdownView::set_source`].
+    pub fn create_markdown_view(&self, cx: &mut App) -> Result<crate::MarkdownView, HostError> {
+        self.0.create_markdown_view(cx)
+    }
+
     /// Invalidates only the owner of the given slot, after this update.
     pub fn invalidate(&self, slot: crate::Slot, _cx: &mut App) {
         self.0.notifier().notify(slot);
@@ -449,6 +640,105 @@ impl WindowHost {
         } else {
             Err(HostError::RepositoryClosed)
         }
+    }
+
+    /// Resolve commit identity independently in this window, at operation time.
+    /// Set this window's editable branch search without changing saved Git configuration.
+    pub fn set_branch_search(
+        &self,
+        query: String,
+        options: gitcomet_core::text_search::TextSearchOptions,
+        cx: &mut App,
+    ) -> Result<(), HostError> {
+        self.0.set_branch_search(query, options, cx)
+    }
+    pub fn external_editors(&self, cx: &App) -> Vec<ExternalEditor> {
+        self.0.external_editors(cx)
+    }
+    /// Override the editor for this window; `None` restores the global preference.
+    pub fn set_external_editor(&self, id: Option<String>, cx: &mut App) -> Result<(), HostError> {
+        self.0.set_external_editor(id, cx)
+    }
+
+    /// The embedded terminal's open tabs in this window, for every
+    /// repository, as of the window's last update.
+    pub fn terminals(&self, cx: &App) -> Vec<TerminalTab> {
+        self.0.terminals(cx)
+    }
+
+    /// Shows `terminal` once this update ends: makes its repository the
+    /// active one, brings the terminal to the front of the bottom panel,
+    /// selects and focuses the tab and activates the window.
+    /// [`HostError::TerminalClosed`] when the tab is no longer open.
+    pub fn focus_terminal(&self, terminal: &TerminalTab, cx: &mut App) -> Result<(), HostError> {
+        self.check(&terminal.repository, cx)?;
+        self.0.focus_terminal(terminal, cx)
+    }
+
+    /// Shows `commit` in `repository`'s History once this update ends, as a
+    /// click on a branch in the sidebar shows its tip: switches to History,
+    /// selects the commit and scrolls its row into view. A commit History's
+    /// mode leaves out switches History to all branches, and that mode is
+    /// kept, as the sidebar keeps it.
+    pub fn reveal_commit(
+        &self,
+        repository: &RepositoryHandle,
+        commit: &gitcomet_core::domain::CommitId,
+        cx: &mut App,
+    ) -> Result<(), HostError> {
+        self.check(repository, cx)?;
+        self.0.reveal_commit(repository, commit, cx)
+    }
+
+    pub fn set_commit_identity_resolver(
+        &self,
+        resolver: Option<crate::CommitIdentityResolver>,
+        cx: &mut App,
+    ) -> Result<(), HostError> {
+        self.0.set_commit_identity_resolver(resolver, cx)
+    }
+    /// Opens a terminal at `cwd` once this update ends, as the user's
+    /// terminal button would: a new tab of `repository`'s embedded terminal,
+    /// brought to the front and focused, or the external terminal they
+    /// chose. A relative `cwd` is joined to the workdir; one that is not a
+    /// folder opens nothing, and the window says so. The repository's own
+    /// terminal still opens in its workdir.
+    pub fn open_terminal(
+        &self,
+        repository: &RepositoryHandle,
+        cwd: &Path,
+        cx: &mut App,
+    ) -> Result<(), HostError> {
+        self.check(repository, cx)?;
+        self.0.open_terminal(repository, cwd, None, cx)
+    }
+
+    /// Like [`Self::open_terminal`], then types `command` and Enter once the
+    /// new tab first prints, so it runs as the user's own: text for whatever
+    /// shell they use, kept in its history. Quoting what goes into it is the
+    /// caller's. One line only: a command with a control character (a line
+    /// break, an escape) is [`HostError::InvalidRequest`]. Only the embedded
+    /// terminal can be handed a command: [`HostError::Unsupported`] when the
+    /// user's terminal button opens an external one.
+    pub fn open_terminal_with_command(
+        &self,
+        repository: &RepositoryHandle,
+        cwd: &Path,
+        command: &str,
+        cx: &mut App,
+    ) -> Result<(), HostError> {
+        self.check(repository, cx)?;
+        self.0.open_terminal(repository, cwd, Some(command), cx)
+    }
+
+    /// Open these repositories together in a new main window, from any host
+    /// kind including Settings. Repository entry gates still run normally.
+    pub fn open_workspace(
+        &self,
+        paths: Vec<PathBuf>,
+        cx: &mut App,
+    ) -> Result<WindowHost, HostError> {
+        self.0.open_workspace(paths, cx)
     }
 
     pub fn dispatch(&self, msg: Msg, cx: &mut App) -> Result<(), HostError> {
@@ -617,6 +907,19 @@ impl WindowHost {
             .open_popover(title.into(), anchor, Box::new(content), cx)
     }
 
+    /// Open the same file actions as the host's built-in changed-file lists.
+    pub fn open_file_context_menu(
+        &self,
+        repository: &RepositoryHandle,
+        source: crate::ChangeSource,
+        file: gitcomet_core::domain::CommitFileChange,
+        anchor: gitcomet_ui_kit::gpui::Point<gitcomet_ui_kit::gpui::Pixels>,
+        cx: &mut App,
+    ) -> Result<(), HostError> {
+        self.0
+            .open_file_context_menu(repository, source, file, anchor, cx)
+    }
+
     pub fn open_menu(
         &self,
         anchor: gitcomet_ui_kit::gpui::Point<gitcomet_ui_kit::gpui::Pixels>,
@@ -624,6 +927,23 @@ impl WindowHost {
         cx: &mut App,
     ) -> Result<DialogHandle, HostError> {
         self.0.open_menu(anchor, items, cx)
+    }
+
+    /// Opens a menu as [`Self::open_menu`] does, and runs `on_closed` once
+    /// it has closed, however it closed: an item chosen, Escape, a click
+    /// away, another popover opening in its place, or its window closing.
+    /// It runs on a later turn of the app, never inside the update that
+    /// closed the menu. So an extension can show what the menu was opened
+    /// from as open until then.
+    pub fn open_menu_with_on_closed(
+        &self,
+        anchor: gitcomet_ui_kit::gpui::Point<gitcomet_ui_kit::gpui::Pixels>,
+        items: Vec<crate::HostedMenuItem>,
+        on_closed: impl FnOnce(&mut App) + 'static,
+        cx: &mut App,
+    ) -> Result<DialogHandle, HostError> {
+        self.0
+            .open_menu_with_on_closed(anchor, items, Box::new(on_closed), cx)
     }
 
     pub fn toast(

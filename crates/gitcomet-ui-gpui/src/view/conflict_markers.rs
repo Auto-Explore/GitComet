@@ -93,7 +93,7 @@ pub(in crate::view) fn stage_confirm_popover(
 /// Anchor for a stage confirmation raised by a keyboard shortcut, which has no
 /// pointer position of its own.
 pub(in crate::view) fn centered_dialog_anchor(window: &Window) -> gpui::Point<Pixels> {
-    let surface = crate::view::chrome::window_surface_bounds(window);
+    let surface = crate::kit::window_chrome::window_surface_bounds(window);
     gpui::point(
         surface.left() + (surface.size.width * 0.5).max(px(64.0)),
         surface.top() + (surface.size.height * 0.25).max(px(24.0)),

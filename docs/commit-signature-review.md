@@ -2,7 +2,7 @@ Commit signature review, 2026-09-11
 
 The review was checked against the worktree, including the staged fixes from the previous pass. Existing fixes were retained. Remaining failures were reproduced in tests before their fixes. The following table maps all 15 findings to the resulting behavior and regression coverage.
 
-Tests live in [core signature tests](../crates/gitcomet-core/tests/commit_signatures.rs), [backend integration tests](../crates/gitcomet-git-gix/tests/commit_signature_integration.rs), [backend cache/parser tests](../crates/gitcomet-git-gix/src/repo/signatures.rs), [state signature tests](../crates/gitcomet-state/src/store/tests/commit_signatures.rs), and the UI test modules beside the affected views.
+Tests live in [core signature tests](../crates/gitcomet-core/tests/commit_signatures.rs), [backend integration tests](../crates/gitcomet-git-gix/tests/integration/commit_signature.rs), [backend cache/parser tests](../crates/gitcomet-git-gix/src/repo/signatures.rs), [state signature tests](../crates/gitcomet-state/src/store/tests/commit_signatures.rs), and the UI test modules beside the affected views.
 
 | # | Finding and disposition | Regression coverage |
 | --- | --- | --- |

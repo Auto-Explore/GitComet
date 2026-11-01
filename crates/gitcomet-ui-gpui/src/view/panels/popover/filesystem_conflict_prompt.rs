@@ -11,9 +11,15 @@ fn resolve(
     move |this, _e, window, cx| {
         let apply_to_all =
             choice != ConflictChoice::Cancel && this.filesystem_conflict_apply_to_all;
-        let _ = this.root_view.update(cx, |root, cx| {
-            root.resolve_filesystem_conflict(prompt_id, choice, apply_to_all, window, cx);
-        });
+        let _ = this.root_view.request(
+            RootRequest::ResolveFilesystemConflict {
+                prompt_id,
+                choice,
+                apply_to_all,
+            },
+            Some(window),
+            cx,
+        );
         this.close_popover_and_restore_focus(window, cx);
     }
 }
@@ -25,7 +31,6 @@ pub(super) fn panel(
     cx: &mut gpui::Context<PopoverHost>,
 ) -> gpui::Div {
     let theme = this.theme;
-    let dialog_width = DIALOG_540_WIDTH.preferred_px(popover_ui_scale(cx));
     let prompt_id = prompt.prompt_id;
 
     let destination = components::TruncatedText::new(
@@ -54,7 +59,6 @@ pub(super) fn panel(
                 .px_2()
                 .py_1()
                 .min_w(px(0.0))
-                .max_w(dialog_width)
                 .font_family(crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY)
                 .child(destination.render(cx)),
         )

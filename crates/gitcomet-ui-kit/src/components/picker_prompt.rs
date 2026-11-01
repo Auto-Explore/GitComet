@@ -9,7 +9,7 @@ use crate::ui_scale::UiScale;
 use crate::{Scrollbar, ScrollbarAxis, TextInput};
 use gpui::prelude::*;
 use gpui::{
-    ClickEvent, CursorStyle, Div, Entity, FontWeight, HighlightStyle, MouseButton, MouseDownEvent,
+    ClickEvent, Div, Entity, FontWeight, HighlightStyle, MouseButton, MouseDownEvent,
     MouseMoveEvent, Pixels, Rgba, ScrollHandle, SharedString, WeakEntity, Window, div, px,
 };
 use palette::IntoColor;
@@ -160,7 +160,7 @@ const SECONDARY_TEXT_REMS: f32 = 0.75;
 /// tree overrides. `row_height_is_the_height_rows_actually_paint_at` pins this
 /// to what a drawn row really measures, so a future global override cannot
 /// silently desynchronise the windowed list's spacers from its rows.
-const LINE_HEIGHT_RATIO: f32 = 1.618_034;
+const LINE_HEIGHT_RATIO: f32 = std::f32::consts::GOLDEN_RATIO;
 /// The list renders every row until its content is this many viewports tall;
 /// past that it renders only what can be seen. Short lists — every picker in the
 /// app bar one — therefore keep exactly the geometry they had before windowing.
@@ -252,6 +252,10 @@ pub fn picker_prompt_layout_ordered(
     collapsed: &BTreeSet<SharedString>,
     order: PickerPromptOrder,
 ) -> PickerPromptLayout {
+    gitcomet_base::history_perf::record_many(
+        gitcomet_base::history_perf::Work::PickerFilterItem,
+        items.len() as u64,
+    );
     let matches = match_items(items, &section_groups(items), query, order);
     let mut layout = PickerPromptLayout {
         item_indices: Vec::with_capacity(matches.len()),
@@ -1449,7 +1453,6 @@ pub fn picker_row<V: 'static>(
         .gap(scaled_px(ROW_ICON_GAP_PX))
         .px(scaled_px(ROW_PAD_X_PX))
         .rounded(scaled_px(ROW_CORNER_PX))
-        .cursor(CursorStyle::PointingHand)
         .when_some(row_icon, |row, icon| {
             row.child(
                 crate::icons::svg_icon(
@@ -1590,7 +1593,9 @@ fn section_header_row(
     if collapsed && header.hidden_count > 0 {
         label_row = label_row.child(
             div()
-                .text_color(with_alpha(theme.colors.foreground.secondary, 0.7))
+                .when(theme.is_dark, |count| {
+                    count.text_color(with_alpha(theme.colors.foreground.secondary, 0.7))
+                })
                 .child(SharedString::from(header.hidden_count.to_string())),
         );
     }
@@ -1618,7 +1623,6 @@ fn section_header_row(
             .debug_selector(move || format!("picker_prompt_section_{debug_label}"))
             .w_full()
             .rounded(scaled_px(ROW_CORNER_PX))
-            .cursor(CursorStyle::PointingHand)
             .control_interaction(InteractionStyle::new(theme), InteractionState::default())
             .child(label_row)
             .on_activate(
@@ -1835,11 +1839,10 @@ pub fn remove_row_button<V: 'static>(
                 .row_height(super::REMOVE_BUTTON_SIZE_PX, 32.0),
         )
         .rounded(px(theme.radii.row))
-        .cursor(CursorStyle::PointingHand)
         .when(!always_visible, |button| {
             button
                 .invisible()
-                .group_hover(row_group, |style| style.visible())
+                .group_hover_style(row_group, |style| style.visible())
         })
         .control_interaction(
             InteractionStyle::destructive(theme),

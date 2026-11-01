@@ -1,11 +1,13 @@
 use super::*;
 
-use crate::view::shortcut_labels::secondary_shortcut;
+use crate::kit::components::secondary_shortcut;
 
 pub(super) fn model(
     repo_id: RepoId,
     path: &std::path::Path,
     branch: Option<&str>,
+    editor_available: bool,
+    location_available: bool,
 ) -> ContextMenuModel {
     let mut items = vec![ContextMenuItem::Header("Worktree".into())];
     items.push(ContextMenuItem::Label(
@@ -21,7 +23,16 @@ pub(super) fn model(
             path: path.to_path_buf(),
         }),
     });
-    if crate::external_editor::configured_setting().is_some() {
+    items.push(ContextMenuItem::Entry {
+        label: "Open folder location".into(),
+        icon: Some("icons/folder.svg".into()),
+        shortcut: None,
+        disabled: !location_available,
+        action: Box::new(ContextMenuAction::OpenRepositoryLocation {
+            path: path.to_path_buf(),
+        }),
+    });
+    if editor_available {
         items.push(ContextMenuItem::Entry {
             label: "Open in code editor".into(),
             icon: Some("icons/open_external.svg".into()),
@@ -53,15 +64,119 @@ pub(super) fn model(
     ContextMenuModel::new(items)
 }
 
+/// The worktrees on one history row, each opening in a tab.
+pub(super) fn commit_model(
+    this: &PopoverHost,
+    repo_id: RepoId,
+    commit_id: &CommitId,
+) -> ContextMenuModel {
+    let sha = commit_id.as_ref();
+    let mut model = ContextMenuModel::new(vec![
+        ContextMenuItem::Header(format!("Worktrees on {}", sha.get(..8).unwrap_or(sha)).into()),
+        ContextMenuItem::Separator,
+    ]);
+    let Some(repo) = this.state.repos.iter().find(|repo| repo.id == repo_id) else {
+        return model;
+    };
+    let Loadable::Ready(worktrees) = &repo.worktrees else {
+        return model;
+    };
+    let dirty = match &repo.worktree_dirty {
+        Loadable::Ready(dirty) => dirty.as_slice(),
+        _ => &[],
+    };
+    let chips = crate::view::caches::history_commit_worktree_chips(
+        &crate::view::caches::history_worktree_chips_by_head(worktrees, &repo.spec.workdir),
+        commit_id,
+        dirty,
+    );
+    for (chip_ix, chip) in chips.into_iter().enumerate() {
+        let index = model.items.len();
+        model
+            .entry_tooltips
+            .insert(index, chip.path.display().to_string().into());
+        model
+            .entry_debug_selectors
+            .insert(index, format!("history_worktree_menu_{chip_ix}").into());
+        model.items.push(ContextMenuItem::Entry {
+            label: chip.label,
+            icon: Some("icons/git_worktree.svg".into()),
+            shortcut: None,
+            disabled: false,
+            action: Box::new(ContextMenuAction::OpenRepo { path: chip.path }),
+        });
+    }
+    model
+}
+
+impl PopoverHost {
+    /// Snapshot availability once per menu opening, away from the UI thread.
+    /// A stat on an offline network share may never return; the menu remains
+    /// usable with the location action disabled while the check is pending.
+    pub(in super::super) fn prepare_worktree_menu_location(
+        &mut self,
+        kind: Option<&PopoverKind>,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.worktree_menu_location_task = None;
+        self.worktree_menu_location = None;
+        let Some(PopoverKind::Repo {
+            kind: RepoPopoverKind::Worktree(WorktreePopoverKind::Menu { path, .. }),
+            ..
+        }) = kind
+        else {
+            return;
+        };
+        let path = path.clone();
+        self.worktree_menu_location = Some((path.clone(), false));
+        let check_path = path.clone();
+        let check = cx
+            .background_executor()
+            .spawn(async move { check_path.is_dir() });
+        self.worktree_menu_location_task = Some(cx.spawn(async move |host, cx| {
+            let available = check.await;
+            let _ = host.update(cx, |host, cx| {
+                if let Some((current_path, current_available)) = &mut host.worktree_menu_location
+                    && *current_path == path
+                {
+                    *current_available = available;
+                    cx.notify();
+                }
+            });
+        }));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
+    fn folder_location_uses_cached_availability_without_checking_disk() {
+        let path = std::path::Path::new("/unavailable/checkout");
+        for available in [false, true] {
+            let menu = model(RepoId(1), path, None, false, available);
+            let disabled = menu.items.iter().find_map(|item| match item {
+                ContextMenuItem::Entry {
+                    action, disabled, ..
+                } if matches!(
+                    action.as_ref(),
+                    ContextMenuAction::OpenRepositoryLocation { .. }
+                ) =>
+                {
+                    Some(*disabled)
+                }
+                _ => None,
+            });
+            assert_eq!(disabled, Some(!available));
+        }
+    }
+
+    #[test]
     fn model_includes_open_in_new_tab() {
         let repo_id = RepoId(1);
         let path = std::path::PathBuf::from("/tmp/worktree");
-        let model = model(repo_id, &path, None);
+        let model = model(repo_id, &path, None, false, true);
 
         let open_action = model
             .items
@@ -86,7 +201,7 @@ mod tests {
     fn model_routes_remove_through_branch_aware_confirm_when_branch_is_provided() {
         let repo_id = RepoId(1);
         let path = std::path::PathBuf::from("/tmp/worktree");
-        let model = model(repo_id, &path, Some("feature/workspace"));
+        let model = model(repo_id, &path, Some("feature/workspace"), false, true);
 
         let remove_action = model
             .items
@@ -111,5 +226,21 @@ mod tests {
                 },
             } if rid == repo_id && remove_path == path && branch == "feature/workspace"
         ));
+    }
+
+    #[test]
+    fn window_editor_override_exposes_the_worktree_action() {
+        let path = std::path::Path::new("/tmp/worktree");
+        let has_editor = |available| {
+            model(RepoId(1), path, None, available, true)
+                .items
+                .iter()
+                .any(|item| {
+                    matches!(item, ContextMenuItem::Entry { action, .. }
+                if matches!(**action, ContextMenuAction::OpenInCodeEditor { .. }))
+                })
+        };
+        assert!(!has_editor(false));
+        assert!(has_editor(true));
     }
 }

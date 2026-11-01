@@ -5,17 +5,19 @@ use super::canvas_text::{
     HighlightSpans, LineMetrics, center_text_y, compute_runs, diff_text_style, empty_highlights,
     line_metrics, paint_gutter_divider, sticky_gutter_bounds, text_clip_bounds_behind_gutter,
 };
-use super::diff_text::{whitespace_visible_line_styled_text_for_raw, whitespace_visible_line_text};
+use super::diff_text::{
+    display_diff_text, hash_text_content, whitespace_visible_line_styled_text_for_raw,
+    whitespace_visible_line_text,
+};
 use super::*;
 use gpui::{
-    App, Bounds, ContentMask, DispatchPhase, Hitbox, HitboxBehavior, Pixels, Styled, TextStyle,
-    Window, fill, point, px, size,
+    App, Bounds, ContentMask, DispatchPhase, Hitbox, HitboxBehavior, PaintQuad, Pixels, Styled,
+    TextStyle, Window, point, px, size,
 };
 use palette::IntoColor;
 use rustc_hash::FxHasher;
 use std::cell::RefCell;
 use std::hash::{Hash, Hasher};
-use std::sync::Arc;
 
 const GUTTER_TEXT_LAYOUT_CACHE_MAX_ENTRIES: usize = 16_384;
 const CONFLICT_TEXT_LAYOUT_CACHE_MAX_ENTRIES: usize = 32_768;
@@ -35,7 +37,7 @@ pub(super) struct ConflictChunkContext {
 }
 
 fn conflict_canvas_click_target(
-    view: &Entity<MainPaneView>,
+    view: &Entity<DiffRenderer>,
     action: impl std::hash::Hash,
     cx: &App,
 ) -> gpui::ElementId {
@@ -55,7 +57,7 @@ fn conflict_canvas_click_target(
 impl ConflictChunkContext {
     fn install_menu(
         &self,
-        view: &Entity<MainPaneView>,
+        view: &Entity<DiffRenderer>,
         target: gpui::ElementId,
         hitbox: &Hitbox,
         invoker: SharedString,
@@ -109,7 +111,7 @@ pub(super) struct AlignmentMarkContext {
 pub(super) fn split_conflict_row_canvas(
     tab_width: usize,
     theme: AppTheme,
-    view: Entity<MainPaneView>,
+    view: Entity<DiffRenderer>,
     visible_row_ix: usize,
     row_ix: usize,
     min_width: Pixels,
@@ -176,18 +178,18 @@ pub(super) fn split_conflict_row_canvas(
             let right_gutter =
                 sticky_gutter_bounds(prepaint.right_col, clip_bounds, pad, gap, line_no_w);
 
-            window.paint_quad(fill(prepaint.left_col, left_bg));
-            window.paint_quad(fill(prepaint.right_col, right_bg));
+            window.paint_quad(PaintQuad::new(prepaint.left_col).background(left_bg));
+            window.paint_quad(PaintQuad::new(prepaint.right_col).background(right_bg));
 
             let divider_x = prepaint.handle_bounds.left()
                 + ((prepaint.handle_bounds.size.width - px(1.0)).max(px(0.0)) * 0.5).floor();
-            window.paint_quad(fill(
-                Bounds::new(
+            window.paint_quad(
+                PaintQuad::new(Bounds::new(
                     point(divider_x, prepaint.handle_bounds.top()),
                     size(px(1.0), prepaint.handle_bounds.size.height),
-                ),
-                theme.colors.stroke.default,
-            ));
+                ))
+                .background(theme.colors.stroke.default),
+            );
 
             if show_line_numbers {
                 window.with_content_mask(
@@ -349,7 +351,7 @@ pub(super) fn split_conflict_row_canvas(
 pub(super) fn single_column_conflict_canvas(
     tab_width: usize,
     theme: AppTheme,
-    view: Entity<MainPaneView>,
+    view: Entity<DiffRenderer>,
     id_prefix: &'static str,
     visible_row_ix: usize,
     row_ix: usize,
@@ -397,30 +399,24 @@ pub(super) fn single_column_conflict_canvas(
             let clip_bounds = window.content_mask().bounds;
             let gutter_bounds = sticky_gutter_bounds(bounds, clip_bounds, pad, gap, line_no_w);
 
-            window.paint_quad(fill(bounds, bg));
+            window.paint_quad(PaintQuad::new(bounds).background(bg));
 
             // section 30 split: highlight rows in the drag selection.
             if row_selected {
-                window.paint_quad(fill(
-                    bounds,
-                    with_alpha(
-                        theme.colors.accent.foreground,
-                        if theme.is_dark { 0.20 } else { 0.14 },
-                    ),
-                ));
+                window.paint_quad(PaintQuad::new(bounds).background(with_alpha(
+                    theme.colors.accent.foreground,
+                    if theme.is_dark { 0.20 } else { 0.14 },
+                )));
             }
 
             // kdiff3 manual diff help: marked lines use the warning hue so they
             // stay distinguishable from an accent-tinted split selection, which
             // can be active in the same columns at the same time.
             if alignment_marked {
-                window.paint_quad(fill(
-                    bounds,
-                    with_alpha(
-                        theme.colors.status.warning.foreground,
-                        if theme.is_dark { 0.22 } else { 0.16 },
-                    ),
-                ));
+                window.paint_quad(PaintQuad::new(bounds).background(with_alpha(
+                    theme.colors.status.warning.foreground,
+                    if theme.is_dark { 0.22 } else { 0.16 },
+                )));
             }
 
             // section 30: mark the active conflict's rows with an accent bar so a
@@ -440,7 +436,7 @@ pub(super) fn single_column_conflict_canvas(
                         bounds.size.height,
                     ),
                 );
-                window.paint_quad(fill(bar, theme.colors.accent.foreground));
+                window.paint_quad(PaintQuad::new(bar).background(theme.colors.accent.foreground));
             }
 
             if show_line_numbers {
@@ -632,62 +628,25 @@ fn prepare_conflict_text_for_canvas(
     styled: Option<&CachedDiffStyledText>,
     reveal_whitespace_chars: bool,
 ) -> PreparedConflictText {
-    let Some(styled) = styled else {
-        let display = if reveal_whitespace_chars {
-            whitespace_visible_line_text(text.as_ref())
-        } else {
-            text
-        };
-        return PreparedConflictText {
-            text_hash: hash_text(display.as_ref()),
-            text: display,
+    let display = if !reveal_whitespace_chars {
+        display_diff_text(styled, text)
+    } else if let Some(styled) = styled.filter(|styled| !styled.highlights.is_empty()) {
+        whitespace_visible_line_styled_text_for_raw(tab_width, styled, text.as_ref())
+    } else {
+        let text = whitespace_visible_line_text(text.as_ref());
+        CachedDiffStyledText {
+            text_hash: hash_text_content(text.as_ref()),
+            text,
             highlights: empty_highlights(),
             highlights_hash: 0,
-        };
-    };
-
-    if styled.highlights.is_empty() {
-        if reveal_whitespace_chars {
-            let display = whitespace_visible_line_text(text.as_ref());
-            return PreparedConflictText {
-                text_hash: hash_text(display.as_ref()),
-                text: display,
-                highlights: empty_highlights(),
-                highlights_hash: 0,
-            };
         }
-        // The text is the styled text unchanged, whose hash is already known;
-        // re-hashing it here ran per visible row per frame.
-        return PreparedConflictText {
-            text_hash: styled.text_hash,
-            text: styled.text.clone(),
-            highlights: empty_highlights(),
-            highlights_hash: 0,
-        };
-    }
-
-    if reveal_whitespace_chars {
-        let visible = whitespace_visible_line_styled_text_for_raw(tab_width, styled, text.as_ref());
-        return PreparedConflictText {
-            text: visible.text,
-            highlights: visible.highlights,
-            text_hash: visible.text_hash,
-            highlights_hash: visible.highlights_hash,
-        };
-    }
-
+    };
     PreparedConflictText {
-        text: styled.text.clone(),
-        highlights: Arc::clone(&styled.highlights),
-        text_hash: styled.text_hash,
-        highlights_hash: styled.highlights_hash,
+        text: display.text,
+        highlights: display.highlights,
+        text_hash: display.text_hash,
+        highlights_hash: display.highlights_hash,
     }
-}
-
-fn hash_text(text: &str) -> u64 {
-    let mut hasher = FxHasher::default();
-    text.hash(&mut hasher);
-    hasher.finish()
 }
 
 #[cfg(test)]
@@ -916,7 +875,7 @@ fn ensure_layout_cached(
         let run = base_style.to_run(prepared.text.len());
         window
             .text_system()
-            .shape_line(prepared.text.clone(), metrics.font_size, &[run], None)
+            .shape_line(prepared.text.clone(), metrics.font_size, &[run])
     } else {
         let runs = compute_runs(
             prepared.text.as_ref(),
@@ -925,7 +884,7 @@ fn ensure_layout_cached(
         );
         window
             .text_system()
-            .shape_line(prepared.text.clone(), metrics.font_size, &runs, None)
+            .shape_line(prepared.text.clone(), metrics.font_size, &runs)
     };
 
     CONFLICT_TEXT_LAYOUT_CACHE.with(|cache| {
@@ -957,6 +916,30 @@ fn conflict_layout_key(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn crlf_conflict_cells_hide_only_the_painted_terminator() {
+        let raw: SharedString = "alpha\r".into();
+        let style = gpui::HighlightStyle {
+            font_weight: Some(gpui::FontWeight::BOLD),
+            ..Default::default()
+        };
+        let styled =
+            super::super::diff_text::build_cached_diff_styled_text_from_relative_highlights(
+                4,
+                raw.as_ref(),
+                &[(0..raw.len(), style)],
+            );
+        for styled in [None, Some(&styled)] {
+            let hidden = prepare_conflict_text_for_canvas(4, raw.clone(), styled, false);
+            assert_eq!(hidden.text.as_ref(), "alpha");
+            assert!(hidden.highlights.iter().all(|(range, _)| range.end <= 5));
+            let revealed = prepare_conflict_text_for_canvas(4, raw.clone(), styled, true);
+            assert_eq!(revealed.text.as_ref(), "alpha␍↵");
+            assert_ne!(hidden.text_hash, revealed.text_hash);
+        }
+        assert_eq!(raw.as_ref(), "alpha\r");
+    }
 
     #[test]
     fn prepare_text_cell_applies_whitespace_when_no_styled_text() {
@@ -1049,7 +1032,7 @@ mod tests {
         assert_eq!(prepared.text.as_ref(), "a·b↵");
         assert_eq!(prepared.highlights.len(), 1);
         assert_eq!(prepared.highlights[0].0, 1..4);
-        assert_eq!(prepared.text_hash, hash_text("a·b↵"));
+        assert_eq!(prepared.text_hash, hash_text_content("a·b↵"));
         assert_ne!(prepared.highlights_hash, 0);
     }
 

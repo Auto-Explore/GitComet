@@ -34,7 +34,7 @@
 #
 # `queries/` is deliberately not vendored, matching vendor/tree-sitter-vue.
 # GitComet keeps its own queries in
-# crates/gitcomet-ui-gpui/src/view/rows/diff_text/queries/.
+# crates/gitcomet-syntax/src/queries/.
 [package]
 name = "tree-sitter-julia"
 description = "Julia grammar for tree-sitter"

@@ -12,6 +12,7 @@ use std::{
 
 fn git(path: &Path, args: &[&str]) {
     let output = Command::new("git")
+        .args(["-c", "maintenance.auto=false"])
         .arg("-C")
         .arg(path)
         .args(args)
@@ -95,7 +96,7 @@ fn run(path: &Path, repeats: usize) {
             ) {
                 continue;
             }
-            let relative = gix::path::try_from_bstr(entry.path(&index)).unwrap();
+            let relative = gix::path::from_bstr(entry.path(&index)).unwrap();
             fs::OpenOptions::new()
                 .write(true)
                 .open(path.join(relative))
@@ -105,11 +106,11 @@ fn run(path: &Path, repeats: usize) {
         }
         let token = CancellationToken::new();
         let start = Instant::now();
-        let status = repo.status_cancellable(&token).unwrap();
+        let status = repo.status(&token).unwrap();
         let status_elapsed = start.elapsed();
         let stats_start = Instant::now();
         let stats = repo
-            .uncommitted_line_stats_for_status_cancellable(&status, &token)
+            .uncommitted_line_stats_for_status(&status, &token)
             .unwrap();
         let stats_elapsed = stats_start.elapsed();
         let elapsed = start.elapsed();

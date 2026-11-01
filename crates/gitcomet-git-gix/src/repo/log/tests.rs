@@ -1,59 +1,40 @@
 use super::*;
+use crate::test_support::{
+    git_command, git_stdout, git_success, init_test_repo, open_repo, write_file,
+};
 use gitcomet_core::domain::UpstreamDivergence;
 use std::fs;
 
-fn git_success(workdir: &Path, args: &[&str]) {
-    let mut cmd = crate::util::git_workdir_cmd_for(workdir);
-    let output = cmd.args(args).output().expect("spawn git");
+mod tracking;
+
+/// Runs git in `workdir` with `input` on its stdin; it must succeed.
+fn git_with_stdin(workdir: &Path, args: &[&str], input: &[u8]) {
+    use std::io::Write as _;
+    let mut child = git_command()
+        .arg("-C")
+        .arg(workdir)
+        .args(args)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("spawn git");
+    // Checked after the exit: git rejecting the stream closes the pipe, and
+    // its stderr says why where the write error would only say EPIPE.
+    let written = child.stdin.take().expect("git stdin").write_all(input);
+    let output = child.wait_with_output().expect("git exit");
     assert!(
         output.status.success(),
-        "git {:?} failed\nstdout:\n{}\nstderr:\n{}",
-        args,
-        String::from_utf8_lossy(&output.stdout),
+        "git {args:?} failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-}
-
-fn git_stdout(workdir: &Path, args: &[&str]) -> String {
-    let mut cmd = crate::util::git_workdir_cmd_for(workdir);
-    let output = cmd.args(args).output().expect("spawn git");
-    assert!(output.status.success(), "git {args:?} failed");
-    String::from_utf8(output.stdout)
-        .expect("utf8 stdout")
-        .trim()
-        .to_string()
-}
-
-fn init_test_repo(workdir: &Path) {
-    git_success(workdir, &["init"]);
-    for args in [
-        ["config", "core.autocrlf", "false"].as_slice(),
-        ["config", "core.eol", "lf"].as_slice(),
-        ["config", "commit.gpgsign", "false"].as_slice(),
-        ["config", "user.name", "Test User"].as_slice(),
-        ["config", "user.email", "test@example.com"].as_slice(),
-    ] {
-        git_success(workdir, args);
-    }
-}
-
-fn write_file(workdir: &Path, relative: &str, contents: &str) {
-    let path = workdir.join(relative);
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).expect("create parent directories");
-    }
-    fs::write(path, contents).expect("write file");
+    written.expect("write git stdin");
 }
 
 fn commit_file(workdir: &Path, path: &str, contents: &str, message: &str) {
     write_file(workdir, path, contents);
     git_success(workdir, &["add", path]);
     git_success(workdir, &["commit", "-m", message]);
-}
-
-fn open_repo(workdir: &Path) -> GixRepo {
-    let thread_safe_repo = gix::open(workdir).expect("open repo").into_sync();
-    GixRepo::new(workdir.to_path_buf(), thread_safe_repo)
 }
 
 /// Classification costs a header lookup and a small read per file (~2 us), so
@@ -82,21 +63,7 @@ fn commit_pointer_classification_outlasts_the_stats_limit() {
         for n in 0..count {
             stream.push_str(&format!("M 100644 :1 {n}.bin\n"));
         }
-        let mut child = crate::util::git_workdir_cmd_for(workdir)
-            .args(["fast-import", "--quiet"])
-            .stdin(std::process::Stdio::piped())
-            .spawn()
-            .unwrap();
-        {
-            use std::io::Write as _;
-            child
-                .stdin
-                .take()
-                .unwrap()
-                .write_all(stream.as_bytes())
-                .unwrap();
-        }
-        assert!(child.wait().unwrap().success());
+        git_with_stdin(workdir, &["fast-import", "--quiet"], stream.as_bytes());
         let id = CommitId(git_stdout(workdir, &["rev-parse", "pointers"]).into());
         let details = open_repo(workdir).commit_details_impl(&id).unwrap();
         assert_eq!(details.files.len(), count);
@@ -193,7 +160,7 @@ fn shallow_snapshot_uses_contents_even_when_stat_metadata_collides() {
     init_test_repo(workdir);
     let repo = open_repo(workdir);
     let local_repo = repo.repo();
-    let shallow_file = local_repo.shallow_file();
+    let shallow_file = local_repo.shallow_file().expect("shallow file path");
 
     fs::write(&shallow_file, b"1111111111111111111111111111111111111111\n")
         .expect("write first shallow boundary");
@@ -227,9 +194,10 @@ fn only_a_missing_object_allows_the_date_order_fallback() {
     let missing = gix::error::not_found("An object with id 1111111 could not be found")
         .raise_erased()
         .raise(gix::error::message("date-order setup failed"))
-        .erased();
-    let corrupt = gix::error::corruption("Internal state (bitflags) not found").raise_erased();
-    let cancelled = std::io::Error::from(std::io::ErrorKind::Interrupted).raise_erased();
+        .erased()
+        .into();
+    let corrupt = gix::error::corruption("Internal state (bitflags) not found").into();
+    let cancelled = gix::Error::from_error(std::io::Error::from(std::io::ErrorKind::Interrupted));
 
     assert!(topo_build_error_is_missing_object(&missing));
     assert!(!topo_build_error_is_missing_object(&corrupt));
@@ -237,9 +205,9 @@ fn only_a_missing_object_allows_the_date_order_fallback() {
 }
 
 #[test]
-fn diff_range_files_lists_changes_between_two_commits() {
+fn compare_files_lists_changes_between_two_commits() {
     use gitcomet_core::domain::FileStatusKind;
-    use gitcomet_core::services::GitRepository;
+    use gitcomet_core::services::{CancellationToken, ComparisonOptions, GitRepository};
 
     let tmp = tempfile::tempdir().expect("tempdir");
     let repo = tmp.path();
@@ -262,8 +230,14 @@ fn diff_range_files_lists_changes_between_two_commits() {
 
     let opened = open_repo(repo);
     let mut files = opened
-        .diff_range_files(&CommitId(from.into()), Some(&CommitId(to.into())))
-        .expect("diff_range_files should succeed");
+        .compare_files(
+            &CommitId(from.into()),
+            Some(&CommitId(to.into())),
+            &ComparisonOptions::direct(),
+            &CancellationToken::new(),
+        )
+        .expect("compare_files should succeed")
+        .files;
     files.sort_by(|a, b| a.path.cmp(&b.path));
 
     let by_path: Vec<(String, FileStatusKind)> = files
@@ -281,9 +255,9 @@ fn diff_range_files_lists_changes_between_two_commits() {
 }
 
 #[test]
-fn diff_range_files_lists_changes_against_the_working_tree() {
+fn compare_files_lists_changes_against_the_working_tree() {
     use gitcomet_core::domain::FileStatusKind;
-    use gitcomet_core::services::GitRepository;
+    use gitcomet_core::services::{CancellationToken, ComparisonOptions, GitRepository};
 
     let tmp = tempfile::tempdir().expect("tempdir");
     let repo = tmp.path();
@@ -309,8 +283,14 @@ fn diff_range_files_lists_changes_against_the_working_tree() {
     let opened = open_repo(repo);
     // `None` tip = compare `from` against the working tree.
     let mut files = opened
-        .diff_range_files(&CommitId(from.into()), None)
-        .expect("diff_range_files should succeed");
+        .compare_files(
+            &CommitId(from.into()),
+            None,
+            &ComparisonOptions::direct(),
+            &CancellationToken::new(),
+        )
+        .expect("compare_files should succeed")
+        .files;
     files.sort_by(|a, b| a.path.cmp(&b.path));
 
     let by_path: Vec<(String, FileStatusKind)> = files
@@ -327,27 +307,20 @@ fn diff_range_files_lists_changes_against_the_working_tree() {
     );
 }
 
-/// A gitlink has to be flagged as a submodule on both comparison paths. The
-/// tree-diff path reads the entry mode; the working-tree path only gets modes
-/// out of `git diff --raw`, so a plain `--name-status` listing would render
-/// the same submodule as an ordinary file.
-#[test]
-fn diff_range_files_flags_a_submodule_pointer_against_the_working_tree() {
-    use gitcomet_core::services::GitRepository;
+/// What `compare_files` lists against the working tree after a gitlink
+/// `vendor/sub` is staged straight into the index: no submodule clone needed
+/// for the 160000 entry mode. The directory has to exist or `git diff
+/// <commit>` skips the entry when comparing against the working tree.
+fn worktree_files_with_a_staged_gitlink() -> Vec<CommitFileChange> {
+    use gitcomet_core::services::{CancellationToken, ComparisonOptions, GitRepository};
 
     let tmp = tempfile::tempdir().expect("tempdir");
     let repo = tmp.path();
     init_test_repo(repo);
-
     write_file(repo, "keep.txt", "one\n");
     git_success(repo, &["add", "."]);
     git_success(repo, &["commit", "-m", "base"]);
     let from = git_stdout(repo, &["rev-parse", "HEAD"]);
-
-    // A gitlink staged straight into the index — no submodule clone needed
-    // to produce the 160000 entry mode the flag is derived from. The
-    // directory has to exist or `git diff <commit>` skips the entry when
-    // comparing against the working tree.
     fs::create_dir_all(repo.join("vendor/sub")).expect("create gitlink dir");
     git_success(
         repo,
@@ -361,17 +334,33 @@ fn diff_range_files_flags_a_submodule_pointer_against_the_working_tree() {
             ),
         ],
     );
+    open_repo(repo)
+        .compare_files(
+            &CommitId(from.into()),
+            None,
+            &ComparisonOptions::direct(),
+            &CancellationToken::new(),
+        )
+        .expect("compare_files should succeed")
+        .files
+}
 
-    let opened = open_repo(repo);
-    let files = opened
-        .diff_range_files(&CommitId(from.into()), None)
-        .expect("diff_range_files should succeed");
-    let gitlink = files
+fn staged_gitlink(files: &[CommitFileChange]) -> &CommitFileChange {
+    files
         .iter()
         .find(|f| f.path.to_string_lossy() == "vendor/sub")
-        .expect("the gitlink should be listed");
+        .expect("the gitlink should be listed")
+}
+
+/// A gitlink has to be flagged as a submodule on both comparison paths. The
+/// tree-diff path reads the entry mode; the working-tree path only gets modes
+/// out of `git diff --raw`, so a plain `--name-status` listing would render
+/// the same submodule as an ordinary file.
+#[test]
+fn compare_files_flags_a_submodule_pointer_against_the_working_tree() {
+    let files = worktree_files_with_a_staged_gitlink();
     assert!(
-        gitlink.is_submodule,
+        staged_gitlink(&files).is_submodule,
         "a gitlink must be reported as a submodule, not as a plain file"
     );
     assert!(
@@ -382,14 +371,26 @@ fn diff_range_files_flags_a_submodule_pointer_against_the_working_tree() {
     );
 }
 
+/// Numstat counts a gitlink's "Subproject commit" line; a submodule pointer
+/// has no line counts here, as in a commit's file list.
+#[test]
+fn a_submodule_pointer_has_no_line_counts_against_the_working_tree() {
+    let files = worktree_files_with_a_staged_gitlink();
+    let gitlink = staged_gitlink(&files);
+    assert_eq!(
+        (gitlink.line_stats.additions, gitlink.line_stats.deletions),
+        (None, None)
+    );
+}
+
 /// A rename is the one `git diff --raw` record that carries *two* path
 /// fields instead of one. Mis-counting them shifts every following record by
 /// a field, silently pairing paths with the wrong statuses for the rest of
 /// the listing, so the shape is worth pinning directly.
 #[test]
-fn diff_range_files_parses_renames_against_the_working_tree() {
+fn compare_files_parses_renames_against_the_working_tree() {
     use gitcomet_core::domain::FileStatusKind;
-    use gitcomet_core::services::GitRepository;
+    use gitcomet_core::services::{CancellationToken, ComparisonOptions, GitRepository};
 
     let tmp = tempfile::tempdir().expect("tempdir");
     let repo = tmp.path();
@@ -412,8 +413,14 @@ fn diff_range_files_parses_renames_against_the_working_tree() {
 
     let opened = open_repo(repo);
     let mut files = opened
-        .diff_range_files(&CommitId(from.into()), None)
-        .expect("diff_range_files should succeed");
+        .compare_files(
+            &CommitId(from.into()),
+            None,
+            &ComparisonOptions::direct(),
+            &CancellationToken::new(),
+        )
+        .expect("compare_files should succeed")
+        .files;
     files.sort_by(|a, b| a.path.cmp(&b.path));
 
     let by_path: Vec<(String, FileStatusKind)> = files
@@ -435,9 +442,9 @@ fn diff_range_files_parses_renames_against_the_working_tree() {
 /// expressed — a root has no parent to diff from — so it has to resolve as a
 /// comparison base even though it is not a commit.
 #[test]
-fn diff_range_files_accepts_the_empty_tree_as_a_base() {
+fn compare_files_accepts_the_empty_tree_as_a_base() {
     use gitcomet_core::domain::{FileStatusKind, empty_tree_id_like};
-    use gitcomet_core::services::GitRepository;
+    use gitcomet_core::services::{CancellationToken, ComparisonOptions, GitRepository};
 
     let tmp = tempfile::tempdir().expect("tempdir");
     let repo = tmp.path();
@@ -451,11 +458,14 @@ fn diff_range_files_accepts_the_empty_tree_as_a_base() {
 
     let opened = open_repo(repo);
     let mut files = opened
-        .diff_range_files(
+        .compare_files(
             &empty_tree_id_like(&CommitId(root.clone().into())).unwrap(),
             Some(&CommitId(root.into())),
+            &ComparisonOptions::direct(),
+            &CancellationToken::new(),
         )
-        .expect("the empty tree should resolve as a base");
+        .expect("the empty tree should resolve as a base")
+        .files;
     files.sort_by(|a, b| a.path.cmp(&b.path));
 
     let by_path: Vec<(String, FileStatusKind)> = files
@@ -657,7 +667,8 @@ fn cursor_file_history_pages_reuse_cached_follow_history() {
     assert_eq!(page1.commits.len(), 1);
     assert!(page1.next_cursor.is_some());
     assert!(
-        repo.log_file_follow_cache
+        repo.history_cache
+            .file_follow
             .lock()
             .expect("log file follow cache")
             .is_empty(),
@@ -672,7 +683,8 @@ fn cursor_file_history_pages_reuse_cached_follow_history() {
 
     let cached_commits = {
         let cache = repo
-            .log_file_follow_cache
+            .history_cache
+            .file_follow
             .lock()
             .expect("log file follow cache");
         assert_eq!(cache.len(), 1);
@@ -687,7 +699,8 @@ fn cursor_file_history_pages_reuse_cached_follow_history() {
     assert_eq!(page3.commits.len(), 1);
 
     let cache = repo
-        .log_file_follow_cache
+        .history_cache
+        .file_follow
         .lock()
         .expect("log file follow cache");
     assert_eq!(cache.len(), 1);
@@ -796,7 +809,7 @@ fn finishing_a_page_reports_a_request_that_was_superseded_while_it_was_built() {
 
     let key = repo.log_page_cache_key(
         HistoryMode::AllBranches,
-        super::super::LogPageSeed::Tips(std::sync::Arc::from(Vec::new())),
+        super::LogPageSeed::Tips(std::sync::Arc::from(Vec::new())),
         &shallow,
         10,
         None,
@@ -832,11 +845,15 @@ fn deep_log_pages_share_a_total_cache_row_budget() {
     commit_file(tmp.path(), "a.txt", "one\n", "first");
     let repo = open_repo(tmp.path());
     let shallow = shallow_snapshot(&repo.repo()).expect("shallow snapshot");
-    let commit = repo.log_head_page_impl(1, None).unwrap().commits[0].clone();
+    let commit = repo
+        .log_head_page_cancellable_impl(1, None, &gitcomet_core::services::CancellationToken::new())
+        .unwrap()
+        .commits[0]
+        .clone();
     for limit in [4000, 4001, 4002, 20_000] {
         let key = repo.log_page_cache_key(
             HistoryMode::AllBranches,
-            super::super::LogPageSeed::Tips(Arc::from(Vec::new())),
+            super::LogPageSeed::Tips(Arc::from(Vec::new())),
             &shallow,
             limit,
             None,
@@ -850,7 +867,8 @@ fn deep_log_pages_share_a_total_cache_row_budget() {
             }),
         );
         let rows: usize = repo
-            .log_page_cache
+            .history_cache
+            .pages
             .lock()
             .unwrap()
             .iter()
@@ -889,14 +907,14 @@ fn a_cached_page_keeps_the_page_that_follows_it_from_being_evicted() {
     let shallow = shallow_snapshot(&local_repo).expect("shallow snapshot");
     let second_key = repo.log_page_cache_key(
         mode,
-        super::super::LogPageSeed::Head(head),
+        super::LogPageSeed::Head(head),
         &shallow,
         4,
         Some(&cursor),
         None,
     );
 
-    for round in 0..super::super::LOG_PAGE_CACHE_LIMIT + 4 {
+    for round in 0..super::LOG_PAGE_CACHE_LIMIT + 4 {
         repo.log_history_mode_page_impl(mode, 5 + round, None)
             .expect("filler page");
         repo.log_history_mode_page_impl(mode, 4, None)
@@ -938,6 +956,7 @@ fn a_page_chunk_counts_lookahead_and_rejected_commits_as_visited() {
         &shallow,
         None,
         None,
+        None,
     )
     .expect("build page walk");
     let mut scanned = Vec::new();
@@ -969,6 +988,7 @@ fn a_page_chunk_counts_lookahead_and_rejected_commits_as_visited() {
         [head],
         HistoryMode::FullReachable,
         &shallow,
+        None,
         None,
         None,
     )
@@ -1106,29 +1126,7 @@ fn fast_import_commits(workdir: &Path, branch: &str, from: Option<&str>, count: 
             content.len()
         ));
     }
-    let mut cmd = crate::util::git_workdir_cmd_for(workdir);
-    let mut child = cmd
-        .args(["fast-import", "--quiet"])
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .expect("spawn git fast-import");
-    {
-        use std::io::Write as _;
-        child
-            .stdin
-            .take()
-            .expect("fast-import stdin")
-            .write_all(stream.as_bytes())
-            .expect("write fast-import stream");
-    }
-    let output = child.wait_with_output().expect("fast-import exit");
-    assert!(
-        output.status.success(),
-        "fast-import failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
+    git_with_stdin(workdir, &["fast-import", "--quiet"], stream.as_bytes());
 }
 
 fn head_commit_id(workdir: &Path) -> CommitId {
@@ -1159,13 +1157,16 @@ fn commit_details_stats_skip_oversized_blobs_without_inflating_them() {
     };
     assert_eq!(
         (
-            by_path("small.txt").additions,
-            by_path("small.txt").deletions
+            by_path("small.txt").line_stats.additions,
+            by_path("small.txt").line_stats.deletions
         ),
         (Some(1), Some(0))
     );
     assert_eq!(
-        (by_path("big.bin").additions, by_path("big.bin").deletions),
+        (
+            by_path("big.bin").line_stats.additions,
+            by_path("big.bin").line_stats.deletions
+        ),
         (None, None),
         "a blob over the size cap must report unknown stats"
     );
@@ -1192,7 +1193,7 @@ fn commit_details_stats_treat_binary_and_absent_sides_as_before() {
             .iter()
             .find(|file| file.path == Path::new(name))
             .unwrap_or_else(|| panic!("{name} in details"));
-        (file.additions, file.deletions)
+        (file.line_stats.additions, file.line_stats.deletions)
     };
     assert_eq!(stats("binary.dat"), (None, None));
     assert_eq!(stats("keep.txt"), (Some(0), Some(2)));
@@ -1223,7 +1224,9 @@ fn upstream_divergence_is_memoized_by_tip_pair_and_recomputed_when_tips_move() {
     commit_file(tmp.path(), "a.txt", "2\n", "c2");
 
     let repo = open_repo(tmp.path());
-    let first = repo.upstream_divergence_impl().expect("divergence");
+    let first = repo
+        .upstream_divergence_cancellable_impl(&gitcomet_core::services::CancellationToken::new())
+        .expect("divergence");
     assert_eq!(
         first,
         Some(UpstreamDivergence {
@@ -1233,13 +1236,15 @@ fn upstream_divergence_is_memoized_by_tip_pair_and_recomputed_when_tips_move() {
     );
     assert_eq!(repo.divergence_cache.lock().expect("cache").len(), 1);
 
-    let again = repo.upstream_divergence_impl().expect("divergence again");
+    let again = repo
+        .upstream_divergence_cancellable_impl(&gitcomet_core::services::CancellationToken::new())
+        .expect("divergence again");
     assert_eq!(again, first);
     assert_eq!(repo.divergence_cache.lock().expect("cache").len(), 1);
 
     commit_file(tmp.path(), "a.txt", "3\n", "c3");
     let moved = repo
-        .upstream_divergence_impl()
+        .upstream_divergence_cancellable_impl(&gitcomet_core::services::CancellationToken::new())
         .expect("divergence after move");
     assert_eq!(
         moved,
@@ -1253,7 +1258,7 @@ fn upstream_divergence_is_memoized_by_tip_pair_and_recomputed_when_tips_move() {
     // Upstream catching up produces the equal-tip fast path (no walk, no entry).
     git_success(tmp.path(), &["fetch", "-q", "origin"]);
     let caught_up = repo
-        .upstream_divergence_impl()
+        .upstream_divergence_cancellable_impl(&gitcomet_core::services::CancellationToken::new())
         .expect("divergence caught up");
     assert_eq!(caught_up, Some(UpstreamDivergence::default()));
     assert_eq!(repo.divergence_cache.lock().expect("cache").len(), 2);
@@ -1304,9 +1309,12 @@ fn upstream_divergence_cache_invalidates_on_shallow_boundary_changes() {
             fs::remove_file(tmp.path().join(".git/shallow")).expect("unshallow");
         }
         assert_eq!(git_stdout(tmp.path(), &["show-ref"]), tips);
-        let fresh = open_repo(tmp.path())
-            .upstream_divergence_impl()
-            .expect("fresh divergence");
+        let fresh =
+            open_repo(tmp.path())
+                .upstream_divergence_cancellable_impl(
+                    &gitcomet_core::services::CancellationToken::new(),
+                )
+                .expect("fresh divergence");
         let ahead: usize = git_stdout(
             tmp.path(),
             &["rev-list", "--count", "HEAD", "--not", "@{upstream}"],
@@ -1315,7 +1323,13 @@ fn upstream_divergence_cache_invalidates_on_shallow_boundary_changes() {
         .unwrap();
         assert_eq!(ahead, expected_ahead);
         assert_eq!(fresh.unwrap().ahead, ahead);
-        assert_eq!(repo.upstream_divergence_impl().expect("divergence"), fresh);
+        assert_eq!(
+            repo.upstream_divergence_cancellable_impl(
+                &gitcomet_core::services::CancellationToken::new()
+            )
+            .expect("divergence"),
+            fresh
+        );
     }
 }
 
@@ -1330,8 +1344,12 @@ fn all_branches_tips_reuse_cached_tips_until_the_ref_namespace_changes() {
 
     let repo = open_repo(tmp.path());
     let handle = repo.repo();
-    let first = repo.all_branches_tips(&handle, None).expect("tips");
-    let second = repo.all_branches_tips(&handle, None).expect("tips again");
+    let first = repo
+        .all_branches_tips(&handle, &HistoryMode::AllBranches.into(), None)
+        .expect("tips");
+    let second = repo
+        .all_branches_tips(&handle, &HistoryMode::AllBranches.into(), None)
+        .expect("tips again");
     assert!(
         Arc::ptr_eq(&first, &second),
         "an unchanged ref namespace must serve the cached tips"
@@ -1345,14 +1363,14 @@ fn all_branches_tips_reuse_cached_tips_until_the_ref_namespace_changes() {
     commit_file(tmp.path(), "a.txt", "2\n", "c2");
     let handle = repo.repo();
     let moved = repo
-        .all_branches_tips(&handle, None)
+        .all_branches_tips(&handle, &HistoryMode::AllBranches.into(), None)
         .expect("tips after commit");
     assert_eq!(moved.len(), 2, "main moved away from topic");
     assert!(!Arc::ptr_eq(&first, &moved));
 
     git_success(tmp.path(), &["tag", "-m", "v2", "v2"]);
     let tagged = repo
-        .all_branches_tips(&handle, None)
+        .all_branches_tips(&handle, &HistoryMode::AllBranches.into(), None)
         .expect("tips after tag");
     assert!(
         Arc::ptr_eq(&moved, &tagged),
@@ -1361,14 +1379,14 @@ fn all_branches_tips_reuse_cached_tips_until_the_ref_namespace_changes() {
 
     git_success(tmp.path(), &["branch", "-D", "topic"]);
     let deleted = repo
-        .all_branches_tips(&handle, None)
+        .all_branches_tips(&handle, &HistoryMode::AllBranches.into(), None)
         .expect("tips after delete");
     assert_eq!(deleted.len(), 1);
 
     write_file(tmp.path(), "a.txt", "dirty\n");
     git_success(tmp.path(), &["stash", "-q"]);
     let stashed = repo
-        .all_branches_tips(&handle, None)
+        .all_branches_tips(&handle, &HistoryMode::AllBranches.into(), None)
         .expect("tips after stash");
     assert!(
         stashed.len() > deleted.len(),
@@ -1392,7 +1410,9 @@ fn all_branches_tips_follow_symbolic_refs_into_the_tag_namespace() {
 
     let repo = open_repo(tmp.path());
     let handle = repo.repo();
-    let first = repo.all_branches_tips(&handle, None).expect("tips");
+    let first = repo
+        .all_branches_tips(&handle, &HistoryMode::AllBranches.into(), None)
+        .expect("tips");
     assert_eq!(
         first.len(),
         1,
@@ -1402,7 +1422,7 @@ fn all_branches_tips_follow_symbolic_refs_into_the_tag_namespace() {
     commit_file(tmp.path(), "a.txt", "2\n", "c2");
     let handle = repo.repo();
     let moved = repo
-        .all_branches_tips(&handle, None)
+        .all_branches_tips(&handle, &HistoryMode::AllBranches.into(), None)
         .expect("tips after commit");
     assert_eq!(moved.len(), 2, "latest still reaches c1 through the tag");
 
@@ -1410,10 +1430,10 @@ fn all_branches_tips_follow_symbolic_refs_into_the_tag_namespace() {
     // symbolic ref that follows it now seeds a different commit.
     git_success(tmp.path(), &["update-ref", "refs/tags/moving", "HEAD"]);
     let retagged = repo
-        .all_branches_tips(&handle, None)
+        .all_branches_tips(&handle, &HistoryMode::AllBranches.into(), None)
         .expect("tips after retag");
     let fresh = open_repo(tmp.path())
-        .all_branches_tips(&handle, None)
+        .all_branches_tips(&handle, &HistoryMode::AllBranches.into(), None)
         .expect("fresh tips");
     assert_eq!(retagged.as_ref(), fresh.as_ref());
     assert_eq!(retagged.len(), 1, "latest now resolves to main's tip");
@@ -1421,7 +1441,7 @@ fn all_branches_tips_follow_symbolic_refs_into_the_tag_namespace() {
     // An annotated tag makes the symbolic chain end at a tag object.
     git_success(tmp.path(), &["tag", "-f", "-m", "old", "moving", "HEAD~1"]);
     let annotated = repo
-        .all_branches_tips(&handle, None)
+        .all_branches_tips(&handle, &HistoryMode::AllBranches.into(), None)
         .expect("tips after annotated retag");
     assert_eq!(annotated.len(), 2, "latest resolves back to c1");
 }
@@ -1518,15 +1538,18 @@ fn worktree_file_source_memo_serves_unchanged_files_and_notices_edits() {
 
 // A settled worktree file must memoize on its first read even though that read
 // creates the cache file: the file is private to this process, so its fresh
-// timestamps cannot hide a later write. Real time, not RacyClockSkew, because
-// the skew would also age the cache file and mask the difference.
+// timestamps cannot hide a later write. Age only the worktree input: a skew
+// applied to the cache file too would mask the difference.
 #[cfg(unix)]
 #[test]
 fn worktree_file_source_memo_trusts_a_cache_file_it_just_created() {
     let tmp = tempfile::tempdir().expect("tempdir");
     init_test_repo(tmp.path());
     commit_file(tmp.path(), "settled.txt", "settled\n", "base");
-    std::thread::sleep(std::time::Duration::from_millis(2100));
+    let _clock = crate::repo::RacyClockSkew::set_for_path(
+        tmp.path().join("settled.txt"),
+        std::time::Duration::from_secs(30),
+    );
 
     let repo = open_repo(tmp.path());
     let handle = repo.repo();
@@ -1536,6 +1559,10 @@ fn worktree_file_source_memo_trusts_a_cache_file_it_just_created() {
             .expect("file exists")
     };
     let first = read();
+    assert!(
+        crate::repo::DiskFileStamp::read_for_verification_memo(&first.path).is_none(),
+        "the cache file must still be inside its timestamp race window"
+    );
     assert_eq!(
         repo.worktree_source_memo.lock().expect("memo").len(),
         1,
@@ -1846,7 +1873,11 @@ fn timing_upstream_divergence_far_behind() {
     let repo = open_repo(tmp.path());
     for round in 1..=3 {
         let started = std::time::Instant::now();
-        let divergence = repo.upstream_divergence_impl().expect("divergence");
+        let divergence =
+            repo.upstream_divergence_cancellable_impl(
+                &gitcomet_core::services::CancellationToken::new(),
+            )
+            .expect("divergence");
         println!(
             "timing upstream_divergence round {round}: {:?} -> {divergence:?}",
             started.elapsed()
@@ -1874,29 +1905,18 @@ fn timing_all_branches_page_with_many_refs() {
         let id = git_stdout(tmp.path(), &["rev-parse", &format!("main~{ix}")]);
         refs.push_str(&format!("create refs/remotes/origin/b{ix} {id}\n"));
     }
-    let mut cmd = crate::util::git_workdir_cmd_for(tmp.path());
-    let mut child = cmd
-        .args(["update-ref", "--stdin"])
-        .stdin(std::process::Stdio::piped())
-        .spawn()
-        .expect("update-ref");
-    {
-        use std::io::Write as _;
-        child
-            .stdin
-            .take()
-            .expect("stdin")
-            .write_all(refs.as_bytes())
-            .expect("write refs");
-    }
-    assert!(child.wait().expect("update-ref exit").success());
+    git_with_stdin(tmp.path(), &["update-ref", "--stdin"], refs.as_bytes());
     git_success(tmp.path(), &["pack-refs", "--all"]);
 
     let repo = open_repo(tmp.path());
     for round in 1..=3 {
         let started = std::time::Instant::now();
         let page = repo
-            .log_all_branches_page_impl(50, None)
+            .log_all_branches_page_cancellable_impl(
+                50,
+                None,
+                &gitcomet_core::services::CancellationToken::new(),
+            )
             .expect("all branches page");
         println!(
             "timing all_branches_page round {round}: {:?} ({} commits)",
@@ -1925,22 +1945,7 @@ fn timing_ref_metadata_with_many_refs() {
         let id = git_stdout(tmp.path(), &["rev-parse", &format!("main~{ix}")]);
         refs.push_str(&format!("create refs/remotes/origin/b{ix} {id}\n"));
     }
-    let mut cmd = crate::util::git_workdir_cmd_for(tmp.path());
-    let mut child = cmd
-        .args(["update-ref", "--stdin"])
-        .stdin(std::process::Stdio::piped())
-        .spawn()
-        .expect("update-ref");
-    {
-        use std::io::Write as _;
-        child
-            .stdin
-            .take()
-            .expect("stdin")
-            .write_all(refs.as_bytes())
-            .expect("write refs");
-    }
-    assert!(child.wait().expect("update-ref exit").success());
+    git_with_stdin(tmp.path(), &["update-ref", "--stdin"], refs.as_bytes());
     git_success(tmp.path(), &["pack-refs", "--all"]);
 
     let repo = open_repo(tmp.path());
@@ -2063,8 +2068,9 @@ fn all_branches_history_recovers_after_repack_replaces_loaded_pack_index() {
 
     let result = gitcomet_core::services::GitRepository::read_history(
         &repo,
-        HistoryMode::AllBranches,
+        &HistoryMode::AllBranches.into(),
         None,
+        &Default::default(),
         &gitcomet_core::services::HistoryReadRequest::Page {
             limit: 50,
             cursor: None,
@@ -2082,12 +2088,103 @@ fn all_branches_history_recovers_after_repack_replaces_loaded_pack_index() {
 }
 
 #[test]
+fn indexed_ranges_survive_automatic_and_later_pack_access_retries() {
+    use gitcomet_core::services::GitRepository;
+
+    for restore_before_retry in [false, true] {
+        let tmp = tempfile::tempdir().unwrap();
+        let workdir = tmp.path();
+        init_test_repo(workdir);
+        commit_file(workdir, "a.txt", "one\n", "first");
+        git_success(workdir, &["repack", "-a", "-d", "-q"]);
+        let repo = open_repo(workdir);
+        let cancel = CancellationToken::new();
+        let index = repo
+            .build_history_index(
+                &HistoryMode::FullReachable.into(),
+                None,
+                &Default::default(),
+                &cancel,
+                &mut |_| {},
+            )
+            .unwrap()
+            .unwrap();
+        let id = gix::ObjectId::from_bytes_or_panic(index.id_bytes(0).unwrap());
+        assert!(
+            repo.range_reader_repo().unwrap().has_object(id),
+            "load the range reader's pack index without mapping its data"
+        );
+        let pack = fs::read_dir(workdir.join(".git/objects/pack"))
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .find(|path| {
+                path.extension()
+                    .is_some_and(|extension| extension == "pack")
+            })
+            .unwrap();
+        let backup = pack.with_extension("blocked");
+        fs::rename(&pack, &backup).unwrap();
+        fs::create_dir(&pack).unwrap();
+        fs::write(pack.join("filler"), vec![b'x'; 4096]).unwrap();
+        let restore = || {
+            fs::remove_dir_all(&pack).unwrap();
+            fs::rename(&backup, &pack).unwrap();
+        };
+        let before = repo.shared_store();
+        let mut attempts = 0;
+        let result = repo.with_store_retry(|| {
+            attempts += 1;
+            let result = repo.read_shared_history_range(&index, 0..1, &cancel);
+            if attempts == 1 {
+                assert!(result.is_err(), "the initial pack access must fail");
+                if restore_before_retry {
+                    restore();
+                }
+            }
+            result
+        });
+        assert_eq!(
+            attempts, 2,
+            "a real pack I/O failure must trigger automatic recovery"
+        );
+        let block = if restore_before_retry {
+            result.expect("the automatic retry must retain the index")
+        } else {
+            let error = result.unwrap_err();
+            assert!(
+                !error.to_string().contains("interpretation changed"),
+                "{error}"
+            );
+            restore();
+            repo.read_history_range_shared(&index, 0..1, &cancel)
+                .expect("a later UI retry must retain the index")
+        };
+        let after = repo.shared_store();
+        assert_ne!(before.mapping_id, after.mapping_id);
+        assert_eq!(before.id, after.id);
+        assert_eq!(block.snapshot, index.snapshot);
+        assert_eq!(block.commits[0].id, index.commit_id(0).unwrap());
+        let rebuilt = repo
+            .build_history_index(
+                &HistoryMode::FullReachable.into(),
+                None,
+                &Default::default(),
+                &cancel,
+                &mut |_| {},
+            )
+            .unwrap()
+            .unwrap();
+        assert!(Arc::ptr_eq(&index, &rebuilt));
+    }
+}
+
+#[test]
 fn peel_failure_reports_underlying_io_error() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let (repo, _) = repo_with_unmappable_loaded_pack(tmp.path());
 
     let error = repo
-        .all_branches_tips(&repo.repo(), None)
+        .all_branches_tips(&repo.repo(), &HistoryMode::AllBranches.into(), None)
         .expect_err("stale store cannot map pack A");
     let message = error.to_string();
     assert!(
@@ -2115,21 +2212,33 @@ fn reopen_object_store_drops_old_store_handles() {
     let first_page = repo
         .log_history_mode_page_impl(HistoryMode::FullReachable, 1, None)
         .expect("first page");
-    assert_eq!(repo.log_paged_walk_cache.lock().unwrap().entries.len(), 1);
+    assert_eq!(repo.history_cache.walks.lock().unwrap().entries.len(), 1);
     repo.range_reader_repo().expect("range reader");
 
+    let active_reader = repo.repo();
+    let old_objects = Arc::downgrade(&repo.thread_safe_repo().0.objects);
+    let old_generation = repo.store_generation();
     repo.reopen_object_store().expect("reopen");
 
-    assert!(repo.log_paged_walk_cache.lock().unwrap().entries.is_empty());
-    assert!(repo.range_reader.lock().unwrap().is_none());
+    assert!(repo.history_cache.walks.lock().unwrap().entries.is_empty());
+    assert!(repo.history_cache.range_reader.lock().unwrap().is_none());
     let (store, generation) = repo.thread_safe_repo();
-    assert_eq!(generation, 1);
+    assert!(generation > old_generation);
     let config_store = repo
         .repo_with_current_config()
         .expect("config repo")
         .into_sync()
         .objects;
     assert!(Arc::ptr_eq(&config_store, &store.objects));
+    assert!(
+        old_objects.upgrade().is_some(),
+        "active readers retain old mappings"
+    );
+    drop(active_reader);
+    assert!(
+        old_objects.upgrade().is_none(),
+        "the final reader releases old mappings"
+    );
     // The old token no longer resumes anything, but the page is still right.
     let next = repo
         .log_history_mode_page_impl(
@@ -2164,4 +2273,104 @@ fn config_change_reuses_the_object_store() {
         &config.into_sync().objects,
         &repo.thread_safe_repo().0.objects
     ));
+}
+
+/// Refs in the namespaces a hidden-refs filter targets, beside branches.
+fn hidden_refs_probe_repo(workdir: &Path, loose_checkpoints: usize) -> String {
+    init_test_repo(workdir);
+    git_success(workdir, &["checkout", "-q", "-b", "main"]);
+    commit_file(workdir, "a.txt", "1\n", "c1");
+    let head = git_stdout(workdir, &["rev-parse", "HEAD"]);
+    let mut stdin = String::new();
+    for i in 0..5_000 {
+        stdin.push_str(&format!("create refs/heads/topic/{i} {head}\n"));
+        stdin.push_str(&format!("create refs/remotes/origin/topic/{i} {head}\n"));
+        stdin.push_str(&format!("create refs/pull/{i}/head {head}\n"));
+    }
+    for i in 0..2_000 {
+        stdin.push_str(&format!("create refs/t3/checkpoints/t/turn/{i} {head}\n"));
+        stdin.push_str(&format!("create refs/claude/checkpoint-{i} {head}\n"));
+    }
+    git_with_stdin(workdir, &["update-ref", "--stdin"], stdin.as_bytes());
+    git_success(workdir, &["pack-refs", "--all"]);
+    let mut loose = String::new();
+    for i in 0..loose_checkpoints {
+        loose.push_str(&format!(
+            "create refs/t3/checkpoints/loose/turn/{i} {head}\n"
+        ));
+    }
+    if !loose.is_empty() {
+        git_with_stdin(workdir, &["update-ref", "--stdin"], loose.as_bytes());
+    }
+    head
+}
+
+const HIDDEN_REFS_PROBE_PREFIXES: [&str; 10] = [
+    "refs/t3",
+    "refs/claude",
+    "refs/gitcomet-pro",
+    "refs/jj/keep",
+    "refs/wip",
+    "refs/prefetch",
+    "refs/original",
+    "refs/notes",
+    "refs/pull",
+    "refs/changes",
+];
+
+#[test]
+#[ignore = "timing probe"]
+fn timing_all_branches_tips_hidden_refs() {
+    for (label, loose, filtered) in [
+        ("packed_unfiltered", 0, false),
+        ("packed_filtered", 0, true),
+        ("loose2k_filtered", 2_000, true),
+    ] {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        hidden_refs_probe_repo(tmp.path(), loose);
+        let options = gitcomet_core::services::RepositoryOptions::default()
+            .with_history_ref_filter(gitcomet_core::services::HistoryRefFilter::excluding(
+                if filtered {
+                    &HIDDEN_REFS_PROBE_PREFIXES[..]
+                } else {
+                    &[][..]
+                }
+                .iter()
+                .copied(),
+            ));
+        let repo = crate::repo::GixRepo::new_with_options(
+            tmp.path().to_path_buf(),
+            crate::test_support::open_gix(tmp.path()).into_sync(),
+            options,
+        )
+        .expect("open");
+        let handle = repo.repo();
+        let tips = repo
+            .all_branches_tips(&handle, &HistoryMode::AllBranches.into(), None)
+            .expect("tips");
+        let runs = 30;
+        let start = std::time::Instant::now();
+        for _ in 0..runs {
+            std::hint::black_box(
+                repo.all_branches_tips(&handle, &HistoryMode::AllBranches.into(), None)
+                    .expect("tips"),
+            );
+        }
+        let warm = start.elapsed() / runs;
+        let start = std::time::Instant::now();
+        for _ in 0..runs {
+            *repo.history_cache.tips.lock().unwrap() = None;
+            std::hint::black_box(
+                repo.all_branches_tips(&handle, &HistoryMode::AllBranches.into(), None)
+                    .expect("tips"),
+            );
+        }
+        let cold = start.elapsed() / runs;
+        println!(
+            "timing {label} tips={} warm={:.2}ms cold={:.2}ms",
+            tips.len(),
+            warm.as_secs_f64() * 1e3,
+            cold.as_secs_f64() * 1e3
+        );
+    }
 }

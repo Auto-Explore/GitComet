@@ -3,7 +3,7 @@
 use super::LargeFileSettings;
 use super::{
     CommandLogEntry, ConflictState, DiffState, FileBrowserState, GitHookOperation, HistoryState,
-    InteractiveCherryPickSetup, InteractiveRebaseSetup, Loadable, RepoLoadsInFlight,
+    InteractiveCherryPickSetup, InteractiveRebaseSetup, LoadKind, Loadable, RepoLoadsInFlight,
     RepoNavigationState, RepoPendingState, Shared, SubmoduleAddProgressState, TagPushPreviewState,
     WorkspaceRepoState,
 };
@@ -18,6 +18,28 @@ use std::time::SystemTime;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub struct RepoId(pub u64);
+
+/// Identifies one repository lifetime across all stores in this process.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
+pub struct RepoLifetime(u64);
+
+impl RepoLifetime {
+    pub(crate) fn allocate() -> Self {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static NEXT_LIFETIME: AtomicU64 = AtomicU64::new(1);
+        Self(
+            NEXT_LIFETIME
+                .try_update(Ordering::Relaxed, Ordering::Relaxed, |next| {
+                    next.checked_add(1)
+                })
+                .expect("repository lifetime identity space exhausted"),
+        )
+    }
+
+    pub fn get(self) -> u64 {
+        self.0
+    }
+}
 
 /// GitComet's side of a repository's maintenance: git's recommendation and a
 /// run the user started. Git never runs it by itself for GitComet's commands.
@@ -35,12 +57,27 @@ pub struct RepoMaintenanceState {
 }
 
 #[derive(Clone, Debug)]
+pub enum BareModeConversionState {
+    Idle,
+    Previewing,
+    AwaitingConfirmation(Arc<BareConversionPreview>),
+    Converting,
+    Reopening,
+    Failed(Arc<gitcomet_core::error::Error>),
+}
+
+impl BareModeConversionState {
+    pub fn is_busy(&self) -> bool {
+        matches!(self, Self::Previewing | Self::Converting | Self::Reopening)
+    }
+}
+
+#[derive(Clone, Debug)]
 pub struct RepoState {
     pub id: RepoId,
     pub spec: RepoSpec,
-    /// Unique per repository opened in this process. `RepoId`s are per store
-    /// and may be reused; the pair (window, id, lifetime) never is.
-    lifetime: u64,
+    /// Unique per repository opened in this process, including across stores.
+    lifetime: RepoLifetime,
     session_workdir_key: Arc<str>,
     /// A loading tab created from an external folder drop. It remains visible
     /// while the backend validates it, but session persistence must ignore it
@@ -65,10 +102,20 @@ pub struct RepoState {
     /// The shared git directory (the main `.git` of a linked worktree), set
     /// once the repository opens; tabs of one repository share maintenance.
     pub common_dir: Option<Arc<std::path::Path>>,
+    pub shared_preferences: Option<super::RepositoryPreferencesSnapshot>,
     pub maintenance: RepoMaintenanceState,
+    pub auto_fetch: super::RepoAutoFetchState,
+    pub(crate) auto_fetch_revision: u64,
+    /// A read the last automatic-fetch refresh started failed.
+    pub(crate) refresh_read_failed: bool,
+    pub incoming: super::RepoIncomingState,
 
     pub open: Loadable<()>,
+    pub repository_mode: Option<RepositoryMode>,
+    pub bare_mode_conversion: BareModeConversionState,
+    pub head_commit: Option<CommitId>,
     pub history_state: HistoryState,
+    pub reword: super::RewordState,
     pub head_branch: Loadable<String>,
     pub detached_head_commit: Option<CommitId>,
     pub head_branch_rev: u64,
@@ -134,6 +181,8 @@ pub struct RepoState {
     pub suggested_commit_message_rev: u64,
     pub worktrees: Loadable<Arc<Vec<Worktree>>>,
     pub worktrees_rev: u64,
+    /// Latest successful list read applied, shared by explicit loads and scans.
+    pub(crate) worktrees_read_seq: u64,
     /// Uncommitted-change counts for the *other* linked worktrees, so the
     /// history pane can show work left behind in a worktree that is not the one
     /// being viewed. Only worktrees with changes are kept.
@@ -195,10 +244,16 @@ pub struct RepoState {
     /// command *starts*, which would spend the signal before the disk changed.
     pub local_worktree_write_rev: u64,
     pub last_active_at: Option<SystemTime>,
+    /// The tab was left with loads or a diff reload in flight. Leaving
+    /// cancelled them, so the values they were replacing stay stale until the
+    /// tab is refreshed on its next activation.
+    pub left_mid_refresh: bool,
 
-    pub feedback: RepoFeedbackState,
+    /// Shared until changed: its bounded logs would otherwise be deep-copied
+    /// with the rest of the state on every dispatch.
+    pub feedback: Arc<RepoFeedbackState>,
     pub pending: RepoPendingState,
-    pub load_epoch: u64,
+    pub load_epoch: crate::model::RepoLoadEpoch,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -208,7 +263,7 @@ pub struct SidebarDataRequest {
     pub stashes: bool,
 }
 
-/// User-visible repository feedback and bounded diagnostic/activity history.
+/// User-visible repository feedback and bounded activity history.
 ///
 /// Keeping this together makes the lifecycle explicit: a successful reopen can
 /// reset repository feedback without touching loaded Git data or navigation.
@@ -216,15 +271,60 @@ pub struct SidebarDataRequest {
 pub struct RepoFeedbackState {
     pub missing_on_disk: bool,
     pub last_error: Option<String>,
+    /// Diagnostics the window has not acknowledged yet
+    /// (`Msg::AcknowledgeRepoFeedback`).
     pub diagnostics: Vec<DiagnosticEntry>,
-    /// Number appended, including entries evicted from the bounded history.
+    /// Number appended, including entries already acknowledged and dropped.
     pub diagnostics_seq: u64,
+    /// Command results the window has not acknowledged yet
+    /// (`Msg::AcknowledgeRepoFeedback`).
     pub command_log: Vec<CommandLogEntry>,
+    /// Number appended, including entries already acknowledged and dropped.
+    pub command_log_seq: u64,
     pub hook_activity: Vec<GitHookOperation>,
     pub hook_activity_rev: u64,
     /// Set only while reducing the existing command completion nested inside a
     /// `GitOperationFinished` message.
     pub(crate) command_log_operation_id: Option<GitOperationId>,
+}
+
+impl RepoFeedbackState {
+    /// Queues a diagnostic for the window.
+    pub fn push_diagnostic(&mut self, entry: DiagnosticEntry) {
+        self.diagnostics_seq = self.diagnostics_seq.wrapping_add(1);
+        self.diagnostics.push(entry);
+    }
+
+    /// Queues a command result for the window.
+    pub fn push_command_result(&mut self, entry: CommandLogEntry) {
+        self.command_log_seq = self.command_log_seq.wrapping_add(1);
+        self.command_log.push(entry);
+    }
+
+    /// Diagnostics queued after diagnostic number `seq`.
+    pub fn diagnostics_after(&self, seq: u64) -> &[DiagnosticEntry] {
+        super::feedback_after(&self.diagnostics, self.diagnostics_seq, seq)
+    }
+
+    /// Command results queued after result number `seq`.
+    pub fn command_log_after(&self, seq: u64) -> &[CommandLogEntry] {
+        super::feedback_after(&self.command_log, self.command_log_seq, seq)
+    }
+
+    /// Releases the diagnostics and command results the window has shown, up
+    /// to the given numbers.
+    pub fn acknowledge(&mut self, diagnostics_through_seq: u64, command_log_through_seq: u64) {
+        super::acknowledge_feedback(
+            &mut self.diagnostics,
+            self.diagnostics_seq,
+            diagnostics_through_seq,
+        );
+        super::acknowledge_feedback(
+            &mut self.command_log,
+            self.command_log_seq,
+            command_log_through_seq,
+        );
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -241,18 +341,26 @@ pub enum DiagnosticKind {
 }
 
 impl RepoState {
+    /// The feedback logs for writing, copied first if a snapshot shares them.
+    pub fn feedback_mut(&mut self) -> &mut RepoFeedbackState {
+        Arc::make_mut(&mut self.feedback)
+    }
+
     /// See the `lifetime` field.
     pub fn lifetime(&self) -> u64 {
+        self.lifetime.get()
+    }
+
+    pub fn lifetime_id(&self) -> RepoLifetime {
         self.lifetime
     }
 
     pub fn new_opening(id: RepoId, spec: RepoSpec) -> Self {
-        static NEXT_LIFETIME: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
         let session_workdir_key = session::path_storage_key_shared(&spec.workdir);
         Self {
             id,
             spec,
-            lifetime: NEXT_LIFETIME.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+            lifetime: RepoLifetime::allocate(),
             session_workdir_key,
             provisional_external_drop_open: false,
             external_drop_previous_active_repo: None,
@@ -265,9 +373,18 @@ impl RepoState {
             sequencer_actions_in_flight: 0,
             commit_in_flight: 0,
             common_dir: None,
+            shared_preferences: None,
             maintenance: RepoMaintenanceState::default(),
+            auto_fetch: super::RepoAutoFetchState::default(),
+            auto_fetch_revision: 0,
+            refresh_read_failed: false,
+            incoming: super::RepoIncomingState::default(),
             open: Loadable::Loading,
+            repository_mode: None,
+            bare_mode_conversion: BareModeConversionState::Idle,
+            head_commit: None,
             history_state: HistoryState::default(),
+            reword: super::RewordState::default(),
             head_branch: Loadable::NotLoaded,
             detached_head_commit: None,
             head_branch_rev: 0,
@@ -315,6 +432,7 @@ impl RepoState {
             suggested_commit_message_rev: 0,
             worktrees: Loadable::NotLoaded,
             worktrees_rev: 0,
+            worktrees_read_seq: 0,
             worktree_dirty: Loadable::NotLoaded,
             worktree_dirty_rev: 0,
             ref_metadata: Loadable::NotLoaded,
@@ -347,11 +465,44 @@ impl RepoState {
             change_lists: Arc::default(),
             local_worktree_write_rev: 0,
             last_active_at: None,
-            feedback: RepoFeedbackState::default(),
+            left_mid_refresh: false,
+            feedback: Arc::default(),
             pending: RepoPendingState::default(),
-            load_epoch: 0,
+            load_epoch: crate::model::RepoLoadEpoch(0),
             workspace: WorkspaceRepoState::default(),
         }
+    }
+
+    pub fn is_bare(&self) -> bool {
+        self.repository_mode == Some(RepositoryMode::Bare)
+    }
+
+    pub(crate) fn retire_repository_lifetime(&mut self) {
+        self.bump_load_epoch();
+        self.history_state.commit_signatures_cancellation.cancel();
+        for session in self.diff_sessions.values() {
+            session.cancellation.cancel();
+        }
+        for session in self.change_lists.values() {
+            session.cancellation.cancel();
+        }
+        self.diff_sessions = Arc::default();
+        self.change_lists = Arc::default();
+        self.lifetime = RepoLifetime::allocate();
+        self.loads_in_flight.clear();
+        self.pending = Default::default();
+        self.set_open(Loadable::Loading);
+    }
+
+    pub fn has_working_tree(&self) -> bool {
+        self.repository_mode == Some(RepositoryMode::WorkingTree)
+    }
+
+    pub fn live_file_source(&self) -> Option<FileSource> {
+        if self.is_bare() {
+            return self.head_commit.clone().map(FileSource::Commit);
+        }
+        Some(FileSource::WorkingDirectory)
     }
 
     pub(crate) fn new_external_drop_opening(
@@ -508,7 +659,10 @@ impl RepoState {
     }
 
     pub(crate) fn set_worktrees(&mut self, worktrees: Loadable<Vec<Worktree>>) {
-        let worktrees = loadable_into_arc(worktrees);
+        self.set_worktrees_shared(loadable_into_arc(worktrees));
+    }
+
+    pub(crate) fn set_worktrees_shared(&mut self, worktrees: Loadable<Arc<Vec<Worktree>>>) {
         if self.worktrees == worktrees {
             return;
         }
@@ -548,12 +702,8 @@ impl RepoState {
         // pending so its result schedules a refetch; otherwise that stale map
         // lands as `Ready` and, since callers only refetch on
         // `NotLoaded | Error`, it would never be corrected.
-        if self
-            .loads_in_flight
-            .is_in_flight(RepoLoadsInFlight::REF_METADATA)
-        {
-            self.loads_in_flight
-                .request(RepoLoadsInFlight::REF_METADATA);
+        if self.loads_in_flight.is_in_flight(LoadKind::RefMetadata) {
+            self.loads_in_flight.request(LoadKind::RefMetadata);
         }
         if matches!(self.ref_metadata, Loadable::NotLoaded) {
             return;
@@ -680,7 +830,10 @@ impl RepoState {
 
     /// Pull and Push of the current branch go through git-annex.
     pub fn annex_takes_over_pull_push(&self, settings: &LargeFileSettings) -> bool {
-        settings.annex_pull_push && self.annex_adjusted_branch().is_some()
+        settings.annex_pull_push
+            && (self.annex_adjusted_branch().is_some()
+                || self.is_bare()
+                    && matches!(&self.large_file_support, Loadable::Ready(support) if support.annex.in_use()))
     }
 
     pub fn large_file_command_busy(
@@ -962,6 +1115,9 @@ impl RepoState {
     /// Resolves the commit HEAD points at: the current branch's target when
     /// attached, else the detached HEAD commit.
     pub fn head_commit_id(&self) -> Option<CommitId> {
+        if self.is_bare() {
+            return self.head_commit.clone();
+        }
         if let Loadable::Ready(head_branch) = &self.head_branch
             && head_branch != "HEAD"
             && let Loadable::Ready(branches) = &self.branches
@@ -1003,6 +1159,27 @@ impl RepoState {
     pub(crate) fn set_upstream_divergence(&mut self, v: Loadable<Option<UpstreamDivergence>>) {
         self.upstream_divergence = v;
         self.upstream_divergence_rev = self.upstream_divergence_rev.wrapping_add(1);
+    }
+
+    /// Last-known counts stay current while a fetch or reload is merely
+    /// running, so routine background checks don't repaint every tab.
+    pub fn incoming_is_stale(&self) -> bool {
+        matches!(self.incoming, super::RepoIncomingState::Stale(_))
+            || matches!(
+                self.auto_fetch.status,
+                super::AutoFetchStatus::Failed { .. }
+            )
+    }
+
+    /// The tab shows no current incoming count and loads none, or a refresh
+    /// read failed, so automatic fetch refreshes it after its next fetch even
+    /// when that moves nothing.
+    pub(crate) fn needs_auto_fetch_refresh(&self) -> bool {
+        self.refresh_read_failed
+            || (!matches!(self.incoming, super::RepoIncomingState::Current(_))
+                && !self
+                    .loads_in_flight
+                    .is_in_flight(super::LoadKind::UpstreamDivergence))
     }
 
     pub(crate) fn set_open(&mut self, v: Loadable<()>) {
@@ -1050,9 +1227,9 @@ impl RepoState {
             || self.commit_in_flight > 0
     }
 
-    pub(crate) fn bump_load_epoch(&mut self) -> u64 {
+    pub(crate) fn bump_load_epoch(&mut self) -> super::RepoLoadEpoch {
         let previous = self.load_epoch;
-        self.load_epoch = self.load_epoch.wrapping_add(1);
+        self.load_epoch = self.load_epoch.next();
         self.history_state.indexed.cancel();
         self.history_state.authors.cancellation.cancel();
         self.history_state.find.interrupt();
@@ -1089,5 +1266,19 @@ fn loadable_into_arc<T>(loadable: Loadable<T>) -> Loadable<Arc<T>> {
         Loadable::Loading => Loadable::Loading,
         Loadable::NotLoaded => Loadable::NotLoaded,
         Loadable::Error(e) => Loadable::Error(e),
+    }
+}
+
+impl RepoState {
+    pub fn repository_key(&self) -> super::RepositoryKey {
+        self.shared_preferences
+            .as_ref()
+            .map(|snapshot| snapshot.key.clone())
+            .unwrap_or_else(|| {
+                self.common_dir
+                    .as_deref()
+                    .map(|path| super::RepositoryKey::CommonDir(path.to_path_buf()))
+                    .unwrap_or_else(|| super::RepositoryKey::Worktree(self.spec.workdir.clone()))
+            })
     }
 }

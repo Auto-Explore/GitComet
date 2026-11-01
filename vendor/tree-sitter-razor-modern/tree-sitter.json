@@ -1,0 +1,42 @@
+{
+  "$schema": "https://tree-sitter.github.io/tree-sitter/assets/schemas/config.schema.json",
+  "grammars": [
+    {
+      "name": "razor",
+      "camelcase": "Razor",
+      "title": "Razor",
+      "scope": "source.razor",
+      "path": ".",
+      "file-types": [
+        "cshtml",
+        "razor"
+      ],
+      "injection-regex": "^razor$"
+    }
+  ],
+  "metadata": {
+    "version": "0.1.2",
+    "license": "MIT",
+    "description": "Tree-sitter grammar for ASP.NET Core Razor markup (.cshtml and .razor)",
+    "authors": [
+      {
+        "name": "tris203",
+        "email": "admin@snappeh.com"
+      },
+      {
+        "name": "M. Reifschneider"
+      }
+    ],
+    "links": {
+      "repository": "https://github.com/alfpricot/tree-sitter-razor-modern"
+    }
+  },
+  "bindings": {
+    "c": false,
+    "go": false,
+    "node": false,
+    "python": false,
+    "rust": true,
+    "swift": false
+  }
+}

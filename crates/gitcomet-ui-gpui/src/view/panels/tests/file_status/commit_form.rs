@@ -2,6 +2,129 @@
 
 use super::*;
 
+/// Read the painted quad and the IME anchor independently of caret row lookup.
+fn draw_and_assert_commit_end_caret(
+    input: &gpui::Entity<gitcomet_ui_kit::TextInput>,
+    cx: &mut gpui::VisualTestContext,
+) -> usize {
+    use gpui::EntityInputHandler as _;
+    for _ in 0..3 {
+        crate::test_support::refresh_and_draw(cx);
+    }
+    cx.update(|window, app| {
+        input.update(app, |input, cx| {
+            let rows = input.wrap_row_counts().iter().sum::<usize>();
+            let first = input.hotspot_bounds(&(0..1)).unwrap();
+            let expected_top = first.top() + first.size.height * (rows - 1) as f32;
+            let end = input.text().encode_utf16().count();
+            let ime = input.bounds_for_range(end..end, first, window, cx).unwrap();
+            let text = input.text();
+            assert_eq!(ime.top(), expected_top, "commit IME anchor for {text:?}");
+            let scale = window.scale_factor();
+            let color = input.theme_for_test().colors.editor.cursor;
+            let caret = window
+                .painted_quads()
+                .into_iter()
+                .find(|quad| {
+                    quad.background == color.into()
+                        && (quad.bounds.size.width.0 - scale).abs() < 0.01
+                })
+                .expect("commit input must paint its caret");
+            let inset = (f32::from(first.size.height) - caret.bounds.size.height.0 / scale) / 2.0;
+            assert!(
+                (caret.bounds.origin.y.0 - (f32::from(expected_top) + inset) * scale).abs() <= 1.0,
+                "commit caret for {text:?}: {:?}, expected row {}",
+                caret.bounds,
+                rows - 1
+            );
+            assert!((caret.bounds.origin.x.0 - f32::from(ime.left()) * scale).abs() <= 1.0);
+            rows
+        })
+    })
+}
+
+#[gpui::test]
+fn cached_commit_form_caret_tracks_wrapped_growth_and_shrink(cx: &mut gpui::TestAppContext) {
+    use gpui::EntityInputHandler as _;
+    let _cache_guard = crate::view::enable_stable_cached_views_for_test();
+    gitcomet_ui_kit::test_support::use_real_text_backend(cx);
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        window.activate();
+        super::super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    let repo_id = gitcomet_state::model::RepoId(49);
+    let mut repo = opening_repo_state(repo_id, Path::new("/tmp/repo-commit-wrap-caret"));
+    repo.status = gitcomet_state::model::Loadable::Ready(
+        gitcomet_core::domain::RepoStatus {
+            staged: Arc::new(vec![gitcomet_core::domain::FileStatus {
+                path: "staged.txt".into(),
+                kind: gitcomet_core::domain::FileStatusKind::Modified,
+                conflict: None,
+            }]),
+            unstaged: Arc::new(Vec::new()),
+        }
+        .into(),
+    );
+    let (input, scroll) = cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+        });
+        let pane = view.read(app).details_pane.read(app);
+        (
+            pane.commit_message_input.clone(),
+            pane.commit_message_scroll.clone(),
+        )
+    });
+    cx.simulate_resize(gpui::size(px(1200.0), px(900.0)));
+    for percent in [100, 150] {
+        cx.update(|window, app| {
+            crate::ui_scale::set_default(app, percent);
+            view.update(app, |view, cx| view.notify_font_preferences_changed(cx));
+            input.update(app, |input, cx| input.set_text(String::new(), cx));
+            window.focus(&input.read(app).focus_handle(), app);
+        });
+        for _ in 0..4 {
+            crate::test_support::refresh_and_draw(cx);
+        }
+        let mut heights = [px(0.0); 3];
+        let mut two_row_end = 0;
+        let message = "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu";
+        for (index, word) in message
+            .split_whitespace()
+            .cycle()
+            .take(8 * message.split_whitespace().count())
+            .enumerate()
+        {
+            if index > 0 {
+                cx.simulate_input(" ");
+            }
+            cx.simulate_input(word);
+            let rows = draw_and_assert_commit_end_caret(&input, cx);
+            assert!(rows <= 3, "fixture must pass through each row");
+            heights[rows - 1] = scroll.bounds().size.height;
+            if rows == 2 {
+                two_row_end = cx.update(|_, app| input.read(app).text().encode_utf16().count());
+            }
+            if rows == 3 {
+                break;
+            }
+        }
+        assert!(
+            heights[1] > heights[0] && heights[2] > heights[1],
+            "commit input must grow: {heights:?}"
+        );
+        cx.update(|window, app| {
+            input.update(app, |input, cx| {
+                let end = input.text().encode_utf16().count();
+                input.replace_text_in_range(Some(two_row_end..end), "", window, cx);
+            })
+        });
+        assert_eq!(draw_and_assert_commit_end_caret(&input, cx), 2);
+        assert_eq!(scroll.bounds().size.height, heights[1]);
+    }
+}
+
 #[gpui::test]
 fn staged_revert_offers_its_message_to_an_empty_commit_box(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
@@ -506,6 +629,7 @@ fn commit_click_dispatches_after_state_update_without_intermediate_redraw(
         });
     });
 
+    let ops_rev_before = crate::view::test_support::repo_ops_rev(&view, cx, repo_id);
     cx.simulate_mouse_move(commit_center, None, Modifiers::default());
     cx.simulate_event(MouseDownEvent {
         position: commit_center,
@@ -521,15 +645,11 @@ fn commit_click_dispatches_after_state_update_without_intermediate_redraw(
         click_count: 1,
     });
 
-    cx.update(|_window, app| {
-        let details_pane = view.read(app).details_pane.clone();
-        let pane = details_pane.read(app);
-        assert_eq!(
-            pane.commit_message_input.read(app).text(),
-            "",
-            "expected first click to execute commit handler and clear the input"
-        );
-    });
+    crate::view::test_support::drain_store_worker(&view, cx);
+    assert!(
+        crate::view::test_support::repo_ops_rev(&view, cx, repo_id) > ops_rev_before,
+        "expected first click to execute the commit handler and dispatch a commit"
+    );
 }
 
 /// Typing into the focused commit box re-renders the details pane only. The
@@ -814,4 +934,288 @@ fn holding_a_drag_selection_past_the_commit_box_scrolls_it(cx: &mut gpui::TestAp
     });
     assert!(!selected.is_empty(), "and the drag selects");
     cx.simulate_mouse_up(below, MouseButton::Left, Modifiers::default());
+}
+
+type CommitView = gpui::Entity<super::super::super::GitCometView>;
+
+fn staged_repo(id: u64) -> gitcomet_state::model::RepoState {
+    let mut repo = opening_repo_state(
+        gitcomet_state::model::RepoId(id),
+        Path::new(&format!("/tmp/repo-commit-result-{id}")),
+    );
+    repo.status = gitcomet_state::model::Loadable::Ready(
+        gitcomet_core::domain::RepoStatus {
+            staged: Arc::new(vec![gitcomet_core::domain::FileStatus {
+                path: "staged.txt".into(),
+                kind: gitcomet_core::domain::FileStatusKind::Modified,
+                conflict: None,
+            }]),
+            unstaged: Arc::new(Vec::new()),
+        }
+        .into(),
+    );
+    repo
+}
+
+/// The repo with one more command result, as the store reports it.
+fn with_command_result(
+    repo: &gitcomet_state::model::RepoState,
+    command: &str,
+    ok: bool,
+) -> gitcomet_state::model::RepoState {
+    let mut repo = repo.clone();
+    repo.feedback_mut()
+        .push_command_result(gitcomet_state::model::CommandLogEntry {
+            kind: gitcomet_state::model::CommandLogKind::Other,
+            time: std::time::UNIX_EPOCH,
+            ok,
+            command: command.to_string(),
+            summary: format!("{command}: test"),
+            stdout: "".into(),
+            stderr: "".into(),
+            announce_success: true,
+            handled_by_prompt: false,
+            failure_id: None,
+            hook_operation_id: None,
+            source: gitcomet_state::model::CommandSource::User,
+        });
+    repo
+}
+
+fn two_repo_state(
+    a: gitcomet_state::model::RepoState,
+    b: gitcomet_state::model::RepoState,
+    active: gitcomet_state::model::RepoId,
+) -> Arc<AppState> {
+    Arc::new(AppState {
+        repos: vec![a, b],
+        active_repo: Some(active),
+        ..AppState::test_default()
+    })
+}
+
+/// A window on `state` with the commit box focused.
+fn commit_box_window(cx: &mut gpui::VisualTestContext, view: &CommitView, state: Arc<AppState>) {
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            push_test_state(this, state, cx);
+            this.details_pane.update(cx, |pane, cx| {
+                let focus = pane.commit_message_input.read(cx).focus_handle();
+                window.focus(&focus, cx);
+            });
+        });
+        let _ = window.draw(app);
+    });
+}
+
+fn set_commit_box_text(cx: &mut gpui::VisualTestContext, view: &CommitView, text: &str) {
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.details_pane.update(cx, |pane, cx| {
+                pane.commit_message_input
+                    .update(cx, |input, cx| input.set_text(text.to_string(), cx));
+            });
+        });
+    });
+}
+
+fn commit_box_text_of(cx: &mut gpui::VisualTestContext, view: &CommitView) -> String {
+    cx.update(|_window, app| {
+        let pane = view.read(app).details_pane.read(app);
+        pane.commit_message_input.read(app).text().to_string()
+    })
+}
+
+fn submit_commit_box(cx: &mut gpui::VisualTestContext, view: &CommitView) {
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.details_pane.update(cx, |pane, cx| {
+                assert!(pane.handle_commit_submit_shortcut(window, cx));
+            });
+        });
+    });
+}
+
+fn sync_store(cx: &mut gpui::VisualTestContext, view: &CommitView) {
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            crate::view::test_support::sync_store_snapshot(this, cx);
+        });
+    });
+    cx.run_until_parked();
+}
+
+/// The store's failure snapshot drops the staged status; the user stages again.
+fn restage(cx: &mut gpui::VisualTestContext, view: &CommitView, id: u64) {
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let repo_id = gitcomet_state::model::RepoId(id);
+            push_test_state(this, app_state_with_repo(staged_repo(id), repo_id), cx);
+        });
+    });
+    cx.run_until_parked();
+}
+
+fn new_commit_view(cx: &mut gpui::TestAppContext) -> (CommitView, &mut gpui::VisualTestContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    cx.add_window_view(|window, cx| {
+        window.activate();
+        super::super::super::GitCometView::new(store, events, None, window, cx)
+    })
+}
+
+#[gpui::test]
+fn failed_commit_keeps_commit_message(cx: &mut gpui::TestAppContext) {
+    let (view, cx) = new_commit_view(cx);
+    let repo_id = gitcomet_state::model::RepoId(61);
+    commit_box_window(cx, &view, app_state_with_repo(staged_repo(61), repo_id));
+    set_commit_box_text(cx, &view, "fix the lint");
+
+    let before = crate::view::test_support::repo_ops_rev(&view, cx, repo_id);
+    submit_commit_box(cx, &view);
+    crate::view::test_support::drain_store_worker(&view, cx);
+    let after_first = crate::view::test_support::repo_ops_rev(&view, cx, repo_id);
+    assert!(
+        after_first > before,
+        "expected the first submit to dispatch"
+    );
+    sync_store(cx, &view);
+    assert_eq!(commit_box_text_of(cx, &view), "fix the lint");
+    restage(cx, &view, 61);
+    let after_first = crate::view::test_support::repo_ops_rev(&view, cx, repo_id);
+
+    submit_commit_box(cx, &view);
+    crate::view::test_support::drain_store_worker(&view, cx);
+    assert!(
+        crate::view::test_support::repo_ops_rev(&view, cx, repo_id) > after_first,
+        "expected a submit after the failure to dispatch again"
+    );
+}
+
+#[gpui::test]
+fn successful_commit_clears_commit_message(cx: &mut gpui::TestAppContext) {
+    let (view, cx) = new_commit_view(cx);
+    let repo_id = gitcomet_state::model::RepoId(62);
+    let repo = staged_repo(62);
+    commit_box_window(cx, &view, app_state_with_repo(repo.clone(), repo_id));
+    set_commit_box_text(cx, &view, "ship it");
+    submit_commit_box(cx, &view);
+    assert_eq!(commit_box_text_of(cx, &view), "ship it");
+
+    let done = with_command_result(&repo, "Commit", true);
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            push_test_state(this, app_state_with_repo(done, repo_id), cx);
+        });
+    });
+    cx.run_until_parked();
+    assert_eq!(commit_box_text_of(cx, &view), "");
+}
+
+#[gpui::test]
+fn commit_message_edited_during_commit_survives_success(cx: &mut gpui::TestAppContext) {
+    let (view, cx) = new_commit_view(cx);
+    let repo_id = gitcomet_state::model::RepoId(63);
+    let repo = staged_repo(63);
+    commit_box_window(cx, &view, app_state_with_repo(repo.clone(), repo_id));
+    set_commit_box_text(cx, &view, "ship it");
+    submit_commit_box(cx, &view);
+    set_commit_box_text(cx, &view, "ship it, and then more");
+
+    let done = with_command_result(&repo, "Commit", true);
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            push_test_state(this, app_state_with_repo(done, repo_id), cx);
+        });
+    });
+    cx.run_until_parked();
+    assert_eq!(commit_box_text_of(cx, &view), "ship it, and then more");
+}
+
+#[gpui::test]
+fn failed_amend_keeps_commit_message_and_amend_toggle(cx: &mut gpui::TestAppContext) {
+    let (view, cx) = new_commit_view(cx);
+    let repo_id = gitcomet_state::model::RepoId(64);
+    commit_box_window(cx, &view, app_state_with_repo(staged_repo(64), repo_id));
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.details_pane
+                .update(cx, |pane, cx| pane.set_commit_amend_enabled(true, cx));
+        });
+    });
+    set_commit_box_text(cx, &view, "amend me");
+
+    let before = crate::view::test_support::repo_ops_rev(&view, cx, repo_id);
+    submit_commit_box(cx, &view);
+    crate::view::test_support::drain_store_worker(&view, cx);
+    assert!(
+        crate::view::test_support::repo_ops_rev(&view, cx, repo_id) > before,
+        "expected the amend to dispatch"
+    );
+    sync_store(cx, &view);
+
+    assert_eq!(commit_box_text_of(cx, &view), "amend me");
+    assert!(cx.update(|_window, app| view.read(app).details_pane.read(app).commit_amend_enabled));
+}
+
+#[gpui::test]
+fn second_submit_while_commit_pending_is_refused(cx: &mut gpui::TestAppContext) {
+    let (view, cx) = new_commit_view(cx);
+    let repo_id = gitcomet_state::model::RepoId(65);
+    commit_box_window(cx, &view, app_state_with_repo(staged_repo(65), repo_id));
+    set_commit_box_text(cx, &view, "once");
+
+    let before = crate::view::test_support::repo_ops_rev(&view, cx, repo_id);
+    submit_commit_box(cx, &view);
+    submit_commit_box(cx, &view);
+    crate::view::test_support::drain_store_worker(&view, cx);
+    let double = crate::view::test_support::repo_ops_rev(&view, cx, repo_id) - before;
+
+    // The failure settles the first commit; one plain submit shows the cost of one dispatch.
+    sync_store(cx, &view);
+    restage(cx, &view, 65);
+    let before = crate::view::test_support::repo_ops_rev(&view, cx, repo_id);
+    submit_commit_box(cx, &view);
+    crate::view::test_support::drain_store_worker(&view, cx);
+    let single = crate::view::test_support::repo_ops_rev(&view, cx, repo_id) - before;
+
+    assert!(single > 0);
+    assert_eq!(double, single, "the second submit must not dispatch");
+}
+
+#[gpui::test]
+fn background_repo_commit_success_drops_its_draft(cx: &mut gpui::TestAppContext) {
+    let (view, cx) = new_commit_view(cx);
+    let repo_a_id = gitcomet_state::model::RepoId(66);
+    let repo_b_id = gitcomet_state::model::RepoId(67);
+    let (repo_a, repo_b) = (staged_repo(66), staged_repo(67));
+    commit_box_window(
+        cx,
+        &view,
+        two_repo_state(repo_a.clone(), repo_b.clone(), repo_a_id),
+    );
+    set_commit_box_text(cx, &view, "background ship");
+    submit_commit_box(cx, &view);
+
+    let push = |cx: &mut gpui::VisualTestContext, state: Arc<AppState>| {
+        cx.update(|_window, app| {
+            view.update(app, |this, cx| push_test_state(this, state, cx));
+        });
+        cx.run_until_parked();
+    };
+    push(
+        cx,
+        two_repo_state(repo_a.clone(), repo_b.clone(), repo_b_id),
+    );
+    let done = with_command_result(&repo_a, "Commit", true);
+    push(cx, two_repo_state(done.clone(), repo_b.clone(), repo_b_id));
+    let mut acknowledged = done;
+    acknowledged.feedback_mut().acknowledge(0, 1);
+    push(
+        cx,
+        two_repo_state(acknowledged.clone(), repo_b.clone(), repo_b_id),
+    );
+    push(cx, two_repo_state(acknowledged, repo_b, repo_a_id));
+
+    assert_eq!(commit_box_text_of(cx, &view), "");
 }

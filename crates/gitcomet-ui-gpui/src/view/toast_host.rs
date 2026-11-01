@@ -15,7 +15,6 @@ pub(super) struct ToastHost {
     root_view: WeakEntity<GitCometView>,
 
     toasts: Vec<ToastState>,
-    errors_hidden: bool,
     /// Monotonic, so an id is never reused. Deriving the next id from
     /// `toasts.last()` restarted numbering whenever the list emptied, and both
     /// removal paths are deferred — the TTL timer below and the launch
@@ -88,6 +87,15 @@ fn apply_clone_progress_sync(
     clone_progress_dest: &mut Option<std::sync::Arc<std::path::PathBuf>>,
     next_clone: Option<&CloneOpState>,
 ) -> CloneProgressSyncAction {
+    if let Some(op) = next_clone
+        && clone_progress_dest
+            .as_ref()
+            .is_some_and(|dest| !std::sync::Arc::ptr_eq(dest, &op.dest))
+    {
+        // A fresh clone attempt owns a new destination Arc, even at the same
+        // path. Detect retries when both Waiting and Running were coalesced.
+        *clone_progress_last_seq = 0;
+    }
     match next_clone {
         Some(op) => match &op.status {
             CloneOpStatus::Running | CloneOpStatus::Cancelling => {
@@ -113,6 +121,18 @@ fn apply_clone_progress_sync(
                         progress_changed: false,
                         notice: None,
                     }
+                }
+            }
+            CloneOpStatus::WaitingForAuthentication => {
+                let had_progress = clone_progress.take().is_some();
+                // A retry starts its sequence again. It can finish before the
+                // UI sees Running, so the challenge's sequence must not mask
+                // the eventual success or terminal failure.
+                *clone_progress_last_seq = 0;
+                *clone_progress_dest = None;
+                CloneProgressSyncAction {
+                    progress_changed: had_progress,
+                    notice: None,
                 }
             }
             CloneOpStatus::FinishedOk => {
@@ -203,7 +223,6 @@ impl ToastHost {
             theme,
             root_view,
             toasts: Vec::new(),
-            errors_hidden: false,
             next_toast_id: 1,
             clone_progress: None,
             clone_progress_last_seq: 0,
@@ -219,20 +238,8 @@ impl ToastHost {
         }
     }
 
-    pub(super) fn set_errors_hidden(&mut self, hidden: bool, cx: &mut gpui::Context<Self>) {
-        if self.errors_hidden != hidden {
-            self.errors_hidden = hidden;
-            cx.notify();
-        }
-    }
-
     pub(super) fn set_theme(&mut self, theme: AppTheme, cx: &mut gpui::Context<Self>) {
         self.theme = theme;
-        for toast in &self.toasts {
-            if let ToastBody::Text { input, .. } = &toast.body {
-                input.update(cx, |input, cx| input.set_theme(theme, cx));
-            }
-        }
         cx.notify();
     }
 
@@ -281,7 +288,7 @@ impl ToastHost {
             body: ToastBody::Error(std::rc::Rc::new(ErrorNotice::new(report))),
             actions: Vec::new(),
             dismiss_behavior: ToastDismissBehavior::Remove,
-            ttl: None,
+            leaving: false,
         });
         cx.notify();
     }
@@ -505,7 +512,6 @@ impl ToastHost {
         cx: &mut gpui::Context<Self>,
     ) -> u64 {
         let id = self.next_id();
-        let theme = self.theme;
         let is_code_message = looks_like_code_message(&message);
         let display_message = if is_code_message {
             strip_code_message_indentation(&message)
@@ -525,7 +531,6 @@ impl ToastHost {
             )
         });
         input.update(cx, |input, cx| {
-            input.set_theme(theme, cx);
             input.set_text(display_message, cx);
             input.set_read_only(true, cx);
         });
@@ -545,15 +550,31 @@ impl ToastHost {
             },
             actions,
             dismiss_behavior,
-            ttl,
+            leaving: false,
         });
         cx.notify();
 
         if let Some(ttl) = ttl {
-            let lifetime = toast_total_lifetime(ttl);
             cx.spawn(
                 async move |view: WeakEntity<ToastHost>, cx: &mut gpui::AsyncApp| {
-                    smol::Timer::after(lifetime).await;
+                    cx.background_executor()
+                        .timer(toast_fade_in_duration() + ttl)
+                        .await;
+                    let still_shown = view.update(cx, |this, cx| {
+                        let Some(toast) = this.toasts.iter_mut().find(|toast| toast.id == id)
+                        else {
+                            return false;
+                        };
+                        toast.leaving = true;
+                        cx.notify();
+                        true
+                    });
+                    if !matches!(still_shown, Ok(true)) {
+                        return;
+                    }
+                    cx.background_executor()
+                        .timer(toast_fade_out_duration())
+                        .await;
                     let _ = view.update(cx, |this, cx| {
                         this.remove_toast(id, cx);
                     });
@@ -850,7 +871,6 @@ impl ToastHost {
             .border_1()
             .border_color(shell_border)
             .rounded(px(theme.radii.popover))
-            .shadow(crate::theme::shadow_popover(theme))
             .text_size(theme.ui_text(14.0))
             .text_color(theme.colors.foreground.primary)
             .px(ui_scale.px(14.0))
@@ -881,7 +901,7 @@ impl ToastHost {
         .borderless()
         .disabled(aborting);
         if aborting {
-            abort_button = abort_button.start_slot(svg_spinner(
+            abort_button = abort_button.start_slot(components::ButtonSlot::spinner(
                 "clone_progress_abort_spinner",
                 spinner_color,
                 ui_scale.px(10.0),
@@ -1097,11 +1117,33 @@ impl ToastHost {
         let operation_id = progress.operation_id;
         let repo_id = progress.repo_id;
         let accent = theme.colors.accent.foreground;
-        let percent = progress
-            .progress
-            .as_ref()
-            .and_then(|meter| meter.percent)
-            .unwrap_or(0);
+        let percent = progress.progress.as_ref().and_then(|meter| meter.percent);
+
+        let details_button = components::Button::new(
+            format!("operation_progress_details_{}", operation_id.0),
+            "Details",
+        )
+        .style(components::ButtonStyle::Outlined)
+        .disabled(progress.command.is_none())
+        .on_click(theme, cx, move |this, _e, window, cx| {
+            let root_view = this.root_view.clone();
+            let window_handle = window.window_handle();
+            cx.defer(move |cx| {
+                let _ = window_handle.update(cx, |_, window, cx| {
+                    let _ = root_view.update(cx, |root, cx| {
+                        root.open_popover_centered(
+                            PopoverKind::HookActivity {
+                                repo_id,
+                                operation_id: Some(operation_id),
+                            },
+                            window,
+                            cx,
+                        );
+                    });
+                });
+            });
+        })
+        .debug_selector(move || format!("operation_progress_details_{}", operation_id.0));
 
         let root_view = self.root_view.clone();
         let stop_button = components::Button::new(
@@ -1185,13 +1227,40 @@ impl ToastHost {
                     )
                     .child(div().font_weight(FontWeight::SEMIBOLD).child(status)),
             )
-            .child(components::progress_bar(
-                theme,
-                ui_scale,
-                crate::view::clone_progress::clone_progress_fill_ratio(percent),
-                with_alpha(accent, if theme.is_dark { 0.88 } else { 0.80 }),
-            ))
-            .child(div().pt_1().child(stop_button));
+            .when_some(percent, |this, percent| {
+                this.child(
+                    components::progress_bar(
+                        theme,
+                        ui_scale,
+                        crate::view::clone_progress::clone_progress_fill_ratio(percent),
+                        with_alpha(accent, if theme.is_dark { 0.88 } else { 0.80 }),
+                    )
+                    .debug_selector(move || format!("operation_progress_bar_{}", operation_id.0)),
+                )
+            })
+            .when(!progress.latest_line.is_empty(), |this| {
+                this.child(
+                    div()
+                        .debug_selector(move || {
+                            format!("operation_progress_output_{}", operation_id.0)
+                        })
+                        .text_size(theme.ui_text(12.0))
+                        .text_color(theme.colors.foreground.secondary)
+                        .line_clamp(2)
+                        .overflow_hidden()
+                        .child(progress.latest_line.clone()),
+                )
+            })
+            .child(
+                div()
+                    .pt_1()
+                    .flex()
+                    .gap_2()
+                    .when(progress.label == "Pull", |actions| {
+                        actions.child(details_button)
+                    })
+                    .child(stop_button),
+            );
 
         self.render_progress_shell(ui_scale, content)
     }
@@ -1208,13 +1277,14 @@ impl ToastHost {
             .expect("hook progress renderer requires at least one operation");
         let repo_id = latest.repo_id;
         let operation_id = latest.operation.id;
-        let hook_name = latest.operation.active_hook_name().unwrap_or("Git");
         let title = if progress.len() > 1 {
-            format!("{} Git hook runs active", progress.len())
+            format!("{} Git operations active", progress.len())
         } else if latest.operation.status == GitHookOperationStatus::Cancelling {
-            format!("Stopping {hook_name} hook…")
-        } else {
+            "Stopping…".to_string()
+        } else if let Some(hook_name) = latest.operation.active_hook_name() {
             format!("Running {hook_name} hook…")
+        } else {
+            format!("{} in progress…", latest.operation.label)
         };
         let ui_scale_percent = crate::ui_scale::current(cx).percent;
         let scaled_px = crate::ui_scale::scaler(ui_scale_percent);
@@ -1231,7 +1301,7 @@ impl ToastHost {
                                 root.open_popover_centered(
                                     PopoverKind::HookActivity {
                                         repo_id,
-                                        operation_id: None,
+                                        operation_id: Some(operation_id),
                                     },
                                     window,
                                     cx,
@@ -1261,7 +1331,6 @@ impl ToastHost {
             .border_color(clone_progress_shell_border_color(theme))
             .rounded(px(theme.radii.popover))
             .overflow_hidden()
-            .shadow(crate::theme::shadow_popover(theme))
             .text_color(theme.colors.foreground.primary)
             .child(svg_spinner(
                 ("hook_progress_spinner", operation_id.0),
@@ -1293,9 +1362,15 @@ impl ToastHost {
         toast: &ToastState,
         message: impl IntoElement,
         close: impl IntoElement,
-        animations: Vec<Animation>,
     ) -> AnyElement {
         let scaled_px = crate::ui_scale::scaler(ui_scale_percent);
+        let leaving = toast.leaving;
+        // A new id restarts the animation state for the fade-out.
+        let (animation_id, duration) = if leaving {
+            ("toast_leaving", toast_fade_out_duration())
+        } else {
+            ("toast", toast_fade_in_duration())
+        };
         div()
             .relative()
             .child(components::toast(
@@ -1311,20 +1386,14 @@ impl ToastHost {
                     .right(scaled_px(10.0))
                     .child(close),
             )
-            .with_animations(
-                ("toast", toast.id),
-                animations,
-                move |toast, animation_ix, delta| {
-                    let opacity = match animation_ix {
-                        0 => delta,
-                        1 => 1.0,
-                        2 => 1.0 - delta,
-                        _ => 1.0,
-                    };
-                    let slide_x = match animation_ix {
-                        0 => -(1.0 - delta) * TOAST_SLIDE_PX,
-                        2 => -delta * TOAST_SLIDE_PX,
-                        _ => 0.0,
+            .with_animation(
+                (animation_id, toast.id),
+                Animation::new(duration).with_easing(gpui::quadratic),
+                move |toast, delta| {
+                    let (opacity, slide_x) = if leaving {
+                        (1.0 - delta, -delta * TOAST_SLIDE_PX)
+                    } else {
+                        (delta, -(1.0 - delta) * TOAST_SLIDE_PX)
                     };
                     toast.opacity(opacity).relative().left(px(slide_x))
                 },
@@ -1353,6 +1422,29 @@ impl ToastHost {
                 this.open_error_details(id, window, cx);
             })
             .debug_selector(move || format!("toast_error_show_{id}"));
+        let review = notice
+            .actions
+            .iter()
+            .find_map(|action| match action {
+                ErrorAction::ReviewLocalChanges { repo_id } => Some(*repo_id),
+                _ => None,
+            })
+            .map(|repo_id| {
+                components::Button::new(format!("toast_error_review_{id}"), "Review local changes")
+                    .style(components::ButtonStyle::Filled)
+                    .on_click(theme, cx, move |this, _e, window, cx| {
+                        let root = this.root_view.clone();
+                        let window_handle = window.window_handle();
+                        cx.defer(move |cx| {
+                            let _ = window_handle.update(cx, |_root, window, cx| {
+                                let _ = root.update(cx, |root, cx| {
+                                    root.review_local_changes(repo_id, window, cx);
+                                });
+                            });
+                        });
+                    })
+                    .debug_selector(move || format!("toast_error_review_{id}"))
+            });
         div()
             .flex()
             .flex_col()
@@ -1407,6 +1499,7 @@ impl ToastHost {
                     .flex()
                     .items_center()
                     .gap_2()
+                    .children(review)
                     .child(show),
             )
     }
@@ -1418,8 +1511,10 @@ impl Render for ToastHost {
         {
             self.render_count += 1;
         }
-        let shows_hook_progress =
-            |progress: &HookProgressToast| self.hook_activity_dialog_repo != Some(progress.repo_id);
+        let shows_hook_progress = |progress: &HookProgressToast| {
+            progress.operation.command.is_none()
+                && self.hook_activity_dialog_repo != Some(progress.repo_id)
+        };
         // Decide "nothing to show" before cloning anything: this renders every
         // frame of the app's life, almost always empty.
         if self.toasts.is_empty()
@@ -1464,7 +1559,11 @@ impl Render for ToastHost {
         for progress in self
             .operation_progress
             .iter()
-            .filter(|progress| progress.is_visible(now))
+            .filter(|progress| {
+                progress.is_visible(now)
+                    && (progress.command.is_none()
+                        || self.hook_activity_dialog_repo != Some(progress.repo_id))
+            })
             .cloned()
             .collect::<Vec<_>>()
         {
@@ -1472,11 +1571,7 @@ impl Render for ToastHost {
         }
         let has_progress = !progress_toasts.is_empty();
         let max_other = if has_progress { 2 } else { 3 };
-        let visible = self
-            .toasts
-            .iter()
-            .rev()
-            .filter(|toast| !self.errors_hidden || !matches!(toast.body, ToastBody::Error(_)));
+        let visible = self.toasts.iter().rev();
         let mut displayed = visible.clone().take(max_other).cloned().collect::<Vec<_>>();
         // Errors never expire, so ones pushed out of view must stay reachable.
         let hidden_errors = visible
@@ -1497,7 +1592,6 @@ impl Render for ToastHost {
                 .border_1()
                 .border_color(theme.colors.stroke.default)
                 .rounded(px(theme.radii.popover))
-                .shadow(crate::theme::shadow_popover(theme))
                 .child(
                     components::Button::new("toast_more_errors", label)
                         .style(components::ButtonStyle::Transparent)
@@ -1509,20 +1603,9 @@ impl Render for ToastHost {
                 .into_any_element()
         });
 
-        let fade_in = toast_fade_in_duration();
-        let fade_out = toast_fade_out_duration();
         let mut children = displayed
             .drain(..)
             .map(move |t| {
-                let animations = match t.ttl {
-                    Some(ttl) => vec![
-                        Animation::new(fade_in).with_easing(gpui::quadratic),
-                        Animation::new(ttl),
-                        Animation::new(fade_out).with_easing(gpui::quadratic),
-                    ],
-                    None => vec![Animation::new(fade_in).with_easing(gpui::quadratic)],
-                };
-
                 let toast_id = t.id;
                 let dismiss_behavior = t.dismiss_behavior.clone();
                 let close = components::Button::new(format!("toast_close_{}", t.id), "")
@@ -1551,14 +1634,7 @@ impl Render for ToastHost {
                             notice,
                             cx,
                         );
-                        return Self::render_toast_frame(
-                            theme,
-                            ui_scale_percent,
-                            &t,
-                            body,
-                            close,
-                            animations,
-                        );
+                        return Self::render_toast_frame(theme, ui_scale_percent, &t, body, close);
                     }
                 };
                 let message_scroll = div()
@@ -1637,7 +1713,7 @@ impl Render for ToastHost {
                     )
                     .when_some(action_buttons, |this, buttons| this.child(buttons));
 
-                Self::render_toast_frame(theme, ui_scale_percent, &t, message, close, animations)
+                Self::render_toast_frame(theme, ui_scale_percent, &t, message, close)
             })
             .collect::<Vec<_>>();
         children.extend(more_errors);
@@ -1678,6 +1754,43 @@ mod tests {
         assert_eq!(toast_ttl(components::ToastKind::Error), None);
         assert!(toast_ttl(components::ToastKind::Warning).is_some());
         assert!(toast_ttl(components::ToastKind::Success).is_some());
+    }
+
+    #[gpui::test]
+    fn expiring_toasts_fade_out_then_leave(cx: &mut gpui::TestAppContext) {
+        let host = cx.update(|app| {
+            app.new(|cx| {
+                let mut host =
+                    ToastHost::new(AppTheme::gitcomet_dark(), gpui::WeakEntity::new_invalid());
+                // Only the live runtime gives toasts a TTL.
+                crate::ui_runtime::with_override(crate::ui_runtime::UiRuntime::live(), || {
+                    host.push_toast(components::ToastKind::Success, "Saved".into(), cx)
+                });
+                host
+            })
+        });
+        let leaving = |cx: &mut gpui::TestAppContext| {
+            cx.update(|app| {
+                host.read(app)
+                    .toasts
+                    .iter()
+                    .map(|toast| toast.leaving)
+                    .collect::<Vec<_>>()
+            })
+        };
+        let shown = toast_fade_in_duration()
+            + toast_ttl(components::ToastKind::Success).expect("success toasts expire");
+
+        cx.executor()
+            .advance_clock(shown - Duration::from_millis(1));
+        cx.run_until_parked();
+        assert_eq!(leaving(cx), [false], "shown through its fade-in and TTL");
+        cx.executor().advance_clock(Duration::from_millis(1));
+        cx.run_until_parked();
+        assert_eq!(leaving(cx), [true], "then fades out");
+        cx.executor().advance_clock(toast_fade_out_duration());
+        cx.run_until_parked();
+        assert!(leaving(cx).is_empty(), "and is removed");
     }
     use crate::theme::with_alpha;
     use gitcomet_state::model::{CloneProgressMeter, CloneProgressStage};
@@ -1843,6 +1956,159 @@ mod tests {
                 progress_changed: false,
                 notice: None,
             }
+        );
+    }
+
+    #[test]
+    fn clone_authentication_wait_clears_progress_without_a_notice_and_allows_fast_retry() {
+        let dest = Arc::new(PathBuf::from("/tmp/repo"));
+        let waiting = clone_op(
+            Arc::clone(&dest),
+            CloneOpStatus::WaitingForAuthentication,
+            CloneProgressStage::Loading,
+            0,
+            1,
+        );
+        let mut progress = Some(clone_op(
+            Arc::clone(&dest),
+            CloneOpStatus::Running,
+            CloneProgressStage::Loading,
+            0,
+            0,
+        ));
+        let mut last_seq = 0;
+        let mut tracked_dest = Some(dest);
+
+        let action = apply_clone_progress_sync(
+            &mut progress,
+            &mut last_seq,
+            &mut tracked_dest,
+            Some(&waiting),
+        );
+        assert!(action.progress_changed);
+        assert!(action.notice.is_none());
+        assert!(progress.is_none());
+        assert!(tracked_dest.is_none());
+        assert_eq!(last_seq, 0);
+
+        // The retry completes before the UI observes its Running snapshot,
+        // and reuses the challenge's sequence number.
+        let finished = clone_op(
+            Arc::new(PathBuf::from("/tmp/repo")),
+            CloneOpStatus::FinishedOk,
+            CloneProgressStage::RemoteObjects,
+            100,
+            waiting.seq,
+        );
+        let action = apply_clone_progress_sync(
+            &mut progress,
+            &mut last_seq,
+            &mut tracked_dest,
+            Some(&finished),
+        );
+        assert_eq!(
+            action.notice,
+            Some((
+                components::ToastKind::Success,
+                "Clone finished: /tmp/repo".to_string(),
+            ))
+        );
+        let repeated = apply_clone_progress_sync(
+            &mut progress,
+            &mut last_seq,
+            &mut tracked_dest,
+            Some(&finished),
+        );
+        assert!(repeated.notice.is_none());
+    }
+
+    #[test]
+    fn clone_retry_completion_is_reported_when_waiting_and_running_snapshots_are_skipped() {
+        for status in [
+            CloneOpStatus::FinishedOk,
+            CloneOpStatus::FinishedErr("Clone failed: network disconnected".into()),
+        ] {
+            let dest = Arc::new(PathBuf::from("/tmp/repo"));
+            let mut progress = Some(clone_op(
+                Arc::clone(&dest),
+                CloneOpStatus::Running,
+                CloneProgressStage::Loading,
+                0,
+                1,
+            ));
+            let mut last_seq = 1;
+            let mut tracked_dest = Some(dest);
+            let expected_kind = if matches!(&status, CloneOpStatus::FinishedOk) {
+                components::ToastKind::Success
+            } else {
+                components::ToastKind::Error
+            };
+            let finished = clone_op(
+                Arc::new(PathBuf::from("/tmp/repo")),
+                status,
+                CloneProgressStage::Loading,
+                0,
+                1,
+            );
+
+            let action = apply_clone_progress_sync(
+                &mut progress,
+                &mut last_seq,
+                &mut tracked_dest,
+                Some(&finished),
+            );
+            assert!(action.progress_changed);
+            assert_eq!(action.notice.map(|(kind, _)| kind), Some(expected_kind));
+            assert!(progress.is_none());
+            let repeated = apply_clone_progress_sync(
+                &mut progress,
+                &mut last_seq,
+                &mut tracked_dest,
+                Some(&finished),
+            );
+            assert!(repeated.notice.is_none());
+        }
+    }
+
+    #[test]
+    fn cancelling_clone_authentication_is_quiet_but_terminal_retry_failure_is_reported() {
+        let waiting = clone_op(
+            Arc::new(PathBuf::from("/tmp/repo")),
+            CloneOpStatus::WaitingForAuthentication,
+            CloneProgressStage::Loading,
+            0,
+            1,
+        );
+        let mut progress = None;
+        let mut last_seq = 0;
+        let mut tracked_dest = None;
+
+        for next in [Some(&waiting), Some(&waiting), None] {
+            let action =
+                apply_clone_progress_sync(&mut progress, &mut last_seq, &mut tracked_dest, next);
+            assert!(action.notice.is_none());
+            assert!(progress.is_none());
+        }
+
+        let failed = clone_op(
+            Arc::new(PathBuf::from("/tmp/repo")),
+            CloneOpStatus::FinishedErr("Clone failed: network disconnected".into()),
+            CloneProgressStage::Loading,
+            0,
+            1,
+        );
+        let action = apply_clone_progress_sync(
+            &mut progress,
+            &mut last_seq,
+            &mut tracked_dest,
+            Some(&failed),
+        );
+        assert_eq!(
+            action.notice,
+            Some((
+                components::ToastKind::Error,
+                "Clone failed: network disconnected".into(),
+            ))
         );
     }
 
@@ -2016,51 +2282,44 @@ mod tests {
     }
 
     #[gpui::test]
-    fn set_theme_rethemes_existing_toast_inputs(cx: &mut gpui::TestAppContext) {
+    fn toast_inputs_follow_their_window_theme(cx: &mut gpui::TestAppContext) {
         let light = AppTheme::gitcomet_light();
         let dark = AppTheme::gitcomet_dark();
 
-        let host = cx.update(|app| {
-            app.new(|cx| {
-                let mut host = ToastHost::new(light, gpui::WeakEntity::new_invalid());
-                host.push_survey_toast(
-                    "survey-id",
-                    "Survey",
-                    "Help shape GitComet by taking a short user survey.",
-                    "https://example.com",
-                    "Open Survey",
-                    "Later",
-                    60,
-                    cx,
-                );
-                host
-            })
+        let (host, cx) = cx.add_window_view(|_, cx| {
+            let mut host = ToastHost::new(light, gpui::WeakEntity::new_invalid());
+            host.push_survey_toast(
+                "survey-id",
+                "Survey",
+                "Help shape GitComet by taking a short user survey.",
+                "https://example.com",
+                "Open Survey",
+                "Later",
+                60,
+                cx,
+            );
+            host
         });
-
-        let toast_input = cx.update(|app| {
+        let window_id = cx.update(|window, _| window.window_handle().window_id());
+        let toast_input = cx.update(|_, app| {
             let host = host.read(app);
             assert_eq!(host.toasts.len(), 1);
             let ToastBody::Text { input, .. } = &host.toasts[0].body else {
                 panic!("a survey toast is text");
             };
-            let input = input.clone();
-            assert_eq!(
-                input.read(app).debug_text_color(),
-                light.colors.foreground.primary.into_color()
-            );
-            input
+            input.clone()
         });
 
-        cx.update(|app| {
-            host.update(app, |host, cx| host.set_theme(dark, cx));
-        });
-
-        cx.update(|app| {
-            assert_eq!(
-                toast_input.read(app).debug_text_color(),
-                dark.colors.foreground.primary.into_color()
-            );
-        });
+        for theme in [light, dark] {
+            cx.update(|_, app| crate::theme::set_window_theme(app, window_id, theme));
+            crate::test_support::refresh_and_draw(cx);
+            cx.update(|_, app| {
+                assert_eq!(
+                    toast_input.read(app).debug_text_color(),
+                    theme.colors.foreground.primary.into_color()
+                );
+            });
+        }
     }
 
     #[test]

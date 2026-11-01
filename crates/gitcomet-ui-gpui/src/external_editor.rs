@@ -629,6 +629,7 @@ pub(crate) fn label_for_setting(setting: Option<&ExternalCodeEditorSetting>) -> 
 /// always true, and it does not pump the Windows message queue, but a PATH
 /// entry on an unreachable share can still stall the click. Caching it (as
 /// [`configured_setting`] already caches the setting itself) is a follow-up.
+#[cfg(test)]
 pub(crate) fn launch_command_for_configured_editor(
     target: &Path,
 ) -> Result<ExternalEditorLaunchCommand, ExternalEditorError> {

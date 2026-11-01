@@ -24,6 +24,8 @@ impl Poller {
             };
         }
 
+        let probe_window = crate::ui_probe::jsonl_enabled()
+            .then(|| format!("{:?}", window.window_handle().window_id()));
         let task = window.spawn(cx, async move |cx| {
             loop {
                 if events.recv().await.is_err() {
@@ -52,13 +54,23 @@ impl Poller {
                 if let Some(applying) = applying {
                     // Observers of the model run inside this update, so the
                     // span covers every pane's synchronous state application.
+                    let elapsed = gitcomet_core::op_trace::duration_ns(applying.elapsed());
                     gitcomet_core::op_trace::record(
                         gitcomet_core::op_trace::Stage::Applied,
                         0,
                         "set_state",
                         publication,
-                        gitcomet_core::op_trace::duration_ns(applying.elapsed()),
+                        elapsed,
                     );
+                    if let Some(window) = &probe_window {
+                        // Publication sequences are local to a store. A different
+                        // window can have the same sequence, so the profiler must
+                        // identify the window before matching an applied state.
+                        crate::ui_probe::scenario_record(
+                            "state_applied",
+                            serde_json::json!({"window": window, "publication": publication, "duration_ns": elapsed}),
+                        );
+                    }
                 }
             }
         });

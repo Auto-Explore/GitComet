@@ -54,16 +54,12 @@ fn show(
     loop {
         draw_and_drain_test_window(cx);
         let caught_up = cx.update(|_window, app| {
-            let pane = view.read(app).main_pane.read(app);
-            if pane
-                .active_repo()
-                .is_some_and(|repo| repo.diff_state.edit_mode)
-            {
-                return true;
-            }
-            pane.diff_cache_rev == diff_rev
-                && pane.file_diff_cache_rev == diff_file_rev
-                && pane.file_diff_cache_inflight.is_none()
+            let pane = view.read(app).diff_renderer.read(app);
+            let builds_file_rows = pane.diff_surface().supports_diff_content_toggle;
+            !builds_file_rows
+                || (pane.diff_cache_rev == diff_rev
+                    && pane.file_diff_cache_rev == diff_file_rev
+                    && pane.file_diff_cache_inflight.is_none())
         });
         if caught_up {
             break;
@@ -85,7 +81,7 @@ fn marker_starts(
     view: &gpui::Entity<super::super::GitCometView>,
 ) -> (Vec<f32>, Vec<f32>) {
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         let starts = |markers: Vec<components::ScrollbarMarker>| {
             markers
                 .into_iter()
@@ -104,7 +100,6 @@ fn markers_follow_an_in_place_external_edit(
     view_mode: DiffViewMode,
     content_mode: DiffContentMode,
 ) {
-    let _guard = lock_visual_test();
     let dir = tempfile::tempdir().expect("tempdir");
     let root = dir.path();
     git(root, &["init", "-q", "-b", "main"]);
@@ -133,7 +128,7 @@ fn markers_follow_an_in_place_external_edit(
     store.insert_repo_for_test(repo_id, repo);
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane
+            this.diff_renderer
                 .update(cx, |pane, _| pane.diff_view = view_mode)
         });
     });
@@ -220,7 +215,6 @@ fn inline_collapsed_markers_follow_an_in_place_external_edit(cx: &mut gpui::Test
 fn markers_are_current_after_editing_reloading_and_reopening_the_diff(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _guard = lock_visual_test();
     let dir = tempfile::tempdir().expect("tempdir");
     let root = dir.path();
     git(root, &["init", "-q", "-b", "main"]);
@@ -246,7 +240,7 @@ fn markers_are_current_after_editing_reloading_and_reopening_the_diff(
     store.insert_repo_for_test(repo_id, repo);
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane
+            this.diff_renderer
                 .update(cx, |pane, _| pane.diff_view = DiffViewMode::Split)
         });
     });
@@ -285,15 +279,20 @@ fn markers_are_current_after_editing_reloading_and_reopening_the_diff(
     show(cx, &view, snapshot);
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane
+            this.diff_renderer
                 .update(cx, |pane, cx| pane.ensure_file_editor_loaded(cx))
         });
     });
-    for _ in 0..5 {
-        draw_and_drain_test_window(cx);
-    }
+    super::shortcuts::wait_until(cx, "the editor text", |cx| {
+        cx.update(|_, app| {
+            let pane = view.read(app).diff_renderer.read(app);
+            !pane.file_editor_loading()
+                && pane.file_editor_input.read(app).text() == lines(&[(35, "changed near the end")])
+        })
+    });
 
     // Another program fills the blank line 6; Reload.
+    let before_refresh = store.snapshot().repos[0].worktree_change_rev;
     std::fs::write(
         root.join("a.rs"),
         lines(&[(5, "asdads;"), (35, "changed near the end")]),
@@ -303,20 +302,34 @@ fn markers_are_current_after_editing_reloading_and_reopening_the_diff(
         repo_id,
         change: gitcomet_state::msg::RepoExternalChange::worktree(),
     });
-    std::thread::sleep(std::time::Duration::from_millis(200));
+    crate::view::test_support::drain_store_worker(&view, cx);
     let snapshot = wait_store(&store, "the refresh", |state| {
-        !state.repos[0].diff_state.diff_reload_in_flight
+        state.repos[0].worktree_change_rev != before_refresh
     });
     show(cx, &view, snapshot);
+    super::shortcuts::wait_until(cx, "the changed-file notice", |cx| {
+        cx.update(|_, app| {
+            view.read(app)
+                .diff_renderer
+                .read(app)
+                .file_disk_notice
+                .is_some()
+        })
+    });
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane
+            this.diff_renderer
                 .update(cx, |pane, cx| pane.reload_file_from_disk_notice(cx))
         });
     });
-    for _ in 0..5 {
-        draw_and_drain_test_window(cx);
-    }
+    super::shortcuts::wait_until(cx, "the reloaded editor text", |cx| {
+        cx.update(|_, app| {
+            let pane = view.read(app).diff_renderer.read(app);
+            !pane.file_editor_loading()
+                && pane.file_editor_input.read(app).text()
+                    == lines(&[(5, "asdads;"), (35, "changed near the end")])
+        })
+    });
 
     // Close the diff, then open the file's diff again.
     store.dispatch(Msg::ExitDiffEditMode { repo_id });

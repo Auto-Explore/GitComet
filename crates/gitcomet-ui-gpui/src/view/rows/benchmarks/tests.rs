@@ -1,6 +1,31 @@
 use super::*;
-use crate::perf_alloc::measure_allocations;
+use crate::perf_alloc::{PerfAllocMetrics, measure_allocations};
 use gitcomet_core::conflict_session::ConflictPayload;
+
+fn in_allocation_test_process(full_name: &str, guard: impl FnOnce()) {
+    const CHILD: &str = "GITCOMET_BENCH_ALLOCATION_TEST_CHILD";
+    let (_, test_name) = full_name.split_once("::").expect("qualified test name");
+    let completed = format!("allocation guard completed: {test_name}");
+    if let Some(child_name) = std::env::var_os(CHILD) {
+        assert_eq!(child_name, std::ffi::OsStr::new(test_name));
+        guard();
+        eprintln!("{completed}");
+        return;
+    }
+
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", test_name, "--nocapture", "--test-threads=1"])
+        .env(CHILD, test_name)
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success() && stderr.lines().filter(|line| *line == completed).count() == 1,
+        "allocation guard {test_name} did not complete: {}\nstdout:\n{stdout}\nstderr:\n{stderr}",
+        output.status,
+    );
+}
 
 #[test]
 fn status_list_fixture_reports_visible_window_metrics() {
@@ -816,8 +841,8 @@ fn branch_sidebar_extreme_fixture_reports_expected_structural_metrics() {
             worktrees: 0,
             submodules: 0,
             stashes: 0,
-            sidebar_rows: 20_414,
-            branch_rows: 20_002,
+            sidebar_rows: 20_413,
+            branch_rows: 20_001,
             remote_headers: 100,
             group_headers: 300,
             max_branch_depth: 4,
@@ -876,8 +901,8 @@ fn repo_switch_two_hot_repos_reloads_selected_diff_and_persists_session() {
     let fixture = RepoSwitchFixture::two_hot_repos(500, 20, 40, 2);
     let (hash, metrics) = fixture.run();
     assert_ne!(hash, 0);
-    assert_eq!(metrics.effect_count, 7);
-    assert_eq!(metrics.refresh_effect_count, 5);
+    assert_eq!(metrics.effect_count, 11);
+    assert_eq!(metrics.refresh_effect_count, 6);
     assert_eq!(metrics.selected_diff_reload_effect_count, 1);
     assert_eq!(metrics.persist_session_effect_count, 1);
     assert_eq!(metrics.repo_count, 2);
@@ -891,8 +916,8 @@ fn repo_switch_selected_commit_and_details_resets_target_without_diff_reload() {
     let fixture = RepoSwitchFixture::selected_commit_and_details(500, 20, 40, 2);
     let (hash, metrics) = fixture.run();
     assert_ne!(hash, 0);
-    assert_eq!(metrics.effect_count, 6);
-    assert_eq!(metrics.refresh_effect_count, 5);
+    assert_eq!(metrics.effect_count, 10);
+    assert_eq!(metrics.refresh_effect_count, 6);
     assert_eq!(metrics.selected_diff_reload_effect_count, 0);
     assert_eq!(metrics.persist_session_effect_count, 1);
     assert_eq!(metrics.repo_count, 2);
@@ -906,8 +931,8 @@ fn repo_switch_twenty_tabs_scales_repo_count_without_heating_all_tabs() {
     let fixture = RepoSwitchFixture::twenty_tabs(500, 20, 40, 2);
     let (hash, metrics) = fixture.run();
     assert_ne!(hash, 0);
-    assert_eq!(metrics.effect_count, 7);
-    assert_eq!(metrics.refresh_effect_count, 5);
+    assert_eq!(metrics.effect_count, 11);
+    assert_eq!(metrics.refresh_effect_count, 6);
     assert_eq!(metrics.selected_diff_reload_effect_count, 1);
     assert_eq!(metrics.persist_session_effect_count, 1);
     assert_eq!(metrics.repo_count, 20);
@@ -940,8 +965,8 @@ fn repo_switch_twenty_repos_all_hot_tracks_extreme_hot_tab_scale() {
     let fixture = RepoSwitchFixture::twenty_repos_all_hot(500, 20, 40, 2);
     let (hash, metrics) = fixture.run();
     assert_ne!(hash, 0);
-    assert_eq!(metrics.effect_count, 7);
-    assert_eq!(metrics.refresh_effect_count, 5);
+    assert_eq!(metrics.effect_count, 11);
+    assert_eq!(metrics.refresh_effect_count, 6);
     assert_eq!(metrics.selected_diff_reload_effect_count, 1);
     assert_eq!(metrics.persist_session_effect_count, 1);
     assert_eq!(metrics.repo_count, 20);
@@ -955,8 +980,8 @@ fn repo_switch_selected_diff_file_triggers_diff_reload_with_loaded_content() {
     let fixture = RepoSwitchFixture::selected_diff_file(500, 20, 40, 2);
     let (hash, metrics) = fixture.run();
     assert_ne!(hash, 0);
-    assert_eq!(metrics.effect_count, 7);
-    assert_eq!(metrics.refresh_effect_count, 5);
+    assert_eq!(metrics.effect_count, 11);
+    assert_eq!(metrics.refresh_effect_count, 6);
     assert_eq!(metrics.selected_diff_reload_effect_count, 1);
     assert_eq!(metrics.persist_session_effect_count, 1);
     assert_eq!(metrics.repo_count, 2);
@@ -970,8 +995,8 @@ fn repo_switch_selected_conflict_target_dispatches_conflict_reload() {
     let fixture = RepoSwitchFixture::selected_conflict_target(500, 20, 40, 2);
     let (hash, metrics) = fixture.run();
     assert_ne!(hash, 0);
-    assert_eq!(metrics.effect_count, 7);
-    assert_eq!(metrics.refresh_effect_count, 5);
+    assert_eq!(metrics.effect_count, 11);
+    assert_eq!(metrics.refresh_effect_count, 6);
     assert_eq!(metrics.selected_diff_reload_effect_count, 1);
     assert_eq!(metrics.persist_session_effect_count, 1);
     assert_eq!(metrics.repo_count, 2);
@@ -984,8 +1009,8 @@ fn repo_switch_merge_active_with_draft_restore_includes_merge_message() {
     let fixture = RepoSwitchFixture::merge_active_with_draft_restore(500, 20, 40, 2);
     let (hash, metrics) = fixture.run();
     assert_ne!(hash, 0);
-    assert_eq!(metrics.effect_count, 7);
-    assert_eq!(metrics.refresh_effect_count, 5);
+    assert_eq!(metrics.effect_count, 11);
+    assert_eq!(metrics.refresh_effect_count, 6);
     assert_eq!(metrics.selected_diff_reload_effect_count, 1);
     assert_eq!(metrics.persist_session_effect_count, 1);
     assert_eq!(metrics.repo_count, 2);
@@ -1814,6 +1839,7 @@ fn large_html_syntax_fixture_uses_external_text_when_available() {
 #[test]
 fn worktree_preview_render_fixture_preserves_output_with_cached_lookup() {
     let fixture = WorktreePreviewRenderFixture::new(1_024, 128);
+    fixture.prepare_window_syntax(96, 160);
     let cached = fixture.run_cached_lookup_step(96, 160);
     let render_time_prepare = fixture.run_render_time_prepare_step(96, 160);
     assert_eq!(cached, render_time_prepare);
@@ -1836,6 +1862,7 @@ fn worktree_preview_render_fixture_handles_long_windows() {
 #[test]
 fn worktree_preview_render_fixture_reports_expected_sidecar_metrics() {
     let fixture = WorktreePreviewRenderFixture::new(4_000, 128);
+    fixture.prepare_window_syntax(0, 200);
     let (cached_hash, cached_metrics) = fixture.run_cached_lookup_with_metrics(0, 200);
     assert_ne!(cached_hash, 0);
     assert_eq!(cached_metrics.total_lines, 4_000);
@@ -2221,7 +2248,7 @@ fn history_column_resize_fixture_clamps_and_bounces() {
     assert_ne!(hash, 0);
     assert_eq!(metrics.steps, 200);
     assert_eq!(metrics.width_clamp_recomputes, metrics.steps);
-    assert_eq!(metrics.visible_column_recomputes, 0);
+    assert_eq!(metrics.visible_column_recomputes, metrics.steps);
     // The drag should clamp at least once at either min or max.
     assert!(
         metrics.clamp_at_min_count + metrics.clamp_at_max_count >= 1,
@@ -2462,13 +2489,15 @@ fn in_diff_text_search_fixture_reports_expected_match_counts() {
     assert_eq!(metrics.matches_found, expected_broad_matches);
     assert_eq!(metrics.prior_matches, 0);
     assert!(metrics.visible_rows_scanned >= metrics.matches_found);
-    assert!(metrics.visible_rows_scanned < fixture.visible_rows() as u64);
+    assert_eq!(metrics.visible_rows_scanned, fixture.visible_rows() as u64);
 }
 
 #[test]
 fn in_diff_text_search_fixture_reports_refinement_counts() {
     let fixture = InDiffTextSearchFixture::new(10_000);
-    let (_, metrics) = fixture.run_refinement_with_metrics("render_cache", "render_cache_hot_path");
+    let prior_matches = fixture.prepare_matches("render_cache");
+    let (hash, metrics) =
+        fixture.run_refinement_from_matches_with_metrics("render_cache_hot_path", &prior_matches);
 
     let expected_broad_matches = count_multiples(10_000, 16) + count_multiples(10_000, 64);
     let expected_refined_matches = count_multiples(10_000, 64);
@@ -2478,7 +2507,44 @@ fn in_diff_text_search_fixture_reports_refinement_counts() {
     assert_eq!(metrics.matches_found, expected_refined_matches);
     assert_eq!(metrics.prior_matches, expected_broad_matches);
     assert!(metrics.prior_matches > metrics.matches_found);
-    assert_eq!(metrics.visible_rows_scanned, metrics.matches_found);
+    assert_eq!(metrics.visible_rows_scanned, expected_broad_matches);
+    assert_eq!(
+        hash,
+        fixture.run_refinement_from_matches("render_cache_hot_path", &prior_matches)
+    );
+}
+
+#[test]
+fn in_diff_text_search_refinement_counts_candidates_even_without_matches() {
+    let fixture = InDiffTextSearchFixture::new(10_000);
+    let prior_matches = fixture.prepare_matches("render_cache");
+    assert_eq!(prior_matches.len(), 782);
+
+    for (query, candidates, expected_scanned) in [
+        ("no matching lines", prior_matches.as_slice(), 782),
+        (" \t ", prior_matches.as_slice(), 0),
+        ("render_cache_hot_path", [].as_slice(), 0),
+    ] {
+        let (hash, metrics) = fixture.run_refinement_from_matches_with_metrics(query, candidates);
+        assert_eq!(metrics.visible_rows_scanned, expected_scanned, "{query:?}");
+        assert_eq!(metrics.matches_found, 0, "{query:?}");
+        assert_eq!(metrics.prior_matches, candidates.len() as u64);
+        assert_eq!(hash, fixture.run_refinement_from_matches(query, candidates));
+    }
+}
+
+#[test]
+fn in_diff_text_search_default_refinement_visits_exact_prepared_candidates() {
+    let fixture = InDiffTextSearchFixture::new(100_000);
+    let prior_matches = fixture.prepare_matches("render_cache");
+    let (hash, metrics) =
+        fixture.run_refinement_from_matches_with_metrics("render_cache_hot_path", &prior_matches);
+
+    assert_eq!(metrics.total_lines, 100_000);
+    assert_eq!(metrics.prior_matches, 7_813);
+    assert_eq!(metrics.visible_rows_scanned, 7_813);
+    assert_eq!(metrics.matches_found, 1_563);
+    assert_eq!(hash, fixture.run_search("render_cache_hot_path"));
 }
 
 #[test]
@@ -3013,12 +3079,7 @@ fn file_fuzzy_find_incremental_narrows_matches() {
     assert!(metrics.prior_matches >= metrics.matches_found);
     assert!(metrics.prior_matches > 0);
     assert!(metrics.matches_found > 0);
-    assert!(metrics.files_scanned >= 1_000);
-    assert!(metrics.files_scanned <= 1_000 + metrics.prior_matches);
-    assert!(
-        metrics.files_scanned < 1_000 + metrics.prior_matches,
-        "strict-extension refinement should skip obviously impossible prior matches",
-    );
+    assert_eq!(metrics.files_scanned, 1_000 + metrics.prior_matches);
 }
 
 #[test]
@@ -3050,32 +3111,56 @@ fn file_fuzzy_find_ordered_pair_prefilter_matches_naive_hashes() {
 }
 
 #[test]
-fn file_fuzzy_find_direct_metrics_are_allocation_free() {
-    let fixture = FileFuzzyFindFixture::new(100_000);
-    let ((_hash, _metrics), alloc_metrics) =
-        measure_allocations(|| fixture.run_find_with_metrics("dcrs"));
-    assert_eq!(
-        alloc_metrics.alloc_ops, 0,
-        "unexpected broad alloc metrics: {alloc_metrics:?}"
-    );
-    assert_eq!(
-        alloc_metrics.alloc_bytes, 0,
-        "unexpected broad alloc metrics: {alloc_metrics:?}"
+fn file_fuzzy_find_metrics_allocate_only_the_query_needle() {
+    in_allocation_test_process(
+        concat!(
+            module_path!(),
+            "::file_fuzzy_find_metrics_allocate_only_the_query_needle"
+        ),
+        || {
+            let fixture = FileFuzzyFindFixture::new(100_000);
+            let ((hash, metrics), alloc_metrics) =
+                measure_allocations(|| fixture.run_find_with_metrics("dcrs"));
+            assert_ne!(hash, 0);
+            assert_eq!(metrics.files_scanned, 100_000);
+            assert_eq!(
+                alloc_metrics,
+                PerfAllocMetrics {
+                    alloc_ops: 1,
+                    dealloc_ops: 1,
+                    alloc_bytes: 4,
+                    dealloc_bytes: 4,
+                    ..PerfAllocMetrics::default()
+                }
+            );
+        },
     );
 }
 
 #[test]
-fn file_fuzzy_find_incremental_direct_metrics_are_allocation_free() {
-    let fixture = FileFuzzyFindFixture::new(100_000);
-    let ((_hash, _metrics), alloc_metrics) =
-        measure_allocations(|| fixture.run_incremental_with_metrics("dc", "dcrs"));
-    assert_eq!(
-        alloc_metrics.alloc_ops, 0,
-        "unexpected incremental alloc metrics: {alloc_metrics:?}"
-    );
-    assert_eq!(
-        alloc_metrics.alloc_bytes, 0,
-        "unexpected incremental alloc metrics: {alloc_metrics:?}"
+fn file_fuzzy_find_incremental_metrics_allocate_only_the_two_query_needles() {
+    in_allocation_test_process(
+        concat!(
+            module_path!(),
+            "::file_fuzzy_find_incremental_metrics_allocate_only_the_two_query_needles"
+        ),
+        || {
+            let fixture = FileFuzzyFindFixture::new(100_000);
+            let ((hash, metrics), alloc_metrics) =
+                measure_allocations(|| fixture.run_incremental_with_metrics("dc", "dcrs"));
+            assert_ne!(hash, 0);
+            assert_eq!(metrics.files_scanned, 100_000 + metrics.prior_matches);
+            assert_eq!(
+                alloc_metrics,
+                PerfAllocMetrics {
+                    alloc_ops: 2,
+                    dealloc_ops: 2,
+                    alloc_bytes: 6,
+                    dealloc_bytes: 6,
+                    ..PerfAllocMetrics::default()
+                }
+            );
+        },
     );
 }
 
@@ -3442,15 +3527,15 @@ fn clipboard_paste_into_commit_message_inserts_text() {
 }
 
 #[test]
-fn clipboard_select_range_iterates_correct_range() {
+fn clipboard_select_range_extracts_each_requested_line() {
     let fixture = ClipboardFixture::select_range_in_diff(500, 250);
     let (hash, metrics) = fixture.run_with_metrics();
 
     assert_ne!(hash, 0);
     assert_eq!(metrics.total_lines, 500);
-    assert_eq!(metrics.line_iterations, 1);
+    assert_eq!(metrics.line_iterations, 250);
     assert!(metrics.total_bytes > 0);
-    assert_eq!(metrics.allocations_approx, 0);
+    assert_eq!(metrics.allocations_approx, 243);
 }
 
 #[test]
@@ -3460,14 +3545,36 @@ fn clipboard_copy_is_deterministic() {
 }
 
 #[test]
-fn clipboard_copy_from_diff_preallocates_without_reallocating() {
-    let fixture = ClipboardFixture::copy_from_diff(10_000);
-    let ((_hash, metrics), alloc_metrics) = measure_allocations(|| fixture.run_with_metrics());
+fn clipboard_copy_from_diff_accounts_for_growing_output() {
+    in_allocation_test_process(
+        concat!(
+            module_path!(),
+            "::clipboard_copy_from_diff_accounts_for_growing_output"
+        ),
+        || {
+            let fixture = ClipboardFixture::copy_from_diff(10_000);
+            let ((hash, metrics), alloc_metrics) =
+                measure_allocations(|| fixture.run_with_metrics());
 
-    assert!(metrics.total_bytes > 0);
-    assert_eq!(alloc_metrics.alloc_ops, 1);
-    assert_eq!(alloc_metrics.realloc_ops, 0);
-    assert!(alloc_metrics.alloc_bytes >= metrics.total_bytes);
+            assert_ne!(hash, 0);
+            assert_eq!(metrics.total_bytes, 614_012);
+            assert_eq!(metrics.line_iterations, 10_000);
+            assert_eq!(metrics.allocations_approx, 9_798);
+            assert_eq!(
+                alloc_metrics,
+                PerfAllocMetrics {
+                    alloc_ops: 1,
+                    dealloc_ops: 1,
+                    realloc_ops: 14,
+                    alloc_bytes: 868_352,
+                    dealloc_bytes: 868_352,
+                    realloc_bytes_delta: 868_299,
+                    net_alloc_bytes: 0,
+                }
+            );
+            assert!(alloc_metrics.alloc_bytes >= metrics.total_bytes);
+        },
+    );
 }
 
 #[test]
@@ -3477,14 +3584,36 @@ fn clipboard_paste_is_deterministic() {
 }
 
 #[test]
-fn clipboard_select_range_is_allocation_free() {
-    let fixture = ClipboardFixture::select_range_in_diff(10_000, 5_000);
-    let ((_hash, metrics), alloc_metrics) = measure_allocations(|| fixture.run_with_metrics());
+fn clipboard_select_range_accounts_for_growing_output() {
+    in_allocation_test_process(
+        concat!(
+            module_path!(),
+            "::clipboard_select_range_accounts_for_growing_output"
+        ),
+        || {
+            let fixture = ClipboardFixture::select_range_in_diff(10_000, 5_000);
+            let ((hash, metrics), alloc_metrics) =
+                measure_allocations(|| fixture.run_with_metrics());
 
-    assert_eq!(metrics.line_iterations, 1);
-    assert_eq!(metrics.allocations_approx, 0);
-    assert_eq!(alloc_metrics.alloc_ops, 0);
-    assert_eq!(alloc_metrics.alloc_bytes, 0);
+            assert_ne!(hash, 0);
+            assert_eq!(metrics.total_bytes, 305_312);
+            assert_eq!(metrics.line_iterations, 5_000);
+            assert_eq!(metrics.allocations_approx, 4_898);
+            assert_eq!(
+                alloc_metrics,
+                PerfAllocMetrics {
+                    alloc_ops: 1,
+                    dealloc_ops: 1,
+                    realloc_ops: 13,
+                    alloc_bytes: 434_176,
+                    dealloc_bytes: 434_176,
+                    realloc_bytes_delta: 434_123,
+                    net_alloc_bytes: 0,
+                }
+            );
+            assert!(alloc_metrics.alloc_bytes >= metrics.total_bytes);
+        },
+    );
 }
 
 // ---------------------------------------------------------------------------

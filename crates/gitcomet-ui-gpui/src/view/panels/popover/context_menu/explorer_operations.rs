@@ -1,6 +1,6 @@
 use super::*;
+use crate::kit::components::{Shortcut, secondary_shortcut};
 use crate::view::panes::ExplorerAction;
-use crate::view::shortcut_labels::{Shortcut, secondary_shortcut};
 
 /// Appends one menu group, separated from the entries before it. A group that
 /// adds nothing leaves no separator behind.

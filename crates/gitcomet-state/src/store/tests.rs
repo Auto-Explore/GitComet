@@ -1,5 +1,6 @@
 use super::*;
 use crate::model::{CloneOpStatus, CloneProgressStage, DiagnosticKind, Loadable, RepoState};
+use crate::msg::StatusEffect;
 use crate::msg::{Effect, RepoActionKind, RepoCommandKind};
 use gitcomet_core::domain::{
     Branch, Commit, CommitDetails, CommitId, DiffArea, DiffTarget, LogCursor, LogPage, LogScope,
@@ -11,9 +12,19 @@ use gitcomet_core::services::{CancellationToken, CommandOutput, PullMode, Result
 use gitcomet_core::test_support::UnconfiguredRepository;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant, SystemTime};
+
+fn fill_set_active_repo_inline(
+    repos: &RepositoryRuntimes,
+    state: &mut AppState,
+    repo_id: RepoId,
+    unchanged: bool,
+    effects: &mut reducer::SetActiveRepoEffects,
+) {
+    let inputs = reducer::test_inputs::for_message(state, repos, Msg::SetActiveRepo { repo_id });
+    reducer::fill_set_active_repo_inline(&inputs, state, repo_id, unchanged, effects);
+}
 
 /// The empty workspace snapshot the history-switch tests seed nav histories
 /// with: no diff target, no preview/edit mode, no selection besides the
@@ -48,7 +59,7 @@ impl GitBackend for FailingBackend {
 }
 
 fn run_git(repo: &Path, args: &[&str]) {
-    let status = Command::new("git")
+    let status = gitcomet_core::test_support::git_fixture::git_command()
         .arg("-C")
         .arg(repo)
         .args(args)
@@ -87,7 +98,7 @@ fn has_worktree_status_effect(effects: &[Effect], repo_id: RepoId) -> bool {
     effects.iter().any(|effect| {
         matches!(
             effect,
-            Effect::LoadWorktreeStatus { repo_id: candidate } if *candidate == repo_id
+            Effect::Status(StatusEffect::LoadWorktreeStatus { repo_id: candidate }) if *candidate == repo_id
         )
     })
 }
@@ -96,7 +107,7 @@ fn has_staged_status_effect(effects: &[Effect], repo_id: RepoId) -> bool {
     effects.iter().any(|effect| {
         matches!(
             effect,
-            Effect::LoadStagedStatus { repo_id: candidate } if *candidate == repo_id
+            Effect::Status(StatusEffect::LoadStagedStatus { repo_id: candidate }) if *candidate == repo_id
         )
     })
 }
@@ -105,7 +116,7 @@ fn has_combined_status_effect(effects: &[Effect], repo_id: RepoId) -> bool {
     effects.iter().any(|effect| {
         matches!(
             effect,
-            Effect::LoadStatus { repo_id: candidate } if *candidate == repo_id
+            Effect::Status(StatusEffect::LoadStatus { repo_id: candidate }) if *candidate == repo_id
         )
     })
 }
@@ -183,6 +194,7 @@ fn app_store_open_repo_effect_propagates_open_error_into_state() {
 
 mod actions_emit_effects;
 mod auth_prompt;
+mod bare_mode;
 mod commit_signatures;
 mod conflict_session;
 mod conflict_telemetry;
@@ -191,9 +203,17 @@ mod diff_sessions;
 mod effects;
 mod external_and_history;
 mod file_browser_follow;
+mod filesystem;
+mod filesystem_engine;
+mod history_hidden_refs;
 mod maintenance;
+mod prepared_inputs;
 mod reducer_diagnostics;
 mod repo_management;
 mod repo_monitor;
+mod repository_preferences;
 mod send_failures;
 mod worktree_redirect;
+mod worktree_scanning;
+
+pub(in crate::store) use worktree_redirect::repo_with_linked_worktree;

@@ -50,10 +50,10 @@ pub const TYPESCRIPT_NODE_TYPES: &str = include_str!("../../typescript/src/node-
 /// [`node-types.json`]: https://tree-sitter.github.io/tree-sitter/using-parsers#static-node-types
 pub const TSX_NODE_TYPES: &str = include_str!("../../tsx/src/node-types.json");
 
-// GitComet: these consts are guarded so the crate still builds with `queries/`
-// unvendored. `vendor/tree-sitter-build` declares and never sets the cfgs, so they
-// compile out; GitComet keeps its own queries under
-// crates/gitcomet-ui-gpui/src/view/rows/diff_text/queries/.
+// GitComet: these consts are guarded because only `queries/highlights.scm` is
+// vendored, for vendor/difftastic. `vendor/tree-sitter-build` sets each cfg when its
+// file exists; GitComet's highlighter keeps its own queries in
+// crates/gitcomet-syntax/src/queries/.
 #[cfg(with_highlights_query)]
 /// The syntax highlighting query for TypeScript.
 pub const HIGHLIGHTS_QUERY: &str = include_str!("../../queries/highlights.scm");

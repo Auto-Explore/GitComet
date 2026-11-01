@@ -4,7 +4,6 @@ use super::*;
 fn operation_menu_dismissal_clears_invoker_and_restores_focus_consistently(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _guard = crate::test_support::lock_visual_test();
     for kind in [PopoverKind::PushPicker, PopoverKind::PullPicker] {
         for escape in [true, false] {
             let (store, events) = AppStore::new_test(Arc::new(TestBackend));
@@ -52,7 +51,6 @@ fn operation_menu_dismissal_clears_invoker_and_restores_focus_consistently(
 
 #[gpui::test]
 fn replacing_menu_in_one_update_publishes_only_the_current_invoker(cx: &mut gpui::TestAppContext) {
-    let _guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -98,7 +96,6 @@ fn replacing_menu_in_one_update_publishes_only_the_current_invoker(cx: &mut gpui
 
 #[gpui::test]
 fn inline_prompt_dismissal_releases_tooltip_suppression(cx: &mut gpui::TestAppContext) {
-    let _guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -132,7 +129,6 @@ fn inline_prompt_dismissal_releases_tooltip_suppression(cx: &mut gpui::TestAppCo
 fn explicit_popover_focus_return_overrides_the_previously_focused_input(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _guard = crate::test_support::lock_visual_test();
     for escape in [false, true] {
         let (store, events) = AppStore::new_test(Arc::new(TestBackend));
         let (view, cx) =

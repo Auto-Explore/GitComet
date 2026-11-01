@@ -14,6 +14,25 @@ pub enum SplitButtonStyle {
     Borderless,
 }
 
+/// The neutral frame shared by Commit and single primary actions.
+pub fn filled_action_frame(theme: AppTheme, scale: UiScale) -> Div {
+    div()
+        .flex()
+        .items_center()
+        .h(control_height(scale))
+        .rounded(px(theme.radii.control))
+        .bg(gpui::rgba(0x00000000))
+        .border_1()
+        .border_color(filled_action_frame_border(theme))
+}
+
+pub(super) fn filled_action_frame_border(theme: AppTheme) -> gpui::Rgba {
+    with_alpha(
+        theme.colors.foreground.secondary,
+        if theme.is_dark { 0.34 } else { 0.26 },
+    )
+}
+
 pub struct SplitButton {
     left: AnyElement,
     right: AnyElement,
@@ -81,10 +100,6 @@ impl SplitButton {
             SplitButtonStyle::Filled => theme.colors.surface.raised,
             SplitButtonStyle::Borderless => gpui::rgba(0x00000000),
         };
-        let border_color = with_alpha(
-            theme.colors.foreground.secondary,
-            if theme.is_dark { 0.34 } else { 0.26 },
-        );
         // Without a frame around it the divider is the only thing left holding
         // the pair together, so it stays — just quieter than a real border.
         let divider_color = if borderless {
@@ -93,7 +108,7 @@ impl SplitButton {
                 if theme.is_dark { 0.24 } else { 0.18 },
             )
         } else {
-            border_color
+            filled_action_frame_border(theme)
         };
 
         let inner = div()
@@ -136,7 +151,7 @@ impl SplitButton {
         } else {
             // Frame at rest only, for the same reason: the halves own hover, and
             // the hovered one's border sits directly inside this one.
-            outer.border_1().border_color(border_color).child(inner)
+            filled_action_frame(theme, ui_scale).child(inner)
         }
     }
 }

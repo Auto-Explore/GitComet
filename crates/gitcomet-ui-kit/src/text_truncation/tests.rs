@@ -8,6 +8,7 @@ use super::path::path_boundaries;
 use super::path_alignment::{PathAlignmentLayoutKey, PathTruncationAlignmentGroup};
 use super::projection::{Affinity, ProjectionSegment, TruncationProjection};
 use super::*;
+use crate::text_layout::TextLayoutExt as _;
 use gpui::{FontFallbacks, FontFeatures, StrikethroughStyle, UnderlineStyle, hsla, px};
 use smallvec::SmallVec;
 use std::cmp::Ordering;
@@ -22,7 +23,7 @@ fn display_width(window: &mut Window, text: &str, style: &TextStyle, font_size: 
     let runs = vec![style.clone().to_run(text.len())];
     window
         .text_system()
-        .shape_line(text.to_string().into(), font_size, &runs, None)
+        .shape_line(text.to_string().into(), font_size, &runs)
         .width
 }
 
@@ -348,6 +349,65 @@ fn truncated_layout_cache_distinguishes_fractional_widths(cx: &mut gpui::TestApp
     clear_truncated_layout_cache_for_test();
 }
 
+/// gpui-ce reports underline offsets below the baseline as positive (y-down)
+/// since `020fb167`; GitComet used to flip Parley's font-space offsets itself.
+#[gpui::test]
+fn sha_link_underlines_stay_below_the_baseline(cx: &mut gpui::TestAppContext) {
+    crate::test_support::use_real_text_backend(cx);
+    clear_truncated_layout_cache_for_test();
+    let cx = cx.add_empty_window();
+    let sha: SharedString = "e71b91c6e336d0f25cfc6b9ef09298a9d2506e24".into();
+    let highlights = [(
+        0..sha.len(),
+        HighlightStyle {
+            underline: Some(UnderlineStyle {
+                thickness: px(1.0),
+                color: None,
+                wavy: false,
+            }),
+            ..Default::default()
+        },
+    )];
+
+    cx.update(|window, app| {
+        for font_size in [11.0, 13.0, 20.0] {
+            let style = TextStyle {
+                font_family: crate::bundled_fonts::UI_MONOSPACE_FONT_FAMILY.into(),
+                font_size: px(font_size).into(),
+                ..window.text_style()
+            };
+            for (width, truncated) in [(100.0, true), (800.0, false)] {
+                let line = shape_truncated_line_cached(
+                    window,
+                    app,
+                    &style,
+                    &sha,
+                    Some(px(width)),
+                    TextTruncationProfile::Middle,
+                    &highlights,
+                    None,
+                );
+                assert_eq!(line.truncated, truncated);
+                let underlined = line
+                    .shaped_line
+                    .paint_fragments
+                    .iter()
+                    .filter(|fragment| fragment.style.underline.is_some())
+                    .collect::<Vec<_>>();
+                assert!(!underlined.is_empty());
+                for fragment in underlined {
+                    assert!(
+                        fragment.underline_offset.is_some_and(|offset| offset > px(0.0)),
+                        "SHA underline must clear the baseline at {font_size}px, width {width}px: {:?}",
+                        fragment.underline_offset,
+                    );
+                }
+            }
+        }
+    });
+    clear_truncated_layout_cache_for_test();
+}
+
 #[gpui::test]
 fn truncated_layout_cache_distinguishes_style_fields(cx: &mut gpui::TestAppContext) {
     clear_truncated_layout_cache_for_test();
@@ -514,6 +574,56 @@ fn start_truncation_uses_bounded_candidate_measurements(cx: &mut gpui::TestAppCo
             "start truncation should not measure each character candidate"
         );
     });
+}
+
+#[gpui::test]
+fn highlighted_path_typing_does_not_measure_every_hidden_suffix(cx: &mut gpui::TestAppContext) {
+    let (_view, cx) = cx.add_window_view(|_window, _cx| gpui::Empty);
+
+    cx.update(|window, app| {
+        let style = window.text_style();
+        for directories in [32, 128] {
+            // A query near the start of a long recent-repository path leaves a
+            // large hidden suffix. Its length must not dictate how many times
+            // we reshape the label while typing.
+            let text: SharedString =
+                format!("/work/needle/{}/repo", "directory/".repeat(directories)).into();
+            let start = text.find("needle").unwrap();
+            for query_len in 1..="needle".len() {
+                clear_truncated_layout_cache_for_test();
+                reset_measure_candidate_calls_for_test();
+                let focus = start..start + query_len;
+                let line = shape_truncated_line_cached(
+                    window,
+                    app,
+                    &style,
+                    &text,
+                    Some(px(120.0)),
+                    TextTruncationProfile::Path,
+                    &[(
+                        focus.clone(),
+                        HighlightStyle {
+                            font_weight: Some(gpui::FontWeight::BOLD),
+                            ..Default::default()
+                        },
+                    )],
+                    Some(focus.clone()),
+                );
+
+                let visible = visible_source_range(&line.projection).unwrap();
+                assert!(line.truncated);
+                assert!(line.shaped_line.width <= px(120.0));
+                assert!(visible.start <= focus.start && visible.end >= focus.end);
+                let measurements = measure_candidate_calls_for_test();
+                assert!(
+                    measurements <= 64,
+                    "query length {query_len} in a {}-byte path needed {measurements} measurements",
+                    text.len(),
+                );
+            }
+        }
+    });
+    clear_truncated_layout_cache_for_test();
 }
 
 #[gpui::test]
@@ -1152,7 +1262,6 @@ fn path_profile_anchor_preserves_posix_drive_and_unc_roots(cx: &mut gpui::TestAp
                 posix_display.into(),
                 font_size,
                 &[style.clone().to_run(posix_display.len())],
-                None,
             )
             .x_for_index("/root/".len());
         let drive_anchor = window
@@ -1161,7 +1270,6 @@ fn path_profile_anchor_preserves_posix_drive_and_unc_roots(cx: &mut gpui::TestAp
                 drive_display.into(),
                 font_size,
                 &[style.clone().to_run(drive_display.len())],
-                None,
             )
             .x_for_index("C:\\root\\".len());
         let unc_anchor = window
@@ -1170,7 +1278,6 @@ fn path_profile_anchor_preserves_posix_drive_and_unc_roots(cx: &mut gpui::TestAp
                 unc_display.into(),
                 font_size,
                 &[style.clone().to_run(unc_display.len())],
-                None,
             )
             .x_for_index(r"\\server\share\dir1\".len());
 

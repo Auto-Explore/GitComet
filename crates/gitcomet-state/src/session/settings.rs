@@ -11,7 +11,10 @@ pub struct UiSettings {
     pub repo_sidebar_pinned_branches: Option<BTreeMap<PathBuf, BTreeSet<String>>>,
     pub theme_mode: Option<String>,
     pub ui_scale_percent: Option<u32>,
+    pub image_sampling_mode: Option<String>,
+    pub image_smooth_filter: Option<String>,
     pub window_controls_mode: Option<String>,
+    pub windows_renderer: Option<String>,
     pub browser_open_target: Option<String>,
     pub ui_density: Option<String>,
     pub ui_font_size_px: Option<u32>,
@@ -25,6 +28,7 @@ pub struct UiSettings {
     pub show_timezone: Option<bool>,
     pub change_tracking_view: Option<String>,
     pub file_list_layout: Option<String>,
+    pub file_list_sort: Option<String>,
     pub repo_picker_sort: Option<String>,
     /// Whole replacement set — the repository picker owns it and always writes
     /// every collapsed section it knows about.
@@ -32,6 +36,7 @@ pub struct UiSettings {
     pub diff_scroll_sync: Option<String>,
     pub diff_content_mode: Option<String>,
     pub diff_whitespace_mode: Option<String>,
+    pub diff_engine: Option<String>,
     pub diff_view_mode: Option<String>,
     pub annotate_enabled: Option<bool>,
     pub diff_reveal_whitespace_chars: Option<bool>,
@@ -51,6 +56,7 @@ pub struct UiSettings {
     pub untracked_height: Option<u32>,
     pub history_branch_names: Option<String>,
     pub history_show_graph: Option<bool>,
+    pub history_show_graph_gradient: Option<bool>,
     pub history_show_author: Option<bool>,
     pub history_show_date: Option<bool>,
     pub history_show_sha: Option<bool>,
@@ -67,13 +73,49 @@ pub struct UiSettings {
     pub annex_pull_push_on_adjusted: Option<bool>,
     pub annex_sync_content: Option<bool>,
     pub history_tag_fetch_mode: Option<GitLogTagFetchMode>,
+    pub history_hidden_refs_enabled: Option<bool>,
+    pub history_hidden_ref_presets: Option<BTreeMap<String, bool>>,
+    pub history_hidden_ref_prefixes: Option<Vec<String>>,
     pub default_history_mode: Option<HistoryMode>,
     pub commit_push_after_enabled: Option<bool>,
     pub default_tag_type: Option<DefaultTagType>,
     pub fetch_prune_deleted_remote_branches: Option<bool>,
+    pub auto_fetch_enabled: Option<bool>,
+    pub auto_fetch_interval_minutes: Option<AutoFetchInterval>,
     pub recommend_repo_maintenance: Option<bool>,
     pub git_executable_path: Option<Option<PathBuf>>,
     pub external_code_editor: Option<Option<ExternalCodeEditorSetting>>,
+}
+
+impl UiSession {
+    /// Saved prefixes that no longer parse, or repeat, are dropped.
+    pub fn hidden_ref_settings(&self) -> HiddenRefSettings {
+        let mut settings = HiddenRefSettings::default();
+        if let Some(enabled) = self.history_hidden_refs_enabled {
+            settings.enabled = enabled;
+        }
+        settings.preset_overrides = self.history_hidden_ref_presets.clone().unwrap_or_default();
+        for prefix in self.history_hidden_ref_prefixes.iter().flatten() {
+            if let Ok(prefix) = HiddenRefPrefix::parse(prefix) {
+                settings.add_custom_prefix(prefix);
+            }
+        }
+        settings
+    }
+}
+
+impl UiSettings {
+    pub fn set_hidden_ref_settings(&mut self, settings: &HiddenRefSettings) {
+        self.history_hidden_refs_enabled = Some(settings.enabled);
+        self.history_hidden_ref_presets = Some(settings.preset_overrides.clone());
+        self.history_hidden_ref_prefixes = Some(
+            settings
+                .custom_prefixes()
+                .iter()
+                .map(|prefix| prefix.as_str().to_owned())
+                .collect(),
+        );
+    }
 }
 
 pub fn persist_ui_settings(settings: UiSettings) -> io::Result<()> {
@@ -111,7 +153,10 @@ pub fn persist_ui_settings_to_path(settings: UiSettings, path: &Path) -> io::Res
         }
         apply_setting!(settings, file, theme_mode);
         apply_setting!(settings, file, ui_scale_percent);
+        apply_setting!(settings, file, image_sampling_mode);
+        apply_setting!(settings, file, image_smooth_filter);
         apply_setting!(settings, file, window_controls_mode);
+        apply_setting!(settings, file, windows_renderer);
         apply_setting!(settings, file, browser_open_target);
         apply_setting!(settings, file, ui_density);
         apply_setting!(settings, file, ui_font_size_px);
@@ -125,12 +170,14 @@ pub fn persist_ui_settings_to_path(settings: UiSettings, path: &Path) -> io::Res
         apply_setting!(settings, file, show_timezone);
         apply_setting!(settings, file, change_tracking_view);
         apply_setting!(settings, file, file_list_layout);
+        apply_setting!(settings, file, file_list_sort);
         apply_setting!(settings, file, repo_picker_sort);
         // Owned by the repository picker (`repo_picker::persist_collapsed_sections`).
         apply_setting!(settings, file, repo_picker_collapsed_sections);
         apply_setting!(settings, file, diff_scroll_sync);
         apply_setting!(settings, file, diff_content_mode);
         apply_setting!(settings, file, diff_whitespace_mode);
+        apply_setting!(settings, file, diff_engine);
         apply_setting!(settings, file, diff_view_mode);
         apply_setting!(settings, file, annotate_enabled);
         apply_setting!(settings, file, diff_reveal_whitespace_chars);
@@ -150,6 +197,7 @@ pub fn persist_ui_settings_to_path(settings: UiSettings, path: &Path) -> io::Res
         apply_setting!(settings, file, untracked_height);
         apply_setting!(settings, file, history_branch_names);
         apply_setting!(settings, file, history_show_graph);
+        apply_setting!(settings, file, history_show_graph_gradient);
         apply_setting!(settings, file, history_show_author);
         apply_setting!(settings, file, history_show_date);
         apply_setting!(settings, file, history_show_sha);
@@ -176,12 +224,17 @@ pub fn persist_ui_settings_to_path(settings: UiSettings, path: &Path) -> io::Res
         apply_setting!(settings, file, annex_sync_content);
         apply_setting!(settings, file, history_relative_dates);
         apply_setting!(settings, file, history_tag_fetch_mode);
+        apply_setting!(settings, file, history_hidden_refs_enabled);
+        apply_setting!(settings, file, history_hidden_ref_presets);
+        apply_setting!(settings, file, history_hidden_ref_prefixes);
         if let Some(value) = settings.default_history_mode {
             file.default_history_mode = Some(value.into());
         }
         apply_setting!(settings, file, commit_push_after_enabled);
         apply_setting!(settings, file, default_tag_type);
         apply_setting!(settings, file, fetch_prune_deleted_remote_branches);
+        apply_setting!(settings, file, auto_fetch_enabled);
+        apply_setting!(settings, file, auto_fetch_interval_minutes);
         apply_setting!(settings, file, recommend_repo_maintenance);
         if let Some(path) = settings.git_executable_path {
             file.git_executable_path = path.map(|path| path_storage_key(&path));

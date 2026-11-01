@@ -1,4 +1,5 @@
 use super::actions_emit_effects::invalidate_loaded_blame;
+use super::conflict_load::{start_conflict_target_reload, start_current_conflict_target_reload};
 use super::effects::{append_ensure_sidebar_data_effects, select_commit_and_load_details};
 use super::repo_management::{
     append_cancel_repo_loads_effect_for_repo, append_selected_history_reload_effects,
@@ -8,17 +9,18 @@ use super::util::{
     SelectedConflictTarget, append_auto_background_metadata_effects,
     append_requested_status_refresh_effects, diff_reload_effects, push_diagnostic,
     refresh_full_effects, refresh_primary_effects, selected_conflict_target,
-    start_conflict_target_reload, start_current_conflict_target_reload,
 };
 use super::{diff_selection, repo_management};
 use crate::model::{
-    AppState, BranchExistsPromptState, DiagnosticKind, InteractiveRebaseSetup, Loadable, RepoId,
-    RepoLoadsInFlight, SidebarMode,
+    AppState, BranchExistsPromptState, DiagnosticKind, InteractiveRebaseSetup, LoadKind, Loadable,
+    RepoId, SidebarMode,
 };
 use crate::msg::{Effect, RepoActionKind, RepoExternalChange, RepoPathList};
+use crate::msg::{PersistenceEffect, ReferenceEffect, StatusEffect};
+use crate::store::reducer::prepared::ReducerInputs;
 use gitcomet_core::domain::{DiffArea, DiffTarget, LogCursor, LogPage, LogScope};
 use gitcomet_core::error::Error;
-use gitcomet_core::services::{GitRepository, InteractiveRebaseEntry, SequencerState};
+use gitcomet_core::services::{InteractiveRebaseEntry, SequencerState};
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -66,7 +68,7 @@ fn reserve_initial_paginated_log_append_slack<T>(commits: &mut Vec<T>) {
 }
 
 pub(super) fn reload_repo(
-    repos: &FxHashMap<crate::model::RepoId, Arc<dyn GitRepository>>,
+    inputs: &ReducerInputs,
     state: &mut AppState,
     repo_id: crate::model::RepoId,
 ) -> Vec<Effect> {
@@ -98,8 +100,7 @@ pub(super) fn reload_repo(
     repo_state.set_rebase_in_progress(Loadable::Loading);
     repo_state.set_sequencer_state(Loadable::Loading);
     repo_state.set_merge_commit_message(Loadable::Loading);
-    repo_state.history_state.file_history_path = None;
-    repo_state.history_state.file_history = Loadable::NotLoaded;
+    repo_state.history_state.clear_file_history();
     repo_state.diff_state.blame_path = None;
     repo_state.diff_state.blame_source = None;
     repo_state.diff_state.blame = Loadable::NotLoaded;
@@ -123,17 +124,17 @@ pub(super) fn reload_repo(
     // Reload deliberately retains the working-tree diff target. Rebuild the
     // target's classification immediately, before later activation or status
     // results can use the freshly cleared cache.
-    super::refresh_selected_head_gitlink(repos, state, repo_id);
+    super::refresh_selected_head_gitlink(inputs, state, repo_id);
     let repo_state = &mut state.repos[repo_ix];
     effects.extend(refresh_full_effects(repo_state, git_log_settings));
+    if let Some(effect) = super::effects::request_worktrees_effect(repo_state) {
+        effects.push(effect);
+    }
     effects.extend(super::effects::request_large_file_support_effect(
         repo_state,
     ));
     effects.extend(super::util::reload_selected_text_attributes(repo_state));
     append_auto_background_metadata_effects(repo_state, git_log_settings, &mut effects);
-    // The view re-requests sidebar data only when its request changes, so
-    // worktrees and stashes reset above would otherwise stay NotLoaded.
-    append_ensure_sidebar_data_effects(repo_state, &mut effects);
     // Linked-worktree rows survive a reload, so their dirty counts have to be
     // refreshed along with everything else. The monitor only flushes for this
     // repo's own `.git`, so a commit or stash made inside a linked worktree
@@ -141,6 +142,9 @@ pub(super) fn reload_repo(
     if let Some(effect) = super::effects::request_worktree_dirty_effect(repo_state) {
         effects.push(effect);
     }
+    // The view only re-requests sections when its request changes, so ensure
+    // the remaining reset sections here too.
+    append_ensure_sidebar_data_effects(repo_state, &mut effects);
     effects
 }
 
@@ -167,8 +171,39 @@ fn file_browser_refresh_for_external_change(
     super::effects::request_file_browser_load(repo_state)
 }
 
+/// Whether `change` can alter `target`'s diff. Index, HEAD and attribute
+/// changes reach every live target; worktree edits reach the files they name
+/// in a diff that reads the worktree. Commits never change.
+pub(super) fn external_change_reloads_diff(
+    target: &DiffTarget,
+    change: &RepoExternalChange,
+) -> bool {
+    let reads_worktree = match target {
+        DiffTarget::Commit { .. }
+        | DiffTarget::CommitRange {
+            to_commit_id: Some(_),
+            ..
+        } => return false,
+        DiffTarget::WorkingTree { area, .. } => *area == DiffArea::Unstaged,
+        DiffTarget::CommitRange {
+            to_commit_id: None, ..
+        } => true,
+    };
+    if change.index || change.git_state || change.text_attributes {
+        return true;
+    }
+    reads_worktree
+        && change.worktree
+        && (target
+            .file_path()
+            .is_none_or(|path| change.paths.may_have_changed(path))
+            || target
+                .old_file_path()
+                .is_some_and(|path| change.paths.may_have_changed(path)))
+}
+
 pub(super) fn repo_externally_changed(
-    repos: &FxHashMap<crate::model::RepoId, Arc<dyn GitRepository>>,
+    inputs: &ReducerInputs,
     state: &mut AppState,
     repo_id: crate::model::RepoId,
     change: RepoExternalChange,
@@ -192,7 +227,7 @@ pub(super) fn repo_externally_changed(
         if let Some(repo_state) = state.repos.iter_mut().find(|repo| repo.id == repo_id) {
             repo_state.head_gitlink_paths.clear();
         }
-        super::refresh_selected_head_gitlink(repos, state, repo_id);
+        super::refresh_selected_head_gitlink(inputs, state, repo_id);
     }
     let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
         return Vec::new();
@@ -223,17 +258,15 @@ pub(super) fn repo_externally_changed(
         // push command validates the branch and HEAD again before pushing.
         repo_state.set_recent_commit_messages(Loadable::NotLoaded);
         let mut effects = refresh_primary_effects(repo_state);
-        if repo_state
-            .loads_in_flight
-            .request(RepoLoadsInFlight::BRANCHES)
-        {
-            effects.push(Effect::LoadBranches { repo_id });
+        if repo_state.loads_in_flight.request(LoadKind::Branches) {
+            effects.push(Effect::References(ReferenceEffect::LoadBranches {
+                repo_id,
+            }));
         }
-        if repo_state
-            .loads_in_flight
-            .request(RepoLoadsInFlight::REMOTE_BRANCHES)
-        {
-            effects.push(Effect::LoadRemoteBranches { repo_id });
+        if repo_state.loads_in_flight.request(LoadKind::RemoteBranches) {
+            effects.push(Effect::References(ReferenceEffect::LoadRemoteBranches {
+                repo_id,
+            }));
         }
         if let Some(effect) = super::effects::request_worktree_dirty_effect(repo_state) {
             effects.push(effect);
@@ -248,13 +281,10 @@ pub(super) fn repo_externally_changed(
             // between the staged and unstaged sections; refreshing only the staged lane would
             // leave the file lingering (stale) in the unstaged section (or vice-versa).
             append_requested_status_refresh_effects(repo_state, &mut effects);
-        } else if change.worktree {
+        } else if change.worktree && !repo_state.is_bare() {
             repo_state.loads_in_flight.invalidate_line_stats();
-            if repo_state
-                .loads_in_flight
-                .request(RepoLoadsInFlight::WORKTREE_STATUS)
-            {
-                effects.push(Effect::LoadWorktreeStatus { repo_id });
+            if repo_state.loads_in_flight.request(LoadKind::WorktreeStatus) {
+                effects.push(Effect::Status(StatusEffect::LoadWorktreeStatus { repo_id }));
             }
         }
         effects
@@ -277,37 +307,16 @@ pub(super) fn repo_externally_changed(
     // which other lanes the event touched. The loaded list stays until the
     // reload lands: every activation sets the flag, and a reset showed no tags
     // in history for that window and rebuilt its decorations twice.
-    if change.tags && repo_state.loads_in_flight.request(RepoLoadsInFlight::TAGS) {
-        effects.push(Effect::LoadTags { repo_id });
+    if change.tags && repo_state.loads_in_flight.request(LoadKind::Tags) {
+        effects.push(Effect::References(ReferenceEffect::LoadTags { repo_id }));
     }
 
-    let should_reload_diff = repo_state
+    if let Some(target) = repo_state
         .diff_state
         .diff_target
         .as_ref()
-        .is_some_and(|target| match target {
-            DiffTarget::WorkingTree { area, .. } => {
-                change.git_state || change.index || (*area == DiffArea::Unstaged && change.worktree)
-            }
-            DiffTarget::Commit { .. } => false,
-            // A commit↔commit range is immutable; a commit↔working-tree range
-            // (to == None) tracks the worktree, so reload it on any change that
-            // moves the index or worktree.
-            DiffTarget::CommitRange { to_commit_id, .. } => {
-                to_commit_id.is_none() && (change.git_state || change.index || change.worktree)
-            }
-        });
-
-    if should_reload_diff
-        && let Some(target) = repo_state.diff_state.diff_target.clone()
-        && matches!(
-            target,
-            DiffTarget::WorkingTree { .. }
-                | DiffTarget::CommitRange {
-                    to_commit_id: None,
-                    ..
-                }
-        )
+        .filter(|target| external_change_reloads_diff(target, &change))
+        .cloned()
     {
         // A moved HEAD (external commit / checkout / rebase) can leave the patch
         // byte-identical while every line's attribution changes ("Not Committed
@@ -330,7 +339,7 @@ pub(super) fn repo_externally_changed(
                 }
             }
         } else {
-            effects.extend(diff_reload_effects(repo_state, repo_id, target));
+            effects.extend(diff_reload_effects(inputs, repo_state, repo_id, target));
         }
     }
 
@@ -397,16 +406,38 @@ pub(super) fn set_history_scope(
     let Some(repo_ix) = state.repos.iter().position(|r| r.id == repo_id) else {
         return Vec::new();
     };
+    let shared_key = state.repos[repo_ix]
+        .shared_preferences
+        .as_ref()
+        .map(|snapshot| snapshot.key.clone());
     if state.repos[repo_ix].history_state.history_scope == scope {
-        return Vec::new();
+        // Another tab's choice may still be queued. Every explicit shared
+        // selection must reach the queue, even when this tab needs no reload.
+        return shared_key
+            .map(|key| {
+                Effect::Persistence(PersistenceEffect::UpdateRepositoryPreferences {
+                    repo_id,
+                    key,
+                    update: crate::model::RepositoryPreferenceUpdate::HistoryMode(scope),
+                })
+            })
+            .into_iter()
+            .collect();
     }
     state.repos[repo_ix].set_log_scope(scope);
 
-    restart_history_load(state, repo_ix, |workdir| Effect::PersistRepoHistoryMode {
-        repo_id: Some(repo_id),
-        workdir,
-        mode: scope,
-        action: "updating history mode",
+    restart_history_load(state, repo_ix, |workdir| match shared_key {
+        Some(key) => Effect::Persistence(PersistenceEffect::UpdateRepositoryPreferences {
+            repo_id,
+            key,
+            update: crate::model::RepositoryPreferenceUpdate::HistoryMode(scope),
+        }),
+        None => Effect::Persistence(PersistenceEffect::PersistRepoHistoryMode {
+            repo_id: Some(repo_id),
+            workdir,
+            mode: scope,
+            action: "updating history mode",
+        }),
     })
 }
 
@@ -424,13 +455,154 @@ pub(super) fn set_history_author_filter(
     state.repos[repo_ix].set_history_author_filter(author.clone());
 
     restart_history_load(state, repo_ix, |workdir| {
-        Effect::PersistRepoHistoryAuthorFilter {
+        Effect::Persistence(PersistenceEffect::PersistRepoHistoryAuthorFilter {
             repo_id: Some(repo_id),
             workdir,
             author,
             action: "updating history author filter",
-        }
+        })
     })
+}
+
+pub(super) fn set_history_focus(
+    state: &mut AppState,
+    repo_id: crate::model::RepoId,
+    focus: gitcomet_core::domain::HistoryFocusSet,
+) -> Vec<Effect> {
+    let Some(repo_ix) = state.repos.iter().position(|r| r.id == repo_id) else {
+        return Vec::new();
+    };
+    if state.repos[repo_ix].history_state.history_focus == focus {
+        return Vec::new();
+    }
+    state.repos[repo_ix].set_history_focus(focus.clone());
+
+    restart_history_load(state, repo_ix, |workdir| {
+        Effect::Persistence(PersistenceEffect::PersistRepoHistoryFocus {
+            repo_id: Some(repo_id),
+            workdir,
+            focus,
+            action: "updating history focus",
+        })
+    })
+}
+
+/// Focuses `target`, or unfocuses it when the focus already covers it. Every
+/// per-ref menu entry and sidebar eye goes through this, so the same click that
+/// focused a ref is the one that unfocuses it.
+///
+/// Covers, not contains: a branch under a focused remote reads as focused, so
+/// clicking it takes it out rather than adding an entry the remote already
+/// implies.
+pub(super) fn toggle_history_focus(
+    state: &mut AppState,
+    repo_id: crate::model::RepoId,
+    target: gitcomet_core::domain::HistoryFocus,
+) -> Vec<Effect> {
+    let Some(repo) = state.repos.iter().find(|r| r.id == repo_id) else {
+        return Vec::new();
+    };
+    let focused = !repo.history_state.history_focus.covers(&target);
+    focus_history_refs(state, repo_id, &[target], focused)
+}
+
+/// Focuses or unfocuses every one of `targets` at once — a branch group's
+/// members, or a single ref from [`toggle_history_focus`].
+pub(super) fn focus_history_refs(
+    state: &mut AppState,
+    repo_id: crate::model::RepoId,
+    targets: &[gitcomet_core::domain::HistoryFocus],
+    focused: bool,
+) -> Vec<Effect> {
+    let Some(repo) = state.repos.iter().find(|r| r.id == repo_id) else {
+        return Vec::new();
+    };
+    // Unfocusing one branch of a focused remote replaces the remote with its
+    // other branches, which only the loaded remote-branch list can name.
+    let focus = repo
+        .history_state
+        .history_focus
+        .with_refs_focused(targets, focused, |remote| match &repo.remote_branches {
+            Loadable::Ready(branches) => branches
+                .iter()
+                .filter(|branch| branch.remote == remote)
+                .map(|branch| branch.name.clone())
+                .collect(),
+            _ => Vec::new(),
+        });
+    set_history_focus(state, repo_id, focus)
+}
+
+/// Which ref list just loaded, and so which focus targets it can speak for.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum FocusRefList {
+    LocalBranches,
+    RemoteBranches,
+    Remotes,
+}
+
+/// Clears focus targets whose refs have gone away.
+///
+/// A focused branch can be deleted or renamed locally, and a remote branch can
+/// vanish under a pruning fetch. A focus pointing at nothing seeds no tips, so
+/// the history would simply go empty; dropping such a target as soon as the ref
+/// list that would contain it says it is gone restores the normal walk instead.
+///
+/// Absence is only evidence of deletion under two conditions, because clearing a
+/// focus the user set is not something to guess at:
+///
+/// - the list that just loaded is the one that governs the target, so a remote
+///   list arriving says nothing about a local branch; and
+/// - that list loaded successfully. A list still loading or one that failed says
+///   nothing, but a successful empty list does: removing the last remote or
+///   pruning the last remote-tracking branch leaves exactly that. Reloads go
+///   through `Loading`, and a remote-branch list caught mid-fetch is held back
+///   before it gets here, so an empty `Ready` is never a transient.
+pub(super) fn clear_missing_history_focus(
+    state: &mut AppState,
+    repo_id: crate::model::RepoId,
+    loaded: FocusRefList,
+) -> Vec<Effect> {
+    use gitcomet_core::domain::HistoryFocus;
+
+    let Some(repo) = state.repos.iter().find(|r| r.id == repo_id) else {
+        return Vec::new();
+    };
+    let focus = repo.history_state.history_focus.clone();
+    if focus.is_empty() {
+        return Vec::new();
+    }
+    /// `Some(list)` only when it loaded successfully; see above.
+    fn conclusive<T>(list: &Loadable<std::sync::Arc<Vec<T>>>) -> Option<&[T]> {
+        list.ready().map(|list| list.as_slice())
+    }
+    let kept = focus.retaining(|target| match (target, loaded) {
+        (HistoryFocus::LocalBranch { name }, FocusRefList::LocalBranches) => {
+            match conclusive(&repo.branches) {
+                Some(branches) => branches.iter().any(|branch| branch.name == name.as_ref()),
+                None => true,
+            }
+        }
+        (HistoryFocus::RemoteBranch { remote, branch }, FocusRefList::RemoteBranches) => {
+            match conclusive(&repo.remote_branches) {
+                Some(branches) => branches.iter().any(|candidate| {
+                    candidate.remote == remote.as_ref() && candidate.name == branch.as_ref()
+                }),
+                None => true,
+            }
+        }
+        (HistoryFocus::Remote { name }, FocusRefList::Remotes) => match conclusive(&repo.remotes) {
+            Some(remotes) => remotes.iter().any(|remote| remote.name == name.as_ref()),
+            None => true,
+        },
+        // This list does not govern this target.
+        _ => true,
+    });
+    if kept == focus {
+        return Vec::new();
+    }
+    // Only the vanished refs drop out; the rest of the focus stands.
+    set_history_focus(state, repo_id, kept)
 }
 
 pub(super) fn load_more_history(
@@ -441,11 +613,7 @@ pub(super) fn load_more_history(
         return Vec::new();
     };
 
-    if repo_state.history_state.log_loading_more
-        || repo_state
-            .loads_in_flight
-            .is_in_flight(RepoLoadsInFlight::LOG)
-    {
+    if repo_state.history_state.log_loading_more || repo_state.loads_in_flight.log_in_flight() {
         return Vec::new();
     }
 
@@ -467,11 +635,13 @@ pub(super) fn load_more_history(
 }
 
 pub(super) fn rebase_state_loaded(
+    inputs: &ReducerInputs,
     state: &mut AppState,
     repo_id: crate::model::RepoId,
     result: std::result::Result<SequencerState, Error>,
 ) -> Vec<Effect> {
     let mut effects = Vec::new();
+    let mut ended_reword = None;
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
         let (sequencer_value, rebase_value) = match result {
             Ok(v) => (
@@ -480,23 +650,36 @@ pub(super) fn rebase_state_loaded(
             ),
             Err(e) => {
                 let error = e.to_string();
-                push_diagnostic(repo_state, DiagnosticKind::Error, error.clone());
+                push_diagnostic(inputs, repo_state, DiagnosticKind::Error, error.clone());
                 (Loadable::Error(error.clone()), Loadable::Error(error))
             }
         };
         repo_state.set_sequencer_state(sequencer_value);
         repo_state.set_rebase_in_progress(rebase_value);
-        if repo_state
-            .loads_in_flight
-            .finish(RepoLoadsInFlight::REBASE_STATE)
-        {
+        if repo_state.loads_in_flight.finish(LoadKind::RebaseState) {
             effects.push(Effect::LoadRebaseState { repo_id });
+        } else if repo_state.sequencer_actions_in_flight == 0
+            && matches!(
+                repo_state.sequencer_state,
+                Loadable::Ready(SequencerState::None)
+            )
+        {
+            // A fresh read can observe an abort/completion performed outside
+            // the app. Do not keep its old editor frozen or its auth prompt
+            // replayable. A queued reload or active command makes this read
+            // too old to retire the continuation.
+            ended_reword = repo_state.reword.continuation;
+            repo_state.reword.clear_continuation();
         }
+    }
+    if let Some(request_id) = ended_reword {
+        super::auth::discard_reword_auth_prompt(state, repo_id, request_id);
     }
     effects
 }
 
 pub(super) fn interactive_rebase_setup_loaded(
+    inputs: &ReducerInputs,
     state: &mut AppState,
     repo_id: crate::model::RepoId,
     base: String,
@@ -514,7 +697,7 @@ pub(super) fn interactive_rebase_setup_loaded(
             let entries = match result {
                 Ok(v) => Loadable::Ready(v),
                 Err(e) => {
-                    push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
+                    push_diagnostic(inputs, repo_state, DiagnosticKind::Error, e.to_string());
                     Loadable::Error(e.to_string())
                 }
             };
@@ -598,6 +781,7 @@ pub(super) fn interactive_cherry_pick_messages_loaded(
 }
 
 pub(super) fn merge_commit_message_loaded(
+    inputs: &ReducerInputs,
     state: &mut AppState,
     repo_id: crate::model::RepoId,
     result: std::result::Result<Option<String>, Error>,
@@ -607,14 +791,14 @@ pub(super) fn merge_commit_message_loaded(
         let value = match result {
             Ok(v) => Loadable::Ready(v),
             Err(e) => {
-                push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
+                push_diagnostic(inputs, repo_state, DiagnosticKind::Error, e.to_string());
                 Loadable::Error(e.to_string())
             }
         };
         repo_state.set_merge_commit_message(value);
         if repo_state
             .loads_in_flight
-            .finish(RepoLoadsInFlight::MERGE_COMMIT_MESSAGE)
+            .finish(LoadKind::MergeCommitMessage)
         {
             effects.push(Effect::LoadMergeCommitMessage { repo_id });
         }
@@ -662,6 +846,7 @@ pub(super) fn log_chunk_loaded(
 }
 
 pub(super) fn log_loaded(
+    inputs: &ReducerInputs,
     state: &mut AppState,
     repo_id: crate::model::RepoId,
     seq: crate::model::LogLoadSeq,
@@ -691,7 +876,7 @@ pub(super) fn log_loaded(
             // A cancelled walk is not a failure: the request that replaced it
             // owns the state now, so leave everything as the newer load found it.
             Err(e) if matches!(e.kind(), gitcomet_core::error::ErrorKind::Cancelled) => {
-                return finish_log_load(repo_state);
+                return finish_log_load(repo_state, seq);
             }
             Ok(gitcomet_core::services::HistoryReadResult::Unchanged) => {
                 // A failed checkout may have changed the optimistic detached
@@ -699,12 +884,16 @@ pub(super) fn log_loaded(
                 reconcile_detached_head_from_log(repo_state, scope);
                 // Activation and watcher checks can leave history unchanged.
                 // Keep its badges and ongoing verification until a page reloads.
-                return finish_log_load(repo_state);
+                return finish_log_load(repo_state, seq);
             }
             Ok(gitcomet_core::services::HistoryReadResult::Invalidated) => {
                 let request = super::util::refresh_log_request(repo_state);
-                repo_state.loads_in_flight.request_log(request);
-                return finish_log_load(repo_state);
+                if repo_state.loads_in_flight.log_is_background(seq) {
+                    repo_state.loads_in_flight.request_background_log(request);
+                } else {
+                    repo_state.loads_in_flight.request_log(request);
+                }
+                return finish_log_load(repo_state, seq);
             }
             Ok(gitcomet_core::services::HistoryReadResult::Page { mut page, snapshot }) => {
                 if is_load_more && let Loadable::Ready(existing) = &mut repo_state.log {
@@ -735,11 +924,15 @@ pub(super) fn log_loaded(
                 repo_state.history_state.log_snapshot = snapshot;
             }
             Err(e) => {
-                push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
+                if repo_state.loads_in_flight.log_is_background(seq) {
+                    super::auto_fetch::refresh_failed(inputs, repo_state, e);
+                    return finish_log_load(repo_state, seq);
+                }
+                push_diagnostic(inputs, repo_state, DiagnosticKind::Error, e.to_string());
                 if !matches!(repo_state.log, Loadable::Ready(_)) {
                     repo_state.set_log(Loadable::Error(e.to_string()));
                 }
-                return finish_log_load(repo_state);
+                return finish_log_load(repo_state, seq);
             }
         }
 
@@ -764,8 +957,16 @@ pub(super) fn log_loaded(
             // quadratic on every reload, and reloads arrive in bursts.
             let page_ids: FxHashSet<&str> = page.commits.iter().map(|c| c.id.as_ref()).collect();
             let reveal_target = repo_state.history_state.reveal_target.clone();
+            let reword_target = repo_state
+                .history_state
+                .selected_commit
+                .as_ref()
+                .filter(|id| repo_state.reword.retains_selected_commit(id))
+                .cloned();
             let survives = |id: &gitcomet_core::domain::CommitId| {
-                reveal_target.as_ref() == Some(id) || page_ids.contains(id.as_ref())
+                reveal_target.as_ref() == Some(id)
+                    || reword_target.as_ref() == Some(id)
+                    || page_ids.contains(id.as_ref())
             };
 
             let mut next = repo_state.history_state.multi_selection.clone();
@@ -786,6 +987,8 @@ pub(super) fn log_loaded(
             // A reveal's target is exempt: it is deliberately selected ahead of
             // the page that will contain it, and a scope switch mid-reveal
             // restarts the log from its first page.
+            // An owned reword's target also survives until continuation settles;
+            // signing a later descendant may pause after replacing that target.
             let focus_gone = repo_state
                 .history_state
                 .selected_commit
@@ -821,13 +1024,13 @@ pub(super) fn log_loaded(
             ));
         }
 
-        effects.extend(finish_log_load(repo_state));
+        effects.extend(finish_log_load(repo_state, seq));
     }
     effects
 }
 
 fn reconcile_detached_head_from_log(repo_state: &mut crate::model::RepoState, scope: LogScope) {
-    if scope.guarantees_head_visibility()
+    if repo_state.history_state.history_focus.head_is_first(scope)
         && matches!(repo_state.head_branch, Loadable::Ready(ref head) if head == "HEAD")
         && let Loadable::Ready(page) = &repo_state.log
     {
@@ -835,10 +1038,13 @@ fn reconcile_detached_head_from_log(repo_state: &mut crate::model::RepoState, sc
     }
 }
 
-fn finish_log_load(repo_state: &mut crate::model::RepoState) -> Vec<Effect> {
+fn finish_log_load(
+    repo_state: &mut crate::model::RepoState,
+    seq: crate::model::LogLoadSeq,
+) -> Vec<Effect> {
     repo_state.set_log_loading_more(false);
     let refresh_limit = super::util::refresh_log_limit(repo_state);
-    if let Some((seq, next)) = repo_state.loads_in_flight.finish_log(|next| {
+    if let Some((seq, next)) = repo_state.loads_in_flight.finish_log(seq, |next| {
         if next.cursor.is_none() {
             next.limit = refresh_limit;
         }
@@ -847,8 +1053,9 @@ fn finish_log_load(repo_state: &mut crate::model::RepoState) -> Vec<Effect> {
         vec![Effect::LoadLog {
             repo_id: repo_state.id,
             seq,
-            scope: next.scope,
+            walk: next.walk,
             author: next.author,
+            focus: next.focus,
             limit: next.limit,
             cursor: next.cursor,
         }]
@@ -864,13 +1071,22 @@ enum RepoActionCompletion {
 }
 
 fn finish_repo_action(
-    repos: &FxHashMap<crate::model::RepoId, Arc<dyn GitRepository>>,
+    inputs: &ReducerInputs,
     state: &mut AppState,
     repo_id: crate::model::RepoId,
     action: RepoActionKind,
     completion: RepoActionCompletion,
 ) -> Vec<Effect> {
     let rebuild_selected_head_gitlink = repo_action_clears_head_dependent_state(action);
+    let refresh_worktrees = matches!(completion, RepoActionCompletion::Succeeded)
+        && matches!(
+            action,
+            RepoActionKind::CheckoutBranch
+                | RepoActionKind::CheckoutRemoteBranch
+                | RepoActionKind::CheckoutCommit
+                | RepoActionKind::CreateBranchAndCheckout
+                | RepoActionKind::RenameBranch
+        );
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
         repo_state.local_actions_in_flight = repo_state.local_actions_in_flight.saturating_sub(1);
         repo_state.bump_ops_rev();
@@ -879,15 +1095,15 @@ fn finish_repo_action(
         }
         match completion {
             RepoActionCompletion::Succeeded => {
-                repo_state.feedback.last_error = None;
+                repo_state.feedback_mut().last_error = None;
                 if repo_action_clears_head_dependent_state(action) {
                     repo_state.clear_head_dependent_cached_state();
                 }
             }
             RepoActionCompletion::ExpectedNoop => {}
             RepoActionCompletion::Failed(e) => {
-                repo_state.feedback.last_error = Some(e.to_string());
-                push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
+                repo_state.feedback_mut().last_error = Some(e.to_string());
+                push_diagnostic(inputs, repo_state, DiagnosticKind::Error, e.to_string());
             }
         }
     }
@@ -898,7 +1114,7 @@ fn finish_repo_action(
     // may retain the staged deletion, while partial failures may still move
     // HEAD.
     if rebuild_selected_head_gitlink {
-        super::refresh_selected_head_gitlink(repos, state, repo_id);
+        super::refresh_selected_head_gitlink(inputs, state, repo_id);
     }
     let is_active = state.active_repo == Some(repo_id);
 
@@ -918,23 +1134,29 @@ fn finish_repo_action(
     // were just cleared, so request_* dispatches fresh loads under the new epoch.
     effects.extend(refresh_primary_effects(repo_state));
 
+    // Only queue the scan after cancellation above. Its successful full listing
+    // refreshes branch badges too, without a second list request from the worker.
+    if refresh_worktrees
+        && let Some(effect) = super::effects::request_worktree_dirty_effect(repo_state)
+    {
+        effects.push(effect);
+    }
+
     // Selected views (branch lists, history, diff) only matter for the repo the user is viewing. A
     // non-active repo's in-flight views were reset to `NotLoaded` and reload when it is next
     // activated; the primary panes above are still refreshed so they are current on return.
     if is_active {
         // Re-issue branch lists when one was in flight before (refresh_primary_effects does not
         // cover them); request() returns true now that the flag was cleared.
-        if repo_state
-            .loads_in_flight
-            .request(RepoLoadsInFlight::BRANCHES)
-        {
-            effects.push(Effect::LoadBranches { repo_id });
+        if repo_state.loads_in_flight.request(LoadKind::Branches) {
+            effects.push(Effect::References(ReferenceEffect::LoadBranches {
+                repo_id,
+            }));
         }
-        if repo_state
-            .loads_in_flight
-            .request(RepoLoadsInFlight::REMOTE_BRANCHES)
-        {
-            effects.push(Effect::LoadRemoteBranches { repo_id });
+        if repo_state.loads_in_flight.request(LoadKind::RemoteBranches) {
+            effects.push(Effect::References(ReferenceEffect::LoadRemoteBranches {
+                repo_id,
+            }));
         }
 
         // Re-issue sidebar data loads (worktrees, submodules, stashes) that were
@@ -955,7 +1177,7 @@ fn finish_repo_action(
                     }
                 }
             } else {
-                effects.extend(diff_reload_effects(repo_state, repo_id, target));
+                effects.extend(diff_reload_effects(inputs, repo_state, repo_id, target));
             }
         }
     }
@@ -964,7 +1186,7 @@ fn finish_repo_action(
 }
 
 pub(super) fn repo_action_finished(
-    repos: &FxHashMap<crate::model::RepoId, Arc<dyn GitRepository>>,
+    inputs: &ReducerInputs,
     state: &mut AppState,
     repo_id: crate::model::RepoId,
     action: RepoActionKind,
@@ -974,11 +1196,36 @@ pub(super) fn repo_action_finished(
         Ok(()) => RepoActionCompletion::Succeeded,
         Err(error) => RepoActionCompletion::Failed(error),
     };
-    finish_repo_action(repos, state, repo_id, action, completion)
+    finish_repo_action(inputs, state, repo_id, action, completion)
+}
+
+/// The refusal is answered by the force-delete prompt, not reported as an error.
+pub(super) fn branch_not_fully_merged(
+    inputs: &ReducerInputs,
+    state: &mut AppState,
+    repo_id: RepoId,
+    name: String,
+) -> Vec<Effect> {
+    if state.repos.iter().any(|repo| repo.id == repo_id) {
+        let generation = state.force_delete_branch_prompt_generation.wrapping_add(1);
+        state.force_delete_branch_prompt_generation = generation;
+        state.force_delete_branch_prompt = Some(crate::model::ForceDeleteBranchPrompt {
+            generation,
+            repo_id,
+            name,
+        });
+    }
+    finish_repo_action(
+        inputs,
+        state,
+        repo_id,
+        RepoActionKind::DeleteBranch,
+        RepoActionCompletion::ExpectedNoop,
+    )
 }
 
 pub(super) fn branch_already_exists(
-    repos: &FxHashMap<crate::model::RepoId, Arc<dyn GitRepository>>,
+    inputs: &ReducerInputs,
     state: &mut AppState,
     action: RepoActionKind,
     prompt: BranchExistsPromptState,
@@ -990,7 +1237,7 @@ pub(super) fn branch_already_exists(
     let repo_id = prompt.repo_id;
     state.branch_exists_prompt = Some(prompt);
     finish_repo_action(
-        repos,
+        inputs,
         state,
         repo_id,
         action,
@@ -998,7 +1245,7 @@ pub(super) fn branch_already_exists(
     )
 }
 
-fn repo_action_clears_head_dependent_state(action: RepoActionKind) -> bool {
+pub(super) fn repo_action_clears_head_dependent_state(action: RepoActionKind) -> bool {
     matches!(
         action,
         RepoActionKind::CheckoutBranch
@@ -1011,7 +1258,7 @@ fn repo_action_clears_head_dependent_state(action: RepoActionKind) -> bool {
 }
 
 pub(super) fn repo_paths_action_finished(
-    repos: &FxHashMap<RepoId, Arc<dyn GitRepository>>,
+    inputs: &ReducerInputs,
     state: &mut AppState,
     repo_id: RepoId,
     action: RepoActionKind,
@@ -1034,11 +1281,11 @@ pub(super) fn repo_paths_action_finished(
             );
         }
     }
-    repo_action_finished(repos, state, repo_id, action, result)
+    repo_action_finished(inputs, state, repo_id, action, result)
 }
 
 pub(super) fn repo_action_finished_in_worktree(
-    repos: &FxHashMap<RepoId, Arc<dyn GitRepository>>,
+    inputs: &ReducerInputs,
     id_alloc: &AtomicU64,
     state: &mut AppState,
     repo_id: RepoId,
@@ -1049,11 +1296,11 @@ pub(super) fn repo_action_finished_in_worktree(
     // Open first so the origin tab is inactive when its action finishes and
     // only refreshes its primary state instead of reloading everything.
     let mut effects = if result.is_ok() {
-        repo_management::open_repo(repos, id_alloc, state, worktree_path)
+        repo_management::open_repo(inputs, id_alloc, state, worktree_path)
     } else {
         Vec::new()
     };
-    effects.extend(repo_action_finished(repos, state, repo_id, action, result));
+    effects.extend(repo_action_finished(inputs, state, repo_id, action, result));
     effects
 }
 

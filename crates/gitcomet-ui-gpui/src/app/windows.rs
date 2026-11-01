@@ -6,7 +6,7 @@ use super::*;
 pub(super) struct GitCometWindowEntry {
     pub(super) handle: gpui::AnyWindowHandle,
     pub(super) view: gpui::WeakEntity<GitCometView>,
-    pub(super) main_pane: gpui::WeakEntity<MainPaneView>,
+    pub(super) diff_renderer: gpui::WeakEntity<DiffRenderer>,
     pub(super) documents: gpui::WeakEntity<crate::view::documents::DocumentsView>,
     pub(super) view_mode: GitCometViewMode,
     pub(super) diff_fallback_enabled: bool,
@@ -60,19 +60,17 @@ fn filesystem_document_windows(
         .unwrap_or_default()
 }
 
-fn filesystem_editor_windows(cx: &App) -> Vec<gpui::WeakEntity<MainPaneView>> {
-    cx.try_global::<GitCometWindowRegistry>()
-        .map(|r| r.windows.values().map(|w| w.main_pane.clone()).collect())
-        .unwrap_or_default()
+fn filesystem_document_owners(cx: &App) -> Vec<crate::view::documents::buffers::DocumentOwner> {
+    filesystem_document_windows(cx)
+        .into_iter()
+        .filter_map(|documents| Some(documents.upgrade()?.read(cx).document_owner()))
+        .collect()
 }
 
 pub(crate) fn filesystem_has_unsaved_buffers(paths: &[PathBuf], cx: &App) -> bool {
     filesystem_document_windows(cx).iter().any(|docs| {
         docs.upgrade()
             .is_some_and(|docs| docs.read(cx).filesystem_has_unsaved(paths, cx))
-    }) || filesystem_editor_windows(cx).iter().any(|pane| {
-        pane.upgrade()
-            .is_some_and(|pane| pane.read(cx).filesystem_has_unsaved(paths))
     })
 }
 
@@ -86,32 +84,20 @@ pub(crate) fn filesystem_unsaved_buffer_paths(paths: &[PathBuf], cx: &App) -> Ve
 }
 
 pub(crate) fn resolve_filesystem_buffers(paths: &[PathBuf], save: bool, cx: &mut App) {
-    for docs in filesystem_document_windows(cx) {
-        let _ = docs.update(cx, |docs, cx| docs.filesystem_resolve(paths, save, cx));
-    }
-    for pane in filesystem_editor_windows(cx) {
-        let _ = pane.update(cx, |pane, cx| {
-            pane.filesystem_resolve_unsaved(paths, save, cx)
-        });
+    for owner in filesystem_document_owners(cx) {
+        owner.resolve(None, Some(paths), save, cx);
     }
 }
 
 pub(crate) fn filesystem_saves_drained(cx: &App) -> bool {
-    filesystem_document_windows(cx).iter().all(|docs| {
-        docs.upgrade()
-            .is_none_or(|docs| docs.read(cx).saves_drained(cx))
-    }) && filesystem_editor_windows(cx).iter().all(|pane| {
-        pane.upgrade()
-            .is_none_or(|pane| pane.read(cx).filesystem_saves_drained())
-    })
+    filesystem_document_owners(cx)
+        .iter()
+        .all(|owner| owner.saves_drained(None) && owner.operations_drained(cx))
 }
 
 pub(crate) fn pause_filesystem_editors(id: gitcomet_core::filesystem::OperationId, cx: &mut App) {
-    for docs in filesystem_document_windows(cx) {
-        let _ = docs.update(cx, |docs, cx| docs.filesystem_pause(id, cx));
-    }
-    for pane in filesystem_editor_windows(cx) {
-        let _ = pane.update(cx, |pane, cx| pane.filesystem_pause(id, cx));
+    for owner in filesystem_document_owners(cx) {
+        owner.pause_presenters(id, cx);
     }
 }
 
@@ -123,15 +109,8 @@ pub(crate) fn finish_filesystem_editors(
     redo: bool,
     cx: &mut App,
 ) {
-    for docs in filesystem_document_windows(cx) {
-        let _ = docs.update(cx, |docs, cx| {
-            docs.filesystem_finish(id, changes, versions, cx)
-        });
-    }
-    for pane in filesystem_editor_windows(cx) {
-        let _ = pane.update(cx, |pane, cx| {
-            pane.filesystem_finish(id, changes, versions, cx)
-        });
+    for owner in filesystem_document_owners(cx) {
+        owner.finish_presenters(id, changes, versions, cx);
     }
     let views: Vec<_> = cx
         .try_global::<GitCometWindowRegistry>()
@@ -205,7 +184,7 @@ pub(crate) fn sync_gitcomet_window_registry<C>(
     cx: &mut C,
     handle: gpui::AnyWindowHandle,
     view: gpui::WeakEntity<GitCometView>,
-    main_pane: gpui::WeakEntity<MainPaneView>,
+    diff_renderer: gpui::WeakEntity<DiffRenderer>,
     documents: gpui::WeakEntity<crate::view::documents::DocumentsView>,
     view_mode: GitCometViewMode,
     workspace_id: Option<session::WorkspaceId>,
@@ -223,7 +202,7 @@ pub(crate) fn sync_gitcomet_window_registry<C>(
             }),
         handle,
         view,
-        main_pane,
+        diff_renderer,
         documents,
         view_mode,
         workspace_id,
@@ -602,14 +581,51 @@ pub(crate) fn close_active_window_or_warn(cx: &mut App) {
     }
 }
 
+#[derive(Default)]
+pub(crate) struct PendingRestart(pub(crate) bool);
+impl gpui::Global for PendingRestart {}
+
+#[cfg(target_os = "windows")]
+pub(crate) fn request_restart(cx: &mut App) {
+    if cx
+        .try_global::<crate::windows_renderer::RendererSession>()
+        .is_none_or(|session| !session.0.borrow().restart_allowed)
+    {
+        return;
+    }
+    cx.set_global(PendingRestart(true));
+    quit_app_or_warn(cx);
+}
+
+pub(crate) fn cancel_pending_restart(cx: &mut App) {
+    if let Some(pending) = cx.try_global::<PendingRestart>()
+        && pending.0
+    {
+        cx.set_global(PendingRestart(false));
+    }
+}
+
+/// Every approved application quit goes through this point, including close guards.
+pub(crate) fn finish_quit_or_restart(cx: &mut App) {
+    let restart = cx
+        .try_global::<PendingRestart>()
+        .is_some_and(|pending| pending.0);
+    cx.set_global(PendingRestart(false));
+    mark_clean_shutdown(cx);
+    if restart {
+        cx.restart();
+    } else {
+        cx.quit();
+    }
+}
+
 pub(crate) fn quit_app_or_warn(cx: &mut App) {
     let entries = gitcomet_window_entries(cx);
     if entries.is_empty() {
         if crate::view::settings_window::close_guards::request_settings_only_quit(cx) {
             return;
         }
-        mark_clean_shutdown(cx);
-        cx.quit();
+        finish_quit_or_restart(cx);
         return;
     }
 
@@ -665,8 +681,7 @@ pub(crate) fn quit_app_or_warn(cx: &mut App) {
             }
         }
         if late_reasons.is_empty() {
-            mark_clean_shutdown(cx);
-            cx.quit();
+            finish_quit_or_restart(cx);
             return;
         }
     }
@@ -700,8 +715,7 @@ pub(crate) fn quit_app_or_warn(cx: &mut App) {
             activate_gitcomet_window(cx, entry.handle);
         }
     } else {
-        mark_clean_shutdown(cx);
-        cx.quit();
+        finish_quit_or_restart(cx);
     }
 }
 
@@ -762,4 +776,41 @@ pub(super) fn live_normal_windows(cx: &mut App) -> Vec<GitCometWindowEntry> {
         .into_iter()
         .filter(|entry| entry.view_mode == GitCometViewMode::Normal)
         .collect()
+}
+
+#[cfg(test)]
+mod restart_tests {
+    use super::*;
+    #[gpui::test]
+    async fn approved_restart_uses_the_existing_helper_without_replaying_arguments(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let restart = cx.expect_restart();
+        cx.update(|cx| {
+            cx.set_global(PendingRestart(true));
+            finish_quit_or_restart(cx);
+            assert!(!cx.global::<PendingRestart>().0);
+        });
+        let (path, arguments) = restart.await.unwrap();
+        assert!(path.is_none());
+        assert!(arguments.is_empty());
+    }
+    #[cfg(target_os = "windows")]
+    #[gpui::test]
+    fn cancellation_retains_saved_renderer_for_the_next_launch(cx: &mut gpui::TestAppContext) {
+        use crate::windows_renderer::{RendererPreference, RendererSession, RendererState};
+        cx.update(|cx| {
+            let mut state = RendererState::new(RendererPreference::Auto, true);
+            state.saved = RendererPreference::Dx11;
+            let session = RendererSession(std::rc::Rc::new(std::cell::RefCell::new(state)));
+            cx.set_global(session.clone());
+            cx.set_global(PendingRestart(true));
+            cancel_pending_restart(cx);
+            assert!(!cx.global::<PendingRestart>().0);
+            cancel_pending_restart(cx);
+            assert!(!cx.global::<PendingRestart>().0);
+            assert_eq!(session.0.borrow().saved, RendererPreference::Dx11);
+            assert!(session.0.borrow().restart_required());
+        });
+    }
 }

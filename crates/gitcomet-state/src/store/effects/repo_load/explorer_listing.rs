@@ -1,6 +1,6 @@
 use crate::model::FileBrowserState;
 use gitcomet_core::domain::{FileEntry, FileEntryKind};
-use gitcomet_core::error::{Error, ErrorKind};
+use gitcomet_core::error::Error;
 use gitcomet_core::services::{CancellationToken, Result};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -35,6 +35,22 @@ impl From<&FileBrowserState> for Options {
     }
 }
 
+/// Whether the backend listing already holds every revealed path. It lists each
+/// listed path's ancestors, in the order `augment`'s walk would rebuild.
+fn lists_all(base: &[FileEntry], revealed: &BTreeSet<PathBuf>) -> bool {
+    let mut missing: Vec<&Path> = revealed.iter().map(PathBuf::as_path).collect();
+    for entry in base {
+        if missing.is_empty() {
+            break;
+        }
+        // File names first: comparing whole paths walks their components.
+        missing.retain(|path| {
+            path.file_name() != entry.path.file_name() || *path != entry.path.as_path()
+        });
+    }
+    missing.is_empty()
+}
+
 pub(super) fn augment(
     root: &Path,
     mut base: Vec<FileEntry>,
@@ -43,7 +59,7 @@ pub(super) fn augment(
 ) -> Result<Vec<FileEntry>> {
     // Staging areas left in a worktree are the filesystem service's, not the user's.
     base.retain(|entry| !gitcomet_core::path_utils::has_service_owned_component(&entry.path));
-    if !options.ignored && options.revealed.is_empty() {
+    if !options.ignored && lists_all(&base, &options.revealed) {
         return Ok(base);
     }
     let mut entries: BTreeMap<PathBuf, FileEntryKind> = base
@@ -59,11 +75,16 @@ pub(super) fn augment(
         {
             continue;
         }
-        let directory = std::fs::read_dir(root.join(&parent))
-            .map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
+        let directory_path = root.join(&parent);
+        let directory = std::fs::read_dir(&directory_path).map_err(|e| {
+            Error::from(e).with_context("read repository directory", Some(&directory_path))
+        })?;
         for entry in directory {
             cancellation.check_cancelled()?;
-            let entry = entry.map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
+            let entry = entry.map_err(|e| {
+                Error::from(e)
+                    .with_context("read repository directory entry", Some(&directory_path))
+            })?;
             let name = entry.file_name();
             if gitcomet_core::path_utils::is_git_metadata_component(&name)
                 || gitcomet_core::path_utils::is_service_owned_name(name.as_encoded_bytes())
@@ -71,9 +92,9 @@ pub(super) fn augment(
                 continue;
             }
             let path = parent.join(name);
-            let kind = entry
-                .file_type()
-                .map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
+            let kind = entry.file_type().map_err(|e| {
+                Error::from(e).with_context("read repository entry type", Some(&entry.path()))
+            })?;
             if !(kind.is_dir() || kind.is_file() || kind.is_symlink()) {
                 continue;
             }
@@ -88,11 +109,13 @@ pub(super) fn augment(
                     },
                 );
             }
+            // Without ignored entries only a revealed path's ancestors can hold
+            // anything the backend did not list.
             if kind.is_dir()
-                && (original.contains(&path)
-                    || revealed
+                && (revealed
                     || (options.ignored
-                        && (options.expanded.contains(&path)
+                        && (original.contains(&path)
+                            || options.expanded.contains(&path)
                             || options.search
                             || options.recursive.iter().any(|root| path.starts_with(root)))))
             {

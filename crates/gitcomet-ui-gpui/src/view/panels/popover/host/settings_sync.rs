@@ -82,6 +82,11 @@ impl PopoverHost {
         let items = self
             .collapsed_items_by_repo
             .get(&repo.spec.workdir)
+            .or_else(|| {
+                repo.shared_preferences
+                    .as_ref()
+                    .map(|snapshot| &snapshot.preferences.collapsed_items)
+            })
             .unwrap_or(&EMPTY);
         crate::view::branch_sidebar::is_collapsed(items, collapse_key)
     }
@@ -99,7 +104,8 @@ impl PopoverHost {
         let Some(repo) = self.state.repos.iter().find(|r| r.id == repo_id) else {
             return 0;
         };
-        self.pinned_branches_by_repo.get(&repo.spec.workdir).map_or(0, |items| {
+        repo.shared_preferences.as_ref().map(|snapshot| &snapshot.preferences.pinned_items)
+            .or_else(|| self.pinned_branches_by_repo.get(&repo.spec.workdir)).map_or(0, |items| {
             crate::view::branch_sidebar::matching_pinned_roots(repo, items, &self.branch_search).iter()
                 .filter(|row| matches!(row, BranchSidebarRow::Branch { section: candidate, .. } | BranchSidebarRow::GroupHeader { section: candidate, .. } if *candidate == section)).count()
         })
@@ -119,8 +125,10 @@ impl PopoverHost {
         let Some(repo) = self.state.repos.iter().find(|r| r.id == repo_id) else {
             return false;
         };
-        self.pinned_branches_by_repo
-            .get(&repo.spec.workdir)
+        repo.shared_preferences
+            .as_ref()
+            .map(|snapshot| &snapshot.preferences.pinned_items)
+            .or_else(|| self.pinned_branches_by_repo.get(&repo.spec.workdir))
             .is_some_and(|items| items.contains(key))
     }
 
@@ -133,7 +141,7 @@ impl PopoverHost {
             return;
         }
         self.date_time_format = next;
-        self.main_pane
+        self.diff_renderer
             .update(cx, |pane, cx| pane.set_date_time_format(next, cx));
         self.sync_pane_date_settings(cx);
         cx.notify();
@@ -210,12 +218,17 @@ impl PopoverHost {
         let root_view = self.root_view.clone();
         cx.spawn(
             async move |_host: WeakEntity<Self>, cx: &mut gpui::AsyncApp| {
-                let _ = root_view.update(cx, |root, cx| {
-                    root.theme_mode = mode;
-                    root.date_time_format = fmt;
-                    root.timezone = tz;
-                    root.show_timezone = show_tz;
-                    root.schedule_ui_settings_persist(cx);
+                cx.update(|cx| {
+                    root_view.request(
+                        RootRequest::PersistDisplayPreferences {
+                            theme_mode: mode,
+                            date_time_format: fmt,
+                            timezone: tz,
+                            show_timezone: show_tz,
+                        },
+                        None,
+                        cx,
+                    )
                 });
             },
         )

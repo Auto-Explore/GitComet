@@ -1073,7 +1073,7 @@ mod tests {
 
     fn open_repo(workdir: &Path) -> GixRepo {
         let thread_safe = gix::open(workdir).expect("open repo").into_sync();
-        GixRepo::new(workdir.to_path_buf(), thread_safe)
+        GixRepo::new(workdir.to_path_buf(), thread_safe).expect("gix repo")
     }
 
     fn read(root: &Path, name: &str) -> String {
@@ -1090,7 +1090,7 @@ mod tests {
         assert_eq!(read(root, "moved.txt"), "ui-x\n", "ui is applied");
         assert_eq!(read(root, "mine.txt"), "y\n");
         assert_eq!(
-            repo.current_branch().expect("current branch"),
+            repo.current_branch(&gitcomet_core::services::CancellationToken::new()).expect("current branch"),
             WORKSPACE_BRANCH,
             "the working directory is the workspace"
         );
@@ -1183,11 +1183,11 @@ mod tests {
     fn leaving_the_workspace_returns_to_the_branch_it_came_from() {
         let (temp, repo, _) = repo_with_two_branches();
         let root = temp.path();
-        let original = repo.current_branch().expect("current branch");
+        let original = repo.current_branch(&gitcomet_core::services::CancellationToken::new()).expect("current branch");
         repo.enter_workspace().expect("enter workspace");
 
         repo.leave_workspace(&original).expect("leave workspace");
-        assert_eq!(repo.current_branch().expect("current branch"), original);
+        assert_eq!(repo.current_branch(&gitcomet_core::services::CancellationToken::new()).expect("current branch"), original);
         assert_eq!(
             read(root, "moved.txt"),
             "x\n",
@@ -2412,7 +2412,7 @@ mod tests {
         ));
 
         let branches: Vec<String> = repo
-            .list_branches()
+            .list_branches(&gitcomet_core::services::CancellationToken::new())
             .expect("list branches")
             .into_iter()
             .map(|branch| branch.name)
@@ -2662,7 +2662,7 @@ mod tests {
         repo.enter_workspace().expect("enter");
         let before = git(root, &["rev-parse", WORKSPACE_BRANCH]);
 
-        assert_refused(repo.pull_with_output(PullMode::Merge), "a pull");
+        assert_refused(repo.pull(PullMode::Merge), "a pull");
 
         assert_eq!(git(root, &["rev-parse", WORKSPACE_BRANCH]), before);
     }

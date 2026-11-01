@@ -4,9 +4,7 @@ pub(crate) use probe::probe_output;
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-#[cfg(test)]
-use std::sync::Mutex;
-use std::sync::{OnceLock, RwLock};
+use std::sync::{Condvar, Mutex, OnceLock, RwLock};
 use std::time::{Duration, Instant};
 
 #[derive(Clone, Debug, Eq, PartialEq, Default)]
@@ -198,12 +196,18 @@ pub fn select_git_executable_preference(preference: GitExecutablePreference) -> 
         slot.cancellation.cancel();
         slot.cancellation = CancellationToken::new();
         slot.generation = slot.generation.wrapping_add(1);
-        slot.probing = false;
+        let abandoned_probe = std::mem::replace(&mut slot.probing, false);
         slot.last_probe = None;
         slot.state = GitRuntimeState {
             preference,
             availability: GitExecutableAvailability::Checking,
         };
+        let state = slot.state.clone();
+        drop(slot);
+        if abandoned_probe {
+            notify_probe_settled();
+        }
+        return state;
     }
     slot.state.clone()
 }
@@ -214,6 +218,9 @@ pub struct GitRuntimeProbe {
     preference: GitExecutablePreference,
     generation: u64,
     cancellation: CancellationToken,
+    /// An unrun claim learned nothing, so dropping it must not rate-limit the
+    /// next request.
+    ran: bool,
 }
 
 /// Shared across windows: coalesce in-flight probes and rate-limit recovery.
@@ -238,11 +245,13 @@ pub fn begin_git_runtime_probe(force: bool) -> Option<GitRuntimeProbe> {
         preference: slot.state.preference.clone(),
         generation: slot.generation,
         cancellation: slot.cancellation.clone(),
+        ran: false,
     })
 }
 
 impl GitRuntimeProbe {
-    pub fn run(self) -> Option<GitRuntimeState> {
+    pub fn run(mut self) -> Option<GitRuntimeState> {
+        self.ran = true;
         let next = probe_git_runtime(self.preference.clone(), &self.cancellation);
         let mut slot = git_runtime_slot()
             .write()
@@ -261,9 +270,63 @@ impl Drop for GitRuntimeProbe {
         let mut slot = git_runtime_slot()
             .write()
             .unwrap_or_else(|err| err.into_inner());
-        if slot.generation == self.generation {
+        let settled = slot.generation == self.generation;
+        if settled {
             slot.probing = false;
+            if !self.ran {
+                slot.last_probe = None;
+            }
         }
+        // Never wake waiters while holding the slot: they read it under the
+        // signal's lock.
+        drop(slot);
+        if settled {
+            notify_probe_settled();
+        }
+    }
+}
+
+/// Wakes `wait_for_git_runtime_probe` callers. Notifiers take the lock after
+/// clearing `probing`, so a waiter cannot miss the wake between its check of
+/// the slot and its wait.
+fn probe_settled_signal() -> &'static (Mutex<()>, Condvar) {
+    static SIGNAL: OnceLock<(Mutex<()>, Condvar)> = OnceLock::new();
+    SIGNAL.get_or_init(|| (Mutex::new(()), Condvar::new()))
+}
+
+fn notify_probe_settled() {
+    let (lock, settled) = probe_settled_signal();
+    let _guard = lock.lock().unwrap_or_else(|err| err.into_inner());
+    settled.notify_all();
+}
+
+/// The settled runtime, waiting for a probe someone else started if one is
+/// running. The browser starts one before GPUI and its first window exist, so
+/// that a window can open its repositories without first waiting for
+/// `git --version`; that probe reports to no window, so a window adopts its
+/// result here instead of probing again.
+///
+/// `None` while nothing is known yet: no probe ran, the running one was
+/// abandoned (the executable preference changed), or `timeout` passed first.
+pub fn wait_for_git_runtime_probe(timeout: Duration) -> Option<GitRuntimeState> {
+    let deadline = Instant::now() + timeout;
+    let (lock, settled) = probe_settled_signal();
+    let mut guard = lock.lock().unwrap_or_else(|err| err.into_inner());
+    loop {
+        {
+            let slot = git_runtime_slot()
+                .read()
+                .unwrap_or_else(|err| err.into_inner());
+            if !slot.probing {
+                return (!matches!(slot.state.availability, GitExecutableAvailability::Checking))
+                    .then(|| slot.state.clone());
+            }
+        }
+        let remaining = deadline.checked_duration_since(Instant::now())?;
+        guard = settled
+            .wait_timeout(guard, remaining)
+            .unwrap_or_else(|err| err.into_inner())
+            .0;
     }
 }
 
@@ -356,6 +419,15 @@ pub(crate) fn git_command_for_preference(preference: &GitExecutablePreference) -
     // No gc/repack behind a command: GitComet recommends maintenance and runs
     // it only when asked. An explicit `git maintenance run` ignores this.
     command.arg("-c").arg("maintenance.auto=false");
+    // GitComet reads Git's messages, so they must be English; a UTF-8
+    // charset keeps hooks and helpers from failing on non-ASCII text.
+    let inherited: Vec<_> = std::env::vars_os().collect();
+    for (name, value) in git_locale_env(&inherited, utf8_locale) {
+        match value {
+            Some(value) => command.env(name, value),
+            None => command.env_remove(name),
+        };
+    }
     if let GitExecutablePreference::Custom(path) = preference
         && let Some(parent) = path.parent()
         && !parent.as_os_str().is_empty()
@@ -363,6 +435,78 @@ pub(crate) fn git_command_for_preference(preference: &GitExecutablePreference) -
         prepend_command_path(&mut command, parent);
     }
     command
+}
+
+/// Environment changes that make Git print English in a UTF-8 charset, given
+/// the inherited environment. `LANGUAGE` picks the messages even over the
+/// user's `LC_ALL`; numbers, dates and sorting keep the user's locale.
+fn git_locale_env(
+    inherited: &[(OsString, OsString)],
+    utf8_locale: impl FnOnce() -> Option<&'static str>,
+) -> Vec<(OsString, Option<OsString>)> {
+    let var = |name: &str| {
+        inherited
+            .iter()
+            .find(|(key, value)| key == name && !value.is_empty())
+            .map(|(_, value)| value.clone())
+    };
+    let mut changes = vec![("LANGUAGE".into(), Some("en".into()))];
+    let all = var("LC_ALL");
+    let charset = all
+        .clone()
+        .or_else(|| var("LC_CTYPE"))
+        .or_else(|| var("LANG"));
+    let names_utf8 = |locale: &OsStr| {
+        let locale = locale.to_string_lossy().to_ascii_lowercase();
+        locale.contains("utf-8") || locale.contains("utf8")
+    };
+    if charset.as_deref().is_some_and(names_utf8) {
+        return changes;
+    }
+    let Some(utf8) = utf8_locale() else {
+        return changes;
+    };
+    if let Some(all) = all {
+        // LC_ALL would override LC_CTYPE. LANG gives the user's locale to
+        // every other category, which the LC_* variables LC_ALL hid must not
+        // take over.
+        changes.extend(
+            inherited
+                .iter()
+                .filter(|(name, _)| name.to_str().is_some_and(|name| name.starts_with("LC_")))
+                .map(|(name, _)| (name.clone(), None)),
+        );
+        changes.push(("LANG".into(), Some(all)));
+    }
+    changes.push(("LC_CTYPE".into(), Some(utf8.into())));
+    changes
+}
+
+/// A UTF-8 locale this machine has, for when the user's charset is not UTF-8.
+/// Linux installs C.UTF-8 on most systems but not all, and a missing locale
+/// makes Perl and bash hooks print warnings.
+fn utf8_locale() -> Option<&'static str> {
+    if cfg!(windows) {
+        // Git for Windows runs in UTF-8 already.
+        None
+    } else if cfg!(target_os = "macos") {
+        Some("UTF-8")
+    } else {
+        static INSTALLED: OnceLock<bool> = OnceLock::new();
+        INSTALLED
+            .get_or_init(|| {
+                background_command("locale")
+                    .arg("-a")
+                    .output()
+                    .is_ok_and(|output| {
+                        String::from_utf8_lossy(&output.stdout).lines().any(|name| {
+                            name.eq_ignore_ascii_case("C.UTF-8")
+                                || name.eq_ignore_ascii_case("C.utf8")
+                        })
+                    })
+            })
+            .then_some("C.UTF-8")
+    }
 }
 
 fn prepend_command_path(command: &mut Command, path: &Path) {
@@ -492,10 +636,7 @@ pub fn bytes_to_text_preserving_utf8(bytes: &[u8]) -> String {
 /// a release build sets `windows_subsystem = "windows"`, so a GitComet launched
 /// from Explorer has no stderr at all and a panic here would kill the very
 /// worker the recovery exists to keep alive.
-pub fn write_stderr_line(args: std::fmt::Arguments<'_>) {
-    use std::io::Write as _;
-    let _ = writeln!(std::io::stderr(), "{args}");
-}
+pub use gitcomet_base::write_stderr_line;
 
 #[cfg(test)]
 pub fn lock_git_runtime_test() -> std::sync::MutexGuard<'static, ()> {
@@ -509,6 +650,80 @@ mod tests {
     use super::*;
     use std::fs;
     use std::path::Path;
+
+    fn locale_env(
+        inherited: &[(&str, &str)],
+        utf8: Option<&'static str>,
+    ) -> Vec<(String, Option<String>)> {
+        let inherited: Vec<(OsString, OsString)> = inherited
+            .iter()
+            .map(|(name, value)| ((*name).into(), (*value).into()))
+            .collect();
+        git_locale_env(&inherited, || utf8)
+            .into_iter()
+            .map(|(name, value)| {
+                (
+                    name.into_string().unwrap(),
+                    value.map(|value| value.into_string().unwrap()),
+                )
+            })
+            .collect()
+    }
+
+    fn set(name: &str, value: &str) -> (String, Option<String>) {
+        (name.to_string(), Some(value.to_string()))
+    }
+
+    #[test]
+    fn git_speaks_english_and_keeps_a_utf8_locale_the_user_chose() {
+        for user in [
+            &[("LC_ALL", "fi_FI.UTF-8")][..],
+            &[("LANG", "de_DE.utf8"), ("LC_NUMERIC", "fi_FI.UTF-8")],
+            &[("LC_CTYPE", "UTF-8")],
+        ] {
+            assert_eq!(
+                locale_env(user, Some("C.UTF-8")),
+                [set("LANGUAGE", "en")],
+                "{user:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_locale_without_utf8_gets_a_utf8_charset_and_keeps_everything_else() {
+        // A macOS app opened from Finder inherits no locale at all.
+        assert_eq!(
+            locale_env(&[], Some("UTF-8")),
+            [set("LANGUAGE", "en"), set("LC_CTYPE", "UTF-8")]
+        );
+        assert_eq!(
+            locale_env(
+                &[("LANG", "fi_FI.UTF-8"), ("LC_CTYPE", "C")],
+                Some("C.UTF-8")
+            ),
+            [set("LANGUAGE", "en"), set("LC_CTYPE", "C.UTF-8")],
+            "LC_CTYPE outranks LANG"
+        );
+        assert_eq!(
+            locale_env(
+                &[("LC_ALL", "fi_FI.iso88591"), ("LC_TIME", "de_DE.UTF-8")],
+                Some("C.UTF-8")
+            ),
+            [
+                set("LANGUAGE", "en"),
+                ("LC_ALL".to_string(), None),
+                ("LC_TIME".to_string(), None),
+                set("LANG", "fi_FI.iso88591"),
+                set("LC_CTYPE", "C.UTF-8"),
+            ],
+            "LC_ALL hid LC_TIME, so moving LC_ALL into LANG must not expose it"
+        );
+        assert_eq!(
+            locale_env(&[("LANG", "C")], None),
+            [set("LANGUAGE", "en")],
+            "a UTF-8 locale this machine lacks would only add warnings"
+        );
+    }
 
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt as _;
@@ -568,6 +783,66 @@ mod tests {
             assert!(begin_git_runtime_probe(false).is_none());
         }
         assert_eq!(git_runtime_probe_count(&log), 1);
+    }
+
+    #[test]
+    fn waiters_adopt_a_probe_started_elsewhere_without_probing_again() {
+        let _lock = lock_git_runtime_test();
+        let _restore = GitRuntimePreferenceResetGuard::install(current_git_executable_preference());
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("probes");
+        let (_script_dir, script) = create_git_probe_script("git version early", "", 0, Some(&log));
+        select_git_executable_path(Some(script));
+        assert!(wait_for_git_runtime_probe(Duration::ZERO).is_none());
+
+        let request = begin_git_runtime_probe(false).unwrap();
+        let waiters: Vec<_> = (0..4)
+            .map(|_| std::thread::spawn(|| wait_for_git_runtime_probe(Duration::from_secs(30))))
+            .collect();
+        // The waiters block on the claim until the probe settles.
+        std::thread::sleep(Duration::from_millis(20));
+        assert!(waiters.iter().all(|waiter| !waiter.is_finished()));
+        assert!(request.run().unwrap().is_available());
+        for waiter in waiters {
+            let adopted = waiter.join().unwrap().expect("settled runtime");
+            assert_eq!(adopted.version_output(), Some("git version early"));
+        }
+        // Settled: adopting returns at once, still without a second probe.
+        assert!(wait_for_git_runtime_probe(Duration::ZERO).is_some_and(|r| r.is_available()));
+        assert_eq!(git_runtime_probe_count(&log), 1);
+    }
+
+    #[test]
+    fn dropping_an_unrun_probe_releases_its_claim_without_rate_limiting() {
+        let _lock = lock_git_runtime_test();
+        let _restore = GitRuntimePreferenceResetGuard::install(current_git_executable_preference());
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("probes");
+        let (_script_dir, script) = create_git_probe_script("git version late", "", 0, Some(&log));
+        select_git_executable_path(Some(script));
+        // A worker that never started (a failed thread spawn, a cancelled task).
+        drop(begin_git_runtime_probe(false).unwrap());
+        assert!(!log.exists());
+        let retry = begin_git_runtime_probe(false).expect("nothing was learned, so retry at once");
+        assert!(retry.run().unwrap().is_available());
+        assert_eq!(git_runtime_probe_count(&log), 1);
+        assert!(begin_git_runtime_probe(false).is_none());
+    }
+
+    #[test]
+    fn waiters_give_up_on_a_probe_abandoned_by_a_new_preference() {
+        let _lock = lock_git_runtime_test();
+        let _restore = GitRuntimePreferenceResetGuard::install(current_git_executable_preference());
+        let (_a, a) = create_git_probe_script("git version old", "", 0, None);
+        let (_b, b) = create_git_probe_script("git version new", "", 0, None);
+        select_git_executable_path(Some(a));
+        let old = begin_git_runtime_probe(false).unwrap();
+        let waiter = std::thread::spawn(|| wait_for_git_runtime_probe(Duration::from_secs(30)));
+        std::thread::sleep(Duration::from_millis(20));
+        select_git_executable_path(Some(b));
+        // Nothing is known about the new executable yet.
+        assert!(waiter.join().unwrap().is_none());
+        assert!(old.run().is_none());
     }
 
     #[test]

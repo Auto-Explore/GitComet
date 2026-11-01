@@ -125,7 +125,7 @@ impl InteractiveRowExt for Stateful<Div> {
             gpui::canvas(
                 |_, _, _| {},
                 move |bounds, _, window, _| {
-                    window.paint_quad(gpui::fill(bounds, color));
+                    window.paint_quad(gpui::PaintQuad::new(bounds).background(color));
                 },
             )
             .absolute()

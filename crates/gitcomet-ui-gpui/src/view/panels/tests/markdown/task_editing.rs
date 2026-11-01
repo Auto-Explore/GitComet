@@ -6,7 +6,7 @@ use super::*;
 fn worktree_markdown_preview_draws_task_items_as_editable_checkboxes(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = lock_visual_test();
+    gitcomet_ui_kit::test_support::use_real_text_backend(cx);
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -37,7 +37,7 @@ fn worktree_markdown_preview_draws_task_items_as_editable_checkboxes(
         "a plain item keeps its bullet"
     );
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert!(
             pane.markdown_preview_tasks_editable(),
             "an unstaged working-tree file is the file the click writes to"
@@ -49,7 +49,7 @@ fn worktree_markdown_preview_draws_task_items_as_editable_checkboxes(
 
 #[gpui::test]
 fn toggling_a_task_invalidates_the_file_preview(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
+    gitcomet_ui_kit::test_support::use_real_text_backend(cx);
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -72,7 +72,7 @@ fn toggling_a_task_invalidates_the_file_preview(cx: &mut gpui::TestAppContext) {
             )),
         );
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.toggle_markdown_preview_task(DiffTextRegion::Inline, task, cx);
             });
         });
@@ -81,7 +81,19 @@ fn toggling_a_task_invalidates_the_file_preview(cx: &mut gpui::TestAppContext) {
 
     let saved_path = fixture.workdir.join("docs/preview.md");
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-    while std::fs::read_to_string(&saved_path).unwrap() != "- [x] ship it\n" {
+    loop {
+        let saved = {
+            // Saves briefly park the original before installing the new file.
+            // Share the worker's lock so the read cannot land in that gap.
+            let _filesystem = cx
+                .update(|_window, app| view.read(app).store.filesystem())
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            std::fs::read_to_string(&saved_path).expect("read saved preview")
+        };
+        if saved == "- [x] ship it\n" {
+            break;
+        }
         assert!(
             std::time::Instant::now() < deadline,
             "checkbox save did not reach disk"
@@ -90,7 +102,7 @@ fn toggling_a_task_invalidates_the_file_preview(cx: &mut gpui::TestAppContext) {
     }
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         let still_the_old_document = matches!(
             &pane.worktree_markdown.document,
             gitcomet_state::model::Loadable::Ready(document)
@@ -108,7 +120,7 @@ fn toggling_a_task_invalidates_the_file_preview(cx: &mut gpui::TestAppContext) {
 
 #[gpui::test]
 fn a_deleted_file_offers_no_editable_checkboxes(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
+    gitcomet_ui_kit::test_support::use_real_text_backend(cx);
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -127,7 +139,7 @@ fn a_deleted_file_offers_no_editable_checkboxes(cx: &mut gpui::TestAppContext) {
     draw_frames(cx, 1);
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert!(
             !pane.markdown_preview_tasks_editable(),
             "a deleted file's checkboxes look clickable but every click fails to read the file"

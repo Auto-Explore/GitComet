@@ -137,13 +137,13 @@ pub(in crate::view) fn changed_file_row<V: 'static, S: FnOnce() -> String + 'sta
             ))
         })
         .when(
-            diff_stat && (f.additions.is_some() || f.deletions.is_some()),
+            diff_stat && (f.line_stats.additions.is_some() || f.line_stats.deletions.is_some()),
             |row| {
                 row.child(div().flex_none().child(components::diff_stat(
                     theme,
                     ui_scale_percent,
-                    f.additions.unwrap_or(0) as usize,
-                    f.deletions.unwrap_or(0) as usize,
+                    f.line_stats.additions.unwrap_or(0) as usize,
+                    f.line_stats.deletions.unwrap_or(0) as usize,
                 )))
             },
         );

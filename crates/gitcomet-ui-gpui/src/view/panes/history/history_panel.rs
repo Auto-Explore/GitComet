@@ -55,6 +55,12 @@ impl HistoryView {
         if manual {
             self.cancel_history_scroll_reveal();
         }
+        // Lets a new indexed viewport start from the pitch its rows will get.
+        let row_height = crate::view::rows::history_row_height(self.ui_scale());
+        self.scroll_interaction.borrow_mut().snapped_row_height = Some((
+            row_height,
+            f64::from(f32::from(window.pixel_snap(row_height))),
+        ));
         self.ensure_indexed_history(cx);
         self.apply_indexed_history(cx);
         if self.indexed.presentation.is_none() {
@@ -231,6 +237,18 @@ impl HistoryView {
                     && match key {
                         "up" => this.history_select_adjacent_commit(-1, cx),
                         "down" => this.history_select_adjacent_commit(1, cx),
+                        "pageup" if this.history_panel_focus_handle.is_focused(window) => {
+                            this.history_select_page(-1, cx)
+                        }
+                        "pagedown" if this.history_panel_focus_handle.is_focused(window) => {
+                            this.history_select_page(1, cx)
+                        }
+                        "home" if this.history_panel_focus_handle.is_focused(window) => {
+                            this.history_select_edge(-1, cx)
+                        }
+                        "end" if this.history_panel_focus_handle.is_focused(window) => {
+                            this.history_select_edge(1, cx)
+                        }
                         "enter" => this.history_open_selected_worktree(window, cx),
                         "escape" if this.history_find_is_open() => {
                             this.close_history_find(window, cx);
@@ -289,11 +307,62 @@ impl HistoryView {
     pub(in crate::view) fn history_select_adjacent_commit(
         &mut self,
         direction: i8,
+        cx: &mut gpui::Context<Self>,
+    ) -> bool {
+        self.history_select_by_rows(direction, 1, false, cx)
+    }
+
+    pub(in crate::view) fn history_select_page(
+        &mut self,
+        direction: i8,
+        cx: &mut gpui::Context<Self>,
+    ) -> bool {
+        let rows = self.history_page_rows();
+        self.history_select_by_rows(direction, rows, true, cx)
+    }
+
+    pub(in crate::view) fn history_select_edge(
+        &mut self,
+        direction: i8,
+        cx: &mut gpui::Context<Self>,
+    ) -> bool {
+        self.history_select_by_rows(direction, usize::MAX, true, cx)
+    }
+
+    pub(super) fn history_page_rows(&self) -> usize {
+        let interaction = self.scroll_interaction.borrow();
+        let metrics = if self.indexed.presentation.is_some() {
+            interaction
+                .logical
+                .as_ref()
+                .map(|logical| (logical.viewport, logical.height))
+        } else {
+            self.history_scroll.0.borrow().last_item_size.map(|size| {
+                (
+                    f64::from(f32::from(size.item.height)),
+                    interaction.row_height(crate::view::rows::history_row_height(self.ui_scale())),
+                )
+            })
+        };
+        metrics
+            .filter(|(viewport, height)| {
+                viewport.is_finite() && height.is_finite() && *height > 0.0
+            })
+            .map_or(1, |(viewport, height)| {
+                (viewport / height).floor().max(1.0) as usize
+            })
+    }
+
+    fn history_select_by_rows(
+        &mut self,
+        direction: i8,
+        rows: usize,
+        paging: bool,
         _cx: &mut gpui::Context<Self>,
     ) -> bool {
         self.cancel_history_find_navigation();
         if self.indexed.presentation.is_some() {
-            return self.select_adjacent_indexed(direction, _cx);
+            return self.select_indexed_by_rows(direction, rows, paging, _cx);
         }
         let Some(repo_id) = self.active_repo_id() else {
             return false;
@@ -387,15 +456,15 @@ impl HistoryView {
         }
 
         let next_list_ix = match (current_list_ix, direction.is_negative()) {
-            (Some(current_list_ix), true) => current_list_ix.saturating_sub(1),
+            (Some(current_list_ix), true) => current_list_ix.saturating_sub(rows),
             (Some(current_list_ix), false) => {
-                let next = current_list_ix + 1;
-                if next < list_len {
-                    next
-                } else {
-                    current_list_ix
-                }
+                current_list_ix.saturating_add(rows).min(list_len - 1)
             }
+            // Home/End (`rows == usize::MAX`) go to the list edge, even with no selection.
+            (None, true) if rows == usize::MAX => 0,
+            (None, false) if rows == usize::MAX => list_len - 1,
+            // A page key enters the list at its first row, as in indexed history.
+            (None, _) if paging => offset,
             (None, true) => list_len.saturating_sub(1),
             (None, false) => offset,
         };
@@ -686,7 +755,7 @@ impl HistoryView {
         let handle_w = scaled_px(HISTORY_COL_HANDLE_PX);
         let handle_half = scaled_px(HISTORY_COL_HANDLE_PX / 2.0);
         let cell_pad = handle_half;
-        let scope_label: SharedString = self
+        let history_mode_label: SharedString = self
             .active_repo()
             .map(|r| {
                 crate::view::history_mode::history_mode_label(r.history_state.history_scope)
@@ -699,6 +768,16 @@ impl HistoryView {
                 .to_string()
             })
             .into();
+        // A focused walk shows one ref's commits and nothing else, which is
+        // drastic enough that the header has to say so rather than leave the
+        // mode name explaining a graph it no longer describes.
+        let history_focus_label: Option<String> = self
+            .active_repo()
+            .and_then(crate::view::history_focus::history_focus_label);
+        let scope_label: SharedString = match &history_focus_label {
+            Some(focused_on) => format!("Focus: {focused_on}").into(),
+            None => history_mode_label.clone(),
+        };
         let scope_repo_id = self.active_repo_id();
         let index_error = self
             .active_repo()
@@ -745,6 +824,13 @@ impl HistoryView {
             .active_context_menu_invoker
             .as_ref()
             .is_some_and(|id| id.as_ref() == author_invoker.as_ref());
+        let header_chip = InteractionStyle::header(theme).dim_when_disabled(true);
+        let scope_chip_state = InteractionState::default()
+            .open(scope_active)
+            .disabled(scope_repo_id.is_none());
+        let author_chip_state = InteractionState::default()
+            .open(author_active)
+            .disabled(scope_repo_id.is_none());
         let author_tooltip: SharedString = self
             .active_repo()
             .and_then(|r| r.history_state.history_author_filter.clone())
@@ -758,6 +844,7 @@ impl HistoryView {
             let dragging = active_col_resize.is_some_and(|state| state.handle == handle);
             div()
                 .id(id)
+                .debug_selector(move || id.to_string())
                 .group(id)
                 .absolute()
                 .w(handle_w)
@@ -772,9 +859,7 @@ impl HistoryView {
                     dragging,
                     Some(theme.colors.stroke.subtle),
                 ))
-                .on_drag(handle, |_handle, _offset, _window, cx| {
-                    cx.new(|_cx| HistoryColResizeDragGhost)
-                })
+                .on_resize_drag(handle)
                 .on_mouse_down(
                     MouseButton::Left,
                     cx.listener(move |this, e: &MouseDownEvent, _w, cx| {
@@ -798,7 +883,7 @@ impl HistoryView {
                             e.position.x,
                             available_width,
                             drag_layout,
-                            this.ui_scale_percent,
+                            this.ui_scale(),
                         ));
                         cx.notify();
                     }),
@@ -873,13 +958,11 @@ impl HistoryView {
                     ))
                     .line_height(scaled_px(HISTORY_HEADER_CHIP_HEIGHT_PX))
                     .rounded(px(theme.radii.row))
-                    .tab_index(0)
-                    .control_interaction(
-                        InteractionStyle::header(theme).disabled_opacity(0.6),
-                        InteractionState::default()
-                            .open(scope_active)
-                            .disabled(scope_repo_id.is_none()),
+                    .text_color(
+                        header_chip.color(theme.colors.foreground.secondary, scope_chip_state),
                     )
+                    .tab_index(0)
+                    .control_interaction(header_chip.clone(), scope_chip_state)
                     .when(scope_label_visible, |d| {
                         d.child(
                             div()
@@ -891,7 +974,7 @@ impl HistoryView {
                     })
                     .child(svg_icon(
                         "icons/chevron_down.svg",
-                        icon_muted,
+                        header_chip.color(icon_muted, scope_chip_state),
                         scaled_px(12.0),
                     ))
                     .when_some(scope_repo_id, |this, repo_id| {
@@ -912,7 +995,16 @@ impl HistoryView {
                             }),
                         )
                     })
-                    .gitcomet_tooltip(theme, format!("History mode: {}", scope_label).into()),
+                    .gitcomet_tooltip(
+                        theme,
+                        match &history_focus_label {
+                            Some(focused_on) => format!(
+                                "Focused on {focused_on} · History mode: {history_mode_label}"
+                            )
+                            .into(),
+                            None => format!("History mode: {history_mode_label}").into(),
+                        },
+                    ),
             );
         let (ref_control, graph_control, message_control) = if !inline_refs {
             (Some(scope_control), None, None)
@@ -985,6 +1077,7 @@ impl HistoryView {
             .when(show_author, |header| {
                 header.child(
                     div()
+                        .debug_selector(|| "history_author_header_cell".to_string())
                         .w(col_author)
                         .flex_none()
                         .flex()
@@ -1021,8 +1114,8 @@ impl HistoryView {
                                         .rounded(px(theme.radii.row))
                                         .tab_index(0)
                                         .control_interaction(
-                                            InteractionStyle::header(theme).disabled_opacity(0.6),
-                                            InteractionState::default().open(author_active).disabled(scope_repo_id.is_none()),
+                                            header_chip.clone(),
+                                            author_chip_state,
                                         )
                                         .child(
                                             div()
@@ -1030,16 +1123,19 @@ impl HistoryView {
                                                 .line_clamp(1)
                                                 .whitespace_nowrap()
                                                 .when(author_filter_active, |d| {
-                                                    d.text_color(theme.colors.accent.foreground)
+                                                    d.text_color(header_chip.color(theme.colors.accent.foreground, author_chip_state))
                                                 })
                                                 .when(!author_filter_active, |d| {
-                                                    d.text_color(theme.colors.foreground.secondary)
+                                                    d.text_color(header_chip.color(
+                                                        theme.colors.foreground.secondary,
+                                                        author_chip_state,
+                                                    ))
                                                 })
                                                 .child(author_label.clone()),
                                         )
                                         .child(svg_icon(
                                             "icons/chevron_down.svg",
-                                            icon_muted,
+                                            header_chip.color(icon_muted, author_chip_state),
                                             scaled_px(12.0),
                                         ))
                                         .when_some(scope_repo_id, |this, repo_id| {

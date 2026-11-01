@@ -321,7 +321,6 @@ mod progress_bar_tests {
     /// the caller passes.
     #[gpui::test]
     fn progress_bars_fill_their_fraction_of_the_track(cx: &mut gpui::TestAppContext) {
-        let _guard = crate::test_support::lock_visual_test();
         let theme = AppTheme::gitcomet_dark();
         let (_view, cx) = cx.add_window_view(|_, _| Bars { theme });
         crate::test_support::redraw(cx);

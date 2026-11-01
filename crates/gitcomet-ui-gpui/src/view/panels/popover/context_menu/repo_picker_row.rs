@@ -108,7 +108,7 @@ pub(super) fn model(host: &PopoverHost, entry: &repo_picker::RepoPickerEntry) ->
                 path: workdir.clone(),
             }),
         });
-        if crate::external_editor::configured_setting().is_some() {
+        if host.external_editor_available() {
             items.push(ContextMenuItem::Entry {
                 label: "Open in code editor".into(),
                 icon: Some("icons/open_external.svg".into()),

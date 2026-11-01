@@ -21,21 +21,21 @@ pub(super) fn model(
             icon: None,
             shortcut: Some(terminal_copy_shortcut().into()),
             disabled: !context.has_selection,
-            action: command(terminal_panel::TerminalCommand::Copy),
+            action: command(gitcomet_ui_terminal::TerminalCommand::Copy),
         },
         ContextMenuItem::Entry {
             label: "Paste".into(),
             icon: None,
             shortcut: Some(terminal_paste_shortcut().into()),
             disabled: !context.connected || !clipboard_has_text,
-            action: command(terminal_panel::TerminalCommand::Paste),
+            action: command(gitcomet_ui_terminal::TerminalCommand::Paste),
         },
         ContextMenuItem::Entry {
             label: "Select All".into(),
             icon: None,
             shortcut: Some(terminal_select_all_shortcut().into()),
             disabled: !context.has_buffer,
-            action: command(terminal_panel::TerminalCommand::SelectAll),
+            action: command(gitcomet_ui_terminal::TerminalCommand::SelectAll),
         },
         ContextMenuItem::Separator,
         ContextMenuItem::Entry {
@@ -43,7 +43,7 @@ pub(super) fn model(
             icon: None,
             shortcut: None,
             disabled: !context.has_buffer,
-            action: command(terminal_panel::TerminalCommand::ClearScreenAndScrollback),
+            action: command(gitcomet_ui_terminal::TerminalCommand::ClearScreenAndScrollback),
         },
         ContextMenuItem::Entry {
             label: "Open in External Terminal".into(),

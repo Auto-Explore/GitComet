@@ -124,7 +124,14 @@ pub(super) fn diff_content_text(line: &AnnotatedDiffLine) -> &str {
 pub(super) fn diff_content_line_text(
     line: &AnnotatedDiffLine,
 ) -> gitcomet_core::file_diff::FileDiffLineText {
-    let content_start = match line.kind {
+    diff_content_line_slice(line.kind, &line.text)
+}
+
+pub(super) fn diff_content_line_slice(
+    kind: gitcomet_core::domain::DiffLineKind,
+    text: &gitcomet_core::domain::SharedLineText,
+) -> gitcomet_core::file_diff::FileDiffLineText {
+    let content_start = match kind {
         gitcomet_core::domain::DiffLineKind::Add
         | gitcomet_core::domain::DiffLineKind::Remove
         | gitcomet_core::domain::DiffLineKind::Context => 1,
@@ -132,9 +139,8 @@ pub(super) fn diff_content_line_text(
             0
         }
     };
-    line.text
-        .slice(content_start..line.text.len())
-        .unwrap_or_else(|| line.text.clone())
+    text.slice(content_start..text.len())
+        .unwrap_or_else(|| text.clone())
         .into()
 }
 
@@ -161,10 +167,24 @@ pub(super) fn image_format_for_path(path: &std::path::Path) -> Option<gpui::Imag
     }
 }
 
+/// The raster format `bytes` are in, read from their signature: for a file
+/// whose name does not say.
+pub(super) fn image_format_for_bytes(bytes: &[u8]) -> Option<gpui::ImageFormat> {
+    match image::guess_format(bytes).ok()? {
+        image::ImageFormat::Png => Some(gpui::ImageFormat::Png),
+        image::ImageFormat::Jpeg => Some(gpui::ImageFormat::Jpeg),
+        image::ImageFormat::Gif => Some(gpui::ImageFormat::Gif),
+        image::ImageFormat::WebP => Some(gpui::ImageFormat::Webp),
+        image::ImageFormat::Bmp => Some(gpui::ImageFormat::Bmp),
+        image::ImageFormat::Tiff => Some(gpui::ImageFormat::Tiff),
+        image::ImageFormat::Ico => Some(gpui::ImageFormat::Ico),
+        image::ImageFormat::Pnm => Some(gpui::ImageFormat::Pnm),
+        _ => None,
+    }
+}
+
 const SVG_PREVIEW_MIN_RASTER_WIDTH_PX: f32 = 1024.0;
 const SVG_PREVIEW_MAX_RASTER_EDGE_PX: f32 = 4096.0;
-static SVG_PREVIEW_USVG_OPTIONS: std::sync::LazyLock<resvg::usvg::Options<'static>> =
-    std::sync::LazyLock::new(resvg::usvg::Options::default);
 
 pub(in crate::view) fn fill_svg_viewport_white(pixmap: &mut resvg::tiny_skia::Pixmap) {
     pixmap.fill(resvg::tiny_skia::Color::WHITE);
@@ -175,7 +195,7 @@ pub(in crate::view) fn rasterize_svg_png(
     target_width_px: f32,
     max_edge_px: f32,
 ) -> Option<Vec<u8>> {
-    let tree = resvg::usvg::Tree::from_data(svg_bytes, &SVG_PREVIEW_USVG_OPTIONS).ok()?;
+    let tree = super::image_preview::svg::parse(svg_bytes).ok()?;
     let svg_size = tree.size();
     let svg_width = svg_size.width();
     let svg_height = svg_size.height();
@@ -466,492 +486,11 @@ pub(super) fn compute_diff_yaml_block_scalar_for_src_ix(
     out
 }
 
-pub(super) fn enclosing_hunk_src_ix(diff: &[AnnotatedDiffLine], src_ix: usize) -> Option<usize> {
-    let src_ix = src_ix.min(diff.len().saturating_sub(1));
-    for ix in (0..=src_ix).rev() {
-        let line = diff.get(ix)?;
-        if matches!(line.kind, gitcomet_core::domain::DiffLineKind::Header)
-            && line.text.starts_with("diff --git ")
-        {
-            break;
-        }
-        if matches!(line.kind, gitcomet_core::domain::DiffLineKind::Hunk) {
-            return Some(ix);
-        }
-    }
-    None
-}
-
-pub(super) trait UnifiedDiffLine {
-    fn kind(&self) -> gitcomet_core::domain::DiffLineKind;
-    fn text(&self) -> &str;
-    /// The line as `git diff` printed it, in the file's encoding and with its
-    /// CR — what a patch must carry for `git apply` to match.
-    fn raw(&self) -> &[u8];
-}
-
-impl UnifiedDiffLine for AnnotatedDiffLine {
-    fn kind(&self) -> gitcomet_core::domain::DiffLineKind {
-        self.kind
-    }
-
-    fn text(&self) -> &str {
-        self.text.as_ref()
-    }
-
-    fn raw(&self) -> &[u8] {
-        self.text.raw_bytes()
-    }
-}
-
-impl UnifiedDiffLine for gitcomet_core::domain::DiffLine {
-    fn kind(&self) -> gitcomet_core::domain::DiffLineKind {
-        self.kind
-    }
-
-    fn text(&self) -> &str {
-        self.text.as_ref()
-    }
-
-    fn raw(&self) -> &[u8] {
-        self.text.raw_bytes()
-    }
-}
-
-fn push_patch_line(out: &mut Vec<u8>, line: &[u8]) {
-    out.extend_from_slice(line);
-    out.push(b'\n');
-}
-
-fn patch_has_content(patch: &[u8]) -> bool {
-    patch.iter().any(|byte| !byte.is_ascii_whitespace())
-}
-
-fn unified_patch_file_and_hunk_bounds<T: UnifiedDiffLine>(
-    lines: &[T],
-    hunk_src_ix: usize,
-) -> Option<(usize, usize, usize)> {
-    let hunk = lines.get(hunk_src_ix)?;
-    if !matches!(hunk.kind(), gitcomet_core::domain::DiffLineKind::Hunk) {
-        return None;
-    }
-
-    let file_start = (0..=hunk_src_ix).rev().find(|&ix| {
-        lines
-            .get(ix)
-            .is_some_and(|l| l.text().starts_with("diff --git "))
-    })?;
-
-    let first_hunk = (file_start + 1..lines.len())
-        .find(|&ix| {
-            let Some(line) = lines.get(ix) else {
-                return false;
-            };
-            matches!(line.kind(), gitcomet_core::domain::DiffLineKind::Hunk)
-                || line.text().starts_with("diff --git ")
-        })
-        .unwrap_or(lines.len());
-
-    let header_end = first_hunk.min(hunk_src_ix);
-    let hunk_end = (hunk_src_ix + 1..lines.len())
-        .find(|&ix| {
-            let Some(line) = lines.get(ix) else {
-                return false;
-            };
-            matches!(line.kind(), gitcomet_core::domain::DiffLineKind::Hunk)
-                || line.text().starts_with("diff --git ")
-        })
-        .unwrap_or(lines.len());
-
-    Some((file_start, header_end, hunk_end))
-}
-
-fn unified_patch_capacity<T: UnifiedDiffLine>(
-    lines: &[T],
-    file_start: usize,
-    header_end: usize,
-    hunk_start: usize,
-    hunk_end: usize,
-) -> usize {
-    lines[file_start..header_end]
-        .iter()
-        .map(|l| l.raw().len().saturating_add(1))
-        .sum::<usize>()
-        .saturating_add(
-            lines[hunk_start..hunk_end]
-                .iter()
-                .map(|l| l.raw().len().saturating_add(1))
-                .sum::<usize>(),
-        )
-}
-
-/// The identity of the hunk starting at `hunk_src_ix`.
-///
-/// Built from what the hunk adds and removes rather than from where it sits,
-/// because a workspace hunk assignment is resolved later against a *different*
-/// base — the branch's, not `HEAD`'s — and only the change itself is the same
-/// on both sides.
-///
-/// The hunk body is split into the change groups git folded into the `@@` —
-/// runs of `+`/`-` lines separated by context — and a group that only adds or
-/// only removes is left out of the fingerprint when another group in the same
-/// hunk is a replacement (touches both sides). Whether the diff also happened
-/// to show a pure insertion above depends on which base it was taken against,
-/// and the backend's [`gitcomet_core::workspace::hunk_spans`] applies the same
-/// rule, so the two sides agree on the hunk's identity either way. A hunk with
-/// no replacement at all is fingerprinted by everything it contains.
-///
-/// The line text is reassembled from the diff's `+`/`-` prefixes to match what
-/// the backend sees when it reads the file: a CRLF file's lines end `\r\n` on
-/// both sides, because the diff line keeps its CR and the newline is added
-/// back.
-pub(super) fn hunk_fingerprint(
-    diff: &[impl UnifiedDiffLine],
-    hunk_src_ix: usize,
-) -> Option<gitcomet_core::workspace::HunkFingerprint> {
-    use gitcomet_core::domain::DiffLineKind;
-
-    let (_, _, hunk_end) = unified_patch_file_and_hunk_bounds(diff, hunk_src_ix)?;
-    let body = diff.get(hunk_src_ix + 1..hunk_end)?;
-    // One entry per change group: the lines it adds and how many it removes.
-    // A non-add/remove line (context) closes the open group.
-    let mut groups: Vec<(Vec<String>, usize)> = Vec::new();
-    let mut open = false;
-    for line in body {
-        let text = line.text();
-        match line.kind() {
-            DiffLineKind::Add => {
-                if !open {
-                    groups.push((Vec::new(), 0));
-                    open = true;
-                }
-                let added = text.strip_prefix('+').unwrap_or(text);
-                if let Some((produced, _)) = groups.last_mut() {
-                    produced.push(format!("{added}\n"));
-                }
-            }
-            DiffLineKind::Remove => {
-                if !open {
-                    groups.push((Vec::new(), 0));
-                    open = true;
-                }
-                if let Some((_, removed)) = groups.last_mut() {
-                    *removed += 1;
-                }
-            }
-            _ => open = false,
-        }
-    }
-    let has_replacement = groups
-        .iter()
-        .any(|(added, removed)| !added.is_empty() && *removed > 0);
-    let mut produced: Vec<String> = Vec::new();
-    let mut removed = 0usize;
-    for (added, group_removed) in &groups {
-        if has_replacement && (added.is_empty() || *group_removed == 0) {
-            continue;
-        }
-        produced.extend(added.iter().cloned());
-        removed += group_removed;
-    }
-    let produced: Vec<&str> = produced.iter().map(String::as_str).collect();
-    Some(gitcomet_core::workspace::HunkFingerprint::of(
-        &produced, removed,
-    ))
-}
-
-pub(super) fn build_unified_patch_for_hunk(
-    diff: &[impl UnifiedDiffLine],
-    hunk_src_ix: usize,
-) -> Option<Vec<u8>> {
-    let lines = diff;
-    let (file_start, header_end, hunk_end) =
-        unified_patch_file_and_hunk_bounds(lines, hunk_src_ix)?;
-
-    let capacity = unified_patch_capacity(lines, file_start, header_end, hunk_src_ix, hunk_end);
-    let mut out = Vec::with_capacity(capacity);
-    for line in &lines[file_start..header_end] {
-        push_patch_line(&mut out, line.raw());
-    }
-    for line in &lines[hunk_src_ix..hunk_end] {
-        push_patch_line(&mut out, line.raw());
-    }
-    patch_has_content(&out).then_some(out)
-}
-
-pub(super) fn build_unified_patch_for_hunks(
-    diff: &[AnnotatedDiffLine],
-    hunk_src_ixs: &[usize],
-) -> Option<Vec<u8>> {
-    if hunk_src_ixs.is_empty() {
-        return None;
-    }
-
-    let mut hunks = hunk_src_ixs.to_vec();
-    hunks.sort_unstable();
-    hunks.dedup();
-
-    let mut out = Vec::new();
-    for hunk_src_ix in hunks {
-        let Some(patch) = build_unified_patch_for_hunk(diff, hunk_src_ix) else {
-            continue;
-        };
-        out.extend_from_slice(&patch);
-    }
-
-    patch_has_content(&out).then_some(out)
-}
-
-#[derive(Clone, Copy)]
-enum UnselectedHunkLineBehavior {
-    Drop,
-    KeepAsContext,
-}
-
-fn append_unselected_hunk_line(
-    out: &mut Vec<u8>,
-    line: &[u8],
-    expected_prefix: u8,
-    behavior: UnselectedHunkLineBehavior,
-    prev_included: &mut bool,
-) {
-    match behavior {
-        UnselectedHunkLineBehavior::Drop => {
-            *prev_included = false;
-        }
-        UnselectedHunkLineBehavior::KeepAsContext => {
-            let content = line.strip_prefix(&[expected_prefix]).unwrap_or(line);
-            out.push(b' ');
-            push_patch_line(out, content);
-            *prev_included = true;
-        }
-    }
-}
-
-fn build_unified_patch_for_hunk_selection_with_unselected_behavior(
-    diff: &[AnnotatedDiffLine],
-    hunk_src_ix: usize,
-    selected_src_ixs: &FxHashSet<usize>,
-    unselected_add: UnselectedHunkLineBehavior,
-    unselected_remove: UnselectedHunkLineBehavior,
-) -> Option<Vec<u8>> {
-    if selected_src_ixs.is_empty() {
-        return None;
-    }
-
-    let lines = diff;
-    let (file_start, header_end, hunk_end) =
-        unified_patch_file_and_hunk_bounds(lines, hunk_src_ix)?;
-
-    let capacity = unified_patch_capacity(lines, file_start, header_end, hunk_src_ix, hunk_end);
-    let mut out = Vec::with_capacity(capacity);
-    for line in &lines[file_start..header_end] {
-        push_patch_line(&mut out, line.raw());
-    }
-
-    // Keep the original hunk header; `git apply --recount` will adjust counts.
-    push_patch_line(&mut out, lines[hunk_src_ix].raw());
-
-    let mut has_change = false;
-    let mut prev_included = false;
-    for (ix, line) in lines
-        .iter()
-        .enumerate()
-        .take(hunk_end)
-        .skip(hunk_src_ix + 1)
-    {
-        if line.raw().starts_with(b"\\") {
-            if prev_included {
-                push_patch_line(&mut out, line.raw());
-            }
-            continue;
-        }
-
-        match line.kind {
-            gitcomet_core::domain::DiffLineKind::Add => {
-                if selected_src_ixs.contains(&ix) {
-                    push_patch_line(&mut out, line.raw());
-                    has_change = true;
-                    prev_included = true;
-                } else {
-                    append_unselected_hunk_line(
-                        &mut out,
-                        line.raw(),
-                        b'+',
-                        unselected_add,
-                        &mut prev_included,
-                    );
-                }
-            }
-            gitcomet_core::domain::DiffLineKind::Remove => {
-                if selected_src_ixs.contains(&ix) {
-                    push_patch_line(&mut out, line.raw());
-                    has_change = true;
-                    prev_included = true;
-                } else {
-                    append_unselected_hunk_line(
-                        &mut out,
-                        line.raw(),
-                        b'-',
-                        unselected_remove,
-                        &mut prev_included,
-                    );
-                }
-            }
-            gitcomet_core::domain::DiffLineKind::Context
-            | gitcomet_core::domain::DiffLineKind::Header
-            | gitcomet_core::domain::DiffLineKind::Hunk => {
-                push_patch_line(&mut out, line.raw());
-                prev_included = true;
-            }
-        }
-    }
-
-    has_change.then_some(out)
-}
-
-pub(super) fn build_unified_patch_for_hunk_selection(
-    diff: &[AnnotatedDiffLine],
-    hunk_src_ix: usize,
-    selected_src_ixs: &FxHashSet<usize>,
-) -> Option<Vec<u8>> {
-    build_unified_patch_for_hunk_selection_with_unselected_behavior(
-        diff,
-        hunk_src_ix,
-        selected_src_ixs,
-        UnselectedHunkLineBehavior::Drop,
-        UnselectedHunkLineBehavior::KeepAsContext,
-    )
-}
-
-/// Patch for a selection that will be applied **in reverse**, where the side
-/// that has to match is the diff's *new* side: the worktree for a discard, the
-/// index for an unstage. Unselected additions are therefore kept as context
-/// (they are present in that side and must survive) and unselected removals are
-/// dropped (they are not). Applying the forward build in reverse instead makes
-/// git reject the patch, because its context would describe the old side.
-pub(super) fn build_unified_patch_for_hunk_selection_for_reverse_apply(
-    diff: &[AnnotatedDiffLine],
-    hunk_src_ix: usize,
-    selected_src_ixs: &FxHashSet<usize>,
-) -> Option<Vec<u8>> {
-    build_unified_patch_for_hunk_selection_with_unselected_behavior(
-        diff,
-        hunk_src_ix,
-        selected_src_ixs,
-        UnselectedHunkLineBehavior::KeepAsContext,
-        UnselectedHunkLineBehavior::Drop,
-    )
-}
-
-/// Patch for a selection that will be applied **forward**, i.e. staging into the
-/// index. See [`build_unified_patch_for_selected_lines_across_hunks_for_reverse_apply`]
-/// for the unstage/discard direction, which is not the same patch.
-pub(super) fn build_unified_patch_for_selected_lines_across_hunks(
-    diff: &[AnnotatedDiffLine],
-    selected_src_ixs: &FxHashSet<usize>,
-) -> Option<Vec<u8>> {
-    use gitcomet_core::domain::DiffLineKind as K;
-    use std::collections::BTreeMap;
-
-    if selected_src_ixs.is_empty() {
-        return None;
-    }
-
-    let mut by_hunk: BTreeMap<usize, FxHashSet<usize>> = BTreeMap::new();
-    for &src_ix in selected_src_ixs {
-        let Some(line) = diff.get(src_ix) else {
-            continue;
-        };
-        if !matches!(line.kind, K::Add | K::Remove) {
-            continue;
-        }
-        let Some(hunk_src_ix) = enclosing_hunk_src_ix(diff, src_ix) else {
-            continue;
-        };
-        by_hunk.entry(hunk_src_ix).or_default().insert(src_ix);
-    }
-
-    let mut out = Vec::new();
-    for (hunk_src_ix, src_ixs) in by_hunk {
-        let Some(patch) = build_unified_patch_for_hunk_selection(diff, hunk_src_ix, &src_ixs)
-        else {
-            continue;
-        };
-        out.extend_from_slice(&patch);
-    }
-
-    patch_has_content(&out).then_some(out)
-}
-
-/// Multi-hunk form of [`build_unified_patch_for_hunk_selection_for_reverse_apply`].
-pub(super) fn build_unified_patch_for_selected_lines_across_hunks_for_reverse_apply(
-    diff: &[AnnotatedDiffLine],
-    selected_src_ixs: &FxHashSet<usize>,
-) -> Option<Vec<u8>> {
-    use gitcomet_core::domain::DiffLineKind as K;
-    use std::collections::BTreeMap;
-
-    if selected_src_ixs.is_empty() {
-        return None;
-    }
-
-    let mut by_hunk: BTreeMap<usize, FxHashSet<usize>> = BTreeMap::new();
-    for &src_ix in selected_src_ixs {
-        let Some(line) = diff.get(src_ix) else {
-            continue;
-        };
-        if !matches!(line.kind, K::Add | K::Remove) {
-            continue;
-        }
-        let Some(hunk_src_ix) = enclosing_hunk_src_ix(diff, src_ix) else {
-            continue;
-        };
-        by_hunk.entry(hunk_src_ix).or_default().insert(src_ix);
-    }
-
-    let mut out = Vec::new();
-    for (hunk_src_ix, src_ixs) in by_hunk {
-        let Some(patch) =
-            build_unified_patch_for_hunk_selection_for_reverse_apply(diff, hunk_src_ix, &src_ixs)
-        else {
-            continue;
-        };
-        out.extend_from_slice(&patch);
-    }
-
-    patch_has_content(&out).then_some(out)
-}
-
-pub(super) fn context_menu_selection_range_from_diff_text(
-    selection: Option<(DiffTextPos, DiffTextPos)>,
-    diff_view: DiffViewMode,
-    clicked_source_visible_ix: usize,
-    clicked_region: DiffTextRegion,
-) -> Option<(usize, usize)> {
-    let (start, end) = selection?;
-    if start == end {
-        return None;
-    }
-    if clicked_source_visible_ix < start.source_visible_ix
-        || clicked_source_visible_ix > end.source_visible_ix
-    {
-        return None;
-    }
-
-    let restrict_region = (diff_view == DiffViewMode::Split
-        && start.region == end.region
-        && matches!(
-            start.region,
-            DiffTextRegion::SplitLeft | DiffTextRegion::SplitRight
-        ))
-    .then_some(start.region);
-    if restrict_region.is_some_and(|r| r != clicked_region) {
-        return None;
-    }
-
-    Some((start.source_visible_ix, end.source_visible_ix))
-}
+pub(super) use gitcomet_core::partial_patch::{
+    NO_NEWLINE_MARKER, UnifiedDiffLine, hunk_fingerprint, build_unified_patch_for_hunk,
+    build_unified_patch_for_hunks, build_unified_patch_for_selected_lines_across_hunks,
+    build_unified_patch_for_selected_lines_across_hunks_for_reverse_apply,
+};
 
 /// Placeholder line for a side that is binary or not UTF-8, with the sizes
 /// of whichever sides exist so a size change is still visible.
@@ -1324,6 +863,274 @@ mod tests {
         assert!(patch.contains(" line3"));
     }
 
+    #[derive(Clone, Copy)]
+    enum LineAction {
+        Stage,
+        Unstage,
+        Discard,
+    }
+
+    struct EditedFile {
+        dir: tempfile::TempDir,
+        opened: std::sync::Arc<dyn gitcomet_core::services::GitRepository>,
+        text: String,
+        diff: Vec<AnnotatedDiffLine>,
+    }
+
+    /// A repository with `name` committed as `head` and then changed by
+    /// `edit`, with the pane's diff of it for `area` (staged first for Staged).
+    fn edited_file_diff(
+        name: &str,
+        head: &str,
+        edit: impl FnOnce(&std::path::Path),
+        area: gitcomet_core::domain::DiffArea,
+    ) -> EditedFile {
+        use gitcomet_core::domain::{Diff, DiffArea, DiffTarget};
+        use gitcomet_core::services::GitBackend as _;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let repo = dir.path();
+        crate::test_support::git(repo, &["init", "-q"]);
+        // Git for Windows' system config sets autocrlf, so applying a patch
+        // to the worktree would write CRLF.
+        crate::test_support::git(repo, &["config", "core.autocrlf", "false"]);
+        std::fs::write(repo.join(name), head).expect("write head");
+        crate::test_support::git(repo, &["add", name]);
+        crate::test_support::git(
+            repo,
+            &[
+                "-c",
+                "user.name=T",
+                "-c",
+                "user.email=t@e.st",
+                "commit",
+                "-qm",
+                "base",
+            ],
+        );
+        edit(&repo.join(name));
+        if area == DiffArea::Staged {
+            crate::test_support::git(repo, &["add", name]);
+        }
+        let opened = gitcomet_git_gix::GixBackend.open(repo).expect("open repo");
+        let target = DiffTarget::working_tree(std::path::PathBuf::from(name), area);
+        let text = opened.diff_unified(&target).expect("diff");
+        let diff = gitcomet_core::diff::annotate_unified(&Diff::from_unified(target, &text));
+        EditedFile {
+            dir,
+            opened,
+            text,
+            diff,
+        }
+    }
+
+    /// Runs one line action the way the diff pane does: the real git diff,
+    /// the pane's patch builder for that action, and the backend apply. Returns
+    /// the content of the side the action writes (index or worktree).
+    fn apply_line_action(head: &str, worktree: &str, line: &str, action: LineAction) -> String {
+        use gitcomet_core::domain::DiffArea;
+
+        let area = match action {
+            LineAction::Stage | LineAction::Discard => DiffArea::Unstaged,
+            LineAction::Unstage => DiffArea::Staged,
+        };
+        let EditedFile {
+            dir,
+            opened,
+            text,
+            diff,
+        } = edited_file_diff(
+            "f.txt",
+            head,
+            |path| std::fs::write(path, worktree).expect("write worktree"),
+            area,
+        );
+        let repo = dir.path();
+        let selected: FxHashSet<usize> = diff
+            .iter()
+            .enumerate()
+            .filter(|(_, l)| l.text.as_ref() == line)
+            .map(|(ix, _)| ix)
+            .collect();
+        assert_eq!(selected.len(), 1, "{line:?} must be one line of:\n{text}");
+
+        match action {
+            LineAction::Stage => {
+                let patch = build_unified_patch_for_selected_lines_across_hunks(&diff, &selected)
+                    .expect("patch");
+                opened
+                    .apply_unified_patch_to_index_with_output(&patch, false)
+                    .expect("apply");
+            }
+            LineAction::Unstage => {
+                let patch = build_unified_patch_for_selected_lines_across_hunks_for_reverse_apply(
+                    &diff, &selected,
+                )
+                .expect("patch");
+                opened
+                    .apply_unified_patch_to_index_with_output(&patch, true)
+                    .expect("apply");
+            }
+            LineAction::Discard => {
+                let patch = build_unified_patch_for_selected_lines_across_hunks_for_reverse_apply(
+                    &diff, &selected,
+                )
+                .expect("patch");
+                opened
+                    .apply_unified_patch_to_worktree_with_output(&patch, true)
+                    .expect("apply");
+            }
+        }
+
+        match action {
+            LineAction::Stage | LineAction::Unstage => {
+                String::from_utf8(crate::test_support::git(repo, &["show", ":f.txt"]))
+                    .expect("UTF-8 index")
+            }
+            LineAction::Discard => std::fs::read_to_string(repo.join("f.txt")).expect("worktree"),
+        }
+    }
+
+    /// A script made executable and edited shows `old mode`/`new mode` above
+    /// its hunk. Hunk and line patches copied those lines, so "Stage hunk"
+    /// also staged the mode and "Discard hunk" also reset the executable bit.
+    #[cfg(unix)]
+    #[test]
+    fn hunk_and_line_actions_leave_the_file_mode_alone() {
+        use gitcomet_core::domain::DiffArea;
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let edited_executable = || {
+            let edited = edited_file_diff(
+                "run.sh",
+                "echo one\n",
+                |path| {
+                    std::fs::write(path, "echo two\n").expect("write worktree");
+                    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755))
+                        .expect("chmod +x");
+                },
+                DiffArea::Unstaged,
+            );
+            assert!(edited.text.contains("new mode 100755"), "{}", edited.text);
+            (edited.dir, edited.opened, edited.diff)
+        };
+        let index_entry = |repo: &std::path::Path| {
+            String::from_utf8(crate::test_support::git(
+                repo,
+                &["ls-files", "-s", "run.sh"],
+            ))
+            .expect("UTF-8 ls-files")
+        };
+        let worktree_is_executable = |repo: &std::path::Path| {
+            // Git tracks only the owner executable bit. `git apply` recreates
+            // the file with permissions filtered through the process umask.
+            std::fs::metadata(repo.join("run.sh"))
+                .expect("worktree file")
+                .permissions()
+                .mode()
+                & 0o100
+                != 0
+        };
+
+        let (dir, opened, diff) = edited_executable();
+        let hunk_ix = diff.iter().position(|line| line.kind == K::Hunk).unwrap();
+        let patch = build_unified_patch_for_hunk(&diff, hunk_ix).expect("hunk patch");
+        opened
+            .apply_unified_patch_to_index_with_output(&patch, false)
+            .expect("stage hunk");
+        assert!(index_entry(dir.path()).starts_with("100644 "), "stage hunk");
+
+        let (dir, opened, diff) = edited_executable();
+        let selected: FxHashSet<usize> = diff
+            .iter()
+            .position(|line| line.text.as_ref() == "+echo two")
+            .into_iter()
+            .collect();
+        let patch =
+            build_unified_patch_for_selected_lines_across_hunks(&diff, &selected).expect("patch");
+        opened
+            .apply_unified_patch_to_index_with_output(&patch, false)
+            .expect("stage line");
+        assert!(index_entry(dir.path()).starts_with("100644 "), "stage line");
+
+        let (dir, opened, diff) = edited_executable();
+        let hunk_ix = diff.iter().position(|line| line.kind == K::Hunk).unwrap();
+        let patch = build_unified_patch_for_hunk(&diff, hunk_ix).expect("hunk patch");
+        opened
+            .apply_unified_patch_to_worktree_with_output(&patch, true)
+            .expect("discard hunk");
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("run.sh")).unwrap(),
+            "echo one\n"
+        );
+        assert!(worktree_is_executable(dir.path()), "discard hunk");
+
+        let (dir, opened, diff) = edited_executable();
+        let selected: FxHashSet<usize> = diff
+            .iter()
+            .position(|line| line.text.as_ref() == "+echo two")
+            .into_iter()
+            .collect();
+        let patch =
+            build_unified_patch_for_selected_lines_across_hunks_for_reverse_apply(&diff, &selected)
+                .expect("patch");
+        opened
+            .apply_unified_patch_to_worktree_with_output(&patch, true)
+            .expect("discard line");
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("run.sh")).unwrap(),
+            ""
+        );
+        assert!(worktree_is_executable(dir.path()), "discard line");
+    }
+
+    /// A removed `-- comment` line reads `--- comment` in the diff. Parsed as a
+    /// file header, it was hidden from the view and staged along with any
+    /// selected line of its hunk.
+    #[test]
+    fn staging_a_line_leaves_an_unselected_removed_dash_dash_line_alone() {
+        assert_eq!(
+            apply_line_action(
+                "select 1;\n-- old comment\nselect 2;\n",
+                "select 1;\nselect 2;\nselect 3;\n",
+                "+select 3;",
+                LineAction::Stage,
+            ),
+            "select 1;\n-- old comment\nselect 2;\nselect 3;\n"
+        );
+    }
+
+    /// An edited last line without a trailing newline shows as `-b`, `\ No
+    /// newline`, `+B`, `\ No newline`. Keeping the unselected side as context
+    /// used to keep its marker too, so git glued the two lines into `bB`.
+    #[test]
+    fn line_actions_on_a_last_line_without_newline_keep_lines_apart() {
+        assert_eq!(
+            apply_line_action("a\nb", "a\nB", "+B", LineAction::Stage),
+            "a\nb\nB"
+        );
+        assert_eq!(
+            apply_line_action("a\nb", "a\nB", "-b", LineAction::Stage),
+            "a\n"
+        );
+        assert_eq!(
+            apply_line_action("a\nb", "a\nB", "-b", LineAction::Unstage),
+            "a\nb\nB"
+        );
+        assert_eq!(
+            apply_line_action("a\nb", "a\nB", "+B", LineAction::Unstage),
+            "a\n"
+        );
+        assert_eq!(
+            apply_line_action("a\nb", "a\nB", "-b", LineAction::Discard),
+            "a\nb\nB"
+        );
+        assert_eq!(
+            apply_line_action("a\nb", "a\nB", "+B", LineAction::Discard),
+            "a\n"
+        );
+    }
+
     #[test]
     fn reverse_apply_patch_keeps_unselected_additions_as_context() {
         let diff = example_two_mods_one_hunk_diff();
@@ -1339,6 +1146,61 @@ mod tests {
         assert!(!patch.contains("-line3"));
         assert!(!patch.contains("+line3_mod"));
         assert!(patch.contains(" line3_mod"));
+    }
+
+    fn text_svg(family: &str) -> Vec<u8> {
+        format!(
+            r#"<svg xmlns="http://www.w3.org/2000/svg" width="240" height="80">
+            <text x="10" y="55" font-family="{family}" font-size="40">Labels</text></svg>"#
+        )
+        .into_bytes()
+    }
+
+    /// Conflict previews parsed SVG without fonts, so their text disappeared
+    /// until detail tiles arrived.
+    #[test]
+    fn svg_text_survives_conflict_preview() {
+        for family in [
+            "IBM Plex Sans",
+            "Lilex",
+            "sans-serif",
+            "monospace",
+            "system-ui",
+        ] {
+            let png = rasterize_svg_preview_png(&text_svg(family)).unwrap();
+            let image = image::load_from_memory(&png).unwrap().to_rgba8();
+            assert!(
+                image.pixels().filter(|p| p[0] < 128).count() > 100,
+                "conflict SVG preview lost font-family={family}"
+            );
+        }
+    }
+
+    #[test]
+    fn svg_text_survives_bounded_image_preview() {
+        for family in [
+            "IBM Plex Sans",
+            "Lilex",
+            "sans-serif",
+            "monospace",
+            "system-ui",
+        ] {
+            let tree = crate::view::image_preview::svg::parse(&text_svg(family)).unwrap();
+            let preview =
+                crate::view::panes::diff::diff_cache::render_svg_image_diff_preview(&tree).unwrap();
+            assert!(
+                preview
+                    .as_bytes(0)
+                    .unwrap()
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .filter(|p| p[0] < 128)
+                    .count()
+                    > 100,
+                "bounded SVG preview lost font-family={family}"
+            );
+        }
     }
 
     #[test]
@@ -1374,74 +1236,6 @@ mod tests {
                 .get_pixel(decoded.width() / 2, decoded.height() / 2)
                 .0,
             [0, 170, 255, 255]
-        );
-    }
-
-    #[test]
-    fn context_menu_selection_range_from_diff_text_requires_click_in_selection() {
-        let selection = Some((
-            DiffTextPos {
-                source_visible_ix: 2,
-                region: DiffTextRegion::Inline,
-                offset: 0,
-            },
-            DiffTextPos {
-                source_visible_ix: 5,
-                region: DiffTextRegion::Inline,
-                offset: 3,
-            },
-        ));
-        assert_eq!(
-            context_menu_selection_range_from_diff_text(
-                selection,
-                DiffViewMode::Inline,
-                4,
-                DiffTextRegion::Inline
-            ),
-            Some((2, 5))
-        );
-        assert_eq!(
-            context_menu_selection_range_from_diff_text(
-                selection,
-                DiffViewMode::Inline,
-                1,
-                DiffTextRegion::Inline
-            ),
-            None
-        );
-    }
-
-    #[test]
-    fn context_menu_selection_range_from_diff_text_restricts_split_region() {
-        let selection = Some((
-            DiffTextPos {
-                source_visible_ix: 1,
-                region: DiffTextRegion::SplitLeft,
-                offset: 0,
-            },
-            DiffTextPos {
-                source_visible_ix: 3,
-                region: DiffTextRegion::SplitLeft,
-                offset: 2,
-            },
-        ));
-        assert_eq!(
-            context_menu_selection_range_from_diff_text(
-                selection,
-                DiffViewMode::Split,
-                2,
-                DiffTextRegion::SplitLeft
-            ),
-            Some((1, 3))
-        );
-        assert_eq!(
-            context_menu_selection_range_from_diff_text(
-                selection,
-                DiffViewMode::Split,
-                2,
-                DiffTextRegion::SplitRight
-            ),
-            None
         );
     }
 

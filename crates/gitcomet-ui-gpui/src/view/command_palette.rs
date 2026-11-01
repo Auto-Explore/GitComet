@@ -10,9 +10,10 @@ use gpui::{
 };
 use palette::IntoColor;
 
-use super::shortcut_labels::Shortcut;
+use super::commands::Command;
 use super::tooltip::GitCometTooltipExt;
 use super::{GitCometView, components, restrict_scroll_to_vertical_axis};
+use crate::kit::components::Shortcut;
 use gitcomet_core::tag_push::TagPushMode;
 
 pub(crate) struct CommandEntry {
@@ -46,6 +47,7 @@ impl CommandEntry {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Needs {
     Nothing,
+    WorkingTree,
     ExternalEditor,
     Merge,
     /// A rebase, apply, cherry-pick, or revert in progress.
@@ -53,6 +55,10 @@ pub(crate) enum Needs {
     /// A sequencer operation with every conflict resolved.
     SequencerResolved,
     PushWithTags(TagPushMode),
+    /// Pull's own reason, from `pull_unavailable_reason`.
+    Pull,
+    /// Push's own reason, from `PushRequest::unavailable_reason`.
+    Push,
     /// A remote whose URL points at a web page.
     RemoteWebPage,
     MacOs,
@@ -73,6 +79,7 @@ pub(crate) enum Needs {
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct PaletteContext {
     pub(crate) has_active_repo: bool,
+    pub(crate) is_bare: bool,
     pub(crate) external_editor: bool,
     pub(crate) merging: bool,
     pub(crate) sequencer: bool,
@@ -82,6 +89,10 @@ pub(crate) struct PaletteContext {
     /// Why each tag-push mode is unavailable, indexed by `TagPushMode::index`.
     /// Computed by the push menu's own logic so the two cannot disagree.
     pub(crate) push_with_tags_unavailable: [Option<&'static str>; 2],
+    /// Why Pull is unavailable, from `pull_unavailable_reason` like its button.
+    pub(crate) pull_unavailable: Option<&'static str>,
+    /// Why Push is unavailable, from `PushRequest::unavailable_reason` like its button.
+    pub(crate) push_unavailable: Option<&'static str>,
     /// Why no remote can be opened in a browser, from `remote_web_request`.
     pub(crate) remote_web_page_unavailable: Option<&'static str>,
     /// Git cannot run `git lfs`.
@@ -105,6 +116,9 @@ pub(crate) fn unavailable_reason(needs: Needs, ctx: &PaletteContext) -> Option<&
     const SEQUENCER_BUSY: &str = "Wait for the running Git operation to finish";
     match needs {
         Needs::Nothing => None,
+        Needs::WorkingTree => ctx
+            .is_bare
+            .then_some(gitcomet_core::domain::WORKING_TREE_REQUIRED_MESSAGE),
         Needs::ExternalEditor => {
             (!ctx.external_editor).then_some("Choose an external code editor in Settings first")
         }
@@ -131,6 +145,8 @@ pub(crate) fn unavailable_reason(needs: Needs, ctx: &PaletteContext) -> Option<&
             }
         }
         Needs::PushWithTags(mode) => ctx.push_with_tags_unavailable[mode.index()],
+        Needs::Pull => ctx.pull_unavailable,
+        Needs::Push => ctx.push_unavailable,
         Needs::RemoteWebPage => ctx.remote_web_page_unavailable,
         Needs::MacOs => (!cfg!(target_os = "macos")).then_some("Only available on macOS"),
         Needs::Linux => (!cfg!(any(target_os = "linux", target_os = "freebsd")))
@@ -159,9 +175,24 @@ pub(crate) fn unavailable_reason(needs: Needs, ctx: &PaletteContext) -> Option<&
     }
 }
 
+pub(crate) fn command_unavailable_reason(
+    command: &CommandEntry,
+    ctx: &PaletteContext,
+) -> Option<&'static str> {
+    if ctx.is_bare
+        && Command::from_id(command.id).is_some_and(|command| {
+            command.repository_requirement()
+                == gitcomet_core::domain::RepositoryRequirement::WorkingTree
+        })
+    {
+        return Some(gitcomet_core::domain::WORKING_TREE_REQUIRED_MESSAGE);
+    }
+    unavailable_reason(command.needs, ctx)
+}
+
 pub(crate) const COMMANDS: &[CommandEntry] = &[
     CommandEntry {
-        id: "commit",
+        id: Command::Commit.id(),
         label: "Commit Changes",
         shortcut: Shortcut::None,
         category: "Commit",
@@ -170,7 +201,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         needs: Needs::Nothing,
     },
     CommandEntry {
-        id: "stage-all",
+        id: Command::StageAll.id(),
         label: "Stage All Changes",
         shortcut: Shortcut::None,
         category: "Working Copy",
@@ -179,7 +210,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         needs: Needs::Nothing,
     },
     CommandEntry {
-        id: "unstage-all",
+        id: Command::UnstageAll.id(),
         label: "Unstage All Changes",
         shortcut: Shortcut::None,
         category: "Working Copy",
@@ -188,7 +219,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         needs: Needs::Nothing,
     },
     CommandEntry {
-        id: "create-branch",
+        id: Command::CreateBranch.id(),
         label: "Create Branch",
         shortcut: Shortcut::None,
         category: "Branch",
@@ -197,7 +228,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         needs: Needs::Nothing,
     },
     CommandEntry {
-        id: "checkout-branch",
+        id: Command::CheckoutBranch.id(),
         label: "Checkout Branch",
         shortcut: Shortcut::None,
         category: "Branch",
@@ -206,7 +237,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         needs: Needs::Nothing,
     },
     CommandEntry {
-        id: "delete-branch",
+        id: Command::DeleteBranch.id(),
         label: "Delete Branch",
         shortcut: Shortcut::None,
         category: "Branch",
@@ -215,7 +246,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         needs: Needs::Nothing,
     },
     CommandEntry {
-        id: "rename-branch",
+        id: Command::RenameBranch.id(),
         label: "Rename Branch",
         shortcut: Shortcut::None,
         category: "Branch",
@@ -224,7 +255,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         needs: Needs::Nothing,
     },
     CommandEntry {
-        id: "rebase",
+        id: Command::Rebase.id(),
         label: "Rebase Onto",
         shortcut: Shortcut::None,
         category: "Branch",
@@ -233,7 +264,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         needs: Needs::Nothing,
     },
     CommandEntry {
-        id: "prune-merged-branches",
+        id: Command::PruneMergedBranches.id(),
         label: "Prune Merged Branches",
         shortcut: Shortcut::None,
         category: "Branch",
@@ -242,7 +273,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         needs: Needs::Nothing,
     },
     CommandEntry {
-        id: "abort-merge",
+        id: Command::AbortMerge.id(),
         label: "Abort Merge",
         shortcut: Shortcut::None,
         category: "Branch",
@@ -251,7 +282,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         needs: Needs::Merge,
     },
     CommandEntry {
-        id: "continue-rebase",
+        id: Command::ContinueRebase.id(),
         label: "Continue Rebase, Cherry-Pick, or Revert",
         shortcut: Shortcut::None,
         category: "Branch",
@@ -260,7 +291,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         needs: Needs::SequencerResolved,
     },
     CommandEntry {
-        id: "abort-rebase",
+        id: Command::AbortRebase.id(),
         label: "Abort Rebase, Cherry-Pick, or Revert",
         shortcut: Shortcut::None,
         category: "Branch",
@@ -269,25 +300,25 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         needs: Needs::Sequencer,
     },
     CommandEntry {
-        id: "pull",
+        id: Command::Pull.id(),
         label: "Pull",
         shortcut: Shortcut::None,
         category: "Sync",
         keywords: "",
         requires_repo: true,
-        needs: Needs::Nothing,
+        needs: Needs::Pull,
     },
     CommandEntry {
-        id: "push",
+        id: Command::Push.id(),
         label: "Push",
         shortcut: Shortcut::None,
         category: "Sync",
         keywords: "",
         requires_repo: true,
-        needs: Needs::Nothing,
+        needs: Needs::Push,
     },
     CommandEntry {
-        id: "force-push",
+        id: Command::ForcePush.id(),
         label: "Force Push",
         shortcut: Shortcut::None,
         category: "Sync",
@@ -296,7 +327,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         needs: Needs::Nothing,
     },
     CommandEntry {
-        id: "push-with-annotated-tags",
+        id: Command::PushWithAnnotatedTags.id(),
         label: "Push with Annotated Tags",
         shortcut: Shortcut::None,
         category: "Sync",
@@ -305,7 +336,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         needs: Needs::PushWithTags(TagPushMode::FollowAnnotated),
     },
     CommandEntry {
-        id: "push-with-all-tags",
+        id: Command::PushWithAllTags.id(),
         label: "Push with All Tags",
         shortcut: Shortcut::None,
         category: "Sync",
@@ -314,7 +345,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         needs: Needs::PushWithTags(TagPushMode::All),
     },
     CommandEntry {
-        id: "stash",
+        id: Command::Stash.id(),
         label: "Stash Changes",
         shortcut: Shortcut::None,
         category: "Stash",
@@ -323,7 +354,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         needs: Needs::Nothing,
     },
     CommandEntry {
-        id: "stash-pop",
+        id: Command::StashPop.id(),
         label: "Pop Stash",
         shortcut: Shortcut::None,
         category: "Stash",
@@ -332,7 +363,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         needs: Needs::Nothing,
     },
     CommandEntry {
-        id: "stash-apply",
+        id: Command::StashApply.id(),
         label: "Apply Stash",
         shortcut: Shortcut::None,
         category: "Stash",
@@ -341,7 +372,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         needs: Needs::Nothing,
     },
     CommandEntry {
-        id: "stash-drop",
+        id: Command::StashDrop.id(),
         label: "Drop Stash",
         shortcut: Shortcut::None,
         category: "Stash",
@@ -350,7 +381,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         needs: Needs::Nothing,
     },
     CommandEntry {
-        id: "open-repository",
+        id: Command::OpenRepository.id(),
         label: "Open Repository",
         shortcut: Shortcut::Secondary("O"),
         category: "Repository",
@@ -359,7 +390,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         needs: Needs::Nothing,
     },
     CommandEntry {
-        id: "switch-repository",
+        id: Command::SwitchRepository.id(),
         label: "Switch Repository",
         shortcut: Shortcut::Platform {
             macos: "Option+Cmd+O",
@@ -371,7 +402,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         needs: Needs::Nothing,
     },
     CommandEntry {
-        id: "clone-repository",
+        id: Command::CloneRepository.id(),
         label: "Clone Repository",
         shortcut: Shortcut::None,
         category: "Repository",
@@ -380,7 +411,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         needs: Needs::Nothing,
     },
     CommandEntry {
-        id: "initialize-repository",
+        id: Command::InitializeRepository.id(),
         label: crate::menu_labels::INITIALIZE_REPOSITORY,
         shortcut: Shortcut::None,
         category: "Repository",
@@ -389,7 +420,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         needs: Needs::Nothing,
     },
     CommandEntry {
-        id: "close-repo-tab",
+        id: Command::CloseRepoTab.id(),
         label: "Close Repository Tab",
         shortcut: Shortcut::Secondary("W"),
         category: "Repository",
@@ -398,7 +429,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         needs: Needs::Nothing,
     },
     CommandEntry {
-        id: "reload-repository",
+        id: Command::ReloadRepository.id(),
         label: "Reload Repository",
         shortcut: Shortcut::None,
         category: "Repository",
@@ -407,7 +438,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         needs: Needs::Nothing,
     },
     CommandEntry {
-        id: "fetch-ref",
+        id: Command::FetchRef.id(),
         label: "Fetch ref…",
         shortcut: Shortcut::None,
         category: "Repository",
@@ -416,7 +447,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         needs: Needs::Nothing,
     },
     CommandEntry {
-        id: "fetch-all",
+        id: Command::FetchAll.id(),
         label: "Fetch All",
         shortcut: Shortcut::None,
         category: "Repository",
@@ -425,7 +456,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         needs: Needs::Nothing,
     },
     CommandEntry {
-        id: "apply-patch",
+        id: Command::ApplyPatch.id(),
         label: crate::menu_labels::APPLY_PATCH,
         shortcut: Shortcut::None,
         category: "Repository",
@@ -434,7 +465,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         needs: Needs::Nothing,
     },
     CommandEntry {
-        id: "open-in-code-editor",
+        id: Command::OpenInCodeEditor.id(),
         label: crate::menu_labels::OPEN_IN_CODE_EDITOR,
         shortcut: Shortcut::Secondary("Shift+E"),
         category: "Repository",
@@ -443,7 +474,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         needs: Needs::ExternalEditor,
     },
     CommandEntry {
-        id: "open-external-terminal",
+        id: Command::OpenExternalTerminal.id(),
         label: "Open in External Terminal",
         shortcut: Shortcut::None,
         category: "Repository",
@@ -452,7 +483,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         needs: Needs::Nothing,
     },
     CommandEntry {
-        id: "toggle-sidebar",
+        id: Command::ToggleSidebar.id(),
         label: "Toggle Sidebar",
         shortcut: Shortcut::None,
         category: "View",
@@ -461,7 +492,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         needs: Needs::Nothing,
     },
     CommandEntry {
-        id: "toggle-details",
+        id: Command::ToggleDetails.id(),
         label: "Toggle Details Pane",
         shortcut: Shortcut::None,
         category: "View",
@@ -470,7 +501,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         needs: Needs::Nothing,
     },
     CommandEntry {
-        id: "toggle-diff-view",
+        id: Command::ToggleDiffView.id(),
         label: "Toggle Diff View (Split/Inline)",
         shortcut: Shortcut::None,
         category: "View",
@@ -479,7 +510,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         needs: Needs::Nothing,
     },
     CommandEntry {
-        id: "toggle-diff-word-wrap",
+        id: Command::ToggleDiffWordWrap.id(),
         label: "Toggle Diff Word Wrap",
         shortcut: Shortcut::None,
         category: "View",
@@ -488,7 +519,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         needs: Needs::Nothing,
     },
     CommandEntry {
-        id: "toggle-line-numbers",
+        id: Command::ToggleLineNumbers.id(),
         label: "Toggle Diff Line Numbers",
         shortcut: Shortcut::None,
         category: "View",
@@ -497,7 +528,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         needs: Needs::Nothing,
     },
     CommandEntry {
-        id: "toggle-whitespace-chars",
+        id: Command::ToggleWhitespaceChars.id(),
         label: "Toggle Whitespace Characters",
         shortcut: Shortcut::None,
         category: "View",
@@ -506,7 +537,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         needs: Needs::Nothing,
     },
     CommandEntry {
-        id: "toggle-terminal",
+        id: Command::ToggleTerminal.id(),
         label: "Toggle Terminal",
         shortcut: Shortcut::None,
         category: "View",
@@ -515,7 +546,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         needs: Needs::Nothing,
     },
     CommandEntry {
-        id: "previous-repo-tab",
+        id: Command::PreviousRepoTab.id(),
         label: "Previous Repository Tab",
         shortcut: Shortcut::Platform {
             macos: "Cmd+Shift+[",
@@ -527,7 +558,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         needs: Needs::Nothing,
     },
     CommandEntry {
-        id: "next-repo-tab",
+        id: Command::NextRepoTab.id(),
         label: "Next Repository Tab",
         shortcut: Shortcut::Platform {
             macos: "Cmd+Shift+]",
@@ -539,7 +570,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         needs: Needs::Nothing,
     },
     CommandEntry {
-        id: "locate-file-in-explorer",
+        id: Command::LocateFileInExplorer.id(),
         label: crate::menu_labels::OPEN_IN_FILE_EXPLORER,
         shortcut: Shortcut::Secondary("Shift+L"),
         category: "Navigation",
@@ -548,7 +579,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         needs: Needs::Nothing,
     },
     CommandEntry {
-        id: "reveal-commit",
+        id: Command::RevealCommit.id(),
         label: "Go to",
         shortcut: Shortcut::Secondary("G"),
         category: "Navigation",
@@ -558,7 +589,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         needs: Needs::Nothing,
     },
     CommandEntry {
-        id: "open-active-view-search",
+        id: Command::OpenActiveViewSearch.id(),
         label: "Search in Current View",
         shortcut: Shortcut::Secondary("F"),
         category: "Navigation",
@@ -567,7 +598,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         needs: Needs::Nothing,
     },
     CommandEntry {
-        id: "back",
+        id: Command::Back.id(),
         label: "Navigate Back",
         shortcut: Shortcut::Alt("Left"),
         category: "Navigation",
@@ -576,7 +607,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         needs: Needs::Nothing,
     },
     CommandEntry {
-        id: "forward",
+        id: Command::Forward.id(),
         label: "Navigate Forward",
         shortcut: Shortcut::Alt("Right"),
         category: "Navigation",
@@ -585,7 +616,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         needs: Needs::Nothing,
     },
     CommandEntry {
-        id: "create-tag",
+        id: Command::CreateTag.id(),
         label: "Create Tag",
         shortcut: Shortcut::None,
         category: "Tags",
@@ -594,7 +625,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         needs: Needs::Nothing,
     },
     CommandEntry {
-        id: "prune-local-tags",
+        id: Command::PruneLocalTags.id(),
         label: "Prune Local Tags",
         shortcut: Shortcut::None,
         category: "Tags",
@@ -603,7 +634,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         needs: Needs::Nothing,
     },
     CommandEntry {
-        id: "new-window",
+        id: Command::NewWindow.id(),
         label: "New Window",
         shortcut: Shortcut::Secondary("N"),
         category: "Window",
@@ -612,7 +643,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         needs: Needs::Nothing,
     },
     CommandEntry {
-        id: "open-workspace",
+        id: Command::OpenWorkspace.id(),
         label: "Open Workspace",
         shortcut: Shortcut::Secondary("Shift+R"),
         category: "Window",
@@ -621,7 +652,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         needs: Needs::Nothing,
     },
     CommandEntry {
-        id: "open-settings",
+        id: Command::OpenSettings.id(),
         label: "Open Settings",
         shortcut: Shortcut::Secondary(","),
         category: "Window",
@@ -630,7 +661,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         needs: Needs::Nothing,
     },
     CommandEntry {
-        id: "quit",
+        id: Command::Quit.id(),
         label: "Quit {app}",
         shortcut: Shortcut::Secondary("Q"),
         category: "Window",
@@ -639,7 +670,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         needs: Needs::Nothing,
     },
     CommandEntry {
-        id: "minimize-window",
+        id: Command::MinimizeWindow.id(),
         label: "Minimize Window",
         shortcut: Shortcut::MacOs("Cmd+M"),
         category: "Window",
@@ -648,7 +679,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         needs: Needs::Nothing,
     },
     CommandEntry {
-        id: "hide",
+        id: Command::Hide.id(),
         label: "Hide {app}",
         shortcut: Shortcut::MacOs("Cmd+H"),
         category: "Window",
@@ -657,7 +688,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         needs: Needs::MacOs,
     },
     CommandEntry {
-        id: "hide-others",
+        id: Command::HideOthers.id(),
         label: "Hide Others",
         shortcut: Shortcut::MacOs("Option+Cmd+H"),
         category: "Window",
@@ -666,7 +697,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         needs: Needs::MacOs,
     },
     CommandEntry {
-        id: "zoom-window",
+        id: Command::ZoomWindow.id(),
         label: "Zoom Window",
         shortcut: Shortcut::None,
         category: "Window",
@@ -675,7 +706,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         needs: Needs::Nothing,
     },
     CommandEntry {
-        id: "toggle-fullscreen",
+        id: Command::ToggleFullscreen.id(),
         label: "Toggle Full Screen",
         shortcut: Shortcut::Platform {
             macos: "Ctrl+Cmd+F",
@@ -687,7 +718,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         needs: Needs::Nothing,
     },
     CommandEntry {
-        id: "increase-ui-scale",
+        id: Command::IncreaseUiScale.id(),
         label: "Increase UI Scale",
         shortcut: Shortcut::Secondary("="),
         category: "Window",
@@ -696,7 +727,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         needs: Needs::Nothing,
     },
     CommandEntry {
-        id: "decrease-ui-scale",
+        id: Command::DecreaseUiScale.id(),
         label: "Decrease UI Scale",
         shortcut: Shortcut::Secondary("-"),
         category: "Window",
@@ -705,7 +736,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         needs: Needs::Nothing,
     },
     CommandEntry {
-        id: "reset-ui-scale",
+        id: Command::ResetUiScale.id(),
         label: "Reset UI Scale",
         shortcut: Shortcut::Secondary("0"),
         category: "Window",
@@ -714,7 +745,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         needs: Needs::Nothing,
     },
     CommandEntry {
-        id: "close-window",
+        id: Command::CloseWindow.id(),
         label: "Close Window",
         shortcut: Shortcut::Secondary("Shift+W"),
         category: "Window",
@@ -723,7 +754,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         needs: Needs::Nothing,
     },
     CommandEntry {
-        id: "check-for-updates",
+        id: Command::CheckForUpdates.id(),
         label: crate::menu_labels::CHECK_FOR_UPDATES,
         shortcut: Shortcut::None,
         category: "Window",
@@ -732,7 +763,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         needs: Needs::Nothing,
     },
     CommandEntry {
-        id: "install-desktop-integration",
+        id: Command::InstallDesktopIntegration.id(),
         label: "Install Desktop Integration",
         shortcut: Shortcut::None,
         category: "Window",
@@ -741,7 +772,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         needs: Needs::Linux,
     },
     CommandEntry {
-        id: "add-remote",
+        id: Command::AddRemote.id(),
         label: "Add Remote",
         shortcut: Shortcut::None,
         category: "Remotes",
@@ -750,7 +781,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         needs: Needs::Nothing,
     },
     CommandEntry {
-        id: "open-remote-in-browser",
+        id: Command::OpenRemoteInBrowser.id(),
         label: crate::menu_labels::OPEN_REMOTE_IN_BROWSER,
         shortcut: Shortcut::Secondary("K"),
         category: "Remotes",
@@ -759,7 +790,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         needs: Needs::RemoteWebPage,
     },
     CommandEntry {
-        id: "add-submodule",
+        id: Command::AddSubmodule.id(),
         label: "Add Submodule",
         shortcut: Shortcut::None,
         category: "Submodules",
@@ -768,7 +799,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         needs: Needs::Nothing,
     },
     CommandEntry {
-        id: "update-submodules",
+        id: Command::UpdateSubmodules.id(),
         label: "Update Submodules",
         shortcut: Shortcut::None,
         category: "Submodules",
@@ -777,7 +808,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         needs: Needs::Nothing,
     },
     CommandEntry {
-        id: "add-worktree",
+        id: Command::AddWorktree.id(),
         label: "Add Worktree",
         shortcut: Shortcut::None,
         category: "Worktrees",
@@ -786,7 +817,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         needs: Needs::Nothing,
     },
     CommandEntry {
-        id: "blame",
+        id: Command::Blame.id(),
         label: "Blame / Annotate",
         shortcut: Shortcut::Alt("B"),
         category: "History",
@@ -795,7 +826,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         needs: Needs::Nothing,
     },
     CommandEntry {
-        id: "show-reflog",
+        id: Command::ShowReflog.id(),
         label: "Show Reflog",
         shortcut: Shortcut::None,
         category: "History",
@@ -803,10 +834,21 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         requires_repo: true,
         needs: Needs::Nothing,
     },
+    CommandEntry {
+        id: Command::FileHistory.id(),
+        label: "File History",
+        shortcut: Shortcut::Platform {
+            macos: "Ctrl+H",
+            other: "Ctrl+H",
+        },
+        category: "History",
+        keywords: "file history log commits changes renames",
+        requires_repo: true,
+        needs: Needs::Nothing,
+    },
     // TODO: "undo"              - Undo (Edit)
     // TODO: "redo"              - Redo (Edit)
     // TODO: "keyboard-shortcuts" - Keyboard Shortcuts (Help)
-    // TODO: "file-history"     - File History (History)
     // TODO: "search-commits"   - Search Commits (Navigation)
     // TODO: "checkout-remote-branch" - Checkout Remote Branch
     // TODO: "delete-remote-branch"   - Delete Remote Branch
@@ -818,7 +860,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
     // TODO: "remove-worktree"        - Remove Worktree
     // TODO: "discard-all"        - Discard All Changes (Working Copy)
     CommandEntry {
-        id: "lfs-download-all",
+        id: Command::LfsDownloadAll.id(),
         label: "Download All LFS Content",
         shortcut: Shortcut::None,
         category: "Git LFS",
@@ -827,7 +869,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         needs: Needs::GitLfsRepo,
     },
     CommandEntry {
-        id: "lfs-fetch-all",
+        id: Command::LfsFetchAll.id(),
         label: "Fetch LFS Objects for All Refs",
         shortcut: Shortcut::None,
         category: "Git LFS",
@@ -836,7 +878,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         needs: Needs::GitLfsRepo,
     },
     CommandEntry {
-        id: "lfs-prune",
+        id: Command::LfsPrune.id(),
         label: "Prune Old LFS Objects",
         shortcut: Shortcut::None,
         category: "Git LFS",
@@ -845,7 +887,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         needs: Needs::GitLfsRepo,
     },
     CommandEntry {
-        id: "lfs-fsck",
+        id: Command::LfsFsck.id(),
         label: "Check LFS Objects",
         shortcut: Shortcut::None,
         category: "Git LFS",
@@ -854,7 +896,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         needs: Needs::GitLfsRepo,
     },
     CommandEntry {
-        id: "lfs-refresh-locks",
+        id: Command::LfsRefreshLocks.id(),
         label: "Refresh LFS Locks",
         shortcut: Shortcut::None,
         category: "Git LFS",
@@ -863,7 +905,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         needs: Needs::GitLfsRepo,
     },
     CommandEntry {
-        id: "lfs-install",
+        id: Command::LfsInstall.id(),
         label: "Enable Git LFS in This Repository",
         shortcut: Shortcut::None,
         category: "Git LFS",
@@ -872,7 +914,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         needs: Needs::GitLfsTool,
     },
     CommandEntry {
-        id: "annex-sync",
+        id: Command::AnnexSync.id(),
         label: "Sync with git-annex Remotes",
         shortcut: Shortcut::None,
         category: "git-annex",
@@ -881,7 +923,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         needs: Needs::GitAnnexInitialized,
     },
     CommandEntry {
-        id: "annex-pull",
+        id: Command::AnnexPull.id(),
         label: "Pull with git-annex",
         shortcut: Shortcut::None,
         category: "git-annex",
@@ -890,7 +932,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         needs: Needs::GitAnnexInitialized,
     },
     CommandEntry {
-        id: "annex-push",
+        id: Command::AnnexPush.id(),
         label: "Push with git-annex",
         shortcut: Shortcut::None,
         category: "git-annex",
@@ -899,7 +941,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         needs: Needs::GitAnnexInitialized,
     },
     CommandEntry {
-        id: "annex-get-all",
+        id: Command::AnnexGetAll.id(),
         label: "Get All Annexed Content",
         shortcut: Shortcut::None,
         category: "git-annex",
@@ -908,7 +950,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         needs: Needs::GitAnnexInitialized,
     },
     CommandEntry {
-        id: "annex-fsck",
+        id: Command::AnnexFsck.id(),
         label: "Check Annexed Content",
         shortcut: Shortcut::None,
         category: "git-annex",
@@ -917,7 +959,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         needs: Needs::GitAnnexInitialized,
     },
     CommandEntry {
-        id: "annex-adjust-unlocked",
+        id: Command::AnnexAdjustUnlocked.id(),
         label: "Switch to Adjusted Branch (Unlocked)",
         shortcut: Shortcut::None,
         category: "git-annex",
@@ -926,7 +968,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         needs: Needs::GitAnnexInitialized,
     },
     CommandEntry {
-        id: "annex-leave-adjusted",
+        id: Command::AnnexLeaveAdjusted.id(),
         label: "Leave git-annex Adjusted Branch",
         shortcut: Shortcut::None,
         category: "git-annex",
@@ -935,7 +977,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         needs: Needs::GitAnnexAdjusted,
     },
     CommandEntry {
-        id: "annex-unused",
+        id: Command::AnnexUnused.id(),
         label: "Find Unused Annexed Content",
         shortcut: Shortcut::None,
         category: "git-annex",
@@ -944,7 +986,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         needs: Needs::GitAnnexInitialized,
     },
     CommandEntry {
-        id: "annex-webapp",
+        id: Command::AnnexWebapp.id(),
         label: "Open git-annex Webapp",
         shortcut: Shortcut::None,
         category: "git-annex",
@@ -953,7 +995,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         needs: Needs::GitAnnexInitialized,
     },
     CommandEntry {
-        id: "annex-restage",
+        id: Command::AnnexRestage.id(),
         label: "Refresh Annexed Files Left Stale",
         shortcut: Shortcut::None,
         category: "git-annex",
@@ -962,7 +1004,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         needs: Needs::GitAnnexInitialized,
     },
     CommandEntry {
-        id: "annex-init",
+        id: Command::AnnexInit.id(),
         label: "Initialize git-annex in This Clone",
         shortcut: Shortcut::None,
         category: "git-annex",
@@ -1106,7 +1148,7 @@ impl CommandPaletteView {
         cx: &mut gpui::Context<Self>,
     ) -> Self {
         let query_input = cx.new(|cx| {
-            let mut input = components::TextInput::new(
+            components::TextInput::new(
                 components::TextInputOptions {
                     placeholder: "Search commands…".into(),
                     chromeless: true,
@@ -1114,9 +1156,7 @@ impl CommandPaletteView {
                 },
                 window,
                 cx,
-            );
-            input.set_theme(theme, cx);
-            input
+            )
         });
         let input_subscription = cx.observe_in(&query_input, window, |this, input, window, cx| {
             this.handle_input_notification(input, window, cx);
@@ -1146,8 +1186,6 @@ impl CommandPaletteView {
 
     pub(crate) fn set_theme(&mut self, theme: AppTheme, cx: &mut gpui::Context<Self>) {
         self.theme = theme;
-        self.query_input
-            .update(cx, |input, cx| input.set_theme(theme, cx));
         cx.notify();
     }
 
@@ -1170,7 +1208,7 @@ impl CommandPaletteView {
 
     /// Why `command` cannot run right now, if it cannot.
     fn unavailable(&self, command: &CommandEntry) -> Option<&'static str> {
-        unavailable_reason(command.needs, &self.context)
+        command_unavailable_reason(command, &self.context)
     }
 
     pub(crate) fn open(
@@ -1483,6 +1521,12 @@ impl CommandPaletteView {
                         } else {
                             theme.colors.foreground.primary
                         };
+                        let display_label =
+                            if self.context.is_bare && command.id == Command::AnnexGetAll.id() {
+                                format!("{} (all versions)", command.label())
+                            } else {
+                                command.label().into_owned()
+                            };
                         let label = div()
                             .flex()
                             .items_center()
@@ -1491,7 +1535,7 @@ impl CommandPaletteView {
                             .flex_1()
                             .min_w(px(0.0))
                             .child(self.render_label(
-                                &command.label(),
+                                &display_label,
                                 &command.positions,
                                 label_color,
                                 cx,

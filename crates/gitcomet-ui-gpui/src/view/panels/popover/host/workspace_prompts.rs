@@ -29,7 +29,6 @@ impl PopoverHost {
         let Some(PopoverKind::WorkspacePrompt { repo_id, prompt }) = self.popover.clone() else {
             return;
         };
-        let theme = self.theme;
         let seed = match kind {
             WorkspacePromptKind::SetParent => self
                 .workspace_state(repo_id)
@@ -49,7 +48,6 @@ impl PopoverHost {
         self.workspace_prompt_kind = Some(kind);
         self.create_branch_input.update(cx, |input, cx| {
             input.clear_transient_key_presses();
-            input.set_theme(theme, cx);
             input.set_text(seed, cx);
             cx.notify();
         });

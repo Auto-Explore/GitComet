@@ -151,6 +151,8 @@ impl GitCometView {
                             .history_tag_preferences(cx);
                         let history_relative_dates =
                             this.main_pane.read(cx).history_relative_dates(cx);
+                        let history_show_graph_gradient =
+                            this.main_pane.read(cx).history_show_graph_gradient(cx);
                         let history_highlight_commit_chain =
                             this.main_pane.read(cx).history_highlight_commit_chain(cx);
                         let (
@@ -158,9 +160,9 @@ impl GitCometView {
                             mergetool_collapse_unchanged,
                             mergetool_output_scroll_sync,
                             mergetool_show_line_numbers,
-                        ) = this.main_pane.read(cx).mergetool_preferences();
+                        ) = this.diff_renderer.read(cx).mergetool_preferences();
                         let mergetool_view_three_way =
-                            this.main_pane.read(cx).mergetool_view_three_way;
+                            this.diff_renderer.read(cx).mergetool_view_three_way;
                         let group_layout = this.current_workspace_layout(cx);
                         let sidebar_width = group_layout.sidebar_width;
                         let details_width = group_layout.details_width;
@@ -172,10 +174,6 @@ impl GitCometView {
                             group_layout,
                             this.window_placement.clone(),
                         );
-                        let repo_sidebar_collapsed_items =
-                            this.sidebar_pane.read(cx).saved_sidebar_collapsed_items();
-                        let repo_sidebar_pinned_branches =
-                            this.sidebar_pane.read(cx).saved_sidebar_pinned_branches();
                         let font_preferences = crate::font_preferences::current(cx);
 
                         let settings = session::UiSettings {
@@ -184,12 +182,15 @@ impl GitCometView {
                             sidebar_width,
                             details_width,
                             sidebar_collapsed: Some(this.sidebar_collapsed),
-                            repo_sidebar_collapsed_items: Some(repo_sidebar_collapsed_items),
-                            repo_sidebar_pinned_branches: Some(repo_sidebar_pinned_branches),
+                            repo_sidebar_collapsed_items: None,
+                            repo_sidebar_pinned_branches: None,
                             theme_mode: Some(this.theme_mode.key().to_string()),
                             // The default is the settings window's; a window's own zoom is not saved.
                             ui_scale_percent: None,
+                            image_sampling_mode: None,
+                            image_smooth_filter: None,
                             // Owned by the settings window; None preserves it.
+                            windows_renderer: None,
                             window_controls_mode: None,
                             browser_open_target: None,
                             ui_density: Some(crate::appearance::current(cx).density.key().to_string()),
@@ -204,6 +205,7 @@ impl GitCometView {
                             show_timezone: Some(this.show_timezone),
                             change_tracking_view: Some(this.change_tracking_view.key().to_string()),
                             file_list_layout: Some(this.file_list_layout.key().to_string()),
+                            file_list_sort: Some(this.file_list_sort.key().to_string()),
                             // Owned by the repository picker, not this snapshot.
                             repo_picker_sort: None,
                             repo_picker_collapsed_sections: None,
@@ -212,6 +214,7 @@ impl GitCometView {
                             diff_whitespace_mode: Some(
                                 this.diff_whitespace_mode.key().to_string(),
                             ),
+                            diff_engine: Some(this.ui_model.read(cx).preferences.diff.engine.key().to_string()),
                             diff_view_mode: Some(this.diff_view_mode.key().to_string()),
                             annotate_enabled: Some(this.annotate_enabled),
                             diff_reveal_whitespace_chars: Some(
@@ -246,6 +249,7 @@ impl GitCometView {
                             // The settings window owns branch-name placement.
                             history_branch_names: None,
                             history_show_graph: Some(history_show_graph),
+                            history_show_graph_gradient: Some(history_show_graph_gradient),
                             history_show_author: Some(history_show_author),
                             history_show_date: Some(history_show_date),
                             history_show_sha: Some(history_show_sha),
@@ -268,10 +272,16 @@ impl GitCometView {
                             } else {
                                 gitcomet_state::model::GitLogTagFetchMode::Disabled
                             }),
+                            // Owned by the settings window, which persists it itself.
+                            history_hidden_refs_enabled: None,
+                            history_hidden_ref_presets: None,
+                            history_hidden_ref_prefixes: None,
                             default_history_mode: None,
                             commit_push_after_enabled: Some(this.commit_push_after_enabled),
                             default_tag_type: None,
                             fetch_prune_deleted_remote_branches: None,
+                            auto_fetch_enabled: None,
+                            auto_fetch_interval_minutes: None,
                             recommend_repo_maintenance: None,
                             git_executable_path: None,
                             external_code_editor: None,

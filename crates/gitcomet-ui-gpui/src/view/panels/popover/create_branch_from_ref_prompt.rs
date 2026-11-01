@@ -20,13 +20,19 @@ fn checkout_toggle(
 
 pub(super) fn panel(
     this: &mut PopoverHost,
-    _repo_id: RepoId,
+    repo_id: RepoId,
     target: String,
     source_selectable: bool,
     window: &Window,
     cx: &mut gpui::Context<PopoverHost>,
 ) -> gpui::Div {
     let theme = this.theme;
+    let is_bare = this
+        .state
+        .repos
+        .iter()
+        .find(|repo| repo.id == repo_id)
+        .is_some_and(RepoState::is_bare);
     let can_create = this.can_submit_create_branch(cx);
     let ui_scale_percent = super::popover_ui_scale_percent(cx);
     let scaled_px = crate::ui_scale::scaler(ui_scale_percent);
@@ -118,13 +124,21 @@ pub(super) fn panel(
                 cx,
             )
             .on_activate(
-                false,
+                is_bare,
                 controls::ControlActivation::Action,
                 cx.listener(|this, _e: &ClickEvent, _w, cx| {
                     this.create_branch_checkout_enabled = !this.create_branch_checkout_enabled;
                     cx.notify();
                 }),
-            ),
+            )
+            .when(is_bare, |toggle| {
+                toggle
+                    .text_color(theme.disabled_color(theme.colors.foreground.primary))
+                    .gitcomet_tooltip(
+                        theme,
+                        gitcomet_core::domain::WORKING_TREE_REQUIRED_MESSAGE.into(),
+                    )
+            }),
         )
         .child(super::popover_rule(theme))
         .child(

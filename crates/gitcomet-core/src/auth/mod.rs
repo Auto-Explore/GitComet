@@ -1,4 +1,10 @@
 pub mod askpass;
+mod challenge;
+
+pub use askpass::validate_passphrase;
+pub use challenge::{
+    AuthChallenge, AuthOutcome, PassphraseValidation, remember_verified_passphrase,
+};
 
 use std::collections::BTreeMap;
 use std::sync::{Mutex, MutexGuard, OnceLock};
@@ -16,9 +22,8 @@ pub const GITCOMET_AUTH_KIND_PASSPHRASE: &str = "passphrase";
 pub const GITCOMET_AUTH_KIND_PASSPHRASE_CACHED: &str = "passphrase_cached";
 pub const GITCOMET_AUTH_KIND_HOST_VERIFICATION: &str = "host_verification";
 
-/// Marker added to a failed Git command when the askpass helper observed an
-/// SSH key passphrase prompt. This lets the state layer classify SSH signing
-/// failures without depending on platform-specific `ssh-keygen` wording.
+/// Diagnostic trailer describing an earlier SSH passphrase prompt. Whether
+/// authentication needs input is carried separately by [`AuthOutcome`].
 pub const SSH_PASSPHRASE_PROMPT_MARKER: &str = "SSH key passphrase prompt:";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -33,6 +38,7 @@ pub struct StagedGitAuth {
     pub kind: GitAuthKind,
     pub username: Option<String>,
     pub secret: String,
+    pub challenge: Option<AuthChallenge>,
 }
 
 #[derive(Clone, Eq, PartialEq)]
@@ -75,8 +81,13 @@ fn staged_git_auth_slot() -> &'static Mutex<Option<PendingStagedGitAuth>> {
     SLOT.get_or_init(|| Mutex::new(None))
 }
 
-fn session_passphrase_slot() -> &'static Mutex<BTreeMap<String, String>> {
-    static SLOT: OnceLock<Mutex<BTreeMap<String, String>>> = OnceLock::new();
+struct SessionPassphrase {
+    secret: String,
+    key: Option<(std::path::PathBuf, [u8; 32])>,
+}
+
+fn session_passphrase_slot() -> &'static Mutex<BTreeMap<String, SessionPassphrase>> {
+    static SLOT: OnceLock<Mutex<BTreeMap<String, SessionPassphrase>>> = OnceLock::new();
     SLOT.get_or_init(|| Mutex::new(BTreeMap::new()))
 }
 
@@ -124,32 +135,38 @@ pub fn take_staged_git_auth() -> Option<StagedGitAuth> {
     }
 }
 
-pub fn remember_session_passphrase(prompt: &str, passphrase: &str) {
+/// Production caching goes through `remember_verified_passphrase`; tests use
+/// this to seed an unbound entry.
+#[cfg(test)]
+pub(crate) fn remember_session_passphrase(prompt: &str, passphrase: &str) {
     if prompt.is_empty() || passphrase.is_empty() {
         return;
     }
 
     let mut guard = lock_or_recover(session_passphrase_slot());
-    guard.insert(prompt.to_string(), passphrase.to_string());
+    guard.insert(
+        prompt.to_string(),
+        SessionPassphrase {
+            secret: passphrase.to_string(),
+            key: None,
+        },
+    );
 }
 
 pub fn load_session_passphrases() -> Vec<CachedPassphraseEntry> {
-    let guard = lock_or_recover(session_passphrase_slot());
+    let mut guard = lock_or_recover(session_passphrase_slot());
+    guard.retain(|_, entry| {
+        entry.key.as_ref().is_none_or(|(path, fingerprint)| {
+            challenge::key_fingerprint(path).as_ref() == Some(fingerprint)
+        })
+    });
     guard
         .iter()
-        .map(|(prompt, secret)| CachedPassphraseEntry {
+        .map(|(prompt, entry)| CachedPassphraseEntry {
             prompt: prompt.clone(),
-            secret: secret.clone(),
+            secret: entry.secret.clone(),
         })
         .collect()
-}
-
-pub fn remember_passphrase_prompt_from_staged_git_auth(auth: &StagedGitAuth, prompt: Option<&str>) {
-    if auth.kind == GitAuthKind::Passphrase
-        && let Some(prompt) = prompt
-    {
-        remember_session_passphrase(prompt, &auth.secret);
-    }
 }
 
 /// Stages thread-owned credentials and clears them again on drop.
@@ -178,11 +195,11 @@ impl Drop for ScopedStagedGitAuth {
 mod tests {
     use super::{
         GitAuthKind, StagedGitAuth, clear_session_passphrase, load_session_passphrases,
-        remember_passphrase_prompt_from_staged_git_auth, remember_session_passphrase,
+        remember_session_passphrase,
     };
     use std::sync::{Mutex, MutexGuard, OnceLock};
 
-    fn auth_test_lock() -> MutexGuard<'static, ()> {
+    pub(super) fn auth_test_lock() -> MutexGuard<'static, ()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
         LOCK.get_or_init(|| Mutex::new(()))
             .lock()
@@ -195,6 +212,7 @@ mod tests {
             kind: GitAuthKind::UsernamePassword,
             username: Some("alice".to_string()),
             secret: "token-123".to_string(),
+            challenge: None,
         };
 
         let rendered = format!("{auth:?}");
@@ -232,59 +250,6 @@ mod tests {
 
         clear_session_passphrase();
         assert!(load_session_passphrases().is_empty());
-    }
-
-    #[test]
-    fn remember_passphrase_prompt_from_staged_git_auth_caches_only_passphrases() {
-        let _lock = auth_test_lock();
-        clear_session_passphrase();
-
-        remember_passphrase_prompt_from_staged_git_auth(
-            &StagedGitAuth {
-                kind: GitAuthKind::UsernamePassword,
-                username: Some("alice".to_string()),
-                secret: "token-123".to_string(),
-            },
-            Some("Enter passphrase for key '/tmp/key-a':"),
-        );
-        assert!(load_session_passphrases().is_empty());
-
-        remember_passphrase_prompt_from_staged_git_auth(
-            &StagedGitAuth {
-                kind: GitAuthKind::HostVerification,
-                username: None,
-                secret: "yes".to_string(),
-            },
-            Some("Enter passphrase for key '/tmp/key-a':"),
-        );
-        assert!(load_session_passphrases().is_empty());
-
-        remember_passphrase_prompt_from_staged_git_auth(
-            &StagedGitAuth {
-                kind: GitAuthKind::Passphrase,
-                username: None,
-                secret: "ssh-passphrase".to_string(),
-            },
-            None,
-        );
-        assert!(load_session_passphrases().is_empty());
-
-        remember_passphrase_prompt_from_staged_git_auth(
-            &StagedGitAuth {
-                kind: GitAuthKind::Passphrase,
-                username: None,
-                secret: "ssh-passphrase".to_string(),
-            },
-            Some("Enter passphrase for key '/tmp/key-a':"),
-        );
-        assert_eq!(load_session_passphrases().len(), 1);
-        assert_eq!(
-            load_session_passphrases()[0].prompt,
-            "Enter passphrase for key '/tmp/key-a':"
-        );
-        assert_eq!(load_session_passphrases()[0].secret, "ssh-passphrase");
-
-        clear_session_passphrase();
     }
 
     #[test]

@@ -1,0 +1,6 @@
+%%{init: {"theme":"dark"}}%%
+architecture-beta
+  group api(icon)[API]
+  service web(icon)[WebUpdated] in api
+  service db(icon)[DB] in api
+  web:R --> L:db

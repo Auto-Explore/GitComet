@@ -1,0 +1,26 @@
+[package]
+name = "gitcomet-markdown"
+description = "Markdown preview model: parsing into preview rows, diff alignment, anchors, tables and wrapping, without GPUI."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+test-support = []
+benchmarks = []
+
+[dependencies]
+gitcomet-core = { workspace = true }
+gitcomet-diagrams = { workspace = true }
+gitcomet-syntax = { workspace = true }
+gpui_shared_string = { workspace = true }
+memchr = { workspace = true }
+pulldown-cmark = { workspace = true }
+rustc-hash = { workspace = true }
+unicode-normalization = { workspace = true }

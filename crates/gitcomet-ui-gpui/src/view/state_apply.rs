@@ -119,18 +119,18 @@ impl GitCometView {
             if session_repo_paths.is_empty() && !self.persisted_workspace_repo_paths.is_empty() {
                 // Entering Home: the store records these as recent in the
                 // background, so promote them here rather than race that write.
-                self.refresh_home_repositories();
-                for path in self.persisted_workspace_repo_paths.iter().rev() {
-                    session::promote_recent_repo(&mut self.home_recent_repos, path);
-                }
-                self.home_selected = None;
-                self.defer_home_search_focus(true, cx);
+                let closed = self.persisted_workspace_repo_paths.clone();
+                self.home.update(cx, |home, cx| {
+                    home.enter(&closed);
+                    home.defer_search_focus(true, cx);
+                });
             } else if !session_repo_paths.is_empty()
                 && self.persisted_workspace_repo_paths.is_empty()
             {
                 // Leaving Home: gpui keeps focus on an unmounted element, which
                 // would then be a stale restore target for the palette.
-                self.defer_home_search_focus(false, cx);
+                self.home
+                    .update(cx, |home, cx| home.defer_search_focus(false, cx));
             }
             self.persisted_workspace_repo_paths = session_repo_paths;
             self.persisted_workspace_active_repository = session_active_repository;
@@ -156,7 +156,7 @@ impl GitCometView {
                 live_repo_paths.push(path.clone());
             }
         }
-        self.workspace_id = if self.view_mode == GitCometViewMode::Normal {
+        let workspace_id = if self.view_mode == GitCometViewMode::Normal {
             crate::workspaces::sync_window(
                 cx,
                 self.window_handle.window_id(),
@@ -167,6 +167,7 @@ impl GitCometView {
         } else {
             None
         };
+        self.set_workspace_id(workspace_id, cx);
         // Live routing includes provisional tabs; durable membership above does not.
         if self.synced_repo_paths.as_ref() != live_repo_paths.as_slice() {
             self.synced_repo_paths = live_repo_paths.into();
@@ -175,7 +176,7 @@ impl GitCometView {
             cx,
             self.window_handle,
             cx.weak_entity(),
-            self.main_pane.downgrade(),
+            self.diff_renderer.downgrade(),
             self.documents.downgrade(),
             self.view_mode,
             self.workspace_id,
@@ -220,41 +221,25 @@ impl GitCometView {
         }
     }
 
-    pub(super) fn apply_state_snapshot(
-        &mut self,
-        next: Arc<AppState>,
-        cx: &mut gpui::Context<Self>,
-    ) -> bool {
-        let workspace_membership_changed = self.state.active_repo != next.active_repo
-            || !Arc::ptr_eq(&self.state.repo_open_failures, &next.repo_open_failures)
-            || !self
-                .state
-                .repos
-                .iter()
-                .map(|repo| {
-                    (
-                        repo.id,
-                        &repo.spec.workdir,
-                        repo.is_provisional_external_drop_open(),
-                    )
-                })
-                .eq(next.repos.iter().map(|repo| {
-                    (
-                        repo.id,
-                        &repo.spec.workdir,
-                        repo.is_provisional_external_drop_open(),
-                    )
-                }));
-        let git_runtime_changed = self.state.git_runtime != next.git_runtime;
-        let prev_git_runtime_available = self.state.git_runtime.is_available();
-        let prev_had_repos = !self.state.repos.is_empty();
-        let prev_annex_rail = CollapsedSidebarSection::Annex.is_available(self.active_repo());
-        let prev_auth_prompt = self.state.auth_prompt.clone();
-        let prev_branch_exists_prompt = self.state.branch_exists_prompt.clone();
-        let prev_submodule_trust_prompt = self.state.submodule_trust_prompt.clone();
-        let prev_submodule_trust_check = self.state.submodule_trust_check_pending;
-        let merge_view_active = active_merge_view_target(next.as_ref()).is_some();
+    /// Store workers may finish before the window attaches. Report only the
+    /// feedback still retained for this window, then acknowledge it just as a
+    /// live update would; the populated repository/runtime state stays intact.
+    pub(super) fn consume_initial_store_feedback(&mut self, cx: &mut gpui::Context<Self>) {
+        let initial = Arc::clone(&self.state);
         let mut follow_up_msgs = Vec::new();
+        self.consume_store_feedback(None, &initial, &mut follow_up_msgs, cx);
+        for msg in follow_up_msgs {
+            self.store.dispatch(msg);
+        }
+    }
+
+    fn consume_store_feedback(
+        &mut self,
+        previous: Option<&AppState>,
+        next: &AppState,
+        follow_up_msgs: &mut Vec<Msg>,
+        cx: &mut gpui::Context<Self>,
+    ) {
         let hook_activity_workflow_repo = self
             .hook_activity_workflow_repo_id(cx)
             .or_else(|| self.pending_hook_activity_open.map(|(repo_id, _)| repo_id));
@@ -262,13 +247,14 @@ impl GitCometView {
         // Reported once each after the diff: some failures are recorded both
         // as a notification and as a diagnostic, and one event is one error.
         let mut error_reports: Vec<ErrorReport> = Vec::new();
-        let old_notification_len = self.state.notifications.len();
         let new_notifications = next
-            .notifications
-            .iter()
-            .skip(old_notification_len.min(next.notifications.len()))
-            .cloned()
-            .collect::<Vec<_>>();
+            .notifications_after(previous.map_or(0, |state| state.notifications_seq))
+            .to_vec();
+        if !new_notifications.is_empty() {
+            follow_up_msgs.push(Msg::AcknowledgeNotifications {
+                through_seq: next.notifications_seq,
+            });
+        }
         for notification in new_notifications {
             let kind = match notification.kind {
                 AppNotificationKind::Warning => components::ToastKind::Warning,
@@ -284,85 +270,45 @@ impl GitCometView {
         }
 
         for next_repo in &next.repos {
-            let (old_diag_len, old_diag_seq, old_cmd_len) = self
-                .state
-                .repos
-                .iter()
-                .find(|r| r.id == next_repo.id)
-                .map(|r| {
-                    (
-                        r.feedback.diagnostics.len(),
-                        r.feedback.diagnostics_seq,
-                        r.feedback.command_log.len(),
-                    )
-                })
-                .unwrap_or((0, 0, 0));
-            let diagnostics = &next_repo.feedback.diagnostics;
-            let appended = usize::try_from(
-                next_repo
-                    .feedback
-                    .diagnostics_seq
-                    .wrapping_sub(old_diag_seq),
-            )
-            .unwrap_or(usize::MAX)
-            .max(diagnostics.len().saturating_sub(old_diag_len));
+            let feedback = &next_repo.feedback;
+            // The numbering restarts with each lifetime of the repository.
+            let (old_diagnostics_seq, old_command_log_seq) = previous
+                .into_iter()
+                .flat_map(|state| state.repos.iter())
+                .find(|r| r.id == next_repo.id && r.lifetime() == next_repo.lifetime())
+                .map_or((0, 0), |r| {
+                    (r.feedback.diagnostics_seq, r.feedback.command_log_seq)
+                });
+            let new_diagnostics = feedback.diagnostics_after(old_diagnostics_seq);
+            let new_command_entries = feedback.command_log_after(old_command_log_seq);
+            if !new_diagnostics.is_empty() || !new_command_entries.is_empty() {
+                follow_up_msgs.push(Msg::AcknowledgeRepoFeedback {
+                    repo_id: next_repo.id,
+                    lifetime: next_repo.lifetime(),
+                    diagnostics_through_seq: feedback.diagnostics_seq,
+                    command_log_through_seq: feedback.command_log_seq,
+                });
+            }
 
-            let new_diag_messages = next_repo
-                .feedback
-                .diagnostics
+            let new_diag_messages = new_diagnostics
                 .iter()
-                .skip(diagnostics.len().saturating_sub(appended))
                 .filter(|d| d.kind == DiagnosticKind::Error)
                 .map(|d| d.message.clone())
                 .collect::<Vec<_>>();
             for msg in new_diag_messages {
-                if self.pending_force_delete_branch_prompt.is_none()
-                    && let Some(name) = parse_force_delete_branch_name(&msg)
-                {
-                    self.pending_force_delete_branch_prompt = Some((next_repo.id, name));
-                }
                 error_reports.push(ErrorReport::message(Some(next_repo.id), msg));
             }
 
-            let new_command_entries = next_repo
-                .feedback
-                .command_log
-                .iter()
-                .skip(old_cmd_len.min(next_repo.feedback.command_log.len()))
-                .collect::<Vec<_>>();
-            for entry in &new_command_entries {
-                if entry.command.starts_with("telemetry.") {
+            for entry in new_command_entries {
+                cx.emit(CommandResultShown {
+                    repo_id: next_repo.id,
+                    entry: entry.clone(),
+                });
+                if entry.source == gitcomet_state::model::CommandSource::Background
+                    || entry.command.starts_with("telemetry.")
+                    || entry.handled_by_prompt
+                {
                     continue;
-                }
-
-                let force_remove_worktree_path = if entry.ok {
-                    None
-                } else {
-                    parse_force_remove_worktree_path(&entry.command, &entry.stderr)
-                };
-                if let Some(path) = force_remove_worktree_path.clone() {
-                    if self.pending_force_remove_worktree_prompt.is_none() {
-                        let branch = self.take_pending_worktree_branch_removal(next_repo.id, &path);
-                        self.pending_force_remove_worktree_prompt =
-                            Some((next_repo.id, path, branch));
-                    }
-                    continue;
-                }
-
-                let worktree_remove_path = parse_worktree_remove_path_from_command(&entry.command);
-                if let Some(path) = worktree_remove_path.as_ref() {
-                    if entry.ok {
-                        if let Some(branch) =
-                            self.take_pending_worktree_branch_removal(next_repo.id, path)
-                        {
-                            follow_up_msgs.push(Msg::DeleteBranch {
-                                repo_id: next_repo.id,
-                                name: branch,
-                            });
-                        }
-                    } else {
-                        self.take_pending_worktree_branch_removal(next_repo.id, path);
-                    }
                 }
 
                 if let Some(operation_id) = entry.hook_operation_id {
@@ -374,10 +320,7 @@ impl GitCometView {
                             .find(|operation| operation.id == operation_id)
                             .is_some_and(outer_failure_after_hooks);
                     if outer_failure_after_hooks {
-                        error_reports.push(ErrorReport::message(
-                            Some(next_repo.id),
-                            entry.summary.clone(),
-                        ));
+                        error_reports.push(ErrorReport::command_failure(next_repo.id, entry));
                     }
                     continue;
                 }
@@ -387,20 +330,22 @@ impl GitCometView {
                         self.push_toast(components::ToastKind::Success, entry.summary.clone(), cx);
                     }
                 } else {
-                    error_reports.push(ErrorReport::message(
-                        Some(next_repo.id),
-                        entry.summary.clone(),
-                    ));
+                    error_reports.push(ErrorReport::command_failure(next_repo.id, entry));
                 }
             }
 
-            let previous_repo = self.state.repos.iter().find(|repo| repo.id == next_repo.id);
-            for operation in next_repo
-                .feedback
-                .hook_activity
-                .iter()
-                .filter(|operation| operation.is_reportable() && !operation.status.is_active())
-            {
+            let previous_repo = previous
+                .into_iter()
+                .flat_map(|state| state.repos.iter())
+                .find(|repo| repo.id == next_repo.id);
+            for operation in next_repo.feedback.hook_activity.iter().filter(|operation| {
+                // Hook activity is retained history, not an unacknowledged
+                // feedback buffer. Attachment must not replay old completions.
+                previous.is_some()
+                    && operation.is_reportable()
+                    && !operation.status.is_active()
+                    && !operation.handled_by_prompt
+            }) {
                 let was_completed = previous_repo
                     .and_then(|repo| {
                         repo.feedback
@@ -433,10 +378,11 @@ impl GitCometView {
             if self.pending_pull_reconcile_prompt.is_none()
                 && next.active_repo == Some(next_repo.id)
                 && new_command_entries.iter().any(|entry| {
-                    if entry.ok {
-                        return false;
-                    }
-                    if !entry.command.trim_start().starts_with("git pull") {
+                    if entry.ok
+                        || entry.handled_by_prompt
+                        || entry.kind != gitcomet_state::model::CommandLogKind::Pull
+                        || entry.failure_id == Some(gitcomet_core::error::GitFailureId::Timeout)
+                    {
                         return false;
                     }
 
@@ -457,6 +403,55 @@ impl GitCometView {
                 self.report_error(report, cx);
             }
         }
+    }
+
+    pub(super) fn apply_state_snapshot(
+        &mut self,
+        next: Arc<AppState>,
+        cx: &mut gpui::Context<Self>,
+    ) -> bool {
+        note_opened_repos_for_activation(
+            &self.state,
+            &next,
+            &mut self.last_repo_activation_dispatch_at,
+            Instant::now(),
+        );
+        let workspace_membership_changed = self.state.active_repo != next.active_repo
+            || !Arc::ptr_eq(&self.state.repo_open_failures, &next.repo_open_failures)
+            || !self
+                .state
+                .repos
+                .iter()
+                .map(|repo| {
+                    (
+                        repo.id,
+                        &repo.spec.workdir,
+                        repo.is_provisional_external_drop_open(),
+                    )
+                })
+                .eq(next.repos.iter().map(|repo| {
+                    (
+                        repo.id,
+                        &repo.spec.workdir,
+                        repo.is_provisional_external_drop_open(),
+                    )
+                }));
+        let repo_open_failed =
+            next.repo_open_failure_revision > self.state.repo_open_failure_revision;
+        let git_runtime_changed = self.state.git_runtime != next.git_runtime;
+        let prev_git_runtime_available = self.state.git_runtime.is_available();
+        let prev_had_repos = !self.state.repos.is_empty();
+        let prev_annex_rail = CollapsedSidebarSection::Annex.is_available(self.active_repo());
+        let prev_auth_prompt = self.state.auth_prompt.clone();
+        let prev_branch_exists_prompt = self.state.branch_exists_prompt.clone();
+        let prev_force_delete_branch_prompt = self.state.force_delete_branch_prompt.clone();
+        let prev_force_remove_worktree_prompt = self.state.force_remove_worktree_prompt.clone();
+        let prev_submodule_trust_prompt = self.state.submodule_trust_prompt.clone();
+        let prev_submodule_trust_check = self.state.submodule_trust_check_pending;
+        let merge_view_active = active_merge_view_target(next.as_ref()).is_some();
+        let mut follow_up_msgs = Vec::new();
+        let previous = Arc::clone(&self.state);
+        self.consume_store_feedback(Some(previous.as_ref()), &next, &mut follow_up_msgs, cx);
 
         let next_submodule_add_progress = next
             .repos
@@ -487,11 +482,9 @@ impl GitCometView {
                 repo.feedback
                     .hook_activity
                     .iter()
-                    // Hook runs and large-file transfers already have their
-                    // own card.
                     .filter(|operation| {
                         operation.progress_lane
-                            && !operation.is_reportable()
+                            && (!operation.is_reportable() || operation.command.is_some())
                             && operation.status.is_active()
                     })
                     .map(move |operation| {
@@ -572,7 +565,6 @@ impl GitCometView {
             .hook_activity_workflow_repo_id(cx)
             .or_else(|| self.pending_hook_activity_open.map(|(repo_id, _)| repo_id));
         self.toast_host.update(cx, |host, cx| {
-            host.set_errors_hidden(next.auth_prompt.is_some(), cx);
             host.sync_clone_progress(next.clone.as_ref(), cx);
             host.sync_submodule_add_progress(&next_submodule_add_progress, cx);
             host.sync_hook_progress(next_hook_progress, cx);
@@ -583,13 +575,26 @@ impl GitCometView {
 
         #[cfg(target_os = "macos")]
         if self.view_mode == GitCometViewMode::Normal {
+            let next_mode = next
+                .repos
+                .iter()
+                .find(|repo| Some(repo.id) == next.active_repo)
+                .and_then(|repo| repo.repository_mode);
+            if self.state.active_repo != next.active_repo
+                || self.active_repo().and_then(|repo| repo.repository_mode) != next_mode
+            {
+                cx.defer(crate::app::refresh_macos_app_menus);
+            }
             for path in newly_opened_repo_paths(&self.state, next.as_ref()) {
                 cx.add_recent_document(&path);
             }
-            let recent_repos = session::load().recent_repos;
-            if self.recent_repos_menu_fingerprint != recent_repos {
-                self.recent_repos_menu_fingerprint = recent_repos;
-                crate::app::refresh_macos_app_menus(cx);
+            // Every publication lands here; re-read the session file (a read
+            // and JSON parse on the UI thread) only after it was written.
+            if let Some(loaded) = session::load_if_changed(&mut self.recent_repos_session_stamp)
+                && self.recent_repos_menu_fingerprint != loaded.recent_repos
+            {
+                self.recent_repos_menu_fingerprint = loaded.recent_repos;
+                cx.defer(crate::app::refresh_macos_app_menus);
             }
         }
 
@@ -613,6 +618,9 @@ impl GitCometView {
         if self.repository_views.is_some() {
             self.sync_extension_navigation(cx);
         }
+        if self.sidebar_tabs.is_some() {
+            self.sync_sidebar_tabs(cx);
+        }
         if !self.document_routing.pending.is_empty() {
             self.finish_document_routing(cx);
         }
@@ -635,12 +643,8 @@ impl GitCometView {
         {
             self.refresh_signing_tools(false, cx);
         }
-        if matches!(
-            self.state.large_file_tools.git_lfs,
-            gitcomet_core::signing_tools::SigningToolAvailability::NotChecked
-        ) {
-            self.refresh_large_file_tools(cx);
-        }
+        self.reconcile_large_file_tools_runtime();
+        self.refresh_large_file_tools(cx);
         // Only an open palette shows enablement; `open` takes a fresh context.
         if self.command_palette_open {
             let context = self.command_palette_context(cx);
@@ -675,7 +679,15 @@ impl GitCometView {
         }
         self.sync_terminal_sessions_with_state(cx);
         self.sync_reflog_panels_with_state();
-        if !prev_git_runtime_available && self.state.git_runtime.is_available() {
+        let bootstrap_adopted_runtime = git_runtime_changed
+            && self
+                .startup_repo_runtime_adoption
+                .take()
+                .is_some_and(|runtime| runtime == self.state.git_runtime);
+        if !prev_git_runtime_available
+            && self.state.git_runtime.is_available()
+            && !bootstrap_adopted_runtime
+        {
             self.resume_after_git_runtime_recovery();
         }
         if git_runtime_changed {
@@ -684,14 +696,40 @@ impl GitCometView {
         for msg in follow_up_msgs {
             self.store.dispatch(msg);
         }
-        if !self.state.repos.is_empty() {
+        if !self.state.repos.is_empty() || repo_open_failed {
             self.startup_repo_bootstrap_pending = false;
         }
         if prev_auth_prompt != self.state.auth_prompt {
-            self.auth_prompt_key = None;
+            let generation_changed = prev_auth_prompt.as_ref().map(|prompt| prompt.generation)
+                != self
+                    .state
+                    .auth_prompt
+                    .as_ref()
+                    .map(|prompt| prompt.generation);
+            let validating = self
+                .state
+                .auth_prompt
+                .as_ref()
+                .is_some_and(|prompt| prompt.status == AuthPromptStatus::Validating);
+            self.auth_prompt_input_error = None;
+            if !validating || generation_changed {
+                self.auth_prompt_submitted_generation = None;
+            }
+            if generation_changed || !validating {
+                self.auth_prompt_key = None;
+                self.auth_prompt_secret_input
+                    .update(cx, |input, cx| input.set_text("", cx));
+            }
         }
         if prev_branch_exists_prompt != self.state.branch_exists_prompt {
             self.pending_branch_exists_prompt = self.state.branch_exists_prompt.clone();
+        }
+        if prev_force_delete_branch_prompt != self.state.force_delete_branch_prompt {
+            self.pending_force_delete_branch_prompt = self.state.force_delete_branch_prompt.clone();
+        }
+        if prev_force_remove_worktree_prompt != self.state.force_remove_worktree_prompt {
+            self.pending_force_remove_worktree_prompt =
+                self.state.force_remove_worktree_prompt.clone();
         }
         if prev_submodule_trust_prompt != self.state.submodule_trust_prompt {
             self.pending_submodule_trust_prompt = self.state.submodule_trust_prompt.clone();
@@ -730,6 +768,8 @@ impl GitCometView {
             || prev_annex_rail != annex_rail
             || prev_auth_prompt != self.state.auth_prompt
             || prev_branch_exists_prompt != self.state.branch_exists_prompt
+            || prev_force_delete_branch_prompt != self.state.force_delete_branch_prompt
+            || prev_force_remove_worktree_prompt != self.state.force_remove_worktree_prompt
     }
 }
 
@@ -749,55 +789,6 @@ fn newly_opened_repo_paths(prev: &AppState, next: &AppState) -> Vec<std::path::P
             (!was_ready).then(|| next_repo.spec.workdir.clone())
         })
         .collect()
-}
-
-fn parse_force_delete_branch_name(message: &str) -> Option<String> {
-    if !message.contains("git branch -d failed:") {
-        return None;
-    }
-    let needle = "run 'git branch -D ";
-    let start = message.find(needle)? + needle.len();
-    let rest = &message[start..];
-    let end = rest.find('\'')?;
-    let name = rest[..end].trim();
-    (!name.is_empty()).then(|| name.to_string())
-}
-
-fn parse_force_remove_worktree_path(command: &str, stderr: &str) -> Option<std::path::PathBuf> {
-    if !is_force_remove_worktree_required_error(command, stderr) {
-        return None;
-    }
-    parse_worktree_path_from_fatal(stderr)
-        .or_else(|| parse_worktree_remove_path_from_command(command))
-}
-
-fn is_force_remove_worktree_required_error(command: &str, stderr: &str) -> bool {
-    let command = command.trim();
-    let is_worktree_remove = command.starts_with("git worktree remove ")
-        && !command.starts_with("git worktree remove --force ");
-    is_worktree_remove
-        && stderr.contains("contains modified or untracked files")
-        && stderr.contains("use --force to delete it")
-}
-
-fn parse_worktree_path_from_fatal(stderr: &str) -> Option<std::path::PathBuf> {
-    let needle = "fatal: '";
-    let start = stderr.find(needle)? + needle.len();
-    let rest = &stderr[start..];
-    let end = rest.find("' contains modified or untracked files")?;
-    let path = rest[..end].trim();
-    (!path.is_empty()).then(|| std::path::PathBuf::from(path))
-}
-
-fn parse_worktree_remove_path_from_command(command: &str) -> Option<std::path::PathBuf> {
-    let command = command.trim();
-    let rest = command.strip_prefix("git worktree remove ")?;
-    let rest = rest.strip_prefix("--force ").unwrap_or(rest);
-    let path = rest.trim();
-    if path.is_empty() || path.starts_with('-') {
-        return None;
-    }
-    Some(std::path::PathBuf::from(path))
 }
 
 /// Whether the active repository opened a file or a commit between two
@@ -821,6 +812,7 @@ fn repository_navigated(prev: &AppState, next: &AppState) -> bool {
 mod tests {
     use super::*;
     use gitcomet_core::git_operation::{GitOperationId, HookExecutionId};
+    #[cfg(target_os = "macos")]
     use std::path::PathBuf;
     use std::sync::Arc;
     use std::time::{Duration, SystemTime};
@@ -836,6 +828,7 @@ mod tests {
             time: SystemTime::UNIX_EPOCH,
             duration: Some(Duration::from_millis(50)),
             status,
+            handled_by_prompt: false,
             hooks: vec![gitcomet_state::model::GitHookRun {
                 id: HookExecutionId {
                     sid: Arc::from("test-session"),
@@ -850,6 +843,7 @@ mod tests {
             output_bytes: 0,
             output_truncated: false,
             latest_line: String::new(),
+            command: None,
             command_started: false,
             transfer: None,
             progress_lane: false,
@@ -867,54 +861,9 @@ mod tests {
         );
         if ready {
             repo.open = Loadable::Ready(());
+            repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
         }
         repo
-    }
-
-    #[test]
-    fn parse_force_remove_worktree_path_prefers_fatal_path() {
-        let command = "git worktree remove /tmp/from-command";
-        let stderr = "git worktree remove /tmp/from-command failed: fatal: '/tmp/from-stderr' contains modified or untracked files, use --force to delete it.";
-        assert_eq!(
-            parse_force_remove_worktree_path(command, stderr),
-            Some(PathBuf::from("/tmp/from-stderr"))
-        );
-    }
-
-    #[test]
-    fn parse_force_remove_worktree_path_falls_back_to_command_path() {
-        let command = "git worktree remove /tmp/worktree";
-        let stderr = "contains modified or untracked files, use --force to delete it";
-        assert_eq!(
-            parse_force_remove_worktree_path(command, stderr),
-            Some(PathBuf::from("/tmp/worktree"))
-        );
-    }
-
-    #[test]
-    fn parse_force_remove_worktree_path_ignores_non_matching_errors() {
-        let command = "git worktree remove /tmp/worktree";
-        let stderr = "fatal: '/tmp/worktree' is not a working tree";
-        assert_eq!(parse_force_remove_worktree_path(command, stderr), None);
-    }
-
-    #[test]
-    fn parse_force_remove_worktree_path_ignores_already_forced_command() {
-        let command = "git worktree remove --force /tmp/worktree";
-        let stderr = "contains modified or untracked files, use --force to delete it";
-        assert_eq!(parse_force_remove_worktree_path(command, stderr), None);
-    }
-
-    #[test]
-    fn parse_worktree_remove_path_from_command_supports_forced_and_plain_remove() {
-        assert_eq!(
-            parse_worktree_remove_path_from_command("git worktree remove /tmp/worktree"),
-            Some(PathBuf::from("/tmp/worktree"))
-        );
-        assert_eq!(
-            parse_worktree_remove_path_from_command("git worktree remove --force /tmp/worktree"),
-            Some(PathBuf::from("/tmp/worktree"))
-        );
     }
 
     #[test]
