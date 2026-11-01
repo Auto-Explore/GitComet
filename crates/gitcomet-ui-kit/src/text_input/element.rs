@@ -172,13 +172,7 @@ impl Element for TextElement {
 
             // A placeholder or masked rendering is a synthesized string that is
             // not the document; everything else reads through the model.
-            let substitute_text: Option<SharedString> = if content.is_empty() {
-                Some(input.placeholder.clone())
-            } else if input.masked {
-                Some(mask_text_for_display(content.as_ref()).into())
-            } else {
-                None
-            };
+            let substitute_text = input.substitute_display_text(&content);
             let text_color = if content.is_empty() {
                 style_colors.placeholder
             } else if input.display_text {
@@ -888,7 +882,7 @@ impl Element for TextElement {
             window.paint_quad(cursor);
         }
 
-        self.input.update(cx, |input, cx| {
+        let needs_another_frame = self.input.update(cx, |input, cx| {
             let prev_height_rows = if input.multiline && input.soft_wrap {
                 input
                     .wrap
@@ -915,9 +909,8 @@ impl Element for TextElement {
                 input.wrap.last_rows = None;
             }
             input.layout.scroll_x = prepaint.scroll_x;
-            if had_pending_cursor_autoscroll {
-                input.ensure_cursor_visible_in_vertical_scroll(cx);
-            }
+            let reveal_continues =
+                had_pending_cursor_autoscroll && input.ensure_cursor_visible_in_vertical_scroll(cx);
             let next_height_rows = if input.multiline && input.soft_wrap {
                 input
                     .wrap
@@ -927,12 +920,22 @@ impl Element for TextElement {
             } else {
                 None
             };
-            if prev_height_rows != next_height_rows {
+            let height_changed = prev_height_rows != next_height_rows;
+            if height_changed {
                 // Apply the measured height to the parent on the next frame.
                 // The caret reveal owns its bounded retry while that happens.
                 cx.notify();
             }
+            height_changed || reveal_continues
         });
+        if needs_another_frame {
+            // A notify during paint only marks the input for whichever frame
+            // comes next; it does not ask for one. Without this request the
+            // field kept painting its text into the old height until an
+            // unrelated redraw (the caret blink, a keystroke, a pointer move).
+            let input = self.input.clone();
+            window.on_next_frame(move |_, cx| input.update(cx, |_, cx| cx.notify()));
+        }
     }
 }
 

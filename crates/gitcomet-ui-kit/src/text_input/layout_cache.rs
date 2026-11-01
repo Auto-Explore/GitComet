@@ -181,6 +181,109 @@ impl TextInput {
         merged
     }
 
+    /// The text painted in place of the document: the placeholder for an
+    /// empty input, or the masked text. `None` paints the document itself.
+    pub(super) fn substitute_display_text(
+        &self,
+        content: &TextModelSnapshot,
+    ) -> Option<SharedString> {
+        if content.is_empty() {
+            Some(self.placeholder.clone())
+        } else if self.masked {
+            Some(mask_text_for_display(content.as_ref()).into())
+        } else {
+            None
+        }
+    }
+
+    /// Measure the lines edited since the last frame before this frame is laid
+    /// out, so the field already has the height of the text it is about to
+    /// paint. Otherwise an edit that adds or removes a wrapped row is laid out
+    /// at the previous height and only corrected by the frame after.
+    ///
+    /// Shapes at the width and font the previous frame wrapped with. Prepaint
+    /// still measures every line it paints at the final width, so a resize or
+    /// font change in this frame is corrected there.
+    pub(super) fn measure_edited_wrap_rows(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !(self.multiline && self.soft_wrap) || self.wrap.dirty_ranges.is_empty() {
+            return;
+        }
+        let Some((base_font, font_size)) = self.wrap.row_counts_font.clone() else {
+            return;
+        };
+        let Some(wrap_width) = self
+            .layout
+            .bounds
+            .map(|bounds| bounds.size.width.max(px(0.0)))
+            .filter(|width| self.wrap.row_counts_width == Some(width.round()))
+        else {
+            return;
+        };
+        let content = self.content.snapshot();
+        let substitute_text = self.substitute_display_text(&content);
+        let line_starts: Arc<[usize]> = match substitute_text.as_ref() {
+            Some(text) => compute_line_starts(text).into(),
+            None => content.shared_line_starts(),
+        };
+        let line_count = line_starts.len().max(1);
+        if self.wrap.row_counts.len() != line_count {
+            return;
+        }
+        let dirty_ranges = self.take_normalized_wrap_dirty_ranges(line_count);
+        // Prepaint takes them again: it shapes the lines it paints and
+        // confirms these rows at the final width.
+        self.wrap.dirty_ranges.clone_from(&dirty_ranges);
+        let dirty_line_count = dirty_ranges.iter().map(Range::len).sum::<usize>();
+        if dirty_line_count > TEXT_INPUT_WRAP_DIRTY_SYNC_LINE_LIMIT {
+            // Prepaint estimates bulk replacements rather than shaping them.
+            return;
+        }
+
+        let has_content = !content.is_empty();
+        let display_text = substitute_text.unwrap_or_else(|| content.as_shared_string());
+        let mut rows_changed = false;
+        for line_ix in dirty_ranges.into_iter().flatten() {
+            let line_start = line_starts.get(line_ix).copied().unwrap_or(0);
+            let line_text = line_text_for_index(display_text.as_ref(), &line_starts, line_ix);
+            // The same runs prepaint shapes with: bold or italic highlights
+            // change where a line wraps.
+            let highlights = has_content.then(|| {
+                let resolved =
+                    self.effective_highlights_for_window(line_start..line_start + line_text.len());
+                if resolved.pending {
+                    self.ensure_highlight_provider_poll(cx);
+                }
+                resolved.highlights
+            });
+            let line_style = TextShapeStyle {
+                base_font: &base_font,
+                text_color: self.style.text,
+                highlights: highlights.as_ref().map(|highlights| highlights.as_slice()),
+                font_size,
+            };
+            let wrapped = shape_wrapped_line(
+                LineShapeInput {
+                    line_ix,
+                    line_start,
+                    line_text,
+                },
+                wrap_width,
+                None,
+                &line_style,
+                self.tab_size,
+                window,
+            );
+            rows_changed |= self.set_measured_wrap_rows(line_ix, wrapped.line_count());
+        }
+        if rows_changed {
+            let rows = total_wrap_rows(&self.wrap.row_counts);
+            self.wrap.last_rows = Some(rows);
+            if let Some(cache) = self.wrap.cache.as_mut() {
+                cache.rows = rows;
+            }
+        }
+    }
+
     pub(super) fn set_measured_wrap_rows(&mut self, line_ix: usize, rows: usize) -> bool {
         let rows = rows.max(1);
         let changed = self.wrap.row_counts[line_ix] != rows;

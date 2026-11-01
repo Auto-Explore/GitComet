@@ -502,17 +502,22 @@ impl TextInput {
         }
     }
 
-    pub(super) fn ensure_cursor_visible_in_vertical_scroll(&mut self, cx: &mut Context<Self>) {
+    /// Scroll the caret into view. Returns whether the reveal needs another
+    /// frame: it scrolled, or it is still waiting for the layout to settle.
+    pub(super) fn ensure_cursor_visible_in_vertical_scroll(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) -> bool {
         let Some(handle) = self.interaction.vertical_scroll_handle.clone() else {
             self.interaction.pending_cursor_autoscroll = false;
-            return;
+            return false;
         };
         let Some(text_bounds) = self.current_text_bounds() else {
-            return;
+            return false;
         };
         let viewport_height = handle.bounds().size.height.max(px(0.0));
         if viewport_height <= px(0.0) {
-            return;
+            return false;
         }
         // Wrapping is measured during prepaint, after the parent's scroll
         // extent was laid out. Wait for that height instead of scrolling
@@ -529,7 +534,7 @@ impl TextInput {
 
         let Some((cursor_top, cursor_bottom)) = self.cursor_vertical_span(self.cursor_offset())
         else {
-            return;
+            return false;
         };
 
         let current = handle.offset();
@@ -577,9 +582,11 @@ impl TextInput {
         } else {
             self.interaction.pending_cursor_autoscroll = false;
         }
-        if moved || self.interaction.pending_cursor_autoscroll {
+        let needs_another_frame = moved || self.interaction.pending_cursor_autoscroll;
+        if needs_another_frame {
             cx.notify();
         }
+        needs_another_frame
     }
 
     pub(super) fn page_up(&mut self, _: &PageUp, _: &mut Window, cx: &mut Context<Self>) {

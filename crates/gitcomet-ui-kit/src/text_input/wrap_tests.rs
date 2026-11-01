@@ -870,3 +870,160 @@ fn wrapped_real_font_typing_is_stable_at_normal_and_enlarged_scale() {
         }
     }
 }
+
+/// The rows the last painted frame wrapped the text into, and the height the
+/// field was laid out at in that same frame.
+fn painted_rows_and_height(
+    input: &Entity<TextInput>,
+    cx: &mut gpui::VisualTestContext,
+) -> (usize, Pixels) {
+    cx.update(|_window, app| {
+        let input = input.read(app);
+        let TextInputLayout::Wrapped { row_counts, .. } = input.layout.last.as_ref().unwrap()
+        else {
+            panic!("wrapped layout")
+        };
+        let rows = total_wrap_rows(row_counts);
+        let height = input.layout.bounds.unwrap().size.height;
+        (rows, height)
+    })
+}
+
+fn assert_height_fits_painted_rows(
+    input: &Entity<TextInput>,
+    cx: &mut gpui::VisualTestContext,
+    context: &str,
+) -> usize {
+    let (rows, height) = painted_rows_and_height(input, cx);
+    let line_height = cx.update(|_window, app| input.read(app).layout.line_height);
+    assert!(
+        (height - line_height * rows as f32).abs() <= px(0.5),
+        "{context}: painted {rows} rows into a field laid out {height:?} tall"
+    );
+    rows
+}
+
+/// Deliver the frames the window asked the platform for, as its frame source
+/// would. Unlike `draw_frame`, nothing is redrawn unless something asked.
+fn draw_requested_frames(cx: &mut gpui::VisualTestContext) {
+    for _ in 0..16 {
+        cx.run_until_parked();
+        if cx.update(|window, app| window.simulate_next_frame(app)) == 0 {
+            return;
+        }
+    }
+    panic!("text input kept requesting frames");
+}
+
+/// Each keystroke is drawn by the frame it dirties, and that frame alone must
+/// already have room for the row the keystroke wrapped onto. The rows used to
+/// be measured only after layout, so the new row was clipped until a later,
+/// unrelated redraw (the caret blink, the next keystroke) grew the field.
+#[gpui::test]
+fn wrapped_height_follows_typing_in_the_frame_that_paints_it(cx: &mut gpui::TestAppContext) {
+    crate::test_support::use_real_text_backend(cx);
+    let (view, cx) = cx.add_window_view(WrappedInputView::new);
+    let input = seed_wrapped_input(&view, cx, "");
+    let message =
+        "Fix the commit box so it grows with its text while typing fast or pasting a long message";
+    let mut max_rows = 0;
+    for (start, character) in message.char_indices() {
+        let end = start + character.len_utf8();
+        cx.simulate_input(&message[start..end]);
+        let rows = assert_height_fits_painted_rows(
+            &input,
+            cx,
+            &format!("after typing {:?}", &message[..end]),
+        );
+        max_rows = max_rows.max(rows);
+    }
+    assert!(max_rows >= 3, "fixture must wrap onto several rows");
+    cx.update(|_window, app| assert_eq!(input.read(app).text(), message));
+
+    for _ in 0..message.len() {
+        cx.update(|window, app| {
+            input.update(app, |input, cx| input.backspace(&Backspace, window, cx));
+        });
+        assert_height_fits_painted_rows(&input, cx, "after deleting");
+    }
+    cx.update(|_window, app| assert_eq!(input.read(app).text(), ""));
+}
+
+/// A paste of long lines lands in one frame at its full height, rather than
+/// at one row per pasted line until the next redraw.
+#[gpui::test]
+fn wrapped_height_follows_a_paste_in_the_frame_that_paints_it(cx: &mut gpui::TestAppContext) {
+    crate::test_support::use_real_text_backend(cx);
+    let (view, cx) = cx.add_window_view(WrappedInputView::new);
+    let input = seed_wrapped_input(&view, cx, "");
+    let pasted = "Subject line\n\nA body paragraph long enough to wrap onto a second row";
+    cx.update(|window, app| {
+        input.update(app, |input, cx| {
+            input.replace_text_in_range(None, pasted, window, cx);
+        });
+    });
+    let rows = assert_height_fits_painted_rows(&input, cx, "after pasting");
+    assert!(rows > 3, "fixture must wrap a pasted line: {rows} rows");
+    cx.update(|_window, app| {
+        assert_eq!(
+            view.read(app).scroll.max_offset().y,
+            px(0.0),
+            "fixture must fit without scrolling"
+        );
+    });
+    draw_requested_frames(cx);
+    assert_eq!(assert_height_fits_painted_rows(&input, cx, "settled"), rows);
+}
+
+/// Rows only prepaint can measure (here after the field narrows) are applied
+/// by a frame the input requests itself. `cx.notify()` during paint marks the
+/// input dirty without scheduling that frame.
+#[gpui::test]
+fn wrapped_height_measured_during_paint_is_applied_by_a_requested_frame(
+    cx: &mut gpui::TestAppContext,
+) {
+    crate::test_support::use_real_text_backend(cx);
+    let (view, cx) = cx.add_window_view(WrappedInputView::new);
+    let input = seed_wrapped_input(&view, cx, "alpha beta gamma delta epsilon zeta eta theta");
+    let wide_rows = assert_height_fits_painted_rows(&input, cx, "seeded");
+    cx.update(|_window, app| {
+        view.update(app, |view, cx| {
+            view.width = px(140.0);
+            cx.notify();
+        });
+    });
+    draw_requested_frames(cx);
+    let narrow_rows = assert_height_fits_painted_rows(&input, cx, "after narrowing");
+    assert!(narrow_rows > wide_rows, "{wide_rows} -> {narrow_rows} rows");
+}
+
+/// Pasting past the field's maximum height reveals the caret without waiting
+/// for another input event: the reveal scrolls during paint and must request
+/// the frame that shows it.
+#[gpui::test]
+fn wrapped_paste_reveals_the_caret_without_another_event(cx: &mut gpui::TestAppContext) {
+    crate::test_support::use_real_text_backend(cx);
+    let (view, cx) = cx.add_window_view(WrappedInputView::new);
+    let input = seed_wrapped_input(&view, cx, "");
+    let pasted = "a pasted line of a long commit message\n".repeat(20);
+    cx.update(|window, app| {
+        input.update(app, |input, cx| {
+            input.replace_text_in_range(None, &pasted, window, cx);
+        });
+    });
+    draw_requested_frames(cx);
+    cx.update(|_window, app| {
+        let input = input.read(app);
+        let viewport = view.read(app).scroll.bounds();
+        let origin = input.layout.bounds.unwrap().top();
+        let (top, bottom) = input.cursor_vertical_span(input.cursor_offset()).unwrap();
+        assert!(view.read(app).scroll.max_offset().y > px(0.0));
+        assert!(
+            origin + top >= viewport.top() - px(1.0)
+                && origin + bottom <= viewport.bottom() + px(1.0),
+            "caret {:?}..{:?}, viewport {viewport:?}",
+            origin + top,
+            origin + bottom
+        );
+    });
+}
