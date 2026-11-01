@@ -13,7 +13,7 @@ mod repository;
 mod repository_preferences;
 mod reword;
 mod signature_map;
-mod workspace;
+mod virtual_branches;
 
 pub use app::*;
 pub use auto_fetch::*;
@@ -28,7 +28,7 @@ pub use repository::*;
 pub use repository_preferences::*;
 pub use reword::*;
 pub use signature_map::CommitSignatureMap;
-pub use workspace::*;
+pub use virtual_branches::*;
 
 pub type Shared<T> = Arc<T>;
 

@@ -88,8 +88,8 @@ impl PopoverHost {
                 name,
                 is_current_branch,
             } => rename_branch_prompt::panel(self, repo_id, name, is_current_branch, cx),
-            PopoverKind::WorkspacePrompt { prompt, .. } => {
-                workspace_prompt::panel(self, prompt.clone(), cx)
+            PopoverKind::VirtualBranchesPrompt { prompt, .. } => {
+                virtual_branches_prompt::panel(self, prompt.clone(), cx)
             }
             PopoverKind::CheckoutRemoteBranchPrompt {
                 repo_id,
@@ -102,8 +102,8 @@ impl PopoverHost {
                 target,
                 operation,
             } => branch_exists_prompt::panel(self, repo_id, name, target, operation, cx),
-            PopoverKind::LeaveWorkspaceToCheckoutPrompt { repo_id, target } => {
-                workspace_exit_prompt::panel(self, repo_id, target, cx)
+            PopoverKind::LeaveVirtualBranchesToCheckoutPrompt { repo_id, target } => {
+                virtual_branches_exit_prompt::panel(self, repo_id, target, cx)
             }
             PopoverKind::StashPrompt => stash_prompt::panel(self, cx),
             PopoverKind::CommitPrompt { repo_id } => commit_prompt::panel(self, repo_id, cx),

@@ -334,15 +334,15 @@ impl SidebarPaneView {
                                         this.explain_working_tree_required(cx);
                                         return;
                                     }
-                                    if workspace_owns_workdir(&this.store.snapshot(), repo_id) {
-                                        // The workspace owns the working directory:
+                                    if virtual_branches_owns_workdir(&this.store.snapshot(), repo_id) {
+                                        // The virtual branches owns the working directory:
                                         // ask to leave it rather than moving HEAD
-                                        // off the workspace branch under the tab
+                                        // off the virtual-branches branch under the tab
                                         // that is showing it.
                                         this.open_popover_at(
-                                            PopoverKind::LeaveWorkspaceToCheckoutPrompt {
+                                            PopoverKind::LeaveVirtualBranchesToCheckoutPrompt {
                                                 repo_id,
-                                                target: WorkspaceCheckoutTarget::Branch(name),
+                                                target: VirtualBranchesCheckoutTarget::Branch(name),
                                             },
                                             e.position(),
                                             window,
@@ -351,15 +351,15 @@ impl SidebarPaneView {
                                         cx.notify();
                                         return;
                                     }
-                                    if workspace_owns_workdir(&this.store.snapshot(), repo_id) {
-                                        // The workspace owns the working directory:
+                                    if virtual_branches_owns_workdir(&this.store.snapshot(), repo_id) {
+                                        // The virtual branches owns the working directory:
                                         // ask to leave it rather than moving HEAD
-                                        // off the workspace branch under the tab
+                                        // off the virtual-branches branch under the tab
                                         // that is showing it.
                                         this.open_popover_at(
-                                            PopoverKind::LeaveWorkspaceToCheckoutPrompt {
+                                            PopoverKind::LeaveVirtualBranchesToCheckoutPrompt {
                                                 repo_id,
-                                                target: WorkspaceCheckoutTarget::Branch(name),
+                                                target: VirtualBranchesCheckoutTarget::Branch(name),
                                             },
                                             e.position(),
                                             window,

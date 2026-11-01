@@ -62,29 +62,29 @@ pub(super) fn send_unavailable_git_effect_result(
                 error: git_unavailable_error(runtime),
             }))
         }
-        Effect::LoadWorkspace { repo_id } => {
-            send(Msg::Internal(crate::msg::InternalMsg::WorkspaceLoaded {
+        Effect::LoadVirtualBranches { repo_id } => {
+            send(Msg::Internal(crate::msg::InternalMsg::VirtualBranchesLoaded {
                 repo_id,
                 result: Err(git_unavailable_error(runtime)),
                 assignments: Err(git_unavailable_error(runtime)),
-                workspace_commit: Err(git_unavailable_error(runtime)),
+                virtual_branches_commit: Err(git_unavailable_error(runtime)),
             }))
         }
-        Effect::ApplyWorkspaceEdit { repo_id, edit } => {
-            send(Msg::Internal(crate::msg::InternalMsg::WorkspaceEditFinished {
+        Effect::ApplyVirtualBranchesEdit { repo_id, edit } => {
+            send(Msg::Internal(crate::msg::InternalMsg::VirtualBranchesEditFinished {
                 repo_id,
                 edit,
                 result: Err(git_unavailable_error(runtime)),
             }))
         }
-        Effect::AssignWorkspaceFile {
+        Effect::AssignVirtualBranchesFile {
             repo_id,
             path,
             hunk,
             branch,
         } => {
             send(Msg::Internal(
-                crate::msg::InternalMsg::WorkspaceAssignFinished {
+                crate::msg::InternalMsg::VirtualBranchesAssignFinished {
                     repo_id,
                     path,
                     hunk,
@@ -93,12 +93,12 @@ pub(super) fn send_unavailable_git_effect_result(
                 },
             ))
         }
-        Effect::EnterWorkspace {
+        Effect::EnterVirtualBranches {
             repo_id,
             checkout_base,
         } => {
             send(Msg::Internal(
-                crate::msg::InternalMsg::WorkspaceActiveFinished {
+                crate::msg::InternalMsg::VirtualBranchesActiveFinished {
                     repo_id,
                     active: true,
                     checkout_base,
@@ -106,12 +106,12 @@ pub(super) fn send_unavailable_git_effect_result(
                 },
             ))
         }
-        Effect::LeaveWorkspace {
+        Effect::LeaveVirtualBranches {
             repo_id,
             checkout_base,
         } => {
             send(Msg::Internal(
-                crate::msg::InternalMsg::WorkspaceActiveFinished {
+                crate::msg::InternalMsg::VirtualBranchesActiveFinished {
                     repo_id,
                     active: false,
                     checkout_base,
@@ -120,15 +120,15 @@ pub(super) fn send_unavailable_git_effect_result(
             ))
         }
         // The checkout waiting for this leave goes with it: the working
-        // directory could not be moved off the workspace, and running the
+        // directory could not be moved off the virtual branches, and running the
         // checkout anyway is the stranding the leave exists to prevent.
-        Effect::LeaveWorkspaceAndCheckout {
+        Effect::LeaveVirtualBranchesAndCheckout {
             repo_id,
             checkout_base,
             then: _,
         } => {
             send(Msg::Internal(
-                crate::msg::InternalMsg::WorkspaceActiveFinished {
+                crate::msg::InternalMsg::VirtualBranchesActiveFinished {
                     repo_id,
                     active: false,
                     checkout_base,
@@ -136,8 +136,8 @@ pub(super) fn send_unavailable_git_effect_result(
                 },
             ))
         }
-        Effect::PushWorkspaceBranch { repo_id, name } => {
-            send(Msg::Internal(crate::msg::InternalMsg::WorkspacePushFinished {
+        Effect::PushVirtualBranchesBranch { repo_id, name } => {
+            send(Msg::Internal(crate::msg::InternalMsg::VirtualBranchesPushFinished {
                 repo_id,
                 name,
                 result: Err(git_unavailable_error(runtime)),
@@ -710,22 +710,22 @@ mod tests {
         rx.try_recv().ok()
     }
 
-    /// A Git that cannot be run must still answer every workspace effect.
+    /// A Git that cannot be run must still answer every virtual branches effect.
     ///
     /// The match above has no catch-all, so a variant that nobody adds here is
     /// a compile error — but the property being pinned is the other one: an
     /// answer *does* arrive. A silent effect would leave the reducer waiting on
-    /// a reply that never comes, with the workspace's busy flag set for good.
+    /// a reply that never comes, with the virtual branches's busy flag set for good.
     #[test]
-    fn entering_the_workspace_is_answered_even_with_no_git() {
-        let sent = answer(Effect::EnterWorkspace {
+    fn entering_the_virtual_branches_is_answered_even_with_no_git() {
+        let sent = answer(Effect::EnterVirtualBranches {
             repo_id: RepoId(1),
             checkout_base: Some("main".into()),
         });
         assert!(
             matches!(
                 sent,
-                Some(Msg::Internal(InternalMsg::WorkspaceActiveFinished {
+                Some(Msg::Internal(InternalMsg::VirtualBranchesActiveFinished {
                     active: true,
                     checkout_base: Some(ref base),
                     result: Err(_),
@@ -737,15 +737,15 @@ mod tests {
     }
 
     #[test]
-    fn leaving_the_workspace_is_answered_even_with_no_git() {
-        let sent = answer(Effect::LeaveWorkspace {
+    fn leaving_the_virtual_branches_is_answered_even_with_no_git() {
+        let sent = answer(Effect::LeaveVirtualBranches {
             repo_id: RepoId(1),
             checkout_base: None,
         });
         assert!(
             matches!(
                 sent,
-                Some(Msg::Internal(InternalMsg::WorkspaceActiveFinished {
+                Some(Msg::Internal(InternalMsg::VirtualBranchesActiveFinished {
                     active: false,
                     result: Err(_),
                     ..
@@ -757,7 +757,7 @@ mod tests {
 
     #[test]
     fn assigning_a_file_is_answered_even_with_no_git() {
-        let sent = answer(Effect::AssignWorkspaceFile {
+        let sent = answer(Effect::AssignVirtualBranchesFile {
             repo_id: RepoId(1),
             path: std::path::PathBuf::from("src/lib.rs"),
             hunk: None,
@@ -766,7 +766,7 @@ mod tests {
         assert!(
             matches!(
                 sent,
-                Some(Msg::Internal(InternalMsg::WorkspaceAssignFinished {
+                Some(Msg::Internal(InternalMsg::VirtualBranchesAssignFinished {
                     branch: Some(ref branch),
                     result: Err(_),
                     ..

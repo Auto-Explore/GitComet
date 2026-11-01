@@ -1,14 +1,14 @@
-//! Per-repository workspace state: the virtual branches, their stacks, and
+//! Per-repository virtual branches state: the virtual branches, their stacks, and
 //! which branch each changed file belongs to.
 //!
-//! This is a cache of what `gitcomet/workspace.json` holds, plus the stacks
+//! This is a cache of what `gitcomet/virtual.json` holds, plus the stacks
 //! derived from it. It is loaded lazily — a repository that never opens the
-//! Workspace view never reads or writes a workspace — and every field is a
+//! Virtual branches view never reads or writes a virtual branches — and every field is a
 //! `Loadable` so the UI can show the state it has while a reload is in flight
 //! rather than blanking out.
 
-use gitcomet_core::workspace::{
-    AssignmentIndex, BranchApplyState, FileAssignment, Stack, VirtualBranch, WorkspaceState,
+use gitcomet_core::virtual_branches::{
+    AssignmentIndex, BranchApplyState, FileAssignment, Stack, VirtualBranch, VirtualBranchesState,
 };
 use rustc_hash::FxHashMap;
 use std::path::PathBuf;
@@ -16,20 +16,20 @@ use std::sync::Arc;
 
 use super::Loadable;
 
-/// A workspace action running on the backend.
+/// A virtual branches action running on the backend.
 ///
-/// Workspace edits mutate the repository, so they are tracked like other Git
+/// Virtual branches edits mutate the repository, so they are tracked like other Git
 /// work: the UI disables conflicting actions and shows progress rather than
 /// letting two of them race.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub struct WorkspaceBusy {
+pub struct VirtualBranchesBusy {
     pub loading: bool,
     pub applying: bool,
     pub committing: bool,
-    /// Any operation that changes branches or the workspace branch, including
+    /// Any operation that changes branches or the virtual-branches branch, including
     /// apply, unapply, restack, and a target change.
     pub mutating: bool,
-    /// Switching the working directory into or out of the workspace.
+    /// Switching the working directory into or out of the virtual branches.
     ///
     /// Separate from `mutating` because this one moves HEAD under the user: it
     /// needs its own progress state so nothing else offers to run at the same
@@ -38,15 +38,15 @@ pub struct WorkspaceBusy {
     pub switching: bool,
 }
 
-impl WorkspaceBusy {
+impl VirtualBranchesBusy {
     pub fn any(&self) -> bool {
         self.loading || self.applying || self.committing || self.mutating || self.switching
     }
 }
 
-/// Why the last workspace rebuild did not produce a clean result.
+/// Why the last virtual branches rebuild did not produce a clean result.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct WorkspaceConflict {
+pub struct VirtualBranchesConflict {
     /// The branch being applied when the merge failed.
     pub branch: String,
     /// The branch it conflicted with, when the failure names one.
@@ -56,7 +56,7 @@ pub struct WorkspaceConflict {
     pub message: String,
 }
 
-impl WorkspaceConflict {
+impl VirtualBranchesConflict {
     /// The conflict described in terms of the branches involved, which is what
     /// the user can act on — a bare checkout/rebase conflict message names
     /// files but not the virtual branches that produced them.
@@ -68,48 +68,48 @@ impl WorkspaceConflict {
     }
 }
 
-/// The workspace of one open repository.
+/// The virtual branches of one open repository.
 #[derive(Clone, Debug, Default)]
-pub struct WorkspaceRepoState {
-    /// The stored workspace: target branch plus virtual branches.
-    pub state: Loadable<Arc<WorkspaceState>>,
+pub struct VirtualBranchesRepoState {
+    /// The stored virtual branches: target branch plus virtual branches.
+    pub state: Loadable<Arc<VirtualBranchesState>>,
     /// Stacks derived from `state`, computed once per load so rendering a long
     /// stack list does not re-sort per frame.
     pub stacks: Arc<Vec<Stack>>,
     /// Which virtual branch each changed file — or each of its hunks — belongs
     /// to.
     pub assignments: Arc<AssignmentIndex>,
-    /// The tip of `gitcomet/workspace`, when it has been built.
-    pub workspace_commit: Loadable<Option<gitcomet_core::domain::CommitId>>,
-    pub busy: WorkspaceBusy,
+    /// The tip of `gitcomet/virtual`, when it has been built.
+    pub virtual_branches_commit: Loadable<Option<gitcomet_core::domain::CommitId>>,
+    pub busy: VirtualBranchesBusy,
     /// The conflict from the last failed apply, cleared by the next successful
     /// one so a resolved conflict does not linger.
-    pub conflict: Option<WorkspaceConflict>,
-    /// Bumped on every change to the workspace, for cache keys.
+    pub conflict: Option<VirtualBranchesConflict>,
+    /// Bumped on every change to the virtual branches, for cache keys.
     pub rev: u64,
-    /// Whether the working directory is currently on `gitcomet/workspace`.
+    /// Whether the working directory is currently on `gitcomet/virtual`.
     ///
-    /// The workspace only owns the working directory while the user is looking
+    /// The virtual branches only owns the working directory while the user is looking
     /// at it. A rebuild while this is `false` updates the ref and nothing else,
-    /// which is what stops a workspace nobody has entered from changing files.
+    /// which is what stops a virtual branches nobody has entered from changing files.
     pub active: bool,
     /// The branch to put the working directory back on when the user leaves.
     ///
     /// Captured on entry rather than derived, because by the time they leave
     /// there is no way to tell what they were on. Kept in memory rather than on
-    /// disk: after a restart the user is either already on the workspace (and
+    /// disk: after a restart the user is either already on the virtual branches (and
     /// this is `None`, meaning "no idea") or not on it at all.
     pub checkout_base: Option<String>,
 }
 
-impl WorkspaceRepoState {
+impl VirtualBranchesRepoState {
     /// Recompute the derived fields from a freshly loaded state.
     ///
-    /// A workspace that fails to validate (hand-edited, or written by an
+    /// A virtual branches that fails to validate (hand-edited, or written by an
     /// incompatible version) still renders: the stacks are empty and the raw
     /// state is kept for the error message, rather than the view refusing to
     /// draw at all.
-    pub fn set_state(&mut self, state: WorkspaceState) {
+    pub fn set_state(&mut self, state: VirtualBranchesState) {
         self.stacks = Arc::new(state.stacks().unwrap_or_default());
         self.state = Loadable::Ready(Arc::new(state));
         self.conflict = None;
@@ -120,8 +120,8 @@ impl WorkspaceRepoState {
         self.state = Loadable::NotLoaded;
         self.stacks = Arc::new(Vec::new());
         self.assignments = Arc::new(AssignmentIndex::default());
-        self.workspace_commit = Loadable::NotLoaded;
-        self.busy = WorkspaceBusy::default();
+        self.virtual_branches_commit = Loadable::NotLoaded;
+        self.busy = VirtualBranchesBusy::default();
         self.conflict = None;
         self.active = false;
         self.checkout_base = None;
@@ -132,8 +132,8 @@ impl WorkspaceRepoState {
         self.rev = self.rev.wrapping_add(1);
     }
 
-    /// The loaded workspace state, if there is one.
-    pub fn workspace(&self) -> Option<&WorkspaceState> {
+    /// The loaded virtual branches state, if there is one.
+    pub fn virtual_branches(&self) -> Option<&VirtualBranchesState> {
         match &self.state {
             Loadable::Ready(state) => Some(state),
             _ => None,
@@ -141,11 +141,11 @@ impl WorkspaceRepoState {
     }
 
     pub fn target(&self) -> Option<&str> {
-        self.workspace().map(|state| state.target.as_str())
+        self.virtual_branches().map(|state| state.target.as_str())
     }
 
     pub fn branch(&self, name: &str) -> Option<&VirtualBranch> {
-        self.workspace()?.get(name)
+        self.virtual_branches()?.get(name)
     }
 
     pub fn applied_count(&self) -> usize {
@@ -161,7 +161,7 @@ impl WorkspaceRepoState {
     /// Paths whose branch no longer exists are reported as unassigned rather
     /// than dropped: the file is still changed and still needs a home.
     pub fn files_by_branch(&self, changed: &[PathBuf]) -> Vec<FileAssignment> {
-        let state = match self.workspace() {
+        let state = match self.virtual_branches() {
             Some(state) => state,
             None => return Vec::new(),
         };
@@ -189,14 +189,14 @@ impl WorkspaceRepoState {
             .collect()
     }
 
-    /// The counts the workspace header shows: assigned per branch, unassigned,
+    /// The counts the virtual branches header shows: assigned per branch, unassigned,
     /// and unapplied branches that hold no files right now.
     ///
     /// A split file counts once for every branch that commits part of it, so
     /// the per-branch numbers answer "what will this branch commit" rather than
     /// "how many files sum to the list above" — and the two do not have to
     /// agree, which is the point of a file being split.
-    pub fn summary_counts(&self, changed: &[PathBuf]) -> WorkspaceSummary {
+    pub fn summary_counts(&self, changed: &[PathBuf]) -> VirtualBranchesSummary {
         let assignments = self.files_by_branch(changed);
         let mut per_branch: FxHashMap<String, usize> = FxHashMap::default();
         let mut unassigned = 0;
@@ -212,7 +212,7 @@ impl WorkspaceRepoState {
                 unassigned += 1;
             }
         }
-        WorkspaceSummary {
+        VirtualBranchesSummary {
             per_branch,
             unassigned,
             applied: self.applied_count(),
@@ -221,28 +221,28 @@ impl WorkspaceRepoState {
     }
 
     /// Whether committing is possible: something is applied, something is
-    /// changed, and no other workspace work is running.
+    /// changed, and no other virtual branches work is running.
     pub fn can_commit(&self, changed_count: usize) -> bool {
         changed_count > 0 && self.applied_count() > 0 && !self.busy.any()
     }
 }
 
-/// The counts shown above the workspace file list.
+/// The counts shown above the virtual branches file list.
 #[derive(Clone, Debug, Default)]
-pub struct WorkspaceSummary {
+pub struct VirtualBranchesSummary {
     pub per_branch: FxHashMap<String, usize>,
     pub unassigned: usize,
     pub applied: usize,
     pub total: usize,
 }
 
-/// An edit to the workspace, as the UI requests it.
+/// An edit to the virtual branches, as the UI requests it.
 ///
 /// The reducer turns one of these into a state change plus the backend calls
 /// needed to realize it, so a single message covers create/apply/restack rather
 /// than one message per button.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub enum WorkspaceEdit {
+pub enum VirtualBranchesEdit {
     /// Add a branch on the target.
     Create {
         name: String,
@@ -281,7 +281,7 @@ pub enum WorkspaceEdit {
     Remove {
         name: String,
     },
-    /// Point the workspace at a different base and rebase onto it.
+    /// Point the virtual branches at a different base and rebase onto it.
     SetTarget {
         target: String,
     },
@@ -296,10 +296,10 @@ pub enum WorkspaceEdit {
     /// other hunk, so this moves the hunk rather than orphaning the rest.
     AssignHunk {
         path: PathBuf,
-        hunk: gitcomet_core::workspace::HunkFingerprint,
+        hunk: gitcomet_core::virtual_branches::HunkFingerprint,
         branch: Option<String>,
     },
-    /// Commit the given files to a branch rather than to the workspace.
+    /// Commit the given files to a branch rather than to the virtual branches.
     CommitPaths {
         name: String,
         message: String,
@@ -307,7 +307,7 @@ pub enum WorkspaceEdit {
     },
 }
 
-impl WorkspaceEdit {
+impl VirtualBranchesEdit {
     /// The branch the edit acts on, for progress reporting and for deciding
     /// which repository rows to invalidate.
     pub fn branch_name(&self) -> Option<&str> {
@@ -326,7 +326,7 @@ impl WorkspaceEdit {
     }
 
     /// Whether the set of applied branches moved, which is what forces the
-    /// workspace branch to be replayed.
+    /// virtual-branches branch to be replayed.
     ///
     /// Creating and removing count: a new branch is applied by default and a
     /// removed one stops contributing, so both change what the working tree
@@ -367,8 +367,8 @@ impl WorkspaceEdit {
 mod tests {
     use super::*;
 
-    fn state_with(names: &[(&str, Option<&str>, BranchApplyState)]) -> WorkspaceState {
-        WorkspaceState::new("main").with_branches(
+    fn state_with(names: &[(&str, Option<&str>, BranchApplyState)]) -> VirtualBranchesState {
+        VirtualBranchesState::new("main").with_branches(
             names
                 .iter()
                 .map(|(name, parent, applied)| {
@@ -383,71 +383,71 @@ mod tests {
         )
     }
 
-    fn loaded(names: &[(&str, Option<&str>, BranchApplyState)]) -> WorkspaceRepoState {
-        let mut workspace = WorkspaceRepoState::default();
-        workspace.set_state(state_with(names));
-        workspace
+    fn loaded(names: &[(&str, Option<&str>, BranchApplyState)]) -> VirtualBranchesRepoState {
+        let mut virtual_branches = VirtualBranchesRepoState::default();
+        virtual_branches.set_state(state_with(names));
+        virtual_branches
     }
 
     #[test]
     fn set_state_derives_stacks() {
-        let workspace = loaded(&[
+        let virtual_branches = loaded(&[
             ("api", None, BranchApplyState::Applied),
             ("ui", Some("api"), BranchApplyState::Applied),
         ]);
-        assert_eq!(workspace.stacks.len(), 1);
-        assert_eq!(workspace.total_count(), 2);
-        assert_eq!(workspace.applied_count(), 2);
+        assert_eq!(virtual_branches.stacks.len(), 1);
+        assert_eq!(virtual_branches.total_count(), 2);
+        assert_eq!(virtual_branches.applied_count(), 2);
     }
 
     #[test]
     fn unapplied_branches_are_counted_separately() {
-        let workspace = loaded(&[
+        let virtual_branches = loaded(&[
             ("api", None, BranchApplyState::Applied),
             ("parked", None, BranchApplyState::Unapplied),
         ]);
-        assert_eq!(workspace.total_count(), 2);
-        assert_eq!(workspace.applied_count(), 1);
+        assert_eq!(virtual_branches.total_count(), 2);
+        assert_eq!(virtual_branches.applied_count(), 1);
     }
 
     #[test]
     fn rev_advances_on_every_change() {
-        let mut workspace = WorkspaceRepoState::default();
-        assert_eq!(workspace.rev, 0);
-        workspace.set_state(WorkspaceState::new("main"));
-        assert_eq!(workspace.rev, 1);
-        workspace.bump_rev();
-        assert_eq!(workspace.rev, 2);
+        let mut virtual_branches = VirtualBranchesRepoState::default();
+        assert_eq!(virtual_branches.rev, 0);
+        virtual_branches.set_state(VirtualBranchesState::new("main"));
+        assert_eq!(virtual_branches.rev, 1);
+        virtual_branches.bump_rev();
+        assert_eq!(virtual_branches.rev, 2);
     }
 
     #[test]
     fn files_are_grouped_by_their_branch() {
-        let mut workspace = loaded(&[("api", None, BranchApplyState::Applied)]);
+        let mut virtual_branches = loaded(&[("api", None, BranchApplyState::Applied)]);
         let mut index = AssignmentIndex::new();
         index.set(PathBuf::from("src/a.rs"), Some("api".into()));
         index.set(PathBuf::from("src/b.rs"), None);
-        workspace.assignments = Arc::new(index);
+        virtual_branches.assignments = Arc::new(index);
 
         let files =
-            workspace.files_by_branch(&[PathBuf::from("src/a.rs"), PathBuf::from("src/b.rs")]);
+            virtual_branches.files_by_branch(&[PathBuf::from("src/a.rs"), PathBuf::from("src/b.rs")]);
         assert_eq!(files[0].branch.as_deref(), Some("api"));
         assert_eq!(files[1].branch, None);
     }
 
     #[test]
     fn a_file_assigned_to_a_deleted_branch_reads_as_unassigned() {
-        let mut workspace = loaded(&[("api", None, BranchApplyState::Applied)]);
+        let mut virtual_branches = loaded(&[("api", None, BranchApplyState::Applied)]);
         let mut index = AssignmentIndex::new();
         index.set(PathBuf::from("src/a.rs"), Some("gone".into()));
-        workspace.assignments = Arc::new(index);
+        virtual_branches.assignments = Arc::new(index);
 
-        let files = workspace.files_by_branch(&[PathBuf::from("src/a.rs")]);
+        let files = virtual_branches.files_by_branch(&[PathBuf::from("src/a.rs")]);
         assert_eq!(files[0].branch, None);
     }
 
     #[test]
     fn summary_counts_cover_assigned_and_unassigned_files() {
-        let mut workspace = loaded(&[
+        let mut virtual_branches = loaded(&[
             ("api", None, BranchApplyState::Applied),
             ("ui", None, BranchApplyState::Applied),
         ]);
@@ -456,9 +456,9 @@ mod tests {
         index.set(PathBuf::from("b.rs"), Some("api".into()));
         index.set(PathBuf::from("c.rs"), Some("ui".into()));
         index.set(PathBuf::from("d.rs"), None);
-        workspace.assignments = Arc::new(index);
+        virtual_branches.assignments = Arc::new(index);
 
-        let summary = workspace.summary_counts(&[
+        let summary = virtual_branches.summary_counts(&[
             PathBuf::from("a.rs"),
             PathBuf::from("b.rs"),
             PathBuf::from("c.rs"),
@@ -475,23 +475,23 @@ mod tests {
         // A split file has no single branch, so `branch` is `None` — but
         // reporting that as unassigned would send the user looking for a file
         // that two branches are already committing.
-        let mut workspace = loaded(&[
+        let mut virtual_branches = loaded(&[
             ("api", None, BranchApplyState::Applied),
             ("ui", None, BranchApplyState::Applied),
         ]);
         let mut index = AssignmentIndex::new();
-        let first = gitcomet_core::workspace::HunkFingerprint::of(&["api\n"], 1);
-        let second = gitcomet_core::workspace::HunkFingerprint::of(&["ui\n"], 1);
+        let first = gitcomet_core::virtual_branches::HunkFingerprint::of(&["api\n"], 1);
+        let second = gitcomet_core::virtual_branches::HunkFingerprint::of(&["ui\n"], 1);
         index.set_hunk(PathBuf::from("a.rs"), first, Some("api".into()));
         index.set_hunk(PathBuf::from("a.rs"), second, Some("ui".into()));
-        workspace.assignments = Arc::new(index);
+        virtual_branches.assignments = Arc::new(index);
 
-        let files = workspace.files_by_branch(&[PathBuf::from("a.rs")]);
+        let files = virtual_branches.files_by_branch(&[PathBuf::from("a.rs")]);
         assert_eq!(files[0].branch, None, "it is on no single branch");
         assert_eq!(files[0].split, ["api", "ui"], "it is on both");
         assert!(files[0].is_assigned());
 
-        let summary = workspace.summary_counts(&[PathBuf::from("a.rs")]);
+        let summary = virtual_branches.summary_counts(&[PathBuf::from("a.rs")]);
         assert_eq!(summary.per_branch.get("api"), Some(&1));
         assert_eq!(summary.per_branch.get("ui"), Some(&1));
         assert_eq!(summary.unassigned, 0, "nothing here will fail to commit");
@@ -499,50 +499,50 @@ mod tests {
 
     #[test]
     fn a_hunk_on_a_deleted_branch_does_not_keep_a_file_assigned() {
-        let mut workspace = loaded(&[("api", None, BranchApplyState::Applied)]);
+        let mut virtual_branches = loaded(&[("api", None, BranchApplyState::Applied)]);
         let mut index = AssignmentIndex::new();
         index.set_hunk(
             PathBuf::from("a.rs"),
-            gitcomet_core::workspace::HunkFingerprint::of(&["new\n"], 1),
+            gitcomet_core::virtual_branches::HunkFingerprint::of(&["new\n"], 1),
             Some("gone".into()),
         );
-        workspace.assignments = Arc::new(index);
+        virtual_branches.assignments = Arc::new(index);
 
-        let files = workspace.files_by_branch(&[PathBuf::from("a.rs")]);
+        let files = virtual_branches.files_by_branch(&[PathBuf::from("a.rs")]);
         assert!(files[0].split.is_empty());
         assert!(!files[0].is_assigned());
     }
 
     #[test]
     fn switching_the_working_directory_counts_as_busy() {
-        // Entering the workspace moves HEAD under the user. Nothing else may
+        // Entering the virtual branches moves HEAD under the user. Nothing else may
         // offer to run while that is in flight.
-        let mut workspace = WorkspaceRepoState::default();
-        workspace.busy.switching = true;
-        assert!(workspace.busy.any());
-        assert!(!workspace.can_commit(1));
+        let mut virtual_branches = VirtualBranchesRepoState::default();
+        virtual_branches.busy.switching = true;
+        assert!(virtual_branches.busy.any());
+        assert!(!virtual_branches.can_commit(1));
     }
 
     #[test]
-    fn clearing_forgets_that_the_working_directory_was_in_the_workspace() {
-        let mut workspace = WorkspaceRepoState::default();
-        workspace.active = true;
-        workspace.checkout_base = Some("main".into());
-        workspace.clear();
-        assert!(!workspace.active);
+    fn clearing_forgets_that_the_working_directory_was_in_the_virtual_branches() {
+        let mut virtual_branches = VirtualBranchesRepoState::default();
+        virtual_branches.active = true;
+        virtual_branches.checkout_base = Some("main".into());
+        virtual_branches.clear();
+        assert!(!virtual_branches.active);
         assert!(
-            workspace.checkout_base.is_none(),
+            virtual_branches.checkout_base.is_none(),
             "a remembered branch must not outlive the session that remembered it"
         );
     }
 
     #[test]
     fn can_commit_requires_changes_applied_branches_and_idle_state() {
-        let workspace = loaded(&[("api", None, BranchApplyState::Applied)]);
-        assert!(workspace.can_commit(1));
-        assert!(!workspace.can_commit(0));
+        let virtual_branches = loaded(&[("api", None, BranchApplyState::Applied)]);
+        assert!(virtual_branches.can_commit(1));
+        assert!(!virtual_branches.can_commit(0));
 
-        let mut busy = workspace.clone();
+        let mut busy = virtual_branches.clone();
         busy.busy.mutating = true;
         assert!(!busy.can_commit(1));
 
@@ -552,36 +552,36 @@ mod tests {
 
     #[test]
     fn clearing_resets_every_field() {
-        let mut workspace = loaded(&[("api", None, BranchApplyState::Applied)]);
-        workspace.busy.applying = true;
-        workspace.clear();
-        assert!(workspace.workspace().is_none());
-        assert!(workspace.stacks.is_empty());
-        assert!(workspace.assignments.is_empty());
-        assert!(!workspace.busy.any());
+        let mut virtual_branches = loaded(&[("api", None, BranchApplyState::Applied)]);
+        virtual_branches.busy.applying = true;
+        virtual_branches.clear();
+        assert!(virtual_branches.virtual_branches().is_none());
+        assert!(virtual_branches.stacks.is_empty());
+        assert!(virtual_branches.assignments.is_empty());
+        assert!(!virtual_branches.busy.any());
     }
 
     #[test]
-    fn a_corrupt_workspace_still_renders_empty_stacks() {
-        let mut workspace = WorkspaceRepoState::default();
+    fn a_corrupt_virtual_branches_still_renders_empty_stacks() {
+        let mut virtual_branches = VirtualBranchesRepoState::default();
         // A cycle cannot produce stacks, but it must not panic the view.
-        let cyclic = WorkspaceState::new("main").with_branches(vec![
+        let cyclic = VirtualBranchesState::new("main").with_branches(vec![
             VirtualBranch::new("a").with_parent("b"),
             VirtualBranch::new("b").with_parent("a"),
         ]);
-        workspace.set_state(cyclic);
-        assert!(workspace.stacks.is_empty());
-        assert!(workspace.workspace().is_some());
+        virtual_branches.set_state(cyclic);
+        assert!(virtual_branches.stacks.is_empty());
+        assert!(virtual_branches.virtual_branches().is_some());
     }
 
     #[test]
     fn edits_report_which_branch_they_act_on() {
         assert_eq!(
-            WorkspaceEdit::Create { name: "a".into() }.branch_name(),
+            VirtualBranchesEdit::Create { name: "a".into() }.branch_name(),
             Some("a")
         );
         assert_eq!(
-            WorkspaceEdit::AssignFile {
+            VirtualBranchesEdit::AssignFile {
                 path: PathBuf::from("a.rs"),
                 branch: Some("api".into()),
             }
@@ -589,7 +589,7 @@ mod tests {
             Some("api")
         );
         assert_eq!(
-            WorkspaceEdit::SetTarget { target: "x".into() }.branch_name(),
+            VirtualBranchesEdit::SetTarget { target: "x".into() }.branch_name(),
             None
         );
     }
@@ -597,26 +597,26 @@ mod tests {
     #[test]
     fn edits_that_move_the_applied_set_are_marked() {
         assert!(
-            WorkspaceEdit::SetApplied {
+            VirtualBranchesEdit::SetApplied {
                 name: "a".into(),
                 applied: BranchApplyState::Applied,
             }
             .changes_applied_set()
         );
-        assert!(WorkspaceEdit::SetTarget { target: "x".into() }.changes_applied_set());
+        assert!(VirtualBranchesEdit::SetTarget { target: "x".into() }.changes_applied_set());
         // A new branch is applied by default, and a removed one stops
-        // contributing, so both have to be replayed into the workspace branch.
-        assert!(WorkspaceEdit::Create { name: "a".into() }.changes_applied_set());
-        assert!(WorkspaceEdit::Remove { name: "a".into() }.changes_applied_set());
+        // contributing, so both have to be replayed into the virtual-branches branch.
+        assert!(VirtualBranchesEdit::Create { name: "a".into() }.changes_applied_set());
+        assert!(VirtualBranchesEdit::Remove { name: "a".into() }.changes_applied_set());
         assert!(
-            !WorkspaceEdit::Reorder {
+            !VirtualBranchesEdit::Reorder {
                 first: "a".into(),
                 second: "b".into(),
             }
             .changes_applied_set()
         );
         assert!(
-            !WorkspaceEdit::AssignFile {
+            !VirtualBranchesEdit::AssignFile {
                 path: PathBuf::from("a.rs"),
                 branch: Some("a".into()),
             }
@@ -627,15 +627,15 @@ mod tests {
     #[test]
     fn only_base_moves_rewrite_history() {
         assert!(
-            WorkspaceEdit::SetParent {
+            VirtualBranchesEdit::SetParent {
                 name: "a".into(),
                 parent: None,
             }
             .rewrites_history()
         );
-        assert!(!WorkspaceEdit::Create { name: "a".into() }.rewrites_history());
+        assert!(!VirtualBranchesEdit::Create { name: "a".into() }.rewrites_history());
         assert!(
-            !WorkspaceEdit::AssignFile {
+            !VirtualBranchesEdit::AssignFile {
                 path: PathBuf::from("a.rs"),
                 branch: None,
             }
@@ -645,7 +645,7 @@ mod tests {
 
     #[test]
     fn only_inserting_below_replays_the_anchor() {
-        let insert = |below| WorkspaceEdit::InsertRelativeTo {
+        let insert = |below| VirtualBranchesEdit::InsertRelativeTo {
             name: "b".into(),
             anchor: "a".into(),
             below,
@@ -660,7 +660,7 @@ mod tests {
     fn inserting_a_branch_moves_the_applied_set() {
         // A new branch is applied by default, like any other creation.
         assert!(
-            WorkspaceEdit::InsertRelativeTo {
+            VirtualBranchesEdit::InsertRelativeTo {
                 name: "b".into(),
                 anchor: "a".into(),
                 below: true,
@@ -668,7 +668,7 @@ mod tests {
             .changes_applied_set()
         );
         assert_eq!(
-            WorkspaceEdit::InsertRelativeTo {
+            VirtualBranchesEdit::InsertRelativeTo {
                 name: "b".into(),
                 anchor: "a".into(),
                 below: true,
@@ -682,7 +682,7 @@ mod tests {
     #[test]
     fn only_committing_produces_a_commit() {
         assert!(
-            WorkspaceEdit::CommitPaths {
+            VirtualBranchesEdit::CommitPaths {
                 name: "a".into(),
                 message: "m".into(),
                 paths: vec![PathBuf::from("a.rs")],
@@ -690,14 +690,14 @@ mod tests {
             .produces_commit()
         );
         assert!(
-            !WorkspaceEdit::SetApplied {
+            !VirtualBranchesEdit::SetApplied {
                 name: "a".into(),
                 applied: BranchApplyState::Applied,
             }
             .produces_commit()
         );
         assert_eq!(
-            WorkspaceEdit::CommitPaths {
+            VirtualBranchesEdit::CommitPaths {
                 name: "a".into(),
                 message: "m".into(),
                 paths: Vec::new(),
@@ -709,7 +709,7 @@ mod tests {
 
     #[test]
     fn a_conflict_summary_names_both_branches() {
-        let conflict = WorkspaceConflict {
+        let conflict = VirtualBranchesConflict {
             branch: "feature/ui".into(),
             against: Some("feature/api".into()),
             paths: Arc::new(Vec::new()),
@@ -717,7 +717,7 @@ mod tests {
         };
         assert_eq!(conflict.summary(), "feature/ui conflicts with feature/api");
 
-        let alone = WorkspaceConflict {
+        let alone = VirtualBranchesConflict {
             branch: "feature/ui".into(),
             against: None,
             paths: Arc::new(Vec::new()),

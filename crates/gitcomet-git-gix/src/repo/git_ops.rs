@@ -407,8 +407,8 @@ fn collect_local_branches(
         let target_id = branch_target_id(&mut reference)?;
         let name = local_branch_name(reference.name());
         // GitComet's own branches are bookkeeping, not something the user
-        // branches from or deletes; they belong to the Workspace view only.
-        if super::workspace::is_workspace_branch(&name) {
+        // branches from or deletes; they belong to the Virtual branches view only.
+        if super::virtual_branches::is_virtual_branches_branch(&name) {
             continue;
         }
         let target = cached_commit_id(&mut target_ids, &mut last_target, target_id);
@@ -483,9 +483,9 @@ fn parse_local_branches_for_each_ref(output: &str) -> Result<Vec<Branch>> {
 
         let mut fields = line.split('\t');
         let name = fields.next().unwrap_or_default();
-        // See `collect_local_branches`: GitComet's own branches are Workspace
+        // See `collect_local_branches`: GitComet's own branches are Virtual branches
         // bookkeeping and never appear as user branches.
-        if super::workspace::is_workspace_branch(name) {
+        if super::virtual_branches::is_virtual_branches_branch(name) {
             continue;
         }
         let target_hex = fields.next().unwrap_or_default();

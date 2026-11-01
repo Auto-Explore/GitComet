@@ -31,8 +31,8 @@ pub(in crate::view) mod explorer_operations;
 pub(in crate::view) use explorer_operations::ExplorerAction;
 mod file_browser_status;
 use file_browser_status::FileBrowserStatusCache;
-pub(in crate::view) mod workspace;
-use workspace::{WorkspaceFingerprint, WorkspacePresentation};
+pub(in crate::view) mod virtual_branches;
+use virtual_branches::{VirtualBranchesFingerprint, VirtualBranchesPresentation};
 // File rows borrow the branch tree's row height: one rhythm for both lists.
 use crate::view::rows::sidebar::{sidebar_list_row_height, sidebar_list_row_height_px};
 
@@ -402,15 +402,15 @@ pub(in super::super) struct SidebarPaneView {
     /// section as popover content instead of the full sidebar. The root view
     /// syncs this to its `sidebar_collapsed_popover` before embedding the pane.
     pub(in crate::view) collapsed_popover_section: Option<CollapsedSidebarSection>,
-    /// The Workspace tab's rows, rebuilt only when the workspace or the
+    /// The Virtual branches tab's rows, rebuilt only when the virtual branches or the
     /// working tree moves. Separate from the branch tree's cache because the
     /// two lists have nothing in common and invalidating one on a change to
     /// the other would rebuild both.
-    workspace_presentation: WorkspacePresentation,
-    workspace_fingerprint: WorkspaceFingerprint,
-    /// Scroll position of the Workspace list, kept apart from the branch
+    virtual_branches_presentation: VirtualBranchesPresentation,
+    virtual_branches_fingerprint: VirtualBranchesFingerprint,
+    /// Scroll position of the Virtual branches list, kept apart from the branch
     /// tree's so switching tabs returns to where the user was.
-    workspace_scroll: UniformListScrollHandle,
+    virtual_branches_scroll: UniformListScrollHandle,
     /// A file the explorer has been asked to scroll to, held until the store
     /// snapshot with its folders expanded arrives.
     pending_file_browser_reveal: Option<std::path::PathBuf>,
@@ -434,13 +434,13 @@ struct SidebarNotifyFingerprint {
     active_worktree_badges_count: usize,
     active_worktree_badges_hash: u64,
     file_browser_rev: u64,
-    /// The Workspace tab's own revisions: the workspace's own counter and the
+    /// The Virtual branches tab's own revisions: the virtual branches's own counter and the
     /// working tree's. The branch fingerprint does not move when a branch is
     /// applied or a file is assigned, so without these the pane would keep
     /// showing the rows it had when the tab was last opened. A tuple rather
     /// than a combined counter: two independent counters do not combine into
     /// one without losing the ability to tell which one moved.
-    workspace_revs: (u64, u64),
+    virtual_branches_revs: (u64, u64),
     /// The file the main pane has open. The tree highlights it, so the sidebar
     /// has to repaint when it changes — nothing else in this fingerprint moves
     /// when the user opens a different file.
@@ -470,8 +470,8 @@ impl SidebarNotifyFingerprint {
         let (active_worktree_badges_count, active_worktree_badges_hash) =
             cache.active_worktree_badges_fingerprint(state);
         let file_browser_rev = repo.map(|r| r.file_browser.file_browser_rev).unwrap_or(0);
-        let workspace_revs = repo
-            .map(|r| (r.workspace.rev, r.worktree_status_rev))
+        let virtual_branches_revs = repo
+            .map(|r| (r.virtual_branches.rev, r.worktree_status_rev))
             .unwrap_or((0, 0));
         let diff_target_rev = repo.map(|r| r.diff_state.diff_target_rev).unwrap_or(0);
         let status_revs = repo
@@ -494,7 +494,7 @@ impl SidebarNotifyFingerprint {
             active_worktree_badges_count,
             active_worktree_badges_hash,
             file_browser_rev,
-            workspace_revs,
+            virtual_branches_revs,
             diff_target_rev,
             history_focus_hash,
             status_revs,
@@ -712,9 +712,9 @@ impl SidebarPaneView {
             file_browser_rows_cache: std::cell::RefCell::new(None),
             file_browser_status_cache: Default::default(),
             collapsed_popover_section: None,
-            workspace_presentation: WorkspacePresentation::default(),
-            workspace_fingerprint: WorkspaceFingerprint::default(),
-            workspace_scroll: UniformListScrollHandle::default(),
+            virtual_branches_presentation: VirtualBranchesPresentation::default(),
+            virtual_branches_fingerprint: VirtualBranchesFingerprint::default(),
+            virtual_branches_scroll: UniformListScrollHandle::default(),
             pending_file_browser_reveal: None,
             pending_file_browser_reveal_at: None,
             #[cfg(any(test, feature = "benchmarks"))]
@@ -1464,14 +1464,14 @@ impl SidebarPaneView {
         cx.notify();
     }
 
-    /// The Workspace tab: virtual branches as stacks over the target, then
+    /// The Virtual branches tab: virtual branches as stacks over the target, then
     /// the working tree grouped by the branch each file is assigned to.
     ///
     /// Deliberately simpler than the branch tree: there is no filter, no
     /// pinning, and no collapsing, because none of those make sense for a
     /// list whose rows are the user's current work rather than a long-lived
     /// branch inventory.
-    fn render_workspace_content(
+    fn render_virtual_branches_content(
         &mut self,
         theme: AppTheme,
         cx: &mut gpui::Context<Self>,
@@ -1480,19 +1480,19 @@ impl SidebarPaneView {
         let ui_scale_percent = ui_scale::current(cx).percent;
         let scaled_px = ui_scale::scaler(ui_scale_percent);
 
-        let presentation = self.workspace_presentation_cached();
+        let presentation = self.virtual_branches_presentation_cached();
         let list = uniform_list(
-            "workspace_sidebar",
+            "virtual_branches_sidebar",
             presentation.rows.len(),
-            cx.processor(Self::render_workspace_rows),
+            cx.processor(Self::render_virtual_branches_rows),
         )
         .h_full()
         .min_h(px(0.0))
-        .track_scroll(&self.workspace_scroll);
+        .track_scroll(&self.virtual_branches_scroll);
 
         let body = div()
-            .id("sidebar_workspace_body")
-            .debug_selector(|| "sidebar_workspace_body".to_string())
+            .id("sidebar_virtual_branches_body")
+            .debug_selector(|| "sidebar_virtual_branches_body".to_string())
             .flex()
             .flex_col()
             .flex_1()
@@ -1501,8 +1501,8 @@ impl SidebarPaneView {
             .child(list)
             .child(
                 components::Scrollbar::new(
-                    "workspace_sidebar_scrollbar",
-                    self.workspace_scroll.clone(),
+                    "virtual_branches_sidebar_scrollbar",
+                    self.virtual_branches_scroll.clone(),
                 )
                 .auto_hide()
                 .render(theme),
@@ -1545,7 +1545,7 @@ impl SidebarPaneView {
                 .into_any_element(),
             (None, SidebarMode::Branches) => self.render_branches_content(theme, cx),
             (None, SidebarMode::Files) => self.render_file_browser_content(theme, cx),
-            (None, SidebarMode::Workspace) => self.render_workspace_content(theme, cx),
+            (None, SidebarMode::VirtualBranches) => self.render_virtual_branches_content(theme, cx),
         };
 
         // `size_full`, not just `h_full`: mounted as a cached view this is laid

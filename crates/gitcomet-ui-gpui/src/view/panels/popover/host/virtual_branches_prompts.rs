@@ -1,4 +1,4 @@
-//! The workspace edit prompt's behaviour: narrowing the action list down to a
+//! The virtual branches edit prompt's behaviour: narrowing the action list down to a
 //! single edit, validating what was typed, and dispatching it.
 //!
 //! Validation is deliberately stricter than the model requires. The model would
@@ -12,7 +12,7 @@
 //! without standing up a popover host.
 
 use super::*;
-use gitcomet_state::model::WorkspaceEdit;
+use gitcomet_state::model::VirtualBranchesEdit;
 
 impl PopoverHost {
     /// Move from a branch's action list to the text field of one action.
@@ -20,18 +20,18 @@ impl PopoverHost {
     /// The field is seeded rather than emptied: re-parenting wants the current
     /// base so the user edits it instead of retyping it, while moving into a
     /// stack has nothing sensible to prefill and so gets nothing.
-    pub(in crate::view::panels::popover) fn open_workspace_prompt_step(
+    pub(in crate::view::panels::popover) fn open_virtual_branches_prompt_step(
         &mut self,
-        kind: WorkspacePromptKind,
+        kind: VirtualBranchesPromptKind,
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
-        let Some(PopoverKind::WorkspacePrompt { repo_id, prompt }) = self.popover.clone() else {
+        let Some(PopoverKind::VirtualBranchesPrompt { repo_id, prompt }) = self.popover.clone() else {
             return;
         };
         let seed = match kind {
-            WorkspacePromptKind::SetParent => self
-                .workspace_state(repo_id)
+            VirtualBranchesPromptKind::SetParent => self
+                .virtual_branches_state(repo_id)
                 .and_then(|state| {
                     state
                         .get(&prompt.branch)
@@ -42,10 +42,10 @@ impl PopoverHost {
             // honest one-word summary of an entire branch's changes, and a
             // synthesised default here would invite the user to accept a commit
             // message that describes nothing.
-            WorkspacePromptKind::CommitBranch => String::new(),
+            VirtualBranchesPromptKind::CommitBranch => String::new(),
             _ => String::new(),
         };
-        self.workspace_prompt_kind = Some(kind);
+        self.virtual_branches_prompt_kind = Some(kind);
         self.create_branch_input.update(cx, |input, cx| {
             input.clear_transient_key_presses();
             input.set_text(seed, cx);
@@ -61,43 +61,43 @@ impl PopoverHost {
     }
 
     /// Whether the open prompt currently describes a valid edit.
-    pub(in crate::view::panels::popover) fn can_submit_workspace_prompt(
+    pub(in crate::view::panels::popover) fn can_submit_virtual_branches_prompt(
         &self,
         cx: &mut gpui::Context<Self>,
     ) -> bool {
-        let Some((repo_id, kind, value)) = self.open_workspace_prompt(cx) else {
+        let Some((repo_id, kind, value)) = self.open_virtual_branches_prompt(cx) else {
             return false;
         };
-        self.workspace_prompt_edit(repo_id, kind, &value).is_some()
+        self.virtual_branches_prompt_edit(repo_id, kind, &value).is_some()
     }
 
     /// Dispatch the open prompt's edit and close the dialog.
-    pub(in crate::view::panels::popover) fn submit_workspace_prompt(
+    pub(in crate::view::panels::popover) fn submit_virtual_branches_prompt(
         &mut self,
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
-        let Some((repo_id, kind, value)) = self.open_workspace_prompt(cx) else {
+        let Some((repo_id, kind, value)) = self.open_virtual_branches_prompt(cx) else {
             return;
         };
-        let Some(edit) = self.workspace_prompt_edit(repo_id, kind, &value) else {
+        let Some(edit) = self.virtual_branches_prompt_edit(repo_id, kind, &value) else {
             return;
         };
         self.store
-            .dispatch(Msg::ApplyWorkspaceEdit { repo_id, edit });
+            .dispatch(Msg::ApplyVirtualBranchesEdit { repo_id, edit });
         self.dismiss_prompt_popover(window, cx);
     }
 
     /// The open prompt as `(repo, step, typed value)`, or `None` when no
-    /// workspace prompt is up.
-    fn open_workspace_prompt(
+    /// virtual branches prompt is up.
+    fn open_virtual_branches_prompt(
         &self,
         cx: &mut gpui::Context<Self>,
-    ) -> Option<(RepoId, WorkspacePromptKind, String)> {
-        let PopoverKind::WorkspacePrompt { repo_id, prompt } = self.popover.as_ref()? else {
+    ) -> Option<(RepoId, VirtualBranchesPromptKind, String)> {
+        let PopoverKind::VirtualBranchesPrompt { repo_id, prompt } = self.popover.as_ref()? else {
             return None;
         };
-        let kind = self.workspace_prompt_kind.unwrap_or(prompt.kind);
+        let kind = self.virtual_branches_prompt_kind.unwrap_or(prompt.kind);
         let value = if kind.asks_for_text() {
             self.create_branch_input
                 .read_with(cx, |input, _| input.text().to_string())
@@ -107,14 +107,14 @@ impl PopoverHost {
         Some((*repo_id, kind, value))
     }
 
-    fn workspace_prompt_edit(
+    fn virtual_branches_prompt_edit(
         &self,
         repo_id: RepoId,
-        kind: WorkspacePromptKind,
+        kind: VirtualBranchesPromptKind,
         value: &str,
-    ) -> Option<WorkspaceEdit> {
+    ) -> Option<VirtualBranchesEdit> {
         let (branch, path, hunk) = match &self.popover {
-            Some(PopoverKind::WorkspacePrompt { prompt, .. }) => {
+            Some(PopoverKind::VirtualBranchesPrompt { prompt, .. }) => {
                 (prompt.branch.clone(), prompt.path.clone(), prompt.hunk)
             }
             _ => (String::new(), None, None),
@@ -122,8 +122,8 @@ impl PopoverHost {
         // A prompt left open across a background load that changed the list must
         // not dispatch an edit against a branch that is gone, so the subject is
         // re-checked here rather than trusted from when the popover opened.
-        let state = self.workspace_state(repo_id);
-        let in_workspace = |name: &str| state.is_some_and(|state| state.contains(name));
+        let state = self.virtual_branches_state(repo_id);
+        let in_virtual_branches = |name: &str| state.is_some_and(|state| state.contains(name));
         let free_name = |value: &str| self.free_branch_name(repo_id, value, state);
         let assignment_of = |path: &std::path::Path| self.file_assignment(repo_id, path);
         let paths_for = |branch: &str| self.assigned_paths(repo_id, branch);
@@ -133,7 +133,7 @@ impl PopoverHost {
             path.as_deref(),
             hunk,
             value.trim(),
-            &in_workspace,
+            &in_virtual_branches,
             &free_name,
             &|name| self.knows_git_branch(repo_id, name),
             &assignment_of,
@@ -150,7 +150,7 @@ impl PopoverHost {
         &self,
         repo_id: RepoId,
         value: &str,
-        state: Option<&gitcomet_core::workspace::WorkspaceState>,
+        state: Option<&gitcomet_core::virtual_branches::VirtualBranchesState>,
     ) -> String {
         let is_taken = |name: &str| {
             state.is_some_and(|state| state.contains(name)) || self.knows_git_branch(repo_id, name)
@@ -172,24 +172,24 @@ impl PopoverHost {
             })
     }
 
-    fn workspace_state(
+    fn virtual_branches_state(
         &self,
         repo_id: RepoId,
-    ) -> Option<&gitcomet_core::workspace::WorkspaceState> {
+    ) -> Option<&gitcomet_core::virtual_branches::VirtualBranchesState> {
         self.state
             .repos
             .iter()
             .find(|repo| repo.id == repo_id)
-            .and_then(|repo| repo.workspace.workspace())
+            .and_then(|repo| repo.virtual_branches.virtual_branches())
     }
 
     /// The branch a file is currently assigned to, if that branch still exists.
     fn file_assignment(&self, repo_id: RepoId, path: &std::path::Path) -> Option<String> {
         let repo = self.state.repos.iter().find(|repo| repo.id == repo_id)?;
-        let workspace = repo.workspace.workspace()?;
-        repo.workspace
+        let virtual_branches = repo.virtual_branches.virtual_branches()?;
+        repo.virtual_branches
             .assignments
-            .resolve(path, workspace)
+            .resolve(path, virtual_branches)
             .map(str::to_string)
     }
 
@@ -200,7 +200,7 @@ impl PopoverHost {
             .iter()
             .find(|repo| repo.id == repo_id)
             .map(|repo| {
-                repo.workspace
+                repo.virtual_branches
                     .assignments
                     .paths_for(branch)
                     .into_iter()
@@ -213,7 +213,7 @@ impl PopoverHost {
 
 /// The edit a prompt at `kind` with `branch`, `path` and `value` produces.
 ///
-/// `in_workspace` answers whether a name is one of the repository's virtual
+/// `in_virtual_branches` answers whether a name is one of the repository's virtual
 /// branches, `free_name` turns typed text into a name nothing else has taken,
 /// `is_git_branch` whether it is a real branch in the repository — the target
 /// is a real branch, while a base or a stack is a virtual one, and conflating
@@ -222,107 +222,107 @@ impl PopoverHost {
 /// `paths_for` the files assigned to a branch.
 #[allow(clippy::too_many_arguments)]
 fn edit_for(
-    kind: WorkspacePromptKind,
+    kind: VirtualBranchesPromptKind,
     branch: &str,
     path: Option<&std::path::Path>,
-    hunk: Option<gitcomet_core::workspace::HunkFingerprint>,
+    hunk: Option<gitcomet_core::virtual_branches::HunkFingerprint>,
     value: &str,
-    in_workspace: &dyn Fn(&str) -> bool,
+    in_virtual_branches: &dyn Fn(&str) -> bool,
     free_name: &dyn Fn(&str) -> String,
     is_git_branch: &dyn Fn(&str) -> bool,
     assignment_of: &dyn Fn(&std::path::Path) -> Option<String>,
     paths_for: &dyn Fn(&str) -> Vec<std::path::PathBuf>,
-) -> Option<WorkspaceEdit> {
+) -> Option<VirtualBranchesEdit> {
     // The action list submits nothing; picking a row is the whole interaction.
-    let branch_exists = !branch.is_empty() && in_workspace(branch);
+    let branch_exists = !branch.is_empty() && in_virtual_branches(branch);
 
     let edit = match kind {
-        WorkspacePromptKind::BranchActions => return None,
-        WorkspacePromptKind::Create => WorkspaceEdit::Create {
+        VirtualBranchesPromptKind::BranchActions => return None,
+        VirtualBranchesPromptKind::Create => VirtualBranchesEdit::Create {
             name: free_name(value),
         },
-        WorkspacePromptKind::CreateAbove | WorkspacePromptKind::CreateBelow => {
+        VirtualBranchesPromptKind::CreateAbove | VirtualBranchesPromptKind::CreateBelow => {
             if !branch_exists {
                 return None;
             }
-            WorkspaceEdit::InsertRelativeTo {
+            VirtualBranchesEdit::InsertRelativeTo {
                 name: free_name(value),
                 anchor: branch.to_string(),
-                below: kind == WorkspacePromptKind::CreateBelow,
+                below: kind == VirtualBranchesPromptKind::CreateBelow,
             }
         }
-        WorkspacePromptKind::SetTarget => {
-            // The target is a revision, not a workspace branch, so it is
+        VirtualBranchesPromptKind::SetTarget => {
+            // The target is a revision, not a virtual-branches branch, so it is
             // checked against the repository's real branch list instead.
             if !is_submittable_branch_name(value) || !is_git_branch(value) {
                 return None;
             }
-            WorkspaceEdit::SetTarget {
+            VirtualBranchesEdit::SetTarget {
                 target: value.to_string(),
             }
         }
-        WorkspacePromptKind::SetParent => {
+        VirtualBranchesPromptKind::SetParent => {
             if !branch_exists {
                 return None;
             }
             // An empty field means "sit on the target directly", which is how a
             // branch leaves a stack, so it is an answer here rather than a
             // missing one.
-            if !value.is_empty() && (value == branch || !in_workspace(value)) {
+            if !value.is_empty() && (value == branch || !in_virtual_branches(value)) {
                 return None;
             }
-            WorkspaceEdit::SetParent {
+            VirtualBranchesEdit::SetParent {
                 name: branch.to_string(),
                 parent: (!value.is_empty()).then(|| value.to_string()),
             }
         }
-        WorkspacePromptKind::MoveToStack => {
-            if !branch_exists || value.is_empty() || value == branch || !in_workspace(value) {
+        VirtualBranchesPromptKind::MoveToStack => {
+            if !branch_exists || value.is_empty() || value == branch || !in_virtual_branches(value) {
                 return None;
             }
-            WorkspaceEdit::MoveToStack {
+            VirtualBranchesEdit::MoveToStack {
                 name: branch.to_string(),
                 stack_base: value.to_string(),
                 relative_to: None,
                 below: false,
             }
         }
-        WorkspacePromptKind::Remove => {
+        VirtualBranchesPromptKind::Remove => {
             if !branch_exists {
                 return None;
             }
-            WorkspaceEdit::Remove {
+            VirtualBranchesEdit::Remove {
                 name: branch.to_string(),
             }
         }
-        WorkspacePromptKind::AssignFile => {
+        VirtualBranchesPromptKind::AssignFile => {
             // An empty field is not a missing answer here: it is how a file
             // goes back to the unassigned bucket.
             let path = path?;
-            if !value.is_empty() && !in_workspace(value) {
+            if !value.is_empty() && !in_virtual_branches(value) {
                 return None;
             }
-            WorkspaceEdit::AssignFile {
+            VirtualBranchesEdit::AssignFile {
                 path: path.to_path_buf(),
                 branch: (!value.is_empty()).then(|| value.to_string()),
             }
         }
-        WorkspacePromptKind::AssignHunk => {
+        VirtualBranchesPromptKind::AssignHunk => {
             // An empty field is how a hunk goes back to nobody's, the same as
             // for a whole file.
             let (Some(path), Some(hunk)) = (path, hunk) else {
                 return None;
             };
-            if !value.is_empty() && !in_workspace(value) {
+            if !value.is_empty() && !in_virtual_branches(value) {
                 return None;
             }
-            WorkspaceEdit::AssignHunk {
+            VirtualBranchesEdit::AssignHunk {
                 path: path.to_path_buf(),
                 hunk,
                 branch: (!value.is_empty()).then(|| value.to_string()),
             }
         }
-        WorkspacePromptKind::CommitMessage => {
+        VirtualBranchesPromptKind::CommitMessage => {
             let path = path?;
             // A commit with no message is one Git will refuse to describe, so
             // the prompt opens on the synthesised default rather than empty and
@@ -336,13 +336,13 @@ fn edit_for(
             // and committing to the branch it used to belong to would put the
             // change somewhere the user is no longer looking.
             let name = assignment_of(path)?;
-            WorkspaceEdit::CommitPaths {
+            VirtualBranchesEdit::CommitPaths {
                 name,
                 message: message.to_string(),
                 paths: vec![path.to_path_buf()],
             }
         }
-        WorkspacePromptKind::CommitBranch => {
+        VirtualBranchesPromptKind::CommitBranch => {
             if !branch_exists {
                 return None;
             }
@@ -358,7 +358,7 @@ fn edit_for(
             if paths.is_empty() {
                 return None;
             }
-            WorkspaceEdit::CommitPaths {
+            VirtualBranchesEdit::CommitPaths {
                 name: branch.to_string(),
                 message: message.to_string(),
                 paths,
@@ -368,7 +368,7 @@ fn edit_for(
     // A creation whose name could not be made free is not an edit at all, and
     // the confirm button stays disabled rather than dispatching an empty name.
     match &edit {
-        WorkspaceEdit::Create { name } | WorkspaceEdit::InsertRelativeTo { name, .. }
+        VirtualBranchesEdit::Create { name } | VirtualBranchesEdit::InsertRelativeTo { name, .. }
             if name.is_empty() =>
         {
             None
@@ -398,7 +398,7 @@ fn free_branch_name(base: &str, is_taken: &dyn Fn(&str) -> bool) -> String {
 mod tests {
     use super::*;
 
-    /// A workspace holding `api` on the target, with `ui` stacked on it.
+    /// A virtual branches holding `api` on the target, with `ui` stacked on it.
     fn membership() -> impl Fn(&str) -> bool {
         let names = ["api", "ui"].map(str::to_string);
         move |name: &str| names.iter().any(|known| known == name)
@@ -411,15 +411,15 @@ mod tests {
     }
 
     /// The name the prompt would create, under the same rule the real one
-    /// uses: a name the workspace already lists is taken too, not only a
+    /// uses: a name the virtual branches already lists is taken too, not only a
     /// name some other branch holds.
     fn free(value: &str) -> String {
         let taken = taken();
-        let in_workspace = membership();
-        free_branch_name(value, &|name| taken(name) || in_workspace(name))
+        let in_virtual_branches = membership();
+        free_branch_name(value, &|name| taken(name) || in_virtual_branches(name))
     }
 
-    fn edit(kind: WorkspacePromptKind, branch: &str, value: &str) -> Option<WorkspaceEdit> {
+    fn edit(kind: VirtualBranchesPromptKind, branch: &str, value: &str) -> Option<VirtualBranchesEdit> {
         edit_for(
             kind,
             branch,
@@ -434,9 +434,9 @@ mod tests {
         )
     }
 
-    fn assign(value: &str) -> Option<WorkspaceEdit> {
+    fn assign(value: &str) -> Option<VirtualBranchesEdit> {
         edit_for(
-            WorkspacePromptKind::AssignFile,
+            VirtualBranchesPromptKind::AssignFile,
             "",
             Some(std::path::Path::new("src/lib.rs")),
             None,
@@ -449,9 +449,9 @@ mod tests {
         )
     }
 
-    fn commit(value: &str) -> Option<WorkspaceEdit> {
+    fn commit(value: &str) -> Option<VirtualBranchesEdit> {
         edit_for(
-            WorkspacePromptKind::CommitMessage,
+            VirtualBranchesPromptKind::CommitMessage,
             "",
             Some(std::path::Path::new("src/lib.rs")),
             None,
@@ -475,9 +475,9 @@ mod tests {
         }
     }
 
-    fn commit_branch(branch: &str, value: &str) -> Option<WorkspaceEdit> {
+    fn commit_branch(branch: &str, value: &str) -> Option<VirtualBranchesEdit> {
         edit_for(
-            WorkspacePromptKind::CommitBranch,
+            VirtualBranchesPromptKind::CommitBranch,
             branch,
             None,
             None,
@@ -492,12 +492,12 @@ mod tests {
 
     #[test]
     fn the_action_list_produces_no_edit() {
-        assert!(edit(WorkspacePromptKind::BranchActions, "api", "").is_none());
+        assert!(edit(VirtualBranchesPromptKind::BranchActions, "api", "").is_none());
     }
 
     #[test]
     fn creating_uses_the_typed_name() {
-        let Some(WorkspaceEdit::Create { name }) = edit(WorkspacePromptKind::Create, "", "feat/x")
+        let Some(VirtualBranchesEdit::Create { name }) = edit(VirtualBranchesPromptKind::Create, "", "feat/x")
         else {
             panic!("expected a create edit");
         };
@@ -506,7 +506,7 @@ mod tests {
 
     #[test]
     fn creating_over_an_existing_branch_gets_suffixed() {
-        let Some(WorkspaceEdit::Create { name }) = edit(WorkspacePromptKind::Create, "", "api")
+        let Some(VirtualBranchesEdit::Create { name }) = edit(VirtualBranchesPromptKind::Create, "", "api")
         else {
             panic!("expected a create edit");
         };
@@ -515,16 +515,16 @@ mod tests {
 
     #[test]
     fn an_unusable_name_produces_no_edit() {
-        assert!(edit(WorkspacePromptKind::Create, "", "   ").is_none());
+        assert!(edit(VirtualBranchesPromptKind::Create, "", "   ").is_none());
     }
 
     #[test]
     fn inserting_below_stacks_on_the_branch_and_inserting_above_takes_its_place() {
-        let Some(WorkspaceEdit::InsertRelativeTo {
+        let Some(VirtualBranchesEdit::InsertRelativeTo {
             name,
             anchor,
             below,
-        }) = edit(WorkspacePromptKind::CreateBelow, "api", "ui")
+        }) = edit(VirtualBranchesPromptKind::CreateBelow, "api", "ui")
         else {
             panic!("expected an insert edit");
         };
@@ -532,8 +532,8 @@ mod tests {
         assert_eq!(anchor, "api");
         assert!(below);
 
-        let Some(WorkspaceEdit::InsertRelativeTo { below, .. }) =
-            edit(WorkspacePromptKind::CreateAbove, "api", "web")
+        let Some(VirtualBranchesEdit::InsertRelativeTo { below, .. }) =
+            edit(VirtualBranchesPromptKind::CreateAbove, "api", "web")
         else {
             panic!("expected an insert edit");
         };
@@ -542,29 +542,29 @@ mod tests {
 
     #[test]
     fn inserting_needs_a_branch_that_is_still_there() {
-        // The branch vanished from the workspace while the prompt was open.
-        assert!(edit(WorkspacePromptKind::CreateAbove, "gone", "x").is_none());
-        assert!(edit(WorkspacePromptKind::CreateBelow, "gone", "x").is_none());
+        // The branch vanished from the virtual branches while the prompt was open.
+        assert!(edit(VirtualBranchesPromptKind::CreateAbove, "gone", "x").is_none());
+        assert!(edit(VirtualBranchesPromptKind::CreateBelow, "gone", "x").is_none());
     }
 
     #[test]
     fn the_target_must_be_a_real_branch() {
-        let Some(WorkspaceEdit::SetTarget { target }) =
-            edit(WorkspacePromptKind::SetTarget, "", "develop")
+        let Some(VirtualBranchesEdit::SetTarget { target }) =
+            edit(VirtualBranchesPromptKind::SetTarget, "", "develop")
         else {
             panic!("expected a set-target edit");
         };
         assert_eq!(target, "develop");
 
-        // A virtual branch is not a revision the workspace can be built on.
-        assert!(edit(WorkspacePromptKind::SetTarget, "", "ui").is_none());
-        assert!(edit(WorkspacePromptKind::SetTarget, "", "").is_none());
+        // A virtual branch is not a revision the virtual branches can be built on.
+        assert!(edit(VirtualBranchesPromptKind::SetTarget, "", "ui").is_none());
+        assert!(edit(VirtualBranchesPromptKind::SetTarget, "", "").is_none());
     }
 
     #[test]
     fn re_parenting_accepts_a_virtual_base_or_nothing_at_all() {
-        let Some(WorkspaceEdit::SetParent { name, parent }) =
-            edit(WorkspacePromptKind::SetParent, "api", "ui")
+        let Some(VirtualBranchesEdit::SetParent { name, parent }) =
+            edit(VirtualBranchesPromptKind::SetParent, "api", "ui")
         else {
             panic!("expected a set-parent edit");
         };
@@ -573,8 +573,8 @@ mod tests {
 
         // Empty means "back onto the target", which is how a branch leaves a
         // stack.
-        let Some(WorkspaceEdit::SetParent { parent, .. }) =
-            edit(WorkspacePromptKind::SetParent, "ui", "")
+        let Some(VirtualBranchesEdit::SetParent { parent, .. }) =
+            edit(VirtualBranchesPromptKind::SetParent, "ui", "")
         else {
             panic!("expected a set-parent edit");
         };
@@ -583,20 +583,20 @@ mod tests {
 
     #[test]
     fn a_branch_cannot_be_stacked_on_itself_or_on_nothing() {
-        assert!(edit(WorkspacePromptKind::SetParent, "api", "api").is_none());
-        assert!(edit(WorkspacePromptKind::MoveToStack, "api", "api").is_none());
-        assert!(edit(WorkspacePromptKind::MoveToStack, "api", "").is_none());
-        assert!(edit(WorkspacePromptKind::MoveToStack, "api", "gone").is_none());
+        assert!(edit(VirtualBranchesPromptKind::SetParent, "api", "api").is_none());
+        assert!(edit(VirtualBranchesPromptKind::MoveToStack, "api", "api").is_none());
+        assert!(edit(VirtualBranchesPromptKind::MoveToStack, "api", "").is_none());
+        assert!(edit(VirtualBranchesPromptKind::MoveToStack, "api", "gone").is_none());
     }
 
     #[test]
     fn moving_into_a_stack_names_the_stack_base() {
-        let Some(WorkspaceEdit::MoveToStack {
+        let Some(VirtualBranchesEdit::MoveToStack {
             name,
             stack_base,
             relative_to,
             below,
-        }) = edit(WorkspacePromptKind::MoveToStack, "api", "ui")
+        }) = edit(VirtualBranchesPromptKind::MoveToStack, "api", "ui")
         else {
             panic!("expected a move edit");
         };
@@ -608,17 +608,17 @@ mod tests {
 
     #[test]
     fn removing_needs_a_branch_that_is_there() {
-        let Some(WorkspaceEdit::Remove { name }) = edit(WorkspacePromptKind::Remove, "api", "")
+        let Some(VirtualBranchesEdit::Remove { name }) = edit(VirtualBranchesPromptKind::Remove, "api", "")
         else {
             panic!("expected a remove edit");
         };
         assert_eq!(name, "api");
-        assert!(edit(WorkspacePromptKind::Remove, "gone", "").is_none());
+        assert!(edit(VirtualBranchesPromptKind::Remove, "gone", "").is_none());
     }
 
     #[test]
     fn assigning_a_file_names_the_branch_it_goes_to() {
-        let Some(WorkspaceEdit::AssignFile { path, branch }) = assign("ui") else {
+        let Some(VirtualBranchesEdit::AssignFile { path, branch }) = assign("ui") else {
             panic!("expected an assign edit");
         };
         assert_eq!(path, std::path::Path::new("src/lib.rs"));
@@ -627,7 +627,7 @@ mod tests {
 
     #[test]
     fn an_empty_field_unassigns_rather_than_refusing() {
-        let Some(WorkspaceEdit::AssignFile { branch, .. }) = assign("") else {
+        let Some(VirtualBranchesEdit::AssignFile { branch, .. }) = assign("") else {
             panic!("an empty field should still produce an edit");
         };
         assert_eq!(branch, None);
@@ -636,7 +636,7 @@ mod tests {
     #[test]
     fn a_file_can_only_go_to_a_branch_that_exists() {
         assert!(assign("nope").is_none());
-        // A real Git branch is not a workspace branch, so it is not a target.
+        // A real Git branch is not a virtual-branches branch, so it is not a target.
         assert!(assign("main").is_none());
     }
 
@@ -644,7 +644,7 @@ mod tests {
     fn assigning_needs_a_file() {
         assert!(
             edit_for(
-                WorkspacePromptKind::AssignFile,
+                VirtualBranchesPromptKind::AssignFile,
                 "",
                 None,
                 None,
@@ -665,33 +665,33 @@ mod tests {
     /// enumerate a plain enum, and a list that has to be updated by hand is exactly
     /// what makes the test below worth having: adding a kind without adding it here
     /// fails, and adding a kind here without implementing it fails too.
-    const ALL_KINDS: [WorkspacePromptKind; 12] = [
-        WorkspacePromptKind::BranchActions,
-        WorkspacePromptKind::Create,
-        WorkspacePromptKind::CreateAbove,
-        WorkspacePromptKind::CreateBelow,
-        WorkspacePromptKind::SetTarget,
-        WorkspacePromptKind::SetParent,
-        WorkspacePromptKind::MoveToStack,
-        WorkspacePromptKind::Remove,
-        WorkspacePromptKind::AssignFile,
-        WorkspacePromptKind::AssignHunk,
-        WorkspacePromptKind::CommitMessage,
-        WorkspacePromptKind::CommitBranch,
+    const ALL_KINDS: [VirtualBranchesPromptKind; 12] = [
+        VirtualBranchesPromptKind::BranchActions,
+        VirtualBranchesPromptKind::Create,
+        VirtualBranchesPromptKind::CreateAbove,
+        VirtualBranchesPromptKind::CreateBelow,
+        VirtualBranchesPromptKind::SetTarget,
+        VirtualBranchesPromptKind::SetParent,
+        VirtualBranchesPromptKind::MoveToStack,
+        VirtualBranchesPromptKind::Remove,
+        VirtualBranchesPromptKind::AssignFile,
+        VirtualBranchesPromptKind::AssignHunk,
+        VirtualBranchesPromptKind::CommitMessage,
+        VirtualBranchesPromptKind::CommitBranch,
     ];
 
     #[test]
     fn every_prompt_kind_produces_an_edit_or_says_it_submits_nothing() {
-        // The docs claim every `WorkspaceEdit` variant is reachable from the
+        // The docs claim every `VirtualBranchesEdit` variant is reachable from the
         // view. `edit_for` has no catch-all — adding a kind is a compile error,
         // not a silent no-op — so this pins the other half of the claim: that
         // each kind really does resolve to something, and that the ones that
         // submit nothing are only the ones meant to.
         // Everything the dialog could be handed exists: `x` names a
-        // workspace branch, a real branch and a hunk of the file, and the
+        // virtual-branches branch, a real branch and a hunk of the file, and the
         // branch has an assigned path to commit.
         let member = membership();
-        let in_workspace = |name: &str| name == "x" || member(name);
+        let in_virtual_branches = |name: &str| name == "x" || member(name);
         let free = |name: &str| name.to_string();
 
         for kind in ALL_KINDS {
@@ -699,9 +699,9 @@ mod tests {
                 kind,
                 "api",
                 Some(std::path::Path::new("src/lib.rs")),
-                Some(gitcomet_core::workspace::HunkFingerprint::default()),
+                Some(gitcomet_core::virtual_branches::HunkFingerprint::default()),
                 "x",
-                &in_workspace,
+                &in_virtual_branches,
                 &free,
                 // The repository does hold the branch the field names, so
                 // every kind that needs an existing answer gets one.
@@ -715,7 +715,7 @@ mod tests {
                     }
                 },
             );
-            if kind == WorkspacePromptKind::BranchActions {
+            if kind == VirtualBranchesPromptKind::BranchActions {
                 assert!(
                     edit.is_none(),
                     "the action list submits nothing; picking a row is the interaction"
@@ -728,13 +728,13 @@ mod tests {
 
     #[test]
     fn assigning_a_hunk_names_the_file_the_hunk_and_the_branch() {
-        let hunk = gitcomet_core::workspace::HunkFingerprint::of(&["new\n"], 1);
-        let Some(WorkspaceEdit::AssignHunk {
+        let hunk = gitcomet_core::virtual_branches::HunkFingerprint::of(&["new\n"], 1);
+        let Some(VirtualBranchesEdit::AssignHunk {
             path,
             hunk: key,
             branch,
         }) = edit_for(
-            WorkspacePromptKind::AssignHunk,
+            VirtualBranchesPromptKind::AssignHunk,
             "",
             Some(std::path::Path::new("src/lib.rs")),
             Some(hunk),
@@ -755,9 +755,9 @@ mod tests {
 
     #[test]
     fn an_empty_field_unassigns_the_hunk_too() {
-        let hunk = gitcomet_core::workspace::HunkFingerprint::default();
-        let Some(WorkspaceEdit::AssignHunk { branch, .. }) = edit_for(
-            WorkspacePromptKind::AssignHunk,
+        let hunk = gitcomet_core::virtual_branches::HunkFingerprint::default();
+        let Some(VirtualBranchesEdit::AssignHunk { branch, .. }) = edit_for(
+            VirtualBranchesPromptKind::AssignHunk,
             "",
             Some(std::path::Path::new("src/lib.rs")),
             Some(hunk),
@@ -776,10 +776,10 @@ mod tests {
     #[test]
     fn assigning_a_hunk_needs_both_a_file_and_a_hunk() {
         let any = edit_for(
-            WorkspacePromptKind::AssignHunk,
+            VirtualBranchesPromptKind::AssignHunk,
             "",
             None,
-            Some(gitcomet_core::workspace::HunkFingerprint::default()),
+            Some(gitcomet_core::virtual_branches::HunkFingerprint::default()),
             "ui",
             &membership(),
             &free,
@@ -790,7 +790,7 @@ mod tests {
         assert!(any.is_none(), "no file, no hunk to assign");
 
         let any = edit_for(
-            WorkspacePromptKind::AssignHunk,
+            VirtualBranchesPromptKind::AssignHunk,
             "",
             Some(std::path::Path::new("a.rs")),
             None,
@@ -808,10 +808,10 @@ mod tests {
     fn a_hunk_can_only_go_to_a_branch_that_exists() {
         let edit = |value: &str| {
             edit_for(
-                WorkspacePromptKind::AssignHunk,
+                VirtualBranchesPromptKind::AssignHunk,
                 "",
                 Some(std::path::Path::new("src/lib.rs")),
-                Some(gitcomet_core::workspace::HunkFingerprint::default()),
+                Some(gitcomet_core::virtual_branches::HunkFingerprint::default()),
                 value,
                 &membership(),
                 &free,
@@ -826,7 +826,7 @@ mod tests {
 
     #[test]
     fn committing_carries_the_message_and_the_file() {
-        let Some(WorkspaceEdit::CommitPaths {
+        let Some(VirtualBranchesEdit::CommitPaths {
             name,
             message,
             paths,
@@ -851,7 +851,7 @@ mod tests {
     fn a_file_with_no_branch_cannot_be_committed() {
         assert!(
             edit_for(
-                WorkspacePromptKind::CommitMessage,
+                VirtualBranchesPromptKind::CommitMessage,
                 "",
                 Some(std::path::Path::new("src/lib.rs")),
                 None,
@@ -870,7 +870,7 @@ mod tests {
     fn committing_needs_a_file() {
         assert!(
             edit_for(
-                WorkspacePromptKind::CommitMessage,
+                VirtualBranchesPromptKind::CommitMessage,
                 "",
                 None,
                 None,
@@ -887,7 +887,7 @@ mod tests {
 
     #[test]
     fn committing_a_branch_takes_every_file_assigned_to_it() {
-        let Some(WorkspaceEdit::CommitPaths {
+        let Some(VirtualBranchesEdit::CommitPaths {
             name,
             message,
             paths,
@@ -949,11 +949,11 @@ mod tests {
     #[test]
     fn every_branch_edit_is_refused_for_a_branch_that_is_gone() {
         for kind in [
-            WorkspacePromptKind::CreateAbove,
-            WorkspacePromptKind::CreateBelow,
-            WorkspacePromptKind::SetParent,
-            WorkspacePromptKind::MoveToStack,
-            WorkspacePromptKind::Remove,
+            VirtualBranchesPromptKind::CreateAbove,
+            VirtualBranchesPromptKind::CreateBelow,
+            VirtualBranchesPromptKind::SetParent,
+            VirtualBranchesPromptKind::MoveToStack,
+            VirtualBranchesPromptKind::Remove,
         ] {
             assert!(
                 edit(kind, "gone", "ui").is_none(),

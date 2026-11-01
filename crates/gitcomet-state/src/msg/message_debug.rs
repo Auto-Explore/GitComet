@@ -717,60 +717,60 @@ impl std::fmt::Debug for InternalMsg {
                 .field("command", command)
                 .field("result", result)
                 .finish(),
-            InternalMsg::WorkspaceLoaded {
+            InternalMsg::VirtualBranchesLoaded {
                 repo_id,
                 result,
                 assignments,
-                workspace_commit,
+                virtual_branches_commit,
             } => f
-                .debug_struct("WorkspaceLoaded")
+                .debug_struct("VirtualBranchesLoaded")
                 .field("repo_id", repo_id)
                 .field("result", result)
                 .field("assignments", assignments)
-                .field("workspace_commit", workspace_commit)
+                .field("virtual_branches_commit", virtual_branches_commit)
                 .finish(),
-            InternalMsg::WorkspaceEditFinished {
+            InternalMsg::VirtualBranchesEditFinished {
                 repo_id,
                 edit,
                 result,
             } => f
-                .debug_struct("WorkspaceEditFinished")
+                .debug_struct("VirtualBranchesEditFinished")
                 .field("repo_id", repo_id)
                 .field("edit", edit)
                 .field("result", result)
                 .finish(),
-            InternalMsg::WorkspaceActiveFinished {
+            InternalMsg::VirtualBranchesActiveFinished {
                 repo_id,
                 active,
                 checkout_base,
                 result,
             } => f
-                .debug_struct("WorkspaceActiveFinished")
+                .debug_struct("VirtualBranchesActiveFinished")
                 .field("repo_id", repo_id)
                 .field("active", active)
                 .field("checkout_base", checkout_base)
                 .field("result", result)
                 .finish(),
-            InternalMsg::WorkspaceAssignFinished {
+            InternalMsg::VirtualBranchesAssignFinished {
                 repo_id,
                 path,
                 hunk,
                 branch,
                 result,
             } => f
-                .debug_struct("WorkspaceAssignFinished")
+                .debug_struct("VirtualBranchesAssignFinished")
                 .field("repo_id", repo_id)
                 .field("path", path)
                 .field("hunk", hunk)
                 .field("branch", branch)
                 .field("result", result)
                 .finish(),
-            InternalMsg::WorkspacePushFinished {
+            InternalMsg::VirtualBranchesPushFinished {
                 repo_id,
                 name,
                 result,
             } => f
-                .debug_struct("WorkspacePushFinished")
+                .debug_struct("VirtualBranchesPushFinished")
                 .field("repo_id", repo_id)
                 .field("name", name)
                 .field("result", result)
@@ -789,21 +789,21 @@ mod tests {
         format!("{msg:?}")
     }
 
-    /// Every workspace message has to render, and render usefully.
+    /// Every virtual branches message has to render, and render usefully.
     ///
     /// The match behind this is exhaustive with no catch-all, so a new variant
     /// is a compile error rather than a silent gap — but a *field* left out is
     /// silent, and these are the strings the debug overlay shows when a
-    /// workspace operation misbehaves.
+    /// virtual branches operation misbehaves.
     #[test]
     fn a_failed_switch_says_which_way_and_where_it_was_going_back_to() {
-        let rendered = rendered(&InternalMsg::WorkspaceActiveFinished {
+        let rendered = rendered(&InternalMsg::VirtualBranchesActiveFinished {
             repo_id: RepoId(3),
             active: true,
             checkout_base: Some("release/2.3".into()),
             result: Err(Error::new(ErrorKind::Backend("local changes".into()))),
         });
-        assert!(rendered.contains("WorkspaceActiveFinished"), "{rendered}");
+        assert!(rendered.contains("VirtualBranchesActiveFinished"), "{rendered}");
         assert!(rendered.contains("active"), "{rendered}");
         assert!(rendered.contains("true"), "{rendered}");
         assert!(rendered.contains("release/2.3"), "{rendered}");
@@ -811,7 +811,7 @@ mod tests {
 
     #[test]
     fn a_failed_leave_shows_the_fallback_target_or_admits_there_was_none() {
-        let without = rendered(&InternalMsg::WorkspaceActiveFinished {
+        let without = rendered(&InternalMsg::VirtualBranchesActiveFinished {
             repo_id: RepoId(3),
             active: false,
             checkout_base: None,
@@ -828,15 +828,15 @@ mod tests {
     fn a_failed_assignment_still_names_its_hunk() {
         // Without the fingerprint the overlay cannot tell two assignments of
         // the same file apart, which is exactly when it is needed.
-        let fingerprint = gitcomet_core::workspace::HunkFingerprint::of(&["NEW\n"], 1);
-        let rendered = rendered(&InternalMsg::WorkspaceAssignFinished {
+        let fingerprint = gitcomet_core::virtual_branches::HunkFingerprint::of(&["NEW\n"], 1);
+        let rendered = rendered(&InternalMsg::VirtualBranchesAssignFinished {
             repo_id: RepoId(3),
             path: std::path::PathBuf::from("src/lib.rs"),
             hunk: Some(fingerprint),
             branch: Some("api".into()),
             result: Err(Error::new(ErrorKind::Backend("nope".into()))),
         });
-        assert!(rendered.contains("WorkspaceAssignFinished"), "{rendered}");
+        assert!(rendered.contains("VirtualBranchesAssignFinished"), "{rendered}");
         assert!(rendered.contains("src/lib.rs"), "{rendered}");
         assert!(rendered.contains("api"), "{rendered}");
     }

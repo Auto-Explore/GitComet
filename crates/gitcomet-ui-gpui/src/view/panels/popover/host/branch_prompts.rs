@@ -181,14 +181,14 @@ impl PopoverHost {
                 );
             }
             _ => {
-                if workspace_owns_workdir(&self.state, repo_id) {
-                    // The workspace owns the working directory: ask before
-                    // taking it off the workspace branch instead of moving
-                    // HEAD out from under the tab that shows the workspace.
+                if virtual_branches_owns_workdir(&self.state, repo_id) {
+                    // The virtual branches owns the working directory: ask before
+                    // taking it off the virtual-branches branch instead of moving
+                    // HEAD out from under the tab that shows the virtual branches.
                     self.open_popover_centered(
-                        PopoverKind::LeaveWorkspaceToCheckoutPrompt {
+                        PopoverKind::LeaveVirtualBranchesToCheckoutPrompt {
                             repo_id,
-                            target: WorkspaceCheckoutTarget::Branch(name),
+                            target: VirtualBranchesCheckoutTarget::Branch(name),
                         },
                         window,
                         cx,
@@ -395,14 +395,14 @@ impl PopoverHost {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
-        if workspace_owns_workdir(&self.state, repo_id) {
+        if virtual_branches_owns_workdir(&self.state, repo_id) {
             // The local branch may not exist yet — this checkout is often what
-            // creates it — so the dialog leaves the workspace first and runs
+            // creates it — so the dialog leaves the virtual branches first and runs
             // the checkout after.
             self.open_popover_centered(
-                PopoverKind::LeaveWorkspaceToCheckoutPrompt {
+                PopoverKind::LeaveVirtualBranchesToCheckoutPrompt {
                     repo_id,
-                    target: WorkspaceCheckoutTarget::Remote {
+                    target: VirtualBranchesCheckoutTarget::Remote {
                         remote,
                         branch,
                         local_branch,

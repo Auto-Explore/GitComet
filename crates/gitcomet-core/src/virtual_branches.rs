@@ -1,4 +1,4 @@
-//! The workspace model: virtual branches, stacks, and the target branch.
+//! The virtual branches model: virtual branches, stacks, and the target branch.
 //!
 //! A *virtual branch* is an independent unit of work that lives as an ordinary
 //! Git branch under `refs/heads/`. Nothing about it requires server support:
@@ -15,9 +15,9 @@
 //! reason about in tests.
 //!
 //! The combined state of every *applied* branch is materialized as a single
-//! branch, [`WORKSPACE_BRANCH`]. It is an implementation detail of the model,
+//! branch, [`VIRTUAL_BRANCHES_BRANCH`]. It is an implementation detail of the model,
 //! not a branch a user works on: commits belong to virtual branches, and the
-//! workspace branch is regenerated from them whenever the applied set changes.
+//! virtual-branches branch is regenerated from them whenever the applied set changes.
 //!
 //! Everything here is pure data plus validation. Nothing in this module talks
 //! to Git; see [`crate::services`] for the operations that do.
@@ -34,19 +34,19 @@ use std::path::{Path, PathBuf};
 /// changes, and direct user commits to it are refused. It is named under a
 /// `gitcomet/` prefix so it is visually distinct from a user's own branches and
 /// so it can be filtered out of ordinary branch listings.
-pub const WORKSPACE_BRANCH: &str = "gitcomet/workspace";
+pub const VIRTUAL_BRANCHES_BRANCH: &str = "gitcomet/virtual";
 
-/// The ref namespace the workspace owns. Branches under it are GitComet's own
+/// The ref namespace the virtual branches owns. Branches under it are GitComet's own
 /// bookkeeping and are never presented as user branches.
-pub const WORKSPACE_REF_PREFIX: &str = "gitcomet/";
+pub const VIRTUAL_BRANCHES_REF_PREFIX: &str = "gitcomet/";
 
-/// Whether a virtual branch contributes its tree to the workspace.
+/// Whether a virtual branch contributes its tree to the virtual branches.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum BranchApplyState {
-    /// Contributes to the workspace branch and can take assigned changes.
+    /// Contributes to the virtual-branches branch and can take assigned changes.
     Applied,
-    /// Exists as a branch but contributes nothing to the workspace.
+    /// Exists as a branch but contributes nothing to the virtual branches.
     Unapplied,
 }
 
@@ -56,10 +56,10 @@ impl BranchApplyState {
     }
 }
 
-/// One unit of work in the workspace.
+/// One unit of work in the virtual branches.
 ///
 /// `parent` is the whole of the stacking model: `None` means the branch is
-/// stacked directly on the workspace target, `Some(name)` means it is stacked
+/// stacked directly on the virtual branches target, `Some(name)` means it is stacked
 /// on another virtual branch, and that branch's pull request targets `name`.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct VirtualBranch {
@@ -122,17 +122,17 @@ impl VirtualBranch {
     }
 
     /// The branch whose pull request this one targets: its parent if it is
-    /// stacked, otherwise the workspace target.
+    /// stacked, otherwise the virtual branches target.
     pub fn base_branch<'a>(&'a self, target: &'a str) -> &'a str {
         self.parent.as_deref().unwrap_or(target)
     }
 }
 
-/// One column of the workspace: a parent branch and everything stacked on it,
+/// One column of the virtual branches: a parent branch and everything stacked on it,
 /// in application order.
 ///
 /// Stacks are a view, not stored state. They are derived from `parent` links by
-/// [`WorkspaceState::stacks`], so a stack can never disagree with the branches
+/// [`VirtualBranchesState::stacks`], so a stack can never disagree with the branches
 /// that make it up.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Stack {
@@ -169,11 +169,11 @@ impl Stack {
 
 /// The target branch plus every virtual branch, as one unit.
 ///
-/// This is the structure the workspace UI reads and the structure that gets
+/// This is the structure the virtual branches UI reads and the structure that gets
 /// written back after an edit. It carries no Git state: nothing here knows
 /// whether a branch exists yet or what its tip is.
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
-pub struct WorkspaceState {
+pub struct VirtualBranchesState {
     /// The base every independent branch is built on, e.g. `main` or
     /// `origin/main`. A revision, not necessarily a local branch.
     #[serde(default = "default_target_branch")]
@@ -186,7 +186,7 @@ fn default_target_branch() -> String {
     "main".to_string()
 }
 
-impl WorkspaceState {
+impl VirtualBranchesState {
     pub fn new(target: impl Into<String>) -> Self {
         Self {
             target: target.into(),
@@ -210,7 +210,7 @@ impl WorkspaceState {
     /// Whether a virtual branch of that name exists.
     ///
     /// The target is deliberately not counted: it is a branch the user already
-    /// has, not one of the workspace's, and `validate` refuses a virtual branch
+    /// has, not one of the virtual branches's, and `validate` refuses a virtual branch
     /// that reuses the name. Callers asking "can I create this?" get the
     /// answer from this and from the repository's own branch list; a name that
     /// is only the target is a refusal the user can read, not a silent one.
@@ -226,12 +226,12 @@ impl WorkspaceState {
         self.applied().map(|b| b.name.as_str()).collect()
     }
 
-    /// Names that must be merged into the workspace branch, in an order where
+    /// Names that must be merged into the virtual-branches branch, in an order where
     /// a stacked branch always follows its parent.
     ///
     /// The order matters: applying `feature/ui` before `feature/api` would merge
     /// a commit whose parent is not yet present and fail to resolve. Independent
-    /// branches keep their declared order so a workspace rebuild is
+    /// branches keep their declared order so a virtual branches rebuild is
     /// deterministic and a diff of two rebuilds is empty.
     pub fn application_order(&self) -> Result<Vec<&VirtualBranch>> {
         let ordered = self.topological_order()?;
@@ -282,8 +282,8 @@ impl WorkspaceState {
         }
 
         if let Some(orphan) = remaining.first() {
-            return Err(workspace_error(format!(
-                "branch '{}' is stacked on '{}', which is not a workspace branch",
+            return Err(virtual_branches_error(format!(
+                "branch '{}' is stacked on '{}', which is not a virtual-branches branch",
                 orphan.name,
                 orphan.parent.as_deref().unwrap_or_default(),
             )));
@@ -359,8 +359,8 @@ impl WorkspaceState {
                 .iter()
                 .any(|other| other.name == branch.name)
             {
-                return Err(workspace_error(format!(
-                    "duplicate workspace branch '{}'",
+                return Err(virtual_branches_error(format!(
+                    "duplicate virtual-branches branch '{}'",
                     branch.name
                 )));
             }
@@ -371,14 +371,14 @@ impl WorkspaceState {
                 continue;
             };
             if *parent == branch.name {
-                return Err(workspace_error(format!(
+                return Err(virtual_branches_error(format!(
                     "branch '{}' is stacked on itself",
                     branch.name
                 )));
             }
             if !self.branches.iter().any(|b| &b.name == parent) {
-                return Err(workspace_error(format!(
-                    "branch '{}' is stacked on '{}', which is not a workspace branch",
+                return Err(virtual_branches_error(format!(
+                    "branch '{}' is stacked on '{}', which is not a virtual-branches branch",
                     branch.name, parent
                 )));
             }
@@ -389,7 +389,7 @@ impl WorkspaceState {
                 .get(parent)
                 .is_some_and(|parent_branch| self.reaches(parent_branch, &branch.name))
             {
-                return Err(workspace_error(format!(
+                return Err(virtual_branches_error(format!(
                     "branch '{}' is stacked on '{}', which already depends on it",
                     branch.name, parent
                 )));
@@ -397,16 +397,16 @@ impl WorkspaceState {
         }
 
         if self.branches.iter().any(|b| b.name == self.target) {
-            return Err(workspace_error(format!(
-                "'{}' is the workspace target and cannot also be a workspace branch",
+            return Err(virtual_branches_error(format!(
+                "'{}' is the virtual branches target and cannot also be a virtual-branches branch",
                 self.target
             )));
         }
         for branch in &self.branches {
-            if branch.name.starts_with(WORKSPACE_REF_PREFIX) {
-                return Err(workspace_error(format!(
+            if branch.name.starts_with(VIRTUAL_BRANCHES_REF_PREFIX) {
+                return Err(virtual_branches_error(format!(
                     "'{}' is inside the reserved '{}' namespace",
-                    branch.name, WORKSPACE_REF_PREFIX
+                    branch.name, VIRTUAL_BRANCHES_REF_PREFIX
                 )));
             }
         }
@@ -464,7 +464,7 @@ impl WorkspaceState {
     /// Insert a branch above `name`: the new branch is stacked on `name`.
     pub fn insert_above(&mut self, branch: VirtualBranch, name: &str) -> Result<()> {
         if self.get(name).is_none() {
-            return Err(workspace_error(format!("no workspace branch '{name}'")));
+            return Err(virtual_branches_error(format!("no virtual-branches branch '{name}'")));
         }
         self.push_branch(branch.clone())?;
         self.set_parent(&branch.name, Some(name))
@@ -480,7 +480,7 @@ impl WorkspaceState {
     pub fn insert_below(&mut self, branch: VirtualBranch, name: &str) -> Result<()> {
         let displaced = self
             .get(name)
-            .ok_or_else(|| workspace_error(format!("no workspace branch '{name}'")))?
+            .ok_or_else(|| virtual_branches_error(format!("no virtual-branches branch '{name}'")))?
             .parent
             .clone();
         self.push_branch(branch.clone())?;
@@ -500,18 +500,18 @@ impl WorkspaceState {
         below: bool,
     ) -> Result<()> {
         if self.get(name).is_none() {
-            return Err(workspace_error(format!("no workspace branch '{name}'")));
+            return Err(virtual_branches_error(format!("no virtual-branches branch '{name}'")));
         }
         let parent = match relative_to {
             None => Some(stack_base.to_string()),
             Some(relative) if relative == name => self.get(name).and_then(|b| b.parent.clone()),
             Some(relative) => {
-                // A relative branch that is not in the workspace cannot be
+                // A relative branch that is not in the virtual branches cannot be
                 // reasoned about. Falling back to `stack_base` would land the
                 // branch somewhere the user never asked for and report success,
                 // which is the same failure `insert_above`/`insert_below` refuse.
                 if self.get(relative).is_none() {
-                    return Err(workspace_error(format!("no workspace branch '{relative}'")));
+                    return Err(virtual_branches_error(format!("no virtual-branches branch '{relative}'")));
                 }
                 if below {
                     Some(relative.to_string())
@@ -525,7 +525,7 @@ impl WorkspaceState {
             }
         };
         // Stacking onto the target means independent: the target is not a
-        // workspace branch and `validate` would refuse it as a parent.
+        // virtual-branches branch and `validate` would refuse it as a parent.
         let parent = parent.filter(|parent| parent != &self.target);
         self.set_parent(name, parent.as_deref())
     }
@@ -537,11 +537,11 @@ impl WorkspaceState {
         }
         let left = self
             .get(first)
-            .ok_or_else(|| workspace_error(format!("no workspace branch '{first}'")))?
+            .ok_or_else(|| virtual_branches_error(format!("no virtual-branches branch '{first}'")))?
             .clone();
         let right = self
             .get(second)
-            .ok_or_else(|| workspace_error(format!("no workspace branch '{second}'")))?
+            .ok_or_else(|| virtual_branches_error(format!("no virtual-branches branch '{second}'")))?
             .clone();
 
         self.swap_positions(first, second, &left, &right)
@@ -558,7 +558,7 @@ impl WorkspaceState {
         // different parents are in different stacks, and "swap" has no meaning
         // without first choosing where the second one goes.
         if left.parent != right.parent {
-            return Err(workspace_error(format!(
+            return Err(virtual_branches_error(format!(
                 "'{first}' and '{second}' are in different stacks; move one into the other's stack instead"
             )));
         }
@@ -597,15 +597,15 @@ impl WorkspaceState {
     /// Add a branch, rejecting a name that is already taken.
     pub fn push_branch(&mut self, branch: VirtualBranch) -> Result<()> {
         validate_branch_name(&branch.name)?;
-        if branch.name.starts_with(WORKSPACE_REF_PREFIX) {
-            return Err(workspace_error(format!(
+        if branch.name.starts_with(VIRTUAL_BRANCHES_REF_PREFIX) {
+            return Err(virtual_branches_error(format!(
                 "'{}' is inside the reserved '{}' namespace",
-                branch.name, WORKSPACE_REF_PREFIX
+                branch.name, VIRTUAL_BRANCHES_REF_PREFIX
             )));
         }
         if self.get(&branch.name).is_some() {
-            return Err(workspace_error(format!(
-                "'{}' is already a workspace branch",
+            return Err(virtual_branches_error(format!(
+                "'{}' is already a virtual-branches branch",
                 branch.name
             )));
         }
@@ -620,7 +620,7 @@ impl WorkspaceState {
             .branches
             .iter()
             .position(|b| b.name == name)
-            .ok_or_else(|| workspace_error(format!("no workspace branch '{name}'")))?;
+            .ok_or_else(|| virtual_branches_error(format!("no virtual-branches branch '{name}'")))?;
         let removed = self.branches.remove(index);
         let parent = removed.parent.clone();
         for branch in &mut self.branches {
@@ -637,7 +637,7 @@ impl WorkspaceState {
     /// would create a cycle is refused with the state left untouched.
     pub fn set_parent(&mut self, name: &str, parent: Option<&str>) -> Result<()> {
         if self.get(name).is_none() {
-            return Err(workspace_error(format!("no workspace branch '{name}'")));
+            return Err(virtual_branches_error(format!("no virtual-branches branch '{name}'")));
         }
         let previous = self.branches.clone();
         if let Some(branch) = self.get_mut(name) {
@@ -650,30 +650,30 @@ impl WorkspaceState {
         Ok(())
     }
 
-    /// Set whether a branch contributes to the workspace branch.
+    /// Set whether a branch contributes to the virtual-branches branch.
     pub fn set_applied(&mut self, name: &str, applied: BranchApplyState) -> Result<()> {
         let Some(branch) = self.get_mut(name) else {
-            return Err(workspace_error(format!("no workspace branch '{name}'")));
+            return Err(virtual_branches_error(format!("no virtual-branches branch '{name}'")));
         };
         branch.applied = applied;
         Ok(())
     }
 
-    /// Point the workspace at a different target branch.
+    /// Point the virtual branches at a different target branch.
     ///
     /// Independent branches keep their names; only their base moves. Callers
     /// rebase them onto the new target with
-    /// [`crate::services::WorkspaceRepository::update_workspace_target`].
+    /// [`crate::services::VirtualBranchesRepository::update_virtual_branches_target`].
     pub fn set_target(&mut self, target: impl Into<String>) -> Result<()> {
         let target = target.into();
         if target.is_empty() {
-            return Err(workspace_error(
-                "the workspace target cannot be empty".into(),
+            return Err(virtual_branches_error(
+                "the virtual branches target cannot be empty".into(),
             ));
         }
         if self.branches.iter().any(|b| b.name == target) {
-            return Err(workspace_error(format!(
-                "'{target}' is already a workspace branch and cannot also be the target"
+            return Err(virtual_branches_error(format!(
+                "'{target}' is already a virtual-branches branch and cannot also be the target"
             )));
         }
         self.target = target;
@@ -681,7 +681,7 @@ impl WorkspaceState {
     }
 }
 
-fn workspace_error(message: String) -> Error {
+fn virtual_branches_error(message: String) -> Error {
     Error::new(ErrorKind::Backend(message))
 }
 
@@ -689,13 +689,13 @@ fn workspace_error(message: String) -> Error {
 /// fails with a less specific message.
 fn validate_branch_name(name: &str) -> Result<()> {
     if name.is_empty() {
-        return Err(workspace_error("a workspace branch needs a name".into()));
+        return Err(virtual_branches_error("a virtual-branches branch needs a name".into()));
     }
     if name.starts_with('-') {
-        return Err(workspace_error(format!("'{name}' cannot start with '-'")));
+        return Err(virtual_branches_error(format!("'{name}' cannot start with '-'")));
     }
     if !name.is_ascii() {
-        return Err(workspace_error(format!(
+        return Err(virtual_branches_error(format!(
             "'{name}' is not a valid branch name"
         )));
     }
@@ -715,13 +715,13 @@ fn validate_branch_name(name: &str) -> Result<()> {
         || name.contains(' ')
         || name.contains('\0')
     {
-        return Err(workspace_error(format!(
+        return Err(virtual_branches_error(format!(
             "'{name}' is not a valid branch name"
         )));
     }
     for part in name.split('/') {
         if part.is_empty() || part.starts_with('.') || part.ends_with(".lock") {
-            return Err(workspace_error(format!(
+            return Err(virtual_branches_error(format!(
                 "'{name}' is not a valid branch name"
             )));
         }
@@ -1209,7 +1209,7 @@ impl FileAssignments {
     /// Identity is by content, so there is nothing to carry over: a hunk that
     /// still exists has the same fingerprint and stays; one that was reverted or
     /// rewritten no longer matches and goes.
-    pub fn retain_hunks(&mut self, current: &[HunkSpan], state: &WorkspaceState) {
+    pub fn retain_hunks(&mut self, current: &[HunkSpan], state: &VirtualBranchesState) {
         self.hunks.retain(|fingerprint, branch| {
             state.get(branch).is_some()
                 && current.iter().any(|span| span.fingerprint == *fingerprint)
@@ -1287,10 +1287,10 @@ impl AssignmentIndex {
     /// The branch `path` belongs to, if that branch still exists.
     ///
     /// A branch deleted elsewhere must not leave the map pointing at nothing,
-    /// so the answer is filtered through the workspace state. A split file has
+    /// so the answer is filtered through the virtual branches state. A split file has
     /// no single branch and so has no answer here; callers that care read
     /// [`AssignmentIndex::file`].
-    pub fn resolve<'a>(&self, path: &Path, state: &'a WorkspaceState) -> Option<&'a str> {
+    pub fn resolve<'a>(&self, path: &Path, state: &'a VirtualBranchesState) -> Option<&'a str> {
         let branch = self.branch_of(path)?;
         state.get(branch).map(|b| b.name.as_str())
     }
@@ -1332,7 +1332,7 @@ impl AssignmentIndex {
     /// leaves with its branches when every branch it named is gone.
     pub fn retain(
         &mut self,
-        state: &WorkspaceState,
+        state: &VirtualBranchesState,
         changed: &dyn Fn(&Path) -> bool,
         hunks_of: HunkLookup<'_>,
     ) {
@@ -1382,13 +1382,13 @@ mod tests {
         VirtualBranch::new(name)
     }
 
-    fn workspace() -> WorkspaceState {
-        WorkspaceState::new("main")
+    fn virtual_branches() -> VirtualBranchesState {
+        VirtualBranchesState::new("main")
     }
 
     #[test]
     fn independent_branches_are_ordered_by_declaration() {
-        let state = workspace().with_branches(vec![vb("a"), vb("b"), vb("c")]);
+        let state = virtual_branches().with_branches(vec![vb("a"), vb("b"), vb("c")]);
         assert_eq!(state.application_order().unwrap().len(), 3);
         let names: Vec<_> = state
             .application_order()
@@ -1401,7 +1401,7 @@ mod tests {
 
     #[test]
     fn a_stacked_branch_is_applied_after_its_parent() {
-        let state = workspace().with_branches(vec![
+        let state = virtual_branches().with_branches(vec![
             vb("feature/ui").with_parent("feature/api"),
             vb("feature/api"),
         ]);
@@ -1416,7 +1416,7 @@ mod tests {
 
     #[test]
     fn unapplied_branches_are_excluded_from_the_application_order() {
-        let state = workspace().with_branches(vec![
+        let state = virtual_branches().with_branches(vec![
             vb("a"),
             vb("b").with_applied(BranchApplyState::Unapplied),
         ]);
@@ -1432,8 +1432,8 @@ mod tests {
     #[test]
     fn a_stacked_branch_applies_after_its_unapplied_parent() {
         // The parent contributes nothing, but the child still has to be merged
-        // last or its commits have no ancestor in the workspace branch.
-        let state = workspace().with_branches(vec![
+        // last or its commits have no ancestor in the virtual-branches branch.
+        let state = virtual_branches().with_branches(vec![
             vb("parent").with_applied(BranchApplyState::Unapplied),
             vb("child").with_parent("parent"),
         ]);
@@ -1448,7 +1448,7 @@ mod tests {
 
     #[test]
     fn stacks_group_independent_branches_separately() {
-        let state = workspace().with_branches(vec![
+        let state = virtual_branches().with_branches(vec![
             vb("api"),
             vb("ui").with_parent("api"),
             vb("e2e").with_parent("ui"),
@@ -1477,7 +1477,7 @@ mod tests {
     #[test]
     fn order_controls_sibling_ordering() {
         let state =
-            workspace().with_branches(vec![vb("second").with_order(1), vb("first").with_order(0)]);
+            virtual_branches().with_branches(vec![vb("second").with_order(1), vb("first").with_order(0)]);
         let stacks = state.stacks().unwrap();
         // Two roots are two stacks, and `order` is what decides which one
         // comes first: without it the declaration order ("second" first)
@@ -1490,38 +1490,38 @@ mod tests {
     #[test]
     fn a_cycle_is_rejected_by_validate() {
         let state =
-            workspace().with_branches(vec![vb("a").with_parent("b"), vb("b").with_parent("a")]);
+            virtual_branches().with_branches(vec![vb("a").with_parent("b"), vb("b").with_parent("a")]);
         assert!(state.validate().is_err());
     }
 
     #[test]
     fn a_branch_stacked_on_itself_is_rejected() {
-        let state = workspace().with_branches(vec![vb("a").with_parent("a")]);
+        let state = virtual_branches().with_branches(vec![vb("a").with_parent("a")]);
         assert!(state.validate().is_err());
     }
 
     #[test]
     fn a_branch_stacked_on_a_missing_branch_is_rejected() {
-        let state = workspace().with_branches(vec![vb("a").with_parent("ghost")]);
+        let state = virtual_branches().with_branches(vec![vb("a").with_parent("ghost")]);
         assert!(state.validate().is_err());
     }
 
     #[test]
     fn duplicate_branch_names_are_rejected() {
-        let state = workspace().with_branches(vec![vb("a"), vb("a")]);
+        let state = virtual_branches().with_branches(vec![vb("a"), vb("a")]);
         assert!(state.validate().is_err());
     }
 
     #[test]
-    fn the_workspace_reserved_namespace_is_rejected() {
-        let mut state = workspace().with_branches(vec![vb("gitcomet/workspace")]);
+    fn the_virtual_branches_reserved_namespace_is_rejected() {
+        let mut state = virtual_branches().with_branches(vec![vb("gitcomet/virtual")]);
         assert!(state.validate().is_err());
         assert!(state.push_branch(vb("gitcomet/other")).is_err());
     }
 
     #[test]
     fn a_branch_named_like_the_target_is_rejected() {
-        let state = workspace().with_branches(vec![vb("main")]);
+        let state = virtual_branches().with_branches(vec![vb("main")]);
         assert!(state.validate().is_err());
     }
 
@@ -1543,7 +1543,7 @@ mod tests {
             "back\\slash",
             ".hidden",
         ] {
-            let state = workspace().with_branches(vec![vb(name)]);
+            let state = virtual_branches().with_branches(vec![vb(name)]);
             assert!(
                 state.validate().is_err(),
                 "expected '{name}' to be rejected"
@@ -1560,14 +1560,14 @@ mod tests {
             "fix-1.2",
             "release-2024",
         ] {
-            let state = workspace().with_branches(vec![vb(name)]);
+            let state = virtual_branches().with_branches(vec![vb(name)]);
             assert!(state.validate().is_ok(), "expected '{name}' to be valid");
         }
     }
 
     #[test]
     fn a_refused_parent_change_leaves_the_state_untouched() {
-        let mut state = workspace().with_branches(vec![vb("a"), vb("b")]);
+        let mut state = virtual_branches().with_branches(vec![vb("a"), vb("b")]);
         state.set_parent("a", Some("b")).unwrap();
         let before = state.clone();
         assert!(state.set_parent("b", Some("a")).is_err());
@@ -1576,7 +1576,7 @@ mod tests {
 
     #[test]
     fn a_branch_inserted_above_another_is_stacked_on_it() {
-        let mut state = workspace().with_branches(vec![vb("api"), vb("ui").with_parent("api")]);
+        let mut state = virtual_branches().with_branches(vec![vb("api"), vb("ui").with_parent("api")]);
         state.insert_above(vb("ui2"), "ui").unwrap();
         assert_eq!(state.get("ui").unwrap().parent.as_deref(), Some("api"));
         assert_eq!(state.get("ui2").unwrap().parent.as_deref(), Some("ui"));
@@ -1587,7 +1587,7 @@ mod tests {
         // The opposite of the above case, which is the whole point of having
         // two: `ui2` is pushed *down* to where `ui` was, `ui` now sits on it,
         // and the stack is one deeper without anything above having moved.
-        let mut state = workspace().with_branches(vec![vb("api"), vb("ui").with_parent("api")]);
+        let mut state = virtual_branches().with_branches(vec![vb("api"), vb("ui").with_parent("api")]);
         state.insert_below(vb("ui2"), "ui").unwrap();
         assert_eq!(
             state.get("ui2").unwrap().parent.as_deref(),
@@ -1603,7 +1603,7 @@ mod tests {
 
     #[test]
     fn inserting_below_a_branch_below_the_target_puts_the_new_one_on_the_target() {
-        let mut state = workspace().with_branches(vec![vb("api")]);
+        let mut state = virtual_branches().with_branches(vec![vb("api")]);
         state.insert_below(vb("ui"), "api").unwrap();
         assert_eq!(state.get("ui").unwrap().parent.as_deref(), None);
         assert_eq!(state.get("api").unwrap().parent.as_deref(), Some("ui"));
@@ -1611,7 +1611,7 @@ mod tests {
 
     #[test]
     fn inserting_below_leaves_the_branches_above_the_anchor_where_they_are() {
-        let mut state = workspace().with_branches(vec![
+        let mut state = virtual_branches().with_branches(vec![
             vb("api"),
             vb("ui").with_parent("api"),
             vb("e2e").with_parent("ui"),
@@ -1627,7 +1627,7 @@ mod tests {
 
     #[test]
     fn removing_a_branch_reparents_its_children() {
-        let mut state = workspace().with_branches(vec![
+        let mut state = virtual_branches().with_branches(vec![
             vb("api"),
             vb("ui").with_parent("api"),
             vb("e2e").with_parent("ui"),
@@ -1639,13 +1639,13 @@ mod tests {
 
     #[test]
     fn removing_an_unknown_branch_is_an_error() {
-        let mut state = workspace();
+        let mut state = virtual_branches();
         assert!(state.remove_branch("ghost").is_err());
     }
 
     #[test]
     fn reorder_swaps_sibling_positions() {
-        let mut state = workspace().with_branches(vec![
+        let mut state = virtual_branches().with_branches(vec![
             vb("a").with_order(0),
             vb("b").with_order(1),
             vb("c").with_order(2),
@@ -1657,13 +1657,13 @@ mod tests {
 
     #[test]
     fn reorder_across_stacks_is_refused() {
-        let mut state = workspace().with_branches(vec![vb("api"), vb("ui").with_parent("api")]);
+        let mut state = virtual_branches().with_branches(vec![vb("api"), vb("ui").with_parent("api")]);
         assert!(state.reorder("api", "ui").is_err());
     }
 
     #[test]
     fn reorder_gives_both_branches_a_position_when_neither_has_one() {
-        let mut state = workspace().with_branches(vec![vb("a"), vb("b")]);
+        let mut state = virtual_branches().with_branches(vec![vb("a"), vb("b")]);
         state.reorder("a", "b").unwrap();
         let orders: Vec<_> = [state.get("a").unwrap().order, state.get("b").unwrap().order]
             .into_iter()
@@ -1674,14 +1674,14 @@ mod tests {
 
     #[test]
     fn move_to_stack_places_a_branch_under_the_new_base() {
-        let mut state = workspace().with_branches(vec![vb("api"), vb("ui").with_parent("api")]);
+        let mut state = virtual_branches().with_branches(vec![vb("api"), vb("ui").with_parent("api")]);
         state.move_to_stack("ui", "main", None, false).unwrap();
         assert_eq!(state.get("ui").unwrap().parent, None);
     }
 
     #[test]
     fn move_to_stack_below_a_sibling_stacks_on_that_sibling() {
-        let mut state = workspace().with_branches(vec![vb("api"), vb("e2e").with_parent("api")]);
+        let mut state = virtual_branches().with_branches(vec![vb("api"), vb("e2e").with_parent("api")]);
         state
             .move_to_stack("e2e", "main", Some("api"), true)
             .unwrap();
@@ -1691,7 +1691,7 @@ mod tests {
     #[test]
     fn move_to_stack_above_a_sibling_takes_its_place() {
         let mut state =
-            workspace().with_branches(vec![vb("api"), vb("e2e").with_parent("api"), vb("other")]);
+            virtual_branches().with_branches(vec![vb("api"), vb("e2e").with_parent("api"), vb("other")]);
         state
             .move_to_stack("other", "main", Some("api"), false)
             .unwrap();
@@ -1701,7 +1701,7 @@ mod tests {
 
     #[test]
     fn a_move_that_would_create_a_cycle_is_refused() {
-        let mut state = workspace().with_branches(vec![
+        let mut state = virtual_branches().with_branches(vec![
             vb("api"),
             vb("ui").with_parent("api"),
             vb("e2e").with_parent("ui"),
@@ -1719,7 +1719,7 @@ mod tests {
         // The drag named a branch that was removed in the meantime. Guessing the
         // stack base instead would put the branch somewhere the user never
         // asked for and report the move as done.
-        let mut state = workspace().with_branches(vec![vb("api"), vb("ui").with_parent("api")]);
+        let mut state = virtual_branches().with_branches(vec![vb("api"), vb("ui").with_parent("api")]);
         assert!(
             state
                 .move_to_stack("api", "main", Some("gone"), false)
@@ -1737,7 +1737,7 @@ mod tests {
 
     #[test]
     fn set_applied_toggles_a_branch_without_disturbing_the_stack() {
-        let mut state = workspace().with_branches(vec![vb("api"), vb("ui").with_parent("api")]);
+        let mut state = virtual_branches().with_branches(vec![vb("api"), vb("ui").with_parent("api")]);
         state
             .set_applied("ui", BranchApplyState::Unapplied)
             .unwrap();
@@ -1749,7 +1749,7 @@ mod tests {
 
     #[test]
     fn set_applied_rejects_an_unknown_branch() {
-        let mut state = workspace();
+        let mut state = virtual_branches();
         assert!(
             state
                 .set_applied("ghost", BranchApplyState::Applied)
@@ -1759,7 +1759,7 @@ mod tests {
 
     #[test]
     fn set_target_refuses_an_empty_or_conflicting_target() {
-        let mut state = workspace().with_branches(vec![vb("api")]);
+        let mut state = virtual_branches().with_branches(vec![vb("api")]);
         assert!(state.set_target("").is_err());
         assert!(state.set_target("api").is_err());
         state.set_target("develop").unwrap();
@@ -1767,27 +1767,27 @@ mod tests {
     }
 
     #[test]
-    fn workspace_state_round_trips_through_serde() {
-        let state = workspace().with_branches(vec![
+    fn virtual_branches_state_round_trips_through_serde() {
+        let state = virtual_branches().with_branches(vec![
             vb("api"),
             vb("ui").with_parent("api").with_order(1),
             vb("parked").with_applied(BranchApplyState::Unapplied),
         ]);
         let json = serde_json::to_string(&state).unwrap();
-        let parsed: WorkspaceState = serde_json::from_str(&json).unwrap();
+        let parsed: VirtualBranchesState = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed, state);
     }
 
     #[test]
-    fn workspace_state_deserializes_a_minimal_document() {
+    fn virtual_branches_state_deserializes_a_minimal_document() {
         // Older or hand-edited files may omit the optional fields entirely.
-        let parsed: WorkspaceState = serde_json::from_str(r#"{"target":"main"}"#).unwrap();
+        let parsed: VirtualBranchesState = serde_json::from_str(r#"{"target":"main"}"#).unwrap();
         assert_eq!(parsed.target, "main");
         assert!(parsed.branches.is_empty());
         assert!(state_defaults_to_applied(&parsed));
     }
 
-    fn state_defaults_to_applied(state: &WorkspaceState) -> bool {
+    fn state_defaults_to_applied(state: &VirtualBranchesState) -> bool {
         let mut probe = state.clone();
         probe.push_branch(vb("probe")).unwrap();
         probe.get("probe").unwrap().is_applied()
@@ -1800,7 +1800,7 @@ mod tests {
         index.set(PathBuf::from("src/b.rs"), None);
         index.set(PathBuf::from("src/c.rs"), Some("deleted".into()));
 
-        let state = workspace().with_branches(vec![vb("api")]);
+        let state = virtual_branches().with_branches(vec![vb("api")]);
         assert_eq!(index.branch_of(Path::new("src/a.rs")), Some("api"));
         assert_eq!(index.branch_of(Path::new("src/b.rs")), None);
         assert_eq!(index.resolve(Path::new("src/a.rs"), &state), Some("api"));
@@ -1828,7 +1828,7 @@ mod tests {
         index.set(PathBuf::from("gone.rs"), Some("deleted".into()));
         index.set(PathBuf::from("clean.rs"), Some("api".into()));
 
-        let state = workspace().with_branches(vec![vb("api")]);
+        let state = virtual_branches().with_branches(vec![vb("api")]);
         let mut changed = |path: &Path| path == Path::new("kept.rs");
         index.retain(&state, &mut changed, None);
 
@@ -1884,7 +1884,7 @@ mod tests {
 
     #[test]
     fn an_unchanged_hunk_keeps_its_assignment_across_a_reload() {
-        let state = workspace().with_branches(vec![vb("api")]);
+        let state = virtual_branches().with_branches(vec![vb("api")]);
         let base = "one\ntwo\nthree\n";
         let working = "ONE\ntwo\nthree\n";
         let fingerprint = hunk_spans(base, working)[0].fingerprint;
@@ -1902,7 +1902,7 @@ mod tests {
 
     #[test]
     fn a_change_that_no_longer_exists_loses_its_assignment() {
-        let state = workspace().with_branches(vec![vb("api")]);
+        let state = virtual_branches().with_branches(vec![vb("api")]);
         let fingerprint = hunk_spans("one\ntwo\n", "ONE\ntwo\n")[0].fingerprint;
         let mut index = AssignmentIndex::new();
         index.set_hunk(PathBuf::from("a.rs"), fingerprint, Some("api".into()));
@@ -2429,7 +2429,7 @@ mod tests {
         // The file is still changed, so it survives — but a hunk naming a branch
         // that no longer exists is dead weight, and one branch leaving does not
         // unassign the others' hunks.
-        let state = workspace().with_branches(vec![vb("api"), vb("ui")]);
+        let state = virtual_branches().with_branches(vec![vb("api"), vb("ui")]);
         let mut index = AssignmentIndex::new();
         let kept = HunkFingerprint::of(&["api\n"], 1);
         let orphan = HunkFingerprint::of(&["ui\n"], 1);
@@ -2453,7 +2453,7 @@ mod tests {
         // A file whose every hunk belonged to branches that are gone is not
         // "changed and unassigned" any more — there is nothing left to commit,
         // so the row has to disappear with the branches.
-        let state = workspace().with_branches(vec![vb("api")]);
+        let state = virtual_branches().with_branches(vec![vb("api")]);
         let mut index = AssignmentIndex::new();
         index.set_hunk(
             PathBuf::from("gone.rs"),
@@ -2473,27 +2473,27 @@ mod tests {
     }
 
     #[test]
-    fn a_workspace_reports_which_of_its_branches_it_has() {
+    fn a_virtual_branches_reports_which_of_its_branches_it_has() {
         // The create prompt asks this before it will use a name: creating a
         // branch whose name is spoken for fails on the backend with a Git error
         // the user can do nothing about.
-        let state = workspace().with_branches(vec![vb("api"), vb("ui").with_parent("api")]);
+        let state = virtual_branches().with_branches(vec![vb("api"), vb("ui").with_parent("api")]);
 
         assert!(state.contains("api"));
         assert!(
             state.contains("ui"),
-            "a stacked branch is still one of the workspace's own branches"
+            "a stacked branch is still one of the virtual branches's own branches"
         );
         assert!(!state.contains("uii"));
         assert!(!state.contains(""));
     }
 
     #[test]
-    fn the_target_is_not_one_of_the_workspaces_branches() {
+    fn the_target_is_not_one_of_the_virtual_branches_branches() {
         // It is the base every independent branch is built on, and `validate`
         // refuses a virtual branch with the same name, so it is never something
         // `get` can return and `contains` must not pretend otherwise.
-        let state = workspace().with_branches(vec![vb("api")]);
+        let state = virtual_branches().with_branches(vec![vb("api")]);
         assert_eq!(state.target, "main");
         assert!(!state.contains("main"));
         assert!(state.get("main").is_none());
@@ -2502,7 +2502,7 @@ mod tests {
     #[test]
     fn a_branch_reports_whether_anything_is_stacked_on_it() {
         let state =
-            workspace().with_branches(vec![vb("api"), vb("ui").with_parent("api"), vb("docs")]);
+            virtual_branches().with_branches(vec![vb("api"), vb("ui").with_parent("api"), vb("docs")]);
         let stacks = state.stacks().unwrap();
         assert!(stacks[0].contains("api"));
         assert!(
@@ -2513,7 +2513,7 @@ mod tests {
             !stacks[0].contains("docs"),
             "an independent branch starts its own"
         );
-        assert!(workspace().stacks().unwrap().is_empty(), "nothing to stack");
+        assert!(virtual_branches().stacks().unwrap().is_empty(), "nothing to stack");
     }
 
     #[test]
@@ -2521,7 +2521,7 @@ mod tests {
         // Used to render the shape a drag will produce without applying it, so
         // the preview and the result have to be computed the same way — and
         // *below* means stacked on the named branch, not pushed down by it.
-        let state = workspace().with_branches(vec![vb("api"), vb("ui").with_parent("api")]);
+        let state = virtual_branches().with_branches(vec![vb("api"), vb("ui").with_parent("api")]);
 
         assert_eq!(
             state.parent_after_move("ui", Some("docs"), true),
@@ -2550,7 +2550,7 @@ mod tests {
     fn the_target_moves_without_touching_the_branches_built_on_it() {
         // The names are the user's; only their base moves, and rebasing them is
         // the backend's job — this only has to say what the base now is.
-        let mut state = workspace().with_branches(vec![vb("api"), vb("ui").with_parent("api")]);
+        let mut state = virtual_branches().with_branches(vec![vb("api"), vb("ui").with_parent("api")]);
         state
             .set_target("release/2.3")
             .expect("a target nobody has claimed");

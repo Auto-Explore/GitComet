@@ -103,11 +103,11 @@ pub(crate) enum TextFormatMenuSection {
     TabSize,
 }
 
-/// What the user asked to check out while the workspace held the working
+/// What the user asked to check out while the virtual branches held the working
 /// directory: carried into the dialog that asks to leave, and dispatched from
 /// it unchanged.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum WorkspaceCheckoutTarget {
+pub(crate) enum VirtualBranchesCheckoutTarget {
     Branch(String),
     Remote {
         remote: String,
@@ -118,11 +118,11 @@ pub(crate) enum WorkspaceCheckoutTarget {
     Commit(CommitId),
 }
 
-impl WorkspaceCheckoutTarget {
+impl VirtualBranchesCheckoutTarget {
     /// The message that performs this checkout.
     ///
     /// Dispatched like any other checkout: the reducer is what turns it into
-    /// "leave the workspace first" while the workspace still holds the working
+    /// "leave the virtual branches first" while the virtual branches still holds the working
     /// directory, so the dialog cannot drift from the rule it explains.
     pub(crate) fn into_msg(self, repo_id: RepoId) -> Msg {
         match self {
@@ -155,17 +155,17 @@ impl WorkspaceCheckoutTarget {
     }
 }
 
-/// Whether the workspace holds the working directory of `repo_id`.
+/// Whether the virtual branches holds the working directory of `repo_id`.
 ///
-/// Every checkout asks this first. While the workspace holds it, the views ask
-/// to leave instead of moving HEAD off the workspace branch underneath a tab
-/// that goes on describing the workspace as checked out.
-pub(crate) fn workspace_owns_workdir(state: &AppState, repo_id: RepoId) -> bool {
+/// Every checkout asks this first. While the virtual branches holds it, the views ask
+/// to leave instead of moving HEAD off the virtual-branches branch underneath a tab
+/// that goes on describing the virtual branches as checked out.
+pub(crate) fn virtual_branches_owns_workdir(state: &AppState, repo_id: RepoId) -> bool {
     state
         .repos
         .iter()
         .find(|repo| repo.id == repo_id)
-        .is_some_and(|repo| repo.workspace.active)
+        .is_some_and(|repo| repo.virtual_branches.active)
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -314,13 +314,13 @@ pub(crate) enum PopoverKind {
         target: String,
         operation: BranchExistsPromptOperation,
     },
-    /// Shown when a checkout is asked for while the workspace holds the working
-    /// directory. Changing branch from there means leaving the workspace first,
+    /// Shown when a checkout is asked for while the virtual branches holds the working
+    /// directory. Changing branch from there means leaving the virtual branches first,
     /// so the dialog says that and lets the user go through with it — or stay
     /// where they are.
-    LeaveWorkspaceToCheckoutPrompt {
+    LeaveVirtualBranchesToCheckoutPrompt {
         repo_id: RepoId,
-        target: WorkspaceCheckoutTarget,
+        target: VirtualBranchesCheckoutTarget,
     },
     ForceDeleteBranchConfirm(gitcomet_state::model::ForceDeleteBranchPrompt),
     ForceRemoveWorktreeConfirm(gitcomet_state::model::ForceRemoveWorktreePrompt),
@@ -387,16 +387,16 @@ pub(crate) enum PopoverKind {
         section: StatusSection,
         folder: std::sync::Arc<std::path::Path>,
     },
-    /// An edit to the workspace: create, restack, re-parent or remove a
-    /// virtual branch, or point the workspace at a different target.
+    /// An edit to the virtual branches: create, restack, re-parent or remove a
+    /// virtual branch, or point the virtual branches at a different target.
     ///
     /// One kind covers all of them because they differ only in the label on the
-    /// field and in which `WorkspaceEdit` confirming builds; a variant each would
+    /// field and in which `VirtualBranchesEdit` confirming builds; a variant each would
     /// mean the same prompt body, input handling and dismissal logic repeated
     /// seven times.
-    WorkspacePrompt {
+    VirtualBranchesPrompt {
         repo_id: RepoId,
-        prompt: WorkspacePrompt,
+        prompt: VirtualBranchesPrompt,
     },
     PreviousCommitMessagesMenu {
         repo_id: RepoId,
@@ -1122,41 +1122,41 @@ pub(in crate::view) enum TerminalShutdownAction {
     QuitApp,
 }
 
-/// Which workspace edit an open [`WorkspacePrompt`] is collecting input for.
+/// Which virtual branches edit an open [`VirtualBranchesPrompt`] is collecting input for.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub(in crate::view) enum WorkspacePromptKind {
+pub(in crate::view) enum VirtualBranchesPromptKind {
     /// Offer the branch's own actions, then narrow to one of them.
     BranchActions,
-    /// A new branch built directly on the workspace target.
+    /// A new branch built directly on the virtual branches target.
     Create,
-    /// A new branch that takes [`WorkspacePrompt::branch`]'s place in the stack.
+    /// A new branch that takes [`VirtualBranchesPrompt::branch`]'s place in the stack.
     CreateAbove,
-    /// A new branch stacked under [`WorkspacePrompt::branch`].
+    /// A new branch stacked under [`VirtualBranchesPrompt::branch`].
     CreateBelow,
-    /// Rebase the workspace onto a different target branch.
+    /// Rebase the virtual branches onto a different target branch.
     SetTarget,
-    /// Restack [`WorkspacePrompt::branch`] onto a different base.
+    /// Restack [`VirtualBranchesPrompt::branch`] onto a different base.
     SetParent,
-    /// Move [`WorkspacePrompt::branch`] into another branch's stack.
+    /// Move [`VirtualBranchesPrompt::branch`] into another branch's stack.
     MoveToStack,
-    /// Delete [`WorkspacePrompt::branch`].
+    /// Delete [`VirtualBranchesPrompt::branch`].
     Remove,
-    /// Say which branch [`WorkspacePrompt::path`] belongs to.
+    /// Say which branch [`VirtualBranchesPrompt::path`] belongs to.
     AssignFile,
     /// Say which branch one hunk of a file belongs to.
     AssignHunk,
-    /// Write the message for the commit of [`WorkspacePrompt::path`].
+    /// Write the message for the commit of [`VirtualBranchesPrompt::path`].
     CommitMessage,
     /// Write the message for a commit of every file assigned to
-    /// [`WorkspacePrompt::branch`].
+    /// [`VirtualBranchesPrompt::branch`].
     CommitBranch,
 }
 
-impl WorkspacePromptKind {
+impl VirtualBranchesPromptKind {
     /// Whether this step asks for a typed value.
     ///
     /// False for the action list, which submits nothing by picking a row, and
-    /// for [`WorkspacePromptKind::Remove`], which is confirmed with no field.
+    /// for [`VirtualBranchesPromptKind::Remove`], which is confirmed with no field.
     pub(in crate::view) fn asks_for_text(self) -> bool {
         !matches!(self, Self::BranchActions | Self::Remove)
     }
@@ -1167,7 +1167,7 @@ impl WorkspacePromptKind {
             Self::Create => "New branch",
             Self::CreateAbove => "New branch above",
             Self::CreateBelow => "New branch below",
-            Self::SetTarget => "Set workspace target",
+            Self::SetTarget => "Set virtual branches target",
             Self::SetParent => "Change base branch",
             Self::MoveToStack => "Move into stack",
             Self::Remove => "Remove branch",
@@ -1208,22 +1208,22 @@ impl WorkspacePromptKind {
     }
 }
 
-/// The workspace edit an open prompt is performing.
+/// The virtual branches edit an open prompt is performing.
 ///
 /// The subject branch is captured here rather than read from the store on
 /// submit: the list can change under an open prompt (a background load, a
 /// restack elsewhere) and the edit should apply to what the user was looking
 /// at when they opened it.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
-pub(in crate::view) struct WorkspacePrompt {
-    pub(in crate::view) kind: WorkspacePromptKind,
-    /// The branch the edit acts on, empty for the workspace-wide kinds and for
+pub(in crate::view) struct VirtualBranchesPrompt {
+    pub(in crate::view) kind: VirtualBranchesPromptKind,
+    /// The branch the edit acts on, empty for the virtual branches-wide kinds and for
     /// the file ones, where the branch is what gets typed.
     pub(in crate::view) branch: String,
     /// The file the edit acts on, set only for the file kinds.
     pub(in crate::view) path: Option<std::path::PathBuf>,
     /// Which hunk of that file, set only for the hunk kinds.
-    pub(in crate::view) hunk: Option<gitcomet_core::workspace::HunkFingerprint>,
+    pub(in crate::view) hunk: Option<gitcomet_core::virtual_branches::HunkFingerprint>,
     /// The text the field opens with.
     pub(in crate::view) value: String,
 }

@@ -1,5 +1,5 @@
-//! The workspace edit prompt: one dialog for creating, restacking, re-parenting
-//! and removing a virtual branch, and for re-pointing the workspace target.
+//! The virtual branches edit prompt: one dialog for creating, restacking, re-parenting
+//! and removing a virtual branch, and for re-pointing the virtual branches target.
 //!
 //! The dialog has two steps. Opened from a branch row it first offers that
 //! branch's actions, because stacking, re-parenting, joining another stack and
@@ -14,52 +14,52 @@ use super::*;
 /// Worth the space: restacking rewrites the branch's history and moving a
 /// branch into a stack does too, and neither is obvious from the button label.
 fn detail_line(
-    kind: WorkspacePromptKind,
+    kind: VirtualBranchesPromptKind,
     branch: &str,
     path: Option<&std::path::Path>,
     value: &str,
 ) -> SharedString {
     match kind {
-        WorkspacePromptKind::Create => {
-            "The new branch starts from the workspace target, with no commits of its own yet."
+        VirtualBranchesPromptKind::Create => {
+            "The new branch starts from the virtual branches target, with no commits of its own yet."
                 .into()
         }
-        WorkspacePromptKind::CreateAbove => format!(
+        VirtualBranchesPromptKind::CreateAbove => format!(
             "The new branch is stacked on {branch}, so it starts from {branch}'s tip. Nothing already in the stack moves."
         )
         .into(),
         // Below is the one creation that moves work that already exists: the
         // new branch starts from the anchor's *base*, so the anchor and
         // anything stacked on it have to be replayed on top of it.
-        WorkspacePromptKind::CreateBelow => format!(
+        VirtualBranchesPromptKind::CreateBelow => format!(
             "The new branch takes {branch}'s place in the stack, so it starts from {branch}'s base; {branch} and anything stacked on it are rebased."
         )
         .into(),
-        WorkspacePromptKind::SetTarget => format!(
-            "Every branch is rebased onto {value} and the workspace branch is rebuilt."
+        VirtualBranchesPromptKind::SetTarget => format!(
+            "Every branch is rebased onto {value} and the virtual-branches branch is rebuilt."
         )
         .into(),
-        WorkspacePromptKind::SetParent => {
+        VirtualBranchesPromptKind::SetParent => {
             if value.is_empty() {
                 format!("{branch} becomes independent, sitting directly on the target.").into()
             } else {
                 format!("{branch} is rebased onto {value}; its history is rewritten.").into()
             }
         }
-        WorkspacePromptKind::MoveToStack => {
+        VirtualBranchesPromptKind::MoveToStack => {
             format!("{branch} is rebased so it sits directly above {value}.").into()
         }
         // Neither of these has a field, so the detail line is the whole body.
-        WorkspacePromptKind::Remove => format!(
-            "{branch} stops contributing to the workspace branch. The Git branch itself is kept."
+        VirtualBranchesPromptKind::Remove => format!(
+            "{branch} stops contributing to the virtual-branches branch. The Git branch itself is kept."
         )
         .into(),
-        WorkspacePromptKind::BranchActions => format!("Actions for {branch}.").into(),
-        WorkspacePromptKind::CommitBranch => format!(
+        VirtualBranchesPromptKind::BranchActions => format!("Actions for {branch}.").into(),
+        VirtualBranchesPromptKind::CommitBranch => format!(
             "Every file assigned to {branch} will be committed to it, and only those."
         )
         .into(),
-        WorkspacePromptKind::CommitMessage => match path {
+        VirtualBranchesPromptKind::CommitMessage => match path {
             Some(path) => format!(
                 "{} will be committed on its own, to the branch it is assigned to.",
                 path.display()
@@ -67,7 +67,7 @@ fn detail_line(
             .into(),
             None => String::new().into(),
         },
-        WorkspacePromptKind::AssignHunk => match path {
+        VirtualBranchesPromptKind::AssignHunk => match path {
             Some(path) if value.is_empty() => format!(
                 "Only this hunk of {} goes back to being unassigned; the rest of the file is untouched.",
                 path.display()
@@ -80,7 +80,7 @@ fn detail_line(
             .into(),
             None => String::new().into(),
         },
-        WorkspacePromptKind::AssignFile => match path {
+        VirtualBranchesPromptKind::AssignFile => match path {
             Some(path) if value.is_empty() => format!(
                 "{} will not be committed to any branch. Clear the field to leave it as it is.",
                 path.display()
@@ -102,25 +102,25 @@ fn detail_line(
 ///
 /// The two "new branch" entries come first because they are what someone opens
 /// a branch row for most often.
-fn branch_actions() -> [WorkspacePromptKind; 6] {
+fn branch_actions() -> [VirtualBranchesPromptKind; 6] {
     [
-        WorkspacePromptKind::CreateAbove,
-        WorkspacePromptKind::CreateBelow,
-        WorkspacePromptKind::SetParent,
-        WorkspacePromptKind::MoveToStack,
-        WorkspacePromptKind::CommitBranch,
-        WorkspacePromptKind::Remove,
+        VirtualBranchesPromptKind::CreateAbove,
+        VirtualBranchesPromptKind::CreateBelow,
+        VirtualBranchesPromptKind::SetParent,
+        VirtualBranchesPromptKind::MoveToStack,
+        VirtualBranchesPromptKind::CommitBranch,
+        VirtualBranchesPromptKind::Remove,
     ]
 }
 
-fn action_label(kind: WorkspacePromptKind) -> &'static str {
+fn action_label(kind: VirtualBranchesPromptKind) -> &'static str {
     match kind {
-        WorkspacePromptKind::CreateAbove => "New branch above this",
-        WorkspacePromptKind::CreateBelow => "New branch below this",
-        WorkspacePromptKind::SetParent => "Change its base branch",
-        WorkspacePromptKind::MoveToStack => "Move it into another stack",
-        WorkspacePromptKind::CommitBranch => "Commit its assigned files",
-        WorkspacePromptKind::Remove => "Remove it from the workspace",
+        VirtualBranchesPromptKind::CreateAbove => "New branch above this",
+        VirtualBranchesPromptKind::CreateBelow => "New branch below this",
+        VirtualBranchesPromptKind::SetParent => "Change its base branch",
+        VirtualBranchesPromptKind::MoveToStack => "Move it into another stack",
+        VirtualBranchesPromptKind::CommitBranch => "Commit its assigned files",
+        VirtualBranchesPromptKind::Remove => "Remove it from the virtual branches",
         _ => "",
     }
 }
@@ -134,9 +134,9 @@ fn action_label(kind: WorkspacePromptKind) -> &'static str {
 pub(in crate::view) fn assign_file_prompt(
     path: &std::path::Path,
     branch: Option<&str>,
-) -> WorkspacePrompt {
-    WorkspacePrompt {
-        kind: WorkspacePromptKind::AssignFile,
+) -> VirtualBranchesPrompt {
+    VirtualBranchesPrompt {
+        kind: VirtualBranchesPromptKind::AssignFile,
         branch: String::new(),
         path: Some(path.to_path_buf()),
         hunk: None,
@@ -148,11 +148,11 @@ pub(in crate::view) fn assign_file_prompt(
 /// hunk is on today.
 pub(in crate::view) fn assign_hunk_prompt(
     path: &std::path::Path,
-    hunk: gitcomet_core::workspace::HunkFingerprint,
+    hunk: gitcomet_core::virtual_branches::HunkFingerprint,
     branch: Option<&str>,
-) -> WorkspacePrompt {
-    WorkspacePrompt {
-        kind: WorkspacePromptKind::AssignHunk,
+) -> VirtualBranchesPrompt {
+    VirtualBranchesPrompt {
+        kind: VirtualBranchesPromptKind::AssignHunk,
         branch: String::new(),
         path: Some(path.to_path_buf()),
         hunk: Some(hunk),
@@ -169,9 +169,9 @@ pub(in crate::view) fn assign_hunk_prompt(
 pub(in crate::view) fn commit_file_prompt(
     path: &std::path::Path,
     message: &str,
-) -> WorkspacePrompt {
-    WorkspacePrompt {
-        kind: WorkspacePromptKind::CommitMessage,
+) -> VirtualBranchesPrompt {
+    VirtualBranchesPrompt {
+        kind: VirtualBranchesPromptKind::CommitMessage,
         branch: String::new(),
         path: Some(path.to_path_buf()),
         hunk: None,
@@ -187,7 +187,7 @@ pub(in crate::view) fn default_commit_message(path: &std::path::Path) -> String 
 
 pub(super) fn panel(
     this: &mut PopoverHost,
-    prompt: WorkspacePrompt,
+    prompt: VirtualBranchesPrompt,
     cx: &mut gpui::Context<PopoverHost>,
 ) -> gpui::Div {
     let theme = this.theme;
@@ -196,7 +196,7 @@ pub(super) fn panel(
     // The step is host state rather than part of the kind so that narrowing
     // the dialog does not change which popover is open: a kind swap would look
     // to the fingerprint like a different dialog replacing this one.
-    let kind = this.workspace_prompt_kind.unwrap_or(prompt.kind);
+    let kind = this.virtual_branches_prompt_kind.unwrap_or(prompt.kind);
     let detail = detail_line(kind, &prompt.branch, prompt.path.as_deref(), &prompt.value);
 
     let mut body = div().flex().flex_col().w(scaled_px(540.0));
@@ -205,17 +205,17 @@ pub(super) fn panel(
         .child(super::popover_rule(theme))
         .child(super::popover_detail(theme, detail));
 
-    if kind == WorkspacePromptKind::BranchActions {
+    if kind == VirtualBranchesPromptKind::BranchActions {
         for action in branch_actions() {
             let action_id = format!(
-                "workspace_action_{}",
+                "virtual_branches_action_{}",
                 action_label(action).replace(' ', "_")
             );
             body = body.child(
                 components::Button::new(action_id, action_label(action))
                     .style(components::ButtonStyle::Subtle)
                     .on_click(theme, cx, move |this, _e, window, cx| {
-                        this.open_workspace_prompt_step(action, window, cx);
+                        this.open_virtual_branches_prompt_step(action, window, cx);
                     })
                     // Full width so the list reads as a menu rather than as five
                     // differently sized buttons stacked in a column. Sizing is
@@ -239,8 +239,8 @@ pub(super) fn panel(
         super::prompt_footer_row()
             .child(
                 cancel_button(
-                    "workspace_prompt_cancel",
-                    "workspace_prompt_cancel_hint",
+                    "virtual_branches_prompt_cancel",
+                    "virtual_branches_prompt_cancel_hint",
                     theme,
                 )
                 .focus_handle(this.create_branch_from_ref_focus.cancel.clone())
@@ -249,13 +249,13 @@ pub(super) fn panel(
                 }),
             )
             .child(
-                components::Button::new("workspace_prompt_go", kind.confirm_label())
+                components::Button::new("virtual_branches_prompt_go", kind.confirm_label())
                     .focus_handle(this.create_branch_from_ref_focus.submit.clone())
-                    .separated_end_slot(hotkey_hint(theme, "workspace_prompt_go_hint", "Enter"))
+                    .separated_end_slot(hotkey_hint(theme, "virtual_branches_prompt_go_hint", "Enter"))
                     .style(components::ButtonStyle::Filled)
-                    .disabled(!this.can_submit_workspace_prompt(cx))
+                    .disabled(!this.can_submit_virtual_branches_prompt(cx))
                     .on_click(theme, cx, |this, _e, window, cx| {
-                        this.submit_workspace_prompt(window, cx);
+                        this.submit_virtual_branches_prompt(window, cx);
                     }),
             ),
     )
@@ -269,18 +269,18 @@ mod tests {
     fn the_action_list_covers_every_branch_only_edit() {
         let actions = branch_actions();
         for kind in [
-            WorkspacePromptKind::CreateAbove,
-            WorkspacePromptKind::CreateBelow,
-            WorkspacePromptKind::SetParent,
-            WorkspacePromptKind::MoveToStack,
-            WorkspacePromptKind::CommitBranch,
-            WorkspacePromptKind::Remove,
+            VirtualBranchesPromptKind::CreateAbove,
+            VirtualBranchesPromptKind::CreateBelow,
+            VirtualBranchesPromptKind::SetParent,
+            VirtualBranchesPromptKind::MoveToStack,
+            VirtualBranchesPromptKind::CommitBranch,
+            VirtualBranchesPromptKind::Remove,
         ] {
             assert!(actions.contains(&kind), "{kind:?} is not offered");
         }
         // Creating a branch has no subject, so it is not on a branch's list.
-        assert!(!actions.contains(&WorkspacePromptKind::Create));
-        assert!(!actions.contains(&WorkspacePromptKind::SetTarget));
+        assert!(!actions.contains(&VirtualBranchesPromptKind::Create));
+        assert!(!actions.contains(&VirtualBranchesPromptKind::SetTarget));
     }
 
     #[test]
@@ -293,17 +293,17 @@ mod tests {
     #[test]
     fn committing_a_branch_is_offered_and_creating_one_is_not() {
         let actions = branch_actions();
-        assert!(actions.contains(&WorkspacePromptKind::CommitBranch));
+        assert!(actions.contains(&VirtualBranchesPromptKind::CommitBranch));
         // A whole-branch commit needs no subject of its own, so it belongs on
         // the branch's list; creating a branch does.
-        assert!(!actions.contains(&WorkspacePromptKind::CommitMessage));
-        assert!(!actions.contains(&WorkspacePromptKind::Create));
+        assert!(!actions.contains(&VirtualBranchesPromptKind::CommitMessage));
+        assert!(!actions.contains(&VirtualBranchesPromptKind::Create));
     }
 
     #[test]
     fn the_branch_commit_line_says_only_assigned_files_go() {
         let line = detail_line(
-            WorkspacePromptKind::CommitBranch,
+            VirtualBranchesPromptKind::CommitBranch,
             "feature/api",
             None,
             "Add the client",
@@ -314,23 +314,23 @@ mod tests {
 
     #[test]
     fn only_the_text_edits_ask_for_a_field() {
-        assert!(!WorkspacePromptKind::BranchActions.asks_for_text());
-        assert!(!WorkspacePromptKind::Remove.asks_for_text());
-        assert!(WorkspacePromptKind::Create.asks_for_text());
-        assert!(WorkspacePromptKind::CreateAbove.asks_for_text());
-        assert!(WorkspacePromptKind::CreateBelow.asks_for_text());
-        assert!(WorkspacePromptKind::SetTarget.asks_for_text());
-        assert!(WorkspacePromptKind::SetParent.asks_for_text());
-        assert!(WorkspacePromptKind::MoveToStack.asks_for_text());
-        assert!(WorkspacePromptKind::AssignFile.asks_for_text());
-        assert!(WorkspacePromptKind::AssignHunk.asks_for_text());
+        assert!(!VirtualBranchesPromptKind::BranchActions.asks_for_text());
+        assert!(!VirtualBranchesPromptKind::Remove.asks_for_text());
+        assert!(VirtualBranchesPromptKind::Create.asks_for_text());
+        assert!(VirtualBranchesPromptKind::CreateAbove.asks_for_text());
+        assert!(VirtualBranchesPromptKind::CreateBelow.asks_for_text());
+        assert!(VirtualBranchesPromptKind::SetTarget.asks_for_text());
+        assert!(VirtualBranchesPromptKind::SetParent.asks_for_text());
+        assert!(VirtualBranchesPromptKind::MoveToStack.asks_for_text());
+        assert!(VirtualBranchesPromptKind::AssignFile.asks_for_text());
+        assert!(VirtualBranchesPromptKind::AssignHunk.asks_for_text());
     }
 
     #[test]
     fn the_commit_prompt_opens_on_a_message_the_user_can_keep() {
         let path = std::path::Path::new("src/lib.rs");
         let prompt = commit_file_prompt(path, &default_commit_message(path));
-        assert_eq!(prompt.kind, WorkspacePromptKind::CommitMessage);
+        assert_eq!(prompt.kind, VirtualBranchesPromptKind::CommitMessage);
         assert_eq!(prompt.path.as_deref(), Some(path));
         assert_eq!(prompt.value, "Update src/lib.rs");
         assert!(
@@ -342,7 +342,7 @@ mod tests {
     #[test]
     fn the_commit_line_says_the_commit_is_just_this_file() {
         let line = detail_line(
-            WorkspacePromptKind::CommitMessage,
+            VirtualBranchesPromptKind::CommitMessage,
             "",
             Some(std::path::Path::new("src/lib.rs")),
             "Update src/lib.rs",
@@ -356,11 +356,11 @@ mod tests {
         // existing branch alone; `CreateBelow` starts it from the anchor's base
         // and rebases the anchor onto it. These two descriptions were once the
         // other way round, which sold a history rewrite as the harmless option.
-        let above = detail_line(WorkspacePromptKind::CreateAbove, "api", None, "ui");
+        let above = detail_line(VirtualBranchesPromptKind::CreateAbove, "api", None, "ui");
         assert!(above.contains("stacked on api"), "{above}");
         assert!(!above.contains("rebased"), "{above}");
 
-        let below = detail_line(WorkspacePromptKind::CreateBelow, "api", None, "ui");
+        let below = detail_line(VirtualBranchesPromptKind::CreateBelow, "api", None, "ui");
         assert!(below.contains("rebased"), "{below}");
         assert!(below.contains("base"), "{below}");
     }
@@ -368,7 +368,7 @@ mod tests {
     #[test]
     fn the_assign_prompt_carries_the_file_and_its_current_branch() {
         let prompt = assign_file_prompt(std::path::Path::new("src/lib.rs"), Some("feature/api"));
-        assert_eq!(prompt.kind, WorkspacePromptKind::AssignFile);
+        assert_eq!(prompt.kind, VirtualBranchesPromptKind::AssignFile);
         assert_eq!(
             prompt.path.as_deref(),
             Some(std::path::Path::new("src/lib.rs"))
@@ -388,7 +388,7 @@ mod tests {
     #[test]
     fn the_assign_line_names_the_file_and_says_where_it_goes() {
         let line = detail_line(
-            WorkspacePromptKind::AssignFile,
+            VirtualBranchesPromptKind::AssignFile,
             "",
             Some(std::path::Path::new("src/lib.rs")),
             "feature/api",
@@ -400,7 +400,7 @@ mod tests {
     #[test]
     fn an_empty_assign_line_says_the_file_stays_where_it_is() {
         let line = detail_line(
-            WorkspacePromptKind::AssignFile,
+            VirtualBranchesPromptKind::AssignFile,
             "",
             Some(std::path::Path::new("src/lib.rs")),
             "",
@@ -411,18 +411,18 @@ mod tests {
     #[test]
     fn every_kind_has_a_distinct_title() {
         let kinds = [
-            WorkspacePromptKind::BranchActions,
-            WorkspacePromptKind::Create,
-            WorkspacePromptKind::CreateAbove,
-            WorkspacePromptKind::CreateBelow,
-            WorkspacePromptKind::SetTarget,
-            WorkspacePromptKind::SetParent,
-            WorkspacePromptKind::MoveToStack,
-            WorkspacePromptKind::Remove,
-            WorkspacePromptKind::AssignFile,
-            WorkspacePromptKind::AssignHunk,
-            WorkspacePromptKind::CommitMessage,
-            WorkspacePromptKind::CommitBranch,
+            VirtualBranchesPromptKind::BranchActions,
+            VirtualBranchesPromptKind::Create,
+            VirtualBranchesPromptKind::CreateAbove,
+            VirtualBranchesPromptKind::CreateBelow,
+            VirtualBranchesPromptKind::SetTarget,
+            VirtualBranchesPromptKind::SetParent,
+            VirtualBranchesPromptKind::MoveToStack,
+            VirtualBranchesPromptKind::Remove,
+            VirtualBranchesPromptKind::AssignFile,
+            VirtualBranchesPromptKind::AssignHunk,
+            VirtualBranchesPromptKind::CommitMessage,
+            VirtualBranchesPromptKind::CommitBranch,
         ];
         for (i, kind) in kinds.iter().enumerate() {
             for other in &kinds[i + 1..] {
@@ -438,20 +438,20 @@ mod tests {
 
     #[test]
     fn the_detail_line_names_the_branch_and_says_history_is_rewritten() {
-        let line = detail_line(WorkspacePromptKind::SetParent, "feature/api", None, "main");
+        let line = detail_line(VirtualBranchesPromptKind::SetParent, "feature/api", None, "main");
         assert!(line.contains("feature/api"), "{line}");
         assert!(line.contains("rebased"), "{line}");
     }
 
     #[test]
     fn an_empty_base_makes_the_branch_independent() {
-        let line = detail_line(WorkspacePromptKind::SetParent, "feature/api", None, "");
+        let line = detail_line(VirtualBranchesPromptKind::SetParent, "feature/api", None, "");
         assert!(line.contains("independent"), "{line}");
     }
 
     #[test]
     fn removing_says_the_git_branch_is_kept() {
-        let line = detail_line(WorkspacePromptKind::Remove, "feature/api", None, "");
+        let line = detail_line(VirtualBranchesPromptKind::Remove, "feature/api", None, "");
         assert!(line.contains("kept"), "{line}");
     }
 }

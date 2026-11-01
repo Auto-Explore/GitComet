@@ -1,23 +1,23 @@
-//! Realizing a workspace edit: which Git operations it asks for, and in what
+//! Realizing a virtual branches edit: which Git operations it asks for, and in what
 //! order.
 //!
 //! What is pinned here is the decision inside `apply_edit`, because that is
 //! where the meaning of an edit lives: above versus below an anchor, whether an
-//! edit rewrites history, and whether the workspace branch has to be rebuilt at
+//! edit rewrites history, and whether the virtual-branches branch has to be rebuilt at
 //! all. The plumbing — a failure coming back as a message rather than dying on
-//! the worker — is covered in `workspace_switch`.
+//! the worker — is covered in `virtual_branches_switch`.
 //!
 //! The double records calls instead of running them. `GitRepository` has 26
 //! required methods and Rust has no inheritance, so they are all spelled out;
-//! each one the workspace does not use answers with an error naming itself
+//! each one the virtual branches does not use answers with an error naming itself
 //! rather than panicking, so an edit that reaches for the wrong thing fails the
 //! test with a sentence instead of a backtrace.
 
 use super::*;
 
-use crate::model::WorkspaceEdit;
+use crate::model::VirtualBranchesEdit;
 use gitcomet_core::services::CommitOperationOutcome;
-use gitcomet_core::workspace::{AssignmentIndex, BranchApplyState, VirtualBranch, WorkspaceState};
+use gitcomet_core::virtual_branches::{AssignmentIndex, BranchApplyState, VirtualBranch, VirtualBranchesState};
 
 /// Enough `GitBackend` to satisfy the scheduling harness; the repositories are
 /// supplied directly, so it is never asked to open anything.
@@ -29,7 +29,7 @@ impl GitBackend for Backend {
     }
 }
 
-/// The workspace calls one edit made, in the order it made them.
+/// The virtual branches calls one edit made, in the order it made them.
 #[derive(Clone, Default)]
 struct Calls {
     /// `create_virtual_branch(name, base)`.
@@ -37,48 +37,48 @@ struct Calls {
     /// `rebase_virtual_branch(name, onto)`.
     rebased: Vec<(String, String)>,
     /// `delete_branch(name)` — must stay empty; removing a branch from the
-    /// workspace is not a request to delete work.
+    /// virtual branches is not a request to delete work.
     deleted: Vec<String>,
-    /// `update_workspace_target(target)`.
+    /// `update_virtual_branches_target(target)`.
     targets: Vec<String>,
-    /// `update_workspace_branch(applied)`, one entry per rebuild.
+    /// `update_virtual_branches_branch(applied)`, one entry per rebuild.
     rebuilds: Vec<Vec<String>>,
-    /// The workspace as it stood each time it was written.
-    writes: Vec<WorkspaceState>,
+    /// The virtual branches as it stood each time it was written.
+    writes: Vec<VirtualBranchesState>,
     /// `commit_paths_to_virtual_branch(name, message, paths)`.
     committed: Vec<(String, String, Vec<PathBuf>)>,
-    /// `push_virtual_branch(name)` — the branch is named because the workspace
+    /// `push_virtual_branch(name)` — the branch is named because the virtual branches
     /// branch itself must never be what gets published.
     pushed: Vec<String>,
-    /// How many times the stored workspace was read.
+    /// How many times the stored virtual branches was read.
     reads: usize,
 }
 
-/// A workspace that remembers what it was asked to do.
-struct WorkspaceRepo {
+/// A virtual branches that remembers what it was asked to do.
+struct VirtualBranchesRepo {
     spec: RepoSpec,
-    state: Mutex<WorkspaceState>,
+    state: Mutex<VirtualBranchesState>,
     assignments: Mutex<AssignmentIndex>,
     calls: Mutex<Calls>,
 }
 
-impl WorkspaceRepo {
+impl VirtualBranchesRepo {
     fn new(branches: Vec<VirtualBranch>) -> Self {
         Self {
             spec: RepoSpec {
-                workdir: PathBuf::from("/workspace-repo"),
+                workdir: PathBuf::from("/virtual branches-repo"),
             },
-            state: Mutex::new(WorkspaceState::new("main").with_branches(branches)),
+            state: Mutex::new(VirtualBranchesState::new("main").with_branches(branches)),
             assignments: Mutex::new(AssignmentIndex::new()),
             calls: Mutex::new(Calls::default()),
         }
     }
 
     fn calls(&self) -> Calls {
-        self.calls.lock().expect("workspace calls poisoned").clone()
+        self.calls.lock().expect("virtual branches calls poisoned").clone()
     }
 
-    fn last_write(&self) -> WorkspaceState {
+    fn last_write(&self) -> VirtualBranchesState {
         self.calls()
             .writes
             .last()
@@ -86,18 +86,18 @@ impl WorkspaceRepo {
             .expect("the edit wrote nothing")
     }
 
-    fn stored(&self) -> WorkspaceState {
-        self.state.lock().expect("workspace poisoned").clone()
+    fn stored(&self) -> VirtualBranchesState {
+        self.state.lock().expect("virtual branches poisoned").clone()
     }
 }
 
 fn unexpected<T>(call: &str) -> Result<T> {
     Err(Error::new(ErrorKind::Backend(format!(
-        "the workspace double was not expected to be asked for {call}"
+        "the virtual branches double was not expected to be asked for {call}"
     ))))
 }
 
-impl GitRepository for WorkspaceRepo {
+impl GitRepository for VirtualBranchesRepo {
     fn spec(&self) -> &RepoSpec {
         &self.spec
     }
@@ -150,7 +150,7 @@ impl GitRepository for WorkspaceRepo {
     fn delete_branch(&self, name: &str) -> Result<()> {
         self.calls
             .lock()
-            .expect("workspace calls poisoned")
+            .expect("virtual branches calls poisoned")
             .deleted
             .push(name.to_string());
         Ok(())
@@ -212,20 +212,20 @@ impl GitRepository for WorkspaceRepo {
         unexpected("discard_worktree_changes")
     }
 
-    fn read_workspace(&self) -> Result<WorkspaceState> {
-        let mut calls = self.calls.lock().expect("workspace calls poisoned");
+    fn read_virtual_branches(&self) -> Result<VirtualBranchesState> {
+        let mut calls = self.calls.lock().expect("virtual branches calls poisoned");
         calls.reads += 1;
-        Ok(self.state.lock().expect("workspace poisoned").clone())
+        Ok(self.state.lock().expect("virtual branches poisoned").clone())
     }
 
-    fn write_workspace(&self, state: &WorkspaceState) -> Result<()> {
-        let mut calls = self.calls.lock().expect("workspace calls poisoned");
+    fn write_virtual_branches(&self, state: &VirtualBranchesState) -> Result<()> {
+        let mut calls = self.calls.lock().expect("virtual branches calls poisoned");
         calls.writes.push(state.clone());
-        *self.state.lock().expect("workspace poisoned") = state.clone();
+        *self.state.lock().expect("virtual branches poisoned") = state.clone();
         Ok(())
     }
 
-    fn read_workspace_assignments(&self) -> Result<AssignmentIndex> {
+    fn read_virtual_branches_assignments(&self) -> Result<AssignmentIndex> {
         Ok(self
             .assignments
             .lock()
@@ -233,7 +233,7 @@ impl GitRepository for WorkspaceRepo {
             .clone())
     }
 
-    fn write_workspace_assignments(&self, index: &AssignmentIndex) -> Result<()> {
+    fn write_virtual_branches_assignments(&self, index: &AssignmentIndex) -> Result<()> {
         *self.assignments.lock().expect("assignments poisoned") = index.clone();
         Ok(())
     }
@@ -241,7 +241,7 @@ impl GitRepository for WorkspaceRepo {
     fn create_virtual_branch(&self, name: &str, base: &str) -> Result<()> {
         self.calls
             .lock()
-            .expect("workspace calls poisoned")
+            .expect("virtual branches calls poisoned")
             .created
             .push((name.to_string(), base.to_string()));
         Ok(())
@@ -250,29 +250,29 @@ impl GitRepository for WorkspaceRepo {
     fn rebase_virtual_branch(&self, name: &str, onto: &str) -> Result<()> {
         self.calls
             .lock()
-            .expect("workspace calls poisoned")
+            .expect("virtual branches calls poisoned")
             .rebased
             .push((name.to_string(), onto.to_string()));
         Ok(())
     }
 
-    fn update_workspace_branch(&self, applied: &[&str]) -> Result<CommitId> {
-        let mut calls = self.calls.lock().expect("workspace calls poisoned");
+    fn update_virtual_branches_branch(&self, applied: &[&str]) -> Result<CommitId> {
+        let mut calls = self.calls.lock().expect("virtual branches calls poisoned");
         let rebuild = calls.rebuilds.len();
         calls
             .rebuilds
             .push(applied.iter().map(|name| name.to_string()).collect());
-        Ok(CommitId(format!("workspace-{rebuild}").into()))
+        Ok(CommitId(format!("virtual branches-{rebuild}").into()))
     }
 
-    fn update_workspace_target(&self, target: &str) -> Result<()> {
+    fn update_virtual_branches_target(&self, target: &str) -> Result<()> {
         // The backend owns the move, so it writes the state itself — which is
         // why the effect reads it back rather than trusting its own copy.
-        let mut state = self.state.lock().expect("workspace poisoned");
+        let mut state = self.state.lock().expect("virtual branches poisoned");
         state.set_target(target)?;
         self.calls
             .lock()
-            .expect("workspace calls poisoned")
+            .expect("virtual branches calls poisoned")
             .targets
             .push(target.to_string());
         Ok(())
@@ -286,7 +286,7 @@ impl GitRepository for WorkspaceRepo {
     ) -> Result<CommitOperationOutcome> {
         self.calls
             .lock()
-            .expect("workspace calls poisoned")
+            .expect("virtual branches calls poisoned")
             .committed
             .push((
                 name.to_string(),
@@ -303,7 +303,7 @@ impl GitRepository for WorkspaceRepo {
     fn push_virtual_branch(&self, name: &str) -> Result<CommandOutput> {
         self.calls
             .lock()
-            .expect("workspace calls poisoned")
+            .expect("virtual branches calls poisoned")
             .pushed
             .push(name.to_string());
         Ok(CommandOutput::empty_success("git push"))
@@ -318,7 +318,7 @@ fn repos_with(repo: Arc<dyn GitRepository>) -> RepositoryRuntimes {
     repos
 }
 
-/// Schedule one workspace effect and return the message it answers with.
+/// Schedule one virtual branches effect and return the message it answers with.
 fn schedule(mut repo: RepositoryRuntimes, effect: Effect) -> Msg {
     let executor = super::super::executor::TaskExecutor::new(1);
     let backend: Arc<dyn GitBackend> = Arc::new(Backend);
@@ -328,16 +328,16 @@ fn schedule(mut repo: RepositoryRuntimes, effect: Effect) -> Msg {
 }
 
 /// Realize one edit and return what it produced.
-fn apply(repo: &Arc<WorkspaceRepo>, edit: WorkspaceEdit) -> Result<CommitOperationOutcome> {
+fn apply(repo: &Arc<VirtualBranchesRepo>, edit: VirtualBranchesEdit) -> Result<CommitOperationOutcome> {
     let msg = schedule(
         repos_with(repo.clone()),
-        Effect::ApplyWorkspaceEdit {
+        Effect::ApplyVirtualBranchesEdit {
             repo_id: REPO_ID,
             edit,
         },
     );
     match msg {
-        Msg::Internal(crate::msg::InternalMsg::WorkspaceEditFinished { result, .. }) => result,
+        Msg::Internal(crate::msg::InternalMsg::VirtualBranchesEditFinished { result, .. }) => result,
         other => panic!("expected a finished edit, got {other:?}"),
     }
 }
@@ -353,19 +353,19 @@ fn stacked(name: &str, parent: &str) -> VirtualBranch {
 }
 
 #[test]
-fn creating_a_branch_creates_it_at_the_target_and_puts_it_in_the_workspace() {
+fn creating_a_branch_creates_it_at_the_target_and_puts_it_in_the_virtual_branches() {
     // A branch nobody has committed to yet still has to show up as a branch, or
     // the working directory would not change when it is created.
-    let repo = Arc::new(WorkspaceRepo::new(vec![]));
+    let repo = Arc::new(VirtualBranchesRepo::new(vec![]));
     let outcome =
-        apply(&repo, WorkspaceEdit::Create { name: "api".into() }).expect("the edit failed");
+        apply(&repo, VirtualBranchesEdit::Create { name: "api".into() }).expect("the edit failed");
 
     let calls = repo.calls();
     assert_eq!(calls.created, [("api".to_string(), "main".to_string())]);
     assert_eq!(
         calls.rebuilds,
         [vec!["api".to_string()]],
-        "a new branch is applied by default, so the workspace has to take it"
+        "a new branch is applied by default, so the virtual branches has to take it"
     );
     assert!(
         repo.last_write().get("api").is_some(),
@@ -373,8 +373,8 @@ fn creating_a_branch_creates_it_at_the_target_and_puts_it_in_the_workspace() {
     );
     assert_eq!(
         outcome.post_head.map(|id| id.0.to_string()),
-        Some("workspace-0".to_string()),
-        "the caller is told what the workspace branch now points at"
+        Some("virtual branches-0".to_string()),
+        "the caller is told what the virtual-branches branch now points at"
     );
 }
 
@@ -382,10 +382,10 @@ fn creating_a_branch_creates_it_at_the_target_and_puts_it_in_the_workspace() {
 fn inserting_above_an_anchor_stacks_on_it_and_replays_nothing() {
     // Above means "on top of the anchor": the anchor's base did not move, so
     // nothing that already existed has to be replayed.
-    let repo = Arc::new(WorkspaceRepo::new(vec![applied("api")]));
+    let repo = Arc::new(VirtualBranchesRepo::new(vec![applied("api")]));
     apply(
         &repo,
-        WorkspaceEdit::InsertRelativeTo {
+        VirtualBranchesEdit::InsertRelativeTo {
             name: "ui".into(),
             anchor: "api".into(),
             below: false,
@@ -411,10 +411,10 @@ fn inserting_below_an_anchor_takes_its_place_and_replays_it() {
     // Below is the mirror image: the new branch starts where the anchor sat and
     // the anchor is now stacked on it, so the anchor's commits have to be
     // replayed or a pull request for it would contain none of the new branch's.
-    let repo = Arc::new(WorkspaceRepo::new(vec![applied("api")]));
+    let repo = Arc::new(VirtualBranchesRepo::new(vec![applied("api")]));
     apply(
         &repo,
-        WorkspaceEdit::InsertRelativeTo {
+        VirtualBranchesEdit::InsertRelativeTo {
             name: "ui".into(),
             anchor: "api".into(),
             below: true,
@@ -451,13 +451,13 @@ fn inserting_below_a_stacked_anchor_keeps_the_stack_the_same_depth() {
     // The anchor had a parent, so the branch displacing it inherits that parent
     // instead of jumping to the target — otherwise the stack loses a level and
     // everything above the anchor would be pulled down with it.
-    let repo = Arc::new(WorkspaceRepo::new(vec![
+    let repo = Arc::new(VirtualBranchesRepo::new(vec![
         applied("base"),
         stacked("api", "base"),
     ]));
     apply(
         &repo,
-        WorkspaceEdit::InsertRelativeTo {
+        VirtualBranchesEdit::InsertRelativeTo {
             name: "ui".into(),
             anchor: "api".into(),
             below: true,
@@ -483,10 +483,10 @@ fn inserting_next_to_a_branch_that_is_not_there_changes_nothing() {
     // The branch was removed elsewhere, or the state was hand-edited. Either way
     // the answer has to be an error rather than a branch built on a base that
     // does not exist.
-    let repo = Arc::new(WorkspaceRepo::new(vec![applied("api")]));
+    let repo = Arc::new(VirtualBranchesRepo::new(vec![applied("api")]));
     let result = apply(
         &repo,
-        WorkspaceEdit::InsertRelativeTo {
+        VirtualBranchesEdit::InsertRelativeTo {
             name: "ui".into(),
             anchor: "gone".into(),
             below: false,
@@ -507,13 +507,13 @@ fn inserting_next_to_a_branch_that_is_not_there_changes_nothing() {
 }
 
 #[test]
-fn unapplying_a_branch_rebuilds_the_workspace_without_it() {
+fn unapplying_a_branch_rebuilds_the_virtual_branches_without_it() {
     // Unapplying is what actually takes a branch's changes back out of the
     // working directory, so the rebuild is the whole point of the edit.
-    let repo = Arc::new(WorkspaceRepo::new(vec![applied("api"), applied("ui")]));
+    let repo = Arc::new(VirtualBranchesRepo::new(vec![applied("api"), applied("ui")]));
     apply(
         &repo,
-        WorkspaceEdit::SetApplied {
+        VirtualBranchesEdit::SetApplied {
             name: "ui".into(),
             applied: BranchApplyState::Unapplied,
         },
@@ -534,10 +534,10 @@ fn unapplying_a_branch_rebuilds_the_workspace_without_it() {
 
 #[test]
 fn stacking_a_branch_replays_it_onto_its_new_base() {
-    let repo = Arc::new(WorkspaceRepo::new(vec![applied("api"), applied("ui")]));
+    let repo = Arc::new(VirtualBranchesRepo::new(vec![applied("api"), applied("ui")]));
     apply(
         &repo,
-        WorkspaceEdit::SetParent {
+        VirtualBranchesEdit::SetParent {
             name: "ui".into(),
             parent: Some("api".into()),
         },
@@ -549,19 +549,19 @@ fn stacking_a_branch_replays_it_onto_its_new_base() {
     assert_eq!(
         calls.rebuilds,
         [vec!["api".to_string(), "ui".to_string()]],
-        "a parent is merged into the workspace before its children"
+        "a parent is merged into the virtual branches before its children"
     );
 }
 
 #[test]
 fn detaching_a_branch_replays_it_onto_the_target() {
-    let repo = Arc::new(WorkspaceRepo::new(vec![
+    let repo = Arc::new(VirtualBranchesRepo::new(vec![
         applied("api"),
         stacked("ui", "api"),
     ]));
     apply(
         &repo,
-        WorkspaceEdit::SetParent {
+        VirtualBranchesEdit::SetParent {
             name: "ui".into(),
             parent: None,
         },
@@ -579,10 +579,10 @@ fn detaching_a_branch_replays_it_onto_the_target() {
 
 #[test]
 fn moving_into_another_stack_rebases_onto_the_new_base() {
-    let repo = Arc::new(WorkspaceRepo::new(vec![applied("api"), applied("ui")]));
+    let repo = Arc::new(VirtualBranchesRepo::new(vec![applied("api"), applied("ui")]));
     apply(
         &repo,
-        WorkspaceEdit::MoveToStack {
+        VirtualBranchesEdit::MoveToStack {
             name: "ui".into(),
             stack_base: "api".into(),
             relative_to: Some("api".into()),
@@ -601,13 +601,13 @@ fn a_move_that_leaves_the_base_alone_does_not_rewrite_anything() {
     // Moving a branch to where it already is is what a drag produces when the
     // row does not actually move. Replaying it anyway would rewrite commits
     // that did not need rewriting, for a gesture that changed nothing.
-    let repo = Arc::new(WorkspaceRepo::new(vec![
+    let repo = Arc::new(VirtualBranchesRepo::new(vec![
         applied("api"),
         stacked("ui", "api"),
     ]));
     let outcome = apply(
         &repo,
-        WorkspaceEdit::MoveToStack {
+        VirtualBranchesEdit::MoveToStack {
             name: "ui".into(),
             stack_base: "api".into(),
             relative_to: Some("api".into()),
@@ -630,10 +630,10 @@ fn a_move_that_leaves_the_base_alone_does_not_rewrite_anything() {
 
 #[test]
 fn reordering_two_siblings_writes_the_state_and_stops_there() {
-    let repo = Arc::new(WorkspaceRepo::new(vec![applied("a"), applied("b")]));
+    let repo = Arc::new(VirtualBranchesRepo::new(vec![applied("a"), applied("b")]));
     apply(
         &repo,
-        WorkspaceEdit::Reorder {
+        VirtualBranchesEdit::Reorder {
             first: "a".into(),
             second: "b".into(),
         },
@@ -655,18 +655,18 @@ fn reordering_two_siblings_writes_the_state_and_stops_there() {
 
 #[test]
 fn removing_a_branch_takes_its_work_out_without_deleting_the_branch() {
-    // The user removed a branch from the workspace, not from their repository:
+    // The user removed a branch from the virtual branches, not from their repository:
     // deleting the ref would throw away commits they may still want.
-    let repo = Arc::new(WorkspaceRepo::new(vec![
+    let repo = Arc::new(VirtualBranchesRepo::new(vec![
         applied("api"),
         stacked("ui", "api"),
     ]));
-    apply(&repo, WorkspaceEdit::Remove { name: "ui".into() }).expect("the edit failed");
+    apply(&repo, VirtualBranchesEdit::Remove { name: "ui".into() }).expect("the edit failed");
 
     let calls = repo.calls();
     assert!(
         calls.deleted.is_empty(),
-        "removing a branch from the workspace is not a request to delete it"
+        "removing a branch from the virtual branches is not a request to delete it"
     );
     assert_eq!(calls.rebuilds, [vec!["api".to_string()]]);
     assert!(repo.last_write().get("ui").is_none());
@@ -674,12 +674,12 @@ fn removing_a_branch_takes_its_work_out_without_deleting_the_branch() {
 
 #[test]
 fn removing_a_branch_moves_its_children_onto_its_own_base() {
-    let repo = Arc::new(WorkspaceRepo::new(vec![
+    let repo = Arc::new(VirtualBranchesRepo::new(vec![
         applied("base"),
         stacked("api", "base"),
         stacked("ui", "api"),
     ]));
-    apply(&repo, WorkspaceEdit::Remove { name: "api".into() }).expect("the edit failed");
+    apply(&repo, VirtualBranchesEdit::Remove { name: "api".into() }).expect("the edit failed");
 
     assert_eq!(
         repo.last_write()
@@ -695,10 +695,10 @@ fn removing_a_branch_moves_its_children_onto_its_own_base() {
 fn a_refused_edit_writes_nothing_and_rebuilds_nothing() {
     // The stored state must keep describing what Git actually has. Writing a
     // half-applied edit would leave it claiming a branch exists that does not.
-    let repo = Arc::new(WorkspaceRepo::new(vec![applied("api")]));
+    let repo = Arc::new(VirtualBranchesRepo::new(vec![applied("api")]));
     let result = apply(
         &repo,
-        WorkspaceEdit::Remove {
+        VirtualBranchesEdit::Remove {
             name: "gone".into(),
         },
     );
@@ -720,14 +720,14 @@ fn a_refused_edit_writes_nothing_and_rebuilds_nothing() {
 }
 
 #[test]
-fn pointing_the_workspace_at_another_target_is_the_backends_job() {
+fn pointing_the_virtual_branches_at_another_target_is_the_backends_job() {
     // The backend owns the move — it has to rebase every independent branch —
     // so the effect reads the state back rather than editing its own copy, and
     // that read-back is the second of the three reads.
-    let repo = Arc::new(WorkspaceRepo::new(vec![applied("api")]));
+    let repo = Arc::new(VirtualBranchesRepo::new(vec![applied("api")]));
     let outcome = apply(
         &repo,
-        WorkspaceEdit::SetTarget {
+        VirtualBranchesEdit::SetTarget {
             target: "release/2.3".into(),
         },
     )
@@ -745,18 +745,18 @@ fn pointing_the_workspace_at_another_target_is_the_backends_job() {
     );
     assert!(
         outcome.post_head.is_some(),
-        "moving the target rebuilds the workspace branch"
+        "moving the target rebuilds the virtual-branches branch"
     );
 }
 
 #[test]
 fn committing_paths_goes_to_the_branch_and_does_not_rebuild() {
     // A commit to a virtual branch is not a change to the applied set, so the
-    // workspace branch has to stay exactly where it is.
-    let repo = Arc::new(WorkspaceRepo::new(vec![applied("api")]));
+    // virtual-branches branch has to stay exactly where it is.
+    let repo = Arc::new(VirtualBranchesRepo::new(vec![applied("api")]));
     let outcome = apply(
         &repo,
-        WorkspaceEdit::CommitPaths {
+        VirtualBranchesEdit::CommitPaths {
             name: "api".into(),
             message: "add the client".into(),
             paths: vec![PathBuf::from("src/api.rs")],
@@ -777,19 +777,19 @@ fn committing_paths_goes_to_the_branch_and_does_not_rebuild() {
     assert_eq!(
         outcome.post_head.map(|id| id.0.to_string()),
         Some("api-commit".to_string()),
-        "the commit is on the branch, not on the workspace"
+        "the commit is on the branch, not on the virtual branches"
     );
 }
 
 #[test]
 fn assigning_a_file_never_reaches_git_at_all() {
-    // A file assignment is bookkeeping. Rebuilding the workspace branch for it
+    // A file assignment is bookkeeping. Rebuilding the virtual-branches branch for it
     // would rewrite a commit for something that changes no file at all, and it
     // would move HEAD under a user who only clicked a row.
-    let repo = Arc::new(WorkspaceRepo::new(vec![applied("api")]));
+    let repo = Arc::new(VirtualBranchesRepo::new(vec![applied("api")]));
     let outcome = apply(
         &repo,
-        WorkspaceEdit::AssignFile {
+        VirtualBranchesEdit::AssignFile {
             path: PathBuf::from("src/api.rs"),
             branch: Some("api".into()),
         },
@@ -799,7 +799,7 @@ fn assigning_a_file_never_reaches_git_at_all() {
     let calls = repo.calls();
     assert_eq!(
         calls.reads, 0,
-        "the assignment index does not need the workspace"
+        "the assignment index does not need the virtual branches"
     );
     assert!(calls.writes.is_empty());
     assert!(calls.rebuilds.is_empty());
@@ -809,12 +809,12 @@ fn assigning_a_file_never_reaches_git_at_all() {
 
 #[test]
 fn assigning_a_hunk_is_also_only_bookkeeping() {
-    let repo = Arc::new(WorkspaceRepo::new(vec![applied("api")]));
+    let repo = Arc::new(VirtualBranchesRepo::new(vec![applied("api")]));
     let outcome = apply(
         &repo,
-        WorkspaceEdit::AssignHunk {
+        VirtualBranchesEdit::AssignHunk {
             path: PathBuf::from("src/api.rs"),
-            hunk: gitcomet_core::workspace::HunkFingerprint::of(&["NEW\n"], 1),
+            hunk: gitcomet_core::virtual_branches::HunkFingerprint::of(&["NEW\n"], 1),
             branch: Some("api".into()),
         },
     )
@@ -823,7 +823,7 @@ fn assigning_a_hunk_is_also_only_bookkeeping() {
     let calls = repo.calls();
     assert_eq!(
         calls.reads, 0,
-        "the assignment index does not need the workspace"
+        "the assignment index does not need the virtual branches"
     );
     assert!(calls.writes.is_empty());
     assert!(calls.rebuilds.is_empty());
@@ -834,11 +834,11 @@ fn assigning_a_hunk_is_also_only_bookkeeping() {
 fn assigning_a_file_writes_it_through_the_index() {
     // The drag has to survive a restart, so the effect owns the write; the
     // reducer only mirrors the result into the store.
-    let repo = Arc::new(WorkspaceRepo::new(vec![applied("api")]));
+    let repo = Arc::new(VirtualBranchesRepo::new(vec![applied("api")]));
     let path = PathBuf::from("src/api.rs");
     let msg = schedule(
         repos_with(repo.clone()),
-        Effect::AssignWorkspaceFile {
+        Effect::AssignVirtualBranchesFile {
             repo_id: REPO_ID,
             path: path.clone(),
             hunk: None,
@@ -848,7 +848,7 @@ fn assigning_a_file_writes_it_through_the_index() {
     assert!(
         matches!(
             msg,
-            Msg::Internal(crate::msg::InternalMsg::WorkspaceAssignFinished {
+            Msg::Internal(crate::msg::InternalMsg::VirtualBranchesAssignFinished {
                 repo_id: REPO_ID,
                 result: Ok(()),
                 ..
@@ -862,7 +862,7 @@ fn assigning_a_file_writes_it_through_the_index() {
         .lock()
         .expect("assignments poisoned")
         .clone();
-    let state = WorkspaceState::new("main").with_branches(vec![applied("api")]);
+    let state = VirtualBranchesState::new("main").with_branches(vec![applied("api")]);
     assert_eq!(stored.resolve(&path, &state), Some("api"));
 }
 
@@ -870,14 +870,14 @@ fn assigning_a_file_writes_it_through_the_index() {
 fn assigning_one_hunk_splits_the_file_it_belongs_to() {
     // Assigning a hunk is a split: the file stops being on the branch that
     // owned it as a whole, and the other hunks are not silently dragged along.
-    let repo = Arc::new(WorkspaceRepo::new(vec![applied("api"), applied("ui")]));
+    let repo = Arc::new(VirtualBranchesRepo::new(vec![applied("api"), applied("ui")]));
     let path = PathBuf::from("src/api.rs");
-    let hunk = gitcomet_core::workspace::HunkFingerprint::of(&["NEW\n"], 1);
+    let hunk = gitcomet_core::virtual_branches::HunkFingerprint::of(&["NEW\n"], 1);
 
     for branch in ["api", "ui"] {
         let msg = schedule(
             repos_with(repo.clone()),
-            Effect::AssignWorkspaceFile {
+            Effect::AssignVirtualBranchesFile {
                 repo_id: REPO_ID,
                 path: path.clone(),
                 hunk: Some(hunk),
@@ -887,7 +887,7 @@ fn assigning_one_hunk_splits_the_file_it_belongs_to() {
         assert!(
             matches!(
                 msg,
-                Msg::Internal(crate::msg::InternalMsg::WorkspaceAssignFinished {
+                Msg::Internal(crate::msg::InternalMsg::VirtualBranchesAssignFinished {
                     result: Ok(()),
                     ..
                 })
@@ -916,13 +916,13 @@ fn assigning_one_hunk_splits_the_file_it_belongs_to() {
 
 #[test]
 fn assigning_a_file_whole_replaces_the_split_it_had() {
-    let repo = Arc::new(WorkspaceRepo::new(vec![applied("api"), applied("ui")]));
+    let repo = Arc::new(VirtualBranchesRepo::new(vec![applied("api"), applied("ui")]));
     let path = PathBuf::from("src/api.rs");
-    let hunk = gitcomet_core::workspace::HunkFingerprint::of(&["NEW\n"], 1);
+    let hunk = gitcomet_core::virtual_branches::HunkFingerprint::of(&["NEW\n"], 1);
 
     schedule(
         repos_with(repo.clone()),
-        Effect::AssignWorkspaceFile {
+        Effect::AssignVirtualBranchesFile {
             repo_id: REPO_ID,
             path: path.clone(),
             hunk: Some(hunk),
@@ -931,7 +931,7 @@ fn assigning_a_file_whole_replaces_the_split_it_had() {
     );
     schedule(
         repos_with(repo.clone()),
-        Effect::AssignWorkspaceFile {
+        Effect::AssignVirtualBranchesFile {
             repo_id: REPO_ID,
             path: path.clone(),
             hunk: None,
@@ -955,10 +955,10 @@ fn assigning_a_file_whole_replaces_the_split_it_had() {
 
 #[test]
 fn pushing_a_virtual_branch_reports_the_branch_it_pushed() {
-    let repo = Arc::new(WorkspaceRepo::new(vec![applied("api")]));
+    let repo = Arc::new(VirtualBranchesRepo::new(vec![applied("api")]));
     let msg = schedule(
         repos_with(repo.clone()),
-        Effect::PushWorkspaceBranch {
+        Effect::PushVirtualBranchesBranch {
             repo_id: REPO_ID,
             name: "api".into(),
         },
@@ -966,7 +966,7 @@ fn pushing_a_virtual_branch_reports_the_branch_it_pushed() {
     assert!(
         matches!(
             msg,
-            Msg::Internal(crate::msg::InternalMsg::WorkspacePushFinished {
+            Msg::Internal(crate::msg::InternalMsg::VirtualBranchesPushFinished {
                 repo_id: REPO_ID,
                 ref name,
                 result: Ok(_),
@@ -984,15 +984,15 @@ fn an_edit_for_a_repository_that_is_gone_is_reported_not_dropped() {
     // set on the way in is never cleared.
     let msg = schedule(
         RepositoryRuntimes::default(),
-        Effect::ApplyWorkspaceEdit {
+        Effect::ApplyVirtualBranchesEdit {
             repo_id: RepoId(404),
-            edit: WorkspaceEdit::Create { name: "api".into() },
+            edit: VirtualBranchesEdit::Create { name: "api".into() },
         },
     );
     assert!(
         matches!(
             msg,
-            Msg::Internal(crate::msg::InternalMsg::WorkspaceEditFinished {
+            Msg::Internal(crate::msg::InternalMsg::VirtualBranchesEditFinished {
                 repo_id: RepoId(404),
                 result: Err(_),
                 ..
@@ -1006,7 +1006,7 @@ fn an_edit_for_a_repository_that_is_gone_is_reported_not_dropped() {
 fn an_assignment_for_a_repository_that_is_gone_is_reported_not_dropped() {
     let msg = schedule(
         RepositoryRuntimes::default(),
-        Effect::AssignWorkspaceFile {
+        Effect::AssignVirtualBranchesFile {
             repo_id: RepoId(404),
             path: PathBuf::from("src/api.rs"),
             hunk: None,
@@ -1016,7 +1016,7 @@ fn an_assignment_for_a_repository_that_is_gone_is_reported_not_dropped() {
     assert!(
         matches!(
             msg,
-            Msg::Internal(crate::msg::InternalMsg::WorkspaceAssignFinished {
+            Msg::Internal(crate::msg::InternalMsg::VirtualBranchesAssignFinished {
                 repo_id: RepoId(404),
                 result: Err(_),
                 ..

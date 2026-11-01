@@ -6,8 +6,8 @@ use super::{
     app_menu, branch_group, components, context_menu_entry_action_at, push_request, repo_picker,
     resolve_checkout_file_path, session,
 };
-use crate::view::panels::popover::workspace_prompt;
-use crate::view::{WorkspaceCheckoutTarget, WorktreePopoverKind, workspace_owns_workdir};
+use crate::view::panels::popover::virtual_branches_prompt;
+use crate::view::{VirtualBranchesCheckoutTarget, WorktreePopoverKind, virtual_branches_owns_workdir};
 use crate::view::gitcomet_view_requests::{RootRequest, RootRequests as _};
 
 impl PopoverHost {
@@ -557,13 +557,13 @@ impl PopoverHost {
                 return;
             }
             ContextMenuAction::CheckoutCommit { repo_id, commit_id } => {
-                if workspace_owns_workdir(&self.state, repo_id) {
-                    // The workspace owns the working directory: leaving it is
+                if virtual_branches_owns_workdir(&self.state, repo_id) {
+                    // The virtual branches owns the working directory: leaving it is
                     // part of this checkout, so say so before it happens.
                     self.open_popover_centered(
-                        PopoverKind::LeaveWorkspaceToCheckoutPrompt {
+                        PopoverKind::LeaveVirtualBranchesToCheckoutPrompt {
                             repo_id,
-                            target: WorkspaceCheckoutTarget::Commit(commit_id),
+                            target: VirtualBranchesCheckoutTarget::Commit(commit_id),
                         },
                         window,
                         cx,
@@ -678,13 +678,13 @@ impl PopoverHost {
                 return;
             }
             ContextMenuAction::CheckoutBranch { repo_id, name } => {
-                if workspace_owns_workdir(&self.state, repo_id) {
-                    // The workspace owns the working directory: leaving it is
+                if virtual_branches_owns_workdir(&self.state, repo_id) {
+                    // The virtual branches owns the working directory: leaving it is
                     // part of this checkout, so say so before it happens.
                     self.open_popover_centered(
-                        PopoverKind::LeaveWorkspaceToCheckoutPrompt {
+                        PopoverKind::LeaveVirtualBranchesToCheckoutPrompt {
                             repo_id,
-                            target: WorkspaceCheckoutTarget::Branch(name),
+                            target: VirtualBranchesCheckoutTarget::Branch(name),
                         },
                         window,
                         cx,
@@ -1445,7 +1445,7 @@ impl PopoverHost {
                     });
                 }
             }
-            ContextMenuAction::AssignHunkToWorkspace {
+            ContextMenuAction::AssignHunkToVirtualBranches {
                 repo_id,
                 path,
                 hunk,
@@ -1457,14 +1457,14 @@ impl PopoverHost {
                     .repos
                     .iter()
                     .find(|repo| repo.id == repo_id)
-                    .and_then(|repo| repo.workspace.assignments.file(&path))
+                    .and_then(|repo| repo.virtual_branches.assignments.file(&path))
                     .and_then(|file| file.hunk_branch(hunk))
                     .map(str::to_string);
                 let anchor = self.popover_anchor_point();
                 self.open_popover_at(
-                    PopoverKind::WorkspacePrompt {
+                    PopoverKind::VirtualBranchesPrompt {
                         repo_id,
-                        prompt: workspace_prompt::assign_hunk_prompt(
+                        prompt: virtual_branches_prompt::assign_hunk_prompt(
                             &path,
                             hunk,
                             branch.as_deref(),

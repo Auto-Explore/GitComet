@@ -989,11 +989,11 @@ fn fill_set_active_repo_inline_impl(
     if changed && let Some(previous) = previous_active {
         // The checkout belongs to the repository, but the tab that explains it
         // belongs to the window. Switching repositories leaves the sidebar on
-        // Workspace, so without this the repository the user just walked away
-        // from stays sitting on `gitcomet/workspace` with nothing on screen
+        // Virtual branches, so without this the repository the user just walked away
+        // from stays sitting on `gitcomet/virtual` with nothing on screen
         // saying why — and the next time they pick it up they would be looking
         // at another repository's branches.
-        effects.extend(super::workspace::leave_workspace(state, previous));
+        effects.extend(super::virtual_branches::leave_virtual_branches(state, previous));
     }
     if changed && state.git_log_settings.verify_commit_signatures {
         for repo in &mut state.repos {

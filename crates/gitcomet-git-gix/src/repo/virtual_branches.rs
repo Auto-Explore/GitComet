@@ -1,6 +1,6 @@
-//! The `gitcomet/workspace` branch and the virtual-branch operations behind it.
+//! The `gitcomet/virtual` branch and the virtual-branch operations behind it.
 //!
-//! The workspace branch holds the combined tree of every applied virtual
+//! The virtual-branches branch holds the combined tree of every applied virtual
 //! branch, so a user can have several pieces of work in one working directory
 //! without checking any of them out. It is rebuilt from scratch rather than
 //! patched: applying, unapplying, or restacking any branch replays the same
@@ -17,8 +17,8 @@
 use gitcomet_core::domain::CommitId;
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::services::{CommandOutput, CommitOperationOutcome, Result};
-use gitcomet_core::workspace::{
-    AssignmentIndex, VirtualBranch, WORKSPACE_BRANCH, WORKSPACE_REF_PREFIX, WorkspaceState,
+use gitcomet_core::virtual_branches::{
+    AssignmentIndex, VirtualBranch, VIRTUAL_BRANCHES_BRANCH, VIRTUAL_BRANCHES_REF_PREFIX, VirtualBranchesState,
     hunk_spans, synthesize_for_branch,
 };
 use std::path::{Path, PathBuf};
@@ -28,25 +28,25 @@ use super::GixRepo;
 use crate::util::{run_git_capture, run_git_capture_bytes, run_git_simple};
 
 /// Directory GitComet's own repository files live in, under the shared
-/// `.git` directory so linked worktrees see the same workspace.
-const WORKSPACE_DIR: &str = "gitcomet";
+/// `.git` directory so linked worktrees see the same virtual branches.
+const VIRTUAL_BRANCHES_DIR: &str = "gitcomet";
 
-const WORKSPACE_STATE_FILE: &str = "workspace.json";
-const WORKSPACE_ASSIGNMENTS_FILE: &str = "assignments.json";
+const VIRTUAL_BRANCHES_STATE_FILE: &str = "virtual branches.json";
+const VIRTUAL_BRANCHES_ASSIGNMENTS_FILE: &str = "assignments.json";
 
 impl GixRepo {
     /// The `.git` directory of the main worktree, where GitComet's own files
     /// live.
-    fn workspace_dir(&self) -> PathBuf {
-        self.common_dir_impl().join(WORKSPACE_DIR)
+    fn virtual_branches_dir(&self) -> PathBuf {
+        self.common_dir_impl().join(VIRTUAL_BRANCHES_DIR)
     }
 
-    fn workspace_state_path(&self) -> PathBuf {
-        self.workspace_dir().join(WORKSPACE_STATE_FILE)
+    fn virtual_branches_state_path(&self) -> PathBuf {
+        self.virtual_branches_dir().join(VIRTUAL_BRANCHES_STATE_FILE)
     }
 
-    fn workspace_assignments_path(&self) -> PathBuf {
-        self.workspace_dir().join(WORKSPACE_ASSIGNMENTS_FILE)
+    fn virtual_branches_assignments_path(&self) -> PathBuf {
+        self.virtual_branches_dir().join(VIRTUAL_BRANCHES_ASSIGNMENTS_FILE)
     }
 
     /// A `git` command that reads the target and target-ish revision without
@@ -81,17 +81,17 @@ impl GixRepo {
 
     // ── State persistence ────────────────────────────────────────
 
-    pub(super) fn read_workspace_impl(&self) -> Result<WorkspaceState> {
-        let path = self.workspace_state_path();
+    pub(super) fn read_virtual_branches_impl(&self) -> Result<VirtualBranchesState> {
+        let path = self.virtual_branches_state_path();
         let bytes = match std::fs::read(&path) {
             Ok(bytes) => bytes,
-            // No workspace yet is the normal state for a repository that has
-            // never opened the Workspace view, not an error. Any other failure
+            // No virtual branches yet is the normal state for a repository that has
+            // never opened the Virtual branches view, not an error. Any other failure
             // is reported rather than folded into "empty": saying "empty" would
             // let the next edit overwrite a file the user can still not read,
             // which is the one outcome worse than an error message.
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                return Ok(WorkspaceState::default());
+                return Ok(VirtualBranchesState::default());
             }
             Err(error) => {
                 return Err(Error::new(ErrorKind::Backend(format!(
@@ -100,31 +100,31 @@ impl GixRepo {
                 ))));
             }
         };
-        // A workspace file written by a newer or hand-edited version must not
+        // A virtual branches file written by a newer or hand-edited version must not
         // make the whole repository unusable; an unparseable file reads as an
-        // empty workspace the user rebuilds from the UI.
+        // empty virtual branches the user rebuilds from the UI.
         Ok(serde_json::from_slice(&bytes).unwrap_or_default())
     }
 
-    pub(super) fn write_workspace_impl(&self, state: &WorkspaceState) -> Result<()> {
+    pub(super) fn write_virtual_branches_impl(&self, state: &VirtualBranchesState) -> Result<()> {
         state.validate()?;
-        let dir = self.workspace_dir();
+        let dir = self.virtual_branches_dir();
         std::fs::create_dir_all(&dir).map_err(|e| {
             Error::new(ErrorKind::Backend(format!(
-                "creating the workspace directory {}: {e}",
+                "creating the virtual branches directory {}: {e}",
                 dir.display()
             )))
         })?;
         let json = serde_json::to_vec_pretty(state)
-            .map_err(|e| Error::new(ErrorKind::Backend(format!("serializing workspace: {e}"))))?;
-        write_atomically(&self.workspace_state_path(), &json)
+            .map_err(|e| Error::new(ErrorKind::Backend(format!("serializing virtual branches: {e}"))))?;
+        write_atomically(&self.virtual_branches_state_path(), &json)
     }
 
     pub(super) fn read_assignments_impl(&self) -> Result<AssignmentIndex> {
-        let path = self.workspace_assignments_path();
+        let path = self.virtual_branches_assignments_path();
         let bytes = match std::fs::read(&path) {
             Ok(bytes) => bytes,
-            // Same reasoning as `read_workspace_impl`: absent is ordinary, any
+            // Same reasoning as `read_virtual_branches_impl`: absent is ordinary, any
             // other failure is not, and reporting it as "no assignments" would
             // quietly discard a file the user cannot read yet can.
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -141,16 +141,16 @@ impl GixRepo {
     }
 
     pub(super) fn write_assignments_impl(&self, index: &AssignmentIndex) -> Result<()> {
-        let dir = self.workspace_dir();
+        let dir = self.virtual_branches_dir();
         std::fs::create_dir_all(&dir).map_err(|e| {
             Error::new(ErrorKind::Backend(format!(
-                "creating the workspace directory {}: {e}",
+                "creating the virtual branches directory {}: {e}",
                 dir.display()
             )))
         })?;
         let json = serde_json::to_vec_pretty(index)
             .map_err(|e| Error::new(ErrorKind::Backend(format!("serializing assignments: {e}"))))?;
-        write_atomically(&self.workspace_assignments_path(), &json)
+        write_atomically(&self.virtual_branches_assignments_path(), &json)
     }
 
     // ── Virtual branches ─────────────────────────────────────────
@@ -169,7 +169,7 @@ impl GixRepo {
     ///
     /// `git rebase` is not usable here. It refuses outright when the working
     /// tree has unstaged changes — "cannot rebase: You have unstaged changes" —
-    /// and in a workspace that is the *normal* state, not a mistake: the whole
+    /// and in a virtual branches that is the *normal* state, not a mistake: the whole
     /// point is uncommitted changes spread across several branches at once.
     /// Every stack edit would fail, so the replay goes through the same
     /// `merge-tree` + `commit-tree` plumbing the target change already uses,
@@ -185,9 +185,9 @@ impl GixRepo {
 
     /// Rebase `name` onto `onto` as a history rewrite with no worktree effect.
     ///
-    /// Uses `merge-tree` + `commit-tree` rather than `rebase` so a workspace
+    /// Uses `merge-tree` + `commit-tree` rather than `rebase` so a virtual branches
     /// branch can be restacked while the user has unrelated edits in the
-    /// working tree — which is the normal state in a workspace.
+    /// working tree — which is the normal state in a virtual branches.
     fn restack_branch_onto(&self, name: &str, onto: &str) -> Result<CommitId> {
         let branch_id = self.require_revision(name)?;
         let onto_id = self.require_revision(onto)?;
@@ -219,79 +219,79 @@ impl GixRepo {
 
     // ── The working directory ────────────────────────────────────
 
-    /// Refuse an action that would land on `gitcomet/workspace` because it acts on
+    /// Refuse an action that would land on `gitcomet/virtual` because it acts on
     /// **HEAD** rather than on a branch the user picked.
     ///
     /// Hiding the branch from every branch list keeps it out of the pickers, but a
     /// plain commit, an amend and an ordinary push all apply to whatever HEAD is —
-    /// and entering the workspace is exactly what puts HEAD there. Without this,
+    /// and entering the virtual branches is exactly what puts HEAD there. Without this,
     /// the user's own commits land on GitComet's bookkeeping branch, where the next
     /// rebuild discards them, and the ordinary push publishes that branch to the
     /// user's remote under their name.
     ///
     /// `action` names what was refused, so the message says what was refused rather
-    /// than something generic. The escape is the Workspace tab, which works on the
+    /// than something generic. The escape is the Virtual branches tab, which works on the
     /// branch each change belongs to.
     ///
-    /// A failure to name HEAD is treated as "not the workspace branch" rather
+    /// A failure to name HEAD is treated as "not the virtual-branches branch" rather
     /// than propagated: `current_branch_name` needs a commit to read, so in a
     /// repository that has none yet — where a first commit is the one thing the
     /// user is trying to do — it fails, and failing there would block the very
     /// commit the guard exists to protect. Whatever command asked is about to
     /// run against the same repository and will report the real problem.
-    pub(super) fn refuse_workspace_head_action(&self, action: &str) -> Result<()> {
+    pub(super) fn refuse_virtual_branches_head_action(&self, action: &str) -> Result<()> {
         if let Ok(Some(branch)) = self.current_branch_name()
-            && is_workspace_branch(branch.trim())
+            && is_virtual_branches_branch(branch.trim())
         {
             let product = gitcomet_core::identity::current().display_name();
             return Err(Error::new(ErrorKind::Backend(format!(
                 "'{branch}' is {product}'s own branch and is rebuilt from the applied \
                  branches, so {action} here would be undone by the next apply. Use \
-                 the Workspace tab: it works on the branch each change belongs to, \
+                 the VirtualBranches tab: it works on the branch each change belongs to, \
                  and pushes a named branch rather than HEAD."
             ))));
         }
         Ok(())
     }
 
-    /// Whether the working directory is currently sitting on the workspace branch.
+    /// Whether the working directory is currently sitting on the virtual-branches branch.
     ///
     /// This is what decides whether a rebuild should also move the files: a
-    /// workspace the user is not looking at has no business changing their
+    /// virtual branches the user is not looking at has no business changing their
     /// working tree, and one they are looking at has to follow.
-    pub(super) fn workspace_is_checked_out(&self) -> bool {
+    pub(super) fn virtual_branches_is_checked_out(&self) -> bool {
         self.current_branch_impl()
-            .map(|branch| branch == WORKSPACE_BRANCH)
+            .map(|branch| branch == VIRTUAL_BRANCHES_BRANCH)
             .unwrap_or(false)
     }
 
-    /// Put the working directory on the workspace branch, building it first if it
+    /// Put the working directory on the virtual-branches branch, building it first if it
     /// does not exist yet.
     ///
     /// The checkout is git's own, so its rule applies: local changes that the
     /// switch would overwrite are refused rather than carried, and nothing is
     /// discarded. That refusal is the whole safety story of this feature — the
-    /// user is told which move failed and why, and gitcomet/workspace has not been
+    /// user is told which move failed and why, and gitcomet/virtual has not been
     /// created and left half-applied behind.
-    pub(super) fn enter_workspace_impl(&self) -> Result<CommitId> {
-        if self.resolve_revision(WORKSPACE_BRANCH)?.is_none() {
-            let state = self.read_workspace_impl()?;
+    pub(super) fn enter_virtual_branches_impl(&self) -> Result<CommitId> {
+        if self.resolve_revision(VIRTUAL_BRANCHES_BRANCH)?.is_none() {
+            let state = self.read_virtual_branches_impl()?;
             let applied = state.application_order()?;
             let names: Vec<&str> = applied.iter().map(|branch| branch.name.as_str()).collect();
-            self.update_workspace_branch_impl(&names)?;
+            self.update_virtual_branches_branch_impl(&names)?;
         }
-        let tip = self.require_revision(WORKSPACE_BRANCH)?;
+        let tip = self.require_revision(VIRTUAL_BRANCHES_BRANCH)?;
 
         let mut cmd = self.git_plumbing();
         cmd.arg("checkout")
             // Submodules are the user's business, not a side effect of which
             // virtual branches happen to be applied.
             .arg("--no-recurse-submodules")
-            .arg(WORKSPACE_BRANCH);
+            .arg(VIRTUAL_BRANCHES_BRANCH);
         let product = gitcomet_core::identity::current().display_name();
         run_git_simple(cmd, "git checkout").map_err(|error| {
             Error::new(ErrorKind::Backend(format!(
-                "could not switch the working directory to the workspace: {error}\n\n\
+                "could not switch the working directory to the virtual_branches: {error}\n\n\
                  {product} will not discard uncommitted changes. Commit or stash \
                  them, then try again."
             )))
@@ -299,12 +299,12 @@ impl GixRepo {
         Ok(tip)
     }
 
-    /// Take the working directory back off the workspace branch and onto `onto`.
+    /// Take the working directory back off the virtual-branches branch and onto `onto`.
     ///
-    /// `onto` is the branch the user was on before they entered the workspace, so
-    /// this is the inverse of [`Self::enter_workspace_impl`] and carries the same
+    /// `onto` is the branch the user was on before they entered the virtual branches, so
+    /// this is the inverse of [`Self::enter_virtual_branches_impl`] and carries the same
     /// refusal rule.
-    pub(super) fn leave_workspace_impl(&self, onto: &str) -> Result<()> {
+    pub(super) fn leave_virtual_branches_impl(&self, onto: &str) -> Result<()> {
         self.require_revision(onto)?;
         let mut cmd = self.git_plumbing();
         cmd.arg("checkout").arg("--no-recurse-submodules").arg(onto);
@@ -318,7 +318,7 @@ impl GixRepo {
         })
     }
 
-    /// Move the working directory from one workspace tree to another.
+    /// Move the working directory from one virtual branches tree to another.
     ///
     /// This is the two-way tree switch `git checkout` performs internally, and it is
     /// the reason applying a branch does not throw away work: a file the user has
@@ -329,8 +329,8 @@ impl GixRepo {
     ///
     /// The index and working tree are verified before anything is written, so a
     /// refusal leaves both exactly as they were. Callers must therefore do this
-    /// *before* moving the workspace ref, not after, or the two would disagree.
-    pub(super) fn sync_workspace_workdir_impl(
+    /// *before* moving the virtual branches ref, not after, or the two would disagree.
+    pub(super) fn sync_virtual_branches_workdir_impl(
         &self,
         old_tip: &CommitId,
         new_tip: &CommitId,
@@ -354,13 +354,13 @@ impl GixRepo {
         })
     }
 
-    // ── The workspace branch ─────────────────────────────────────
+    // ── The virtual-branches branch ─────────────────────────────────────
 
-    pub(super) fn update_workspace_branch_impl(&self, applied: &[&str]) -> Result<CommitId> {
-        let state = self.read_workspace_impl()?;
+    pub(super) fn update_virtual_branches_branch_impl(&self, applied: &[&str]) -> Result<CommitId> {
+        let state = self.read_virtual_branches_impl()?;
         let target_id = self.require_revision(&state.target)?;
 
-        // Start from the target every time: the workspace branch is a pure
+        // Start from the target every time: the virtual-branches branch is a pure
         // function of the applied set, so a stale merge from a previous applied
         // set cannot survive into the new one.
         let mut head = target_id.clone();
@@ -388,7 +388,7 @@ impl GixRepo {
                     ))));
                 }
             };
-            // Every merge gets its own commit so the workspace history shows
+            // Every merge gets its own commit so the virtual branches history shows
             // which branch contributed what, and so unapplying one later is a
             // replay rather than an edit of history that has been pushed.
             let message = format!("Apply {name}");
@@ -398,41 +398,41 @@ impl GixRepo {
         }
 
         if !merged_any {
-            // Nothing changed hands, so the workspace branch should point at
+            // Nothing changed hands, so the virtual-branches branch should point at
             // the target directly rather than accumulate no-op merge commits.
-            let existing = self.resolve_revision(WORKSPACE_BRANCH)?;
+            let existing = self.resolve_revision(VIRTUAL_BRANCHES_BRANCH)?;
             if existing.as_ref() == Some(&head) {
                 return Ok(head);
             }
         }
 
         // The working directory follows only when the user is looking at the
-        // workspace; a rebuild of a workspace nobody has entered must not touch
+        // virtual branches; a rebuild of a virtual branches nobody has entered must not touch
         // their files.
         //
         // Syncing *before* the ref moves is the whole ordering here. A refused
         // sync leaves the index and the working tree exactly as they were, and
         // with the ref still on the old tree the two cannot disagree.
-        let previous = self.resolve_revision(WORKSPACE_BRANCH)?;
+        let previous = self.resolve_revision(VIRTUAL_BRANCHES_BRANCH)?;
         if let Some(previous) = previous
             .as_ref()
-            .filter(|_| self.workspace_is_checked_out())
+            .filter(|_| self.virtual_branches_is_checked_out())
         {
-            self.sync_workspace_workdir_impl(previous, &head)?;
+            self.sync_virtual_branches_workdir_impl(previous, &head)?;
         }
 
-        self.update_workspace_ref(&head)?;
+        self.update_virtual_branches_ref(&head)?;
         Ok(head)
     }
 
-    /// Write the workspace branch, refusing to move it backwards.
+    /// Write the virtual-branches branch, refusing to move it backwards.
     ///
     /// The old value is passed as `update-ref`'s expected-old argument so a
     /// concurrent rebuild cannot be silently overwritten.
-    fn update_workspace_ref(&self, commit: &CommitId) -> Result<()> {
+    fn update_virtual_branches_ref(&self, commit: &CommitId) -> Result<()> {
         let mut cmd = self.git_plumbing();
         cmd.arg("update-ref");
-        cmd.arg(format!("refs/heads/{WORKSPACE_BRANCH}"));
+        cmd.arg(format!("refs/heads/{VIRTUAL_BRANCHES_BRANCH}"));
         cmd.arg(commit.as_ref());
         // The empty string means "must not exist yet", which is what creating
         // the branch needs; a real old value makes the update conditional on
@@ -440,17 +440,17 @@ impl GixRepo {
         // would have been the wrong way to say the first case: its length is
         // 40 for SHA-1 and 64 for SHA-256, so it only works in the repository
         // format the author happened to be thinking of.
-        cmd.arg(match self.resolve_revision(WORKSPACE_BRANCH)? {
+        cmd.arg(match self.resolve_revision(VIRTUAL_BRANCHES_BRANCH)? {
             Some(existing) => existing.to_string(),
             None => String::new(),
         });
         run_git_simple(cmd, "git update-ref")
     }
 
-    pub(super) fn update_workspace_target_impl(&self, target: &str) -> Result<()> {
-        let mut state = self.read_workspace_impl()?;
+    pub(super) fn update_virtual_branches_target_impl(&self, target: &str) -> Result<()> {
+        let mut state = self.read_virtual_branches_impl()?;
         state.set_target(target)?;
-        self.write_workspace_impl(&state)?;
+        self.write_virtual_branches_impl(&state)?;
 
         // Fail before anything is rebased if the new target does not exist.
         self.require_revision(&state.target)?;
@@ -465,7 +465,7 @@ impl GixRepo {
 
         let applied = state.application_order()?;
         let names: Vec<&str> = applied.iter().map(|b| b.name.as_str()).collect();
-        self.update_workspace_branch_impl(&names).map(|_| ())
+        self.update_virtual_branches_branch_impl(&names).map(|_| ())
     }
 
     // ── Assigning and committing ─────────────────────────────────
@@ -476,10 +476,10 @@ impl GixRepo {
         message: &str,
         paths: &[&Path],
     ) -> Result<CommitOperationOutcome> {
-        let state = self.read_workspace_impl()?;
+        let state = self.read_virtual_branches_impl()?;
         let branch = state.get(name).ok_or_else(|| {
             Error::new(ErrorKind::Backend(format!(
-                "'{name}' is not a workspace branch"
+                "'{name}' is not a virtual-branches branch"
             )))
         })?;
         let base = branch.base_branch(&state.target).to_string();
@@ -487,16 +487,16 @@ impl GixRepo {
         let pre_head = self.resolve_revision(name)?;
 
         // The commit is built against the branch's own base rather than the
-        // workspace, so it contains only the assigned files. A temporary index
+        // virtual branches, so it contains only the assigned files. A temporary index
         // keeps the user's real index and working tree untouched.
-        let index_path = self.workspace_dir().join("commit-index");
+        let index_path = self.virtual_branches_dir().join("commit-index");
         // Not `.ok()`: if the directory cannot be made, every later `GIT_INDEX_FILE`
         // command fails with a git error that says nothing about the real
         // problem, and the user is left guessing at their repository.
-        std::fs::create_dir_all(self.workspace_dir()).map_err(|e| {
+        std::fs::create_dir_all(self.virtual_branches_dir()).map_err(|e| {
             Error::new(ErrorKind::Backend(format!(
-                "creating the workspace directory {}: {e}",
-                self.workspace_dir().display()
+                "creating the virtual branches directory {}: {e}",
+                self.virtual_branches_dir().display()
             )))
         })?;
 
@@ -515,11 +515,11 @@ impl GixRepo {
 
         let _ = std::fs::remove_file(&index_path);
 
-        // The branch moved, so the workspace branch has to be rebuilt to pick
+        // The branch moved, so the virtual-branches branch has to be rebuilt to pick
         // the new commit up.
         let applied = state.application_order()?;
         let names: Vec<&str> = applied.iter().map(|b| b.name.as_str()).collect();
-        self.update_workspace_branch_impl(&names)?;
+        self.update_virtual_branches_branch_impl(&names)?;
 
         Ok(CommitOperationOutcome {
             local_branch: Some(name.to_string()),
@@ -623,7 +623,7 @@ impl GixRepo {
         // The fingerprints are recomputed here, against *this branch's* base.
         // That is the whole point of keying on content: the assignment was made
         // from a diff against something else, and it still resolves.
-        let keep = |fingerprint: gitcomet_core::workspace::HunkFingerprint| {
+        let keep = |fingerprint: gitcomet_core::virtual_branches::HunkFingerprint| {
             mine.iter().any(|(assigned, assigned_branch)| {
                 *assigned == fingerprint && *assigned_branch == branch
             })
@@ -711,7 +711,7 @@ impl GixRepo {
     ///
     /// `git merge-tree --write-tree` computes the merge entirely in the object
     /// database: no ref moves, no index entry is written, and the worktree is
-    /// not read or written. That is what lets the workspace be rebuilt while
+    /// not read or written. That is what lets the virtual branches be rebuilt while
     /// the user has unsaved edits in the files being merged.
     ///
     /// Requires Git 2.38 or newer. Older Git reports it as an unknown option,
@@ -779,10 +779,10 @@ impl GixRepo {
     pub(super) fn virtual_branch_push_target_impl(
         &self,
         name: &str,
-        workspace: &WorkspaceState,
+        virtual_branches: &VirtualBranchesState,
     ) -> Option<String> {
-        let branch: &VirtualBranch = workspace.get(name)?;
-        Some(branch.base_branch(&workspace.target).to_string())
+        let branch: &VirtualBranch = virtual_branches.get(name)?;
+        Some(branch.base_branch(&virtual_branches.target).to_string())
     }
 
     pub(super) fn push_virtual_branch_impl(&self, name: &str) -> Result<CommandOutput> {
@@ -793,7 +793,7 @@ impl GixRepo {
             )));
         };
 
-        // The named ref on both sides, not `HEAD`: in a workspace the user is
+        // The named ref on both sides, not `HEAD`: in a virtual branches the user is
         // usually sitting on an unrelated branch, and pushing `HEAD` would
         // publish that one instead of the branch they clicked.
         let label = format!("git push --set-upstream {remote} {name}");
@@ -855,7 +855,7 @@ fn conflict_message(name: &str, against: Option<&str>, paths: &[String]) -> Stri
         ),
         None => format!(
             "'{name}' could not be applied: it conflicts with the branches \
-             already in the workspace, in {}\n\n\
+             already in the virtual_branches, in {}\n\n\
              Unapply one of them, or resolve the conflict before applying \
              {name} again.",
             describe_paths(paths)
@@ -878,7 +878,7 @@ enum MergeOutcome {
     Merged(CommitId),
     /// The paths git could not merge.
     ///
-    /// A conflict is not an error condition in the caller: the workspace is
+    /// A conflict is not an error condition in the caller: the virtual branches is
     /// still valid, it just cannot take this branch, and the user has to be
     /// told which two branches are in the way rather than being handed a bare
     /// "merge failed".
@@ -957,7 +957,7 @@ fn merge_base_of(repo: &GixRepo, ours: &CommitId, theirs: &CommitId) -> String {
 }
 
 /// Write via a temporary file and rename, so a crash mid-write cannot leave a
-/// truncated workspace file that reads as an empty workspace.
+/// truncated virtual branches file that reads as an empty virtual branches.
 fn write_atomically(path: &Path, bytes: &[u8]) -> Result<()> {
     let temp = path.with_extension("tmp");
     std::fs::write(&temp, bytes).map_err(|e| {
@@ -987,8 +987,8 @@ fn parse_mode(output: &str) -> Option<&'static str> {
 }
 
 /// Whether `name` is one of GitComet's own branches rather than a user's.
-pub(crate) fn is_workspace_branch(name: &str) -> bool {
-    name.starts_with(WORKSPACE_REF_PREFIX)
+pub(crate) fn is_virtual_branches_branch(name: &str) -> bool {
+    name.starts_with(VIRTUAL_BRANCHES_REF_PREFIX)
 }
 
 #[cfg(test)]
@@ -1047,7 +1047,7 @@ mod tests {
         git(root, &["commit", "-m", "base"]);
         // Captured while HEAD is still the target: taking it after the branch
         // checkouts below would name `api` as both the target and a branch,
-        // which `write_workspace` refuses.
+        // which `write_virtual_branches` refuses.
         let default_branch = git(root, &["symbolic-ref", "--short", "HEAD"]);
 
         // Two siblings off the target, one change each — that is what makes
@@ -1064,10 +1064,10 @@ mod tests {
 
         git(root, &["checkout", &default_branch]);
 
-        let state = WorkspaceState::new(&default_branch)
+        let state = VirtualBranchesState::new(&default_branch)
             .with_branches(vec![VirtualBranch::new("api"), VirtualBranch::new("ui")]);
         let repo = open_repo(root);
-        repo.write_workspace(&state).expect("write workspace");
+        repo.write_virtual_branches(&state).expect("write virtual branches");
         (temp, repo, default_branch)
     }
 
@@ -1081,18 +1081,18 @@ mod tests {
     }
 
     #[test]
-    fn entering_the_workspace_puts_every_applied_branch_in_the_files() {
+    fn entering_the_virtual_branches_puts_every_applied_branch_in_the_files() {
         let (temp, repo, _) = repo_with_two_branches();
         let root = temp.path();
-        let tip = repo.enter_workspace().expect("enter workspace");
+        let tip = repo.enter_virtual_branches().expect("enter virtual branches");
 
         assert_eq!(read(root, "shared.txt"), "a1\nAPI\na3\n", "api is applied");
         assert_eq!(read(root, "moved.txt"), "ui-x\n", "ui is applied");
         assert_eq!(read(root, "mine.txt"), "y\n");
         assert_eq!(
             repo.current_branch(&gitcomet_core::services::CancellationToken::new()).expect("current branch"),
-            WORKSPACE_BRANCH,
-            "the working directory is the workspace"
+            VIRTUAL_BRANCHES_BRANCH,
+            "the working directory is the virtual branches"
         );
         assert_eq!(tip.as_ref(), git(root, &["rev-parse", "HEAD"]).as_str());
     }
@@ -1103,16 +1103,16 @@ mod tests {
         // directory without taking uncommitted work with it.
         let (temp, repo, _) = repo_with_two_branches();
         let root = temp.path();
-        repo.enter_workspace().expect("enter workspace");
+        repo.enter_virtual_branches().expect("enter virtual branches");
 
         std::fs::write(root.join("mine.txt"), "y\nMY UNCOMMITTED WORK\n").unwrap();
 
-        let mut state = repo.read_workspace().expect("read workspace");
+        let mut state = repo.read_virtual_branches().expect("read virtual branches");
         state
-            .set_applied("ui", gitcomet_core::workspace::BranchApplyState::Unapplied)
+            .set_applied("ui", gitcomet_core::virtual_branches::BranchApplyState::Unapplied)
             .expect("unapply");
-        repo.write_workspace(&state).expect("write workspace");
-        repo.update_workspace_branch(&["api"]).expect("rebuild");
+        repo.write_virtual_branches(&state).expect("write virtual branches");
+        repo.update_virtual_branches_branch(&["api"]).expect("rebuild");
 
         assert_eq!(
             read(root, "moved.txt"),
@@ -1135,19 +1135,19 @@ mod tests {
         // a refusal cannot leave the two disagreeing.
         let (temp, repo, _) = repo_with_two_branches();
         let root = temp.path();
-        repo.enter_workspace().expect("enter workspace");
-        let before = git(root, &["rev-parse", WORKSPACE_BRANCH]);
+        repo.enter_virtual_branches().expect("enter virtual branches");
+        let before = git(root, &["rev-parse", VIRTUAL_BRANCHES_BRANCH]);
 
         // Edit the very file `api` changed, then unapply it.
         std::fs::write(root.join("shared.txt"), "a1\nAPI\nMINE\na3\n").unwrap();
-        let mut state = repo.read_workspace().expect("read workspace");
+        let mut state = repo.read_virtual_branches().expect("read virtual branches");
         state
-            .set_applied("api", gitcomet_core::workspace::BranchApplyState::Unapplied)
+            .set_applied("api", gitcomet_core::virtual_branches::BranchApplyState::Unapplied)
             .expect("unapply");
-        repo.write_workspace(&state).expect("write workspace");
+        repo.write_virtual_branches(&state).expect("write virtual branches");
 
         assert!(
-            repo.update_workspace_branch(&["ui"]).is_err(),
+            repo.update_virtual_branches_branch(&["ui"]).is_err(),
             "a switch that would overwrite a local edit is refused"
         );
         assert_eq!(
@@ -1156,37 +1156,37 @@ mod tests {
             "the file is untouched"
         );
         assert_eq!(
-            git(root, &["rev-parse", WORKSPACE_BRANCH]),
+            git(root, &["rev-parse", VIRTUAL_BRANCHES_BRANCH]),
             before,
             "and so is the branch, because the ref is only moved after a sync succeeds"
         );
     }
 
     #[test]
-    fn a_rebuild_does_not_touch_the_files_of_a_workspace_that_is_not_checked_out() {
+    fn a_rebuild_does_not_touch_the_files_of_a_virtual_branches_that_is_not_checked_out() {
         let (temp, repo, _) = repo_with_two_branches();
         let root = temp.path();
-        assert!(!repo.workspace_is_checked_out());
+        assert!(!repo.virtual_branches_is_checked_out());
 
-        repo.update_workspace_branch(&["api", "ui"])
+        repo.update_virtual_branches_branch(&["api", "ui"])
             .expect("rebuild");
 
         assert_eq!(
             read(root, "moved.txt"),
             "x\n",
-            "the ref moved, but a workspace nobody has entered must not move files"
+            "the ref moved, but a virtual branches nobody has entered must not move files"
         );
         assert_eq!(read(root, "shared.txt"), "a1\na2\na3\n");
     }
 
     #[test]
-    fn leaving_the_workspace_returns_to_the_branch_it_came_from() {
+    fn leaving_the_virtual_branches_returns_to_the_branch_it_came_from() {
         let (temp, repo, _) = repo_with_two_branches();
         let root = temp.path();
         let original = repo.current_branch(&gitcomet_core::services::CancellationToken::new()).expect("current branch");
-        repo.enter_workspace().expect("enter workspace");
+        repo.enter_virtual_branches().expect("enter virtual branches");
 
-        repo.leave_workspace(&original).expect("leave workspace");
+        repo.leave_virtual_branches(&original).expect("leave virtual branches");
         assert_eq!(repo.current_branch(&gitcomet_core::services::CancellationToken::new()).expect("current branch"), original);
         assert_eq!(
             read(root, "moved.txt"),
@@ -1207,7 +1207,7 @@ mod tests {
         git(temp.path(), &["commit", "-am", "clash"]);
 
         let error = repo
-            .update_workspace_branch(&["api", "ui"])
+            .update_virtual_branches_branch(&["api", "ui"])
             .expect_err("api and ui now change the same line");
         let message = error.to_string();
         assert!(
@@ -1349,20 +1349,20 @@ mod tests {
     }
 
     #[test]
-    fn workspace_branches_are_recognized_by_their_prefix() {
-        assert!(is_workspace_branch(WORKSPACE_BRANCH));
-        assert!(is_workspace_branch("gitcomet/anything"));
-        assert!(!is_workspace_branch("feature/api"));
-        assert!(!is_workspace_branch("main"));
+    fn virtual_branches_branches_are_recognized_by_their_prefix() {
+        assert!(is_virtual_branches_branch(VIRTUAL_BRANCHES_BRANCH));
+        assert!(is_virtual_branches_branch("gitcomet/anything"));
+        assert!(!is_virtual_branches_branch("feature/api"));
+        assert!(!is_virtual_branches_branch("main"));
     }
 
     #[test]
-    fn the_state_file_sits_inside_the_workspace_directory() {
-        let dir = PathBuf::from("/repo/.git").join(WORKSPACE_DIR);
-        assert!(dir.ends_with(WORKSPACE_DIR));
+    fn the_state_file_sits_inside_the_virtual_branches_directory() {
+        let dir = PathBuf::from("/repo/.git").join(VIRTUAL_BRANCHES_DIR);
+        assert!(dir.ends_with(VIRTUAL_BRANCHES_DIR));
         assert_eq!(
-            dir.join(WORKSPACE_STATE_FILE).file_name().unwrap(),
-            "workspace.json"
+            dir.join(VIRTUAL_BRANCHES_STATE_FILE).file_name().unwrap(),
+            "virtual branches.json"
         );
     }
 
@@ -1558,10 +1558,10 @@ mod tests {
         git(root, &["branch", "api"]);
         git(root, &["branch", "ui"]);
 
-        let state = WorkspaceState::new(&default_branch)
+        let state = VirtualBranchesState::new(&default_branch)
             .with_branches(vec![VirtualBranch::new("api"), VirtualBranch::new("ui")]);
         let repo = open_repo(root);
-        repo.write_workspace(&state).expect("write workspace");
+        repo.write_virtual_branches(&state).expect("write virtual branches");
         (temp, repo, default_branch)
     }
 
@@ -1588,7 +1588,7 @@ mod tests {
                 Some(branch.into()),
             );
         }
-        repo.write_workspace_assignments(&index)
+        repo.write_virtual_branches_assignments(&index)
             .expect("write assignments");
         spans.len()
     }
@@ -1628,7 +1628,7 @@ mod tests {
         assert_eq!(
             git(root, &["rev-parse", "api~1"]),
             git(root, &["rev-parse", &default_branch]),
-            "the commit is built on the branch's own base, never on the workspace"
+            "the commit is built on the branch's own base, never on the virtual branches"
         );
         assert_eq!(outcome.local_branch.as_deref(), Some("api"));
         assert_eq!(
@@ -1639,9 +1639,9 @@ mod tests {
     }
 
     #[test]
-    fn both_branches_commit_their_own_half_and_the_workspace_gathers_both() {
+    fn both_branches_commit_their_own_half_and_the_virtual_branches_gathers_both() {
         // The point of the whole feature: two unrelated changes in one working
-        // directory, each landing on its own branch, and the workspace showing
+        // directory, each landing on its own branch, and the virtual branches showing
         // both.
         let (temp, repo, _) = repo_with_a_splittable_file();
         let root = temp.path();
@@ -1659,9 +1659,9 @@ mod tests {
             "the second commit must not pick up the first branch's hunk"
         );
         assert_eq!(
-            blob(root, WORKSPACE_BRANCH, "shared.txt"),
+            blob(root, VIRTUAL_BRANCHES_BRANCH, "shared.txt"),
             SPLIT_WORKING,
-            "the workspace is the two branches together, which is what makes the \
+            "the virtual_branches is the two branches together, which is what makes the \
              working directory show both changes"
         );
     }
@@ -1673,11 +1673,11 @@ mod tests {
         let (temp, repo, _) = repo_with_a_splittable_file();
         let root = temp.path();
         std::fs::write(root.join("shared.txt"), SPLIT_WORKING).unwrap();
-        let mut state = repo.read_workspace().expect("read workspace");
+        let mut state = repo.read_virtual_branches().expect("read virtual branches");
         state
             .set_parent("ui", Some("api"))
             .expect("stack ui on api");
-        repo.write_workspace(&state).expect("write workspace");
+        repo.write_virtual_branches(&state).expect("write virtual branches");
         assign_the_two_hunks(&repo);
 
         repo.commit_paths_to_virtual_branch("api", "the api change", &[Path::new("shared.txt")])
@@ -1700,7 +1700,7 @@ mod tests {
         std::fs::write(root.join("mine.txt"), "y\n").unwrap();
         let mut index = AssignmentIndex::new();
         index.set(Path::new("mine.txt"), Some("api".into()));
-        repo.write_workspace_assignments(&index)
+        repo.write_virtual_branches_assignments(&index)
             .expect("write assignments");
 
         repo.commit_paths_to_virtual_branch("api", "just the new file", &[Path::new("mine.txt")])
@@ -1761,7 +1761,7 @@ mod tests {
         assert_eq!(
             git(root, &["diff", "--cached", "--name-only"]),
             staged_before,
-            "the user's staging has to survive a workspace commit untouched"
+            "the user's staging has to survive a virtual branches commit untouched"
         );
         assert_eq!(read(root, "shared.txt"), SPLIT_WORKING);
         assert_eq!(read(root, "other.txt"), "staged edit\n");
@@ -1789,14 +1789,14 @@ mod tests {
         let default_branch = git(root, &["symbolic-ref", "--short", "HEAD"]);
         git(root, &["branch", "api"]);
         let state =
-            WorkspaceState::new(&default_branch).with_branches(vec![VirtualBranch::new("api")]);
+            VirtualBranchesState::new(&default_branch).with_branches(vec![VirtualBranch::new("api")]);
         let repo = open_repo(root);
-        repo.write_workspace(&state).expect("write workspace");
+        repo.write_virtual_branches(&state).expect("write virtual branches");
 
         std::fs::write(root.join("run.sh"), "#!/bin/sh\necho bye\n").unwrap();
         let mut index = AssignmentIndex::new();
         index.set(Path::new("run.sh"), Some("api".into()));
-        repo.write_workspace_assignments(&index)
+        repo.write_virtual_branches_assignments(&index)
             .expect("write assignments");
 
         repo.commit_paths_to_virtual_branch("api", "shout", &[Path::new("run.sh")])
@@ -1811,8 +1811,8 @@ mod tests {
     }
 
     #[test]
-    fn committing_to_a_branch_that_is_not_in_the_workspace_is_refused() {
-        // Otherwise a typo would create a commit on a ref the workspace has no
+    fn committing_to_a_branch_that_is_not_in_the_virtual_branches_is_refused() {
+        // Otherwise a typo would create a commit on a ref the virtual branches has no
         // idea about, invisible in every stack in the UI.
         let (temp, repo, _) = repo_with_a_splittable_file();
         let root = temp.path();
@@ -1821,7 +1821,7 @@ mod tests {
         let result = repo.commit_paths_to_virtual_branch("nowhere", "m", &[Path::new("mine.txt")]);
         assert!(
             result.is_err(),
-            "a branch the workspace does not have is an error"
+            "a branch the virtual branches does not have is an error"
         );
         assert!(
             !root
@@ -1844,9 +1844,9 @@ mod tests {
         cmd.output().map(|o| o.status.success()).unwrap_or(false)
     }
 
-    /// The subjects on the workspace branch, newest first.
-    fn workspace_log(root: &Path) -> String {
-        git(root, &["log", "--format=%s", WORKSPACE_BRANCH])
+    /// The subjects on the virtual-branches branch, newest first.
+    fn virtual_branches_log(root: &Path) -> String {
+        git(root, &["log", "--format=%s", VIRTUAL_BRANCHES_BRANCH])
     }
 
     /// Two branches that changed the same line, so applying both cannot work.
@@ -1874,12 +1874,12 @@ mod tests {
         git(root, &["commit", "-am", "right"]);
         git(root, &["checkout", &default_branch]);
 
-        let state = WorkspaceState::new(&default_branch).with_branches(vec![
+        let state = VirtualBranchesState::new(&default_branch).with_branches(vec![
             VirtualBranch::new("left"),
             VirtualBranch::new("right"),
         ]);
         let repo = open_repo(root);
-        repo.write_workspace(&state).expect("write workspace");
+        repo.write_virtual_branches(&state).expect("write virtual branches");
         (temp, repo, default_branch)
     }
 
@@ -1911,7 +1911,7 @@ mod tests {
         git(root, &["commit", "-m", "ui"]);
         git(root, &["checkout", &default_branch]);
 
-        // A second target that moved too, so pointing the workspace at it is a
+        // A second target that moved too, so pointing the virtual branches at it is a
         // real change rather than a rename.
         git(root, &["checkout", "-b", "next"]);
         std::fs::write(root.join("next.txt"), "next\n").unwrap();
@@ -1919,25 +1919,25 @@ mod tests {
         git(root, &["commit", "-m", "next"]);
         git(root, &["checkout", &default_branch]);
 
-        let state = WorkspaceState::new(&default_branch).with_branches(vec![
+        let state = VirtualBranchesState::new(&default_branch).with_branches(vec![
             VirtualBranch::new("api"),
             VirtualBranch::new("ui").with_parent("api"),
         ]);
         let repo = open_repo(root);
-        repo.write_workspace(&state).expect("write workspace");
+        repo.write_virtual_branches(&state).expect("write virtual branches");
         (temp, repo, default_branch)
     }
 
     #[test]
-    fn an_empty_applied_set_points_the_workspace_at_the_target() {
-        // Unapplying everything is a legitimate state, and then the workspace
+    fn an_empty_applied_set_points_the_virtual_branches_at_the_target() {
+        // Unapplying everything is a legitimate state, and then the virtual branches
         // branch *is* the target rather than a branch whose tree nobody can
         // explain.
         let (temp, repo, default_branch) = repo_with_two_branches();
         let root = temp.path();
 
         let tip = repo
-            .update_workspace_branch(&[])
+            .update_virtual_branches_branch(&[])
             .expect("rebuild with nothing applied");
 
         assert_eq!(
@@ -1945,21 +1945,21 @@ mod tests {
             repo.resolve_revision(&default_branch)
                 .expect("resolve")
                 .expect("the target exists"),
-            "with nothing applied the workspace branch is the target"
+            "with nothing applied the virtual-branches branch is the target"
         );
         assert_eq!(
-            git(root, &["rev-parse", WORKSPACE_BRANCH]),
+            git(root, &["rev-parse", VIRTUAL_BRANCHES_BRANCH]),
             git(root, &["rev-parse", &default_branch])
         );
         assert!(
-            !workspace_log(root).contains("Apply "),
+            !virtual_branches_log(root).contains("Apply "),
             "a merge that did not happen must not leave a commit: {}",
-            workspace_log(root)
+            virtual_branches_log(root)
         );
     }
 
     #[test]
-    fn rebuilding_the_workspace_branch_is_a_pure_function_of_the_applied_set() {
+    fn rebuilding_the_virtual_branches_branch_is_a_pure_function_of_the_applied_set() {
         // Rebuilt from the target every time, never patched. If merges piled up,
         // unapplying a branch would leave its merge commit in the history for
         // good and the branch could no longer be explained by the virtual
@@ -1967,16 +1967,16 @@ mod tests {
         let (temp, repo, _) = repo_with_two_branches();
         let root = temp.path();
 
-        repo.update_workspace_branch(&["api", "ui"])
+        repo.update_virtual_branches_branch(&["api", "ui"])
             .expect("apply both");
-        let both = workspace_log(root);
+        let both = virtual_branches_log(root);
         assert!(
             both.contains("Apply api") && both.contains("Apply ui"),
             "{both}"
         );
 
-        repo.update_workspace_branch(&["api"]).expect("unapply ui");
-        let one = workspace_log(root);
+        repo.update_virtual_branches_branch(&["api"]).expect("unapply ui");
+        let one = virtual_branches_log(root);
         assert!(one.contains("Apply api"), "{one}");
         assert!(
             !one.contains("Apply ui"),
@@ -1986,21 +1986,21 @@ mod tests {
 
     #[test]
     fn rebuilding_an_unchanged_applied_set_appends_nothing() {
-        // Every reload of the Workspace tab rebuilds. A rebuild that invented a
+        // Every reload of the Virtual branches tab rebuilds. A rebuild that invented a
         // commit would lengthen the branch every time the user looked at it.
         let (temp, repo, _) = repo_with_two_branches();
         let root = temp.path();
 
-        repo.update_workspace_branch(&["api", "ui"]).expect("first");
-        let tree = format!("{WORKSPACE_BRANCH}^{{tree}}");
+        repo.update_virtual_branches_branch(&["api", "ui"]).expect("first");
+        let tree = format!("{VIRTUAL_BRANCHES_BRANCH}^{{tree}}");
         let tree_after_first = git(root, &["rev-parse", &tree]);
-        let commits_after_first = workspace_log(root).lines().count();
+        let commits_after_first = virtual_branches_log(root).lines().count();
 
-        repo.update_workspace_branch(&["api", "ui"])
+        repo.update_virtual_branches_branch(&["api", "ui"])
             .expect("second");
 
         assert_eq!(
-            workspace_log(root).lines().count(),
+            virtual_branches_log(root).lines().count(),
             commits_after_first,
             "an identical rebuild grew the branch"
         );
@@ -2038,7 +2038,7 @@ mod tests {
         let (temp, repo, default_branch) = repo_with_conflicting_branches();
         let root = temp.path();
 
-        let Err(error) = repo.update_workspace_branch(&["left", "right"]) else {
+        let Err(error) = repo.update_virtual_branches_branch(&["left", "right"]) else {
             panic!("these two branches edit the same line; the rebuild must be refused");
         };
         let message = format!("{error}");
@@ -2056,7 +2056,7 @@ mod tests {
                 &[
                     "rev-parse",
                     "--verify",
-                    &format!("refs/heads/{WORKSPACE_BRANCH}")
+                    &format!("refs/heads/{VIRTUAL_BRANCHES_BRANCH}")
                 ]
             ),
             "a refused rebuild must not leave a half-built branch behind"
@@ -2075,10 +2075,10 @@ mod tests {
         let ui_parent_before = git(root, &["rev-parse", "ui^"]);
         let next = git(root, &["rev-parse", "next"]);
 
-        repo.update_workspace_target("next")
+        repo.update_virtual_branches_target("next")
             .expect("move the target");
 
-        assert_eq!(repo.read_workspace().expect("read").target, "next");
+        assert_eq!(repo.read_virtual_branches().expect("read").target, "next");
         assert_eq!(
             git(root, &["rev-parse", "api^"]),
             next,
@@ -2093,14 +2093,14 @@ mod tests {
     }
 
     #[test]
-    fn a_corrupt_workspace_file_reads_as_an_empty_workspace() {
+    fn a_corrupt_virtual_branches_file_reads_as_an_empty_virtual_branches() {
         // A file written by a newer version, or half-written by a crash, must
         // not make the whole repository unusable: the user rebuilds from the UI.
         let (_temp, repo, _) = repo_with_two_branches();
-        std::fs::write(repo.workspace_state_path(), b"{ this is not json").expect("corrupt it");
+        std::fs::write(repo.virtual_branches_state_path(), b"{ this is not json").expect("corrupt it");
 
         let state = repo
-            .read_workspace()
+            .read_virtual_branches()
             .expect("a corrupt file is not an error");
         assert!(
             state.branches.is_empty(),
@@ -2109,45 +2109,45 @@ mod tests {
     }
 
     #[test]
-    fn a_workspace_file_that_cannot_be_read_is_an_error_not_an_empty_workspace() {
+    fn a_virtual_branches_file_that_cannot_be_read_is_an_error_not_an_empty_virtual_branches() {
         // Corrupt is recoverable — the user rebuilds from the UI. Unreadable is
         // not: reported as "empty", the next edit writes over a file the user
         // still cannot read, and that data is gone.
         let (_temp, repo, _) = repo_with_two_branches();
-        std::fs::remove_file(repo.workspace_state_path()).expect("remove the file");
-        std::fs::create_dir(repo.workspace_state_path()).expect("put something unreadable there");
+        std::fs::remove_file(repo.virtual_branches_state_path()).expect("remove the file");
+        std::fs::create_dir(repo.virtual_branches_state_path()).expect("put something unreadable there");
 
         let error = repo
-            .read_workspace()
-            .expect_err("an unreadable file is not an empty workspace");
+            .read_virtual_branches()
+            .expect_err("an unreadable file is not an empty virtual branches");
         assert!(
             format!("{error}").contains("reading"),
             "the message has to say which file: {error}"
         );
 
         // The assignments file follows the same rule.
-        std::fs::create_dir(repo.workspace_assignments_path()).expect("same for assignments");
-        assert!(repo.read_workspace_assignments().is_err());
+        std::fs::create_dir(repo.virtual_branches_assignments_path()).expect("same for assignments");
+        assert!(repo.read_virtual_branches_assignments().is_err());
     }
 
     #[test]
-    fn an_invalid_workspace_is_refused_and_the_file_on_disk_is_untouched() {
+    fn an_invalid_virtual_branches_is_refused_and_the_file_on_disk_is_untouched() {
         let (_temp, repo, _) = repo_with_two_branches();
-        let before = repo.read_workspace().expect("read");
+        let before = repo.read_virtual_branches().expect("read");
 
         // A loop between two branches: the state renders, but no ordering of it
         // can be applied, so it must never reach the disk.
-        let cyclic = WorkspaceState::new("main").with_branches(vec![
+        let cyclic = VirtualBranchesState::new("main").with_branches(vec![
             VirtualBranch::new("a").with_parent("b"),
             VirtualBranch::new("b").with_parent("a"),
         ]);
         assert!(
-            repo.write_workspace(&cyclic).is_err(),
+            repo.write_virtual_branches(&cyclic).is_err(),
             "a state that cannot be ordered has to be refused"
         );
 
         assert_eq!(
-            repo.read_workspace().expect("read"),
+            repo.read_virtual_branches().expect("read"),
             before,
             "the file on disk still has to describe what Git actually has"
         );
@@ -2163,22 +2163,22 @@ mod tests {
         index.set(Path::new("src/b.rs"), None);
         index.set_hunk(
             Path::new("src/c.rs"),
-            gitcomet_core::workspace::HunkFingerprint::of(&["NEW\n"], 1),
+            gitcomet_core::virtual_branches::HunkFingerprint::of(&["NEW\n"], 1),
             Some("ui".to_string()),
         );
 
-        repo.write_workspace_assignments(&index).expect("write");
+        repo.write_virtual_branches_assignments(&index).expect("write");
 
-        assert_eq!(repo.read_workspace_assignments().expect("read"), index);
+        assert_eq!(repo.read_virtual_branches_assignments().expect("read"), index);
     }
 
     #[test]
     fn an_unreadable_assignments_file_reads_as_empty() {
-        // Same reasoning as the workspace file: a corrupt file must not make
+        // Same reasoning as the virtual branches file: a corrupt file must not make
         // every changed file in the repository unusable.
         let (_temp, repo, _) = repo_with_two_branches();
-        std::fs::write(repo.workspace_assignments_path(), b"not json at all").expect("corrupt it");
-        assert!(repo.read_workspace_assignments().expect("read").is_empty());
+        std::fs::write(repo.virtual_branches_assignments_path(), b"not json at all").expect("corrupt it");
+        assert!(repo.read_virtual_branches_assignments().expect("read").is_empty());
     }
 
     #[test]
@@ -2188,7 +2188,7 @@ mod tests {
         // against a ref that does not exist.
         let (_temp, repo, _) = repo_with_two_branches();
         let root = repo.spec().workdir.clone();
-        let target = repo.read_workspace().expect("read").target;
+        let target = repo.read_virtual_branches().expect("read").target;
 
         repo.create_virtual_branch("feature", &target)
             .expect("create");
@@ -2247,16 +2247,16 @@ mod tests {
         git(root, &["remote", "add", "origin", &remote_path]);
 
         let state =
-            WorkspaceState::new(&default_branch).with_branches(vec![VirtualBranch::new("api")]);
+            VirtualBranchesState::new(&default_branch).with_branches(vec![VirtualBranch::new("api")]);
         let repo = open_repo(root);
-        repo.write_workspace(&state).expect("write workspace");
+        repo.write_virtual_branches(&state).expect("write virtual branches");
         (temp, remote, repo)
     }
 
     #[test]
     fn pushing_a_virtual_branch_publishes_that_branch_and_not_head() {
         // The user is usually sitting on the target while they work in a
-        // workspace, so pushing `HEAD` would publish the target and leave the
+        // virtual branches, so pushing `HEAD` would publish the target and leave the
         // branch they clicked unpushed.
         let (temp, remote, repo) = repo_with_a_remote();
         let root = temp.path();
@@ -2308,7 +2308,7 @@ mod tests {
         // belongs in a pull request against *that* branch, or the reviewer sees
         // the lower branch's work as part of this one.
         let (_temp, repo, _) = repo_with_two_branches();
-        let mut state = repo.read_workspace().expect("read");
+        let mut state = repo.read_virtual_branches().expect("read");
         let target = state.target.clone();
         state
             .set_parent("ui", Some("api"))
@@ -2317,7 +2317,7 @@ mod tests {
         assert_eq!(
             repo.virtual_branch_push_target("api", &state).as_deref(),
             Some(target.as_str()),
-            "an independent branch is reviewed against the workspace target"
+            "an independent branch is reviewed against the virtual branches target"
         );
         assert_eq!(
             repo.virtual_branch_push_target("ui", &state).as_deref(),
@@ -2327,73 +2327,73 @@ mod tests {
         assert_eq!(
             repo.virtual_branch_push_target("nowhere", &state),
             None,
-            "a branch the workspace does not have has no target"
+            "a branch the virtual branches does not have has no target"
         );
     }
 
     // ── The working directory ────────────────────────────────────
 
     #[test]
-    fn entering_a_workspace_that_already_exists_does_not_rebuild_it() {
+    fn entering_a_virtual_branches_that_already_exists_does_not_rebuild_it() {
         // The tab is opened and closed constantly. Rebuilding on every entry
         // would rewrite the branch each time and make the working directory
         // jump for no reason.
         let (temp, repo, _) = repo_with_two_branches();
         let root = temp.path();
-        repo.enter_workspace().expect("first enter");
-        let tip = git(root, &["rev-parse", WORKSPACE_BRANCH]);
+        repo.enter_virtual_branches().expect("first enter");
+        let tip = git(root, &["rev-parse", VIRTUAL_BRANCHES_BRANCH]);
 
-        repo.enter_workspace().expect("second enter");
+        repo.enter_virtual_branches().expect("second enter");
 
         assert_eq!(
-            git(root, &["rev-parse", WORKSPACE_BRANCH]),
+            git(root, &["rev-parse", VIRTUAL_BRANCHES_BRANCH]),
             tip,
-            "entering again must not move the workspace branch"
+            "entering again must not move the virtual-branches branch"
         );
     }
 
     #[test]
     fn leaving_onto_a_branch_that_no_longer_exists_is_refused() {
         // The branch the user was on was deleted or renamed while they were in
-        // the workspace. Falling back to a guess would move them onto a branch
+        // the virtual branches. Falling back to a guess would move them onto a branch
         // they never had checked out.
         let (temp, repo, default_branch) = repo_with_two_branches();
         let root = temp.path();
-        repo.enter_workspace().expect("enter");
+        repo.enter_virtual_branches().expect("enter");
         git(root, &["branch", "-D", &default_branch]);
 
-        let result = repo.leave_workspace(&default_branch);
+        let result = repo.leave_virtual_branches(&default_branch);
         assert!(
             result.is_err(),
             "there is nowhere to go back to, and guessing is worse than failing"
         );
         assert_eq!(
             git(root, &["symbolic-ref", "--short", "HEAD"]),
-            WORKSPACE_BRANCH,
+            VIRTUAL_BRANCHES_BRANCH,
             "and the working directory has to stay where it is"
         );
     }
 
     #[test]
-    fn only_the_workspace_branch_counts_as_being_in_the_workspace() {
+    fn only_the_virtual_branches_branch_counts_as_being_in_the_virtual_branches() {
         let (temp, repo, default_branch) = repo_with_two_branches();
         let _root = temp.path();
 
         assert!(
-            !repo.workspace_is_checked_out(),
+            !repo.virtual_branches_is_checked_out(),
             "the working directory starts on the target"
         );
-        repo.enter_workspace().expect("enter");
+        repo.enter_virtual_branches().expect("enter");
         assert!(
-            repo.workspace_is_checked_out(),
-            "and is on the workspace branch afterwards"
+            repo.virtual_branches_is_checked_out(),
+            "and is on the virtual-branches branch afterwards"
         );
-        repo.leave_workspace(&default_branch).expect("leave");
-        assert!(!repo.workspace_is_checked_out());
+        repo.leave_virtual_branches(&default_branch).expect("leave");
+        assert!(!repo.virtual_branches_is_checked_out());
     }
 
     #[test]
-    fn the_workspace_branch_never_appears_as_a_user_branch() {
+    fn the_virtual_branches_branch_never_appears_as_a_user_branch() {
         // Criterion 14 is carried by the name: `gitcomet/*` is GitComet's own
         // namespace and the branch list skips it, so no picker can offer to
         // check it out, rename it, or delete it. The virtual branches are
@@ -2401,13 +2401,13 @@ mod tests {
         // are the user's work.
         let (temp, repo, _) = repo_with_two_branches();
         let root = temp.path();
-        repo.update_workspace_branch(&["api", "ui"]).expect("build");
+        repo.update_virtual_branches_branch(&["api", "ui"]).expect("build");
         assert!(git_succeeds(
             root,
             &[
                 "rev-parse",
                 "--verify",
-                &format!("refs/heads/{WORKSPACE_BRANCH}")
+                &format!("refs/heads/{VIRTUAL_BRANCHES_BRANCH}")
             ]
         ));
 
@@ -2418,8 +2418,8 @@ mod tests {
             .map(|branch| branch.name)
             .collect();
         assert!(
-            !branches.iter().any(|name| is_workspace_branch(name)),
-            "the workspace branch is bookkeeping, not a branch the user works on: {branches:?}"
+            !branches.iter().any(|name| is_virtual_branches_branch(name)),
+            "the virtual-branches branch is bookkeeping, not a branch the user works on: {branches:?}"
         );
         assert!(
             branches.iter().any(|name| name == "api"),
@@ -2428,28 +2428,28 @@ mod tests {
     }
 
     #[test]
-    fn committing_while_the_working_directory_is_in_the_workspace_is_refused() {
+    fn committing_while_the_working_directory_is_in_the_virtual_branches_is_refused() {
         // The other half of criterion 14, and the half a hidden branch does not
-        // cover: a plain commit goes to HEAD, and entering the workspace is
+        // cover: a plain commit goes to HEAD, and entering the virtual branches is
         // exactly what puts HEAD there. A commit here would be thrown away at
         // the next apply, after the log had shown it to the user as theirs.
         let (temp, repo, _) = repo_with_two_branches();
         let root = temp.path();
-        repo.enter_workspace().expect("enter");
+        repo.enter_virtual_branches().expect("enter");
         std::fs::write(root.join("shared.txt"), "edited\na2\na3\n").expect("edit");
         git(root, &["add", "-A"]);
 
         let error = repo
             .commit("a message")
-            .expect_err("the workspace branch is not commit-able");
+            .expect_err("the virtual-branches branch is not commit-able");
         assert!(
-            format!("{error}").contains("Workspace tab"),
+            format!("{error}").contains("Virtual branches tab"),
             "the message has to say where to commit instead: {error}"
         );
 
         assert_eq!(
             git(root, &["symbolic-ref", "--short", "HEAD"]),
-            WORKSPACE_BRANCH,
+            VIRTUAL_BRANCHES_BRANCH,
             "and nothing may have been committed or moved"
         );
         assert_eq!(
@@ -2462,63 +2462,63 @@ mod tests {
     }
 
     #[test]
-    fn amending_a_commit_on_the_workspace_branch_is_refused_too() {
+    fn amending_a_commit_on_the_virtual_branches_branch_is_refused_too() {
         let (temp, repo, _) = repo_with_two_branches();
         let _root = temp.path();
-        repo.enter_workspace().expect("enter");
+        repo.enter_virtual_branches().expect("enter");
 
         let error = repo
             .commit_amend("a message")
             .expect_err("an amend here rewrites a commit the next rebuild discards");
         assert!(
-            format!("{error}").contains("gitcomet/workspace"),
+            format!("{error}").contains("gitcomet/virtual"),
             "the refusal has to name the branch it is about: {error}"
         );
     }
 
     #[test]
-    fn pushing_from_inside_the_workspace_would_publish_it_and_is_refused() {
+    fn pushing_from_inside_the_virtual_branches_would_publish_it_and_is_refused() {
         // The ordinary push publishes whatever HEAD is, and entering the
-        // workspace is what puts HEAD there. Left alone it would create
-        // `gitcomet/workspace` on the user's remote — visible in their fork and
+        // virtual branches is what puts HEAD there. Left alone it would create
+        // `gitcomet/virtual` on the user's remote — visible in their fork and
         // in every pull request's branch picker — and set it as an upstream, so
         // it would follow them to every later branch switch.
         let (temp, remote, repo) = repo_with_a_remote();
         let root = temp.path();
-        repo.enter_workspace().expect("enter");
+        repo.enter_virtual_branches().expect("enter");
 
         let error = repo
             .push()
-            .expect_err("the workspace branch is not the user's to publish");
+            .expect_err("the virtual-branches branch is not the user's to publish");
         let message = format!("{error}");
         assert!(
-            message.contains("gitcomet/workspace") && message.contains("Workspace tab"),
+            message.contains("gitcomet/virtual") && message.contains("Virtual branches tab"),
             "the message has to name the branch and say what to do instead: {message}"
         );
         assert!(
             !git_succeeds(
                 remote.path(),
-                &["rev-parse", "--verify", "refs/heads/gitcomet/workspace"]
+                &["rev-parse", "--verify", "refs/heads/gitcomet/virtual"]
             ),
             "nothing may have reached the remote"
         );
         assert!(
             !git_succeeds(
                 root,
-                &["config", "--get", "branch.gitcomet/workspace.remote"]
+                &["config", "--get", "branch.gitcomet/virtual.remote"]
             ),
             "and no upstream may have been configured"
         );
     }
 
     #[test]
-    fn the_named_branch_push_still_works_from_inside_the_workspace() {
-        // The refusal above must not take the Workspace tab's own push with it:
+    fn the_named_branch_push_still_works_from_inside_the_virtual_branches() {
+        // The refusal above must not take the Virtual branches tab's own push with it:
         // that one names the ref, so it is exactly the action the user wants
         // while they are in here.
         let (temp, remote, repo) = repo_with_a_remote();
         let _root = temp.path();
-        repo.enter_workspace().expect("enter");
+        repo.enter_virtual_branches().expect("enter");
 
         repo.push_virtual_branch("api").expect("push the branch");
 
@@ -2529,18 +2529,18 @@ mod tests {
         assert!(
             !git_succeeds(
                 remote.path(),
-                &["rev-parse", "--verify", "refs/heads/gitcomet/workspace"]
+                &["rev-parse", "--verify", "refs/heads/gitcomet/virtual"]
             ),
             "pushing a branch must not drag HEAD along with it"
         );
     }
 
-    /// A repository with the working directory inside the workspace, and a commit
+    /// A repository with the working directory inside the virtual branches, and a commit
     /// on `api` to point history operations at.
-    fn repo_inside_the_workspace() -> (tempfile::TempDir, GixRepo, CommitId) {
+    fn repo_inside_the_virtual_branches() -> (tempfile::TempDir, GixRepo, CommitId) {
         let (temp, repo, _) = repo_with_two_branches();
         let _root = temp.path();
-        repo.enter_workspace().expect("enter");
+        repo.enter_virtual_branches().expect("enter");
         let api_tip = repo
             .resolve_revision("api")
             .expect("resolve")
@@ -2551,29 +2551,29 @@ mod tests {
     /// Assert that an operation was refused for the right reason.
     ///
     /// Every one of these is the same bug: an action that applies to **HEAD**,
-    /// run while the workspace has put HEAD on `gitcomet/workspace`. Each would
+    /// run while the virtual branches has put HEAD on `gitcomet/virtual`. Each would
     /// create or rewrite a commit on GitComet's bookkeeping branch, where the
     /// next rebuild discards it. Listing them one by one is the point — a guard
     /// that covers six operations and not the seventh is indistinguishable from
     /// one that covers none.
     fn assert_refused(result: Result<CommandOutput>, action: &str) {
-        let error = result.expect_err("the workspace branch is not the user's to rewrite");
+        let error = result.expect_err("the virtual-branches branch is not the user's to rewrite");
         let message = format!("{error}");
         assert!(
-            message.contains("gitcomet/workspace"),
+            message.contains("gitcomet/virtual"),
             "{action} has to say which branch it is about: {message}"
         );
         assert!(
-            message.contains("Workspace tab"),
+            message.contains("Virtual branches tab"),
             "{action} has to say what to do instead: {message}"
         );
     }
 
     #[test]
-    fn a_cherry_pick_inside_the_workspace_is_refused() {
-        let (temp, repo, tip) = repo_inside_the_workspace();
+    fn a_cherry_pick_inside_the_virtual_branches_is_refused() {
+        let (temp, repo, tip) = repo_inside_the_virtual_branches();
         let root = temp.path();
-        let before = git(root, &["rev-parse", WORKSPACE_BRANCH]);
+        let before = git(root, &["rev-parse", VIRTUAL_BRANCHES_BRANCH]);
 
         assert_refused(
             repo.cherry_pick_with_output(&tip, true, None),
@@ -2581,138 +2581,138 @@ mod tests {
         );
 
         assert_eq!(
-            git(root, &["rev-parse", WORKSPACE_BRANCH]),
+            git(root, &["rev-parse", VIRTUAL_BRANCHES_BRANCH]),
             before,
             "a refused pick must not move the branch"
         );
     }
 
     #[test]
-    fn a_revert_inside_the_workspace_is_refused() {
-        let (temp, repo, tip) = repo_inside_the_workspace();
+    fn a_revert_inside_the_virtual_branches_is_refused() {
+        let (temp, repo, tip) = repo_inside_the_virtual_branches();
         let root = temp.path();
-        let before = git(root, &["rev-parse", WORKSPACE_BRANCH]);
+        let before = git(root, &["rev-parse", VIRTUAL_BRANCHES_BRANCH]);
 
         assert_refused(repo.revert_with_output(&tip, true, None), "a revert");
 
-        assert_eq!(git(root, &["rev-parse", WORKSPACE_BRANCH]), before);
+        assert_eq!(git(root, &["rev-parse", VIRTUAL_BRANCHES_BRANCH]), before);
     }
 
     #[test]
-    fn a_reset_inside_the_workspace_is_refused() {
+    fn a_reset_inside_the_virtual_branches_is_refused() {
         // A reset here would throw away the merge history the branch exists to hold,
         // and the next rebuild would put it straight back.
-        let (temp, repo, tip) = repo_inside_the_workspace();
+        let (temp, repo, tip) = repo_inside_the_virtual_branches();
         let root = temp.path();
-        let before = git(root, &["rev-parse", WORKSPACE_BRANCH]);
+        let before = git(root, &["rev-parse", VIRTUAL_BRANCHES_BRANCH]);
 
         assert_refused(
             repo.reset_with_output(tip.as_ref(), ResetMode::Hard),
             "a reset",
         );
 
-        assert_eq!(git(root, &["rev-parse", WORKSPACE_BRANCH]), before);
+        assert_eq!(git(root, &["rev-parse", VIRTUAL_BRANCHES_BRANCH]), before);
     }
 
     #[test]
-    fn a_squash_inside_the_workspace_is_refused() {
-        let (temp, repo, tip) = repo_inside_the_workspace();
+    fn a_squash_inside_the_virtual_branches_is_refused() {
+        let (temp, repo, tip) = repo_inside_the_virtual_branches();
         let root = temp.path();
-        let head = git(root, &["rev-parse", WORKSPACE_BRANCH]);
+        let head = git(root, &["rev-parse", VIRTUAL_BRANCHES_BRANCH]);
 
         assert_refused(
             repo.squash_commits_with_output(&tip, &tip, "squashed"),
             "a squash",
         );
 
-        assert_eq!(git(root, &["rev-parse", WORKSPACE_BRANCH]), head);
+        assert_eq!(git(root, &["rev-parse", VIRTUAL_BRANCHES_BRANCH]), head);
     }
 
     #[test]
-    fn a_rebase_inside_the_workspace_is_refused() {
-        // Rebasing the workspace branch would rewrite the merge commits that say
+    fn a_rebase_inside_the_virtual_branches_is_refused() {
+        // Rebasing the virtual-branches branch would rewrite the merge commits that say
         // which branch contributed what — the one thing the branch's history is for.
-        let (temp, repo, _) = repo_inside_the_workspace();
+        let (temp, repo, _) = repo_inside_the_virtual_branches();
         let root = temp.path();
-        let before = git(root, &["rev-parse", WORKSPACE_BRANCH]);
+        let before = git(root, &["rev-parse", VIRTUAL_BRANCHES_BRANCH]);
 
         assert_refused(repo.rebase_with_output("api"), "a rebase");
 
-        assert_eq!(git(root, &["rev-parse", WORKSPACE_BRANCH]), before);
+        assert_eq!(git(root, &["rev-parse", VIRTUAL_BRANCHES_BRANCH]), before);
     }
 
     #[test]
-    fn a_merge_inside_the_workspace_is_refused() {
-        let (temp, repo, _) = repo_inside_the_workspace();
+    fn a_merge_inside_the_virtual_branches_is_refused() {
+        let (temp, repo, _) = repo_inside_the_virtual_branches();
         let root = temp.path();
-        let before = git(root, &["rev-parse", WORKSPACE_BRANCH]);
+        let before = git(root, &["rev-parse", VIRTUAL_BRANCHES_BRANCH]);
 
         assert_refused(repo.merge_ref_with_output("api"), "a merge");
 
-        assert_eq!(git(root, &["rev-parse", WORKSPACE_BRANCH]), before);
+        assert_eq!(git(root, &["rev-parse", VIRTUAL_BRANCHES_BRANCH]), before);
     }
 
     #[test]
-    fn a_pull_inside_the_workspace_is_refused() {
+    fn a_pull_inside_the_virtual_branches_is_refused() {
         // A pull merges into HEAD, so here it would leave a merge commit that the
         // next rebuild discards. Moving the base forward is SetTarget, which is the
         // operation that means it here.
         let (temp, _remote, repo) = repo_with_a_remote();
         let root = temp.path();
-        repo.enter_workspace().expect("enter");
-        let before = git(root, &["rev-parse", WORKSPACE_BRANCH]);
+        repo.enter_virtual_branches().expect("enter");
+        let before = git(root, &["rev-parse", VIRTUAL_BRANCHES_BRANCH]);
 
         assert_refused(repo.pull(PullMode::Merge), "a pull");
 
-        assert_eq!(git(root, &["rev-parse", WORKSPACE_BRANCH]), before);
+        assert_eq!(git(root, &["rev-parse", VIRTUAL_BRANCHES_BRANCH]), before);
     }
 
     #[test]
-    fn a_force_push_inside_the_workspace_is_refused() {
+    fn a_force_push_inside_the_virtual_branches_is_refused() {
         // A force push publishes HEAD just as an ordinary push does, and with
         // `--force-with-lease` it would overwrite what the remote already has
         // rather than add to it — so the ordinary-push guard is not enough.
         let (temp, _remote, repo) = repo_with_a_remote();
         let root = temp.path();
-        repo.enter_workspace().expect("enter");
-        let before = git(root, &["rev-parse", WORKSPACE_BRANCH]);
+        repo.enter_virtual_branches().expect("enter");
+        let before = git(root, &["rev-parse", VIRTUAL_BRANCHES_BRANCH]);
 
         assert_refused(repo.push_force_with_output(), "a force push");
 
-        assert_eq!(git(root, &["rev-parse", WORKSPACE_BRANCH]), before);
+        assert_eq!(git(root, &["rev-parse", VIRTUAL_BRANCHES_BRANCH]), before);
     }
 
     #[test]
-    fn a_force_push_with_a_lease_inside_the_workspace_is_refused() {
+    fn a_force_push_with_a_lease_inside_the_virtual_branches_is_refused() {
         // The lease form is a separate entry point with its own command, so
         // covering only the plain force push would leave this path open.
         let (temp, _remote, repo) = repo_with_a_remote();
         let root = temp.path();
-        repo.enter_workspace().expect("enter");
-        let before = git(root, &["rev-parse", WORKSPACE_BRANCH]);
+        repo.enter_virtual_branches().expect("enter");
+        let before = git(root, &["rev-parse", VIRTUAL_BRANCHES_BRANCH]);
         let head = repo
-            .resolve_revision(WORKSPACE_BRANCH)
+            .resolve_revision(VIRTUAL_BRANCHES_BRANCH)
             .expect("resolve")
-            .expect("the workspace branch exists");
+            .expect("the virtual-branches branch exists");
 
         assert_refused(
             repo.push_force_with_lease_with_output(&ForcePushLease {
                 remote: "origin".into(),
                 branch: "api".into(),
                 expected: head.clone(),
-                local_branch: WORKSPACE_BRANCH.into(),
+                local_branch: VIRTUAL_BRANCHES_BRANCH.into(),
                 local_head: head,
             }),
             "a force push with a lease",
         );
 
-        assert_eq!(git(root, &["rev-parse", WORKSPACE_BRANCH]), before);
+        assert_eq!(git(root, &["rev-parse", VIRTUAL_BRANCHES_BRANCH]), before);
     }
 
     #[test]
     fn committing_on_an_ordinary_branch_still_works() {
-        // The guard is about the workspace branch, not about commits: refusing
-        // here would break the workflow the Workspace view sits next to.
+        // The guard is about the virtual-branches branch, not about commits: refusing
+        // here would break the workflow the Virtual branches view sits next to.
         let (temp, repo, _) = repo_with_two_branches();
         let root = temp.path();
         // An edit that actually changes the file: the fixture already contains
@@ -2736,14 +2736,14 @@ mod tests {
         // be a `read-tree -u`, which can refuse on a file the user has edited.
         let (temp, repo, _) = repo_with_two_branches();
         let root = temp.path();
-        repo.enter_workspace().expect("enter");
+        repo.enter_virtual_branches().expect("enter");
         let tip = repo
-            .resolve_revision(WORKSPACE_BRANCH)
+            .resolve_revision(VIRTUAL_BRANCHES_BRANCH)
             .expect("resolve")
             .expect("tip");
 
         std::fs::write(root.join("shared.txt"), "mine\na2\na3\n").expect("edit");
-        repo.sync_workspace_workdir_impl(&tip, &tip)
+        repo.sync_virtual_branches_workdir_impl(&tip, &tip)
             .expect("sync onto itself");
 
         assert_eq!(

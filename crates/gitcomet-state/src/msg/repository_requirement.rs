@@ -77,10 +77,10 @@ impl Msg {
             | Self::UnstagePaths { repo_id, .. }
             | Self::UpdateSubmodules { repo_id, .. }
             | Self::UpdateSubmodulesTrusted { repo_id, .. }
-            | Self::ApplyWorkspaceEdit { repo_id, .. }
-            | Self::SetWorkspaceBranchApplied { repo_id, .. }
-            | Self::CommitWorkspaceBranch { repo_id, .. }
-            | Self::CommitWorkspaceFile { repo_id, .. } => Some((*repo_id, WorkingTree)),
+            | Self::ApplyVirtualBranchesEdit { repo_id, .. }
+            | Self::SetVirtualBranchesBranchApplied { repo_id, .. }
+            | Self::CommitVirtualBranchesBranch { repo_id, .. }
+            | Self::CommitVirtualBranchesFile { repo_id, .. } => Some((*repo_id, WorkingTree)),
             Self::RememberDocumentInRepository { repo_id, .. }
             | Self::SelectExplorerPath { repo_id, .. }
             | Self::FocusExplorerPath { repo_id, .. }
@@ -310,9 +310,9 @@ impl Msg {
             | Self::ConfirmSubmoduleTrustPrompt
             | Self::CancelSubmoduleTrustPrompt
             | Self::Fetch(..)
-            | Self::LoadWorkspace { .. }
-            | Self::DismissWorkspaceConflict { .. }
-            | Self::PushWorkspaceBranch { .. }
+            | Self::LoadVirtualBranches { .. }
+            | Self::DismissVirtualBranchesConflict { .. }
+            | Self::PushVirtualBranchesBranch { .. }
             | Self::Internal(..) => None,
         }
     }

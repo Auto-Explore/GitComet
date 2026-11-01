@@ -1,4 +1,4 @@
-//! The Workspace view: virtual branches as stacks over a target branch, and
+//! The Virtual branches view: virtual branches as stacks over a target branch, and
 //! the working tree grouped by the branch each file belongs to.
 //!
 //! This is an alternative to the branch workflow, not a replacement. The
@@ -6,17 +6,17 @@
 //! work from, for someone who wants several pieces of work in one directory
 //! without checking any of them out.
 //!
-//! The rows are computed from `RepoState::workspace` and cached behind a
+//! The rows are computed from `RepoState::virtual branches` and cached behind a
 //! fingerprint, the same way the branch tree is, because the pane re-renders on
 //! every store notification and rebuilding stacks per frame would show up as a
 //! stutter in a long stack list.
 
 use super::*;
-use crate::view::panels::popover::workspace_prompt::{
+use crate::view::panels::popover::virtual_branches_prompt::{
     assign_file_prompt, commit_file_prompt, default_commit_message,
 };
-use gitcomet_core::workspace::{BranchApplyState, VirtualBranch};
-use gitcomet_state::model::{Loadable, WorkspaceEdit};
+use gitcomet_core::virtual_branches::{BranchApplyState, VirtualBranch};
+use gitcomet_state::model::{Loadable, VirtualBranchesEdit};
 use gpui::{Div, Stateful};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -35,19 +35,19 @@ const ROW_GAP_PX: f32 = 6.0;
 /// have to be disabled at the ends of a stack, and a row that cannot move has to
 /// say so before it is clicked rather than after.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub(in crate::view) struct WorkspaceSiblings {
+pub(in crate::view) struct VirtualBranchesSiblings {
     /// The branch one row up in the stack.
     pub(in crate::view) above: Option<String>,
     /// The branch one row down in the stack.
     pub(in crate::view) below: Option<String>,
 }
 
-/// One row of the workspace list.
+/// One row of the virtual branches list.
 ///
 /// The list interleaves stack headers, branch rows, and file rows, so a single
 /// enum keeps the index space of the uniform list simple.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(in crate::view) enum WorkspaceRow {
+pub(in crate::view) enum VirtualBranchesRow {
     /// The target branch every independent branch is built on.
     Target {
         name: String,
@@ -57,7 +57,7 @@ pub(in crate::view) enum WorkspaceRow {
         name: String,
         applied: bool,
         file_count: usize,
-        siblings: WorkspaceSiblings,
+        siblings: VirtualBranchesSiblings,
     },
     /// A branch stacked on another, indented by its depth.
     Branch {
@@ -66,7 +66,7 @@ pub(in crate::view) enum WorkspaceRow {
         applied: bool,
         file_count: usize,
         description: Option<String>,
-        siblings: WorkspaceSiblings,
+        siblings: VirtualBranchesSiblings,
     },
     /// The count line above the file list.
     Summary {
@@ -90,32 +90,32 @@ pub(in crate::view) enum WorkspaceRow {
     },
 }
 
-/// The whole workspace list, computed once per change rather than per frame.
+/// The whole virtual branches list, computed once per change rather than per frame.
 #[derive(Clone, Debug, Default)]
-pub(in crate::view) struct WorkspacePresentation {
-    pub rows: Arc<Vec<WorkspaceRow>>,
+pub(in crate::view) struct VirtualBranchesPresentation {
+    pub rows: Arc<Vec<VirtualBranchesRow>>,
 }
 
-/// Identifies the workspace data a presentation was built from. A new
+/// Identifies the virtual branches data a presentation was built from. A new
 /// fingerprint means the cached rows are stale.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(in crate::view) struct WorkspaceFingerprint {
-    workspace_rev: u64,
+pub(in crate::view) struct VirtualBranchesFingerprint {
+    virtual_branches_rev: u64,
     worktree_status_rev: u64,
     busy: bool,
 }
 
-impl WorkspaceFingerprint {
+impl VirtualBranchesFingerprint {
     pub(in crate::view) fn from_repo(repo: &RepoState) -> Self {
         Self {
-            workspace_rev: repo.workspace.rev,
+            virtual_branches_rev: repo.virtual_branches.rev,
             worktree_status_rev: repo.worktree_status_rev,
-            busy: repo.workspace.busy.any(),
+            busy: repo.virtual_branches.busy.any(),
         }
     }
 }
 
-impl WorkspacePresentation {
+impl VirtualBranchesPresentation {
     /// Build the rows for `repo`, or a placeholder when there is none.
     pub(in crate::view) fn build(repo: Option<&RepoState>) -> Self {
         let Some(repo) = repo else {
@@ -128,7 +128,7 @@ impl WorkspacePresentation {
 
     fn placeholder(message: &str) -> Self {
         Self {
-            rows: Arc::new(vec![WorkspaceRow::Placeholder {
+            rows: Arc::new(vec![VirtualBranchesRow::Placeholder {
                 message: message.into(),
             }]),
         }
@@ -146,41 +146,41 @@ fn changed_paths(repo: &RepoState) -> Arc<Vec<PathBuf>> {
     }
 }
 
-fn build_rows(repo: &RepoState) -> Vec<WorkspaceRow> {
+fn build_rows(repo: &RepoState) -> Vec<VirtualBranchesRow> {
     let mut rows = Vec::new();
 
-    if let Some(conflict) = &repo.workspace.conflict {
-        rows.push(WorkspaceRow::Conflict {
+    if let Some(conflict) = &repo.virtual_branches.conflict {
+        rows.push(VirtualBranchesRow::Conflict {
             message: conflict.summary(),
         });
     }
 
-    if matches!(repo.workspace.state, Loadable::NotLoaded) {
-        rows.push(WorkspaceRow::Placeholder {
-            message: "Loading workspace...".into(),
+    if matches!(repo.virtual_branches.state, Loadable::NotLoaded) {
+        rows.push(VirtualBranchesRow::Placeholder {
+            message: "Loading virtual branches...".into(),
         });
         return rows;
     }
-    if let Loadable::Error(error) = &repo.workspace.state {
-        rows.push(WorkspaceRow::Placeholder {
-            message: format!("Could not load the workspace: {error}"),
+    if let Loadable::Error(error) = &repo.virtual_branches.state {
+        rows.push(VirtualBranchesRow::Placeholder {
+            message: format!("Could not load the virtual branches: {error}"),
         });
         return rows;
     }
 
-    let Some(workspace) = repo.workspace.workspace() else {
-        rows.push(WorkspaceRow::Placeholder {
-            message: "No workspace yet. Create a branch to start one.".into(),
+    let Some(virtual_branches) = repo.virtual_branches.virtual_branches() else {
+        rows.push(VirtualBranchesRow::Placeholder {
+            message: "No virtual branches yet. Create a branch to start one.".into(),
         });
         return rows;
     };
 
     let paths = changed_paths(repo);
-    let assignments = repo.workspace.files_by_branch(&paths);
+    let assignments = repo.virtual_branches.files_by_branch(&paths);
     let mut counts: rustc_hash::FxHashMap<String, usize> = rustc_hash::FxHashMap::default();
     for assignment in &assignments {
         // A split file is committed by every branch holding part of it, so it
-        // counts under each of them. See `WorkspaceRepoState::summary_counts`.
+        // counts under each of them. See `VirtualBranchesRepoState::summary_counts`.
         match &assignment.branch {
             Some(branch) => *counts.entry(branch.clone()).or_default() += 1,
             None => {
@@ -192,30 +192,30 @@ fn build_rows(repo: &RepoState) -> Vec<WorkspaceRow> {
     }
 
     // Opening this tab is supposed to move the working directory onto
-    // `gitcomet/workspace`, which is the only reason an applied branch becomes
+    // `gitcomet/virtual`, which is the only reason an applied branch becomes
     // visible in the files. When that did not happen — a refused checkout, or a
-    // workspace restored after a restart — the list below describes branches the
+    // virtual branches restored after a restart — the list below describes branches the
     // user is not actually working in, and saying so is the difference between a
     // confusing tab and an honest one.
-    if !repo.workspace.active {
-        rows.push(WorkspaceRow::Placeholder {
-            message: "Your working directory is not on the workspace, so applied \
+    if !repo.virtual_branches.active {
+        rows.push(VirtualBranchesRow::Placeholder {
+            message: "Your working directory is not on the virtual_branches, so applied \
                       branches are not in your files."
                 .into(),
         });
     }
 
-    rows.push(WorkspaceRow::Target {
-        name: workspace.target.clone(),
+    rows.push(VirtualBranchesRow::Target {
+        name: virtual_branches.target.clone(),
     });
 
-    // The stacks were derived once when the workspace was loaded, and the
+    // The stacks were derived once when the virtual branches was loaded, and the
     // fingerprint below already covers that revision, so re-deriving them per
     // build would only cost time on a long stack list.
-    for stack in repo.workspace.stacks.iter() {
+    for stack in repo.virtual_branches.stacks.iter() {
         for (index, member) in stack.branches.iter().enumerate() {
             let count = counts.get(&member.branch.name).copied().unwrap_or(0);
-            let siblings = WorkspaceSiblings {
+            let siblings = VirtualBranchesSiblings {
                 above: index
                     .checked_sub(1)
                     .and_then(|above| stack.branches.get(above))
@@ -226,14 +226,14 @@ fn build_rows(repo: &RepoState) -> Vec<WorkspaceRow> {
                     .map(|below| below.branch.name.clone()),
             };
             if index == 0 {
-                rows.push(WorkspaceRow::StackBase {
+                rows.push(VirtualBranchesRow::StackBase {
                     name: member.branch.name.clone(),
                     applied: member.branch.is_applied(),
                     file_count: count,
                     siblings,
                 });
             } else {
-                rows.push(WorkspaceRow::Branch {
+                rows.push(VirtualBranchesRow::Branch {
                     name: member.branch.name.clone(),
                     depth: member.depth,
                     applied: member.branch.is_applied(),
@@ -245,15 +245,15 @@ fn build_rows(repo: &RepoState) -> Vec<WorkspaceRow> {
         }
     }
 
-    if workspace.branches.is_empty() {
-        rows.push(WorkspaceRow::Placeholder {
-            message: "Create a branch to start working in the workspace.".into(),
+    if virtual_branches.branches.is_empty() {
+        rows.push(VirtualBranchesRow::Placeholder {
+            message: "Create a branch to start working in the virtual branches.".into(),
         });
         return rows;
     }
 
-    let summary = repo.workspace.summary_counts(&paths);
-    rows.push(WorkspaceRow::Summary {
+    let summary = repo.virtual_branches.summary_counts(&paths);
+    rows.push(VirtualBranchesRow::Summary {
         text: format!(
             "{} of {} applied · {} unassigned",
             summary.applied, summary.total, summary.unassigned
@@ -266,7 +266,7 @@ fn build_rows(repo: &RepoState) -> Vec<WorkspaceRow> {
         // so the gap is visible, and a split file is indented because it *is*
         // assigned — just to more than one branch.
         let indented = assignment.is_assigned();
-        rows.push(WorkspaceRow::File {
+        rows.push(VirtualBranchesRow::File {
             path: assignment.path,
             branch: assignment.branch,
             split: assignment.split,
@@ -292,38 +292,38 @@ pub(in crate::view) fn apply_label(applied: BranchApplyState) -> &'static str {
 pub(in crate::view) fn apply_tooltip(branch: &VirtualBranch) -> SharedString {
     if branch.is_applied() {
         SharedString::from(format!(
-            "Unapply {}: remove its changes from the workspace",
+            "Unapply {}: remove its changes from the virtual branches",
             branch.name
         ))
     } else {
         SharedString::from(format!(
-            "Apply {}: add its changes to the workspace",
+            "Apply {}: add its changes to the virtual branches",
             branch.name
         ))
     }
 }
 
 impl SidebarPaneView {
-    /// The workspace rows, recomputed only when the workspace or the working
+    /// The virtual branches rows, recomputed only when the virtual branches or the working
     /// tree has actually moved.
-    pub(in crate::view) fn workspace_presentation_cached(&mut self) -> WorkspacePresentation {
+    pub(in crate::view) fn virtual_branches_presentation_cached(&mut self) -> VirtualBranchesPresentation {
         let fingerprint = self
             .active_repo()
-            .map(WorkspaceFingerprint::from_repo)
+            .map(VirtualBranchesFingerprint::from_repo)
             .unwrap_or_default();
-        if fingerprint != self.workspace_fingerprint {
-            self.workspace_fingerprint = fingerprint;
+        if fingerprint != self.virtual_branches_fingerprint {
+            self.virtual_branches_fingerprint = fingerprint;
             // Built in its own statement so the borrow of the active repo ends
             // before the cache field is written.
-            let presentation = WorkspacePresentation::build(self.active_repo());
-            self.workspace_presentation = presentation;
+            let presentation = VirtualBranchesPresentation::build(self.active_repo());
+            self.virtual_branches_presentation = presentation;
         }
-        self.workspace_presentation.clone()
+        self.virtual_branches_presentation.clone()
     }
 
-    /// One row of the workspace list. Registered as the uniform-list processor
+    /// One row of the virtual branches list. Registered as the uniform-list processor
     /// so a long stack list scrolls without building every row.
-    pub(in crate::view) fn render_workspace_rows(
+    pub(in crate::view) fn render_virtual_branches_rows(
         this: &mut Self,
         range: std::ops::Range<usize>,
         _window: &mut Window,
@@ -331,8 +331,8 @@ impl SidebarPaneView {
     ) -> Vec<AnyElement> {
         let theme = this.theme;
         let ui_scale_percent = ui_scale::current(cx).percent;
-        let row_height = workspace_row_height(theme, ui_scale_percent);
-        let presentation = this.workspace_presentation_cached();
+        let row_height = virtual_branches_row_height(theme, ui_scale_percent);
+        let presentation = this.virtual_branches_presentation_cached();
         let Some(repo_id) = this.active_repo_id() else {
             // No repository means there is nothing to dispatch an action to, so
             // only the placeholder row survives; the stack rows are never built.
@@ -340,7 +340,7 @@ impl SidebarPaneView {
                 .rows
                 .iter()
                 .map(|row| match row {
-                    WorkspaceRow::Placeholder { message } => {
+                    VirtualBranchesRow::Placeholder { message } => {
                         render_placeholder_row(theme, row_height, message.clone())
                     }
                     _ => div().h(row_height).into_any_element(),
@@ -349,7 +349,7 @@ impl SidebarPaneView {
         };
         let busy = this
             .active_repo()
-            .is_some_and(|repo| repo.workspace.busy.any());
+            .is_some_and(|repo| repo.virtual_branches.busy.any());
         let rows = presentation.rows.clone();
         let store = Arc::clone(&this.store);
 
@@ -359,7 +359,7 @@ impl SidebarPaneView {
                     return div().h(row_height).into_any_element();
                 };
                 match row {
-                    WorkspaceRow::Target { name } => render_target_row(
+                    VirtualBranchesRow::Target { name } => render_target_row(
                         theme,
                         row_height,
                         ui_scale_percent,
@@ -369,7 +369,7 @@ impl SidebarPaneView {
                         repo_id,
                         cx,
                     ),
-                    WorkspaceRow::StackBase {
+                    VirtualBranchesRow::StackBase {
                         name,
                         applied,
                         file_count,
@@ -390,7 +390,7 @@ impl SidebarPaneView {
                         Arc::clone(&store),
                         cx,
                     ),
-                    WorkspaceRow::Branch {
+                    VirtualBranchesRow::Branch {
                         name,
                         depth,
                         applied,
@@ -413,10 +413,10 @@ impl SidebarPaneView {
                         Arc::clone(&store),
                         cx,
                     ),
-                    WorkspaceRow::Summary { text } => {
+                    VirtualBranchesRow::Summary { text } => {
                         render_summary_row(theme, row_height, ix, text.clone(), busy, repo_id, cx)
                     }
-                    WorkspaceRow::File {
+                    VirtualBranchesRow::File {
                         path,
                         branch,
                         split,
@@ -434,10 +434,10 @@ impl SidebarPaneView {
                         repo_id,
                         cx,
                     ),
-                    WorkspaceRow::Placeholder { message } => {
+                    VirtualBranchesRow::Placeholder { message } => {
                         render_placeholder_row(theme, row_height, message.clone())
                     }
-                    WorkspaceRow::Conflict { message } => render_conflict_row(
+                    VirtualBranchesRow::Conflict { message } => render_conflict_row(
                         theme,
                         row_height,
                         ix,
@@ -453,7 +453,7 @@ impl SidebarPaneView {
     }
 }
 
-/// The shared frame every workspace row sits in, so labels and controls share
+/// The shared frame every virtual branches row sits in, so labels and controls share
 /// one vertical rhythm with the branch tree beside them.
 ///
 /// The id is the row's index rather than anything about the row's content: two
@@ -467,7 +467,7 @@ fn row_frame(
     surface: gpui::Rgba,
 ) -> Stateful<Div> {
     div()
-        .id(("workspace_row", index))
+        .id(("virtual_branches_row", index))
         .relative()
         .h(row_height)
         .w_full()
@@ -493,7 +493,7 @@ fn render_target_row(
     repo_id: RepoId,
     cx: &mut gpui::Context<SidebarPaneView>,
 ) -> AnyElement {
-    let set_target = components::Button::new("workspace_set_target", "Change")
+    let set_target = components::Button::new("virtual_branches_set_target", "Change")
         .style(components::ButtonStyle::Subtle)
         .disabled(busy)
         .on_click(theme, cx, {
@@ -502,10 +502,10 @@ fn render_target_row(
             let prompt_name = name.clone();
             move |this, event, window, cx| {
                 this.open_popover_at(
-                    PopoverKind::WorkspacePrompt {
+                    PopoverKind::VirtualBranchesPrompt {
                         repo_id,
-                        prompt: WorkspacePrompt {
-                            kind: WorkspacePromptKind::SetTarget,
+                        prompt: VirtualBranchesPrompt {
+                            kind: VirtualBranchesPromptKind::SetTarget,
                             branch: String::new(),
                             path: None,
                             hunk: None,
@@ -523,7 +523,7 @@ fn render_target_row(
         .gitcomet_tooltip(
             theme,
             SharedString::from(format!(
-                "Rebase the whole workspace onto a different branch than {name}"
+                "Rebase the whole virtual branches onto a different branch than {name}"
             )),
         );
 
@@ -566,7 +566,7 @@ fn render_branch_row(
     applied: bool,
     file_count: usize,
     description: Option<String>,
-    siblings: WorkspaceSiblings,
+    siblings: VirtualBranchesSiblings,
     busy: bool,
     repo_id: RepoId,
     store: std::sync::Arc<AppStore>,
@@ -582,11 +582,11 @@ fn render_branch_row(
 
     let toggle_store = Arc::clone(&store);
     let toggle_name = name.clone();
-    let apply = components::Button::new(format!("workspace_apply_{name}"), apply_label(state))
+    let apply = components::Button::new(format!("virtual_branches_apply_{name}"), apply_label(state))
         .style(components::ButtonStyle::Subtle)
         .disabled(busy)
         .on_click(theme, cx, move |_, _, _, _| {
-            toggle_store.dispatch(Msg::SetWorkspaceBranchApplied {
+            toggle_store.dispatch(Msg::SetVirtualBranchesBranchApplied {
                 repo_id,
                 name: toggle_name.clone(),
                 applied: if state.is_applied() {
@@ -600,11 +600,11 @@ fn render_branch_row(
 
     let push_store = Arc::clone(&store);
     let push_name = name.clone();
-    let push = components::Button::new(format!("workspace_push_{name}"), "Push")
+    let push = components::Button::new(format!("virtual_branches_push_{name}"), "Push")
         .style(components::ButtonStyle::Subtle)
         .disabled(busy)
         .on_click(theme, cx, move |_, _, _, _| {
-            push_store.dispatch(Msg::PushWorkspaceBranch {
+            push_store.dispatch(Msg::PushVirtualBranchesBranch {
                 repo_id,
                 name: push_name.clone(),
             });
@@ -616,7 +616,7 @@ fn render_branch_row(
 
     let up = reorder_button(
         theme,
-        format!("workspace_up_{name}"),
+        format!("virtual_branches_up_{name}"),
         ReorderDirection::Up,
         siblings.above.clone(),
         name.clone(),
@@ -627,7 +627,7 @@ fn render_branch_row(
     );
     let down = reorder_button(
         theme,
-        format!("workspace_down_{name}"),
+        format!("virtual_branches_down_{name}"),
         ReorderDirection::Down,
         siblings.below.clone(),
         name.clone(),
@@ -640,7 +640,7 @@ fn render_branch_row(
     // Stacking, re-parenting, joining another stack and removing are four
     // questions about the same branch, and a row already carries push and
     // apply; the actions go behind one button rather than four more.
-    let actions = components::Button::new(format!("workspace_actions_{name}"), "⋯")
+    let actions = components::Button::new(format!("virtual_branches_actions_{name}"), "⋯")
         .style(components::ButtonStyle::Subtle)
         .disabled(busy)
         .on_click(theme, cx, {
@@ -649,10 +649,10 @@ fn render_branch_row(
             let prompt_name = name.clone();
             move |this, event, window, cx| {
                 this.open_popover_at(
-                    PopoverKind::WorkspacePrompt {
+                    PopoverKind::VirtualBranchesPrompt {
                         repo_id,
-                        prompt: WorkspacePrompt {
-                            kind: WorkspacePromptKind::BranchActions,
+                        prompt: VirtualBranchesPrompt {
+                            kind: VirtualBranchesPromptKind::BranchActions,
                             branch: prompt_name.clone(),
                             path: None,
                             hunk: None,
@@ -770,9 +770,9 @@ fn reorder_button(
                 return;
             };
             let (first, second) = direction.swap(&name, &partner);
-            store.dispatch(Msg::ApplyWorkspaceEdit {
+            store.dispatch(Msg::ApplyVirtualBranchesEdit {
                 repo_id,
-                edit: WorkspaceEdit::Reorder { first, second },
+                edit: VirtualBranchesEdit::Reorder { first, second },
             });
         });
     match tooltip {
@@ -790,18 +790,18 @@ fn render_summary_row(
     repo_id: RepoId,
     cx: &mut gpui::Context<SidebarPaneView>,
 ) -> AnyElement {
-    // Creating a branch is the one workspace action with no row of its own to
+    // Creating a branch is the one virtual branches action with no row of its own to
     // hang off — there is nothing yet to hang it off — so it lives on the
     // summary line that closes the branch list.
-    let create = components::Button::new("workspace_create_branch", "New branch")
+    let create = components::Button::new("virtual_branches_create_branch", "New branch")
         .style(components::ButtonStyle::Subtle)
         .disabled(busy)
         .on_click(theme, cx, move |this, event, window, cx| {
             this.open_popover_at(
-                PopoverKind::WorkspacePrompt {
+                PopoverKind::VirtualBranchesPrompt {
                     repo_id,
-                    prompt: WorkspacePrompt {
-                        kind: WorkspacePromptKind::Create,
+                    prompt: VirtualBranchesPrompt {
+                        kind: VirtualBranchesPromptKind::Create,
                         branch: String::new(),
                         path: None,
                         hunk: None,
@@ -813,7 +813,7 @@ fn render_summary_row(
                 cx,
             );
         })
-        .gitcomet_tooltip(theme, SharedString::from("Add a branch to the workspace"));
+        .gitcomet_tooltip(theme, SharedString::from("Add a branch to the virtual branches"));
 
     row_frame(
         theme,
@@ -869,7 +869,7 @@ fn render_file_row(
         let commit_path = path.clone();
         let message = default_commit_message(&commit_path);
         components::Button::new(
-            format!("workspace_commit_{}", commit_path.display()),
+            format!("virtual_branches_commit_{}", commit_path.display()),
             "Commit",
         )
         .style(components::ButtonStyle::Subtle)
@@ -879,7 +879,7 @@ fn render_file_row(
             let prompt_path = commit_path.clone();
             move |this, event, window, cx| {
                 this.open_popover_at(
-                    PopoverKind::WorkspacePrompt {
+                    PopoverKind::VirtualBranchesPrompt {
                         repo_id,
                         prompt: commit_file_prompt(&prompt_path, &message),
                     },
@@ -913,14 +913,14 @@ fn render_file_row(
     let assign_path = path.clone();
     let assign_branch = branch.clone();
     let assign = components::Button::new(
-        format!("workspace_assign_{}", assign_path.display()),
+        format!("virtual_branches_assign_{}", assign_path.display()),
         assign_label_text,
     )
     .style(components::ButtonStyle::Subtle)
     .disabled(busy)
     .on_click(theme, cx, move |this, event, window, cx| {
         this.open_popover_at(
-            PopoverKind::WorkspacePrompt {
+            PopoverKind::VirtualBranchesPrompt {
                 repo_id,
                 prompt: assign_file_prompt(&assign_path, assign_branch.as_deref()),
             },
@@ -998,11 +998,11 @@ fn render_conflict_row(
     cx: &mut gpui::Context<SidebarPaneView>,
 ) -> AnyElement {
     let dismiss_store = Arc::clone(&store);
-    let dismiss = components::Button::new("workspace_conflict_dismiss", "Dismiss")
+    let dismiss = components::Button::new("virtual_branches_conflict_dismiss", "Dismiss")
         .style(components::ButtonStyle::Subtle)
         .disabled(busy)
         .on_click(theme, cx, move |_, _, _, _| {
-            dismiss_store.dispatch(Msg::DismissWorkspaceConflict { repo_id });
+            dismiss_store.dispatch(Msg::DismissVirtualBranchesConflict { repo_id });
         })
         .gitcomet_tooltip(theme, SharedString::from("Hide this conflict"));
 
@@ -1024,9 +1024,9 @@ fn render_conflict_row(
     .into_any_element()
 }
 
-/// Row height for the workspace list, matching the branch tree's rhythm so the
+/// Row height for the virtual branches list, matching the branch tree's rhythm so the
 /// two panes do not visibly change size when the user switches tabs.
-pub(in crate::view) fn workspace_row_height(
+pub(in crate::view) fn virtual_branches_row_height(
     theme: AppTheme,
     ui_scale_percent: u32,
 ) -> gpui::Pixels {
@@ -1037,33 +1037,33 @@ pub(in crate::view) fn workspace_row_height(
 mod tests {
     use super::*;
     use gitcomet_core::domain::RepoSpec;
-    use gitcomet_core::workspace::{VirtualBranch, WorkspaceState};
-    use gitcomet_state::model::{RepoId, RepoState, WorkspaceRepoState};
+    use gitcomet_core::virtual_branches::{VirtualBranch, VirtualBranchesState};
+    use gitcomet_state::model::{RepoId, RepoState, VirtualBranchesRepoState};
 
-    fn repo_with(workspace: WorkspaceState) -> RepoState {
+    fn repo_with(virtual_branches: VirtualBranchesState) -> RepoState {
         let mut repo = RepoState::new_opening(
             RepoId(1),
             RepoSpec {
                 workdir: std::path::PathBuf::from("/repo"),
             },
         );
-        let mut state = WorkspaceRepoState::default();
-        state.set_state(workspace);
+        let mut state = VirtualBranchesRepoState::default();
+        state.set_state(virtual_branches);
         // Most tests are about the stack layout, and the tab normally has the
         // working directory. The notice for when it does not has its own test.
         state.active = true;
-        repo.workspace = state;
+        repo.virtual_branches = state;
         repo
     }
 
-    fn names(presentation: &WorkspacePresentation) -> Vec<String> {
+    fn names(presentation: &VirtualBranchesPresentation) -> Vec<String> {
         presentation
             .rows
             .iter()
             .map(|row| match row {
-                WorkspaceRow::Target { name }
-                | WorkspaceRow::StackBase { name, .. }
-                | WorkspaceRow::Branch { name, .. } => name.clone(),
+                VirtualBranchesRow::Target { name }
+                | VirtualBranchesRow::StackBase { name, .. }
+                | VirtualBranchesRow::Branch { name, .. } => name.clone(),
                 _ => String::new(),
             })
             .collect()
@@ -1071,11 +1071,11 @@ mod tests {
 
     #[test]
     fn rows_start_with_the_target_then_the_stacks() {
-        let repo = repo_with(WorkspaceState::new("main").with_branches(vec![
+        let repo = repo_with(VirtualBranchesState::new("main").with_branches(vec![
             VirtualBranch::new("api"),
             VirtualBranch::new("ui").with_parent("api"),
         ]));
-        let presentation = WorkspacePresentation::build(Some(&repo));
+        let presentation = VirtualBranchesPresentation::build(Some(&repo));
         assert_eq!(
             names(&presentation),
             ["main", "api", "ui", ""],
@@ -1084,58 +1084,58 @@ mod tests {
     }
 
     #[test]
-    fn a_workspace_the_working_directory_is_not_on_says_so() {
+    fn a_virtual_branches_the_working_directory_is_not_on_says_so() {
         // Without this the tab happily lists applied branches while the user's
         // files contain none of them, which reads as the feature being broken.
         let repo =
-            repo_with(WorkspaceState::new("main").with_branches(vec![VirtualBranch::new("api")]));
+            repo_with(VirtualBranchesState::new("main").with_branches(vec![VirtualBranch::new("api")]));
         let mut repo = repo;
-        repo.workspace.active = false;
+        repo.virtual_branches.active = false;
 
-        let presentation = WorkspacePresentation::build(Some(&repo));
+        let presentation = VirtualBranchesPresentation::build(Some(&repo));
         let first = match &presentation.rows[0] {
-            WorkspaceRow::Placeholder { message } => message.clone(),
+            VirtualBranchesRow::Placeholder { message } => message.clone(),
             other => panic!("expected a notice, got {other:?}"),
         };
         assert!(
-            first.contains("not on the workspace"),
+            first.contains("not on the virtual branches"),
             "the notice says what is wrong, not just that something is"
         );
     }
 
     #[test]
-    fn a_workspace_the_working_directory_is_on_says_nothing_about_it() {
-        // The other half of the notice: a workspace in its normal state must not
+    fn a_virtual_branches_the_working_directory_is_on_says_nothing_about_it() {
+        // The other half of the notice: a virtual branches in its normal state must not
         // carry a permanent warning at the top of the tab.
         let repo =
-            repo_with(WorkspaceState::new("main").with_branches(vec![VirtualBranch::new("api")]));
-        let presentation = WorkspacePresentation::build(Some(&repo));
+            repo_with(VirtualBranchesState::new("main").with_branches(vec![VirtualBranch::new("api")]));
+        let presentation = VirtualBranchesPresentation::build(Some(&repo));
         assert!(
             presentation.rows.iter().all(|row| !matches!(
                 row,
-                WorkspaceRow::Placeholder { message } if message.contains("workspace")
+                VirtualBranchesRow::Placeholder { message } if message.contains("virtual branches")
             )),
-            "the notice is about being off the workspace, not about being in it"
+            "the notice is about being off the virtual branches, not about being in it"
         );
         assert!(
-            matches!(presentation.rows.first(), Some(WorkspaceRow::Target { .. })),
+            matches!(presentation.rows.first(), Some(VirtualBranchesRow::Target { .. })),
             "and the target row still comes first"
         );
     }
 
     #[test]
     fn a_stacked_branch_reports_its_depth() {
-        let repo = repo_with(WorkspaceState::new("main").with_branches(vec![
+        let repo = repo_with(VirtualBranchesState::new("main").with_branches(vec![
             VirtualBranch::new("api"),
             VirtualBranch::new("ui").with_parent("api"),
             VirtualBranch::new("e2e").with_parent("ui"),
         ]));
-        let presentation = WorkspacePresentation::build(Some(&repo));
+        let presentation = VirtualBranchesPresentation::build(Some(&repo));
         let depths: Vec<_> = presentation
             .rows
             .iter()
             .filter_map(|row| match row {
-                WorkspaceRow::Branch { depth, .. } => Some(*depth),
+                VirtualBranchesRow::Branch { depth, .. } => Some(*depth),
                 _ => None,
             })
             .collect();
@@ -1144,16 +1144,16 @@ mod tests {
 
     #[test]
     fn an_unapplied_branch_is_marked() {
-        let repo = repo_with(WorkspaceState::new("main").with_branches(vec![
+        let repo = repo_with(VirtualBranchesState::new("main").with_branches(vec![
             VirtualBranch::new("api"),
             VirtualBranch::new("parked").with_applied(BranchApplyState::Unapplied),
         ]));
-        let presentation = WorkspacePresentation::build(Some(&repo));
+        let presentation = VirtualBranchesPresentation::build(Some(&repo));
         let unapplied: Vec<_> = presentation
             .rows
             .iter()
             .filter_map(|row| match row {
-                WorkspaceRow::StackBase {
+                VirtualBranchesRow::StackBase {
                     name,
                     applied: false,
                     ..
@@ -1165,71 +1165,71 @@ mod tests {
     }
 
     #[test]
-    fn an_empty_workspace_invites_the_user_to_create_a_branch() {
-        let repo = repo_with(WorkspaceState::new("main"));
-        let presentation = WorkspacePresentation::build(Some(&repo));
+    fn an_empty_virtual_branches_invites_the_user_to_create_a_branch() {
+        let repo = repo_with(VirtualBranchesState::new("main"));
+        let presentation = VirtualBranchesPresentation::build(Some(&repo));
         assert!(
             presentation
                 .rows
                 .iter()
-                .any(|row| matches!(row, WorkspaceRow::Placeholder { message } if message.contains("Create a branch")))
+                .any(|row| matches!(row, VirtualBranchesRow::Placeholder { message } if message.contains("Create a branch")))
         );
     }
 
     #[test]
     fn no_repository_renders_a_placeholder() {
-        let presentation = WorkspacePresentation::build(None);
+        let presentation = VirtualBranchesPresentation::build(None);
         assert_eq!(presentation.rows.len(), 1);
         assert!(matches!(
             presentation.rows[0],
-            WorkspaceRow::Placeholder { .. }
+            VirtualBranchesRow::Placeholder { .. }
         ));
     }
 
     #[test]
     fn a_conflict_is_shown_before_the_branches() {
         let mut repo =
-            repo_with(WorkspaceState::new("main").with_branches(vec![VirtualBranch::new("api")]));
-        repo.workspace.conflict = Some(gitcomet_state::model::WorkspaceConflict {
+            repo_with(VirtualBranchesState::new("main").with_branches(vec![VirtualBranch::new("api")]));
+        repo.virtual_branches.conflict = Some(gitcomet_state::model::VirtualBranchesConflict {
             branch: "api".into(),
             against: Some("ui".into()),
             paths: Arc::new(Vec::new()),
             message: "conflict".into(),
         });
-        let presentation = WorkspacePresentation::build(Some(&repo));
+        let presentation = VirtualBranchesPresentation::build(Some(&repo));
         assert!(matches!(
             presentation.rows.first(),
-            Some(WorkspaceRow::Conflict { .. })
+            Some(VirtualBranchesRow::Conflict { .. })
         ));
     }
 
     #[test]
-    fn the_fingerprint_moves_with_the_workspace_and_the_worktree() {
-        let mut repo = repo_with(WorkspaceState::new("main"));
-        let before = WorkspaceFingerprint::from_repo(&repo);
-        repo.workspace.bump_rev();
-        assert_ne!(WorkspaceFingerprint::from_repo(&repo), before);
+    fn the_fingerprint_moves_with_the_virtual_branches_and_the_worktree() {
+        let mut repo = repo_with(VirtualBranchesState::new("main"));
+        let before = VirtualBranchesFingerprint::from_repo(&repo);
+        repo.virtual_branches.bump_rev();
+        assert_ne!(VirtualBranchesFingerprint::from_repo(&repo), before);
 
-        let mut repo = repo_with(WorkspaceState::new("main"));
-        let before = WorkspaceFingerprint::from_repo(&repo);
+        let mut repo = repo_with(VirtualBranchesState::new("main"));
+        let before = VirtualBranchesFingerprint::from_repo(&repo);
         repo.worktree_status_rev = 7;
-        assert_ne!(WorkspaceFingerprint::from_repo(&repo), before);
+        assert_ne!(VirtualBranchesFingerprint::from_repo(&repo), before);
     }
 
     #[test]
     fn a_branch_knows_the_siblings_it_can_swap_with() {
-        let repo = repo_with(WorkspaceState::new("main").with_branches(vec![
+        let repo = repo_with(VirtualBranchesState::new("main").with_branches(vec![
             VirtualBranch::new("api"),
             VirtualBranch::new("ui").with_parent("api"),
             VirtualBranch::new("docs").with_parent("ui"),
         ]));
-        let presentation = WorkspacePresentation::build(Some(&repo));
+        let presentation = VirtualBranchesPresentation::build(Some(&repo));
         let siblings: Vec<_> = presentation
             .rows
             .iter()
             .filter_map(|row| match row {
-                WorkspaceRow::StackBase { name, siblings, .. }
-                | WorkspaceRow::Branch { name, siblings, .. } => {
+                VirtualBranchesRow::StackBase { name, siblings, .. }
+                | VirtualBranchesRow::Branch { name, siblings, .. } => {
                     Some((name.clone(), siblings.clone()))
                 }
                 _ => None,

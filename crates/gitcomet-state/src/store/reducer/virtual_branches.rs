@@ -1,7 +1,7 @@
-//! Workspace reducers: turn Workspace messages into state changes and the
+//! Virtual branches reducers: turn Virtual branches messages into state changes and the
 //! effects that keep the repository in step.
 //!
-//! The pattern throughout is that a workspace action is optimistic about the
+//! The pattern throughout is that a virtual branches action is optimistic about the
 //! *repository* and pessimistic about the *state file*: the edit goes to the
 //! backend first, and the reducer's copy is only updated once the backend
 //! reports what actually happened. A failed apply therefore leaves the UI
@@ -11,22 +11,22 @@ use super::prepared::ReducerInputs;
 use super::util::{push_diagnostic, push_notification};
 use crate::msg::{ReferenceEffect, StatusEffect};
 use crate::model::{
-    AppNotificationKind, AppState, DiagnosticKind, Loadable, RepoId, RepoState, WorkspaceEdit,
+    AppNotificationKind, AppState, DiagnosticKind, Loadable, RepoId, RepoState, VirtualBranchesEdit,
 };
 use crate::msg::{CheckoutRequest, Effect};
-use gitcomet_core::workspace::{AssignmentIndex, BranchApplyState, WorkspaceState};
+use gitcomet_core::virtual_branches::{AssignmentIndex, BranchApplyState, VirtualBranchesState};
 use std::path::PathBuf;
 use std::sync::Arc;
 
-/// The Workspace view asks for its data; nothing else does, so a repository
-/// that never opens it never reads a workspace file.
-pub(super) fn load_workspace(state: &mut AppState, repo_id: RepoId) -> Vec<Effect> {
+/// The Virtual branches view asks for its data; nothing else does, so a repository
+/// that never opens it never reads a virtual branches file.
+pub(super) fn load_virtual_branches(state: &mut AppState, repo_id: RepoId) -> Vec<Effect> {
     let Some(repo) = repo_mut(state, repo_id) else {
         return Vec::new();
     };
-    repo.workspace.busy.loading = true;
-    repo.workspace.state = Loadable::Loading;
-    vec![Effect::LoadWorkspace { repo_id }]
+    repo.virtual_branches.busy.loading = true;
+    repo.virtual_branches.state = Loadable::Loading;
+    vec![Effect::LoadVirtualBranches { repo_id }]
 }
 
 /// Read the branch's row button: apply or unapply.
@@ -36,31 +36,31 @@ pub(super) fn set_branch_applied(
     name: String,
     applied: BranchApplyState,
 ) -> Vec<Effect> {
-    // Applying or unapplying always rewrites `gitcomet/workspace`, so it takes
+    // Applying or unapplying always rewrites `gitcomet/virtual`, so it takes
     // the same busy gate as a stack change.
     apply_edit(
         state,
         repo_id,
-        WorkspaceEdit::SetApplied { name, applied },
+        VirtualBranchesEdit::SetApplied { name, applied },
         true,
     )
 }
 
-/// Any other workspace edit from the UI.
-pub(super) fn apply_workspace_edit(
+/// Any other virtual branches edit from the UI.
+pub(super) fn apply_virtual_branches_edit(
     state: &mut AppState,
     repo_id: RepoId,
-    edit: WorkspaceEdit,
+    edit: VirtualBranchesEdit,
 ) -> Vec<Effect> {
     // A file assignment writes only the assignment index, so it gets its own
-    // effect rather than going through the workspace rewrite path. Hunk
+    // effect rather than going through the virtual branches rewrite path. Hunk
     // assignments take the same road: they write the same file.
     //
     // Matched by reference so the edit survives for `rewrites_history` and for
     // the effect below; the assignment owns copies rather than the fields.
     let assignment = match &edit {
-        WorkspaceEdit::AssignFile { path, branch } => Some((path.clone(), None, branch.clone())),
-        WorkspaceEdit::AssignHunk { path, hunk, branch } => {
+        VirtualBranchesEdit::AssignFile { path, branch } => Some((path.clone(), None, branch.clone())),
+        VirtualBranchesEdit::AssignHunk { path, hunk, branch } => {
             Some((path.clone(), Some(*hunk), branch.clone()))
         }
         _ => None,
@@ -69,12 +69,12 @@ pub(super) fn apply_workspace_edit(
         let Some(repo) = repo_mut(state, repo_id) else {
             return Vec::new();
         };
-        if repo.workspace.busy.any() {
+        if repo.virtual_branches.busy.any() {
             return Vec::new();
         }
-        repo.workspace.busy.applying = true;
-        repo.workspace.bump_rev();
-        return vec![Effect::AssignWorkspaceFile {
+        repo.virtual_branches.busy.applying = true;
+        repo.virtual_branches.bump_rev();
+        return vec![Effect::AssignVirtualBranchesFile {
             repo_id,
             path,
             hunk,
@@ -91,25 +91,25 @@ pub(super) fn apply_workspace_edit(
 fn apply_edit(
     state: &mut AppState,
     repo_id: RepoId,
-    edit: WorkspaceEdit,
+    edit: VirtualBranchesEdit,
     mutating: bool,
 ) -> Vec<Effect> {
     let Some(repo) = repo_mut(state, repo_id) else {
         return Vec::new();
     };
-    if repo.workspace.busy.any() {
-        // Two workspace edits racing would each write the state file and the
+    if repo.virtual_branches.busy.any() {
+        // Two virtual branches edits racing would each write the state file and the
         // loser's change would vanish silently.
         return Vec::new();
     }
     if mutating {
-        repo.workspace.busy.mutating = true;
+        repo.virtual_branches.busy.mutating = true;
     } else {
-        repo.workspace.busy.applying = true;
+        repo.virtual_branches.busy.applying = true;
     }
-    repo.workspace.bump_rev();
+    repo.virtual_branches.bump_rev();
 
-    vec![Effect::ApplyWorkspaceEdit { repo_id, edit }]
+    vec![Effect::ApplyVirtualBranchesEdit { repo_id, edit }]
 }
 
 /// Commit every file assigned to `name`.
@@ -123,7 +123,7 @@ pub(super) fn commit_branch(
     let Some(repo) = repo_mut(state, repo_id) else {
         return Vec::new();
     };
-    if repo.workspace.busy.any() {
+    if repo.virtual_branches.busy.any() {
         return Vec::new();
     }
     // An empty message would create a commit git refuses to describe; the
@@ -133,7 +133,7 @@ pub(super) fn commit_branch(
         return Vec::new();
     }
     let paths: Vec<PathBuf> = repo
-        .workspace
+        .virtual_branches
         .assignments
         .paths_for(&name)
         .into_iter()
@@ -155,7 +155,7 @@ pub(super) fn commit_branch(
 /// Commit one file to whatever branch it is assigned to.
 ///
 /// A file with no branch has nowhere to go, so the message says so instead of
-/// committing it to the workspace branch, which is never a user commit target.
+/// committing it to the virtual-branches branch, which is never a user commit target.
 pub(super) fn commit_single_file(
     inputs: &ReducerInputs,
     state: &mut AppState,
@@ -166,12 +166,12 @@ pub(super) fn commit_single_file(
         let Some(repo) = repo_mut(state, repo_id) else {
             return Vec::new();
         };
-        let Some(workspace) = repo.workspace.workspace() else {
+        let Some(virtual_branches) = repo.virtual_branches.virtual_branches() else {
             return Vec::new();
         };
-        repo.workspace
+        repo.virtual_branches
             .assignments
-            .resolve(&path, workspace)
+            .resolve(&path, virtual_branches)
             .map(str::to_string)
     };
     let Some(branch) = branch else {
@@ -205,15 +205,15 @@ fn commit_paths(
     let Some(repo) = repo_mut(state, repo_id) else {
         return Vec::new();
     };
-    if repo.workspace.busy.any() {
+    if repo.virtual_branches.busy.any() {
         return Vec::new();
     }
-    repo.workspace.busy.committing = true;
-    repo.workspace.bump_rev();
+    repo.virtual_branches.busy.committing = true;
+    repo.virtual_branches.bump_rev();
 
-    vec![Effect::ApplyWorkspaceEdit {
+    vec![Effect::ApplyVirtualBranchesEdit {
         repo_id,
-        edit: WorkspaceEdit::CommitPaths {
+        edit: VirtualBranchesEdit::CommitPaths {
             name,
             message,
             paths,
@@ -226,97 +226,97 @@ pub(super) fn push_branch(state: &mut AppState, repo_id: RepoId, name: String) -
     let Some(repo) = repo_mut(state, repo_id) else {
         return Vec::new();
     };
-    if repo.workspace.busy.any() {
+    if repo.virtual_branches.busy.any() {
         return Vec::new();
     }
-    repo.workspace.busy.mutating = true;
-    repo.workspace.bump_rev();
-    vec![Effect::PushWorkspaceBranch { repo_id, name }]
+    repo.virtual_branches.busy.mutating = true;
+    repo.virtual_branches.bump_rev();
+    vec![Effect::PushVirtualBranchesBranch { repo_id, name }]
 }
 
-/// Switch the working directory into the workspace.
+/// Switch the working directory into the virtual branches.
 ///
 /// The branch to return to is read here rather than in the effect, because it
 /// is the reducer that sees the repository state and the effect that has
 /// already queued a command by the time anybody could ask.
-pub(super) fn enter_workspace(state: &mut AppState, repo_id: RepoId) -> Vec<Effect> {
+pub(super) fn enter_virtual_branches(state: &mut AppState, repo_id: RepoId) -> Vec<Effect> {
     let Some(repo) = repo_mut(state, repo_id) else {
         return Vec::new();
     };
-    if repo.workspace.busy.any() {
+    if repo.virtual_branches.busy.any() {
         return Vec::new();
     }
-    // Already on the workspace branch: entering again is a no-op, and re-running
+    // Already on the virtual-branches branch: entering again is a no-op, and re-running
     // the checkout would only risk a refusal over changes that are already in
     // place.
-    if repo.workspace.active {
+    if repo.virtual_branches.active {
         return Vec::new();
     }
     let checkout_base = match &repo.head_branch {
         // A detached HEAD reports its name as "HEAD" — and an empty name is
         // no branch either. Not loaded is the same answer from less
         // information. Either way there is no branch to go back to, and
-        // leaving then falls back to the workspace target.
+        // leaving then falls back to the virtual branches target.
         Loadable::Ready(branch) if !branch.is_empty() && branch != "HEAD" => Some(branch.clone()),
         _ => None,
     };
-    repo.workspace.busy.switching = true;
-    repo.workspace.bump_rev();
-    vec![Effect::EnterWorkspace {
+    repo.virtual_branches.busy.switching = true;
+    repo.virtual_branches.bump_rev();
+    vec![Effect::EnterVirtualBranches {
         repo_id,
         checkout_base,
     }]
 }
 
-/// Switch the working directory back off the workspace branch.
-pub(super) fn leave_workspace(state: &mut AppState, repo_id: RepoId) -> Vec<Effect> {
+/// Switch the working directory back off the virtual-branches branch.
+pub(super) fn leave_virtual_branches(state: &mut AppState, repo_id: RepoId) -> Vec<Effect> {
     let Some(repo) = repo_mut(state, repo_id) else {
         return Vec::new();
     };
     if !begin_leave(repo) {
         return Vec::new();
     }
-    let checkout_base = repo.workspace.checkout_base.clone();
-    vec![Effect::LeaveWorkspace {
+    let checkout_base = repo.virtual_branches.checkout_base.clone();
+    vec![Effect::LeaveVirtualBranches {
         repo_id,
         checkout_base,
     }]
 }
 
-/// Whether the working directory is the workspace's to move.
+/// Whether the working directory is the virtual branches's to move.
 ///
-/// This is the test every checkout asks before it may run: a workspace that
+/// This is the test every checkout asks before it may run: a virtual branches that
 /// owns the working directory has to be left first, both because moving HEAD
 /// out from under it would strand the two in disagreement and because the
-/// views promise that the workspace stays on `gitcomet/workspace` while they
+/// views promise that the virtual branches stays on `gitcomet/virtual` while they
 /// are showing it.
 pub(super) fn owns_workdir(state: &AppState, repo_id: RepoId) -> bool {
     state
         .repos
         .iter()
         .find(|repo| repo.id == repo_id)
-        .is_some_and(|repo| repo.workspace.active)
+        .is_some_and(|repo| repo.virtual_branches.active)
 }
 
-/// Mark the workspace as switching, answering whether a switch may start.
+/// Mark the virtual branches as switching, answering whether a switch may start.
 ///
-/// A workspace that is already busy — an apply in flight, or the working
+/// A virtual branches that is already busy — an apply in flight, or the working
 /// directory being moved by an earlier request — cannot leave again, and the
 /// caller reports the refusal instead of believing the move happened.
 fn begin_leave(repo: &mut RepoState) -> bool {
-    if repo.workspace.busy.any() || !repo.workspace.active {
+    if repo.virtual_branches.busy.any() || !repo.virtual_branches.active {
         return false;
     }
-    repo.workspace.busy.switching = true;
-    repo.workspace.bump_rev();
+    repo.virtual_branches.busy.switching = true;
+    repo.virtual_branches.bump_rev();
     true
 }
 
-/// Leave the workspace to run a checkout that asked for what it holds.
+/// Leave the virtual branches to run a checkout that asked for what it holds.
 ///
 /// `checkout_base` is where the leave puts the working directory: the branch
 /// or commit the user asked for when it already exists, or `None` to fall back
-/// to the branch the workspace remembers (which is what a checkout that still
+/// to the branch the virtual branches remembers (which is what a checkout that still
 /// has to create its branch needs). `then` runs only once the leave has been
 /// reported, so the two moves cannot be split by a failure in between.
 pub(super) fn leave_for_checkout(
@@ -329,8 +329,8 @@ pub(super) fn leave_for_checkout(
     let Some(repo) = repo_mut(state, repo_id) else {
         return Vec::new();
     };
-    if !repo.workspace.active {
-        // The working directory stopped being the workspace's between the
+    if !repo.virtual_branches.active {
+        // The working directory stopped being the virtual branches's between the
         // check and here; the ordinary checkout path already handles that.
         return Vec::new();
     }
@@ -340,11 +340,11 @@ pub(super) fn leave_for_checkout(
             inputs,
             state,
             AppNotificationKind::Info,
-            "The workspace is busy; try changing branch again in a moment.".to_string(),
+            "The virtual branches is busy; try changing branch again in a moment.".to_string(),
         );
         return Vec::new();
     }
-    vec![Effect::LeaveWorkspaceAndCheckout {
+    vec![Effect::LeaveVirtualBranchesAndCheckout {
         repo_id,
         checkout_base,
         then,
@@ -357,7 +357,7 @@ pub(super) fn leave_for_checkout(
 /// view keeps describing the repository as it really is: a refused checkout
 /// never moved HEAD, and pretending it had would make the next leave try to
 /// undo a switch that never happened.
-pub(super) fn workspace_active_finished(
+pub(super) fn virtual_branches_active_finished(
     inputs: &ReducerInputs,
     state: &mut AppState,
     repo_id: RepoId,
@@ -368,26 +368,26 @@ pub(super) fn workspace_active_finished(
     let Some(repo) = repo_mut(state, repo_id) else {
         return Vec::new();
     };
-    repo.workspace.busy.switching = false;
+    repo.virtual_branches.busy.switching = false;
 
     if let Err(error) = result {
-        repo.workspace.bump_rev();
+        repo.virtual_branches.bump_rev();
         push_notification(
             inputs,
             state,
             AppNotificationKind::Error,
             if active {
-                format!("Could not open the workspace: {error}")
+                format!("Could not open the virtual branches: {error}")
             } else {
-                format!("Could not switch back out of the workspace: {error}")
+                format!("Could not switch back out of the virtual branches: {error}")
             },
         );
-        return vec![Effect::LoadWorkspace { repo_id }];
+        return vec![Effect::LoadVirtualBranches { repo_id }];
     }
 
-    repo.workspace.active = active;
-    repo.workspace.checkout_base = if active { checkout_base } else { None };
-    repo.workspace.bump_rev();
+    repo.virtual_branches.active = active;
+    repo.virtual_branches.checkout_base = if active { checkout_base } else { None };
+    repo.virtual_branches.bump_rev();
     // Leaving changes which branch HEAD is on, and entering changes the files,
     // so the ordinary views have to catch up either way.
     vec![
@@ -396,7 +396,7 @@ pub(super) fn workspace_active_finished(
     ]
 }
 
-/// The other branch named by a workspace conflict message.
+/// The other branch named by a virtual branches conflict message.
 ///
 /// The backend writes `"'x' conflicts with 'y' in ..."` when it could attribute
 /// the conflict to a specific already-applied branch, and falls back to prose
@@ -409,7 +409,7 @@ fn conflict_against(message: &str) -> Option<String> {
     (!other.is_empty()).then(|| other.to_string())
 }
 
-/// The conflicting path a workspace conflict message names.
+/// The conflicting path a virtual branches conflict message names.
 ///
 /// Only the first one is recovered: the backend collapses longer lists into
 /// prose, because a conflict the user cannot act on is better shown as a
@@ -440,40 +440,40 @@ pub(super) fn dismiss_conflict(state: &mut AppState, repo_id: RepoId) -> Vec<Eff
     let Some(repo) = repo_mut(state, repo_id) else {
         return Vec::new();
     };
-    if repo.workspace.conflict.take().is_some() {
-        repo.workspace.bump_rev();
+    if repo.virtual_branches.conflict.take().is_some() {
+        repo.virtual_branches.bump_rev();
     }
     Vec::new()
 }
 
 // ── Backend replies ─────────────────────────────────────────────
 
-pub(super) fn workspace_loaded(
+pub(super) fn virtual_branches_loaded(
     inputs: &ReducerInputs,
     state: &mut AppState,
     repo_id: RepoId,
-    result: gitcomet_core::services::Result<WorkspaceState>,
+    result: gitcomet_core::services::Result<VirtualBranchesState>,
     assignments: gitcomet_core::services::Result<AssignmentIndex>,
-    workspace_commit: gitcomet_core::services::Result<Option<gitcomet_core::domain::CommitId>>,
+    virtual_branches_commit: gitcomet_core::services::Result<Option<gitcomet_core::domain::CommitId>>,
 ) -> Vec<Effect> {
     let Some(repo) = repo_mut(state, repo_id) else {
         return Vec::new();
     };
-    repo.workspace.busy.loading = false;
+    repo.virtual_branches.busy.loading = false;
     match &result {
         // `set_state` derives the stacks and stores the state, so the loadable
         // and the cached stacks can never disagree.
         Ok(loaded) => {
-            repo.workspace.set_state(loaded.clone());
-            repo.workspace.workspace_commit = match &workspace_commit {
+            repo.virtual_branches.set_state(loaded.clone());
+            repo.virtual_branches.virtual_branches_commit = match &virtual_branches_commit {
                 Ok(commit) => Loadable::Ready(commit.clone()),
                 Err(error) => Loadable::Error(error.to_string()),
             };
         }
-        Err(error) => repo.workspace.state = Loadable::Error(error.to_string()),
+        Err(error) => repo.virtual_branches.state = Loadable::Error(error.to_string()),
     };
     if let Ok(mut index) = assignments {
-        // A branch that was removed from the workspace must not leave its file
+        // A branch that was removed from the virtual branches must not leave its file
         // assignments behind: re-creating a branch with the same name would
         // otherwise silently re-adopt files the user assigned to it months ago,
         // which is a change nobody asked for and cannot see.
@@ -483,18 +483,18 @@ pub(super) fn workspace_loaded(
         // the effects layer; doing it without one would drop assignments for
         // files that are merely unmodified at this instant — the very mistake
         // the assignments file exists to avoid.
-        if let Some(state) = repo.workspace.workspace().cloned() {
+        if let Some(state) = repo.virtual_branches.virtual_branches().cloned() {
             index.retain(&state, &|_| true, None);
         }
-        repo.workspace.assignments = Arc::new(index);
+        repo.virtual_branches.assignments = Arc::new(index);
     }
-    // A reload can land while the working directory is sitting on the workspace
+    // A reload can land while the working directory is sitting on the virtual branches
     // branch — the user was there before a refresh, or after a restart that left
     // HEAD there. Nothing is going to tell us we are "active" any other way, and
     // guessing wrong would either hide the fact or send the user to a branch
     // they were never on.
-    repo.workspace.active = matches!(&repo.head_branch, Loadable::Ready(branch) if branch == gitcomet_core::workspace::WORKSPACE_BRANCH);
-    repo.workspace.bump_rev();
+    repo.virtual_branches.active = matches!(&repo.head_branch, Loadable::Ready(branch) if branch == gitcomet_core::virtual_branches::VIRTUAL_BRANCHES_BRANCH);
+    repo.virtual_branches.bump_rev();
 
     let mut effects = Vec::new();
     if let Err(error) = result {
@@ -502,36 +502,36 @@ pub(super) fn workspace_loaded(
             inputs,
             state,
             AppNotificationKind::Error,
-            format!("Could not load the workspace: {error}"),
+            format!("Could not load the virtual branches: {error}"),
         );
     }
-    // A branch the workspace does not know about yet cannot be applied, so the
-    // view needs the ordinary branch list alongside the workspace.
+    // A branch the virtual branches does not know about yet cannot be applied, so the
+    // view needs the ordinary branch list alongside the virtual branches.
     effects.push(Effect::References(ReferenceEffect::LoadBranches { repo_id }));
     effects
 }
 
-pub(super) fn workspace_edit_finished(
+pub(super) fn virtual_branches_edit_finished(
     inputs: &ReducerInputs,
     state: &mut AppState,
     repo_id: RepoId,
-    edit: WorkspaceEdit,
+    edit: VirtualBranchesEdit,
     result: gitcomet_core::services::Result<gitcomet_core::services::CommitOperationOutcome>,
 ) -> Vec<Effect> {
     let Some(repo) = repo_mut(state, repo_id) else {
         return Vec::new();
     };
-    repo.workspace.busy = Default::default();
-    repo.workspace.bump_rev();
+    repo.virtual_branches.busy = Default::default();
+    repo.virtual_branches.bump_rev();
 
     if let Err(error) = result {
-        let branch = edit.branch_name().unwrap_or("workspace");
+        let branch = edit.branch_name().unwrap_or("virtual branches");
         // The backend names the other branch when it can work out which one is
         // in the way. Without that the banner can only say "X could not be
-        // applied", which is the traditional conflict message the Workspace is
+        // applied", which is the traditional conflict message the Virtual branches is
         // supposed to replace with one about virtual branches.
         let message = error.to_string();
-        repo.workspace.conflict = Some(crate::model::WorkspaceConflict {
+        repo.virtual_branches.conflict = Some(crate::model::VirtualBranchesConflict {
             branch: branch.to_string(),
             against: conflict_against(&message),
             paths: Arc::new(conflict_paths(&message)),
@@ -540,57 +540,57 @@ pub(super) fn workspace_edit_finished(
         push_diagnostic(inputs, repo, DiagnosticKind::Error, error.to_string());
         // The edit did not happen, so the cached state is stale in the other
         // direction: reload rather than guess what survived.
-        return vec![Effect::LoadWorkspace { repo_id }];
+        return vec![Effect::LoadVirtualBranches { repo_id }];
     }
 
-    repo.workspace.conflict = None;
+    repo.virtual_branches.conflict = None;
     vec![
-        Effect::LoadWorkspace { repo_id },
+        Effect::LoadVirtualBranches { repo_id },
         // A commit or an apply can change what the working tree reports.
         Effect::Status(StatusEffect::LoadWorktreeStatus { repo_id }),
         Effect::References(ReferenceEffect::LoadBranches { repo_id }),
     ]
 }
 
-pub(super) fn workspace_assign_finished(
+pub(super) fn virtual_branches_assign_finished(
     inputs: &ReducerInputs,
     state: &mut AppState,
     repo_id: RepoId,
     path: PathBuf,
-    hunk: Option<gitcomet_core::workspace::HunkFingerprint>,
+    hunk: Option<gitcomet_core::virtual_branches::HunkFingerprint>,
     branch: Option<String>,
     result: gitcomet_core::services::Result<()>,
 ) -> Vec<Effect> {
     let Some(repo) = repo_mut(state, repo_id) else {
         return Vec::new();
     };
-    repo.workspace.busy.applying = false;
+    repo.virtual_branches.busy.applying = false;
 
     if let Err(error) = result {
-        repo.workspace.bump_rev();
+        repo.virtual_branches.bump_rev();
         push_notification(
             inputs,
             state,
             AppNotificationKind::Error,
             format!("Could not assign '{}': {error}", path.display()),
         );
-        return vec![Effect::LoadWorkspace { repo_id }];
+        return vec![Effect::LoadVirtualBranches { repo_id }];
     }
 
-    // Mirror the write into the store. Reloading the whole workspace to learn
+    // Mirror the write into the store. Reloading the whole virtual branches to learn
     // something the view already knows would discard the derived stacks and
     // rebuild them for nothing, and on a hunk-by-hunk assignment that is once
     // per hunk.
-    let index = std::sync::Arc::make_mut(&mut repo.workspace.assignments);
+    let index = std::sync::Arc::make_mut(&mut repo.virtual_branches.assignments);
     match hunk {
         Some(hunk) => index.set_hunk(path, hunk, branch),
         None => index.set(path, branch),
     }
-    repo.workspace.bump_rev();
+    repo.virtual_branches.bump_rev();
     Vec::new()
 }
 
-pub(super) fn workspace_push_finished(
+pub(super) fn virtual_branches_push_finished(
     inputs: &ReducerInputs,
     state: &mut AppState,
     repo_id: RepoId,
@@ -600,8 +600,8 @@ pub(super) fn workspace_push_finished(
     let Some(repo) = repo_mut(state, repo_id) else {
         return Vec::new();
     };
-    repo.workspace.busy.mutating = false;
-    repo.workspace.bump_rev();
+    repo.virtual_branches.busy.mutating = false;
+    repo.virtual_branches.bump_rev();
 
     match result {
         Ok(_) => {
@@ -628,40 +628,40 @@ fn repo_mut(state: &mut AppState, repo_id: RepoId) -> Option<&mut RepoState> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{RepoState, WorkspaceRepoState};
+    use crate::model::{RepoState, VirtualBranchesRepoState};
     use gitcomet_core::domain::RepoSpec;
-    use gitcomet_core::workspace::VirtualBranch;
+    use gitcomet_core::virtual_branches::VirtualBranch;
     use std::path::Path;
 
-    fn repo_with_workspace() -> AppState {
+    fn repo_with_virtual_branches() -> AppState {
         let mut state = AppState::test_default();
         let spec = RepoSpec {
             workdir: std::path::PathBuf::from("/repo"),
         };
         let mut repo = RepoState::new_opening(RepoId(1), spec);
-        let mut workspace = WorkspaceRepoState::default();
-        workspace.set_state(WorkspaceState::new("main").with_branches(vec![
+        let mut virtual_branches = VirtualBranchesRepoState::default();
+        virtual_branches.set_state(VirtualBranchesState::new("main").with_branches(vec![
             VirtualBranch::new("api"),
             VirtualBranch::new("ui").with_parent("api"),
         ]));
-        repo.workspace = workspace;
+        repo.virtual_branches = virtual_branches;
         state.repos.push(repo);
         state
     }
 
     #[test]
-    fn load_workspace_marks_loading_and_emits_the_effect() {
-        let mut state = repo_with_workspace();
-        let effects = load_workspace(&mut state, RepoId(1));
+    fn load_virtual_branches_marks_loading_and_emits_the_effect() {
+        let mut state = repo_with_virtual_branches();
+        let effects = load_virtual_branches(&mut state, RepoId(1));
         assert_eq!(effects.len(), 1);
-        assert!(matches!(effects[0], Effect::LoadWorkspace { .. }));
-        assert!(state.repos[0].workspace.busy.loading);
-        assert!(matches!(state.repos[0].workspace.state, Loadable::Loading));
+        assert!(matches!(effects[0], Effect::LoadVirtualBranches { .. }));
+        assert!(state.repos[0].virtual_branches.busy.loading);
+        assert!(matches!(state.repos[0].virtual_branches.state, Loadable::Loading));
     }
 
     #[test]
     fn applying_a_branch_emits_the_edit_and_sets_mutating() {
-        let mut state = repo_with_workspace();
+        let mut state = repo_with_virtual_branches();
         let effects = set_branch_applied(
             &mut state,
             RepoId(1),
@@ -671,17 +671,17 @@ mod tests {
         assert_eq!(effects.len(), 1);
         assert!(matches!(
             &effects[0],
-            Effect::ApplyWorkspaceEdit {
+            Effect::ApplyVirtualBranchesEdit {
                 repo_id: RepoId(1),
-                edit: WorkspaceEdit::SetApplied { .. },
+                edit: VirtualBranchesEdit::SetApplied { .. },
             }
         ));
-        assert!(state.repos[0].workspace.busy.mutating);
+        assert!(state.repos[0].virtual_branches.busy.mutating);
     }
 
     #[test]
     fn a_second_edit_is_refused_while_one_is_running() {
-        let mut state = repo_with_workspace();
+        let mut state = repo_with_virtual_branches();
         set_branch_applied(
             &mut state,
             RepoId(1),
@@ -699,11 +699,11 @@ mod tests {
 
     #[test]
     fn an_assignment_emits_the_assignment_effect() {
-        let mut state = repo_with_workspace();
-        let effects = apply_workspace_edit(
+        let mut state = repo_with_virtual_branches();
+        let effects = apply_virtual_branches_edit(
             &mut state,
             RepoId(1),
-            WorkspaceEdit::AssignFile {
+            VirtualBranchesEdit::AssignFile {
                 path: PathBuf::from("a.rs"),
                 branch: Some("api".into()),
             },
@@ -711,41 +711,41 @@ mod tests {
         assert_eq!(effects.len(), 1);
         assert!(matches!(
             &effects[0],
-            Effect::AssignWorkspaceFile {
+            Effect::AssignVirtualBranchesFile {
                 repo_id: RepoId(1),
                 path,
                 branch: Some(branch),
                 ..
             } if path == &PathBuf::from("a.rs") && branch == "api"
         ));
-        // It is workspace bookkeeping, not a history rewrite.
-        assert!(!state.repos[0].workspace.busy.mutating);
-        assert!(state.repos[0].workspace.busy.applying);
+        // It is virtual branches bookkeeping, not a history rewrite.
+        assert!(!state.repos[0].virtual_branches.busy.mutating);
+        assert!(state.repos[0].virtual_branches.busy.applying);
     }
 
     #[test]
     fn a_conflict_names_the_branch_it_is_in_the_way_of() {
-        // This is the whole point of the Workspace conflict banner: "api and ui
+        // This is the whole point of the Virtual branches conflict banner: "api and ui
         // changed the same lines" is something the user can act on, where the
         // git-native message only says a merge failed.
-        let mut state = repo_with_workspace();
+        let mut state = repo_with_virtual_branches();
         let error = gitcomet_core::error::Error::new(gitcomet_core::error::ErrorKind::Backend(
             "'ui' conflicts with 'api' in src/auth.ts\n\n\
                  Both are applied, and both changed the same lines."
                 .into(),
         ));
-        workspace_edit_finished(
+        virtual_branches_edit_finished(
             &crate::store::reducer::test_inputs::clock(),
             &mut state,
             RepoId(1),
-            WorkspaceEdit::SetApplied {
+            VirtualBranchesEdit::SetApplied {
                 name: "ui".into(),
                 applied: BranchApplyState::Applied,
             },
             Err(error),
         );
 
-        let conflict = state.repos[0].workspace.conflict.as_ref().unwrap();
+        let conflict = state.repos[0].virtual_branches.conflict.as_ref().unwrap();
         assert_eq!(conflict.branch, "ui");
         assert_eq!(conflict.against.as_deref(), Some("api"));
         assert_eq!(conflict.paths.len(), 1);
@@ -757,24 +757,24 @@ mod tests {
     fn a_conflict_the_backend_could_not_attribute_still_reports_the_branch() {
         // git named no partner, so the banner falls back rather than inventing
         // one — and must not read a branch name out of unrelated prose.
-        let mut state = repo_with_workspace();
+        let mut state = repo_with_virtual_branches();
         let error = gitcomet_core::error::Error::new(gitcomet_core::error::ErrorKind::Backend(
             "'ui' could not be applied: it conflicts with the branches already \
-                 in the workspace, in files git did not name"
+                 in the virtual_branches, in files git did not name"
                 .into(),
         ));
-        workspace_edit_finished(
+        virtual_branches_edit_finished(
             &crate::store::reducer::test_inputs::clock(),
             &mut state,
             RepoId(1),
-            WorkspaceEdit::SetApplied {
+            VirtualBranchesEdit::SetApplied {
                 name: "ui".into(),
                 applied: BranchApplyState::Applied,
             },
             Err(error),
         );
 
-        let conflict = state.repos[0].workspace.conflict.as_ref().unwrap();
+        let conflict = state.repos[0].virtual_branches.conflict.as_ref().unwrap();
         assert_eq!(conflict.against, None, "better silent than wrong");
         assert!(
             conflict.paths.is_empty(),
@@ -785,25 +785,25 @@ mod tests {
 
     #[test]
     fn loading_drops_assignments_naming_a_branch_that_is_gone() {
-        // Without this, removing `api` from the workspace and re-creating it
+        // Without this, removing `api` from the virtual branches and re-creating it
         // later silently hands it every file it was ever given, with no action
         // from the user and nothing on screen saying so.
-        let mut state = repo_with_workspace();
+        let mut state = repo_with_virtual_branches();
         let mut index = AssignmentIndex::new();
         index.set(PathBuf::from("live.rs"), Some("api".into()));
         index.set(PathBuf::from("gone.rs"), Some("removed".into()));
 
-        // `repo_with_workspace` has api and ui, so `removed` is the odd one out.
-        workspace_loaded(
+        // `repo_with_virtual_branches` has api and ui, so `removed` is the odd one out.
+        virtual_branches_loaded(
             &crate::store::reducer::test_inputs::clock(),
             &mut state,
             RepoId(1),
-            Ok(WorkspaceState::new("main").with_branches(vec![VirtualBranch::new("api")])),
+            Ok(VirtualBranchesState::new("main").with_branches(vec![VirtualBranch::new("api")])),
             Ok(index),
             Ok(None),
         );
 
-        let assignments = &state.repos[0].workspace.assignments;
+        let assignments = &state.repos[0].virtual_branches.assignments;
         assert_eq!(assignments.branch_of(Path::new("live.rs")), Some("api"));
         assert!(
             assignments.file(Path::new("gone.rs")).is_none(),
@@ -815,22 +815,22 @@ mod tests {
     fn loading_keeps_assignments_for_files_that_are_merely_unmodified() {
         // The whole reason assignments live in a file rather than being derived
         // from the diff: a file that is saved-but-unchanged must keep its branch.
-        let mut state = repo_with_workspace();
+        let mut state = repo_with_virtual_branches();
         let mut index = AssignmentIndex::new();
         index.set(PathBuf::from("clean.rs"), Some("api".into()));
 
-        workspace_loaded(
+        virtual_branches_loaded(
             &crate::store::reducer::test_inputs::clock(),
             &mut state,
             RepoId(1),
-            Ok(WorkspaceState::new("main").with_branches(vec![VirtualBranch::new("api")])),
+            Ok(VirtualBranchesState::new("main").with_branches(vec![VirtualBranch::new("api")])),
             Ok(index),
             Ok(None),
         );
 
         assert_eq!(
             state.repos[0]
-                .workspace
+                .virtual_branches
                 .assignments
                 .branch_of(Path::new("clean.rs")),
             Some("api"),
@@ -839,16 +839,16 @@ mod tests {
     }
 
     #[test]
-    fn switching_repositories_hands_back_a_workspace_the_user_was_in() {
+    fn switching_repositories_hands_back_a_virtual_branches_the_user_was_in() {
         // The checkout belongs to the repository; the tab that explains it
         // belongs to the window. Walking away from a repository tab must not
-        // leave that repository sitting on `gitcomet/workspace`, because the
-        // sidebar stays on Workspace and the next time it is picked up the
+        // leave that repository sitting on `gitcomet/virtual`, because the
+        // sidebar stays on Virtual branches and the next time it is picked up the
         // user would be looking at the wrong repository's branches.
-        let mut state = repo_with_workspace();
+        let mut state = repo_with_virtual_branches();
         state.active_repo = Some(RepoId(1));
-        state.repos[0].workspace.active = true;
-        state.repos[0].workspace.checkout_base = Some("main".into());
+        state.repos[0].virtual_branches.active = true;
+        state.repos[0].virtual_branches.checkout_base = Some("main".into());
         state.repos.push(RepoState::new_opening(
             RepoId(2),
             RepoSpec {
@@ -864,7 +864,7 @@ mod tests {
         assert!(
             effects.iter().any(|effect| matches!(
                 effect,
-                Effect::LeaveWorkspace {
+                Effect::LeaveVirtualBranches {
                     repo_id: RepoId(1),
                     ..
                 }
@@ -874,10 +874,10 @@ mod tests {
     }
 
     #[test]
-    fn switching_repositories_untouched_by_the_workspace_costs_nothing() {
-        // The common case: a repository that was never in the workspace must not
+    fn switching_repositories_untouched_by_the_virtual_branches_costs_nothing() {
+        // The common case: a repository that was never in the virtual branches must not
         // grow a checkout on every repository switch.
-        let mut state = repo_with_workspace();
+        let mut state = repo_with_virtual_branches();
         state.active_repo = Some(RepoId(1));
         state.repos.push(RepoState::new_opening(
             RepoId(2),
@@ -894,61 +894,61 @@ mod tests {
         assert!(
             !effects
                 .iter()
-                .any(|effect| matches!(effect, Effect::LeaveWorkspace { .. })),
+                .any(|effect| matches!(effect, Effect::LeaveVirtualBranches { .. })),
             "nothing to hand back"
         );
     }
 
     #[test]
-    fn entering_the_workspace_remembers_where_to_go_back_to() {
-        let mut state = repo_with_workspace();
+    fn entering_the_virtual_branches_remembers_where_to_go_back_to() {
+        let mut state = repo_with_virtual_branches();
         let repo = state.repos.iter_mut().find(|r| r.id == RepoId(1)).unwrap();
         repo.head_branch = Loadable::Ready("main".into());
-        let before_rev = state.repos[0].workspace.rev;
+        let before_rev = state.repos[0].virtual_branches.rev;
 
-        let effects = enter_workspace(&mut state, RepoId(1));
+        let effects = enter_virtual_branches(&mut state, RepoId(1));
         assert_eq!(effects.len(), 1);
         assert!(matches!(
             &effects[0],
-            Effect::EnterWorkspace {
+            Effect::EnterVirtualBranches {
                 repo_id: RepoId(1),
                 checkout_base: Some(base),
             } if base == "main"
         ));
         assert!(
-            state.repos[0].workspace.busy.switching,
+            state.repos[0].virtual_branches.busy.switching,
             "moving HEAD under the user is its own kind of busy"
         );
         assert_ne!(
-            state.repos[0].workspace.rev, before_rev,
+            state.repos[0].virtual_branches.rev, before_rev,
             "the presentation is cached on this counter, so a switch that does not bump it would leave the tab describing a working directory that has moved"
         );
     }
 
     #[test]
-    fn entering_the_workspace_twice_does_nothing_the_second_time() {
-        let mut state = repo_with_workspace();
-        state.repos[0].workspace.active = true;
+    fn entering_the_virtual_branches_twice_does_nothing_the_second_time() {
+        let mut state = repo_with_virtual_branches();
+        state.repos[0].virtual_branches.active = true;
         // Re-running the checkout would only risk a refusal over changes that
         // are already in place.
-        assert!(enter_workspace(&mut state, RepoId(1)).is_empty());
+        assert!(enter_virtual_branches(&mut state, RepoId(1)).is_empty());
     }
 
     #[test]
-    fn entering_the_workspace_is_refused_while_something_else_is_running() {
-        let mut state = repo_with_workspace();
-        state.repos[0].workspace.busy.committing = true;
-        assert!(enter_workspace(&mut state, RepoId(1)).is_empty());
-        assert!(!state.repos[0].workspace.busy.switching);
+    fn entering_the_virtual_branches_is_refused_while_something_else_is_running() {
+        let mut state = repo_with_virtual_branches();
+        state.repos[0].virtual_branches.busy.committing = true;
+        assert!(enter_virtual_branches(&mut state, RepoId(1)).is_empty());
+        assert!(!state.repos[0].virtual_branches.busy.switching);
     }
 
     #[test]
     fn entering_with_a_detached_head_remembers_nothing_to_go_back_to() {
-        let mut state = repo_with_workspace();
+        let mut state = repo_with_virtual_branches();
         state.repos[0].head_branch = Loadable::Ready(String::new());
         assert!(matches!(
-            &enter_workspace(&mut state, RepoId(1))[0],
-            Effect::EnterWorkspace {
+            &enter_virtual_branches(&mut state, RepoId(1))[0],
+            Effect::EnterVirtualBranches {
                 checkout_base: None,
                 ..
             }
@@ -956,14 +956,14 @@ mod tests {
     }
 
     #[test]
-    fn leaving_the_workspace_asks_for_the_branch_it_came_from() {
-        let mut state = repo_with_workspace();
-        state.repos[0].workspace.active = true;
-        state.repos[0].workspace.checkout_base = Some("main".into());
+    fn leaving_the_virtual_branches_asks_for_the_branch_it_came_from() {
+        let mut state = repo_with_virtual_branches();
+        state.repos[0].virtual_branches.active = true;
+        state.repos[0].virtual_branches.checkout_base = Some("main".into());
 
         assert!(matches!(
-            &leave_workspace(&mut state, RepoId(1))[0],
-            Effect::LeaveWorkspace {
+            &leave_virtual_branches(&mut state, RepoId(1))[0],
+            Effect::LeaveVirtualBranches {
                 repo_id: RepoId(1),
                 checkout_base: Some(base),
             } if base == "main"
@@ -971,49 +971,49 @@ mod tests {
     }
 
     #[test]
-    fn leaving_a_workspace_that_was_never_entered_does_nothing() {
-        let mut state = repo_with_workspace();
-        assert!(leave_workspace(&mut state, RepoId(1)).is_empty());
-        assert!(!state.repos[0].workspace.busy.switching);
+    fn leaving_a_virtual_branches_that_was_never_entered_does_nothing() {
+        let mut state = repo_with_virtual_branches();
+        assert!(leave_virtual_branches(&mut state, RepoId(1)).is_empty());
+        assert!(!state.repos[0].virtual_branches.busy.switching);
     }
 
     #[test]
     fn a_finished_switch_records_where_the_working_directory_is() {
-        let mut state = repo_with_workspace();
-        state.repos[0].workspace.busy.switching = true;
-        workspace_active_finished(&crate::store::reducer::test_inputs::clock(),
+        let mut state = repo_with_virtual_branches();
+        state.repos[0].virtual_branches.busy.switching = true;
+        virtual_branches_active_finished(&crate::store::reducer::test_inputs::clock(),
             &mut state, RepoId(1), true, Some("main".into()), Ok(()));
 
-        let workspace = &state.repos[0].workspace;
-        assert!(workspace.active);
-        assert_eq!(workspace.checkout_base.as_deref(), Some("main"));
-        assert!(!workspace.busy.switching);
+        let virtual_branches = &state.repos[0].virtual_branches;
+        assert!(virtual_branches.active);
+        assert_eq!(virtual_branches.checkout_base.as_deref(), Some("main"));
+        assert!(!virtual_branches.busy.switching);
     }
 
     #[test]
     fn a_finished_leave_forgets_where_to_go_back_to() {
-        let mut state = repo_with_workspace();
-        state.repos[0].workspace.active = true;
-        state.repos[0].workspace.checkout_base = Some("main".into());
-        workspace_active_finished(&crate::store::reducer::test_inputs::clock(),
+        let mut state = repo_with_virtual_branches();
+        state.repos[0].virtual_branches.active = true;
+        state.repos[0].virtual_branches.checkout_base = Some("main".into());
+        virtual_branches_active_finished(&crate::store::reducer::test_inputs::clock(),
             &mut state, RepoId(1), false, None, Ok(()));
 
-        let workspace = &state.repos[0].workspace;
-        assert!(!workspace.active);
+        let virtual_branches = &state.repos[0].virtual_branches;
+        assert!(!virtual_branches.active);
         assert!(
-            workspace.checkout_base.is_none(),
-            "the remembered branch is only meaningful while the workspace is checked out"
+            virtual_branches.checkout_base.is_none(),
+            "the remembered branch is only meaningful while the virtual branches is checked out"
         );
     }
 
     #[test]
     fn a_refused_switch_leaves_the_working_directory_described_as_it_is() {
         // The property that stops the view lying after a refused checkout: git
-        // never moved HEAD, so claiming we are on the workspace would make the
+        // never moved HEAD, so claiming we are on the virtual branches would make the
         // next leave try to undo a switch that never happened.
-        let mut state = repo_with_workspace();
-        state.repos[0].workspace.busy.switching = true;
-        let effects = workspace_active_finished(
+        let mut state = repo_with_virtual_branches();
+        state.repos[0].virtual_branches.busy.switching = true;
+        let effects = virtual_branches_active_finished(
             &crate::store::reducer::test_inputs::clock(),
             &mut state,
             RepoId(1),
@@ -1024,15 +1024,15 @@ mod tests {
             )),
         );
 
-        let workspace = &state.repos[0].workspace;
-        assert!(!workspace.active, "HEAD never moved");
-        assert!(workspace.checkout_base.is_none());
-        assert!(!workspace.busy.switching, "but the operation is over");
+        let virtual_branches = &state.repos[0].virtual_branches;
+        assert!(!virtual_branches.active, "HEAD never moved");
+        assert!(virtual_branches.checkout_base.is_none());
+        assert!(!virtual_branches.busy.switching, "but the operation is over");
         assert!(
             effects
                 .iter()
-                .any(|effect| matches!(effect, Effect::LoadWorkspace { repo_id: RepoId(1) })),
-            "and the workspace is re-read so the view matches the repository"
+                .any(|effect| matches!(effect, Effect::LoadVirtualBranches { repo_id: RepoId(1) })),
+            "and the virtual branches is re-read so the view matches the repository"
         );
     }
 
@@ -1040,11 +1040,11 @@ mod tests {
     fn a_switch_reloads_the_branches_and_the_working_tree() {
         // Entering changes the files and leaving changes which branch HEAD is
         // on, so both ordinary views are now stale.
-        let mut state = repo_with_workspace();
-        let effects = workspace_active_finished(&crate::store::reducer::test_inputs::clock(),
+        let mut state = repo_with_virtual_branches();
+        let effects = virtual_branches_active_finished(&crate::store::reducer::test_inputs::clock(),
             &mut state, RepoId(1), true, None, Ok(()));
         assert_ne!(
-            state.repos[0].workspace.rev, 0,
+            state.repos[0].virtual_branches.rev, 0,
             "the switch has to reach the cached presentation, which only sees this counter"
         );
         assert!(
@@ -1060,31 +1060,31 @@ mod tests {
     }
 
     #[test]
-    fn a_load_infers_that_the_working_directory_is_on_the_workspace() {
+    fn a_load_infers_that_the_working_directory_is_on_the_virtual_branches() {
         // Nothing else will say so, and it has to survive a restart that left
-        // HEAD on `gitcomet/workspace`.
-        let mut state = repo_with_workspace();
+        // HEAD on `gitcomet/virtual`.
+        let mut state = repo_with_virtual_branches();
         state.repos[0].head_branch =
-            Loadable::Ready(gitcomet_core::workspace::WORKSPACE_BRANCH.into());
-        workspace_loaded(
+            Loadable::Ready(gitcomet_core::virtual_branches::VIRTUAL_BRANCHES_BRANCH.into());
+        virtual_branches_loaded(
             &crate::store::reducer::test_inputs::clock(),
             &mut state,
             RepoId(1),
-            Ok(WorkspaceState::new("main")),
+            Ok(VirtualBranchesState::new("main")),
             Ok(AssignmentIndex::new()),
             Ok(None),
         );
-        assert!(state.repos[0].workspace.active);
+        assert!(state.repos[0].virtual_branches.active);
     }
 
     #[test]
     fn a_hunk_assignment_takes_the_same_effect_and_names_its_hunk() {
-        let mut state = repo_with_workspace();
-        let hunk = gitcomet_core::workspace::HunkFingerprint::of(&["new\n"], 1);
-        let effects = apply_workspace_edit(
+        let mut state = repo_with_virtual_branches();
+        let hunk = gitcomet_core::virtual_branches::HunkFingerprint::of(&["new\n"], 1);
+        let effects = apply_virtual_branches_edit(
             &mut state,
             RepoId(1),
-            WorkspaceEdit::AssignHunk {
+            VirtualBranchesEdit::AssignHunk {
                 path: PathBuf::from("a.rs"),
                 hunk,
                 branch: Some("ui".into()),
@@ -1093,7 +1093,7 @@ mod tests {
         assert_eq!(effects.len(), 1);
         assert!(matches!(
             &effects[0],
-            Effect::AssignWorkspaceFile {
+            Effect::AssignVirtualBranchesFile {
                 repo_id: RepoId(1),
                 hunk: Some(key),
                 branch: Some(branch),
@@ -1104,8 +1104,8 @@ mod tests {
 
     #[test]
     fn a_finished_assignment_lands_in_the_store_without_a_reload() {
-        let mut state = repo_with_workspace();
-        workspace_assign_finished(
+        let mut state = repo_with_virtual_branches();
+        virtual_branches_assign_finished(
             &crate::store::reducer::test_inputs::clock(),
             &mut state,
             RepoId(1),
@@ -1116,19 +1116,19 @@ mod tests {
         );
         assert_eq!(
             state.repos[0]
-                .workspace
+                .virtual_branches
                 .assignments
                 .branch_of(Path::new("a.rs")),
             Some("api"),
             "the row has to update without waiting for the next load"
         );
-        assert!(!state.repos[0].workspace.busy.applying);
+        assert!(!state.repos[0].virtual_branches.busy.applying);
     }
 
     #[test]
     fn a_failed_assignment_reloads_rather_than_guessing() {
-        let mut state = repo_with_workspace();
-        let effects = workspace_assign_finished(
+        let mut state = repo_with_virtual_branches();
+        let effects = virtual_branches_assign_finished(
             &crate::store::reducer::test_inputs::clock(),
             &mut state,
             RepoId(1),
@@ -1142,23 +1142,23 @@ mod tests {
         assert!(
             effects
                 .iter()
-                .any(|effect| matches!(effect, Effect::LoadWorkspace { .. })),
+                .any(|effect| matches!(effect, Effect::LoadVirtualBranches { .. })),
             "the store copy is left alone, so it has to come back from disk"
         );
     }
 
     #[test]
     fn committing_an_empty_message_is_refused() {
-        let mut state = repo_with_workspace();
+        let mut state = repo_with_virtual_branches();
         let effects = commit_branch(&crate::store::reducer::test_inputs::clock(),
             &mut state, RepoId(1), "api".into(), "   ".into());
         assert!(effects.is_empty());
-        assert!(!state.repos[0].workspace.busy.committing);
+        assert!(!state.repos[0].virtual_branches.busy.committing);
     }
 
     #[test]
     fn committing_a_branch_with_no_assigned_files_is_refused() {
-        let mut state = repo_with_workspace();
+        let mut state = repo_with_virtual_branches();
         let effects = commit_branch(&crate::store::reducer::test_inputs::clock(),
             &mut state, RepoId(1), "api".into(), "Add API".into());
         assert!(effects.is_empty());
@@ -1166,18 +1166,18 @@ mod tests {
 
     #[test]
     fn committing_a_branch_with_assigned_files_emits_the_edit() {
-        let mut state = repo_with_workspace();
+        let mut state = repo_with_virtual_branches();
         let mut index = AssignmentIndex::new();
         index.set(PathBuf::from("a.rs"), Some("api".into()));
-        state.repos[0].workspace.assignments = Arc::new(index);
+        state.repos[0].virtual_branches.assignments = Arc::new(index);
 
         let effects = commit_branch(&crate::store::reducer::test_inputs::clock(),
             &mut state, RepoId(1), "api".into(), "Add API".into());
         assert_eq!(effects.len(), 1);
         match &effects[0] {
-            Effect::ApplyWorkspaceEdit {
+            Effect::ApplyVirtualBranchesEdit {
                 repo_id,
-                edit: WorkspaceEdit::CommitPaths { name, paths, .. },
+                edit: VirtualBranchesEdit::CommitPaths { name, paths, .. },
             } => {
                 assert_eq!(*repo_id, RepoId(1));
                 assert_eq!(name, "api");
@@ -1185,17 +1185,17 @@ mod tests {
             }
             other => panic!("unexpected effect {other:?}"),
         }
-        assert!(state.repos[0].workspace.busy.committing);
+        assert!(state.repos[0].virtual_branches.busy.committing);
     }
 
     #[test]
     fn a_failed_edit_records_a_conflict_and_reloads() {
-        let mut state = repo_with_workspace();
-        let effects = workspace_edit_finished(
+        let mut state = repo_with_virtual_branches();
+        let effects = virtual_branches_edit_finished(
             &crate::store::reducer::test_inputs::clock(),
             &mut state,
             RepoId(1),
-            WorkspaceEdit::SetApplied {
+            VirtualBranchesEdit::SetApplied {
                 name: "api".into(),
                 applied: BranchApplyState::Applied,
             },
@@ -1204,21 +1204,21 @@ mod tests {
             )),
         );
         assert_eq!(effects.len(), 1);
-        assert!(matches!(effects[0], Effect::LoadWorkspace { .. }));
-        let conflict = state.repos[0].workspace.conflict.as_ref().unwrap();
+        assert!(matches!(effects[0], Effect::LoadVirtualBranches { .. }));
+        let conflict = state.repos[0].virtual_branches.conflict.as_ref().unwrap();
         assert_eq!(conflict.branch, "api");
-        assert!(!state.repos[0].workspace.busy.any());
+        assert!(!state.repos[0].virtual_branches.busy.any());
     }
 
     #[test]
     fn a_successful_edit_clears_the_conflict_and_reloads_status() {
-        let mut state = repo_with_workspace();
-        state.repos[0].workspace.conflict = None;
-        let effects = workspace_edit_finished(
+        let mut state = repo_with_virtual_branches();
+        state.repos[0].virtual_branches.conflict = None;
+        let effects = virtual_branches_edit_finished(
             &crate::store::reducer::test_inputs::clock(),
             &mut state,
             RepoId(1),
-            WorkspaceEdit::SetApplied {
+            VirtualBranchesEdit::SetApplied {
                 name: "api".into(),
                 applied: BranchApplyState::Applied,
             },
@@ -1232,29 +1232,29 @@ mod tests {
         assert!(
             effects
                 .iter()
-                .any(|effect| matches!(effect, Effect::LoadWorkspace { .. }))
+                .any(|effect| matches!(effect, Effect::LoadVirtualBranches { .. }))
         );
-        assert!(state.repos[0].workspace.conflict.is_none());
-        assert!(!state.repos[0].workspace.busy.any());
+        assert!(state.repos[0].virtual_branches.conflict.is_none());
+        assert!(!state.repos[0].virtual_branches.busy.any());
     }
 
     #[test]
     fn dismissing_a_conflict_clears_it() {
-        let mut state = repo_with_workspace();
-        state.repos[0].workspace.conflict = Some(crate::model::WorkspaceConflict {
+        let mut state = repo_with_virtual_branches();
+        state.repos[0].virtual_branches.conflict = Some(crate::model::VirtualBranchesConflict {
             branch: "api".into(),
             against: None,
             paths: Arc::new(Vec::new()),
             message: "conflict".into(),
         });
         dismiss_conflict(&mut state, RepoId(1));
-        assert!(state.repos[0].workspace.conflict.is_none());
+        assert!(state.repos[0].virtual_branches.conflict.is_none());
     }
 
     #[test]
     fn a_failed_push_notifies_without_reloading() {
-        let mut state = repo_with_workspace();
-        let effects = workspace_push_finished(
+        let mut state = repo_with_virtual_branches();
+        let effects = virtual_branches_push_finished(
             &crate::store::reducer::test_inputs::clock(),
             &mut state,
             RepoId(1),
@@ -1264,11 +1264,11 @@ mod tests {
             )),
         );
         assert!(effects.is_empty());
-        assert!(!state.repos[0].workspace.busy.mutating);
+        assert!(!state.repos[0].virtual_branches.busy.mutating);
     }
 
     /// The conflict message the backend builds, copied from
-    /// `gitcomet_gix::repo::workspace::conflict_message` so these tests exercise
+    /// `gitcomet_gix::repo::virtual branches::conflict_message` so these tests exercise
     /// the shape that really arrives. Nothing enforces that the two stay in
     /// step — if one changes, this is the place that has to follow.
     fn conflict_message(name: &str, against: Option<&str>, listed: &str) -> String {
@@ -1276,7 +1276,7 @@ mod tests {
             Some(against) => format!("'{name}' conflicts with '{against}' in {listed}"),
             None => format!(
                 "'{name}' could not be applied: it conflicts with the branches \
-                 already in the workspace, in {listed}"
+                 already in the virtual_branches, in {listed}"
             ),
         };
         format!(
@@ -1287,13 +1287,13 @@ mod tests {
     }
 
     /// Run a failing edit carrying `message` and return the conflict recorded.
-    fn conflict_from(message: &str) -> crate::model::WorkspaceConflict {
-        let mut state = repo_with_workspace();
-        workspace_edit_finished(
+    fn conflict_from(message: &str) -> crate::model::VirtualBranchesConflict {
+        let mut state = repo_with_virtual_branches();
+        virtual_branches_edit_finished(
             &crate::store::reducer::test_inputs::clock(),
             &mut state,
             RepoId(1),
-            WorkspaceEdit::SetApplied {
+            VirtualBranchesEdit::SetApplied {
                 name: "ui".into(),
                 applied: BranchApplyState::Applied,
             },
@@ -1302,7 +1302,7 @@ mod tests {
             )),
         );
         state.repos[0]
-            .workspace
+            .virtual_branches
             .conflict
             .clone()
             .expect("a failed edit has to record the conflict")
@@ -1362,20 +1362,20 @@ mod tests {
 
     #[test]
     fn committing_one_file_commits_only_that_file() {
-        let mut state = repo_with_workspace();
+        let mut state = repo_with_virtual_branches();
         let mut index = AssignmentIndex::new();
         index.set(PathBuf::from("a.rs"), Some("api".into()));
         index.set(PathBuf::from("b.rs"), Some("api".into()));
-        state.repos[0].workspace.assignments = Arc::new(index);
+        state.repos[0].virtual_branches.assignments = Arc::new(index);
 
         let effects = commit_single_file(&crate::store::reducer::test_inputs::clock(),
             &mut state, RepoId(1), PathBuf::from("a.rs"));
         assert_eq!(effects.len(), 1);
         match &effects[0] {
-            Effect::ApplyWorkspaceEdit {
+            Effect::ApplyVirtualBranchesEdit {
                 repo_id,
                 edit:
-                    WorkspaceEdit::CommitPaths {
+                    VirtualBranchesEdit::CommitPaths {
                         name,
                         message,
                         paths,
@@ -1396,12 +1396,12 @@ mod tests {
             }
             other => panic!("unexpected effect {other:?}"),
         }
-        assert!(state.repos[0].workspace.busy.committing);
+        assert!(state.repos[0].virtual_branches.busy.committing);
     }
 
     #[test]
     fn committing_a_file_that_is_on_no_branch_says_so_instead_of_committing_it_anywhere() {
-        let mut state = repo_with_workspace();
+        let mut state = repo_with_virtual_branches();
         let effects = commit_single_file(&crate::store::reducer::test_inputs::clock(),
             &mut state, RepoId(1), PathBuf::from("a.rs"));
 
@@ -1412,7 +1412,7 @@ mod tests {
             "the message has to name the file the user clicked: {}",
             state.notifications[0].message
         );
-        assert!(!state.repos[0].workspace.busy.any());
+        assert!(!state.repos[0].virtual_branches.busy.any());
     }
 
     #[test]
@@ -1420,19 +1420,19 @@ mod tests {
         // A split file is on no single branch, so there is no branch to commit
         // it to; committing the whole file to either one would take hunks
         // belonging to the other.
-        let mut state = repo_with_workspace();
+        let mut state = repo_with_virtual_branches();
         let mut index = AssignmentIndex::new();
         index.set_hunk(
             PathBuf::from("a.rs"),
-            gitcomet_core::workspace::HunkFingerprint::of(&["API\n"], 1),
+            gitcomet_core::virtual_branches::HunkFingerprint::of(&["API\n"], 1),
             Some("api".into()),
         );
         index.set_hunk(
             PathBuf::from("a.rs"),
-            gitcomet_core::workspace::HunkFingerprint::of(&["UI\n"], 1),
+            gitcomet_core::virtual_branches::HunkFingerprint::of(&["UI\n"], 1),
             Some("ui".into()),
         );
-        state.repos[0].workspace.assignments = Arc::new(index);
+        state.repos[0].virtual_branches.assignments = Arc::new(index);
 
         let effects = commit_single_file(&crate::store::reducer::test_inputs::clock(),
             &mut state, RepoId(1), PathBuf::from("a.rs"));
@@ -1447,11 +1447,11 @@ mod tests {
     #[test]
     fn committing_a_file_whose_branch_is_gone_is_refused() {
         // The branch was removed elsewhere. Falling back to the raw assignment
-        // would commit to a ref the workspace no longer has.
-        let mut state = repo_with_workspace();
+        // would commit to a ref the virtual branches no longer has.
+        let mut state = repo_with_virtual_branches();
         let mut index = AssignmentIndex::new();
         index.set(PathBuf::from("a.rs"), Some("vanished".into()));
-        state.repos[0].workspace.assignments = Arc::new(index);
+        state.repos[0].virtual_branches.assignments = Arc::new(index);
 
         let effects = commit_single_file(&crate::store::reducer::test_inputs::clock(),
             &mut state, RepoId(1), PathBuf::from("a.rs"));
@@ -1464,26 +1464,26 @@ mod tests {
     fn committing_one_file_while_something_else_runs_does_nothing() {
         // Same gate as a whole-branch commit: two commits racing would leave a
         // ref moved by whichever lost.
-        let mut state = repo_with_workspace();
+        let mut state = repo_with_virtual_branches();
         let mut index = AssignmentIndex::new();
         index.set(PathBuf::from("a.rs"), Some("api".into()));
-        state.repos[0].workspace.assignments = Arc::new(index);
-        state.repos[0].workspace.busy.mutating = true;
+        state.repos[0].virtual_branches.assignments = Arc::new(index);
+        state.repos[0].virtual_branches.busy.mutating = true;
 
         let effects = commit_single_file(&crate::store::reducer::test_inputs::clock(),
             &mut state, RepoId(1), PathBuf::from("a.rs"));
 
         assert!(effects.is_empty());
         assert!(
-            !state.repos[0].workspace.busy.committing,
+            !state.repos[0].virtual_branches.busy.committing,
             "and it must not claim it is committing either"
         );
     }
 
     #[test]
     fn messages_for_an_unknown_repository_are_ignored() {
-        let mut state = repo_with_workspace();
-        let effects = load_workspace(&mut state, RepoId(99));
+        let mut state = repo_with_virtual_branches();
+        let effects = load_virtual_branches(&mut state, RepoId(99));
         assert!(effects.is_empty());
     }
 }

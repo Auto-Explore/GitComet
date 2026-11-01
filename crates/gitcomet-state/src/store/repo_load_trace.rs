@@ -151,10 +151,10 @@ pub(super) fn effect_repo_id(effect: &Effect) -> Option<RepoId> {
         | Effect::Status(StatusEffect::LoadStatus { repo_id })
         | Effect::References(ReferenceEffect::LoadHeadBranch { repo_id })
         | Effect::References(ReferenceEffect::LoadUpstreamDivergence { repo_id })
-        | Effect::LoadWorkspace { repo_id }
-        | Effect::ApplyWorkspaceEdit { repo_id, .. }
-        | Effect::AssignWorkspaceFile { repo_id, .. }
-        | Effect::PushWorkspaceBranch { repo_id, .. }
+        | Effect::LoadVirtualBranches { repo_id }
+        | Effect::ApplyVirtualBranchesEdit { repo_id, .. }
+        | Effect::AssignVirtualBranchesFile { repo_id, .. }
+        | Effect::PushVirtualBranchesBranch { repo_id, .. }
         | Effect::LoadLog { repo_id, .. }
         | Effect::References(ReferenceEffect::LoadTags { repo_id })
         | Effect::References(ReferenceEffect::LoadRemoteTags { repo_id })

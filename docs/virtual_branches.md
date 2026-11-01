@@ -1,12 +1,12 @@
-# The Workspace: virtual branches and stacked branches
+# The VirtualBranches: virtual branches and stacked branches
 
 GitComet has two ways to work. The **Branches** tab is the ordinary Git
-workflow: check out a branch, work, commit. The **Workspace** tab is a
+workflow: check out a branch, work, commit. The **VirtualBranches** tab is a
 GitButler-style alternative, for working on several things at once without
 checking any of them out.
 
-This document explains the model behind the Workspace tab: what a virtual
-branch is, how stacks work, what `gitcomet/workspace` is for, and which
+This document explains the model behind the VirtualBranches tab: what a virtual
+branch is, how stacks work, what `gitcomet/virtual_branches` is for, and which
 operations change which piece of it.
 
 ## Why another workflow
@@ -16,12 +16,12 @@ unrelated features you either switch back and forth — losing your place and
 your build state — or you use separate worktrees, which means separate
 directories to keep straight.
 
-A workspace lets several branches be applied to one working directory at the
+A virtual_branches lets several branches be applied to one working directory at the
 same time. Each file in the working tree belongs to a branch, so you edit all
 of them, and commit each set of changes to the branch it belongs to. Nothing
-is checked out except the workspace itself.
+is checked out except the virtual_branches itself.
 
-The Branches tab is unchanged and remains fully supported. The Workspace is
+The Branches tab is unchanged and remains fully supported. The VirtualBranches is
 for people who prefer this model, not a replacement.
 
 ## Virtual branches
@@ -57,7 +57,7 @@ Every branch has an **applied** or **unapplied** state.
   directory.
 
 Applying and unapplying never involve `git checkout`. Applying merges the
-branch's commits into the workspace branch; unapplying rebuilds the workspace
+branch's commits into the virtual_branches branch; unapplying rebuilds the virtual_branches
 without it.
 
 ```
@@ -93,7 +93,7 @@ feature/e2e → feature/ui
 ```
 
 Stacks are not stored as a separate structure. They are derived from the
-`parent` fields by `WorkspaceState::stacks()`, which means a stack can never
+`parent` fields by `VirtualBranchesState::stacks()`, which means a stack can never
 disagree with the branches that make it up.
 
 ### Above and below
@@ -115,7 +115,7 @@ The *below* case has to rewrite history, because the anchor's commits were built
 on the new branch's commit, not the other way round. That rewrite goes through
 `merge-tree` + `commit-tree` rather than `git rebase`, because `git rebase`
 refuses outright when the working tree has unstaged changes — which in a
-workspace is the normal state, not a mistake. The cost is that the branch's
+virtual_branches is the normal state, not a mistake. The cost is that the branch's
 commits are replayed as one.
 
 ### Independent and stacked are the same thing
@@ -131,7 +131,7 @@ why every structural edit is the same edit — changing one field:
 | Move a branch to another stack | `parent = Some(new_base)` |
 | Reorder within a stack | swap two siblings' `order` |
 
-`WorkspaceState` validates every one of these before it is written, so a move
+`VirtualBranchesState` validates every one of these before it is written, so a move
 that would close a loop is refused with the state left exactly as it was.
 
 Every row in that table replays the branch's commits, **including making a
@@ -142,7 +142,7 @@ anchor has to replay the anchor.
 
 ## The target branch
 
-The workspace has a **target**: the base every independent branch is built on.
+The virtual_branches has a **target**: the base every independent branch is built on.
 `main` or `origin/main` — a revision, not necessarily a local branch.
 
 ```
@@ -153,13 +153,13 @@ origin/main
 ```
 
 Changing the target rebases the independent branches onto the new one and
-rebuilds the workspace. Branches stacked on another virtual branch are not
+rebuilds the virtual_branches. Branches stacked on another virtual branch are not
 rebased at that point; they move when their base does.
 
-## How the workspace reaches the working directory
+## How the virtual_branches reaches the working directory
 
-The workspace branch is not decoration: while the user is inside the Workspace
-view, the working directory *is* `gitcomet/workspace`. Apply, unapply, create,
+The virtual_branches branch is not decoration: while the user is inside the VirtualBranches
+view, the working directory *is* `gitcomet/virtual_branches`. Apply, unapply, create,
 commit and re-target all rebuild that branch and then move the working
 directory onto it, which is what makes a branch's changes actually appear in the
 files.
@@ -168,7 +168,7 @@ Rebuilding the ref is plumbing (`merge-tree` + `commit-tree`) and never touches
 the files. Moving the files onto it is a separate, deliberate step:
 
 ```
-git checkout --no-recurse-submodules gitcomet/workspace   # entering
+git checkout --no-recurse-submodules gitcomet/virtual_branches   # entering
 git read-tree -u -m <old-tip> <new-tip>                  # following a rebuild
 git checkout --no-recurse-submodules <previous-branch>   # leaving
 ```
@@ -186,45 +186,45 @@ The sync runs *before* the ref is moved, so a refusal leaves the index, the
 working tree and the ref all exactly as they were. There is no state in which
 they disagree.
 
-A rebuild only touches the working directory when the workspace is actually
-checked out; a workspace the user has not entered never changes their files.
+A rebuild only touches the working directory when the virtual_branches is actually
+checked out; a virtual_branches the user has not entered never changes their files.
 
 ### Where the switch is driven from
 
-Opening the Workspace tab enters; switching to any other tab leaves. Both go
+Opening the VirtualBranches tab enters; switching to any other tab leaves. Both go
 through `set_sidebar_mode`, which is the only place that knows the mode
-changed. Entering is deferred behind `LoadWorkspace` when the workspace has
-never been read: a checkout cannot run before the state says a workspace
+changed. Entering is deferred behind `LoadVirtualBranches` when the virtual_branches has
+never been read: a checkout cannot run before the state says a virtual_branches
 exists, and a rejected one would leave the user on a tab describing branches
 they are not actually on.
 
-`WorkspaceRepoState` holds the two pieces of session state this needs:
+`VirtualBranchesRepoState` holds the two pieces of session state this needs:
 
 | Field | Meaning |
 | --- | --- |
-| `active` | the working directory is on `gitcomet/workspace` |
+| `active` | the working directory is on `gitcomet/virtual_branches` |
 | `checkout_base` | the branch to go back to, captured on entry |
 
 Leaving is triggered by switching **tab** *or* by switching **repository**. The
 second one matters because the checkout belongs to the repository while the tab
 belongs to the window: walking away from a repository tab while the sidebar
-stays on Workspace would otherwise strand that repository on
-`gitcomet/workspace`, and the next time it was picked up the user would be
+stays on VirtualBranches would otherwise strand that repository on
+`gitcomet/virtual_branches`, and the next time it was picked up the user would be
 looking at another repository's branches.
 
-Neither survives a reload as a *decision* — `workspace_loaded` infers `active`
-from whether `HEAD` is the workspace branch, because that is the only true
+Neither survives a reload as a *decision* — `virtual_branches_loaded` infers `active`
+from whether `HEAD` is the virtual_branches branch, because that is the only true
 answer after a restart — and a refused switch leaves both untouched, since git
 never moved `HEAD` and claiming otherwise would make the next leave try to undo
 a switch that never happened.
 
-## The workspace branch
+## The virtual_branches branch
 
-GitComet keeps a branch called `gitcomet/workspace` that holds the combined
+GitComet keeps a branch called `gitcomet/virtual_branches` that holds the combined
 tree of every applied branch:
 
 ```
-gitcomet/workspace
+gitcomet/virtual_branches
 │  merge of applied branches
 ├── feature/api
 ├── feature/ui
@@ -244,12 +244,12 @@ replays the same sequence of merges from the target, so the branch can always
 be reconstructed, and unapplying one later is a replay rather than an edit of
 history that may already have been pushed.
 
-Each merge gets its own commit, so the workspace history shows which branch
+Each merge gets its own commit, so the virtual_branches history shows which branch
 contributed what.
 
 ## Assigning changes to branches
 
-The point of the workspace is that unrelated changes can coexist in one
+The point of the virtual_branches is that unrelated changes can coexist in one
 working directory and still belong to different branches.
 
 ```
@@ -269,7 +269,7 @@ saved it and nothing changed.
 
 That is also why an assignment is **not** dropped merely because Git does not
 currently report its path as changed. Assignments naming a branch that has been
-removed from the workspace *are* dropped, when the workspace loads: otherwise
+removed from the virtual_branches *are* dropped, when the virtual_branches loads: otherwise
 re-creating a branch with a name the user had used before would silently hand
 it every file it was ever given, with no action from the user and nothing on
 screen to show.
@@ -280,7 +280,7 @@ several branches. See below.
 ## Assigning hunks
 
 A file that goes to more than one branch is *split*. In the diff view, right
-click a hunk and choose **Assign to a branch…**; in the Workspace tab the file
+click a hunk and choose **Assign to a branch…**; in the VirtualBranches tab the file
 row then reads `feature/api + feature/ui` instead of a single branch.
 
 The hard part is not recording the assignment but *finding the hunk again* at
@@ -324,26 +324,26 @@ a branch that exists, and disappears when none does.
 ## Committing
 
 Committing a branch collects the files assigned to it and commits them against
-**that branch's own base**, not against the workspace. The commit therefore
+**that branch's own base**, not against the virtual_branches. The commit therefore
 contains only the work assigned to that branch.
 
 The commit is built with a temporary index, so your real index and working
 tree are untouched — you can have unrelated staged and unstaged changes in the
 same directory and still commit one branch cleanly.
 
-After a commit the workspace is rebuilt, since the branch moved.
+After a commit the virtual_branches is rebuilt, since the branch moved.
 
 ## Conflicts
 
 Two applied branches that changed the same lines cannot both be applied. The
-Workspace reports this in terms of the branches involved rather than as a bare
+VirtualBranches reports this in terms of the branches involved rather than as a bare
 checkout or rebase conflict:
 
 ```
 ⚠ feature/ui conflicts with feature/api
 ```
 
-Applying a conflicting branch leaves the workspace branch unchanged and records
+Applying a conflicting branch leaves the virtual_branches branch unchanged and records
 the conflict on the branch that caused it. Unapplying one of the two, or
 resolving the conflict, clears it.
 
@@ -371,12 +371,12 @@ Everything the model needs lives in `.git/gitcomet/`:
 
 | File | Contents |
 | --- | --- |
-| `workspace.json` | target branch and every virtual branch |
+| `virtual_branches.json` | target branch and every virtual branch |
 | `assignments.json` | which branch each changed file — or each of its hunks — belongs to |
 
-Both are written atomically and are ignored if unreadable: a workspace file
-written by a newer or hand-edited version makes the Workspace tab show an
-empty workspace the user can rebuild, rather than making the repository
+Both are written atomically and are ignored if unreadable: a virtual_branches file
+written by a newer or hand-edited version makes the VirtualBranches tab show an
+empty virtual_branches the user can rebuild, rather than making the repository
 unusable.
 
 ## Pushing
@@ -385,37 +385,37 @@ Virtual branches are ordinary branches, so pushing needs no special server
 support. `refs/heads/feature/api` is pushed as `feature/api`.
 
 `GitRepository::push_virtual_branch` pushes the *named ref* rather than `HEAD`.
-That is the one thing a workspace has to be explicit about: the user is
+That is the one thing a virtual_branches has to be explicit about: the user is
 usually sitting on an unrelated branch, and `git push` with no arguments would
 publish that one instead of the branch whose Push button they clicked. The
 backend picks the remote the same way the ordinary push path does and sets
 the upstream on the branch it pushed.
 
 The converse is a refusal. The ordinary push also applies to `HEAD`, and
-entering the workspace is what puts `HEAD` on `gitcomet/workspace` — so while
-the working directory is inside the workspace, the ordinary **Push** would
-create `gitcomet/workspace` on the user's remote, visible in their fork and in
+entering the virtual_branches is what puts `HEAD` on `gitcomet/virtual_branches` — so while
+the working directory is inside the virtual_branches, the ordinary **Push** would
+create `gitcomet/virtual_branches` on the user's remote, visible in their fork and in
 every pull request's branch picker, and set it as an upstream so it followed
 them to every later branch switch. It is refused, with a message pointing at
-the Workspace tab, whose push names the ref and so is unaffected.
+the VirtualBranches tab, whose push names the ref and so is unaffected.
 
-What a workspace adds is the *base*: a stacked branch's pull request targets
-the branch below it, not the target. `WorkspaceState::base_branch` computes
+What a virtual_branches adds is the *base*: a stacked branch's pull request targets
+the branch below it, not the target. `VirtualBranchesState::base_branch` computes
 that base, and `virtual_branch_push_target` exposes it so the UI can say what
 a push will do before it does it.
 
 The data model keeps each branch's base explicit, which is what stacked pull
 requests will need later; the multi-PR workflow itself is not implemented yet.
 
-## What the Workspace tab can do today
+## What the VirtualBranches tab can do today
 
 Per branch: apply/unapply, push, a `⋯` menu (new branch above it, new branch
 below it, change its base, move it into another stack, commit every file
-assigned to it, remove it from the workspace), and `↑`/`↓` to reorder it inside
+assigned to it, remove it from the virtual_branches), and `↑`/`↓` to reorder it inside
 its stack — the arrows are disabled at the ends of a stack rather than offered
 and refused.
 
-Per workspace: `New branch` on the summary line, and `Change` on the target row
+Per virtual_branches: `New branch` on the summary line, and `Change` on the target row
 to rebase everything onto a different branch.
 
 Per file: `Assign` (or `Change`, when it already has a branch) to say which
@@ -449,12 +449,12 @@ branch — a real answer to a real question, and one that clears the split.
 
 A conflict from a failed apply is shown above the stacks and can be dismissed.
 
-Every `WorkspaceEdit` variant is now reachable from the view, through a single
-popover, `PopoverKind::WorkspacePrompt`, with one `WorkspacePromptKind` per
+Every `VirtualBranchesEdit` variant is now reachable from the view, through a single
+popover, `PopoverKind::VirtualBranchesPrompt`, with one `VirtualBranchesPromptKind` per
 distinct thing the dialog can be asked for:
 
 - the body is the same for all of them, so they share one variant rather than
-  one each — what differs is the label on the field and which `WorkspaceEdit`
+  one each — what differs is the label on the field and which `VirtualBranchesEdit`
   confirming builds;
 - opened from a branch row it shows that branch's actions first, because
   stacking, re-parenting, joining a stack and removing are the same four
@@ -467,32 +467,32 @@ distinct thing the dialog can be asked for:
   than accepted and failed later on a background thread with a rebase error;
   a name that is already taken is suffixed rather than passed to Git;
 - the mapping from `(kind, branch, path, text)` to an edit is a free function
-  over predicates (`in_workspace`, `free_name`, `is_git_branch`,
+  over predicates (`in_virtual_branches`, `free_name`, `is_git_branch`,
   `assignment_of`, `paths_for`), so every rule above is unit-tested without
   standing up a popover host.
 
 Not exposed anywhere: dragging a file onto a branch as a way to assign it — the
 row's `Assign` button, or the diff view's hunk menu, is the only assignment
-gesture. Everything else in `WorkspaceEdit` has a control.
+gesture. Everything else in `VirtualBranchesEdit` has a control.
 
 ## Acceptance criteria for #539
 
 | # | Criterion | State |
 | --- | --- | --- |
-| 1 | Workspace view | done — third sidebar tab, existing tabs untouched |
+| 1 | VirtualBranches view | done — third sidebar tab, existing tabs untouched |
 | 2 | Existing branch workflow kept | done |
 | 3 | Multiple virtual branches in one directory | done — the tab owns the working directory |
 | 4 | Apply / unapply | done — rebuild moves the files |
 | 5 | Independent virtual branches | done |
 | 6 | Stacked / dependent branches | done |
-| 7 | Create branches above/below existing ones | done — `WorkspaceEdit::InsertRelativeTo`, two distinct edits |
+| 7 | Create branches above/below existing ones | done — `VirtualBranchesEdit::InsertRelativeTo`, two distinct edits |
 | 8 | Move branches between stacks | done — `MoveToStack` |
 | 9 | Reorder within a stack | done — `Reorder` plus `↑`/`↓` |
 | 10 | Assign files to virtual branches | done |
 | 11 | Assign individual hunks | done — `HunkFingerprint`, diff hunk menu |
-| 12 | Maintain `gitcomet/workspace` | done |
-| 13 | Auto-update when the applied set changes | done — and moves the working directory when the workspace is checked out |
-| 14 | Prevent direct commits to `gitcomet/workspace` | done — hidden from every branch list, and `commit`/`commit --amend`/`push` refuse while HEAD is on it |
+| 12 | Maintain `gitcomet/virtual_branches` | done |
+| 13 | Auto-update when the applied set changes | done — and moves the working directory when the virtual_branches is checked out |
+| 14 | Prevent direct commits to `gitcomet/virtual_branches` | done — hidden from every branch list, and `commit`/`commit --amend`/`push` refuse while HEAD is on it |
 | 15 | Configurable target branch | done |
 | 16 | Rebase when the target changes | done |
 | 17 | Expose conflicts between branches | done — both branch names and the file, from git's stdout |
@@ -515,25 +515,25 @@ they are the user's work.
 not cover those paths, and this is not a hypothetical: `commit`,
 `commit --amend`, `cherry-pick`, `revert`, `reset`, `squash`, `rebase`, `merge`,
 `pull`, the ordinary `push` and both force pushes all apply to whatever **HEAD**
-is — not to a branch the user picked from a list — and the Workspace tab is
-exactly what puts HEAD on `gitcomet/workspace`. So while the working directory is
-inside the workspace, all twelve refuse and say to use the Workspace tab instead,
+is — not to a branch the user picked from a list — and the VirtualBranches tab is
+exactly what puts HEAD on `gitcomet/virtual_branches`. So while the working directory is
+inside the virtual_branches, all twelve refuse and say to use the VirtualBranches tab instead,
 which is the edit the user meant anyway. Without this, a commit would be silently
 discarded by the next rebuild after the log had shown it to the user as their own
 work, and a push would publish GitComet's bookkeeping branch to their remote.
 
-The shared guard is `GixRepo::refuse_workspace_head_action`, so the twelve cannot
+The shared guard is `GixRepo::refuse_virtual_branches_head_action`, so the twelve cannot
 drift apart in what they refuse, and each one has a test. The two force pushes
 are here rather than with the rest because each is its own entry point with its
 own command: `push_force` and `push_force_with_lease` would otherwise have
 published HEAD with `--force-with-lease`, overwriting the remote's copy of the
-workspace branch instead of adding to it. **The `--continue` paths of an in-flight
+virtual_branches branch instead of adding to it. **The `--continue` paths of an in-flight
 `cherry-pick` or `revert` are deliberately exempt**: the guard runs after them,
 because refusing to finish an operation git has already started would strand the
-user in it. (In practice this cannot arise — entering the workspace is refused
+user in it. (In practice this cannot arise — entering the virtual_branches is refused
 while the working tree has a conflict to overwrite.)
 
-`pull` deserves a note: while inside the workspace it is refused rather than
+`pull` deserves a note: while inside the virtual_branches it is refused rather than
 redirected, because moving the base forward is `SetTarget`, which already exists
 and means exactly that.
 
@@ -554,7 +554,7 @@ The three things that were missing:
   temporary index. The working tree and the user's real index are never
   involved.
 - **A control in the diff view.** The hunk context menu now offers *Assign to a
-  branch…*, which opens the same `WorkspacePrompt` the sidebar uses.
+  branch…*, which opens the same `VirtualBranchesPrompt` the sidebar uses.
 
 A file split across branches is reported as `api + ui` rather than as
 unassigned: it has no single branch, but it is assigned, and saying otherwise
@@ -564,22 +564,22 @@ would send the user looking for a file two branches are already committing.
 
 | Piece | Location |
 | --- | --- |
-| Model, validation, stacks | `crates/gitcomet-core/src/workspace.rs` |
-| Service contract | `crates/gitcomet-core/src/services.rs` (workspace section) |
-| Git plumbing | `crates/gitcomet-git-gix/src/repo/workspace.rs` |
-| Per-repository state | `crates/gitcomet-state/src/model/workspace.rs` |
-| Edit dialog | `crates/gitcomet-ui-gpui/src/view/panels/popover/workspace_prompt.rs` |
-| Dialog behaviour | `crates/gitcomet-ui-gpui/src/view/panels/popover/host/workspace_prompts.rs` |
-| Messages and effects | `crates/gitcomet-state/src/store/effects/workspace_effects.rs` |
-| Reducers | `crates/gitcomet-state/src/store/reducer/workspace.rs` |
-| The view | `crates/gitcomet-ui-gpui/src/view/panes/sidebar/workspace.rs` |
+| Model, validation, stacks | `crates/gitcomet-core/src/virtual_branches.rs` |
+| Service contract | `crates/gitcomet-core/src/services.rs` (virtual_branches section) |
+| Git plumbing | `crates/gitcomet-git-gix/src/repo/virtual_branches.rs` |
+| Per-repository state | `crates/gitcomet-state/src/model/virtual_branches.rs` |
+| Edit dialog | `crates/gitcomet-ui-gpui/src/view/panels/popover/virtual_branches_prompt.rs` |
+| Dialog behaviour | `crates/gitcomet-ui-gpui/src/view/panels/popover/host/virtual_branches_prompts.rs` |
+| Messages and effects | `crates/gitcomet-state/src/store/effects/virtual_branches_effects.rs` |
+| Reducers | `crates/gitcomet-state/src/store/reducer/virtual_branches.rs` |
+| The view | `crates/gitcomet-ui-gpui/src/view/panes/sidebar/virtual_branches.rs` |
 | Hunk fingerprints from a rendered diff | `crates/gitcomet-ui-gpui/src/view/diff_utils.rs` |
 | Hunk menu entry | `crates/gitcomet-ui-gpui/src/view/panels/popover/context_menu/diff_hunk.rs` |
 
 ## Naming
 
-GitComet already had a use for the word "workspace" — a saved window grouping
-several repositories, in `session::workspaces`. The two are unrelated: that one
+GitComet already had a use for the word "virtual branches" — a saved window grouping
+several repositories, in `session::virtual_branches`. The two are unrelated: that one
 groups repository *tabs* in a window, this one groups *branches* in a
-repository's working tree. The types are named apart (`WorkspaceRepoState`
-versus `session::Workspace`) to keep them from being confused.
+repository's working tree. The types are named apart (`VirtualBranchesRepoState`
+versus `session::VirtualBranches`) to keep them from being confused.

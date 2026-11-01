@@ -261,7 +261,7 @@ fn repo_for_popover<'a>(
         | PopoverKind::MergeCommitConfirm { repo_id, .. }
         | PopoverKind::MergeAbortConfirm { repo_id }
         | PopoverKind::BranchExistsPrompt { repo_id, .. }
-        | PopoverKind::LeaveWorkspaceToCheckoutPrompt { repo_id, .. }
+        | PopoverKind::LeaveVirtualBranchesToCheckoutPrompt { repo_id, .. }
         | PopoverKind::ForceDeleteBranchConfirm(gitcomet_state::model::ForceDeleteBranchPrompt {
             repo_id,
             ..
@@ -304,7 +304,7 @@ fn repo_for_popover<'a>(
         | PopoverKind::CommitShaLinkMenu { repo_id, .. }
         | PopoverKind::LocalFileLinkMenu { repo_id, .. }
         | PopoverKind::ReflogEntryMenu { repo_id, .. }
-        | PopoverKind::WorkspacePrompt { repo_id, .. }
+        | PopoverKind::VirtualBranchesPrompt { repo_id, .. }
         | PopoverKind::FileHistoryCommitMenu { repo_id, .. }
         | PopoverKind::HookActivity { repo_id, .. } => Some(*repo_id),
         PopoverKind::DiffEditorMenu { repo_id, .. } => *repo_id,
@@ -329,7 +329,7 @@ fn hash_repo_for_popover<H: Hasher>(
         | PopoverKind::UpstreamPicker { .. }
         | PopoverKind::CreateBranchFromRefPrompt { .. }
         | PopoverKind::RenameBranchPrompt { .. }
-        | PopoverKind::WorkspacePrompt { .. }
+        | PopoverKind::VirtualBranchesPrompt { .. }
         | PopoverKind::BranchMenu { .. }
         | PopoverKind::BranchSectionMenu { .. }
         // The group menu's branch count and the pinned menu's "Unpin all (N)"
@@ -392,14 +392,14 @@ fn hash_repo_for_popover<H: Hasher>(
             repo.head_branch_rev.hash(hasher);
         }
 
-        // The whole dialog is the claim that the workspace holds the working
-        // directory. If that stops being true while it is up — the workspace
+        // The whole dialog is the claim that the virtual branches holds the working
+        // directory. If that stops being true while it is up — the virtual branches
         // was left from somewhere else, or a switch is under way — it has to
         // repaint rather than go on offering to leave.
-        PopoverKind::LeaveWorkspaceToCheckoutPrompt { .. } => {
-            repo.workspace.active.hash(hasher);
-            repo.workspace.busy.switching.hash(hasher);
-            repo.workspace.rev.hash(hasher);
+        PopoverKind::LeaveVirtualBranchesToCheckoutPrompt { .. } => {
+            repo.virtual_branches.active.hash(hasher);
+            repo.virtual_branches.busy.switching.hash(hasher);
+            repo.virtual_branches.rev.hash(hasher);
         }
 
         PopoverKind::Repo {
@@ -685,7 +685,7 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
     // The variant comes first, so no two kinds share a hash domain.
     std::mem::discriminant(kind).hash(hasher);
     match kind {
-        PopoverKind::LeaveWorkspaceToCheckoutPrompt { repo_id, target } => {
+        PopoverKind::LeaveVirtualBranchesToCheckoutPrompt { repo_id, target } => {
             124u8.hash(hasher);
             repo_id.hash(hasher);
             // The dialog shows the target's label; the checkout it dispatches
@@ -725,7 +725,7 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
             name.hash(hasher);
             is_current_branch.hash(hasher);
         }
-        PopoverKind::WorkspacePrompt { repo_id, prompt } => {
+        PopoverKind::VirtualBranchesPrompt { repo_id, prompt } => {
             123u8.hash(hasher);
             repo_id.hash(hasher);
             prompt.kind.hash(hasher);

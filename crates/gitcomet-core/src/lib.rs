@@ -42,7 +42,7 @@ pub mod text_format;
 pub mod text_search;
 pub mod text_utils;
 pub mod url_encoding;
-pub mod workspace;
+pub mod virtual_branches;
 pub mod word_diff;
 
 #[cfg(any(test, feature = "test-support"))]

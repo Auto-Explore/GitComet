@@ -86,12 +86,12 @@ mod submodules;
 mod tags;
 mod text_attributes;
 mod text_decode;
-pub(crate) mod workspace;
+pub(crate) mod virtual_branches;
 mod worktrees;
 
 /// Re-exported so the loose-ref reader can filter GitComet's own branches
-/// without depending on a `repo::workspace` path.
-pub(crate) use workspace::is_workspace_branch as is_workspace_branch_name;
+/// without depending on a `repo::virtual branches` path.
+pub(crate) use virtual_branches::is_virtual_branches_branch as is_virtual_branches_branch_name;
 
 #[derive(Clone, Debug, Default, Eq, Hash, PartialEq)]
 struct RepoFileStamp {
@@ -2089,21 +2089,21 @@ impl GitRepository for GixRepo {
         self.discard_worktree_changes_impl(paths)
     }
 
-    fn read_workspace(&self) -> Result<gitcomet_core::workspace::WorkspaceState> {
-        self.read_workspace_impl()
+    fn read_virtual_branches(&self) -> Result<gitcomet_core::virtual_branches::VirtualBranchesState> {
+        self.read_virtual_branches_impl()
     }
 
-    fn write_workspace(&self, state: &gitcomet_core::workspace::WorkspaceState) -> Result<()> {
-        self.write_workspace_impl(state)
+    fn write_virtual_branches(&self, state: &gitcomet_core::virtual_branches::VirtualBranchesState) -> Result<()> {
+        self.write_virtual_branches_impl(state)
     }
 
-    fn read_workspace_assignments(&self) -> Result<gitcomet_core::workspace::AssignmentIndex> {
+    fn read_virtual_branches_assignments(&self) -> Result<gitcomet_core::virtual_branches::AssignmentIndex> {
         self.read_assignments_impl()
     }
 
-    fn write_workspace_assignments(
+    fn write_virtual_branches_assignments(
         &self,
-        index: &gitcomet_core::workspace::AssignmentIndex,
+        index: &gitcomet_core::virtual_branches::AssignmentIndex,
     ) -> Result<()> {
         self.write_assignments_impl(index)
     }
@@ -2116,20 +2116,20 @@ impl GitRepository for GixRepo {
         self.rebase_virtual_branch_impl(name, onto)
     }
 
-    fn enter_workspace(&self) -> Result<CommitId> {
-        self.enter_workspace_impl()
+    fn enter_virtual_branches(&self) -> Result<CommitId> {
+        self.enter_virtual_branches_impl()
     }
 
-    fn leave_workspace(&self, onto: &str) -> Result<()> {
-        self.leave_workspace_impl(onto)
+    fn leave_virtual_branches(&self, onto: &str) -> Result<()> {
+        self.leave_virtual_branches_impl(onto)
     }
 
-    fn update_workspace_branch(&self, applied: &[&str]) -> Result<CommitId> {
-        self.update_workspace_branch_impl(applied)
+    fn update_virtual_branches_branch(&self, applied: &[&str]) -> Result<CommitId> {
+        self.update_virtual_branches_branch_impl(applied)
     }
 
-    fn update_workspace_target(&self, target: &str) -> Result<()> {
-        self.update_workspace_target_impl(target)
+    fn update_virtual_branches_target(&self, target: &str) -> Result<()> {
+        self.update_virtual_branches_target_impl(target)
     }
 
     fn commit_paths_to_virtual_branch(
@@ -2144,9 +2144,9 @@ impl GitRepository for GixRepo {
     fn virtual_branch_push_target(
         &self,
         name: &str,
-        workspace: &gitcomet_core::workspace::WorkspaceState,
+        virtual_branches: &gitcomet_core::virtual_branches::VirtualBranchesState,
     ) -> Option<String> {
-        self.virtual_branch_push_target_impl(name, workspace)
+        self.virtual_branch_push_target_impl(name, virtual_branches)
     }
 
     fn push_virtual_branch(&self, name: &str) -> Result<CommandOutput> {

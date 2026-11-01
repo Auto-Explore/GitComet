@@ -1133,7 +1133,7 @@ impl GitRepository for RecordingCheckoutRepo {
             .push(format!("checkout {name}"));
         Ok(())
     }
-    fn leave_workspace(&self, onto: &str) -> Result<()> {
+    fn leave_virtual_branches(&self, onto: &str) -> Result<()> {
         self.calls
             .lock()
             .expect("checkout recording mutex")
@@ -1324,6 +1324,6 @@ mod load_scheduling;
 mod prepared_patch;
 mod repository_operations;
 mod retries_errors;
-mod workspace_edits;
-mod workspace_switch;
+mod virtual_branches_edits;
+mod virtual_branches_switch;
 mod reword;

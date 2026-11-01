@@ -49,55 +49,55 @@ pub enum Effect {
     HistoryAuthors(crate::history_authors::HistoryAuthorsEffect),
     HistoryFind(crate::history_find::HistoryFindEffect),
 
-    /// Read a repository's workspace, assignments, and workspace-branch tip.
-    LoadWorkspace {
+    /// Read a repository's virtual branches, assignments, and virtual branches-branch tip.
+    LoadVirtualBranches {
         repo_id: RepoId,
     },
-    /// Realize one workspace edit: the state write plus whatever branch
-    /// creation, restacking, or workspace rebuild the edit needs.
-    ApplyWorkspaceEdit {
+    /// Realize one virtual branches edit: the state write plus whatever branch
+    /// creation, restacking, or virtual branches rebuild the edit needs.
+    ApplyVirtualBranchesEdit {
         repo_id: RepoId,
-        edit: crate::model::WorkspaceEdit,
+        edit: crate::model::VirtualBranchesEdit,
     },
     /// Persist one file's branch assignment, or one hunk's.
     ///
     /// One effect for both because they write the same file through the same
     /// index; `hunk` is what distinguishes them.
-    AssignWorkspaceFile {
+    AssignVirtualBranchesFile {
         repo_id: RepoId,
         path: PathBuf,
-        hunk: Option<gitcomet_core::workspace::HunkFingerprint>,
+        hunk: Option<gitcomet_core::virtual_branches::HunkFingerprint>,
         branch: Option<String>,
     },
-    /// Put the working directory on the workspace branch.
-    EnterWorkspace {
+    /// Put the working directory on the virtual-branches branch.
+    EnterVirtualBranches {
         repo_id: RepoId,
         /// The branch to remember so leaving has somewhere to go back to.
         checkout_base: Option<String>,
     },
-    /// Take the working directory back off the workspace branch.
-    LeaveWorkspace {
+    /// Take the working directory back off the virtual-branches branch.
+    LeaveVirtualBranches {
         repo_id: RepoId,
         checkout_base: Option<String>,
     },
-    /// Take the working directory off the workspace branch and then run the
+    /// Take the working directory off the virtual-branches branch and then run the
     /// checkout that had to wait for it.
     ///
-    /// A checkout asked for while the workspace holds the working directory is
-    /// two moves: leave first, then check out on a directory the workspace no
+    /// A checkout asked for while the virtual branches holds the working directory is
+    /// two moves: leave first, then check out on a directory the virtual branches no
     /// longer owns. Keeping them in one effect is what stops a failed leave
     /// from running the second half anyway — or from leaving the user on a
-    /// branch neither the workspace nor the request wanted.
-    LeaveWorkspaceAndCheckout {
+    /// branch neither the virtual branches nor the request wanted.
+    LeaveVirtualBranchesAndCheckout {
         repo_id: RepoId,
         /// Where the leave puts the working directory: the branch or commit
         /// the user asked for when it already exists, `None` to fall back to
-        /// the branch the workspace remembers.
+        /// the branch the virtual branches remembers.
         checkout_base: Option<String>,
         then: CheckoutRequest,
     },
     /// Push a virtual branch, setting upstream on first push.
-    PushWorkspaceBranch {
+    PushVirtualBranchesBranch {
         repo_id: RepoId,
         name: String,
     },
@@ -527,21 +527,21 @@ impl Effect {
             | Self::ApplyStash { .. }
             | Self::PopStash { .. }
             | Self::DropStash { .. }
-            | Self::LoadWorkspace { .. }
-            | Self::ApplyWorkspaceEdit { .. }
-            | Self::AssignWorkspaceFile { .. }
-            | Self::EnterWorkspace { .. }
-            | Self::LeaveWorkspace { .. }
-            | Self::LeaveWorkspaceAndCheckout { .. }
-            | Self::PushWorkspaceBranch { .. } => true,
+            | Self::LoadVirtualBranches { .. }
+            | Self::ApplyVirtualBranchesEdit { .. }
+            | Self::AssignVirtualBranchesFile { .. }
+            | Self::EnterVirtualBranches { .. }
+            | Self::LeaveVirtualBranches { .. }
+            | Self::LeaveVirtualBranchesAndCheckout { .. }
+            | Self::PushVirtualBranchesBranch { .. } => true,
         }
     }
 }
 
-/// What to check out once the working directory is off the workspace branch.
+/// What to check out once the working directory is off the virtual-branches branch.
 ///
 /// The three checkouts the user can ask for from the views that sit over the
-/// workspace, carried through the leave so the request survives it.
+/// virtual branches, carried through the leave so the request survives it.
 #[derive(Clone, Debug)]
 pub enum CheckoutRequest {
     Branch {

@@ -1,16 +1,16 @@
-//! Switching the working directory into and out of the workspace.
+//! Switching the working directory into and out of the virtual branches.
 //!
 //! The repository here is `UnconfiguredRepository`, which answers every call
 //! with "unsupported". That is enough on purpose: what these tests pin is the
 //! *plumbing* — that the effect reaches the repository, and that whatever
-//! happens comes back as a `WorkspaceActiveFinished` message rather than being
+//! happens comes back as a `VirtualBranchesActiveFinished` message rather than being
 //! dropped on the worker thread where nobody would ever hear about it.
 //!
-//! Asserting *which* branch `leave_workspace` was called with would need a
+//! Asserting *which* branch `leave_virtual_branches` was called with would need a
 //! recording double, and building one here would mean spelling out all 26 of
 //! `GitRepository`'s required methods again — Rust has no inheritance, so a
 //! double that cares about three calls still has to implement the other 23.
-//! `workspace_edits` already carries such a double; duplicating it to assert
+//! `virtual_branches_edits` already carries such a double; duplicating it to assert
 //! one more field would cost more than the assertion is worth.
 
 use super::*;
@@ -57,7 +57,7 @@ fn run_against_unconfigured(
 fn is_switch(msg: &Msg, active: bool) -> bool {
     matches!(
         msg,
-        Msg::Internal(crate::msg::InternalMsg::WorkspaceActiveFinished {
+        Msg::Internal(crate::msg::InternalMsg::VirtualBranchesActiveFinished {
             repo_id: RepoId(7),
             active: reported,
             result: Err(_),
@@ -67,11 +67,11 @@ fn is_switch(msg: &Msg, active: bool) -> bool {
 }
 
 #[test]
-fn entering_the_workspace_reports_its_outcome_instead_of_dropping_it() {
+fn entering_the_virtual_branches_reports_its_outcome_instead_of_dropping_it() {
     // A switch that fails must still arrive: the reducer needs it to clear the
     // busy flag, and the view needs it to stop claiming the working directory
     // moved when it did not.
-    let msg = run_against_unconfigured(Effect::EnterWorkspace {
+    let msg = run_against_unconfigured(Effect::EnterVirtualBranches {
         repo_id: RepoId(7),
         checkout_base: Some("main".into()),
     })
@@ -83,8 +83,8 @@ fn entering_the_workspace_reports_its_outcome_instead_of_dropping_it() {
 }
 
 #[test]
-fn entering_the_workspace_carries_the_branch_to_go_back_to() {
-    let msg = run_against_unconfigured(Effect::EnterWorkspace {
+fn entering_the_virtual_branches_carries_the_branch_to_go_back_to() {
+    let msg = run_against_unconfigured(Effect::EnterVirtualBranches {
         repo_id: RepoId(7),
         checkout_base: Some("release/2.3".into()),
     })
@@ -92,7 +92,7 @@ fn entering_the_workspace_carries_the_branch_to_go_back_to() {
     assert!(
         matches!(
             msg,
-            Msg::Internal(crate::msg::InternalMsg::WorkspaceActiveFinished {
+            Msg::Internal(crate::msg::InternalMsg::VirtualBranchesActiveFinished {
                 checkout_base: Some(ref base),
                 ..
             }) if base == "release/2.3"
@@ -102,8 +102,8 @@ fn entering_the_workspace_carries_the_branch_to_go_back_to() {
 }
 
 #[test]
-fn leaving_the_workspace_reports_its_outcome() {
-    let msg = run_against_unconfigured(Effect::LeaveWorkspace {
+fn leaving_the_virtual_branches_reports_its_outcome() {
+    let msg = run_against_unconfigured(Effect::LeaveVirtualBranches {
         repo_id: RepoId(7),
         checkout_base: Some("main".into()),
     })
@@ -115,18 +115,18 @@ fn leaving_the_workspace_reports_its_outcome() {
 }
 
 #[test]
-fn leaving_with_nothing_remembered_falls_back_to_reading_the_workspace() {
-    // With no branch remembered, the effect reads the workspace for its
+fn leaving_with_nothing_remembered_falls_back_to_reading_the_virtual_branches() {
+    // With no branch remembered, the effect reads the virtual branches for its
     // target. That read failing used to be the `?` that could not compile in a
     // closure returning `()`; now it has to come back as a reported failure.
-    let msg = run_against_unconfigured(Effect::LeaveWorkspace {
+    let msg = run_against_unconfigured(Effect::LeaveVirtualBranches {
         repo_id: RepoId(7),
         checkout_base: None,
     })
     .expect("no message came back");
     assert!(
         is_switch(&msg, false),
-        "an unreadable workspace is a failure to report, not one to swallow, got {msg:?}"
+        "an unreadable virtual branches is a failure to report, not one to swallow, got {msg:?}"
     );
 }
 
@@ -146,7 +146,7 @@ fn a_switch_for_a_repository_that_is_gone_still_answers() {
         &backend,
         &mut repos,
         msg_tx,
-        Effect::EnterWorkspace {
+        Effect::EnterVirtualBranches {
             repo_id: RepoId(404),
             checkout_base: Some("main".into()),
         },
@@ -157,7 +157,7 @@ fn a_switch_for_a_repository_that_is_gone_still_answers() {
     assert!(
         matches!(
             msg,
-            Msg::Internal(crate::msg::InternalMsg::WorkspaceActiveFinished {
+            Msg::Internal(crate::msg::InternalMsg::VirtualBranchesActiveFinished {
                 repo_id: RepoId(404),
                 result: Err(_),
                 ..
@@ -171,9 +171,9 @@ fn a_switch_for_a_repository_that_is_gone_still_answers() {
 fn a_leave_that_carries_a_checkout_drops_the_checkout_when_the_leave_fails() {
     // The leave fails here — the repository answers "unsupported" — and the
     // checkout that asked for it goes with it. Running it against a working
-    // directory the workspace still holds is exactly the stranding the leave
+    // directory the virtual branches still holds is exactly the stranding the leave
     // exists to prevent, so the second message must never arrive.
-    let replies = replies_to_unconfigured(Effect::LeaveWorkspaceAndCheckout {
+    let replies = replies_to_unconfigured(Effect::LeaveVirtualBranchesAndCheckout {
         repo_id: RepoId(7),
         checkout_base: Some("main".into()),
         then: crate::msg::CheckoutRequest::Branch {
@@ -219,7 +219,7 @@ fn a_successful_leave_runs_the_checkout_that_waited_for_it() {
         &backend,
         &mut repos,
         msg_tx,
-        Effect::LeaveWorkspaceAndCheckout {
+        Effect::LeaveVirtualBranchesAndCheckout {
             repo_id,
             checkout_base: Some("main".into()),
             then: crate::msg::CheckoutRequest::Branch {
@@ -234,7 +234,7 @@ fn a_successful_leave_runs_the_checkout_that_waited_for_it() {
     assert!(
         matches!(
             left,
-            Msg::Internal(crate::msg::InternalMsg::WorkspaceActiveFinished {
+            Msg::Internal(crate::msg::InternalMsg::VirtualBranchesActiveFinished {
                 repo_id: RepoId(7),
                 active: false,
                 result: Ok(()),

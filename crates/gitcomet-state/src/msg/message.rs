@@ -2,7 +2,7 @@ use crate::model::GitLogTagFetchMode;
 use crate::model::{
     BranchExistsPromptState, ConflictFileLoadMode, DefaultTagType, FileBrowserSettings,
     ForceDeleteBranchPrompt, ForceRemoveWorktreePrompt, GitOperationOuterOutcome,
-    MaintenanceSettings, RemoteSettings, RepoId, SidebarDataRequest, SidebarMode, WorkspaceEdit,
+    MaintenanceSettings, RemoteSettings, RepoId, SidebarDataRequest, SidebarMode, VirtualBranchesEdit,
 };
 use gitcomet_core::auth::StagedGitAuth;
 use gitcomet_core::conflict_session::ConflictSession;
@@ -1408,41 +1408,41 @@ pub enum Msg {
         repo_id: RepoId,
         index: usize,
     },
-    // ── Workspace ───────────────────────────────────────────────
+    // ── Virtual branches ───────────────────────────────────────────────
     //
     // One request per user action; the reducer turns it into the state edit
     // plus whatever backend calls realizing it needs.
-    /// Read the workspace and its file assignments for a repository.
-    LoadWorkspace {
+    /// Read the virtual branches and its file assignments for a repository.
+    LoadVirtualBranches {
         repo_id: RepoId,
     },
-    ApplyWorkspaceEdit {
+    ApplyVirtualBranchesEdit {
         repo_id: RepoId,
-        edit: WorkspaceEdit,
+        edit: VirtualBranchesEdit,
     },
     /// Apply or unapply a branch from its row.
-    SetWorkspaceBranchApplied {
+    SetVirtualBranchesBranchApplied {
         repo_id: RepoId,
         name: String,
-        applied: gitcomet_core::workspace::BranchApplyState,
+        applied: gitcomet_core::virtual_branches::BranchApplyState,
     },
     /// Commit the files assigned to one branch.
-    CommitWorkspaceBranch {
+    CommitVirtualBranchesBranch {
         repo_id: RepoId,
         name: String,
         message: String,
     },
     /// Commit one file to its assigned branch.
-    CommitWorkspaceFile {
+    CommitVirtualBranchesFile {
         repo_id: RepoId,
         path: PathBuf,
     },
     /// Dismiss the conflict from a failed apply.
-    DismissWorkspaceConflict {
+    DismissVirtualBranchesConflict {
         repo_id: RepoId,
     },
     /// Push a virtual branch to its remote.
-    PushWorkspaceBranch {
+    PushVirtualBranchesBranch {
         repo_id: RepoId,
         name: String,
     },
@@ -1901,19 +1901,19 @@ pub enum InternalMsg {
         command: RepoCommandKind,
         result: Result<CommandOutput, Error>,
     },
-    WorkspaceLoaded {
+    VirtualBranchesLoaded {
         repo_id: RepoId,
-        result: Result<gitcomet_core::workspace::WorkspaceState, Error>,
-        assignments: Result<gitcomet_core::workspace::AssignmentIndex, Error>,
-        workspace_commit: Result<Option<gitcomet_core::domain::CommitId>, Error>,
+        result: Result<gitcomet_core::virtual_branches::VirtualBranchesState, Error>,
+        assignments: Result<gitcomet_core::virtual_branches::AssignmentIndex, Error>,
+        virtual_branches_commit: Result<Option<gitcomet_core::domain::CommitId>, Error>,
     },
-    WorkspaceEditFinished {
+    VirtualBranchesEditFinished {
         repo_id: RepoId,
-        edit: WorkspaceEdit,
+        edit: VirtualBranchesEdit,
         result: Result<gitcomet_core::services::CommitOperationOutcome, Error>,
     },
-    /// A switch of the working directory into or out of the workspace.
-    WorkspaceActiveFinished {
+    /// A switch of the working directory into or out of the virtual branches.
+    VirtualBranchesActiveFinished {
         repo_id: RepoId,
         /// `true` for entering, `false` for leaving.
         active: bool,
@@ -1922,17 +1922,17 @@ pub enum InternalMsg {
         checkout_base: Option<String>,
         result: Result<(), Error>,
     },
-    WorkspaceAssignFinished {
+    VirtualBranchesAssignFinished {
         repo_id: RepoId,
         path: PathBuf,
         /// Which hunk was assigned, `None` for the whole file.
-        hunk: Option<gitcomet_core::workspace::HunkFingerprint>,
+        hunk: Option<gitcomet_core::virtual_branches::HunkFingerprint>,
         /// What it was set to, mirrored into the store so the row updates
         /// without a full reload.
         branch: Option<String>,
         result: Result<(), Error>,
     },
-    WorkspacePushFinished {
+    VirtualBranchesPushFinished {
         repo_id: RepoId,
         name: String,
         result: Result<CommandOutput, Error>,

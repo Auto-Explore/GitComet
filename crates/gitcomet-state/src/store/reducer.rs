@@ -42,7 +42,7 @@ mod submodule_trust;
 #[cfg(test)]
 pub(super) mod test_inputs;
 mod util;
-mod workspace;
+mod virtual_branches;
 mod worktree_removal;
 
 use crate::model::{AppState, Loadable, RepoId};
@@ -1498,11 +1498,11 @@ fn reduce_inner(
             diff_selection::apply_worktree_patch(repo_id, patch, reverse)
         }
         Msg::CheckoutBranch { repo_id, name } => {
-            if workspace::owns_workdir(state, repo_id) {
-                // The workspace owns the working directory, so leaving it is
+            if virtual_branches::owns_workdir(state, repo_id) {
+                // The virtual branches owns the working directory, so leaving it is
                 // part of this checkout. The branch exists already, which is
                 // what lets the leave put the directory straight on it.
-                return workspace::leave_for_checkout(
+                return virtual_branches::leave_for_checkout(
                     inputs,
                     state,
                     repo_id,
@@ -1523,11 +1523,11 @@ fn reduce_inner(
             local_branch,
             mode,
         } => {
-            if workspace::owns_workdir(state, repo_id) {
+            if virtual_branches::owns_workdir(state, repo_id) {
                 // The local branch may not exist yet — the checkout is often
                 // what creates it — so the leave goes back to the branch the
-                // workspace remembers and the checkout runs after it.
-                return workspace::leave_for_checkout(
+                // virtual branches remembers and the checkout runs after it.
+                return virtual_branches::leave_for_checkout(
                     inputs,
                     state,
                     repo_id,
@@ -1553,10 +1553,10 @@ fn reduce_inner(
             )
         }
         Msg::CheckoutCommit { repo_id, commit_id } => {
-            if workspace::owns_workdir(state, repo_id) {
+            if virtual_branches::owns_workdir(state, repo_id) {
                 // A commit is always there to check out, so the leave can take
                 // the working directory straight to it.
-                return workspace::leave_for_checkout(
+                return virtual_branches::leave_for_checkout(
                     inputs,
                     state,
                     repo_id,
@@ -2836,54 +2836,54 @@ fn reduce_inner(
             command,
             result,
         }) => auth::repo_command_finished(inputs, repos, id_alloc, state, repo_id, command, result),
-        // ── Workspace ───────────────────────────────────────────
-        Msg::LoadWorkspace { repo_id } => workspace::load_workspace(state, repo_id),
-        Msg::ApplyWorkspaceEdit { repo_id, edit } => {
-            workspace::apply_workspace_edit(state, repo_id, edit)
+        // ── Virtual branches ───────────────────────────────────────────
+        Msg::LoadVirtualBranches { repo_id } => virtual_branches::load_virtual_branches(state, repo_id),
+        Msg::ApplyVirtualBranchesEdit { repo_id, edit } => {
+            virtual_branches::apply_virtual_branches_edit(state, repo_id, edit)
         }
-        Msg::SetWorkspaceBranchApplied {
+        Msg::SetVirtualBranchesBranchApplied {
             repo_id,
             name,
             applied,
-        } => workspace::set_branch_applied(state, repo_id, name, applied),
-        Msg::CommitWorkspaceBranch {
+        } => virtual_branches::set_branch_applied(state, repo_id, name, applied),
+        Msg::CommitVirtualBranchesBranch {
             repo_id,
             name,
             message,
-        } => workspace::commit_branch(inputs, state, repo_id, name, message),
-        Msg::CommitWorkspaceFile { repo_id, path } => {
-            workspace::commit_single_file(inputs, state, repo_id, path)
+        } => virtual_branches::commit_branch(inputs, state, repo_id, name, message),
+        Msg::CommitVirtualBranchesFile { repo_id, path } => {
+            virtual_branches::commit_single_file(inputs, state, repo_id, path)
         }
-        Msg::DismissWorkspaceConflict { repo_id } => workspace::dismiss_conflict(state, repo_id),
-        Msg::PushWorkspaceBranch { repo_id, name } => workspace::push_branch(state, repo_id, name),
-        Msg::Internal(crate::msg::InternalMsg::WorkspaceLoaded {
+        Msg::DismissVirtualBranchesConflict { repo_id } => virtual_branches::dismiss_conflict(state, repo_id),
+        Msg::PushVirtualBranchesBranch { repo_id, name } => virtual_branches::push_branch(state, repo_id, name),
+        Msg::Internal(crate::msg::InternalMsg::VirtualBranchesLoaded {
             repo_id,
             result,
             assignments,
-            workspace_commit,
-        }) => workspace::workspace_loaded(inputs, state, repo_id, result, assignments, workspace_commit),
-        Msg::Internal(crate::msg::InternalMsg::WorkspaceEditFinished {
+            virtual_branches_commit,
+        }) => virtual_branches::virtual_branches_loaded(inputs, state, repo_id, result, assignments, virtual_branches_commit),
+        Msg::Internal(crate::msg::InternalMsg::VirtualBranchesEditFinished {
             repo_id,
             edit,
             result,
-        }) => workspace::workspace_edit_finished(inputs, state, repo_id, edit, result),
-        Msg::Internal(crate::msg::InternalMsg::WorkspaceActiveFinished {
+        }) => virtual_branches::virtual_branches_edit_finished(inputs, state, repo_id, edit, result),
+        Msg::Internal(crate::msg::InternalMsg::VirtualBranchesActiveFinished {
             repo_id,
             active,
             checkout_base,
             result,
-        }) => workspace::workspace_active_finished(inputs, state, repo_id, active, checkout_base, result),
-        Msg::Internal(crate::msg::InternalMsg::WorkspaceAssignFinished {
+        }) => virtual_branches::virtual_branches_active_finished(inputs, state, repo_id, active, checkout_base, result),
+        Msg::Internal(crate::msg::InternalMsg::VirtualBranchesAssignFinished {
             repo_id,
             path,
             hunk,
             branch,
             result,
-        }) => workspace::workspace_assign_finished(inputs, state, repo_id, path, hunk, branch, result),
-        Msg::Internal(crate::msg::InternalMsg::WorkspacePushFinished {
+        }) => virtual_branches::virtual_branches_assign_finished(inputs, state, repo_id, path, hunk, branch, result),
+        Msg::Internal(crate::msg::InternalMsg::VirtualBranchesPushFinished {
             repo_id,
             name,
             result,
-        }) => workspace::workspace_push_finished(inputs, state, repo_id, name, result),
+        }) => virtual_branches::virtual_branches_push_finished(inputs, state, repo_id, name, result),
     }
 }

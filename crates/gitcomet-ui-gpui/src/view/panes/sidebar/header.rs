@@ -8,7 +8,7 @@ const FALLBACK_TAB_ICON: &str = "icons/side_panel_left.svg";
 enum SidebarTabTarget {
     Branches,
     Files,
-    Workspace,
+    VirtualBranches,
     History,
     Extension(usize),
 }
@@ -18,7 +18,7 @@ impl SidebarTabTarget {
         match self {
             Self::Branches => 2,
             Self::Files => 3,
-            Self::Workspace | Self::History | Self::Extension(_) => 0,
+            Self::VirtualBranches | Self::History | Self::Extension(_) => 0,
         }
     }
 }
@@ -44,7 +44,7 @@ impl SidebarPaneView {
             match self.state.sidebar_mode {
                 SidebarMode::Branches => SidebarTabTarget::Branches,
                 SidebarMode::Files => SidebarTabTarget::Files,
-                SidebarMode::Workspace => SidebarTabTarget::Workspace,
+                SidebarMode::VirtualBranches => SidebarTabTarget::VirtualBranches,
             }
         };
         let font_preferences = crate::font_preferences::current(cx);
@@ -93,11 +93,11 @@ impl SidebarPaneView {
                 "Files".into(),
             );
             add(
-                SidebarTabTarget::Workspace,
-                "sidebar_tab_workspace".into(),
-                "Workspace".into(),
+                SidebarTabTarget::VirtualBranches,
+                "sidebar_tab_virtual_branches".into(),
+                "Virtual branches".into(),
                 "icons/git_branch.svg".into(),
-                "Workspace".into(),
+                "Virtual branches".into(),
             );
         }
         if self.file_history_visible(cx) {
@@ -160,7 +160,7 @@ impl SidebarPaneView {
         let (control, targets, active) = self.header_control(cx);
         let mode = match active {
             SidebarTabTarget::Files => SidebarMode::Files,
-            SidebarTabTarget::Workspace => SidebarMode::Workspace,
+            SidebarTabTarget::VirtualBranches => SidebarMode::VirtualBranches,
             _ => SidebarMode::Branches,
         };
         let tools = active.tool_count() > 0;
@@ -178,10 +178,10 @@ impl SidebarPaneView {
             match targets[index] {
                 SidebarTabTarget::Branches
                 | SidebarTabTarget::Files
-                | SidebarTabTarget::Workspace => {
+                | SidebarTabTarget::VirtualBranches => {
                     let mode = match targets[index] {
                         SidebarTabTarget::Branches => SidebarMode::Branches,
-                        SidebarTabTarget::Workspace => SidebarMode::Workspace,
+                        SidebarTabTarget::VirtualBranches => SidebarMode::VirtualBranches,
                         _ => SidebarMode::Files,
                     };
                     this.file_history_selected = false;

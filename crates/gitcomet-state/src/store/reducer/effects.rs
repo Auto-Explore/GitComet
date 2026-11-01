@@ -1694,29 +1694,29 @@ pub(super) fn set_sidebar_mode(state: &mut AppState, mode: SidebarMode) -> Vec<E
         }
     }
 
-    if mode == SidebarMode::Workspace {
+    if mode == SidebarMode::VirtualBranches {
         if let Some(repo_id) = state.active_repo {
             // Load first when there is nothing to show yet; the switch into the
-            // workspace itself cannot run before the state says the workspace
+            // virtual branches itself cannot run before the state says the virtual branches
             // exists, and a rejected checkout would leave the user on a tab
             // describing branches they are not actually on.
             let needs_load = state
                 .repos
                 .iter()
                 .find(|repo| repo.id == repo_id)
-                .is_some_and(|repo| matches!(repo.workspace.state, Loadable::NotLoaded));
+                .is_some_and(|repo| matches!(repo.virtual_branches.state, Loadable::NotLoaded));
             if needs_load {
-                return vec![Effect::LoadWorkspace { repo_id }];
+                return vec![Effect::LoadVirtualBranches { repo_id }];
             }
-            return super::workspace::enter_workspace(state, repo_id);
+            return super::virtual_branches::enter_virtual_branches(state, repo_id);
         }
-    } else if previous == SidebarMode::Workspace
+    } else if previous == SidebarMode::VirtualBranches
         && let Some(repo_id) = state.active_repo
     {
         // Leaving hands the working directory back. Anything else here would
-        // strand the user on `gitcomet/workspace` after they have walked away
+        // strand the user on `gitcomet/virtual` after they have walked away
         // from the tab that explains it.
-        return super::workspace::leave_workspace(state, repo_id);
+        return super::virtual_branches::leave_virtual_branches(state, repo_id);
     }
 
     Vec::new()

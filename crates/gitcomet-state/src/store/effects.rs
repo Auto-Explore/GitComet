@@ -18,7 +18,7 @@ mod repo_load;
 mod status;
 mod unavailable;
 mod util;
-mod workspace_effects;
+mod virtual_branches_effects;
 pub(super) mod worktree_list;
 
 /// Releases one runtime's ownership without disturbing other stores or tabs.
@@ -164,44 +164,44 @@ pub(super) fn schedule_effect(
         Effect::Persistence(work) => {
             persistence::schedule(session_persist_executor, thread_state, msg_tx, work)
         }
-        Effect::LoadWorkspace { repo_id } => {
-            workspace_effects::schedule_load_workspace(
+        Effect::LoadVirtualBranches { repo_id } => {
+            virtual_branches_effects::schedule_load_virtual_branches(
                 repo_load_executor,
                 repos,
                 msg_tx,
                 repo_id,
             );
         }
-        Effect::ApplyWorkspaceEdit { repo_id, edit } => {
-            workspace_effects::schedule_apply_workspace_edit(
+        Effect::ApplyVirtualBranchesEdit { repo_id, edit } => {
+            virtual_branches_effects::schedule_apply_virtual_branches_edit(
                 executor, repos, msg_tx, repo_id, edit,
             );
         }
-        Effect::EnterWorkspace {
+        Effect::EnterVirtualBranches {
             repo_id,
             checkout_base,
-        } => workspace_effects::schedule_enter_workspace(
+        } => virtual_branches_effects::schedule_enter_virtual_branches(
             executor,
             repos,
             msg_tx,
             repo_id,
             checkout_base,
         ),
-        Effect::LeaveWorkspace {
+        Effect::LeaveVirtualBranches {
             repo_id,
             checkout_base,
-        } => workspace_effects::schedule_leave_workspace(
+        } => virtual_branches_effects::schedule_leave_virtual_branches(
             executor,
             repos,
             msg_tx,
             repo_id,
             checkout_base,
         ),
-        Effect::LeaveWorkspaceAndCheckout {
+        Effect::LeaveVirtualBranchesAndCheckout {
             repo_id,
             checkout_base,
             then,
-        } => workspace_effects::schedule_leave_workspace_and_checkout(
+        } => virtual_branches_effects::schedule_leave_virtual_branches_and_checkout(
             executor,
             repos,
             msg_tx,
@@ -209,13 +209,13 @@ pub(super) fn schedule_effect(
             checkout_base,
             then,
         ),
-        Effect::AssignWorkspaceFile {
+        Effect::AssignVirtualBranchesFile {
             repo_id,
             path,
             hunk,
             branch,
         } => {
-            workspace_effects::schedule_assign_workspace_file(
+            virtual_branches_effects::schedule_assign_virtual_branches_file(
                 metadata_executor,
                 repos,
                 msg_tx,
@@ -225,8 +225,8 @@ pub(super) fn schedule_effect(
                 branch,
             );
         }
-        Effect::PushWorkspaceBranch { repo_id, name } => {
-            workspace_effects::schedule_push_workspace_branch(
+        Effect::PushVirtualBranchesBranch { repo_id, name } => {
+            virtual_branches_effects::schedule_push_virtual_branches_branch(
                 executor, repos, msg_tx, repo_id, name,
             );
         }

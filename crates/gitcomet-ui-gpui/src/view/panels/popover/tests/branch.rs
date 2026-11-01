@@ -885,9 +885,9 @@ fn checkout_remote_branch_collision_dialog_overwrites_from_remote(cx: &mut gpui:
     assert!(!is_open, "expected overwrite to close the collision dialog");
 }
 
-/// A repository whose working directory the workspace owns — the state the
+/// A repository whose working directory the virtual branches owns — the state the
 /// leave dialog exists for — with the branch picker ready to pick from it.
-fn open_branch_picker_over_a_workspace_holding_workdir(
+fn open_branch_picker_over_a_virtual_branches_holding_workdir(
     cx: &mut gpui::TestAppContext,
 ) -> (
     gpui::Entity<GitCometView>,
@@ -899,15 +899,15 @@ fn open_branch_picker_over_a_workspace_holding_workdir(
     let mut repo = RepoState::new_opening(
         repo_id,
         RepoSpec {
-            workdir: PathBuf::from("/tmp/workspace-exit-checkout"),
+            workdir: PathBuf::from("/tmp/virtual branches-exit-checkout"),
         },
     );
-    // A workspace that holds the working directory has HEAD on its own
-    // branch: that is what makes `workspace_loaded` re-derive `active` from
+    // A virtual branches that holds the working directory has HEAD on its own
+    // branch: that is what makes `virtual_branches_loaded` re-derive `active` from
     // HEAD after the failed leave reports back.
-    repo.head_branch = Loadable::Ready(gitcomet_core::workspace::WORKSPACE_BRANCH.into());
-    repo.workspace.active = true;
-    repo.workspace.checkout_base = Some("main".to_string());
+    repo.head_branch = Loadable::Ready(gitcomet_core::virtual_branches::VIRTUAL_BRANCHES_BRANCH.into());
+    repo.virtual_branches.active = true;
+    repo.virtual_branches.checkout_base = Some("main".to_string());
     let state = Arc::new(AppState {
         active_repo: Some(repo_id),
         repos: vec![repo],
@@ -949,19 +949,19 @@ fn pick_branch_through_the_picker(
 }
 
 #[gpui::test]
-fn picking_a_branch_while_the_workspace_holds_the_working_directory_asks_to_leave(
+fn picking_a_branch_while_the_virtual_branches_holds_the_working_directory_asks_to_leave(
     cx: &mut gpui::TestAppContext,
 ) {
-    let (view, cx, store) = open_branch_picker_over_a_workspace_holding_workdir(cx);
+    let (view, cx, store) = open_branch_picker_over_a_virtual_branches_holding_workdir(cx);
     pick_branch_through_the_picker(&view, cx, RepoId(901));
 
     let popover = cx.update(|_window, app| view.read(app).popover_host.read(app).popover.clone());
     assert!(
         matches!(
             popover,
-            Some(PopoverKind::LeaveWorkspaceToCheckoutPrompt { .. })
+            Some(PopoverKind::LeaveVirtualBranchesToCheckoutPrompt { .. })
         ),
-        "changing branch while the workspace holds the working directory has to ask to leave \
+        "changing branch while the virtual_branches holds the working directory has to ask to leave \
          it first, got {popover:?}"
     );
 
@@ -971,16 +971,16 @@ fn picking_a_branch_while_the_workspace_holds_the_working_directory_asks_to_leav
         let _ = window.draw(app);
     });
     assert!(
-        cx.debug_bounds("leave_workspace_checkout_go").is_some(),
-        "expected the action that leaves the workspace"
+        cx.debug_bounds("leave_virtual_branches_checkout_go").is_some(),
+        "expected the action that leaves the virtual branches"
     );
     assert!(
-        cx.debug_bounds("leave_workspace_checkout_cancel").is_some(),
+        cx.debug_bounds("leave_virtual_branches_checkout_cancel").is_some(),
         "expected a way to stay where the user is"
     );
 
     // Cancelling leaves everything as it was: no leave, no checkout.
-    click_debug_selector(cx, "leave_workspace_checkout_cancel");
+    click_debug_selector(cx, "leave_virtual_branches_checkout_cancel");
     let is_open = cx.update(|_window, app| view.read(app).popover_host.read(app).is_open());
     assert!(!is_open, "expected Cancel to close the dialog");
     assert!(
@@ -989,23 +989,23 @@ fn picking_a_branch_while_the_workspace_holds_the_working_directory_asks_to_leav
             .repos
             .iter()
             .find(|repo| repo.id == RepoId(901))
-            .is_some_and(|repo| repo.workspace.active && !repo.workspace.busy.switching),
+            .is_some_and(|repo| repo.virtual_branches.active && !repo.virtual_branches.busy.switching),
         "cancelling must not move the working directory"
     );
 }
 
 #[gpui::test]
-fn confirming_the_leave_dialog_leaves_the_workspace_before_checking_the_branch_out(
+fn confirming_the_leave_dialog_leaves_the_virtual_branches_before_checking_the_branch_out(
     cx: &mut gpui::TestAppContext,
 ) {
-    let (view, cx, store) = open_branch_picker_over_a_workspace_holding_workdir(cx);
+    let (view, cx, store) = open_branch_picker_over_a_virtual_branches_holding_workdir(cx);
     pick_branch_through_the_picker(&view, cx, RepoId(901));
     cx.run_until_parked();
     cx.update(|window, app| {
         let _ = window.draw(app);
     });
 
-    click_debug_selector(cx, "leave_workspace_checkout_go");
+    click_debug_selector(cx, "leave_virtual_branches_checkout_go");
 
     // Confirming dispatches the checkout unchanged, and the reducer turns it
     // into a leave first. The leave is what fails against this backend, so the
@@ -1014,7 +1014,7 @@ fn confirming_the_leave_dialog_leaves_the_workspace_before_checking_the_branch_o
         store.snapshot().notifications.iter().any(|notification| {
             notification
                 .message
-                .contains("Could not switch back out of the workspace")
+                .contains("Could not switch back out of the virtual branches")
         })
     });
 
@@ -1026,7 +1026,7 @@ fn confirming_the_leave_dialog_leaves_the_workspace_before_checking_the_branch_o
             .repos
             .iter()
             .find(|repo| repo.id == RepoId(901))
-            .is_some_and(|repo| repo.workspace.active),
+            .is_some_and(|repo| repo.virtual_branches.active),
         "a leave that failed has to leave the working directory where it was"
     );
 }

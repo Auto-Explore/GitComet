@@ -1227,11 +1227,11 @@ impl GixRepo {
         }
     }
 
-    /// Refuse a commit while the working directory is on `gitcomet/workspace`.
+    /// Refuse a commit while the working directory is on `gitcomet/virtual`.
     ///
-    /// The workspace branch is GitComet's own bookkeeping and is rebuilt from the
+    /// The virtual-branches branch is GitComet's own bookkeeping and is rebuilt from the
     /// applied set, so a commit on it is discarded at the next apply. See
-    /// [`GixRepo::refuse_workspace_head_action`], which carries the reasoning.
+    /// [`GixRepo::refuse_virtual_branches_head_action`], which carries the reasoning.
     pub(super) fn commit_impl(&self, message: &str) -> Result<()> {
         self.commit_identity_impl(message, None, false)
     }
@@ -1242,7 +1242,7 @@ impl GixRepo {
         identity: Option<&gitcomet_core::commit_identity::CommitIdentity>,
         amend: bool,
     ) -> Result<()> {
-        self.refuse_workspace_head_action(if amend { "an amend" } else { "a commit" })?;
+        self.refuse_virtual_branches_head_action(if amend { "an amend" } else { "a commit" })?;
         let merge_in_progress = self.merge_in_progress_for_commit()?;
         let mut cmd = self.git_workdir_cmd();
         cmd.arg("commit");

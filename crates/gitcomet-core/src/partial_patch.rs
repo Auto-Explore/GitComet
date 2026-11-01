@@ -135,7 +135,7 @@ fn push_hunk_patch_file_header(out: &mut Vec<u8>, header: &[impl UnifiedDiffLine
 /// The identity of the hunk starting at `hunk_src_ix`.
 ///
 /// Built from what the hunk adds and removes rather than from where it sits,
-/// because a workspace hunk assignment is resolved later against a *different*
+/// because a virtual-branches hunk assignment is resolved later against a *different*
 /// base — the branch's, not `HEAD`'s — and only the change itself is the same
 /// on both sides.
 ///
@@ -144,7 +144,7 @@ fn push_hunk_patch_file_header(out: &mut Vec<u8>, header: &[impl UnifiedDiffLine
 /// only removes is left out of the fingerprint when another group in the same
 /// hunk is a replacement (touches both sides). Whether the diff also happened
 /// to show a pure insertion above depends on which base it was taken against,
-/// and the backend's [`crate::workspace::hunk_spans`] applies the same
+/// and the backend's [`crate::virtual_branches::hunk_spans`] applies the same
 /// rule, so the two sides agree on the hunk's identity either way. A hunk with
 /// no replacement at all is fingerprinted by everything it contains.
 ///
@@ -155,7 +155,7 @@ fn push_hunk_patch_file_header(out: &mut Vec<u8>, header: &[impl UnifiedDiffLine
 pub fn hunk_fingerprint(
     diff: &[impl UnifiedDiffLine],
     hunk_src_ix: usize,
-) -> Option<crate::workspace::HunkFingerprint> {
+) -> Option<crate::virtual_branches::HunkFingerprint> {
     use crate::domain::DiffLineKind;
 
     let (_, _, hunk_end) = unified_patch_file_and_hunk_bounds(diff, hunk_src_ix)?;
@@ -202,7 +202,7 @@ pub fn hunk_fingerprint(
         removed += group_removed;
     }
     let produced: Vec<&str> = produced.iter().map(String::as_str).collect();
-    Some(crate::workspace::HunkFingerprint::of(
+    Some(crate::virtual_branches::HunkFingerprint::of(
         &produced, removed,
     ))
 }
