@@ -2939,7 +2939,9 @@ fn opening_the_virtual_branches_tab_moves_the_working_directory_onto_it() {
     // Already loaded, so the switch is not deferred behind a load.
     let repo = repo_mut(&mut state, repo_id);
     repo.virtual_branches
-        .set_state(gitcomet_core::virtual_branches::VirtualBranchesState::new("main"));
+        .set_state(gitcomet_core::virtual_branches::VirtualBranchesState::new(
+            "main",
+        ));
     repo.head_branch = Loadable::Ready("main".into());
 
     let effects = set_sidebar_mode(&mut state, SidebarMode::VirtualBranches);
@@ -2960,7 +2962,9 @@ fn leaving_the_virtual_branches_tab_hands_the_working_directory_back() {
     state.sidebar_mode = SidebarMode::VirtualBranches;
     let repo = repo_mut(&mut state, repo_id);
     repo.virtual_branches
-        .set_state(gitcomet_core::virtual_branches::VirtualBranchesState::new("main"));
+        .set_state(gitcomet_core::virtual_branches::VirtualBranchesState::new(
+            "main",
+        ));
     repo.virtual_branches.active = true;
     repo.virtual_branches.checkout_base = Some("main".into());
 
@@ -2981,7 +2985,9 @@ fn opening_the_virtual_branches_tab_twice_does_not_switch_again() {
     state.sidebar_mode = SidebarMode::VirtualBranches;
     let repo = repo_mut(&mut state, repo_id);
     repo.virtual_branches
-        .set_state(gitcomet_core::virtual_branches::VirtualBranchesState::new("main"));
+        .set_state(gitcomet_core::virtual_branches::VirtualBranchesState::new(
+            "main",
+        ));
     repo.virtual_branches.active = true;
 
     assert!(

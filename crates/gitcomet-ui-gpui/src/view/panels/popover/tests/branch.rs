@@ -905,7 +905,8 @@ fn open_branch_picker_over_a_virtual_branches_holding_workdir(
     // A virtual branches that holds the working directory has HEAD on its own
     // branch: that is what makes `virtual_branches_loaded` re-derive `active` from
     // HEAD after the failed leave reports back.
-    repo.head_branch = Loadable::Ready(gitcomet_core::virtual_branches::VIRTUAL_BRANCHES_BRANCH.into());
+    repo.head_branch =
+        Loadable::Ready(gitcomet_core::virtual_branches::VIRTUAL_BRANCHES_BRANCH.into());
     repo.virtual_branches.active = true;
     repo.virtual_branches.checkout_base = Some("main".to_string());
     let state = Arc::new(AppState {
@@ -971,11 +972,13 @@ fn picking_a_branch_while_the_virtual_branches_holds_the_working_directory_asks_
         let _ = window.draw(app);
     });
     assert!(
-        cx.debug_bounds("leave_virtual_branches_checkout_go").is_some(),
+        cx.debug_bounds("leave_virtual_branches_checkout_go")
+            .is_some(),
         "expected the action that leaves the virtual branches"
     );
     assert!(
-        cx.debug_bounds("leave_virtual_branches_checkout_cancel").is_some(),
+        cx.debug_bounds("leave_virtual_branches_checkout_cancel")
+            .is_some(),
         "expected a way to stay where the user is"
     );
 
@@ -989,7 +992,9 @@ fn picking_a_branch_while_the_virtual_branches_holds_the_working_directory_asks_
             .repos
             .iter()
             .find(|repo| repo.id == RepoId(901))
-            .is_some_and(|repo| repo.virtual_branches.active && !repo.virtual_branches.busy.switching),
+            .is_some_and(
+                |repo| repo.virtual_branches.active && !repo.virtual_branches.busy.switching
+            ),
         "cancelling must not move the working directory"
     );
 }

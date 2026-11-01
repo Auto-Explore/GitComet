@@ -306,7 +306,9 @@ pub(in crate::view) fn apply_tooltip(branch: &VirtualBranch) -> SharedString {
 impl SidebarPaneView {
     /// The virtual branches rows, recomputed only when the virtual branches or the working
     /// tree has actually moved.
-    pub(in crate::view) fn virtual_branches_presentation_cached(&mut self) -> VirtualBranchesPresentation {
+    pub(in crate::view) fn virtual_branches_presentation_cached(
+        &mut self,
+    ) -> VirtualBranchesPresentation {
         let fingerprint = self
             .active_repo()
             .map(VirtualBranchesFingerprint::from_repo)
@@ -582,21 +584,22 @@ fn render_branch_row(
 
     let toggle_store = Arc::clone(&store);
     let toggle_name = name.clone();
-    let apply = components::Button::new(format!("virtual_branches_apply_{name}"), apply_label(state))
-        .style(components::ButtonStyle::Subtle)
-        .disabled(busy)
-        .on_click(theme, cx, move |_, _, _, _| {
-            toggle_store.dispatch(Msg::SetVirtualBranchesBranchApplied {
-                repo_id,
-                name: toggle_name.clone(),
-                applied: if state.is_applied() {
-                    BranchApplyState::Unapplied
-                } else {
-                    BranchApplyState::Applied
-                },
-            });
-        })
-        .gitcomet_tooltip(theme, tooltip);
+    let apply =
+        components::Button::new(format!("virtual_branches_apply_{name}"), apply_label(state))
+            .style(components::ButtonStyle::Subtle)
+            .disabled(busy)
+            .on_click(theme, cx, move |_, _, _, _| {
+                toggle_store.dispatch(Msg::SetVirtualBranchesBranchApplied {
+                    repo_id,
+                    name: toggle_name.clone(),
+                    applied: if state.is_applied() {
+                        BranchApplyState::Unapplied
+                    } else {
+                        BranchApplyState::Applied
+                    },
+                });
+            })
+            .gitcomet_tooltip(theme, tooltip);
 
     let push_store = Arc::clone(&store);
     let push_name = name.clone();
@@ -813,7 +816,10 @@ fn render_summary_row(
                 cx,
             );
         })
-        .gitcomet_tooltip(theme, SharedString::from("Add a branch to the virtual branches"));
+        .gitcomet_tooltip(
+            theme,
+            SharedString::from("Add a branch to the virtual branches"),
+        );
 
     row_frame(
         theme,
@@ -1087,8 +1093,9 @@ mod tests {
     fn a_virtual_branches_the_working_directory_is_not_on_says_so() {
         // Without this the tab happily lists applied branches while the user's
         // files contain none of them, which reads as the feature being broken.
-        let repo =
-            repo_with(VirtualBranchesState::new("main").with_branches(vec![VirtualBranch::new("api")]));
+        let repo = repo_with(
+            VirtualBranchesState::new("main").with_branches(vec![VirtualBranch::new("api")]),
+        );
         let mut repo = repo;
         repo.virtual_branches.active = false;
 
@@ -1107,8 +1114,9 @@ mod tests {
     fn a_virtual_branches_the_working_directory_is_on_says_nothing_about_it() {
         // The other half of the notice: a virtual branches in its normal state must not
         // carry a permanent warning at the top of the tab.
-        let repo =
-            repo_with(VirtualBranchesState::new("main").with_branches(vec![VirtualBranch::new("api")]));
+        let repo = repo_with(
+            VirtualBranchesState::new("main").with_branches(vec![VirtualBranch::new("api")]),
+        );
         let presentation = VirtualBranchesPresentation::build(Some(&repo));
         assert!(
             presentation.rows.iter().all(|row| !matches!(
@@ -1118,7 +1126,10 @@ mod tests {
             "the notice is about being off the virtual branches, not about being in it"
         );
         assert!(
-            matches!(presentation.rows.first(), Some(VirtualBranchesRow::Target { .. })),
+            matches!(
+                presentation.rows.first(),
+                Some(VirtualBranchesRow::Target { .. })
+            ),
             "and the target row still comes first"
         );
     }
@@ -1188,8 +1199,9 @@ mod tests {
 
     #[test]
     fn a_conflict_is_shown_before_the_branches() {
-        let mut repo =
-            repo_with(VirtualBranchesState::new("main").with_branches(vec![VirtualBranch::new("api")]));
+        let mut repo = repo_with(
+            VirtualBranchesState::new("main").with_branches(vec![VirtualBranch::new("api")]),
+        );
         repo.virtual_branches.conflict = Some(gitcomet_state::model::VirtualBranchesConflict {
             branch: "api".into(),
             against: Some("ui".into()),

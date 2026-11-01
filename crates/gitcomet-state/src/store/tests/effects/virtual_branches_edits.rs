@@ -17,7 +17,9 @@ use super::*;
 
 use crate::model::VirtualBranchesEdit;
 use gitcomet_core::services::CommitOperationOutcome;
-use gitcomet_core::virtual_branches::{AssignmentIndex, BranchApplyState, VirtualBranch, VirtualBranchesState};
+use gitcomet_core::virtual_branches::{
+    AssignmentIndex, BranchApplyState, VirtualBranch, VirtualBranchesState,
+};
 
 /// Enough `GitBackend` to satisfy the scheduling harness; the repositories are
 /// supplied directly, so it is never asked to open anything.
@@ -75,7 +77,10 @@ impl VirtualBranchesRepo {
     }
 
     fn calls(&self) -> Calls {
-        self.calls.lock().expect("virtual branches calls poisoned").clone()
+        self.calls
+            .lock()
+            .expect("virtual branches calls poisoned")
+            .clone()
     }
 
     fn last_write(&self) -> VirtualBranchesState {
@@ -87,7 +92,10 @@ impl VirtualBranchesRepo {
     }
 
     fn stored(&self) -> VirtualBranchesState {
-        self.state.lock().expect("virtual branches poisoned").clone()
+        self.state
+            .lock()
+            .expect("virtual branches poisoned")
+            .clone()
     }
 }
 
@@ -119,23 +127,38 @@ impl GitRepository for VirtualBranchesRepo {
         unexpected("reflog_head")
     }
 
-    fn current_branch(&self, _cancellation: &gitcomet_core::services::CancellationToken) -> Result<String> {
+    fn current_branch(
+        &self,
+        _cancellation: &gitcomet_core::services::CancellationToken,
+    ) -> Result<String> {
         unexpected("current_branch")
     }
 
-    fn list_branches(&self, _cancellation: &gitcomet_core::services::CancellationToken) -> Result<Vec<Branch>> {
+    fn list_branches(
+        &self,
+        _cancellation: &gitcomet_core::services::CancellationToken,
+    ) -> Result<Vec<Branch>> {
         unexpected("list_branches")
     }
 
-    fn list_remotes(&self, _cancellation: &gitcomet_core::services::CancellationToken) -> Result<Vec<Remote>> {
+    fn list_remotes(
+        &self,
+        _cancellation: &gitcomet_core::services::CancellationToken,
+    ) -> Result<Vec<Remote>> {
         unexpected("list_remotes")
     }
 
-    fn list_remote_branches(&self, _cancellation: &gitcomet_core::services::CancellationToken) -> Result<Vec<RemoteBranch>> {
+    fn list_remote_branches(
+        &self,
+        _cancellation: &gitcomet_core::services::CancellationToken,
+    ) -> Result<Vec<RemoteBranch>> {
         unexpected("list_remote_branches")
     }
 
-    fn status(&self, _cancellation: &gitcomet_core::services::CancellationToken) -> Result<RepoStatus> {
+    fn status(
+        &self,
+        _cancellation: &gitcomet_core::services::CancellationToken,
+    ) -> Result<RepoStatus> {
         unexpected("status")
     }
 
@@ -172,7 +195,10 @@ impl GitRepository for VirtualBranchesRepo {
         unexpected("stash_create")
     }
 
-    fn stash_list(&self, _cancellation: &gitcomet_core::services::CancellationToken) -> Result<Vec<StashEntry>> {
+    fn stash_list(
+        &self,
+        _cancellation: &gitcomet_core::services::CancellationToken,
+    ) -> Result<Vec<StashEntry>> {
         unexpected("stash_list")
     }
 
@@ -215,7 +241,11 @@ impl GitRepository for VirtualBranchesRepo {
     fn read_virtual_branches(&self) -> Result<VirtualBranchesState> {
         let mut calls = self.calls.lock().expect("virtual branches calls poisoned");
         calls.reads += 1;
-        Ok(self.state.lock().expect("virtual branches poisoned").clone())
+        Ok(self
+            .state
+            .lock()
+            .expect("virtual branches poisoned")
+            .clone())
     }
 
     fn write_virtual_branches(&self, state: &VirtualBranchesState) -> Result<()> {
@@ -328,7 +358,10 @@ fn schedule(mut repo: RepositoryRuntimes, effect: Effect) -> Msg {
 }
 
 /// Realize one edit and return what it produced.
-fn apply(repo: &Arc<VirtualBranchesRepo>, edit: VirtualBranchesEdit) -> Result<CommitOperationOutcome> {
+fn apply(
+    repo: &Arc<VirtualBranchesRepo>,
+    edit: VirtualBranchesEdit,
+) -> Result<CommitOperationOutcome> {
     let msg = schedule(
         repos_with(repo.clone()),
         Effect::ApplyVirtualBranchesEdit {
@@ -337,7 +370,9 @@ fn apply(repo: &Arc<VirtualBranchesRepo>, edit: VirtualBranchesEdit) -> Result<C
         },
     );
     match msg {
-        Msg::Internal(crate::msg::InternalMsg::VirtualBranchesEditFinished { result, .. }) => result,
+        Msg::Internal(crate::msg::InternalMsg::VirtualBranchesEditFinished { result, .. }) => {
+            result
+        }
         other => panic!("expected a finished edit, got {other:?}"),
     }
 }
@@ -510,7 +545,10 @@ fn inserting_next_to_a_branch_that_is_not_there_changes_nothing() {
 fn unapplying_a_branch_rebuilds_the_virtual_branches_without_it() {
     // Unapplying is what actually takes a branch's changes back out of the
     // working directory, so the rebuild is the whole point of the edit.
-    let repo = Arc::new(VirtualBranchesRepo::new(vec![applied("api"), applied("ui")]));
+    let repo = Arc::new(VirtualBranchesRepo::new(vec![
+        applied("api"),
+        applied("ui"),
+    ]));
     apply(
         &repo,
         VirtualBranchesEdit::SetApplied {
@@ -534,7 +572,10 @@ fn unapplying_a_branch_rebuilds_the_virtual_branches_without_it() {
 
 #[test]
 fn stacking_a_branch_replays_it_onto_its_new_base() {
-    let repo = Arc::new(VirtualBranchesRepo::new(vec![applied("api"), applied("ui")]));
+    let repo = Arc::new(VirtualBranchesRepo::new(vec![
+        applied("api"),
+        applied("ui"),
+    ]));
     apply(
         &repo,
         VirtualBranchesEdit::SetParent {
@@ -579,7 +620,10 @@ fn detaching_a_branch_replays_it_onto_the_target() {
 
 #[test]
 fn moving_into_another_stacked_branch_rebases_onto_the_new_base() {
-    let repo = Arc::new(VirtualBranchesRepo::new(vec![applied("api"), applied("ui")]));
+    let repo = Arc::new(VirtualBranchesRepo::new(vec![
+        applied("api"),
+        applied("ui"),
+    ]));
     apply(
         &repo,
         VirtualBranchesEdit::MoveToStackedBranch {
@@ -870,7 +914,10 @@ fn assigning_a_file_writes_it_through_the_index() {
 fn assigning_one_hunk_splits_the_file_it_belongs_to() {
     // Assigning a hunk is a split: the file stops being on the branch that
     // owned it as a whole, and the other hunks are not silently dragged along.
-    let repo = Arc::new(VirtualBranchesRepo::new(vec![applied("api"), applied("ui")]));
+    let repo = Arc::new(VirtualBranchesRepo::new(vec![
+        applied("api"),
+        applied("ui"),
+    ]));
     let path = PathBuf::from("src/api.rs");
     let hunk = gitcomet_core::virtual_branches::HunkFingerprint::of(&["NEW\n"], 1);
 
@@ -916,7 +963,10 @@ fn assigning_one_hunk_splits_the_file_it_belongs_to() {
 
 #[test]
 fn assigning_a_file_whole_replaces_the_split_it_had() {
-    let repo = Arc::new(VirtualBranchesRepo::new(vec![applied("api"), applied("ui")]));
+    let repo = Arc::new(VirtualBranchesRepo::new(vec![
+        applied("api"),
+        applied("ui"),
+    ]));
     let path = PathBuf::from("src/api.rs");
     let hunk = gitcomet_core::virtual_branches::HunkFingerprint::of(&["NEW\n"], 1);
 

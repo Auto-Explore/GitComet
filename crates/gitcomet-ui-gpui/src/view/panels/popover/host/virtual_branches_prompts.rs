@@ -26,7 +26,8 @@ impl PopoverHost {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
-        let Some(PopoverKind::VirtualBranchesPrompt { repo_id, prompt }) = self.popover.clone() else {
+        let Some(PopoverKind::VirtualBranchesPrompt { repo_id, prompt }) = self.popover.clone()
+        else {
             return;
         };
         let seed = match kind {
@@ -68,7 +69,8 @@ impl PopoverHost {
         let Some((repo_id, kind, value)) = self.open_virtual_branches_prompt(cx) else {
             return false;
         };
-        self.virtual_branches_prompt_edit(repo_id, kind, &value).is_some()
+        self.virtual_branches_prompt_edit(repo_id, kind, &value)
+            .is_some()
     }
 
     /// Dispatch the open prompt's edit and close the dialog.
@@ -277,7 +279,8 @@ fn edit_for(
             }
         }
         VirtualBranchesPromptKind::MoveToStackedBranch => {
-            if !branch_exists || value.is_empty() || value == branch || !in_virtual_branches(value) {
+            if !branch_exists || value.is_empty() || value == branch || !in_virtual_branches(value)
+            {
                 return None;
             }
             VirtualBranchesEdit::MoveToStackedBranch {
@@ -368,7 +371,8 @@ fn edit_for(
     // A creation whose name could not be made free is not an edit at all, and
     // the confirm button stays disabled rather than dispatching an empty name.
     match &edit {
-        VirtualBranchesEdit::Create { name } | VirtualBranchesEdit::InsertRelativeTo { name, .. }
+        VirtualBranchesEdit::Create { name }
+        | VirtualBranchesEdit::InsertRelativeTo { name, .. }
             if name.is_empty() =>
         {
             None
@@ -419,7 +423,11 @@ mod tests {
         free_branch_name(value, &|name| taken(name) || in_virtual_branches(name))
     }
 
-    fn edit(kind: VirtualBranchesPromptKind, branch: &str, value: &str) -> Option<VirtualBranchesEdit> {
+    fn edit(
+        kind: VirtualBranchesPromptKind,
+        branch: &str,
+        value: &str,
+    ) -> Option<VirtualBranchesEdit> {
         edit_for(
             kind,
             branch,
@@ -497,7 +505,8 @@ mod tests {
 
     #[test]
     fn creating_uses_the_typed_name() {
-        let Some(VirtualBranchesEdit::Create { name }) = edit(VirtualBranchesPromptKind::Create, "", "feat/x")
+        let Some(VirtualBranchesEdit::Create { name }) =
+            edit(VirtualBranchesPromptKind::Create, "", "feat/x")
         else {
             panic!("expected a create edit");
         };
@@ -506,7 +515,8 @@ mod tests {
 
     #[test]
     fn creating_over_an_existing_branch_gets_suffixed() {
-        let Some(VirtualBranchesEdit::Create { name }) = edit(VirtualBranchesPromptKind::Create, "", "api")
+        let Some(VirtualBranchesEdit::Create { name }) =
+            edit(VirtualBranchesPromptKind::Create, "", "api")
         else {
             panic!("expected a create edit");
         };
@@ -586,7 +596,14 @@ mod tests {
         assert!(edit(VirtualBranchesPromptKind::SetParent, "api", "api").is_none());
         assert!(edit(VirtualBranchesPromptKind::MoveToStackedBranch, "api", "api").is_none());
         assert!(edit(VirtualBranchesPromptKind::MoveToStackedBranch, "api", "").is_none());
-        assert!(edit(VirtualBranchesPromptKind::MoveToStackedBranch, "api", "gone").is_none());
+        assert!(
+            edit(
+                VirtualBranchesPromptKind::MoveToStackedBranch,
+                "api",
+                "gone"
+            )
+            .is_none()
+        );
     }
 
     #[test]
@@ -608,7 +625,8 @@ mod tests {
 
     #[test]
     fn removing_needs_a_branch_that_is_there() {
-        let Some(VirtualBranchesEdit::Remove { name }) = edit(VirtualBranchesPromptKind::Remove, "api", "")
+        let Some(VirtualBranchesEdit::Remove { name }) =
+            edit(VirtualBranchesPromptKind::Remove, "api", "")
         else {
             panic!("expected a remove edit");
         };

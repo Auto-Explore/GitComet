@@ -334,7 +334,10 @@ impl SidebarPaneView {
                                         this.explain_working_tree_required(cx);
                                         return;
                                     }
-                                    if virtual_branches_owns_workdir(&this.store.snapshot(), repo_id) {
+                                    if virtual_branches_owns_workdir(
+                                        &this.store.snapshot(),
+                                        repo_id,
+                                    ) {
                                         // The virtual branches owns the working directory:
                                         // ask to leave it rather than moving HEAD
                                         // off the virtual-branches branch under the tab
@@ -351,7 +354,10 @@ impl SidebarPaneView {
                                         cx.notify();
                                         return;
                                     }
-                                    if virtual_branches_owns_workdir(&this.store.snapshot(), repo_id) {
+                                    if virtual_branches_owns_workdir(
+                                        &this.store.snapshot(),
+                                        repo_id,
+                                    ) {
                                         // The virtual branches owns the working directory:
                                         // ask to leave it rather than moving HEAD
                                         // off the virtual-branches branch under the tab

@@ -313,7 +313,11 @@ impl VirtualBranchesState {
                     }],
                 }),
                 Some(parent) => {
-                    let depth = match stacked_branches.iter_mut().rev().find(|s| s.contains(parent)) {
+                    let depth = match stacked_branches
+                        .iter_mut()
+                        .rev()
+                        .find(|s| s.contains(parent))
+                    {
                         Some(stacked_branch) => {
                             let depth = stacked_branch
                                 .branches
@@ -464,7 +468,9 @@ impl VirtualBranchesState {
     /// Insert a branch above `name`: the new branch is stacked on `name`.
     pub fn insert_above(&mut self, branch: VirtualBranch, name: &str) -> Result<()> {
         if self.get(name).is_none() {
-            return Err(virtual_branches_error(format!("no virtual-branches branch '{name}'")));
+            return Err(virtual_branches_error(format!(
+                "no virtual-branches branch '{name}'"
+            )));
         }
         self.push_branch(branch.clone())?;
         self.set_parent(&branch.name, Some(name))
@@ -500,7 +506,9 @@ impl VirtualBranchesState {
         below: bool,
     ) -> Result<()> {
         if self.get(name).is_none() {
-            return Err(virtual_branches_error(format!("no virtual-branches branch '{name}'")));
+            return Err(virtual_branches_error(format!(
+                "no virtual-branches branch '{name}'"
+            )));
         }
         let parent = match relative_to {
             None => Some(stacked_branch_base.to_string()),
@@ -511,7 +519,9 @@ impl VirtualBranchesState {
                 // branch somewhere the user never asked for and report success,
                 // which is the same failure `insert_above`/`insert_below` refuse.
                 if self.get(relative).is_none() {
-                    return Err(virtual_branches_error(format!("no virtual-branches branch '{relative}'")));
+                    return Err(virtual_branches_error(format!(
+                        "no virtual-branches branch '{relative}'"
+                    )));
                 }
                 if below {
                     Some(relative.to_string())
@@ -541,7 +551,9 @@ impl VirtualBranchesState {
             .clone();
         let right = self
             .get(second)
-            .ok_or_else(|| virtual_branches_error(format!("no virtual-branches branch '{second}'")))?
+            .ok_or_else(|| {
+                virtual_branches_error(format!("no virtual-branches branch '{second}'"))
+            })?
             .clone();
 
         self.swap_positions(first, second, &left, &right)
@@ -620,7 +632,9 @@ impl VirtualBranchesState {
             .branches
             .iter()
             .position(|b| b.name == name)
-            .ok_or_else(|| virtual_branches_error(format!("no virtual-branches branch '{name}'")))?;
+            .ok_or_else(|| {
+                virtual_branches_error(format!("no virtual-branches branch '{name}'"))
+            })?;
         let removed = self.branches.remove(index);
         let parent = removed.parent.clone();
         for branch in &mut self.branches {
@@ -637,7 +651,9 @@ impl VirtualBranchesState {
     /// would create a cycle is refused with the state left untouched.
     pub fn set_parent(&mut self, name: &str, parent: Option<&str>) -> Result<()> {
         if self.get(name).is_none() {
-            return Err(virtual_branches_error(format!("no virtual-branches branch '{name}'")));
+            return Err(virtual_branches_error(format!(
+                "no virtual-branches branch '{name}'"
+            )));
         }
         let previous = self.branches.clone();
         if let Some(branch) = self.get_mut(name) {
@@ -653,7 +669,9 @@ impl VirtualBranchesState {
     /// Set whether a branch contributes to the virtual-branches branch.
     pub fn set_applied(&mut self, name: &str, applied: BranchApplyState) -> Result<()> {
         let Some(branch) = self.get_mut(name) else {
-            return Err(virtual_branches_error(format!("no virtual-branches branch '{name}'")));
+            return Err(virtual_branches_error(format!(
+                "no virtual-branches branch '{name}'"
+            )));
         };
         branch.applied = applied;
         Ok(())
@@ -689,10 +707,14 @@ fn virtual_branches_error(message: String) -> Error {
 /// fails with a less specific message.
 fn validate_branch_name(name: &str) -> Result<()> {
     if name.is_empty() {
-        return Err(virtual_branches_error("a virtual-branches branch needs a name".into()));
+        return Err(virtual_branches_error(
+            "a virtual-branches branch needs a name".into(),
+        ));
     }
     if name.starts_with('-') {
-        return Err(virtual_branches_error(format!("'{name}' cannot start with '-'")));
+        return Err(virtual_branches_error(format!(
+            "'{name}' cannot start with '-'"
+        )));
     }
     if !name.is_ascii() {
         return Err(virtual_branches_error(format!(
@@ -1476,8 +1498,8 @@ mod tests {
 
     #[test]
     fn order_controls_sibling_ordering() {
-        let state =
-            virtual_branches().with_branches(vec![vb("second").with_order(1), vb("first").with_order(0)]);
+        let state = virtual_branches()
+            .with_branches(vec![vb("second").with_order(1), vb("first").with_order(0)]);
         let stacked_branches = state.stacked_branches().unwrap();
         // Two roots are two stacked branches, and `order` is what decides which one
         // comes first: without it the declaration order ("second" first)
@@ -1489,8 +1511,8 @@ mod tests {
 
     #[test]
     fn a_cycle_is_rejected_by_validate() {
-        let state =
-            virtual_branches().with_branches(vec![vb("a").with_parent("b"), vb("b").with_parent("a")]);
+        let state = virtual_branches()
+            .with_branches(vec![vb("a").with_parent("b"), vb("b").with_parent("a")]);
         assert!(state.validate().is_err());
     }
 
@@ -1576,7 +1598,8 @@ mod tests {
 
     #[test]
     fn a_branch_inserted_above_another_is_stacked_on_it() {
-        let mut state = virtual_branches().with_branches(vec![vb("api"), vb("ui").with_parent("api")]);
+        let mut state =
+            virtual_branches().with_branches(vec![vb("api"), vb("ui").with_parent("api")]);
         state.insert_above(vb("ui2"), "ui").unwrap();
         assert_eq!(state.get("ui").unwrap().parent.as_deref(), Some("api"));
         assert_eq!(state.get("ui2").unwrap().parent.as_deref(), Some("ui"));
@@ -1587,7 +1610,8 @@ mod tests {
         // The opposite of the above case, which is the whole point of having
         // two: `ui2` is pushed *down* to where `ui` was, `ui` now sits on it,
         // and the stacked branch is one deeper without anything above having moved.
-        let mut state = virtual_branches().with_branches(vec![vb("api"), vb("ui").with_parent("api")]);
+        let mut state =
+            virtual_branches().with_branches(vec![vb("api"), vb("ui").with_parent("api")]);
         state.insert_below(vb("ui2"), "ui").unwrap();
         assert_eq!(
             state.get("ui2").unwrap().parent.as_deref(),
@@ -1657,7 +1681,8 @@ mod tests {
 
     #[test]
     fn reorder_across_stacked_branches_is_refused() {
-        let mut state = virtual_branches().with_branches(vec![vb("api"), vb("ui").with_parent("api")]);
+        let mut state =
+            virtual_branches().with_branches(vec![vb("api"), vb("ui").with_parent("api")]);
         assert!(state.reorder("api", "ui").is_err());
     }
 
@@ -1674,14 +1699,18 @@ mod tests {
 
     #[test]
     fn move_to_stacked_branch_places_a_branch_under_the_new_base() {
-        let mut state = virtual_branches().with_branches(vec![vb("api"), vb("ui").with_parent("api")]);
-        state.move_to_stacked_branch("ui", "main", None, false).unwrap();
+        let mut state =
+            virtual_branches().with_branches(vec![vb("api"), vb("ui").with_parent("api")]);
+        state
+            .move_to_stacked_branch("ui", "main", None, false)
+            .unwrap();
         assert_eq!(state.get("ui").unwrap().parent, None);
     }
 
     #[test]
     fn move_to_stacked_branch_below_a_sibling_stacked_branches_on_that_sibling() {
-        let mut state = virtual_branches().with_branches(vec![vb("api"), vb("e2e").with_parent("api")]);
+        let mut state =
+            virtual_branches().with_branches(vec![vb("api"), vb("e2e").with_parent("api")]);
         state
             .move_to_stacked_branch("e2e", "main", Some("api"), true)
             .unwrap();
@@ -1690,8 +1719,11 @@ mod tests {
 
     #[test]
     fn move_to_stacked_branch_above_a_sibling_takes_its_place() {
-        let mut state =
-            virtual_branches().with_branches(vec![vb("api"), vb("e2e").with_parent("api"), vb("other")]);
+        let mut state = virtual_branches().with_branches(vec![
+            vb("api"),
+            vb("e2e").with_parent("api"),
+            vb("other"),
+        ]);
         state
             .move_to_stacked_branch("other", "main", Some("api"), false)
             .unwrap();
@@ -1719,7 +1751,8 @@ mod tests {
         // The drag named a branch that was removed in the meantime. Guessing the
         // stacked branch base instead would put the branch somewhere the user never
         // asked for and report the move as done.
-        let mut state = virtual_branches().with_branches(vec![vb("api"), vb("ui").with_parent("api")]);
+        let mut state =
+            virtual_branches().with_branches(vec![vb("api"), vb("ui").with_parent("api")]);
         assert!(
             state
                 .move_to_stacked_branch("api", "main", Some("gone"), false)
@@ -1737,7 +1770,8 @@ mod tests {
 
     #[test]
     fn set_applied_toggles_a_branch_without_disturbing_the_stacked_branch() {
-        let mut state = virtual_branches().with_branches(vec![vb("api"), vb("ui").with_parent("api")]);
+        let mut state =
+            virtual_branches().with_branches(vec![vb("api"), vb("ui").with_parent("api")]);
         state
             .set_applied("ui", BranchApplyState::Unapplied)
             .unwrap();
@@ -1829,8 +1863,8 @@ mod tests {
         index.set(PathBuf::from("clean.rs"), Some("api".into()));
 
         let state = virtual_branches().with_branches(vec![vb("api")]);
-        let mut changed = |path: &Path| path == Path::new("kept.rs");
-        index.retain(&state, &mut changed, None);
+        let changed = |path: &Path| path == Path::new("kept.rs");
+        index.retain(&state, &changed, None);
 
         assert_eq!(index.len(), 1);
         assert_eq!(index.branch_of(Path::new("kept.rs")), Some("api"));
@@ -2501,8 +2535,11 @@ mod tests {
 
     #[test]
     fn a_branch_reports_whether_anything_is_stacked_on_it() {
-        let state =
-            virtual_branches().with_branches(vec![vb("api"), vb("ui").with_parent("api"), vb("docs")]);
+        let state = virtual_branches().with_branches(vec![
+            vb("api"),
+            vb("ui").with_parent("api"),
+            vb("docs"),
+        ]);
         let stacked_branches = state.stacked_branches().unwrap();
         assert!(stacked_branches[0].contains("api"));
         assert!(
@@ -2513,7 +2550,10 @@ mod tests {
             !stacked_branches[0].contains("docs"),
             "an independent branch starts its own"
         );
-        assert!(virtual_branches().stacked_branches().unwrap().is_empty(), "nothing to stacked branch");
+        assert!(
+            virtual_branches().stacked_branches().unwrap().is_empty(),
+            "nothing to stacked branch"
+        );
     }
 
     #[test]
@@ -2550,7 +2590,8 @@ mod tests {
     fn the_target_moves_without_touching_the_branches_built_on_it() {
         // The names are the user's; only their base moves, and rebasing them is
         // the backend's job — this only has to say what the base now is.
-        let mut state = virtual_branches().with_branches(vec![vb("api"), vb("ui").with_parent("api")]);
+        let mut state =
+            virtual_branches().with_branches(vec![vb("api"), vb("ui").with_parent("api")]);
         state
             .set_target("release/2.3")
             .expect("a target nobody has claimed");

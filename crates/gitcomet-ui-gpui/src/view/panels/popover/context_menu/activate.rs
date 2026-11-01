@@ -6,9 +6,11 @@ use super::{
     app_menu, branch_group, components, context_menu_entry_action_at, push_request, repo_picker,
     resolve_checkout_file_path, session,
 };
-use crate::view::panels::popover::virtual_branches_prompt;
-use crate::view::{VirtualBranchesCheckoutTarget, WorktreePopoverKind, virtual_branches_owns_workdir};
 use crate::view::gitcomet_view_requests::{RootRequest, RootRequests as _};
+use crate::view::panels::popover::virtual_branches_prompt;
+use crate::view::{
+    VirtualBranchesCheckoutTarget, WorktreePopoverKind, virtual_branches_owns_workdir,
+};
 
 impl PopoverHost {
     pub(in crate::view) fn context_menu_activate_action(

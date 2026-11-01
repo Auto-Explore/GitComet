@@ -18,8 +18,8 @@ use gitcomet_core::domain::CommitId;
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::services::{CommandOutput, CommitOperationOutcome, Result};
 use gitcomet_core::virtual_branches::{
-    AssignmentIndex, VirtualBranch, VIRTUAL_BRANCHES_BRANCH, VIRTUAL_BRANCHES_REF_PREFIX, VirtualBranchesState,
-    hunk_spans, synthesize_for_branch,
+    AssignmentIndex, VIRTUAL_BRANCHES_BRANCH, VIRTUAL_BRANCHES_REF_PREFIX, VirtualBranch,
+    VirtualBranchesState, hunk_spans, synthesize_for_branch,
 };
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -42,11 +42,13 @@ impl GixRepo {
     }
 
     fn virtual_branches_state_path(&self) -> PathBuf {
-        self.virtual_branches_dir().join(VIRTUAL_BRANCHES_STATE_FILE)
+        self.virtual_branches_dir()
+            .join(VIRTUAL_BRANCHES_STATE_FILE)
     }
 
     fn virtual_branches_assignments_path(&self) -> PathBuf {
-        self.virtual_branches_dir().join(VIRTUAL_BRANCHES_ASSIGNMENTS_FILE)
+        self.virtual_branches_dir()
+            .join(VIRTUAL_BRANCHES_ASSIGNMENTS_FILE)
     }
 
     /// A `git` command that reads the target and target-ish revision without
@@ -115,8 +117,11 @@ impl GixRepo {
                 dir.display()
             )))
         })?;
-        let json = serde_json::to_vec_pretty(state)
-            .map_err(|e| Error::new(ErrorKind::Backend(format!("serializing virtual branches: {e}"))))?;
+        let json = serde_json::to_vec_pretty(state).map_err(|e| {
+            Error::new(ErrorKind::Backend(format!(
+                "serializing virtual branches: {e}"
+            )))
+        })?;
         write_atomically(&self.virtual_branches_state_path(), &json)
     }
 
@@ -1067,7 +1072,8 @@ mod tests {
         let state = VirtualBranchesState::new(&default_branch)
             .with_branches(vec![VirtualBranch::new("api"), VirtualBranch::new("ui")]);
         let repo = open_repo(root);
-        repo.write_virtual_branches(&state).expect("write virtual branches");
+        repo.write_virtual_branches(&state)
+            .expect("write virtual branches");
         (temp, repo, default_branch)
     }
 
@@ -1084,13 +1090,16 @@ mod tests {
     fn entering_the_virtual_branches_puts_every_applied_branch_in_the_files() {
         let (temp, repo, _) = repo_with_two_branches();
         let root = temp.path();
-        let tip = repo.enter_virtual_branches().expect("enter virtual branches");
+        let tip = repo
+            .enter_virtual_branches()
+            .expect("enter virtual branches");
 
         assert_eq!(read(root, "shared.txt"), "a1\nAPI\na3\n", "api is applied");
         assert_eq!(read(root, "moved.txt"), "ui-x\n", "ui is applied");
         assert_eq!(read(root, "mine.txt"), "y\n");
         assert_eq!(
-            repo.current_branch(&gitcomet_core::services::CancellationToken::new()).expect("current branch"),
+            repo.current_branch(&gitcomet_core::services::CancellationToken::new())
+                .expect("current branch"),
             VIRTUAL_BRANCHES_BRANCH,
             "the working directory is the virtual branches"
         );
@@ -1103,16 +1112,22 @@ mod tests {
         // directory without taking uncommitted work with it.
         let (temp, repo, _) = repo_with_two_branches();
         let root = temp.path();
-        repo.enter_virtual_branches().expect("enter virtual branches");
+        repo.enter_virtual_branches()
+            .expect("enter virtual branches");
 
         std::fs::write(root.join("mine.txt"), "y\nMY UNCOMMITTED WORK\n").unwrap();
 
         let mut state = repo.read_virtual_branches().expect("read virtual branches");
         state
-            .set_applied("ui", gitcomet_core::virtual_branches::BranchApplyState::Unapplied)
+            .set_applied(
+                "ui",
+                gitcomet_core::virtual_branches::BranchApplyState::Unapplied,
+            )
             .expect("unapply");
-        repo.write_virtual_branches(&state).expect("write virtual branches");
-        repo.update_virtual_branches_branch(&["api"]).expect("rebuild");
+        repo.write_virtual_branches(&state)
+            .expect("write virtual branches");
+        repo.update_virtual_branches_branch(&["api"])
+            .expect("rebuild");
 
         assert_eq!(
             read(root, "moved.txt"),
@@ -1135,16 +1150,21 @@ mod tests {
         // a refusal cannot leave the two disagreeing.
         let (temp, repo, _) = repo_with_two_branches();
         let root = temp.path();
-        repo.enter_virtual_branches().expect("enter virtual branches");
+        repo.enter_virtual_branches()
+            .expect("enter virtual branches");
         let before = git(root, &["rev-parse", VIRTUAL_BRANCHES_BRANCH]);
 
         // Edit the very file `api` changed, then unapply it.
         std::fs::write(root.join("shared.txt"), "a1\nAPI\nMINE\na3\n").unwrap();
         let mut state = repo.read_virtual_branches().expect("read virtual branches");
         state
-            .set_applied("api", gitcomet_core::virtual_branches::BranchApplyState::Unapplied)
+            .set_applied(
+                "api",
+                gitcomet_core::virtual_branches::BranchApplyState::Unapplied,
+            )
             .expect("unapply");
-        repo.write_virtual_branches(&state).expect("write virtual branches");
+        repo.write_virtual_branches(&state)
+            .expect("write virtual branches");
 
         assert!(
             repo.update_virtual_branches_branch(&["ui"]).is_err(),
@@ -1183,11 +1203,19 @@ mod tests {
     fn leaving_the_virtual_branches_returns_to_the_branch_it_came_from() {
         let (temp, repo, _) = repo_with_two_branches();
         let root = temp.path();
-        let original = repo.current_branch(&gitcomet_core::services::CancellationToken::new()).expect("current branch");
-        repo.enter_virtual_branches().expect("enter virtual branches");
+        let original = repo
+            .current_branch(&gitcomet_core::services::CancellationToken::new())
+            .expect("current branch");
+        repo.enter_virtual_branches()
+            .expect("enter virtual branches");
 
-        repo.leave_virtual_branches(&original).expect("leave virtual branches");
-        assert_eq!(repo.current_branch(&gitcomet_core::services::CancellationToken::new()).expect("current branch"), original);
+        repo.leave_virtual_branches(&original)
+            .expect("leave virtual branches");
+        assert_eq!(
+            repo.current_branch(&gitcomet_core::services::CancellationToken::new())
+                .expect("current branch"),
+            original
+        );
         assert_eq!(
             read(root, "moved.txt"),
             "x\n",
@@ -1561,7 +1589,8 @@ mod tests {
         let state = VirtualBranchesState::new(&default_branch)
             .with_branches(vec![VirtualBranch::new("api"), VirtualBranch::new("ui")]);
         let repo = open_repo(root);
-        repo.write_virtual_branches(&state).expect("write virtual branches");
+        repo.write_virtual_branches(&state)
+            .expect("write virtual branches");
         (temp, repo, default_branch)
     }
 
@@ -1677,7 +1706,8 @@ mod tests {
         state
             .set_parent("ui", Some("api"))
             .expect("stacked branch ui on api");
-        repo.write_virtual_branches(&state).expect("write virtual branches");
+        repo.write_virtual_branches(&state)
+            .expect("write virtual branches");
         assign_the_two_hunks(&repo);
 
         repo.commit_paths_to_virtual_branch("api", "the api change", &[Path::new("shared.txt")])
@@ -1788,10 +1818,11 @@ mod tests {
 
         let default_branch = git(root, &["symbolic-ref", "--short", "HEAD"]);
         git(root, &["branch", "api"]);
-        let state =
-            VirtualBranchesState::new(&default_branch).with_branches(vec![VirtualBranch::new("api")]);
+        let state = VirtualBranchesState::new(&default_branch)
+            .with_branches(vec![VirtualBranch::new("api")]);
         let repo = open_repo(root);
-        repo.write_virtual_branches(&state).expect("write virtual branches");
+        repo.write_virtual_branches(&state)
+            .expect("write virtual branches");
 
         std::fs::write(root.join("run.sh"), "#!/bin/sh\necho bye\n").unwrap();
         let mut index = AssignmentIndex::new();
@@ -1879,7 +1910,8 @@ mod tests {
             VirtualBranch::new("right"),
         ]);
         let repo = open_repo(root);
-        repo.write_virtual_branches(&state).expect("write virtual branches");
+        repo.write_virtual_branches(&state)
+            .expect("write virtual branches");
         (temp, repo, default_branch)
     }
 
@@ -1924,7 +1956,8 @@ mod tests {
             VirtualBranch::new("ui").with_parent("api"),
         ]);
         let repo = open_repo(root);
-        repo.write_virtual_branches(&state).expect("write virtual branches");
+        repo.write_virtual_branches(&state)
+            .expect("write virtual branches");
         (temp, repo, default_branch)
     }
 
@@ -1975,7 +2008,8 @@ mod tests {
             "{both}"
         );
 
-        repo.update_virtual_branches_branch(&["api"]).expect("unapply ui");
+        repo.update_virtual_branches_branch(&["api"])
+            .expect("unapply ui");
         let one = virtual_branches_log(root);
         assert!(one.contains("Apply api"), "{one}");
         assert!(
@@ -1991,7 +2025,8 @@ mod tests {
         let (temp, repo, _) = repo_with_two_branches();
         let root = temp.path();
 
-        repo.update_virtual_branches_branch(&["api", "ui"]).expect("first");
+        repo.update_virtual_branches_branch(&["api", "ui"])
+            .expect("first");
         let tree = format!("{VIRTUAL_BRANCHES_BRANCH}^{{tree}}");
         let tree_after_first = git(root, &["rev-parse", &tree]);
         let commits_after_first = virtual_branches_log(root).lines().count();
@@ -2097,7 +2132,8 @@ mod tests {
         // A file written by a newer version, or half-written by a crash, must
         // not make the whole repository unusable: the user rebuilds from the UI.
         let (_temp, repo, _) = repo_with_two_branches();
-        std::fs::write(repo.virtual_branches_state_path(), b"{ this is not json").expect("corrupt it");
+        std::fs::write(repo.virtual_branches_state_path(), b"{ this is not json")
+            .expect("corrupt it");
 
         let state = repo
             .read_virtual_branches()
@@ -2115,7 +2151,8 @@ mod tests {
         // still cannot read, and that data is gone.
         let (_temp, repo, _) = repo_with_two_branches();
         std::fs::remove_file(repo.virtual_branches_state_path()).expect("remove the file");
-        std::fs::create_dir(repo.virtual_branches_state_path()).expect("put something unreadable there");
+        std::fs::create_dir(repo.virtual_branches_state_path())
+            .expect("put something unreadable there");
 
         let error = repo
             .read_virtual_branches()
@@ -2126,7 +2163,8 @@ mod tests {
         );
 
         // The assignments file follows the same rule.
-        std::fs::create_dir(repo.virtual_branches_assignments_path()).expect("same for assignments");
+        std::fs::create_dir(repo.virtual_branches_assignments_path())
+            .expect("same for assignments");
         assert!(repo.read_virtual_branches_assignments().is_err());
     }
 
@@ -2167,9 +2205,13 @@ mod tests {
             Some("ui".to_string()),
         );
 
-        repo.write_virtual_branches_assignments(&index).expect("write");
+        repo.write_virtual_branches_assignments(&index)
+            .expect("write");
 
-        assert_eq!(repo.read_virtual_branches_assignments().expect("read"), index);
+        assert_eq!(
+            repo.read_virtual_branches_assignments().expect("read"),
+            index
+        );
     }
 
     #[test]
@@ -2177,8 +2219,13 @@ mod tests {
         // Same reasoning as the virtual branches file: a corrupt file must not make
         // every changed file in the repository unusable.
         let (_temp, repo, _) = repo_with_two_branches();
-        std::fs::write(repo.virtual_branches_assignments_path(), b"not json at all").expect("corrupt it");
-        assert!(repo.read_virtual_branches_assignments().expect("read").is_empty());
+        std::fs::write(repo.virtual_branches_assignments_path(), b"not json at all")
+            .expect("corrupt it");
+        assert!(
+            repo.read_virtual_branches_assignments()
+                .expect("read")
+                .is_empty()
+        );
     }
 
     #[test]
@@ -2246,10 +2293,11 @@ mod tests {
         let remote_path = remote.path().to_string_lossy().into_owned();
         git(root, &["remote", "add", "origin", &remote_path]);
 
-        let state =
-            VirtualBranchesState::new(&default_branch).with_branches(vec![VirtualBranch::new("api")]);
+        let state = VirtualBranchesState::new(&default_branch)
+            .with_branches(vec![VirtualBranch::new("api")]);
         let repo = open_repo(root);
-        repo.write_virtual_branches(&state).expect("write virtual branches");
+        repo.write_virtual_branches(&state)
+            .expect("write virtual branches");
         (temp, remote, repo)
     }
 
@@ -2401,7 +2449,8 @@ mod tests {
         // are the user's work.
         let (temp, repo, _) = repo_with_two_branches();
         let root = temp.path();
-        repo.update_virtual_branches_branch(&["api", "ui"]).expect("build");
+        repo.update_virtual_branches_branch(&["api", "ui"])
+            .expect("build");
         assert!(git_succeeds(
             root,
             &[
@@ -2503,10 +2552,7 @@ mod tests {
             "nothing may have reached the remote"
         );
         assert!(
-            !git_succeeds(
-                root,
-                &["config", "--get", "branch.gitcomet/virtual.remote"]
-            ),
+            !git_succeeds(root, &["config", "--get", "branch.gitcomet/virtual.remote"]),
             "and no upstream may have been configured"
         );
     }

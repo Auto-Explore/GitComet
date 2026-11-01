@@ -1324,6 +1324,6 @@ mod load_scheduling;
 mod prepared_patch;
 mod repository_operations;
 mod retries_errors;
+mod reword;
 mod virtual_branches_edits;
 mod virtual_branches_switch;
-mod reword;

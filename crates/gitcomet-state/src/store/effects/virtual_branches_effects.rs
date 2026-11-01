@@ -14,12 +14,11 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use super::super::RepoId;
-use super::super::repository_runtime::RepositoryRuntimes;
 use super::super::executor::TaskExecutor;
+use super::super::repository_runtime::RepositoryRuntimes;
 use super::super::worker_channel::StoreWorkerSender;
 use super::util::{
-    missing_repo_error, send_or_log, spawn_detached_with_repo_or_else,
-    spawn_with_repo_or_else,
+    missing_repo_error, send_or_log, spawn_detached_with_repo_or_else, spawn_with_repo_or_else,
 };
 
 /// Read the virtual branches, its assignments, and the virtual branches-branch tip in one
@@ -218,7 +217,12 @@ fn apply_edit(
             below,
         } => {
             let before = state.get(name).and_then(|b| b.parent.clone());
-            state.move_to_stacked_branch(name, stacked_branch_base, relative_to.as_deref(), *below)?;
+            state.move_to_stacked_branch(
+                name,
+                stacked_branch_base,
+                relative_to.as_deref(),
+                *below,
+            )?;
             repo.write_virtual_branches(&state)?;
             // Only a change of stacked branch needs history rewritten; a reorder inside
             // the same stacked branch does not.

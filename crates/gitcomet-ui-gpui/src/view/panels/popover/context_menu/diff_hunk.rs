@@ -113,7 +113,8 @@ pub(super) fn model(
         .rendered_patch_diff_loadable()
         .and_then(Loadable::ready)
         .and_then(|diff| crate::view::diff_utils::hunk_fingerprint(diff.lines.as_slice(), src_ix));
-    if let Some(action) = virtual_branches_assign_action(repo_id, src_ix, diff_target, fingerprint) {
+    if let Some(action) = virtual_branches_assign_action(repo_id, src_ix, diff_target, fingerprint)
+    {
         items.push(ContextMenuItem::Separator);
         items.push(ContextMenuItem::Entry {
             label: "Assign to a branch...".into(),
@@ -143,7 +144,7 @@ mod tests {
                 repo_id: RepoId(1),
                 path,
                 hunk,
-            }) if path == std::path::PathBuf::from("src/lib.rs") && hunk == fingerprint
+            }) if path.as_path() == std::path::Path::new("src/lib.rs") && hunk == fingerprint
         ));
     }
 
@@ -157,7 +158,10 @@ mod tests {
             std::path::PathBuf::from("src/lib.rs"),
         );
         let fingerprint = gitcomet_core::virtual_branches::HunkFingerprint::of(&["NEW\n"], 1);
-        assert!(virtual_branches_assign_action(RepoId(1), 3, Some(&target), Some(fingerprint)).is_none());
+        assert!(
+            virtual_branches_assign_action(RepoId(1), 3, Some(&target), Some(fingerprint))
+                .is_none()
+        );
     }
 
     #[test]

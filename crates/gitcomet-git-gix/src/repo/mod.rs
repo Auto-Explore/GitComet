@@ -2089,15 +2089,22 @@ impl GitRepository for GixRepo {
         self.discard_worktree_changes_impl(paths)
     }
 
-    fn read_virtual_branches(&self) -> Result<gitcomet_core::virtual_branches::VirtualBranchesState> {
+    fn read_virtual_branches(
+        &self,
+    ) -> Result<gitcomet_core::virtual_branches::VirtualBranchesState> {
         self.read_virtual_branches_impl()
     }
 
-    fn write_virtual_branches(&self, state: &gitcomet_core::virtual_branches::VirtualBranchesState) -> Result<()> {
+    fn write_virtual_branches(
+        &self,
+        state: &gitcomet_core::virtual_branches::VirtualBranchesState,
+    ) -> Result<()> {
         self.write_virtual_branches_impl(state)
     }
 
-    fn read_virtual_branches_assignments(&self) -> Result<gitcomet_core::virtual_branches::AssignmentIndex> {
+    fn read_virtual_branches_assignments(
+        &self,
+    ) -> Result<gitcomet_core::virtual_branches::AssignmentIndex> {
         self.read_assignments_impl()
     }
 

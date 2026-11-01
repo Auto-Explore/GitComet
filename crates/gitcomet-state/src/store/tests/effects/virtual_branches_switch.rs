@@ -188,9 +188,8 @@ fn a_leave_that_carries_a_checkout_drops_the_checkout_when_the_leave_fails() {
         is_switch(&msg, false),
         "expected a failed leave to be reported, got {msg:?}"
     );
-    match replies.recv_timeout(std::time::Duration::from_millis(200)) {
-        Ok(later) => panic!("the checkout ran after a leave that failed: {later:?}"),
-        Err(_) => {}
+    if let Ok(later) = replies.recv_timeout(std::time::Duration::from_millis(200)) {
+        panic!("the checkout ran after a leave that failed: {later:?}");
     }
 }
 

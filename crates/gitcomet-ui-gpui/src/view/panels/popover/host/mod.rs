@@ -668,7 +668,8 @@ impl PopoverHost {
                     this.submit_create_branch(window, cx);
                 } else if matches!(this.popover, Some(PopoverKind::RenameBranchPrompt { .. })) {
                     this.submit_rename_branch(window, cx);
-                } else if let Some(PopoverKind::VirtualBranchesPrompt { .. }) = this.popover.clone() {
+                } else if let Some(PopoverKind::VirtualBranchesPrompt { .. }) = this.popover.clone()
+                {
                     this.submit_virtual_branches_prompt(window, cx);
                 } else {
                     this.submit_checkout_remote_branch(window, cx);
@@ -2095,7 +2096,7 @@ impl PopoverHost {
                     let value = prompt.value.clone();
                     self.create_branch_input.update(cx, |input, cx| {
                         input.clear_transient_key_presses();
-                                    input.set_text(value, cx);
+                        input.set_text(value, cx);
                         cx.notify();
                     });
                     if prompt.kind.asks_for_text() {

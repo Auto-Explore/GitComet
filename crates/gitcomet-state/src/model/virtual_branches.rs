@@ -8,7 +8,8 @@
 //! rather than blanking out.
 
 use gitcomet_core::virtual_branches::{
-    AssignmentIndex, BranchApplyState, FileAssignment, StackedBranch, VirtualBranch, VirtualBranchesState,
+    AssignmentIndex, BranchApplyState, FileAssignment, StackedBranch, VirtualBranch,
+    VirtualBranchesState,
 };
 use rustc_hash::FxHashMap;
 use std::path::PathBuf;
@@ -149,11 +150,17 @@ impl VirtualBranchesRepoState {
     }
 
     pub fn applied_count(&self) -> usize {
-        self.stacked_branches.iter().map(StackedBranch::applied_count).sum()
+        self.stacked_branches
+            .iter()
+            .map(StackedBranch::applied_count)
+            .sum()
     }
 
     pub fn total_count(&self) -> usize {
-        self.stacked_branches.iter().map(|stacked_branch| stacked_branch.branches.len()).sum()
+        self.stacked_branches
+            .iter()
+            .map(|stacked_branch| stacked_branch.branches.len())
+            .sum()
     }
 
     /// Changed files with the branch — or the branches — they are assigned to.
@@ -351,7 +358,9 @@ impl VirtualBranchesEdit {
     /// commits have to be replayed on the branch that displaced them.
     pub fn rewrites_history(&self) -> bool {
         match self {
-            Self::SetParent { .. } | Self::MoveToStackedBranch { .. } | Self::SetTarget { .. } => true,
+            Self::SetParent { .. } | Self::MoveToStackedBranch { .. } | Self::SetTarget { .. } => {
+                true
+            }
             Self::InsertRelativeTo { below, .. } => *below,
             _ => false,
         }
@@ -428,8 +437,8 @@ mod tests {
         index.set(PathBuf::from("src/b.rs"), None);
         virtual_branches.assignments = Arc::new(index);
 
-        let files =
-            virtual_branches.files_by_branch(&[PathBuf::from("src/a.rs"), PathBuf::from("src/b.rs")]);
+        let files = virtual_branches
+            .files_by_branch(&[PathBuf::from("src/a.rs"), PathBuf::from("src/b.rs")]);
         assert_eq!(files[0].branch.as_deref(), Some("api"));
         assert_eq!(files[1].branch, None);
     }
@@ -525,9 +534,11 @@ mod tests {
 
     #[test]
     fn clearing_forgets_that_the_working_directory_was_in_the_virtual_branches() {
-        let mut virtual_branches = VirtualBranchesRepoState::default();
-        virtual_branches.active = true;
-        virtual_branches.checkout_base = Some("main".into());
+        let mut virtual_branches = VirtualBranchesRepoState {
+            active: true,
+            checkout_base: Some("main".into()),
+            ..Default::default()
+        };
         virtual_branches.clear();
         assert!(!virtual_branches.active);
         assert!(

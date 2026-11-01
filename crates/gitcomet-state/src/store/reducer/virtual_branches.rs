@@ -9,11 +9,11 @@
 
 use super::prepared::ReducerInputs;
 use super::util::{push_diagnostic, push_notification};
-use crate::msg::{ReferenceEffect, StatusEffect};
 use crate::model::{
     AppNotificationKind, AppState, DiagnosticKind, Loadable, RepoId, RepoState, VirtualBranchesEdit,
 };
 use crate::msg::{CheckoutRequest, Effect};
+use crate::msg::{ReferenceEffect, StatusEffect};
 use gitcomet_core::virtual_branches::{AssignmentIndex, BranchApplyState, VirtualBranchesState};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -59,7 +59,9 @@ pub(super) fn apply_virtual_branches_edit(
     // Matched by reference so the edit survives for `rewrites_history` and for
     // the effect below; the assignment owns copies rather than the fields.
     let assignment = match &edit {
-        VirtualBranchesEdit::AssignFile { path, branch } => Some((path.clone(), None, branch.clone())),
+        VirtualBranchesEdit::AssignFile { path, branch } => {
+            Some((path.clone(), None, branch.clone()))
+        }
         VirtualBranchesEdit::AssignHunk { path, hunk, branch } => {
             Some((path.clone(), Some(*hunk), branch.clone()))
         }
@@ -454,7 +456,9 @@ pub(super) fn virtual_branches_loaded(
     repo_id: RepoId,
     result: gitcomet_core::services::Result<VirtualBranchesState>,
     assignments: gitcomet_core::services::Result<AssignmentIndex>,
-    virtual_branches_commit: gitcomet_core::services::Result<Option<gitcomet_core::domain::CommitId>>,
+    virtual_branches_commit: gitcomet_core::services::Result<
+        Option<gitcomet_core::domain::CommitId>,
+    >,
 ) -> Vec<Effect> {
     let Some(repo) = repo_mut(state, repo_id) else {
         return Vec::new();
@@ -507,7 +511,9 @@ pub(super) fn virtual_branches_loaded(
     }
     // A branch the virtual branches does not know about yet cannot be applied, so the
     // view needs the ordinary branch list alongside the virtual branches.
-    effects.push(Effect::References(ReferenceEffect::LoadBranches { repo_id }));
+    effects.push(Effect::References(ReferenceEffect::LoadBranches {
+        repo_id,
+    }));
     effects
 }
 
@@ -605,14 +611,20 @@ pub(super) fn virtual_branches_push_finished(
 
     match result {
         Ok(_) => {
-            push_notification(inputs,
-            state, AppNotificationKind::Info, format!("Pushed '{name}'"));
-            vec![Effect::References(ReferenceEffect::LoadBranches { repo_id })]
+            push_notification(
+                inputs,
+                state,
+                AppNotificationKind::Info,
+                format!("Pushed '{name}'"),
+            );
+            vec![Effect::References(ReferenceEffect::LoadBranches {
+                repo_id,
+            })]
         }
         Err(error) => {
             push_notification(
                 inputs,
-            state,
+                state,
                 AppNotificationKind::Error,
                 format!("Could not push '{name}': {error}"),
             );
@@ -656,7 +668,10 @@ mod tests {
         assert_eq!(effects.len(), 1);
         assert!(matches!(effects[0], Effect::LoadVirtualBranches { .. }));
         assert!(state.repos[0].virtual_branches.busy.loading);
-        assert!(matches!(state.repos[0].virtual_branches.state, Loadable::Loading));
+        assert!(matches!(
+            state.repos[0].virtual_branches.state,
+            Loadable::Loading
+        ));
     }
 
     #[test]
@@ -981,8 +996,14 @@ mod tests {
     fn a_finished_switch_records_where_the_working_directory_is() {
         let mut state = repo_with_virtual_branches();
         state.repos[0].virtual_branches.busy.switching = true;
-        virtual_branches_active_finished(&crate::store::reducer::test_inputs::clock(),
-            &mut state, RepoId(1), true, Some("main".into()), Ok(()));
+        virtual_branches_active_finished(
+            &crate::store::reducer::test_inputs::clock(),
+            &mut state,
+            RepoId(1),
+            true,
+            Some("main".into()),
+            Ok(()),
+        );
 
         let virtual_branches = &state.repos[0].virtual_branches;
         assert!(virtual_branches.active);
@@ -995,8 +1016,14 @@ mod tests {
         let mut state = repo_with_virtual_branches();
         state.repos[0].virtual_branches.active = true;
         state.repos[0].virtual_branches.checkout_base = Some("main".into());
-        virtual_branches_active_finished(&crate::store::reducer::test_inputs::clock(),
-            &mut state, RepoId(1), false, None, Ok(()));
+        virtual_branches_active_finished(
+            &crate::store::reducer::test_inputs::clock(),
+            &mut state,
+            RepoId(1),
+            false,
+            None,
+            Ok(()),
+        );
 
         let virtual_branches = &state.repos[0].virtual_branches;
         assert!(!virtual_branches.active);
@@ -1027,7 +1054,10 @@ mod tests {
         let virtual_branches = &state.repos[0].virtual_branches;
         assert!(!virtual_branches.active, "HEAD never moved");
         assert!(virtual_branches.checkout_base.is_none());
-        assert!(!virtual_branches.busy.switching, "but the operation is over");
+        assert!(
+            !virtual_branches.busy.switching,
+            "but the operation is over"
+        );
         assert!(
             effects
                 .iter()
@@ -1041,22 +1071,26 @@ mod tests {
         // Entering changes the files and leaving changes which branch HEAD is
         // on, so both ordinary views are now stale.
         let mut state = repo_with_virtual_branches();
-        let effects = virtual_branches_active_finished(&crate::store::reducer::test_inputs::clock(),
-            &mut state, RepoId(1), true, None, Ok(()));
+        let effects = virtual_branches_active_finished(
+            &crate::store::reducer::test_inputs::clock(),
+            &mut state,
+            RepoId(1),
+            true,
+            None,
+            Ok(()),
+        );
         assert_ne!(
             state.repos[0].virtual_branches.rev, 0,
             "the switch has to reach the cached presentation, which only sees this counter"
         );
-        assert!(
-            effects
-                .iter()
-                .any(|effect| matches!(effect, Effect::Status(StatusEffect::LoadWorktreeStatus { repo_id: RepoId(1) })))
-        );
-        assert!(
-            effects
-                .iter()
-                .any(|effect| matches!(effect, Effect::References(ReferenceEffect::LoadBranches { repo_id: RepoId(1) })))
-        );
+        assert!(effects.iter().any(|effect| matches!(
+            effect,
+            Effect::Status(StatusEffect::LoadWorktreeStatus { repo_id: RepoId(1) })
+        )));
+        assert!(effects.iter().any(|effect| matches!(
+            effect,
+            Effect::References(ReferenceEffect::LoadBranches { repo_id: RepoId(1) })
+        )));
     }
 
     #[test]
@@ -1150,8 +1184,13 @@ mod tests {
     #[test]
     fn committing_an_empty_message_is_refused() {
         let mut state = repo_with_virtual_branches();
-        let effects = commit_branch(&crate::store::reducer::test_inputs::clock(),
-            &mut state, RepoId(1), "api".into(), "   ".into());
+        let effects = commit_branch(
+            &crate::store::reducer::test_inputs::clock(),
+            &mut state,
+            RepoId(1),
+            "api".into(),
+            "   ".into(),
+        );
         assert!(effects.is_empty());
         assert!(!state.repos[0].virtual_branches.busy.committing);
     }
@@ -1159,8 +1198,13 @@ mod tests {
     #[test]
     fn committing_a_branch_with_no_assigned_files_is_refused() {
         let mut state = repo_with_virtual_branches();
-        let effects = commit_branch(&crate::store::reducer::test_inputs::clock(),
-            &mut state, RepoId(1), "api".into(), "Add API".into());
+        let effects = commit_branch(
+            &crate::store::reducer::test_inputs::clock(),
+            &mut state,
+            RepoId(1),
+            "api".into(),
+            "Add API".into(),
+        );
         assert!(effects.is_empty());
     }
 
@@ -1171,8 +1215,13 @@ mod tests {
         index.set(PathBuf::from("a.rs"), Some("api".into()));
         state.repos[0].virtual_branches.assignments = Arc::new(index);
 
-        let effects = commit_branch(&crate::store::reducer::test_inputs::clock(),
-            &mut state, RepoId(1), "api".into(), "Add API".into());
+        let effects = commit_branch(
+            &crate::store::reducer::test_inputs::clock(),
+            &mut state,
+            RepoId(1),
+            "api".into(),
+            "Add API".into(),
+        );
         assert_eq!(effects.len(), 1);
         match &effects[0] {
             Effect::ApplyVirtualBranchesEdit {
@@ -1224,11 +1273,10 @@ mod tests {
             },
             Ok(gitcomet_core::services::CommitOperationOutcome::default()),
         );
-        assert!(
-            effects
-                .iter()
-                .any(|effect| matches!(effect, Effect::Status(StatusEffect::LoadWorktreeStatus { .. })))
-        );
+        assert!(effects.iter().any(|effect| matches!(
+            effect,
+            Effect::Status(StatusEffect::LoadWorktreeStatus { .. })
+        )));
         assert!(
             effects
                 .iter()
@@ -1368,8 +1416,12 @@ mod tests {
         index.set(PathBuf::from("b.rs"), Some("api".into()));
         state.repos[0].virtual_branches.assignments = Arc::new(index);
 
-        let effects = commit_single_file(&crate::store::reducer::test_inputs::clock(),
-            &mut state, RepoId(1), PathBuf::from("a.rs"));
+        let effects = commit_single_file(
+            &crate::store::reducer::test_inputs::clock(),
+            &mut state,
+            RepoId(1),
+            PathBuf::from("a.rs"),
+        );
         assert_eq!(effects.len(), 1);
         match &effects[0] {
             Effect::ApplyVirtualBranchesEdit {
@@ -1402,8 +1454,12 @@ mod tests {
     #[test]
     fn committing_a_file_that_is_on_no_branch_says_so_instead_of_committing_it_anywhere() {
         let mut state = repo_with_virtual_branches();
-        let effects = commit_single_file(&crate::store::reducer::test_inputs::clock(),
-            &mut state, RepoId(1), PathBuf::from("a.rs"));
+        let effects = commit_single_file(
+            &crate::store::reducer::test_inputs::clock(),
+            &mut state,
+            RepoId(1),
+            PathBuf::from("a.rs"),
+        );
 
         assert!(effects.is_empty(), "there is nowhere for it to go");
         assert_eq!(state.notifications.len(), 1);
@@ -1434,8 +1490,12 @@ mod tests {
         );
         state.repos[0].virtual_branches.assignments = Arc::new(index);
 
-        let effects = commit_single_file(&crate::store::reducer::test_inputs::clock(),
-            &mut state, RepoId(1), PathBuf::from("a.rs"));
+        let effects = commit_single_file(
+            &crate::store::reducer::test_inputs::clock(),
+            &mut state,
+            RepoId(1),
+            PathBuf::from("a.rs"),
+        );
 
         assert!(
             effects.is_empty(),
@@ -1453,8 +1513,12 @@ mod tests {
         index.set(PathBuf::from("a.rs"), Some("vanished".into()));
         state.repos[0].virtual_branches.assignments = Arc::new(index);
 
-        let effects = commit_single_file(&crate::store::reducer::test_inputs::clock(),
-            &mut state, RepoId(1), PathBuf::from("a.rs"));
+        let effects = commit_single_file(
+            &crate::store::reducer::test_inputs::clock(),
+            &mut state,
+            RepoId(1),
+            PathBuf::from("a.rs"),
+        );
 
         assert!(effects.is_empty());
         assert_eq!(state.notifications.len(), 1);
@@ -1470,8 +1534,12 @@ mod tests {
         state.repos[0].virtual_branches.assignments = Arc::new(index);
         state.repos[0].virtual_branches.busy.mutating = true;
 
-        let effects = commit_single_file(&crate::store::reducer::test_inputs::clock(),
-            &mut state, RepoId(1), PathBuf::from("a.rs"));
+        let effects = commit_single_file(
+            &crate::store::reducer::test_inputs::clock(),
+            &mut state,
+            RepoId(1),
+            PathBuf::from("a.rs"),
+        );
 
         assert!(effects.is_empty());
         assert!(

@@ -62,63 +62,57 @@ pub(super) fn send_unavailable_git_effect_result(
                 error: git_unavailable_error(runtime),
             }))
         }
-        Effect::LoadVirtualBranches { repo_id } => {
-            send(Msg::Internal(crate::msg::InternalMsg::VirtualBranchesLoaded {
+        Effect::LoadVirtualBranches { repo_id } => send(Msg::Internal(
+            crate::msg::InternalMsg::VirtualBranchesLoaded {
                 repo_id,
                 result: Err(git_unavailable_error(runtime)),
                 assignments: Err(git_unavailable_error(runtime)),
                 virtual_branches_commit: Err(git_unavailable_error(runtime)),
-            }))
-        }
-        Effect::ApplyVirtualBranchesEdit { repo_id, edit } => {
-            send(Msg::Internal(crate::msg::InternalMsg::VirtualBranchesEditFinished {
+            },
+        )),
+        Effect::ApplyVirtualBranchesEdit { repo_id, edit } => send(Msg::Internal(
+            crate::msg::InternalMsg::VirtualBranchesEditFinished {
                 repo_id,
                 edit,
                 result: Err(git_unavailable_error(runtime)),
-            }))
-        }
+            },
+        )),
         Effect::AssignVirtualBranchesFile {
             repo_id,
             path,
             hunk,
             branch,
-        } => {
-            send(Msg::Internal(
-                crate::msg::InternalMsg::VirtualBranchesAssignFinished {
-                    repo_id,
-                    path,
-                    hunk,
-                    branch,
-                    result: Err(git_unavailable_error(runtime)),
-                },
-            ))
-        }
+        } => send(Msg::Internal(
+            crate::msg::InternalMsg::VirtualBranchesAssignFinished {
+                repo_id,
+                path,
+                hunk,
+                branch,
+                result: Err(git_unavailable_error(runtime)),
+            },
+        )),
         Effect::EnterVirtualBranches {
             repo_id,
             checkout_base,
-        } => {
-            send(Msg::Internal(
-                crate::msg::InternalMsg::VirtualBranchesActiveFinished {
-                    repo_id,
-                    active: true,
-                    checkout_base,
-                    result: Err(git_unavailable_error(runtime)),
-                },
-            ))
-        }
+        } => send(Msg::Internal(
+            crate::msg::InternalMsg::VirtualBranchesActiveFinished {
+                repo_id,
+                active: true,
+                checkout_base,
+                result: Err(git_unavailable_error(runtime)),
+            },
+        )),
         Effect::LeaveVirtualBranches {
             repo_id,
             checkout_base,
-        } => {
-            send(Msg::Internal(
-                crate::msg::InternalMsg::VirtualBranchesActiveFinished {
-                    repo_id,
-                    active: false,
-                    checkout_base,
-                    result: Err(git_unavailable_error(runtime)),
-                },
-            ))
-        }
+        } => send(Msg::Internal(
+            crate::msg::InternalMsg::VirtualBranchesActiveFinished {
+                repo_id,
+                active: false,
+                checkout_base,
+                result: Err(git_unavailable_error(runtime)),
+            },
+        )),
         // The checkout waiting for this leave goes with it: the working
         // directory could not be moved off the virtual branches, and running the
         // checkout anyway is the stranding the leave exists to prevent.
@@ -126,23 +120,21 @@ pub(super) fn send_unavailable_git_effect_result(
             repo_id,
             checkout_base,
             then: _,
-        } => {
-            send(Msg::Internal(
-                crate::msg::InternalMsg::VirtualBranchesActiveFinished {
-                    repo_id,
-                    active: false,
-                    checkout_base,
-                    result: Err(git_unavailable_error(runtime)),
-                },
-            ))
-        }
-        Effect::PushVirtualBranchesBranch { repo_id, name } => {
-            send(Msg::Internal(crate::msg::InternalMsg::VirtualBranchesPushFinished {
+        } => send(Msg::Internal(
+            crate::msg::InternalMsg::VirtualBranchesActiveFinished {
+                repo_id,
+                active: false,
+                checkout_base,
+                result: Err(git_unavailable_error(runtime)),
+            },
+        )),
+        Effect::PushVirtualBranchesBranch { repo_id, name } => send(Msg::Internal(
+            crate::msg::InternalMsg::VirtualBranchesPushFinished {
                 repo_id,
                 name,
                 result: Err(git_unavailable_error(runtime)),
-            }))
-        }
+            },
+        )),
         Effect::IndexedHistory(work) => send(Msg::IndexedHistory(
             work.failed(git_unavailable_error(runtime)),
         )),

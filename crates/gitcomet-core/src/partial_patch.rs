@@ -207,7 +207,6 @@ pub fn hunk_fingerprint(
     ))
 }
 
-
 pub fn build_unified_patch_for_hunk(
     diff: &[impl UnifiedDiffLine],
     hunk_src_ix: usize,

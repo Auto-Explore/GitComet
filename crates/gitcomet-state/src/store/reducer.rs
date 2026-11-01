@@ -47,7 +47,8 @@ mod worktree_removal;
 
 use crate::model::{AppState, Loadable, RepoId};
 use crate::msg::{
-    CheckoutRequest, ConflictRegionChoice, Effect, Msg, RepoPath, RepoPathList, WorktreeSaveBaseline,
+    CheckoutRequest, ConflictRegionChoice, Effect, Msg, RepoPath, RepoPathList,
+    WorktreeSaveBaseline,
 };
 use auth::{annex_adjusted_refusal, annex_takeover};
 use rustc_hash::FxHashMap;
@@ -2837,7 +2838,9 @@ fn reduce_inner(
             result,
         }) => auth::repo_command_finished(inputs, repos, id_alloc, state, repo_id, command, result),
         // ── Virtual branches ───────────────────────────────────────────
-        Msg::LoadVirtualBranches { repo_id } => virtual_branches::load_virtual_branches(state, repo_id),
+        Msg::LoadVirtualBranches { repo_id } => {
+            virtual_branches::load_virtual_branches(state, repo_id)
+        }
         Msg::ApplyVirtualBranchesEdit { repo_id, edit } => {
             virtual_branches::apply_virtual_branches_edit(state, repo_id, edit)
         }
@@ -2854,36 +2857,60 @@ fn reduce_inner(
         Msg::CommitVirtualBranchesFile { repo_id, path } => {
             virtual_branches::commit_single_file(inputs, state, repo_id, path)
         }
-        Msg::DismissVirtualBranchesConflict { repo_id } => virtual_branches::dismiss_conflict(state, repo_id),
-        Msg::PushVirtualBranchesBranch { repo_id, name } => virtual_branches::push_branch(state, repo_id, name),
+        Msg::DismissVirtualBranchesConflict { repo_id } => {
+            virtual_branches::dismiss_conflict(state, repo_id)
+        }
+        Msg::PushVirtualBranchesBranch { repo_id, name } => {
+            virtual_branches::push_branch(state, repo_id, name)
+        }
         Msg::Internal(crate::msg::InternalMsg::VirtualBranchesLoaded {
             repo_id,
             result,
             assignments,
             virtual_branches_commit,
-        }) => virtual_branches::virtual_branches_loaded(inputs, state, repo_id, result, assignments, virtual_branches_commit),
+        }) => virtual_branches::virtual_branches_loaded(
+            inputs,
+            state,
+            repo_id,
+            result,
+            assignments,
+            virtual_branches_commit,
+        ),
         Msg::Internal(crate::msg::InternalMsg::VirtualBranchesEditFinished {
             repo_id,
             edit,
             result,
-        }) => virtual_branches::virtual_branches_edit_finished(inputs, state, repo_id, edit, result),
+        }) => {
+            virtual_branches::virtual_branches_edit_finished(inputs, state, repo_id, edit, result)
+        }
         Msg::Internal(crate::msg::InternalMsg::VirtualBranchesActiveFinished {
             repo_id,
             active,
             checkout_base,
             result,
-        }) => virtual_branches::virtual_branches_active_finished(inputs, state, repo_id, active, checkout_base, result),
+        }) => virtual_branches::virtual_branches_active_finished(
+            inputs,
+            state,
+            repo_id,
+            active,
+            checkout_base,
+            result,
+        ),
         Msg::Internal(crate::msg::InternalMsg::VirtualBranchesAssignFinished {
             repo_id,
             path,
             hunk,
             branch,
             result,
-        }) => virtual_branches::virtual_branches_assign_finished(inputs, state, repo_id, path, hunk, branch, result),
+        }) => virtual_branches::virtual_branches_assign_finished(
+            inputs, state, repo_id, path, hunk, branch, result,
+        ),
         Msg::Internal(crate::msg::InternalMsg::VirtualBranchesPushFinished {
             repo_id,
             name,
             result,
-        }) => virtual_branches::virtual_branches_push_finished(inputs, state, repo_id, name, result),
+        }) => {
+            virtual_branches::virtual_branches_push_finished(inputs, state, repo_id, name, result)
+        }
     }
 }

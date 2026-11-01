@@ -803,7 +803,10 @@ mod tests {
             checkout_base: Some("release/2.3".into()),
             result: Err(Error::new(ErrorKind::Backend("local changes".into()))),
         });
-        assert!(rendered.contains("VirtualBranchesActiveFinished"), "{rendered}");
+        assert!(
+            rendered.contains("VirtualBranchesActiveFinished"),
+            "{rendered}"
+        );
         assert!(rendered.contains("active"), "{rendered}");
         assert!(rendered.contains("true"), "{rendered}");
         assert!(rendered.contains("release/2.3"), "{rendered}");
@@ -836,7 +839,10 @@ mod tests {
             branch: Some("api".into()),
             result: Err(Error::new(ErrorKind::Backend("nope".into()))),
         });
-        assert!(rendered.contains("VirtualBranchesAssignFinished"), "{rendered}");
+        assert!(
+            rendered.contains("VirtualBranchesAssignFinished"),
+            "{rendered}"
+        );
         assert!(rendered.contains("src/lib.rs"), "{rendered}");
         assert!(rendered.contains("api"), "{rendered}");
     }

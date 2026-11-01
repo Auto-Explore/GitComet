@@ -2170,14 +2170,19 @@ pub trait GitRepository: Send + Sync {
     ///
     /// The state is validated before it is written, so a rejected edit leaves
     /// the stored virtual branches exactly as it was rather than half-applied.
-    fn write_virtual_branches(&self, _state: &crate::virtual_branches::VirtualBranchesState) -> Result<()> {
+    fn write_virtual_branches(
+        &self,
+        _state: &crate::virtual_branches::VirtualBranchesState,
+    ) -> Result<()> {
         Err(Error::new(ErrorKind::Unsupported(
             "virtual branches is not implemented for this backend",
         )))
     }
 
     /// Read which virtual branch each changed file belongs to.
-    fn read_virtual_branches_assignments(&self) -> Result<crate::virtual_branches::AssignmentIndex> {
+    fn read_virtual_branches_assignments(
+        &self,
+    ) -> Result<crate::virtual_branches::AssignmentIndex> {
         Err(Error::new(ErrorKind::Unsupported(
             "virtual branches is not implemented for this backend",
         )))

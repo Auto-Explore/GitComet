@@ -251,7 +251,11 @@ pub(super) fn panel(
             .child(
                 components::Button::new("virtual_branches_prompt_go", kind.confirm_label())
                     .focus_handle(this.create_branch_from_ref_focus.submit.clone())
-                    .separated_end_slot(hotkey_hint(theme, "virtual_branches_prompt_go_hint", "Enter"))
+                    .separated_end_slot(hotkey_hint(
+                        theme,
+                        "virtual_branches_prompt_go_hint",
+                        "Enter",
+                    ))
                     .style(components::ButtonStyle::Filled)
                     .disabled(!this.can_submit_virtual_branches_prompt(cx))
                     .on_click(theme, cx, |this, _e, window, cx| {
@@ -438,14 +442,24 @@ mod tests {
 
     #[test]
     fn the_detail_line_names_the_branch_and_says_history_is_rewritten() {
-        let line = detail_line(VirtualBranchesPromptKind::SetParent, "feature/api", None, "main");
+        let line = detail_line(
+            VirtualBranchesPromptKind::SetParent,
+            "feature/api",
+            None,
+            "main",
+        );
         assert!(line.contains("feature/api"), "{line}");
         assert!(line.contains("rebased"), "{line}");
     }
 
     #[test]
     fn an_empty_base_makes_the_branch_independent() {
-        let line = detail_line(VirtualBranchesPromptKind::SetParent, "feature/api", None, "");
+        let line = detail_line(
+            VirtualBranchesPromptKind::SetParent,
+            "feature/api",
+            None,
+            "",
+        );
         assert!(line.contains("independent"), "{line}");
     }
 
