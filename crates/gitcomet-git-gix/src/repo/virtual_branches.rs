@@ -247,7 +247,7 @@ impl GixRepo {
             return Err(Error::new(ErrorKind::Backend(format!(
                 "'{branch}' is {product}'s own branch and is rebuilt from the applied \
                  branches, so {action} here would be undone by the next apply. Use \
-                 the VirtualBranches tab: it works on the branch each change belongs to, \
+                 the Virtual branches tab: it works on the branch each change belongs to, \
                  and pushes a named branch rather than HEAD."
             ))));
         }
@@ -855,7 +855,7 @@ fn conflict_message(name: &str, against: Option<&str>, paths: &[String]) -> Stri
         ),
         None => format!(
             "'{name}' could not be applied: it conflicts with the branches \
-             already in the virtual_branches, in {}\n\n\
+             already in the virtual branches, in {}\n\n\
              Unapply one of them, or resolve the conflict before applying \
              {name} again.",
             describe_paths(paths)
@@ -1661,7 +1661,7 @@ mod tests {
         assert_eq!(
             blob(root, VIRTUAL_BRANCHES_BRANCH, "shared.txt"),
             SPLIT_WORKING,
-            "the virtual_branches is the two branches together, which is what makes the \
+            "the virtual branches is the two branches together, which is what makes the \
              working directory show both changes"
         );
     }

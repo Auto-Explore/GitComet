@@ -961,7 +961,7 @@ fn picking_a_branch_while_the_virtual_branches_holds_the_working_directory_asks_
             popover,
             Some(PopoverKind::LeaveVirtualBranchesToCheckoutPrompt { .. })
         ),
-        "changing branch while the virtual_branches holds the working directory has to ask to leave \
+        "changing branch while the virtual branches holds the working directory has to ask to leave \
          it first, got {popover:?}"
     );
 

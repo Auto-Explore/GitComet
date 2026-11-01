@@ -760,7 +760,7 @@ mod tests {
         let mut state = repo_with_virtual_branches();
         let error = gitcomet_core::error::Error::new(gitcomet_core::error::ErrorKind::Backend(
             "'ui' could not be applied: it conflicts with the branches already \
-                 in the virtual_branches, in files git did not name"
+                 in the virtual branches, in files git did not name"
                 .into(),
         ));
         virtual_branches_edit_finished(
@@ -1276,7 +1276,7 @@ mod tests {
             Some(against) => format!("'{name}' conflicts with '{against}' in {listed}"),
             None => format!(
                 "'{name}' could not be applied: it conflicts with the branches \
-                 already in the virtual_branches, in {listed}"
+                 already in the virtual branches, in {listed}"
             ),
         };
         format!(

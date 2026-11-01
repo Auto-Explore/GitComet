@@ -19,16 +19,16 @@ pub(super) fn panel(
         .text(
             theme,
             format!(
-                "The working directory is on {branch}, the branch the virtual_branches rebuilds from \
+                "The working directory is on {branch}, the branch the virtual branches rebuilds from \
                  your applied branches. Checking out '{destination}' takes it off that branch, so \
-                 the virtual_branches has to be left first.",
+                 the virtual branches has to be left first.",
                 branch = gitcomet_core::virtual_branches::VIRTUAL_BRANCHES_BRANCH,
             ),
         )
         .note(
             theme,
-            "Nothing in the virtual_branches is lost: applied branches and their changes stay as they \
-             are, and opening the VirtualBranches tab puts the working directory back on the virtual_branches.",
+            "Nothing in the virtual branches is lost: applied branches and their changes stay as they \
+             are, and opening the Virtual branches tab puts the working directory back on the virtual branches.",
         )
         .render(
             theme,

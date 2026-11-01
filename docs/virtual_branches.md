@@ -1,12 +1,12 @@
-# The VirtualBranches: virtual branches and stacked branches
+# The Virtual branches: virtual branches and stacked branches
 
 GitComet has two ways to work. The **Branches** tab is the ordinary Git
-workflow: check out a branch, work, commit. The **VirtualBranches** tab is a
+workflow: check out a branch, work, commit. The **Virtual branches** tab is a
 GitButler-style alternative, for working on several things at once without
 checking any of them out.
 
-This document explains the model behind the VirtualBranches tab: what a virtual
-branch is, how stacks work, what `gitcomet/virtual_branches` is for, and which
+This document explains the model behind the Virtual branches tab: what a virtual
+branch is, how stacks work, what `gitcomet/virtual` is for, and which
 operations change which piece of it.
 
 ## Why another workflow
@@ -16,12 +16,12 @@ unrelated features you either switch back and forth — losing your place and
 your build state — or you use separate worktrees, which means separate
 directories to keep straight.
 
-A virtual_branches lets several branches be applied to one working directory at the
+A virtual branches lets several branches be applied to one working directory at the
 same time. Each file in the working tree belongs to a branch, so you edit all
 of them, and commit each set of changes to the branch it belongs to. Nothing
-is checked out except the virtual_branches itself.
+is checked out except the virtual branches itself.
 
-The Branches tab is unchanged and remains fully supported. The VirtualBranches is
+The Branches tab is unchanged and remains fully supported. The Virtual branches is
 for people who prefer this model, not a replacement.
 
 ## Virtual branches
@@ -57,7 +57,7 @@ Every branch has an **applied** or **unapplied** state.
   directory.
 
 Applying and unapplying never involve `git checkout`. Applying merges the
-branch's commits into the virtual_branches branch; unapplying rebuilds the virtual_branches
+branch's commits into the virtual-branches branch; unapplying rebuilds the virtual branches
 without it.
 
 ```
@@ -115,7 +115,7 @@ The *below* case has to rewrite history, because the anchor's commits were built
 on the new branch's commit, not the other way round. That rewrite goes through
 `merge-tree` + `commit-tree` rather than `git rebase`, because `git rebase`
 refuses outright when the working tree has unstaged changes — which in a
-virtual_branches is the normal state, not a mistake. The cost is that the branch's
+virtual branches is the normal state, not a mistake. The cost is that the branch's
 commits are replayed as one.
 
 ### Independent and stacked are the same thing
@@ -142,7 +142,7 @@ anchor has to replay the anchor.
 
 ## The target branch
 
-The virtual_branches has a **target**: the base every independent branch is built on.
+The virtual branches has a **target**: the base every independent branch is built on.
 `main` or `origin/main` — a revision, not necessarily a local branch.
 
 ```
@@ -153,13 +153,13 @@ origin/main
 ```
 
 Changing the target rebases the independent branches onto the new one and
-rebuilds the virtual_branches. Branches stacked on another virtual branch are not
+rebuilds the virtual branches. Branches stacked on another virtual branch are not
 rebased at that point; they move when their base does.
 
-## How the virtual_branches reaches the working directory
+## How the virtual branches reaches the working directory
 
-The virtual_branches branch is not decoration: while the user is inside the VirtualBranches
-view, the working directory *is* `gitcomet/virtual_branches`. Apply, unapply, create,
+The virtual-branches branch is not decoration: while the user is inside the Virtual branches
+view, the working directory *is* `gitcomet/virtual`. Apply, unapply, create,
 commit and re-target all rebuild that branch and then move the working
 directory onto it, which is what makes a branch's changes actually appear in the
 files.
@@ -168,7 +168,7 @@ Rebuilding the ref is plumbing (`merge-tree` + `commit-tree`) and never touches
 the files. Moving the files onto it is a separate, deliberate step:
 
 ```
-git checkout --no-recurse-submodules gitcomet/virtual_branches   # entering
+git checkout --no-recurse-submodules gitcomet/virtual   # entering
 git read-tree -u -m <old-tip> <new-tip>                  # following a rebuild
 git checkout --no-recurse-submodules <previous-branch>   # leaving
 ```
@@ -186,15 +186,15 @@ The sync runs *before* the ref is moved, so a refusal leaves the index, the
 working tree and the ref all exactly as they were. There is no state in which
 they disagree.
 
-A rebuild only touches the working directory when the virtual_branches is actually
-checked out; a virtual_branches the user has not entered never changes their files.
+A rebuild only touches the working directory when the virtual branches is actually
+checked out; a virtual branches the user has not entered never changes their files.
 
 ### Where the switch is driven from
 
-Opening the VirtualBranches tab enters; switching to any other tab leaves. Both go
+Opening the Virtual branches tab enters; switching to any other tab leaves. Both go
 through `set_sidebar_mode`, which is the only place that knows the mode
-changed. Entering is deferred behind `LoadVirtualBranches` when the virtual_branches has
-never been read: a checkout cannot run before the state says a virtual_branches
+changed. Entering is deferred behind `LoadVirtualBranches` when the virtual branches has
+never been read: a checkout cannot run before the state says a virtual branches
 exists, and a rejected one would leave the user on a tab describing branches
 they are not actually on.
 
@@ -202,29 +202,29 @@ they are not actually on.
 
 | Field | Meaning |
 | --- | --- |
-| `active` | the working directory is on `gitcomet/virtual_branches` |
+| `active` | the working directory is on `gitcomet/virtual` |
 | `checkout_base` | the branch to go back to, captured on entry |
 
 Leaving is triggered by switching **tab** *or* by switching **repository**. The
 second one matters because the checkout belongs to the repository while the tab
 belongs to the window: walking away from a repository tab while the sidebar
-stays on VirtualBranches would otherwise strand that repository on
-`gitcomet/virtual_branches`, and the next time it was picked up the user would be
+stays on Virtual branches would otherwise strand that repository on
+`gitcomet/virtual`, and the next time it was picked up the user would be
 looking at another repository's branches.
 
 Neither survives a reload as a *decision* — `virtual_branches_loaded` infers `active`
-from whether `HEAD` is the virtual_branches branch, because that is the only true
+from whether `HEAD` is the virtual-branches branch, because that is the only true
 answer after a restart — and a refused switch leaves both untouched, since git
 never moved `HEAD` and claiming otherwise would make the next leave try to undo
 a switch that never happened.
 
-## The virtual_branches branch
+## The virtual-branches branch
 
-GitComet keeps a branch called `gitcomet/virtual_branches` that holds the combined
+GitComet keeps a branch called `gitcomet/virtual` that holds the combined
 tree of every applied branch:
 
 ```
-gitcomet/virtual_branches
+gitcomet/virtual
 │  merge of applied branches
 ├── feature/api
 ├── feature/ui
@@ -244,12 +244,12 @@ replays the same sequence of merges from the target, so the branch can always
 be reconstructed, and unapplying one later is a replay rather than an edit of
 history that may already have been pushed.
 
-Each merge gets its own commit, so the virtual_branches history shows which branch
+Each merge gets its own commit, so the virtual branches history shows which branch
 contributed what.
 
 ## Assigning changes to branches
 
-The point of the virtual_branches is that unrelated changes can coexist in one
+The point of the virtual branches is that unrelated changes can coexist in one
 working directory and still belong to different branches.
 
 ```
@@ -269,7 +269,7 @@ saved it and nothing changed.
 
 That is also why an assignment is **not** dropped merely because Git does not
 currently report its path as changed. Assignments naming a branch that has been
-removed from the virtual_branches *are* dropped, when the virtual_branches loads: otherwise
+removed from the virtual branches *are* dropped, when the virtual branches loads: otherwise
 re-creating a branch with a name the user had used before would silently hand
 it every file it was ever given, with no action from the user and nothing on
 screen to show.
@@ -280,7 +280,7 @@ several branches. See below.
 ## Assigning hunks
 
 A file that goes to more than one branch is *split*. In the diff view, right
-click a hunk and choose **Assign to a branch…**; in the VirtualBranches tab the file
+click a hunk and choose **Assign to a branch…**; in the Virtual branches tab the file
 row then reads `feature/api + feature/ui` instead of a single branch.
 
 The hard part is not recording the assignment but *finding the hunk again* at
@@ -324,26 +324,26 @@ a branch that exists, and disappears when none does.
 ## Committing
 
 Committing a branch collects the files assigned to it and commits them against
-**that branch's own base**, not against the virtual_branches. The commit therefore
+**that branch's own base**, not against the virtual branches. The commit therefore
 contains only the work assigned to that branch.
 
 The commit is built with a temporary index, so your real index and working
 tree are untouched — you can have unrelated staged and unstaged changes in the
 same directory and still commit one branch cleanly.
 
-After a commit the virtual_branches is rebuilt, since the branch moved.
+After a commit the virtual branches is rebuilt, since the branch moved.
 
 ## Conflicts
 
 Two applied branches that changed the same lines cannot both be applied. The
-VirtualBranches reports this in terms of the branches involved rather than as a bare
+Virtual branches reports this in terms of the branches involved rather than as a bare
 checkout or rebase conflict:
 
 ```
 ⚠ feature/ui conflicts with feature/api
 ```
 
-Applying a conflicting branch leaves the virtual_branches branch unchanged and records
+Applying a conflicting branch leaves the virtual-branches branch unchanged and records
 the conflict on the branch that caused it. Unapplying one of the two, or
 resolving the conflict, clears it.
 
@@ -374,9 +374,9 @@ Everything the model needs lives in `.git/gitcomet/`:
 | `virtual_branches.json` | target branch and every virtual branch |
 | `assignments.json` | which branch each changed file — or each of its hunks — belongs to |
 
-Both are written atomically and are ignored if unreadable: a virtual_branches file
-written by a newer or hand-edited version makes the VirtualBranches tab show an
-empty virtual_branches the user can rebuild, rather than making the repository
+Both are written atomically and are ignored if unreadable: a virtual branches file
+written by a newer or hand-edited version makes the Virtual branches tab show an
+empty virtual branches the user can rebuild, rather than making the repository
 unusable.
 
 ## Pushing
@@ -385,21 +385,21 @@ Virtual branches are ordinary branches, so pushing needs no special server
 support. `refs/heads/feature/api` is pushed as `feature/api`.
 
 `GitRepository::push_virtual_branch` pushes the *named ref* rather than `HEAD`.
-That is the one thing a virtual_branches has to be explicit about: the user is
+That is the one thing a virtual branches has to be explicit about: the user is
 usually sitting on an unrelated branch, and `git push` with no arguments would
 publish that one instead of the branch whose Push button they clicked. The
 backend picks the remote the same way the ordinary push path does and sets
 the upstream on the branch it pushed.
 
 The converse is a refusal. The ordinary push also applies to `HEAD`, and
-entering the virtual_branches is what puts `HEAD` on `gitcomet/virtual_branches` — so while
-the working directory is inside the virtual_branches, the ordinary **Push** would
-create `gitcomet/virtual_branches` on the user's remote, visible in their fork and in
+entering the virtual branches is what puts `HEAD` on `gitcomet/virtual` — so while
+the working directory is inside the virtual branches, the ordinary **Push** would
+create `gitcomet/virtual` on the user's remote, visible in their fork and in
 every pull request's branch picker, and set it as an upstream so it followed
 them to every later branch switch. It is refused, with a message pointing at
-the VirtualBranches tab, whose push names the ref and so is unaffected.
+the Virtual branches tab, whose push names the ref and so is unaffected.
 
-What a virtual_branches adds is the *base*: a stacked branch's pull request targets
+What a virtual branches adds is the *base*: a stacked branch's pull request targets
 the branch below it, not the target. `VirtualBranchesState::base_branch` computes
 that base, and `virtual_branch_push_target` exposes it so the UI can say what
 a push will do before it does it.
@@ -407,15 +407,15 @@ a push will do before it does it.
 The data model keeps each branch's base explicit, which is what stacked pull
 requests will need later; the multi-PR workflow itself is not implemented yet.
 
-## What the VirtualBranches tab can do today
+## What the Virtual branches tab can do today
 
 Per branch: apply/unapply, push, a `⋯` menu (new branch above it, new branch
 below it, change its base, move it into another stack, commit every file
-assigned to it, remove it from the virtual_branches), and `↑`/`↓` to reorder it inside
+assigned to it, remove it from the virtual branches), and `↑`/`↓` to reorder it inside
 its stack — the arrows are disabled at the ends of a stack rather than offered
 and refused.
 
-Per virtual_branches: `New branch` on the summary line, and `Change` on the target row
+Per virtual branches: `New branch` on the summary line, and `Change` on the target row
 to rebase everything onto a different branch.
 
 Per file: `Assign` (or `Change`, when it already has a branch) to say which
@@ -479,7 +479,7 @@ gesture. Everything else in `VirtualBranchesEdit` has a control.
 
 | # | Criterion | State |
 | --- | --- | --- |
-| 1 | VirtualBranches view | done — third sidebar tab, existing tabs untouched |
+| 1 | Virtual branches view | done — third sidebar tab, existing tabs untouched |
 | 2 | Existing branch workflow kept | done |
 | 3 | Multiple virtual branches in one directory | done — the tab owns the working directory |
 | 4 | Apply / unapply | done — rebuild moves the files |
@@ -490,9 +490,9 @@ gesture. Everything else in `VirtualBranchesEdit` has a control.
 | 9 | Reorder within a stack | done — `Reorder` plus `↑`/`↓` |
 | 10 | Assign files to virtual branches | done |
 | 11 | Assign individual hunks | done — `HunkFingerprint`, diff hunk menu |
-| 12 | Maintain `gitcomet/virtual_branches` | done |
-| 13 | Auto-update when the applied set changes | done — and moves the working directory when the virtual_branches is checked out |
-| 14 | Prevent direct commits to `gitcomet/virtual_branches` | done — hidden from every branch list, and `commit`/`commit --amend`/`push` refuse while HEAD is on it |
+| 12 | Maintain `gitcomet/virtual` | done |
+| 13 | Auto-update when the applied set changes | done — and moves the working directory when the virtual branches is checked out |
+| 14 | Prevent direct commits to `gitcomet/virtual` | done — hidden from every branch list, and `commit`/`commit --amend`/`push` refuse while HEAD is on it |
 | 15 | Configurable target branch | done |
 | 16 | Rebase when the target changes | done |
 | 17 | Expose conflicts between branches | done — both branch names and the file, from git's stdout |
@@ -515,9 +515,9 @@ they are the user's work.
 not cover those paths, and this is not a hypothetical: `commit`,
 `commit --amend`, `cherry-pick`, `revert`, `reset`, `squash`, `rebase`, `merge`,
 `pull`, the ordinary `push` and both force pushes all apply to whatever **HEAD**
-is — not to a branch the user picked from a list — and the VirtualBranches tab is
-exactly what puts HEAD on `gitcomet/virtual_branches`. So while the working directory is
-inside the virtual_branches, all twelve refuse and say to use the VirtualBranches tab instead,
+is — not to a branch the user picked from a list — and the Virtual branches tab is
+exactly what puts HEAD on `gitcomet/virtual`. So while the working directory is
+inside the virtual branches, all twelve refuse and say to use the Virtual branches tab instead,
 which is the edit the user meant anyway. Without this, a commit would be silently
 discarded by the next rebuild after the log had shown it to the user as their own
 work, and a push would publish GitComet's bookkeeping branch to their remote.
@@ -527,13 +527,13 @@ drift apart in what they refuse, and each one has a test. The two force pushes
 are here rather than with the rest because each is its own entry point with its
 own command: `push_force` and `push_force_with_lease` would otherwise have
 published HEAD with `--force-with-lease`, overwriting the remote's copy of the
-virtual_branches branch instead of adding to it. **The `--continue` paths of an in-flight
+virtual-branches branch instead of adding to it. **The `--continue` paths of an in-flight
 `cherry-pick` or `revert` are deliberately exempt**: the guard runs after them,
 because refusing to finish an operation git has already started would strand the
-user in it. (In practice this cannot arise — entering the virtual_branches is refused
+user in it. (In practice this cannot arise — entering the virtual branches is refused
 while the working tree has a conflict to overwrite.)
 
-`pull` deserves a note: while inside the virtual_branches it is refused rather than
+`pull` deserves a note: while inside the virtual branches it is refused rather than
 redirected, because moving the base forward is `SetTarget`, which already exists
 and means exactly that.
 
@@ -565,7 +565,7 @@ would send the user looking for a file two branches are already committing.
 | Piece | Location |
 | --- | --- |
 | Model, validation, stacks | `crates/gitcomet-core/src/virtual_branches.rs` |
-| Service contract | `crates/gitcomet-core/src/services.rs` (virtual_branches section) |
+| Service contract | `crates/gitcomet-core/src/services.rs` (virtual branches section) |
 | Git plumbing | `crates/gitcomet-git-gix/src/repo/virtual_branches.rs` |
 | Per-repository state | `crates/gitcomet-state/src/model/virtual_branches.rs` |
 | Edit dialog | `crates/gitcomet-ui-gpui/src/view/panels/popover/virtual_branches_prompt.rs` |

@@ -199,7 +199,7 @@ fn build_rows(repo: &RepoState) -> Vec<VirtualBranchesRow> {
     // confusing tab and an honest one.
     if !repo.virtual_branches.active {
         rows.push(VirtualBranchesRow::Placeholder {
-            message: "Your working directory is not on the virtual_branches, so applied \
+            message: "Your working directory is not on the virtual branches, so applied \
                       branches are not in your files."
                 .into(),
         });
