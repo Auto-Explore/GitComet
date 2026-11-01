@@ -12,6 +12,65 @@ use std::time::{Duration, Instant};
 
 struct TestBackend;
 
+#[gpui::test]
+fn first_window_readiness_precedes_extension_window_hooks(cx: &mut gpui::TestAppContext) {
+    use gitcomet_extension_api::{Extension, ExtensionId, Registrar, WindowExtension, WindowHost};
+    use std::rc::Rc;
+
+    struct CheckReadiness(Rc<Cell<usize>>, Rc<Cell<usize>>);
+
+    impl Extension for CheckReadiness {
+        fn id(&self) -> ExtensionId {
+            ExtensionId::new("dev.gitcomet.readiness-test").unwrap()
+        }
+
+        fn register(&self, _: &mut Registrar) {}
+
+        fn window_opened(
+            &self,
+            _: WindowHost,
+            _: &mut Window,
+            _: &mut gpui::App,
+        ) -> Option<Box<dyn WindowExtension>> {
+            assert_eq!(
+                self.0.get(),
+                1,
+                "the launcher must already know a window exists"
+            );
+            self.1.set(self.1.get() + 1);
+            None
+        }
+    }
+
+    let calls = Rc::new(Cell::new(0));
+    let hooks = Rc::new(Cell::new(0));
+    let seen = calls.clone();
+    let readiness = readiness::StartupReadiness::new(Some(Box::new(move || {
+        seen.set(seen.get() + 1);
+        Ok(())
+    })));
+    let registry = gitcomet_extension_api::Registry::build(vec![Box::new(CheckReadiness(
+        calls.clone(),
+        hooks.clone(),
+    ))])
+    .unwrap();
+    cx.update(|app| {
+        crate::workspaces::initialize_for_test(app, Vec::new());
+        crate::view::extension_host::install_registry(registry, app);
+        readiness.watch(app);
+        for _ in 0..2 {
+            open_gitcomet_window(
+                app,
+                Arc::new(TestBackend),
+                &normal_empty_launch_config(None),
+            );
+        }
+    });
+    assert_eq!(calls.get(), 1);
+    assert_eq!(hooks.get(), 2);
+    assert!(readiness.result().is_ok());
+}
+
 #[test]
 fn window_startup_failure_retains_the_full_cause() {
     let err = anyhow::anyhow!("Gl: No GPU adapter found that can configure the display surface")

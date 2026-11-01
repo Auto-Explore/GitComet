@@ -245,6 +245,7 @@ pub enum CliOutcome {
 pub(crate) struct ParsedLaunch {
     pub(crate) outcome: CliOutcome,
     pub(crate) foreground: bool,
+    pub(crate) startup_socket: Option<PathBuf>,
 }
 
 pub(crate) fn foreground_requested(flag: bool, value: Option<OsString>) -> Result<bool, String> {
@@ -289,6 +290,12 @@ pub(crate) fn cli_command(about: &str) -> clap::Command {
     let identity = gitcomet_core::identity::current();
     let name = identity.executable_name().to_owned();
     Cli::command()
+        .arg(
+            clap::Arg::new("startup_socket")
+                .long("__gitcomet-startup-socket")
+                .value_parser(clap::value_parser!(PathBuf))
+                .hide(true),
+        )
         .arg(
             clap::Arg::new("foreground")
                 .long("foreground")
@@ -753,10 +760,16 @@ fn parse_launch_from_args_env_and_config(
     let parsed = cli_command(about)
         .try_get_matches_from(normalized_args.iter())
         .and_then(|matches| {
-            Cli::from_arg_matches(&matches).map(|cli| (cli, matches.get_flag("foreground")))
+            Cli::from_arg_matches(&matches).map(|cli| {
+                (
+                    cli,
+                    matches.get_flag("foreground"),
+                    matches.get_one::<PathBuf>("startup_socket").cloned(),
+                )
+            })
         });
     match parsed {
-        Ok((cli, foreground)) => match cli.command {
+        Ok((cli, foreground, startup_socket)) => match cli.command {
             None => Ok(AppMode::Browser { path: cli.path }),
             Some(Command::Difftool(args)) => {
                 resolve_difftool_with_env(args, env).map(AppMode::Difftool)
@@ -779,6 +792,7 @@ fn parse_launch_from_args_env_and_config(
         .map(|mode| ParsedLaunch {
             outcome: CliOutcome::Run(mode),
             foreground,
+            startup_socket,
         }),
         Err(clap_err) => {
             // --help and --version are informational, not errors: they must
@@ -791,6 +805,7 @@ fn parse_launch_from_args_env_and_config(
                 return Ok(ParsedLaunch {
                     outcome: CliOutcome::Inform(Informational(clap_err)),
                     foreground: false,
+                    startup_socket: None,
                 });
             }
 
@@ -805,6 +820,7 @@ fn parse_launch_from_args_env_and_config(
                 return Ok(ParsedLaunch {
                     outcome: CliOutcome::Run(mode),
                     foreground: false,
+                    startup_socket: None,
                 });
             }
             Err(clap_err.to_string())

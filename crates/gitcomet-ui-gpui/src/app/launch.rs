@@ -1,5 +1,6 @@
 //! Launching: configuration, the application run loop, and opening main windows.
 
+use super::readiness::{ReadyCallback, StartupReadiness};
 use super::*;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -154,6 +155,7 @@ pub struct UiLaunch {
     pub(super) startup_crash_report: Option<StartupCrashReport>,
     pub(super) on_shutdown: Option<ShutdownCallback>,
     pub(super) browser_requests: Option<crate::BrowserRequestReceiver>,
+    on_ready: Option<ReadyCallback>,
 }
 
 impl UiLaunch {
@@ -168,6 +170,7 @@ impl UiLaunch {
             startup_crash_report: None,
             on_shutdown: None,
             browser_requests: None,
+            on_ready: None,
         }
     }
 
@@ -207,6 +210,11 @@ impl UiLaunch {
         self
     }
 
+    pub fn on_ready(mut self, callback: impl FnOnce() -> Result<(), String> + 'static) -> Self {
+        self.on_ready = Some(Box::new(callback));
+        self
+    }
+
     pub fn run(self) -> Result<UiRunOutcome, UiLaunchError> {
         {
             let _stage = gitcomet_core::startup_trace::span("ui_runtime_policy");
@@ -219,7 +227,10 @@ impl UiLaunch {
             startup_crash_report,
             on_shutdown,
             browser_requests,
+            on_ready,
         } = self;
+        let readiness = StartupReadiness::new(on_ready);
+        let window_readiness = readiness.clone();
         let mut launch = normal_launch_config(initial_request.path, startup_crash_report);
         launch.browser_open_target = initial_request.target;
         {
@@ -234,11 +245,10 @@ impl UiLaunch {
                 CleanShutdownTracker::default(),
                 on_shutdown,
                 browser_requests,
+                window_readiness,
             )
         })?;
-        // A native abort or forced process termination cannot return from the
-        // GPUI event loop. Reaching this point is therefore a clean shutdown even
-        // when a platform-specific close path did not set CleanShutdownTracker.
+        readiness.result()?;
         Ok(UiRunOutcome::CleanShutdown)
     }
 }
@@ -288,6 +298,7 @@ impl UiLaunch {
                 CleanShutdownTracker::default(),
                 self.on_shutdown,
                 None,
+                StartupReadiness::new(None),
             )
         }) {
             Ok(()) => 0,
@@ -346,6 +357,7 @@ fn run_mergetool_with_extensions(
             CleanShutdownTracker::default(),
             None,
             None,
+            StartupReadiness::new(None),
         )
     }) {
         eprintln!("Failed to launch focused mergetool window: {err}");
@@ -471,6 +483,7 @@ pub(super) fn run_windowed_app(
     clean_shutdown_tracker: CleanShutdownTracker,
     on_shutdown: Option<ShutdownCallback>,
     browser_requests: Option<crate::BrowserRequestReceiver>,
+    readiness: StartupReadiness,
 ) {
     let quit_when_all_windows_closed = should_quit_when_all_windows_closed(&launch);
     // Without this, `gpui` keeps its null client and every request — the
@@ -582,11 +595,13 @@ pub(super) fn run_windowed_app(
         bind_terminal_keys(cx);
 
         let launch_is_normal = launch.view_config.view_mode == GitCometViewMode::Normal;
+        readiness.watch(cx);
         let resume = move |cx: &mut App| {
             let _stage = gitcomet_core::startup_trace::span("open_initial_windows");
             open_initial_gitcomet_windows(cx, Arc::clone(&backend), &launch);
             crate::view::scenario_driver::start_if_requested(cx);
             cx.activate(true);
+            readiness.observe(cx);
         };
         let workflows: Vec<_> = crate::view::extension_host::registry(cx)
             .filter(|_| launch_is_normal)
@@ -810,6 +825,10 @@ pub(super) fn open_gitcomet_window(
         )
     })
     .unwrap_or_else(|err| panic!("{}", window_open_failure_message(&err)));
+
+    if let Some(readiness) = cx.try_global::<StartupReadiness>().cloned() {
+        readiness.observe(cx);
+    }
 
     #[cfg(target_os = "macos")]
     refresh_macos_app_menus(cx);

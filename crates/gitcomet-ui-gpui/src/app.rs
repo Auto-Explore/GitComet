@@ -49,6 +49,7 @@ mod bindings;
 mod launch;
 mod menus;
 mod placement;
+mod readiness;
 mod routing;
 mod windows;
 

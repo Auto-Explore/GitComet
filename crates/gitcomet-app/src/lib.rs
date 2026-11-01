@@ -1,11 +1,3 @@
-//! Process launch for GitComet and applications built on its crates.
-//!
-//! [`AppLaunch`] installs the product identity, then crash logging, parses the
-//! command line, runs the caller's preparation hook, and runs the selected
-//! mode: the repository browser, the focused difftool or mergetool, or Git
-//! tool setup. The executable keeps only its allocator, platform resources,
-//! and `main`.
-
 #[cfg(feature = "ui-gpui-runtime")]
 mod browser_instance;
 pub mod cli;
@@ -21,6 +13,8 @@ mod launch;
 ))]
 mod linux_wayland_fallback;
 mod mergetool_mode;
+#[cfg(all(unix, feature = "ui-gpui-runtime"))]
+mod process_launch;
 mod setup_mode;
 
 pub use cli::{AppMode, CliOutcome, exit_code};
@@ -36,6 +30,7 @@ use std::ffi::OsString;
 use std::io::Write;
 
 type PrepareHook = Box<dyn FnOnce(&AppMode) -> Result<(), String>>;
+type ReadyCallback = Box<dyn FnOnce() -> Result<(), String>>;
 
 #[derive(Clone, Copy)]
 enum LaunchEntry {
@@ -167,21 +162,24 @@ impl AppLaunch {
             return exit_code::ERROR;
         }
 
-        #[cfg(feature = "ui-gpui-runtime")]
-        {
-            let _stage = gitcomet_core::startup_trace::span("crashlog_install");
-            crashlog::install();
-        }
-
         let parsed = {
             let _stage = gitcomet_core::startup_trace::span("parse_cli");
-            cli::parse_launch(args, &about)
+            cli::parse_launch(args.clone(), &about)
         };
-        let (parsed, foreground) = match parsed {
+        let mut on_ready: Option<ReadyCallback> = None;
+        let parsed = match parsed {
             Ok(parsed) => {
-                let foreground = if matches!(entry, LaunchEntry::Cli)
-                    && matches!(parsed.outcome, CliOutcome::Run(AppMode::Browser { .. }))
+                let is_cli_browser = matches!(entry, LaunchEntry::Cli)
+                    && matches!(parsed.outcome, CliOutcome::Run(AppMode::Browser { .. }));
+                if parsed.startup_socket.is_some()
+                    && (!is_cli_browser || !cfg!(all(unix, feature = "ui-gpui-runtime")))
                 {
+                    eprintln!(
+                        "A startup acknowledgement is only valid for a Unix browser CLI launch."
+                    );
+                    return exit_code::ERROR;
+                }
+                let foreground = if is_cli_browser {
                     match cli::foreground_requested(
                         parsed.foreground,
                         std::env::var_os("GITCOMET_FOREGROUND"),
@@ -195,12 +193,46 @@ impl AppLaunch {
                 } else {
                     true
                 };
-                (Ok(parsed.outcome), foreground)
+                #[cfg(all(unix, feature = "ui-gpui-runtime"))]
+                if is_cli_browser {
+                    use std::io::IsTerminal as _;
+                    if let Some(endpoint) = parsed.startup_socket {
+                        on_ready = Some(Box::new(move || process_launch::notify_ready(&endpoint)));
+                    } else if !foreground && std::io::stdin().is_terminal() {
+                        return match process_launch::launch(&args) {
+                            Ok(code) => code,
+                            Err(error) => {
+                                eprintln!("Failed to start the browser: {error}");
+                                exit_code::ERROR
+                            }
+                        };
+                    }
+                }
+                #[cfg(not(all(unix, feature = "ui-gpui-runtime")))]
+                let _ = foreground;
+                Ok(parsed.outcome)
             }
-            Err(message) => (Err(message), true),
+            Err(message) => Err(message),
         };
+        #[cfg(feature = "ui-gpui-runtime")]
+        if let Ok(CliOutcome::Run(mode)) = &parsed {
+            if matches!(entry, LaunchEntry::Cli)
+                && let Some(code) = launch::prepare_platform_launch(mode, &args, true)
+            {
+                return code;
+            }
+            let _stage = gitcomet_core::startup_trace::span("crashlog_install");
+            crashlog::install();
+        }
         dispatch(parsed, on_prepare, move |mode| {
-            launch::run_mode(mode, extensions, repository_options, backend, foreground)
+            launch::run_mode(
+                mode,
+                extensions,
+                repository_options,
+                backend,
+                on_ready.take(),
+                matches!(entry, LaunchEntry::Library).then_some(args.as_slice()),
+            )
         })
     }
 }

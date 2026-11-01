@@ -230,7 +230,9 @@ Built-in `uninstall` restores those backups only when the key still has the setu
 gitcomet [path] [--foreground]
 ```
 
-On Unix, when standard input is a terminal, the browser relaunches itself detached so the shell prompt returns without waiting for the window to close. Pass `--foreground` (or set `GITCOMET_FOREGROUND=1`) to keep it attached for debugging or to wait for completion in a script. A script launched from a terminal can inherit terminal input and detach too; Finder, `open`, and launches without terminal input do not use automatic terminal detachment.
+On Unix, when standard input is a terminal, the browser relaunches itself in a separate session. The command returns success once its first native window opens (including a first-run dialog), or an existing browser accepts the request. Startup diagnostics remain visible. Failure before that acknowledgement returns exit code 2; startup times out after 60 seconds and stops the launched process group. The command does not wait for repository loading, onboarding completion, or eventual window closure.
+
+Pass `--foreground` (or set `GITCOMET_FOREGROUND=1`) to keep a newly started browser attached for continuous diagnostics or to wait for completion in a script. A script launched from a terminal can inherit terminal input and detach too; use `gitcomet --foreground "$repo"` to wait for a browser that the script starts. Requests forwarded to an existing browser still return after it accepts the request. Finder, `open`, and launches without terminal input do not use automatic terminal detachment. Focused difftool and mergetool modes continue to wait and report their final exit status.
 
 `GITCOMET_FOREGROUND` accepts `1`/`true` and `0`/`false` (case-insensitive). An empty or unset value uses automatic detachment. Other values are errors; `--foreground` overrides the environment.
 
