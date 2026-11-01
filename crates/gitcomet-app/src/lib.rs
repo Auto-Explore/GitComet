@@ -1,3 +1,17 @@
+//! Process launch for GitComet and applications built on its crates.
+//!
+//! [`AppLaunch`] installs the product identity, then crash logging, parses the
+//! command line, runs the caller's preparation hook, and runs the selected
+//! mode: the repository browser, the focused difftool or mergetool, or Git
+//! tool setup. The executable keeps only its allocator, platform resources,
+//! and `main`.
+//!
+//! [`AppLaunch::run_cli`] is the executable entry: before any GUI work a
+//! browser launch forwards to a running instance, and from a terminal it
+//! starts a detached copy of itself and waits for its first window.
+//! [`AppLaunch::run`] and [`AppLaunch::run_with_args`] are library entries
+//! that never detach.
+
 #[cfg(feature = "ui-gpui-runtime")]
 mod browser_instance;
 pub mod cli;
@@ -144,6 +158,9 @@ impl AppLaunch {
         self.run_args(args, LaunchEntry::Library)
     }
 
+    /// Runs as the product executable with the process arguments: forwards
+    /// to a running browser, detaches from an interactive terminal unless
+    /// `--foreground`/`GITCOMET_FOREGROUND=1`, then runs like [`Self::run`].
     pub fn run_cli(self) -> i32 {
         self.run_args(std::env::args_os().collect(), LaunchEntry::Cli)
     }

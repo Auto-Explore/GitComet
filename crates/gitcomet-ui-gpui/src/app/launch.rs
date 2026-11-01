@@ -210,6 +210,8 @@ impl UiLaunch {
         self
     }
 
+    /// Runs once when the first window exists. An `Err` is the callback's to
+    /// report; the UI keeps running.
     pub fn on_ready(mut self, callback: impl FnOnce() -> Result<(), String> + 'static) -> Self {
         self.on_ready = Some(Box::new(callback));
         self
