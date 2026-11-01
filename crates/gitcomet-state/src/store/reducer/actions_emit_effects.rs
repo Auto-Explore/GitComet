@@ -283,6 +283,20 @@ pub(super) fn remove_submodule(repo_id: RepoId, path: PathBuf) -> Vec<Effect> {
     })]
 }
 
+pub(super) fn record_submodule_commit(
+    repo_id: RepoId,
+    path: PathBuf,
+    message: String,
+) -> Vec<Effect> {
+    vec![Effect::RepoCommand(
+        RepoCommandEffect::RecordSubmoduleCommit {
+            repo_id,
+            path,
+            message,
+        },
+    )]
+}
+
 pub(super) fn stage_path(repo_id: RepoId, path: PathBuf) -> Vec<Effect> {
     vec![Effect::StagePath { repo_id, path }]
 }
@@ -1297,6 +1311,7 @@ fn command_may_change_large_file_support(command: &RepoCommandKind) -> bool {
         | RepoCommandKind::LoadSubmodule { .. }
         | RepoCommandKind::ChangeSubmodulePointer { .. }
         | RepoCommandKind::RemoveSubmodule { .. }
+        | RepoCommandKind::RecordSubmoduleCommit { .. }
         | RepoCommandKind::StageHunk
         | RepoCommandKind::UnstageHunk
         | RepoCommandKind::ApplyWorktreePatch { .. }
@@ -1344,6 +1359,7 @@ fn tracks_local_actions_in_flight(command: &RepoCommandKind) -> bool {
             | RepoCommandKind::LoadSubmodule { .. }
             | RepoCommandKind::ChangeSubmodulePointer { .. }
             | RepoCommandKind::RemoveSubmodule { .. }
+            | RepoCommandKind::RecordSubmoduleCommit { .. }
             | RepoCommandKind::StageHunk
             | RepoCommandKind::UnstageHunk
             | RepoCommandKind::ApplyWorktreePatch { .. }
@@ -1479,6 +1495,7 @@ pub(super) fn repo_command_finished(
             | RepoCommandKind::LoadSubmodule { .. }
             | RepoCommandKind::ChangeSubmodulePointer { .. }
             | RepoCommandKind::RemoveSubmodule { .. }
+            | RepoCommandKind::RecordSubmoduleCommit { .. }
     ) && result.is_ok();
     let command_succeeded = result.is_ok();
     let fetch_like_command = command.fetches_objects();

@@ -268,6 +268,7 @@ fn repo_command_context(command: &RepoCommandKind) -> Option<String> {
         RepoCommandKind::ChangeSubmodulePointer { path, reference } => {
             format!("{} → {reference}", path.display())
         }
+        RepoCommandKind::RecordSubmoduleCommit { path, .. } => path.display().to_string(),
         RepoCommandKind::StageHunk
         | RepoCommandKind::UnstageHunk
         | RepoCommandKind::ApplyWorktreePatch { .. } => "Selected hunk".to_string(),
@@ -2773,6 +2774,19 @@ pub(super) fn schedule(
         }
         RepoCommandEffect::RemoveSubmodule { repo_id, path } => {
             schedule_remove_submodule(executor, repos, msg_tx, repo_id, path);
+        }
+        RepoCommandEffect::RecordSubmoduleCommit {
+            repo_id,
+            path,
+            message,
+        } => {
+            let command = RepoCommandKind::RecordSubmoduleCommit {
+                path: path.clone(),
+                message: message.clone(),
+            };
+            schedule_repo_command(executor, repos, msg_tx, repo_id, command, move |repo| {
+                repo.record_submodule_commit_with_output(&path, &message)
+            });
         }
         RepoCommandEffect::StageHunk { repo_id, patch } => {
             schedule_stage_hunk(executor, repos, msg_tx, repo_id, patch);

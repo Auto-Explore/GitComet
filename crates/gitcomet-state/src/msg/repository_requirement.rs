@@ -62,6 +62,8 @@ impl Msg {
             | Self::RebaseAbort { repo_id, .. }
             | Self::RebaseContinue { repo_id, .. }
             | Self::RemoveSubmodule { repo_id, .. }
+            | Self::RecordSubmoduleCommit { repo_id, .. }
+            | Self::CommitLinked { repo_id, .. }
             | Self::RevertCommit { repo_id, .. }
             | Self::RewordCommit { repo_id, .. }
             | Self::ContinueRewordCommit { repo_id, .. }

@@ -235,6 +235,12 @@ pub enum RepoCommandKind {
     RemoveSubmodule {
         path: PathBuf,
     },
+    /// Commits a submodule's checked-out commit in this (parent) repository
+    /// and nothing else, after a commit made in the submodule's own tab.
+    RecordSubmoduleCommit {
+        path: PathBuf,
+        message: String,
+    },
     StageHunk,
     UnstageHunk,
     ApplyWorktreePatch {
@@ -362,6 +368,7 @@ impl RepoCommandKind {
             | Self::LoadSubmodule { .. }
             | Self::ChangeSubmodulePointer { .. }
             | Self::RemoveSubmodule { .. }
+            | Self::RecordSubmoduleCommit { .. }
             | Self::StageHunk
             | Self::UnstageHunk
             | Self::ApplyWorktreePatch { .. } => WorkingTree,
@@ -414,6 +421,7 @@ impl RepoCommandKind {
             | Self::LoadSubmodule { .. }
             | Self::ChangeSubmodulePointer { .. }
             | Self::RemoveSubmodule { .. }
+            | Self::RecordSubmoduleCommit { .. }
             | Self::ApplyWorktreePatch { .. } => true,
             Self::FetchAll
             | Self::FetchRemote { .. }
@@ -520,6 +528,7 @@ impl RepoCommandKind {
             | Self::LoadSubmodule { .. }
             | Self::ChangeSubmodulePointer { .. }
             | Self::RemoveSubmodule { .. }
+            | Self::RecordSubmoduleCommit { .. }
             | Self::ApplyWorktreePatch { .. }
             | Self::PruneLocalTags
             | Self::RunMaintenance
@@ -609,6 +618,7 @@ impl RepoCommandKind {
             Self::LoadSubmodule { .. } => "Load submodule",
             Self::ChangeSubmodulePointer { .. } => "Change submodule",
             Self::RemoveSubmodule { .. } => "Remove submodule",
+            Self::RecordSubmoduleCommit { .. } => "Record submodule commit",
             Self::StageHunk => "Stage hunk",
             Self::UnstageHunk => "Unstage hunk",
             Self::ApplyWorktreePatch { .. } => "Apply worktree patch",

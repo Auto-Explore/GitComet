@@ -478,7 +478,8 @@ fn open_repo_with_mode(
         .or(session_preferences.default_history_mode)
         .unwrap_or_default();
 
-    state.repos.push({
+    let insert_ix = nested_tab_insert_index(&state.repos, &spec.workdir);
+    let new_repo_state = {
         let mut repo_state = match mode {
             OpenRepoMode::Standard | OpenRepoMode::DocumentBackground => {
                 RepoState::new_opening(repo_id, spec.clone())
@@ -501,7 +502,11 @@ fn open_repo_with_mode(
             .unwrap_or_default();
         repo_state.last_active_at = Some(now);
         repo_state
-    });
+    };
+    match insert_ix {
+        Some(ix) => state.repos.insert(ix, new_repo_state),
+        None => state.repos.push(new_repo_state),
+    }
     let mut effects = Vec::new();
     if mode != OpenRepoMode::DocumentBackground {
         state.active_repo = Some(repo_id);
@@ -1161,6 +1166,122 @@ fn fill_set_active_repo_inline_impl(
     }
 }
 
+/// Whether `child` is a checkout inside `parent`'s working tree. Tabs keep a
+/// submodule next to the repository it lives in; this is the path test that
+/// placement and reordering share. The view confirms the submodule relation
+/// before drawing tabs as a pair.
+fn is_nested_workdir(child: &std::path::Path, parent: &std::path::Path) -> bool {
+    child != parent && child.starts_with(parent)
+}
+
+/// Index of the tab whose working tree directly contains the tab at `ix`,
+/// when every tab between them is nested in it too.
+fn nested_tab_parent_index(repos: &[RepoState], ix: usize) -> Option<usize> {
+    repos.get(ix)?;
+    (0..ix).rev().find(|&candidate| {
+        let parent = &repos[candidate].spec.workdir;
+        repos[candidate + 1..=ix]
+            .iter()
+            .all(|repo| is_nested_workdir(&repo.spec.workdir, parent))
+    })
+}
+
+/// End (exclusive) of the run made of the tab at `ix` and the nested tabs
+/// directly after it.
+fn nested_tab_block_end(repos: &[RepoState], ix: usize) -> usize {
+    let Some(repo) = repos.get(ix) else {
+        return ix;
+    };
+    let mut end = ix + 1;
+    while repos
+        .get(end)
+        .is_some_and(|next| is_nested_workdir(&next.spec.workdir, &repo.spec.workdir))
+    {
+        end += 1;
+    }
+    end
+}
+
+/// Where a newly opened checkout goes: after the open tab that contains it
+/// and that tab's other nested tabs. `None` appends as before.
+fn nested_tab_insert_index(repos: &[RepoState], workdir: &std::path::Path) -> Option<usize> {
+    let parent_ix = repos
+        .iter()
+        .enumerate()
+        .filter(|(_, repo)| is_nested_workdir(workdir, &repo.spec.workdir))
+        .max_by_key(|(_, repo)| repo.spec.workdir.as_os_str().len())
+        .map(|(ix, _)| ix)?;
+    Some(nested_tab_block_end(repos, parent_ix))
+}
+
+/// How a reorder treats nested tabs (a submodule tab next to the tab of the
+/// repository it lives in).
+#[derive(Debug, PartialEq, Eq)]
+enum NestedTabMove {
+    /// No nested tab is involved: the ordinary single-tab move applies.
+    Ordinary,
+    /// The drop would split a run or is already in place.
+    Refuse,
+    /// Move `start..end` so it lands before index `insert_ix` (counted
+    /// before the move).
+    Block {
+        start: usize,
+        end: usize,
+        insert_ix: usize,
+    },
+}
+
+/// Plans a reorder that keeps nested tabs with the tab that contains them. A
+/// tab carries its nested tabs along, a nested tab only moves among its
+/// siblings, and nothing is dropped between a tab and its nested tabs.
+fn nested_tab_move(repos: &[RepoState], from_ix: usize, before_ix: Option<usize>) -> NestedTabMove {
+    let block_end = nested_tab_block_end(repos, from_ix);
+    let parent_ix = nested_tab_parent_index(repos, from_ix);
+    let target_inside_run = before_ix
+        .and_then(|before_ix| nested_tab_parent_index(repos, before_ix).map(|_| before_ix));
+    if parent_ix.is_none() && block_end == from_ix + 1 && target_inside_run.is_none() {
+        return NestedTabMove::Ordinary;
+    }
+
+    let insert_ix = match parent_ix {
+        Some(parent_ix) => {
+            let siblings_end = nested_tab_block_end(repos, parent_ix);
+            let insert_ix = before_ix.unwrap_or(repos.len());
+            if insert_ix <= parent_ix || insert_ix > siblings_end {
+                return NestedTabMove::Refuse;
+            }
+            insert_ix
+        }
+        None => match target_inside_run {
+            Some(before_ix) => {
+                // Snap to the edge of that run in the direction of travel.
+                let target_parent = top_level_tab_index(repos, before_ix);
+                if before_ix > from_ix {
+                    nested_tab_block_end(repos, target_parent)
+                } else {
+                    target_parent
+                }
+            }
+            None => before_ix.unwrap_or(repos.len()),
+        },
+    };
+    if (from_ix..=block_end).contains(&insert_ix) {
+        return NestedTabMove::Refuse;
+    }
+    NestedTabMove::Block {
+        start: from_ix,
+        end: block_end,
+        insert_ix,
+    }
+}
+
+fn top_level_tab_index(repos: &[RepoState], mut ix: usize) -> usize {
+    while let Some(parent_ix) = nested_tab_parent_index(repos, ix) {
+        ix = parent_ix;
+    }
+    ix
+}
+
 pub(super) fn reorder_repo_tabs(
     state: &mut AppState,
     repo_id: RepoId,
@@ -1202,6 +1323,29 @@ pub(super) fn fill_reorder_repo_tabs_inline(
     let Some(from_ix) = from_ix else {
         return;
     };
+
+    match nested_tab_move(&state.repos, from_ix, before_ix) {
+        NestedTabMove::Ordinary => {}
+        NestedTabMove::Refuse => return,
+        NestedTabMove::Block {
+            start,
+            end,
+            insert_ix,
+        } => {
+            let block_len = end - start;
+            if insert_ix < start {
+                state.repos[insert_ix..end].rotate_right(block_len);
+            } else {
+                state.repos[start..insert_ix].rotate_left(block_len);
+            }
+            effects.push(persist_session_effect(
+                state,
+                state.active_repo,
+                "reordering repository tabs",
+            ));
+            return;
+        }
+    }
 
     match before_ix {
         Some(before_ix) if from_ix + 1 == before_ix => {

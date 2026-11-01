@@ -361,7 +361,7 @@ impl SidebarPaneView {
         let (icon_color, badge_label, can_open, tooltip) = {
             let badge_label = match status {
                 SubmoduleStatus::NotInitialized => Some("Not loaded"),
-                SubmoduleStatus::HeadMismatch => Some("Head mismatch"),
+                SubmoduleStatus::HeadMismatch => Some("Out of sync"),
                 SubmoduleStatus::MergeConflict => Some("Conflict"),
                 SubmoduleStatus::MissingMapping => Some("Missing mapping"),
                 SubmoduleStatus::Unknown(_) => Some("Unknown"),
@@ -388,8 +388,15 @@ impl SidebarPaneView {
                 .as_ref()
                 .map(|head| head.as_ref())
                 .unwrap_or("not loaded");
+            let sync_note = match status {
+                SubmoduleStatus::HeadMismatch => {
+                    "\nThe checked-out commit is not the one this repository records."
+                }
+                SubmoduleStatus::NotInitialized => "\nNot checked out yet.",
+                _ => "",
+            };
             let tooltip: SharedString = format!(
-                "{}\nRecorded: {}\nChecked out: {}",
+                "{}\nRecorded: {}\nChecked out: {}{sync_note}",
                 path.display(),
                 recorded_head.as_ref(),
                 checked_out,

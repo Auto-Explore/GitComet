@@ -214,6 +214,28 @@ pub struct PendingCommitRetry {
     pub push_after_commit: bool,
 }
 
+/// Where a linked commit (submodule first, then its parent) has got to.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LinkedCommitStage {
+    /// The submodule commit is running.
+    CommittingSubmodule,
+    /// The parent is committing the submodule's new commit.
+    RecordingInParent,
+    /// The submodule's branch is being pushed; the parent waits for it.
+    PushingSubmodule,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LinkedParentRecord {
+    pub parent_repo_id: super::RepoId,
+    /// The submodule's path inside the parent.
+    pub path: std::path::PathBuf,
+    pub parent_message: String,
+    /// Push the submodule, then the parent once the submodule push succeeded.
+    pub push: bool,
+    pub stage: LinkedCommitStage,
+}
+
 #[derive(Clone, Debug)]
 pub struct InteractiveRebaseSetup {
     pub base: String,
@@ -235,6 +257,9 @@ pub struct InteractiveCherryPickSetup {
 #[derive(Clone, Debug, Default)]
 pub struct RepoPendingState {
     pub commit_retry: Option<PendingCommitRetry>,
+    /// A commit in this submodule's tab that also records the new commit in
+    /// the parent repository's tab, and pushes both in order when asked.
+    pub linked_parent_record: Option<LinkedParentRecord>,
     pub force_push_lease: Option<ForcePushLease>,
     /// Annex operations waiting for a conflicting pull or push to finish.
     pub(crate) large_file_commands: std::collections::VecDeque<PendingLargeFileCommand>,

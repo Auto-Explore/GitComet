@@ -2146,6 +2146,18 @@ pub trait GitRepository: Send + Sync {
         )))
     }
 
+    /// Commits the submodule at `path` at the commit it has checked out, and
+    /// nothing else: other staged changes stay staged and out of the commit.
+    fn record_submodule_commit_with_output(
+        &self,
+        _path: &Path,
+        _message: &str,
+    ) -> Result<CommandOutput> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "recording submodule commits is not implemented for this backend",
+        )))
+    }
+
     fn discard_worktree_changes(&self, paths: &[&Path]) -> Result<()>;
 }
 

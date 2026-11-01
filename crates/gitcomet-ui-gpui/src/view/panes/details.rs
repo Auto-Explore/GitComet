@@ -131,6 +131,9 @@ pub(in super::super) struct DetailsPaneView {
     pub(in super::super) commit_message_drafts: FxHashMap<RepoId, SharedString>,
     pub(in super::super) commit_amend_enabled: bool,
     pub(in super::super) commit_push_after_enabled: bool,
+    /// Submodule tabs whose commits are not also recorded in the parent.
+    /// Recording is on by default for every submodule tab.
+    pub(in super::super) record_in_parent_off: FxHashSet<RepoId>,
     pub(in super::super) pending_commits: FxHashMap<RepoId, PendingCommit>,
     pending_amend_prefill: Option<RepoId>,
     /// Suggestion (repo and rev) already offered to the commit box, so git's
@@ -600,6 +603,7 @@ impl DetailsPaneView {
             commit_message_drafts: FxHashMap::default(),
             commit_amend_enabled: false,
             commit_push_after_enabled,
+            record_in_parent_off: FxHashSet::default(),
             pending_commits: FxHashMap::default(),
             pending_amend_prefill: None,
             applied_commit_suggestions: rustc_hash::FxHashMap::default(),

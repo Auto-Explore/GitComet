@@ -1582,11 +1582,13 @@ impl GitRepository for GixRepo {
 
     fn push(&self) -> Result<()> {
         let _operation = self.operation_lease()?;
+        self.unpushed_submodule_pointer_guard()?;
         self.push_impl()
     }
 
     fn push_with_output(&self) -> Result<CommandOutput> {
         let _operation = self.operation_lease()?;
+        self.unpushed_submodule_pointer_guard()?;
         self.push_with_output_impl()
     }
 
@@ -1613,6 +1615,7 @@ impl GitRepository for GixRepo {
         target: &SafePushAfterCommitTarget,
     ) -> Result<CommandOutput> {
         let _operation = self.operation_lease()?;
+        self.unpushed_submodule_pointer_guard()?;
         self.push_after_commit_with_output_impl(target)
     }
 
@@ -2076,6 +2079,16 @@ impl GitRepository for GixRepo {
         let _operation = self.operation_lease()?;
         self.require_working_tree()?;
         self.remove_submodule_with_output_impl(path)
+    }
+
+    fn record_submodule_commit_with_output(
+        &self,
+        path: &Path,
+        message: &str,
+    ) -> Result<CommandOutput> {
+        let _operation = self.operation_lease()?;
+        self.require_working_tree()?;
+        self.record_submodule_commit_with_output_impl(path, message)
     }
 
     fn discard_worktree_changes(&self, paths: &[&Path]) -> Result<()> {

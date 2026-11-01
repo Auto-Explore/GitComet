@@ -5,8 +5,8 @@ use super::history::gix_head_id_or_none;
 use super::{GixRepo, object_id_from_commit_id, oid_to_arc_str};
 use crate::util::{
     bytes_to_text_preserving_utf8, fnv1a_64, git_workdir_cmd_for, path_buf_from_git_bytes,
-    push_literal_paths, run_git_capture_bytes_cancellable, run_git_simple, run_git_with_output,
-    stable_path_bytes, submodule_script_path,
+    push_literal_paths, run_git_capture_bytes, run_git_capture_bytes_cancellable, run_git_simple,
+    run_git_with_output, stable_path_bytes, submodule_script_path,
 };
 use gitcomet_core::domain::{
     CommitId, DiffTarget, FileStatus, RepoStatus, Submodule, SubmoduleDiffRange,
@@ -320,6 +320,117 @@ impl GixRepo {
             format!("Change submodule pointer {}", path.display()),
             &[checkout_output, stage_output],
         ))
+    }
+
+    pub(super) fn record_submodule_commit_with_output_impl(
+        &self,
+        path: &Path,
+        message: &str,
+    ) -> Result<CommandOutput> {
+        let repo = self.reopen_repo()?;
+        if open_gitlink_repo(&repo, path)?.is_none() {
+            return Err(Error::new(ErrorKind::Backend(format!(
+                "submodule '{}' is not checked out",
+                path.display()
+            ))));
+        }
+        // `--only` commits the gitlink as it is in the working tree (the
+        // submodule's checked-out commit) and leaves the rest of the index
+        // exactly as it was, other staged files included.
+        let mut cmd = self.git_workdir_cmd();
+        cmd.arg("commit").arg("--only").arg("-m").arg(message);
+        push_literal_paths(&mut cmd, [path]);
+        run_git_with_output(cmd, &format!("git commit --only -- {}", path.display()))
+    }
+
+    /// Refuses a push that would publish a submodule pointer nobody else can
+    /// fetch: a gitlink changed by the outgoing commits whose commit is on no
+    /// remote-tracking branch of that submodule's checkout. Pushes without an
+    /// upstream, and submodules that are not checked out or lack the commit
+    /// locally, are not checked.
+    pub(super) fn unpushed_submodule_pointer_guard(&self) -> Result<()> {
+        let mut diff = self.git_workdir_cmd();
+        diff.args([
+            "diff",
+            "--raw",
+            "--no-abbrev",
+            "--no-renames",
+            "-z",
+            "@{upstream}",
+            "HEAD",
+        ]);
+        let Ok(raw) = run_git_capture_bytes(diff, "git diff --raw @{upstream} HEAD") else {
+            return Ok(());
+        };
+        let mut unpushed = Vec::new();
+        for (path, commit) in outgoing_gitlinks(&raw) {
+            let checkout = self.spec.workdir.join(&path);
+            if fs::symlink_metadata(checkout.join(".git")).is_err() {
+                continue;
+            }
+            let mut contains = git_workdir_cmd_for(&checkout);
+            contains.args(["branch", "-r", "--contains", commit.as_str()]);
+            match run_git_capture_bytes(contains, "git branch -r --contains") {
+                Ok(branches) if branches.trim_ascii().is_empty() => {
+                    unpushed.push((path, commit));
+                }
+                _ => {}
+            }
+        }
+        let Some((path, commit)) = unpushed.first() else {
+            return Ok(());
+        };
+        let short = commit.get(..7).unwrap_or(commit.as_str());
+        let others = match unpushed.len() {
+            1 => String::new(),
+            n => format!(" ({} more submodules too)", n - 1),
+        };
+        Err(Error::new(ErrorKind::Backend(format!(
+            "Push {} first: this push records its commit {short}, which is not on any remote \
+             branch yet, so others could not check it out{others}.",
+            path.display()
+        ))))
+    }
+
+    /// Refuses to move the submodule checkout at `path` when doing so would
+    /// lose work: uncommitted changes inside it, or a checked-out commit that
+    /// no branch, tag or remote-tracking ref contains.
+    pub(super) fn submodule_checkout_move_guard(&self, path: &Path) -> Result<()> {
+        let repo = self.reopen_repo()?;
+        let Some(nested_repo) = open_gitlink_repo(&repo, path)? else {
+            return Ok(());
+        };
+        let nested_workdir = repo_workdir_for_submodule_trust(&repo).join(path);
+        let nested = GixRepo::new(nested_workdir.clone(), nested_repo.into_sync())?;
+        let status = nested.status_impl()?;
+        let changes = status.staged.len() + status.unstaged.len();
+        if changes > 0 {
+            return Err(Error::new(ErrorKind::Backend(format!(
+                "Cannot discard the pointer change of submodule '{}': it has {changes} uncommitted \
+                 {}. Open the submodule and commit, stash or discard them first.",
+                path.display(),
+                if changes == 1 { "change" } else { "changes" },
+            ))));
+        }
+
+        let mut cmd = git_workdir_cmd_for(&nested_workdir);
+        cmd.args([
+            "for-each-ref",
+            "--count=1",
+            "--format=%(refname)",
+            "--contains",
+            "HEAD",
+        ]);
+        let containing = run_git_capture_bytes(cmd, "git for-each-ref --contains HEAD")?;
+        if containing.trim_ascii().is_empty() {
+            return Err(Error::new(ErrorKind::Backend(format!(
+                "Cannot discard the pointer change of submodule '{}': its checked-out commit is \
+                 not on any branch, so checking out the recorded commit would leave it behind. \
+                 Create a branch for it in the submodule first.",
+                path.display()
+            ))));
+        }
+        Ok(())
     }
 
     pub(super) fn remove_submodule_with_output_impl(&self, path: &Path) -> Result<CommandOutput> {
@@ -750,6 +861,34 @@ fn load_target_submodule_recursive(
     }
 
     Ok(false)
+}
+
+/// Gitlinks that `git diff --raw -z` reports as added or changed, with the
+/// commit each now records.
+fn outgoing_gitlinks(raw: &[u8]) -> Vec<(PathBuf, String)> {
+    let mut out = Vec::new();
+    let mut fields = raw.split(|byte| *byte == 0);
+    while let Some(meta) = fields.next() {
+        if meta.is_empty() {
+            continue;
+        }
+        let Some(path) = fields.next() else {
+            break;
+        };
+        // `:<old mode> <new mode> <old sha> <new sha> <status>`
+        let meta = String::from_utf8_lossy(meta);
+        let parts: Vec<&str> = meta.trim_start_matches(':').split(' ').collect();
+        let [_, new_mode, _, new_sha, status] = parts.as_slice() else {
+            continue;
+        };
+        if *new_mode != "160000" || status.starts_with('D') {
+            continue;
+        }
+        if let Ok(path) = path_buf_from_git_bytes(path, "submodule path") {
+            out.push((path, (*new_sha).to_string()));
+        }
+    }
+    out
 }
 
 fn configured_submodule_row(

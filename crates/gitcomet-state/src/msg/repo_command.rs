@@ -134,6 +134,11 @@ pub enum RepoCommandEffect {
         repo_id: RepoId,
         path: PathBuf,
     },
+    RecordSubmoduleCommit {
+        repo_id: RepoId,
+        path: PathBuf,
+        message: String,
+    },
     StageHunk {
         repo_id: RepoId,
         patch: super::ContentBytes,
@@ -410,6 +415,7 @@ macro_rules! match_git_auth {
             | RepoCommandEffect::CheckSubmoduleLoadTrust { .. }
             | RepoCommandEffect::ChangeSubmodulePointer { .. }
             | RepoCommandEffect::RemoveSubmodule { .. }
+            | RepoCommandEffect::RecordSubmoduleCommit { .. }
             | RepoCommandEffect::StageHunk { .. }
             | RepoCommandEffect::ApplyPreparedDiffPatch { .. }
             | RepoCommandEffect::UnstageHunk { .. }
@@ -645,6 +651,14 @@ impl RepoCommandEffect {
             RepoCommandEffect::RemoveSubmodule { repo_id, path } => {
                 Some(RepoCommandKind::RemoveSubmodule { path }.finished(repo_id, Err(error)))
             }
+            RepoCommandEffect::RecordSubmoduleCommit {
+                repo_id,
+                path,
+                message,
+            } => Some(
+                RepoCommandKind::RecordSubmoduleCommit { path, message }
+                    .finished(repo_id, Err(error)),
+            ),
             RepoCommandEffect::StageHunk { repo_id, .. } => {
                 Some(RepoCommandKind::StageHunk.finished(repo_id, Err(error)))
             }

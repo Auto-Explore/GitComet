@@ -584,6 +584,11 @@ fn retry_msg_for_repo_command(repo_id: RepoId, command: RepoCommandKind) -> Opti
             }
         }
         RepoCommandKind::RemoveSubmodule { path } => Msg::RemoveSubmodule { repo_id, path },
+        RepoCommandKind::RecordSubmoduleCommit { path, message } => Msg::RecordSubmoduleCommit {
+            repo_id,
+            path,
+            message,
+        },
         // A signing failure mid-rebase leaves git's state (and GitComet's
         // persisted reword messages) on disk; continue it with the staged
         // auth like the cherry-pick commands above.
@@ -816,8 +821,135 @@ pub(super) fn commit(
             amend: false,
             push_after_commit,
         });
+        // A plain commit never records itself in a parent; `commit_linked`
+        // sets this again right after.
+        repo_state.pending.linked_parent_record = None;
     }
     actions_emit_effects::commit(repo_id, message)
+}
+
+/// A commit in a submodule's tab that the parent's tab records next.
+pub(super) fn commit_linked(
+    state: &mut AppState,
+    repo_id: RepoId,
+    record: crate::model::LinkedParentRecord,
+    message: String,
+) -> Vec<Effect> {
+    let effects = commit(state, repo_id, message, false);
+    if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
+        repo_state.pending.linked_parent_record = Some(record);
+    }
+    effects
+}
+
+/// Advances linked commits after the submodule's commit finished: on
+/// success the parent records the new commit; on failure nothing happens in
+/// the parent.
+fn linked_commit_after_submodule_commit(
+    state: &mut AppState,
+    repo_id: RepoId,
+    succeeded: bool,
+) -> Vec<Effect> {
+    let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
+        return Vec::new();
+    };
+    let Some(record) = repo_state.pending.linked_parent_record.as_mut() else {
+        return Vec::new();
+    };
+    if record.stage != crate::model::LinkedCommitStage::CommittingSubmodule {
+        return Vec::new();
+    }
+    if !succeeded {
+        repo_state.pending.linked_parent_record = None;
+        return Vec::new();
+    }
+    record.stage = crate::model::LinkedCommitStage::RecordingInParent;
+    let parent_repo_id = record.parent_repo_id;
+    let path = record.path.clone();
+    let message = record.parent_message.clone();
+    if !state.repos.iter().any(|repo| repo.id == parent_repo_id) {
+        if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
+            repo_state.pending.linked_parent_record = None;
+        }
+        return Vec::new();
+    }
+    super::begin_local_action(state, parent_repo_id);
+    actions_emit_effects::record_submodule_commit(parent_repo_id, path, message)
+}
+
+/// Advances linked commits after a command finished in `repo_id`: the
+/// parent's record, then the submodule push, then the parent push. The
+/// parent is pushed only after the submodule push succeeded, so the parent
+/// never publishes a pointer to a commit others cannot fetch.
+pub(super) fn linked_commit_after_repo_command(
+    inputs: &ReducerInputs,
+    repos: &RepositoryRuntimes,
+    state: &mut AppState,
+    repo_id: RepoId,
+    command: &RepoCommandKind,
+    succeeded: bool,
+) -> Vec<Effect> {
+    use crate::model::LinkedCommitStage;
+    match command {
+        RepoCommandKind::RecordSubmoduleCommit { .. } => {
+            let Some(child) = state.repos.iter_mut().find(|repo| {
+                repo.pending
+                    .linked_parent_record
+                    .as_ref()
+                    .is_some_and(|record| {
+                        record.parent_repo_id == repo_id
+                            && record.stage == LinkedCommitStage::RecordingInParent
+                    })
+            }) else {
+                return Vec::new();
+            };
+            let push = child
+                .pending
+                .linked_parent_record
+                .as_ref()
+                .is_some_and(|record| record.push);
+            if !succeeded || !push {
+                child.pending.linked_parent_record = None;
+                return Vec::new();
+            }
+            let child_id = child.id;
+            if let Some(record) = child.pending.linked_parent_record.as_mut() {
+                record.stage = LinkedCommitStage::PushingSubmodule;
+            }
+            linked_push(inputs, repos, state, child_id)
+        }
+        RepoCommandKind::Push => {
+            let Some(child) = state.repos.iter_mut().find(|repo| repo.id == repo_id) else {
+                return Vec::new();
+            };
+            let Some(record) = child.pending.linked_parent_record.as_ref() else {
+                return Vec::new();
+            };
+            if record.stage != LinkedCommitStage::PushingSubmodule {
+                return Vec::new();
+            }
+            let parent_repo_id = record.parent_repo_id;
+            child.pending.linked_parent_record = None;
+            if !succeeded || !state.repos.iter().any(|repo| repo.id == parent_repo_id) {
+                return Vec::new();
+            }
+            linked_push(inputs, repos, state, parent_repo_id)
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// The same push the toolbar's Push runs.
+fn linked_push(
+    inputs: &ReducerInputs,
+    repos: &RepositoryRuntimes,
+    state: &mut AppState,
+    repo_id: RepoId,
+) -> Vec<Effect> {
+    match annex_takeover(inputs, repos, state, repo_id, false) {
+        Some(effects) => effects,
+        None => actions_emit_effects::push(repos, state, repo_id),
+    }
 }
 
 pub(super) fn commit_amend(
@@ -871,9 +1003,17 @@ pub(super) fn commit_finished(
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
         repo_state.pending.commit_retry = None;
     }
+    let awaiting_auth = auth_prompt.is_some();
     if let Some(prompt) = auth_prompt {
         clear_staged_git_auth_env();
         install_auth_prompt(state, prompt);
+    }
+    if !amend && !awaiting_auth {
+        effects.extend(linked_commit_after_submodule_commit(
+            state,
+            repo_id,
+            outcome.is_some(),
+        ));
     }
     if push_after_commit && let Some(push) = annex_takeover(inputs, repos, state, repo_id, false) {
         effects.extend(push);
@@ -1003,6 +1143,12 @@ pub(super) fn repo_command_finished(
     }
 
     let maintenance_ended = matches!(command, RepoCommandKind::RunMaintenance);
+    let linked_step = matches!(
+        command,
+        RepoCommandKind::Push | RepoCommandKind::RecordSubmoduleCommit { .. }
+    )
+    .then(|| (command.clone(), result.is_ok()))
+    .filter(|_| auth_prompt.is_none());
     // Open first, like an action redirected to a worktree, so the origin tab
     // is inactive when its refresh runs.
     let mut effects = opened_worktree_path.map_or_else(Vec::new, |path| {
@@ -1030,6 +1176,11 @@ pub(super) fn repo_command_finished(
     effects.extend(actions_emit_effects::start_queued_large_file_commands(
         inputs, repos, state, repo_id,
     ));
+    if let Some((command, succeeded)) = linked_step {
+        effects.extend(linked_commit_after_repo_command(
+            inputs, repos, state, repo_id, &command, succeeded,
+        ));
+    }
 
     if let Some(path) = removed_worktree_path {
         let repo_ids_to_close = state

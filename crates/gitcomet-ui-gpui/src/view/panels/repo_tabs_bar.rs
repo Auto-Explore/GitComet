@@ -460,6 +460,22 @@ impl RepoTabsBarView {
         .into()
     }
 
+    /// A submodule tab's tooltip names the repository it belongs to first.
+    fn submodule_tab_tooltip(
+        repo: &RepoState,
+        base: SharedString,
+        parent: &RepoState,
+    ) -> SharedString {
+        let parent_name = path_display::repo_path_name(&parent.spec.workdir);
+        let path = repo
+            .spec
+            .workdir
+            .strip_prefix(&parent.spec.workdir)
+            .map(|path| path.display().to_string())
+            .unwrap_or_default();
+        format!("Submodule {path} of {parent_name}\n{base}").into()
+    }
+
     fn repo_tab_shows_missing_warning(repo: &RepoState, show_spinner: bool) -> bool {
         repo.feedback.missing_on_disk && !show_spinner
     }
@@ -927,10 +943,16 @@ impl Render for RepoTabsBarView {
                 components::Tab::natural_width(content_width, tab_horizontal_padding)
             })
             .collect::<Vec<_>>();
+        // Submodule tabs that sit right after their parent's tab are drawn
+        // as one group with it.
+        let attached_parents = crate::view::submodule_links::attached_parents(&self.state);
         let mut bar = components::TabBar::new("repo_tab_bar").scroll(self.tab_scroll.clone());
         for (ix, repo) in self.state.repos.iter().enumerate() {
             let repo_id = repo.id;
             let next_repo_id = self.state.repos.get(ix + 1).map(|r| r.id);
+            let attached_parent = attached_parents[ix];
+            let next_is_attached = attached_parents.get(ix + 1).copied().flatten().is_some();
+            let in_tab_group = attached_parent.is_some() || next_is_attached;
             let is_active = Some(repo_id) == active;
             let show_spinner = self.shows_spinner(repo);
             let context_menu_invoker: SharedString = format!("repo_tab_{}", repo_id.0).into();
@@ -945,6 +967,7 @@ impl Render for RepoTabsBarView {
             });
             let show_inactive_separator = !is_active
                 && !context_menu_active
+                && !next_is_attached
                 && next_repo_id.is_some()
                 && next_repo_id != active
                 && !next_context_menu_active;
@@ -973,7 +996,18 @@ impl Render for RepoTabsBarView {
                 .filter(|drag| drag.repo_id == repo_id)
                 .map(|drag| drag.left);
 
-            let tooltip = Self::repo_tab_tooltip(repo);
+            let tooltip = match attached_parent
+                .or_else(|| {
+                    crate::view::submodule_links::parent_tab(&self.state, repo)
+                        .map(|parent| parent.repo_id)
+                })
+                .and_then(|parent_id| self.state.repos.iter().find(|r| r.id == parent_id))
+            {
+                Some(parent) => {
+                    Self::submodule_tab_tooltip(repo, Self::repo_tab_tooltip(repo), parent)
+                }
+                None => Self::repo_tab_tooltip(repo),
+            };
             let close_tooltip: SharedString = "Close repository".into();
 
             let close_button = div()
@@ -1092,7 +1126,19 @@ impl Render for RepoTabsBarView {
                                 .debug_selector(move || format!("repo_tab_incoming_{}", repo_id.0)),
                             )
                         })
-                        .when(show_initials, |d| {
+                        .when(show_initials && attached_parent.is_some(), |d| {
+                            // A submodule tab wears the sidebar's submodule
+                            // icon where a repository shows its initials.
+                            d.debug_selector(move || {
+                                format!("repo_tab_submodule_icon_{}", repo_id.0)
+                            })
+                            .child(svg_icon(
+                                "icons/box.svg",
+                                badge_color,
+                                px(13.0),
+                            ))
+                        })
+                        .when(show_initials && attached_parent.is_none(), |d| {
                             d.child(
                                 components::repository_initials_box(
                                     theme,
@@ -1152,6 +1198,28 @@ impl Render for RepoTabsBarView {
                             .bg(with_alpha(
                                 components::Tab::outline_color(theme),
                                 if theme.is_dark { 0.55 } else { 0.50 },
+                            )),
+                    )
+                })
+                .when(in_tab_group, |tab| {
+                    // One accent rule across the top of the group, running
+                    // through the gutters between its tabs.
+                    let gutter = px(components::Tab::HORIZONTAL_MARGIN_PX);
+                    let is_first = attached_parent.is_none();
+                    let is_last = !next_is_attached;
+                    tab.child(
+                        div()
+                            .debug_selector(move || format!("repo_tab_group_rule_{}", repo_id.0))
+                            .absolute()
+                            .top(px(-1.0))
+                            .h(px(2.0))
+                            .left(if is_first { px(2.0) } else { -gutter - px(1.0) })
+                            .right(if is_last { px(2.0) } else { -gutter - px(1.0) })
+                            .when(is_first, |rule| rule.rounded_l(px(1.0)))
+                            .when(is_last, |rule| rule.rounded_r(px(1.0)))
+                            .bg(with_alpha(
+                                theme.colors.accent.foreground,
+                                if is_active { 0.95 } else { 0.7 },
                             )),
                     )
                 })

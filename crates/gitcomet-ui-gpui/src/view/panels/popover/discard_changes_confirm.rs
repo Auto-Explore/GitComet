@@ -18,6 +18,25 @@ pub(super) fn conflict_discard_note<'a>(
         .then_some("Conflicted files keep your version (ours); the incoming change is dropped.")
 }
 
+/// Discarding a submodule's pointer change checks the submodule out again.
+pub(super) fn submodule_discard_note<'a>(
+    state: &AppState,
+    repo_id: RepoId,
+    paths: impl IntoIterator<Item = &'a std::path::Path>,
+) -> Option<&'static str> {
+    let repo = state.repos.iter().find(|repo| repo.id == repo_id)?;
+    let gitcomet_state::model::Loadable::Ready(submodules) = &repo.submodules else {
+        return None;
+    };
+    paths
+        .into_iter()
+        .any(|path| submodules.iter().any(|submodule| submodule.path == path))
+        .then_some(
+            "Submodules are checked out at the commit this repository records. \
+             GitComet stops if a submodule has uncommitted changes or unpushed commits.",
+        )
+}
+
 pub(super) fn panel(
     this: &mut PopoverHost,
     repo_id: RepoId,
@@ -54,6 +73,11 @@ pub(super) fn panel(
         format!("This will discard working tree changes for {detail}."),
     );
     if let Some(note) = note {
+        dialog = dialog.note(theme, note);
+    }
+    if let Some(note) =
+        submodule_discard_note(&this.state, repo_id, targets.iter().map(|p| p.as_path()))
+    {
         dialog = dialog.note(theme, note);
     }
     dialog.render(

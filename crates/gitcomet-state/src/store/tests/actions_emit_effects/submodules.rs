@@ -549,3 +549,218 @@ fn local_submodule_update_trust_prompt_cancels_cleanly() {
     assert!(effects.is_empty());
     assert!(state.submodule_trust_prompt.is_none());
 }
+
+fn linked_commit_state() -> (RepositoryRuntimes, AtomicU64, AppState, RepoId, RepoId) {
+    let mut repos: RepositoryRuntimes = Default::default();
+    let id_alloc = AtomicU64::new(10);
+    let mut state = AppState::test_default();
+    let parent = RepoId(1);
+    let child = RepoId(2);
+    repos.attach_repository_for_test(parent, Arc::new(DummyRepo::new("/w/app")));
+    repos.attach_repository_for_test(child, Arc::new(DummyRepo::new("/w/app/sub")));
+    for (id, workdir) in [(parent, "/w/app"), (child, "/w/app/sub")] {
+        state.repos.push(RepoState::new_opening(
+            id,
+            RepoSpec {
+                workdir: PathBuf::from(workdir),
+            },
+        ));
+    }
+    state.active_repo = Some(child);
+    (repos, id_alloc, state, parent, child)
+}
+
+fn commit_ok() -> Msg {
+    Msg::Internal(crate::msg::InternalMsg::CommitFinished {
+        repo_id: RepoId(2),
+        result: Ok(gitcomet_core::services::CommitOperationOutcome {
+            local_branch: Some("main".to_string()),
+            pre_head: Some(CommitId("1111111111111111111111111111111111111111".into())),
+            post_head: Some(CommitId("2222222222222222222222222222222222222222".into())),
+        }),
+    })
+}
+
+fn command_finished(repo_id: RepoId, command: RepoCommandKind, ok: bool) -> Msg {
+    Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
+        repo_id,
+        command,
+        result: if ok {
+            Ok(CommandOutput::empty_success("git"))
+        } else {
+            Err(Error::new(ErrorKind::Backend("rejected".to_string())))
+        },
+    })
+}
+
+fn linked_commit(parent: RepoId, child: RepoId, push: bool) -> Msg {
+    Msg::CommitLinked {
+        repo_id: child,
+        parent_repo_id: parent,
+        path: PathBuf::from("sub"),
+        message: "test: add fixtures".to_string(),
+        parent_message: "Update sub: test: add fixtures".to_string(),
+        push,
+    }
+}
+
+fn record_effect(effects: &[Effect], parent: RepoId) -> bool {
+    effects.iter().any(|effect| {
+        matches!(
+            effect,
+            Effect::RepoCommand(RepoCommandEffect::RecordSubmoduleCommit { repo_id, path, message })
+                if *repo_id == parent
+                    && path == &PathBuf::from("sub")
+                    && message == "Update sub: test: add fixtures"
+        )
+    })
+}
+
+fn push_effect(effects: &[Effect], repo: RepoId) -> bool {
+    effects.iter().any(|effect| {
+        matches!(effect, Effect::RepoCommand(RepoCommandEffect::Push { repo_id, .. }) if *repo_id == repo)
+    })
+}
+
+fn record_command() -> RepoCommandKind {
+    RepoCommandKind::RecordSubmoduleCommit {
+        path: PathBuf::from("sub"),
+        message: "Update sub: test: add fixtures".to_string(),
+    }
+}
+
+#[test]
+fn linked_commit_records_in_parent_then_pushes_submodule_before_parent() {
+    let (mut repos, id_alloc, mut state, parent, child) = linked_commit_state();
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        linked_commit(parent, child, true),
+    );
+    assert!(
+        effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::Commit { repo_id, .. } if *repo_id == child))
+    );
+    assert!(
+        !record_effect(&effects, parent),
+        "parent waits for the commit"
+    );
+
+    let effects = reduce(&mut repos, &id_alloc, &mut state, commit_ok());
+    assert!(record_effect(&effects, parent));
+    assert!(!push_effect(&effects, child), "no plain push-after-commit");
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        command_finished(parent, record_command(), true),
+    );
+    assert!(push_effect(&effects, child));
+    assert!(
+        !push_effect(&effects, parent),
+        "parent waits for the submodule push"
+    );
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        command_finished(child, RepoCommandKind::Push, true),
+    );
+    assert!(push_effect(&effects, parent));
+    assert!(state.repos[1].pending.linked_parent_record.is_none());
+}
+
+#[test]
+fn linked_commit_keeps_the_parent_local_when_the_submodule_push_fails() {
+    let (mut repos, id_alloc, mut state, parent, child) = linked_commit_state();
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        linked_commit(parent, child, true),
+    );
+    reduce(&mut repos, &id_alloc, &mut state, commit_ok());
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        command_finished(parent, record_command(), true),
+    );
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        command_finished(child, RepoCommandKind::Push, false),
+    );
+    assert!(!push_effect(&effects, parent));
+    assert!(state.repos[1].pending.linked_parent_record.is_none());
+}
+
+#[test]
+fn linked_commit_without_push_stops_after_recording_and_a_failed_commit_records_nothing() {
+    let (mut repos, id_alloc, mut state, parent, child) = linked_commit_state();
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        linked_commit(parent, child, false),
+    );
+    reduce(&mut repos, &id_alloc, &mut state, commit_ok());
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        command_finished(parent, record_command(), true),
+    );
+    assert!(!push_effect(&effects, child) && !push_effect(&effects, parent));
+    assert!(state.repos[1].pending.linked_parent_record.is_none());
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        linked_commit(parent, child, true),
+    );
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::CommitFinished {
+            repo_id: child,
+            result: Err(Error::new(ErrorKind::Backend(
+                "nothing to commit".to_string(),
+            ))),
+        }),
+    );
+    assert!(!record_effect(&effects, parent));
+    assert!(state.repos[1].pending.linked_parent_record.is_none());
+}
+
+#[test]
+fn a_plain_commit_does_not_inherit_a_leftover_linked_record() {
+    let (mut repos, id_alloc, mut state, parent, child) = linked_commit_state();
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        linked_commit(parent, child, false),
+    );
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Commit {
+            repo_id: child,
+            message: "plain".to_string(),
+            push_after_commit: false,
+        },
+    );
+    let effects = reduce(&mut repos, &id_alloc, &mut state, commit_ok());
+    assert!(!record_effect(&effects, parent));
+}

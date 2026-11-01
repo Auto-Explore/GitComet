@@ -988,6 +988,13 @@ pub enum Msg {
         repo_id: RepoId,
         path: PathBuf,
     },
+    /// Commits the submodule at `path` at its checked-out commit in this
+    /// repository, leaving other staged changes out of the commit.
+    RecordSubmoduleCommit {
+        repo_id: RepoId,
+        path: PathBuf,
+        message: String,
+    },
     StagePath {
         repo_id: RepoId,
         path: PathBuf,
@@ -1061,6 +1068,18 @@ pub enum Msg {
         repo_id: RepoId,
         message: String,
         push_after_commit: bool,
+    },
+    /// Commits in a submodule's tab, then records the new commit in the
+    /// parent repository's tab. With `push`, pushes the submodule and, once
+    /// that succeeded, the parent.
+    CommitLinked {
+        repo_id: RepoId,
+        parent_repo_id: RepoId,
+        /// The submodule's path inside the parent.
+        path: PathBuf,
+        message: String,
+        parent_message: String,
+        push: bool,
     },
     SafePushAfterCommit {
         repo_id: RepoId,

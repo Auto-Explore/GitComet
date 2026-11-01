@@ -459,7 +459,7 @@ impl DiffRenderer {
                     ),
                 ),
                 SubmoduleStatus::HeadMismatch => {
-                    ("Head mismatch", theme.colors.status.warning.foreground)
+                    ("Out of sync", theme.colors.status.warning.foreground)
                 }
                 SubmoduleStatus::MergeConflict => {
                     ("Conflict", theme.colors.status.danger.foreground)

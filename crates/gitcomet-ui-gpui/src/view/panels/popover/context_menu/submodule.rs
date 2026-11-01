@@ -57,7 +57,7 @@ pub(super) fn menu_state(
 pub(super) fn status_label(status: Option<SubmoduleStatus>) -> Option<&'static str> {
     match status {
         Some(SubmoduleStatus::NotInitialized) => Some("Not loaded"),
-        Some(SubmoduleStatus::HeadMismatch) => Some("Head mismatch"),
+        Some(SubmoduleStatus::HeadMismatch) => Some("Out of sync"),
         Some(SubmoduleStatus::MergeConflict) => Some("Conflict"),
         Some(SubmoduleStatus::MissingMapping) => Some("Missing mapping"),
         Some(SubmoduleStatus::Unknown(_)) => Some("Unknown"),
@@ -98,6 +98,22 @@ pub(super) fn model(
             disabled: false,
             action: Box::new(ContextMenuAction::LoadSubmodule {
                 repo_id,
+                path: path.to_path_buf(),
+            }),
+        });
+    }
+
+    if state.status == Some(SubmoduleStatus::HeadMismatch) {
+        // Same as discarding the pointer change in the status list: checks
+        // the submodule out at the commit this repository records.
+        items.push(ContextMenuItem::Entry {
+            label: "Check out recorded commit".into(),
+            icon: Some("icons/refresh.svg".into()),
+            shortcut: None,
+            disabled: false,
+            action: Box::new(ContextMenuAction::DiscardWorktreeChangesSelectionOrPath {
+                repo_id,
+                area: DiffArea::Unstaged,
                 path: path.to_path_buf(),
             }),
         });

@@ -319,6 +319,7 @@ pub(crate) fn msg_requires_available_git(msg: &Msg) -> bool {
             | Msg::UpdateSubmodules { .. }
             | Msg::ChangeSubmodulePointer { .. }
             | Msg::RemoveSubmodule { .. }
+            | Msg::RecordSubmoduleCommit { .. }
             | Msg::StagePath { .. }
             | Msg::StagePaths { .. }
             | Msg::UnstagePath { .. }
@@ -331,6 +332,7 @@ pub(crate) fn msg_requires_available_git(msg: &Msg) -> bool {
             | Msg::AppendGitattributesRule { .. }
             | Msg::Commit { .. }
             | Msg::CommitAmend { .. }
+            | Msg::CommitLinked { .. }
             | Msg::SafePushAfterCommit { .. }
             | Msg::Fetch(crate::msg::FetchMsg::All { .. })
             | Msg::Fetch(crate::msg::FetchMsg::Remote { .. })
@@ -1762,6 +1764,14 @@ fn reduce_inner(
             begin_local_action(state, repo_id);
             actions_emit_effects::remove_submodule(repo_id, path)
         }
+        Msg::RecordSubmoduleCommit {
+            repo_id,
+            path,
+            message,
+        } => {
+            begin_local_action(state, repo_id);
+            actions_emit_effects::record_submodule_commit(repo_id, path, message)
+        }
         Msg::StagePath { repo_id, path } => {
             begin_local_action(state, repo_id);
             actions_emit_effects::stage_path(repo_id, path)
@@ -1906,6 +1916,25 @@ fn reduce_inner(
             message,
             push_after_commit,
         } => auth::commit_amend(state, repo_id, message, push_after_commit),
+        Msg::CommitLinked {
+            repo_id,
+            parent_repo_id,
+            path,
+            message,
+            parent_message,
+            push,
+        } => auth::commit_linked(
+            state,
+            repo_id,
+            crate::model::LinkedParentRecord {
+                parent_repo_id,
+                path,
+                parent_message,
+                push,
+                stage: crate::model::LinkedCommitStage::CommittingSubmodule,
+            },
+            message,
+        ),
         Msg::SafePushAfterCommit { repo_id, context } => {
             match annex_takeover(inputs, repos, state, repo_id, false) {
                 Some(effects) => effects,

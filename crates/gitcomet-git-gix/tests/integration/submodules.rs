@@ -1803,3 +1803,236 @@ exec git "$@"
         },
     );
 }
+
+/// A parent with submodule `sm` recorded at the submodule's first commit,
+/// and a second submodule commit fetched into the checkout. Returns the
+/// tempdir, the parent path and the (recorded, next) commit ids.
+fn parent_with_fetched_next_commit() -> (tempfile::TempDir, PathBuf, String, String) {
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let root = dir.path();
+    let sub_repo = root.join("sub");
+    let parent_repo = root.join("parent");
+    fs::create_dir_all(&sub_repo).expect("create sub repository directory");
+    fs::create_dir_all(&parent_repo).expect("create parent repository directory");
+    init_repo_with_seed(&sub_repo, "file.txt", "hello\n", "seed submodule");
+    init_repo_with_seed(&parent_repo, "seed.txt", "seed\n", "seed parent");
+    let recorded = git_stdout(&sub_repo, &["rev-parse", "HEAD"]);
+
+    add_submodule_raw(&parent_repo, &sub_repo, Path::new("sm"), None);
+    run_git(
+        &parent_repo,
+        &[
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "-m",
+            "add submodule",
+        ],
+    );
+
+    fs::write(sub_repo.join("next.txt"), "next\n").expect("write next submodule commit");
+    run_git(&sub_repo, &["add", "next.txt"]);
+    run_git(
+        &sub_repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "next"],
+    );
+    let next = git_stdout(&sub_repo, &["rev-parse", "HEAD"]);
+    run_git(
+        &parent_repo.join("sm"),
+        &["-c", "protocol.file.allow=always", "fetch", "--quiet"],
+    );
+    (dir, parent_repo, recorded, next)
+}
+
+fn recorded_gitlink(parent: &Path) -> String {
+    let line = git_stdout(parent, &["ls-files", "--stage", "--", "sm"]);
+    line.split_whitespace()
+        .nth(1)
+        .unwrap_or_default()
+        .to_string()
+}
+
+#[test]
+fn discarding_a_moved_submodule_checks_out_the_recorded_commit() {
+    let _guard = setup_submodule_test();
+    let (_dir, parent, recorded, next) = parent_with_fetched_next_commit();
+    run_git(&parent.join("sm"), &["checkout", "--quiet", &next]);
+
+    let opened = GixBackend.open(&parent).expect("open parent repository");
+    opened
+        .discard_worktree_changes(&[Path::new("sm")])
+        .expect("discard pointer change");
+
+    assert_eq!(
+        git_stdout(&parent.join("sm"), &["rev-parse", "HEAD"]),
+        recorded
+    );
+    assert_eq!(git_stdout(&parent, &["status", "--porcelain"]), "");
+}
+
+#[test]
+fn discarding_a_staged_pointer_change_unstages_it_and_checks_out_the_recorded_commit() {
+    let _guard = setup_submodule_test();
+    let (_dir, parent, recorded, next) = parent_with_fetched_next_commit();
+
+    let opened = GixBackend.open(&parent).expect("open parent repository");
+    opened
+        .change_submodule_pointer_with_output(Path::new("sm"), &next)
+        .expect("change pointer");
+    assert_eq!(recorded_gitlink(&parent), next);
+    assert_eq!(git_stdout(&parent.join("sm"), &["rev-parse", "HEAD"]), next);
+
+    opened
+        .discard_worktree_changes(&[Path::new("sm")])
+        .expect("discard staged pointer change");
+
+    assert_eq!(recorded_gitlink(&parent), recorded);
+    assert_eq!(
+        git_stdout(&parent.join("sm"), &["rev-parse", "HEAD"]),
+        recorded
+    );
+    assert_eq!(git_stdout(&parent, &["status", "--porcelain"]), "");
+}
+
+#[test]
+fn discarding_a_pointer_change_keeps_uncommitted_work_in_the_submodule() {
+    let _guard = setup_submodule_test();
+    let (_dir, parent, _recorded, next) = parent_with_fetched_next_commit();
+    let sm = parent.join("sm");
+    run_git(&sm, &["checkout", "--quiet", &next]);
+    fs::write(sm.join("file.txt"), "local edit\n").expect("edit file inside submodule");
+
+    let opened = GixBackend.open(&parent).expect("open parent repository");
+    let error = opened
+        .discard_worktree_changes(&[Path::new("sm")])
+        .expect_err("discard must refuse to drop submodule work");
+
+    assert!(error.to_string().contains("uncommitted"), "{error}");
+    assert_eq!(git_stdout(&sm, &["rev-parse", "HEAD"]), next);
+    assert_eq!(
+        fs::read_to_string(sm.join("file.txt")).unwrap(),
+        "local edit\n"
+    );
+}
+
+#[test]
+fn discarding_a_pointer_change_keeps_commits_that_are_on_no_branch() {
+    let _guard = setup_submodule_test();
+    let (_dir, parent, _recorded, _next) = parent_with_fetched_next_commit();
+    let sm = parent.join("sm");
+    run_git(&sm, &["checkout", "--quiet", "--detach"]);
+    fs::write(sm.join("local.txt"), "local\n").expect("write local commit");
+    run_git(&sm, &["add", "local.txt"]);
+    run_git(
+        &sm,
+        &[
+            "-c",
+            "commit.gpgsign=false",
+            "-c",
+            "user.name=You",
+            "-c",
+            "user.email=you@example.com",
+            "commit",
+            "-m",
+            "detached work",
+        ],
+    );
+    let detached = git_stdout(&sm, &["rev-parse", "HEAD"]);
+
+    let opened = GixBackend.open(&parent).expect("open parent repository");
+    let error = opened
+        .discard_worktree_changes(&[Path::new("sm")])
+        .expect_err("discard must refuse to orphan a commit");
+
+    assert!(error.to_string().contains("not on any branch"), "{error}");
+    assert_eq!(git_stdout(&sm, &["rev-parse", "HEAD"]), detached);
+}
+
+#[test]
+fn recording_a_submodule_commit_leaves_other_staged_files_out() {
+    let _guard = setup_submodule_test();
+    let (_dir, parent, _recorded, next) = parent_with_fetched_next_commit();
+    run_git(&parent.join("sm"), &["checkout", "--quiet", &next]);
+    fs::write(parent.join("other.txt"), "staged\n").expect("write other file");
+    run_git(&parent, &["add", "other.txt"]);
+
+    let opened = GixBackend.open(&parent).expect("open parent repository");
+    opened
+        .record_submodule_commit_with_output(Path::new("sm"), "Update sm")
+        .expect("record submodule commit");
+
+    assert_eq!(
+        git_stdout(&parent, &["rev-parse", "HEAD:sm"]),
+        next,
+        "the new parent commit records the submodule's checkout"
+    );
+    assert_eq!(
+        git_stdout(&parent, &["log", "-1", "--format=%s"]),
+        "Update sm"
+    );
+    assert_eq!(
+        git_stdout(&parent, &["diff", "--cached", "--name-only"]),
+        "other.txt",
+        "the other staged file stays staged"
+    );
+}
+
+#[test]
+fn pushing_a_pointer_to_an_unpushed_submodule_commit_is_refused() {
+    let _guard = setup_submodule_test();
+    let (dir, parent, _recorded, _next) = parent_with_fetched_next_commit();
+    let remote = dir.path().join("parent_remote.git");
+    run_git(
+        dir.path(),
+        &[
+            "clone",
+            "--quiet",
+            "--bare",
+            parent.to_str().unwrap(),
+            remote.to_str().unwrap(),
+        ],
+    );
+    run_git(
+        &parent,
+        &["remote", "add", "origin", remote.to_str().unwrap()],
+    );
+    run_git(&parent, &["fetch", "--quiet", "origin"]);
+    run_git(&parent, &["branch", "--set-upstream-to=origin/master"]);
+
+    let sm = parent.join("sm");
+    run_git(&sm, &["checkout", "--quiet", "-B", "master"]);
+    fs::write(sm.join("local.txt"), "local\n").expect("write submodule change");
+    run_git(&sm, &["add", "local.txt"]);
+    run_git(
+        &sm,
+        &[
+            "-c",
+            "commit.gpgsign=false",
+            "-c",
+            "user.name=You",
+            "-c",
+            "user.email=you@example.com",
+            "commit",
+            "-m",
+            "local only",
+        ],
+    );
+
+    let opened = GixBackend.open(&parent).expect("open parent repository");
+    opened
+        .record_submodule_commit_with_output(Path::new("sm"), "Update sm")
+        .expect("record submodule commit");
+
+    let error = opened.push().expect_err("push must wait for the submodule");
+    assert!(error.to_string().contains("Push sm first"), "{error}");
+
+    // Once the submodule commit is on a remote branch, the push goes through.
+    run_git(&sm, &["update-ref", "refs/remotes/origin/master", "HEAD"]);
+    opened
+        .push()
+        .expect("push after the submodule is published");
+    assert_eq!(
+        git_stdout(&remote, &["rev-parse", "master"]),
+        git_stdout(&parent, &["rev-parse", "HEAD"])
+    );
+}

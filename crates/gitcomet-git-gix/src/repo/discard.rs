@@ -1,6 +1,6 @@
 use super::GixRepo;
 use crate::util::run_git_simple_with_paths;
-use gitcomet_core::domain::FileStatusKind;
+use gitcomet_core::domain::{FileStatusKind, SubmoduleStatus};
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::services::{ConflictSide, Result};
 use rustc_hash::FxHashSet;
@@ -25,10 +25,15 @@ impl GixRepo {
             FxHashSet::with_capacity_and_hasher(paths.len(), Default::default());
         // Discarding a conflict keeps our side, as "Resolve using ours" does.
         let mut conflicted_paths: Vec<&Path> = Vec::new();
-        let submodule_paths: FxHashSet<std::path::PathBuf> = self
-            .list_submodules_impl()?
-            .into_iter()
-            .map(|submodule| submodule.path)
+        let submodules = self.list_submodules_impl()?;
+        let submodule_paths: FxHashSet<std::path::PathBuf> = submodules
+            .iter()
+            .map(|submodule| submodule.path.clone())
+            .collect();
+        let not_initialized: FxHashSet<&Path> = submodules
+            .iter()
+            .filter(|submodule| submodule.status == SubmoduleStatus::NotInitialized)
+            .map(|submodule| submodule.path.as_path())
             .collect();
 
         for entry in status.unstaged.iter() {
@@ -47,6 +52,9 @@ impl GixRepo {
         }
 
         let mut remove_paths: Vec<&Path> = Vec::with_capacity(paths.len());
+        // Staged pointer changes (from "Change pointer" or `git add`): unstage
+        // the gitlink, then check the submodule out at the recorded commit.
+        let mut unstage_submodule_paths: Vec<&Path> = Vec::new();
         for entry in status.staged.iter() {
             let path = entry.path.as_path();
             if !selected.contains(path) {
@@ -59,6 +67,12 @@ impl GixRepo {
                 }
                 FileStatusKind::Added if !unstaged_selected.contains(path) => {
                     remove_paths.push(path)
+                }
+                FileStatusKind::Modified if submodule_paths.contains(path) => {
+                    unstage_submodule_paths.push(path);
+                    if !unstaged_selected.contains(path) {
+                        submodule_update_paths.push(path);
+                    }
                 }
                 _ => {}
             }
@@ -86,8 +100,25 @@ impl GixRepo {
             }
         }
 
+        // Moving a submodule checkout must not lose work inside it. Check all
+        // of them before changing anything.
+        for path in &submodule_update_paths {
+            if !not_initialized.contains(path) {
+                self.submodule_checkout_move_guard(path)?;
+            }
+        }
+
         for path in conflicted_paths {
             self.checkout_conflict_side_impl(path, ConflictSide::Ours)?;
+        }
+
+        if !unstage_submodule_paths.is_empty() {
+            run_git_simple_with_paths(
+                &self.spec.workdir,
+                "git reset -q",
+                &["reset", "-q"],
+                &unstage_submodule_paths,
+            )?;
         }
 
         // Keep behavior deterministic for mixed selections.
@@ -110,13 +141,29 @@ impl GixRepo {
         if !submodule_update_paths.is_empty() {
             // `git checkout -- <submodule>` does not reliably move the nested HEAD back to the
             // superproject-recorded commit. Use a path-scoped submodule update instead so discard
-            // actually checks out the recorded pointer again.
-            run_git_simple_with_paths(
-                &self.spec.workdir,
-                "git submodule update --checkout --force",
-                &["submodule", "update", "--checkout", "--force"],
-                &submodule_update_paths,
-            )?;
+            // actually checks out the recorded pointer again. The guard above already refused
+            // checkouts holding work, so no `--force`: Git still stops rather than overwrite
+            // anything that appeared since. A submodule that is not checked out yet is loaded.
+            let (init_paths, update_paths): (Vec<&Path>, Vec<&Path>) = submodule_update_paths
+                .iter()
+                .copied()
+                .partition(|path| not_initialized.contains(path));
+            if !update_paths.is_empty() {
+                run_git_simple_with_paths(
+                    &self.spec.workdir,
+                    "git submodule update --checkout",
+                    &["submodule", "update", "--checkout"],
+                    &update_paths,
+                )?;
+            }
+            if !init_paths.is_empty() {
+                run_git_simple_with_paths(
+                    &self.spec.workdir,
+                    "git submodule update --init --checkout",
+                    &["submodule", "update", "--init", "--checkout"],
+                    &init_paths,
+                )?;
+            }
         }
         if !checkout_paths.is_empty() {
             run_git_simple_with_paths(

@@ -1416,7 +1416,8 @@ fn summarize_command(
             | RepoCommandKind::UpdateSubmodules { .. }
             | RepoCommandKind::LoadSubmodule { .. }
             | RepoCommandKind::ChangeSubmodulePointer { .. }
-            | RepoCommandKind::RemoveSubmodule { .. } => "Submodule",
+            | RepoCommandKind::RemoveSubmodule { .. }
+            | RepoCommandKind::RecordSubmoduleCommit { .. } => "Submodule",
             RepoCommandKind::StageHunk | RepoCommandKind::UnstageHunk => "Hunk",
             RepoCommandKind::ApplyWorktreePatch { reverse } => {
                 if *reverse {
@@ -1846,6 +1847,9 @@ fn summarize_command(
         }
         RepoCommandKind::RemoveSubmodule { path } => {
             format!("Submodule removed → {}", path.display())
+        }
+        RepoCommandKind::RecordSubmoduleCommit { path, .. } => {
+            format!("Recorded submodule commit → {}", path.display())
         }
         RepoCommandKind::StageHunk => "Hunk staged".to_string(),
         RepoCommandKind::UnstageHunk => "Hunk unstaged".to_string(),

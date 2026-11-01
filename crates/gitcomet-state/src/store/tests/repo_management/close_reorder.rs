@@ -644,3 +644,194 @@ fn reorder_repo_tabs_noops_for_invalid_or_already_stable_ordering() {
         original
     );
 }
+
+fn open_paths(
+    repos: &mut RepositoryRuntimes,
+    id_alloc: &AtomicU64,
+    state: &mut AppState,
+    paths: &[&str],
+) {
+    for path in paths {
+        reduce(repos, id_alloc, state, Msg::OpenRepo(PathBuf::from(path)));
+    }
+}
+
+fn tab_paths(state: &AppState) -> Vec<String> {
+    state
+        .repos
+        .iter()
+        .map(|repo| repo.spec.workdir.display().to_string())
+        .collect()
+}
+
+fn reorder(
+    repos: &mut RepositoryRuntimes,
+    id_alloc: &AtomicU64,
+    state: &mut AppState,
+    path: &str,
+    before: Option<&str>,
+) {
+    let id_of = |state: &AppState, path: &str| {
+        state
+            .repos
+            .iter()
+            .find(|repo| repo.spec.workdir == std::path::Path::new(path))
+            .map(|repo| repo.id)
+            .expect("tab is open")
+    };
+    let repo_id = id_of(state, path);
+    let insert_before = before.map(|before| id_of(state, before));
+    reduce(
+        repos,
+        id_alloc,
+        state,
+        Msg::ReorderRepoTabs {
+            repo_id,
+            insert_before,
+        },
+    );
+}
+
+#[test]
+fn opening_a_checkout_inside_an_open_tab_places_it_after_that_tab() {
+    let mut repos: RepositoryRuntimes = Default::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::test_default();
+
+    open_paths(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        &["/w/app", "/w/other", "/w/app/fixtures/a", "/w/app/libs/b"],
+    );
+    assert_eq!(
+        tab_paths(&state),
+        ["/w/app", "/w/app/fixtures/a", "/w/app/libs/b", "/w/other"]
+    );
+    let active = state.active_repo;
+    assert_eq!(
+        state
+            .repos
+            .iter()
+            .find(|repo| Some(repo.id) == active)
+            .map(|repo| repo.spec.workdir.clone()),
+        Some(PathBuf::from("/w/app/libs/b"))
+    );
+
+    // A checkout nested two levels down goes after its own parent's run.
+    open_paths(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        &["/w/app/fixtures/a/deep"],
+    );
+    assert_eq!(
+        tab_paths(&state),
+        [
+            "/w/app",
+            "/w/app/fixtures/a",
+            "/w/app/fixtures/a/deep",
+            "/w/app/libs/b",
+            "/w/other"
+        ]
+    );
+}
+
+#[test]
+fn reordering_moves_a_tab_together_with_its_nested_tabs() {
+    let mut repos: RepositoryRuntimes = Default::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::test_default();
+    open_paths(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        &["/w/app", "/w/app/sub", "/w/other", "/w/third"],
+    );
+    assert_eq!(
+        tab_paths(&state),
+        ["/w/app", "/w/app/sub", "/w/other", "/w/third"]
+    );
+
+    reorder(&mut repos, &id_alloc, &mut state, "/w/app", None);
+    assert_eq!(
+        tab_paths(&state),
+        ["/w/other", "/w/third", "/w/app", "/w/app/sub"]
+    );
+
+    reorder(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        "/w/app",
+        Some("/w/other"),
+    );
+    assert_eq!(
+        tab_paths(&state),
+        ["/w/app", "/w/app/sub", "/w/other", "/w/third"]
+    );
+
+    reorder(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        "/w/app",
+        Some("/w/third"),
+    );
+    assert_eq!(
+        tab_paths(&state),
+        ["/w/other", "/w/app", "/w/app/sub", "/w/third"]
+    );
+}
+
+#[test]
+fn reordering_never_splits_a_tab_from_its_nested_tabs() {
+    let mut repos: RepositoryRuntimes = Default::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::test_default();
+    open_paths(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        &["/w/app", "/w/app/a", "/w/app/b", "/w/other"],
+    );
+    let before = tab_paths(&state);
+
+    // A nested tab cannot leave its run...
+    reorder(&mut repos, &id_alloc, &mut state, "/w/app/a", None);
+    assert_eq!(tab_paths(&state), before);
+    reorder(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        "/w/app/b",
+        Some("/w/app"),
+    );
+    assert_eq!(tab_paths(&state), before);
+
+    // ...but can move among its siblings.
+    reorder(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        "/w/app/b",
+        Some("/w/app/a"),
+    );
+    assert_eq!(
+        tab_paths(&state),
+        ["/w/app", "/w/app/b", "/w/app/a", "/w/other"]
+    );
+
+    // A plain tab dropped inside the run snaps to the run's edge.
+    reorder(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        "/w/other",
+        Some("/w/app/a"),
+    );
+    assert_eq!(
+        tab_paths(&state),
+        ["/w/other", "/w/app", "/w/app/b", "/w/app/a"]
+    );
+}
