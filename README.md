@@ -238,6 +238,8 @@ Pass `--foreground` (or set `GITCOMET_FOREGROUND=1`) to keep a newly started bro
 
 Products built on the library opt into terminal detachment with `AppLaunch::run_cli()` or `App::run()`. Existing `AppLaunch::run()` and `run_with_args()` calls do not automatically detach. Use `run_cli()` at a process entry point whose configuration can be recreated when its executable restarts.
 
+CLI requests to an existing browser are forwarded before preparation hooks or extension registration. A new browser performs that preparation once in its own process. Startup diagnostics use the caller's standard error; a helper started before readiness can retain that stream after the launcher returns.
+
 **Difftool:**
 
 ```bash

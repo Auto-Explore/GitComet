@@ -133,6 +133,27 @@ fn inherited_stderr_descriptors_do_not_delay_readiness() {
 }
 
 #[test]
+fn an_inherited_detach_guard_does_not_reach_user_shells() {
+    const CHILD: &str = "GITCOMET_TEST_INHERITED_DETACH_GUARD";
+    if std::env::var_os(CHILD).is_some() {
+        assert_eq!(std::env::var("GITCOMET_SKIP_TERMINAL_DETACH").unwrap(), "1");
+        verify_success("ready");
+        return;
+    }
+    let output = Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "process_launch::tests::an_inherited_detach_guard_does_not_reach_user_shells",
+            "--nocapture",
+        ])
+        .env(CHILD, "1")
+        .env("GITCOMET_SKIP_TERMINAL_DETACH", "1")
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+}
+
+#[test]
 fn large_startup_diagnostics_are_relayed_without_deadlocking() {
     verify_success("large-output");
 }
