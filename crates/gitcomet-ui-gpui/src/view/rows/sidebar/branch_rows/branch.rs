@@ -293,6 +293,23 @@ impl SidebarPaneView {
                                 badge_worktree_path.as_deref(),
                             ) {
                                 LocalBranchDoubleClickAction::CheckoutBranch { name } => {
+                                    if workspace_owns_workdir(&this.store.snapshot(), repo_id) {
+                                        // The workspace owns the working directory:
+                                        // ask to leave it rather than moving HEAD
+                                        // off the workspace branch under the tab
+                                        // that is showing it.
+                                        this.open_popover_at(
+                                            PopoverKind::LeaveWorkspaceToCheckoutPrompt {
+                                                repo_id,
+                                                target: WorkspaceCheckoutTarget::Branch(name),
+                                            },
+                                            e.position(),
+                                            window,
+                                            cx,
+                                        );
+                                        cx.notify();
+                                        return;
+                                    }
                                     this.store.dispatch(Msg::CheckoutBranch { repo_id, name });
                                     this.rebuild_diff_cache(cx);
                                     cx.notify();

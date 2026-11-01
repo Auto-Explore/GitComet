@@ -100,6 +100,71 @@ pub(crate) enum TextFormatMenuSection {
     TabSize,
 }
 
+/// What the user asked to check out while the workspace held the working
+/// directory: carried into the dialog that asks to leave, and dispatched from
+/// it unchanged.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum WorkspaceCheckoutTarget {
+    Branch(String),
+    Remote {
+        remote: String,
+        branch: String,
+        local_branch: String,
+        mode: gitcomet_core::services::CheckoutRemoteBranchMode,
+    },
+    Commit(CommitId),
+}
+
+impl WorkspaceCheckoutTarget {
+    /// The message that performs this checkout.
+    ///
+    /// Dispatched like any other checkout: the reducer is what turns it into
+    /// "leave the workspace first" while the workspace still holds the working
+    /// directory, so the dialog cannot drift from the rule it explains.
+    pub(crate) fn into_msg(self, repo_id: RepoId) -> Msg {
+        match self {
+            Self::Branch(name) => Msg::CheckoutBranch { repo_id, name },
+            Self::Remote {
+                remote,
+                branch,
+                local_branch,
+                mode,
+            } => Msg::CheckoutRemoteBranch {
+                repo_id,
+                remote,
+                branch,
+                local_branch,
+                mode,
+            },
+            Self::Commit(commit_id) => Msg::CheckoutCommit { repo_id, commit_id },
+        }
+    }
+
+    /// What the checkout would change to, as the dialog names it.
+    pub(crate) fn label(&self) -> String {
+        match self {
+            Self::Branch(name) => name.clone(),
+            Self::Remote { remote, branch, .. } => format!("{remote}/{branch}"),
+            Self::Commit(commit_id) => {
+                gitcomet_core::domain::short_commit_id(commit_id.as_ref()).to_string()
+            }
+        }
+    }
+}
+
+/// Whether the workspace holds the working directory of `repo_id`.
+///
+/// Every checkout asks this first. While the workspace holds it, the views ask
+/// to leave instead of moving HEAD off the workspace branch underneath a tab
+/// that goes on describing the workspace as checked out.
+pub(crate) fn workspace_owns_workdir(state: &AppState, repo_id: RepoId) -> bool {
+    state
+        .repos
+        .iter()
+        .find(|repo| repo.id == repo_id)
+        .is_some_and(|repo| repo.workspace.active)
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum PopoverKind {
     /// A dialog an extension opened; its content lives on the popover host.
@@ -240,6 +305,14 @@ pub(crate) enum PopoverKind {
         name: String,
         target: String,
         operation: BranchExistsPromptOperation,
+    },
+    /// Shown when a checkout is asked for while the workspace holds the working
+    /// directory. Changing branch from there means leaving the workspace first,
+    /// so the dialog says that and lets the user go through with it — or stay
+    /// where they are.
+    LeaveWorkspaceToCheckoutPrompt {
+        repo_id: RepoId,
+        target: WorkspaceCheckoutTarget,
     },
     ForceDeleteBranchConfirm {
         repo_id: RepoId,

@@ -5612,4 +5612,178 @@ fn cherry_pick_setup_never_enables_rewording_after_partial_or_stale_message_load
     assert_eq!(setup.entries[0].message, "subject");
 }
 
+/// A checkout asked for while the workspace owns the working directory has to
+/// leave it first: the workspace promises that the working directory stays on
+/// its branch while the tab shows it, and carrying the branch through the leave
+/// is what lets the working directory land on the branch that was asked for.
+#[test]
+fn checkout_while_the_workspace_holds_the_working_directory_leaves_first() {
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::test_default();
+    state.repos.push(RepoState::new_opening(
+        RepoId(1),
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+    state.active_repo = Some(RepoId(1));
+    state.repos[0].workspace.active = true;
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::CheckoutBranch {
+            repo_id: RepoId(1),
+            name: "feature/x".to_string(),
+        },
+    );
+
+    assert!(
+        matches!(
+            effects.as_slice(),
+            [Effect::LeaveWorkspaceAndCheckout {
+                repo_id: RepoId(1),
+                checkout_base: Some(base),
+                then: crate::msg::CheckoutRequest::Branch { name },
+            }] if base == "feature/x" && name == "feature/x"
+        ),
+        "the leave has to carry the branch so the working directory lands on it, got {effects:?}"
+    );
+    assert!(
+        state.repos[0].workspace.busy.switching,
+        "the leave is in flight, so the workspace has to say it is switching"
+    );
+    assert!(
+        state.repos[0].workspace.active,
+        "the working directory stays the workspace's until the leave reports"
+    );
+}
+
+/// A commit is always there to check out, so the leave can take the working
+/// directory straight to it instead of stopping on the way.
+#[test]
+fn checkout_commit_while_the_workspace_holds_the_working_directory_leaves_for_it() {
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::test_default();
+    state.repos.push(RepoState::new_opening(
+        RepoId(1),
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+    state.active_repo = Some(RepoId(1));
+    state.repos[0].workspace.active = true;
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::CheckoutCommit {
+            repo_id: RepoId(1),
+            commit_id: CommitId("deadbeef".into()),
+        },
+    );
+
+    assert!(
+        matches!(
+            effects.as_slice(),
+            [Effect::LeaveWorkspaceAndCheckout {
+                repo_id: RepoId(1),
+                checkout_base: Some(base),
+                then: crate::msg::CheckoutRequest::Commit { commit_id },
+            }] if base == "deadbeef" && commit_id.as_ref() == "deadbeef"
+        ),
+        "the commit is reachable, so the leave can go straight to it, got {effects:?}"
+    );
+}
+
+/// The local branch a remote checkout names may not exist yet — creating it is
+/// often what the checkout is for — so there is nothing to land on, and the
+/// leave falls back to the branch the workspace remembers.
+#[test]
+fn remote_checkout_while_the_workspace_holds_the_working_directory_leaves_to_the_remembered_branch()
+{
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::test_default();
+    state.repos.push(RepoState::new_opening(
+        RepoId(1),
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+    state.active_repo = Some(RepoId(1));
+    state.repos[0].workspace.active = true;
+    state.repos[0].workspace.checkout_base = Some("main".to_string());
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::CheckoutRemoteBranch {
+            repo_id: RepoId(1),
+            remote: "origin".to_string(),
+            branch: "feature".to_string(),
+            local_branch: "feature".to_string(),
+            mode: gitcomet_core::services::CheckoutRemoteBranchMode::Create,
+        },
+    );
+
+    assert!(
+        matches!(
+            effects.as_slice(),
+            [Effect::LeaveWorkspaceAndCheckout {
+                repo_id: RepoId(1),
+                checkout_base: None,
+                then: crate::msg::CheckoutRequest::Remote { local_branch, .. },
+            }] if local_branch == "feature"
+        ),
+        "with no branch to land on the leave must fall back to the remembered one, got {effects:?}"
+    );
+}
+
+/// A workspace already moving HEAD — an apply in flight, or an earlier switch
+/// — cannot leave again, and the checkout refused by it has to say so: the
+/// dialog the user confirmed would otherwise close and nothing would happen.
+#[test]
+fn a_checkout_refused_by_a_busy_workspace_reports_the_refusal() {
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::test_default();
+    state.repos.push(RepoState::new_opening(
+        RepoId(1),
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+    state.active_repo = Some(RepoId(1));
+    state.repos[0].workspace.active = true;
+    state.repos[0].workspace.busy.switching = true;
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::CheckoutBranch {
+            repo_id: RepoId(1),
+            name: "feature/x".to_string(),
+        },
+    );
+
+    assert!(
+        effects.is_empty(),
+        "a second leave while one is in flight would race the first, got {effects:?}"
+    );
+    assert!(
+        state
+            .notifications
+            .iter()
+            .any(|notification| notification.message.contains("workspace is busy")),
+        "the refused checkout has to say why it did nothing"
+    );
+}
+
 mod large_files;

@@ -411,6 +411,18 @@ pub(super) fn schedule_effect(
             repo_id,
             checkout_base,
         ),
+        Effect::LeaveWorkspaceAndCheckout {
+            repo_id,
+            checkout_base,
+            then,
+        } => workspace_effects::schedule_leave_workspace_and_checkout(
+            executor,
+            repos,
+            msg_tx,
+            repo_id,
+            checkout_base,
+            then,
+        ),
         Effect::AssignWorkspaceFile {
             repo_id,
             path,

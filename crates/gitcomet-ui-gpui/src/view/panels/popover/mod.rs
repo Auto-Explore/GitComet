@@ -67,6 +67,7 @@ mod tag_push;
 mod terminal_shutdown_confirm;
 mod unsaved_file_edits_confirm;
 mod upstream_picker;
+mod workspace_exit_prompt;
 pub(in crate::view) mod workspace_prompt;
 mod worktree_add_prompt;
 mod worktree_badge_picker;
@@ -1102,6 +1103,9 @@ pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<Popover
         PopoverKind::BranchExistsPrompt { .. } | PopoverKind::FilesystemConflict(_) => {
             Some(DIALOG_540_WIDTH)
         }
+        // The leave-workspace dialog names the branch and explains where the
+        // workspace goes; a dialog width keeps that prose off the buttons.
+        PopoverKind::LeaveWorkspaceToCheckoutPrompt { .. } => Some(DIALOG_440_WIDTH),
         PopoverKind::MergeAbortConfirm { .. } => Some(DIALOG_360_WIDTH),
         PopoverKind::ForceRemoveWorktreeConfirm { .. } => Some(DIALOG_460_WIDTH),
         PopoverKind::PullReconcilePrompt { .. } | PopoverKind::AddToGitignorePrompt { .. } => {

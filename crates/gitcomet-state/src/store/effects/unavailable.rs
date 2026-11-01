@@ -130,6 +130,23 @@ pub(super) fn send_unavailable_git_effect_result(
                 },
             ))
         }
+        // The checkout waiting for this leave goes with it: the working
+        // directory could not be moved off the workspace, and running the
+        // checkout anyway is the stranding the leave exists to prevent.
+        Effect::LeaveWorkspaceAndCheckout {
+            repo_id,
+            checkout_base,
+            then: _,
+        } => {
+            send(Msg::Internal(
+                crate::msg::InternalMsg::WorkspaceActiveFinished {
+                    repo_id,
+                    active: false,
+                    checkout_base,
+                    result: Err(git_unavailable_error(runtime)),
+                },
+            ))
+        }
         Effect::PushWorkspaceBranch { repo_id, name } => {
             send(Msg::Internal(crate::msg::InternalMsg::WorkspacePushFinished {
                 repo_id,

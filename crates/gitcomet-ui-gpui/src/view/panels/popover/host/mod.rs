@@ -662,7 +662,7 @@ impl PopoverHost {
                 } else if let Some(PopoverKind::WorkspacePrompt { .. }) = this.popover.clone() {
                     this.submit_workspace_prompt(window, cx);
                 } else {
-                    this.submit_checkout_remote_branch(cx);
+                    this.submit_checkout_remote_branch(window, cx);
                 }
             },
         ));

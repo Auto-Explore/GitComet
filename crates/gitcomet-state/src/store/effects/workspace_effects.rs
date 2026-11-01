@@ -7,10 +7,11 @@
 //! every other repository in the window.
 
 use crate::model::WorkspaceEdit;
-use crate::msg::{InternalMsg, Msg};
+use crate::msg::{CheckoutRequest, InternalMsg, Msg};
 use gitcomet_core::services::{GitRepository, Result};
 use gitcomet_core::workspace::{AssignmentIndex, VirtualBranch};
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use super::super::RepoId;
 use super::super::executor::TaskExecutor;
@@ -348,31 +349,8 @@ pub(super) fn schedule_leave_workspace(
         repo_id,
         msg_tx,
         move |repo, msg_tx| {
-            // No branch to go back to: fall back to the workspace target rather
-            // than guessing, since a wrong guess would move the user onto a
-            // branch they never had checked out.
-            //
-            // The read can itself fail — a repository with no workspace on disk
-            // at all — and this closure answers through the message channel
-            // rather than by returning, so the failure is reported the same way
-            // every other one is instead of being dropped on the worker.
-            let onto = match &checkout_base {
-                Some(branch) => branch.clone(),
-                None => match repo.read_workspace() {
-                    Ok(state) => state.target,
-                    Err(error) => {
-                        send_or_log(
-                            &msg_tx,
-                            Msg::Internal(InternalMsg::WorkspaceActiveFinished {
-                                repo_id,
-                                active: false,
-                                checkout_base: None,
-                                result: Err(error),
-                            }),
-                        );
-                        return;
-                    }
-                },
+            let Some(onto) = resolve_leave_target(&repo, &checkout_base, repo_id, &msg_tx) else {
+                return;
             };
             let result = repo.leave_workspace(&onto);
             send_or_log(
@@ -384,6 +362,96 @@ pub(super) fn schedule_leave_workspace(
                     result,
                 }),
             );
+        },
+        move |msg_tx| {
+            send_or_log(
+                &msg_tx,
+                Msg::Internal(InternalMsg::WorkspaceActiveFinished {
+                    repo_id,
+                    active: false,
+                    checkout_base: None,
+                    result: Err(missing_repo_error(repo_id)),
+                }),
+            );
+        },
+    );
+}
+
+/// Where a leave puts the working directory.
+///
+/// The branch the caller named when it has one, otherwise the branch the stored
+/// workspace targets — never a guess, since a wrong guess would move the user
+/// onto a branch they never had checked out.
+///
+/// `None` means the decision could not be made: reading the workspace failed
+/// (a repository with no workspace on disk at all), and that failure has
+/// already been reported through `msg_tx`, the same way every other worker
+/// failure is, rather than being dropped on the thread that produced it.
+fn resolve_leave_target(
+    repo: &Arc<dyn GitRepository>,
+    checkout_base: &Option<String>,
+    repo_id: RepoId,
+    msg_tx: &StoreWorkerSender,
+) -> Option<String> {
+    if let Some(branch) = checkout_base {
+        return Some(branch.clone());
+    }
+    match repo.read_workspace() {
+        Ok(state) => Some(state.target),
+        Err(error) => {
+            send_or_log(
+                msg_tx,
+                Msg::Internal(InternalMsg::WorkspaceActiveFinished {
+                    repo_id,
+                    active: false,
+                    checkout_base: None,
+                    result: Err(error),
+                }),
+            );
+            None
+        }
+    }
+}
+
+/// Take the working directory off the workspace branch and then run the
+/// checkout that asked for it.
+///
+/// The leave is reported exactly as [`schedule_leave_workspace`] reports it,
+/// and the checkout follows it as the ordinary message it is: the reducer
+/// then records the checkout the way it records every other one, and a leave
+/// that fails takes the checkout with it instead of running it against a
+/// working directory the workspace still holds.
+pub(super) fn schedule_leave_workspace_and_checkout(
+    executor: &TaskExecutor,
+    repos: &RepoMap,
+    msg_tx: StoreWorkerSender,
+    repo_id: RepoId,
+    checkout_base: Option<String>,
+    then: CheckoutRequest,
+) {
+    spawn_with_repo_or_else(
+        executor,
+        repos,
+        repo_id,
+        msg_tx,
+        move |repo, msg_tx| {
+            let Some(onto) = resolve_leave_target(&repo, &checkout_base, repo_id, &msg_tx) else {
+                return;
+            };
+            let result = repo.leave_workspace(&onto);
+            let left = result.is_ok();
+            send_or_log(
+                &msg_tx,
+                Msg::Internal(InternalMsg::WorkspaceActiveFinished {
+                    repo_id,
+                    active: false,
+                    checkout_base: None,
+                    result,
+                }),
+            );
+            if left {
+                send_or_log(&msg_tx, then.into_msg(repo_id));
+            }
         },
         move |msg_tx| {
             send_or_log(

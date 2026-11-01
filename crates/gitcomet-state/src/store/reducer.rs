@@ -30,7 +30,7 @@ mod util;
 mod workspace;
 
 use crate::model::{AppState, Loadable, RepoId};
-use crate::msg::{ConflictRegionChoice, Effect, Msg, RepoPath, RepoPathList};
+use crate::msg::{CheckoutRequest, ConflictRegionChoice, Effect, Msg, RepoPath, RepoPathList};
 use auth::{annex_adjusted_refusal, annex_takeover};
 use gitcomet_core::services::GitRepository;
 use rustc_hash::FxHashMap;
@@ -1206,6 +1206,17 @@ fn reduce_inner(
             diff_selection::apply_worktree_patch(repo_id, patch, reverse)
         }
         Msg::CheckoutBranch { repo_id, name } => {
+            if workspace::owns_workdir(state, repo_id) {
+                // The workspace owns the working directory, so leaving it is
+                // part of this checkout. The branch exists already, which is
+                // what lets the leave put the directory straight on it.
+                return workspace::leave_for_checkout(
+                    state,
+                    repo_id,
+                    Some(name.clone()),
+                    CheckoutRequest::Branch { name },
+                );
+            }
             if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
                 repo_state.set_detached_head_commit(None);
             }
@@ -1219,6 +1230,22 @@ fn reduce_inner(
             local_branch,
             mode,
         } => {
+            if workspace::owns_workdir(state, repo_id) {
+                // The local branch may not exist yet — the checkout is often
+                // what creates it — so the leave goes back to the branch the
+                // workspace remembers and the checkout runs after it.
+                return workspace::leave_for_checkout(
+                    state,
+                    repo_id,
+                    None,
+                    CheckoutRequest::Remote {
+                        remote,
+                        branch,
+                        local_branch,
+                        mode,
+                    },
+                );
+            }
             if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
                 repo_state.set_detached_head_commit(None);
             }
@@ -1232,6 +1259,16 @@ fn reduce_inner(
             )
         }
         Msg::CheckoutCommit { repo_id, commit_id } => {
+            if workspace::owns_workdir(state, repo_id) {
+                // A commit is always there to check out, so the leave can take
+                // the working directory straight to it.
+                return workspace::leave_for_checkout(
+                    state,
+                    repo_id,
+                    Some(commit_id.to_string()),
+                    CheckoutRequest::Commit { commit_id },
+                );
+            }
             if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
                 repo_state.set_detached_head_commit(Some(commit_id.clone()));
             }

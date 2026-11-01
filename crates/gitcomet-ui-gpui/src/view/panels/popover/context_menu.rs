@@ -1333,6 +1333,19 @@ impl PopoverHost {
                 return;
             }
             ContextMenuAction::CheckoutCommit { repo_id, commit_id } => {
+                if workspace_owns_workdir(&self.state, repo_id) {
+                    // The workspace owns the working directory: leaving it is
+                    // part of this checkout, so say so before it happens.
+                    self.open_popover_centered(
+                        PopoverKind::LeaveWorkspaceToCheckoutPrompt {
+                            repo_id,
+                            target: WorkspaceCheckoutTarget::Commit(commit_id),
+                        },
+                        window,
+                        cx,
+                    );
+                    return;
+                }
                 self.store
                     .dispatch(Msg::CheckoutCommit { repo_id, commit_id });
             }
@@ -1441,6 +1454,19 @@ impl PopoverHost {
                 return;
             }
             ContextMenuAction::CheckoutBranch { repo_id, name } => {
+                if workspace_owns_workdir(&self.state, repo_id) {
+                    // The workspace owns the working directory: leaving it is
+                    // part of this checkout, so say so before it happens.
+                    self.open_popover_centered(
+                        PopoverKind::LeaveWorkspaceToCheckoutPrompt {
+                            repo_id,
+                            target: WorkspaceCheckoutTarget::Branch(name),
+                        },
+                        window,
+                        cx,
+                    );
+                    return;
+                }
                 self.store.dispatch(Msg::CheckoutBranch { repo_id, name });
             }
             ContextMenuAction::DeleteBranch { repo_id, name } => {

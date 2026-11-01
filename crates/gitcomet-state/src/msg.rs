@@ -7,7 +7,7 @@ mod repo_path;
 mod repo_path_list;
 mod store_event;
 
-pub use effect::Effect;
+pub use effect::{CheckoutRequest, Effect};
 pub use message::{
     BranchExistsChoice, CommitSelectMode, ConflictAutosolveMode, ConflictAutosolveStats,
     ConflictBulkChoice, ConflictBulkScope, ConflictRegionChoice, ConflictRegionResolutionUpdate,

@@ -10,7 +10,7 @@ use gitcomet_core::services::{
 };
 use std::path::PathBuf;
 
-use super::RepoPathList;
+use super::{Msg, RepoPathList};
 
 /// Matches every effect that runs a command with staged credentials,
 /// binding its `auth` slot, so both accessors list them once.
@@ -140,6 +140,22 @@ pub enum Effect {
     LeaveWorkspace {
         repo_id: RepoId,
         checkout_base: Option<String>,
+    },
+    /// Take the working directory off the workspace branch and then run the
+    /// checkout that had to wait for it.
+    ///
+    /// A checkout asked for while the workspace holds the working directory is
+    /// two moves: leave first, then check out on a directory the workspace no
+    /// longer owns. Keeping them in one effect is what stops a failed leave
+    /// from running the second half anyway — or from leaving the user on a
+    /// branch neither the workspace nor the request wanted.
+    LeaveWorkspaceAndCheckout {
+        repo_id: RepoId,
+        /// Where the leave puts the working directory: the branch or commit
+        /// the user asked for when it already exists, `None` to fall back to
+        /// the branch the workspace remembers.
+        checkout_base: Option<String>,
+        then: CheckoutRequest,
     },
     /// Push a virtual branch, setting upstream on first push.
     PushWorkspaceBranch {
@@ -846,4 +862,51 @@ pub enum Effect {
         repo_id: RepoId,
         index: usize,
     },
+}
+
+/// What to check out once the working directory is off the workspace branch.
+///
+/// The three checkouts the user can ask for from the views that sit over the
+/// workspace, carried through the leave so the request survives it.
+#[derive(Clone, Debug)]
+pub enum CheckoutRequest {
+    Branch {
+        name: String,
+    },
+    Remote {
+        remote: String,
+        branch: String,
+        local_branch: String,
+        mode: CheckoutRemoteBranchMode,
+    },
+    Commit {
+        commit_id: CommitId,
+    },
+}
+
+impl CheckoutRequest {
+    /// The ordinary message that performs this checkout.
+    ///
+    /// Sent only once the leave has been reported, so the reducer records it
+    /// exactly as it records any other checkout — the same busy marker, the
+    /// same detached-HEAD bookkeeping, the same effect — instead of the leave
+    /// having to know how each checkout is put together.
+    pub fn into_msg(self, repo_id: RepoId) -> Msg {
+        match self {
+            Self::Branch { name } => Msg::CheckoutBranch { repo_id, name },
+            Self::Remote {
+                remote,
+                branch,
+                local_branch,
+                mode,
+            } => Msg::CheckoutRemoteBranch {
+                repo_id,
+                remote,
+                branch,
+                local_branch,
+                mode,
+            },
+            Self::Commit { commit_id } => Msg::CheckoutCommit { repo_id, commit_id },
+        }
+    }
 }

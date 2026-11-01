@@ -102,6 +102,9 @@ impl PopoverHost {
                 target,
                 operation,
             } => branch_exists_prompt::panel(self, repo_id, name, target, operation, cx),
+            PopoverKind::LeaveWorkspaceToCheckoutPrompt { repo_id, target } => {
+                workspace_exit_prompt::panel(self, repo_id, target, cx)
+            }
             PopoverKind::StashPrompt => stash_prompt::panel(self, cx),
             PopoverKind::CommitPrompt { repo_id } => commit_prompt::panel(self, repo_id, cx),
             PopoverKind::StashPickerPrompt { repo_id, purpose } => {

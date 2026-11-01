@@ -11,7 +11,7 @@ use super::util::{push_diagnostic, push_notification};
 use crate::model::{
     AppNotificationKind, AppState, DiagnosticKind, Loadable, RepoId, RepoState, WorkspaceEdit,
 };
-use crate::msg::Effect;
+use crate::msg::{CheckoutRequest, Effect};
 use gitcomet_core::workspace::{AssignmentIndex, BranchApplyState, WorkspaceState};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -267,15 +267,79 @@ pub(super) fn leave_workspace(state: &mut AppState, repo_id: RepoId) -> Vec<Effe
     let Some(repo) = repo_mut(state, repo_id) else {
         return Vec::new();
     };
-    if repo.workspace.busy.any() || !repo.workspace.active {
+    if !begin_leave(repo) {
         return Vec::new();
     }
     let checkout_base = repo.workspace.checkout_base.clone();
-    repo.workspace.busy.switching = true;
-    repo.workspace.bump_rev();
     vec![Effect::LeaveWorkspace {
         repo_id,
         checkout_base,
+    }]
+}
+
+/// Whether the working directory is the workspace's to move.
+///
+/// This is the test every checkout asks before it may run: a workspace that
+/// owns the working directory has to be left first, both because moving HEAD
+/// out from under it would strand the two in disagreement and because the
+/// views promise that the workspace stays on `gitcomet/workspace` while they
+/// are showing it.
+pub(super) fn owns_workdir(state: &AppState, repo_id: RepoId) -> bool {
+    state
+        .repos
+        .iter()
+        .find(|repo| repo.id == repo_id)
+        .is_some_and(|repo| repo.workspace.active)
+}
+
+/// Mark the workspace as switching, answering whether a switch may start.
+///
+/// A workspace that is already busy — an apply in flight, or the working
+/// directory being moved by an earlier request — cannot leave again, and the
+/// caller reports the refusal instead of believing the move happened.
+fn begin_leave(repo: &mut RepoState) -> bool {
+    if repo.workspace.busy.any() || !repo.workspace.active {
+        return false;
+    }
+    repo.workspace.busy.switching = true;
+    repo.workspace.bump_rev();
+    true
+}
+
+/// Leave the workspace to run a checkout that asked for what it holds.
+///
+/// `checkout_base` is where the leave puts the working directory: the branch
+/// or commit the user asked for when it already exists, or `None` to fall back
+/// to the branch the workspace remembers (which is what a checkout that still
+/// has to create its branch needs). `then` runs only once the leave has been
+/// reported, so the two moves cannot be split by a failure in between.
+pub(super) fn leave_for_checkout(
+    state: &mut AppState,
+    repo_id: RepoId,
+    checkout_base: Option<String>,
+    then: CheckoutRequest,
+) -> Vec<Effect> {
+    let Some(repo) = repo_mut(state, repo_id) else {
+        return Vec::new();
+    };
+    if !repo.workspace.active {
+        // The working directory stopped being the workspace's between the
+        // check and here; the ordinary checkout path already handles that.
+        return Vec::new();
+    }
+    let may_leave = begin_leave(repo);
+    if !may_leave {
+        push_notification(
+            state,
+            AppNotificationKind::Info,
+            "The workspace is busy; try changing branch again in a moment.".to_string(),
+        );
+        return Vec::new();
+    }
+    vec![Effect::LeaveWorkspaceAndCheckout {
+        repo_id,
+        checkout_base,
+        then,
     }]
 }
 

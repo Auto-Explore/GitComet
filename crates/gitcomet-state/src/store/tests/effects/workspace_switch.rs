@@ -25,11 +25,9 @@ impl GitBackend for Backend {
     }
 }
 
-/// Run one effect against a repository that cannot do the work, and return the
-/// single message it produced.
-fn run_against_unconfigured(
-    effect: Effect,
-) -> std::result::Result<Msg, std::sync::mpsc::RecvTimeoutError> {
+/// Queue one effect against a repository that cannot do the work, and hand
+/// back the channel its replies arrive on.
+fn replies_to_unconfigured(effect: Effect) -> std::sync::mpsc::Receiver<Msg> {
     let repo_id = RepoId(7);
     let executor = super::super::executor::TaskExecutor::new(1);
     let backend: Arc<dyn GitBackend> = Arc::new(Backend);
@@ -45,7 +43,15 @@ fn run_against_unconfigured(
     };
     let (msg_tx, msg_rx) = std::sync::mpsc::channel::<Msg>();
     schedule_effect_for_test(&executor, &executor, &backend, &repos, msg_tx, effect);
-    msg_rx.recv_timeout(std::time::Duration::from_secs(10))
+    msg_rx
+}
+
+/// Run one effect against a repository that cannot do the work, and return the
+/// single message it produced.
+fn run_against_unconfigured(
+    effect: Effect,
+) -> std::result::Result<Msg, std::sync::mpsc::RecvTimeoutError> {
+    replies_to_unconfigured(effect).recv_timeout(std::time::Duration::from_secs(10))
 }
 
 /// True when this message is a finished switch whose payload matches.
@@ -159,5 +165,96 @@ fn a_switch_for_a_repository_that_is_gone_still_answers() {
             })
         ),
         "a missing repository has to be reported through the same channel"
+    );
+}
+
+#[test]
+fn a_leave_that_carries_a_checkout_drops_the_checkout_when_the_leave_fails() {
+    // The leave fails here — the repository answers "unsupported" — and the
+    // checkout that asked for it goes with it. Running it against a working
+    // directory the workspace still holds is exactly the stranding the leave
+    // exists to prevent, so the second message must never arrive.
+    let replies = replies_to_unconfigured(Effect::LeaveWorkspaceAndCheckout {
+        repo_id: RepoId(7),
+        checkout_base: Some("main".into()),
+        then: crate::msg::CheckoutRequest::Branch {
+            name: "feature".to_string(),
+        },
+    });
+
+    let msg = replies
+        .recv_timeout(std::time::Duration::from_secs(10))
+        .expect("the leave has to be reported, not dropped on the worker");
+    assert!(
+        is_switch(&msg, false),
+        "expected a failed leave to be reported, got {msg:?}"
+    );
+    match replies.recv_timeout(std::time::Duration::from_millis(200)) {
+        Ok(later) => panic!("the checkout ran after a leave that failed: {later:?}"),
+        Err(_) => {}
+    }
+}
+
+#[test]
+fn a_successful_leave_runs_the_checkout_that_waited_for_it() {
+    // The whole point of carrying the checkout through the leave: once the
+    // working directory is back on an ordinary branch, the request that had to
+    // wait arrives as the ordinary message it is, in order behind the report.
+    let repo_id = RepoId(7);
+    let calls = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    let repo = RecordingCheckoutRepo::new(
+        RepoSpec {
+            workdir: std::path::PathBuf::from("/repo"),
+        },
+        Arc::clone(&calls),
+    );
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    repos.insert(repo_id, Arc::new(repo));
+    let executor = super::super::executor::TaskExecutor::new(1);
+    let backend: Arc<dyn GitBackend> = Arc::new(Backend);
+    let (msg_tx, msg_rx) = std::sync::mpsc::channel::<Msg>();
+
+    schedule_effect_for_test(
+        &executor,
+        &executor,
+        &backend,
+        &repos,
+        msg_tx,
+        Effect::LeaveWorkspaceAndCheckout {
+            repo_id,
+            checkout_base: Some("main".into()),
+            then: crate::msg::CheckoutRequest::Branch {
+                name: "feature".to_string(),
+            },
+        },
+    );
+
+    let left = msg_rx
+        .recv_timeout(std::time::Duration::from_secs(10))
+        .expect("the leave has to be reported first");
+    assert!(
+        matches!(
+            left,
+            Msg::Internal(crate::msg::InternalMsg::WorkspaceActiveFinished {
+                repo_id: RepoId(7),
+                active: false,
+                result: Ok(()),
+                ..
+            })
+        ),
+        "expected the leave to be reported as done, got {left:?}"
+    );
+    let checkout = msg_rx
+        .recv_timeout(std::time::Duration::from_secs(10))
+        .expect("the checkout never followed the leave");
+    assert!(
+        matches!(
+            &checkout,
+            Msg::CheckoutBranch {
+                repo_id: RepoId(7),
+                name,
+            } if name == "feature"
+        ),
+        "expected the checkout that asked for the leave, got {checkout:?}"
     );
 }

@@ -213,6 +213,7 @@ fn repo_for_popover<'a>(state: &'a AppState, popover: &PopoverKind) -> Option<&'
         | PopoverKind::MergeCommitConfirm { repo_id, .. }
         | PopoverKind::MergeAbortConfirm { repo_id }
         | PopoverKind::BranchExistsPrompt { repo_id, .. }
+        | PopoverKind::LeaveWorkspaceToCheckoutPrompt { repo_id, .. }
         | PopoverKind::ForceDeleteBranchConfirm { repo_id, .. }
         | PopoverKind::ForceRemoveWorktreeConfirm { repo_id, .. }
         | PopoverKind::DiscardChangesConfirm { repo_id, .. }
@@ -323,6 +324,16 @@ fn hash_repo_for_popover<H: Hasher>(repo: &RepoState, popover: &PopoverKind, has
         PopoverKind::BranchExistsPrompt { .. } => {
             repo.worktrees_rev.hash(hasher);
             repo.head_branch_rev.hash(hasher);
+        }
+
+        // The whole dialog is the claim that the workspace holds the working
+        // directory. If that stops being true while it is up — the workspace
+        // was left from somewhere else, or a switch is under way — it has to
+        // repaint rather than go on offering to leave.
+        PopoverKind::LeaveWorkspaceToCheckoutPrompt { .. } => {
+            repo.workspace.active.hash(hasher);
+            repo.workspace.busy.switching.hash(hasher);
+            repo.workspace.rev.hash(hasher);
         }
 
         PopoverKind::Repo {
@@ -584,6 +595,15 @@ fn hash_pending_force_push_lease(repo: &RepoState, hasher: &mut impl Hasher) {
 
 fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
     match kind {
+        PopoverKind::LeaveWorkspaceToCheckoutPrompt { repo_id, target } => {
+            124u8.hash(hasher);
+            repo_id.hash(hasher);
+            // The dialog shows the target's label; the checkout it dispatches
+            // is fixed by the choice that asked for it, not by repository
+            // state, so hashing the label is hashing what is on screen.
+            std::mem::discriminant(target).hash(hasher);
+            target.label().hash(hasher);
+        }
         PopoverKind::RepoPicker { scope } => {
             0u8.hash(hasher);
             scope.hash(hasher);

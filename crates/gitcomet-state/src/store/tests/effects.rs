@@ -793,6 +793,13 @@ impl GitRepository for RecordingCheckoutRepo {
             .push(format!("checkout {name}"));
         Ok(())
     }
+    fn leave_workspace(&self, onto: &str) -> Result<()> {
+        self.calls
+            .lock()
+            .expect("checkout recording mutex")
+            .push(format!("leave {onto}"));
+        Ok(())
+    }
     fn checkout_remote_branch(
         &self,
         remote: &str,
