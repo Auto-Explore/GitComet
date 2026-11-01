@@ -15,6 +15,8 @@ mod linux_wayland_fallback;
 mod mergetool_mode;
 #[cfg(all(unix, feature = "ui-gpui-runtime"))]
 mod process_launch;
+#[cfg(feature = "ui-gpui-runtime")]
+mod process_liveness;
 mod setup_mode;
 
 pub use cli::{AppMode, CliOutcome, exit_code};
