@@ -98,6 +98,39 @@ fn config_for(mode: GitCometViewMode) -> GitCometViewConfig {
 }
 
 #[gpui::test]
+fn commit_messages_are_unsupported_without_a_commit_box(cx: &mut gpui::TestAppContext) {
+    cx.update(install_example);
+    for mode in [
+        GitCometViewMode::FocusedDiff,
+        GitCometViewMode::FocusedMergetool,
+    ] {
+        let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+        let (view, cx) = cx.add_window_view(|window, cx| {
+            GitCometView::new_with_config(store, events, config_for(mode), window, cx)
+        });
+        cx.update(|_, app| {
+            view.update(app, |this, cx| {
+                test_support::push_test_state(
+                    this,
+                    state_with_repo(RepoId(1), Path::new("/tmp/no-commit-box")),
+                    cx,
+                )
+            });
+            extension_host::window_opened(&view, app);
+        });
+        test_support::redraw(cx);
+        cx.update(|_, app| {
+            let host = view.read(app).extension_window.as_ref().unwrap().host();
+            let repository = host.active_repository(app).unwrap().unwrap();
+            assert_eq!(
+                host.set_commit_message(&repository, "message".into(), app),
+                Err(HostError::Unsupported)
+            );
+        });
+    }
+}
+
+#[gpui::test]
 fn without_extensions_the_host_adds_nothing(cx: &mut gpui::TestAppContext) {
     for mode in [
         GitCometViewMode::Normal,

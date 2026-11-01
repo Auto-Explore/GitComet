@@ -973,6 +973,10 @@ impl WindowHostImpl for HostWindow {
         message: String,
         cx: &mut App,
     ) -> Result<(), HostError> {
+        self.live()?;
+        if self.kind != gitcomet_core::identity::WindowKind::Main {
+            return Err(HostError::Unsupported);
+        }
         let view = self.view.clone();
         let repository = repository.clone();
         cx.defer(move |cx| {

@@ -24,6 +24,7 @@ pub(in crate::view) struct HostedDiffDecor {
     /// The most people one annotation names, which the rows make room for.
     most_people: Option<usize>,
     pub insets: Arc<[DiffInset]>,
+    projected_insets: Arc<[DiffInset]>,
     pub(super) views: super::hosted_views::HostedViews,
     pub(super) row_height: Pixels,
     pub file_cache: Option<Arc<diff_cache::SharedFileDiffCache>>,
@@ -431,13 +432,15 @@ impl DiffRenderer {
         let decor = self.hosted_decor.get_or_insert_with(Default::default);
         decor.view_id = view_id;
         decor.options = options;
-        decor.most_people = annotations
-            .iter()
-            .filter_map(|(_, _, annotation)| match &annotation.glyph {
-                Some(DiffGlyph::People(people)) if !people.is_empty() => Some(people.len()),
-                _ => None,
-            })
-            .max();
+        if !Arc::ptr_eq(&decor.annotations, &annotations) {
+            decor.most_people = annotations
+                .iter()
+                .filter_map(|(_, _, annotation)| match &annotation.glyph {
+                    Some(DiffGlyph::People(people)) if !people.is_empty() => Some(people.len()),
+                    _ => None,
+                })
+                .max();
+        }
         decor.annotations = annotations;
         decor.insets = insets;
         let reset = decor.views.set(views) || reset;
@@ -518,6 +521,15 @@ impl DiffRenderer {
                         let view = decor.views.reprojected(view)?;
                         Some(DisplayRow::View { view, row })
                     }
+                    DisplayRow::Inset { inset, line } => {
+                        let previous = decor.projected_insets.get(inset)?;
+                        let inset = decor.insets.iter().position(|inset| {
+                            inset.side == previous.side
+                                && inset.line == previous.line
+                                && inset.lines == previous.lines
+                        })?;
+                        Some(DisplayRow::Inset { inset, line })
+                    }
                     anchor => Some(anchor),
                 });
             let following = decor.display.get(top..).and_then(|rows| {
@@ -531,6 +543,7 @@ impl DiffRenderer {
         let decor = self.hosted_decor.as_mut().unwrap();
         decor.display.clear();
         decor.views.project();
+        decor.projected_insets = decor.insets.clone();
         decor.document.clear();
         for row in 0..len {
             decor.document.push(decor.display.len());

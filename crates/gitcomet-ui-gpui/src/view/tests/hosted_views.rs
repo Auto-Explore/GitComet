@@ -66,6 +66,7 @@ fn view_frame<V: 'static>(id: u64, thread: &gpui::Entity<V>) -> &'static str {
 fn draw(cx: &mut gpui::VisualTestContext) {
     for _ in 0..3 {
         cx.update(|window, app| {
+            window.simulate_next_frame(app);
             let _ = window.draw(app);
         });
         cx.run_until_parked();
@@ -701,12 +702,97 @@ fn a_retargeted_pane_leaves_the_old_files_views_behind(cx: &mut gpui::TestAppCon
         "the view's row after a.rs line 4"
     );
 
+    cx.update(|_, app| pane.set_target(target("a.rs"), app));
+    assert!(!cx.update(|_, app| pane.is_loading(app)));
+    draw(cx);
+    assert_eq!(
+        reserved(cx, &renderer),
+        1,
+        "the same target keeps its views"
+    );
+
     cx.update(|_, app| pane.set_target(target("b.rs"), app));
     settle(cx, &view, &store, "b.rs", |cx| {
         cx.update(|_, app| !pane.is_loading(app))
     });
     assert_eq!(rows_with(cx, &pane, "b edited 20"), 1);
     assert_eq!(reserved(cx, &renderer), 0, "none after b.rs line 4");
+}
+
+#[gpui::test]
+fn removing_an_earlier_inset_keeps_the_top_note(cx: &mut gpui::TestAppContext) {
+    let Mounted {
+        pane, renderer, cx, ..
+    } = mount(
+        cx,
+        DiffLayout::Inline,
+        numbered("line", 100, None),
+        numbered("line", 100, Some(1)),
+        2,
+    );
+    let inset = |line| {
+        gitcomet_extension_api::DiffInset::new(
+            DiffLineSide::New,
+            line,
+            [format!("note {line}").into()],
+        )
+        .with_action(gitcomet_extension_api::HostedAction::new(
+            "open note",
+            |_| {},
+        ))
+    };
+    cx.update(|_, app| pane.set_insets(vec![inset(10), inset(20), inset(30)], app));
+    draw(cx);
+    let height = row_height(cx, &renderer);
+    let note_row = |pane: &DiffRenderer| {
+        let document = (0..pane.diff_visible_len())
+            .find(|row| pane.hosted_line_numbers(*row).1 == Some(20))
+            .unwrap();
+        pane.diff_list_index(document) + 1
+    };
+    let top = cx.update(|_, app| note_row(renderer.read(app)));
+    cx.update(|_, app| {
+        renderer.update(app, |pane, cx| {
+            pane.diff_scroll
+                .0
+                .borrow()
+                .base_handle
+                .set_offset(gpui::point(px(0.0), -height * top as f32));
+            cx.notify();
+        })
+    });
+    draw(cx);
+    cx.update(|_, app| pane.set_insets(vec![inset(20), inset(30)], app));
+    draw(cx);
+    cx.update(|_, app| {
+        let pane = renderer.read(app);
+        let top = note_row(pane);
+        assert_eq!(
+            pane.diff_scroll.0.borrow().base_handle.offset().y,
+            -height * top as f32
+        );
+    });
+}
+
+#[gpui::test]
+fn stale_list_metrics_do_not_request_frames_without_a_list(cx: &mut gpui::TestAppContext) {
+    let Mounted { renderer, cx, .. } = mount(
+        cx,
+        DiffLayout::Inline,
+        numbered("line", 10, None),
+        numbered("line", 10, Some(1)),
+        2,
+    );
+    cx.update(|window, app| {
+        window.simulate_next_frame(app);
+    });
+    cx.update(|window, app| {
+        renderer.update(app, |pane, cx| {
+            pane.diff_list_built.row_height = px(1.0);
+            pane.sync_hosted_row_height(window, cx);
+        });
+        assert_eq!(window.simulate_next_frame(app), 0);
+    });
 }
 
 /// A view growing above the top line keeps that line where it was.
@@ -1022,6 +1108,31 @@ fn end_of_line_views_scroll_sideways_with_the_text(cx: &mut gpui::TestAppContext
         let (_, end) = text_end(cx, &renderer, region, "changed");
         assert_near(after.left(), end, &format!("{layout:?}: still after it"));
     }
+}
+
+#[gpui::test]
+fn measuring_line_end_text_requests_a_frame_for_the_scrollbar(cx: &mut gpui::TestAppContext) {
+    let (_, _pane, renderer, _, cx) = mount_hint(
+        cx,
+        DiffLayout::Inline,
+        "one\ntwo\nthree\n".into(),
+        "one\nTWO\nthree\n".into(),
+        2,
+        4000.0,
+    );
+    cx.update(|window, app| {
+        window.simulate_next_frame(app);
+    });
+    cx.update(|_, app| {
+        renderer.update(app, |pane, cx| {
+            pane.forget_hosted_line_end_text();
+            cx.notify();
+        })
+    });
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+    assert!(cx.update(|window, app| window.simulate_next_frame(app)) > 0);
 }
 
 /// The horizontal offset and furthest offset of the column a hint after a

@@ -26,10 +26,21 @@ const DETAILS_TAB_ICON: &str = "icons/side_panel_right.svg";
 
 /// The details tabs listed for the active repository: the contributions in
 /// its view, the selected one, and whether the details pane's own tab leads.
+#[derive(Clone, PartialEq)]
 pub(in crate::view) struct DetailsListing {
     tabs: Vec<(usize, SharedString, Option<SharedString>)>,
     selected: Option<usize>,
     own: bool,
+}
+
+#[derive(PartialEq)]
+pub(in crate::view) struct DetailsHeaderMeasureKey {
+    pub listing: Option<DetailsListing>,
+    pub theme: AppTheme,
+    pub scale: ui_scale::UiScale,
+    pub text: gpui::TextStyle,
+    pub rem: Pixels,
+    pub scale_factor: f32,
 }
 
 /// A contribution built per repository: its title, tab icon and builder.
@@ -835,6 +846,11 @@ impl GitCometView {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
+        if self.main_slot() == MainSlot::Document {
+            self.documents
+                .update(cx, |documents, cx| documents.focus_active(window, cx));
+            return;
+        }
         let selected = self
             .repository_views
             .as_ref()

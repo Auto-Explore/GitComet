@@ -512,13 +512,20 @@ impl DiffRenderer {
         window: &Window,
         cx: &mut App,
     ) {
-        self.diff_list_built = helpers::state::DiffListBuilt {
+        let built = helpers::state::DiffListBuilt {
             rows,
             row_height: self
                 .theme
                 .editor_row_height(crate::ui_scale::UiScale::current(cx).percent()),
             scale_factor: window.scale_factor(),
         };
+        if self.hosted_decor.is_some()
+            && (self.diff_list_built.row_height != built.row_height
+                || self.diff_list_built.scale_factor != built.scale_factor)
+        {
+            window.on_next_frame(|window, _| window.refresh());
+        }
+        self.diff_list_built = built;
     }
 
     pub(in crate::view) fn diff_vertical_scrollbar_gutter_for_column(

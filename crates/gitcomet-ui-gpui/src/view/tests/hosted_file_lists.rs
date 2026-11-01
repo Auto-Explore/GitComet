@@ -290,7 +290,7 @@ fn mark_glyphs_draw_in_their_own_column(cx: &mut gpui::TestAppContext) {
     let flagged = RowMark::new(gpui::red())
         .with_glyph(RowGlyph::Text("F".into()))
         .with_label("flagged");
-    cx.update(|_, app| list.set_marks(marks(2, flagged), app));
+    cx.update(|_, app| list.set_marks(marks(1, flagged), app));
     draw(cx);
     let a = cx
         .debug_bounds(glyph("a.rs"))
@@ -317,10 +317,12 @@ fn trailing_marks_follow_the_line_counts(cx: &mut gpui::TestAppContext) {
     let comments = RowMark::new(gpui::blue())
         .with_glyph(RowGlyph::Text("C".into()))
         .with_label("3");
+    let initial = FileListMarks::new(1, BTreeMap::new());
+    cx.update(|_, app| list.set_marks(initial.clone(), app));
+    draw(cx);
     cx.update(|_, app| {
         list.set_marks(
-            FileListMarks::new(1, BTreeMap::new())
-                .with_trailing(BTreeMap::from([(PathBuf::from("a.rs"), comments)])),
+            initial.with_trailing(BTreeMap::from([(PathBuf::from("a.rs"), comments)])),
             app,
         )
     });

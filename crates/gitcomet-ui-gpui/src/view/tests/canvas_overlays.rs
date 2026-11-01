@@ -762,14 +762,39 @@ fn showing_another_overlay_hides_the_first_and_keeps_it(cx: &mut gpui::TestAppCo
 
 #[gpui::test]
 fn a_document_takes_the_slot_from_the_overlay(cx: &mut gpui::TestAppContext) {
+    assert_document_takes_overlay(cx, "notes.txt");
+}
+
+#[gpui::test]
+fn an_image_document_takes_focus_from_the_overlay(cx: &mut gpui::TestAppContext) {
+    assert_document_takes_overlay(cx, "preview.png");
+}
+
+#[gpui::test]
+fn a_diagram_document_takes_focus_from_the_overlay(cx: &mut gpui::TestAppContext) {
+    assert_document_takes_overlay(cx, "diagram.mmd");
+}
+
+fn assert_document_takes_overlay(cx: &mut gpui::TestAppContext, name: &str) {
     let mut opened = open(
         cx,
         state(vec![repo(RepoId(1), "/tmp/overlay-document")], RepoId(1)),
     );
     opened.show();
     let directory = tempfile::tempdir().unwrap();
-    let path = directory.path().join("notes.txt");
-    std::fs::write(&path, "notes\n").unwrap();
+    let path = directory.path().join(name);
+    if name == "preview.png" {
+        image::RgbaImage::from_pixel(2, 2, image::Rgba([0, 0, 0, 255]))
+            .save(&path)
+            .unwrap();
+    } else {
+        let text = if name == "diagram.mmd" {
+            "flowchart LR\nA-->B"
+        } else {
+            "notes\n"
+        };
+        std::fs::write(&path, text).unwrap();
+    }
     let view = opened.view.clone();
     opened
         .cx
@@ -781,6 +806,12 @@ fn a_document_takes_the_slot_from_the_overlay(cx: &mut gpui::TestAppContext) {
         opened.changes().last(),
         Some(&CanvasOverlayVisibility::Hidden)
     );
+    opened.cx.update(|window, app| {
+        let actual = window.focused(app);
+        let documents = view.read(app).documents.clone();
+        documents.update(app, |documents, cx| documents.focus_active(window, cx));
+        assert_eq!(actual, window.focused(app), "the document receives focus");
+    });
 
     // Showing the overlay again leaves the document.
     opened.show();

@@ -135,14 +135,25 @@ impl GitCometView {
             self.sidebar_header_minimum = minimum;
             self.pane_resize = None;
         }
-        let details_minimum = self.details_listing().map_or(px(0.0), |listing| {
-            Self::details_header(&listing, cx)
-                .0
-                .minimum_width(theme, scale, window)
-        });
-        if self.details_header_minimum != details_minimum {
-            self.details_header_minimum = details_minimum;
-            self.pane_resize = None;
+        let details_key = super::repository_views::DetailsHeaderMeasureKey {
+            listing: self.details_listing(),
+            theme,
+            scale,
+            text: window.text_style(),
+            rem: window.rem_size(),
+            scale_factor: window.scale_factor(),
+        };
+        if self.details_header_measure_key.as_ref() != Some(&details_key) {
+            let minimum = details_key.listing.as_ref().map_or(px(0.0), |listing| {
+                Self::details_header(listing, cx)
+                    .0
+                    .minimum_width(theme, scale, window)
+            });
+            self.details_header_measure_key = Some(details_key);
+            if self.details_header_minimum != minimum {
+                self.details_header_minimum = minimum;
+                self.pane_resize = None;
+            }
         }
         if !renders_full_chrome(self.view_mode) {
             self.pane_window_size_request = None;

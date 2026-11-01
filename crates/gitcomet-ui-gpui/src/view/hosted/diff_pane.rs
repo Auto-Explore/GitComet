@@ -56,8 +56,7 @@ pub(crate) struct DiffPaneView {
     patch_error: Option<SharedString>,
     insets: Arc<[DiffInset]>,
     views: Arc<[DiffHostedView]>,
-    /// A view that notifies is measured again before it is next drawn.
-    view_observers: Vec<gpui::Subscription>,
+    view_observers: rustc_hash::FxHashMap<gpui::EntityId, gpui::Subscription>,
     annotations: Arc<DiffAnnotations>,
     legend: Vec<DiffLegendItem>,
     selection: Option<DiffLineRange>,
@@ -112,7 +111,7 @@ impl DiffPaneView {
             patch_error: None,
             insets: Arc::from([]),
             views: Arc::from([]),
-            view_observers: Vec::new(),
+            view_observers: Default::default(),
             annotations: Arc::default(),
             legend: Vec::new(),
             selection: None,
@@ -578,7 +577,7 @@ impl DiffPaneView {
     }
 
     pub(crate) fn set_target(&mut self, target: DiffTarget, cx: &mut gpui::Context<Self>) {
-        if matches!(self.source, PaneSource::Snapshot(_)) {
+        if !matches!(&self.source, PaneSource::Session { target: shown, .. } if *shown != target) {
             return;
         }
         self.open(target.clone(), cx);
@@ -1125,12 +1124,11 @@ impl DiffPaneImpl for HostedDiffPane {
             {
                 return;
             }
-            let pane_entity = cx.weak_entity();
-            pane.view_observers = views
-                .iter()
-                .map(|view| {
-                    let id = view.view().entity_id();
-                    let pane_entity = pane_entity.clone();
+            pane.view_observers.retain(|id, _| seen.contains(id));
+            for view in &views {
+                let id = view.view().entity_id();
+                pane.view_observers.entry(id).or_insert_with(|| {
+                    let pane_entity = cx.weak_entity();
                     view.observe(
                         move |cx| {
                             let _ = pane_entity.update(cx, |pane, cx| {
@@ -1144,8 +1142,8 @@ impl DiffPaneImpl for HostedDiffPane {
                         },
                         cx,
                     )
-                })
-                .collect();
+                });
+            }
             pane.views = views.into();
             pane.sync_decor(cx);
             cx.notify();

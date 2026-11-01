@@ -1293,6 +1293,7 @@ impl GitCometView {
             sidebar_width: initial_sidebar_width,
             sidebar_header_minimum: px(0.0),
             details_header_minimum: px(0.0),
+            details_header_measure_key: None,
             pane_window_size_request: None,
             _sidebar_header_subscription: sidebar_header_subscription,
             details_width: initial_details_width,

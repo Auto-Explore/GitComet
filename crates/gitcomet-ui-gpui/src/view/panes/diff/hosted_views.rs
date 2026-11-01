@@ -148,8 +148,9 @@ impl HostedViews {
         if Arc::ptr_eq(&self.views, &views) {
             return false;
         }
-        self.states
-            .retain(|id, _| views.iter().any(|view| view.view().entity_id() == *id));
+        let ids: rustc_hash::FxHashSet<_> =
+            views.iter().map(|view| view.view().entity_id()).collect();
+        self.states.retain(|id, _| ids.contains(id));
         self.line_end_views.clear();
         self.over_views.clear();
         for (ix, view) in views.iter().enumerate() {
@@ -296,10 +297,6 @@ impl DiffRenderer {
         let built = self.diff_list_built;
         let current = built.row_height == asked && built.scale_factor == scale_factor;
         let pitch = list_row_pitch(&self.diff_scroll, built.rows).filter(|_| current);
-        if built.rows > 0 && !current {
-            // The views are cached: nothing else draws the frame that would.
-            window.on_next_frame(|window, _| window.refresh());
-        }
         let row_height = pitch.unwrap_or_else(|| device_snapped(asked, scale_factor));
         if let Some(decor) = self.hosted_decor.as_mut() {
             decor.row_height = row_height;
@@ -490,6 +487,7 @@ impl DiffRenderer {
         &mut self,
         lines: LineEndLines,
         width: Pixels,
+        window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
         if self.diff_word_wrap
@@ -506,7 +504,10 @@ impl DiffRenderer {
             decor.views.line_end_text.insert(lines, width);
         }
         if self.diff_horizontal_content_width_for_column(column) != range {
-            cx.notify();
+            let pane = cx.weak_entity();
+            window.on_next_frame(move |_, cx| {
+                let _ = pane.update(cx, |_, cx| cx.notify());
+            });
         }
     }
 
