@@ -149,7 +149,7 @@ dependencies = [
  "libc",
  "log",
  "miow",
- "parking_lot",
+ "parking_lot 0.12.5",
  "piper",
  "polling",
  "regex-automata",
@@ -1473,9 +1473,9 @@ dependencies = [
  "cfg-if",
  "crossbeam-utils",
  "hashbrown 0.14.5",
- "lock_api",
+ "lock_api 0.4.14",
  "once_cell",
- "parking_lot_core",
+ "parking_lot_core 0.9.12",
 ]
 
 [[package]]
@@ -2519,7 +2519,7 @@ dependencies = [
  "gitcomet-fonts",
  "image",
  "mermaid-rs-renderer",
- "resvg 0.49.0",
+ "resvg",
  "roxmltree 0.21.2",
  "serde_json",
  "yaml-rust2",
@@ -2833,7 +2833,7 @@ dependencies = [
  "palette",
  "raw-window-handle",
  "regex",
- "resvg 0.49.0",
+ "resvg",
  "rustc-hash 2.1.3",
  "rustfs-mimalloc",
  "rustix",
@@ -2892,7 +2892,7 @@ dependencies = [
  "gpui-ce",
  "image",
  "lru",
- "resvg 0.49.0",
+ "resvg",
  "rustc-hash 2.1.3",
  "tempfile",
 ]
@@ -3249,7 +3249,7 @@ checksum = "2f66822aee11ccb28d6a2e63b587254e578fb52a138bd5806b58d8560125592b"
 dependencies = [
  "gix-hash",
  "hashbrown 0.17.1",
- "parking_lot",
+ "parking_lot 0.12.5",
 ]
 
 [[package]]
@@ -3380,7 +3380,7 @@ dependencies = [
  "gix-utils",
  "gix-zlib",
  "memmap2",
- "parking_lot",
+ "parking_lot 0.12.5",
  "tempfile",
 ]
 
@@ -3429,7 +3429,7 @@ dependencies = [
  "crossbeam-channel",
  "gix-trace",
  "once_cell",
- "parking_lot",
+ "parking_lot 0.12.5",
 ]
 
 [[package]]
@@ -3630,7 +3630,7 @@ dependencies = [
  "dashmap",
  "gix-fs",
  "libc",
- "parking_lot",
+ "parking_lot 0.12.5",
  "tempfile",
  "windows-sys 0.61.2",
 ]
@@ -3751,7 +3751,7 @@ dependencies = [
  "gix-trace",
  "gix-traverse",
  "gix-utils",
- "parking_lot",
+ "parking_lot 0.12.5",
 ]
 
 [[package]]
@@ -3826,7 +3826,7 @@ dependencies = [
 [[package]]
 name = "gpui-ce"
 version = "0.2.2"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=a2beb9ccf3f5a4816a07055af6b2044a5d170e18#a2beb9ccf3f5a4816a07055af6b2044a5d170e18"
+source = "git+https://github.com/Havunen/gpui-ce.git?rev=4b3b9c54191be9762095dcdf7656d0d3ca30cecf#4b3b9c54191be9762095dcdf7656d0d3ca30cecf"
 dependencies = [
  "accesskit",
  "anyhow",
@@ -3866,7 +3866,7 @@ dependencies = [
  "num_cpus",
  "palette",
  "parking",
- "parking_lot",
+ "parking_lot 0.13.0",
  "phf 0.14.0",
  "pin-project",
  "pollster 1.0.1",
@@ -3876,23 +3876,26 @@ dependencies = [
  "rand 0.10.3",
  "raw-window-handle",
  "regex",
- "resvg 0.48.1",
+ "resvg",
+ "roxmltree 0.21.2",
  "schemars",
  "seahash",
  "serde",
  "serde_json",
- "skrifa 0.48.0",
+ "simplecss",
+ "skrifa 0.49.0",
  "slotmap",
  "smallvec",
  "spin 0.12.3",
  "strum 0.28.0",
+ "svgtypes",
  "taffy",
  "thiserror 2.0.21",
  "tracing",
  "unicode-bidi",
  "unicode-segmentation",
  "url",
- "usvg 0.48.1",
+ "usvg",
  "uuid",
  "waker-fn",
  "web-time",
@@ -3902,7 +3905,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_apple"
 version = "0.1.0"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=a2beb9ccf3f5a4816a07055af6b2044a5d170e18#a2beb9ccf3f5a4816a07055af6b2044a5d170e18"
+source = "git+https://github.com/Havunen/gpui-ce.git?rev=4b3b9c54191be9762095dcdf7656d0d3ca30cecf#4b3b9c54191be9762095dcdf7656d0d3ca30cecf"
 dependencies = [
  "anyhow",
  "block",
@@ -3920,7 +3923,7 @@ dependencies = [
  "metal",
  "objc2 0.6.5",
  "objc2-quartz-core 0.3.2",
- "parking_lot",
+ "parking_lot 0.13.0",
  "smallvec",
  "wgsl-rs",
 ]
@@ -3928,7 +3931,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_collections"
 version = "0.2.2"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=a2beb9ccf3f5a4816a07055af6b2044a5d170e18#a2beb9ccf3f5a4816a07055af6b2044a5d170e18"
+source = "git+https://github.com/Havunen/gpui-ce.git?rev=4b3b9c54191be9762095dcdf7656d0d3ca30cecf#4b3b9c54191be9762095dcdf7656d0d3ca30cecf"
 dependencies = [
  "gpui_ce_util",
  "indexmap",
@@ -3938,7 +3941,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_derive_refineable"
 version = "0.2.2"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=a2beb9ccf3f5a4816a07055af6b2044a5d170e18#a2beb9ccf3f5a4816a07055af6b2044a5d170e18"
+source = "git+https://github.com/Havunen/gpui-ce.git?rev=4b3b9c54191be9762095dcdf7656d0d3ca30cecf#4b3b9c54191be9762095dcdf7656d0d3ca30cecf"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3948,7 +3951,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_linux"
 version = "0.1.0"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=a2beb9ccf3f5a4816a07055af6b2044a5d170e18#a2beb9ccf3f5a4816a07055af6b2044a5d170e18"
+source = "git+https://github.com/Havunen/gpui-ce.git?rev=4b3b9c54191be9762095dcdf7656d0d3ca30cecf#4b3b9c54191be9762095dcdf7656d0d3ca30cecf"
 dependencies = [
  "accesskit",
  "accesskit_unix",
@@ -3975,7 +3978,7 @@ dependencies = [
  "notify-rust",
  "oo7",
  "open",
- "parking_lot",
+ "parking_lot 0.13.0",
  "raw-window-handle",
  "smallvec",
  "smol",
@@ -3996,7 +3999,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_macos"
 version = "0.1.0"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=a2beb9ccf3f5a4816a07055af6b2044a5d170e18#a2beb9ccf3f5a4816a07055af6b2044a5d170e18"
+source = "git+https://github.com/Havunen/gpui-ce.git?rev=4b3b9c54191be9762095dcdf7656d0d3ca30cecf#4b3b9c54191be9762095dcdf7656d0d3ca30cecf"
 dependencies = [
  "accesskit",
  "accesskit_macos",
@@ -4031,11 +4034,11 @@ dependencies = [
  "objc2-foundation 0.3.2",
  "objc2-user-notifications",
  "palette",
- "parking_lot",
+ "parking_lot 0.13.0",
  "pathfinder_geometry",
  "raw-window-handle",
  "semver",
- "skrifa 0.48.0",
+ "skrifa 0.49.0",
  "smallvec",
  "strum 0.28.0",
  "url",
@@ -4045,7 +4048,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_macros"
 version = "0.1.0"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=a2beb9ccf3f5a4816a07055af6b2044a5d170e18#a2beb9ccf3f5a4816a07055af6b2044a5d170e18"
+source = "git+https://github.com/Havunen/gpui-ce.git?rev=4b3b9c54191be9762095dcdf7656d0d3ca30cecf#4b3b9c54191be9762095dcdf7656d0d3ca30cecf"
 dependencies = [
  "heck",
  "proc-macro2",
@@ -4056,7 +4059,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_media"
 version = "0.2.2"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=a2beb9ccf3f5a4816a07055af6b2044a5d170e18#a2beb9ccf3f5a4816a07055af6b2044a5d170e18"
+source = "git+https://github.com/Havunen/gpui-ce.git?rev=4b3b9c54191be9762095dcdf7656d0d3ca30cecf#4b3b9c54191be9762095dcdf7656d0d3ca30cecf"
 dependencies = [
  "anyhow",
  "bindgen",
@@ -4070,14 +4073,14 @@ dependencies = [
 [[package]]
 name = "gpui_ce_parley"
 version = "0.1.0"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=a2beb9ccf3f5a4816a07055af6b2044a5d170e18#a2beb9ccf3f5a4816a07055af6b2044a5d170e18"
+source = "git+https://github.com/Havunen/gpui-ce.git?rev=4b3b9c54191be9762095dcdf7656d0d3ca30cecf#4b3b9c54191be9762095dcdf7656d0d3ca30cecf"
 dependencies = [
  "anyhow",
  "fontique",
  "gpui-ce",
- "parking_lot",
+ "parking_lot 0.13.0",
  "parley",
- "skrifa 0.48.0",
+ "skrifa 0.49.0",
  "swash",
  "unicode-segmentation",
 ]
@@ -4085,7 +4088,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_platform"
 version = "0.1.0"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=a2beb9ccf3f5a4816a07055af6b2044a5d170e18#a2beb9ccf3f5a4816a07055af6b2044a5d170e18"
+source = "git+https://github.com/Havunen/gpui-ce.git?rev=4b3b9c54191be9762095dcdf7656d0d3ca30cecf#4b3b9c54191be9762095dcdf7656d0d3ca30cecf"
 dependencies = [
  "console_error_panic_hook",
  "gpui-ce",
@@ -4099,7 +4102,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_refineable"
 version = "0.2.2"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=a2beb9ccf3f5a4816a07055af6b2044a5d170e18#a2beb9ccf3f5a4816a07055af6b2044a5d170e18"
+source = "git+https://github.com/Havunen/gpui-ce.git?rev=4b3b9c54191be9762095dcdf7656d0d3ca30cecf#4b3b9c54191be9762095dcdf7656d0d3ca30cecf"
 dependencies = [
  "gpui_ce_derive_refineable",
 ]
@@ -4107,7 +4110,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_render"
 version = "0.1.0"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=a2beb9ccf3f5a4816a07055af6b2044a5d170e18#a2beb9ccf3f5a4816a07055af6b2044a5d170e18"
+source = "git+https://github.com/Havunen/gpui-ce.git?rev=4b3b9c54191be9762095dcdf7656d0d3ca30cecf#4b3b9c54191be9762095dcdf7656d0d3ca30cecf"
 dependencies = [
  "gpui-ce",
  "naga 24.0.0",
@@ -4121,14 +4124,14 @@ dependencies = [
 [[package]]
 name = "gpui_ce_scheduler"
 version = "0.2.2"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=a2beb9ccf3f5a4816a07055af6b2044a5d170e18#a2beb9ccf3f5a4816a07055af6b2044a5d170e18"
+source = "git+https://github.com/Havunen/gpui-ce.git?rev=4b3b9c54191be9762095dcdf7656d0d3ca30cecf#4b3b9c54191be9762095dcdf7656d0d3ca30cecf"
 dependencies = [
  "async-task",
  "backtrace",
  "chrono",
  "flume",
  "futures",
- "parking_lot",
+ "parking_lot 0.13.0",
  "rand 0.10.3",
  "web-time",
 ]
@@ -4136,7 +4139,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_shared_string"
 version = "0.1.0"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=a2beb9ccf3f5a4816a07055af6b2044a5d170e18#a2beb9ccf3f5a4816a07055af6b2044a5d170e18"
+source = "git+https://github.com/Havunen/gpui-ce.git?rev=4b3b9c54191be9762095dcdf7656d0d3ca30cecf#4b3b9c54191be9762095dcdf7656d0d3ca30cecf"
 dependencies = [
  "schemars",
  "serde",
@@ -4146,7 +4149,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_sum_tree"
 version = "0.2.2"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=a2beb9ccf3f5a4816a07055af6b2044a5d170e18#a2beb9ccf3f5a4816a07055af6b2044a5d170e18"
+source = "git+https://github.com/Havunen/gpui-ce.git?rev=4b3b9c54191be9762095dcdf7656d0d3ca30cecf#4b3b9c54191be9762095dcdf7656d0d3ca30cecf"
 dependencies = [
  "heapless 0.9.3",
  "log",
@@ -4157,7 +4160,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_util"
 version = "0.2.6"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=a2beb9ccf3f5a4816a07055af6b2044a5d170e18#a2beb9ccf3f5a4816a07055af6b2044a5d170e18"
+source = "git+https://github.com/Havunen/gpui-ce.git?rev=4b3b9c54191be9762095dcdf7656d0d3ca30cecf#4b3b9c54191be9762095dcdf7656d0d3ca30cecf"
 dependencies = [
  "anyhow",
  "log",
@@ -4167,7 +4170,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_web"
 version = "0.1.0"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=a2beb9ccf3f5a4816a07055af6b2044a5d170e18#a2beb9ccf3f5a4816a07055af6b2044a5d170e18"
+source = "git+https://github.com/Havunen/gpui-ce.git?rev=4b3b9c54191be9762095dcdf7656d0d3ca30cecf#4b3b9c54191be9762095dcdf7656d0d3ca30cecf"
 dependencies = [
  "anyhow",
  "console_error_panic_hook",
@@ -4179,7 +4182,7 @@ dependencies = [
  "http",
  "js-sys",
  "log",
- "parking_lot",
+ "parking_lot 0.13.0",
  "raw-window-handle",
  "uuid",
  "wasm-bindgen",
@@ -4191,7 +4194,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_wgpu"
 version = "0.1.0"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=a2beb9ccf3f5a4816a07055af6b2044a5d170e18#a2beb9ccf3f5a4816a07055af6b2044a5d170e18"
+source = "git+https://github.com/Havunen/gpui-ce.git?rev=4b3b9c54191be9762095dcdf7656d0d3ca30cecf#4b3b9c54191be9762095dcdf7656d0d3ca30cecf"
 dependencies = [
  "anyhow",
  "core-foundation",
@@ -4207,7 +4210,7 @@ dependencies = [
  "metal",
  "objc2 0.6.5",
  "objc2-metal 0.3.2",
- "parking_lot",
+ "parking_lot 0.13.0",
  "pollster 1.0.1",
  "profiling",
  "raw-window-handle",
@@ -4223,7 +4226,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_windows"
 version = "0.1.0"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=a2beb9ccf3f5a4816a07055af6b2044a5d170e18#a2beb9ccf3f5a4816a07055af6b2044a5d170e18"
+source = "git+https://github.com/Havunen/gpui-ce.git?rev=4b3b9c54191be9762095dcdf7656d0d3ca30cecf#4b3b9c54191be9762095dcdf7656d0d3ca30cecf"
 dependencies = [
  "accesskit",
  "accesskit_windows",
@@ -4240,7 +4243,7 @@ dependencies = [
  "image",
  "itertools 0.15.0",
  "log",
- "parking_lot",
+ "parking_lot 0.13.0",
  "rand 0.10.3",
  "raw-window-handle",
  "smallvec",
@@ -4256,7 +4259,7 @@ dependencies = [
 [[package]]
 name = "gpui_xim"
 version = "0.4.0-gpui"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=a2beb9ccf3f5a4816a07055af6b2044a5d170e18#a2beb9ccf3f5a4816a07055af6b2044a5d170e18"
+source = "git+https://github.com/Havunen/gpui-ce.git?rev=4b3b9c54191be9762095dcdf7656d0d3ca30cecf#4b3b9c54191be9762095dcdf7656d0d3ca30cecf"
 dependencies = [
  "ahash",
  "hashbrown 0.17.1",
@@ -5105,6 +5108,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "lock_api"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "65d91b22da179613dcf4d6ec8349563f52a363f6849e03b00dd0a185ec4a59af"
+dependencies = [
+ "scopeguard",
+]
+
+[[package]]
 name = "log"
 version = "0.4.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5289,12 +5301,12 @@ dependencies = [
  "lru",
  "once_cell",
  "regex",
- "resvg 0.49.0",
+ "resvg",
  "serde",
  "serde_json",
  "skrifa 0.49.0",
  "thiserror 2.0.21",
- "usvg 0.49.0",
+ "usvg",
 ]
 
 [[package]]
@@ -6082,8 +6094,18 @@ version = "0.12.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "93857453250e3077bd71ff98b6a65ea6621a19bb0f559a85248955ac12c45a1a"
 dependencies = [
- "lock_api",
- "parking_lot_core",
+ "lock_api 0.4.14",
+ "parking_lot_core 0.9.12",
+]
+
+[[package]]
+name = "parking_lot"
+version = "0.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a9cf937ca4e1d0b7578784559063422fc39ae7c5a00f02471f2614d5486fd226"
+dependencies = [
+ "lock_api 0.5.0",
+ "parking_lot_core 0.10.0",
 ]
 
 [[package]]
@@ -6094,7 +6116,19 @@ checksum = "2621685985a2ebf1c516881c026032ac7deafcda1a2c9b7850dc81e3dfcb64c1"
 dependencies = [
  "cfg-if",
  "libc",
- "redox_syscall",
+ "redox_syscall 0.5.18",
+ "smallvec",
+ "windows-link 0.2.1",
+]
+
+[[package]]
+name = "parking_lot_core"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9cfff060068cc18aa7815010fcaf80c68c7fb9e85fc7f5c0f9bf142c21d19826"
+dependencies = [
+ "libc",
+ "redox_syscall 0.9.5",
  "smallvec",
  "windows-link 0.2.1",
 ]
@@ -6413,7 +6447,7 @@ dependencies = [
  "crossbeam-queue",
  "futures",
  "log",
- "parking_lot",
+ "parking_lot 0.12.5",
  "pin-project",
  "pollster 0.2.5",
  "static_assertions",
@@ -6509,7 +6543,7 @@ checksum = "cf52d87428247c5aa3760ac8e7d8b13ec7b3579b955a8c3f311668b6860acba5"
 dependencies = [
  "bytesize",
  "human_format",
- "parking_lot",
+ "parking_lot 0.12.5",
 ]
 
 [[package]]
@@ -6839,19 +6873,6 @@ dependencies = [
 
 [[package]]
 name = "read-fonts"
-version = "0.45.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4edc8db0d972de88e53a085b1f01fb3fbdae7bb0cb7a0ce2b2f8285a412fe3ef"
-dependencies = [
- "bytemuck",
- "foldhash 0.2.0",
- "font-types",
- "once_cell",
- "yoke",
-]
-
-[[package]]
-name = "read-fonts"
 version = "0.46.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bdaa4fffe9ff3ca2c353fa9729792805b9b3e324695ff5a081f860612e81b330"
@@ -6875,6 +6896,15 @@ name = "redox_syscall"
 version = "0.5.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ed2bf2547551a7053d6fdfafda3f938979645c44812fbfcda098faae3f1a362d"
+dependencies = [
+ "bitflags 2.13.2",
+]
+
+[[package]]
+name = "redox_syscall"
+version = "0.9.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "580c875845b41ecb1564ad1ae4703044cef774145e3d7a94dc2b3fa7c97868fd"
 dependencies = [
  "bitflags 2.13.2",
 ]
@@ -6946,24 +6976,6 @@ checksum = "19b30a45b0cd0bcca8037f3d0dc3421eaf95327a17cad11964fb8179b4fc4832"
 
 [[package]]
 name = "resvg"
-version = "0.48.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "67e3803f97b999e80cbf7c6ecdd07a8102204d92e1633cf48783720c521196bd"
-dependencies = [
- "bytemuck",
- "gif",
- "image-webp",
- "log",
- "pico-args",
- "rgb",
- "svgtypes",
- "tiny-skia",
- "usvg 0.48.1",
- "zune-jpeg",
-]
-
-[[package]]
-name = "resvg"
 version = "0.49.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1572844b6727a1bf842190e9947641a68ac44bed83f50afb4bd1407a2564bee8"
@@ -6976,7 +6988,7 @@ dependencies = [
  "rgb",
  "svgtypes",
  "tiny-skia",
- "usvg 0.49.0",
+ "usvg",
  "zune-jpeg",
 ]
 
@@ -7422,16 +7434,6 @@ dependencies = [
 
 [[package]]
 name = "skrifa"
-version = "0.48.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a5213b4825bac3587046330052d61bfac7bd3bd0d203c758d7c2ef726fcea034"
-dependencies = [
- "bytemuck",
- "read-fonts 0.45.1",
-]
-
-[[package]]
-name = "skrifa"
 version = "0.49.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a7459fb60888ad9a5f367dd293fa2fb9df142cb451aa6bfd6cd66a7d6a9b739d"
@@ -7518,7 +7520,7 @@ version = "0.9.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3763264f6b73151db08c50ff20d7d8a0b8796e021cdea7ceedad07b80155fa0e"
 dependencies = [
- "lock_api",
+ "lock_api 0.4.14",
 ]
 
 [[package]]
@@ -7527,7 +7529,7 @@ version = "0.12.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0134f9043ed38b087ac4f7d4af44c79e2c9e5094421fe3164f435ce585953b10"
 dependencies = [
- "lock_api",
+ "lock_api 0.4.14",
 ]
 
 [[package]]
@@ -7776,11 +7778,10 @@ dependencies = [
 
 [[package]]
 name = "taffy"
-version = "0.14.0"
+version = "0.15.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "639627c87f43b9181c811f40a6296409e093a17bc761214cba3c15df74f86b99"
+checksum = "31f7bd2d97198df05186f93a3a3c306845f40e8b3c22bf9279cdd7e5cf5fea7d"
 dependencies = [
- "arrayvec",
  "serde",
  "slotmap",
  "smallvec",
@@ -9071,33 +9072,6 @@ dependencies = [
 
 [[package]]
 name = "usvg"
-version = "0.48.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "977d0a4abdef933f424a99fe09f95576e089b90aebc6f016a3bc813762493e91"
-dependencies = [
- "base64 0.23.1",
- "data-url",
- "fontdb",
- "harfrust",
- "imagesize",
- "kurbo",
- "log",
- "pico-args",
- "roxmltree 0.21.2",
- "simplecss",
- "siphasher",
- "skrifa 0.44.0",
- "strict-num",
- "svgtypes",
- "tiny-skia-path",
- "unicode-bidi",
- "unicode-script",
- "unicode-vo",
- "xmlwriter",
-]
-
-[[package]]
-name = "usvg"
 version = "0.49.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d09b73ee83641d390ad7ffd9000f347b16eb128e437675b6ff277ea5c7fcf22c"
@@ -9501,7 +9475,7 @@ dependencies = [
  "js-sys",
  "log",
  "naga 30.0.1",
- "parking_lot",
+ "parking_lot 0.12.5",
  "portable-atomic",
  "profiling",
  "raw-window-handle",
@@ -9534,7 +9508,7 @@ dependencies = [
  "naga 30.0.1",
  "naga-types",
  "once_cell",
- "parking_lot",
+ "parking_lot 0.12.5",
  "portable-atomic",
  "profiling",
  "raw-window-handle",
@@ -9621,7 +9595,7 @@ dependencies = [
  "objc2-quartz-core 0.3.2",
  "once_cell",
  "ordered-float",
- "parking_lot",
+ "parking_lot 0.12.5",
  "portable-atomic",
  "portable-atomic-util",
  "profiling",
@@ -10143,7 +10117,7 @@ checksum = "163b33ed8786455e2fa5d72f554057ce3f3182425434f756cd39c99839d88e23"
 [[package]]
 name = "xim-ctext"
 version = "0.3.0"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=a2beb9ccf3f5a4816a07055af6b2044a5d170e18#a2beb9ccf3f5a4816a07055af6b2044a5d170e18"
+source = "git+https://github.com/Havunen/gpui-ce.git?rev=4b3b9c54191be9762095dcdf7656d0d3ca30cecf#4b3b9c54191be9762095dcdf7656d0d3ca30cecf"
 dependencies = [
  "encoding_rs",
 ]
@@ -10151,7 +10125,7 @@ dependencies = [
 [[package]]
 name = "xim-parser"
 version = "0.2.1"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=a2beb9ccf3f5a4816a07055af6b2044a5d170e18#a2beb9ccf3f5a4816a07055af6b2044a5d170e18"
+source = "git+https://github.com/Havunen/gpui-ce.git?rev=4b3b9c54191be9762095dcdf7656d0d3ca30cecf#4b3b9c54191be9762095dcdf7656d0d3ca30cecf"
 dependencies = [
  "bitflags 2.13.2",
 ]

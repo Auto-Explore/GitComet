@@ -419,6 +419,7 @@ linux-raw-sys	0.12.1	Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT
 litemap	0.8.3	Unicode-3.0
 litrs	1.0.1	MIT OR Apache-2.0
 lock_api	0.4.14	MIT OR Apache-2.0
+lock_api	0.5.0	MIT OR Apache-2.0
 log	0.4.34	MIT OR Apache-2.0
 loop9	0.1.5	MIT
 lru	0.19.0	MIT
@@ -510,6 +511,8 @@ palette_derive	0.7.7	MIT OR Apache-2.0
 palette_math	0.7.7	MIT OR Apache-2.0
 parking	2.2.1	Apache-2.0 OR MIT
 parking_lot	0.12.5	MIT OR Apache-2.0
+parking_lot	0.13.0	MIT OR Apache-2.0
+parking_lot_core	0.10.0	MIT OR Apache-2.0
 parking_lot_core	0.9.12	MIT OR Apache-2.0
 parlance	0.1.1	Apache-2.0 OR MIT
 parley	0.12.0	Apache-2.0 OR MIT
@@ -587,10 +590,10 @@ raw-window-metal	1.1.0	MIT OR Apache-2.0
 rayon	1.12.0	MIT OR Apache-2.0
 rayon-core	1.13.0	MIT OR Apache-2.0
 read-fonts	0.41.0	MIT OR Apache-2.0
-read-fonts	0.45.1	MIT OR Apache-2.0
 read-fonts	0.46.0	MIT OR Apache-2.0
 reborrow	0.5.5	MIT
 redox_syscall	0.5.18	MIT
+redox_syscall	0.9.5	MIT
 redox_users	0.5.3	MIT
 ref-cast	1.0.27	MIT OR Apache-2.0
 ref-cast-impl	1.0.27	MIT OR Apache-2.0
@@ -598,7 +601,6 @@ regex	1.13.1	MIT OR Apache-2.0
 regex-automata	0.4.18	MIT OR Apache-2.0
 regex-syntax	0.8.11	MIT OR Apache-2.0
 renderdoc-sys	1.1.0	MIT OR Apache-2.0
-resvg	0.48.1	Apache-2.0 OR MIT
 resvg	0.49.0	Apache-2.0 OR MIT
 rgb	0.8.53	MIT
 ring	0.17.14	Apache-2.0 AND ISC
@@ -648,7 +650,6 @@ simplecss	0.2.2	Apache-2.0 OR MIT
 siphasher	1.0.4	MIT OR Apache-2.0
 sirocco	0.2.1	MIT OR Apache-2.0
 skrifa	0.44.0	MIT OR Apache-2.0
-skrifa	0.48.0	MIT OR Apache-2.0
 skrifa	0.49.0	MIT OR Apache-2.0
 slab	0.4.12	MIT
 slotmap	1.1.1	Zlib
@@ -685,7 +686,7 @@ syn	2.0.119	MIT OR Apache-2.0
 syn	3.0.9	MIT OR Apache-2.0
 synstructure	0.14.0	MIT
 sysinfo	0.40.1	MIT
-taffy	0.14.0	MIT
+taffy	0.15.1	MIT
 tauri-winrt-notification	0.8.1	MIT OR Apache-2.0
 tempfile	3.27.0	MIT OR Apache-2.0
 termcolor	1.4.1	Unlicense OR MIT
@@ -828,7 +829,6 @@ untrusted	0.9.0	ISC
 ureq	3.5.0	MIT OR Apache-2.0
 ureq-proto	0.6.5	MIT OR Apache-2.0
 url	2.5.8	MIT OR Apache-2.0
-usvg	0.48.1	Apache-2.0 OR MIT
 usvg	0.49.0	Apache-2.0 OR MIT
 utf8-zero	0.8.1	MIT OR Apache-2.0
 utf8_iter	1.1.0	Apache-2.0 OR MIT
