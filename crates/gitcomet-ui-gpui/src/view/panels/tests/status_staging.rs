@@ -4,6 +4,7 @@ use gitcomet_core::services::GitBackend;
 use std::path::PathBuf;
 
 mod fixture;
+mod line_keys;
 use fixture::{clean_repository_template, restore_repository};
 
 const REPO: RepoId = RepoId(791);

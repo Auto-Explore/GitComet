@@ -2,6 +2,7 @@ use super::*;
 use crate::kit::interaction as controls;
 use crate::view::components::{ControlInteractionExt, InteractionState, InteractionStyle};
 use crate::view::panes::diff::diff_search::DiffSearchOptions;
+use crate::view::panes::diff::diff_text::DiffLineAction;
 use crate::view::panes::diff::services::{DiffCommand, DiffPreference};
 use crate::view::panes::diff::{DiffBody, DiskSurface};
 use gpui::Focusable;
@@ -918,6 +919,20 @@ impl DiffRenderer {
                 _ => {}
             }
             handled = true;
+        }
+
+        // The diff editor menu shows S, U and D beside its line entries; the
+        // bare letters stage, unstage and discard the selected lines with the
+        // menu closed as well. Only while the diff itself holds focus, as it
+        // does after a click, a drag or the menu: plain letters also arrive
+        // through the window-wide fallback and bubble up from the panel's
+        // text fields, and neither may discard lines selected here.
+        if !handled
+            && !conflict_resolver_active
+            && let Some(action) = DiffLineAction::from_keystroke(keystroke)
+            && self.diff_panel_focus_handle.is_focused(window)
+        {
+            handled = self.apply_diff_line_action(action, cx);
         }
 
         if !handled

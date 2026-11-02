@@ -1,9 +1,8 @@
 //! The right-click menu of the diff and file editor text.
 
 use super::{
-    DiffArea, DiffRenderer, DiffTarget, DiffTextRegion, DiffViewMode, FxHashMap, FxHashSet, Pixels,
-    Point, PopoverKind, Window, build_unified_patch_for_hunks,
-    build_unified_patch_for_selected_lines_across_hunks,
+    DiffArea, DiffRenderer, DiffTarget, DiffTextRegion, DiffViewMode, Pixels, Point, PopoverKind,
+    Window, build_unified_patch_for_hunks, build_unified_patch_for_selected_lines_across_hunks,
     build_unified_patch_for_selected_lines_across_hunks_for_reverse_apply, rows,
 };
 
@@ -99,146 +98,9 @@ impl DiffRenderer {
             }
         }
 
-        struct FileDiffSrcLookup {
-            file_rel: std::path::PathBuf,
-            add_by_new_line: FxHashMap<u32, usize>,
-            remove_by_old_line: FxHashMap<u32, usize>,
-            context_by_old_line: FxHashMap<u32, usize>,
-        }
-
-        let file_diff_lookup = if self.is_file_diff_view_active() {
-            self.file_diff_cache_path.as_ref().map(|abs| {
-                let rel = abs.strip_prefix(&workdir).unwrap_or(abs);
-                let file_rel = rel.to_path_buf();
-                // Git diffs use forward slashes even on Windows.
-                let rel_str = file_rel.to_str().map(|text| text.replace('\\', "/"));
-
-                let approx_map_len = match self.diff_view {
-                    DiffViewMode::Inline => self.file_diff_inline_row_len(),
-                    DiffViewMode::Split => self.file_diff_split_row_len(),
-                };
-                let mut add_by_new_line: FxHashMap<u32, usize> =
-                    FxHashMap::with_capacity_and_hasher(approx_map_len, Default::default());
-                let mut remove_by_old_line: FxHashMap<u32, usize> =
-                    FxHashMap::with_capacity_and_hasher(approx_map_len, Default::default());
-                let mut context_by_old_line: FxHashMap<u32, usize> =
-                    FxHashMap::with_capacity_and_hasher(approx_map_len, Default::default());
-
-                for ix in 0..self.patch_diff_row_len() {
-                    let Some(line) = self.patch_diff_row(ix) else {
-                        continue;
-                    };
-                    if self.diff_file_for_src_ix.get(ix).and_then(|p| p.as_deref())
-                        != rel_str.as_deref()
-                    {
-                        continue;
-                    }
-                    match line.kind {
-                        gitcomet_core::domain::DiffLineKind::Add => {
-                            if let Some(n) = line.new_line {
-                                add_by_new_line.insert(n, ix);
-                            }
-                        }
-                        gitcomet_core::domain::DiffLineKind::Remove => {
-                            if let Some(o) = line.old_line {
-                                remove_by_old_line.insert(o, ix);
-                            }
-                        }
-                        gitcomet_core::domain::DiffLineKind::Context => {
-                            if let Some(o) = line.old_line {
-                                context_by_old_line.insert(o, ix);
-                            }
-                        }
-                        gitcomet_core::domain::DiffLineKind::Header
-                        | gitcomet_core::domain::DiffLineKind::Hunk => {}
-                    }
-                }
-
-                FileDiffSrcLookup {
-                    file_rel,
-                    add_by_new_line,
-                    remove_by_old_line,
-                    context_by_old_line,
-                }
-            })
-        } else {
-            None
-        };
-
-        let src_ixs_for_visible_ix = |visible_ix: usize| -> Vec<usize> {
-            if let Some(lookup) = file_diff_lookup.as_ref() {
-                let Some(mapped_ix) = self.diff_mapped_ix_for_visible_ix(visible_ix) else {
-                    return Vec::new();
-                };
-                match self.diff_view {
-                    DiffViewMode::Inline => {
-                        let Some(line) = self.file_diff_inline_render_data(mapped_ix) else {
-                            return Vec::new();
-                        };
-                        match line.kind {
-                            gitcomet_core::domain::DiffLineKind::Add => line
-                                .new_line
-                                .and_then(|n| lookup.add_by_new_line.get(&n).copied())
-                                .into_iter()
-                                .collect(),
-                            gitcomet_core::domain::DiffLineKind::Remove => line
-                                .old_line
-                                .and_then(|o| lookup.remove_by_old_line.get(&o).copied())
-                                .into_iter()
-                                .collect(),
-                            gitcomet_core::domain::DiffLineKind::Context => line
-                                .old_line
-                                .and_then(|o| lookup.context_by_old_line.get(&o).copied())
-                                .into_iter()
-                                .collect(),
-                            gitcomet_core::domain::DiffLineKind::Header
-                            | gitcomet_core::domain::DiffLineKind::Hunk => Vec::new(),
-                        }
-                    }
-                    DiffViewMode::Split => {
-                        let Some(row) = self.file_diff_split_render_data(mapped_ix) else {
-                            return Vec::new();
-                        };
-                        match row.kind {
-                            gitcomet_core::file_diff::FileDiffRowKind::Context => row
-                                .old_line
-                                .and_then(|o| lookup.context_by_old_line.get(&o).copied())
-                                .into_iter()
-                                .collect(),
-                            gitcomet_core::file_diff::FileDiffRowKind::Add => row
-                                .new_line
-                                .and_then(|n| lookup.add_by_new_line.get(&n).copied())
-                                .into_iter()
-                                .collect(),
-                            gitcomet_core::file_diff::FileDiffRowKind::Remove => row
-                                .old_line
-                                .and_then(|o| lookup.remove_by_old_line.get(&o).copied())
-                                .into_iter()
-                                .collect(),
-                            gitcomet_core::file_diff::FileDiffRowKind::Modify => {
-                                let mut out = Vec::with_capacity(2);
-                                if let Some(o) = row.old_line
-                                    && let Some(ix) = lookup.remove_by_old_line.get(&o).copied()
-                                {
-                                    out.push(ix);
-                                }
-                                if let Some(n) = row.new_line
-                                    && let Some(ix) = lookup.add_by_new_line.get(&n).copied()
-                                    && !out.contains(&ix)
-                                {
-                                    out.push(ix);
-                                }
-                                out
-                            }
-                        }
-                    }
-                }
-            } else {
-                self.diff_src_ixs_for_visible_ix(visible_ix)
-            }
-        };
-
-        let clicked_src_ix = src_ixs_for_visible_ix(clicked_visible_ix)
+        let sources = self.diff_line_sources(&workdir);
+        let clicked_src_ix = self
+            .diff_line_src_ixs(&sources, clicked_visible_ix)
             .into_iter()
             .next();
         let hunk_src_ix = clicked_src_ix.and_then(|src_ix| self.diff_enclosing_hunk_src_ix(src_ix));
@@ -249,7 +111,7 @@ impl DiffRenderer {
             .and_then(|p| p.as_deref())
             .map(std::path::PathBuf::from);
         let path = path
-            .or_else(|| file_diff_lookup.as_ref().map(|l| l.file_rel.clone()))
+            .or_else(|| sources.file_rel().map(std::path::Path::to_path_buf))
             .or_else(|| {
                 self.worktree_preview_path.as_ref().map(|abs| {
                     let rel = abs.strip_prefix(&workdir).unwrap_or(abs);
@@ -273,34 +135,13 @@ impl DiffRenderer {
 
         let (hunks_count, hunk_patch, lines_count, lines_patch, discard_lines_patch) =
             if allow_patch_actions && let Some((sel_a, sel_b)) = selection {
-                let approx_selected = sel_b
-                    .saturating_sub(sel_a)
-                    .saturating_add(1)
-                    .saturating_mul(2);
-                let mut selected_src_ixs: FxHashSet<usize> =
-                    FxHashSet::with_capacity_and_hasher(approx_selected, Default::default());
-                let mut selected_change_src_ixs: FxHashSet<usize> =
-                    FxHashSet::with_capacity_and_hasher(approx_selected, Default::default());
+                let selected = self.selected_diff_lines(&sources, (sel_a, sel_b));
+                let selected_change_src_ixs = &selected.change_src_ixs;
 
-                for vix in sel_a..=sel_b {
-                    for src_ix in src_ixs_for_visible_ix(vix) {
-                        let Some(line) = self.patch_diff_row(src_ix) else {
-                            continue;
-                        };
-                        selected_src_ixs.insert(src_ix);
-                        if matches!(
-                            line.kind,
-                            gitcomet_core::domain::DiffLineKind::Add
-                                | gitcomet_core::domain::DiffLineKind::Remove
-                        ) {
-                            selected_change_src_ixs.insert(src_ix);
-                        }
-                    }
-                }
-
-                let mut selected_hunks: Vec<usize> = selected_src_ixs
-                    .into_iter()
-                    .filter_map(|ix| self.diff_enclosing_hunk_src_ix(ix))
+                let mut selected_hunks: Vec<usize> = selected
+                    .src_ixs
+                    .iter()
+                    .filter_map(|&ix| self.diff_enclosing_hunk_src_ix(ix))
                     .collect();
                 selected_hunks.sort_unstable();
                 selected_hunks.dedup();
@@ -319,19 +160,19 @@ impl DiffRenderer {
                 let lines_patch = match area {
                     DiffArea::Unstaged => build_unified_patch_for_selected_lines_across_hunks(
                         &materialized_diff,
-                        &selected_change_src_ixs,
+                        selected_change_src_ixs,
                     ),
                     DiffArea::Staged => {
                         build_unified_patch_for_selected_lines_across_hunks_for_reverse_apply(
                             &materialized_diff,
-                            &selected_change_src_ixs,
+                            selected_change_src_ixs,
                         )
                     }
                 };
                 let discard_lines_patch = if area == DiffArea::Unstaged {
                     build_unified_patch_for_selected_lines_across_hunks_for_reverse_apply(
                         &materialized_diff,
-                        &selected_change_src_ixs,
+                        selected_change_src_ixs,
                     )
                 } else {
                     None

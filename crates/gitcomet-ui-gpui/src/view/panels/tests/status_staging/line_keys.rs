@@ -1,0 +1,331 @@
+//! The diff editor menu shows S, U and D beside its line entries. Pressed with
+//! the menu closed, those letters did nothing; against a real repository each
+//! must now move exactly the selected lines, and only from the diff itself.
+
+use super::*;
+
+const PATH: &str = "lines.txt";
+const BASE: &str = "one\ntwo\nthree\nfour\nfive\n";
+/// Two changes in one hunk, so a line action has to split the hunk.
+const EDITED: &str = "one\nTWO\nthree\nfour\nFIVE\n";
+
+#[derive(Clone, Copy, Debug)]
+enum Select {
+    /// No selection at all: the diff only opened.
+    Nothing,
+    /// The rows drawing these patch lines, as a shift-click selects them.
+    Rows(&'static [&'static str]),
+    /// All the text of the row drawing this patch line, as a drag selects it.
+    Text(&'static str),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Focus {
+    DiffPanel,
+    /// Nothing inside the window's view tree, so the key only reaches the
+    /// diff through the window-wide fallback.
+    Detached,
+}
+
+struct Pressed {
+    acted: bool,
+    index: String,
+    worktree: String,
+}
+
+/// The visible row drawing the patch line that reads `text`.
+fn row_for(pane: &DiffRenderer, text: &str) -> usize {
+    let src_ix = (0..pane.patch_diff_row_len())
+        .find(|ix| {
+            pane.patch_diff_row(*ix)
+                .is_some_and(|line| line.text.as_ref() == text)
+        })
+        .unwrap_or_else(|| panic!("expected a patch line reading {text:?}"));
+    (0..pane.diff_visible_len())
+        .find(|row| pane.diff_src_ixs_for_visible_ix(*row).contains(&src_ix))
+        .unwrap_or_else(|| panic!("expected a visible row for {text:?}"))
+}
+
+fn index_text(dir: &Path) -> String {
+    String::from_utf8(git_output(dir, &["show", &format!(":{PATH}")])).unwrap()
+}
+
+/// Opens `lines.txt`'s diff for `area` in `mode`, selects, focuses and presses
+/// `key`, then reports whether Git ran an action and what it left behind.
+fn press(
+    cx: &mut gpui::TestAppContext,
+    area: DiffArea,
+    mode: DiffViewMode,
+    select: Select,
+    focus: Focus,
+    key: &str,
+) -> Pressed {
+    let case = format!("{area:?} {mode:?} {select:?} {focus:?} {key:?}");
+    let dir = tempfile::tempdir().unwrap();
+    // Unwind cleanup closes the app before the directory declared above it.
+    let mut scenario = ScenarioApp {
+        app: cx.new_app(),
+        store: None,
+        finished: false,
+    };
+    restore_repository(dir.path(), clean_repository_template());
+    std::fs::write(dir.path().join(PATH), BASE).unwrap();
+    git(dir.path(), &["add", PATH]);
+    commit(dir.path(), "lines");
+    std::fs::write(dir.path().join(PATH), EDITED).unwrap();
+    if area == DiffArea::Staged {
+        git(dir.path(), &["add", PATH]);
+    }
+
+    let backend = gitcomet_git_gix::GixBackend.open(dir.path()).unwrap();
+    let status = backend
+        .status(&gitcomet_core::services::CancellationToken::new())
+        .unwrap();
+    let mut repo = opening_repo_state(REPO, dir.path());
+    repo.open = Loadable::Ready(());
+    repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
+    repo.worktree_status = Loadable::Ready(status.unstaged.clone());
+    repo.staged_status = Loadable::Ready(status.staged.clone());
+    repo.status = Loadable::Ready(Arc::new(status));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    scenario.store = Some(store.clone());
+    store.disable_repo_monitors_for_test();
+    let store_for_view = store.clone();
+    let (view, cx) = scenario
+        .app
+        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+    crate::view::test_support::drain_store_worker(&view, cx);
+    super::super::shortcuts::apply_state(cx, &view, app_state_with_repo(repo, REPO));
+    store.insert_repo_for_test(REPO, backend);
+    cx.simulate_resize(gpui::size(px(1600.0), px(1000.0)));
+    cx.update(|_, app| {
+        view.update(app, |root, cx| root.set_diff_view_mode(mode, cx));
+    });
+
+    let target = DiffTarget::working_tree(PATH.into(), area);
+    store.dispatch(Msg::SelectDiff {
+        repo_id: REPO,
+        target: target.clone(),
+    });
+    // The whole-file view needs both the patch and the file's two versions.
+    wait_for(cx, &view, &store, &case, |repo| {
+        repo.diff_state.diff_target.as_ref() == Some(&target)
+            && matches!(repo.diff_state.diff, Loadable::Ready(_))
+            && matches!(repo.diff_state.diff_file, Loadable::Ready(Some(_)))
+    });
+    super::super::shortcuts::wait_until(cx, "the whole-file diff rows", |cx| {
+        cx.update(|_, app| {
+            view.update(app, |this, cx| {
+                crate::view::test_support::sync_store_snapshot(this, cx);
+            });
+            let pane = view.read(app).diff_renderer.read(app);
+            pane.is_file_diff_view_active()
+                && pane.diff_view == mode
+                && pane.diff_visible_len() > 0
+                && (0..pane.patch_diff_row_len()).any(|ix| {
+                    pane.patch_diff_row(ix)
+                        .is_some_and(|line| line.text.as_ref() == "+FIVE")
+                })
+        })
+    });
+
+    cx.update(|window, app| {
+        view.read(app)
+            .diff_renderer
+            .clone()
+            .update(app, |pane, cx| {
+                match select {
+                    Select::Nothing => {}
+                    Select::Rows(lines) => {
+                        let rows: Vec<usize> =
+                            lines.iter().map(|line| row_for(pane, line)).collect();
+                        let (first, last) =
+                            (rows.iter().min().unwrap(), rows.iter().max().unwrap());
+                        pane.diff_selection_anchor = Some(*first);
+                        pane.diff_selection_range = Some((*first, *last));
+                    }
+                    Select::Text(line) => {
+                        let row = row_for(pane, line);
+                        let region = match (mode, line.starts_with('-')) {
+                            (DiffViewMode::Inline, _) => DiffTextRegion::Inline,
+                            (DiffViewMode::Split, true) => DiffTextRegion::SplitLeft,
+                            (DiffViewMode::Split, false) => DiffTextRegion::SplitRight,
+                        };
+                        let anchor = DiffTextPos {
+                            source_visible_ix: row,
+                            region,
+                            offset: 0,
+                        };
+                        pane.diff_text_anchor = Some(anchor);
+                        pane.diff_text_head = Some(DiffTextPos {
+                            offset: line.len() - 1,
+                            ..anchor
+                        });
+                        pane.sync_diff_focus_to_text_selection();
+                        pane.diff_text_selection_owner.adopt(window, cx);
+                    }
+                }
+                cx.notify();
+            });
+        app.clear_key_bindings();
+        crate::app::bind_app_keys_for_test(app);
+        crate::app::install_global_diff_shortcut_fallback_for_test(app);
+        match focus {
+            Focus::DiffPanel => {
+                let handle = view
+                    .read(app)
+                    .diff_renderer
+                    .read(app)
+                    .diff_panel_focus_handle
+                    .clone();
+                window.focus(&handle, app);
+            }
+            Focus::Detached => {
+                let handle = app.focus_handle();
+                window.focus(&handle, app);
+            }
+        }
+    });
+    draw_and_drain_test_window(cx);
+    crate::view::test_support::drain_store_worker(&view, cx);
+    cx.update(|_, app| {
+        let pane = view.read(app).diff_renderer.read(app);
+        let selected = match select {
+            Select::Nothing => {
+                !pane.diff_text_has_selection() && pane.diff_selection_range.is_none()
+            }
+            Select::Rows(_) => pane.diff_selection_range.is_some(),
+            Select::Text(_) => pane.diff_text_has_selection(),
+        };
+        assert!(selected, "{case}: the selection must survive until the key");
+    });
+    let before = store.snapshot().repos[0].ops_rev;
+
+    cx.simulate_keystrokes(key);
+    draw_and_drain_test_window(cx);
+    crate::view::test_support::drain_store_worker(&view, cx);
+    let acted = store.snapshot().repos[0].ops_rev != before;
+    if acted {
+        wait_for(cx, &view, &store, &case, |repo| {
+            repo.ops_rev >= before + 2 && repo.local_actions_in_flight == 0
+        });
+        let snapshot = store.snapshot();
+        assert!(
+            snapshot.repos[0].feedback.last_error.is_none(),
+            "{case}: {:?}",
+            snapshot.repos[0].feedback.last_error
+        );
+    }
+    let pressed = Pressed {
+        acted,
+        index: index_text(dir.path()),
+        worktree: std::fs::read_to_string(dir.path().join(PATH)).unwrap(),
+    };
+
+    // Release this case's windows before removing its temporary directory.
+    store.dispatch(Msg::CloseRepo { repo_id: REPO });
+    crate::view::test_support::drain_store_worker(&view, cx);
+    drop(view);
+    scenario.finish().expect("line key scenario teardown");
+    pressed
+}
+
+#[gpui::test]
+fn s_stages_only_the_selected_rows(cx: &mut gpui::TestAppContext) {
+    for mode in [DiffViewMode::Inline, DiffViewMode::Split] {
+        let pressed = press(
+            cx,
+            DiffArea::Unstaged,
+            mode,
+            Select::Rows(&["-two", "+TWO"]),
+            Focus::DiffPanel,
+            "s",
+        );
+        assert!(pressed.acted, "{mode:?}: S must stage the selected rows");
+        assert_eq!(
+            pressed.index, "one\nTWO\nthree\nfour\nfive\n",
+            "{mode:?}: only the selected change reaches the index"
+        );
+        assert_eq!(
+            pressed.worktree, EDITED,
+            "{mode:?}: staging leaves the file"
+        );
+    }
+}
+
+#[gpui::test]
+fn s_stages_only_the_lines_the_text_selection_covers(cx: &mut gpui::TestAppContext) {
+    let pressed = press(
+        cx,
+        DiffArea::Unstaged,
+        DiffViewMode::Inline,
+        Select::Text("+TWO"),
+        Focus::DiffPanel,
+        "s",
+    );
+    assert!(pressed.acted, "S must stage the selected text's line");
+    // The removal was not selected, so it stays behind as context.
+    assert_eq!(pressed.index, "one\ntwo\nTWO\nthree\nfour\nfive\n");
+    assert_eq!(pressed.worktree, EDITED);
+}
+
+#[gpui::test]
+fn d_discards_only_the_selected_rows(cx: &mut gpui::TestAppContext) {
+    for mode in [DiffViewMode::Inline, DiffViewMode::Split] {
+        let pressed = press(
+            cx,
+            DiffArea::Unstaged,
+            mode,
+            Select::Rows(&["-five", "+FIVE"]),
+            Focus::DiffPanel,
+            "d",
+        );
+        assert!(pressed.acted, "{mode:?}: D must discard the selected rows");
+        assert_eq!(
+            pressed.worktree, "one\nTWO\nthree\nfour\nfive\n",
+            "{mode:?}: only the selected change is reverted in the file"
+        );
+        assert_eq!(pressed.index, BASE, "{mode:?}: discarding leaves the index");
+    }
+}
+
+#[gpui::test]
+fn u_unstages_only_the_selected_rows(cx: &mut gpui::TestAppContext) {
+    let pressed = press(
+        cx,
+        DiffArea::Staged,
+        DiffViewMode::Inline,
+        Select::Rows(&["-two", "+TWO"]),
+        Focus::DiffPanel,
+        "u",
+    );
+    assert!(pressed.acted, "U must unstage the selected rows");
+    assert_eq!(pressed.index, "one\ntwo\nthree\nfour\nFIVE\n");
+    assert_eq!(pressed.worktree, EDITED);
+}
+
+/// The letters are safe to press by accident: with nothing selected, in the
+/// other area's diff, or from outside the diff, they leave Git alone.
+#[gpui::test]
+fn line_keys_need_a_selection_in_the_focused_diff(cx: &mut gpui::TestAppContext) {
+    let rows = Select::Rows(&["-five", "+FIVE"]);
+    for (area, select, focus, key) in [
+        (DiffArea::Unstaged, Select::Nothing, Focus::DiffPanel, "s"),
+        (DiffArea::Unstaged, Select::Nothing, Focus::DiffPanel, "d"),
+        (DiffArea::Unstaged, rows, Focus::DiffPanel, "u"),
+        (DiffArea::Unstaged, rows, Focus::DiffPanel, "shift-s"),
+        (DiffArea::Unstaged, rows, Focus::Detached, "d"),
+        (DiffArea::Staged, rows, Focus::DiffPanel, "s"),
+        (DiffArea::Staged, rows, Focus::DiffPanel, "d"),
+    ] {
+        let pressed = press(cx, area, DiffViewMode::Inline, select, focus, key);
+        let case = format!("{area:?} {select:?} {focus:?} {key}");
+        assert!(!pressed.acted, "{case}: no Git action may run");
+        let index = match area {
+            DiffArea::Unstaged => BASE,
+            DiffArea::Staged => EDITED,
+        };
+        assert_eq!(pressed.index, index, "{case}");
+        assert_eq!(pressed.worktree, EDITED, "{case}");
+    }
+}

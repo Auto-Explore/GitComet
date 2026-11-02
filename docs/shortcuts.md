@@ -207,6 +207,9 @@ These shortcuts apply in the main diff panel, including conflict resolution view
 | Switch to split diff | `Option-S` | `Alt-S` | Raw file diff only. |
 | Toggle whitespace characters | `Option-W` | `Alt-W` | Text diff / conflict diff only. |
 | Stage or unstage the current working-tree file and advance to the adjacent file | `Space` | `Space` | Raw working-tree file diff only, and not while the diff search input has focus. |
+| Stage the selected lines | `S` | `S` | Unstaged working-tree diff, while the diff has focus. No modifiers. Acts on the lines selected by dragging over text, by selecting rows, or by right-clicking a line; with nothing selected it does nothing. The same as "Stage lines" in the diff's right-click menu. |
+| Unstage the selected lines | `U` | `U` | Staged diff, while the diff has focus. No modifiers. The same as "Unstage lines" in the right-click menu. |
+| Discard the selected lines | `D` | `D` | Unstaged working-tree diff, while the diff has focus. No modifiers. Reverts the selected lines in the file without asking, as "Discard lines" in the right-click menu does. In the conflict resolver `D` picks Both instead. |
 | Select all diff text | `Cmd-A` | `Ctrl-A` | File preview and text-selection flows. |
 | Copy selected diff text | `Cmd-C` | `Ctrl-C` | File preview and text-selection flows. |
 | Pick conflict result `Base / Ours / Theirs / Both` | `A`, `B`, `C`, `D` | `A`, `B`, `C`, `D` | Conflict resolver only. |
