@@ -2092,6 +2092,7 @@ impl GitRepository for GixRepo {
     fn read_virtual_branches(
         &self,
     ) -> Result<gitcomet_core::virtual_branches::VirtualBranchesState> {
+        let _operation = self.operation_lease()?;
         self.read_virtual_branches_impl()
     }
 
@@ -2099,12 +2100,14 @@ impl GitRepository for GixRepo {
         &self,
         state: &gitcomet_core::virtual_branches::VirtualBranchesState,
     ) -> Result<()> {
+        let _operation = self.operation_lease()?;
         self.write_virtual_branches_impl(state)
     }
 
     fn read_virtual_branches_assignments(
         &self,
     ) -> Result<gitcomet_core::virtual_branches::AssignmentIndex> {
+        let _operation = self.operation_lease()?;
         self.read_assignments_impl()
     }
 
@@ -2112,30 +2115,37 @@ impl GitRepository for GixRepo {
         &self,
         index: &gitcomet_core::virtual_branches::AssignmentIndex,
     ) -> Result<()> {
+        let _operation = self.operation_lease()?;
         self.write_assignments_impl(index)
     }
 
     fn create_virtual_branch(&self, name: &str, base: &str) -> Result<()> {
+        let _operation = self.operation_lease()?;
         self.create_virtual_branch_impl(name, base)
     }
 
     fn rebase_virtual_branch(&self, name: &str, onto: &str) -> Result<()> {
+        let _operation = self.operation_lease()?;
         self.rebase_virtual_branch_impl(name, onto)
     }
 
     fn enter_virtual_branches(&self) -> Result<CommitId> {
+        let _operation = self.operation_lease()?;
         self.enter_virtual_branches_impl()
     }
 
     fn leave_virtual_branches(&self, onto: &str) -> Result<()> {
+        let _operation = self.operation_lease()?;
         self.leave_virtual_branches_impl(onto)
     }
 
     fn update_virtual_branches_branch(&self, applied: &[&str]) -> Result<CommitId> {
+        let _operation = self.operation_lease()?;
         self.update_virtual_branches_branch_impl(applied)
     }
 
     fn update_virtual_branches_target(&self, target: &str) -> Result<()> {
+        let _operation = self.operation_lease()?;
         self.update_virtual_branches_target_impl(target)
     }
 
@@ -2145,6 +2155,7 @@ impl GitRepository for GixRepo {
         message: &str,
         paths: &[&Path],
     ) -> Result<CommitOperationOutcome> {
+        let _operation = self.operation_lease()?;
         self.commit_paths_to_virtual_branch_impl(name, message, paths)
     }
 
@@ -2157,6 +2168,7 @@ impl GitRepository for GixRepo {
     }
 
     fn push_virtual_branch(&self, name: &str) -> Result<CommandOutput> {
+        let _operation = self.operation_lease()?;
         self.push_virtual_branch_impl(name)
     }
 }

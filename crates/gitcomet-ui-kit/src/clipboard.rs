@@ -441,9 +441,6 @@ mod tests {
         ClipboardBackend, clipboard_backend, copy_diagnostics_enabled, replace_clipboard_owner,
         select_clipboard_backend,
     };
-    // Only the receipt test below exists off Unix, where it needs the type.
-    #[cfg(unix)]
-    use super::PasteReceipt;
     use crate::ui_runtime::{UiRuntime, with_override};
 
     /// The switch is the runtime, not `cfg(test)`, which a dependent's tests
