@@ -259,7 +259,15 @@ pub(super) fn enter_virtual_branches(state: &mut AppState, repo_id: RepoId) -> V
         // no branch either. Not loaded is the same answer from less
         // information. Either way there is no branch to go back to, and
         // leaving then falls back to the virtual branches target.
-        Loadable::Ready(branch) if !branch.is_empty() && branch != "HEAD" => Some(branch.clone()),
+        // The virtual-branches branch itself is no place to go back to: HEAD can
+        // still be there before the view has marked the repository active.
+        Loadable::Ready(branch)
+            if !branch.is_empty()
+                && branch != "HEAD"
+                && branch != gitcomet_core::virtual_branches::VIRTUAL_BRANCHES_BRANCH =>
+        {
+            Some(branch.clone())
+        }
         _ => None,
     };
     repo.virtual_branches.busy.switching = true;

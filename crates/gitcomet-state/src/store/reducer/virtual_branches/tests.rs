@@ -913,3 +913,20 @@ fn messages_for_an_unknown_repository_are_ignored() {
     let effects = load_virtual_branches(&mut state, RepoId(99));
     assert!(effects.is_empty());
 }
+
+#[test]
+fn entering_while_head_is_already_on_the_virtual_branches_branch_remembers_nothing() {
+    // Right after a restart HEAD can still be on gitcomet/virtual before the
+    // view has loaded and marked the repository active. Remembering that
+    // branch as the one to return to would make leaving a switch onto itself.
+    let mut state = repo_with_virtual_branches();
+    state.repos[0].head_branch =
+        Loadable::Ready(gitcomet_core::virtual_branches::VIRTUAL_BRANCHES_BRANCH.into());
+    assert!(matches!(
+        &enter_virtual_branches(&mut state, RepoId(1))[0],
+        Effect::EnterVirtualBranches {
+            checkout_base: None,
+            ..
+        }
+    ));
+}
