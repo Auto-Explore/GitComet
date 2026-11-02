@@ -237,12 +237,7 @@ impl TextInput {
             let line_text = line_text_for_index(display_text.as_ref(), &line_starts, line_ix);
             // Bold or italic highlights move wrap points.
             let highlights = has_content.then(|| {
-                let resolved =
-                    self.effective_highlights_for_window(line_start..line_start + line_text.len());
-                if resolved.pending {
-                    self.ensure_highlight_provider_poll(cx);
-                }
-                resolved.highlights
+                self.highlights_polling_provider(line_start..line_start + line_text.len(), cx)
             });
             let line_style = TextShapeStyle {
                 base_font: &base_font,

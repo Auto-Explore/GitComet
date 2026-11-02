@@ -212,11 +212,7 @@ impl Element for TextElement {
                     visible_top,
                     visible_bottom,
                 );
-                let resolved = input.effective_highlights_for_window(byte_range);
-                if resolved.pending {
-                    input.ensure_highlight_provider_poll(cx);
-                }
-                Some(resolved.highlights)
+                Some(input.highlights_polling_provider(byte_range, cx))
             };
             let highlight_slice = highlights.as_ref().map(|h| h.as_slice());
             let has_background_runs = highlight_slice.is_some_and(|highlights| {
@@ -589,20 +585,15 @@ impl Element for TextElement {
                     let offscreen_highlights = (!visible_line_range.contains(&line_ix)
                         && input.highlight.provider.is_some())
                     .then(|| {
-                        input.effective_highlights_for_window(
+                        input.highlights_polling_provider(
                             line_start..line_start + line_text.len(),
+                            cx,
                         )
                     });
-                    if offscreen_highlights
-                        .as_ref()
-                        .is_some_and(|resolved| resolved.pending)
-                    {
-                        input.ensure_highlight_provider_poll(cx);
-                    }
                     let line_style = TextShapeStyle {
                         highlights: offscreen_highlights
                             .as_ref()
-                            .map(|resolved| resolved.highlights.as_slice())
+                            .map(|highlights| highlights.as_slice())
                             .or(shape_style.highlights),
                         ..shape_style
                     };
