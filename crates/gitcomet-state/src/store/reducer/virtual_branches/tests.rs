@@ -521,6 +521,50 @@ fn a_late_load_does_not_undo_a_leave_before_head_catches_up() {
 }
 
 #[test]
+fn a_stale_head_reply_does_not_confirm_a_leave() {
+    // A `head_branch` reply sent before the leave still names the virtual
+    // branches branch. It must not clear the unconfirmed flag, or a load
+    // landing after it would turn `active` back on.
+    let mut state = repo_with_virtual_branches();
+    state.repos[0].head_branch =
+        Loadable::Ready(gitcomet_core::virtual_branches::VIRTUAL_BRANCHES_BRANCH.into());
+    state.repos[0].virtual_branches.active = true;
+    state.repos[0].virtual_branches.busy.switching = true;
+    virtual_branches_active_finished(
+        &crate::store::reducer::test_inputs::clock(),
+        &mut state,
+        RepoId(1),
+        false,
+        None,
+        Ok(()),
+    );
+    crate::store::reducer::effects::head_branch_loaded(
+        &crate::store::reducer::test_inputs::clock(),
+        &mut state,
+        RepoId(1),
+        Ok(gitcomet_core::virtual_branches::VIRTUAL_BRANCHES_BRANCH.into()),
+    );
+    assert!(state.repos[0].virtual_branches.head_unconfirmed);
+    state.repos[0].virtual_branches.busy.switching = false;
+    virtual_branches_loaded(
+        &crate::store::reducer::test_inputs::clock(),
+        &mut state,
+        RepoId(1),
+        Ok(VirtualBranchesState::new("main")),
+        Ok(AssignmentIndex::new()),
+        Ok(None),
+    );
+    assert!(!state.repos[0].virtual_branches.active);
+    crate::store::reducer::effects::head_branch_loaded(
+        &crate::store::reducer::test_inputs::clock(),
+        &mut state,
+        RepoId(1),
+        Ok("main".into()),
+    );
+    assert!(!state.repos[0].virtual_branches.head_unconfirmed);
+}
+
+#[test]
 fn a_load_during_a_switch_leaves_active_to_the_switch() {
     // While the working directory is being moved, HEAD is neither here nor
     // there; only the switch's own report may say where it ended up.

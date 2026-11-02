@@ -2372,7 +2372,14 @@ pub(super) fn head_branch_loaded(
 ) -> Vec<Effect> {
     let mut effects = Vec::new();
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
-        repo_state.virtual_branches.head_unconfirmed = false;
+        // A reply that still names the virtual branches branch was read before
+        // the leave moved HEAD, so it cannot confirm the leave. An error
+        // clears the flag too: nothing will ever confirm it, and leaving it
+        // set would keep `active` from lighting again.
+        if !matches!(&result, Ok(v) if v == gitcomet_core::virtual_branches::VIRTUAL_BRANCHES_BRANCH)
+        {
+            repo_state.virtual_branches.head_unconfirmed = false;
+        }
         let head_branch = match result {
             Ok(v) => {
                 if v == "HEAD" {
