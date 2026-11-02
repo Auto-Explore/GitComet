@@ -1245,6 +1245,34 @@ fn pushing_a_branch_stacked_on_an_unknown_parent_is_refused_and_changes_nothing(
 }
 
 #[test]
+fn pushing_independent_branches_and_one_on_a_known_parent_is_accepted() {
+    // The reducer and the effect push plain, independent branches; only the
+    // insert operations name a parent, and always one that exists.
+    let mut state = virtual_branches().with_branches(vec![vb("a")]);
+    state.push_branch(vb("b")).unwrap();
+    state.push_branch(vb("c").with_parent("a")).unwrap();
+    assert!(state.contains("b") && state.contains("c"));
+    state.validate().unwrap();
+}
+
+#[test]
+fn clearing_a_hunk_of_a_file_assigned_whole_drops_the_whole_assignment() {
+    // Hunk edits split a whole-file assignment rather than carrying it over
+    // (see `AssignmentIndex::set_hunk`), and clearing is a hunk edit too: the
+    // file ends up with no assignment, not with its old branch.
+    let fingerprint = HunkFingerprint::of(&["x\n"], 1);
+    let mut index = AssignmentIndex::new();
+    index.set(PathBuf::from("a.rs"), Some("api".into()));
+    index.set_hunk(PathBuf::from("a.rs"), fingerprint, None);
+    assert_eq!(index.branch_of(Path::new("a.rs")), None);
+    assert!(
+        index
+            .file(Path::new("a.rs"))
+            .is_some_and(|file| file.is_empty())
+    );
+}
+
+#[test]
 fn a_refused_insert_above_leaves_the_state_untouched() {
     let mut state = virtual_branches().with_branches(vec![vb("a")]);
     let before = state.clone();

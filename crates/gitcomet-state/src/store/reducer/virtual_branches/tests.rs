@@ -471,6 +471,45 @@ fn a_load_infers_that_the_working_directory_is_on_the_virtual_branches() {
 }
 
 #[test]
+fn a_late_load_does_not_undo_an_enter_before_head_catches_up() {
+    // Entering sets `active` straight away, but `head_branch` only follows once
+    // the branch reload it triggers lands. A load that arrives in between sees
+    // the old HEAD, and must not read that as "we are not on the branch".
+    let mut state = repo_with_virtual_branches();
+    state.repos[0].head_branch = Loadable::Ready("main".into());
+    state.repos[0].virtual_branches.active = true;
+    state.repos[0].virtual_branches.checkout_base = Some("main".into());
+    virtual_branches_loaded(
+        &crate::store::reducer::test_inputs::clock(),
+        &mut state,
+        RepoId(1),
+        Ok(VirtualBranchesState::new("main")),
+        Ok(AssignmentIndex::new()),
+        Ok(None),
+    );
+    assert!(state.repos[0].virtual_branches.active);
+}
+
+#[test]
+fn a_load_during_a_switch_leaves_active_to_the_switch() {
+    // While the working directory is being moved, HEAD is neither here nor
+    // there; only the switch's own report may say where it ended up.
+    let mut state = repo_with_virtual_branches();
+    state.repos[0].head_branch =
+        Loadable::Ready(gitcomet_core::virtual_branches::VIRTUAL_BRANCHES_BRANCH.into());
+    state.repos[0].virtual_branches.busy.switching = true;
+    virtual_branches_loaded(
+        &crate::store::reducer::test_inputs::clock(),
+        &mut state,
+        RepoId(1),
+        Ok(VirtualBranchesState::new("main")),
+        Ok(AssignmentIndex::new()),
+        Ok(None),
+    );
+    assert!(!state.repos[0].virtual_branches.active);
+}
+
+#[test]
 fn a_hunk_assignment_takes_the_same_effect_and_names_its_hunk() {
     let mut state = repo_with_virtual_branches();
     let hunk = gitcomet_core::virtual_branches::HunkFingerprint::of(&["new\n"], 1);

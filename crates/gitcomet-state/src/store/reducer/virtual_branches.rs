@@ -505,7 +505,16 @@ pub(super) fn virtual_branches_loaded(
     // HEAD there. Nothing is going to tell us we are "active" any other way, and
     // guessing wrong would either hide the fact or send the user to a branch
     // they were never on.
-    repo.virtual_branches.active = matches!(&repo.head_branch, Loadable::Ready(branch) if branch == gitcomet_core::virtual_branches::VIRTUAL_BRANCHES_BRANCH);
+    //
+    // This only ever turns `active` on. Entering sets it before `head_branch`
+    // follows, so a load landing in that gap sees the old HEAD, and reading
+    // that as "not on the branch" would undo the enter. Leaving is reported by
+    // the switch itself. A switch in flight owns `active` altogether.
+    if !repo.virtual_branches.busy.switching
+        && matches!(&repo.head_branch, Loadable::Ready(branch) if branch == gitcomet_core::virtual_branches::VIRTUAL_BRANCHES_BRANCH)
+    {
+        repo.virtual_branches.active = true;
+    }
     repo.virtual_branches.bump_rev();
 
     let mut effects = Vec::new();
