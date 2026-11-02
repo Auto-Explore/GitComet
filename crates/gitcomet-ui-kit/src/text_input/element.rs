@@ -920,19 +920,16 @@ impl Element for TextElement {
             } else {
                 None
             };
-            let height_changed = prev_height_rows != next_height_rows;
-            if height_changed {
-                // Apply the measured height to the parent on the next frame.
-                // The caret reveal owns its bounded retry while that happens.
+            let rows_changed = std::mem::take(&mut input.wrap.ancestor_rows_stale)
+                || prev_height_rows != next_height_rows;
+            if rows_changed {
+                // Re-render ancestors with the measured rows next frame.
                 cx.notify();
             }
-            height_changed || reveal_continues
+            rows_changed || reveal_continues
         });
         if needs_another_frame {
-            // A notify during paint only marks the input for whichever frame
-            // comes next; it does not ask for one. Without this request the
-            // field kept painting its text into the old height until an
-            // unrelated redraw (the caret blink, a keystroke, a pointer move).
+            // A notify during paint does not request a frame.
             let input = self.input.clone();
             window.on_next_frame(move |_, cx| input.update(cx, |_, cx| cx.notify()));
         }

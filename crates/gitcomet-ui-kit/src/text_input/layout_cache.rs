@@ -275,13 +275,16 @@ impl TextInput {
             );
             rows_changed |= self.set_measured_wrap_rows(line_ix, wrapped.line_count());
         }
-        if rows_changed {
-            let rows = total_wrap_rows(&self.wrap.row_counts);
-            self.wrap.last_rows = Some(rows);
-            if let Some(cache) = self.wrap.cache.as_mut() {
-                cache.rows = rows;
-            }
+        if !rows_changed {
+            return;
         }
+        let rows = total_wrap_rows(&self.wrap.row_counts);
+        self.wrap.last_rows = Some(rows);
+        if let Some(cache) = self.wrap.cache.as_mut() {
+            cache.rows = rows;
+        }
+        // cache.rows already holds the new total, so paint's comparison cannot see this.
+        self.wrap.ancestor_rows_stale = true;
     }
 
     pub(super) fn set_measured_wrap_rows(&mut self, line_ix: usize, rows: usize) -> bool {

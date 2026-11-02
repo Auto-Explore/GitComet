@@ -1027,3 +1027,94 @@ fn wrapped_paste_reveals_the_caret_without_another_event(cx: &mut gpui::TestAppC
         );
     });
 }
+
+/// Reads row counts while rendering, like the editor gutters.
+struct GutterView {
+    input: Entity<TextInput>,
+    rendered_rows: Vec<usize>,
+}
+
+impl Render for GutterView {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.rendered_rows = self.input.read(cx).wrap_row_counts().to_vec();
+        div().w(px(280.0)).child(self.input.clone())
+    }
+}
+
+struct CachedGutterHost {
+    gutter: Entity<GutterView>,
+}
+
+impl Render for CachedGutterHost {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        div().size_full().child(
+            gpui::AnyView::from(self.gutter.clone()).cached(gpui::StyleRefinement::default()),
+        )
+    }
+}
+
+#[gpui::test]
+fn wrap_rows_measured_after_ancestor_render_rerender_ancestors(cx: &mut gpui::TestAppContext) {
+    crate::test_support::use_real_text_backend(cx);
+    let (host, cx) = cx.add_window_view(|window, cx| {
+        window.activate();
+        let input = cx.new(|cx| {
+            TextInput::new(
+                TextInputOptions {
+                    multiline: true,
+                    soft_wrap: true,
+                    ..Default::default()
+                },
+                window,
+                cx,
+            )
+        });
+        let gutter = cx.new(|_| GutterView {
+            input,
+            rendered_rows: Vec::new(),
+        });
+        CachedGutterHost { gutter }
+    });
+    let (gutter, input) = cx.update(|window, app| {
+        let gutter = host.read(app).gutter.clone();
+        let input = gutter.read(app).input.clone();
+        input.update(app, |input, cx| {
+            input.set_text("alpha beta gamma delta".to_owned(), cx);
+            input.set_caret(input.text().len(), cx);
+            window.focus(&input.focus_handle(), cx);
+        });
+        (gutter, input)
+    });
+    for _ in 0..4 {
+        draw_frame(cx);
+    }
+
+    let rendered_and_measured = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|_window, app| {
+            (
+                gutter.read(app).rendered_rows.clone(),
+                input.read(app).wrap_row_counts().to_vec(),
+            )
+        })
+    };
+    let mut wrapped = false;
+    for character in " epsilon zeta eta theta iota kappa lambda mu nu xi".chars() {
+        cx.simulate_input(&character.to_string());
+        draw_requested_frames(cx);
+        let (rendered, measured) = rendered_and_measured(cx);
+        assert_eq!(
+            rendered, measured,
+            "requested frames after typing {character:?}"
+        );
+        // Unrelated redraw: replays the cached gutter unless it is dirty.
+        cx.update(|_window, app| host.update(app, |_, cx| cx.notify()));
+        draw_requested_frames(cx);
+        let (rendered, measured) = rendered_and_measured(cx);
+        assert_eq!(
+            rendered, measured,
+            "unrelated redraw after typing {character:?}"
+        );
+        wrapped |= measured.iter().sum::<usize>() > 1;
+    }
+    assert!(wrapped, "fixture must wrap onto a second row");
+}
