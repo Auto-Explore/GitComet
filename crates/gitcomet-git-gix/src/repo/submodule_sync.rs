@@ -396,6 +396,20 @@ impl GixRepo {
         })
     }
 
+    /// Stash everything uncommitted in the submodule at `path`, untracked
+    /// files included, so a commit in the parent leaves nothing behind.
+    pub(super) fn stash_submodule_changes_impl(&self, path: &Path, message: &str) -> Result<()> {
+        let workdir = self.spec.workdir.join(path);
+        let mut stash = git_workdir_cmd_for(&workdir);
+        stash
+            .arg("stash")
+            .arg("push")
+            .arg("--include-untracked")
+            .arg("-m")
+            .arg(message);
+        run_git_simple(stash, "git stash push")
+    }
+
     /// Push the submodule at `path` from its own checkout to its upstream.
     pub(super) fn push_submodule_with_output_impl(&self, path: &Path) -> Result<CommandOutput> {
         let workdir = self.spec.workdir.join(path);

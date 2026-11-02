@@ -152,6 +152,44 @@ impl Render for GitCometView {
         }
 
         if self
+            .pending_linked_push_prompt
+            .as_ref()
+            .is_some_and(|prompt| {
+                let active = self.active_repo_id();
+                active == Some(prompt.child) || active == Some(prompt.parent)
+            })
+            && let Some(prompt) = self.pending_linked_push_prompt.take()
+        {
+            self.open_popover_centered(PopoverKind::LinkedPushConfirm(prompt), window, cx);
+        }
+
+        if self
+            .pending_unpushed_pointer_prompt
+            .as_ref()
+            .is_some_and(|prompt| self.active_repo_id() == Some(prompt.repo_id))
+            && let Some(prompt) = self.pending_unpushed_pointer_prompt.take()
+        {
+            self.open_popover_centered(PopoverKind::UnpushedPointerConfirm(prompt), window, cx);
+        }
+
+        if let Some(prompt) = self.pending_submodule_close_prompt.take() {
+            self.open_popover_centered(PopoverKind::SubmoduleCloseConfirm(prompt), window, cx);
+        }
+
+        if self
+            .pending_submodule_leave_behind_prompt
+            .as_ref()
+            .is_some_and(|prompt| self.active_repo_id() == Some(prompt.repo_id))
+            && let Some(prompt) = self.pending_submodule_leave_behind_prompt.take()
+        {
+            self.open_popover_centered(
+                PopoverKind::SubmoduleLeaveBehindConfirm(prompt),
+                window,
+                cx,
+            );
+        }
+
+        if self
             .pending_force_remove_worktree_prompt
             .as_ref()
             .is_some_and(|prompt| self.active_repo_id() == Some(prompt.repo_id))

@@ -533,6 +533,11 @@ pub(in crate::view) enum ContextMenuAction {
         repo_id: RepoId,
         path: std::path::PathBuf,
     },
+    /// Check a submodule out at the commit its parent records.
+    UpdateSubmoduleToRecorded {
+        repo_id: RepoId,
+        path: std::path::PathBuf,
+    },
     LoadWorktrees {
         repo_id: RepoId,
     },

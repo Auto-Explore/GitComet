@@ -330,6 +330,7 @@ pub(crate) fn msg_requires_available_git(msg: &Msg) -> bool {
             | Msg::DiscardWorktreeChangesPaths { .. }
             | Msg::ResolveSubmoduleCheckoutPrompt { .. }
             | Msg::UpdateSubmoduleToRecorded { .. }
+            | Msg::ShelveSubmoduleChanges { .. }
             | Msg::CommitLinked { .. }
             | Msg::ResolveLinkedPushPrompt { .. }
             | Msg::ResolveUnpushedPointerPrompt { .. }
@@ -1812,7 +1813,7 @@ fn reduce_inner(
             parent_message,
             push,
         } => {
-            if linked_commit::start(state, child, parent_message, push).is_some() {
+            if linked_commit::start(state, child, &message, parent_message, push).is_some() {
                 auth::commit(state, child, message, false)
             } else {
                 auth::commit(state, child, message, push)
@@ -1836,6 +1837,22 @@ fn reduce_inner(
         Msg::UpdateSubmoduleToRecorded { repo_id, path } => {
             begin_local_action(state, repo_id);
             submodule_checkout::update_to_recorded(repo_id, path)
+        }
+        Msg::ShelveSubmoduleChanges {
+            repo_id,
+            paths,
+            message,
+        } => {
+            if paths.is_empty() || !state.repos.iter().any(|repo| repo.id == repo_id) {
+                Vec::new()
+            } else {
+                begin_local_action(state, repo_id);
+                vec![Effect::ShelveSubmoduleChanges {
+                    repo_id,
+                    paths,
+                    message,
+                }]
+            }
         }
         Msg::SaveWorktreeFile {
             repo_id,

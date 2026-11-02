@@ -376,11 +376,55 @@ fn running_git_operation(repo: &RepoState) -> Option<&'static str> {
     }
 }
 
+/// Open submodule tabs a single worktree tab's close would leave behind, in
+/// tab order. Closing several tabs at once already names the set to close,
+/// so it asks nothing.
+pub(in crate::view) fn open_submodules_left_behind(
+    state: &AppState,
+    repo_ids: &[RepoId],
+) -> Vec<RepoId> {
+    if repo_ids.len() != 1 {
+        return Vec::new();
+    }
+    state
+        .repos
+        .iter()
+        .filter(|repo| {
+            !repo_ids.contains(&repo.id)
+                && repo
+                    .submodule_parent_tab()
+                    .is_some_and(|parent| repo_ids.contains(&parent))
+        })
+        .map(|repo| repo.id)
+        .collect()
+}
+
 impl GitCometView {
     /// Closes repository tabs through every guard: running terminal
     /// commands, running Git operations, then extension guards. Every way to
     /// close a tab (its button, Cmd+W, the tab menu) comes through here.
     pub(crate) fn request_close_repos(
+        &mut self,
+        repo_ids: Vec<RepoId>,
+        activate_after: Option<RepoId>,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let submodules = open_submodules_left_behind(&self.state, &repo_ids);
+        if !submodules.is_empty() {
+            self.pending_submodule_close_prompt = Some(SubmoduleClosePrompt {
+                repo_ids,
+                activate_after,
+                submodules,
+            });
+            cx.notify();
+            return;
+        }
+        self.request_close_repos_past_submodule_prompt(repo_ids, activate_after, cx);
+    }
+
+    /// The rest of [`Self::request_close_repos`], once open submodule tabs
+    /// are settled.
+    pub(in crate::view) fn request_close_repos_past_submodule_prompt(
         &mut self,
         repo_ids: Vec<RepoId>,
         activate_after: Option<RepoId>,

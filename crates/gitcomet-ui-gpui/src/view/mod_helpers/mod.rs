@@ -1152,6 +1152,11 @@ pub struct GitCometView {
     pub(super) pending_force_delete_branch_centered: bool,
     pub(super) pending_submodule_checkout_prompt:
         Option<gitcomet_state::model::SubmoduleCheckoutPrompt>,
+    pub(super) pending_linked_push_prompt: Option<gitcomet_state::model::LinkedPushPrompt>,
+    pub(super) pending_unpushed_pointer_prompt:
+        Option<gitcomet_state::model::UnpushedPointerPrompt>,
+    pub(super) pending_submodule_close_prompt: Option<SubmoduleClosePrompt>,
+    pub(in crate::view) pending_submodule_leave_behind_prompt: Option<SubmoduleLeaveBehindPrompt>,
     pub(super) pending_force_remove_worktree_prompt:
         Option<gitcomet_state::model::ForceRemoveWorktreePrompt>,
     pub(super) pending_submodule_trust_prompt:

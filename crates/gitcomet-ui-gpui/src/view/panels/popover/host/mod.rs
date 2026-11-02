@@ -1593,6 +1593,17 @@ impl PopoverHost {
                 prompt: prompt.clone(),
             });
         }
+        if let Some(PopoverKind::LinkedPushConfirm(prompt)) = self.popover.as_ref() {
+            self.store.dispatch(Msg::ResolveLinkedPushPrompt {
+                prompt: prompt.clone(),
+                choice: gitcomet_state::model::LinkedPushChoice::KeepLocal,
+            });
+        }
+        if let Some(PopoverKind::UnpushedPointerConfirm(prompt)) = self.popover.as_ref() {
+            self.store.dispatch(Msg::DismissUnpushedPointerPrompt {
+                prompt: prompt.clone(),
+            });
+        }
     }
 
     pub(in crate::view) fn dismiss_prompt_popover(

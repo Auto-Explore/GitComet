@@ -2230,6 +2230,14 @@ pub trait GitRepository: Send + Sync {
         )))
     }
 
+    /// Stash the uncommitted changes inside the submodule at `path`,
+    /// untracked files included, under `message`.
+    fn stash_submodule_changes(&self, _path: &Path, _message: &str) -> Result<()> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "stashing in a submodule is not implemented for this backend",
+        )))
+    }
+
     /// Submodule commits that outgoing commits record but no remote-tracking
     /// branch in that submodule holds.
     fn unpushed_submodule_pointers(&self) -> Result<Vec<crate::domain::SubmoduleCheckoutUpdate>> {

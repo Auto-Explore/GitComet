@@ -85,6 +85,7 @@ pub enum RepoActionKind {
     PopStash,
     DropStash,
     UpdateSubmodule,
+    ShelveSubmoduleChanges,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -133,7 +134,8 @@ impl RepoActionKind {
             | Self::ApplyStash
             | Self::PopStash
             | Self::DropStash
-            | Self::UpdateSubmodule => RepositoryRequirement::WorkingTree,
+            | Self::UpdateSubmodule
+            | Self::ShelveSubmoduleChanges => RepositoryRequirement::WorkingTree,
         }
     }
 
@@ -159,7 +161,8 @@ impl RepoActionKind {
             | Self::Stash
             | Self::ApplyStash
             | Self::PopStash
-            | Self::UpdateSubmodule => true,
+            | Self::UpdateSubmodule
+            | Self::ShelveSubmoduleChanges => true,
             Self::CreateBranch
             | Self::RenameBranch
             | Self::DeleteBranch
@@ -191,6 +194,7 @@ impl RepoActionKind {
             Self::PopStash => "Pop stash",
             Self::DropStash => "Drop stash",
             Self::UpdateSubmodule => "Update submodule",
+            Self::ShelveSubmoduleChanges => "Shelve submodule changes",
         }
     }
 }
@@ -895,6 +899,14 @@ pub enum Msg {
     },
     DismissSubmoduleCheckoutPrompt {
         prompt: SubmoduleCheckoutPrompt,
+    },
+    /// Stash the uncommitted changes inside each first-level submodule at
+    /// `paths` of `repo_id`, under `message`, so a commit in the parent does
+    /// not leave them behind unrecorded.
+    ShelveSubmoduleChanges {
+        repo_id: RepoId,
+        paths: Vec<PathBuf>,
+        message: String,
     },
     /// Commit in the first-level submodule tab `child`, then record the new
     /// commit in its parent's tab with `parent_message`. With `push`, push the

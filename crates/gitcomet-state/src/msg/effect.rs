@@ -366,6 +366,11 @@ pub enum Effect {
         operation: crate::model::SubmoduleCheckoutOperation,
         policy: gitcomet_core::domain::SubmoduleCheckoutPolicy,
     },
+    ShelveSubmoduleChanges {
+        repo_id: RepoId,
+        paths: Vec<std::path::PathBuf>,
+        message: String,
+    },
     Commit {
         repo_id: RepoId,
         message: String,
@@ -488,6 +493,7 @@ impl Effect {
             | Self::DiscardWorktreeChangesPath { .. }
             | Self::DiscardWorktreeChangesPaths { .. }
             | Self::SubmoduleCheckout { .. }
+            | Self::ShelveSubmoduleChanges { .. }
             | Self::RecordSubmoduleCommit { .. }
             | Self::PushSubmodulesThenRepo { .. }
             | Self::Commit { .. }

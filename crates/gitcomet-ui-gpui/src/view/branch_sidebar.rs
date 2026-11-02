@@ -328,6 +328,10 @@ pub(super) enum BranchSidebarRow {
         status: SubmoduleStatus,
         recorded_head: CommitId,
         checked_out_head: Option<CommitId>,
+        /// How far the checkout moved from the recorded commit.
+        drift: Option<gitcomet_core::domain::SubmoduleDrift>,
+        /// Uncommitted files inside the submodule.
+        has_inner_changes: bool,
     },
     /// git-annex: the repositories and special remotes content can live in.
     AnnexHeader {
@@ -1350,6 +1354,8 @@ fn sidebar_rows(
                         status: submodule.status,
                         recorded_head: submodule.recorded_head.clone(),
                         checked_out_head: submodule.checked_out_head.clone(),
+                        drift: submodule.drift,
+                        has_inner_changes: submodule.has_inner_changes,
                     });
                 }
             }

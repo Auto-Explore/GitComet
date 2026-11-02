@@ -28,26 +28,14 @@ fn short(commit: &CommitId) -> &str {
     id.get(..7).unwrap_or(id)
 }
 
-/// The message the parent's commit starts with: the submodule's path and the
-/// first line of the submodule's message.
-pub fn default_parent_message(path: &std::path::Path, child_message: &str) -> String {
-    let subject = child_message
-        .lines()
-        .map(str::trim)
-        .find(|line| !line.is_empty())
-        .unwrap_or_default();
-    if subject.is_empty() {
-        format!("Update {}", path.display())
-    } else {
-        format!("Update {}: {subject}", path.display())
-    }
-}
+use crate::model::default_parent_message;
 
 /// Start a linked commit. Returns `None` when the tab has no open parent or
 /// another linked commit is running; the caller then commits normally.
 pub(super) fn start(
     state: &mut AppState,
     child: RepoId,
+    child_message: &str,
     parent_message: String,
     push: bool,
 ) -> Option<()> {
@@ -62,7 +50,7 @@ pub(super) fn start(
         .clone()?;
     let parent = link.repo_id?;
     let parent_message = match parent_message.trim() {
-        "" => default_parent_message(&link.path, ""),
+        "" => default_parent_message(&link.path, child_message),
         message => message.to_string(),
     };
     state.linked_commit = Some(LinkedCommit {
@@ -459,7 +447,7 @@ mod tests {
     fn a_failed_submodule_commit_records_nothing_in_the_parent() {
         let inputs = super::super::test_inputs::clock();
         let mut state = state();
-        start(&mut state, RepoId(2), "Update vendor/lib".into(), true).expect("linked");
+        start(&mut state, RepoId(2), "x", "Update vendor/lib".into(), true).expect("linked");
         let effects = child_commit_finished(&inputs, &mut state, RepoId(2), false);
         assert!(effects.is_empty());
         assert!(state.linked_commit.is_none());
@@ -470,7 +458,14 @@ mod tests {
     fn a_committed_submodule_is_recorded_in_the_parent_alone() {
         let inputs = super::super::test_inputs::clock();
         let mut state = state();
-        start(&mut state, RepoId(2), "Update vendor/lib: x".into(), false).expect("linked");
+        start(
+            &mut state,
+            RepoId(2),
+            "x",
+            "Update vendor/lib: x".into(),
+            false,
+        )
+        .expect("linked");
         let effects = child_commit_finished(&inputs, &mut state, RepoId(2), true);
         assert!(matches!(
             effects.as_slice(),
@@ -492,7 +487,7 @@ mod tests {
         let inputs = super::super::test_inputs::clock();
         let repos = RepositoryRuntimes::default();
         let mut state = state();
-        start(&mut state, RepoId(2), "m".into(), true).expect("linked");
+        start(&mut state, RepoId(2), "x", "m".into(), true).expect("linked");
         state.linked_commit.as_mut().unwrap().stage = LinkedCommitStage::PushChild;
         let effects = command_finished(
             &inputs,
@@ -525,7 +520,7 @@ mod tests {
         let inputs = super::super::test_inputs::clock();
         let repos = RepositoryRuntimes::default();
         let mut state = state();
-        start(&mut state, RepoId(2), "m".into(), true).expect("linked");
+        start(&mut state, RepoId(2), "x", "m".into(), true).expect("linked");
         {
             let plan = state.linked_commit.as_mut().unwrap();
             plan.stage = LinkedCommitStage::ReconcileChild { rebase: true };

@@ -1228,6 +1228,43 @@ pub(super) fn schedule_commit_amend(
     );
 }
 
+/// Stash the changes inside each submodule at `paths`. The submodules'
+/// rows and the parent's status change with them, so both reload.
+pub(super) fn schedule_shelve_submodule_changes(
+    executor: &TaskExecutor,
+    repos: &RepositoryRuntimes,
+    msg_tx: StoreWorkerSender,
+    repo_id: RepoId,
+    paths: Vec<PathBuf>,
+    message: String,
+) {
+    let context = single_line_context(
+        paths
+            .iter()
+            .map(|path| path.display().to_string())
+            .collect::<Vec<_>>()
+            .join(", "),
+    );
+    schedule_repo_action_with_hook(
+        executor,
+        repos,
+        msg_tx,
+        repo_id,
+        RepoActionKind::ShelveSubmoduleChanges,
+        context,
+        move |repo| {
+            for path in &paths {
+                repo.stash_submodule_changes(path, &message)?;
+            }
+            Ok(())
+        },
+        |msg_tx, repo_id, _result| {
+            send_or_log(msg_tx, Msg::LoadSubmodules { repo_id });
+        },
+        repo_action_finished(RepoActionKind::ShelveSubmoduleChanges),
+    );
+}
+
 pub(super) fn schedule_stash(
     executor: &TaskExecutor,
     repos: &RepositoryRuntimes,

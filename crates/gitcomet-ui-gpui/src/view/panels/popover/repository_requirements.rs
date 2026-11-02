@@ -95,6 +95,10 @@ impl PopoverKind {
             | Self::ForcePushConfirm { .. }
             | Self::ForceDeleteBranchConfirm(_)
             | Self::SubmoduleCheckoutConfirm(_)
+            | Self::LinkedPushConfirm(_)
+            | Self::UnpushedPointerConfirm(_)
+            | Self::SubmoduleCloseConfirm(_)
+            | Self::SubmoduleLeaveBehindConfirm(_)
             | Self::ForceRemoveWorktreeConfirm(_)
             | Self::PullPicker
             | Self::PushPicker
@@ -215,6 +219,7 @@ impl PopoverHost {
             | ContextMenuAction::LaunchMergetool { repo_id, .. }
             | ContextMenuAction::UpdateSubmodules { repo_id }
             | ContextMenuAction::LoadSubmodule { repo_id, .. }
+            | ContextMenuAction::UpdateSubmoduleToRecorded { repo_id, .. }
             | ContextMenuAction::PullBranch { repo_id, .. }
             | ContextMenuAction::MergeRef { repo_id, .. }
             | ContextMenuAction::SquashRef { repo_id, .. }

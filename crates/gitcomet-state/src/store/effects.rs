@@ -1042,6 +1042,13 @@ pub(super) fn schedule_effect(
         Effect::PushSubmodulesThenRepo { repo_id, paths } => {
             repo_commands::schedule_submodule_push(executor, repos, msg_tx, repo_id, paths)
         }
+        Effect::ShelveSubmoduleChanges {
+            repo_id,
+            paths,
+            message,
+        } => repo_actions::schedule_shelve_submodule_changes(
+            executor, repos, msg_tx, repo_id, paths, message,
+        ),
         Effect::SubmoduleCheckout {
             repo_id,
             operation,

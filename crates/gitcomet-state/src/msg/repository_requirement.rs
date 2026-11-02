@@ -77,6 +77,7 @@ impl Msg {
             | Self::UnstagePaths { repo_id, .. }
             | Self::UpdateSubmodules { repo_id, .. }
             | Self::UpdateSubmoduleToRecorded { repo_id, .. }
+            | Self::ShelveSubmoduleChanges { repo_id, .. }
             | Self::UpdateSubmodulesTrusted { repo_id, .. } => Some((*repo_id, WorkingTree)),
             Self::ResolveSubmoduleCheckoutPrompt { prompt, .. } => {
                 Some((prompt.repo_id, WorkingTree))

@@ -111,6 +111,8 @@ const REPO_TAB_CONTENT_HEIGHT_PX: f32 = 18.0;
 const REPO_TAB_STATUS_SIZE_PX: f32 = components::REPOSITORY_BADGE_SIZE_PX;
 const REPO_TAB_LABEL_GAP_PX: f32 = 6.0;
 const REPO_TAB_CLOSE_FADE_WIDTH_PX: f32 = 16.0;
+/// Height of the strip that joins a worktree tab and its submodule tabs.
+const REPO_TAB_GROUP_STRIP_HEIGHT_PX: f32 = 2.0;
 /// Counts above this show as `↓99+`; the tooltip keeps the exact number.
 const REPO_TAB_INCOMING_MAX_SHOWN: usize = 99;
 pub(in crate::view) const REPO_TAB_SIDE_PADDING_PX: f32 = 14.0;
@@ -124,6 +126,38 @@ const REPO_TAB_HOVER_BOX_HEIGHT_PX: f32 =
     REPO_TAB_CONTENT_HEIGHT_PX + REPO_TAB_HOVER_BOX_Y_OVERHANG_PX * 2.0;
 const _: () = assert!(REPO_TAB_HOVER_BOX_HEIGHT_PX >= components::REMOVE_BUTTON_SIZE_PX);
 const _: () = assert!(REPO_TAB_HOVER_BOX_HEIGHT_PX < components::Tab::CONTENT_HEIGHT_PX);
+
+/// Where a tab sits in a worktree-and-submodules group.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct RepoTabGroup {
+    /// A submodule tab joined to its worktree's tab.
+    is_submodule: bool,
+    /// The tab before it belongs to the same group.
+    joins_previous: bool,
+    /// The tab after it belongs to the same group.
+    joins_next: bool,
+}
+
+fn repo_tab_group(repos: &[RepoState], ix: usize) -> RepoTabGroup {
+    // The worktree tab that heads the group a tab belongs to, if any.
+    let head = |ix: usize| -> Option<RepoId> {
+        let repo = repos.get(ix)?;
+        repo.submodule_parent_tab().or(Some(repo.id))
+    };
+    let joined = |a: usize, b: usize| -> bool {
+        let (Some(first), Some(second)) = (repos.get(a), repos.get(b)) else {
+            return false;
+        };
+        second.submodule_parent_tab().is_some() && head(a) == head(b) && first.id != second.id
+    };
+    RepoTabGroup {
+        is_submodule: repos
+            .get(ix)
+            .is_some_and(|repo| repo.submodule_parent_tab().is_some()),
+        joins_previous: ix > 0 && joined(ix - 1, ix),
+        joins_next: joined(ix, ix + 1),
+    }
+}
 
 /// Returns the drag direction and its new high/low-water mark. A direction is
 /// established immediately, but reversing it requires deliberate travel away
@@ -324,6 +358,12 @@ impl RepoTabsBarView {
             Self::repo_tab_tracking(repo)
                 .map(|tracking| (tracking, repo.incoming_is_stale()))
                 .hash(&mut hasher);
+            // The pair drawing and the "recorded" tooltip line.
+            repo.submodule_parent.hash(&mut hasher);
+            state
+                .submodule_row_in_parent(repo.id)
+                .map(|row| &row.recorded_head)
+                .hash(&mut hasher);
         }
         if let Some(repo_id) = state.active_repo
             && let Some(repo) = state.repos.iter().find(|r| r.id == repo_id)
@@ -393,7 +433,32 @@ impl RepoTabsBarView {
         })
     }
 
-    fn repo_tab_tooltip(repo: &RepoState) -> SharedString {
+    /// The tooltip line naming a submodule tab's parent worktree and the
+    /// commit the parent records for it.
+    fn repo_tab_submodule_line(state: &AppState, repo: &RepoState) -> Option<String> {
+        let link = repo.submodule_parent.as_ref()?;
+        let parent = link.parent_name();
+        Some(match state.submodule_row_in_parent(repo.id) {
+            Some(row) => {
+                let recorded = row.recorded_head.as_ref();
+                format!(
+                    "Submodule of {parent} · recorded {}",
+                    recorded.get(..7).unwrap_or(recorded)
+                )
+            }
+            None => format!("Submodule of {parent}"),
+        })
+    }
+
+    fn repo_tab_tooltip(state: &AppState, repo: &RepoState) -> SharedString {
+        let tooltip = Self::repo_tab_tracking_tooltip(repo);
+        match Self::repo_tab_submodule_line(state, repo) {
+            Some(line) => format!("{tooltip}\n{line}").into(),
+            None => tooltip,
+        }
+    }
+
+    fn repo_tab_tracking_tooltip(repo: &RepoState) -> SharedString {
         if repo.feedback.missing_on_disk {
             return format!(
                 "Repository not found!\n{}",
@@ -882,6 +947,9 @@ impl Render for RepoTabsBarView {
         self.drive_repo_tab_drag_scroll(window);
 
         let tab_horizontal_padding = px(REPO_TAB_SIDE_PADDING_PX);
+        let group_color = workspace_color
+            .map(|color| crate::view::chrome::workspace_color(Some(color)))
+            .unwrap_or(theme.colors.accent.solid);
         let repo_tab_labels = self
             .state
             .repos
@@ -943,11 +1011,16 @@ impl Render for RepoTabsBarView {
                         invoker.as_ref() == format!("repo_tab_{}", next_repo_id.0)
                     })
             });
+            // A worktree tab and its submodule tabs read as one unit: a
+            // strip in the repository color joins them and no divider
+            // splits them.
+            let group = repo_tab_group(&self.state.repos, ix);
             let show_inactive_separator = !is_active
                 && !context_menu_active
                 && next_repo_id.is_some()
                 && next_repo_id != active
-                && !next_context_menu_active;
+                && !next_context_menu_active
+                && !group.joins_next;
             let context_menu_invoker_for_right_click = context_menu_invoker.clone();
             let is_hovered = self.hovered_repo_tab == Some(repo_id);
             let is_pressed = self.pressed_repo_tab == Some(repo_id);
@@ -973,7 +1046,7 @@ impl Render for RepoTabsBarView {
                 .filter(|drag| drag.repo_id == repo_id)
                 .map(|drag| drag.left);
 
-            let tooltip = Self::repo_tab_tooltip(repo);
+            let tooltip = Self::repo_tab_tooltip(&self.state, repo);
             let close_tooltip: SharedString = "Close repository".into();
 
             let close_button = div()
@@ -1027,6 +1100,8 @@ impl Render for RepoTabsBarView {
             let show_missing_warning = Self::repo_tab_shows_missing_warning(repo, show_spinner);
             let incoming_label = incoming_label.filter(|_| !show_spinner && !show_missing_warning);
             let show_initials = !show_spinner && !show_missing_warning && incoming_label.is_none();
+            let show_elbow = show_initials && group.is_submodule;
+            let show_initials = show_initials && !show_elbow;
             let status_color = with_alpha(
                 theme.colors.foreground.primary,
                 if theme.is_dark { 0.72 } else { 0.62 },
@@ -1092,6 +1167,14 @@ impl Render for RepoTabsBarView {
                                 .debug_selector(move || format!("repo_tab_incoming_{}", repo_id.0)),
                             )
                         })
+                        .when(show_elbow, |d| {
+                            d.debug_selector(move || format!("repo_tab_elbow_{}", repo_id.0))
+                                .child(svg_icon(
+                                    "icons/corner_down_right.svg",
+                                    group_color,
+                                    px(REPO_TAB_STATUS_SIZE_PX - 2.0),
+                                ))
+                        })
                         .when(show_initials, |d| {
                             d.child(
                                 components::repository_initials_box(
@@ -1153,6 +1236,29 @@ impl Render for RepoTabsBarView {
                                 components::Tab::outline_color(theme),
                                 if theme.is_dark { 0.55 } else { 0.50 },
                             )),
+                    )
+                })
+                .when(group.joins_previous || group.joins_next, |tab| {
+                    let margin = px(components::Tab::HORIZONTAL_MARGIN_PX);
+                    let radius = px(theme.radii.control);
+                    tab.child(
+                        div()
+                            .debug_selector(move || format!("repo_tab_group_strip_{}", repo_id.0))
+                            .absolute()
+                            .top_0()
+                            // Reach across the shared margin so the strip runs
+                            // unbroken from the first tab of the group to the
+                            // last.
+                            .left(if group.joins_previous {
+                                -margin
+                            } else {
+                                px(0.0)
+                            })
+                            .right(if group.joins_next { -margin } else { px(0.0) })
+                            .h(px(REPO_TAB_GROUP_STRIP_HEIGHT_PX))
+                            .when(!group.joins_previous, |strip| strip.rounded_tl(radius))
+                            .when(!group.joins_next, |strip| strip.rounded_tr(radius))
+                            .bg(group_color),
                     )
                 })
                 .debug_selector(move || format!("repo_tab_{}", repo_id.0))
@@ -1524,8 +1630,8 @@ fn repo_tab_insert_before_for_drop(
 #[cfg(test)]
 mod tests {
     use super::{
-        RepoTabsBarView, repo_tab_close_button_fill, repo_tab_drag_direction,
-        repo_tab_insert_before_for_drag_cursor, repo_tab_insert_before_for_drop,
+        RepoTabGroup, RepoTabsBarView, repo_tab_close_button_fill, repo_tab_drag_direction,
+        repo_tab_group, repo_tab_insert_before_for_drag_cursor, repo_tab_insert_before_for_drop,
     };
     use gitcomet_core::domain::{HeadTracking, RepoSpec, Upstream, UpstreamDivergence};
     use gitcomet_state::model::{
@@ -1628,7 +1734,7 @@ mod tests {
     fn repo_tab_tooltip_reports_unknown_incoming_commits() {
         let repo = repo_state("/tmp/repo");
         assert_eq!(
-            RepoTabsBarView::repo_tab_tooltip(&repo).as_ref(),
+            RepoTabsBarView::repo_tab_tracking_tooltip(&repo).as_ref(),
             "/tmp/repo\nIncoming commits unknown."
         );
     }
@@ -1677,7 +1783,7 @@ mod tests {
             });
             assert_eq!(RepoTabsBarView::repo_tab_incoming_text(&repo), None);
             assert_eq!(
-                RepoTabsBarView::repo_tab_tooltip(&repo).as_ref(),
+                RepoTabsBarView::repo_tab_tracking_tooltip(&repo).as_ref(),
                 format!("/tmp/repo\n{explanation}")
             );
         }
@@ -1690,7 +1796,7 @@ mod tests {
             Some("↓3")
         );
         assert_eq!(
-            RepoTabsBarView::repo_tab_tooltip(&repo).as_ref(),
+            RepoTabsBarView::repo_tab_tracking_tooltip(&repo).as_ref(),
             "/tmp/repo\nmain is 3 commits behind origin/main."
         );
         repo.incoming = RepoIncomingState::Stale(RepoIncomingSnapshot {
@@ -1704,7 +1810,7 @@ mod tests {
             Some("↓3")
         );
         assert_eq!(
-            RepoTabsBarView::repo_tab_tooltip(&repo).as_ref(),
+            RepoTabsBarView::repo_tab_tracking_tooltip(&repo).as_ref(),
             "/tmp/repo\nmain is 3 commits behind origin/main.\nLast known tracking information; it may be out of date."
         );
     }
@@ -1723,7 +1829,7 @@ mod tests {
             );
         }
         assert!(
-            RepoTabsBarView::repo_tab_tooltip(&repo).contains("12345 commits behind"),
+            RepoTabsBarView::repo_tab_tracking_tooltip(&repo).contains("12345 commits behind"),
             "the tooltip keeps the exact count"
         );
     }
@@ -1778,7 +1884,9 @@ mod tests {
             };
         }
         assert_ne!(failed, RepoTabsBarView::notify_fingerprint(&state));
-        assert!(!RepoTabsBarView::repo_tab_tooltip(&state.repos[0]).contains("origin/main"));
+        assert!(
+            !RepoTabsBarView::repo_tab_tracking_tooltip(&state.repos[0]).contains("origin/main")
+        );
     }
 
     #[test]
@@ -1786,7 +1894,7 @@ mod tests {
         let mut repo = repo_state("/tmp/missing-repo");
         repo.feedback_mut().missing_on_disk = true;
         assert_eq!(
-            RepoTabsBarView::repo_tab_tooltip(&repo).as_ref(),
+            RepoTabsBarView::repo_tab_tracking_tooltip(&repo).as_ref(),
             "Repository not found!\n/tmp/missing-repo"
         );
     }
@@ -1897,6 +2005,94 @@ mod tests {
             (direction, anchor),
             (-1, px(98.0)),
             "deliberate travel beyond the dead band must still reverse"
+        );
+    }
+
+    fn linked(id: u64, path: &str, parent: Option<u64>) -> RepoState {
+        let mut repo = RepoState::new_opening(
+            RepoId(id),
+            RepoSpec {
+                workdir: PathBuf::from(path),
+            },
+        );
+        repo.submodule_parent = parent.map(|parent| gitcomet_state::model::SubmoduleParentLink {
+            workdir: PathBuf::from("/w/app"),
+            path: PathBuf::from(path.trim_start_matches("/w/app/")),
+            repo_id: Some(RepoId(parent)),
+        });
+        repo
+    }
+
+    #[test]
+    fn a_worktree_and_its_submodule_tabs_join_into_one_group() {
+        let repos = vec![
+            linked(1, "/w/other", None),
+            linked(2, "/w/app", None),
+            linked(3, "/w/app/a", Some(2)),
+            linked(4, "/w/app/vendor/b", Some(2)),
+            linked(5, "/w/next", None),
+        ];
+        let groups = (0..repos.len())
+            .map(|ix| repo_tab_group(&repos, ix))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            groups,
+            vec![
+                RepoTabGroup::default(),
+                RepoTabGroup {
+                    is_submodule: false,
+                    joins_previous: false,
+                    joins_next: true,
+                },
+                RepoTabGroup {
+                    is_submodule: true,
+                    joins_previous: true,
+                    joins_next: true,
+                },
+                RepoTabGroup {
+                    is_submodule: true,
+                    joins_previous: true,
+                    joins_next: false,
+                },
+                RepoTabGroup::default(),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_submodule_whose_parent_is_closed_stands_alone() {
+        let mut child = linked(3, "/w/app/a", None);
+        child.submodule_parent = Some(gitcomet_state::model::SubmoduleParentLink {
+            workdir: PathBuf::from("/w/app"),
+            path: PathBuf::from("a"),
+            repo_id: None,
+        });
+        let repos = vec![linked(1, "/w/other", None), child];
+        assert_eq!(repo_tab_group(&repos, 0), RepoTabGroup::default());
+        assert_eq!(repo_tab_group(&repos, 1), RepoTabGroup::default());
+    }
+
+    #[test]
+    fn a_submodule_tab_tooltip_names_its_parent_and_recorded_commit() {
+        use gitcomet_core::domain::{CommitId, Submodule, SubmoduleStatus};
+        use gitcomet_state::model::Loadable;
+        let mut state = AppState::default();
+        let mut parent = linked(1, "/w/app", None);
+        parent.submodules = Loadable::Ready(std::sync::Arc::new(vec![Submodule::new(
+            PathBuf::from("a"),
+            CommitId("a1b2c3d4e5f6".into()),
+            None,
+            SubmoduleStatus::UpToDate,
+        )]));
+        state.repos.push(parent);
+        state.repos.push(linked(2, "/w/app/a", Some(1)));
+        let tooltip = RepoTabsBarView::repo_tab_tooltip(&state, &state.repos[1]);
+        assert!(
+            tooltip.ends_with("\nSubmodule of app · recorded a1b2c3d"),
+            "{tooltip}"
+        );
+        assert!(
+            !RepoTabsBarView::repo_tab_tooltip(&state, &state.repos[0]).contains("Submodule of")
         );
     }
 

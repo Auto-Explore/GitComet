@@ -199,6 +199,21 @@ pub struct LinkedCommit {
     pub parent_commit: Option<gitcomet_core::domain::CommitId>,
 }
 
+/// The message a parent's commit recording a submodule starts with: the
+/// submodule's path and the first line of the submodule's message.
+pub fn default_parent_message(path: &std::path::Path, child_message: &str) -> String {
+    let subject = child_message
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or_default();
+    if subject.is_empty() {
+        format!("Update {}", path.display())
+    } else {
+        format!("Update {}: {subject}", path.display())
+    }
+}
+
 /// The submodule push of a linked commit was refused, so the parent's push
 /// is held back.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]

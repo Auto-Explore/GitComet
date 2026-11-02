@@ -2088,7 +2088,9 @@ impl GitRepository for GixRepo {
     }
 
     fn discard_worktree_changes(&self, paths: &[&Path]) -> Result<()> {
-        let outcome = self.discard_worktree_changes_with_submodules(
+        let _operation = self.operation_lease()?;
+        self.require_working_tree()?;
+        let outcome = self.discard_worktree_changes_with_submodules_impl(
             paths,
             gitcomet_core::domain::SubmoduleCheckoutPolicy::Guarded,
             RemoteUrlPolicy::default(),
@@ -2176,9 +2178,16 @@ impl GitRepository for GixRepo {
         self.push_submodule_with_output_impl(path)
     }
 
+    fn stash_submodule_changes(&self, path: &Path, message: &str) -> Result<()> {
+        let _operation = self.operation_lease()?;
+        self.require_working_tree()?;
+        self.stash_submodule_changes_impl(path, message)
+    }
+
     fn unpushed_submodule_pointers(
         &self,
     ) -> Result<Vec<gitcomet_core::domain::SubmoduleCheckoutUpdate>> {
+        let _operation = self.operation_lease()?;
         if self.repository_mode_impl()? == gitcomet_core::domain::RepositoryMode::Bare {
             return Ok(Vec::new());
         }

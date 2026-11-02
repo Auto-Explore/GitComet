@@ -558,6 +558,12 @@ pub(super) fn send_unavailable_git_effect_result(
             result: Err(git_unavailable_error(runtime)),
         })),
         Effect::PushSubmodulesThenRepo { .. } => {}
+        Effect::ShelveSubmoduleChanges { repo_id, .. } => send_repo_action_unavailable(
+            repo_id,
+            RepoActionKind::ShelveSubmoduleChanges,
+            runtime,
+            &send,
+        ),
         Effect::SubmoduleCheckout {
             repo_id, operation, ..
         } => send_repo_action_unavailable(

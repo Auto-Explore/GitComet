@@ -84,7 +84,7 @@ pub(in super::super) struct DetailsPaneView {
     /// The history find bar's query, highlighted in the commit details. It
     /// lives on the history view, so this copy is what repaints the pane.
     pub(in super::super) history_find_query: Option<HistoryFindQuery>,
-    root_view: WeakEntity<GitCometView>,
+    pub(in super::super) root_view: WeakEntity<GitCometView>,
     diff_renderer: WeakEntity<DiffRenderer>,
     pub(in crate::view) tooltip_host: WeakEntity<TooltipHost>,
     notify_fingerprint: u64,
@@ -117,6 +117,15 @@ pub(in super::super) struct DetailsPaneView {
     pub(in super::super) commit_scroll: ScrollHandle,
 
     pub(in super::super) commit_message_input: Entity<components::TextInput>,
+    /// The parent's message when a submodule tab's commit is recorded in its
+    /// parent. It follows the commit message until the user edits it.
+    pub(in super::super) parent_message_input: Entity<components::TextInput>,
+    pub(in super::super) parent_message_programmatic_change: bool,
+    pub(in super::super) parent_message_user_edited: bool,
+    _parent_message_input_subscription: gpui::Subscription,
+    /// Submodule tabs whose commits stay out of their parent. Recording is
+    /// on for every other one.
+    pub(in super::super) record_in_parent_off: FxHashSet<RepoId>,
     pub(in super::super) commit_details_message_input: Entity<components::TextInput>,
     /// The editable message while [`Self::commit_reword`] is set.
     pub(in super::super) commit_reword_input: Entity<components::TextInput>,
@@ -362,6 +371,18 @@ impl DetailsPaneView {
                 .as_ref()
                 .map(|inline| (&inline.submodule_repo_path, inline.selected_ix))
                 .hash(&mut hasher);
+            // A submodule tab's commit form records in its parent: the
+            // parent's name, recorded commit and staged files show there.
+            if let Some(link) = repo.submodule_parent.as_ref() {
+                link.hash(&mut hasher);
+                if let Some(parent) = state.repos.iter().find(|r| Some(r.id) == link.repo_id) {
+                    parent.staged_status_cache_rev().hash(&mut hasher);
+                    parent.submodules_rev.hash(&mut hasher);
+                    parent.head_branch_rev.hash(&mut hasher);
+                    parent.commit_in_flight.hash(&mut hasher);
+                }
+            }
+            state.linked_commit.is_some().hash(&mut hasher);
         }
 
         hasher.finish()
@@ -520,8 +541,26 @@ impl DetailsPaneView {
             )
         });
 
+        let parent_message_input = cx.new(|cx| {
+            components::TextInput::new(
+                components::TextInputOptions {
+                    placeholder: "Parent commit message".into(),
+                    ..Default::default()
+                },
+                window,
+                cx,
+            )
+        });
+        let parent_message_subscription = cx.observe(&parent_message_input, |this, _input, _cx| {
+            if this.parent_message_programmatic_change {
+                this.parent_message_programmatic_change = false;
+                return;
+            }
+            this.parent_message_user_edited = true;
+        });
         let commit_message_subscription = cx.observe(&commit_message_input, |this, input, cx| {
             let next: SharedString = input.read(cx).text().to_string().into();
+            this.sync_parent_message(next.as_ref(), cx);
             if this.commit_message_programmatic_change {
                 this.commit_message_programmatic_change = false;
                 this.commit_message_last_text = next;
@@ -553,6 +592,7 @@ impl DetailsPaneView {
             show_timezone,
             _ui_model_subscription: subscription,
             _commit_message_input_subscription: commit_message_subscription,
+            _parent_message_input_subscription: parent_message_subscription,
             _commit_reword_input_subscription: commit_reword_subscription,
             _history_find_subscription: history_find_subscription,
             history_find_query,
@@ -587,6 +627,10 @@ impl DetailsPaneView {
             commit_message_scroll,
             commit_scroll,
             commit_message_input,
+            parent_message_input,
+            parent_message_programmatic_change: false,
+            parent_message_user_edited: false,
+            record_in_parent_off: FxHashSet::default(),
             commit_details_message_input,
             commit_reword_input,
             commit_reword_scroll,
