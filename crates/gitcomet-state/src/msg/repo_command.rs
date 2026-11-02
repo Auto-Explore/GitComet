@@ -4,8 +4,9 @@ use gitcomet_core::auth::StagedGitAuth;
 use gitcomet_core::domain::*;
 use gitcomet_core::remote_url::RemoteUrlPolicy;
 use gitcomet_core::services::{
-    ConflictSide, ForcePushLease, InteractiveRebaseEntry, PullMode, RemoteUrlKind, ResetMode,
-    SafePushAfterCommitContext, SafePushAfterCommitTarget, SubmoduleTrustTarget, WorktreeCheckout,
+    ConflictSide, ForcePushLease, GitHooks, InteractiveRebaseEntry, PullMode, RemoteUrlKind,
+    ResetMode, SafePushAfterCommitContext, SafePushAfterCommitTarget, SubmoduleTrustTarget,
+    WorktreeCheckout,
 };
 use std::path::PathBuf;
 
@@ -221,6 +222,7 @@ pub enum RepoCommandEffect {
         repo_id: RepoId,
         target: SafePushAfterCommitTarget,
         set_upstream: bool,
+        hooks: GitHooks,
         auth: Option<StagedGitAuth>,
     },
     ForcePush {
@@ -726,11 +728,13 @@ impl RepoCommandEffect {
                 repo_id,
                 target,
                 set_upstream,
+                hooks,
                 ..
             } => Some(
                 RepoCommandKind::PushAfterCommit {
                     target,
                     set_upstream,
+                    hooks,
                 }
                 .finished(repo_id, Err(error)),
             ),

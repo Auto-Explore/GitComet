@@ -36,17 +36,23 @@ pub(super) fn model(this: &PopoverHost, repo_id: RepoId) -> ContextMenuModel {
         repo,
         this.commit_amend_enabled,
         this.commit_push_after_enabled,
+        this.commit_skip_hooks_enabled,
     )
 }
+
+const SKIP_HOOKS_LABEL: &str = "Skip Git hooks";
+const SKIP_HOOKS_TOOLTIP: &str = "Commit and push with --no-verify: the pre-commit, commit-msg and \
+     pre-push hooks do not run. Applies until turned off or the window closes.";
 
 fn model_for_state(
     repo: Option<&RepoState>,
     commit_amend_enabled: bool,
     commit_push_after_enabled: bool,
+    commit_skip_hooks_enabled: bool,
 ) -> ContextMenuModel {
     let check = |enabled: bool| enabled.then_some("icons/check.svg".into());
 
-    ContextMenuModel::new(vec![
+    let mut model = ContextMenuModel::new(vec![
         ContextMenuItem::Header("Commit options".into()),
         ContextMenuItem::Separator,
         ContextMenuItem::Entry {
@@ -67,7 +73,20 @@ fn model_for_state(
                 enabled: !commit_push_after_enabled,
             }),
         },
-    ])
+        ContextMenuItem::Entry {
+            label: SKIP_HOOKS_LABEL.into(),
+            icon: check(commit_skip_hooks_enabled),
+            shortcut: Some("H".into()),
+            disabled: repo.is_none(),
+            action: Box::new(ContextMenuAction::SetCommitSkipHooksEnabled {
+                enabled: !commit_skip_hooks_enabled,
+            }),
+        },
+    ]);
+    model
+        .entry_tooltips
+        .insert(model.items.len() - 1, SKIP_HOOKS_TOOLTIP.into());
+    model
 }
 
 #[cfg(test)]
@@ -109,9 +128,51 @@ mod tests {
             .expect("amend option should exist")
     }
 
+    fn skip_hooks_entry(model: &ContextMenuModel) -> (usize, bool, bool, bool) {
+        model
+            .items
+            .iter()
+            .enumerate()
+            .find_map(|(ix, item)| match item {
+                ContextMenuItem::Entry {
+                    label,
+                    icon,
+                    disabled,
+                    action,
+                    ..
+                } if label.as_ref() == SKIP_HOOKS_LABEL => {
+                    let ContextMenuAction::SetCommitSkipHooksEnabled { enabled } = action.as_ref()
+                    else {
+                        panic!("skip hooks entry should toggle the option");
+                    };
+                    Some((ix, icon.is_some(), *disabled, *enabled))
+                }
+                _ => None,
+            })
+            .expect("skip hooks option should exist")
+    }
+
+    #[test]
+    fn skip_hooks_option_toggles_and_shows_its_state() {
+        let repo = repo_state();
+
+        let model = model_for_state(Some(&repo), false, false, false);
+        let (ix, checked, disabled, enables) = skip_hooks_entry(&model);
+        assert!(!checked && !disabled && enables);
+        let tooltip = model.entry_tooltips.get(&ix).expect("explains the option");
+        assert!(tooltip.contains("--no-verify"));
+
+        let model = model_for_state(Some(&repo), false, true, true);
+        let (_, checked, disabled, enables) = skip_hooks_entry(&model);
+        assert!(checked && !disabled && !enables);
+
+        let (_, _, disabled, _) = skip_hooks_entry(&model_for_state(None, false, false, false));
+        assert!(disabled, "no repository, nothing to commit");
+    }
+
     #[test]
     fn model_does_not_include_previous_commit_messages() {
-        let model = model_for_state(None, false, false);
+        let model = model_for_state(None, false, false, false);
 
         assert!(!model.items.iter().any(|item| matches!(
             item,
@@ -120,7 +181,7 @@ mod tests {
                 ..
             } if matches!(action.as_ref(), ContextMenuAction::UseCommitMessage { .. })
         )));
-        assert_eq!(model.items.len(), 4);
+        assert_eq!(model.items.len(), 5);
     }
 
     #[test]
@@ -133,7 +194,7 @@ mod tests {
             next_cursor: None,
         }));
 
-        let model = model_for_state(Some(&repo), false, false);
+        let model = model_for_state(Some(&repo), false, false, false);
 
         assert!(!amend_option_disabled(&model));
     }
@@ -148,7 +209,7 @@ mod tests {
             next_cursor: None,
         }));
 
-        let model = model_for_state(Some(&repo), false, false);
+        let model = model_for_state(Some(&repo), false, false, false);
 
         assert!(amend_option_disabled(&model));
     }

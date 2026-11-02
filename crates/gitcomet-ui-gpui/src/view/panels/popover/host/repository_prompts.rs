@@ -286,6 +286,7 @@ impl PopoverHost {
             repo_id,
             message,
             push_after_commit: false,
+            hooks: gitcomet_core::services::GitHooks::Run,
         });
         self.pending_commit_prompts.insert(repo_id, pending);
         self.dismiss_inline_popover(window, cx);

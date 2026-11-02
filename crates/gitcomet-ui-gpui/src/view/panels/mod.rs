@@ -469,6 +469,9 @@ pub(in crate::view) enum ContextMenuAction {
     SetCommitPushAfterEnabled {
         enabled: bool,
     },
+    SetCommitSkipHooksEnabled {
+        enabled: bool,
+    },
     UseCommitMessage {
         message: String,
     },

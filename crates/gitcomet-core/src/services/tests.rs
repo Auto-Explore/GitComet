@@ -1,8 +1,8 @@
 use super::CancellationToken;
 use super::{
-    BlameLine, CheckoutRemoteBranchMode, CommandOutput, ConflictSide, GitBackend, GitRepository,
-    PullMode, RemoteUrlKind, ResetMode, SafePushAfterCommitTarget, UnavailableGitBackend,
-    decode_utf8_optional, validate_conflict_resolution_text,
+    BlameLine, CheckoutRemoteBranchMode, CommandOutput, ConflictSide, GitBackend, GitHooks,
+    GitRepository, PullMode, RemoteUrlKind, ResetMode, SafePushAfterCommitTarget,
+    UnavailableGitBackend, decode_utf8_optional, validate_conflict_resolution_text,
 };
 use crate::domain::{
     Branch, CommitDetails, CommitId, DiffArea, DiffTarget, HistoryMode, LogCursor, LogPage,
@@ -310,6 +310,63 @@ fn provided_trait_methods_use_unsupported_fallback_behavior() {
         repo.update_submodules_with_output(&[], crate::remote_url::RemoteUrlPolicy::default()),
     );
     assert_unsupported(repo.remove_submodule_with_output(path));
+}
+
+#[test]
+fn backends_that_cannot_skip_hooks_refuse_instead_of_running_them() {
+    fn unsupported_message<T: std::fmt::Debug>(result: super::Result<T>) -> &'static str {
+        match result.expect_err("operation must fail").kind() {
+            ErrorKind::Unsupported(message) => message,
+            other => panic!("expected Unsupported, got {other:?}"),
+        }
+    }
+
+    let repo = UnconfiguredRepository::new("/tmp/hook-defaults");
+    let target = SafePushAfterCommitTarget {
+        remote: "origin".to_string(),
+        branch: "main".to_string(),
+        local_branch: "main".to_string(),
+        local_head: CommitId("abc123".into()),
+    };
+    let refused = "skipping Git hooks is not supported by this backend";
+
+    assert_eq!(
+        unsupported_message(repo.commit_with_hooks("message", None, GitHooks::Skip)),
+        refused
+    );
+    assert_eq!(
+        unsupported_message(repo.commit_amend_with_hooks("message", None, GitHooks::Skip)),
+        refused
+    );
+    for set_upstream in [false, true] {
+        assert_eq!(
+            unsupported_message(repo.push_after_commit_with_hooks(
+                &target,
+                set_upstream,
+                GitHooks::Skip
+            )),
+            refused
+        );
+    }
+
+    // Running hooks is the ordinary operation, which this repository lacks.
+    assert_ne!(
+        unsupported_message(repo.commit_with_hooks("message", None, GitHooks::Run)),
+        refused
+    );
+    assert_ne!(
+        unsupported_message(repo.commit_amend_with_hooks("message", None, GitHooks::Run)),
+        refused
+    );
+}
+
+#[test]
+fn git_hooks_default_runs_them() {
+    assert_eq!(GitHooks::default(), GitHooks::Run);
+    assert_eq!(GitHooks::from_skip(false), GitHooks::Run);
+    assert_eq!(GitHooks::from_skip(true), GitHooks::Skip);
+    assert!(GitHooks::Skip.skipped());
+    assert!(!GitHooks::Run.skipped());
 }
 
 #[test]

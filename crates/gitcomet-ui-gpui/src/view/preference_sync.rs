@@ -447,6 +447,22 @@ impl GitCometView {
         cx.notify();
     }
 
+    /// Lasts while the window is open and is never saved: a forgotten skip
+    /// would silently bypass every hook from then on.
+    pub(in crate::view) fn set_commit_skip_hooks_enabled(
+        &mut self,
+        enabled: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.details_pane.update(cx, |pane, cx| {
+            pane.set_commit_skip_hooks_enabled(enabled, cx)
+        });
+        self.popover_host.update(cx, |host, cx| {
+            host.sync_commit_skip_hooks_enabled(enabled, cx)
+        });
+        cx.notify();
+    }
+
     pub(in crate::view) fn set_diff_scroll_sync(
         &mut self,
         next: DiffScrollSync,

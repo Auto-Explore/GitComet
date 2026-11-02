@@ -10,7 +10,7 @@ use gitcomet_core::domain::{CommitId, Remote, RemoteBranch, Upstream};
 use gitcomet_core::error::{Error, ErrorKind, GitFailure, GitFailureId};
 use gitcomet_core::remote_url::{RemoteUrlPolicy, validate_remote_url_with_policy};
 use gitcomet_core::services::{
-    CancellationToken, CommandOutput, ForcePushLease, RemoteUrlKind, Result,
+    CancellationToken, CommandOutput, ForcePushLease, GitHooks, RemoteUrlKind, Result,
     SafePushAfterCommitContext, SafePushAfterCommitDecision, SafePushAfterCommitTarget,
 };
 use gitcomet_core::text_utils::redact_url_userinfo;
@@ -1536,31 +1536,63 @@ impl GixRepo {
         target: &SafePushAfterCommitTarget,
         set_upstream: bool,
         capture_output: bool,
+        hooks: GitHooks,
     ) -> Result<CommandOutput> {
         self.validate_push_after_commit_target(target)?;
+        // Git LFS uploads objects from its `pre-push` hook, and `--no-verify`
+        // skips that hook too. Upload them first, as the hook would have, so
+        // the pushed commits never point at objects the server lacks.
+        if !hooks.skipped() || !self.lfs_objects_upload_on_pre_push()? {
+            return self.push_after_commit_target_once(target, set_upstream, capture_output, hooks);
+        }
+        // Both commands answer the same credentials prompt.
+        crate::util::with_shared_git_auth(|| {
+            let local_head = target.local_head.to_string();
+            let mut cmd = self.git_workdir_cmd();
+            cmd.args(["lfs", "push"])
+                .arg(&target.remote)
+                .arg(&local_head);
+            let label = format!("git lfs push {} {local_head}", target.remote);
+            let uploaded = run_git_command_with_optional_output(cmd, &label, capture_output)?;
+            let pushed =
+                self.push_after_commit_target_once(target, set_upstream, capture_output, hooks)?;
+            let label = format!("{label} && {}", pushed.command);
+            Ok(super::lfs::combine(&label, vec![uploaded, pushed]))
+        })
+    }
 
+    fn push_after_commit_target_once(
+        &self,
+        target: &SafePushAfterCommitTarget,
+        set_upstream: bool,
+        capture_output: bool,
+        hooks: GitHooks,
+    ) -> Result<CommandOutput> {
         let source = if set_upstream {
             format!("refs/heads/{}", target.local_branch)
         } else {
             target.local_head.to_string()
         };
         let refspec = format!("{source}:refs/heads/{}", target.branch);
-        let command_label = if set_upstream {
-            format!(
-                "git push --set-upstream {} {}:refs/heads/{}",
-                target.remote, source, target.branch
-            )
-        } else {
-            format!(
-                "git push {} {}:refs/heads/{}",
-                target.remote, source, target.branch
-            )
-        };
+        let mut flags = String::new();
+        if set_upstream {
+            flags.push_str(" --set-upstream");
+        }
+        if hooks.skipped() {
+            flags.push_str(" --no-verify");
+        }
+        let command_label = format!(
+            "git push{flags} {} {}:refs/heads/{}",
+            target.remote, source, target.branch
+        );
 
         let mut cmd = self.git_workdir_cmd();
         cmd.arg("push");
         if set_upstream {
             cmd.arg("--set-upstream");
+        }
+        if hooks.skipped() {
+            cmd.arg("--no-verify");
         }
         cmd.arg("--").arg(&target.remote).arg(refspec);
         let output = run_git_command_with_optional_output(cmd, &command_label, capture_output)?;
@@ -1578,14 +1610,23 @@ impl GixRepo {
         &self,
         target: &SafePushAfterCommitTarget,
     ) -> Result<CommandOutput> {
-        self.push_after_commit_target_with_optional_output_impl(target, false, true)
+        self.push_after_commit_target_with_optional_output_impl(target, false, true, GitHooks::Run)
     }
 
     pub(super) fn push_after_commit_set_upstream_with_output_impl(
         &self,
         target: &SafePushAfterCommitTarget,
     ) -> Result<CommandOutput> {
-        self.push_after_commit_target_with_optional_output_impl(target, true, true)
+        self.push_after_commit_target_with_optional_output_impl(target, true, true, GitHooks::Run)
+    }
+
+    pub(super) fn push_after_commit_with_hooks_impl(
+        &self,
+        target: &SafePushAfterCommitTarget,
+        set_upstream: bool,
+        hooks: GitHooks,
+    ) -> Result<CommandOutput> {
+        self.push_after_commit_target_with_optional_output_impl(target, set_upstream, true, hooks)
     }
 
     fn fetch_remote_branch_tip_with_output(

@@ -269,6 +269,7 @@ impl PopoverHost {
             ContextMenuAction::AddGitattributesRule { .. }
             | ContextMenuAction::SetCommitAmendEnabled { .. }
             | ContextMenuAction::SetCommitPushAfterEnabled { .. }
+            | ContextMenuAction::SetCommitSkipHooksEnabled { .. }
             | ContextMenuAction::UseCommitMessage { .. }
             | ContextMenuAction::SetInteractiveRebaseAction { .. }
             | ContextMenuAction::SetInteractiveRebaseAutosquashMode { .. }
