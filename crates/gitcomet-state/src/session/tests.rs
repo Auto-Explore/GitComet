@@ -2979,6 +2979,32 @@ fn persist_ui_settings_round_trips_recommend_repo_maintenance() {
 }
 
 #[test]
+fn persist_ui_settings_round_trips_follow_submodule_pointers() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("session.json");
+    persist_to_path(
+        &path,
+        &UiSessionFile {
+            version: CURRENT_SESSION_FILE_VERSION,
+            ..UiSessionFile::default()
+        },
+    )
+    .expect("seed session file");
+    assert_eq!(load_from_path(&path).follow_submodule_pointers, None);
+
+    persist_ui_settings_to_path(
+        UiSettings {
+            follow_submodule_pointers: Some(false),
+            ..UiSettings::default()
+        },
+        &path,
+    )
+    .expect("persist submodule setting");
+
+    assert_eq!(load_from_path(&path).follow_submodule_pointers, Some(false));
+}
+
+#[test]
 fn persist_ui_settings_round_trips_fetch_prune_deleted_remote_branches() {
     let dir = env::temp_dir().join(format!(
         "gitcomet-ui-settings-test-{}-{}",

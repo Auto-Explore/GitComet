@@ -64,6 +64,7 @@ mod stash_picker_prompt;
 mod stash_prompt;
 mod submodule_add_prompt;
 mod submodule_change_pointer_prompt;
+mod submodule_checkout_confirm;
 mod submodule_picker;
 mod submodule_remove_confirm;
 mod submodule_trust_confirm;
@@ -704,6 +705,7 @@ fn popover_is_confirm_dialog(kind: &PopoverKind) -> bool {
             | PopoverKind::RebaseReword { .. }
             | PopoverKind::BranchExistsPrompt { .. }
             | PopoverKind::ForceDeleteBranchConfirm(_)
+            | PopoverKind::SubmoduleCheckoutConfirm(_)
             | PopoverKind::DeleteBranchesConfirm { .. }
             | PopoverKind::ForceRemoveWorktreeConfirm(_)
             | PopoverKind::DiscardChangesConfirm { .. }
@@ -1054,6 +1056,7 @@ fn popover_anchor_corner(kind: &PopoverKind) -> Anchor {
         | PopoverKind::DeletePermanentlyConfirm(_)
         | PopoverKind::FilesystemUnsavedEditsConfirm(_)
         | PopoverKind::ForceDeleteBranchConfirm(_)
+        | PopoverKind::SubmoduleCheckoutConfirm(_)
         | PopoverKind::ForceRemoveWorktreeConfirm(_)
         | PopoverKind::PullReconcilePrompt { .. }
         | PopoverKind::RebaseOntoConfirm { .. }
@@ -1127,6 +1130,7 @@ pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<Popover
         }
         | PopoverKind::ForcePushConfirm { .. }
         | PopoverKind::ForceDeleteBranchConfirm(_)
+        | PopoverKind::SubmoduleCheckoutConfirm(_)
         | PopoverKind::DeleteBranchesConfirm { .. }
         | PopoverKind::DiscardChangesConfirm { .. }
         | PopoverKind::DiscardFolderChangesConfirm { .. }

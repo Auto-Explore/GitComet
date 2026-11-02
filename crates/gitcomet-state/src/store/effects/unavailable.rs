@@ -548,6 +548,16 @@ pub(super) fn send_unavailable_git_effect_result(
             runtime,
             &send,
         ),
+        Effect::RecordSubmoduleCommit {
+            repo_id,
+            amend_expected,
+            ..
+        } => send(Msg::Internal(crate::msg::InternalMsg::SubmoduleRecorded {
+            repo_id,
+            amend: amend_expected.is_some(),
+            result: Err(git_unavailable_error(runtime)),
+        })),
+        Effect::PushSubmodulesThenRepo { .. } => {}
         Effect::SubmoduleCheckout {
             repo_id, operation, ..
         } => send_repo_action_unavailable(

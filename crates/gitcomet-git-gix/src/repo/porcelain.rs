@@ -493,7 +493,7 @@ fn stash_tracked_change_paths(
 }
 
 impl GixRepo {
-    fn head_commit_id_for_outcome(&self) -> Result<Option<CommitId>> {
+    pub(super) fn head_commit_id_for_outcome(&self) -> Result<Option<CommitId>> {
         let repo = self.reopen_repo()?;
         gix_head_id_or_none(&repo).map(|id| id.map(|id| CommitId(oid_to_arc_str(&id))))
     }
@@ -1316,7 +1316,7 @@ impl GixRepo {
 }
 
 impl GixRepo {
-    fn current_branch_name_for_outcome(&self) -> Result<Option<String>> {
+    pub(super) fn current_branch_name_for_outcome(&self) -> Result<Option<String>> {
         let head = self.current_branch_impl()?;
         let head = head.trim();
         if head.is_empty() || head == "HEAD" {

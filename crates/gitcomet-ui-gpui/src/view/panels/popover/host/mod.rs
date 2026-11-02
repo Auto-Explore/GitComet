@@ -1588,6 +1588,11 @@ impl PopoverHost {
                 prompt: prompt.clone(),
             });
         }
+        if let Some(PopoverKind::SubmoduleCheckoutConfirm(prompt)) = self.popover.as_ref() {
+            self.store.dispatch(Msg::DismissSubmoduleCheckoutPrompt {
+                prompt: prompt.clone(),
+            });
+        }
     }
 
     pub(in crate::view) fn dismiss_prompt_popover(

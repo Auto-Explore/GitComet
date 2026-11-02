@@ -260,7 +260,7 @@ pub struct RepoState {
 
 /// A first-level submodule's parent worktree, and that worktree's tab while
 /// one is open in this window.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct SubmoduleParentLink {
     /// The parent worktree's working directory, canonical.
     pub workdir: PathBuf,

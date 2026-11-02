@@ -1,9 +1,9 @@
 use crate::model::GitLogTagFetchMode;
 use crate::model::{
     BranchExistsPromptState, ConflictFileLoadMode, DefaultTagType, FileBrowserSettings,
-    ForceDeleteBranchPrompt, ForceRemoveWorktreePrompt, GitOperationOuterOutcome,
-    MaintenanceSettings, RemoteSettings, RepoId, SidebarDataRequest, SidebarMode,
-    SubmoduleCheckoutOperation, SubmoduleCheckoutPrompt, SubmoduleSettings,
+    ForceDeleteBranchPrompt, ForceRemoveWorktreePrompt, GitOperationOuterOutcome, LinkedPushChoice,
+    LinkedPushPrompt, MaintenanceSettings, RemoteSettings, RepoId, SidebarDataRequest, SidebarMode,
+    SubmoduleCheckoutOperation, SubmoduleCheckoutPrompt, SubmoduleSettings, UnpushedPointerPrompt,
 };
 use gitcomet_core::auth::StagedGitAuth;
 use gitcomet_core::conflict_session::ConflictSession;
@@ -895,6 +895,28 @@ pub enum Msg {
     },
     DismissSubmoduleCheckoutPrompt {
         prompt: SubmoduleCheckoutPrompt,
+    },
+    /// Commit in the first-level submodule tab `child`, then record the new
+    /// commit in its parent's tab with `parent_message`. With `push`, push the
+    /// submodule first and the parent only after it.
+    CommitLinked {
+        child: RepoId,
+        message: String,
+        parent_message: String,
+        push: bool,
+    },
+    ResolveLinkedPushPrompt {
+        prompt: LinkedPushPrompt,
+        choice: LinkedPushChoice,
+    },
+    /// `push_submodules_first`: push each listed submodule, then the
+    /// repository; otherwise push the repository anyway.
+    ResolveUnpushedPointerPrompt {
+        prompt: UnpushedPointerPrompt,
+        push_submodules_first: bool,
+    },
+    DismissUnpushedPointerPrompt {
+        prompt: UnpushedPointerPrompt,
     },
     /// Check the submodule at `path` out at the commit `repo_id` records.
     UpdateSubmoduleToRecorded {
@@ -1864,6 +1886,18 @@ pub enum InternalMsg {
         repo_id: RepoId,
         operation: SubmoduleCheckoutOperation,
         outcome: DiscardOutcome,
+    },
+    /// A linked commit recorded (or re-recorded) the submodule in the parent.
+    SubmoduleRecorded {
+        repo_id: RepoId,
+        amend: bool,
+        result: Result<CommitOperationOutcome, Error>,
+    },
+    /// A push stopped before running: outgoing commits record these submodule
+    /// commits, which the submodules' remotes do not have.
+    PushBlockedByUnpushedSubmodules {
+        repo_id: RepoId,
+        pointers: Vec<SubmoduleCheckoutUpdate>,
     },
     /// Submodules checked out at the commit an operation moved their pointer to.
     SubmodulePointersFollowed {

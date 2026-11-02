@@ -1446,8 +1446,10 @@ fn schedule_push(
     repo_id: RepoId,
     tracking: Option<(String, String)>,
     auth: Option<StagedGitAuth>,
+    guard_submodules: bool,
 ) {
     let context = tracking.map(|(local, upstream)| format!("{local} → {upstream}"));
+    let guard_tx = msg_tx.clone();
     schedule_repo_command_with_context(
         executor,
         repos,
@@ -1455,7 +1457,72 @@ fn schedule_push(
         repo_id,
         RepoCommandKind::Push,
         context,
-        move |repo| run_with_git_auth(auth, || repo.push_with_output()),
+        move |repo| {
+            if guard_submodules {
+                refuse_unpushed_submodule_pointers(repo.as_ref(), &guard_tx, repo_id)?;
+            }
+            run_with_git_auth(auth, || repo.push_with_output())
+        },
+    );
+}
+
+/// Stops a push whose outgoing commits record submodule commits that the
+/// submodules' remotes do not have: nobody could check those out. The prompt
+/// that offers to push the submodules first opens from the message sent here.
+fn refuse_unpushed_submodule_pointers(
+    repo: &dyn GitRepository,
+    msg_tx: &StoreWorkerSender,
+    repo_id: RepoId,
+) -> Result<(), Error> {
+    // The check never blocks a push it cannot complete.
+    let pointers = repo.unpushed_submodule_pointers().unwrap_or_default();
+    if pointers.is_empty() {
+        return Ok(());
+    }
+    let names = pointers
+        .iter()
+        .map(|pointer| pointer.path.display().to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
+    send_or_log(
+        msg_tx,
+        Msg::Internal(InternalMsg::PushBlockedByUnpushedSubmodules { repo_id, pointers }),
+    );
+    Err(Error::new(ErrorKind::Backend(format!(
+        "Push stopped: the commits to push record submodule commits that are not on the submodule's remote ({names}). Push the submodule first."
+    ))))
+}
+
+/// Push each submodule at `paths` of `repo_id` to its upstream, then ask
+/// for the repository's own push.
+fn schedule_push_submodules_then_repo(
+    executor: &TaskExecutor,
+    repos: &RepositoryRuntimes,
+    msg_tx: StoreWorkerSender,
+    repo_id: RepoId,
+    paths: Vec<PathBuf>,
+) {
+    spawn_with_repo_or_else(
+        executor,
+        repos,
+        repo_id,
+        msg_tx,
+        move |repo, msg_tx| {
+            for path in &paths {
+                if let Err(error) = repo.push_submodule_with_output(path) {
+                    send_or_log(
+                        &msg_tx,
+                        Msg::ReportError {
+                            repo_id: Some(repo_id),
+                            message: format!("Pushing {} failed: {error}", path.display()),
+                        },
+                    );
+                    return;
+                }
+            }
+            send_or_log(&msg_tx, Msg::Push { repo_id });
+        },
+        |_msg_tx| {},
     );
 }
 
@@ -1467,8 +1534,10 @@ fn schedule_push_after_commit(
     target: SafePushAfterCommitTarget,
     set_upstream: bool,
     auth: Option<StagedGitAuth>,
+    guard_submodules: bool,
 ) {
     let command_target = target.clone();
+    let guard_tx = msg_tx.clone();
     schedule_repo_command(
         executor,
         repos,
@@ -1479,6 +1548,9 @@ fn schedule_push_after_commit(
             set_upstream,
         },
         move |repo| {
+            if guard_submodules {
+                refuse_unpushed_submodule_pointers(repo.as_ref(), &guard_tx, repo_id)?;
+            }
             run_with_git_auth(auth, || {
                 if set_upstream {
                     repo.push_after_commit_set_upstream_with_output(&target)
@@ -2566,6 +2638,23 @@ fn tracking_branch_context(
     ))
 }
 
+/// Whether a push of `repo_id` checks for unpushed submodule commits first:
+/// always, unless the user chose to push anyway.
+fn guard_unpushed_submodules(thread_state: &Arc<RwLock<Arc<AppState>>>, repo_id: RepoId) -> bool {
+    let state = thread_state.read().unwrap_or_else(|e| e.into_inner());
+    state.unpushed_pointer_override != Some(repo_id)
+}
+
+pub(super) fn schedule_submodule_push(
+    executor: &TaskExecutor,
+    repos: &RepositoryRuntimes,
+    msg_tx: StoreWorkerSender,
+    repo_id: RepoId,
+    paths: Vec<PathBuf>,
+) {
+    schedule_push_submodules_then_repo(executor, repos, msg_tx, repo_id, paths);
+}
+
 pub(super) fn schedule(
     executor: &TaskExecutor,
     filesystem_executor: &TaskExecutor,
@@ -2976,15 +3065,23 @@ pub(super) fn schedule(
             repo_id,
             tracking_branch_context(thread_state, repo_id),
             auth,
+            guard_unpushed_submodules(thread_state, repo_id),
         ),
         RepoCommandEffect::PushAfterCommit {
             repo_id,
             target,
             set_upstream,
             auth,
-        } => {
-            schedule_push_after_commit(executor, repos, msg_tx, repo_id, target, set_upstream, auth)
-        }
+        } => schedule_push_after_commit(
+            executor,
+            repos,
+            msg_tx,
+            repo_id,
+            target,
+            set_upstream,
+            auth,
+            guard_unpushed_submodules(thread_state, repo_id),
+        ),
         RepoCommandEffect::ForcePush { repo_id, auth } => schedule_force_push(
             executor,
             repos,

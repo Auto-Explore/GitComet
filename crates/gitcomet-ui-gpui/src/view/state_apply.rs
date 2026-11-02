@@ -445,6 +445,7 @@ impl GitCometView {
         let prev_auth_prompt = self.state.auth_prompt.clone();
         let prev_branch_exists_prompt = self.state.branch_exists_prompt.clone();
         let prev_force_delete_branch_prompt = self.state.force_delete_branch_prompt.clone();
+        let prev_submodule_checkout_prompt = self.state.submodule_checkout_prompt.clone();
         let prev_force_remove_worktree_prompt = self.state.force_remove_worktree_prompt.clone();
         let prev_submodule_trust_prompt = self.state.submodule_trust_prompt.clone();
         let prev_submodule_trust_check = self.state.submodule_trust_check_pending;
@@ -727,6 +728,9 @@ impl GitCometView {
         if prev_force_delete_branch_prompt != self.state.force_delete_branch_prompt {
             self.pending_force_delete_branch_prompt = self.state.force_delete_branch_prompt.clone();
         }
+        if prev_submodule_checkout_prompt != self.state.submodule_checkout_prompt {
+            self.pending_submodule_checkout_prompt = self.state.submodule_checkout_prompt.clone();
+        }
         if prev_force_remove_worktree_prompt != self.state.force_remove_worktree_prompt {
             self.pending_force_remove_worktree_prompt =
                 self.state.force_remove_worktree_prompt.clone();
@@ -769,6 +773,7 @@ impl GitCometView {
             || prev_auth_prompt != self.state.auth_prompt
             || prev_branch_exists_prompt != self.state.branch_exists_prompt
             || prev_force_delete_branch_prompt != self.state.force_delete_branch_prompt
+            || prev_submodule_checkout_prompt != self.state.submodule_checkout_prompt
             || prev_force_remove_worktree_prompt != self.state.force_remove_worktree_prompt
     }
 }

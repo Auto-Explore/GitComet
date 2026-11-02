@@ -141,6 +141,17 @@ impl Render for GitCometView {
         }
 
         if self
+            .pending_submodule_checkout_prompt
+            .as_ref()
+            .is_some_and(|prompt| self.active_repo_id() == Some(prompt.repo_id))
+            && let Some(prompt) = self.pending_submodule_checkout_prompt.take()
+        {
+            // The guard answers a discard that is already confirmed, often
+            // from a dialog that has closed, so the prompt has no anchor.
+            self.open_popover_centered(PopoverKind::SubmoduleCheckoutConfirm(prompt), window, cx);
+        }
+
+        if self
             .pending_force_remove_worktree_prompt
             .as_ref()
             .is_some_and(|prompt| self.active_repo_id() == Some(prompt.repo_id))

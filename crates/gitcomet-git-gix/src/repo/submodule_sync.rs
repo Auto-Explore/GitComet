@@ -15,7 +15,9 @@ use gitcomet_core::domain::{
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::path_utils::canonicalize_or_original;
 use gitcomet_core::remote_url::RemoteUrlPolicy;
-use gitcomet_core::services::{CancellationToken, Result, SubmoduleTrustDecision};
+use gitcomet_core::services::{
+    CancellationToken, CommandOutput, CommitOperationOutcome, Result, SubmoduleTrustDecision,
+};
 use std::path::{Path, PathBuf};
 
 impl GixRepo {
@@ -336,6 +338,162 @@ impl GixRepo {
     }
 }
 
+impl GixRepo {
+    /// Commit the submodule at `path` as checked out now, leaving everything
+    /// else that is staged where it is (`git commit --only`).
+    pub(super) fn record_submodule_commit_impl(
+        &self,
+        path: &Path,
+        message: &str,
+        identity: Option<&gitcomet_core::commit_identity::CommitIdentity>,
+    ) -> Result<CommitOperationOutcome> {
+        let local_branch = self.current_branch_name_for_outcome()?;
+        let pre_head = self.head_commit_id_for_outcome()?;
+        let mut cmd = self.git_workdir_cmd();
+        cmd.arg("commit").arg("--only");
+        if let Some(identity) = identity {
+            identity.apply(&mut cmd)?;
+        }
+        cmd.arg("-m").arg(message);
+        push_literal_paths(&mut cmd, &[path.to_path_buf()]);
+        run_git_simple(cmd, "git commit --only")?;
+        let post_head = self.head_commit_id_for_outcome()?;
+        Ok(CommitOperationOutcome {
+            local_branch,
+            pre_head,
+            post_head,
+        })
+    }
+
+    /// Re-record the submodule at `path` in the commit that recorded it,
+    /// keeping its message. Refuses unless HEAD is still `expected_head`, so
+    /// a commit made in between is never rewritten.
+    pub(super) fn amend_submodule_record_impl(
+        &self,
+        path: &Path,
+        expected_head: &CommitId,
+    ) -> Result<CommitOperationOutcome> {
+        let local_branch = self.current_branch_name_for_outcome()?;
+        let pre_head = self.head_commit_id_for_outcome()?;
+        if pre_head.as_ref() != Some(expected_head) {
+            return Err(Error::new(ErrorKind::Backend(format!(
+                "HEAD moved since {} was recorded; record the submodule again by hand.",
+                path.display()
+            ))));
+        }
+        let mut cmd = self.git_workdir_cmd();
+        cmd.arg("commit")
+            .arg("--amend")
+            .arg("--no-edit")
+            .arg("--only");
+        push_literal_paths(&mut cmd, &[path.to_path_buf()]);
+        run_git_simple(cmd, "git commit --amend --only")?;
+        let post_head = self.head_commit_id_for_outcome()?;
+        Ok(CommitOperationOutcome {
+            local_branch,
+            pre_head,
+            post_head,
+        })
+    }
+
+    /// Push the submodule at `path` from its own checkout to its upstream.
+    pub(super) fn push_submodule_with_output_impl(&self, path: &Path) -> Result<CommandOutput> {
+        let workdir = self.spec.workdir.join(path);
+        let mut cmd = git_workdir_cmd_for(&workdir);
+        cmd.arg("push");
+        crate::util::run_git_with_output(cmd, "git push")
+    }
+
+    /// First-level submodule commits that outgoing commits record but that no
+    /// remote-tracking branch in the submodule holds, so nobody could fetch
+    /// them after a push. Submodules that are not loaded are left out.
+    pub(super) fn unpushed_submodule_pointers_impl(&self) -> Result<Vec<SubmoduleCheckoutUpdate>> {
+        let mut cmd = self.git_workdir_cmd();
+        cmd.arg("log")
+            .arg("--format=")
+            .arg("--raw")
+            .arg("--no-abbrev")
+            .arg("-z")
+            .arg("--no-renames")
+            .arg("HEAD")
+            .arg("--not")
+            .arg("--remotes");
+        let output = run_git_background_output(
+            cmd,
+            "git log --raw HEAD --not --remotes",
+            &CancellationToken::new(),
+        )?;
+        if !output.status.success() {
+            // An unborn branch has no outgoing commits to check.
+            return Ok(Vec::new());
+        }
+        let mut newest: Vec<SubmoduleCheckoutUpdate> = Vec::new();
+        for (path, commit) in parse_raw_gitlinks(&output.stdout) {
+            if newest.iter().all(|seen| seen.path != path) {
+                newest.push(SubmoduleCheckoutUpdate { path, commit });
+            }
+        }
+        let mut unpushed = Vec::new();
+        for pointer in newest {
+            let workdir = self.spec.workdir.join(&pointer.path);
+            if !workdir.join(".git").exists() || !commit_exists(&workdir, &pointer.commit) {
+                continue;
+            }
+            if !commit_on_remote(&workdir, &pointer.commit)? {
+                unpushed.push(pointer);
+            }
+        }
+        Ok(unpushed)
+    }
+}
+
+/// `(path, new commit)` for each gitlink a `git log --raw -z` adds or moves,
+/// newest first.
+fn parse_raw_gitlinks(stdout: &[u8]) -> Vec<(PathBuf, CommitId)> {
+    let mut gitlinks = Vec::new();
+    let mut fields = stdout.split(|byte| *byte == 0);
+    while let Some(meta) = fields.next() {
+        let meta = meta.trim_ascii_start();
+        if meta.first() != Some(&b':') {
+            continue;
+        }
+        let Some(path) = fields.next() else {
+            break;
+        };
+        let parts: Vec<&[u8]> = meta[1..].split(|byte| *byte == b' ').collect();
+        let [_, new_mode, _, new_id, status] = parts.as_slice() else {
+            continue;
+        };
+        if *new_mode != b"160000" || status.first() == Some(&b'D') {
+            continue;
+        }
+        let Ok(id) = std::str::from_utf8(new_id) else {
+            continue;
+        };
+        let Ok(path) = path_buf_from_git_bytes(path, "git log --raw path") else {
+            continue;
+        };
+        gitlinks.push((path, CommitId(id.into())));
+    }
+    gitlinks
+}
+
+/// Whether a remote-tracking branch in the submodule holds `commit`.
+fn commit_on_remote(workdir: &Path, commit: &CommitId) -> Result<bool> {
+    let mut cmd = git_workdir_cmd_for(workdir);
+    cmd.arg("for-each-ref")
+        .arg("--count=1")
+        .arg("--format=%(refname)")
+        .arg(format!("--contains={}", commit.as_ref()))
+        .arg("refs/remotes");
+    let output = run_git_background_output(
+        cmd,
+        "git for-each-ref --contains refs/remotes",
+        &CancellationToken::new(),
+    )?;
+    Ok(output.status.success() && !output.stdout.trim_ascii().is_empty())
+}
+
 fn short_id(id: &CommitId) -> &str {
     let id: &str = id.as_ref();
     &id[..id.len().min(7)]
@@ -536,6 +694,23 @@ fn parse_left_right_counts(stdout: &[u8]) -> Option<SubmoduleDrift> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn raw_gitlinks_keep_added_and_moved_pointers_only() {
+        let a = "a".repeat(40);
+        let b = "b".repeat(40);
+        let z = "0".repeat(40);
+        let raw = format!(
+            ":160000 160000 {a} {b} M\0mods/child\0:100644 100644 {a} {b} M\0README\0:000000 160000 {z} {a} A\0libs/new\0:160000 000000 {a} {z} D\0libs/gone\0"
+        );
+        assert_eq!(
+            parse_raw_gitlinks(raw.as_bytes()),
+            vec![
+                (PathBuf::from("mods/child"), CommitId(b.as_str().into())),
+                (PathBuf::from("libs/new"), CommitId(a.as_str().into())),
+            ]
+        );
+    }
 
     #[test]
     fn submodule_records_report_tracked_and_untracked_changes() {

@@ -505,7 +505,9 @@ impl SettingsCategory {
                  automatically check updates startup"
             }
             Self::Terminal => "terminal external terminal button opens status bar",
-            Self::ChangeTracking => "change tracking untracked files",
+            Self::ChangeTracking => {
+                "change tracking untracked files submodules submodule pointer checkout follow update"
+            }
             Self::Diff => {
                 "diff engine difftastic structural line by line mode scroll sync show whitespace changes reveal whitespace characters \
                  word wrap show line numbers unified split"
@@ -701,6 +703,7 @@ pub(crate) struct SettingsWindowView {
     hidden_ref_prefix_error: Option<gitcomet_state::model::HiddenRefPrefixError>,
     _hidden_ref_prefix_subscriptions: Vec<gpui::Subscription>,
     recommend_repo_maintenance: bool,
+    follow_submodule_pointers: bool,
     current_view: SettingsView,
     selected_category: SettingsCategory,
     /// Extension pages, fixed when the window opens; empty without extensions.
@@ -1138,6 +1141,7 @@ impl SettingsWindowView {
         let large_file_settings = ui_preferences.large_files;
         let hidden_ref_settings = ui_preferences.history.hidden_ref_settings.clone();
         let recommend_repo_maintenance = ui_preferences.maintenance.recommend;
+        let follow_submodule_pointers = ui_preferences.submodules.follow_pointers;
         let external_editor_setting = initial_external_editor_setting(&ui_session);
         // Only the saved editor's entry is needed to render the summary row;
         // installed editors are detected once the row is expanded, see
@@ -1560,6 +1564,7 @@ impl SettingsWindowView {
             hidden_ref_prefix_error: None,
             _hidden_ref_prefix_subscriptions: hidden_ref_prefix_subscriptions,
             recommend_repo_maintenance,
+            follow_submodule_pointers,
             current_view: SettingsView::Root,
             selected_category: SettingsCategory::General,
             extension_pages: extension_pages::extension_pages(cx),

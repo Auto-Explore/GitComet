@@ -345,6 +345,20 @@ pub enum Effect {
         repo_id: RepoId,
         paths: Vec<PathBuf>,
     },
+    /// Commit the submodule at `path` as checked out in `repo_id`, alone; or,
+    /// with `amend_expected`, record it again in that commit.
+    RecordSubmoduleCommit {
+        repo_id: RepoId,
+        path: PathBuf,
+        message: String,
+        amend_expected: Option<gitcomet_core::domain::CommitId>,
+    },
+    /// Push the first-level submodules at `paths` of `repo_id`, each to its
+    /// upstream, then push `repo_id`.
+    PushSubmodulesThenRepo {
+        repo_id: RepoId,
+        paths: Vec<PathBuf>,
+    },
     /// A discard or submodule update run again with the policy the user
     /// picked in the submodule checkout prompt, or a first guarded update.
     SubmoduleCheckout {
@@ -474,6 +488,8 @@ impl Effect {
             | Self::DiscardWorktreeChangesPath { .. }
             | Self::DiscardWorktreeChangesPaths { .. }
             | Self::SubmoduleCheckout { .. }
+            | Self::RecordSubmoduleCommit { .. }
+            | Self::PushSubmodulesThenRepo { .. }
             | Self::Commit { .. }
             | Self::CommitAmend { .. }
             | Self::PreviewTagPush { .. }

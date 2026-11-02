@@ -1150,6 +1150,8 @@ pub struct GitCometView {
     pub(super) pending_force_delete_branch_prompt:
         Option<gitcomet_state::model::ForceDeleteBranchPrompt>,
     pub(super) pending_force_delete_branch_centered: bool,
+    pub(super) pending_submodule_checkout_prompt:
+        Option<gitcomet_state::model::SubmoduleCheckoutPrompt>,
     pub(super) pending_force_remove_worktree_prompt:
         Option<gitcomet_state::model::ForceRemoveWorktreePrompt>,
     pub(super) pending_submodule_trust_prompt:

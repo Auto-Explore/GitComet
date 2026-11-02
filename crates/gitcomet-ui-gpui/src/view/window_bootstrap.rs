@@ -262,6 +262,7 @@ impl PreparedWindowBootstrap {
         });
         store.dispatch(Msg::SetDefaultTagType(default_tag_type));
         store.dispatch(Msg::SetRemoteSettings(remote_settings));
+        store.dispatch(Msg::SetSubmoduleSettings(ui_preferences.submodules));
         store.dispatch(Msg::SetMaintenanceSettings(MaintenanceSettings {
             recommend: ui_preferences.maintenance.recommend,
         }));

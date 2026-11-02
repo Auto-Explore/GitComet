@@ -2197,6 +2197,44 @@ pub trait GitRepository: Send + Sync {
     ) -> Result<Vec<crate::domain::SubmoduleCheckoutUpdate>> {
         Ok(Vec::new())
     }
+
+    /// Commit the submodule at `path` as it is checked out, leaving anything
+    /// else that is staged out of the commit.
+    fn record_submodule_commit(
+        &self,
+        _path: &Path,
+        _message: &str,
+        _identity: Option<&crate::commit_identity::CommitIdentity>,
+    ) -> Result<CommitOperationOutcome> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "recording a submodule commit is not implemented for this backend",
+        )))
+    }
+
+    /// Record the submodule at `path` again in HEAD, which must still be
+    /// `expected_head`, keeping its message.
+    fn amend_submodule_record(
+        &self,
+        _path: &Path,
+        _expected_head: &crate::domain::CommitId,
+    ) -> Result<CommitOperationOutcome> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "re-recording a submodule commit is not implemented for this backend",
+        )))
+    }
+
+    /// Push the submodule checked out at `path` to its upstream.
+    fn push_submodule_with_output(&self, _path: &Path) -> Result<CommandOutput> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "pushing a submodule is not implemented for this backend",
+        )))
+    }
+
+    /// Submodule commits that outgoing commits record but no remote-tracking
+    /// branch in that submodule holds.
+    fn unpushed_submodule_pointers(&self) -> Result<Vec<crate::domain::SubmoduleCheckoutUpdate>> {
+        Ok(Vec::new())
+    }
 }
 
 fn validate_safe_push_after_commit_target<R: GitRepository + ?Sized>(

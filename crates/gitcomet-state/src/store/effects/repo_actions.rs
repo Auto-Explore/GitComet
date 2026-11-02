@@ -1108,6 +1108,38 @@ pub(super) fn schedule_submodule_checkout(
     }
 }
 
+/// Record a linked commit's submodule in its parent, or record it again in
+/// the same commit after the submodule commit was rebased.
+pub(super) fn schedule_record_submodule_commit(
+    executor: &TaskExecutor,
+    repos: &RepositoryRuntimes,
+    msg_tx: StoreWorkerSender,
+    repo_id: RepoId,
+    path: PathBuf,
+    message: String,
+    amend_expected: Option<gitcomet_core::domain::CommitId>,
+) {
+    let amend = amend_expected.is_some();
+    let label = if amend { "Amend commit" } else { "Commit" };
+    schedule_repo_action_with_result(
+        executor,
+        repos,
+        msg_tx,
+        repo_id,
+        label,
+        message_subject(&message),
+        move |repo| match amend_expected {
+            Some(expected) => repo.amend_submodule_record(&path, &expected),
+            None => repo.record_submodule_commit(&path, &message, None),
+        },
+        move |repo_id, result| InternalMsg::SubmoduleRecorded {
+            repo_id,
+            amend,
+            result,
+        },
+    );
+}
+
 /// Runs `operation`, then checks out the first-level submodules whose
 /// recorded commit it moved and that were in sync before, and reports them.
 pub(super) fn following_submodule_pointers<T>(

@@ -19,8 +19,6 @@ pub(crate) struct Fixture {
     _dir: tempfile::TempDir,
     pub(crate) root: PathBuf,
     pub(crate) parent: PathBuf,
-    /// The repository `mods/child` was cloned from: its `origin`.
-    pub(crate) child_source: PathBuf,
 }
 
 impl Fixture {
@@ -89,7 +87,6 @@ pub(crate) fn fixture() -> Fixture {
         _dir: dir,
         root,
         parent,
-        child_source: child,
     }
 }
 
@@ -444,4 +441,93 @@ fn a_dirty_submodule_does_not_follow_its_pointer() {
             .is_empty()
     );
     assert_eq!(head_of(&fixture.child()), original);
+}
+
+#[test]
+fn recording_a_submodule_commit_leaves_other_staged_files_staged() {
+    let _guard = setup_submodule_test();
+    let fixture = fixture();
+    run_git(&fixture.parent, &["config", "commit.gpgsign", "false"]);
+    let moved = commit_in(&fixture.child(), "a.txt", "a\n");
+    fs::write(fixture.parent.join("parent.txt"), "staged\n").unwrap();
+    run_git(&fixture.parent, &["add", "parent.txt"]);
+    let parent = fixture.open(&fixture.parent);
+
+    let outcome = parent
+        .record_submodule_commit(Path::new("mods/child"), "Update mods/child", None)
+        .expect("record");
+    assert_ne!(outcome.pre_head, outcome.post_head);
+    assert_eq!(
+        git_stdout(&fixture.parent, &["rev-parse", "HEAD:mods/child"]),
+        moved
+    );
+    assert_eq!(
+        git_stdout(&fixture.parent, &["diff", "--cached", "--name-only"]),
+        "parent.txt",
+        "the other staged change is neither committed nor unstaged"
+    );
+}
+
+#[test]
+fn re_recording_amends_only_while_head_is_the_recording_commit() {
+    let _guard = setup_submodule_test();
+    let fixture = fixture();
+    run_git(&fixture.parent, &["config", "commit.gpgsign", "false"]);
+    commit_in(&fixture.child(), "a.txt", "a\n");
+    let parent = fixture.open(&fixture.parent);
+    let recorded = parent
+        .record_submodule_commit(Path::new("mods/child"), "Update mods/child", None)
+        .expect("record")
+        .post_head
+        .expect("a commit");
+
+    run_git(
+        &fixture.child(),
+        &["commit", "-q", "--amend", "-m", "rebased"],
+    );
+    let rebased = head_of(&fixture.child());
+    let amended = parent
+        .amend_submodule_record(Path::new("mods/child"), &recorded)
+        .expect("amend");
+    assert_eq!(
+        git_stdout(&fixture.parent, &["rev-parse", "HEAD:mods/child"]),
+        rebased
+    );
+    assert_eq!(
+        git_stdout(&fixture.parent, &["log", "-1", "--format=%s"]),
+        "Update mods/child"
+    );
+
+    commit_in(&fixture.parent, "later.txt", "later\n");
+    assert!(
+        parent
+            .amend_submodule_record(Path::new("mods/child"), &amended.post_head.unwrap())
+            .is_err(),
+        "a commit made since is never rewritten"
+    );
+}
+
+#[test]
+fn unpushed_submodule_pointers_lists_commits_missing_from_the_submodule_remote() {
+    let _guard = setup_submodule_test();
+    let fixture = fixture();
+    run_git(&fixture.parent, &["config", "commit.gpgsign", "false"]);
+    let parent = fixture.open(&fixture.parent);
+    assert!(parent.unpushed_submodule_pointers().unwrap().is_empty());
+
+    let local = commit_in(&fixture.child(), "a.txt", "a\n");
+    parent
+        .record_submodule_commit(Path::new("mods/child"), "Update mods/child", None)
+        .expect("record");
+    let unpushed = parent.unpushed_submodule_pointers().unwrap();
+    assert_eq!(unpushed.len(), 1);
+    assert_eq!(unpushed[0].path, PathBuf::from("mods/child"));
+    assert_eq!(unpushed[0].commit.as_ref(), local.as_str());
+
+    run_git(
+        &fixture.child(),
+        &["push", "-q", "origin", "HEAD:refs/heads/shared"],
+    );
+    run_git(&fixture.child(), &["fetch", "-q", "origin"]);
+    assert!(parent.unpushed_submodule_pointers().unwrap().is_empty());
 }

@@ -938,7 +938,7 @@ pub struct SubmoduleCheckoutRisk {
 }
 
 /// A submodule checked out at `commit` to match its pointer.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct SubmoduleCheckoutUpdate {
     pub path: PathBuf,
     pub commit: CommitId,

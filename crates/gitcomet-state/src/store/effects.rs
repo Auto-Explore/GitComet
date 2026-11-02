@@ -1025,6 +1025,23 @@ pub(super) fn schedule_effect(
                 remote_url_policy(thread_state),
             )
         }
+        Effect::RecordSubmoduleCommit {
+            repo_id,
+            path,
+            message,
+            amend_expected,
+        } => repo_actions::schedule_record_submodule_commit(
+            executor,
+            repos,
+            msg_tx,
+            repo_id,
+            path,
+            message,
+            amend_expected,
+        ),
+        Effect::PushSubmodulesThenRepo { repo_id, paths } => {
+            repo_commands::schedule_submodule_push(executor, repos, msg_tx, repo_id, paths)
+        }
         Effect::SubmoduleCheckout {
             repo_id,
             operation,

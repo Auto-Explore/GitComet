@@ -2148,6 +2148,42 @@ impl GitRepository for GixRepo {
         self.require_working_tree()?;
         self.follow_submodule_pointers_impl(snapshot)
     }
+
+    fn record_submodule_commit(
+        &self,
+        path: &Path,
+        message: &str,
+        identity: Option<&gitcomet_core::commit_identity::CommitIdentity>,
+    ) -> Result<CommitOperationOutcome> {
+        let _operation = self.operation_lease()?;
+        self.require_working_tree()?;
+        self.record_submodule_commit_impl(path, message, identity)
+    }
+
+    fn amend_submodule_record(
+        &self,
+        path: &Path,
+        expected_head: &CommitId,
+    ) -> Result<CommitOperationOutcome> {
+        let _operation = self.operation_lease()?;
+        self.require_working_tree()?;
+        self.amend_submodule_record_impl(path, expected_head)
+    }
+
+    fn push_submodule_with_output(&self, path: &Path) -> Result<CommandOutput> {
+        let _operation = self.operation_lease()?;
+        self.require_working_tree()?;
+        self.push_submodule_with_output_impl(path)
+    }
+
+    fn unpushed_submodule_pointers(
+        &self,
+    ) -> Result<Vec<gitcomet_core::domain::SubmoduleCheckoutUpdate>> {
+        if self.repository_mode_impl()? == gitcomet_core::domain::RepositoryMode::Bare {
+            return Ok(Vec::new());
+        }
+        self.unpushed_submodule_pointers_impl()
+    }
 }
 
 pub(crate) fn shared_history_memory() -> (usize, usize, usize) {

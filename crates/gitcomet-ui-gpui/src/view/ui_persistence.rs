@@ -283,6 +283,7 @@ impl GitCometView {
                             auto_fetch_enabled: None,
                             auto_fetch_interval_minutes: None,
                             recommend_repo_maintenance: None,
+                            follow_submodule_pointers: None,
                             git_executable_path: None,
                             external_code_editor: None,
                         };

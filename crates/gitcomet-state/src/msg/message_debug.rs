@@ -688,6 +688,21 @@ impl std::fmt::Debug for InternalMsg {
                 .field("operation", operation)
                 .field("outcome", outcome)
                 .finish(),
+            InternalMsg::SubmoduleRecorded {
+                repo_id,
+                amend,
+                result,
+            } => f
+                .debug_struct("SubmoduleRecorded")
+                .field("repo_id", repo_id)
+                .field("amend", amend)
+                .field("ok", &result.is_ok())
+                .finish(),
+            InternalMsg::PushBlockedByUnpushedSubmodules { repo_id, pointers } => f
+                .debug_struct("PushBlockedByUnpushedSubmodules")
+                .field("repo_id", repo_id)
+                .field("pointers", pointers)
+                .finish(),
             InternalMsg::SubmodulePointersFollowed { repo_id, updates } => f
                 .debug_struct("SubmodulePointersFollowed")
                 .field("repo_id", repo_id)

@@ -310,6 +310,7 @@ pub(super) struct UiPreferences {
     pub(super) repository: RepositoryPreferences,
     pub(super) remotes: RemotePreferences,
     pub(super) maintenance: MaintenancePreferences,
+    pub(super) submodules: gitcomet_state::model::SubmoduleSettings,
     pub(super) terminal: TerminalPreferences,
     pub(super) large_files: gitcomet_state::model::LargeFileSettings,
 }
@@ -462,6 +463,11 @@ impl UiPreferences {
             },
             maintenance: MaintenancePreferences {
                 recommend: session.recommend_repo_maintenance.unwrap_or(true),
+            },
+            submodules: gitcomet_state::model::SubmoduleSettings {
+                follow_pointers: session
+                    .follow_submodule_pointers
+                    .unwrap_or(gitcomet_state::model::SubmoduleSettings::default().follow_pointers),
             },
             terminal: TerminalPreferences::from_ui_session(session),
             large_files: {

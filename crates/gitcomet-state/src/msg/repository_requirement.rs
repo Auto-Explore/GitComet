@@ -81,6 +81,9 @@ impl Msg {
             Self::ResolveSubmoduleCheckoutPrompt { prompt, .. } => {
                 Some((prompt.repo_id, WorkingTree))
             }
+            Self::CommitLinked { child, .. } => Some((*child, WorkingTree)),
+            Self::ResolveLinkedPushPrompt { prompt, .. } => Some((prompt.child, WorkingTree)),
+            Self::ResolveUnpushedPointerPrompt { prompt, .. } => Some((prompt.repo_id, Repository)),
             Self::RememberDocumentInRepository { repo_id, .. }
             | Self::SelectExplorerPath { repo_id, .. }
             | Self::FocusExplorerPath { repo_id, .. }
@@ -298,6 +301,7 @@ impl Msg {
             | Self::SetMaintenanceSettings(..)
             | Self::SetSubmoduleSettings(..)
             | Self::DismissSubmoduleCheckoutPrompt { .. }
+            | Self::DismissUnpushedPointerPrompt { .. }
             | Self::SetFileBrowserSettings(..)
             | Self::SetLargeFileSettings(..)
             | Self::SetHistoryHiddenRefs(..)

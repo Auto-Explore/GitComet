@@ -201,112 +201,115 @@ fn repo_for_popover<'a>(
     popover: &PopoverKind,
     binding: Option<crate::view::pane_store::DiffBinding>,
 ) -> Option<&'a RepoState> {
-    let repo_id = match popover {
-        PopoverKind::RepoPicker { .. }
-        | PopoverKind::CloneRepo
-        | PopoverKind::DiffContentModeSettings
-        | PopoverKind::TextFormatMenu { .. }
-        | PopoverKind::CommitFileSortMenu { .. }
-        | PopoverKind::WebLinkMenu { .. }
-        | PopoverKind::DiffActionMenu
-        | PopoverKind::MergetoolSettingsMenu
-        | PopoverKind::ChangeTrackingSettings
-        | PopoverKind::UiScalePicker
-        | PopoverKind::Hosted { .. }
-        | PopoverKind::ErrorDetails { .. }
-        | PopoverKind::FilesystemConflict(_)
-        | PopoverKind::DeletePermanentlyConfirm(_)
-        | PopoverKind::FilesystemUnsavedEditsConfirm(_) => None,
+    let repo_id =
+        match popover {
+            PopoverKind::RepoPicker { .. }
+            | PopoverKind::CloneRepo
+            | PopoverKind::DiffContentModeSettings
+            | PopoverKind::TextFormatMenu { .. }
+            | PopoverKind::CommitFileSortMenu { .. }
+            | PopoverKind::WebLinkMenu { .. }
+            | PopoverKind::DiffActionMenu
+            | PopoverKind::MergetoolSettingsMenu
+            | PopoverKind::ChangeTrackingSettings
+            | PopoverKind::UiScalePicker
+            | PopoverKind::Hosted { .. }
+            | PopoverKind::ErrorDetails { .. }
+            | PopoverKind::FilesystemConflict(_)
+            | PopoverKind::DeletePermanentlyConfirm(_)
+            | PopoverKind::FilesystemUnsavedEditsConfirm(_) => None,
 
-        // Popovers that implicitly use the currently active repo.
-        PopoverKind::BranchPicker { .. }
-        | PopoverKind::StashPrompt
-        | PopoverKind::PullPicker
-        | PopoverKind::PushPicker
-        | PopoverKind::AppMenu
-        | PopoverKind::AddRepoMenu
-        | PopoverKind::RebaseReword { .. }
-        | PopoverKind::InteractiveRebaseActionMenu { .. }
-        | PopoverKind::InteractiveRebaseAutosquashMenu
-        | PopoverKind::TerminalShutdownConfirm(_)
-        | PopoverKind::CloseGuardConfirm(_)
-        | PopoverKind::UnsavedFileEditsConfirm(_)
-        | PopoverKind::ConflictResolverInputRowMenu { .. }
-        | PopoverKind::ConflictResolverChunkMenu { .. }
-        | PopoverKind::ConflictResolverOutputMenu { .. } => {
-            binding.map(|binding| binding.repo_id).or(state.active_repo)
-        }
+            // Popovers that implicitly use the currently active repo.
+            PopoverKind::BranchPicker { .. }
+            | PopoverKind::StashPrompt
+            | PopoverKind::PullPicker
+            | PopoverKind::PushPicker
+            | PopoverKind::AppMenu
+            | PopoverKind::AddRepoMenu
+            | PopoverKind::RebaseReword { .. }
+            | PopoverKind::InteractiveRebaseActionMenu { .. }
+            | PopoverKind::InteractiveRebaseAutosquashMenu
+            | PopoverKind::TerminalShutdownConfirm(_)
+            | PopoverKind::CloseGuardConfirm(_)
+            | PopoverKind::UnsavedFileEditsConfirm(_)
+            | PopoverKind::ConflictResolverInputRowMenu { .. }
+            | PopoverKind::ConflictResolverChunkMenu { .. }
+            | PopoverKind::ConflictResolverOutputMenu { .. } => {
+                binding.map(|binding| binding.repo_id).or(state.active_repo)
+            }
 
-        // Popovers that carry an explicit repo id.
-        PopoverKind::CommitPrompt { repo_id }
-        | PopoverKind::StashPickerPrompt { repo_id, .. }
-        | PopoverKind::FileHistoryFilePicker { repo_id }
-        | PopoverKind::UpstreamPicker { repo_id, .. }
-        | PopoverKind::CreateBranchFromRefPrompt { repo_id, .. }
-        | PopoverKind::RenameBranchPrompt { repo_id, .. }
-        | PopoverKind::ResetPrompt { repo_id, .. }
-        | PopoverKind::SquashPrompt { repo_id }
-        | PopoverKind::CheckoutRemoteBranchPrompt { repo_id, .. }
-        | PopoverKind::StashDropConfirm { repo_id, .. }
-        | PopoverKind::StashMenu { repo_id, .. }
-        | PopoverKind::RepoTabMenu { repo_id }
-        | PopoverKind::CreateTagPrompt { repo_id, .. }
-        | PopoverKind::Repo { repo_id, .. }
-        | PopoverKind::PushSetUpstreamPrompt { repo_id, .. }
-        | PopoverKind::ForcePushConfirm { repo_id }
-        | PopoverKind::CherryPickCommitConfirm { repo_id, .. }
-        | PopoverKind::InteractiveCherryPickConfirm { repo_id, .. }
-        | PopoverKind::ApplyFileChangeConfirm { repo_id, .. }
-        | PopoverKind::RevertCommitConfirm { repo_id, .. }
-        | PopoverKind::MergeCommitConfirm { repo_id, .. }
-        | PopoverKind::MergeAbortConfirm { repo_id }
-        | PopoverKind::BranchExistsPrompt { repo_id, .. }
-        | PopoverKind::ForceDeleteBranchConfirm(gitcomet_state::model::ForceDeleteBranchPrompt {
-            repo_id,
-            ..
-        })
-        | PopoverKind::ForceRemoveWorktreeConfirm(
-            gitcomet_state::model::ForceRemoveWorktreePrompt { repo_id, .. },
-        )
-        | PopoverKind::DiscardChangesConfirm { repo_id, .. }
-        | PopoverKind::DiscardFolderChangesConfirm { repo_id, .. }
-        | PopoverKind::FileListFolderMenu { repo_id, .. }
-        | PopoverKind::FileListLayoutMenu { repo_id, .. }
-        | PopoverKind::AddToGitignorePrompt { repo_id, .. }
-        | PopoverKind::StageConflictMarkersConfirm { repo_id, .. }
-        | PopoverKind::PullReconcilePrompt { repo_id }
-        | PopoverKind::RebaseOntoConfirm { repo_id, .. }
-        | PopoverKind::CommitOptionsMenu { repo_id }
-        | PopoverKind::PreviousCommitMessagesMenu { repo_id }
-        | PopoverKind::DiffHunkMenu { repo_id, .. }
-        | PopoverKind::CommitMenu { repo_id, .. }
-        | PopoverKind::StatusFileMenu { repo_id, .. }
-        | PopoverKind::StatusConflictMenu { repo_id, .. }
-        | PopoverKind::BranchMenu { repo_id, .. }
-        | PopoverKind::BranchSectionMenu { repo_id, .. }
-        | PopoverKind::BranchGroupMenu { repo_id, .. }
-        | PopoverKind::SidebarPinnedOverflow { repo_id, .. }
-        | PopoverKind::SidebarAncestorMenu { repo_id, .. }
-        | PopoverKind::DeleteBranchesConfirm { repo_id, .. }
-        | PopoverKind::CommitFileMenu { repo_id, .. }
-        | PopoverKind::WorktreeFileMenu { repo_id, .. }
-        | PopoverKind::CommitRangeFileMenu { repo_id, .. }
-        | PopoverKind::FileBrowserFileMenu { repo_id, .. }
-        | PopoverKind::FileBrowserFolderMenu { repo_id, .. }
-        | PopoverKind::ExplorerSettingsMenu { repo_id }
-        | PopoverKind::BrowseHistoryMenu { repo_id }
-        | PopoverKind::SubmoduleInnerDiffMenu { repo_id, .. }
-        | PopoverKind::TagMenu { repo_id, .. }
-        | PopoverKind::TerminalMenu { repo_id, .. }
-        | PopoverKind::HistoryBranchFilter { repo_id }
-        | PopoverKind::HistoryAuthorFilter { repo_id }
-        | PopoverKind::CommitShaLinkMenu { repo_id, .. }
-        | PopoverKind::LocalFileLinkMenu { repo_id, .. }
-        | PopoverKind::ReflogEntryMenu { repo_id, .. }
-        | PopoverKind::FileHistoryCommitMenu { repo_id, .. }
-        | PopoverKind::HookActivity { repo_id, .. } => Some(*repo_id),
-        PopoverKind::DiffEditorMenu { repo_id, .. } => *repo_id,
-    }?;
+            // Popovers that carry an explicit repo id.
+            PopoverKind::CommitPrompt { repo_id }
+            | PopoverKind::StashPickerPrompt { repo_id, .. }
+            | PopoverKind::FileHistoryFilePicker { repo_id }
+            | PopoverKind::UpstreamPicker { repo_id, .. }
+            | PopoverKind::CreateBranchFromRefPrompt { repo_id, .. }
+            | PopoverKind::RenameBranchPrompt { repo_id, .. }
+            | PopoverKind::ResetPrompt { repo_id, .. }
+            | PopoverKind::SquashPrompt { repo_id }
+            | PopoverKind::CheckoutRemoteBranchPrompt { repo_id, .. }
+            | PopoverKind::StashDropConfirm { repo_id, .. }
+            | PopoverKind::StashMenu { repo_id, .. }
+            | PopoverKind::RepoTabMenu { repo_id }
+            | PopoverKind::CreateTagPrompt { repo_id, .. }
+            | PopoverKind::Repo { repo_id, .. }
+            | PopoverKind::PushSetUpstreamPrompt { repo_id, .. }
+            | PopoverKind::ForcePushConfirm { repo_id }
+            | PopoverKind::CherryPickCommitConfirm { repo_id, .. }
+            | PopoverKind::InteractiveCherryPickConfirm { repo_id, .. }
+            | PopoverKind::ApplyFileChangeConfirm { repo_id, .. }
+            | PopoverKind::RevertCommitConfirm { repo_id, .. }
+            | PopoverKind::MergeCommitConfirm { repo_id, .. }
+            | PopoverKind::MergeAbortConfirm { repo_id }
+            | PopoverKind::BranchExistsPrompt { repo_id, .. }
+            | PopoverKind::ForceDeleteBranchConfirm(
+                gitcomet_state::model::ForceDeleteBranchPrompt { repo_id, .. },
+            )
+            | PopoverKind::ForceRemoveWorktreeConfirm(
+                gitcomet_state::model::ForceRemoveWorktreePrompt { repo_id, .. },
+            )
+            | PopoverKind::SubmoduleCheckoutConfirm(
+                gitcomet_state::model::SubmoduleCheckoutPrompt { repo_id, .. },
+            )
+            | PopoverKind::DiscardChangesConfirm { repo_id, .. }
+            | PopoverKind::DiscardFolderChangesConfirm { repo_id, .. }
+            | PopoverKind::FileListFolderMenu { repo_id, .. }
+            | PopoverKind::FileListLayoutMenu { repo_id, .. }
+            | PopoverKind::AddToGitignorePrompt { repo_id, .. }
+            | PopoverKind::StageConflictMarkersConfirm { repo_id, .. }
+            | PopoverKind::PullReconcilePrompt { repo_id }
+            | PopoverKind::RebaseOntoConfirm { repo_id, .. }
+            | PopoverKind::CommitOptionsMenu { repo_id }
+            | PopoverKind::PreviousCommitMessagesMenu { repo_id }
+            | PopoverKind::DiffHunkMenu { repo_id, .. }
+            | PopoverKind::CommitMenu { repo_id, .. }
+            | PopoverKind::StatusFileMenu { repo_id, .. }
+            | PopoverKind::StatusConflictMenu { repo_id, .. }
+            | PopoverKind::BranchMenu { repo_id, .. }
+            | PopoverKind::BranchSectionMenu { repo_id, .. }
+            | PopoverKind::BranchGroupMenu { repo_id, .. }
+            | PopoverKind::SidebarPinnedOverflow { repo_id, .. }
+            | PopoverKind::SidebarAncestorMenu { repo_id, .. }
+            | PopoverKind::DeleteBranchesConfirm { repo_id, .. }
+            | PopoverKind::CommitFileMenu { repo_id, .. }
+            | PopoverKind::WorktreeFileMenu { repo_id, .. }
+            | PopoverKind::CommitRangeFileMenu { repo_id, .. }
+            | PopoverKind::FileBrowserFileMenu { repo_id, .. }
+            | PopoverKind::FileBrowserFolderMenu { repo_id, .. }
+            | PopoverKind::ExplorerSettingsMenu { repo_id }
+            | PopoverKind::BrowseHistoryMenu { repo_id }
+            | PopoverKind::SubmoduleInnerDiffMenu { repo_id, .. }
+            | PopoverKind::TagMenu { repo_id, .. }
+            | PopoverKind::TerminalMenu { repo_id, .. }
+            | PopoverKind::HistoryBranchFilter { repo_id }
+            | PopoverKind::HistoryAuthorFilter { repo_id }
+            | PopoverKind::CommitShaLinkMenu { repo_id, .. }
+            | PopoverKind::LocalFileLinkMenu { repo_id, .. }
+            | PopoverKind::ReflogEntryMenu { repo_id, .. }
+            | PopoverKind::FileHistoryCommitMenu { repo_id, .. }
+            | PopoverKind::HookActivity { repo_id, .. } => Some(*repo_id),
+            PopoverKind::DiffEditorMenu { repo_id, .. } => *repo_id,
+        }?;
 
     if let Some(binding) = binding {
         return binding.repository(state).filter(|repo| repo.id == repo_id);
@@ -336,6 +339,7 @@ fn hash_repo_for_popover<H: Hasher>(
         | PopoverKind::SidebarPinnedOverflow { .. }
         | PopoverKind::SidebarAncestorMenu { .. }
         | PopoverKind::ForceDeleteBranchConfirm(_)
+        | PopoverKind::SubmoduleCheckoutConfirm(_)
         | PopoverKind::PushSetUpstreamPrompt { .. } => {
             repo.head_branch_rev.hash(hasher);
             repo.branches_rev.hash(hasher);
@@ -857,6 +861,7 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
             operation.hash(hasher);
         }
         PopoverKind::ForceDeleteBranchConfirm(prompt) => prompt.hash(hasher),
+        PopoverKind::SubmoduleCheckoutConfirm(prompt) => prompt.hash(hasher),
         PopoverKind::ForceRemoveWorktreeConfirm(prompt) => prompt.hash(hasher),
         PopoverKind::DiscardChangesConfirm {
             repo_id,

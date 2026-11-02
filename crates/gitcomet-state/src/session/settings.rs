@@ -83,6 +83,7 @@ pub struct UiSettings {
     pub auto_fetch_enabled: Option<bool>,
     pub auto_fetch_interval_minutes: Option<AutoFetchInterval>,
     pub recommend_repo_maintenance: Option<bool>,
+    pub follow_submodule_pointers: Option<bool>,
     pub git_executable_path: Option<Option<PathBuf>>,
     pub external_code_editor: Option<Option<ExternalCodeEditorSetting>>,
 }
@@ -236,6 +237,7 @@ pub fn persist_ui_settings_to_path(settings: UiSettings, path: &Path) -> io::Res
         apply_setting!(settings, file, auto_fetch_enabled);
         apply_setting!(settings, file, auto_fetch_interval_minutes);
         apply_setting!(settings, file, recommend_repo_maintenance);
+        apply_setting!(settings, file, follow_submodule_pointers);
         if let Some(path) = settings.git_executable_path {
             file.git_executable_path = path.map(|path| path_storage_key(&path));
         }
