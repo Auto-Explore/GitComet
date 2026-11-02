@@ -652,6 +652,93 @@ fn commit_click_dispatches_after_state_update_without_intermediate_redraw(
     );
 }
 
+#[gpui::test]
+fn commit_box_grows_in_the_frame_that_wraps_its_text(cx: &mut gpui::TestAppContext) {
+    use gpui::EntityInputHandler as _;
+    let _cache_guard = crate::view::enable_stable_cached_views_for_test();
+    gitcomet_ui_kit::test_support::use_real_text_backend(cx);
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        window.activate();
+        super::super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    let repo_id = gitcomet_state::model::RepoId(50);
+    let mut repo = opening_repo_state(repo_id, Path::new("/tmp/repo-commit-grows-same-frame"));
+    repo.status = gitcomet_state::model::Loadable::Ready(
+        gitcomet_core::domain::RepoStatus {
+            staged: Arc::new(vec![gitcomet_core::domain::FileStatus {
+                path: "staged.txt".into(),
+                kind: gitcomet_core::domain::FileStatusKind::Modified,
+                conflict: None,
+            }]),
+            unstaged: Arc::new(Vec::new()),
+        }
+        .into(),
+    );
+    let (input, scroll) = cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+        });
+        let pane = view.read(app).details_pane.read(app);
+        (
+            pane.commit_message_input.clone(),
+            pane.commit_message_scroll.clone(),
+        )
+    });
+    cx.simulate_resize(gpui::size(px(1200.0), px(900.0)));
+    cx.update(|window, app| window.focus(&input.read(app).focus_handle(), app));
+    for _ in 0..4 {
+        crate::test_support::refresh_and_draw(cx);
+    }
+
+    cx.simulate_input("alpha");
+    let rows_and_height = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|_window, app| {
+            let rows = input.read(app).wrap_row_counts().iter().sum::<usize>();
+            (rows, scroll.bounds().size.height)
+        })
+    };
+    let (rows, one_row_height) = rows_and_height(cx);
+    assert_eq!(rows, 1);
+    let line_height =
+        cx.update(|_window, app| input.read(app).hotspot_bounds(&(0..1)).unwrap().size.height);
+    let assert_box_fits = |cx: &mut gpui::VisualTestContext, context: &str| {
+        let (rows, height) = rows_and_height(cx);
+        let expected = one_row_height + line_height * (rows - 1) as f32;
+        assert!(
+            (height - expected).abs() <= px(0.5),
+            "{context}: {rows} rows painted into a {height:?} box, expected {expected:?}"
+        );
+        rows
+    };
+
+    let mut max_rows = 1;
+    let typed = " beta gamma delta epsilon zeta eta theta iota kappa lambda mu nu xi omicron pi";
+    for character in typed.chars().cycle().take(4 * typed.len()) {
+        cx.simulate_input(&character.to_string());
+        max_rows = max_rows.max(assert_box_fits(cx, &format!("after typing {character:?}")));
+        if max_rows == 4 {
+            break;
+        }
+    }
+    assert_eq!(max_rows, 4, "fixture must wrap onto four rows");
+
+    cx.update(|window, app| {
+        input.update(app, |input, cx| {
+            let end = input.text().encode_utf16().count();
+            input.replace_text_in_range(
+                Some(0..end),
+                "Subject\n\nA pasted body paragraph that is long enough to wrap onto more than \
+                 one row of the commit box",
+                window,
+                cx,
+            );
+        })
+    });
+    let rows = assert_box_fits(cx, "after pasting");
+    assert!(rows > 3, "fixture must wrap the pasted body: {rows} rows");
+}
+
 /// Typing into the focused commit box re-renders the details pane only. The
 /// bottom bar and the toast host paint after it, so a cached mount replays
 /// their paint after the focused input's handler slot on every keystroke.
