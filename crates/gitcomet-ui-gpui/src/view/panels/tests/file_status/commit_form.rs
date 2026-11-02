@@ -652,17 +652,6 @@ fn commit_click_dispatches_after_state_update_without_intermediate_redraw(
     );
 }
 
-/// Typing into the focused commit box re-renders the details pane only. The
-/// bottom bar and the toast host paint after it, so a cached mount replays
-/// their paint after the focused input's handler slot on every keystroke.
-/// That replay panicked inside gpui's `reuse_paint` until gpui-ce took zed's
-/// fix (#50665: the frame's input handler was popped, shortening the list
-/// the cached ranges index), which is why both used to mount uncached and
-/// re-rendered on every frame.
-/// The commit box grows in the frame that paints the row a keystroke or a
-/// paste wraps onto. It used to grow only on a later, unrelated redraw (the
-/// caret blink, the next keystroke), so fast typing and pastes left the new
-/// rows clipped for a while.
 #[gpui::test]
 fn commit_box_grows_in_the_frame_that_wraps_its_text(cx: &mut gpui::TestAppContext) {
     use gpui::EntityInputHandler as _;
@@ -702,7 +691,6 @@ fn commit_box_grows_in_the_frame_that_wraps_its_text(cx: &mut gpui::TestAppConte
         crate::test_support::refresh_and_draw(cx);
     }
 
-    // Typing and the paste below are each drawn by the one frame they dirty.
     cx.simulate_input("alpha");
     let rows_and_height = |cx: &mut gpui::VisualTestContext| {
         cx.update(|_window, app| {
@@ -751,6 +739,13 @@ fn commit_box_grows_in_the_frame_that_wraps_its_text(cx: &mut gpui::TestAppConte
     assert!(rows > 3, "fixture must wrap the pasted body: {rows} rows");
 }
 
+/// Typing into the focused commit box re-renders the details pane only. The
+/// bottom bar and the toast host paint after it, so a cached mount replays
+/// their paint after the focused input's handler slot on every keystroke.
+/// That replay panicked inside gpui's `reuse_paint` until gpui-ce took zed's
+/// fix (#50665: the frame's input handler was popped, shortening the list
+/// the cached ranges index), which is why both used to mount uncached and
+/// re-rendered on every frame.
 #[gpui::test]
 fn typing_in_the_commit_box_replays_the_cached_bottom_bar_and_toasts(
     cx: &mut gpui::TestAppContext,

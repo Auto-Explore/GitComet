@@ -52,7 +52,7 @@ impl Render for TextInput {
                 "model":snapshot.model_id(), "revision":snapshot.revision(), "bytes":snapshot.len()})
         });
         self.sync_theme(cx);
-        // Before the field's heights below read the wrapped row count.
+        // Before the heights below read the row counts.
         self.measure_edited_wrap_rows(window, cx);
         let style = self.style;
         let focus = self.focus_handle.clone();

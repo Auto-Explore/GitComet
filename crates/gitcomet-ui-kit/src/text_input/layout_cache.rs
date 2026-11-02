@@ -181,8 +181,6 @@ impl TextInput {
         merged
     }
 
-    /// The text painted in place of the document: the placeholder for an
-    /// empty input, or the masked text. `None` paints the document itself.
     pub(super) fn substitute_display_text(
         &self,
         content: &TextModelSnapshot,
@@ -196,14 +194,8 @@ impl TextInput {
         }
     }
 
-    /// Measure the lines edited since the last frame before this frame is laid
-    /// out, so the field already has the height of the text it is about to
-    /// paint. Otherwise an edit that adds or removes a wrapped row is laid out
-    /// at the previous height and only corrected by the frame after.
-    ///
-    /// Shapes at the width and font the previous frame wrapped with. Prepaint
-    /// still measures every line it paints at the final width, so a resize or
-    /// font change in this frame is corrected there.
+    /// Wraps edited lines before layout, at the last frame's width and font, so
+    /// this frame is laid out at their height. Prepaint corrects a resize.
     pub(super) fn measure_edited_wrap_rows(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !(self.multiline && self.soft_wrap) || self.wrap.dirty_ranges.is_empty() {
             return;
@@ -230,12 +222,10 @@ impl TextInput {
             return;
         }
         let dirty_ranges = self.take_normalized_wrap_dirty_ranges(line_count);
-        // Prepaint takes them again: it shapes the lines it paints and
-        // confirms these rows at the final width.
+        // Left for prepaint to confirm at the final width.
         self.wrap.dirty_ranges.clone_from(&dirty_ranges);
         let dirty_line_count = dirty_ranges.iter().map(Range::len).sum::<usize>();
         if dirty_line_count > TEXT_INPUT_WRAP_DIRTY_SYNC_LINE_LIMIT {
-            // Prepaint estimates bulk replacements rather than shaping them.
             return;
         }
 
@@ -245,8 +235,7 @@ impl TextInput {
         for line_ix in dirty_ranges.into_iter().flatten() {
             let line_start = line_starts.get(line_ix).copied().unwrap_or(0);
             let line_text = line_text_for_index(display_text.as_ref(), &line_starts, line_ix);
-            // The same runs prepaint shapes with: bold or italic highlights
-            // change where a line wraps.
+            // Bold or italic highlights move wrap points.
             let highlights = has_content.then(|| {
                 let resolved =
                     self.effective_highlights_for_window(line_start..line_start + line_text.len());

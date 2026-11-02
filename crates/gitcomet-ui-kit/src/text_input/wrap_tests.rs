@@ -871,8 +871,6 @@ fn wrapped_real_font_typing_is_stable_at_normal_and_enlarged_scale() {
     }
 }
 
-/// The rows the last painted frame wrapped the text into, and the height the
-/// field was laid out at in that same frame.
 fn painted_rows_and_height(
     input: &Entity<TextInput>,
     cx: &mut gpui::VisualTestContext,
@@ -903,8 +901,7 @@ fn assert_height_fits_painted_rows(
     rows
 }
 
-/// Deliver the frames the window asked the platform for, as its frame source
-/// would. Unlike `draw_frame`, nothing is redrawn unless something asked.
+/// Unlike `draw_frame`, draws only frames the window requested.
 fn draw_requested_frames(cx: &mut gpui::VisualTestContext) {
     for _ in 0..16 {
         cx.run_until_parked();
@@ -915,10 +912,6 @@ fn draw_requested_frames(cx: &mut gpui::VisualTestContext) {
     panic!("text input kept requesting frames");
 }
 
-/// Each keystroke is drawn by the frame it dirties, and that frame alone must
-/// already have room for the row the keystroke wrapped onto. The rows used to
-/// be measured only after layout, so the new row was clipped until a later,
-/// unrelated redraw (the caret blink, the next keystroke) grew the field.
 #[gpui::test]
 fn wrapped_height_follows_typing_in_the_frame_that_paints_it(cx: &mut gpui::TestAppContext) {
     crate::test_support::use_real_text_backend(cx);
@@ -949,8 +942,6 @@ fn wrapped_height_follows_typing_in_the_frame_that_paints_it(cx: &mut gpui::Test
     cx.update(|_window, app| assert_eq!(input.read(app).text(), ""));
 }
 
-/// A paste of long lines lands in one frame at its full height, rather than
-/// at one row per pasted line until the next redraw.
 #[gpui::test]
 fn wrapped_height_follows_a_paste_in_the_frame_that_paints_it(cx: &mut gpui::TestAppContext) {
     crate::test_support::use_real_text_backend(cx);
@@ -975,9 +966,6 @@ fn wrapped_height_follows_a_paste_in_the_frame_that_paints_it(cx: &mut gpui::Tes
     assert_eq!(assert_height_fits_painted_rows(&input, cx, "settled"), rows);
 }
 
-/// Rows only prepaint can measure (here after the field narrows) are applied
-/// by a frame the input requests itself. `cx.notify()` during paint marks the
-/// input dirty without scheduling that frame.
 #[gpui::test]
 fn wrapped_height_measured_during_paint_is_applied_by_a_requested_frame(
     cx: &mut gpui::TestAppContext,
@@ -997,9 +985,6 @@ fn wrapped_height_measured_during_paint_is_applied_by_a_requested_frame(
     assert!(narrow_rows > wide_rows, "{wide_rows} -> {narrow_rows} rows");
 }
 
-/// Pasting past the field's maximum height reveals the caret without waiting
-/// for another input event: the reveal scrolls during paint and must request
-/// the frame that shows it.
 #[gpui::test]
 fn wrapped_paste_reveals_the_caret_without_another_event(cx: &mut gpui::TestAppContext) {
     crate::test_support::use_real_text_backend(cx);

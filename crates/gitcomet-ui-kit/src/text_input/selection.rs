@@ -502,8 +502,7 @@ impl TextInput {
         }
     }
 
-    /// Scroll the caret into view. Returns whether the reveal needs another
-    /// frame: it scrolled, or it is still waiting for the layout to settle.
+    /// Returns whether the reveal needs another frame.
     pub(super) fn ensure_cursor_visible_in_vertical_scroll(
         &mut self,
         cx: &mut Context<Self>,
