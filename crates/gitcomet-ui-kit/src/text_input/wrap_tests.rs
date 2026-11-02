@@ -1038,8 +1038,14 @@ impl Render for CachedGutterHost {
     }
 }
 
-#[gpui::test]
-fn wrap_rows_measured_after_ancestor_render_rerender_ancestors(cx: &mut gpui::TestAppContext) {
+fn mount_cached_gutter(
+    cx: &mut gpui::TestAppContext,
+) -> (
+    Entity<CachedGutterHost>,
+    Entity<GutterView>,
+    Entity<TextInput>,
+    &mut gpui::VisualTestContext,
+) {
     crate::test_support::use_real_text_backend(cx);
     let (host, cx) = cx.add_window_view(|window, cx| {
         window.activate();
@@ -1073,7 +1079,13 @@ fn wrap_rows_measured_after_ancestor_render_rerender_ancestors(cx: &mut gpui::Te
     for _ in 0..4 {
         draw_frame(cx);
     }
+    draw_requested_frames(cx);
+    (host, gutter, input, cx)
+}
 
+#[gpui::test]
+fn wrap_rows_measured_after_ancestor_render_rerender_ancestors(cx: &mut gpui::TestAppContext) {
+    let (host, gutter, input, cx) = mount_cached_gutter(cx);
     let rendered_and_measured = |cx: &mut gpui::VisualTestContext| {
         cx.update(|_window, app| {
             (
@@ -1102,4 +1114,31 @@ fn wrap_rows_measured_after_ancestor_render_rerender_ancestors(cx: &mut gpui::Te
         wrapped |= measured.iter().sum::<usize>() > 1;
     }
     assert!(wrapped, "fixture must wrap onto a second row");
+}
+
+#[gpui::test]
+fn wrap_edit_that_keeps_every_row_count_requests_no_extra_frame(cx: &mut gpui::TestAppContext) {
+    let (_host, _gutter, input, cx) = mount_cached_gutter(cx);
+    let row_counts = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|_window, app| input.read(app).wrap_row_counts().to_vec())
+    };
+    let mut kept_rows = 0;
+    let mut changed_rows = 0;
+    for character in " epsilon zeta eta theta iota kappa lambda mu nu xi".chars() {
+        let before = row_counts(cx);
+        cx.simulate_input(&character.to_string());
+        let requested = cx.update(|window, app| window.simulate_next_frame(app));
+        if row_counts(cx) == before {
+            kept_rows += 1;
+            assert_eq!(requested, 0, "typing {character:?} kept the rows");
+        } else {
+            changed_rows += 1;
+            assert!(requested > 0, "typing {character:?} changed the rows");
+        }
+        draw_requested_frames(cx);
+    }
+    assert!(
+        kept_rows > 0 && changed_rows > 0,
+        "{kept_rows} kept, {changed_rows} changed"
+    );
 }
