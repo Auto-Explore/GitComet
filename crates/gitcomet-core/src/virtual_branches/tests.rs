@@ -1192,3 +1192,78 @@ fn the_target_moves_without_touching_the_branches_built_on_it() {
     );
     assert_eq!(state.get("ui").unwrap().base_branch(&state.target), "api");
 }
+
+fn application_names(state: &VirtualBranchesState) -> Vec<String> {
+    state
+        .application_order()
+        .unwrap()
+        .iter()
+        .map(|b| b.name.clone())
+        .collect()
+}
+
+#[test]
+fn reorder_swaps_the_application_order_when_neither_branch_has_a_position() {
+    let mut state = virtual_branches().with_branches(vec![vb("a"), vb("b"), vb("c")]);
+    state.reorder("a", "b").unwrap();
+    assert_eq!(application_names(&state), ["b", "a", "c"]);
+}
+
+#[test]
+fn reorder_swaps_the_application_order_when_only_the_first_has_a_position() {
+    let mut state = virtual_branches().with_branches(vec![vb("a").with_order(0), vb("b")]);
+    state.reorder("a", "b").unwrap();
+    assert_eq!(application_names(&state), ["b", "a"]);
+}
+
+#[test]
+fn reorder_swaps_the_application_order_when_only_the_second_has_a_position() {
+    let mut state = virtual_branches().with_branches(vec![vb("a"), vb("b").with_order(0)]);
+    state.reorder("a", "b").unwrap();
+    assert_eq!(application_names(&state), ["a", "b"]);
+}
+
+#[test]
+fn reorder_keeps_the_other_siblings_where_they_were() {
+    let mut state = virtual_branches().with_branches(vec![
+        vb("a"),
+        vb("b").with_order(1),
+        vb("c"),
+        vb("d").with_order(0),
+    ]);
+    // Current order: d(0), b(1), a, c.
+    state.reorder("d", "c").unwrap();
+    assert_eq!(application_names(&state), ["c", "b", "a", "d"]);
+}
+
+#[test]
+fn pushing_a_branch_stacked_on_an_unknown_parent_is_refused_and_changes_nothing() {
+    let mut state = virtual_branches().with_branches(vec![vb("a")]);
+    assert!(state.push_branch(vb("b").with_parent("ghost")).is_err());
+    assert!(!state.contains("b"));
+    state.validate().unwrap();
+}
+
+#[test]
+fn a_refused_insert_above_leaves_the_state_untouched() {
+    let mut state = virtual_branches().with_branches(vec![vb("a")]);
+    let before = state.clone();
+    assert!(
+        state
+            .insert_above(vb("b").with_parent("ghost"), "a")
+            .is_err()
+    );
+    assert_eq!(state, before);
+}
+
+#[test]
+fn a_refused_insert_below_leaves_the_state_untouched() {
+    let mut state = virtual_branches().with_branches(vec![vb("a")]);
+    let before = state.clone();
+    assert!(
+        state
+            .insert_below(vb("b").with_parent("ghost"), "a")
+            .is_err()
+    );
+    assert_eq!(state, before);
+}

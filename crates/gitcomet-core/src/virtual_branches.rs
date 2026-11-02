@@ -472,8 +472,14 @@ impl VirtualBranchesState {
                 "no virtual-branches branch '{name}'"
             )));
         }
-        self.push_branch(branch.clone())?;
-        self.set_parent(&branch.name, Some(name))
+        let previous = self.branches.clone();
+        let result = self
+            .push_branch(branch.clone())
+            .and_then(|()| self.set_parent(&branch.name, Some(name)));
+        if result.is_err() {
+            self.branches = previous;
+        }
+        result
     }
 
     /// Insert a branch below `name`: it takes `name`'s place in the stacked branch, so
@@ -489,11 +495,17 @@ impl VirtualBranchesState {
             .ok_or_else(|| virtual_branches_error(format!("no virtual-branches branch '{name}'")))?
             .parent
             .clone();
-        self.push_branch(branch.clone())?;
-        self.set_parent(name, Some(&branch.name))?;
+        let previous = self.branches.clone();
         // The new branch inherits the anchor's old parent, so the stacked branch keeps
         // its depth and everything that was above the anchor stays above it.
-        self.set_parent(&branch.name, displaced.as_deref())
+        let result = self
+            .push_branch(branch.clone())
+            .and_then(|()| self.set_parent(name, Some(&branch.name)))
+            .and_then(|()| self.set_parent(&branch.name, displaced.as_deref()));
+        if result.is_err() {
+            self.branches = previous;
+        }
+        result
     }
 
     /// Move `name` into `stacked_branch_base`'s stacked branch, optionally above or below
@@ -575,32 +587,28 @@ impl VirtualBranchesState {
             )));
         }
 
-        match (left.order, right.order) {
-            (Some(a), Some(b)) => {
-                if let Some(branch) = self.get_mut(first) {
-                    branch.order = Some(b);
-                }
-                if let Some(branch) = self.get_mut(second) {
-                    branch.order = Some(a);
-                }
-            }
-            (Some(_), None) | (None, Some(_)) => {
-                // One side carries an explicit position and the other does not;
-                // both need a position now or the pair has no stable order.
-                let base = left.order.or(right.order).unwrap_or_default();
-                if let Some(branch) = self.get_mut(first) {
-                    branch.order = Some(base);
-                }
-                if let Some(branch) = self.get_mut(second) {
-                    branch.order = Some(base + 1);
-                }
-            }
-            (None, None) => {
-                for (index, name) in [first, second].into_iter().enumerate() {
-                    if let Some(branch) = self.get_mut(name) {
-                        branch.order = Some(index as u32);
-                    }
-                }
+        // Siblings are ordered by their position, with unpositioned ones after
+        // the positioned ones in declaration order. Swapping two of them means
+        // swapping where they sit in that sequence, whatever mix of positioned
+        // and unpositioned branches they are, so every sibling is given its
+        // current place explicitly and the pair then trades places.
+        let mut siblings: Vec<String> = {
+            let mut siblings: Vec<&VirtualBranch> = self
+                .branches
+                .iter()
+                .filter(|b| b.parent == left.parent)
+                .collect();
+            siblings.sort_by_key(|b| b.order.unwrap_or(u32::MAX));
+            siblings.into_iter().map(|b| b.name.clone()).collect()
+        };
+        let first_index = siblings.iter().position(|name| name == first);
+        let second_index = siblings.iter().position(|name| name == second);
+        if let (Some(first_index), Some(second_index)) = (first_index, second_index) {
+            siblings.swap(first_index, second_index);
+        }
+        for (index, name) in siblings.iter().enumerate() {
+            if let Some(branch) = self.get_mut(name) {
+                branch.order = Some(index as u32);
             }
         }
         Ok(())
@@ -622,6 +630,10 @@ impl VirtualBranchesState {
             )));
         }
         self.branches.push(branch);
+        if let Err(error) = self.validate() {
+            self.branches.pop();
+            return Err(error);
+        }
         Ok(())
     }
 
