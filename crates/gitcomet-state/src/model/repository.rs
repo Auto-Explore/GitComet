@@ -190,6 +190,13 @@ pub struct RepoState {
     pub ref_metadata_rev: u64,
     pub submodules: Loadable<Arc<Vec<Submodule>>>,
     pub submodules_rev: u64,
+    /// The worktree this checkout is a first-level submodule of, read once
+    /// the repository opens. Deeper submodules, worktrees of submodules and
+    /// ordinary repositories have none.
+    pub submodule_parent: Option<SubmoduleParentLink>,
+    /// The working directory with symlinks resolved, read when the repository
+    /// opens, so submodule parents match tabs opened through another path.
+    pub canonical_workdir: Option<PathBuf>,
     /// Git LFS / git-annex facts; drives whether per-row state is computed.
     pub large_file_support: Loadable<Arc<gitcomet_core::large_files::LargeFileSupport>>,
     pub large_file_support_rev: u64,
@@ -249,6 +256,36 @@ pub struct RepoState {
     pub feedback: Arc<RepoFeedbackState>,
     pub pending: RepoPendingState,
     pub load_epoch: crate::model::RepoLoadEpoch,
+}
+
+/// A first-level submodule's parent worktree, and that worktree's tab while
+/// one is open in this window.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SubmoduleParentLink {
+    /// The parent worktree's working directory, canonical.
+    pub workdir: PathBuf,
+    /// This submodule's path inside the parent worktree.
+    pub path: PathBuf,
+    /// The parent's open tab; `None` while the parent is not open here.
+    pub repo_id: Option<RepoId>,
+}
+
+impl SubmoduleParentLink {
+    /// The parent worktree's folder name, as its tab shows it.
+    pub fn parent_name(&self) -> String {
+        self.workdir
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| self.workdir.display().to_string())
+    }
+
+    /// The submodule's folder name, as its tab shows it.
+    pub fn submodule_name(&self) -> String {
+        self.path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| self.path.display().to_string())
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -434,6 +471,8 @@ impl RepoState {
             ref_metadata_rev: 0,
             submodules: Loadable::NotLoaded,
             submodules_rev: 0,
+            submodule_parent: None,
+            canonical_workdir: None,
             large_file_support: Loadable::NotLoaded,
             large_file_support_rev: 0,
             uncommitted_large_files: Arc::default(),
@@ -469,6 +508,12 @@ impl RepoState {
 
     pub fn is_bare(&self) -> bool {
         self.repository_mode == Some(RepositoryMode::Bare)
+    }
+
+    /// The open tab of the worktree this repository is a first-level
+    /// submodule of.
+    pub fn submodule_parent_tab(&self) -> Option<RepoId> {
+        self.submodule_parent.as_ref().and_then(|link| link.repo_id)
     }
 
     pub(crate) fn retire_repository_lifetime(&mut self) {

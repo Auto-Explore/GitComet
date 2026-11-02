@@ -1,11 +1,15 @@
-use crate::model::{BranchExistsPromptOperation, BranchExistsPromptState};
+use crate::model::{
+    BranchExistsPromptOperation, BranchExistsPromptState, SubmoduleCheckoutOperation,
+};
 use crate::msg::{InternalMsg, Msg, RepoActionKind, RepoPathList};
 use crate::store::repository_runtime::RepositoryRuntimes;
 use gitcomet_core::auth::{ScopedStagedGitAuth, StagedGitAuth};
+use gitcomet_core::domain::{DiscardOutcome, SubmoduleCheckoutPolicy};
 use gitcomet_core::error::{Error, ErrorKind, GitFailureId};
+use gitcomet_core::remote_url::RemoteUrlPolicy;
 use gitcomet_core::services::{CheckoutRemoteBranchMode, GitBackend, GitRepository};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use super::super::{RepoId, executor::TaskExecutor, worker_channel::StoreWorkerSender};
 use super::util::{
@@ -371,9 +375,11 @@ pub(super) fn schedule_checkout_branch(
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     name: String,
+    follow_submodules: bool,
 ) {
     let context = single_line_context(&name);
     let branch = name.clone();
+    let follow_tx = msg_tx.clone();
     schedule_branch_action(
         executor,
         repos,
@@ -384,7 +390,11 @@ pub(super) fn schedule_checkout_branch(
         context,
         branch,
         WorktreeRedirect::OpenOnly,
-        move |repo| repo.checkout_branch(&name),
+        move |repo| {
+            following_submodule_pointers(repo, follow_submodules, &follow_tx, repo_id, || {
+                repo.checkout_branch(&name)
+            })
+        },
     );
 }
 
@@ -399,8 +409,16 @@ pub(super) fn schedule_checkout_remote_branch(
     branch: String,
     local_branch: String,
     mode: CheckoutRemoteBranchMode,
+    follow_submodules: bool,
 ) {
     let context = single_line_context(format!("{remote}/{branch} → {local_branch}"));
+    let target = local_branch.clone();
+    let follow_tx = msg_tx.clone();
+    let run = move |repo: &dyn GitRepository| {
+        following_submodule_pointers(repo, follow_submodules, &follow_tx, repo_id, || {
+            repo.checkout_remote_branch(&remote, &branch, &local_branch, mode)
+        })
+    };
     match mode {
         CheckoutRemoteBranchMode::Create => schedule_repo_action_with_hook(
             executor,
@@ -409,25 +427,22 @@ pub(super) fn schedule_checkout_remote_branch(
             repo_id,
             RepoActionKind::CheckoutRemoteBranch,
             context,
-            move |repo| repo.checkout_remote_branch(&remote, &branch, &local_branch, mode),
+            move |repo| run(repo.as_ref()),
             send_refresh_branches_on_success,
             repo_action_finished(RepoActionKind::CheckoutRemoteBranch),
         ),
-        CheckoutRemoteBranchMode::Overwrite => {
-            let target = local_branch.clone();
-            schedule_branch_action(
-                executor,
-                repos,
-                backend,
-                msg_tx,
-                repo_id,
-                RepoActionKind::CheckoutRemoteBranch,
-                context,
-                target,
-                WorktreeRedirect::RunThere,
-                move |repo| repo.checkout_remote_branch(&remote, &branch, &local_branch, mode),
-            )
-        }
+        CheckoutRemoteBranchMode::Overwrite => schedule_branch_action(
+            executor,
+            repos,
+            backend,
+            msg_tx,
+            repo_id,
+            RepoActionKind::CheckoutRemoteBranch,
+            context,
+            target,
+            WorktreeRedirect::RunThere,
+            run,
+        ),
     }
 }
 
@@ -437,8 +452,10 @@ pub(super) fn schedule_checkout_commit(
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     commit_id: gitcomet_core::domain::CommitId,
+    follow_submodules: bool,
 ) {
     let context = Some(short_commit_id(commit_id.as_ref()));
+    let follow_tx = msg_tx.clone();
     schedule_repo_action_with_hook(
         executor,
         repos,
@@ -446,7 +463,15 @@ pub(super) fn schedule_checkout_commit(
         repo_id,
         RepoActionKind::CheckoutCommit,
         context,
-        move |repo| repo.checkout_commit(&commit_id),
+        move |repo| {
+            following_submodule_pointers(
+                repo.as_ref(),
+                follow_submodules,
+                &follow_tx,
+                repo_id,
+                || repo.checkout_commit(&commit_id),
+            )
+        },
         |_msg_tx, _repo_id, _result| {},
         repo_action_finished(RepoActionKind::CheckoutCommit),
     );
@@ -913,27 +938,17 @@ pub(super) fn schedule_discard_worktree_changes_path(
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     path: PathBuf,
+    remote_url_policy: RemoteUrlPolicy,
 ) {
-    let context = path_context(&path);
-    let completed_paths = vec![path.clone()].into();
-    schedule_repo_action_with_hook(
+    schedule_submodule_aware_discard(
         executor,
         repos,
         msg_tx,
         repo_id,
         RepoActionKind::DiscardWorktreeChangesPath,
-        context,
-        move |repo| {
-            let path_ref: &Path = &path;
-            repo.discard_worktree_changes(&[path_ref])
-        },
-        |_msg_tx, _repo_id, _result| {},
-        move |repo_id, result| InternalMsg::RepoPathsActionFinished {
-            repo_id,
-            action: RepoActionKind::DiscardWorktreeChangesPath,
-            paths: completed_paths,
-            result,
-        },
+        vec![path],
+        SubmoduleCheckoutPolicy::Guarded,
+        remote_url_policy,
     );
 }
 
@@ -943,29 +958,190 @@ pub(super) fn schedule_discard_worktree_changes_paths(
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     paths: Vec<PathBuf>,
+    remote_url_policy: RemoteUrlPolicy,
 ) {
-    let context = paths_context(&paths, "files");
-    let completed_paths = paths.clone().into();
-    schedule_repo_action_with_hook(
+    schedule_submodule_aware_discard(
         executor,
         repos,
         msg_tx,
         repo_id,
         RepoActionKind::DiscardWorktreeChangesPaths,
+        paths,
+        SubmoduleCheckoutPolicy::Guarded,
+        remote_url_policy,
+    );
+}
+
+/// A discard that keeps each submodule among `paths` checked out at the
+/// pointer it restores. What happened to the submodules is reported before
+/// the action completes; a guarded discard the submodule guard stopped
+/// changed nothing, so it completes for no paths and keeps the selection.
+#[allow(clippy::too_many_arguments)]
+fn schedule_submodule_aware_discard(
+    executor: &TaskExecutor,
+    repos: &RepositoryRuntimes,
+    msg_tx: StoreWorkerSender,
+    repo_id: RepoId,
+    action: RepoActionKind,
+    paths: Vec<PathBuf>,
+    policy: SubmoduleCheckoutPolicy,
+    remote_url_policy: RemoteUrlPolicy,
+) {
+    let context = match paths.as_slice() {
+        [path] => path_context(path),
+        _ => paths_context(&paths, "files"),
+    };
+    let completed_paths: RepoPathList = paths.clone().into();
+    let operation = SubmoduleCheckoutOperation::Discard {
+        paths: paths.clone(),
+    };
+    let outcome = Arc::new(Mutex::new(None::<DiscardOutcome>));
+    let run_outcome = Arc::clone(&outcome);
+    let hook_outcome = Arc::clone(&outcome);
+    schedule_repo_action_with_hook(
+        executor,
+        repos,
+        msg_tx,
+        repo_id,
+        action,
         context,
         move |repo| {
             let unique = dedup_paths(paths);
             let refs = unique.iter().map(|p| p.as_path()).collect::<Vec<_>>();
-            repo.discard_worktree_changes(&refs)
+            let result =
+                repo.discard_worktree_changes_with_submodules(&refs, policy, remote_url_policy)?;
+            *lock(&run_outcome) = Some(result);
+            Ok(())
         },
-        |_msg_tx, _repo_id, _result| {},
-        move |repo_id, result| InternalMsg::RepoPathsActionFinished {
-            repo_id,
-            action: RepoActionKind::DiscardWorktreeChangesPaths,
-            paths: completed_paths,
-            result,
+        move |msg_tx, repo_id, _result| {
+            send_submodule_checkout_outcome(msg_tx, repo_id, operation, &hook_outcome);
+        },
+        move |repo_id, result| {
+            let blocked = lock(&outcome)
+                .as_ref()
+                .is_some_and(DiscardOutcome::is_blocked);
+            InternalMsg::RepoPathsActionFinished {
+                repo_id,
+                action,
+                paths: if blocked {
+                    RepoPathList::default()
+                } else {
+                    completed_paths
+                },
+                result,
+            }
         },
     );
+}
+
+fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(|error| error.into_inner())
+}
+
+fn send_submodule_checkout_outcome(
+    msg_tx: &StoreWorkerSender,
+    repo_id: RepoId,
+    operation: SubmoduleCheckoutOperation,
+    outcome: &Mutex<Option<DiscardOutcome>>,
+) {
+    let Some(outcome) = lock(outcome).take() else {
+        return;
+    };
+    if outcome == DiscardOutcome::default() {
+        return;
+    }
+    send_or_log(
+        msg_tx,
+        Msg::Internal(InternalMsg::SubmoduleCheckoutFinished {
+            repo_id,
+            operation,
+            outcome,
+        }),
+    );
+}
+
+/// Run a discard again with the policy the user picked, or check a submodule
+/// out at its recorded commit.
+pub(super) fn schedule_submodule_checkout(
+    executor: &TaskExecutor,
+    repos: &RepositoryRuntimes,
+    msg_tx: StoreWorkerSender,
+    repo_id: RepoId,
+    operation: SubmoduleCheckoutOperation,
+    policy: SubmoduleCheckoutPolicy,
+    remote_url_policy: RemoteUrlPolicy,
+) {
+    match operation {
+        SubmoduleCheckoutOperation::Discard { paths } => schedule_submodule_aware_discard(
+            executor,
+            repos,
+            msg_tx,
+            repo_id,
+            RepoActionKind::DiscardWorktreeChangesPaths,
+            paths,
+            policy,
+            remote_url_policy,
+        ),
+        SubmoduleCheckoutOperation::UpdateToRecorded { path } => {
+            let context = path_context(&path);
+            let operation = SubmoduleCheckoutOperation::UpdateToRecorded { path: path.clone() };
+            let outcome = Arc::new(Mutex::new(None::<DiscardOutcome>));
+            let run_outcome = Arc::clone(&outcome);
+            schedule_repo_action_with_hook(
+                executor,
+                repos,
+                msg_tx,
+                repo_id,
+                RepoActionKind::UpdateSubmodule,
+                context,
+                move |repo| {
+                    let result = repo.update_submodule_to_recorded(&path, policy)?;
+                    *lock(&run_outcome) = Some(result);
+                    Ok(())
+                },
+                move |msg_tx, repo_id, _result| {
+                    send_submodule_checkout_outcome(msg_tx, repo_id, operation, &outcome);
+                },
+                repo_action_finished(RepoActionKind::UpdateSubmodule),
+            );
+        }
+    }
+}
+
+/// Runs `operation`, then checks out the first-level submodules whose
+/// recorded commit it moved and that were in sync before, and reports them.
+pub(super) fn following_submodule_pointers<T>(
+    repo: &dyn GitRepository,
+    follow: bool,
+    msg_tx: &StoreWorkerSender,
+    repo_id: RepoId,
+    operation: impl FnOnce() -> Result<T, Error>,
+) -> Result<T, Error> {
+    // Without a snapshot nothing follows, the same as with no submodules;
+    // the operation itself must not fail because of it.
+    let snapshot = follow
+        .then(|| repo.submodule_pointer_snapshot().ok().flatten())
+        .flatten();
+    let result = operation();
+    if result.is_ok()
+        && let Some(snapshot) = snapshot
+    {
+        match repo.follow_submodule_pointers(&snapshot) {
+            Ok(updates) if !updates.is_empty() => send_or_log(
+                msg_tx,
+                Msg::Internal(InternalMsg::SubmodulePointersFollowed { repo_id, updates }),
+            ),
+            Ok(_) => {}
+            Err(error) => send_or_log(
+                msg_tx,
+                Msg::ReportError {
+                    repo_id: Some(repo_id),
+                    message: format!("Updating submodules to their new pointers failed: {error}"),
+                },
+            ),
+        }
+    }
+    result
 }
 
 pub(super) fn schedule_commit(
@@ -1057,7 +1233,9 @@ pub(super) fn schedule_apply_stash(
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     index: usize,
+    follow_submodules: bool,
 ) {
+    let follow_tx = msg_tx.clone();
     schedule_repo_action(
         executor,
         repos,
@@ -1065,7 +1243,15 @@ pub(super) fn schedule_apply_stash(
         repo_id,
         RepoActionKind::ApplyStash,
         Some(format!("stash@{{{index}}}")),
-        move |repo| repo.stash_apply(index),
+        move |repo| {
+            following_submodule_pointers(
+                repo.as_ref(),
+                follow_submodules,
+                &follow_tx,
+                repo_id,
+                || repo.stash_apply(index),
+            )
+        },
     );
 }
 
@@ -1075,6 +1261,7 @@ pub(super) fn schedule_pop_stash(
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     index: usize,
+    follow_submodules: bool,
 ) {
     let context = Some(format!("stash@{{{index}}}"));
     spawn_repo_action(
@@ -1092,7 +1279,13 @@ pub(super) fn schedule_pop_stash(
             );
             let (applied, result) = {
                 let _scope = operation.attach();
-                let apply_result = repo.stash_apply(index);
+                let apply_result = following_submodule_pointers(
+                    repo.as_ref(),
+                    follow_submodules,
+                    &msg_tx,
+                    repo_id,
+                    || repo.stash_apply(index),
+                );
                 let applied = apply_result.is_ok();
                 let result = apply_result.and_then(|()| repo.stash_drop(index));
                 (applied, result)

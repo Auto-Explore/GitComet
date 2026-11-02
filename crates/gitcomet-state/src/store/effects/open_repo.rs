@@ -77,6 +77,11 @@ pub(super) fn schedule_open_repo(
                         }),
                     );
                 }
+                // Read before the handle moves into the message; a failed
+                // read leaves the tab unlinked rather than failing the open.
+                let parent = repo.superproject().ok().flatten();
+                let canonical_workdir =
+                    gitcomet_core::path_utils::canonicalize_or_original(spec.workdir.clone());
                 send_or_log(
                     &msg_tx,
                     Msg::Internal(crate::msg::InternalMsg::RepoOpenedOk {
@@ -86,6 +91,14 @@ pub(super) fn schedule_open_repo(
                         repo_id,
                         spec,
                         repo,
+                    }),
+                );
+                send_or_log(
+                    &msg_tx,
+                    Msg::Internal(crate::msg::InternalMsg::SubmoduleParentResolved {
+                        repo_id,
+                        canonical_workdir,
+                        parent,
                     }),
                 );
             }

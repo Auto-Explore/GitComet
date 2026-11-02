@@ -2031,8 +2031,24 @@ pub(super) fn status_loaded(
         StatusLane::Worktree.finish(repo_state, &mut effects);
         StatusLane::Staged.finish(repo_state, &mut effects);
         effects.extend(super::util::replan_one_sided_change(inputs, repo_state));
+        refresh_submodule_sync_facts(repo_state, &mut effects);
     }
     effects
+}
+
+/// Submodule drift and inner changes come with the submodule list, so a
+/// status refresh in a worktree that has first-level submodules re-reads the
+/// list too. The rows stay shown while it loads.
+fn refresh_submodule_sync_facts(repo_state: &mut RepoState, effects: &mut Vec<Effect>) {
+    let has_first_level = matches!(
+        &repo_state.submodules,
+        Loadable::Ready(submodules) if submodules.iter().any(|submodule| !submodule.nested)
+    );
+    if has_first_level && repo_state.loads_in_flight.request(LoadKind::Submodules) {
+        effects.push(Effect::LoadSubmodules {
+            repo_id: repo_state.id,
+        });
+    }
 }
 
 pub(super) fn worktree_status_loaded(
@@ -2058,6 +2074,7 @@ pub(super) fn worktree_status_loaded(
         }
         StatusLane::Worktree.finish(repo_state, &mut effects);
         effects.extend(super::util::replan_one_sided_change(inputs, repo_state));
+        refresh_submodule_sync_facts(repo_state, &mut effects);
     }
     effects
 }

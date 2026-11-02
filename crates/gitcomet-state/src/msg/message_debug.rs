@@ -132,6 +132,16 @@ impl std::fmt::Debug for InternalMsg {
                 .field("repo_id", repo_id)
                 .field("spec", spec)
                 .finish_non_exhaustive(),
+            InternalMsg::SubmoduleParentResolved {
+                repo_id,
+                canonical_workdir,
+                parent,
+            } => f
+                .debug_struct("SubmoduleParentResolved")
+                .field("repo_id", repo_id)
+                .field("canonical_workdir", canonical_workdir)
+                .field("parent", parent)
+                .finish(),
             InternalMsg::RepoMaintenanceChecked { repo_id, needed } => f
                 .debug_struct("RepoMaintenanceChecked")
                 .field("repo_id", repo_id)
@@ -667,6 +677,21 @@ impl std::fmt::Debug for InternalMsg {
                 .debug_struct("BranchAlreadyExists")
                 .field("action", action)
                 .field("prompt", prompt)
+                .finish(),
+            InternalMsg::SubmoduleCheckoutFinished {
+                repo_id,
+                operation,
+                outcome,
+            } => f
+                .debug_struct("SubmoduleCheckoutFinished")
+                .field("repo_id", repo_id)
+                .field("operation", operation)
+                .field("outcome", outcome)
+                .finish(),
+            InternalMsg::SubmodulePointersFollowed { repo_id, updates } => f
+                .debug_struct("SubmodulePointersFollowed")
+                .field("repo_id", repo_id)
+                .field("updates", updates)
                 .finish(),
             InternalMsg::BranchNotFullyMerged { repo_id, name } => f
                 .debug_struct("BranchNotFullyMerged")

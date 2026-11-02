@@ -856,6 +856,135 @@ pub struct Submodule {
     pub recorded_head: CommitId,
     pub checked_out_head: Option<CommitId>,
     pub status: SubmoduleStatus,
+    /// Listed inside another submodule rather than directly in this
+    /// repository. Only first-level rows carry the sync facts below.
+    pub nested: bool,
+    /// How far the checkout has moved from the recorded commit, counted inside
+    /// the submodule. `None` when in sync, not loaded, nested, or when either
+    /// commit is missing locally.
+    pub drift: Option<SubmoduleDrift>,
+    /// Uncommitted files inside the submodule, as the superproject's status
+    /// reports them, so `submodule.<name>.ignore` applies. First level only.
+    pub has_inner_changes: bool,
+}
+
+impl Submodule {
+    /// A first-level row without drift or inner-change facts.
+    pub fn new(
+        path: PathBuf,
+        recorded_head: CommitId,
+        checked_out_head: Option<CommitId>,
+        status: SubmoduleStatus,
+    ) -> Self {
+        Self {
+            path,
+            recorded_head,
+            checked_out_head,
+            status,
+            nested: false,
+            drift: None,
+            has_inner_changes: false,
+        }
+    }
+
+    /// The checkout differs from the recorded commit or has uncommitted
+    /// files: the out-of-sync states the sidebar marks.
+    pub fn is_out_of_sync(&self) -> bool {
+        self.has_inner_changes
+            || self.drift.is_some_and(|drift| !drift.is_empty())
+            || self.status == SubmoduleStatus::HeadMismatch
+    }
+}
+
+/// Commits the checked-out submodule commit has that the recorded one does
+/// not (`ahead`), and the reverse (`behind`).
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
+pub struct SubmoduleDrift {
+    pub ahead: u32,
+    pub behind: u32,
+}
+
+impl SubmoduleDrift {
+    pub fn is_empty(self) -> bool {
+        self.ahead == 0 && self.behind == 0
+    }
+}
+
+/// What restoring a submodule's pointer does to that submodule's checkout.
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
+pub enum SubmoduleCheckoutPolicy {
+    /// Check the submodule out at the restored commit, unless that could lose
+    /// work in it; then nothing changes and the risks come back.
+    #[default]
+    Guarded,
+    /// Keep the work first: stash uncommitted changes and keep a commit that
+    /// no branch holds on a new branch, then check out the restored commit.
+    StashAndUpdate,
+    /// Restore the pointer only and leave the checkout as it is.
+    KeepCheckout,
+}
+
+/// A submodule checkout that moving to `target` could lose work in.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct SubmoduleCheckoutRisk {
+    pub path: PathBuf,
+    pub checked_out: Option<CommitId>,
+    pub target: CommitId,
+    /// Uncommitted changes to tracked files inside the submodule.
+    pub has_inner_changes: bool,
+    /// No branch or tag holds the checked-out commit, so moving away leaves
+    /// it reachable only from the reflog.
+    pub unreferenced: bool,
+}
+
+/// A submodule checked out at `commit` to match its pointer.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SubmoduleCheckoutUpdate {
+    pub path: PathBuf,
+    pub commit: CommitId,
+}
+
+/// What a discard did to the submodules among its paths.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct DiscardOutcome {
+    /// Not empty when the guard stopped the discard: nothing was changed.
+    pub blocked: Vec<SubmoduleCheckoutRisk>,
+    pub updated: Vec<SubmoduleCheckoutUpdate>,
+    /// Submodules whose uncommitted changes were stashed first.
+    pub stashed: Vec<PathBuf>,
+    /// Submodules whose checked-out commit was kept on a new branch first.
+    pub kept_on_branch: Vec<(PathBuf, String)>,
+    /// Pointers restored in a submodule that is not loaded, because loading
+    /// it needs the source approved first.
+    pub not_loaded: Vec<PathBuf>,
+}
+
+impl DiscardOutcome {
+    pub fn is_blocked(&self) -> bool {
+        !self.blocked.is_empty()
+    }
+}
+
+/// First-level submodules that were checked out at their recorded commit
+/// with no uncommitted changes, taken before an operation that may move the
+/// recorded commits, so the checkouts can follow afterwards.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct SubmodulePointerSnapshot {
+    pub in_sync: Vec<(PathBuf, CommitId)>,
+}
+
+/// Where a repository's working tree is checked out as a submodule of
+/// another working tree.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct SubmoduleParent {
+    /// The superproject's working tree: the worktree whose index records the
+    /// gitlink. Each linked worktree of a superproject has its own.
+    pub workdir: PathBuf,
+    /// The submodule's path inside `workdir`.
+    pub path: PathBuf,
+    /// The superproject is itself a submodule, so this one is second level
+    /// or deeper and gets ordinary repository behaviour.
+    pub nested: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

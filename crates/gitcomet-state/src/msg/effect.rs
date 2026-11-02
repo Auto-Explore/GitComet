@@ -345,6 +345,13 @@ pub enum Effect {
         repo_id: RepoId,
         paths: Vec<PathBuf>,
     },
+    /// A discard or submodule update run again with the policy the user
+    /// picked in the submodule checkout prompt, or a first guarded update.
+    SubmoduleCheckout {
+        repo_id: RepoId,
+        operation: crate::model::SubmoduleCheckoutOperation,
+        policy: gitcomet_core::domain::SubmoduleCheckoutPolicy,
+    },
     Commit {
         repo_id: RepoId,
         message: String,
@@ -466,6 +473,7 @@ impl Effect {
             | Self::UnstagePaths { .. }
             | Self::DiscardWorktreeChangesPath { .. }
             | Self::DiscardWorktreeChangesPaths { .. }
+            | Self::SubmoduleCheckout { .. }
             | Self::Commit { .. }
             | Self::CommitAmend { .. }
             | Self::PreviewTagPush { .. }

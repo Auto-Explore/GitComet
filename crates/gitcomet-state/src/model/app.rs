@@ -129,6 +129,41 @@ impl Default for FileBrowserSettings {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SubmoduleSettings {
+    /// After a checkout, pull, reset or stash pop moves a first-level
+    /// submodule's recorded commit, check the submodule out there too when it
+    /// was in sync before. Git's own `submodule.recurse` takes precedence.
+    pub follow_pointers: bool,
+}
+
+impl Default for SubmoduleSettings {
+    fn default() -> Self {
+        Self {
+            follow_pointers: true,
+        }
+    }
+}
+
+/// What a submodule checkout prompt will run once the user picks how to keep
+/// the work the guard found.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub enum SubmoduleCheckoutOperation {
+    /// Discard these paths in the parent; at least one restores a pointer.
+    Discard { paths: Vec<PathBuf> },
+    /// Check a submodule out at the commit its parent records.
+    UpdateToRecorded { path: PathBuf },
+}
+
+/// A checkout the guard stopped because it could lose work in a submodule.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct SubmoduleCheckoutPrompt {
+    pub generation: u64,
+    pub repo_id: RepoId,
+    pub operation: SubmoduleCheckoutOperation,
+    pub risks: Vec<gitcomet_core::domain::SubmoduleCheckoutRisk>,
+}
+
 // ── App state ───────────────────────────────────────────────────
 
 #[derive(Clone, Debug, Default)]
@@ -166,6 +201,10 @@ pub struct AppState {
     /// repeats the last one is still a new prompt.
     pub force_remove_worktree_prompt_generation: u64,
     pub submodule_trust_prompt: Option<SubmoduleTrustPromptState>,
+    /// A discard or update the submodule guard stopped, waiting for a choice.
+    pub submodule_checkout_prompt: Option<SubmoduleCheckoutPrompt>,
+    pub submodule_checkout_prompt_generation: u64,
+    pub submodule_settings: SubmoduleSettings,
     /// A submodule trust check is running in the background. Set the moment the
     /// add/update/load is triggered and cleared when the check resolves, so the
     /// UI can show a pending/spinner state instead of a dead gap before the
@@ -208,6 +247,16 @@ impl AppState {
             },
             ..Self::default()
         }
+    }
+
+    /// Open first-level submodule tabs of the worktree tab `repo_id`, in tab
+    /// order.
+    pub fn submodule_children(&self, repo_id: RepoId) -> Vec<RepoId> {
+        self.repos
+            .iter()
+            .filter(|repo| repo.submodule_parent_tab() == Some(repo_id))
+            .map(|repo| repo.id)
+            .collect()
     }
 
     /// Queues a notification for the window.

@@ -548,6 +548,21 @@ pub(super) fn send_unavailable_git_effect_result(
             runtime,
             &send,
         ),
+        Effect::SubmoduleCheckout {
+            repo_id, operation, ..
+        } => send_repo_action_unavailable(
+            repo_id,
+            match operation {
+                crate::model::SubmoduleCheckoutOperation::Discard { .. } => {
+                    RepoActionKind::DiscardWorktreeChangesPaths
+                }
+                crate::model::SubmoduleCheckoutOperation::UpdateToRecorded { .. } => {
+                    RepoActionKind::UpdateSubmodule
+                }
+            },
+            runtime,
+            &send,
+        ),
         Effect::Stash { repo_id, .. } => {
             send_repo_action_unavailable(repo_id, RepoActionKind::Stash, runtime, &send)
         }

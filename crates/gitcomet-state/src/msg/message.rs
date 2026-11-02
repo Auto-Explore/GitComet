@@ -3,6 +3,7 @@ use crate::model::{
     BranchExistsPromptState, ConflictFileLoadMode, DefaultTagType, FileBrowserSettings,
     ForceDeleteBranchPrompt, ForceRemoveWorktreePrompt, GitOperationOuterOutcome,
     MaintenanceSettings, RemoteSettings, RepoId, SidebarDataRequest, SidebarMode,
+    SubmoduleCheckoutOperation, SubmoduleCheckoutPrompt, SubmoduleSettings,
 };
 use gitcomet_core::auth::StagedGitAuth;
 use gitcomet_core::conflict_session::ConflictSession;
@@ -83,6 +84,7 @@ pub enum RepoActionKind {
     ApplyStash,
     PopStash,
     DropStash,
+    UpdateSubmodule,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -130,7 +132,8 @@ impl RepoActionKind {
             | Self::Stash
             | Self::ApplyStash
             | Self::PopStash
-            | Self::DropStash => RepositoryRequirement::WorkingTree,
+            | Self::DropStash
+            | Self::UpdateSubmodule => RepositoryRequirement::WorkingTree,
         }
     }
 
@@ -155,7 +158,8 @@ impl RepoActionKind {
             | Self::DiscardWorktreeChangesPaths
             | Self::Stash
             | Self::ApplyStash
-            | Self::PopStash => true,
+            | Self::PopStash
+            | Self::UpdateSubmodule => true,
             Self::CreateBranch
             | Self::RenameBranch
             | Self::DeleteBranch
@@ -186,6 +190,7 @@ impl RepoActionKind {
             Self::ApplyStash => "Apply stash",
             Self::PopStash => "Pop stash",
             Self::DropStash => "Drop stash",
+            Self::UpdateSubmodule => "Update submodule",
         }
     }
 }
@@ -407,6 +412,7 @@ pub enum Msg {
     },
     SetRemoteSettings(RemoteSettings),
     SetMaintenanceSettings(MaintenanceSettings),
+    SetSubmoduleSettings(SubmoduleSettings),
     SetFileBrowserSettings(FileBrowserSettings),
     SetLargeFileSettings(crate::model::LargeFileSettings),
     /// The resolved hidden-refs setting; every all-branches walk leaves these out.
@@ -880,6 +886,20 @@ pub enum Msg {
     },
     DismissForceDeleteBranchPrompt {
         prompt: ForceDeleteBranchPrompt,
+    },
+    /// Run the checkout the submodule guard stopped, keeping the work it
+    /// found as `policy` says.
+    ResolveSubmoduleCheckoutPrompt {
+        prompt: SubmoduleCheckoutPrompt,
+        policy: SubmoduleCheckoutPolicy,
+    },
+    DismissSubmoduleCheckoutPrompt {
+        prompt: SubmoduleCheckoutPrompt,
+    },
+    /// Check the submodule at `path` out at the commit `repo_id` records.
+    UpdateSubmoduleToRecorded {
+        repo_id: RepoId,
+        path: PathBuf,
     },
     RenameBranch {
         repo_id: RepoId,
@@ -1503,6 +1523,13 @@ pub enum InternalMsg {
         spec: RepoSpec,
         repo: Arc<dyn GitRepository>,
     },
+    /// Sent right after `RepoOpenedOk`: the repository's canonical folder,
+    /// and the worktree it is checked out in as a submodule, if any.
+    SubmoduleParentResolved {
+        repo_id: RepoId,
+        canonical_workdir: PathBuf,
+        parent: Option<SubmoduleParent>,
+    },
     RepoMaintenanceChecked {
         repo_id: RepoId,
         needed: bool,
@@ -1830,6 +1857,18 @@ pub enum InternalMsg {
     BranchAlreadyExists {
         action: RepoActionKind,
         prompt: BranchExistsPromptState,
+    },
+    /// What a discard or submodule update did to submodule checkouts. Sent
+    /// before the action's own completion.
+    SubmoduleCheckoutFinished {
+        repo_id: RepoId,
+        operation: SubmoduleCheckoutOperation,
+        outcome: DiscardOutcome,
+    },
+    /// Submodules checked out at the commit an operation moved their pointer to.
+    SubmodulePointersFollowed {
+        repo_id: RepoId,
+        updates: Vec<SubmoduleCheckoutUpdate>,
     },
     /// `git branch -d` refused `name` because it is not fully merged.
     BranchNotFullyMerged {

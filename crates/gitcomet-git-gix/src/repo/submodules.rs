@@ -396,6 +396,7 @@ fn collect_repo_submodules(
     cancellation: &CancellationToken,
 ) -> Result<()> {
     cancellation.check_cancelled()?;
+    let nested_listing = !prefix.as_os_str().is_empty();
     let mut gitlinks = collect_gitlinks(repo, cancellation)?;
     if let Some(submodules) = crate::refs::submodules(repo).map_err(|e| {
         Error::new(ErrorKind::Backend(format!("gix submodules: {e}"))).with_source(e)
@@ -411,8 +412,9 @@ fn collect_repo_submodules(
             };
 
             let full_path = prefix.join(&relative_path);
-            let (row, nested_repo) =
+            let (mut row, nested_repo) =
                 configured_submodule_row(repo, submodule, full_path.clone(), gitlink)?;
+            row.nested = nested_listing;
             out.push(row);
             cancellation.check_cancelled()?;
             if let Some(nested_repo) = nested_repo {
@@ -429,6 +431,9 @@ fn collect_repo_submodules(
             recorded_head: gitlink.index_head_or_null(repo),
             checked_out_head: None,
             status: SubmoduleStatus::MissingMapping,
+            nested: nested_listing,
+            drift: None,
+            has_inner_changes: false,
         });
         cancellation.check_cancelled()?;
         if let Some(nested_repo) = open_gitlink_repo(repo, &relative_path)? {
@@ -765,6 +770,9 @@ fn configured_submodule_row(
                 recorded_head: gitlink.null_head(repo),
                 checked_out_head: None,
                 status: SubmoduleStatus::MergeConflict,
+                nested: false,
+                drift: None,
+                has_inner_changes: false,
             },
             None,
         ));
@@ -778,6 +786,9 @@ fn configured_submodule_row(
                 recorded_head: gitlink.index_head_or_null(repo),
                 checked_out_head: None,
                 status: SubmoduleStatus::NotInitialized,
+                nested: false,
+                drift: None,
+                has_inner_changes: false,
             },
             None,
         ));
@@ -799,6 +810,9 @@ fn configured_submodule_row(
             recorded_head: gitlink.index_head_or_null(repo),
             checked_out_head: Some(head),
             status,
+            nested: false,
+            drift: None,
+            has_inner_changes: false,
         },
         Some(nested_repo),
     ))
@@ -886,6 +900,9 @@ fn submodule_worktree_diff_summary(
                 recorded_head: gitlink.index_head_or_null(repo),
                 checked_out_head: None,
                 status: SubmoduleStatus::MissingMapping,
+                nested: false,
+                drift: None,
+                has_inner_changes: false,
             });
         }
     }
@@ -1265,7 +1282,10 @@ fn gitlink_commit_id_in_object(
     Ok(Some(object_id_to_commit_id(entry.object_id())))
 }
 
-fn head_gitlink_commit_id(repo: &gix::Repository, path: &Path) -> Result<Option<CommitId>> {
+pub(super) fn head_gitlink_commit_id(
+    repo: &gix::Repository,
+    path: &Path,
+) -> Result<Option<CommitId>> {
     let Some(head_id) = gix_head_id_or_none(repo)? else {
         return Ok(None);
     };
@@ -1959,6 +1979,17 @@ fn list_submodules_in(
     let mut submodules = Vec::new();
     collect_repo_submodules(repo, Path::new(""), &mut submodules, cancellation)?;
     cancellation.check_cancelled()?;
+    if let Some(workdir) = repo.workdir() {
+        // The facts only refine the rows; a failed read leaves them as listed.
+        match super::submodule_sync::fill_first_level_sync_facts(
+            workdir,
+            &mut submodules,
+            cancellation,
+        ) {
+            Err(error) if matches!(error.kind(), ErrorKind::Cancelled) => return Err(error),
+            Ok(()) | Err(_) => {}
+        }
+    }
     submodules.sort_unstable_by(|a, b| a.path.cmp(&b.path));
     Ok(submodules)
 }

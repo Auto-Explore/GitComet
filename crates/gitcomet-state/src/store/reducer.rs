@@ -38,6 +38,8 @@ mod repo_watch;
 mod repository_preferences;
 mod reword;
 mod settings;
+mod submodule_checkout;
+mod submodule_tabs;
 mod submodule_trust;
 #[cfg(test)]
 pub(super) mod test_inputs;
@@ -325,6 +327,8 @@ pub(crate) fn msg_requires_available_git(msg: &Msg) -> bool {
             | Msg::UnstagePaths { .. }
             | Msg::DiscardWorktreeChangesPath { .. }
             | Msg::DiscardWorktreeChangesPaths { .. }
+            | Msg::ResolveSubmoduleCheckoutPrompt { .. }
+            | Msg::UpdateSubmoduleToRecorded { .. }
             | Msg::SaveWorktreeFile { .. }
             | Msg::AppendGitignorePatterns { .. }
             | Msg::RunLargeFileCommand { .. }
@@ -1097,6 +1101,7 @@ fn reduce_inner(
         Msg::SetLargeFileSettings(settings) => settings::set_large_file_settings(state, settings),
         Msg::SetHistoryHiddenRefs(filter) => settings::set_history_hidden_refs(state, filter),
         Msg::SetMaintenanceSettings(settings) => maintenance::set_settings(state, settings),
+        Msg::SetSubmoduleSettings(settings) => submodule_checkout::set_settings(state, settings),
         Msg::SetFileBrowserSettings(settings) => {
             effects::set_file_browser_settings(state, settings)
         }
@@ -1786,6 +1791,21 @@ fn reduce_inner(
             begin_local_action(state, repo_id);
             actions_emit_effects::discard_worktree_changes_paths(repo_id, paths)
         }
+        Msg::ResolveSubmoduleCheckoutPrompt { prompt, policy } => {
+            let repo_id = prompt.repo_id;
+            let effects = submodule_checkout::resolve_prompt(state, prompt, policy);
+            if !effects.is_empty() {
+                begin_local_action(state, repo_id);
+            }
+            effects
+        }
+        Msg::DismissSubmoduleCheckoutPrompt { prompt } => {
+            submodule_checkout::dismiss_prompt(state, prompt)
+        }
+        Msg::UpdateSubmoduleToRecorded { repo_id, path } => {
+            begin_local_action(state, repo_id);
+            submodule_checkout::update_to_recorded(repo_id, path)
+        }
         Msg::SaveWorktreeFile {
             repo_id,
             path,
@@ -2419,6 +2439,11 @@ fn reduce_inner(
             repository_mode,
             head_commit,
         ),
+        Msg::Internal(crate::msg::InternalMsg::SubmoduleParentResolved {
+            repo_id,
+            canonical_workdir,
+            parent,
+        }) => submodule_tabs::submodule_parent_resolved(state, repo_id, canonical_workdir, parent),
         Msg::Internal(crate::msg::InternalMsg::RepoLoadFinished {
             repo_id,
             load_epoch,
@@ -2756,6 +2781,14 @@ fn reduce_inner(
         ),
         Msg::Internal(crate::msg::InternalMsg::BranchAlreadyExists { action, prompt }) => {
             external_and_history::branch_already_exists(inputs, state, action, prompt)
+        }
+        Msg::Internal(crate::msg::InternalMsg::SubmoduleCheckoutFinished {
+            repo_id,
+            operation,
+            outcome,
+        }) => submodule_checkout::checkout_finished(inputs, state, repo_id, operation, outcome),
+        Msg::Internal(crate::msg::InternalMsg::SubmodulePointersFollowed { repo_id, updates }) => {
+            submodule_checkout::pointers_followed(inputs, state, repo_id, updates)
         }
         Msg::Internal(crate::msg::InternalMsg::BranchNotFullyMerged { repo_id, name }) => {
             external_and_history::branch_not_fully_merged(inputs, state, repo_id, name)

@@ -16,6 +16,7 @@ use std::sync::Arc;
 use std::sync::RwLock;
 
 use super::super::{RepoId, executor::TaskExecutor, worker_channel::StoreWorkerSender};
+use super::repo_actions::following_submodule_pointers;
 use super::util::{
     GitOperationTask, message_subject, missing_repo_error, send_or_log, short_commit_id,
     single_line_context, spawn_with_repo, spawn_with_repo_or_else,
@@ -1307,8 +1308,10 @@ fn schedule_pull(
     mode: PullMode,
     context: Option<String>,
     auth: Option<StagedGitAuth>,
+    follow_submodules: bool,
 ) {
     let command = RepoCommandKind::Pull { mode };
+    let follow_tx = msg_tx.clone();
     let context = context.map(|context| match pull_mode_suffix(mode) {
         Some(mode) => format!("{context} · {mode}"),
         None => context,
@@ -1320,7 +1323,15 @@ fn schedule_pull(
         repo_id,
         command,
         context,
-        move |repo| run_with_git_auth(auth, || repo.pull(mode)),
+        move |repo| {
+            following_submodule_pointers(
+                repo.as_ref(),
+                follow_submodules,
+                &follow_tx,
+                repo_id,
+                || run_with_git_auth(auth, || repo.pull(mode)),
+            )
+        },
     );
 }
 
@@ -1333,8 +1344,10 @@ fn schedule_pull_branch(
     branch: String,
     local_branch: Option<String>,
     auth: Option<StagedGitAuth>,
+    follow_submodules: bool,
 ) {
     let command_remote = remote.clone();
+    let follow_tx = msg_tx.clone();
     let command_branch = branch.clone();
     let context = local_branch.map(|local| format!("{remote}/{branch} → {local}"));
     schedule_repo_command_with_context(
@@ -1347,7 +1360,15 @@ fn schedule_pull_branch(
             branch: command_branch,
         },
         context,
-        move |repo| run_with_git_auth(auth, || repo.pull_branch_with_output(&remote, &branch)),
+        move |repo| {
+            following_submodule_pointers(
+                repo.as_ref(),
+                follow_submodules,
+                &follow_tx,
+                repo_id,
+                || run_with_git_auth(auth, || repo.pull_branch_with_output(&remote, &branch)),
+            )
+        },
     );
 }
 
@@ -1685,8 +1706,10 @@ fn schedule_reset(
     repo_id: RepoId,
     target: String,
     mode: ResetMode,
+    follow_submodules: bool,
 ) {
     let command_target = target.clone();
+    let follow_tx = msg_tx.clone();
     schedule_repo_command(
         executor,
         repos,
@@ -1696,7 +1719,15 @@ fn schedule_reset(
             mode,
             target: command_target,
         },
-        move |repo| repo.reset_with_output(&target, mode),
+        move |repo| {
+            following_submodule_pointers(
+                repo.as_ref(),
+                follow_submodules,
+                &follow_tx,
+                repo_id,
+                || repo.reset_with_output(&target, mode),
+            )
+        },
     );
 }
 
@@ -2909,6 +2940,7 @@ pub(super) fn schedule(
                 .map(|(local, upstream)| format!("{upstream} → {local}"))
                 .or_else(|| current_branch_context(thread_state, repo_id)),
             auth,
+            super::follow_submodule_pointers(thread_state),
         ),
         RepoCommandEffect::PullBranch {
             repo_id,
@@ -2924,6 +2956,7 @@ pub(super) fn schedule(
             branch,
             current_branch_context(thread_state, repo_id),
             auth,
+            super::follow_submodule_pointers(thread_state),
         ),
         RepoCommandEffect::MergeRef { repo_id, reference } => {
             schedule_merge_ref(executor, repos, msg_tx, repo_id, reference);
@@ -3006,7 +3039,15 @@ pub(super) fn schedule(
             repo_id,
             target,
             mode,
-        } => schedule_reset(executor, repos, msg_tx, repo_id, target, mode),
+        } => schedule_reset(
+            executor,
+            repos,
+            msg_tx,
+            repo_id,
+            target,
+            mode,
+            super::follow_submodule_pointers(thread_state),
+        ),
         RepoCommandEffect::SquashCommits {
             repo_id,
             oldest,
