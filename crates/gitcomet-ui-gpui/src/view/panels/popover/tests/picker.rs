@@ -809,6 +809,124 @@ fn repo_picker_typing_long_recent_paths_has_bounded_text_measurements(
     clear_truncated_layout_cache_for_test();
 }
 
+/// The recents list keeps 150 repositories, far more than fit in the picker
+/// without scrolling. Every one of them has to stay reachable by search, and a
+/// list that long must cost no more per frame than a shorter one that still
+/// overflows the viewport: rows are built only for what is in view, and a
+/// keystroke filters each repository once without rebuilding the row model.
+#[gpui::test]
+fn repo_picker_finds_every_recent_repository_at_the_cap(cx: &mut gpui::TestAppContext) {
+    use crate::kit::text_truncation::clear_truncated_layout_cache_for_test;
+    use gitcomet_core::history_perf::{self, Work};
+
+    // The session's recents cap.
+    const RECENT_COUNT: usize = 150;
+
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    cx.update(|_window, app| crate::app::bind_text_input_keys_for_test(app));
+    open_repo_picker(&view, cx);
+    let popover_host = cx.update(|_window, app| view.read(app).popover_host.clone());
+    let recents: Vec<std::path::PathBuf> = (0..RECENT_COUNT)
+        .map(|ix| std::path::PathBuf::from(format!("/work/team-{:02}/recent-{ix:03}", ix % 7)))
+        .collect();
+
+    // Text measured to draw the picker browsing the newest `count` recents,
+    // starting from a cold layout cache.
+    let browse_frame_measurements = |count: usize, cx: &mut gpui::VisualTestContext| {
+        cx.update(|_window, app| {
+            popover_host.update(app, |host, cx| {
+                host.cached_workspaces.clear();
+                host.cached_pinned_repos.clear();
+                host.cached_recent_repos = recents[..count].to_vec();
+                cx.notify();
+            });
+        });
+        clear_truncated_layout_cache_for_test();
+        let _work = history_perf::capture();
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+        history_perf::count(Work::TextMeasurement)
+    };
+
+    let overflowing = browse_frame_measurements(50, cx);
+    let full = browse_frame_measurements(RECENT_COUNT, cx);
+    assert!(overflowing > 0, "the browse frame measures its rows");
+    assert_eq!(
+        full, overflowing,
+        "a frame costs the same whether the list holds 50 or {RECENT_COUNT} repositories"
+    );
+    cx.update(|_window, app| {
+        let rows = repo_picker::cached(popover_host.read(app), "");
+        assert_eq!(
+            rows.filtered_len(),
+            RECENT_COUNT,
+            "browsing lists every recent"
+        );
+    });
+    assert!(cx.debug_bounds("picker_prompt_item_0").is_some());
+    assert!(
+        cx.debug_bounds("picker_prompt_item_149").is_none(),
+        "the oldest recent is below the fold until it is scrolled or searched to"
+    );
+
+    let oldest = recents.last().cloned().expect("seeded recents");
+    let input = cx.update(|_window, app| {
+        popover_host
+            .read(app)
+            .repo_picker_search_input
+            .clone()
+            .expect("repo picker search input")
+    });
+    for (query, matches) in [("team-02", 22), ("recent-14", 10), ("recent-149", 1)] {
+        let _work = history_perf::capture();
+        input.update(cx, |input, cx| input.set_text(query, cx));
+        cx.run_until_parked();
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+        assert_eq!(
+            history_perf::count(Work::PickerModelBuild),
+            0,
+            "typing must reuse the row model"
+        );
+        assert_eq!(
+            history_perf::count(Work::PickerFilterItem),
+            RECENT_COUNT as u64,
+            "filter each repository once per query"
+        );
+        cx.update(|_window, app| {
+            let host = popover_host.read(app);
+            let rows = repo_picker::cached(host, query);
+            assert_eq!(rows.filtered_len(), matches, "matches for {query:?}");
+            assert!(
+                rows.filtered_payloads()
+                    .contains(&repo_picker::RepoPickerEntry::Closed(oldest.clone())),
+                "{query:?} has to find the oldest recent repository"
+            );
+            assert_eq!(host.repo_picker_selected_index, Some(0));
+        });
+        // Rows are keyed by their place in the full list, so this is the
+        // oldest recent's row, now in view.
+        assert!(
+            cx.debug_bounds("picker_prompt_item_149").is_some(),
+            "{query:?} has to bring the oldest recent repository into view"
+        );
+    }
+
+    cx.update(|_window, app| {
+        let rows = repo_picker::cached(popover_host.read(app), "recent-149");
+        assert_eq!(
+            rows.filtered_payload(0),
+            Some(&repo_picker::RepoPickerEntry::Closed(oldest)),
+            "Enter opens the oldest recent repository"
+        );
+    });
+    clear_truncated_layout_cache_for_test();
+}
+
 /// Seeds a session where one repository is pinned and has already fallen off
 /// the recents list, then checks the picker still lists it — under Pinned, and
 /// nowhere else. Runs in a subprocess so the session-file override is set

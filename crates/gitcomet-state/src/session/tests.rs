@@ -1566,6 +1566,40 @@ fn pinned_repos_survive_the_recent_repository_cap() {
     );
 }
 
+/// The repository switcher lists and searches every recent repository, so the
+/// list keeps 150 of them before the oldest starts falling off.
+#[test]
+fn recent_repos_keep_the_last_150_repositories() {
+    assert_eq!(MAX_RECENT_REPOS, 150);
+
+    let dir = unique_session_test_dir("recent-repos-keep-150");
+    let path = dir.join("session.json");
+    let repos: Vec<PathBuf> = (0..150)
+        .map(|ix| dir.join(format!("repo-{ix:03}")))
+        .collect();
+    for repo in &repos {
+        persist_recent_repo_to_path(repo, &path).expect("record repo as recent");
+    }
+
+    let newest_first: Vec<PathBuf> = repos.iter().rev().cloned().collect();
+    assert_eq!(
+        load_from_path(&path).recent_repos,
+        newest_first,
+        "all 150 repositories are kept, most recent first"
+    );
+
+    let newest = dir.join("repo-150");
+    persist_recent_repo_to_path(&newest, &path).expect("record one more repo");
+    let loaded = load_from_path(&path).recent_repos;
+    assert_eq!(loaded.len(), 150);
+    assert_eq!(loaded.first(), Some(&newest));
+    assert!(
+        !loaded.contains(&repos[0]),
+        "the 151st repository pushes the oldest off the list"
+    );
+    assert_eq!(loaded.last(), Some(&repos[1]));
+}
+
 /// A UI holding its own copy of the recents has to be able to apply a bump
 /// without re-reading the file, and the copy has to still match the file
 /// afterwards — including at the cap, where the file drops its tail.

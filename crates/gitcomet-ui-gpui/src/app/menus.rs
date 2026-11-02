@@ -219,11 +219,28 @@ pub(super) fn refresh_macos_app_menus_for_external_editor(cx: &mut App, configur
     ));
 }
 
+/// How many recent repositories the macOS "Recent Repositories" submenu lists.
+///
+/// The recents list itself holds many more, and the repository switcher lists
+/// and searches every one of them. A native submenu has no search and is rebuilt
+/// whenever the active repository changes, so it keeps to the newest few.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub(crate) const RECENT_REPOSITORIES_MENU_LIMIT: usize = 15;
+
+/// The recent repositories the macOS "Recent Repositories" submenu lists:
+/// the newest [`RECENT_REPOSITORIES_MENU_LIMIT`], most recent first.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub(crate) fn recent_repository_menu_paths(
+    recent_repos: Vec<PathBuf>,
+) -> impl Iterator<Item = PathBuf> {
+    recent_repos
+        .into_iter()
+        .take(RECENT_REPOSITORIES_MENU_LIMIT)
+}
+
 #[cfg(target_os = "macos")]
 pub(super) fn recent_repo_menu_items() -> Vec<MenuItem> {
-    session::load()
-        .recent_repos
-        .into_iter()
+    recent_repository_menu_paths(session::load().recent_repos)
         .map(|path| {
             MenuItem::action(
                 recent_repository_label(&path),
