@@ -2437,6 +2437,28 @@ fn recent_repository_label_formats_repo_name_and_parent() {
     assert_eq!(label, "gitcomet - /Users/sampo/projects");
 }
 
+/// The recents list holds far more repositories than a native submenu should
+/// show, so the macOS menu keeps to the newest few and leaves the rest to the
+/// searchable repository switcher.
+#[test]
+fn recent_repositories_menu_lists_only_the_newest_repositories() {
+    let recent: Vec<PathBuf> = (0..150)
+        .map(|ix| PathBuf::from(format!("/work/repo-{ix:03}")))
+        .collect();
+
+    let listed: Vec<PathBuf> = recent_repository_menu_paths(recent.clone()).collect();
+
+    assert_eq!(listed.len(), RECENT_REPOSITORIES_MENU_LIMIT);
+    assert_eq!(listed, recent[..RECENT_REPOSITORIES_MENU_LIMIT]);
+
+    let short = recent[..3].to_vec();
+    assert_eq!(
+        recent_repository_menu_paths(short.clone()).collect::<Vec<_>>(),
+        short,
+        "a list under the limit is listed whole"
+    );
+}
+
 #[test]
 fn recent_repository_label_falls_back_to_display_when_file_name_is_missing() {
     let path = PathBuf::from(std::path::MAIN_SEPARATOR.to_string());
