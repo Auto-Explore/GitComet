@@ -491,6 +491,36 @@ fn a_late_load_does_not_undo_an_enter_before_head_catches_up() {
 }
 
 #[test]
+fn a_late_load_does_not_undo_a_leave_before_head_catches_up() {
+    // Leaving clears `active` straight away, but `head_branch` only follows
+    // once the reload it triggers lands. A load that arrives in between still
+    // sees HEAD on the virtual branches branch, and must not read that as
+    // "we are back on it".
+    let mut state = repo_with_virtual_branches();
+    state.repos[0].head_branch =
+        Loadable::Ready(gitcomet_core::virtual_branches::VIRTUAL_BRANCHES_BRANCH.into());
+    state.repos[0].virtual_branches.active = true;
+    state.repos[0].virtual_branches.busy.switching = true;
+    virtual_branches_active_finished(
+        &crate::store::reducer::test_inputs::clock(),
+        &mut state,
+        RepoId(1),
+        false,
+        None,
+        Ok(()),
+    );
+    virtual_branches_loaded(
+        &crate::store::reducer::test_inputs::clock(),
+        &mut state,
+        RepoId(1),
+        Ok(VirtualBranchesState::new("main")),
+        Ok(AssignmentIndex::new()),
+        Ok(None),
+    );
+    assert!(!state.repos[0].virtual_branches.active);
+}
+
+#[test]
 fn a_load_during_a_switch_leaves_active_to_the_switch() {
     // While the working directory is being moved, HEAD is neither here nor
     // there; only the switch's own report may say where it ended up.

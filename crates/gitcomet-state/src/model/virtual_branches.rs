@@ -101,6 +101,11 @@ pub struct VirtualBranchesRepoState {
     /// disk: after a restart the user is either already on the virtual branches (and
     /// this is `None`, meaning "no idea") or not on it at all.
     pub checkout_base: Option<String>,
+    /// Set when a leave has finished and the repository's `head_branch` has
+    /// not been reloaded since. Until then it still names the virtual
+    /// branches branch, and a load landing in that gap must not read it as
+    /// "the working directory is back on it".
+    pub head_unconfirmed: bool,
 }
 
 impl VirtualBranchesRepoState {
@@ -126,6 +131,7 @@ impl VirtualBranchesRepoState {
         self.conflict = None;
         self.active = false;
         self.checkout_base = None;
+        self.head_unconfirmed = false;
         self.bump_rev();
     }
 

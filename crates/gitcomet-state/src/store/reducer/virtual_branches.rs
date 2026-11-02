@@ -397,12 +397,16 @@ pub(super) fn virtual_branches_active_finished(
 
     repo.virtual_branches.active = active;
     repo.virtual_branches.checkout_base = if active { checkout_base } else { None };
+    // Leaving moves HEAD off the virtual branches branch, but `head_branch`
+    // still names it until the reload below lands.
+    repo.virtual_branches.head_unconfirmed = !active;
     repo.virtual_branches.bump_rev();
     // Leaving changes which branch HEAD is on, and entering changes the files,
     // so the ordinary views have to catch up either way.
     vec![
         Effect::Status(StatusEffect::LoadWorktreeStatus { repo_id }),
         Effect::References(ReferenceEffect::LoadBranches { repo_id }),
+        Effect::References(ReferenceEffect::LoadHeadBranch { repo_id }),
     ]
 }
 
@@ -509,8 +513,10 @@ pub(super) fn virtual_branches_loaded(
     // This only ever turns `active` on. Entering sets it before `head_branch`
     // follows, so a load landing in that gap sees the old HEAD, and reading
     // that as "not on the branch" would undo the enter. Leaving is reported by
-    // the switch itself. A switch in flight owns `active` altogether.
+    // the switch itself. A switch in flight owns `active` altogether, and so
+    // does a leave whose `head_branch` has not been reloaded yet.
     if !repo.virtual_branches.busy.switching
+        && !repo.virtual_branches.head_unconfirmed
         && matches!(&repo.head_branch, Loadable::Ready(branch) if branch == gitcomet_core::virtual_branches::VIRTUAL_BRANCHES_BRANCH)
     {
         repo.virtual_branches.active = true;
