@@ -1707,6 +1707,23 @@ fn a_pull_inside_the_virtual_branches_is_refused() {
 }
 
 #[test]
+fn pulling_a_named_branch_inside_the_virtual_branches_is_refused() {
+    // Pulling a named remote branch is a second entry point that also merges
+    // into HEAD, so the plain-pull guard does not cover it.
+    let (temp, _remote, repo) = repo_with_a_remote();
+    let root = temp.path();
+    repo.enter_virtual_branches().expect("enter");
+    let before = git(root, &["rev-parse", VIRTUAL_BRANCHES_BRANCH]);
+
+    assert_refused(
+        repo.pull_branch_with_output("origin", "main"),
+        "a named pull",
+    );
+
+    assert_eq!(git(root, &["rev-parse", VIRTUAL_BRANCHES_BRANCH]), before);
+}
+
+#[test]
 fn a_force_push_inside_the_virtual_branches_is_refused() {
     // A force push publishes HEAD just as an ordinary push does, and with
     // `--force-with-lease` it would overwrite what the remote already has
