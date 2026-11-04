@@ -817,6 +817,7 @@ impl GitCometView {
             }
             TerminalShutdownAction::CloseWindow
             | TerminalShutdownAction::DeleteWorkspace { .. }
+            | TerminalShutdownAction::SwitchWorkspace { .. }
             | TerminalShutdownAction::QuitApp => self.running_terminal_summary(),
         }
     }
@@ -948,6 +949,9 @@ impl GitCometView {
                     // A focused tool ends with its window, Settings or not.
                     cx.quit();
                 }
+            }
+            TerminalShutdownAction::SwitchWorkspace { target, hand_off } => {
+                self.begin_workspace_switch(target, hand_off, cx);
             }
             TerminalShutdownAction::DeleteWorkspace { workspace_id } => {
                 // Deferred: finishing may update this view to reset it.
@@ -1695,6 +1699,7 @@ fn terminate_terminals_for_action(view: &mut GitCometView, action: &TerminalShut
         }
         TerminalShutdownAction::CloseWindow
         | TerminalShutdownAction::DeleteWorkspace { .. }
+        | TerminalShutdownAction::SwitchWorkspace { .. }
         | TerminalShutdownAction::QuitApp => {
             for session in view.terminal_sessions.values() {
                 for instance in &session.instances {
@@ -1705,7 +1710,7 @@ fn terminate_terminals_for_action(view: &mut GitCometView, action: &TerminalShut
     }
 }
 
-fn shutdown_terminal_instance(instance: &TerminalInstance, terminate: bool) {
+pub(in crate::view) fn shutdown_terminal_instance(instance: &TerminalInstance, terminate: bool) {
     if terminate {
         terminate_terminal_process_group(instance.child_pid);
     }

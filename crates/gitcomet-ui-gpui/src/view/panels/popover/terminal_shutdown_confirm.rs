@@ -15,6 +15,7 @@ pub(super) fn panel(
         TerminalShutdownAction::QuitApp => format!("Quit {}?", crate::view::product_name()),
         TerminalShutdownAction::CloseWindow => "Close window?".to_string(),
         TerminalShutdownAction::DeleteWorkspace { .. } => "Delete workspace?".to_string(),
+        TerminalShutdownAction::SwitchWorkspace { .. } => "Switch workspace?".to_string(),
         TerminalShutdownAction::MoveRepo { .. } => "Move repository?".to_string(),
         TerminalShutdownAction::CloseRepos { .. } => "Close terminals?".to_string(),
         TerminalShutdownAction::CloseRepo { .. }
@@ -25,6 +26,7 @@ pub(super) fn panel(
         TerminalShutdownAction::QuitApp => "Terminate and quit",
         TerminalShutdownAction::CloseWindow => "Terminate and close",
         TerminalShutdownAction::DeleteWorkspace { .. } => "Terminate and delete",
+        TerminalShutdownAction::SwitchWorkspace { .. } => "Terminate and switch",
         TerminalShutdownAction::MoveRepo { .. } => "Terminate and move",
         TerminalShutdownAction::CloseRepos { .. } => "Terminate and close",
         TerminalShutdownAction::CloseRepo { .. }
@@ -47,6 +49,7 @@ pub(super) fn panel(
             TerminalShutdownAction::CloseWindow
                 | TerminalShutdownAction::CloseRepos { .. }
                 | TerminalShutdownAction::DeleteWorkspace { .. }
+                | TerminalShutdownAction::SwitchWorkspace { .. }
                 | TerminalShutdownAction::QuitApp
         );
 

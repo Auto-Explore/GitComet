@@ -186,6 +186,12 @@ pub(super) fn send_unavailable_git_effect_result(
                 result: Err(git_unavailable_error(runtime)),
             }))
         }
+        Effect::LoadSubmoduleChanges { repo_id, .. } => send(Msg::Internal(
+            crate::msg::InternalMsg::SubmoduleChangesLoaded {
+                repo_id,
+                result: Err(git_unavailable_error(runtime)),
+            },
+        )),
         Effect::LoadLargeFileSupport { repo_id } => send(Msg::Internal(
             crate::msg::InternalMsg::LargeFileSupportLoaded {
                 repo_id,
@@ -558,6 +564,51 @@ pub(super) fn send_unavailable_git_effect_result(
             result: Err(git_unavailable_error(runtime)),
         })),
         Effect::PushSubmodulesThenRepo { .. } => {}
+        Effect::CommitSubmodules {
+            repo_id, commits, ..
+        } => send(Msg::Internal(
+            crate::msg::InternalMsg::SubmodulesCommitted {
+                repo_id,
+                committed: Vec::new(),
+                failed: commits
+                    .into_iter()
+                    .next()
+                    .map(|child| (child.path, git_unavailable_error(runtime))),
+            },
+        )),
+        Effect::CommitWithSubmodules { repo_id, .. } => {
+            send(Msg::Internal(crate::msg::InternalMsg::SubmoduleRecorded {
+                repo_id,
+                amend: false,
+                result: Err(git_unavailable_error(runtime)),
+            }))
+        }
+        Effect::PushLinkedSubmodules { repo_id, paths } => send(Msg::Internal(
+            crate::msg::InternalMsg::LinkedSubmodulesPushed {
+                repo_id,
+                failed: paths
+                    .into_iter()
+                    .next()
+                    .map(|path| (path, git_unavailable_error(runtime).to_string())),
+            },
+        )),
+        Effect::PullLinkedSubmodule { repo_id, path, .. } => send(Msg::Internal(
+            crate::msg::InternalMsg::LinkedSubmodulePulled {
+                repo_id,
+                path,
+                error: Some(git_unavailable_error(runtime).to_string()),
+            },
+        )),
+        Effect::StageInSubmodule { repo_id, stage, .. } => send_repo_action_unavailable(
+            repo_id,
+            if stage {
+                RepoActionKind::StageInSubmodule
+            } else {
+                RepoActionKind::UnstageInSubmodule
+            },
+            runtime,
+            &send,
+        ),
         Effect::SubmoduleCheckout {
             repo_id, operation, ..
         } => send_repo_action_unavailable(

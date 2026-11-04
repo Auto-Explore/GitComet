@@ -3809,3 +3809,194 @@ fn zooming_a_plain_window_redraws_it(cx: &mut gpui::TestAppContext) {
         .unwrap();
     assert!(renders.get() > before, "the zoomed window must redraw");
 }
+
+/// A window on its own seeded repository, with workspaces opening in the
+/// current window and `saved` known to the manager.
+fn rail_window(
+    cx: &mut gpui::TestAppContext,
+    saved: Vec<session::Workspace>,
+) -> (
+    gpui::Entity<GitCometView>,
+    &mut gpui::VisualTestContext,
+    gpui::WindowId,
+) {
+    let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
+    let (store, events) = AppStore::new_test(Arc::clone(&backend));
+    let store_for_view = store.clone();
+    let (view, cx) = cx
+        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+    let window_id = cx.update(|window, app| {
+        crate::workspaces::initialize_for_test(app, saved);
+        crate::workspaces::set_open_mode(app, crate::workspaces::WorkspaceOpenMode::CurrentWindow);
+        install_app_shortcuts_for_test(app, Arc::clone(&backend));
+        window.activate();
+        let _ = window.draw(app);
+        window.window_handle().window_id()
+    });
+    seed_worktree_repo(cx, &store, view.clone());
+    (view, cx, window_id)
+}
+
+/// Sync and draw the window until `done` holds.
+fn settle_until(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<GitCometView>,
+    what: &str,
+    mut done: impl FnMut(&mut App) -> bool,
+) {
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        cx.update(|window, app| {
+            view.update(app, |view, cx| {
+                crate::view::test_support::sync_store_snapshot(view, cx)
+            });
+            let _ = window.draw(app);
+        });
+        cx.run_until_parked();
+        if cx.cx.update(&mut done) {
+            return;
+        }
+        assert!(Instant::now() < deadline, "timed out waiting: {what}");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+fn windows_holding(app: &App, id: session::WorkspaceId) -> usize {
+    crate::workspaces::window_numbers(app)
+        .into_iter()
+        .filter(|(_, workspace, _)| *workspace == id)
+        .count()
+}
+
+#[gpui::test]
+fn switching_a_window_in_place_keeps_each_workspace_in_one_window(cx: &mut gpui::TestAppContext) {
+    let mut beta = session::Workspace::new(Vec::new());
+    beta.custom_name = Some("Beta".into());
+    beta.restore_on_launch = false;
+    let beta_id = beta.id;
+    let (view, cx, window_id) = rail_window(cx, vec![beta]);
+    let (alpha_id, alpha_repositories) = cx.cx.update(|app| {
+        let alpha = crate::workspaces::workspace_for_window(app, window_id)
+            .expect("the seeded repository makes a workspace");
+        (alpha.id, alpha.repositories)
+    });
+    assert!(!alpha_repositories.is_empty());
+
+    cx.cx
+        .update(|app| switch_workspace_in_window(app, window_id, beta_id));
+    settle_until(cx, &view, "the window shows Beta", |app| {
+        crate::workspaces::workspace_for_window(app, window_id).map(|w| w.id) == Some(beta_id)
+            && normal_gitcomet_window_by_id(app, window_id)
+                .is_some_and(|entry| entry.repo_paths.is_empty())
+    });
+
+    cx.cx.update(|app| {
+        let alpha = crate::workspaces::workspace(app, alpha_id)
+            .expect("the workspace the window left stays saved");
+        assert_eq!(alpha.repositories, alpha_repositories);
+        assert!(!crate::workspaces::is_open_in_a_window(app, alpha_id));
+        assert_eq!(windows_holding(app, beta_id), 1);
+        assert_eq!(app.windows().len(), 1, "the switch happens in place");
+    });
+
+    // Beta came first, so Alt+2 is the workspace the window just left.
+    cx.simulate_keystrokes("alt-2");
+    settle_until(cx, &view, "Alt+2 brings the first workspace back", |app| {
+        crate::workspaces::workspace_for_window(app, window_id).map(|w| w.id) == Some(alpha_id)
+            && normal_gitcomet_window_by_id(app, window_id)
+                .is_some_and(|entry| !entry.repo_paths.is_empty())
+    });
+    cx.cx.update(|app| {
+        assert!(!crate::workspaces::is_open_in_a_window(app, beta_id));
+        assert_eq!(windows_holding(app, alpha_id), 1);
+    });
+}
+
+#[gpui::test]
+fn a_running_push_holds_a_workspace_switch_back(cx: &mut gpui::TestAppContext) {
+    let mut beta = session::Workspace::new(Vec::new());
+    beta.custom_name = Some("Beta".into());
+    let beta_id = beta.id;
+    let (view, cx, window_id) = rail_window(cx, vec![beta]);
+    let alpha_id = cx.cx.update(|app| {
+        crate::workspaces::workspace_for_window(app, window_id)
+            .expect("a workspace")
+            .id
+    });
+    cx.update(|_window, app| {
+        view.update(app, |view, cx| {
+            crate::view::test_support::push_running_push_for_test(view, cx);
+        });
+    });
+
+    let prompted = cx.update(|_window, app| {
+        view.update(app, |view, cx| {
+            view.request_switch_workspace(Some(beta_id), None, cx)
+        })
+    });
+
+    assert!(prompted, "the running push asks first");
+    cx.cx.update(|app| {
+        assert_eq!(
+            crate::workspaces::workspace_for_window(app, window_id).map(|w| w.id),
+            Some(alpha_id),
+            "nothing switches until the user confirms"
+        );
+        assert!(!crate::view::test_support::workspace_switch_pending_for_test(view.read(app)));
+        assert!(!crate::workspaces::is_open_in_a_window(app, beta_id));
+    });
+}
+
+#[gpui::test]
+fn moving_a_workspace_here_releases_it_in_the_other_window(cx: &mut gpui::TestAppContext) {
+    let mut beta = session::Workspace::new(Vec::new());
+    beta.custom_name = Some("Beta".into());
+    let beta_id = beta.id;
+    let (_view, cx, window_id) = empty_window_for_adoption(cx, vec![beta.clone()]);
+    cx.cx.update(|app| {
+        crate::workspaces::set_open_mode(app, crate::workspaces::WorkspaceOpenMode::CurrentWindow)
+    });
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let config = crate::view::GitCometViewConfig {
+        workspace: WorkspaceBootstrap::Saved(Box::new(beta)),
+        ..crate::view::GitCometViewConfig::normal(None)
+    };
+    let owner = cx
+        .cx
+        .add_window(|window, cx| GitCometView::new_with_config(store, events, config, window, cx));
+    cx.cx.update(|app| {
+        let any_owner: gpui::AnyWindowHandle = owner.into();
+        let _ = any_owner.update(app, |_root, window, cx| {
+            let _ = window.draw(cx);
+        });
+        let _ = owner.update(app, |view, _window, cx| {
+            crate::view::test_support::sync_store_snapshot(view, cx);
+        });
+    });
+    cx.run_until_parked();
+
+    // A plain pick focuses the window that already shows it.
+    cx.cx
+        .update(|app| switch_workspace_in_window(app, window_id, beta_id));
+    cx.run_until_parked();
+    cx.cx.update(|app| {
+        assert_eq!(
+            crate::workspaces::workspace_for_window(app, owner.window_id()).map(|w| w.id),
+            Some(beta_id)
+        );
+        assert!(crate::workspaces::workspace_for_window(app, window_id).is_none());
+    });
+
+    cx.cx
+        .update(|app| move_workspace_to_window(app, window_id, beta_id));
+    cx.run_until_parked();
+    cx.cx.update(|app| {
+        assert_eq!(
+            crate::workspaces::workspace_for_window(app, window_id).map(|w| w.id),
+            Some(beta_id),
+            "Move here shows it in this window"
+        );
+        assert!(crate::workspaces::workspace_for_window(app, owner.window_id()).is_none());
+        assert_eq!(windows_holding(app, beta_id), 1);
+    });
+}

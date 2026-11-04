@@ -19,6 +19,9 @@ pub(super) fn panel(
             UnsavedFileEditsAction::DeleteWorkspace { .. } => {
                 ("Delete workspace?", "Discard and delete")
             }
+            UnsavedFileEditsAction::SwitchWorkspace { .. } => {
+                ("Switch workspace?", "Discard and switch")
+            }
             UnsavedFileEditsAction::QuitApp => (quit_title.as_str(), "Discard and quit"),
             UnsavedFileEditsAction::MoveRepo { .. } => ("Move repository?", "Discard and move"),
         }

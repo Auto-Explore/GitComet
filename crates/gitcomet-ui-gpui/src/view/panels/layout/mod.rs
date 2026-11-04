@@ -12,6 +12,7 @@ mod commit_metadata;
 mod commit_reword;
 mod comparison;
 mod file_lists;
+mod linked_commit_panel;
 mod status_sections;
 mod status_view;
 mod worktree_uncommitted;
@@ -27,6 +28,8 @@ pub(in crate::view) use commit_reword::commit_reword_submittable;
 use comparison::*;
 #[cfg(test)]
 use file_lists::*;
+pub(in crate::view) use linked_commit_panel::LinkedMessageInput;
+use linked_commit_panel::*;
 use status_sections::*;
 
 #[cfg(test)]

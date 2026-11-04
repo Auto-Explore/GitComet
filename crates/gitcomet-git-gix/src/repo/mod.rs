@@ -2194,6 +2194,14 @@ impl GitRepository for GixRepo {
         }
         self.unpushed_submodule_pointers_impl()
     }
+
+    fn open_submodule(
+        &self,
+        path: &Path,
+    ) -> Result<std::sync::Arc<dyn gitcomet_core::services::GitRepository>> {
+        self.require_working_tree()?;
+        self.open_submodule_impl(path)
+    }
 }
 
 pub(crate) fn shared_history_memory() -> (usize, usize, usize) {

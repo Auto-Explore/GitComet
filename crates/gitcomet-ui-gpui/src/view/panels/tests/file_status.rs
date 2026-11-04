@@ -93,6 +93,7 @@ fn test_signature(
 mod commit_details;
 mod commit_form;
 mod file_lists;
+mod linked_commit;
 mod list_layouts;
 mod one_sided_diffs;
 mod previews;

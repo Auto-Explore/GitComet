@@ -94,6 +94,19 @@ pub(crate) fn push_test_state(
     });
 }
 
+/// The window's state with a push running in its first repository.
+pub(crate) fn push_running_push_for_test(view: &GitCometView, cx: &mut impl gpui::AppContext) {
+    let mut state = (*view.state).clone();
+    if let Some(repo) = state.repos.first_mut() {
+        repo.push_in_flight = 1;
+    }
+    push_test_state(view, Arc::new(state), cx);
+}
+
+pub(crate) fn workspace_switch_pending_for_test(view: &GitCometView) -> bool {
+    view.pending_workspace_switch.is_some()
+}
+
 pub(crate) fn sync_store_snapshot(view: &GitCometView, cx: &mut impl gpui::AppContext) {
     push_test_state(view, view.store.snapshot(), cx);
 }

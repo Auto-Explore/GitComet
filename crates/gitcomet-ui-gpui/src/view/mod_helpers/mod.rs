@@ -982,6 +982,11 @@ pub struct GitCometView {
     pub(super) window_appearance: gpui::WindowAppearance,
     pub(super) theme: AppTheme,
     pub(super) title_bar: Entity<TitleBarView>,
+    /// Lists every workspace at the window's left while workspaces open in
+    /// the current window; empty otherwise.
+    pub(super) workspace_rail: Entity<super::workspace_rail::WorkspaceRail>,
+    /// Set while a workspace switch waits for the old repositories to close.
+    pub(super) pending_workspace_switch: Option<super::workspace_rail::PendingWorkspaceSwitch>,
     pub(super) sidebar_pane: Entity<SidebarPaneView>,
     pub(super) _sidebar_header_subscription: gpui::Subscription,
     pub(super) diff_renderer: Entity<DiffRenderer>,

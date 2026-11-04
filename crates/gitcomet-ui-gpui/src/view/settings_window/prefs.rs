@@ -65,6 +65,7 @@ impl SettingsWindowView {
             remote_markdown_image_policy: Some(self.remote_markdown_image_policy.key().to_string()),
             check_for_updates_on_startup: Some(self.check_for_updates_on_startup),
             auto_save_file_edits: Some(self.auto_save_file_edits),
+            workspace_open_mode: Some(self.workspace_open_mode.key().to_string()),
             // Merge tool settings are managed from the resolver's cog menu;
             // None never overwrites the stored values.
             mergetool_auto_advance: None,
@@ -864,6 +865,22 @@ impl SettingsWindowView {
         self.diff_show_line_numbers = next;
         self.persist_preferences(cx);
         self.broadcast_preference(PreferenceChange::DiffShowLineNumbers(next), cx);
+        cx.notify();
+    }
+
+    pub(super) fn set_workspace_open_mode(
+        &mut self,
+        next: crate::workspaces::WorkspaceOpenMode,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.workspace_open_mode == next {
+            return;
+        }
+        self.workspace_open_mode = next;
+        self.persist_preferences(cx);
+        // Every window's rail and the Alt+1…9 keys follow the manager.
+        crate::workspaces::set_open_mode(cx, next);
+        crate::app::refresh_workspace_switch_key_bindings(cx);
         cx.notify();
     }
 

@@ -534,6 +534,20 @@ pub(super) fn schedule_effect(
                 );
             }
         }
+        Effect::LoadSubmoduleChanges { repo_id, paths } => {
+            if let Some((msg_tx, cancellation)) =
+                repo_load_context(thread_state, repos, msg_tx, repo_id)
+            {
+                repo_actions::schedule_load_submodule_changes(
+                    metadata_executor,
+                    repos,
+                    msg_tx,
+                    repo_id,
+                    paths,
+                    cancellation,
+                );
+            }
+        }
         Effect::LoadLargeFileSupport { repo_id } => {
             if let Some((msg_tx, cancellation)) =
                 repo_load_context(thread_state, repos, msg_tx, repo_id)
@@ -1040,6 +1054,39 @@ pub(super) fn schedule_effect(
             message,
             amend_expected,
             identity,
+        ),
+        Effect::CommitSubmodules {
+            repo_id,
+            commits,
+            identities,
+        } => repo_actions::schedule_commit_submodules(
+            executor, repos, msg_tx, repo_id, commits, identities,
+        ),
+        Effect::CommitWithSubmodules {
+            repo_id,
+            paths,
+            message,
+            identity,
+        } => repo_actions::schedule_commit_with_submodules(
+            executor, repos, msg_tx, repo_id, paths, message, identity,
+        ),
+        Effect::PushLinkedSubmodules { repo_id, paths } => {
+            repo_actions::schedule_push_linked_submodules(executor, repos, msg_tx, repo_id, paths)
+        }
+        Effect::PullLinkedSubmodule {
+            repo_id,
+            path,
+            mode,
+        } => repo_actions::schedule_pull_linked_submodule(
+            executor, repos, msg_tx, repo_id, path, mode,
+        ),
+        Effect::StageInSubmodule {
+            repo_id,
+            path,
+            files,
+            stage,
+        } => repo_actions::schedule_stage_in_submodule(
+            executor, repos, msg_tx, repo_id, path, files, stage,
         ),
         Effect::PushSubmodulesThenRepo {
             repo_id,

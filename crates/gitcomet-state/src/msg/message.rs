@@ -2,7 +2,7 @@ use crate::model::GitLogTagFetchMode;
 use crate::model::{
     BlockedPush, BranchExistsPromptState, ConflictFileLoadMode, DefaultTagType,
     FileBrowserSettings, ForceDeleteBranchPrompt, ForceRemoveWorktreePrompt,
-    GitOperationOuterOutcome, LinkedPushChoice, LinkedPushPrompt, MaintenanceSettings,
+    GitOperationOuterOutcome, LinkedChild, LinkedPushChoice, LinkedPushPrompt, MaintenanceSettings,
     RemoteSettings, RepoId, SidebarDataRequest, SidebarMode, SubmoduleCheckoutOperation,
     SubmoduleCheckoutPrompt, SubmoduleSettings, SubmoduleShelve, UnpushedPointerPrompt,
 };
@@ -86,6 +86,9 @@ pub enum RepoActionKind {
     PopStash,
     DropStash,
     UpdateSubmodule,
+    /// Stage or unstage inside a submodule from its parent's tab.
+    StageInSubmodule,
+    UnstageInSubmodule,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -134,7 +137,9 @@ impl RepoActionKind {
             | Self::ApplyStash
             | Self::PopStash
             | Self::DropStash
-            | Self::UpdateSubmodule => RepositoryRequirement::WorkingTree,
+            | Self::UpdateSubmodule
+            | Self::StageInSubmodule
+            | Self::UnstageInSubmodule => RepositoryRequirement::WorkingTree,
         }
     }
 
@@ -170,6 +175,8 @@ impl RepoActionKind {
             | Self::StagePaths
             | Self::UnstagePath
             | Self::UnstagePaths
+            | Self::StageInSubmodule
+            | Self::UnstageInSubmodule
             | Self::DropStash => false,
         }
     }
@@ -192,6 +199,8 @@ impl RepoActionKind {
             Self::PopStash => "Pop stash",
             Self::DropStash => "Drop stash",
             Self::UpdateSubmodule => "Update submodule",
+            Self::StageInSubmodule => "Stage in submodule",
+            Self::UnstageInSubmodule => "Unstage in submodule",
         }
     }
 }
@@ -906,15 +915,33 @@ pub enum Msg {
         push_after_commit: bool,
         shelve: SubmoduleShelve,
     },
-    /// Commit in the first-level submodule tab `child`, then record the new
-    /// commit in its parent's tab with `parent_message`. With `push`, push the
-    /// submodule first and the parent only after it.
+    /// Commit first-level submodules, then record the new commits in their
+    /// parent worktree with `parent_message`. With `push`, push the
+    /// submodules first and the parent only after all of them.
+    ///
+    /// `origin` is the tab the commit started in. From a submodule's own tab
+    /// it commits that submodule (`children` holds its path and message) and
+    /// the parent records it alone. From the parent's tab it commits each of
+    /// `children` inside its checkout, and the parent's commit takes the
+    /// submodules and everything else staged there.
     CommitLinked {
-        child: RepoId,
-        message: String,
+        origin: RepoId,
+        children: Vec<LinkedChild>,
         parent_message: String,
         push: bool,
         shelve: Option<SubmoduleShelve>,
+    },
+    /// Stage `files` inside the first-level submodule at `path` of `repo_id`,
+    /// from the parent's linked commit panel.
+    StageInSubmodule {
+        repo_id: RepoId,
+        path: PathBuf,
+        files: Vec<PathBuf>,
+    },
+    UnstageInSubmodule {
+        repo_id: RepoId,
+        path: PathBuf,
+        files: Vec<PathBuf>,
     },
     ResolveLinkedPushPrompt {
         prompt: LinkedPushPrompt,
@@ -1897,6 +1924,30 @@ pub enum InternalMsg {
         repo_id: RepoId,
         operation: SubmoduleCheckoutOperation,
         outcome: DiscardOutcome,
+    },
+    /// A linked commit from the parent's tab committed inside its submodules:
+    /// `committed` in order, then `failed` stopped it.
+    SubmodulesCommitted {
+        repo_id: RepoId,
+        committed: Vec<PathBuf>,
+        failed: Option<(PathBuf, Error)>,
+    },
+    /// A linked commit pushed the submodules of `repo_id` in order; `failed`
+    /// is the first one whose push was refused.
+    LinkedSubmodulesPushed {
+        repo_id: RepoId,
+        failed: Option<(PathBuf, String)>,
+    },
+    /// A linked commit pulled the submodule at `path` of `repo_id` before
+    /// pushing again.
+    LinkedSubmodulePulled {
+        repo_id: RepoId,
+        path: PathBuf,
+        error: Option<String>,
+    },
+    SubmoduleChangesLoaded {
+        repo_id: RepoId,
+        result: Result<Vec<SubmoduleChanges>, Error>,
     },
     /// A linked commit recorded (or re-recorded) the submodule in the parent.
     SubmoduleRecorded {

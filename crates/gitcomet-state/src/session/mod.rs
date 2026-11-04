@@ -74,6 +74,8 @@ pub struct UiSession {
     pub allowed_remote_protocols: Option<BTreeSet<String>>,
     pub check_for_updates_on_startup: Option<bool>,
     pub auto_save_file_edits: Option<bool>,
+    /// Where opening a workspace shows it: `new_window` or `current_window`.
+    pub workspace_open_mode: Option<String>,
     pub mergetool_auto_advance: Option<bool>,
     pub mergetool_collapse_unchanged: Option<bool>,
     pub mergetool_output_scroll_sync: Option<bool>,
@@ -257,6 +259,8 @@ pub(crate) struct UiSessionFile {
     check_for_updates_on_startup: Option<bool>,
     #[serde(default, deserialize_with = "lenient")]
     auto_save_file_edits: Option<bool>,
+    #[serde(default, deserialize_with = "lenient")]
+    workspace_open_mode: Option<String>,
     #[serde(default, deserialize_with = "lenient")]
     mergetool_auto_advance: Option<bool>,
     #[serde(default, deserialize_with = "lenient")]
@@ -554,6 +558,7 @@ pub fn load_from_path(path: &Path) -> UiSession {
         allowed_remote_protocols: file.allowed_remote_protocols,
         check_for_updates_on_startup: file.check_for_updates_on_startup,
         auto_save_file_edits: file.auto_save_file_edits,
+        workspace_open_mode: file.workspace_open_mode,
         mergetool_auto_advance: file.mergetool_auto_advance,
         mergetool_collapse_unchanged: file.mergetool_collapse_unchanged,
         mergetool_output_scroll_sync: file.mergetool_output_scroll_sync,

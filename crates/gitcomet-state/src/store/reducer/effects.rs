@@ -361,6 +361,8 @@ pub(super) fn submodules_loaded(
         repo_state.set_submodules(submodules);
         if repo_state.loads_in_flight.finish(LoadKind::Submodules) {
             effects.push(Effect::LoadSubmodules { repo_id });
+        } else if matches!(repo_state.submodules, Loadable::Ready(_)) {
+            effects.extend(super::linked_commit::refresh_submodule_changes(repo_state));
         }
     }
     effects

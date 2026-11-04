@@ -485,6 +485,34 @@ impl GixRepo {
         crate::util::run_git_with_output(push, "git push")
     }
 
+    /// Open the submodule checked out at `path` as a repository of its own.
+    /// The path must name a directory inside this worktree that has its own
+    /// checkout; the handle is shared with a tab that has it open.
+    pub(super) fn open_submodule_impl(
+        &self,
+        path: &Path,
+    ) -> Result<std::sync::Arc<dyn gitcomet_core::services::GitRepository>> {
+        use gitcomet_core::services::GitBackend as _;
+        let inside = !path.as_os_str().is_empty()
+            && path
+                .components()
+                .all(|component| matches!(component, std::path::Component::Normal(_)));
+        if !inside {
+            return Err(Error::new(ErrorKind::Backend(format!(
+                "{} is not a submodule path inside this worktree",
+                path.display()
+            ))));
+        }
+        let workdir = self.spec.workdir.join(path);
+        if !workdir.join(".git").exists() {
+            return Err(Error::new(ErrorKind::Backend(format!(
+                "{} is not checked out",
+                path.display()
+            ))));
+        }
+        crate::GixBackend.open_with_options(&workdir, &self.options)
+    }
+
     /// First-level submodule commits that outgoing commits record but that no
     /// remote-tracking branch or tag in the submodule holds, so nobody could
     /// fetch them after a push. Submodules that are not loaded are left out.

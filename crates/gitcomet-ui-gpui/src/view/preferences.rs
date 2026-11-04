@@ -260,6 +260,11 @@ pub(super) struct FileEditingPreferences {
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(super) struct WorkspacePreferences {
+    pub(super) open_mode: crate::workspaces::WorkspaceOpenMode,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(super) struct RepositoryPreferences {
     pub(super) commit_push_after_enabled: bool,
     pub(super) default_tag_type: DefaultTagType,
@@ -307,6 +312,7 @@ pub(super) struct UiPreferences {
     pub(super) merge_tool: MergeToolPreferences,
     pub(super) history: HistoryPreferences,
     pub(super) file_editing: FileEditingPreferences,
+    pub(super) workspaces: WorkspacePreferences,
     pub(super) repository: RepositoryPreferences,
     pub(super) remotes: RemotePreferences,
     pub(super) maintenance: MaintenancePreferences,
@@ -447,6 +453,13 @@ impl UiPreferences {
             },
             file_editing: FileEditingPreferences {
                 auto_save: session.auto_save_file_edits.unwrap_or(false),
+            },
+            workspaces: WorkspacePreferences {
+                open_mode: session
+                    .workspace_open_mode
+                    .as_deref()
+                    .and_then(crate::workspaces::WorkspaceOpenMode::from_key)
+                    .unwrap_or_default(),
             },
             repository: RepositoryPreferences {
                 commit_push_after_enabled: session.commit_push_after_enabled.unwrap_or(false),
