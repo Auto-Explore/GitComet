@@ -1142,3 +1142,37 @@ fn wrap_edit_that_keeps_every_row_count_requests_no_extra_frame(cx: &mut gpui::T
         "{kept_rows} kept, {changed_rows} changed"
     );
 }
+
+/// Measuring a paste before layout resolves highlights once for the pasted
+/// block, not once per line. The resolved-highlight cache holds one range, so
+/// a lookup per line missed it every time and asked the provider again.
+#[gpui::test]
+fn measuring_a_paste_resolves_its_highlights_once_per_block(cx: &mut gpui::TestAppContext) {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    crate::test_support::use_real_text_backend(cx);
+    let (view, cx) = cx.add_window_view(WrappedInputView::new);
+    let input = seed_wrapped_input(&view, cx, "start");
+    let resolves = Arc::new(AtomicUsize::new(0));
+    let provider = {
+        let resolves = Arc::clone(&resolves);
+        HighlightProvider::from_fn(move |_| {
+            resolves.fetch_add(1, Ordering::Relaxed);
+            Vec::new()
+        })
+    };
+    cx.update(|window, app| {
+        input.update(app, |input, cx| {
+            input.replace_text_in_range(None, "\none\ntwo\nthree\nfour\nfive", window, cx);
+            // As a highlighter does once it has parsed the edit.
+            input.set_highlight_provider_with_key(7, provider, input.content.len(), cx);
+        });
+    });
+    resolves.store(0, Ordering::Relaxed);
+    draw_frame(cx);
+    let resolved = resolves.load(Ordering::Relaxed);
+    assert!(
+        (1..=2).contains(&resolved),
+        "one lookup for the pasted lines, at most one more for the window: {resolved}"
+    );
+}

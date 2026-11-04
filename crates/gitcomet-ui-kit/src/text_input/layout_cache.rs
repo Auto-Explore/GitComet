@@ -232,12 +232,18 @@ impl TextInput {
         let has_content = !content.is_empty();
         let display_text = substitute_text.unwrap_or_else(|| content.as_shared_string());
         let mut rows_changed = false;
-        for line_ix in dirty_ranges.into_iter().flatten() {
-            let line_start = line_starts.get(line_ix).copied().unwrap_or(0);
-            let line_text = line_text_for_index(display_text.as_ref(), &line_starts, line_ix);
-            // Bold or italic highlights move wrap points.
+        for range in dirty_ranges {
+            // Bold or italic highlights move wrap points. Resolve them once
+            // per edited range: the resolved-highlight cache holds one range,
+            // so a lookup per line would miss it every time and re-map the
+            // whole cached window for each line of a paste.
             let highlights = has_content.then(|| {
-                self.highlights_polling_provider(line_start..line_start + line_text.len(), cx)
+                let bytes = super::wrap::byte_range_for_line_range(
+                    &line_starts,
+                    display_text.len(),
+                    range.clone(),
+                );
+                self.highlights_polling_provider(bytes, cx)
             });
             let line_style = TextShapeStyle {
                 base_font: &base_font,
@@ -245,19 +251,23 @@ impl TextInput {
                 highlights: highlights.as_ref().map(|highlights| highlights.as_slice()),
                 font_size,
             };
-            let wrapped = shape_wrapped_line(
-                LineShapeInput {
-                    line_ix,
-                    line_start,
-                    line_text,
-                },
-                wrap_width,
-                None,
-                &line_style,
-                self.tab_size,
-                window,
-            );
-            rows_changed |= self.set_measured_wrap_rows(line_ix, wrapped.line_count());
+            for line_ix in range {
+                let line_start = line_starts.get(line_ix).copied().unwrap_or(0);
+                let line_text = line_text_for_index(display_text.as_ref(), &line_starts, line_ix);
+                let wrapped = shape_wrapped_line(
+                    LineShapeInput {
+                        line_ix,
+                        line_start,
+                        line_text,
+                    },
+                    wrap_width,
+                    None,
+                    &line_style,
+                    self.tab_size,
+                    window,
+                );
+                rows_changed |= self.set_measured_wrap_rows(line_ix, wrapped.line_count());
+            }
         }
         if !rows_changed {
             return;
