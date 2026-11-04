@@ -2,6 +2,7 @@
 //! actions and resize handles, and the commit box.
 
 use super::*;
+use crate::kit::click::PointerClickExt as _;
 
 /// One status section's numbers, as its header and body read them.
 #[derive(Clone, Copy)]
@@ -1199,7 +1200,7 @@ impl DetailsPaneView {
                     theme,
                 })
             })
-            .on_mouse_down(
+            .on_pointer_click(
                 MouseButton::Right,
                 cx.listener(move |this, e: &MouseDownEvent, window, cx| {
                     cx.stop_propagation();

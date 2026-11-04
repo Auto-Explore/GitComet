@@ -651,7 +651,7 @@ impl SidebarPaneView {
                     theme,
                 })
             })
-            .on_mouse_down(
+            .on_pointer_click(
                 MouseButton::Right,
                 cx.listener(move |this, e: &MouseDownEvent, window, cx| {
                     cx.stop_propagation();

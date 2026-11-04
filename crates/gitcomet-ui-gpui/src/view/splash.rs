@@ -793,9 +793,10 @@ impl GitCometView {
                 .then(|| self.terminal_panel_resize_handle(theme, cx));
             let drop_overlay = self.render_dock_drop_overlay(cx);
             self.dock_hosts.end_frame();
+            let main_content = self.repository_main_content();
             let main_content = match zoomed {
                 Some((_, dock)) => dock,
-                None => self.repository_main_content(),
+                None => main_content,
             };
             let content = div()
                 .flex()

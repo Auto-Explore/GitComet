@@ -578,11 +578,15 @@ impl Render for MainPaneView {
             history.set_last_window_size(window.viewport_size());
             history.set_history_content_width(width);
         });
-        match self.active_content(cx) {
+        let content = self.active_content(cx);
+        if content == MainPaneContent::Diff
+            && let Some(split) = self.split_centre(width, window, cx)
+        {
+            return split;
+        }
+        match content {
             MainPaneContent::History => self.history_view.clone().into_any_element(),
-            MainPaneContent::Diff => self
-                .split_centre(width, window, cx)
-                .unwrap_or_else(|| self.diff_renderer.clone().into_any_element()),
+            MainPaneContent::Diff => self.diff_renderer.clone().into_any_element(),
             MainPaneContent::InteractiveRebase => {
                 self.interactive_rebase_view(window, cx).into_any_element()
             }

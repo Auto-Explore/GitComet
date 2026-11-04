@@ -1,4 +1,5 @@
 use super::*;
+use crate::kit::click::PointerClickExt as _;
 
 const HEADER_PAD_X_PX: f32 = 4.0;
 const HEADER_GAP_PX: f32 = 2.0;
@@ -357,7 +358,7 @@ impl SidebarPaneView {
                             theme: theme_for_drag,
                         })
                     })
-                    .on_mouse_down(
+                    .on_pointer_click(
                         MouseButton::Right,
                         cx.listener(move |this, e: &MouseDownEvent, window, cx| {
                             cx.stop_propagation();

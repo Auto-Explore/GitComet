@@ -10,6 +10,7 @@
 
 use super::hosts::HostKey;
 use super::*;
+use crate::kit::click::PointerClickExt as _;
 use crate::kit::interaction::{self as controls, ControlInteractionExt as _};
 use std::rc::Rc;
 
@@ -318,17 +319,21 @@ impl GitCometView {
             .group(id.clone())
             .bg(theme.colors.stroke.subtle)
             .on_resize_drag(DockSplitDrag(side))
-            .on_click(cx.listener(move |this, e: &gpui::ClickEvent, _window, cx| {
-                // Double-click puts the halves back to equal shares.
-                if e.click_count() == 2
-                    && this
-                        .dock_layout
-                        .set_dock_split(side, gitcomet_state::session::DEFAULT_SPLIT_PERMILLE)
-                {
-                    this.schedule_ui_settings_persist(cx);
-                    cx.notify();
-                }
-            }));
+            .on_activate(
+                false,
+                controls::ControlActivation::Action,
+                cx.listener(move |this, e: &gpui::ClickEvent, _window, cx| {
+                    // Double-click puts the halves back to equal shares.
+                    if e.click_count() == 2
+                        && this
+                            .dock_layout
+                            .set_dock_split(side, gitcomet_state::session::DEFAULT_SPLIT_PERMILLE)
+                    {
+                        this.schedule_ui_settings_persist(cx);
+                        cx.notify();
+                    }
+                }),
+            );
         if vertical {
             handle
                 .h(size)
@@ -653,7 +658,7 @@ impl GitCometView {
                             theme,
                         })
                     })
-                    .on_mouse_down(
+                    .on_pointer_click(
                         MouseButton::Right,
                         cx.listener(move |this, e: &MouseDownEvent, window, cx| {
                             cx.stop_propagation();
