@@ -26,7 +26,7 @@ impl GixRepo {
         // Discarding a conflict keeps our side, as "Resolve using ours" does.
         let mut conflicted_paths: Vec<&Path> = Vec::new();
         let submodule_paths: FxHashSet<std::path::PathBuf> = self
-            .list_submodules_impl()?
+            .submodule_rows_impl()?
             .into_iter()
             .map(|submodule| submodule.path)
             .collect();

@@ -36,10 +36,9 @@ pub(in crate::view) fn parent_record_target(
         .repos
         .iter()
         .find(|candidate| Some(candidate.id) == link.repo_id)?;
-    let recorded = state.submodule_row_in_parent(repo_id).map(|row| {
-        let id = row.recorded_head.as_ref();
-        id.get(..7).unwrap_or(id).to_string()
-    });
+    let recorded = state
+        .submodule_row_in_parent(repo_id)
+        .map(|row| gitcomet_core::domain::short_commit_id(row.recorded_head.as_ref()).to_string());
     let other_staged = parent.staged_status_entries().map_or(0, |entries| {
         entries
             .iter()
@@ -97,7 +96,7 @@ impl DetailsPaneView {
     }
 
     /// Keep the parent message on its default while the user has not edited
-    /// it.
+    /// it in this tab.
     pub(in crate::view) fn sync_parent_message(
         &mut self,
         commit_message: &str,
@@ -113,10 +112,20 @@ impl DetailsPaneView {
             return;
         };
         let message = gitcomet_state::model::default_parent_message(&target.path, commit_message);
-        if self.parent_message_input.read(cx).text() == message {
+        self.set_parent_message_programmatically(message, cx);
+    }
+
+    /// Put `message` in the parent message box without counting it as the
+    /// user's edit.
+    pub(in crate::view) fn set_parent_message_programmatically(
+        &mut self,
+        message: String,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.parent_message_last_text.as_ref() == message {
             return;
         }
-        self.parent_message_programmatic_change = true;
+        self.parent_message_last_text = message.clone().into();
         self.parent_message_input
             .update(cx, |input, cx| input.set_text(message, cx));
     }
@@ -162,19 +171,21 @@ impl DetailsPaneView {
     }
 
     fn submit_commit(&mut self, cx: &mut gpui::Context<Self>) -> bool {
-        self.submit_commit_with(false, cx)
+        self.submit_commit_with(false, None, cx)
     }
 
     pub(in crate::view) fn submit_commit_past_submodule_guard(
         &mut self,
+        shelve: Option<gitcomet_state::model::SubmoduleShelve>,
         cx: &mut gpui::Context<Self>,
     ) -> bool {
-        self.submit_commit_with(true, cx)
+        self.submit_commit_with(true, shelve, cx)
     }
 
     fn submit_commit_with(
         &mut self,
         past_submodule_guard: bool,
+        shelve: Option<gitcomet_state::model::SubmoduleShelve>,
         cx: &mut gpui::Context<Self>,
     ) -> bool {
         let Some(repo_id) = self.active_repo_id() else {
@@ -229,6 +240,7 @@ impl DetailsPaneView {
                 message: message.trim().to_string(),
                 parent_message,
                 push: self.commit_push_after_enabled,
+                shelve,
             });
             // The next commit's parent message starts from its default again.
             self.parent_message_user_edited = false;
@@ -237,6 +249,13 @@ impl DetailsPaneView {
                 repo_id,
                 message: message.trim().to_string(),
                 push_after_commit: self.commit_push_after_enabled,
+            });
+        } else if let Some(shelve) = shelve {
+            self.store.dispatch(Msg::CommitShelvingSubmodules {
+                repo_id,
+                message: message.trim().to_string(),
+                push_after_commit: self.commit_push_after_enabled,
+                shelve,
             });
         } else {
             self.store.dispatch(Msg::Commit {

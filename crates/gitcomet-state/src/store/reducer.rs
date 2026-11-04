@@ -40,6 +40,8 @@ mod repository_preferences;
 mod reword;
 mod settings;
 mod submodule_checkout;
+#[cfg(test)]
+mod submodule_refresh_tests;
 mod submodule_tabs;
 mod submodule_trust;
 #[cfg(test)]
@@ -330,7 +332,7 @@ pub(crate) fn msg_requires_available_git(msg: &Msg) -> bool {
             | Msg::DiscardWorktreeChangesPaths { .. }
             | Msg::ResolveSubmoduleCheckoutPrompt { .. }
             | Msg::UpdateSubmoduleToRecorded { .. }
-            | Msg::ShelveSubmoduleChanges { .. }
+            | Msg::CommitShelvingSubmodules { .. }
             | Msg::CommitLinked { .. }
             | Msg::ResolveLinkedPushPrompt { .. }
             | Msg::ResolveUnpushedPointerPrompt { .. }
@@ -1812,12 +1814,12 @@ fn reduce_inner(
             message,
             parent_message,
             push,
+            shelve,
         } => {
-            if linked_commit::start(state, child, &message, parent_message, push).is_some() {
-                auth::commit(state, child, message, false)
-            } else {
-                auth::commit(state, child, message, push)
-            }
+            let linked = linked_commit::start(inputs, state, child, &message, parent_message, push);
+            // The linked plan pushes the submodule itself, after the parent
+            // records it.
+            auth::commit(state, child, message, push && !linked, shelve)
         }
         Msg::ResolveLinkedPushPrompt { prompt, choice } => {
             linked_commit::resolve_push_prompt(inputs, repos, state, prompt, choice)
@@ -1838,22 +1840,12 @@ fn reduce_inner(
             begin_local_action(state, repo_id);
             submodule_checkout::update_to_recorded(repo_id, path)
         }
-        Msg::ShelveSubmoduleChanges {
+        Msg::CommitShelvingSubmodules {
             repo_id,
-            paths,
             message,
-        } => {
-            if paths.is_empty() || !state.repos.iter().any(|repo| repo.id == repo_id) {
-                Vec::new()
-            } else {
-                begin_local_action(state, repo_id);
-                vec![Effect::ShelveSubmoduleChanges {
-                    repo_id,
-                    paths,
-                    message,
-                }]
-            }
-        }
+            push_after_commit,
+            shelve,
+        } => auth::commit(state, repo_id, message, push_after_commit, Some(shelve)),
         Msg::SaveWorktreeFile {
             repo_id,
             path,
@@ -1968,7 +1960,7 @@ fn reduce_inner(
             repo_id,
             message,
             push_after_commit,
-        } => auth::commit(state, repo_id, message, push_after_commit),
+        } => auth::commit(state, repo_id, message, push_after_commit, None),
         Msg::CommitAmend {
             repo_id,
             message,
@@ -2892,7 +2884,8 @@ fn reduce_inner(
         Msg::Internal(crate::msg::InternalMsg::PushBlockedByUnpushedSubmodules {
             repo_id,
             pointers,
-        }) => linked_commit::push_blocked(state, repo_id, pointers),
+            push,
+        }) => linked_commit::push_blocked(state, repo_id, pointers, push),
         Msg::Internal(crate::msg::InternalMsg::CommitAmendFinished { repo_id, result }) => {
             auth::commit_finished(inputs, repos, state, repo_id, result, true)
         }

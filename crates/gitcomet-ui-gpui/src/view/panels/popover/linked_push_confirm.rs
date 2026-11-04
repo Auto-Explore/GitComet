@@ -3,18 +3,7 @@ use gitcomet_core::domain::CommitId;
 use gitcomet_state::model::{LinkedPushChoice, LinkedPushPrompt};
 
 fn short(commit: &CommitId) -> String {
-    let id = commit.as_ref();
-    id.get(..7).unwrap_or(id).to_string()
-}
-
-fn repo_name(state: &AppState, repo_id: RepoId) -> String {
-    state
-        .repos
-        .iter()
-        .find(|repo| repo.id == repo_id)
-        .and_then(|repo| repo.spec.workdir.file_name())
-        .map(|name| name.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "the repository".to_string())
+    gitcomet_core::domain::short_commit_id(commit.as_ref()).to_string()
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -41,8 +30,8 @@ pub(super) struct LinkedPushCopy {
 }
 
 pub(super) fn copy(state: &AppState, prompt: &LinkedPushPrompt) -> LinkedPushCopy {
-    let child = repo_name(state, prompt.child);
-    let parent = repo_name(state, prompt.parent);
+    let child = state.repo_name(prompt.child);
+    let parent = state.repo_name(prompt.parent);
     let plan = state
         .linked_commit
         .as_ref()

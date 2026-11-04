@@ -235,6 +235,17 @@ pub enum LinkedPushChoice {
     Merge,
 }
 
+/// The push the unpushed-pointer guard stopped, so that "Push anyway" and
+/// "Push submodules first" run it again as it was asked for.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub enum BlockedPush {
+    Push,
+    AfterCommit {
+        target: gitcomet_core::services::SafePushAfterCommitTarget,
+        set_upstream: bool,
+    },
+}
+
 /// A push refused because outgoing commits record submodule commits that
 /// the submodules' remotes do not have.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -242,6 +253,15 @@ pub struct UnpushedPointerPrompt {
     pub generation: u64,
     pub repo_id: RepoId,
     pub pointers: Vec<gitcomet_core::domain::SubmoduleCheckoutUpdate>,
+    pub push: BlockedPush,
+}
+
+/// Changes to tracked files in first-level submodules that a commit in the
+/// parent stashes first, under `message`, instead of leaving them behind.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct SubmoduleShelve {
+    pub paths: Vec<PathBuf>,
+    pub message: String,
 }
 
 // ── App state ───────────────────────────────────────────────────
@@ -346,6 +366,16 @@ impl AppState {
             .filter(|repo| repo.submodule_parent_tab() == Some(repo_id))
             .map(|repo| repo.id)
             .collect()
+    }
+
+    /// The folder name the tab of `repo_id` shows, for prompts and notices.
+    pub fn repo_name(&self, repo_id: RepoId) -> String {
+        self.repos
+            .iter()
+            .find(|repo| repo.id == repo_id)
+            .and_then(|repo| repo.spec.workdir.file_name())
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "the repository".to_string())
     }
 
     /// The row the parent tab lists for the first-level submodule tab

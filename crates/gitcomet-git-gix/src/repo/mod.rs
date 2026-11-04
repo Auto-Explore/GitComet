@@ -2166,16 +2166,17 @@ impl GitRepository for GixRepo {
         &self,
         path: &Path,
         expected_head: &CommitId,
+        identity: Option<&gitcomet_core::commit_identity::CommitIdentity>,
     ) -> Result<CommitOperationOutcome> {
         let _operation = self.operation_lease()?;
         self.require_working_tree()?;
-        self.amend_submodule_record_impl(path, expected_head)
+        self.amend_submodule_record_impl(path, expected_head, identity)
     }
 
-    fn push_submodule_with_output(&self, path: &Path) -> Result<CommandOutput> {
+    fn push_submodule_with_output(&self, path: &Path, commit: &CommitId) -> Result<CommandOutput> {
         let _operation = self.operation_lease()?;
         self.require_working_tree()?;
-        self.push_submodule_with_output_impl(path)
+        self.push_submodule_with_output_impl(path, commit)
     }
 
     fn stash_submodule_changes(&self, path: &Path, message: &str) -> Result<()> {

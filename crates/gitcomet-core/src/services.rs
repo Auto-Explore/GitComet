@@ -537,7 +537,7 @@ pub struct SafePushAfterCommitContext {
     pub post_head: Option<CommitId>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct SafePushAfterCommitTarget {
     pub remote: String,
     pub branch: String,
@@ -2217,21 +2217,27 @@ pub trait GitRepository: Send + Sync {
         &self,
         _path: &Path,
         _expected_head: &crate::domain::CommitId,
+        _identity: Option<&crate::commit_identity::CommitIdentity>,
     ) -> Result<CommitOperationOutcome> {
         Err(Error::new(ErrorKind::Unsupported(
             "re-recording a submodule commit is not implemented for this backend",
         )))
     }
 
-    /// Push the submodule checked out at `path` to its upstream.
-    fn push_submodule_with_output(&self, _path: &Path) -> Result<CommandOutput> {
+    /// Push the branch of the submodule at `path` that holds `commit` to
+    /// that branch's upstream.
+    fn push_submodule_with_output(
+        &self,
+        _path: &Path,
+        _commit: &crate::domain::CommitId,
+    ) -> Result<CommandOutput> {
         Err(Error::new(ErrorKind::Unsupported(
             "pushing a submodule is not implemented for this backend",
         )))
     }
 
-    /// Stash the uncommitted changes inside the submodule at `path`,
-    /// untracked files included, under `message`.
+    /// Stash the uncommitted changes to tracked files inside the submodule
+    /// at `path` under `message`.
     fn stash_submodule_changes(&self, _path: &Path, _message: &str) -> Result<()> {
         Err(Error::new(ErrorKind::Unsupported(
             "stashing in a submodule is not implemented for this backend",
@@ -2239,7 +2245,7 @@ pub trait GitRepository: Send + Sync {
     }
 
     /// Submodule commits that outgoing commits record but no remote-tracking
-    /// branch in that submodule holds.
+    /// branch or tag in that submodule holds.
     fn unpushed_submodule_pointers(&self) -> Result<Vec<crate::domain::SubmoduleCheckoutUpdate>> {
         Ok(Vec::new())
     }

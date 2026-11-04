@@ -3,17 +3,11 @@ use gitcomet_core::domain::SubmoduleCheckoutUpdate;
 use gitcomet_state::model::UnpushedPointerPrompt;
 
 fn name(pointer: &SubmoduleCheckoutUpdate) -> String {
-    pointer
-        .path
-        .file_name()
-        .unwrap_or(pointer.path.as_os_str())
-        .to_string_lossy()
-        .into_owned()
+    gitcomet_state::model::submodule_display_name(&pointer.path)
 }
 
-fn short(pointer: &SubmoduleCheckoutUpdate) -> String {
-    let id = pointer.commit.as_ref();
-    id.get(..7).unwrap_or(id).to_string()
+fn short(pointer: &SubmoduleCheckoutUpdate) -> &str {
+    gitcomet_core::domain::short_commit_id(pointer.commit.as_ref())
 }
 
 /// The words the prompt uses: one submodule is named, several are counted.
@@ -118,6 +112,7 @@ mod tests {
             generation: 1,
             repo_id: RepoId(1),
             pointers: vec![pointer("fixtures/syntax_test")],
+            push: gitcomet_state::model::BlockedPush::Push,
         });
         assert_eq!(copy.title, "Push syntax_test first");
         assert_eq!(copy.push_first_label, "Push syntax_test first");
@@ -130,6 +125,7 @@ mod tests {
             generation: 1,
             repo_id: RepoId(1),
             pointers: vec![pointer("a"), pointer("vendor/b")],
+            push: gitcomet_state::model::BlockedPush::Push,
         });
         assert_eq!(copy.title, "Push 2 submodules first");
         assert_eq!(copy.push_first_label, "Push submodules first");

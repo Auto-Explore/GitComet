@@ -1,9 +1,10 @@
 use crate::model::GitLogTagFetchMode;
 use crate::model::{
-    BranchExistsPromptState, ConflictFileLoadMode, DefaultTagType, FileBrowserSettings,
-    ForceDeleteBranchPrompt, ForceRemoveWorktreePrompt, GitOperationOuterOutcome, LinkedPushChoice,
-    LinkedPushPrompt, MaintenanceSettings, RemoteSettings, RepoId, SidebarDataRequest, SidebarMode,
-    SubmoduleCheckoutOperation, SubmoduleCheckoutPrompt, SubmoduleSettings, UnpushedPointerPrompt,
+    BlockedPush, BranchExistsPromptState, ConflictFileLoadMode, DefaultTagType,
+    FileBrowserSettings, ForceDeleteBranchPrompt, ForceRemoveWorktreePrompt,
+    GitOperationOuterOutcome, LinkedPushChoice, LinkedPushPrompt, MaintenanceSettings,
+    RemoteSettings, RepoId, SidebarDataRequest, SidebarMode, SubmoduleCheckoutOperation,
+    SubmoduleCheckoutPrompt, SubmoduleSettings, SubmoduleShelve, UnpushedPointerPrompt,
 };
 use gitcomet_core::auth::StagedGitAuth;
 use gitcomet_core::conflict_session::ConflictSession;
@@ -85,7 +86,6 @@ pub enum RepoActionKind {
     PopStash,
     DropStash,
     UpdateSubmodule,
-    ShelveSubmoduleChanges,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -134,8 +134,7 @@ impl RepoActionKind {
             | Self::ApplyStash
             | Self::PopStash
             | Self::DropStash
-            | Self::UpdateSubmodule
-            | Self::ShelveSubmoduleChanges => RepositoryRequirement::WorkingTree,
+            | Self::UpdateSubmodule => RepositoryRequirement::WorkingTree,
         }
     }
 
@@ -161,8 +160,7 @@ impl RepoActionKind {
             | Self::Stash
             | Self::ApplyStash
             | Self::PopStash
-            | Self::UpdateSubmodule
-            | Self::ShelveSubmoduleChanges => true,
+            | Self::UpdateSubmodule => true,
             Self::CreateBranch
             | Self::RenameBranch
             | Self::DeleteBranch
@@ -194,7 +192,6 @@ impl RepoActionKind {
             Self::PopStash => "Pop stash",
             Self::DropStash => "Drop stash",
             Self::UpdateSubmodule => "Update submodule",
-            Self::ShelveSubmoduleChanges => "Shelve submodule changes",
         }
     }
 }
@@ -900,13 +897,14 @@ pub enum Msg {
     DismissSubmoduleCheckoutPrompt {
         prompt: SubmoduleCheckoutPrompt,
     },
-    /// Stash the uncommitted changes inside each first-level submodule at
-    /// `paths` of `repo_id`, under `message`, so a commit in the parent does
-    /// not leave them behind unrecorded.
-    ShelveSubmoduleChanges {
+    /// Commit `repo_id` like `Commit`, after stashing the changes inside the
+    /// first-level submodules `shelve` names, so the commit does not leave
+    /// them behind unrecorded. A failed stash fails the commit.
+    CommitShelvingSubmodules {
         repo_id: RepoId,
-        paths: Vec<PathBuf>,
         message: String,
+        push_after_commit: bool,
+        shelve: SubmoduleShelve,
     },
     /// Commit in the first-level submodule tab `child`, then record the new
     /// commit in its parent's tab with `parent_message`. With `push`, push the
@@ -916,6 +914,7 @@ pub enum Msg {
         message: String,
         parent_message: String,
         push: bool,
+        shelve: Option<SubmoduleShelve>,
     },
     ResolveLinkedPushPrompt {
         prompt: LinkedPushPrompt,
@@ -1910,6 +1909,7 @@ pub enum InternalMsg {
     PushBlockedByUnpushedSubmodules {
         repo_id: RepoId,
         pointers: Vec<SubmoduleCheckoutUpdate>,
+        push: BlockedPush,
     },
     /// Submodules checked out at the commit an operation moved their pointer to.
     SubmodulePointersFollowed {

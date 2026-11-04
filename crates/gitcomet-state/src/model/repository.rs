@@ -281,11 +281,16 @@ impl SubmoduleParentLink {
 
     /// The submodule's folder name, as its tab shows it.
     pub fn submodule_name(&self) -> String {
-        self.path
-            .file_name()
-            .map(|name| name.to_string_lossy().into_owned())
-            .unwrap_or_else(|| self.path.display().to_string())
+        submodule_display_name(&self.path)
     }
+}
+
+/// The name the user knows a submodule by: the last part of its path.
+pub fn submodule_display_name(path: &std::path::Path) -> String {
+    path.file_name()
+        .unwrap_or(path.as_os_str())
+        .to_string_lossy()
+        .into_owned()
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]

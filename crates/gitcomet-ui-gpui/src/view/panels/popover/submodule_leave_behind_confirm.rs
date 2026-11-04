@@ -1,11 +1,6 @@
 use super::*;
 
-fn name(path: &std::path::Path) -> String {
-    path.file_name()
-        .unwrap_or(path.as_os_str())
-        .to_string_lossy()
-        .into_owned()
-}
+use gitcomet_state::model::submodule_display_name as name;
 
 /// The words the prompt uses: one submodule is named, several are counted.
 pub(super) struct LeaveBehindCopy {
@@ -61,12 +56,7 @@ pub(super) fn panel(
         .iter()
         .find(|repo| repo.id == prompt.repo_id)
         .map(|repo| repo.spec.workdir.clone());
-    let parent = parent_workdir
-        .as_deref()
-        .and_then(|workdir| workdir.file_name())
-        .map(|name| name.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "the repository".to_string());
-    let copy = copy(&prompt, &parent);
+    let copy = copy(&prompt, &this.state.repo_name(prompt.repo_id));
     let mut dialog = ConfirmDialog::new(copy.title, DIALOG_440_WIDTH).text(theme, copy.body);
     for path in &prompt.submodules {
         dialog = dialog.mono_value(theme, path.display().to_string());
@@ -76,7 +66,7 @@ pub(super) fn panel(
     let open_path = parent_workdir
         .zip(prompt.submodules.first())
         .map(|(workdir, path)| workdir.join(path));
-    let shelve_prompt = prompt.clone();
+    let shelve_paths = prompt.submodules.clone();
     let stash_message = copy.stash_message;
     let actions = div()
         .flex()
@@ -103,7 +93,7 @@ pub(super) fn panel(
                     let root_view = this.root_view.clone();
                     this.close_resolved_popover(cx);
                     let _ = root_view.request(
-                        RootRequest::SubmitCommitPastSubmoduleGuard,
+                        RootRequest::SubmitCommitPastSubmoduleGuard { shelve: None },
                         Some(window),
                         cx,
                     );
@@ -113,15 +103,18 @@ pub(super) fn panel(
             components::Button::new("submodule_leave_behind_shelve", "Shelve and commit")
                 .style(components::ButtonStyle::Filled)
                 .on_click(theme, cx, move |this, _e, window, cx| {
-                    this.store.dispatch(Msg::ShelveSubmoduleChanges {
-                        repo_id: shelve_prompt.repo_id,
-                        paths: shelve_prompt.submodules.clone(),
+                    // The stash runs in the commit's own step, so a failed
+                    // stash leaves nothing committed.
+                    let shelve = gitcomet_state::model::SubmoduleShelve {
+                        paths: shelve_paths.clone(),
                         message: stash_message.clone(),
-                    });
+                    };
                     let root_view = this.root_view.clone();
                     this.close_resolved_popover(cx);
                     let _ = root_view.request(
-                        RootRequest::SubmitCommitPastSubmoduleGuard,
+                        RootRequest::SubmitCommitPastSubmoduleGuard {
+                            shelve: Some(shelve),
+                        },
                         Some(window),
                         cx,
                     );

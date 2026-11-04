@@ -2016,6 +2016,8 @@ pub(super) fn status_loaded(
 ) -> Vec<Effect> {
     let mut effects = Vec::new();
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
+        let submodule_listed_before = status_lists_first_level_submodule(repo_state);
+        let loaded = result.is_ok();
         match result {
             Ok(next) => {
                 // Also restore individual lanes after a partial-load error.
@@ -2031,20 +2033,44 @@ pub(super) fn status_loaded(
         StatusLane::Worktree.finish(repo_state, &mut effects);
         StatusLane::Staged.finish(repo_state, &mut effects);
         effects.extend(super::util::replan_one_sided_change(inputs, repo_state));
-        refresh_submodule_sync_facts(repo_state, &mut effects);
+        if loaded {
+            refresh_submodule_sync_facts(repo_state, submodule_listed_before, &mut effects);
+        }
     }
     effects
 }
 
-/// Submodule drift and inner changes come with the submodule list, so a
-/// status refresh in a worktree that has first-level submodules re-reads the
-/// list too. The rows stay shown while it loads.
-fn refresh_submodule_sync_facts(repo_state: &mut RepoState, effects: &mut Vec<Effect>) {
-    let has_first_level = matches!(
-        &repo_state.submodules,
-        Loadable::Ready(submodules) if submodules.iter().any(|submodule| !submodule.nested)
-    );
-    if has_first_level && repo_state.loads_in_flight.request(LoadKind::Submodules) {
+/// Whether the status lists a first-level submodule: a submodule that moved
+/// or has changes inside shows there as a changed gitlink.
+fn status_lists_first_level_submodule(repo_state: &RepoState) -> bool {
+    let Loadable::Ready(submodules) = &repo_state.submodules else {
+        return false;
+    };
+    let is_first_level = |path: &std::path::Path| {
+        submodules
+            .iter()
+            .any(|submodule| !submodule.nested && submodule.path == path)
+    };
+    repo_state
+        .worktree_status_entries()
+        .into_iter()
+        .chain(repo_state.staged_status_entries())
+        .flatten()
+        .any(|entry| is_first_level(&entry.path))
+}
+
+/// Submodule drift and inner changes come with the submodule list, which
+/// costs a `git status` and a `git rev-list` per submodule. A status refresh
+/// re-reads it only when a first-level submodule is listed there now or was
+/// before: one in sync with no changes inside has no facts to refresh. The
+/// rows stay shown while it loads.
+fn refresh_submodule_sync_facts(
+    repo_state: &mut RepoState,
+    submodule_listed_before: bool,
+    effects: &mut Vec<Effect>,
+) {
+    let listed = submodule_listed_before || status_lists_first_level_submodule(repo_state);
+    if listed && repo_state.loads_in_flight.request(LoadKind::Submodules) {
         effects.push(Effect::LoadSubmodules {
             repo_id: repo_state.id,
         });
@@ -2059,6 +2085,8 @@ pub(super) fn worktree_status_loaded(
 ) -> Vec<Effect> {
     let mut effects = Vec::new();
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
+        let submodule_listed_before = status_lists_first_level_submodule(repo_state);
+        let loaded = result.is_ok();
         match result {
             Ok(next) => {
                 let status_unchanged = matches!(&repo_state.worktree_status, Loadable::Ready(prev) if prev.as_slice() == next.as_slice());
@@ -2074,7 +2102,9 @@ pub(super) fn worktree_status_loaded(
         }
         StatusLane::Worktree.finish(repo_state, &mut effects);
         effects.extend(super::util::replan_one_sided_change(inputs, repo_state));
-        refresh_submodule_sync_facts(repo_state, &mut effects);
+        if loaded {
+            refresh_submodule_sync_facts(repo_state, submodule_listed_before, &mut effects);
+        }
     }
     effects
 }

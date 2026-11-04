@@ -10,7 +10,7 @@ use crate::util::{
 use gitcomet_core::domain::{
     CommitId, DiscardOutcome, FileStatusKind, Submodule, SubmoduleCheckoutPolicy,
     SubmoduleCheckoutRisk, SubmoduleCheckoutUpdate, SubmoduleDrift, SubmoduleParent,
-    SubmodulePointerSnapshot, SubmoduleStatus,
+    SubmodulePointerSnapshot, SubmoduleStatus, short_commit_id,
 };
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::path_utils::canonicalize_or_original;
@@ -63,8 +63,19 @@ impl GixRepo {
         if paths.is_empty() {
             return Ok(DiscardOutcome::default());
         }
+        if !self.spec.workdir.join(".gitmodules").is_file() {
+            self.discard_worktree_changes_impl(paths)?;
+            return Ok(DiscardOutcome::default());
+        }
+        let rows = self.submodule_rows_impl()?;
+        if !paths
+            .iter()
+            .any(|path| rows.iter().any(|row| !row.nested && row.path == *path))
+        {
+            self.discard_worktree_changes_impl(paths)?;
+            return Ok(DiscardOutcome::default());
+        }
         let status = self.status_impl()?;
-        let rows = self.list_submodules_impl()?;
         let repo = self.reopen_repo()?;
         let kind_in = |entries: &[gitcomet_core::domain::FileStatus], path: &Path| {
             entries
@@ -119,6 +130,10 @@ impl GixRepo {
         let risks = if policy == SubmoduleCheckoutPolicy::KeepCheckout {
             Vec::new()
         } else {
+            fill_inner_changes(
+                &self.spec.workdir,
+                restores.iter_mut().map(|restore| &mut restore.row),
+            )?;
             restores
                 .iter()
                 .filter_map(|restore| self.checkout_risk(&restore.row, &restore.target))
@@ -177,8 +192,8 @@ impl GixRepo {
         path: &Path,
         policy: SubmoduleCheckoutPolicy,
     ) -> Result<DiscardOutcome> {
-        let rows = self.list_submodules_impl()?;
-        let Some(row) = rows.into_iter().find(|row| !row.nested && row.path == path) else {
+        let rows = self.submodule_rows_impl()?;
+        let Some(mut row) = rows.into_iter().find(|row| !row.nested && row.path == path) else {
             return Err(Error::new(ErrorKind::Backend(format!(
                 "'{}' is not a submodule of this repository",
                 path.display()
@@ -191,6 +206,9 @@ impl GixRepo {
             ))));
         }
         let target = row.recorded_head.clone();
+        if policy != SubmoduleCheckoutPolicy::KeepCheckout {
+            fill_inner_changes(&self.spec.workdir, [&mut row])?;
+        }
         let risk = (policy != SubmoduleCheckoutPolicy::KeepCheckout)
             .then(|| self.checkout_risk(&row, &target))
             .flatten();
@@ -219,12 +237,13 @@ impl GixRepo {
         if repo.config_snapshot().boolean("submodule.recurse") == Some(true) {
             return Ok(None);
         }
+        // Uncommitted work inside is checked after the operation, and only
+        // for the submodules whose pointer moved: the operation in the parent
+        // leaves it as it was.
         let in_sync: Vec<(PathBuf, CommitId)> = self
-            .list_submodules_impl()?
+            .submodule_rows_impl()?
             .into_iter()
-            .filter(|row| {
-                !row.nested && row.status == SubmoduleStatus::UpToDate && !row.has_inner_changes
-            })
+            .filter(|row| !row.nested && row.status == SubmoduleStatus::UpToDate)
             .map(|row| (row.path, row.recorded_head))
             .collect();
         Ok((!in_sync.is_empty()).then_some(SubmodulePointerSnapshot { in_sync }))
@@ -234,14 +253,25 @@ impl GixRepo {
         &self,
         snapshot: &SubmodulePointerSnapshot,
     ) -> Result<Vec<SubmoduleCheckoutUpdate>> {
-        let rows = self.list_submodules_impl()?;
+        let mut rows = self.submodule_rows_impl()?;
+        let mut moved: Vec<&mut Submodule> = rows
+            .iter_mut()
+            .filter(|row| {
+                !row.nested
+                    && snapshot.in_sync.iter().any(|(path, before)| {
+                        *path == row.path
+                            && row.recorded_head != *before
+                            && row.checked_out_head.as_ref() == Some(before)
+                    })
+            })
+            .collect();
+        if moved.is_empty() {
+            return Ok(Vec::new());
+        }
+        fill_inner_changes(&self.spec.workdir, moved.iter_mut().map(|row| &mut **row))?;
         let mut outcome = DiscardOutcome::default();
-        for (path, before) in &snapshot.in_sync {
-            let Some(row) = rows.iter().find(|row| !row.nested && row.path == *path) else {
-                continue;
-            };
-            let still_at_old_commit = row.checked_out_head.as_ref() == Some(before);
-            if row.recorded_head == *before || !still_at_old_commit || row.has_inner_changes {
+        for row in moved {
+            if row.has_inner_changes {
                 continue;
             }
             let target = row.recorded_head.clone();
@@ -256,9 +286,11 @@ impl GixRepo {
     fn checkout_risk(&self, row: &Submodule, target: &CommitId) -> Option<SubmoduleCheckoutRisk> {
         let checked_out = row.checked_out_head.clone()?;
         let moves = checked_out != *target;
+        // A commit whose refs cannot be read counts as unreferenced, so the
+        // guard keeps it on a branch rather than risk losing it.
         let unreferenced = moves
             && !commit_is_referenced(&self.spec.workdir.join(&row.path), &checked_out)
-                .unwrap_or(true);
+                .unwrap_or(false);
         (row.has_inner_changes || unreferenced).then(|| SubmoduleCheckoutRisk {
             path: row.path.clone(),
             checked_out: Some(checked_out),
@@ -277,7 +309,7 @@ impl GixRepo {
         outcome: &mut DiscardOutcome,
     ) -> Result<()> {
         let submodule_workdir = self.spec.workdir.join(&row.path);
-        let target_short = short_id(target);
+        let target_short = short_commit_id(target.as_ref());
         if let Some(risk) = risk {
             if risk.has_inner_changes {
                 let mut stash = git_workdir_cmd_for(&submodule_workdir);
@@ -299,7 +331,7 @@ impl GixRepo {
                 let branch = format!(
                     "{}/kept-{}",
                     gitcomet_core::identity::current().executable_name(),
-                    short_id(checked_out)
+                    short_commit_id(checked_out.as_ref())
                 );
                 let mut keep = git_workdir_cmd_for(&submodule_workdir);
                 keep.arg("branch")
@@ -372,6 +404,7 @@ impl GixRepo {
         &self,
         path: &Path,
         expected_head: &CommitId,
+        identity: Option<&gitcomet_core::commit_identity::CommitIdentity>,
     ) -> Result<CommitOperationOutcome> {
         let local_branch = self.current_branch_name_for_outcome()?;
         let pre_head = self.head_commit_id_for_outcome()?;
@@ -386,6 +419,9 @@ impl GixRepo {
             .arg("--amend")
             .arg("--no-edit")
             .arg("--only");
+        if let Some(identity) = identity {
+            identity.apply(&mut cmd)?;
+        }
         push_literal_paths(&mut cmd, &[path.to_path_buf()]);
         run_git_simple(cmd, "git commit --amend --only")?;
         let post_head = self.head_commit_id_for_outcome()?;
@@ -396,32 +432,66 @@ impl GixRepo {
         })
     }
 
-    /// Stash everything uncommitted in the submodule at `path`, untracked
-    /// files included, so a commit in the parent leaves nothing behind.
+    /// Stash the uncommitted changes to tracked files in the submodule at
+    /// `path`: the changes the leave-behind guard counted. Untracked files
+    /// stay where they are.
     pub(super) fn stash_submodule_changes_impl(&self, path: &Path, message: &str) -> Result<()> {
         let workdir = self.spec.workdir.join(path);
         let mut stash = git_workdir_cmd_for(&workdir);
-        stash
-            .arg("stash")
-            .arg("push")
-            .arg("--include-untracked")
-            .arg("-m")
-            .arg(message);
+        stash.arg("stash").arg("push").arg("-m").arg(message);
         run_git_simple(stash, "git stash push")
     }
 
-    /// Push the submodule at `path` from its own checkout to its upstream.
-    pub(super) fn push_submodule_with_output_impl(&self, path: &Path) -> Result<CommandOutput> {
+    /// Make `commit` fetchable from the submodule at `path`: push the local
+    /// branch that holds it to that branch's upstream. The checked-out branch
+    /// wins; a submodule is often detached at the commit after `submodule
+    /// update`, so another branch that holds it is pushed instead.
+    pub(super) fn push_submodule_with_output_impl(
+        &self,
+        path: &Path,
+        commit: &CommitId,
+    ) -> Result<CommandOutput> {
         let workdir = self.spec.workdir.join(path);
-        let mut cmd = git_workdir_cmd_for(&workdir);
-        cmd.arg("push");
-        crate::util::run_git_with_output(cmd, "git push")
+        let mut refs = git_workdir_cmd_for(&workdir);
+        refs.arg("for-each-ref")
+            .arg("--format=%(HEAD)%00%(refname)%00%(upstream:remotename)%00%(upstream:remoteref)")
+            .arg(format!("--contains={}", commit.as_ref()))
+            .arg("refs/heads");
+        let output = run_git_background_output(
+            refs,
+            "git for-each-ref --contains refs/heads",
+            &CancellationToken::new(),
+        )?;
+        let branches = if output.status.success() {
+            parse_branches_with_upstream(&output.stdout)
+        } else {
+            Vec::new()
+        };
+        let Some(branch) = branches
+            .iter()
+            .find(|branch| branch.current)
+            .or_else(|| branches.first())
+        else {
+            return Err(Error::new(ErrorKind::Backend(format!(
+                "No branch with an upstream in {} holds {}. Put the commit on a branch there, set its upstream and push it.",
+                path.display(),
+                short_commit_id(commit.as_ref())
+            ))));
+        };
+        let mut push = git_workdir_cmd_for(&workdir);
+        push.arg("push")
+            .arg(&branch.remote)
+            .arg(format!("{}:{}", branch.refname, branch.remote_ref));
+        crate::util::run_git_with_output(push, "git push")
     }
 
     /// First-level submodule commits that outgoing commits record but that no
-    /// remote-tracking branch in the submodule holds, so nobody could fetch
-    /// them after a push. Submodules that are not loaded are left out.
+    /// remote-tracking branch or tag in the submodule holds, so nobody could
+    /// fetch them after a push. Submodules that are not loaded are left out.
     pub(super) fn unpushed_submodule_pointers_impl(&self) -> Result<Vec<SubmoduleCheckoutUpdate>> {
+        if !self.spec.workdir.join(".gitmodules").is_file() {
+            return Ok(Vec::new());
+        }
         let mut cmd = self.git_workdir_cmd();
         cmd.arg("log")
             .arg("--format=")
@@ -492,25 +562,52 @@ fn parse_raw_gitlinks(stdout: &[u8]) -> Vec<(PathBuf, CommitId)> {
     gitlinks
 }
 
-/// Whether a remote-tracking branch in the submodule holds `commit`.
+/// Whether a remote-tracking branch or a tag in the submodule holds
+/// `commit`. Tags count because a submodule is often pinned to a release tag
+/// that no remote branch contains.
 fn commit_on_remote(workdir: &Path, commit: &CommitId) -> Result<bool> {
     let mut cmd = git_workdir_cmd_for(workdir);
     cmd.arg("for-each-ref")
         .arg("--count=1")
         .arg("--format=%(refname)")
         .arg(format!("--contains={}", commit.as_ref()))
-        .arg("refs/remotes");
+        .arg("refs/remotes")
+        .arg("refs/tags");
     let output = run_git_background_output(
         cmd,
-        "git for-each-ref --contains refs/remotes",
+        "git for-each-ref --contains refs/remotes refs/tags",
         &CancellationToken::new(),
     )?;
     Ok(output.status.success() && !output.stdout.trim_ascii().is_empty())
 }
 
-fn short_id(id: &CommitId) -> &str {
-    let id: &str = id.as_ref();
-    &id[..id.len().min(7)]
+/// A local branch with an upstream, from `for-each-ref` with the format
+/// `%(HEAD)%00%(refname)%00%(upstream:remotename)%00%(upstream:remoteref)`.
+#[derive(Debug, Eq, PartialEq)]
+struct BranchWithUpstream {
+    current: bool,
+    refname: String,
+    remote: String,
+    remote_ref: String,
+}
+
+fn parse_branches_with_upstream(stdout: &[u8]) -> Vec<BranchWithUpstream> {
+    String::from_utf8_lossy(stdout)
+        .lines()
+        .filter_map(|line| {
+            let mut fields = line.split('\0');
+            let current = fields.next()? == "*";
+            let refname = fields.next()?;
+            let remote = fields.next()?;
+            let remote_ref = fields.next()?;
+            (!remote.is_empty() && !remote_ref.is_empty()).then(|| BranchWithUpstream {
+                current,
+                refname: refname.to_string(),
+                remote: remote.to_string(),
+                remote_ref: remote_ref.to_string(),
+            })
+        })
+        .collect()
 }
 
 fn commit_exists(workdir: &Path, commit: &CommitId) -> bool {
@@ -581,21 +678,7 @@ pub(super) fn fill_first_level_sync_facts(
     rows: &mut [Submodule],
     cancellation: &CancellationToken,
 ) -> Result<()> {
-    let loaded: Vec<PathBuf> = rows
-        .iter()
-        .filter(|row| !row.nested && row.checked_out_head.is_some())
-        .map(|row| row.path.clone())
-        .collect();
-    if loaded.is_empty() {
-        return Ok(());
-    }
-
-    for (path, inner) in inner_change_flags(workdir, &loaded, cancellation)? {
-        if let Some(row) = rows.iter_mut().find(|row| row.path == path) {
-            row.has_inner_changes = inner;
-        }
-    }
-
+    fill_inner_changes_cancellable(workdir, rows.iter_mut(), cancellation)?;
     for row in rows
         .iter_mut()
         .filter(|row| !row.nested && row.status == SubmoduleStatus::HeadMismatch)
@@ -610,6 +693,35 @@ pub(super) fn fill_first_level_sync_facts(
             checked_out.as_ref(),
             cancellation,
         )?;
+    }
+    Ok(())
+}
+
+/// Set `has_inner_changes` on the loaded first-level rows among `rows`.
+fn fill_inner_changes<'a>(
+    workdir: &Path,
+    rows: impl IntoIterator<Item = &'a mut Submodule>,
+) -> Result<()> {
+    fill_inner_changes_cancellable(workdir, rows, &CancellationToken::new())
+}
+
+fn fill_inner_changes_cancellable<'a>(
+    workdir: &Path,
+    rows: impl IntoIterator<Item = &'a mut Submodule>,
+    cancellation: &CancellationToken,
+) -> Result<()> {
+    let mut loaded: Vec<&mut Submodule> = rows
+        .into_iter()
+        .filter(|row| !row.nested && row.checked_out_head.is_some())
+        .collect();
+    if loaded.is_empty() {
+        return Ok(());
+    }
+    let paths: Vec<PathBuf> = loaded.iter().map(|row| row.path.clone()).collect();
+    for (path, inner) in inner_change_flags(workdir, &paths, cancellation)? {
+        if let Some(row) = loaded.iter_mut().find(|row| row.path == path) {
+            row.has_inner_changes = inner;
+        }
     }
     Ok(())
 }
@@ -632,7 +744,11 @@ fn inner_change_flags(
     push_literal_paths(&mut cmd, paths);
     let output = run_git_background_output(cmd, "git status --porcelain=v2", cancellation)?;
     if !output.status.success() {
-        return Ok(Vec::new());
+        // The checkout guard must not read "no changes" from a failed status.
+        return Err(Error::new(ErrorKind::Backend(format!(
+            "could not read the submodules' status: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ))));
     }
     let mut flags = Vec::new();
     let mut records = output.stdout.split(|byte| *byte == 0).peekable();
@@ -708,6 +824,20 @@ fn parse_left_right_counts(stdout: &[u8]) -> Option<SubmoduleDrift> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn branches_without_an_upstream_cannot_be_pushed_to_one() {
+        let stdout = b"*\0refs/heads/main\0\0\n \0refs/heads/topic\0origin\0refs/heads/topic\n";
+        assert_eq!(
+            parse_branches_with_upstream(stdout),
+            vec![BranchWithUpstream {
+                current: false,
+                refname: "refs/heads/topic".into(),
+                remote: "origin".into(),
+                remote_ref: "refs/heads/topic".into(),
+            }]
+        );
+    }
 
     #[test]
     fn raw_gitlinks_keep_added_and_moved_pointers_only() {

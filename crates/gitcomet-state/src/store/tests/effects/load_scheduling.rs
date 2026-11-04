@@ -2628,6 +2628,7 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
                 message: "msg".to_string(),
                 identity: None,
                 auth: None,
+                shelve: None,
             },
             1,
         ),

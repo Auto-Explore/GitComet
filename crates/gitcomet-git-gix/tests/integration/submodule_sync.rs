@@ -4,7 +4,7 @@
 use super::submodules::{
     add_submodule_raw, git_stdout, init_repo_with_seed, run_git, setup_submodule_test,
 };
-use gitcomet_core::domain::{SubmoduleCheckoutPolicy, SubmoduleDrift, SubmoduleStatus};
+use gitcomet_core::domain::{CommitId, SubmoduleCheckoutPolicy, SubmoduleDrift, SubmoduleStatus};
 use gitcomet_core::path_utils::canonicalize_or_original;
 use gitcomet_core::remote_url::RemoteUrlPolicy;
 use gitcomet_core::services::{CancellationToken, GitBackend, GitRepository};
@@ -487,7 +487,7 @@ fn re_recording_amends_only_while_head_is_the_recording_commit() {
     );
     let rebased = head_of(&fixture.child());
     let amended = parent
-        .amend_submodule_record(Path::new("mods/child"), &recorded)
+        .amend_submodule_record(Path::new("mods/child"), &recorded, None)
         .expect("amend");
     assert_eq!(
         git_stdout(&fixture.parent, &["rev-parse", "HEAD:mods/child"]),
@@ -501,7 +501,7 @@ fn re_recording_amends_only_while_head_is_the_recording_commit() {
     commit_in(&fixture.parent, "later.txt", "later\n");
     assert!(
         parent
-            .amend_submodule_record(Path::new("mods/child"), &amended.post_head.unwrap())
+            .amend_submodule_record(Path::new("mods/child"), &amended.post_head.unwrap(), None)
             .is_err(),
         "a commit made since is never rewritten"
     );
@@ -530,4 +530,87 @@ fn unpushed_submodule_pointers_lists_commits_missing_from_the_submodule_remote()
     );
     run_git(&fixture.child(), &["fetch", "-q", "origin"]);
     assert!(parent.unpushed_submodule_pointers().unwrap().is_empty());
+}
+
+#[test]
+fn a_submodule_pinned_to_a_tag_is_not_reported_unpushed() {
+    let _guard = setup_submodule_test();
+    let fixture = fixture();
+    run_git(&fixture.parent, &["config", "commit.gpgsign", "false"]);
+    let parent = fixture.open(&fixture.parent);
+    commit_in(&fixture.child(), "a.txt", "a\n");
+    parent
+        .record_submodule_commit(Path::new("mods/child"), "Update mods/child", None)
+        .expect("record");
+    assert_eq!(parent.unpushed_submodule_pointers().unwrap().len(), 1);
+
+    run_git(&fixture.child(), &["tag", "v1"]);
+    assert!(parent.unpushed_submodule_pointers().unwrap().is_empty());
+}
+
+#[test]
+fn pushing_a_detached_submodule_pushes_the_branch_that_holds_the_commit() {
+    let _guard = setup_submodule_test();
+    let fixture = fixture();
+    let child = fixture.child();
+    run_git(&child, &["checkout", "-q", "--detach"]);
+    // A non-bare origin refuses pushes to its checked-out branch, so the
+    // branch pushes to a branch of its own there.
+    run_git(&child, &["push", "-q", "origin", "HEAD:refs/heads/topic"]);
+    run_git(&child, &["fetch", "-q", "origin"]);
+    run_git(&child, &["branch", "--track", "topic", "origin/topic"]);
+    let local = commit_in(&child, "a.txt", "a\n");
+    run_git(&child, &["update-ref", "refs/heads/topic", &local]);
+    assert_eq!(
+        git_stdout(&child, &["rev-parse", "--abbrev-ref", "HEAD"]),
+        "HEAD"
+    );
+
+    let parent = fixture.open(&fixture.parent);
+    parent
+        .push_submodule_with_output(Path::new("mods/child"), &CommitId(local.as_str().into()))
+        .expect("push the branch that holds the commit");
+    assert_eq!(
+        git_stdout(
+            &fixture.root.join("child"),
+            &["rev-parse", "refs/heads/topic"]
+        ),
+        local
+    );
+}
+
+#[test]
+fn pushing_a_submodule_commit_no_branch_holds_says_what_to_do() {
+    let _guard = setup_submodule_test();
+    let fixture = fixture();
+    run_git(&fixture.child(), &["checkout", "-q", "--detach"]);
+    let local = commit_in(&fixture.child(), "a.txt", "a\n");
+    let parent = fixture.open(&fixture.parent);
+    let error = parent
+        .push_submodule_with_output(Path::new("mods/child"), &CommitId(local.as_str().into()))
+        .expect_err("no branch holds the commit");
+    assert!(
+        error.to_string().contains("No branch with an upstream"),
+        "{error}"
+    );
+}
+
+#[test]
+fn shelving_a_submodule_stashes_tracked_changes_and_leaves_untracked_files() {
+    let _guard = setup_submodule_test();
+    let fixture = fixture();
+    let child = fixture.child();
+    fs::write(child.join("child.txt"), "changed\n").expect("write tracked change");
+    fs::write(child.join("local.cfg"), "mine\n").expect("write untracked file");
+
+    let parent = fixture.open(&fixture.parent);
+    parent
+        .stash_submodule_changes(Path::new("mods/child"), "Shelved while committing parent")
+        .expect("stash");
+    assert_eq!(
+        fs::read_to_string(child.join("child.txt")).unwrap(),
+        "child\n"
+    );
+    assert!(child.join("local.cfg").exists(), "untracked files stay");
+    assert!(git_stdout(&child, &["stash", "list"]).contains("Shelved while committing parent"));
 }

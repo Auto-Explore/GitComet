@@ -4,31 +4,22 @@
 use super::util::push_notification;
 use crate::model::{
     AppNotificationKind, AppState, RepoId, SubmoduleCheckoutOperation, SubmoduleCheckoutPrompt,
-    SubmoduleSettings,
+    SubmoduleSettings, submodule_display_name,
 };
 use crate::msg::Effect;
 use crate::store::reducer::prepared::ReducerInputs;
 use gitcomet_core::domain::{
     CommitId, DiscardOutcome, SubmoduleCheckoutPolicy, SubmoduleCheckoutUpdate,
 };
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 pub(super) fn set_settings(state: &mut AppState, settings: SubmoduleSettings) -> Vec<Effect> {
     state.submodule_settings = settings;
     Vec::new()
 }
 
-/// The name the user knows a submodule by: the last part of its path.
-pub(crate) fn submodule_display_name(path: &Path) -> String {
-    path.file_name()
-        .unwrap_or(path.as_os_str())
-        .to_string_lossy()
-        .into_owned()
-}
-
 fn short(commit: &CommitId) -> &str {
-    let id = commit.as_ref();
-    id.get(..7).unwrap_or(id)
+    gitcomet_core::domain::short_commit_id(commit.as_ref())
 }
 
 pub(super) fn update_to_recorded(repo_id: RepoId, path: PathBuf) -> Vec<Effect> {

@@ -57,17 +57,32 @@ impl GixRepo {
         Ok(head_gitlink_commit_id(&repo, path)?.is_some())
     }
 
-    pub(super) fn list_submodules_impl(&self) -> Result<Vec<Submodule>> {
-        self.list_submodules_cancellable_impl(&CancellationToken::new())
-    }
-
     pub(super) fn list_submodules_cancellable_impl(
         &self,
         cancellation: &CancellationToken,
     ) -> Result<Vec<Submodule>> {
         cancellation.check_cancelled()?;
         let repo = self.reopen_repo()?;
-        list_submodules_in(&repo, cancellation)
+        let mut submodules = submodule_rows_in(&repo, cancellation)?;
+        if let Some(workdir) = repo.workdir() {
+            // The facts only refine the rows; a failed read leaves them as listed.
+            match super::submodule_sync::fill_first_level_sync_facts(
+                workdir,
+                &mut submodules,
+                cancellation,
+            ) {
+                Err(error) if matches!(error.kind(), ErrorKind::Cancelled) => return Err(error),
+                Ok(()) | Err(_) => {}
+            }
+        }
+        Ok(submodules)
+    }
+
+    /// The submodule rows without drift and inner-change facts, which cost a
+    /// `git status` and a `git rev-list` per submodule to read.
+    pub(super) fn submodule_rows_impl(&self) -> Result<Vec<Submodule>> {
+        let repo = self.reopen_repo()?;
+        submodule_rows_in(&repo, &CancellationToken::new())
     }
 
     pub(super) fn submodule_diff_summary_cancellable_impl(
@@ -1972,24 +1987,13 @@ fn object_id_to_commit_id(id: gix::ObjectId) -> CommitId {
 }
 
 /// Submodules of an already-open repository, sorted by path.
-fn list_submodules_in(
+fn submodule_rows_in(
     repo: &gix::Repository,
     cancellation: &CancellationToken,
 ) -> Result<Vec<Submodule>> {
     let mut submodules = Vec::new();
     collect_repo_submodules(repo, Path::new(""), &mut submodules, cancellation)?;
     cancellation.check_cancelled()?;
-    if let Some(workdir) = repo.workdir() {
-        // The facts only refine the rows; a failed read leaves them as listed.
-        match super::submodule_sync::fill_first_level_sync_facts(
-            workdir,
-            &mut submodules,
-            cancellation,
-        ) {
-            Err(error) if matches!(error.kind(), ErrorKind::Cancelled) => return Err(error),
-            Ok(()) | Err(_) => {}
-        }
-    }
     submodules.sort_unstable_by(|a, b| a.path.cmp(&b.path));
     Ok(submodules)
 }

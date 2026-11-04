@@ -717,6 +717,7 @@ fn remove_repo(
     repos.retire(&repo_id);
     // Submodule tabs of a closed parent stay where they are, unlinked.
     super::submodule_tabs::relink(state);
+    super::linked_commit::forget_closed_repos(state);
     if record_recent && persist_closed_recent {
         effects.push(persist_recent_repo_effect(Some(repo_id), closed_workdir));
     }
@@ -850,6 +851,7 @@ pub(super) fn close_repos(
         keep
     });
     super::submodule_tabs::relink(state);
+    super::linked_commit::forget_closed_repos(state);
 
     if let Some(active_repo_id) = next_active_repo {
         if state.active_repo != Some(active_repo_id) {

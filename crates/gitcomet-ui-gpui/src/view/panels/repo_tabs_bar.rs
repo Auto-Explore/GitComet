@@ -439,13 +439,10 @@ impl RepoTabsBarView {
         let link = repo.submodule_parent.as_ref()?;
         let parent = link.parent_name();
         Some(match state.submodule_row_in_parent(repo.id) {
-            Some(row) => {
-                let recorded = row.recorded_head.as_ref();
-                format!(
-                    "Submodule of {parent} · recorded {}",
-                    recorded.get(..7).unwrap_or(recorded)
-                )
-            }
+            Some(row) => format!(
+                "Submodule of {parent} · recorded {}",
+                gitcomet_core::domain::short_commit_id(row.recorded_head.as_ref())
+            ),
             None => format!("Submodule of {parent}"),
         })
     }

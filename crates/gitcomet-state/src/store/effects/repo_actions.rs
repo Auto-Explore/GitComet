@@ -1118,6 +1118,7 @@ pub(super) fn schedule_record_submodule_commit(
     path: PathBuf,
     message: String,
     amend_expected: Option<gitcomet_core::domain::CommitId>,
+    identity: Option<gitcomet_core::commit_identity::CommitIdentity>,
 ) {
     let amend = amend_expected.is_some();
     let label = if amend { "Amend commit" } else { "Commit" };
@@ -1129,8 +1130,8 @@ pub(super) fn schedule_record_submodule_commit(
         label,
         message_subject(&message),
         move |repo| match amend_expected {
-            Some(expected) => repo.amend_submodule_record(&path, &expected),
-            None => repo.record_submodule_commit(&path, &message, None),
+            Some(expected) => repo.amend_submodule_record(&path, &expected, identity.as_ref()),
+            None => repo.record_submodule_commit(&path, &message, identity.as_ref()),
         },
         move |repo_id, result| InternalMsg::SubmoduleRecorded {
             repo_id,
@@ -1184,6 +1185,7 @@ pub(super) fn schedule_commit(
     message: String,
     identity: Option<gitcomet_core::commit_identity::CommitIdentity>,
     auth: Option<StagedGitAuth>,
+    shelve: Option<crate::model::SubmoduleShelve>,
 ) {
     let context = message_subject(&message).or_else(|| Some("No commit message".to_string()));
     schedule_repo_action_with_result(
@@ -1194,12 +1196,33 @@ pub(super) fn schedule_commit(
         "Commit",
         context,
         move |repo| {
+            if let Some(shelve) = &shelve {
+                shelve_submodule_changes(repo.as_ref(), shelve)?;
+            }
             run_with_git_auth(auth, || {
                 repo.commit_with_identity(&message, identity.as_ref())
             })
         },
         |repo_id, result| InternalMsg::CommitFinished { repo_id, result },
     );
+}
+
+/// Stash the changes in each submodule `shelve` names. The first failure
+/// stops the commit, so nothing is left behind that the user chose to keep.
+fn shelve_submodule_changes(
+    repo: &dyn GitRepository,
+    shelve: &crate::model::SubmoduleShelve,
+) -> Result<(), Error> {
+    for path in &shelve.paths {
+        repo.stash_submodule_changes(path, &shelve.message)
+            .map_err(|error| {
+                Error::new(ErrorKind::Backend(format!(
+                    "Shelving the changes in {} failed, so nothing was committed: {error}",
+                    path.display()
+                )))
+            })?;
+    }
+    Ok(())
 }
 
 pub(super) fn schedule_commit_amend(
@@ -1225,43 +1248,6 @@ pub(super) fn schedule_commit_amend(
             })
         },
         |repo_id, result| InternalMsg::CommitAmendFinished { repo_id, result },
-    );
-}
-
-/// Stash the changes inside each submodule at `paths`. The submodules'
-/// rows and the parent's status change with them, so both reload.
-pub(super) fn schedule_shelve_submodule_changes(
-    executor: &TaskExecutor,
-    repos: &RepositoryRuntimes,
-    msg_tx: StoreWorkerSender,
-    repo_id: RepoId,
-    paths: Vec<PathBuf>,
-    message: String,
-) {
-    let context = single_line_context(
-        paths
-            .iter()
-            .map(|path| path.display().to_string())
-            .collect::<Vec<_>>()
-            .join(", "),
-    );
-    schedule_repo_action_with_hook(
-        executor,
-        repos,
-        msg_tx,
-        repo_id,
-        RepoActionKind::ShelveSubmoduleChanges,
-        context,
-        move |repo| {
-            for path in &paths {
-                repo.stash_submodule_changes(path, &message)?;
-            }
-            Ok(())
-        },
-        |msg_tx, repo_id, _result| {
-            send_or_log(msg_tx, Msg::LoadSubmodules { repo_id });
-        },
-        repo_action_finished(RepoActionKind::ShelveSubmoduleChanges),
     );
 }
 

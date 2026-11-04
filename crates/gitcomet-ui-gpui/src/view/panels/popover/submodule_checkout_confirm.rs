@@ -3,16 +3,11 @@ use gitcomet_core::domain::{CommitId, SubmoduleCheckoutPolicy, SubmoduleCheckout
 use gitcomet_state::model::{SubmoduleCheckoutOperation, SubmoduleCheckoutPrompt};
 
 fn short(commit: &CommitId) -> String {
-    let id = commit.as_ref();
-    id.get(..7).unwrap_or(id).to_string()
+    gitcomet_core::domain::short_commit_id(commit.as_ref()).to_string()
 }
 
 fn name(risk: &SubmoduleCheckoutRisk) -> String {
-    risk.path
-        .file_name()
-        .unwrap_or(risk.path.as_os_str())
-        .to_string_lossy()
-        .into_owned()
+    gitcomet_state::model::submodule_display_name(&risk.path)
 }
 
 /// The words the prompt uses: one submodule is named, several are counted.

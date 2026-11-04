@@ -45,8 +45,11 @@ pub(in crate::view) enum RootRequest {
     SetChangeTrackingView(ChangeTrackingView),
     SetCommitAmend(bool),
     /// Commit what the commit form holds, past the question about
-    /// submodule changes the commit leaves behind.
-    SubmitCommitPastSubmoduleGuard,
+    /// submodule changes the commit leaves behind; `shelve` stashes them in
+    /// the same step, before the commit.
+    SubmitCommitPastSubmoduleGuard {
+        shelve: Option<gitcomet_state::model::SubmoduleShelve>,
+    },
     SetCommitPushAfter(bool),
     OpenPopoverCentered(PopoverKind),
     OpenFileHistory {
@@ -167,9 +170,9 @@ impl GitCometView {
             } => self.request_move_repo_to_workspace(repo_id, path, target, cx),
             RootRequest::SetChangeTrackingView(view) => self.set_change_tracking_view(view, cx),
             RootRequest::SetCommitAmend(enabled) => self.set_commit_amend_enabled(enabled, cx),
-            RootRequest::SubmitCommitPastSubmoduleGuard => {
+            RootRequest::SubmitCommitPastSubmoduleGuard { shelve } => {
                 self.details_pane.update(cx, |pane, cx| {
-                    let _ = pane.submit_commit_past_submodule_guard(cx);
+                    let _ = pane.submit_commit_past_submodule_guard(shelve, cx);
                 });
             }
             RootRequest::SetCommitPushAfter(enabled) => {

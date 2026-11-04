@@ -1,15 +1,5 @@
 use super::*;
 
-fn tab_name(state: &AppState, repo_id: RepoId) -> String {
-    state
-        .repos
-        .iter()
-        .find(|repo| repo.id == repo_id)
-        .and_then(|repo| repo.spec.workdir.file_name())
-        .map(|name| name.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "the repository".to_string())
-}
-
 /// The words the prompt uses, kept apart from the drawing so tests can read
 /// them.
 pub(super) struct SubmoduleCloseCopy {
@@ -22,12 +12,12 @@ pub(super) fn copy(state: &AppState, prompt: &SubmoduleClosePrompt) -> Submodule
     let parent = prompt
         .repo_ids
         .first()
-        .map(|repo_id| tab_name(state, *repo_id))
+        .map(|repo_id| state.repo_name(*repo_id))
         .unwrap_or_else(|| "the repository".to_string());
     let submodules = prompt
         .submodules
         .iter()
-        .map(|repo_id| tab_name(state, *repo_id))
+        .map(|repo_id| state.repo_name(*repo_id))
         .collect::<Vec<_>>();
     let body = match submodules.as_slice() {
         [submodule] => format!(

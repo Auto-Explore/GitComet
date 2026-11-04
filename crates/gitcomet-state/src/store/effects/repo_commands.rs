@@ -1,4 +1,4 @@
-use crate::model::{AppState, Loadable};
+use crate::model::{AppState, BlockedPush, Loadable};
 use crate::msg::RepoCommandEffect;
 use crate::msg::{InternalMsg, Msg, RepoCommandKind};
 use crate::store::repository_runtime::RepositoryRuntimes;
@@ -1459,7 +1459,12 @@ fn schedule_push(
         context,
         move |repo| {
             if guard_submodules {
-                refuse_unpushed_submodule_pointers(repo.as_ref(), &guard_tx, repo_id)?;
+                refuse_unpushed_submodule_pointers(
+                    repo.as_ref(),
+                    &guard_tx,
+                    repo_id,
+                    BlockedPush::Push,
+                )?;
             }
             run_with_git_auth(auth, || repo.push_with_output())
         },
@@ -1473,6 +1478,7 @@ fn refuse_unpushed_submodule_pointers(
     repo: &dyn GitRepository,
     msg_tx: &StoreWorkerSender,
     repo_id: RepoId,
+    push: BlockedPush,
 ) -> Result<(), Error> {
     // The check never blocks a push it cannot complete.
     let pointers = repo.unpushed_submodule_pointers().unwrap_or_default();
@@ -1486,21 +1492,26 @@ fn refuse_unpushed_submodule_pointers(
         .join(", ");
     send_or_log(
         msg_tx,
-        Msg::Internal(InternalMsg::PushBlockedByUnpushedSubmodules { repo_id, pointers }),
+        Msg::Internal(InternalMsg::PushBlockedByUnpushedSubmodules {
+            repo_id,
+            pointers,
+            push,
+        }),
     );
     Err(Error::new(ErrorKind::Backend(format!(
         "Push stopped: the commits to push record submodule commits that are not on the submodule's remote ({names}). Push the submodule first."
     ))))
 }
 
-/// Push each submodule at `paths` of `repo_id` to its upstream, then ask
-/// for the repository's own push.
-fn schedule_push_submodules_then_repo(
+/// Push each submodule of `repo_id` so its listed commit is on its remote,
+/// then run the repository's stopped push again.
+pub(super) fn schedule_push_submodules_then_repo(
     executor: &TaskExecutor,
     repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
-    paths: Vec<PathBuf>,
+    pointers: Vec<gitcomet_core::domain::SubmoduleCheckoutUpdate>,
+    push: BlockedPush,
 ) {
     spawn_with_repo_or_else(
         executor,
@@ -1508,19 +1519,38 @@ fn schedule_push_submodules_then_repo(
         repo_id,
         msg_tx,
         move |repo, msg_tx| {
-            for path in &paths {
-                if let Err(error) = repo.push_submodule_with_output(path) {
+            for pointer in &pointers {
+                if let Err(error) = repo.push_submodule_with_output(&pointer.path, &pointer.commit)
+                {
+                    // The submodule push runs without the sign-in prompt;
+                    // its own tab has it.
                     send_or_log(
                         &msg_tx,
                         Msg::ReportError {
                             repo_id: Some(repo_id),
-                            message: format!("Pushing {} failed: {error}", path.display()),
+                            message: format!(
+                                "Pushing {} failed, so nothing was pushed: {error}. Open it and push it from its own tab.",
+                                pointer.path.display()
+                            ),
                         },
                     );
                     return;
                 }
             }
-            send_or_log(&msg_tx, Msg::Push { repo_id });
+            send_or_log(
+                &msg_tx,
+                match push {
+                    BlockedPush::Push => Msg::Push { repo_id },
+                    BlockedPush::AfterCommit {
+                        target,
+                        set_upstream,
+                    } => Msg::PushAfterCommit {
+                        repo_id,
+                        target,
+                        set_upstream,
+                    },
+                },
+            );
         },
         |_msg_tx| {},
     );
@@ -1549,7 +1579,15 @@ fn schedule_push_after_commit(
         },
         move |repo| {
             if guard_submodules {
-                refuse_unpushed_submodule_pointers(repo.as_ref(), &guard_tx, repo_id)?;
+                refuse_unpushed_submodule_pointers(
+                    repo.as_ref(),
+                    &guard_tx,
+                    repo_id,
+                    BlockedPush::AfterCommit {
+                        target: target.clone(),
+                        set_upstream,
+                    },
+                )?;
             }
             run_with_git_auth(auth, || {
                 if set_upstream {
@@ -1792,9 +1830,12 @@ fn schedule_reset(
             target: command_target,
         },
         move |repo| {
+            // Only a hard reset updates the working tree, as with Git's own
+            // `--recurse-submodules`; soft and mixed resets leave the
+            // submodule checkouts alone too.
             following_submodule_pointers(
                 repo.as_ref(),
-                follow_submodules,
+                follow_submodules && mode == ResetMode::Hard,
                 &follow_tx,
                 repo_id,
                 || repo.reset_with_output(&target, mode),
@@ -2643,16 +2684,6 @@ fn tracking_branch_context(
 fn guard_unpushed_submodules(thread_state: &Arc<RwLock<Arc<AppState>>>, repo_id: RepoId) -> bool {
     let state = thread_state.read().unwrap_or_else(|e| e.into_inner());
     state.unpushed_pointer_override != Some(repo_id)
-}
-
-pub(super) fn schedule_submodule_push(
-    executor: &TaskExecutor,
-    repos: &RepositoryRuntimes,
-    msg_tx: StoreWorkerSender,
-    repo_id: RepoId,
-    paths: Vec<PathBuf>,
-) {
-    schedule_push_submodules_then_repo(executor, repos, msg_tx, repo_id, paths);
 }
 
 pub(super) fn schedule(

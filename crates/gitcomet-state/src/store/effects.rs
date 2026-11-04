@@ -1030,6 +1030,7 @@ pub(super) fn schedule_effect(
             path,
             message,
             amend_expected,
+            identity,
         } => repo_actions::schedule_record_submodule_commit(
             executor,
             repos,
@@ -1038,16 +1039,14 @@ pub(super) fn schedule_effect(
             path,
             message,
             amend_expected,
+            identity,
         ),
-        Effect::PushSubmodulesThenRepo { repo_id, paths } => {
-            repo_commands::schedule_submodule_push(executor, repos, msg_tx, repo_id, paths)
-        }
-        Effect::ShelveSubmoduleChanges {
+        Effect::PushSubmodulesThenRepo {
             repo_id,
-            paths,
-            message,
-        } => repo_actions::schedule_shelve_submodule_changes(
-            executor, repos, msg_tx, repo_id, paths, message,
+            pointers,
+            push,
+        } => repo_commands::schedule_push_submodules_then_repo(
+            executor, repos, msg_tx, repo_id, pointers, push,
         ),
         Effect::SubmoduleCheckout {
             repo_id,
@@ -1067,9 +1066,10 @@ pub(super) fn schedule_effect(
             message,
             identity,
             auth,
+            shelve,
         } => {
             repo_actions::schedule_commit(
-                executor, repos, msg_tx, repo_id, message, identity, auth,
+                executor, repos, msg_tx, repo_id, message, identity, auth, shelve,
             );
         }
         Effect::CommitAmend {

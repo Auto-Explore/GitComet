@@ -79,17 +79,13 @@ pub(super) fn relink(state: &mut AppState) {
     }
 }
 
-fn parent_tab(repo: &RepoState) -> Option<RepoId> {
-    repo.submodule_parent_tab()
-}
-
 /// Put each linked submodule tab right after its parent's tab, keeping the
 /// relative order of everything else. Returns whether the order changed.
 pub(super) fn group(state: &mut AppState) -> bool {
     let order: Vec<RepoId> = state.repos.iter().map(|repo| repo.id).collect();
     let mut grouped: Vec<RepoId> = Vec::with_capacity(order.len());
     for repo in &state.repos {
-        if parent_tab(repo).is_some() {
+        if repo.submodule_parent_tab().is_some() {
             continue;
         }
         grouped.push(repo.id);
@@ -97,7 +93,7 @@ pub(super) fn group(state: &mut AppState) -> bool {
             state
                 .repos
                 .iter()
-                .filter(|child| parent_tab(child) == Some(repo.id))
+                .filter(|child| child.submodule_parent_tab() == Some(repo.id))
                 .map(|child| child.id),
         );
     }
@@ -204,7 +200,7 @@ mod tests {
         );
         assert_eq!(order(&state), vec![1, 3, 2]);
         assert_eq!(effects.len(), 1, "the new order is persisted");
-        assert_eq!(parent_tab(&state.repos[1]), Some(RepoId(1)));
+        assert_eq!(state.repos[1].submodule_parent_tab(), Some(RepoId(1)));
     }
 
     #[test]
@@ -217,12 +213,12 @@ mod tests {
             Some(parent("/w/app", "vendor/lib")),
         );
         assert_eq!(order(&state), vec![3, 2], "no parent tab yet: order kept");
-        assert_eq!(parent_tab(&state.repos[0]), None);
+        assert_eq!(state.repos[0].submodule_parent_tab(), None);
 
         state.repos.push(repo(1, "/w/app"));
         submodule_parent_resolved(&mut state, RepoId(1), PathBuf::from("/w/app"), None);
         assert_eq!(order(&state), vec![2, 1, 3]);
-        assert_eq!(parent_tab(&state.repos[2]), Some(RepoId(1)));
+        assert_eq!(state.repos[2].submodule_parent_tab(), Some(RepoId(1)));
     }
 
     #[test]
@@ -234,17 +230,17 @@ mod tests {
             PathBuf::from("/w/app/vendor/lib"),
             Some(parent("/w/app", "vendor/lib")),
         );
-        assert_eq!(parent_tab(&state.repos[1]), Some(RepoId(1)));
+        assert_eq!(state.repos[1].submodule_parent_tab(), Some(RepoId(1)));
 
         state.repos.retain(|repo| repo.id != RepoId(1));
         relink_and_group(&mut state);
-        assert_eq!(parent_tab(&state.repos[0]), None);
+        assert_eq!(state.repos[0].submodule_parent_tab(), None);
         assert!(state.repos[0].submodule_parent.is_some(), "the link waits");
 
         state.repos.push(repo(4, "/w/app"));
         submodule_parent_resolved(&mut state, RepoId(4), PathBuf::from("/w/app"), None);
         assert_eq!(order(&state), vec![4, 3]);
-        assert_eq!(parent_tab(&state.repos[1]), Some(RepoId(4)));
+        assert_eq!(state.repos[1].submodule_parent_tab(), Some(RepoId(4)));
     }
 
     #[test]
