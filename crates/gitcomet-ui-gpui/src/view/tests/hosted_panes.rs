@@ -1459,6 +1459,67 @@ fn difftastic_file_in<'a>(
     (dir, store, view, cx, renderer)
 }
 
+/// Discarding lines with the line engine reaches the repository from a hosted
+/// pane, as staging them does: the pane's store forwards the patch.
+#[gpui::test]
+fn discarding_lines_in_a_hosted_pane_reverts_them(cx: &mut gpui::TestAppContext) {
+    let (dir, store, view, cx) = open_repository_in(cx, Arc::new(TestBackend), rust_repository());
+    let (list_id, changes) = open_changes_view(cx, &view, &store);
+    click_debug_selector(
+        cx,
+        selector(format!("hosted_file_list_{list_id}_file_b.rs")),
+    );
+    let pane = cx.update(|_window, app| changes.read(app).current().cloned().unwrap());
+    cx.update(|_window, app| {
+        pane.set_target(
+            DiffTarget::working_tree("b.rs".into(), DiffArea::Unstaged),
+            app,
+        );
+    });
+    let renderer = cx.update(|_window, app| {
+        pane.view()
+            .downcast::<crate::view::hosted::diff_pane::DiffPaneView>()
+            .unwrap()
+            .read(app)
+            .renderer()
+            .cloned()
+            .unwrap()
+    });
+    settle(cx, &view, &store, "b.rs compared line by line", |cx| {
+        cx.update(|_window, app| {
+            let renderer = renderer.read(app);
+            !renderer.structural_diff_active()
+                && renderer
+                    .rendered_diff_target()
+                    .and_then(DiffTarget::file_path)
+                    == Some(Path::new("b.rs"))
+                && renderer.is_file_diff_view_active()
+                && renderer.diff_visible_len() > 0
+        })
+    });
+    cx.update(|_window, app| {
+        renderer.update(app, |pane, cx| {
+            let last = pane.diff_visible_len() - 1;
+            pane.diff_selection_anchor = Some(0);
+            pane.diff_selection_range = Some((0, last));
+            assert!(pane.apply_diff_line_action(
+                crate::view::panes::diff::diff_text::DiffLineAction::Discard,
+                cx
+            ));
+        })
+    });
+    settle(
+        cx,
+        &view,
+        &store,
+        "b.rs reverted in the working tree",
+        |_| {
+            std::fs::read_to_string(dir.path().join("b.rs")).unwrap()
+                == "pub fn b() -> i32 {\n    1\n}\n"
+        },
+    );
+}
+
 /// The visible row of `renderer` whose line numbers are `(old, new)`.
 fn row_with_lines(
     renderer: &gpui::Entity<crate::view::panes::diff::DiffRenderer>,

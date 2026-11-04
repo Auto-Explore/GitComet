@@ -17,6 +17,9 @@ enum Select {
     Rows(&'static [&'static str]),
     /// All the text of the row drawing this patch line, as a drag selects it.
     Text(&'static str),
+    /// Text selected on the first line, then a right-click on the second
+    /// line's row, outside the highlight, and the menu closed again.
+    TextThenRightClick(&'static str, &'static str),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -50,8 +53,9 @@ fn index_text(dir: &Path) -> String {
     String::from_utf8(git_output(dir, &["show", &format!(":{PATH}")])).unwrap()
 }
 
-/// Opens `lines.txt`'s diff for `area` in `mode`, selects, focuses and presses
-/// `key`, then reports whether Git ran an action and what it left behind.
+/// Opens `lines.txt`'s whole-file diff for `area` in `mode`, selects, focuses
+/// and presses `key`, then reports whether Git ran an action and what it left
+/// behind.
 fn press(
     cx: &mut gpui::TestAppContext,
     area: DiffArea,
@@ -60,7 +64,21 @@ fn press(
     focus: Focus,
     key: &str,
 ) -> Pressed {
-    let case = format!("{area:?} {mode:?} {select:?} {focus:?} {key:?}");
+    press_in(cx, DiffContentMode::Full, area, mode, select, focus, key)
+}
+
+/// [`press`] with the diff shown as `content`: the whole file or its
+/// collapsed hunks.
+fn press_in(
+    cx: &mut gpui::TestAppContext,
+    content: DiffContentMode,
+    area: DiffArea,
+    mode: DiffViewMode,
+    select: Select,
+    focus: Focus,
+    key: &str,
+) -> Pressed {
+    let case = format!("{content:?} {area:?} {mode:?} {select:?} {focus:?} {key:?}");
     let dir = tempfile::tempdir().unwrap();
     // Unwind cleanup closes the app before the directory declared above it.
     let mut scenario = ScenarioApp {
@@ -99,7 +117,10 @@ fn press(
     store.insert_repo_for_test(REPO, backend);
     cx.simulate_resize(gpui::size(px(1600.0), px(1000.0)));
     cx.update(|_, app| {
-        view.update(app, |root, cx| root.set_diff_view_mode(mode, cx));
+        view.update(app, |root, cx| {
+            root.set_diff_view_mode(mode, cx);
+            root.set_diff_content_mode(content, cx);
+        });
     });
 
     let target = DiffTarget::working_tree(PATH.into(), area);
@@ -119,7 +140,11 @@ fn press(
                 crate::view::test_support::sync_store_snapshot(this, cx);
             });
             let pane = view.read(app).diff_renderer.read(app);
-            pane.is_file_diff_view_active()
+            let rows_listed = match content {
+                DiffContentMode::Full => pane.is_file_diff_view_active(),
+                DiffContentMode::Collapsed => pane.is_collapsed_diff_projection_active(),
+            };
+            rows_listed
                 && pane.diff_view == mode
                 && pane.diff_visible_len() > 0
                 && (0..pane.patch_diff_row_len()).any(|ix| {
@@ -144,7 +169,7 @@ fn press(
                         pane.diff_selection_anchor = Some(*first);
                         pane.diff_selection_range = Some((*first, *last));
                     }
-                    Select::Text(line) => {
+                    Select::Text(line) | Select::TextThenRightClick(line, _) => {
                         let row = row_for(pane, line);
                         let region = match (mode, line.starts_with('-')) {
                             (DiffViewMode::Inline, _) => DiffTextRegion::Inline,
@@ -163,10 +188,23 @@ fn press(
                         });
                         pane.sync_diff_focus_to_text_selection();
                         pane.diff_text_selection_owner.adopt(window, cx);
+                        if let Select::TextThenRightClick(_, clicked) = select {
+                            pane.open_diff_editor_context_menu(
+                                row_for(pane, clicked),
+                                region,
+                                point(px(40.0), px(40.0)),
+                                window,
+                                cx,
+                            );
+                        }
                     }
                 }
                 cx.notify();
             });
+        if matches!(select, Select::TextThenRightClick(..)) {
+            let host = view.read(app).popover_host.clone();
+            host.update(app, |host, cx| host.close_popover(cx));
+        }
         app.clear_key_bindings();
         crate::app::bind_app_keys_for_test(app);
         crate::app::install_global_diff_shortcut_fallback_for_test(app);
@@ -196,6 +234,9 @@ fn press(
             }
             Select::Rows(_) => pane.diff_selection_range.is_some(),
             Select::Text(_) => pane.diff_text_has_selection(),
+            Select::TextThenRightClick(..) => {
+                pane.diff_text_has_selection() && pane.diff_selection_range.is_some()
+            }
         };
         assert!(selected, "{case}: the selection must survive until the key");
     });
@@ -327,5 +368,69 @@ fn line_keys_need_a_selection_in_the_focused_diff(cx: &mut gpui::TestAppContext)
         };
         assert_eq!(pressed.index, index, "{case}");
         assert_eq!(pressed.worktree, EDITED, "{case}");
+    }
+}
+
+/// A right-click beside a text selection acts on the row it lands on, and the
+/// key pressed once the menu is closed must act on that row too: discarding
+/// the older text selection instead would revert lines the menu never showed.
+#[gpui::test]
+fn d_after_a_right_click_beside_the_text_discards_the_clicked_row(cx: &mut gpui::TestAppContext) {
+    let pressed = press(
+        cx,
+        DiffArea::Unstaged,
+        DiffViewMode::Inline,
+        Select::TextThenRightClick("+TWO", "+FIVE"),
+        Focus::DiffPanel,
+        "d",
+    );
+    assert!(pressed.acted, "D must discard the right-clicked row");
+    assert!(
+        pressed.worktree.contains("TWO") && !pressed.worktree.contains("FIVE"),
+        "only the clicked line is reverted, not the text selected earlier: {:?}",
+        pressed.worktree
+    );
+    assert_eq!(pressed.index, BASE);
+}
+
+/// Collapsed hunks list the same file rows as the whole-file view, and the
+/// keys move the same lines there.
+#[gpui::test]
+fn line_keys_act_on_collapsed_hunks(cx: &mut gpui::TestAppContext) {
+    for (area, rows, key, index, worktree) in [
+        (
+            DiffArea::Unstaged,
+            Select::Rows(&["-two", "+TWO"]),
+            "s",
+            "one\nTWO\nthree\nfour\nfive\n",
+            EDITED,
+        ),
+        (
+            DiffArea::Unstaged,
+            Select::Rows(&["-five", "+FIVE"]),
+            "d",
+            BASE,
+            "one\nTWO\nthree\nfour\nfive\n",
+        ),
+        (
+            DiffArea::Staged,
+            Select::Rows(&["-two", "+TWO"]),
+            "u",
+            "one\ntwo\nthree\nfour\nFIVE\n",
+            EDITED,
+        ),
+    ] {
+        let pressed = press_in(
+            cx,
+            DiffContentMode::Collapsed,
+            area,
+            DiffViewMode::Inline,
+            rows,
+            Focus::DiffPanel,
+            key,
+        );
+        assert!(pressed.acted, "{area:?} {key}: the key must act");
+        assert_eq!(pressed.index, index, "{area:?} {key}");
+        assert_eq!(pressed.worktree, worktree, "{area:?} {key}");
     }
 }

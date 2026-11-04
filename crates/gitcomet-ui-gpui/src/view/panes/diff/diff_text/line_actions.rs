@@ -90,7 +90,10 @@ pub(super) struct SelectedDiffLines {
 
 impl DiffRenderer {
     pub(super) fn diff_line_sources(&self, workdir: &Path) -> DiffLineSources {
-        if !self.is_file_diff_view_active() {
+        // Collapsed hunks list the same file rows as the full file view, so
+        // they need the lookup too: without it every selected row would scan
+        // the whole patch for its line.
+        if !self.lists_file_diff_rows() {
             return DiffLineSources { file_diff: None };
         }
         let file_diff = self.file_diff_cache_path.as_ref().map(|abs| {
@@ -98,10 +101,9 @@ impl DiffRenderer {
             // Git diffs use forward slashes even on Windows.
             let rel_str = file_rel.to_str().map(|text| text.replace('\\', "/"));
 
-            let approx_map_len = match self.diff_view {
-                DiffViewMode::Inline => self.file_diff_inline_row_len(),
-                DiffViewMode::Split => self.file_diff_split_row_len(),
-            };
+            // The maps only hold patch lines, which in a working-tree diff are
+            // the changes and their context: far fewer than the file's rows.
+            let approx_map_len = self.patch_diff_row_len();
             let map = || FxHashMap::with_capacity_and_hasher(approx_map_len, Default::default());
             let mut add_by_new_line: FxHashMap<u32, usize> = map();
             let mut remove_by_old_line: FxHashMap<u32, usize> = map();
@@ -157,7 +159,8 @@ impl DiffRenderer {
             return self.diff_src_ixs_for_visible_ix(visible_ix);
         };
         let Some(mapped_ix) = self.diff_mapped_ix_for_visible_ix(visible_ix) else {
-            return Vec::new();
+            // A collapsed hunk header maps to no file row but acts on its hunk.
+            return self.diff_src_ixs_for_visible_ix(visible_ix);
         };
         match self.diff_view {
             DiffViewMode::Inline => {
@@ -239,11 +242,17 @@ impl DiffRenderer {
             FxHashSet::with_capacity_and_hasher(approx_selected, Default::default());
         for visible_ix in start..=end {
             for src_ix in self.diff_line_src_ixs(sources, visible_ix) {
-                let Some(line) = self.patch_diff_row(src_ix) else {
+                // The kind table avoids cloning each line just to read its kind.
+                let Some(kind) = self
+                    .diff_line_kind_for_src_ix
+                    .get(src_ix)
+                    .copied()
+                    .or_else(|| self.patch_diff_row(src_ix).map(|line| line.kind))
+                else {
                     continue;
                 };
                 src_ixs.insert(src_ix);
-                if matches!(line.kind, DiffLineKind::Add | DiffLineKind::Remove) {
+                if matches!(kind, DiffLineKind::Add | DiffLineKind::Remove) {
                     change_src_ixs.insert(src_ix);
                 }
             }
@@ -284,10 +293,17 @@ impl DiffRenderer {
         if len == 0 {
             return None;
         }
-        let (start, end) = self
+        let text = self
             .diff_text_selection_line_rows(self.diff_view)
-            .and_then(|(first, last)| self.diff_text_visible_range_for_source_range(first, last))
-            .or_else(|| self.diff_selection_range.map(|(a, b)| (a.min(b), a.max(b))))?;
+            .and_then(|(first, last)| self.diff_text_visible_range_for_source_range(first, last));
+        let rows = self.diff_selection_range.map(|(a, b)| (a.min(b), a.max(b)));
+        let (start, end) = match (text, rows) {
+            // Selecting text clears the selected rows, so rows outside the text
+            // were chosen after it: a right-click beside the highlight, which
+            // the menu acted on. The key must act on the same lines.
+            (Some(text), Some(rows)) if rows_outside(rows, text) => rows,
+            (text, rows) => text.or(rows)?,
+        };
         Some((start.min(len - 1), end.min(len - 1)))
     }
 
@@ -298,7 +314,14 @@ impl DiffRenderer {
         &self,
         action: DiffLineAction,
     ) -> Option<ContentBytes> {
-        let rows = self.diff_line_action_rows()?;
+        self.diff_lines_patch_for_rows(action, self.diff_line_action_rows()?)
+    }
+
+    fn diff_lines_patch_for_rows(
+        &self,
+        action: DiffLineAction,
+        rows: (usize, usize),
+    ) -> Option<ContentBytes> {
         let sources = self.diff_line_sources(self.rendered_diff_workdir()?);
         let selected = self.selected_diff_lines(&sources, rows);
         if selected.change_src_ixs.is_empty() {
@@ -328,7 +351,17 @@ impl DiffRenderer {
     pub(in crate::view::panes::diff) fn structural_selected_lines(
         &self,
     ) -> Option<SourceLineSelection> {
-        if let Some((first, last)) = self.diff_text_selection_line_rows(self.diff_view) {
+        let rows = self.diff_selection_range.map(|(a, b)| (a.min(b), a.max(b)));
+        // As in `diff_line_action_rows`: rows chosen beside the text win.
+        let text = self
+            .diff_text_selection_line_rows(self.diff_view)
+            .filter(|&(first, last)| {
+                !rows.is_some_and(|rows| {
+                    self.diff_text_visible_range_for_source_range(first, last)
+                        .is_some_and(|text| rows_outside(rows, text))
+                })
+            });
+        if let Some((first, last)) = text {
             let regions: &[DiffTextRegion] = match self.diff_view {
                 DiffViewMode::Split => &[DiffTextRegion::SplitLeft, DiffTextRegion::SplitRight],
                 DiffViewMode::Inline => &[DiffTextRegion::Inline],
@@ -348,9 +381,9 @@ impl DiffRenderer {
             }
             return Some(selection);
         }
-        let (a, b) = self.diff_selection_range?;
+        let (a, b) = rows?;
         Some(self.structural_source_lines(
-            (a.min(b)..=a.max(b)).filter_map(|row| self.diff_mapped_ix_for_visible_ix(row)),
+            (a..=b).filter_map(|row| self.diff_mapped_ix_for_visible_ix(row)),
             None,
         ))
     }
@@ -383,14 +416,14 @@ impl DiffRenderer {
         let Some(repo_id) = self.active_repo_id() else {
             return false;
         };
-        if self.diff_line_action_rows().is_none() {
+        let Some(rows) = self.diff_line_action_rows() else {
             return false;
-        }
+        };
         // As above: a patch built from stale rows would not apply.
         if self.diff_actions_busy() {
             return true;
         }
-        let Some(patch) = self.selected_diff_lines_patch(action) else {
+        let Some(patch) = self.diff_lines_patch_for_rows(action, rows) else {
             return false;
         };
         self.store.dispatch(match action {
@@ -404,4 +437,9 @@ impl DiffRenderer {
         });
         true
     }
+}
+
+/// Whether the row range `rows` lies wholly outside `text`'s rows.
+fn rows_outside(rows: (usize, usize), text: (usize, usize)) -> bool {
+    rows.1 < text.0 || rows.0 > text.1
 }
