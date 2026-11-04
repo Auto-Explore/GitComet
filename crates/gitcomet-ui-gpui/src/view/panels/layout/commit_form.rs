@@ -216,13 +216,16 @@ impl DetailsPaneView {
         let amend_toggle = {
             let box_size = scaled_px(14.0);
             let on = amend;
+            // Switching amend off is always allowed; switching it on needs a
+            // commit to amend and no commit, merge or rebase in the way.
+            let disabled = !on && !super::commit_amend::can_amend(self.active_repo());
             div()
                 .id("commit_amend_toggle")
                 .debug_selector(|| "commit_amend_toggle".to_string())
                 .flex()
                 .items_center()
                 .gap_2()
-                .cursor_pointer()
+                .when(!disabled, |d| d.cursor_pointer())
                 .child(
                     div()
                         .size(box_size)
@@ -235,7 +238,7 @@ impl DetailsPaneView {
                         .border_color(if on {
                             theme.colors.accent.foreground
                         } else {
-                            theme.colors.stroke.default
+                            theme.disabled_color_if(disabled, theme.colors.stroke.default)
                         })
                         .when(on, |d| d.bg(theme.colors.accent.foreground))
                         .when(on, |d| {
@@ -249,11 +252,13 @@ impl DetailsPaneView {
                 .child(
                     div()
                         .text_size(theme.ui_text(13.0))
-                        .text_color(theme.colors.foreground.primary)
+                        .text_color(
+                            theme.disabled_color_if(disabled, theme.colors.foreground.primary),
+                        )
                         .child("Amend previous commit"),
                 )
                 .on_activate(
-                    false,
+                    disabled,
                     components::ControlActivation::Action,
                     cx.listener(|this, e: &ClickEvent, _w, cx| {
                         if e.standard_click() {
