@@ -9,7 +9,13 @@ use gitcomet_core::services::{CancellationToken, CommandOutput, Result};
 use gix::bstr::ByteSlice as _;
 use rustc_hash::FxHashSet;
 use std::str;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
+
+/// Remotes asked for their tags at once. Each lookup is a network round trip
+/// in its own `git ls-remote`, so a repository with many remotes (forks, CI
+/// mirrors) must not start one per remote.
+const REMOTE_TAG_LOOKUPS_AT_ONCE: usize = 4;
 
 fn parse_ls_remote_tag_names(output: &str) -> FxHashSet<String> {
     output
@@ -97,66 +103,61 @@ impl GixRepo {
         cancellation: &CancellationToken,
     ) -> Result<Vec<RemoteTag>> {
         cancellation.check_cancelled()?;
-        let remotes = self.list_remotes_impl()?;
-        let workdir = self.spec.workdir.clone();
-        let mut handles = Vec::new();
-
-        for remote in remotes {
-            cancellation.check_cancelled()?;
-            if validate_ref_like_arg(&remote.name, "remote name").is_err() {
-                continue;
+        let remotes: Vec<String> = self
+            .list_remotes_impl()?
+            .into_iter()
+            .map(|remote| remote.name)
+            .filter(|name| validate_ref_like_arg(name, "remote name").is_ok())
+            .collect();
+        let workdir = &self.spec.workdir;
+        let lookup = |remote_name: &str| {
+            // Nobody asked for this lookup, so it never prompts for
+            // credentials: it uses stored ones or fails.
+            let output = crate::util::background::with_background_git(cancellation, || {
+                let mut cmd = git_workdir_cmd_for(workdir);
+                cmd.arg("ls-remote")
+                    .arg("--tags")
+                    .arg("--refs")
+                    .arg("--")
+                    .arg(remote_name);
+                run_git_capture_cancellable(
+                    cmd,
+                    &format!("git ls-remote --tags --refs {remote_name}"),
+                    cancellation,
+                )
+            });
+            match output {
+                Ok(output) => parse_ls_remote_tags(&output, remote_name),
+                // Remote tag presence is best-effort metadata for UI menus. If
+                // one remote is unavailable, keep partial results from others;
+                // a cancelled lookup is reported once every worker stops.
+                Err(_) => Vec::new(),
             }
+        };
+        let next = AtomicUsize::new(0);
+        let mut remote_tags: Vec<RemoteTag> = thread::scope(|scope| {
+            let workers: Vec<_> = (0..remotes.len().min(REMOTE_TAG_LOOKUPS_AT_ONCE))
+                .map(|_| {
+                    scope.spawn(|| {
+                        let mut found = Vec::new();
+                        while let Some(remote) = remotes.get(next.fetch_add(1, Ordering::Relaxed)) {
+                            if cancellation.is_cancelled() {
+                                break;
+                            }
+                            found.append(&mut lookup(remote));
+                        }
+                        found
+                    })
+                })
+                .collect();
+            workers
+                .into_iter()
+                .filter_map(|worker| worker.join().ok())
+                .flatten()
+                .collect()
+        });
 
-            let workdir = workdir.clone();
-            let remote_name = remote.name;
-            let cancellation = cancellation.clone();
-            handles.push(thread::spawn(move || {
-                if cancellation.is_cancelled() {
-                    return None;
-                }
-                // Nobody asked for this lookup, so it never prompts for
-                // credentials: it uses stored ones or fails.
-                let output = crate::util::background::with_background_git(&cancellation, || {
-                    let mut cmd = git_workdir_cmd_for(&workdir);
-                    cmd.arg("ls-remote")
-                        .arg("--tags")
-                        .arg("--refs")
-                        .arg("--")
-                        .arg(&remote_name);
-                    run_git_capture_cancellable(
-                        cmd,
-                        &format!("git ls-remote --tags --refs {remote_name}"),
-                        &cancellation,
-                    )
-                });
-                match output {
-                    Ok(output) => Some(parse_ls_remote_tags(&output, &remote_name)),
-                    Err(error) if matches!(error.kind(), ErrorKind::Cancelled) => None,
-                    // Remote tag presence is best-effort metadata for UI menus.
-                    // If one remote is unavailable, keep partial results from others.
-                    Err(_) => None,
-                }
-            }));
-        }
-
-        let mut remote_tags = Vec::new();
-        let mut cancelled = false;
-        for handle in handles {
-            let Ok(maybe_tags) = handle.join() else {
-                continue;
-            };
-            if cancellation.is_cancelled() {
-                cancelled = true;
-                continue;
-            }
-            if let Some(mut tags) = maybe_tags {
-                remote_tags.append(&mut tags);
-            }
-        }
-
-        if cancelled {
-            return Err(Error::new(ErrorKind::Cancelled));
-        }
+        cancellation.check_cancelled()?;
         remote_tags.sort_unstable_by(|a, b| {
             a.remote
                 .cmp(&b.remote)

@@ -994,7 +994,9 @@ where
     drop(timing);
     #[cfg(feature = "benchmarks")]
     let timing = crate::status_trace::StageTimer::new("worker-policy");
-    let thread_limit = worker_limit::for_index(repo, index, cancellation)?;
+    // Holds the workers' slots in the process budget until the walk ends.
+    let workers = worker_limit::for_index(repo, index, cancellation)?;
+    let thread_limit = workers.threads;
     #[cfg(feature = "benchmarks")]
     drop(timing);
     #[cfg(feature = "benchmarks")]
@@ -1044,6 +1046,7 @@ where
             )))
         }
     })?;
+    drop(workers);
     #[cfg(feature = "benchmarks")]
     {
         drop(timing);

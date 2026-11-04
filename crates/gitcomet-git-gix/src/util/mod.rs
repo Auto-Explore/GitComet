@@ -77,6 +77,7 @@ mod args;
 pub(crate) mod background;
 mod log_parse;
 mod process;
+pub(crate) mod process_budget;
 mod stream;
 mod trace2;
 

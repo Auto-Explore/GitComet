@@ -1853,3 +1853,77 @@ fn run_git_with_stdin_capture_forwards_stdin_and_captures_stdout() {
 
     assert_eq!(output, input);
 }
+
+#[cfg(unix)]
+#[test]
+fn concurrent_git_commands_wait_for_the_shared_process_budget() {
+    use super::process_budget::{ProcessBudget, with_git_process_budget};
+    static BUDGET: ProcessBudget = ProcessBudget::new(2, 0);
+    let repo = tempfile::tempdir().expect("create temp repo");
+    git_success(repo.path(), &["init", "-q"]);
+    thread::scope(|scope| {
+        let runs: Vec<_> = (0..6)
+            .map(|_| {
+                scope.spawn(|| {
+                    with_git_process_budget(&BUDGET, || {
+                        let mut cmd = git_workdir_cmd_for(repo.path());
+                        cmd.args(["-c", "alias.nap=!sleep 0.2", "nap"]);
+                        run_git_raw_output(cmd, "git nap")
+                    })
+                })
+            })
+            .collect();
+        for run in runs {
+            let output = run.join().expect("join command thread").expect("run git");
+            assert!(output.status.success(), "{output:?}");
+        }
+    });
+    assert_eq!(BUDGET.peak(), 2);
+    assert_eq!(BUDGET.in_use(), 0);
+}
+
+#[test]
+fn a_command_cancelled_while_queued_for_the_process_budget_never_starts() {
+    use super::process_budget::{ProcessBudget, ProcessPriority, with_git_process_budget};
+    static BUDGET: ProcessBudget = ProcessBudget::new(1, 0);
+    let held = BUDGET
+        .acquire(ProcessPriority::Background, || false)
+        .expect("take the only slot");
+    let cancellation = CancellationToken::new();
+    thread::scope(|scope| {
+        let queued = scope.spawn(|| {
+            with_git_process_budget(&BUDGET, || {
+                run_command_with_timeout(
+                    Command::new("gitcomet-command-that-must-not-be-spawned"),
+                    "git queued",
+                    Duration::from_secs(30),
+                    Some(&cancellation),
+                )
+            })
+        });
+        thread::sleep(Duration::from_millis(100));
+        assert!(!queued.is_finished(), "the command must wait for a slot");
+        cancellation.cancel();
+        let error = queued.join().expect("join command thread").unwrap_err();
+        assert!(matches!(error.kind(), ErrorKind::Cancelled), "{error}");
+    });
+    drop(held);
+    assert_eq!(BUDGET.peak(), 1);
+}
+
+#[test]
+fn user_operations_run_while_background_commands_fill_the_process_budget() {
+    use super::process_budget::{ProcessBudget, ProcessPriority, with_git_process_budget};
+    static BUDGET: ProcessBudget = ProcessBudget::new(2, 1);
+    let _background = BUDGET
+        .acquire(ProcessPriority::Background, || false)
+        .expect("fill the background share");
+    let operation = GitOperationContext::new("Commit", |_, _| {});
+    let _scope = git_operation::attach(&operation);
+    let mut cmd = git_command();
+    cmd.arg("--version");
+    let output = with_git_process_budget(&BUDGET, || run_git_raw_output(cmd, "git --version"))
+        .expect("a user operation takes the reserved slot");
+    assert!(output.status.success());
+    assert_eq!(BUDGET.peak(), 2);
+}

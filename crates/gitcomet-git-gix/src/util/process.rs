@@ -341,6 +341,27 @@ pub(super) fn command_cancellation_requested(
         || super::background::background_git_cancelled()
 }
 
+/// Waits for a slot in the process-wide Git budget ([`super::process_budget`]).
+/// A queued command watches the same cancellation as its run, so a refresh
+/// superseded while it waits never starts a process.
+pub(super) fn acquire_git_process_slot(
+    cancellation: Option<&CancellationToken>,
+    operation: Option<&GitOperationContext>,
+) -> Result<super::process_budget::ProcessPermit<'static>> {
+    use super::process_budget::{ProcessPriority, git_processes};
+    let priority = if operation.is_some() {
+        ProcessPriority::Foreground
+    } else {
+        ProcessPriority::Background
+    };
+    git_processes().acquire(priority, || {
+        command_cancellation_requested(
+            cancellation,
+            operation.map(GitOperationContext::cancellation),
+        )
+    })
+}
+
 pub(super) fn reject_cancelled_command(
     cancellation: Option<&CancellationToken>,
     operation_cancellation: Option<&CancellationToken>,
@@ -681,6 +702,9 @@ fn run_command_with_timeout_auth_activity(
         cancellation,
         operation.as_ref().map(GitOperationContext::cancellation),
     )?;
+    // Held until the child is reaped and its pipes drained.
+    let _process_slot = acquire_git_process_slot(cancellation, operation.as_ref())?;
+    timing.stage("process-slot");
     let liveness = LivenessClock::new();
     let activity = match activity {
         CommandActivity::Report => operation.as_ref(),
@@ -850,6 +874,9 @@ pub(crate) fn run_git_with_stdin_capture(
         cancellation,
         operation.as_ref().map(GitOperationContext::cancellation),
     )?;
+    // Held until the child is reaped and its pipes drained.
+    let _process_slot = acquire_git_process_slot(cancellation, operation.as_ref())?;
+    timing.stage("process-slot");
     let liveness = LivenessClock::new();
     let trace2 = Trace2Monitor::start(&mut cmd, operation.as_ref(), &liveness);
     cmd.env("GIT_TERMINAL_PROMPT", "0");
@@ -1028,6 +1055,9 @@ where
         cancellation,
         operation.as_ref().map(GitOperationContext::cancellation),
     )?;
+    // Held until the child is reaped and its pipes drained.
+    let _process_slot = acquire_git_process_slot(cancellation, operation.as_ref())?;
+    timing.stage("process-slot");
     let liveness = LivenessClock::new();
     let trace2 = Trace2Monitor::start(&mut cmd, operation.as_ref(), &liveness);
     let askpass_context = if command_may_require_auth(&cmd) {

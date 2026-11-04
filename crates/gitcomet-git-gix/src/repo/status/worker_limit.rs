@@ -1,27 +1,91 @@
-//! Each status worker owns its filter processes. On Windows, starting many LFS
-//! pipelines can cost much more than comparing the files themselves.
+//! Each status worker owns its filter processes: a walk that compares content
+//! through a configured clean or process filter (git-lfs filter-process) starts
+//! one per worker. On Windows, starting many LFS pipelines can cost much more
+//! than comparing the files themselves. Elsewhere an uncapped walk would start
+//! one per core, for every repository and linked worktree refreshing at once.
+//!
+//! Workers that may start a filter draw from one process-wide budget, shared by
+//! every repository and linked worktree; see [`crate::util::process_budget`].
+//! It is separate from the Git command budget, so a long walk never delays a
+//! command. A walk never waits for it either: with no slot free it runs on a
+//! single worker, starting at most one filter.
+use crate::util::process_budget::{ProcessBudget, ProcessPermit, ProcessPriority};
 use gitcomet_core::services::{CancellationToken, Result};
+
+/// Status workers that may start filter processes at once, across every walk.
+/// At up to eight workers a walk, two walks at least run at full width; others
+/// overlapping them run on one worker each.
+const FILTER_WORKER_LIMIT: usize = 16;
+static FILTER_WORKERS: ProcessBudget = ProcessBudget::new(FILTER_WORKER_LIMIT, 0);
+
+/// The workers one status walk may use, holding their budget slots until the
+/// walk is dropped.
+pub(super) struct WorkerLimit {
+    pub(super) threads: Option<usize>,
+    _slots: Option<ProcessPermit<'static>>,
+}
+
+impl WorkerLimit {
+    fn uncapped() -> Self {
+        Self {
+            threads: None,
+            _slots: None,
+        }
+    }
+
+    /// Up to `wanted` workers, each of which may start a filter process.
+    fn filtered(budget: &'static ProcessBudget, wanted: usize) -> Self {
+        let slots = budget.try_acquire_up_to(ProcessPriority::Background, wanted);
+        Self {
+            threads: Some(slots.slots().max(1)),
+            _slots: Some(slots),
+        }
+    }
+}
 
 pub(super) fn for_index(
     repo: &gix::Repository,
     index: &gix::index::State,
     cancellation: &CancellationToken,
-) -> Result<Option<usize>> {
-    #[cfg(windows)]
-    {
-        if let Some(limit) = benchmark_override() {
-            return Ok(limit);
-        }
-        production_limit(repo, index, cancellation)
-    }
-    #[cfg(not(windows))]
-    {
-        let _ = (repo, index, cancellation);
-        Ok(None)
-    }
+) -> Result<WorkerLimit> {
+    for_index_from(&FILTER_WORKERS, repo, index, cancellation)
 }
 
-#[cfg(any(windows, test))]
+fn for_index_from(
+    budget: &'static ProcessBudget,
+    repo: &gix::Repository,
+    index: &gix::index::State,
+    cancellation: &CancellationToken,
+) -> Result<WorkerLimit> {
+    #[cfg(windows)]
+    let wanted = match benchmark_override() {
+        Some(limit) => limit,
+        None => production_limit(repo, index, cancellation)?,
+    };
+    #[cfg(not(windows))]
+    let wanted = {
+        let _ = (index, cancellation);
+        program_filter_configured(repo).then(bounded_limit)
+    };
+    Ok(wanted.map_or_else(WorkerLimit::uncapped, |wanted| {
+        WorkerLimit::filtered(budget, wanted)
+    }))
+}
+
+/// Whether any configured filter driver runs a program to clean content,
+/// the only kind a status comparison starts a process for.
+#[cfg(any(not(windows), test))]
+fn program_filter_configured(repo: &gix::Repository) -> bool {
+    let runs =
+        |program: &Option<gix::bstr::BString>| program.as_ref().is_some_and(|p| !p.is_empty());
+    gix::filter::Pipeline::options(repo).is_ok_and(|options| {
+        options
+            .drivers
+            .iter()
+            .any(|driver| runs(&driver.clean) || runs(&driver.process))
+    })
+}
+
 fn bounded_limit() -> usize {
     std::thread::available_parallelism()
         .map_or(1, usize::from)
@@ -158,6 +222,63 @@ mod tests {
             &CancellationToken::new(),
         )
         .unwrap()
+    }
+
+    #[test]
+    fn only_cleaning_filter_programs_count_as_starting_processes() {
+        let dir = tempfile::tempdir().unwrap();
+        git_success(dir.path(), &["init"]);
+        assert!(!program_filter_configured(&open_gix(dir.path())));
+        git_success(dir.path(), &["config", "filter.crypt.smudge", "cat"]);
+        git_success(dir.path(), &["config", "filter.crypt.clean", ""]);
+        // Status cleans worktree content; smudging and empty programs run nothing.
+        assert!(!program_filter_configured(&open_gix(dir.path())));
+        git_success(dir.path(), &["config", "filter.crypt.clean", "cat"]);
+        assert!(program_filter_configured(&open_gix(dir.path())));
+        git_success(dir.path(), &["config", "--unset", "filter.crypt.clean"]);
+        git_success(
+            dir.path(),
+            &["config", "filter.lfs.process", "git-lfs filter-process"],
+        );
+        let repo = open_gix(dir.path());
+        assert!(program_filter_configured(&repo));
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn filtered_walks_share_one_worker_budget_and_never_wait_for_it() {
+        let budget: &'static ProcessBudget =
+            Box::leak(Box::new(ProcessBudget::new(bounded_limit() + 1, 0)));
+        let dir = tempfile::tempdir().unwrap();
+        git_success(dir.path(), &["init"]);
+        let plain = open_gix(dir.path());
+        git_success(
+            dir.path(),
+            &["config", "filter.lfs.process", "git-lfs filter-process"],
+        );
+        let filtered = open_gix(dir.path());
+        let limit = |repo: &gix::Repository| {
+            for_index_from(
+                budget,
+                repo,
+                &repo.index_or_empty().unwrap(),
+                &CancellationToken::new(),
+            )
+            .unwrap()
+        };
+        // Without a filter program no worker starts a process.
+        assert_eq!(limit(&plain).threads, None);
+        assert_eq!(budget.in_use(), 0);
+        let first = limit(&filtered);
+        assert_eq!(first.threads, Some(bounded_limit()));
+        let second = limit(&filtered);
+        assert_eq!(second.threads, Some(1));
+        // Exhausted: the walk runs on one worker rather than waiting.
+        let third = limit(&filtered);
+        assert_eq!(third.threads, Some(1));
+        assert_eq!(budget.in_use(), bounded_limit() + 1);
+        drop((first, second, third));
+        assert_eq!(budget.in_use(), 0);
     }
 
     #[test]

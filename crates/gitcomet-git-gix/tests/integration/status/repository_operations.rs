@@ -2609,6 +2609,52 @@ fn list_remote_tags_collects_sorted_results_and_skips_unavailable_remote() {
 }
 
 #[test]
+fn list_remote_tags_reads_every_remote_when_there_are_more_remotes_than_lookups_at_once() {
+    test_git_env::ensure_initialized();
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path().join("repo");
+    fs::create_dir_all(&repo).unwrap();
+    run_git(&repo, &["init", "-b", "main"]);
+    run_git(&repo, &["config", "user.email", "you@example.com"]);
+    run_git(&repo, &["config", "user.name", "You"]);
+    write(&repo, "a.txt", "one\n");
+    run_git(&repo, &["add", "a.txt"]);
+    run_git(
+        &repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "init"],
+    );
+
+    // More remotes than the lookups that run at once, so workers take several.
+    let names: Vec<String> = (0..9).map(|ix| format!("mirror{ix}")).collect();
+    for name in &names {
+        let remote = dir.path().join(format!("{name}.git"));
+        fs::create_dir_all(&remote).unwrap();
+        run_git(&remote, &["init", "--bare", "-b", "main"]);
+        run_git(
+            &repo,
+            &["remote", "add", name, git_remote_url(&remote).as_str()],
+        );
+        let tag = format!("{name}-tag");
+        run_git(&repo, &["tag", &tag]);
+        run_git(&repo, &["push", name, &format!("refs/tags/{tag}")]);
+    }
+
+    let opened = GixBackend.open(&repo).unwrap();
+    let remote_tags = opened
+        .list_remote_tags(&gitcomet_core::services::CancellationToken::new())
+        .unwrap();
+    let found = remote_tags
+        .iter()
+        .map(|tag| (tag.remote.clone(), tag.name.clone()))
+        .collect::<Vec<_>>();
+    let expected = names
+        .iter()
+        .map(|name| (name.clone(), format!("{name}-tag")))
+        .collect::<Vec<_>>();
+    assert_eq!(found, expected);
+}
+
+#[test]
 fn push_and_delete_remote_tag() {
     test_git_env::ensure_initialized();
     let dir = tempfile::tempdir().unwrap();
