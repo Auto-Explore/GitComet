@@ -1319,7 +1319,10 @@ impl GitCometView {
             minimized_hook_activity_repos: FxHashSet::default(),
             startup_crash_report,
             #[cfg(target_os = "macos")]
-            recent_repos_menu_fingerprint: ui_session.recent_repos.clone(),
+            recent_repos_menu_fingerprint: crate::app::recent_repository_menu_paths(
+                ui_session.recent_repos.clone(),
+            )
+            .collect(),
             #[cfg(target_os = "macos")]
             recent_repos_session_stamp: None,
             auth_prompt_username_input,

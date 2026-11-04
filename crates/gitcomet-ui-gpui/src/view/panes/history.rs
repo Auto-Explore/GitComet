@@ -865,6 +865,14 @@ impl HistoryView {
                 this.pending_history_selections.drain(..=ix);
             }
             this.state = next;
+            // A closed tab's retained graph holds its whole history index. The
+            // view need not render again soon (the main pane may be showing a
+            // diff), so release it here rather than on the next render.
+            if !this.retained_indexed_tabs.is_empty() {
+                let repos = &this.state.repos;
+                this.retained_indexed_tabs
+                    .retain(|id, _| repos.iter().any(|repo| repo.id == *id));
+            }
             if selected_remote_branch_is_missing(&this.state, this.selected_branch.as_ref()) {
                 this.selected_branch = None;
             }

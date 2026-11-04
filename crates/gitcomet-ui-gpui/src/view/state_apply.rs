@@ -590,11 +590,15 @@ impl GitCometView {
             }
             // Every publication lands here; re-read the session file (a read
             // and JSON parse on the UI thread) only after it was written.
-            if let Some(loaded) = session::load_if_changed(&mut self.recent_repos_session_stamp)
-                && self.recent_repos_menu_fingerprint != loaded.recent_repos
-            {
-                self.recent_repos_menu_fingerprint = loaded.recent_repos;
-                cx.defer(crate::app::refresh_macos_app_menus);
+            // Compare what the submenu lists, not the whole recents list: a
+            // change below the listed few would rebuild every menu for nothing.
+            if let Some(loaded) = session::load_if_changed(&mut self.recent_repos_session_stamp) {
+                let listed: Vec<_> =
+                    crate::app::recent_repository_menu_paths(loaded.recent_repos).collect();
+                if self.recent_repos_menu_fingerprint != listed {
+                    self.recent_repos_menu_fingerprint = listed;
+                    cx.defer(crate::app::refresh_macos_app_menus);
+                }
             }
         }
 

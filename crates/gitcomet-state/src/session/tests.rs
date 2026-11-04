@@ -1600,6 +1600,38 @@ fn recent_repos_keep_the_last_150_repositories() {
     assert_eq!(loaded.last(), Some(&repos[1]));
 }
 
+/// A session file listing more recents than the cap, from an older build or a
+/// hand edit, loads only the newest 150, as a write would have kept.
+#[test]
+fn loading_holds_recent_repos_to_the_cap() {
+    let dir = unique_session_test_dir("recent-repos-load-cap");
+    let path = dir.join("session.json");
+    let repos: Vec<String> = (0..200)
+        .map(|ix| {
+            dir.join(format!("repo-{ix:03}"))
+                .to_string_lossy()
+                .into_owned()
+        })
+        .collect();
+    let stored = serde_json::json!({
+        "version": CURRENT_SESSION_FILE_VERSION,
+        "recent_repos": repos,
+    });
+    fs::write(&path, serde_json::to_vec(&stored).expect("encode fixture"))
+        .expect("write session fixture");
+
+    let loaded = load_from_path(&path).recent_repos;
+    assert_eq!(loaded.len(), MAX_RECENT_REPOS);
+    let expected: Vec<PathBuf> = repos[..MAX_RECENT_REPOS]
+        .iter()
+        .map(PathBuf::from)
+        .collect();
+    assert_eq!(
+        loaded, expected,
+        "the file's newest entries are kept, in order"
+    );
+}
+
 /// A UI holding its own copy of the recents has to be able to apply a bump
 /// without re-reading the file, and the copy has to still match the file
 /// afterwards — including at the cap, where the file drops its tail.

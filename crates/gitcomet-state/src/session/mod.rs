@@ -476,7 +476,11 @@ pub fn load_from_path(path: &Path) -> UiSession {
         .mergetool_window_width
         .zip(file.mergetool_window_height)
         .or(file.window_width.zip(file.window_height));
-    let recent_repos = parse_path_list(file.recent_repos.unwrap_or_default());
+    let mut recent_repos = parse_path_list(file.recent_repos.unwrap_or_default());
+    // Writes keep the list at the cap. A file from elsewhere (an older build
+    // with a higher cap, a sync, a hand edit) is held to it too, so the picker,
+    // Home and the next write all agree on how long the list is.
+    recent_repos.truncate(MAX_RECENT_REPOS);
     let pinned_repos = parse_path_list(file.pinned_repos.unwrap_or_default());
     let repo_sidebar_collapsed_items =
         parse_path_keyed_string_sets(file.repo_sidebar_collapsed_items.unwrap_or_default());

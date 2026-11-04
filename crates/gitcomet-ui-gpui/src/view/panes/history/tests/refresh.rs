@@ -783,9 +783,17 @@ fn changing_a_cold_indexed_query_does_not_block_its_new_bootstrap(cx: &mut gpui:
     cx.run_until_parked();
 }
 
-#[gpui::test]
-fn indexed_tab_retention_rejects_changed_refs_and_releases_closed_tabs(
+/// Two open repositories with an indexed history, each shown once, so the
+/// first (`RepoId(1)`) is retained in the background while the second shows.
+fn two_prepared_indexed_tabs(
     cx: &mut gpui::TestAppContext,
+) -> (
+    Entity<GitCometView>,
+    &mut gpui::VisualTestContext,
+    AppState,
+    AppStore,
+    Entity<HistoryView>,
+    Vec<Commit>,
 ) {
     let (index, commits) = indexed_fixture(500);
     let (view, cx, mut state, store) = mount(cx, Arc::new(log_page(commits[..200].to_vec(), None)));
@@ -810,6 +818,14 @@ fn indexed_tab_retention_rejects_changed_refs_and_releases_closed_tabs(
             })
         });
     }
+    (view, cx, state, store, history, commits)
+}
+
+#[gpui::test]
+fn indexed_tab_retention_rejects_changed_refs_and_releases_closed_tabs(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (view, cx, mut state, _store, history, commits) = two_prepared_indexed_tabs(cx);
     state.repos[0].branches =
         Loadable::Ready(Arc::new(vec![branch("new-tip", commits[100].id.as_ref())]));
     state.repos[0].branches_rev += 1;
@@ -826,6 +842,35 @@ fn indexed_tab_retention_rejects_changed_refs_and_releases_closed_tabs(
             history.ensure_indexed_history(cx);
             assert!(history.retained_indexed_tabs.is_empty());
         });
+    });
+}
+
+/// Closing a background tab releases its retained history straight away. The
+/// history view only re-renders for its active tab, and not at all while the
+/// main pane shows a diff, so pruning on render alone kept the closed tab's
+/// graph and index alive.
+#[gpui::test]
+fn indexed_tab_retention_releases_a_closed_background_tab_without_a_render(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (view, cx, mut state, store, history, _commits) = two_prepared_indexed_tabs(cx);
+    cx.update(|_, app| {
+        assert!(
+            history
+                .read(app)
+                .retained_indexed_tabs
+                .contains_key(&RepoId(1))
+        );
+    });
+    state.repos.retain(|repo| repo.id != RepoId(1));
+    let state = Arc::new(state);
+    store.replace_snapshot_for_test(Arc::clone(&state));
+    cx.update(|_, app| {
+        let ui_model = view.read(app).ui_model.clone();
+        ui_model.update(app, |model, cx| model.set_state(state, cx));
+    });
+    cx.update(|_, app| {
+        assert!(history.read(app).retained_indexed_tabs.is_empty());
     });
 }
 
