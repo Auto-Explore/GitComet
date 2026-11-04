@@ -478,7 +478,7 @@ impl SidebarPaneView {
                     cx,
                 ),
                 BranchSidebarRow::EmptyCard { section, part } => {
-                    Self::sidebar_empty_card_row(this, &ctx, slot.ix, section, part, cx)
+                    Self::sidebar_empty_card_row(&ctx, slot.ix, section, part, cx)
                 }
                 // A full slot: uniform_list sizes every row from item 0.
                 BranchSidebarRow::SectionSpacer => div()

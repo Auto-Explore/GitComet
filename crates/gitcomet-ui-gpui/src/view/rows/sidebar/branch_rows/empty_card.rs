@@ -10,45 +10,43 @@ const EMPTY_CARD_TOP_GAP_PX: f32 = 8.0;
 
 impl SidebarPaneView {
     pub(super) fn sidebar_empty_card_row(
-        this: &Self,
         ctx: &SidebarRowContext,
         ix: usize,
         section: EmptySection,
         part: u8,
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
-        let _ = this;
         let theme = ctx.theme;
         let repo_id = ctx.repo_id;
         let (icon, title, detail, action) = match section {
             EmptySection::Branches => (
                 "icons/git_branch.svg",
-                "No branches yet",
+                "No branches",
                 "Create one to start working.",
                 "New branch",
             ),
             EmptySection::Remotes => (
                 "icons/cloud.svg",
-                "Nothing to sync with",
+                "No remotes",
                 "Add a remote to push and pull.",
                 "Add remote",
             ),
             EmptySection::Worktrees => (
                 WORKTREE_ICON_PATH,
-                "Two branches, two folders",
-                "Fix a bug beside your work.",
+                "No worktrees",
+                "Work on two branches at once.",
                 "New worktree",
             ),
             EmptySection::Submodules => (
                 "icons/box.svg",
-                "Repositories inside repositories",
+                "No submodules",
                 "Track another repo in this one.",
                 "Add submodule",
             ),
             EmptySection::Stashes => (
                 STASH_ICON_PATH,
-                "Set changes aside",
-                "Come back to them later.",
+                "No stashes",
+                "Set changes aside for later.",
                 "New stash",
             ),
         };
