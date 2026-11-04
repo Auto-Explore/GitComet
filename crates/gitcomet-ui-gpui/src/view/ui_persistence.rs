@@ -19,6 +19,7 @@ impl GitCometView {
             sidebar_collapsed: self.sidebar_collapsed,
             change_tracking_height,
             untracked_height,
+            dock: None,
         }
     }
 

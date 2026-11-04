@@ -256,6 +256,9 @@ pub struct SidebarDataRequest {
     pub worktrees: bool,
     pub submodules: bool,
     pub stashes: bool,
+    /// The sidebar shows a Tags section, so local tags load even when the
+    /// history hides them.
+    pub tags: bool,
 }
 
 /// User-visible repository feedback and bounded activity history.

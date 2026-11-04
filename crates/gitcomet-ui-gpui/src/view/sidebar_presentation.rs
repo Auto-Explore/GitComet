@@ -196,6 +196,7 @@ pub(in crate::view) fn active_sidebar_data_request(
                     collapsed_items,
                     branch_sidebar::stash_section_storage_key(),
                 ),
+            tags: false,
         },
     ))
 }

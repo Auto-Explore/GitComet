@@ -1630,6 +1630,7 @@ impl SidebarPaneView {
                         worktrees: true,
                         submodules: false,
                         stashes: true,
+                        tags: false,
                     },
                 });
             }
@@ -1640,6 +1641,7 @@ impl SidebarPaneView {
                         worktrees: true,
                         submodules: false,
                         stashes: false,
+                        tags: false,
                     },
                 });
             }
