@@ -1198,7 +1198,7 @@ fn commit_details_parent_sha_click_menu_navigate_reveals_referenced_commit(
         let _ = window.draw(app);
     });
     let parent_bounds = cx
-        .debug_bounds("commit_card_parent")
+        .debug_bounds("commit_card_parent_0")
         .expect("expected the parent chip in the commit card");
     simulate_counted_click(cx, parent_bounds.center(), 1);
     cx.run_until_parked();
@@ -1277,7 +1277,7 @@ fn commit_details_parent_sha_dash_has_no_link_menu(cx: &mut gpui::TestAppContext
         let _ = window.draw(app);
     });
     assert!(
-        cx.debug_bounds("commit_card_parent").is_none(),
+        cx.debug_bounds("commit_card_parent_0").is_none(),
         "a root commit has no parent chip to click"
     );
 }

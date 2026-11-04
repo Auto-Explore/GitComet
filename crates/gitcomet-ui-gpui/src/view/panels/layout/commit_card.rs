@@ -84,7 +84,7 @@ impl DetailsPaneView {
             .flex()
             .flex_none()
             .items_center()
-            .h(px(22.0))
+            .h(self.ui_scale().px(22.0))
             .rounded(px(theme.radii.control))
             .border_1()
             .border_color(theme.colors.stroke.default)
@@ -98,13 +98,14 @@ impl DetailsPaneView {
 
     fn commit_card_chip_part(
         &self,
-        id: &'static str,
-        tooltip: &'static str,
+        id: impl Into<gpui::ElementId>,
+        selector: String,
+        tooltip: SharedString,
     ) -> gpui::Stateful<Div> {
         let theme = self.theme;
         div()
             .id(id)
-            .debug_selector(move || id.to_string())
+            .debug_selector(move || selector)
             .flex()
             .items_center()
             .gap_1()
@@ -115,13 +116,14 @@ impl DetailsPaneView {
             .text_color(theme.colors.foreground.primary)
             .cursor_pointer()
             .control_interaction(InteractionStyle::new(theme), InteractionState::default())
-            .gitcomet_tooltip(theme, tooltip.into())
+            .gitcomet_tooltip(theme, tooltip)
     }
 
     /// The arrow that opens the commit menu (reveal, browse files, copy).
     fn commit_card_menu_arrow(
         &self,
-        id: &'static str,
+        id: gpui::ElementId,
+        selector: String,
         repo_id: RepoId,
         commit_id: CommitId,
         allow_navigate: bool,
@@ -130,7 +132,7 @@ impl DetailsPaneView {
     ) -> gpui::Stateful<Div> {
         let theme = self.theme;
         let ui_scale = self.ui_scale();
-        self.commit_card_chip_part(id, "Commit actions")
+        self.commit_card_chip_part(id, selector, "Commit actions".into())
             .border_l_1()
             .border_color(theme.colors.stroke.subtle)
             .px_1()
@@ -179,9 +181,9 @@ impl DetailsPaneView {
             .flex()
             .flex_none()
             .items_center()
-            .gap(px(6.0))
+            .gap(ui_scale.px(6.0))
             .px_2()
-            .h(px(24.0))
+            .h(ui_scale.px(24.0))
             .rounded(px(theme.radii.row))
             .when(pill.is_head, |d| {
                 d.bg(with_alpha(
@@ -209,7 +211,6 @@ impl DetailsPaneView {
         let theme = self.theme;
         let ui_scale = self.ui_scale();
         let full_sha = details.id.as_ref().to_string();
-        let parent = details.parent_ids.first().cloned();
         let date = self.commit_details_date_display(details);
         let relative = (details.authored_at_unix != 0).then(|| {
             crate::view::date_time::format_relative_time(
@@ -233,7 +234,11 @@ impl DetailsPaneView {
 
         let copy_id = details.id.clone();
         let sha_main = self
-            .commit_card_chip_part("commit_card_sha", "Copy commit SHA")
+            .commit_card_chip_part(
+                "commit_card_sha",
+                "commit_card_sha".to_string(),
+                format!("Copy {full_sha}").into(),
+            )
             .child(short_sha(&full_sha).to_string())
             .child(svg_icon(
                 "icons/copy.svg",
@@ -250,7 +255,8 @@ impl DetailsPaneView {
                 }),
             );
         let sha_arrow = self.commit_card_menu_arrow(
-            "commit_card_sha_menu",
+            "commit_card_sha_menu".into(),
+            "commit_card_sha_menu".to_string(),
             repo_id,
             details.id.clone(),
             false,
@@ -259,6 +265,9 @@ impl DetailsPaneView {
         );
         let sha_chip = self
             .commit_card_chip(sha_matched)
+            .when(sha_matched, |chip| {
+                chip.debug_selector(|| "commit_card_sha_find_match".to_string())
+            })
             .child(sha_main)
             .child(sha_arrow);
 
@@ -300,6 +309,16 @@ impl DetailsPaneView {
                                             .with_highlights(name_highlights),
                                     ),
                             )
+                            .when(!details.author_email.is_empty(), |column| {
+                                column.child(
+                                    div()
+                                        .debug_selector(|| "commit_card_author_email".to_string())
+                                        .text_size(theme.ui_text(12.0))
+                                        .text_color(theme.colors.foreground.secondary)
+                                        .truncate()
+                                        .child(details.author_email.clone()),
+                                )
+                            })
                             .child(
                                 div()
                                     .text_size(theme.ui_text(12.0))
@@ -334,49 +353,63 @@ impl DetailsPaneView {
                 div()
                     .text_size(theme.ui_text(12.0))
                     .text_color(theme.colors.foreground.secondary)
-                    .child("Parent"),
+                    .child(if details.parent_ids.len() > 1 {
+                        "Parents"
+                    } else {
+                        "Parent"
+                    }),
             );
-        bottom = match parent {
-            Some(parent) => {
-                let parent_sha = parent.as_ref().to_string();
-                let parent_for_menu = parent.clone();
-                let main = self
-                    .commit_card_chip_part("commit_card_parent", "Go to parent commit")
-                    .child(short_sha(&parent_sha).to_string())
-                    .on_activate(
-                        !current,
-                        components::ControlActivation::Action,
-                        cx.listener(move |this, e: &ClickEvent, _w, cx| {
-                            if e.standard_click() {
-                                this.store.dispatch(Msg::SelectCommit {
-                                    request_id: None,
-                                    repo_id,
-                                    commit_id: parent.clone(),
-                                });
-                                cx.notify();
-                            }
-                        }),
-                    );
-                let arrow = self.commit_card_menu_arrow(
-                    "commit_card_parent_menu",
-                    repo_id,
-                    parent_for_menu,
-                    true,
-                    current,
-                    cx,
-                );
-                let chip = self.commit_card_chip(false).child(main).child(arrow);
-                bottom.child(chip)
-            }
-            None => bottom.child(
+        if details.parent_ids.is_empty() {
+            bottom = bottom.child(
                 div()
                     .text_size(theme.ui_text(12.0))
                     .text_color(theme.colors.foreground.secondary)
                     .child("none (root commit)"),
-            ),
-        };
+            );
+        }
+        // A merge commit lists every parent, first parent first.
+        for (ix, parent) in details.parent_ids.iter().enumerate() {
+            let parent_sha = parent.as_ref().to_string();
+            let select = parent.clone();
+            let main = self
+                .commit_card_chip_part(
+                    ("commit_card_parent", ix),
+                    format!("commit_card_parent_{ix}"),
+                    format!("Go to parent commit {parent_sha}").into(),
+                )
+                .child(short_sha(&parent_sha).to_string())
+                .on_activate(
+                    !current,
+                    components::ControlActivation::Action,
+                    cx.listener(move |this, e: &ClickEvent, _w, cx| {
+                        if e.standard_click() {
+                            this.store.dispatch(Msg::SelectCommit {
+                                request_id: None,
+                                repo_id,
+                                commit_id: select.clone(),
+                            });
+                            cx.notify();
+                        }
+                    }),
+                );
+            let arrow = self.commit_card_menu_arrow(
+                ("commit_card_parent_menu", ix).into(),
+                format!("commit_card_parent_menu_{ix}"),
+                repo_id,
+                parent.clone(),
+                true,
+                current,
+                cx,
+            );
+            bottom = bottom.child(self.commit_card_chip(false).child(main).child(arrow));
+        }
         if !pills.is_empty() {
-            bottom = bottom.child(div().w(px(1.0)).h(px(14.0)).bg(theme.colors.stroke.default));
+            bottom = bottom.child(
+                div()
+                    .w(px(1.0))
+                    .h(ui_scale.px(14.0))
+                    .bg(theme.colors.stroke.default),
+            );
             for pill in pills.into_iter().take(MAX_REF_PILLS) {
                 bottom = bottom.child(self.commit_card_ref_pill(pill));
             }

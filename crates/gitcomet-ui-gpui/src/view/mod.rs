@@ -643,6 +643,16 @@ pub(crate) fn commit_copy_message(commit_id: &str) -> String {
     format!("Commit {short} copied to clipboard")
 }
 
+#[cfg(test)]
+#[test]
+fn commit_copy_message_names_the_short_id() {
+    assert_eq!(
+        commit_copy_message("0123456789abcdef0123456789abcdef01234567"),
+        "Commit 01234567 copied to clipboard"
+    );
+    assert_eq!(commit_copy_message("abc"), "Commit abc copied to clipboard");
+}
+
 fn stable_cached_fill_view<V: Render>(view: Entity<V>) -> AnyElement {
     stable_cached_view(view, StyleRefinement::default().size_full())
 }
