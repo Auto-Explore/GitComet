@@ -490,7 +490,7 @@ impl DetailsPaneView {
                 .border_1()
                 .border_dashed()
                 .border_color(theme.colors.stroke.default)
-                .rounded(px(6.0))
+                .rounded(ui_scale.px(6.0))
                 .text_size(theme.ui_text(13.0))
                 .child(
                     div()
