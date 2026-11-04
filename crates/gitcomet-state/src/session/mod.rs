@@ -98,7 +98,6 @@ pub struct UiSession {
     pub annex_sync_content: Option<bool>,
     pub history_tag_fetch_mode: Option<GitLogTagFetchMode>,
     pub default_history_mode: Option<HistoryMode>,
-    pub commit_push_after_enabled: Option<bool>,
     pub default_tag_type: Option<DefaultTagType>,
     pub fetch_prune_deleted_remote_branches: Option<bool>,
     pub recommend_repo_maintenance: Option<bool>,
@@ -304,8 +303,6 @@ pub(crate) struct UiSessionFile {
     history_tag_fetch_mode: Option<GitLogTagFetchMode>,
     #[serde(default, deserialize_with = "lenient")]
     default_history_mode: Option<HistoryModeSetting>,
-    #[serde(default, deserialize_with = "lenient")]
-    commit_push_after_enabled: Option<bool>,
     #[serde(default, deserialize_with = "lenient")]
     default_tag_type: Option<DefaultTagType>,
     #[serde(default, deserialize_with = "lenient")]
@@ -566,7 +563,6 @@ pub fn load_from_path(path: &Path) -> UiSession {
         annex_sync_content: file.annex_sync_content,
         history_tag_fetch_mode: file.history_tag_fetch_mode,
         default_history_mode: file.default_history_mode.map(Into::into),
-        commit_push_after_enabled: file.commit_push_after_enabled,
         default_tag_type: file.default_tag_type,
         fetch_prune_deleted_remote_branches: file.fetch_prune_deleted_remote_branches,
         recommend_repo_maintenance: file.recommend_repo_maintenance,

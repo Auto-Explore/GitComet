@@ -37,8 +37,6 @@ pub(in crate::view) enum RootRequest {
         target: Option<gitcomet_state::session::WorkspaceId>,
     },
     SetChangeTrackingView(ChangeTrackingView),
-    SetCommitAmend(bool),
-    SetCommitPushAfter(bool),
     OpenPopoverCentered(PopoverKind),
     OpenFileHistory {
         repo_id: RepoId,
@@ -153,10 +151,6 @@ impl GitCometView {
                 target,
             } => self.request_move_repo_to_workspace(repo_id, path, target, cx),
             RootRequest::SetChangeTrackingView(view) => self.set_change_tracking_view(view, cx),
-            RootRequest::SetCommitAmend(enabled) => self.set_commit_amend_enabled(enabled, cx),
-            RootRequest::SetCommitPushAfter(enabled) => {
-                self.set_commit_push_after_enabled(enabled, cx)
-            }
             RootRequest::ReportError(report) => self.report_error(report, cx),
             RootRequest::SetActiveContextMenuInvoker(next) => {
                 self.set_active_context_menu_invoker(next, cx)

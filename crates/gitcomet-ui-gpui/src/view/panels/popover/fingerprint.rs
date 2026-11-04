@@ -255,7 +255,6 @@ fn repo_for_popover<'a>(
         | PopoverKind::StageConflictMarkersConfirm { repo_id, .. }
         | PopoverKind::PullReconcilePrompt { repo_id }
         | PopoverKind::RebaseOntoConfirm { repo_id, .. }
-        | PopoverKind::CommitOptionsMenu { repo_id }
         | PopoverKind::PreviousCommitMessagesMenu { repo_id }
         | PopoverKind::DiffHunkMenu { repo_id, .. }
         | PopoverKind::CommitMenu { repo_id, .. }
@@ -471,13 +470,6 @@ fn hash_repo_for_popover<H: Hasher>(
             repo.id.hash(hasher);
         }
 
-        PopoverKind::CommitOptionsMenu { .. } => {
-            repo.log_rev.hash(hasher);
-            repo.ops_rev.hash(hasher);
-            repo.merge_message_rev.hash(hasher);
-            repo.head_branch_rev.hash(hasher);
-            repo.branches_rev.hash(hasher);
-        }
 
         // The squash prompt tracks the message preview plus everything that
         // can invalidate the selection's eligibility while it is open.
@@ -758,9 +750,6 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
         }
         PopoverKind::DiffActionMenu => {}
         PopoverKind::MergetoolSettingsMenu => {}
-        PopoverKind::CommitOptionsMenu { repo_id } => {
-            repo_id.hash(hasher);
-        }
         PopoverKind::PreviousCommitMessagesMenu { repo_id } => {
             repo_id.hash(hasher);
         }
@@ -1739,35 +1728,6 @@ mod tests {
             None,
         );
         assert_ne!(picker, menu);
-    }
-
-    #[test]
-    fn commit_options_fingerprint_changes_when_amend_availability_revisions_change() {
-        let repo_id = RepoId(9);
-        let repo = RepoState::new_opening(
-            repo_id,
-            gitcomet_core::domain::RepoSpec {
-                workdir: std::env::temp_dir().join("gitcomet_commit_options_fingerprint"),
-            },
-        );
-        let mut state = AppState {
-            active_repo: Some(repo_id),
-            ..AppState::test_default()
-        };
-        state.repos.push(repo);
-
-        let popover = PopoverKind::CommitOptionsMenu { repo_id };
-        let before = notify_fingerprint(&state, &popover, None);
-
-        state.repos[0].head_branch_rev = state.repos[0].head_branch_rev.wrapping_add(1);
-        let after_head_branch = notify_fingerprint(&state, &popover, None);
-        assert_ne!(before, after_head_branch);
-
-        state.repos[0].branches_rev = state.repos[0].branches_rev.wrapping_add(1);
-        assert_ne!(
-            after_head_branch,
-            notify_fingerprint(&state, &popover, None)
-        );
     }
 
     #[test]

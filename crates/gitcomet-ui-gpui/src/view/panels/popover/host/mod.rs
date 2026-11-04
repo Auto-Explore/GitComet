@@ -174,7 +174,6 @@ impl PopoverHost {
         let show_timezone = preferences.appearance.show_timezone;
         let history_relative_dates = preferences.history.relative_dates;
         let change_tracking_view = preferences.change_tracking.view;
-        let commit_push_after_enabled = preferences.repository.commit_push_after_enabled;
         let diff_content_mode = preferences.diff.content_mode;
         let diff_whitespace_mode = preferences.diff.whitespace_mode;
         let diff_reveal_whitespace_chars = preferences.diff.reveal_whitespace_chars;
@@ -840,8 +839,6 @@ impl PopoverHost {
             show_timezone,
             history_relative_dates,
             change_tracking_view,
-            commit_amend_enabled: false,
-            commit_push_after_enabled,
             diff_content_mode,
             diff_whitespace_mode,
             diff_reveal_whitespace_chars,
@@ -1715,7 +1712,6 @@ impl PopoverHost {
                 Some(*repo_id)
             }
             PopoverKind::PreviousCommitMessagesMenu { repo_id } => Some(*repo_id),
-            PopoverKind::CommitOptionsMenu { repo_id } => Some(*repo_id),
             PopoverKind::BranchPicker { .. } => self.state.active_repo,
             PopoverKind::UpstreamPicker { repo_id, .. } => Some(*repo_id),
             _ => None,
@@ -1741,10 +1737,7 @@ impl PopoverHost {
             return;
         }
 
-        if matches!(
-            kind,
-            PopoverKind::PreviousCommitMessagesMenu { .. } | PopoverKind::CommitOptionsMenu { .. }
-        ) {
+        if matches!(kind, PopoverKind::PreviousCommitMessagesMenu { .. }) {
             if matches!(
                 repo.recent_commit_messages,
                 Loadable::NotLoaded | Loadable::Error(_)

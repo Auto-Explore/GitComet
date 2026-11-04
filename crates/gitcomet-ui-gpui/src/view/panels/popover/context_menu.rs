@@ -11,7 +11,6 @@ mod change_tracking_settings;
 mod commit;
 mod commit_file;
 mod commit_file_sort;
-mod commit_options;
 mod commit_sha_link;
 mod conflict_resolver_chunk;
 mod conflict_resolver_input_row;
@@ -589,9 +588,6 @@ impl PopoverHost {
             PopoverKind::AddRepoMenu => Some(add_repo_menu::model()),
             PopoverKind::PullPicker => Some(pull::model(self)),
             PopoverKind::PushPicker => Some(push::model(self)),
-            PopoverKind::CommitOptionsMenu { repo_id } => {
-                Some(commit_options::model(self, *repo_id))
-            }
             PopoverKind::PreviousCommitMessagesMenu { repo_id } => {
                 Some(previous_commit_messages::model(self, *repo_id))
             }

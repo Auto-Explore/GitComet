@@ -74,7 +74,6 @@ pub struct UiSettings {
     pub annex_sync_content: Option<bool>,
     pub history_tag_fetch_mode: Option<GitLogTagFetchMode>,
     pub default_history_mode: Option<HistoryMode>,
-    pub commit_push_after_enabled: Option<bool>,
     pub default_tag_type: Option<DefaultTagType>,
     pub fetch_prune_deleted_remote_branches: Option<bool>,
     pub recommend_repo_maintenance: Option<bool>,
@@ -191,7 +190,6 @@ pub fn persist_ui_settings_to_path(settings: UiSettings, path: &Path) -> io::Res
         if let Some(value) = settings.default_history_mode {
             file.default_history_mode = Some(value.into());
         }
-        apply_setting!(settings, file, commit_push_after_enabled);
         apply_setting!(settings, file, default_tag_type);
         apply_setting!(settings, file, fetch_prune_deleted_remote_branches);
         apply_setting!(settings, file, recommend_repo_maintenance);

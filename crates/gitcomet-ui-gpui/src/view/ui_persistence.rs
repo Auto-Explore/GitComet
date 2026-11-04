@@ -273,7 +273,6 @@ impl GitCometView {
                                 gitcomet_state::model::GitLogTagFetchMode::Disabled
                             }),
                             default_history_mode: None,
-                            commit_push_after_enabled: Some(this.commit_push_after_enabled),
                             default_tag_type: None,
                             fetch_prune_deleted_remote_branches: None,
                             recommend_repo_maintenance: None,

@@ -412,41 +412,6 @@ impl GitCometView {
         self.schedule_ui_settings_persist(cx);
     }
 
-    pub(in crate::view) fn set_commit_push_after_enabled(
-        &mut self,
-        enabled: bool,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        if self.commit_push_after_enabled == enabled {
-            return;
-        }
-
-        self.commit_push_after_enabled = enabled;
-        self.update_ui_preferences(cx, move |preferences| {
-            preferences.repository.commit_push_after_enabled = enabled;
-        });
-        self.details_pane.update(cx, |pane, cx| {
-            pane.set_commit_push_after_enabled(enabled, cx)
-        });
-        self.popover_host.update(cx, |host, cx| {
-            host.sync_commit_push_after_enabled(enabled, cx)
-        });
-        self.schedule_ui_settings_persist(cx);
-        cx.notify();
-    }
-
-    pub(in crate::view) fn set_commit_amend_enabled(
-        &mut self,
-        enabled: bool,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        self.details_pane
-            .update(cx, |pane, cx| pane.set_commit_amend_enabled(enabled, cx));
-        self.popover_host
-            .update(cx, |host, cx| host.sync_commit_amend_enabled(enabled, cx));
-        cx.notify();
-    }
-
     pub(in crate::view) fn set_diff_scroll_sync(
         &mut self,
         next: DiffScrollSync,

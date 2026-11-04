@@ -853,22 +853,6 @@ impl PopoverHost {
                     crate::app::set_window_ui_scale_percent(cx, window_id, percent);
                 });
             }
-            ContextMenuAction::SetCommitAmendEnabled { enabled } => {
-                close_after_action = false;
-                self.commit_amend_enabled = enabled;
-                let root_view = self.root_view.clone();
-                cx.defer(move |cx| {
-                    let _ = root_view.request(RootRequest::SetCommitAmend(enabled), None, cx);
-                });
-            }
-            ContextMenuAction::SetCommitPushAfterEnabled { enabled } => {
-                close_after_action = false;
-                self.commit_push_after_enabled = enabled;
-                let root_view = self.root_view.clone();
-                cx.defer(move |cx| {
-                    let _ = root_view.request(RootRequest::SetCommitPushAfter(enabled), None, cx);
-                });
-            }
             ContextMenuAction::UseCommitMessage { message } => {
                 self.details_pane.update(cx, |pane, cx| {
                     pane.set_commit_message_from_history(message, window, cx);

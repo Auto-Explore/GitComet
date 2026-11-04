@@ -93,7 +93,6 @@ impl SettingsWindowView {
             annex_pull_push_on_adjusted: Some(self.large_file_settings.annex_pull_push),
             annex_sync_content: Some(self.large_file_settings.annex_sync_content),
             recommend_repo_maintenance: Some(self.recommend_repo_maintenance),
-            commit_push_after_enabled: None,
             git_executable_path: Some(applied_git_executable_path(&self.runtime_info.git.runtime)),
             terminal_external_mode: None,
             terminal_external_program: None,

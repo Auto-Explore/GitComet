@@ -443,12 +443,6 @@ pub(in crate::view) enum ContextMenuAction {
     SetUiScale {
         percent: Option<u32>,
     },
-    SetCommitAmendEnabled {
-        enabled: bool,
-    },
-    SetCommitPushAfterEnabled {
-        enabled: bool,
-    },
     UseCommitMessage {
         message: String,
     },

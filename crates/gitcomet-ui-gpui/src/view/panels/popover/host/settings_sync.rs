@@ -250,36 +250,6 @@ impl PopoverHost {
         }
     }
 
-    pub(in crate::view) fn sync_commit_push_after_enabled(
-        &mut self,
-        enabled: bool,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        if self.commit_push_after_enabled == enabled {
-            return;
-        }
-
-        self.commit_push_after_enabled = enabled;
-        if matches!(self.popover, Some(PopoverKind::CommitOptionsMenu { .. })) {
-            cx.notify();
-        }
-    }
-
-    pub(in crate::view) fn sync_commit_amend_enabled(
-        &mut self,
-        enabled: bool,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        if self.commit_amend_enabled == enabled {
-            return;
-        }
-
-        self.commit_amend_enabled = enabled;
-        if matches!(self.popover, Some(PopoverKind::CommitOptionsMenu { .. })) {
-            cx.notify();
-        }
-    }
-
     pub(in crate::view) fn sync_diff_content_mode(
         &mut self,
         next: DiffContentMode,

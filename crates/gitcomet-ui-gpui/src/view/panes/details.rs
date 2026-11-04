@@ -125,7 +125,6 @@ pub(in super::super) struct DetailsPaneView {
     pub(in super::super) commit_details_message_link_menu: Entity<components::CommitLinkMenu>,
     pub(in super::super) commit_message_drafts: FxHashMap<RepoId, SharedString>,
     pub(in super::super) commit_amend_enabled: bool,
-    pub(in super::super) commit_push_after_enabled: bool,
     pub(in super::super) pending_commits: FxHashMap<RepoId, PendingCommit>,
     pending_amend_prefill: Option<RepoId>,
     /// Suggestion (repo and rev) already offered to the commit box, so git's
@@ -383,7 +382,6 @@ impl DetailsPaneView {
         let change_tracking_height = preferences.change_tracking.height;
         let untracked_height = preferences.change_tracking.untracked_height;
         let ui_scale_percent = preferences.appearance.ui_scale_percent;
-        let commit_push_after_enabled = preferences.repository.commit_push_after_enabled;
         let date_time_format = preferences.appearance.date_time_format;
         let timezone = preferences.appearance.timezone;
         let show_timezone = preferences.appearance.show_timezone;
@@ -555,7 +553,6 @@ impl DetailsPaneView {
             commit_details_message_link_menu,
             commit_message_drafts: FxHashMap::default(),
             commit_amend_enabled: false,
-            commit_push_after_enabled,
             pending_commits: FxHashMap::default(),
             pending_amend_prefill: None,
             applied_commit_suggestions: rustc_hash::FxHashMap::default(),
@@ -814,15 +811,9 @@ impl DetailsPaneView {
         });
     }
 
-    /// Toggle amend from the commit box and keep the rest of the window (the
-    /// popover host mirrors the flag) in step.
+    /// Toggle amend from the commit box's checkbox.
     pub(in super::super) fn toggle_commit_amend(&mut self, cx: &mut gpui::Context<Self>) {
-        let enabled = !self.commit_amend_enabled;
-        self.set_commit_amend_enabled(enabled, cx);
-        let root_view = self.root_view.clone();
-        cx.defer(move |cx| {
-            let _ = root_view.update(cx, |root, cx| root.set_commit_amend_enabled(enabled, cx));
-        });
+        self.set_commit_amend_enabled(!self.commit_amend_enabled, cx);
     }
 
     fn commit_message_is_empty(&self, cx: &gpui::Context<Self>) -> bool {
@@ -879,19 +870,6 @@ impl DetailsPaneView {
         }
     }
 
-    pub(in super::super) fn set_commit_push_after_enabled(
-        &mut self,
-        enabled: bool,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        if self.commit_push_after_enabled == enabled {
-            return;
-        }
-
-        self.commit_push_after_enabled = enabled;
-        cx.notify();
-    }
-
     pub(in super::super) fn set_commit_message_from_history(
         &mut self,
         message: String,
@@ -910,15 +888,6 @@ impl DetailsPaneView {
             .read_with(cx, |input, _| input.focus_handle());
         window.focus(&focus, cx);
         cx.notify();
-    }
-
-    fn sync_commit_amend_enabled_to_root(&self, enabled: bool, cx: &mut gpui::Context<Self>) {
-        let root_view = self.root_view.clone();
-        cx.defer(move |cx| {
-            let _ = root_view.update(cx, |root, cx| {
-                root.set_commit_amend_enabled(enabled, cx);
-            });
-        });
     }
 
     /// Follows dispatched commits to their result. Runs on every snapshot,
@@ -946,7 +915,6 @@ impl DetailsPaneView {
                     }
                     if pending.amend && self.commit_amend_enabled {
                         self.commit_amend_enabled = false;
-                        self.sync_commit_amend_enabled_to_root(false, cx);
                         changed = true;
                     }
                 } else if self
@@ -2577,12 +2545,8 @@ impl DetailsPaneView {
         }
         let mut restored_commit_message: Option<SharedString> = None;
         if switched_repo {
-            let was_amend_enabled = self.commit_amend_enabled;
             self.commit_amend_enabled = false;
             self.pending_amend_prefill = None;
-            if was_amend_enabled {
-                self.sync_commit_amend_enabled_to_root(false, cx);
-            }
         }
         if switched_repo {
             if let Some(prev_repo_id) = prev_active_repo_id {

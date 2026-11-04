@@ -285,12 +285,6 @@ pub(crate) enum PopoverKind {
     },
     PullPicker,
     PushPicker,
-    // The commit box now has Commit / Commit & Push buttons and an amend
-    // checkbox, so nothing opens this menu any more.
-    #[allow(dead_code)]
-    CommitOptionsMenu {
-        repo_id: RepoId,
-    },
     CommitFileSortMenu {
         list: crate::view::rows::FileListId,
     },
