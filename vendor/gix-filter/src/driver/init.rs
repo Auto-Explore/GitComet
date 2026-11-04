@@ -1,0 +1,103 @@
+use gix_error::Result;
+use std::process::Stdio;
+
+use bstr::{BStr, BString};
+
+use crate::{
+    Driver, driver,
+    driver::{Operation, Process, State, process, substitute_f_parameter},
+};
+
+/// Lifecycle
+impl State {
+    /// Obtain a process as defined in `driver` suitable for a given `operation. `rela_path` may be used to substitute the current
+    /// file for use in the invoked `SingleFile` process.
+    ///
+    /// Note that if a long-running process is defined, the `operation` isn't relevant and capabilities are to be checked by the caller.
+    pub fn maybe_launch_process(
+        &mut self,
+        driver: &Driver,
+        operation: Operation,
+        rela_path: &BStr,
+    ) -> Result<Option<Process<'_>>> {
+        match driver.process.as_ref() {
+            Some(process) => {
+                let client = match self.running.remove(process) {
+                    Some(c) => c,
+                    None => {
+                        use gix_error::{ResultExt, message};
+                        // Without this, every entry would start the filter again, and fail again.
+                        if self.failed.contains(process) {
+                            gix_error::bail!(message!("Filter process {process:?} failed to start earlier"));
+                        }
+                        let started = spawn_driver(process.clone(), &self.context).and_then(|(child, cmd)| {
+                            process::Client::handshake(child, "git-filter", &[2], &["clean", "smudge", "delay"])
+                                .or_raise(|| {
+                                    message!("Process handshake with command {cmd:?} failed")
+                                        .with_program(cmd.get_program())
+                                })
+                        });
+                        match started {
+                            Ok(client) => client,
+                            Err(err) => {
+                                self.failed.insert(process.clone());
+                                return Err(err);
+                            }
+                        }
+                    }
+                };
+
+                // TODO: find a way to not have to do this 'borrow-dance'.
+                // this strangeness is to workaround the borrowchecker, who otherwise won't let us return a reader. Quite sad :/.
+                // One would want to `get_mut()` or insert essentially, but it won't work.
+                self.running.insert(process.clone(), client);
+                let client = self.running.get_mut(process).expect("just inserted");
+
+                Ok(Some(Process::MultiFile {
+                    client,
+                    key: driver::Key(process.to_owned()),
+                }))
+            }
+            None => {
+                let cmd = match operation {
+                    Operation::Clean => driver
+                        .clean
+                        .as_ref()
+                        .map(|cmd| substitute_f_parameter(cmd.as_ref(), rela_path)),
+
+                    Operation::Smudge => driver
+                        .smudge
+                        .as_ref()
+                        .map(|cmd| substitute_f_parameter(cmd.as_ref(), rela_path)),
+                };
+
+                let cmd = match cmd {
+                    Some(cmd) => cmd,
+                    None => return Ok(None),
+                };
+
+                let (child, command) = spawn_driver(cmd, &self.context)?;
+                Ok(Some(Process::SingleFile { child, command }))
+            }
+        }
+    }
+}
+
+fn spawn_driver(cmd: BString, context: &gix_command::Context) -> Result<(std::process::Child, std::process::Command)> {
+    let mut cmd: std::process::Command = gix_command::prepare(gix_path::from_bstr(cmd)?.into_owned())
+        .command_may_be_shell_script()
+        .with_context(context.clone())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit())
+        .try_into()?;
+    if let Some(worktree_dir) = &context.worktree_dir {
+        cmd.current_dir(worktree_dir);
+    }
+    gix_trace::debug!(cmd = ?cmd, "launching filter driver");
+    use gix_error::ResultExt;
+    let child = cmd
+        .spawn()
+        .or_raise(|| gix_error::message!("Failed to spawn driver: {cmd:?}").with_program(cmd.get_program()))?;
+    Ok((child, cmd))
+}

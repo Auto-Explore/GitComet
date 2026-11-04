@@ -33,6 +33,7 @@ members = [
 exclude = [
   "vendor/block",
   "vendor/block/test_utils",
+  "vendor/gix-filter",
   "crates/gitcomet-filesystem-native",
   "crates/win32-window-utils",
   "vendor/tree-sitter-asm",
@@ -110,6 +111,9 @@ rust-version = "1.99.1"
 [patch.crates-io]
 # block 0.1.6 has no released fix for its uninhabited extern class static.
 block = { path = "vendor/block" }
+# gix-filter 0.36.1 drops filter children without waiting for them when a
+# long-running filter fails to start, leaving one zombie per filtered file.
+gix-filter = { path = "vendor/gix-filter" }
 
 [workspace.dependencies]
 # Internal crates

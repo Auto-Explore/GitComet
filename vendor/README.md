@@ -50,6 +50,42 @@ C interop tests, two documentation examples, and a regression that invokes a
 capturing block before and after copying it, retains the heap block, and checks
 that the captured value drops exactly once.
 
+## Git filter drivers
+
+`gix-filter/` contains the published `gix-filter` 0.36.1 source from
+[GitoxideLabs/gitoxide](https://github.com/GitoxideLabs/gitoxide), licensed
+MIT OR Apache-2.0. That is still the latest release, and upstream's `main`
+has the same defect. The root `[patch.crates-io]` replaces it for every gix
+crate.
+
+The published crate drops filter children without waiting for them in a few
+error paths, and Rust's `Child` does not reap on drop. Each such child stays a
+zombie until GitComet exits. The worst case is a long-running filter that
+fails its handshake. On macOS, an app started from Finder or the Dock gets
+launchd's `PATH`, which lacks Homebrew's `git-lfs`. `sh -c 'git-lfs
+filter-process'` then exits 127. Every LFS file that a status walk compares by
+content started another attempt, so one refresh could leave hundreds of
+zombies and eventually exhaust the per-user process limit.
+
+The patch, in `src/driver/`:
+
+- `process::Client::handshake` kills and waits for the process when the
+  handshake fails.
+- The broken-pipe path and the unexpected-status path, which drop a running
+  long-running filter, now kill and wait for it as well.
+- `ReadFilterOutput`, a one-shot clean or smudge filter whose output is
+  dropped before the end, stops and waits for its child.
+- `State` remembers long-running filters that failed to start and does not
+  start them again. Clones keep that memory, so a status walk makes at most one
+  attempt per worker rather than one per file.
+
+The published package ships no tests. GitComet's regression is
+`a_filter_process_that_fails_its_handshake_is_reaped_and_not_restarted_per_file`
+in `crates/gitcomet-git-gix/src/repo/status/tests.rs`. The published
+`Cargo.toml.orig` and `Cargo.lock` are not kept. The crate is excluded from the
+main workspace so workspace formatting and lints do not rewrite upstream
+source. Drop the copy once a gix-filter release reaps these children.
+
 ## GPUI text storage
 
 The root workspace manifest pins GPUI to a Havunen/gpui-ce revision, and

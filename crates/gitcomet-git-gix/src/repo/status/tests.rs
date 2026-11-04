@@ -1577,3 +1577,58 @@ fn timing_merge_unmerged_conflicts() {
         );
     }
 }
+
+/// A long-running filter that dies before its handshake, like `git-lfs
+/// filter-process` when `git-lfs` is not on the PATH of an app started from
+/// Finder: `sh` exits 127. Each attempt used to stay a zombie until GitComet
+/// quit, and every entry needing a content check made a new attempt.
+#[cfg(unix)]
+#[test]
+fn a_filter_process_that_fails_its_handshake_is_reaped_and_not_restarted_per_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let workdir = dir.path();
+    init_test_repo(workdir);
+    write_file(workdir, ".gitattributes", "*.bin filter=broken\n");
+    for n in 0..40 {
+        write_file(workdir, &format!("asset{n:02}.bin"), "asset\n");
+    }
+    git_success(workdir, &["add", "."]);
+    git_success(workdir, &["commit", "-q", "-m", "seed"]);
+    // Stale stats with unchanged sizes: every asset needs a content check.
+    let stale =
+        filetime::FileTime::from_unix_time(filetime::FileTime::now().unix_seconds() - 60, 0);
+    for n in 0..40 {
+        filetime::set_file_mtime(workdir.join(format!("asset{n:02}.bin")), stale).unwrap();
+    }
+    let pids = workdir.join(".git/filter-pids");
+    let process = format!(
+        "echo $$ >> '{}'",
+        pids.to_str().unwrap().replace('\'', "'\\''")
+    );
+    git_success(workdir, &["config", "filter.broken.process", &process]);
+
+    let repo = open_repo(workdir);
+    let _ = repo.status_impl();
+
+    let started: Vec<String> = fs::read_to_string(&pids)
+        .unwrap()
+        .lines()
+        .map(str::to_owned)
+        .collect();
+    let workers = std::thread::available_parallelism().map_or(1, usize::from);
+    assert!(
+        !started.is_empty() && started.len() <= workers,
+        "at most one start per status worker, not one per file: {}",
+        started.len()
+    );
+    for pid in &started {
+        let state = std::process::Command::new("ps")
+            .args(["-o", "stat=", "-p", pid])
+            .output()
+            .unwrap();
+        assert!(
+            !String::from_utf8_lossy(&state.stdout).contains('Z'),
+            "filter process {pid} was left as a zombie"
+        );
+    }
+}
