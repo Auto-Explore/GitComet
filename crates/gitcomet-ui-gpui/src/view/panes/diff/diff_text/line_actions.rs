@@ -310,6 +310,7 @@ impl DiffRenderer {
     /// The patch `action` applies to the selected lines, built exactly as the
     /// diff editor menu builds that entry's. `None` when nothing is selected
     /// or no added or removed line is.
+    #[cfg(test)]
     pub(in crate::view) fn selected_diff_lines_patch(
         &self,
         action: DiffLineAction,
