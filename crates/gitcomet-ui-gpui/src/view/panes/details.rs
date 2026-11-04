@@ -62,6 +62,9 @@ pub(in crate::view) struct ComparisonCardCache {
 }
 
 pub(in super::super) struct DetailsPaneView {
+    /// The change sections the dock layout keeps in this pane, in order
+    /// (ids from `gitcomet_state::session::section_ids`).
+    pub(in crate::view) change_sections: Vec<&'static str>,
     pub(in crate::view) file_controllers: std::cell::RefCell<
         FxHashMap<
             (RepoId, crate::view::rows::FileListId),
@@ -84,7 +87,7 @@ pub(in super::super) struct DetailsPaneView {
     /// The history find bar's query, highlighted in the commit details. It
     /// lives on the history view, so this copy is what repaints the pane.
     pub(in super::super) history_find_query: Option<HistoryFindQuery>,
-    root_view: WeakEntity<GitCometView>,
+    pub(in crate::view) root_view: WeakEntity<GitCometView>,
     diff_renderer: WeakEntity<DiffRenderer>,
     pub(in crate::view) tooltip_host: WeakEntity<TooltipHost>,
     notify_fingerprint: u64,
@@ -619,6 +622,7 @@ impl DetailsPaneView {
             default_file_list_sort,
             file_list_layout,
             file_list_layout_override: FxHashMap::default(),
+            change_sections: gitcomet_state::session::DEFAULT_CHANGES_SECTIONS.to_vec(),
             file_controllers: Default::default(),
             status_section_order: std::cell::RefCell::new(Default::default()),
             status_footer_position: Default::default(),
@@ -2986,6 +2990,20 @@ impl DetailsPaneView {
             let handle = history.read(cx).history_panel_focus_handle.clone();
             window.focus(&handle, cx);
         });
+    }
+}
+
+impl DetailsPaneView {
+    /// The change sections the dock layout keeps here; repaints on a change.
+    pub(in crate::view) fn set_change_sections(
+        &mut self,
+        sections: Vec<&'static str>,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.change_sections != sections {
+            self.change_sections = sections;
+            cx.notify();
+        }
     }
 }
 

@@ -1,5 +1,7 @@
 mod contributions;
+mod dock;
 mod header;
+pub(in crate::view) use dock::{SidebarDockConfig, SidebarTabSet};
 
 pub(in crate::view) struct SidebarHeaderChanged;
 
@@ -322,6 +324,8 @@ impl SidebarExtensionTabs {
 }
 
 pub(in super::super) struct SidebarPaneView {
+    /// The tabs and sections the dock layout gives this pane.
+    dock: SidebarDockConfig,
     /// Tabs contributed after Branches and Files; `None` without any.
     extension_tabs: Option<SidebarExtensionTabs>,
     /// The on-demand file history tab; it has content while its pane has a target.
@@ -435,6 +439,8 @@ struct SidebarNotifyFingerprint {
     history_focus_hash: u64,
     status_revs: (u64, u64),
     selected_commit: Option<CommitId>,
+    /// The Tags section draws local tags, which the branch fingerprint leaves out.
+    tags_rev: u64,
 }
 
 impl SidebarNotifyFingerprint {
@@ -477,6 +483,7 @@ impl SidebarNotifyFingerprint {
             history_focus_hash,
             status_revs,
             selected_commit: repo.and_then(|repo| repo.history_state.selected_commit.clone()),
+            tags_rev: repo.map_or(0, |repo| repo.tags_rev),
         }
     }
 }
@@ -623,6 +630,7 @@ impl SidebarPaneView {
         );
 
         let mut this = Self {
+            dock: SidebarDockConfig::default(),
             explorer_focus: cx.focus_handle(),
             explorer_pending_focus: None,
             explorer_name_input: cx.new(|cx| {
@@ -1314,20 +1322,26 @@ impl SidebarPaneView {
     }
 
     fn dispatch_sidebar_data_request_if_needed(&mut self, cx: &mut gpui::Context<Self>) {
+        let expanded_visible = self.expanded_branches_visible
+            && self.sidebar_mode() == SidebarMode::Branches
+            && self.dock.tabs.branches;
+        let sections = self.dock.sections.clone();
         let next = sidebar_presentation::sidebar_request_fingerprint(
             self.state.as_ref(),
             &self.sidebar_collapsed_items_by_repo,
-            self.expanded_branches_visible && self.state.sidebar_mode == SidebarMode::Branches,
+            expanded_visible,
+            sections.as_deref(),
         );
         if next == self.sidebar_request_fingerprint {
             return;
         }
         self.sidebar_request_fingerprint = next;
 
-        let Some((repo_id, request)) = sidebar_presentation::active_sidebar_data_request(
+        let Some((repo_id, request)) = sidebar_presentation::active_sidebar_data_request_for(
             self.state.as_ref(),
             &self.sidebar_collapsed_items_by_repo,
-            self.expanded_branches_visible && self.state.sidebar_mode == SidebarMode::Branches,
+            expanded_visible,
+            sections.as_deref(),
         ) else {
             return;
         };
@@ -1339,7 +1353,7 @@ impl SidebarPaneView {
     pub(in super::super) fn branch_sidebar_presentation_cached(
         &mut self,
     ) -> Option<SidebarPresentation> {
-        let presentation = sidebar_presentation::build_sidebar_presentation_scoped(
+        let presentation = sidebar_presentation::build_sidebar_presentation_ordered(
             &mut self.sidebar_presentation_cache,
             self.state.as_ref(),
             &self.sidebar_collapsed_items_by_repo,
@@ -1348,8 +1362,9 @@ impl SidebarPaneView {
             self.branch_search_options,
             self.collapsed_popover_section
                 .and_then(|section| section.storage_key()),
+            self.dock.sections.as_ref(),
         )?;
-        let presentation = if self.collapsed_popover_section.is_none() {
+        let presentation = if self.collapsed_popover_section.is_none() && self.dock.extension_tabs {
             match &mut self.contributions {
                 Some(contributions) => contributions.project(presentation),
                 None => presentation,
@@ -1418,7 +1433,7 @@ impl SidebarPaneView {
     }
 
     fn file_history_shown(&self, cx: &gpui::App) -> bool {
-        self.file_history_selected && self.file_history_visible(cx)
+        self.dock_shows_history(cx)
     }
 
     /// Selects the history tab and leaves a contributed tab.
@@ -1444,12 +1459,12 @@ impl SidebarPaneView {
         let theme = self.theme;
 
         self.apply_pending_file_browser_reveal(cx);
-        let tab_bar = self.render_tab_bar(theme, cx);
-        let mode = self.state.sidebar_mode;
+        let tab_bar = self.dock.header.then(|| self.render_tab_bar(theme, cx));
+        let mode = self.sidebar_mode();
         let contributed = self
             .extension_tabs
             .as_ref()
-            .filter(|tabs| tabs.showing().is_some())
+            .filter(|tabs| self.dock.extension_tabs && tabs.showing().is_some())
             .and_then(|tabs| tabs.view.clone());
         let history_shown = self.file_history_shown(cx);
         let content = match (contributed, mode) {
@@ -1465,6 +1480,10 @@ impl SidebarPaneView {
                 .debug_selector(|| "sidebar_extension_tab_content".to_string())
                 .child(view)
                 .into_any_element(),
+            _ if !self.dock.tabs.branches && !self.dock.tabs.files => {
+                components::empty_state(theme, "File history", "No file history is open.")
+                    .into_any_element()
+            }
             (None, SidebarMode::Branches) => self.render_branches_content(theme, cx),
             (None, SidebarMode::Files) => self.render_file_browser_content(theme, cx),
         };
@@ -1478,7 +1497,7 @@ impl SidebarPaneView {
             .size_full()
             .min_h(px(0.0))
             .on_key_down(cx.listener(Self::on_sidebar_key_down))
-            .child(tab_bar)
+            .children(tab_bar)
             .child(content)
     }
 
@@ -1748,7 +1767,7 @@ impl SidebarPaneView {
         self.file_history_selected = false;
         let files_visible = self
             .collapsed_popover_section
-            .map_or(self.state.sidebar_mode == SidebarMode::Files, |section| {
+            .map_or(self.sidebar_mode() == SidebarMode::Files, |section| {
                 section == CollapsedSidebarSection::Files
             });
         if !files_visible {
@@ -1803,8 +1822,7 @@ impl SidebarPaneView {
             self.pending_file_browser_reveal_at = None;
             return;
         }
-        if self.collapsed_popover_section.is_none() && self.state.sidebar_mode != SidebarMode::Files
-        {
+        if self.collapsed_popover_section.is_none() && self.sidebar_mode() != SidebarMode::Files {
             return;
         }
         let Some(repo) = self.active_repo() else {
@@ -2153,6 +2171,23 @@ impl SidebarPaneView {
             let _ = root_view.update(cx, |root, cx| {
                 root.main_pane.update(cx, |pane, cx| {
                     pane.reveal_history_worktree(repo_id, path, is_current, head, cx);
+                });
+            });
+        });
+    }
+
+    /// Select `commit_id` in the log, as a tag row's click does.
+    pub(in crate::view) fn reveal_commit_in_history(
+        &mut self,
+        repo_id: RepoId,
+        commit_id: CommitId,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let root_view = self.root_view.clone();
+        cx.defer(move |cx| {
+            let _ = root_view.update(cx, |root, cx| {
+                root.main_pane.update(cx, |pane, cx| {
+                    pane.reveal_history_commit(repo_id, commit_id, None, cx);
                 });
             });
         });

@@ -628,6 +628,7 @@ fn popover_is_context_menu(kind: &PopoverKind) -> bool {
             | PopoverKind::FileListLayoutMenu { .. }
             | PopoverKind::ChangeTrackingSettings
             | PopoverKind::UiScalePicker
+            | PopoverKind::DockMenu(_)
             | PopoverKind::TerminalMenu { .. }
             | PopoverKind::DiffHunkMenu { .. }
             | PopoverKind::DiffEditorMenu { .. }
@@ -1271,6 +1272,7 @@ pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<Popover
         | PopoverKind::DiffContentModeSettings
         | PopoverKind::UiScalePicker
         | PopoverKind::DiffHunkMenu { .. } => Some(NARROW_CONTEXT_MENU_WIDTH),
+        PopoverKind::DockMenu(_) => Some(SORT_CONTEXT_MENU_WIDTH),
         PopoverKind::TextFormatMenu { .. } => Some(TEXT_FORMAT_MENU_WIDTH),
         PopoverKind::HistoryAuthorFilter { .. } => Some(HISTORY_AUTHOR_FILTER_WIDTH),
         PopoverKind::ChangeTrackingSettings => Some(CHANGE_TRACKING_MENU_WIDTH),

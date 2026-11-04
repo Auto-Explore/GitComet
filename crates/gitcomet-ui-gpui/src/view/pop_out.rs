@@ -45,6 +45,44 @@ pub(in crate::view) fn open(
     on_closed: OnWindowClosed,
     cx: &mut App,
 ) -> Result<PopOutWindow, HostError> {
+    let (options, percent) = window_options(main, &title, cx);
+    let handle = cx
+        .open_window(options, move |window, cx| {
+            // Renders at its main window's zoom and theme, and changes with them.
+            crate::ui_scale::follow_window(cx, window.window_handle().window_id(), main);
+            crate::theme::follow_window_theme(cx, window.window_handle().window_id(), main);
+            crate::ui_scale::apply_to_window(window, percent);
+            let popped = window.window_handle();
+            let content = content(window, cx);
+            cx.new(|cx| PopOutView {
+                host,
+                content,
+                on_closed: Some(on_closed),
+                _main_closed: cx.on_window_closed(move |cx, closed| {
+                    if closed == main {
+                        let _ = popped.update(cx, |_, window, _| window.remove_window());
+                    }
+                }),
+                _released: cx.on_release(|this: &mut PopOutView, cx| {
+                    if let Some(on_closed) = this.on_closed.take() {
+                        on_closed(cx);
+                    }
+                }),
+            })
+        })
+        .map_err(|_| HostError::Unsupported)?;
+    Ok(PopOutWindow::new(Rc::new(HostedPopOut {
+        handle: handle.into(),
+    })))
+}
+
+/// The options every popped-out window opens with: centred, at its main
+/// window's zoom, with native decorations and the main window's app id.
+pub(in crate::view) fn window_options(
+    main: gpui::WindowId,
+    title: &str,
+    cx: &App,
+) -> (WindowOptions, u32) {
     let percent = crate::ui_scale::percent_for_window(cx, main);
     let bounds = Bounds::centered(
         None,
@@ -75,34 +113,7 @@ pub(in crate::view) fn open(
         is_resizable: true,
         ..Default::default()
     };
-    let handle = cx
-        .open_window(options, move |window, cx| {
-            // Renders at its main window's zoom and theme, and changes with them.
-            crate::ui_scale::follow_window(cx, window.window_handle().window_id(), main);
-            crate::theme::follow_window_theme(cx, window.window_handle().window_id(), main);
-            crate::ui_scale::apply_to_window(window, percent);
-            let popped = window.window_handle();
-            let content = content(window, cx);
-            cx.new(|cx| PopOutView {
-                host,
-                content,
-                on_closed: Some(on_closed),
-                _main_closed: cx.on_window_closed(move |cx, closed| {
-                    if closed == main {
-                        let _ = popped.update(cx, |_, window, _| window.remove_window());
-                    }
-                }),
-                _released: cx.on_release(|this: &mut PopOutView, cx| {
-                    if let Some(on_closed) = this.on_closed.take() {
-                        on_closed(cx);
-                    }
-                }),
-            })
-        })
-        .map_err(|_| HostError::Unsupported)?;
-    Ok(PopOutWindow::new(Rc::new(HostedPopOut {
-        handle: handle.into(),
-    })))
+    (options, percent)
 }
 
 struct HostedPopOut {

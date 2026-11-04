@@ -533,6 +533,8 @@ pub(crate) enum PopoverKind {
     ChangeTrackingSettings,
     /// The bottom bar's zoom menu for this window.
     UiScalePicker,
+    /// A panel's or a section's layout menu, built by the root.
+    DockMenu(Arc<crate::view::dock::DockMenu>),
     RebaseOntoConfirm {
         repo_id: RepoId,
         onto: String,

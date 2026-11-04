@@ -13,13 +13,20 @@ impl GitCometView {
         let details_width = ui_scale::stored_design_units(Some(
             self.ui_scale().design_units_from_pixels(self.details_width),
         ));
+        let mut dock = self.dock_layout.clone();
+        dock.dock_mut(session::DockSide::Left).size = sidebar_width;
+        dock.dock_mut(session::DockSide::Right).size = details_width;
+        dock.dock_mut(session::DockSide::Bottom).size = ui_scale::stored_design_units(Some(
+            self.ui_scale()
+                .design_units_from_pixels(self.terminal_panel_height),
+        ));
         session::WorkspaceLayout {
             sidebar_width,
             details_width,
             sidebar_collapsed: self.sidebar_collapsed,
             change_tracking_height,
             untracked_height,
-            dock: None,
+            dock: Some(dock),
         }
     }
 

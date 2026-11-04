@@ -24,6 +24,7 @@ const WORKTREES_SECTION_KEY: &str = "section:worktrees";
 const SUBMODULES_SECTION_KEY: &str = "section:submodules";
 const ANNEX_SECTION_KEY: &str = "section:annex";
 const STASH_SECTION_KEY: &str = "section:stash";
+const TAGS_SECTION_KEY: &str = "section:tags";
 const EXPANDED_DEFAULT_SECTION_PREFIX: &str = "expanded:";
 const TRAILING_BOTTOM_SPACERS: usize = 3;
 const REMOTE_HEADER_GROUP_PREFIX: &str = "group:remote-header:";
@@ -219,6 +220,26 @@ pub(super) const fn stash_section_storage_key() -> &'static str {
     STASH_SECTION_KEY
 }
 
+pub(super) const fn tags_section_storage_key() -> &'static str {
+    TAGS_SECTION_KEY
+}
+
+/// The collapse key of the header that starts a dock layout section, for the
+/// reference sections the branch list draws.
+pub(in crate::view) fn section_storage_key(section: &str) -> Option<&'static str> {
+    use gitcomet_state::session::section_ids;
+    Some(match section {
+        section_ids::LOCAL_BRANCHES => LOCAL_SECTION_KEY,
+        section_ids::REMOTE_BRANCHES => REMOTE_SECTION_KEY,
+        section_ids::TAGS => TAGS_SECTION_KEY,
+        section_ids::WORKTREES => WORKTREES_SECTION_KEY,
+        section_ids::SUBMODULES => SUBMODULES_SECTION_KEY,
+        section_ids::ANNEX => ANNEX_SECTION_KEY,
+        section_ids::STASHES => STASH_SECTION_KEY,
+        _ => return None,
+    })
+}
+
 pub(super) fn remote_header_storage_key(name: &str) -> String {
     let mut key = String::with_capacity(REMOTE_HEADER_GROUP_PREFIX.len() + name.len());
     key.push_str(REMOTE_HEADER_GROUP_PREFIX);
@@ -365,6 +386,18 @@ pub(super) enum BranchSidebarRow {
         message: SharedString,
         tooltip: SharedString,
         created_at: Option<std::time::SystemTime>,
+    },
+    /// Local tags. Shown only when the dock layout places the Tags section.
+    TagsHeader {
+        collapsed: bool,
+        collapse_key: SharedString,
+    },
+    TagPlaceholder {
+        message: SharedString,
+    },
+    TagItem {
+        name: SharedString,
+        target: CommitId,
     },
 }
 
@@ -1033,7 +1066,45 @@ pub(super) fn is_top_level_collapse_key(key: &str) -> bool {
                 | SUBMODULES_SECTION_KEY
                 | ANNEX_SECTION_KEY
                 | STASH_SECTION_KEY
+                | TAGS_SECTION_KEY
         )
+}
+
+/// The Tags section's rows, newest name last as `git tag` lists them. Built
+/// on demand: the cached branch tree leaves tags out so a hidden section
+/// costs nothing.
+pub(in crate::view) fn tags_section_rows(
+    repo: &RepoState,
+    collapsed_items: &BTreeSet<String>,
+) -> Vec<BranchSidebarRow> {
+    let collapsed = is_collapsed(collapsed_items, TAGS_SECTION_KEY);
+    let mut rows = vec![BranchSidebarRow::TagsHeader {
+        collapsed,
+        collapse_key: TAGS_SECTION_KEY.into(),
+    }];
+    if collapsed {
+        return rows;
+    }
+    match &repo.tags {
+        Loadable::Ready(tags) if tags.is_empty() => rows.push(BranchSidebarRow::TagPlaceholder {
+            message: "No tags".into(),
+        }),
+        Loadable::Ready(tags) => {
+            let mut sorted: Vec<&gitcomet_core::domain::Tag> = tags.iter().collect();
+            sorted.sort_by(|a, b| cmp_case_insensitive_then_case_sensitive(&a.name, &b.name));
+            rows.extend(sorted.into_iter().map(|tag| BranchSidebarRow::TagItem {
+                name: SharedString::new(tag.name.as_str()),
+                target: tag.target.clone(),
+            }));
+        }
+        Loadable::Loading | Loadable::NotLoaded => rows.push(BranchSidebarRow::TagPlaceholder {
+            message: "Loading".into(),
+        }),
+        Loadable::Error(error) => rows.push(BranchSidebarRow::TagPlaceholder {
+            message: error.clone().into(),
+        }),
+    }
+    rows
 }
 
 fn sidebar_rows(

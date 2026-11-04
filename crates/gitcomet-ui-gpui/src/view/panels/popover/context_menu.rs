@@ -20,6 +20,7 @@ mod diff_actions;
 mod diff_content_mode_settings;
 mod diff_editor;
 mod diff_hunk;
+mod dock_menu;
 mod explorer_operations;
 mod explorer_settings;
 mod file_browser_file;
@@ -911,6 +912,7 @@ impl PopoverHost {
             }
             PopoverKind::ChangeTrackingSettings => Some(change_tracking_settings::model(self)),
             PopoverKind::UiScalePicker => Some(ui_scale_picker::model(cx)),
+            PopoverKind::DockMenu(menu) => Some(dock_menu::model(menu)),
             PopoverKind::InteractiveRebaseActionMenu {
                 ix,
                 can_squash,

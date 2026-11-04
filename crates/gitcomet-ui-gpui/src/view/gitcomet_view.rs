@@ -496,6 +496,7 @@ impl GitCometView {
             persisted_workspace_active_repository,
             initial_window_placement,
             workspace_theme_key,
+            dock_layout: saved_dock_layout,
             entry_denials,
             mut startup_repo_bootstrap_pending,
             startup_repo_open_failure_revision,
@@ -547,6 +548,17 @@ impl GitCometView {
         let restored_sidebar_width = ui_preferences.window.sidebar_width;
         let restored_details_width = ui_preferences.window.details_width;
         let restored_sidebar_collapsed = ui_preferences.window.sidebar_collapsed;
+        // The saved layout, else today's window with the sidebar as it was.
+        // Details always opens, as it did before layouts were saved.
+        let mut initial_dock_layout =
+            saved_dock_layout.unwrap_or_else(super::dock::DockLayout::factory);
+        initial_dock_layout
+            .dock_mut(super::dock::DockSide::Left)
+            .hidden = restored_sidebar_collapsed;
+        initial_dock_layout
+            .dock_mut(super::dock::DockSide::Right)
+            .hidden = false;
+        let initial_terminal_height = initial_dock_layout.dock(super::dock::DockSide::Bottom).size;
         let _ = crate::theme::ensure_user_themes_dir_exists();
         let theme_mode = ui_preferences.appearance.theme_mode.clone();
         let workspace_theme_mode = workspace_theme_key.as_deref().and_then(ThemeMode::from_key);
@@ -1241,7 +1253,10 @@ impl GitCometView {
             file_list_sort,
             terminal_preferences,
             terminal_sessions: FxHashMap::default(),
-            terminal_panel_height: px(TERMINAL_PANEL_DEFAULT_HEIGHT_PX),
+            terminal_panel_height: initial_terminal_height
+                .map_or(px(TERMINAL_PANEL_DEFAULT_HEIGHT_PX), |height| {
+                    scale.px(height as f32)
+                }),
             terminal_panel_resize: None,
             next_terminal_session_seq: 1,
             reflog_pane,
@@ -1280,6 +1295,18 @@ impl GitCometView {
             external_drag_drop_pending: false,
             hover_resize_edge: None,
             frame_decorations: None,
+            dock_layout: initial_dock_layout,
+            dock_hosts: Default::default(),
+            dock_zoomed: None,
+            dock_focus_side: super::dock::DockSide::Left,
+            named_layouts: if crate::ui_runtime::current().persists_ui_settings() {
+                session::load_named_layouts()
+            } else {
+                Default::default()
+            },
+            dock_popped_out: std::collections::BTreeMap::new(),
+            dock_present: Vec::new(),
+            bottom_panel_fill: false,
             sidebar_collapsed: restored_sidebar_collapsed,
             sidebar_collapsed_popover: None,
             sidebar_collapsed_popover_closing: None,
@@ -1389,6 +1416,9 @@ impl GitCometView {
             .update(cx, |bar, cx| bar.set_theme(theme, cx));
         self.sidebar_pane
             .update(cx, |pane, cx| pane.set_theme(theme, cx));
+        for pane in self.dock_hosts.sidebar_panes().cloned().collect::<Vec<_>>() {
+            pane.update(cx, |pane, cx| pane.set_theme(theme, cx));
+        }
         self.diff_renderer
             .update(cx, |pane, cx| pane.set_theme(theme, cx));
         self.main_pane
@@ -1700,6 +1730,9 @@ impl GitCometView {
     }
 
     pub(super) fn set_sidebar_collapsed(&mut self, collapsed: bool, cx: &mut gpui::Context<Self>) {
+        // The left dock's hidden flag is this collapse; keep them one.
+        self.dock_layout
+            .set_dock_hidden(super::dock::DockSide::Left, collapsed);
         if self.sidebar_collapsed == collapsed {
             return;
         }
@@ -1833,6 +1866,8 @@ impl GitCometView {
     }
 
     pub(super) fn set_details_collapsed(&mut self, collapsed: bool, cx: &mut gpui::Context<Self>) {
+        self.dock_layout
+            .set_dock_hidden(super::dock::DockSide::Right, collapsed);
         if self.details_collapsed == collapsed {
             return;
         }

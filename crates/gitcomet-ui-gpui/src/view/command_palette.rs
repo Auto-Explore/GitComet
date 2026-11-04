@@ -1167,7 +1167,9 @@ impl CommandPaletteView {
             restore_focus: None,
             fallback_focus: None,
             root_view,
-            extension_commands: super::extension_host::palette_entries(cx),
+            extension_commands: super::dock::palette_entries(
+                super::extension_host::palette_entries(cx),
+            ),
             theme,
             context: PaletteContext {
                 has_active_repo,

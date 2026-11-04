@@ -847,6 +847,15 @@ impl PopoverHost {
                     let _ = root_view.request(RootRequest::SetChangeTrackingView(view), None, cx);
                 });
             }
+            ContextMenuAction::Dock(command) => {
+                let root_view = self.root_view.clone();
+                let window_handle = window.window_handle();
+                cx.defer(move |cx| {
+                    let _ = window_handle.update(cx, |_, window, cx| {
+                        root_view.request(RootRequest::Dock(command), Some(window), cx)
+                    });
+                });
+            }
             ContextMenuAction::SetUiScale { percent } => {
                 let window_id = window.window_handle().window_id();
                 cx.defer(move |cx| {

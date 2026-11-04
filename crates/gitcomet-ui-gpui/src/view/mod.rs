@@ -307,6 +307,7 @@ mod diff_preview;
 mod diff_text_model;
 mod diff_text_selection;
 mod diff_utils;
+pub(crate) mod dock;
 pub(crate) mod documents;
 pub(crate) mod error_notices;
 pub(crate) mod extension_host;

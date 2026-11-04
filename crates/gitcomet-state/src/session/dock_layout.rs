@@ -1115,6 +1115,8 @@ impl LayoutPreset {
 #[serde(default)]
 pub struct NamedLayouts {
     pub layouts: BTreeMap<String, DockLayout>,
+    /// Whether the one-time "panels can move" hint was shown.
+    pub hint_seen: bool,
 }
 
 impl NamedLayouts {
