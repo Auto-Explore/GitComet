@@ -114,7 +114,10 @@ fn coalesced_lanes(
 /// The row's continuations, coalesced like [`coalesced`] keyed on x and on
 /// whether the lane elbows out of the node. Lanes born at the node that land on
 /// the edge line come from the row's summary, so an unpinned node never forces a
-/// scan of the pinned columns.
+/// scan of the pinned columns. Lanes `leaves_node` claims are left out: the
+/// caller draws them out of the node with the merge edges, and leaving them out
+/// here rather than after coalescing keeps them from winning an edge line other
+/// lanes still need drawn straight.
 fn continuing_winners(
     row: &history_graph::GraphRow,
     pin_col: usize,
@@ -122,6 +125,7 @@ fn continuing_winners(
     draw_reserved: bool,
     selection_possible: bool,
     selected: impl Fn(usize, history_graph::LanePaint) -> bool,
+    leaves_node: impl Fn(usize, history_graph::LanePaint) -> bool,
 ) -> SmallVec<[LaneItem; 8]> {
     let mut extra = (None, None);
     if !node_pinned {
@@ -156,6 +160,7 @@ fn continuing_winners(
             lane.is_active()
                 && (draw_reserved || !lane.reserved())
                 && !(col >= pin_col && !node_pinned && lane.starts_at_node())
+                && !leaves_node(col, lane)
         },
         selected,
         extra,
@@ -332,6 +337,16 @@ pub(super) fn paint_history_graph(
         );
     }
 
+    // A merge hands each lane that reached it from another column on to one of
+    // its parents, so such a lane joins the node and then carries on down its own
+    // column. Above the centre line it has already turned into the node, which
+    // leaves nothing on its column there: a straight run down from the centre
+    // would start out of thin air, a flat-topped stub beside the join's elbow.
+    // It leaves the node the way it arrived instead, through an elbow drawn with
+    // the merge edges below.
+    let leaves_node =
+        |col: usize, lane: history_graph::LanePaint| !lane.starts_at_node() && joins_out_of(col);
+
     // Continuations from current row to next row.
     let continuing = continuing_winners(
         row,
@@ -340,6 +355,7 @@ pub(super) fn paint_history_graph(
         draw_reserved,
         selection_possible,
         |col, lane| paints_last(col, lane.color_ix),
+        leaves_node,
     );
     for (out_col, lane_paint) in continuing {
         let x_out = x_for_col(out_col);
@@ -368,10 +384,25 @@ pub(super) fn paint_history_graph(
         }
     }
 
+    // The lanes `leaves_node` kept out of the continuations: exactly the ones the
+    // continuation pass would otherwise have drawn straight down.
+    let rejoined = row.joins_in.iter().filter_map(|edge| {
+        let col = usize::from(edge.from_col);
+        let lane = *row.lanes_next.get(col)?;
+        (lane.is_active() && (draw_reserved || !lane.reserved()) && leaves_node(col, lane))
+            .then_some(history_graph::GraphEdge {
+                from_col: row.node_col,
+                to_col: edge.from_col,
+                color_ix: lane.color_ix,
+            })
+    });
+
     // Additional merge edges from the node into lanes that were re-targeted to secondary parents.
-    // Collapsed onto the node's x, the target lane's own continuation covers it.
+    // Collapsed onto the node's x, the target lane's own continuation covers it. A
+    // merge edge into a lane that also joined the node shares its elbow, so the
+    // two coalesce into one stroke.
     for edge in coalesced(
-        row.edges_out.iter().copied(),
+        row.edges_out.iter().copied().chain(rejoined),
         |edge| x_key(x_for_col(usize::from(edge.to_col))),
         |_| false,
     ) {
@@ -1803,10 +1834,18 @@ mod band_tests {
         let mut row = band(&[born(0).with_reserved(true), born(1)], 1);
         row.lanes_now[0] = incoming(0).with_reserved(true);
         let cols = |draw_reserved| {
-            continuing_winners(&row, usize::MAX, false, draw_reserved, false, |_, _| false)
-                .iter()
-                .map(|(col, _)| *col)
-                .collect::<Vec<_>>()
+            continuing_winners(
+                &row,
+                usize::MAX,
+                false,
+                draw_reserved,
+                false,
+                |_, _| false,
+                |_, _| false,
+            )
+            .iter()
+            .map(|(col, _)| *col)
+            .collect::<Vec<_>>()
         };
         assert_eq!(cols(true), [0, 1]);
         assert_eq!(cols(false), [1]);
@@ -2551,12 +2590,16 @@ mod lane_coalescing_regressions {
                 is_merge: false,
                 from_node_cols: history_graph::from_node_cols_of(&lanes),
             };
+            // Lanes that joined the node and carry on leave it through an elbow
+            // drawn with the merge edges, wherever they sit.
+            let leaves_node =
+                |col: usize, lane: LanePaint| !lane.starts_at_node() && joins_out_of(col);
             let expected = coalesced(
                 lanes
                     .iter()
                     .copied()
                     .enumerate()
-                    .filter(|(_, lane)| lane.is_active()),
+                    .filter(|&(col, lane)| lane.is_active() && !leaves_node(col, lane)),
                 |(col, lane)| {
                     (
                         x_key(x_for_col(col)),
@@ -2572,6 +2615,7 @@ mod lane_coalescing_regressions {
                 true,
                 selection_possible,
                 |col, lane| paints_last(col, lane.color_ix),
+                leaves_node,
             );
             assert_eq!(
                 actual.as_slice(),
@@ -2673,6 +2717,7 @@ mod lane_coalescing_regressions {
                 true,
                 selection.is_some(),
                 |col, lane| col >= pin_col && selection == Some(lane.color_ix),
+                |_, _| false,
             );
             assert_eq!(continuing.len(), pin_col + 1, "{selection:?}");
         }
@@ -2898,6 +2943,209 @@ mod author_node_geometry_tests {
                     }
                 }
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod merge_rejoin_regressions {
+    use super::*;
+    use gitcomet_core::domain::{Commit, CommitId};
+    use std::rc::Rc;
+
+    fn commit(id: &str, parent_ids: &[&str]) -> Commit {
+        Commit {
+            id: CommitId(id.into()),
+            parent_ids: parent_ids.iter().map(|p| CommitId((*p).into())).collect(),
+            summary: "".into(),
+            author: "".into(),
+            time: std::time::SystemTime::UNIX_EPOCH,
+        }
+    }
+
+    type GraphPaint = Rc<dyn Fn(&mut Window, &mut App)>;
+
+    struct GraphPaintView(GraphPaint);
+
+    impl gpui::Render for GraphPaintView {
+        fn render(&mut self, _: &mut Window, _: &mut gpui::Context<Self>) -> impl IntoElement {
+            let paint = self.0.clone();
+            gpui::canvas(|_, _, _| (), move |_, (), window, cx| paint(window, cx)).size_full()
+        }
+    }
+
+    /// A merge hands the lane that reached it from beside the node on to one of
+    /// its parents, so that lane joins the node and then carries on down its own
+    /// column. Its top half is an elbow into the node, so nothing is on its
+    /// column at the centre line; the straight run the continuation pass used to
+    /// draw from there started out of thin air, a flat-topped stub beside the
+    /// join's elbow (#713). The lane has to leave the node through an elbow too.
+    #[gpui::test]
+    fn a_lane_a_merge_hands_on_leaves_the_node_instead_of_a_stub(cx: &mut gpui::TestAppContext) {
+        use gitcomet_core::history_perf::{self, Work};
+
+        struct Shape {
+            name: &'static str,
+            commits: Vec<Commit>,
+            merge_row: usize,
+            /// Columns whose lane joins the merge and carries on below it.
+            handed_on: &'static [usize],
+            /// Columns whose lane runs straight past the merge.
+            passing: &'static [usize],
+            /// The join elbows plus one exit elbow per distinct column.
+            elbows: u64,
+        }
+        let shapes = [
+            // The issue's shape: `side` reaches the merge from the next column
+            // and carries on to `feature`, the merge's second parent, so the
+            // merge edge and the handed-on lane share one elbow.
+            Shape {
+                name: "handed on to the merge's own edge",
+                commits: vec![
+                    commit("tip", &["merge"]),
+                    commit("side", &["merge"]),
+                    commit("merge", &["main", "feature"]),
+                    commit("feature", &["root"]),
+                    commit("main", &["root"]),
+                    commit("root", &[]),
+                ],
+                merge_row: 2,
+                handed_on: &[1],
+                passing: &[],
+                elbows: 2,
+            },
+            // A lane nearer the node already runs to `feature`, so the merge
+            // edge goes there and the handed-on lane has no edge of its own: it
+            // needs its own elbow out, or it hangs below the node unconnected.
+            Shape {
+                name: "handed on beside another lane to the same parent",
+                commits: vec![
+                    commit("tip", &["merge"]),
+                    commit("other", &["feature"]),
+                    commit("side", &["merge"]),
+                    commit("merge", &["main", "feature"]),
+                    commit("feature", &["root"]),
+                    commit("main", &["root"]),
+                    commit("root", &[]),
+                ],
+                merge_row: 3,
+                handed_on: &[2],
+                passing: &[1],
+                elbows: 3,
+            },
+        ];
+
+        let (view, cx) = cx.add_window_view(|_, _| GraphPaintView(Rc::new(|_, _| {})));
+        for shape in shapes {
+            let name = shape.name;
+            let theme = AppTheme::gitcomet_dark();
+            let graph = history_graph::compute_graph(
+                &shape.commits,
+                theme,
+                std::iter::empty::<&str>(),
+                None,
+            );
+            let row = graph[shape.merge_row].clone();
+            assert!(row.is_merge, "{name}: fixture row is the merge");
+            assert_eq!(row.node_col, 0, "{name}: fixture merge sits on column 0");
+            for &col in shape.handed_on {
+                assert!(
+                    row.joins_in
+                        .iter()
+                        .any(|edge| usize::from(edge.from_col) == col),
+                    "{name}: column {col} must join the merge"
+                );
+                let lane = row.lanes_next[col];
+                assert!(
+                    lane.is_active() && !lane.starts_at_node(),
+                    "{name}: and carry on below it as the same lane"
+                );
+                assert!(
+                    graph[shape.merge_row + 1].lanes_now[col].incoming(),
+                    "{name}: the row below continues it from the top"
+                );
+            }
+
+            let _capture = history_perf::capture();
+            let (quads, xs) = cx.update(|window, app| {
+                window.set_scale_factor(1.0);
+                let scale = ui_scale::UiScale::from_window(window).with_appearance(theme.metrics);
+                let cell = Bounds::new(
+                    point(px(0.0), px(0.0)),
+                    size(px(200.0), super::super::history::history_row_height(scale)),
+                );
+                let grid = GraphGrid::new(window, scale);
+                let col_left = |col: usize| {
+                    grid.snap(cell.left()) + grid.col_x(col, grid.edge_x(cell.size.width))
+                };
+                let xs: Vec<f32> = (0..row.lanes_now.len().max(row.lanes_next.len()))
+                    .map(|col| f32::from(col_left(col)))
+                    .collect();
+                let painted_row = row.clone();
+                view.update(app, |view, cx| {
+                    view.0 = Rc::new(move |window, app| {
+                        let row = &painted_row;
+                        paint_history_graph(
+                            theme,
+                            row,
+                            0,
+                            None,
+                            true,
+                            false,
+                            None,
+                            history_canvas::HistoryRowVisual::new(
+                                theme,
+                                row,
+                                0,
+                                None,
+                                false,
+                                theme.colors.surface.canvas,
+                            ),
+                            &HistoryAuthorVm::new("Ada Lovelace".into()),
+                            1.0,
+                            0.0,
+                            cell,
+                            grid,
+                            graph_node_bounds(row, false, 1.0, cell, grid, scale),
+                            window,
+                            app,
+                        );
+                    });
+                    cx.notify();
+                });
+                let _ = window.draw(app);
+                (window.painted_quads(), xs)
+            });
+
+            let lanes: Vec<&gpui::Quad> = quads
+                .iter()
+                .filter(|quad| quad.corner_radii.top_left.0 == 0.0)
+                .collect();
+            let on_col = |col: usize| {
+                lanes
+                    .iter()
+                    .filter(|quad| (quad.bounds.center().x.0 - xs[col]).abs() < 0.5)
+                    .count()
+            };
+            for &col in shape.handed_on {
+                assert_eq!(
+                    on_col(col),
+                    0,
+                    "{name}: column {col} must not run straight down from the centre: {lanes:?}"
+                );
+            }
+            for &col in [0].iter().chain(shape.passing) {
+                assert_eq!(
+                    on_col(col),
+                    2,
+                    "{name}: column {col} runs the full height: {lanes:?}"
+                );
+            }
+            assert_eq!(
+                history_perf::count(Work::PaintPath),
+                shape.elbows,
+                "{name}: one elbow into the node per join, one out per column"
+            );
         }
     }
 }
