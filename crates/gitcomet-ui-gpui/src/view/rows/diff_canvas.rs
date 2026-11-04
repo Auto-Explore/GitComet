@@ -102,8 +102,10 @@ pub(in crate::view) struct RowBlamePaint {
     pub(in crate::view) show_text: bool,
     /// Relative time ("3 days ago").
     pub(in crate::view) when: SharedString,
-    /// The author's name (truncated with an ellipsis at paint time).
+    /// The author's name, which picks the avatar's colour.
     pub(in crate::view) author: SharedString,
+    /// The avatar's initials, derived from `author` once and cached.
+    pub(in crate::view) author_initials: SharedString,
     /// Hover text for the avatar: the name and, when known, `<email>`.
     pub(in crate::view) author_tip: SharedString,
     /// Commit summary (truncated with an ellipsis at paint time).

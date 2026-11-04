@@ -187,15 +187,11 @@ fn blame_commit_is_navigable(commit_id: &gitcomet_core::domain::CommitId) -> boo
     !commit_id.is_uncommitted()
 }
 
-/// Paint the annotation column for one row: a recency border bar and, on run
-/// starts, the "X ago | author | summary" sub-columns plus two action icons.
-/// When `hovered` is Some, that area gets a highlight + underline (message) or
-/// brighter color (icons).
-#[allow(clippy::too_many_arguments)]
 /// The author's avatar (the circle with coloured initials used in commit
 /// details), centred vertically in the author cell.
 fn paint_author_avatar(
     author: &SharedString,
+    initials: &SharedString,
     cell: Bounds<Pixels>,
     theme: AppTheme,
     ui_scale_percent: u32,
@@ -220,9 +216,8 @@ fn paint_author_avatar(
             .background(crate::theme::with_alpha(color, 0.22))
             .corner_radii(diameter * 0.5),
     );
-    let initials: SharedString = components::author_initials(author).into();
     components::paint_avatar_initials(
-        &initials,
+        initials,
         color,
         scale.px(components::AVATAR_FONT_PX),
         bounds,
@@ -231,6 +226,11 @@ fn paint_author_avatar(
     );
 }
 
+/// Paint the annotation column for one row: a recency border bar and, on run
+/// starts, the "X ago | author | summary" sub-columns plus two action icons.
+/// When `hovered` is Some, that area gets a highlight + underline (message) or
+/// brighter color (icons).
+#[allow(clippy::too_many_arguments)]
 fn paint_blame_annotation(
     blame: &RowBlamePaint,
     layout: &BlameColumnLayout,
@@ -268,6 +268,7 @@ fn paint_blame_annotation(
     );
     paint_author_avatar(
         &blame.author,
+        &blame.author_initials,
         layout.author,
         theme,
         ui_scale_percent,

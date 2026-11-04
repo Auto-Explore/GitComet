@@ -8,7 +8,14 @@ use super::super::*;
 pub(in crate::view) struct BlameLabelCache {
     when_bucket: i64,
     when: FxHashMap<i64, SharedString>,
-    authors: FxHashMap<std::sync::Arc<str>, SharedString>,
+    authors: FxHashMap<std::sync::Arc<str>, AuthorLabel>,
+}
+
+/// An author's name as the blame column shows it, with the avatar's initials.
+#[derive(Clone)]
+struct AuthorLabel {
+    name: SharedString,
+    initials: SharedString,
 }
 
 impl BlameRenderCtx {
@@ -33,7 +40,7 @@ impl BlameRenderCtx {
             .clone()
     }
 
-    fn author_label(&self, author: &std::sync::Arc<str>) -> SharedString {
+    fn author_label(&self, author: &std::sync::Arc<str>) -> AuthorLabel {
         let mut cache = self.labels.borrow_mut();
         if let Some(label) = cache.authors.get(author) {
             return label.clone();
@@ -41,7 +48,11 @@ impl BlameRenderCtx {
         if cache.authors.len() >= 4_096 {
             cache.authors.clear();
         }
-        let label: SharedString = super::blame::author_display_name(author).into();
+        let name = super::blame::author_display_name(author);
+        let label = AuthorLabel {
+            name: name.to_string().into(),
+            initials: components::author_initials(name).into(),
+        };
         cache
             .authors
             .insert(std::sync::Arc::clone(author), label.clone());
@@ -237,8 +248,9 @@ fn build_row_blame_paint_inner(
             crate::theme::blame_heat_color(theme.is_dark, t)
         }
     };
-    let (when, author, author_tip, summary, body) = if !is_run_start {
+    let (when, author, author_initials, author_tip, summary, body) = if !is_run_start {
         (
+            SharedString::default(),
             SharedString::default(),
             SharedString::default(),
             SharedString::default(),
@@ -251,6 +263,7 @@ fn build_row_blame_paint_inner(
             SharedString::default(),
             SharedString::default(),
             SharedString::default(),
+            SharedString::default(),
             None,
         )
     } else {
@@ -258,9 +271,11 @@ fn build_row_blame_paint_inner(
             .author_time_unix
             .map(|ts| ctx.relative_time_label(ts))
             .unwrap_or_else(|| "unknown".into());
+        let author = ctx.author_label(&line.author);
         (
             when,
-            ctx.author_label(&line.author),
+            author.name,
+            author.initials,
             author_tip(&line.author, &line.author_email),
             // `Arc<str>` -> `SharedString` is a refcount bump, not a byte copy,
             // so this avoids re-allocating the summary/body every render pass.
@@ -273,6 +288,7 @@ fn build_row_blame_paint_inner(
         show_text: is_run_start,
         when,
         author,
+        author_initials,
         author_tip,
         summary,
         body,
@@ -307,6 +323,7 @@ fn removal_blame_paint(
         show_text: is_run_start,
         when,
         author: SharedString::default(),
+        author_initials: SharedString::default(),
         author_tip: SharedString::default(),
         summary: SharedString::default(),
         body: None,

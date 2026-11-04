@@ -705,6 +705,8 @@ mod tests {
             "1111111111111111111111111111111111111111"
         );
         assert_eq!(committed.author.as_ref(), "Ada Lovelace");
+        // `author-mail` arrives in angle brackets; they are stripped.
+        assert_eq!(committed.author_email.as_ref(), "ada@example.com");
         assert_eq!(committed.author_time_unix, Some(1700000000));
         assert_eq!(committed.summary.as_ref(), "initial commit");
         assert_eq!(committed.line, "committed line");
@@ -720,6 +722,8 @@ mod tests {
             "0000000000000000000000000000000000000000"
         );
         assert_eq!(uncommitted.author.as_ref(), "Not Committed Yet");
+        // git's placeholder address for local changes is not an email.
+        assert_eq!(uncommitted.author_email.as_ref(), "");
         assert_eq!(uncommitted.summary.as_ref(), "Not Committed Yet");
         assert_eq!(uncommitted.author_time_unix, None);
         assert_eq!(uncommitted.line, "uncommitted line");

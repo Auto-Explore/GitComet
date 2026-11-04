@@ -166,9 +166,11 @@ enum BlameClickAction {
 }
 
 /// Register hover handling for a row's annotation column. On every mouse move it
-/// resolves which sub-area (message / prior icon / browse icon) the cursor is
-/// over and, only when that changes for this row, updates the view's hover state
-/// (which drives the accent highlight on repaint) and the shared tooltip host.
+/// resolves which sub-area (author / message / prior icon / browse icon) the
+/// cursor is over and, only when that changes for this row, updates the view's
+/// hover state (which drives the accent highlight on repaint) and the shared
+/// tooltip host.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn install_blame_annotation_hover_handler(
     window: &mut Window,
     view: &Entity<DiffRenderer>,
