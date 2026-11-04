@@ -475,7 +475,7 @@ fn commit_amend_finished_auth_error_uses_pending_retry_with_amend() {
         message: "fixup".to_string(),
         amend: true,
         push_after_commit: false,
-        hooks: gitcomet_core::services::GitHooks::Run,
+        hooks: gitcomet_core::services::GitHooks::Skip,
     });
 
     reduce(
@@ -501,7 +501,7 @@ fn commit_amend_finished_auth_error_uses_pending_retry_with_amend() {
             message: "fixup".to_string(),
             amend: true,
             push_after_commit: false,
-            hooks: gitcomet_core::services::GitHooks::Run,
+            hooks: gitcomet_core::services::GitHooks::Skip,
         }
     );
 }

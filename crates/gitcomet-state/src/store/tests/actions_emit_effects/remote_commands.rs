@@ -1099,6 +1099,42 @@ fn skipped_hooks_follow_the_commit_to_the_push_after_it() {
             effect,
             Effect::RepoCommand(RepoCommandEffect::PushAfterCommit {
                 target: effect_target,
+                set_upstream: false,
+                hooks: GitHooks::Skip,
+                ..
+            }) if effect_target == &target
+        )),
+        "{effects:?}"
+    );
+
+    // A branch with no upstream yet keeps skipping hooks too.
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::SafePushAfterCommitFinished {
+            repo_id,
+            context: gitcomet_core::services::SafePushAfterCommitContext {
+                amend: false,
+                local_branch: Some("main".to_string()),
+                pre_head: Some(CommitId("1111111111111111111111111111111111111111".into())),
+                post_head: Some(CommitId("2222222222222222222222222222222222222222".into())),
+                hooks: GitHooks::Skip,
+            },
+            auth: None,
+            result: Ok(
+                gitcomet_core::services::SafePushAfterCommitDecision::PushSetUpstream {
+                    target: target.clone(),
+                },
+            ),
+        }),
+    );
+    assert!(
+        effects.iter().any(|effect| matches!(
+            effect,
+            Effect::RepoCommand(RepoCommandEffect::PushAfterCommit {
+                target: effect_target,
+                set_upstream: true,
                 hooks: GitHooks::Skip,
                 ..
             }) if effect_target == &target

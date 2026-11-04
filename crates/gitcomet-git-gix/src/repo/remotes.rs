@@ -1554,6 +1554,12 @@ impl GixRepo {
                 .arg(&local_head);
             let label = format!("git lfs push {} {local_head}", target.remote);
             let uploaded = run_git_command_with_optional_output(cmd, &label, capture_output)?;
+            if set_upstream {
+                // `--set-upstream` pushes the branch, not `local_head`. A commit
+                // made during the upload would be published without its objects,
+                // and with hooks skipped no `pre-push` would catch it.
+                self.validate_push_after_commit_target(target)?;
+            }
             let pushed =
                 self.push_after_commit_target_once(target, set_upstream, capture_output, hooks)?;
             let label = format!("{label} && {}", pushed.command);

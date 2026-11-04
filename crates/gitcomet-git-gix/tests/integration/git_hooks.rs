@@ -289,13 +289,8 @@ fn file_url(path: &Path) -> String {
     }
 }
 
-/// LFS uploads from its `pre-push` hook. A push that skips hooks uploads the
-/// objects itself, so the remote never receives a pointer without content.
-#[test]
-fn push_after_commit_without_hooks_still_uploads_lfs_objects() {
-    if !git_lfs_available() {
-        return;
-    }
+/// The fixture with Git LFS configured and `*.bin` tracked by LFS.
+fn lfs_fixture() -> (Fixture, Arc<dyn GitRepository>) {
     let fixture = fixture();
     git(
         &fixture.work,
@@ -309,19 +304,22 @@ fn push_after_commit_without_hooks_still_uploads_lfs_objects() {
     ] {
         git(&fixture.work, &["config", key, value]);
     }
-    let repo = GixBackend.open(&fixture.work).unwrap();
-    let base = head(&fixture.work);
-
     fs::write(
         fixture.work.join(".gitattributes"),
         "*.bin filter=lfs diff=lfs merge=lfs -text\n",
     )
     .unwrap();
+    let repo = GixBackend.open(&fixture.work).unwrap();
+    (fixture, repo)
+}
+
+/// Commits `asset.bin` as an LFS pointer, skipping hooks, and returns the
+/// commit and where the remote keeps its object.
+fn commit_lfs_asset(fixture: &Fixture, repo: &Arc<dyn GitRepository>) -> (String, PathBuf) {
     fs::write(fixture.work.join("asset.bin"), b"large file contents\n").unwrap();
     git(&fixture.work, &["add", ".gitattributes", "asset.bin"]);
     repo.commit_with_hooks("asset", None, GitHooks::Skip)
         .unwrap();
-    let committed = head(&fixture.work);
     let pointer = git(&fixture.work, &["show", "HEAD:asset.bin"]);
     let oid = pointer
         .lines()
@@ -335,22 +333,116 @@ fn push_after_commit_without_hooks_still_uploads_lfs_objects() {
         .join(&oid[2..4])
         .join(&oid);
     assert!(!remote_object.exists());
+    (head(&fixture.work), remote_object)
+}
 
-    let (target, set_upstream) =
-        push_target(&repo, "main", Some(&base), &committed, GitHooks::Skip);
-    let output = repo
+/// LFS uploads from its `pre-push` hook. A push that skips hooks uploads the
+/// objects itself, so the remote never receives a pointer without content,
+/// on a tracked branch and on one the push sets the upstream of.
+#[test]
+fn push_after_commit_without_hooks_still_uploads_lfs_objects() {
+    if !git_lfs_available() {
+        return;
+    }
+    for branch in ["main", "topic"] {
+        let (fixture, repo) = lfs_fixture();
+        let base = head(&fixture.work);
+        let pre_head = if branch == "main" {
+            Some(base.as_str())
+        } else {
+            git(&fixture.work, &["checkout", "-q", "-b", branch]);
+            None
+        };
+        let (committed, remote_object) = commit_lfs_asset(&fixture, &repo);
+
+        let (target, set_upstream) =
+            push_target(&repo, branch, pre_head, &committed, GitHooks::Skip);
+        assert_eq!(set_upstream, branch == "topic", "{branch}");
+        let output = repo
+            .push_after_commit_with_hooks(&target, set_upstream, GitHooks::Skip)
+            .unwrap();
+
+        assert!(
+            output.command.starts_with("git lfs push origin "),
+            "{branch}: {}",
+            output.command
+        );
+        assert!(
+            output.command.contains("--no-verify"),
+            "{branch}: {}",
+            output.command
+        );
+        assert!(
+            remote_object.is_file(),
+            "{branch}: the LFS object was uploaded"
+        );
+        assert_eq!(
+            remote_branch(&fixture.remote, branch).as_deref(),
+            Some(committed.as_str()),
+            "{branch}"
+        );
+    }
+}
+
+/// Setting the upstream pushes the branch rather than the commit that was
+/// uploaded. If the branch moves while `git lfs push` runs, the push must stop
+/// instead of publishing a commit whose objects never reached the remote.
+#[cfg(unix)]
+#[test]
+fn push_after_commit_without_hooks_refuses_a_branch_that_moved_during_the_lfs_upload() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    if !git_lfs_available() {
+        return;
+    }
+    let (fixture, repo) = lfs_fixture();
+    git(&fixture.work, &["checkout", "-q", "-b", "topic"]);
+    let (committed, _remote_object) = commit_lfs_asset(&fixture, &repo);
+    // A transfer agent that commits on `topic` while it "uploads".
+    let agent = fixture.work.parent().unwrap().join("moving-agent.sh");
+    fs::write(
+        &agent,
+        format!(
+            r#"#!/bin/sh
+while IFS= read -r line; do
+  case "$line" in
+    *'"event":"init"'*) echo '{{}}' ;;
+    *'"event":"upload"'*)
+      oid=$(printf '%s' "$line" | sed 's/.*"oid":"\([0-9a-f]*\)".*/\1/')
+      git -C '{work}' commit -q --no-verify --allow-empty -m moved >/dev/null 2>&1
+      printf '{{"event":"complete","oid":"%s"}}\n' "$oid" ;;
+    *'"event":"terminate"'*) exit 0 ;;
+  esac
+done
+"#,
+            work = fixture.work.display()
+        ),
+    )
+    .unwrap();
+    fs::set_permissions(&agent, fs::Permissions::from_mode(0o755)).unwrap();
+    git(
+        &fixture.work,
+        &[
+            "config",
+            "lfs.customtransfer.moving.path",
+            agent.to_str().unwrap(),
+        ],
+    );
+    git(
+        &fixture.work,
+        &["config", "lfs.standalonetransferagent", "moving"],
+    );
+
+    let (target, set_upstream) = push_target(&repo, "topic", None, &committed, GitHooks::Skip);
+    assert!(set_upstream, "topic has no upstream yet");
+    let error = repo
         .push_after_commit_with_hooks(&target, set_upstream, GitHooks::Skip)
-        .unwrap();
+        .expect_err("the branch moved during the upload");
 
     assert!(
-        output.command.starts_with("git lfs push origin "),
-        "{}",
-        output.command
+        error.to_string().contains("stale push-after-commit target"),
+        "{error}"
     );
-    assert!(output.command.contains("--no-verify"), "{}", output.command);
-    assert!(remote_object.is_file(), "the LFS object was uploaded");
-    assert_eq!(
-        remote_branch(&fixture.remote, "main").as_deref(),
-        Some(committed.as_str())
-    );
+    assert_ne!(head(&fixture.work), committed, "the agent committed");
+    assert_eq!(remote_branch(&fixture.remote, "topic"), None);
 }

@@ -1481,9 +1481,7 @@ impl GitRepository for GixRepo {
         message: &str,
         identity: Option<&gitcomet_core::commit_identity::CommitIdentity>,
     ) -> Result<CommitOperationOutcome> {
-        let _operation = self.operation_lease()?;
-        self.require_working_tree()?;
-        self.commit_with_identity_impl(message, identity, false, GitHooks::Run)
+        self.commit_with_hooks(message, identity, GitHooks::Run)
     }
     fn commit_with_hooks(
         &self,
@@ -1500,9 +1498,7 @@ impl GitRepository for GixRepo {
         message: &str,
         identity: Option<&gitcomet_core::commit_identity::CommitIdentity>,
     ) -> Result<CommitOperationOutcome> {
-        let _operation = self.operation_lease()?;
-        self.require_working_tree()?;
-        self.commit_with_identity_impl(message, identity, true, GitHooks::Run)
+        self.commit_amend_with_hooks(message, identity, GitHooks::Run)
     }
     fn commit_amend_with_hooks(
         &self,
