@@ -1087,66 +1087,64 @@ fn mount_details_find_fixture(
     (view, cx, id)
 }
 
-/// Ranges of the details message (or SHA) field washed as find matches.
+/// Ranges of the details message washed as find matches.
 fn details_find_washes(
     cx: &mut gpui::VisualTestContext,
     view: &gpui::Entity<GitCometView>,
-    sha: bool,
 ) -> Vec<std::ops::Range<usize>> {
     cx.update(|_window, app| {
         let pane = view.read(app).details_pane.read(app);
-        let input = if sha {
-            pane.commit_details_sha_input.clone()
-        } else {
-            pane.commit_details_message_input.clone()
-        };
-        input.update(app, |input, _| {
-            let len = input.text().len();
-            input
-                .debug_effective_highlights_for_range(0..len)
-                .into_iter()
-                .filter(|(_, style)| style.background_color.is_some())
-                .map(|(range, _)| range)
-                .collect()
-        })
+        pane.commit_details_message_input
+            .clone()
+            .update(app, |input, _| {
+                let len = input.text().len();
+                input
+                    .debug_effective_highlights_for_range(0..len)
+                    .into_iter()
+                    .filter(|(_, style)| style.background_color.is_some())
+                    .map(|(range, _)| range)
+                    .collect()
+            })
     })
 }
 
-/// The details pane follows the find bar: the summary match, the whole SHA
-/// for an abbreviation or the full id, and nothing once the bar closes.
+/// Whether the commit card's SHA badge is washed as a find match.
+fn details_sha_washed(cx: &mut gpui::VisualTestContext) -> bool {
+    draw_and_park(cx);
+    cx.debug_bounds("commit_card_sha_find_match").is_some()
+}
+
+/// The details pane follows the find bar: the summary match, the SHA badge for
+/// an abbreviation or the full id, and nothing once the bar closes.
 #[gpui::test]
 fn history_find_highlights_the_selected_commit_details(cx: &mut gpui::TestAppContext) {
     let (view, cx, id) = mount_details_find_fixture(cx);
-    assert!(details_find_washes(cx, &view, false).is_empty());
-    assert!(details_find_washes(cx, &view, true).is_empty());
+    assert!(details_find_washes(cx, &view).is_empty());
+    assert!(!details_sha_washed(cx));
 
     open_find_with_shortcut(cx, &view);
     type_query(cx, "fix");
     assert_eq!(
-        details_find_washes(cx, &view, false),
+        details_find_washes(cx, &view),
         vec![0..3],
         "the summary match, not the body's"
     );
-    assert!(details_find_washes(cx, &view, true).is_empty());
+    assert!(!details_sha_washed(cx));
 
     retype_query(cx, "AAAA0000");
-    assert_eq!(
-        details_find_washes(cx, &view, true),
-        vec![0..40],
-        "an abbreviation washes the whole id"
+    assert!(
+        details_sha_washed(cx),
+        "an abbreviation washes the SHA badge"
     );
-    assert!(details_find_washes(cx, &view, false).is_empty());
+    assert!(details_find_washes(cx, &view).is_empty());
 
     retype_query(cx, &id);
-    assert_eq!(details_find_washes(cx, &view, true), vec![0..40]);
+    assert!(details_sha_washed(cx), "the full id washes the SHA badge");
 
     cx.simulate_keystrokes("escape");
     draw_and_park(cx);
     assert!(!find_is_open(cx, &view));
-    assert!(
-        details_find_washes(cx, &view, true).is_empty(),
-        "closing the bar clears the wash"
-    );
+    assert!(!details_sha_washed(cx), "closing the bar clears the wash");
 }
 
 // ---------------------------------------------------------------------------
@@ -2931,12 +2929,12 @@ fn history_find_stash_details_highlight_only_the_row_summary(cx: &mut gpui::Test
     type_query(cx, "main");
     settle_typing(cx);
     assert!(
-        details_find_washes(cx, &view, false).is_empty(),
+        details_find_washes(cx, &view).is_empty(),
         "the hidden stash prefix is not a match"
     );
     retype_query(cx, "saved");
     settle_typing(cx);
-    assert_eq!(details_find_washes(cx, &view, false), vec![13..18]);
+    assert_eq!(details_find_washes(cx, &view), vec![13..18]);
 }
 
 #[gpui::test]

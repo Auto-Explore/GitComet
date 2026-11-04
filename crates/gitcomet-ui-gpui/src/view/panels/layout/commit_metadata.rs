@@ -1,5 +1,5 @@
-//! Commit metadata in the details pane: author row, SHA/date/parent fields,
-//! and the linkified message.
+//! Commit metadata in the details pane: the author's display name and the
+//! linkified message.
 
 use super::*;
 use crate::view::commit_message_text::{
@@ -96,30 +96,6 @@ fn commit_message_link_highlights(
     (highlights, Arc::from(links))
 }
 
-/// The whole of a SHA field is one link, without scanning: the field holds
-/// nothing but the id.
-fn commit_sha_field_links(sha: &str, interactive: bool, allow_navigate: bool) -> MessageLinks {
-    if interactive {
-        Arc::from([components::MessageLink {
-            range: 0..sha.len(),
-            target: components::LinkTarget::Commit {
-                commit_id: CommitId(sha.to_string().into()),
-                allow_navigate,
-            },
-        }])
-    } else {
-        Arc::<[components::MessageLink]>::from([])
-    }
-}
-
-fn commit_sha_field_highlights(value: &str, theme: AppTheme) -> TextHighlights {
-    if value.is_empty() || value == "—" {
-        Vec::new()
-    } else {
-        vec![(0..value.len(), commit_link_style(theme))]
-    }
-}
-
 impl DetailsPaneView {
     /// What the history find query matched in `details`. The row is matched on
     /// its displayed summary, so the ranges are found there and mapped back
@@ -153,18 +129,6 @@ impl DetailsPaneView {
             row_summary,
         )
         .unwrap_or_default()
-    }
-
-    pub(super) fn sync_commit_details_input_value(
-        input: &Entity<components::TextInput>,
-        value: &str,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        if input.read(cx).text() != value {
-            input.update(cx, |input, cx| {
-                input.set_text(value.to_string(), cx);
-            });
-        }
     }
 
     pub(super) fn sync_commit_details_message_input(
@@ -201,74 +165,6 @@ impl DetailsPaneView {
                     cx,
                 );
             });
-    }
-
-    pub(super) fn sync_commit_details_parent_input(
-        &mut self,
-        parent: &str,
-        repo_id: RepoId,
-        interactive: bool,
-        theme: AppTheme,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        Self::sync_commit_details_input_value(&self.commit_details_parent_input, parent, cx);
-        self.commit_details_parent_input.update(cx, |input, cx| {
-            input.set_highlights(commit_sha_field_highlights(parent, theme), cx);
-        });
-        let parent_links = commit_sha_field_links(parent, interactive, true);
-        self.commit_details_parent_link_menu.update(cx, |menu, cx| {
-            menu.sync(
-                self.commit_details_parent_input.clone(),
-                repo_id,
-                parent_links,
-                "commit_details_parent_link_menu",
-                cx,
-            );
-        });
-    }
-
-    /// The SHA field's text and link style, washed whole when the history find
-    /// query matched it.
-    pub(super) fn sync_commit_details_sha_input(
-        &mut self,
-        sha: &str,
-        find_matched: bool,
-        theme: AppTheme,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        Self::sync_commit_details_input_value(&self.commit_details_sha_input, sha, cx);
-        let whole = find_matched.then_some(0..sha.len());
-        let highlights = crate::text_runs::overlay_highlights(
-            commit_sha_field_highlights(sha, theme),
-            whole.as_slice(),
-            crate::view::rows::query_highlight_style(theme),
-        );
-        self.commit_details_sha_input.update(cx, |input, cx| {
-            input.set_highlights(highlights, cx);
-        });
-    }
-
-    pub(super) fn sync_commit_details_sha_menu(
-        &mut self,
-        sha: &str,
-        repo_id: RepoId,
-        interactive: bool,
-        find_matched: bool,
-        theme: AppTheme,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        self.sync_commit_details_sha_input(sha, find_matched, theme, cx);
-        // A commit's own SHA has nothing to reveal.
-        let sha_links = commit_sha_field_links(sha, interactive, false);
-        self.commit_details_sha_link_menu.update(cx, |menu, cx| {
-            menu.sync(
-                self.commit_details_sha_input.clone(),
-                repo_id,
-                sha_links,
-                "commit_details_sha_link_menu",
-                cx,
-            );
-        });
     }
 
     pub(super) fn sync_retained_commit_details_message_input(
