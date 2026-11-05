@@ -1,4 +1,5 @@
 use super::*;
+use crate::view::dock::section_ids;
 use gitcomet_core::domain::Upstream;
 
 mod activate;
@@ -20,6 +21,7 @@ mod diff_actions;
 mod diff_content_mode_settings;
 mod diff_editor;
 mod diff_hunk;
+mod dock_menu;
 mod explorer_operations;
 mod explorer_settings;
 mod file_browser_file;
@@ -628,7 +630,14 @@ impl PopoverHost {
                 Some(branch::model(self, *repo_id, target))
             }
             PopoverKind::BranchSectionMenu { repo_id, section } => {
-                Some(branch_section::model(self, *repo_id, *section))
+                let id = match section {
+                    BranchSection::Local => section_ids::LOCAL_BRANCHES,
+                    BranchSection::Remote => section_ids::REMOTE_BRANCHES,
+                };
+                Some(dock_menu::with_layout_entry(
+                    branch_section::model(self, *repo_id, *section),
+                    id,
+                ))
             }
             PopoverKind::Repo {
                 repo_id,
@@ -680,7 +689,10 @@ impl PopoverHost {
             PopoverKind::Repo {
                 repo_id,
                 kind: RepoPopoverKind::Worktree(WorktreePopoverKind::SectionMenu),
-            } => Some(worktree_section::model(*repo_id)),
+            } => Some(dock_menu::with_layout_entry(
+                worktree_section::model(*repo_id),
+                section_ids::WORKTREES,
+            )),
             PopoverKind::Repo {
                 repo_id,
                 kind: RepoPopoverKind::Worktree(WorktreePopoverKind::CommitMenu { commit_id }),
@@ -700,7 +712,10 @@ impl PopoverHost {
             PopoverKind::Repo {
                 repo_id,
                 kind: RepoPopoverKind::Submodule(SubmodulePopoverKind::SectionMenu),
-            } => Some(submodule_section::model(*repo_id)),
+            } => Some(dock_menu::with_layout_entry(
+                submodule_section::model(*repo_id),
+                section_ids::SUBMODULES,
+            )),
             PopoverKind::Repo {
                 repo_id,
                 kind: RepoPopoverKind::Submodule(SubmodulePopoverKind::Menu { path }),
@@ -708,7 +723,10 @@ impl PopoverHost {
             PopoverKind::Repo {
                 repo_id,
                 kind: RepoPopoverKind::Annex(AnnexPopoverKind::SectionMenu),
-            } => Some(annex::section_model(self, *repo_id)),
+            } => Some(dock_menu::with_layout_entry(
+                annex::section_model(self, *repo_id),
+                section_ids::ANNEX,
+            )),
             PopoverKind::Repo {
                 repo_id,
                 kind: RepoPopoverKind::Annex(AnnexPopoverKind::RepositoryMenu { uuid }),
@@ -911,6 +929,7 @@ impl PopoverHost {
             }
             PopoverKind::ChangeTrackingSettings => Some(change_tracking_settings::model(self)),
             PopoverKind::UiScalePicker => Some(ui_scale_picker::model(cx)),
+            PopoverKind::DockMenu(menu) => Some(dock_menu::model(menu)),
             PopoverKind::InteractiveRebaseActionMenu {
                 ix,
                 can_squash,

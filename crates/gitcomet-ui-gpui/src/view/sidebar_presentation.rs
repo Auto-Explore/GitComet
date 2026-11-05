@@ -77,6 +77,10 @@ struct SidebarProjection {
     tree: Rc<[BranchSidebarRow]>,
     pins: Rc<[BranchSidebarRow]>,
     scope: Option<String>,
+    /// The dock layout's section order the rows were arranged in.
+    order: Option<Rc<[&'static str]>>,
+    /// The tags the Tags section was built from, when it is shown.
+    tags_rev: u64,
     presentation: SidebarPresentation,
 }
 
@@ -171,10 +175,40 @@ pub(in crate::view) struct SidebarRequestFingerprint {
     request: Option<SidebarDataRequest>,
 }
 
+impl SidebarRequestFingerprint {
+    /// For a pane without a branch list (Files or File History on its own):
+    /// it needs nothing loaded.
+    pub(in crate::view) fn nothing(state: &AppState) -> Self {
+        Self {
+            active_repo_id: state.active_repo,
+            request: None,
+        }
+    }
+
+    /// What the pane asks for, for the window to combine with its other
+    /// panes' requests.
+    pub(in crate::view) fn request(&self) -> Option<(RepoId, SidebarDataRequest)> {
+        Some((self.active_repo_id?, self.request?))
+    }
+}
+
+#[cfg(test)]
 pub(in crate::view) fn active_sidebar_data_request(
     state: &AppState,
     collapsed_items_by_repo: &BTreeMap<PathBuf, BTreeSet<String>>,
     expanded_visible: bool,
+) -> Option<(RepoId, SidebarDataRequest)> {
+    active_sidebar_data_request_for(state, collapsed_items_by_repo, expanded_visible, None)
+}
+
+/// What the branch list needs loaded. `sections` are the header keys the dock
+/// layout shows in this list (`None`: today's sections); a section the layout
+/// hides asks for nothing, so its data is never read from Git.
+pub(in crate::view) fn active_sidebar_data_request_for(
+    state: &AppState,
+    collapsed_items_by_repo: &BTreeMap<PathBuf, BTreeSet<String>>,
+    expanded_visible: bool,
+    sections: Option<&[&'static str]>,
 ) -> Option<(RepoId, SidebarDataRequest)> {
     let repo_id = state.active_repo?;
     let repo = state.repos.iter().find(|repo| repo.id == repo_id)?;
@@ -182,20 +216,22 @@ pub(in crate::view) fn active_sidebar_data_request(
     let collapsed_items = collapsed_items_by_repo
         .get(&repo.spec.workdir)
         .unwrap_or(&empty);
+    let listed = |key: &str| {
+        sections.map_or(
+            key != branch_sidebar::tags_section_storage_key(),
+            |sections| sections.contains(&key),
+        )
+    };
+    let wants = |key: &'static str| {
+        listed(key) && (expanded_visible || !branch_sidebar::is_collapsed(collapsed_items, key))
+    };
     Some((
         repo_id,
         SidebarDataRequest {
             worktrees: true,
-            submodules: expanded_visible
-                || !branch_sidebar::is_collapsed(
-                    collapsed_items,
-                    branch_sidebar::submodules_section_storage_key(),
-                ),
-            stashes: expanded_visible
-                || !branch_sidebar::is_collapsed(
-                    collapsed_items,
-                    branch_sidebar::stash_section_storage_key(),
-                ),
+            submodules: wants(branch_sidebar::submodules_section_storage_key()),
+            stashes: wants(branch_sidebar::stash_section_storage_key()),
+            tags: wants(branch_sidebar::tags_section_storage_key()),
         },
     ))
 }
@@ -204,9 +240,10 @@ pub(in crate::view) fn sidebar_request_fingerprint(
     state: &AppState,
     collapsed_items_by_repo: &BTreeMap<PathBuf, BTreeSet<String>>,
     expanded_visible: bool,
+    sections: Option<&[&'static str]>,
 ) -> SidebarRequestFingerprint {
     let (active_repo_id, request) =
-        active_sidebar_data_request(state, collapsed_items_by_repo, expanded_visible)
+        active_sidebar_data_request_for(state, collapsed_items_by_repo, expanded_visible, sections)
             .map_or((state.active_repo, None), |(repo_id, request)| {
                 (Some(repo_id), Some(request))
             });
@@ -235,6 +272,7 @@ pub(in crate::view) fn build_sidebar_presentation(
     )
 }
 
+#[cfg(test)]
 pub(in crate::view) fn build_sidebar_presentation_scoped(
     cache: &mut SidebarPresentationCache,
     state: &AppState,
@@ -243,6 +281,32 @@ pub(in crate::view) fn build_sidebar_presentation_scoped(
     branch_filter: &str,
     options: TextSearchOptions,
     scope: Option<&str>,
+) -> Option<SidebarPresentation> {
+    build_sidebar_presentation_ordered(
+        cache,
+        state,
+        collapsed_items_by_repo,
+        pinned_branches_by_repo,
+        branch_filter,
+        options,
+        scope,
+        None,
+    )
+}
+
+/// As [`build_sidebar_presentation_scoped`], with the reference sections the
+/// dock layout puts in this list, in its order (header keys). `None` keeps
+/// today's sections; the Tags section is only ever drawn when listed.
+#[allow(clippy::too_many_arguments)]
+pub(in crate::view) fn build_sidebar_presentation_ordered(
+    cache: &mut SidebarPresentationCache,
+    state: &AppState,
+    collapsed_items_by_repo: &BTreeMap<PathBuf, BTreeSet<String>>,
+    pinned_branches_by_repo: &BTreeMap<PathBuf, BTreeSet<String>>,
+    branch_filter: &str,
+    options: TextSearchOptions,
+    scope: Option<&str>,
+    order: Option<&Rc<[&'static str]>>,
 ) -> Option<SidebarPresentation> {
     if !cache.search.as_ref().is_some_and(|search| {
         search.query == branch_filter.trim() && search.matcher.options() == options
@@ -286,11 +350,17 @@ pub(in crate::view) fn build_sidebar_presentation_scoped(
             branch_sidebar::expanded_pinned_rows(repo, pinned_branches, collapsed_items).into()
         });
     let badges = worktree_badges_cached(&mut cache.worktree_badges, repo, state.repos.as_slice());
+    let tags_key = branch_sidebar::tags_section_storage_key();
+    let tags_listed =
+        order.is_some_and(|order| order.contains(&tags_key)) || scope == Some(tags_key);
+    let tags_rev = if tags_listed { repo.tags_rev } else { 0 };
     if let Some(cached) = &cache.projection
         && Rc::ptr_eq(&tree, &cached.tree)
         && Rc::ptr_eq(&raw_pins, &cached.pins)
         && Rc::ptr_eq(&search, &cached.presentation.search)
         && cached.scope.as_deref() == scope
+        && cached.order.as_deref() == order.map(|order| &order[..])
+        && cached.tags_rev == tags_rev
     {
         return Some(SidebarPresentation {
             worktree_badges: badges,
@@ -299,6 +369,28 @@ pub(in crate::view) fn build_sidebar_presentation_scoped(
     }
     let mut pins = search.project(&raw_pins);
     let mut rows = search.project(&tree);
+    if tags_listed {
+        let tag_rows = branch_sidebar::tags_section_rows(repo, collapsed_items);
+        rows.extend(search.project(&tag_rows));
+    }
+    if scope.is_none()
+        && let Some(order) = order
+    {
+        rows = arrange_sections(rows, order);
+        let keeps = |key: &'static str| order.contains(&key);
+        pins.retain(|row| match row {
+            BranchSidebarRow::Branch { section, .. }
+            | BranchSidebarRow::GroupHeader { section, .. } => match section {
+                branch_sidebar::BranchSection::Local => {
+                    keeps(branch_sidebar::local_section_storage_key())
+                }
+                branch_sidebar::BranchSection::Remote => {
+                    keeps(branch_sidebar::remote_section_storage_key())
+                }
+            },
+            _ => true,
+        });
+    }
     if let Some(scope) = scope {
         pins.retain(|row| match row {
             BranchSidebarRow::Branch { section, .. }
@@ -396,9 +488,50 @@ pub(in crate::view) fn build_sidebar_presentation_scoped(
         tree,
         pins: raw_pins,
         scope: scope.map(str::to_owned),
+        order: order.cloned(),
+        tags_rev,
         presentation: presentation.clone(),
     });
     Some(presentation)
+}
+
+/// Splits rows at each top-level section header and keeps the sections
+/// `order` lists, in its order. Rows before the first header stay first.
+fn arrange_sections(rows: Vec<BranchSidebarRow>, order: &[&'static str]) -> Vec<BranchSidebarRow> {
+    let mut lead = Vec::new();
+    let mut chunks: Vec<(SharedString, Vec<BranchSidebarRow>)> = Vec::new();
+    for row in rows {
+        match super::sidebar_sticky::header_key(&row)
+            .filter(|key| branch_sidebar::is_top_level_collapse_key(key))
+        {
+            Some(key) => {
+                let key = key.clone();
+                chunks.push((key, vec![row]));
+            }
+            None => match chunks.last_mut() {
+                Some((_, chunk)) => chunk.push(row),
+                None => lead.push(row),
+            },
+        }
+    }
+    let mut out = lead;
+    for key in order {
+        if let Some(index) = chunks
+            .iter()
+            .position(|(chunk_key, _)| chunk_key.as_ref() == *key)
+        {
+            out.extend(chunks.swap_remove(index).1);
+        }
+    }
+    // Extension sections are not in the layout's catalogue; they keep their
+    // place at the end, as before.
+    out.extend(
+        chunks
+            .into_iter()
+            .filter(|(key, _)| key.starts_with("section:extension:"))
+            .flat_map(|(_, chunk)| chunk),
+    );
+    out
 }
 
 fn branch_sidebar_rows_cached(

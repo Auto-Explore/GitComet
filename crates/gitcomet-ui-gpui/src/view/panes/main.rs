@@ -24,6 +24,8 @@ pub(crate) struct MainPaneView {
     view_mode: GitCometViewMode,
     active_context_menu_invoker: Option<SharedString>,
     pub(in crate::view) interactive_rebase_states: FxHashMap<RepoId, IRebaseViewState>,
+    /// Whether a diff shares the centre with the history or replaces it.
+    centre: gitcomet_state::session::CentreLayout,
     _subscription: gpui::Subscription,
 }
 
@@ -99,6 +101,7 @@ impl MainPaneView {
             view_mode,
             active_context_menu_invoker: None,
             interactive_rebase_states: FxHashMap::default(),
+            centre: Default::default(),
             _subscription: subscription,
         }
     }
@@ -483,6 +486,78 @@ impl MainPaneView {
         cx.notify();
     }
 
+    pub(in crate::view) fn set_centre_layout(
+        &mut self,
+        centre: gitcomet_state::session::CentreLayout,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.centre != centre {
+            self.centre = centre;
+            cx.notify();
+        }
+    }
+
+    /// History and an open diff together, when the layout asks for it.
+    fn split_centre(
+        &mut self,
+        width: Pixels,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> Option<AnyElement> {
+        use gitcomet_state::session::CentreSplitMode;
+        let size = window.viewport_size();
+        let mode = self
+            .centre
+            .mode
+            .resolve(size.width.into(), size.height.into());
+        let side_by_side = match mode {
+            CentreSplitMode::Single | CentreSplitMode::Auto => return None,
+            CentreSplitMode::SideBySide => true,
+            CentreSplitMode::Stacked => false,
+        };
+        let share = f32::from(self.centre.split_permille) / 1000.0;
+        if side_by_side {
+            self.history_view.update(cx, |history, _| {
+                history.set_history_content_width(width * share)
+            });
+        }
+        let theme = self.theme;
+        let slot = |grow: f32, child: AnyElement| {
+            let mut slot = div()
+                .flex()
+                .flex_col()
+                .min_w(px(0.0))
+                .min_h(px(0.0))
+                .overflow_hidden()
+                .child(child);
+            slot.style().flex_grow = Some(grow);
+            slot.style().flex_shrink = Some(1.0);
+            slot.style().flex_basis = Some(relative(0.0).into());
+            slot
+        };
+        let history = slot(share, self.history_view.clone().into_any_element());
+        let diff = slot(1.0 - share, self.diff_renderer.clone().into_any_element());
+        let container = div()
+            .id("centre_split")
+            .debug_selector(|| "centre_split".to_string())
+            .flex()
+            .size_full();
+        Some(
+            if side_by_side {
+                container
+                    .flex_row()
+                    .child(history)
+                    .child(diff.border_l_1().border_color(theme.colors.stroke.subtle))
+            } else {
+                container
+                    .flex_col()
+                    .child(history)
+                    .child(diff.border_t_1().border_color(theme.colors.stroke.subtle))
+            }
+            .into_any_element(),
+        )
+    }
+
     pub(in crate::view) fn reset_history_column_widths(&mut self, cx: &mut gpui::Context<Self>) {
         self.history_view.update(cx, |view, cx| {
             view.reset_history_column_widths();
@@ -503,7 +578,13 @@ impl Render for MainPaneView {
             history.set_last_window_size(window.viewport_size());
             history.set_history_content_width(width);
         });
-        match self.active_content(cx) {
+        let content = self.active_content(cx);
+        if content == MainPaneContent::Diff
+            && let Some(split) = self.split_centre(width, window, cx)
+        {
+            return split;
+        }
+        match content {
             MainPaneContent::History => self.history_view.clone().into_any_element(),
             MainPaneContent::Diff => self.diff_renderer.clone().into_any_element(),
             MainPaneContent::InteractiveRebase => {

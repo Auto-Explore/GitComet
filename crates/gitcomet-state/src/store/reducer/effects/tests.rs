@@ -1286,6 +1286,7 @@ fn ensure_sidebar_data_stores_request_before_repo_is_open() {
         worktrees: true,
         submodules: true,
         stashes: true,
+        tags: false,
     };
 
     assert!(ensure_sidebar_data(&mut state, repo_id, request).is_empty());
@@ -1308,6 +1309,7 @@ fn ensure_sidebar_data_loads_only_missing_requested_sections() {
         worktrees: true,
         submodules: false,
         stashes: true,
+        tags: false,
     };
     let effects = ensure_sidebar_data(&mut state, repo_id, request);
 
@@ -1333,6 +1335,38 @@ fn ensure_sidebar_data_loads_only_missing_requested_sections() {
     assert!(repo.stashes.is_loading());
 
     assert!(ensure_sidebar_data(&mut state, repo_id, request).is_empty());
+}
+
+#[test]
+fn ensure_sidebar_data_loads_tags_only_while_a_tags_section_asks() {
+    let repo_id = RepoId(1);
+    let mut state = new_state_with_repo(repo_id);
+    mark_repo_open_ready(&mut state, repo_id);
+
+    let without = SidebarDataRequest {
+        worktrees: true,
+        ..Default::default()
+    };
+    let effects = ensure_sidebar_data(&mut state, repo_id, without);
+    assert!(!effects.iter().any(|effect| matches!(
+        effect,
+        Effect::References(crate::msg::ReferenceEffect::LoadTags { .. })
+    )));
+    assert!(matches!(
+        repo_mut(&mut state, repo_id).tags,
+        Loadable::NotLoaded
+    ));
+
+    let with = SidebarDataRequest {
+        tags: true,
+        ..without
+    };
+    let effects = ensure_sidebar_data(&mut state, repo_id, with);
+    assert!(effects.iter().any(|effect| matches!(
+        effect,
+        Effect::References(crate::msg::ReferenceEffect::LoadTags { repo_id: rid }) if *rid == repo_id
+    )));
+    assert!(repo_mut(&mut state, repo_id).tags.is_loading());
 }
 
 #[test]

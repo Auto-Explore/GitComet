@@ -1110,6 +1110,21 @@ pub struct GitCometView {
     /// The decorations the last render saw; see `sync_frame_decorations`.
     pub(super) frame_decorations: Option<gpui::Decorations>,
 
+    /// Where panels and sections sit; the docks are drawn from it.
+    pub(super) dock_layout: crate::view::dock::DockLayout,
+    /// Extra panes a rearranged layout needs.
+    pub(super) dock_hosts: crate::view::dock::DockHosts,
+    /// The dock filling the window (Maximize), if any.
+    pub(super) dock_zoomed: Option<crate::view::dock::DockSide>,
+    /// The dock the user last worked with; Maximize fills the window with it.
+    pub(super) dock_focus_side: crate::view::dock::DockSide,
+    pub(super) named_layouts: crate::view::dock::NamedLayouts,
+    pub(super) dock_popped_out:
+        std::collections::BTreeMap<crate::view::dock::PanelId, crate::view::dock::PoppedOutPanel>,
+    /// Built-in panels present last frame, to show the ones that appear.
+    pub(super) dock_present: crate::view::dock::DockPresence,
+    /// Set while the bottom panel draws in a side dock: fill, not own height.
+    pub(super) bottom_panel_fill: bool,
     pub(super) sidebar_collapsed: bool,
     /// Which sidebar section is currently shown in the collapsed-rail popover, if
     /// any. Only meaningful while `sidebar_collapsed` is true.

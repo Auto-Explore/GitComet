@@ -966,6 +966,13 @@ pub(super) fn append_ensure_sidebar_data_effects(
             effects.push_effect(Effect::LoadStashes { repo_id, limit: 50 });
         }
     }
+
+    if request.tags && matches!(repo_state.tags, Loadable::NotLoaded) {
+        repo_state.set_tags(Loadable::Loading);
+        if repo_state.loads_in_flight.request(LoadKind::Tags) {
+            effects.push_effect(Effect::References(ReferenceEffect::LoadTags { repo_id }));
+        }
+    }
 }
 
 pub(super) fn ensure_sidebar_data(

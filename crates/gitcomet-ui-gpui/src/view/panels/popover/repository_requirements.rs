@@ -146,6 +146,7 @@ impl PopoverKind {
             | Self::TextFormatMenu { .. }
             | Self::ChangeTrackingSettings
             | Self::UiScalePicker
+            | Self::DockMenu(_)
             | Self::InteractiveRebaseActionMenu { .. }
             | Self::InteractiveRebaseAutosquashMenu => None,
         }
@@ -365,6 +366,8 @@ impl PopoverHost {
             | ContextMenuAction::SetExplorerVisibility { .. }
             | ContextMenuAction::SetChangeTrackingView { .. }
             | ContextMenuAction::SetUiScale { .. }
+            | ContextMenuAction::Dock(_)
+            | ContextMenuAction::OpenDockMenu(_)
             | ContextMenuAction::LoadLfsLocks { .. }
             | ContextMenuAction::FetchAll { .. }
             | ContextMenuAction::FetchRemote { .. }

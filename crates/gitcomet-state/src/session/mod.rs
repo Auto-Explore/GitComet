@@ -915,6 +915,7 @@ use parse::*;
 use survey::{SurveyPromptSession, current_unix_seconds};
 use workspaces::*;
 
+mod dock_layout;
 mod documents;
 mod extensions;
 mod history_mode;
@@ -926,6 +927,7 @@ mod settings;
 mod survey;
 mod workspaces;
 
+pub use dock_layout::*;
 pub use documents::*;
 pub use history_mode::*;
 pub use maintenance::{

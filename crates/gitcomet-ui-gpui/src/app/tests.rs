@@ -1954,7 +1954,9 @@ impl Render for KeyBindingProbe {
             .on_action(record_action_listener!(Hide))
             .on_action(record_action_listener!(HideOthers))
             .on_action(record_action_listener!(ShowAll))
-            .on_action(record_action_listener!(Quit));
+            .on_action(record_action_listener!(Quit))
+            .on_action(record_action_listener!(crate::view::dock::HideAllDocks))
+            .on_action(record_action_listener!(crate::view::dock::MaximizeDock));
 
         #[cfg(target_os = "macos")]
         let root = root.on_action(record_action_listener!(crate::kit::ShowCharacterPalette));
@@ -2505,6 +2507,12 @@ fn app_keybindings_resolve_expected_actions(cx: &mut gpui::TestAppContext) {
         ("secondary--", DecreaseUiScale.name()),
         ("secondary-0", ResetUiScale.name()),
         ("secondary-q", Quit.name()),
+        (
+            "secondary-shift-f12",
+            crate::view::dock::HideAllDocks.name(),
+        ),
+        // What the platforms report for Ctrl+Shift+' (Cmd on macOS).
+        ("secondary-\"", crate::view::dock::MaximizeDock.name()),
         ("f1", crate::view::DiffPrevFile.name()),
         ("f4", crate::view::DiffNextFile.name()),
         ("alt-left", crate::view::DiffPrevFile.name()),

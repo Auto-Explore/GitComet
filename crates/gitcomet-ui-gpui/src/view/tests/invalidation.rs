@@ -199,12 +199,21 @@ fn full_chrome_layout_caches_the_pane_subviews() {
             .contains("MainPaneContent::Diff=>self.diff_renderer.clone().into_any_element()"),
         "expected the cached compositor to render its retained diff renderer"
     );
+    // The side panes mount through the dock renderer, which draws today's
+    // sidebar and details panes in the factory layout.
+    let dock_source: String = include_str!("../dock/render.rs")
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect();
     assert!(
-        normalized.contains("content.child(stable_cached_fill_view(self.sidebar_pane.clone()"),
+        normalized.contains(".when_some(left_dock,")
+            && dock_source.contains("self.sidebar_pane.clone()}else{")
+            && dock_source.contains(".child(stable_cached_fill_view(pane.clone()))"),
         "expected the expanded sidebar pane to mount behind the stable cache boundary"
     );
     assert!(
-        normalized.contains(".child(stable_cached_fill_view(self.details_pane.clone()"),
+        normalized.contains(".when_some(right_dock,")
+            && dock_source.contains(".child(stable_cached_fill_view(self.details_pane.clone()))"),
         "expected the expanded details pane to mount behind the stable cache boundary"
     );
 }

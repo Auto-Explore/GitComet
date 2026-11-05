@@ -283,6 +283,9 @@ pub(super) fn bind_app_keys(cx: &mut App) {
         KeyBinding::new("secondary--", DecreaseUiScale, None),
         KeyBinding::new("secondary-0", ResetUiScale, None),
         KeyBinding::new("secondary-q", Quit, None),
+        KeyBinding::new("secondary-shift-f12", crate::view::dock::HideAllDocks, None),
+        // Shift+' arrives as the key `"` without Shift, so bind the character.
+        KeyBinding::new("secondary-\"", crate::view::dock::MaximizeDock, None),
         KeyBinding::new("f1", DiffPrevFile, None),
         KeyBinding::new("f4", DiffNextFile, None),
         KeyBinding::new("alt-left", DiffPrevFile, None),
@@ -312,7 +315,40 @@ pub(super) fn bind_app_keys(cx: &mut App) {
         #[cfg(target_os = "macos")]
         KeyBinding::new("alt-cmd-h", HideOthers, None),
     ]);
+    bind_dock_keys(cx);
     refresh_external_editor_key_binding(cx);
+}
+
+/// Alt+1..9 (Cmd+1..9 on macOS) show and hide the built-in panels;
+/// Ctrl+Alt+1..9 (Cmd+Alt+1..9) apply saved layouts.
+fn bind_dock_keys(cx: &mut App) {
+    use crate::view::dock::{ApplySavedLayout, BUILTIN_PANEL_COUNT, ToggleDockPanel};
+    let panel = if cfg!(target_os = "macos") {
+        "cmd"
+    } else {
+        "alt"
+    };
+    let saved = if cfg!(target_os = "macos") {
+        "cmd-alt"
+    } else {
+        "ctrl-alt"
+    };
+    let mut bindings = Vec::new();
+    for index in 1..=9usize {
+        if index <= BUILTIN_PANEL_COUNT {
+            bindings.push(KeyBinding::new(
+                &format!("{panel}-{index}"),
+                ToggleDockPanel { index },
+                None,
+            ));
+        }
+        bindings.push(KeyBinding::new(
+            &format!("{saved}-{index}"),
+            ApplySavedLayout { index },
+            None,
+        ));
+    }
+    cx.bind_keys(bindings);
 }
 
 pub(super) fn refresh_external_editor_key_binding(cx: &mut App) {

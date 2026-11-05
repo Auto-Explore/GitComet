@@ -466,6 +466,21 @@ impl GitCometView {
                 pane.set_untracked_height_from_pixels(Some(scale.px(height as f32)));
             }
         });
+        let dock = layout.dock_layout();
+        if let Some(height) = dock.dock(session::DockSide::Bottom).size {
+            self.terminal_panel_height = scale.px(height as f32);
+        }
+        self.update_dock_layout(
+            |current| {
+                let mut dock = dock;
+                dock.dock_mut(session::DockSide::Left).hidden = layout.sidebar_collapsed;
+                dock.dock_mut(session::DockSide::Right).hidden = false;
+                let changed = *current != dock;
+                *current = dock;
+                changed
+            },
+            cx,
+        );
         self.set_sidebar_collapsed(layout.sidebar_collapsed, cx);
         self.clamp_pane_widths_to_window();
 

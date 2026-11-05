@@ -759,16 +759,47 @@ impl GitCometView {
         }
 
         if renders_full_chrome(self.view_mode) {
-            // Terminal and/or reflog — see `render_bottom_panel` for which.
-            let bottom_panel = self.render_bottom_panel(theme, window, cx);
+            // The docks, drawn from the layout. The factory layout draws
+            // today's sidebar, details pane and bottom panel.
+            use super::dock::DockSide;
+            self.dock_hosts.begin_frame();
+            self.sync_dock_presence(cx);
+            self.sync_dock_section_hosts(cx);
+            self.sync_centre_split(cx);
+            if self.active_repo_id().is_some() {
+                self.maybe_show_dock_hint(cx);
+            }
+            let zoomed = self
+                .dock_zoomed
+                .and_then(|side| Some((side, self.render_dock(side, true, window, cx)?)));
+            let left_rail = self.dock_left_has_rail();
+            let left_dock = (zoomed.is_none() && !self.sidebar_collapsed)
+                .then(|| self.render_dock(DockSide::Left, false, window, cx))
+                .flatten();
+            let show_left =
+                zoomed.is_none() && (left_dock.is_some() || (self.sidebar_collapsed && left_rail));
+            let right_dock = (zoomed.is_none() && !self.details_collapsed)
+                .then(|| self.render_dock(DockSide::Right, false, window, cx))
+                .flatten();
+            let show_right = zoomed.is_none()
+                && (right_dock.is_some()
+                    || (self.details_collapsed && self.dock_has_content(DockSide::Right, cx)));
+            let bottom_panel = (zoomed.is_none()
+                && !self.dock_layout.dock(DockSide::Bottom).hidden)
+                .then(|| self.render_dock(DockSide::Bottom, false, window, cx))
+                .flatten();
             let bottom_panel_resize_handle = bottom_panel
                 .is_some()
                 .then(|| self.terminal_panel_resize_handle(theme, cx));
+            let drop_overlay = self.render_dock_drop_overlay(cx);
+            if self.dock_hosts.end_frame(&self.dock_layout) {
+                self.schedule_sidebar_data_request(cx);
+            }
             let main_content = self.repository_main_content();
-            let details_tabs = self.details_tab_content(cx);
-            let sidebar_sections = (!self.sidebar_collapsed)
-                .then(|| self.sidebar_section_content(window, cx))
-                .flatten();
+            let main_content = match zoomed {
+                Some((_, dock)) => dock,
+                None => main_content,
+            };
             let content = div()
                 .flex()
                 .flex_col()
@@ -810,36 +841,32 @@ impl GitCometView {
                         .flex_1()
                         .min_h(px(0.0))
                         .bg(theme.colors.surface.chrome)
-                        .child(
-                            div()
-                                .id("sidebar_pane")
-                                .debug_selector(|| "sidebar_pane".to_string())
-                                .relative()
-                                .w(self.sidebar_render_width)
-                                .min_h(px(0.0))
-                                .bg(theme.colors.surface.chrome)
-                                .flex_none()
-                                .overflow_hidden()
-                                .when(!self.sidebar_collapsed, |d| {
-                                    let content = div().w(self.sidebar_width).h_full();
-                                    let content = match sidebar_sections {
-                                        None => content.child(stable_cached_fill_view(
-                                            self.sidebar_pane.clone(),
-                                        )),
-                                        Some(sections) => content
-                                            .flex()
-                                            .flex_col()
-                                            .child(div().flex_1().min_h(px(0.0)).child(
-                                                stable_cached_fill_view(self.sidebar_pane.clone()),
-                                            ))
-                                            .child(sections),
-                                    };
-                                    d.child(content)
-                                })
-                                .when(self.sidebar_collapsed, |d| {
-                                    d.child(self.collapsed_sidebar_rail(theme, cx))
-                                }),
-                        )
+                        .when(show_left, |row| {
+                            row.child(
+                                div()
+                                    .id("sidebar_pane")
+                                    .debug_selector(|| "sidebar_pane".to_string())
+                                    .relative()
+                                    .w(self.sidebar_render_width)
+                                    .min_h(px(0.0))
+                                    .bg(theme.colors.surface.chrome)
+                                    .flex_none()
+                                    .overflow_hidden()
+                                    .when_some(left_dock, |d, dock| {
+                                        d.child(
+                                            div()
+                                                .w(self.sidebar_width)
+                                                .h_full()
+                                                .flex()
+                                                .flex_col()
+                                                .child(dock),
+                                        )
+                                    })
+                                    .when(self.sidebar_collapsed && left_rail, |d| {
+                                        d.child(self.collapsed_sidebar_rail(theme, cx))
+                                    }),
+                            )
+                        })
                         .child(
                             // Main + details share one card silhouette; the panes stay
                             // independently resizable inside it. The card sits flush
@@ -884,77 +911,80 @@ impl GitCometView {
                                             }
                                         }),
                                 )
-                                .child(
-                                    div()
-                                        .id("details_pane")
-                                        .debug_selector(|| "details_pane".to_string())
-                                        .relative()
-                                        .w(self.details_render_width)
-                                        .min_h(px(0.0))
-                                        .flex()
-                                        .flex_col()
-                                        .overflow_hidden()
-                                        .when(self.details_collapsed, |d| {
-                                            // The resize handle is hidden while collapsed, so
-                                            // keep a hairline between main and the strip.
-                                            d.border_l_1().border_color(theme.colors.stroke.subtle)
-                                        })
-                                        .when(!self.details_collapsed, |d| match details_tabs {
-                                            None => d.child(div().flex_1().min_h(px(0.0)).child(
-                                                stable_cached_fill_view(self.details_pane.clone()),
+                                .when(show_right, |card| {
+                                    card.child(
+                                        div()
+                                            .id("details_pane")
+                                            .debug_selector(|| "details_pane".to_string())
+                                            .relative()
+                                            .w(self.details_render_width)
+                                            .min_h(px(0.0))
+                                            .flex()
+                                            .flex_col()
+                                            .overflow_hidden()
+                                            .when(self.details_collapsed, |d| {
+                                                // The resize handle is hidden while collapsed, so
+                                                // keep a hairline between main and the strip.
+                                                d.border_l_1()
+                                                    .border_color(theme.colors.stroke.subtle)
+                                            })
+                                            .when_some(right_dock, |d, dock| d.child(dock)),
+                                    )
+                                })
+                                .when(show_right, |card| {
+                                    card.child(
+                                        // Keep the full resize hit target without reserving a
+                                        // visible strip between the main and details panes.
+                                        div()
+                                            .absolute()
+                                            .top_0()
+                                            .bottom_0()
+                                            .right(
+                                                (self.details_render_width
+                                                    - self.pane_resize_handle_width() / 2.0)
+                                                    .max(px(0.0)),
+                                            )
+                                            .child(self.pane_resize_handle(
+                                                theme,
+                                                "pane_resize_details",
+                                                PaneResizeHandle::Details,
+                                                cx,
                                             )),
-                                            Some(content) => d.child(content),
-                                        }),
-                                )
-                                .child(
-                                    // Keep the full resize hit target without reserving a
-                                    // visible strip between the main and details panes.
-                                    div()
-                                        .absolute()
-                                        .top_0()
-                                        .bottom_0()
-                                        .right(
-                                            (self.details_render_width
-                                                - self.pane_resize_handle_width() / 2.0)
-                                                .max(px(0.0)),
-                                        )
-                                        .child(self.pane_resize_handle(
-                                            theme,
-                                            "pane_resize_details",
-                                            PaneResizeHandle::Details,
-                                            cx,
-                                        )),
-                                )
+                                    )
+                                })
                                 .child(card_left_corner_caps(
                                     px((main_content_card_radius(theme) - 1.0).max(0.0)),
                                     theme.colors.surface.chrome,
                                 )),
                         )
-                        .child(
-                            // Sidebar resize grab strip, straddling the card's left
-                            // edge the way the details strip straddles its boundary,
-                            // so the grip centers on the rule instead of sitting
-                            // beside it. It hangs off the row rather than the card
-                            // because the card clips its overflow, and it matches the
-                            // card's bottom margin so both strips end on the same
-                            // line. Absolute, so the boundary still consumes no
-                            // layout space of its own.
-                            div()
-                                .absolute()
-                                .top_0()
-                                .bottom(scaled_px(CONTENT_CARD_BOTTOM_MARGIN_PX))
-                                .left(
-                                    (self.sidebar_render_width
-                                        - self.pane_resize_handle_width() / 2.0)
-                                        .max(px(0.0)),
-                                )
-                                .child(self.pane_resize_handle(
-                                    theme,
-                                    "pane_resize_sidebar",
-                                    PaneResizeHandle::Sidebar,
-                                    cx,
-                                )),
-                        )
+                        .when(show_left, |row| {
+                            row.child(
+                                // Sidebar resize grab strip, straddling the card's left
+                                // edge the way the details strip straddles its boundary,
+                                // so the grip centers on the rule instead of sitting
+                                // beside it. It hangs off the row rather than the card
+                                // because the card clips its overflow, and it matches the
+                                // card's bottom margin so both strips end on the same
+                                // line. Absolute, so the boundary still consumes no
+                                // layout space of its own.
+                                div()
+                                    .absolute()
+                                    .top_0()
+                                    .bottom(scaled_px(CONTENT_CARD_BOTTOM_MARGIN_PX))
+                                    .left(
+                                        (self.sidebar_render_width
+                                            - self.pane_resize_handle_width() / 2.0)
+                                            .max(px(0.0)),
+                                    )
+                                    .child(self.pane_resize_handle(
+                                        theme,
+                                        "pane_resize_sidebar",
+                                        PaneResizeHandle::Sidebar,
+                                        cx,
+                                    )),
+                            )
+                        })
+                        .when_some(drop_overlay, |row, overlay| row.child(overlay))
                         // Scrim only while open (not during fade-out).
                         .when(popover_open.is_some(), |d| {
                             d.child(self.collapsed_sidebar_popover_scrim(cx))

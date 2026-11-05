@@ -103,6 +103,28 @@ pub struct WorkspaceLayout {
     pub sidebar_collapsed: bool,
     pub change_tracking_height: Option<u32>,
     pub untracked_height: Option<u32>,
+    /// The configurable arrangement of docks, panels and sections. `None` for
+    /// a window saved before layouts were configurable; it then starts from
+    /// [`DockLayout::from_legacy`]. The fields above stay written for one
+    /// release so a downgrade keeps its widths.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "lenient"
+    )]
+    pub dock: Option<DockLayout>,
+}
+
+impl WorkspaceLayout {
+    /// The dock layout this window should use, migrated and repaired.
+    pub fn dock_layout(&self) -> DockLayout {
+        let mut layout = self
+            .dock
+            .clone()
+            .unwrap_or_else(|| DockLayout::from_legacy(self));
+        layout.sanitize();
+        layout
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
@@ -411,6 +433,7 @@ pub(super) fn legacy_workspace_from_projection(file: &UiSessionFile) -> Option<W
             sidebar_collapsed: file.sidebar_collapsed.unwrap_or(false),
             change_tracking_height: file.change_tracking_height,
             untracked_height: file.untracked_height,
+            dock: None,
         },
         placement: PortableWindowPlacement::default(),
         theme_mode: None,

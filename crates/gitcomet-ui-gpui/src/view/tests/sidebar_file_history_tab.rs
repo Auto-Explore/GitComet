@@ -109,6 +109,126 @@ fn the_tab_hides_while_another_repository_is_active(cx: &mut gpui::TestAppContex
     assert!(shows(cx, "sidebar_file_history_content"));
 }
 
+/// File History counts as present only while its repository is active.
+/// Coming back to that repository is not the history appearing, so it must
+/// not reopen a sidebar the user collapsed meanwhile.
+#[gpui::test]
+fn coming_back_to_the_repository_keeps_the_sidebar_collapsed(cx: &mut gpui::TestAppContext) {
+    let (view, cx) = open_view(cx);
+    open_history(&view, cx);
+    cx.update(|_window, app| view.update(app, |view, cx| view.set_sidebar_collapsed(true, cx)));
+    test_support::redraw(cx);
+    push_state(&view, cx, |state| {
+        let mut other = RepoState::new_opening(
+            RepoId(2),
+            RepoSpec {
+                workdir: PathBuf::from("/tmp/other-repo"),
+            },
+        );
+        other.open = Loadable::Ready(());
+        other.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
+        state.repos.push(other);
+        state.active_repo = Some(RepoId(2));
+    });
+    push_state(&view, cx, |state| state.active_repo = Some(RepoId(1)));
+    assert!(cx.update(|_window, app| view.read(app).sidebar_collapsed));
+}
+
+fn run_dock(
+    view: &gpui::Entity<GitCometView>,
+    cx: &mut gpui::VisualTestContext,
+    command: crate::view::dock::DockCommand,
+) {
+    cx.update(|window, app| {
+        view.update(app, |view, cx| {
+            view.run_dock_command(command, Some(window), cx)
+        })
+    });
+    cx.run_until_parked();
+    test_support::redraw(cx);
+}
+
+fn move_to_right_split(
+    view: &gpui::Entity<GitCometView>,
+    cx: &mut gpui::VisualTestContext,
+    panel: &str,
+) {
+    use crate::view::dock::{DockCommand, DockHalf, DockSide, PanelId};
+    run_dock(
+        view,
+        cx,
+        DockCommand::MovePanel {
+            panel: PanelId::from(panel),
+            side: DockSide::Right,
+            half: DockHalf::Split,
+        },
+    );
+}
+
+/// With Files and File History moved to the right dock, the history opens
+/// there: the collapsed sidebar stays collapsed and the right dock's pane
+/// shows the history, not Files.
+#[gpui::test]
+fn the_history_opens_in_the_dock_that_holds_it(cx: &mut gpui::TestAppContext) {
+    use crate::view::dock::{DockSide, PanelId, panel_ids};
+    let (view, cx) = open_view(cx);
+    move_to_right_split(&view, cx, panel_ids::FILES);
+    move_to_right_split(&view, cx, panel_ids::FILE_HISTORY);
+    cx.update(|_window, app| view.update(app, |view, cx| view.set_sidebar_collapsed(true, cx)));
+    test_support::redraw(cx);
+
+    open_history(&view, cx);
+    test_support::redraw(cx);
+    assert!(cx.update(|_window, app| view.read(app).sidebar_collapsed));
+    assert!(shows(cx, "sidebar_file_history_content"));
+    let active = cx.update(|_window, app| {
+        view.read(app)
+            .dock_layout
+            .dock(DockSide::Right)
+            .active_split
+            .clone()
+    });
+    assert_eq!(active, Some(PanelId::from(panel_ids::FILE_HISTORY)));
+}
+
+/// Locate File reveals the file in the Files pane wherever it is docked.
+#[gpui::test]
+fn locating_a_file_uses_the_dock_that_holds_files(cx: &mut gpui::TestAppContext) {
+    use crate::view::dock::{DockSide, PanelId, panel_ids};
+    let (view, cx) = open_view(cx);
+    push_state(&view, cx, |state| {
+        state.repos[0].diff_state.diff_target = Some(DiffTarget::working_tree(
+            PATH.into(),
+            gitcomet_core::domain::DiffArea::Unstaged,
+        ));
+    });
+    move_to_right_split(&view, cx, panel_ids::FILES);
+    cx.update(|_window, app| view.update(app, |view, cx| view.set_sidebar_collapsed(true, cx)));
+    cx.update(|_window, app| view.update(app, |view, cx| view.set_details_collapsed(true, cx)));
+    test_support::redraw(cx);
+    let mode = cx.update(|_window, app| view.read(app).ui_model.read(app).state.sidebar_mode);
+
+    cx.update(|_window, app| view.update(app, |view, cx| view.locate_open_file_in_explorer(cx)));
+    cx.run_until_parked();
+    test_support::redraw(cx);
+    let (left_collapsed, right_collapsed, active) = cx.update(|_window, app| {
+        let view = view.read(app);
+        (
+            view.sidebar_collapsed,
+            view.details_collapsed,
+            view.dock_layout.dock(DockSide::Right).active_split.clone(),
+        )
+    });
+    assert!(left_collapsed, "the sidebar does not hold Files");
+    assert!(!right_collapsed, "the dock holding Files opens");
+    assert_eq!(active, Some(PanelId::from(panel_ids::FILES)));
+    assert_eq!(
+        cx.update(|_window, app| view.read(app).ui_model.read(app).state.sidebar_mode),
+        mode,
+        "the main pane keeps its tab"
+    );
+}
+
 #[gpui::test]
 fn contributed_tabs_and_the_history_tab_exclude_each_other(cx: &mut gpui::TestAppContext) {
     let (view, cx) = open_view(cx);

@@ -51,7 +51,8 @@ impl SidebarSearch {
                 | BranchSidebarRow::WorktreesHeader { .. }
                 | BranchSidebarRow::SubmodulesHeader { .. }
                 | BranchSidebarRow::AnnexHeader { .. }
-                | BranchSidebarRow::StashHeader { .. } => (0, true),
+                | BranchSidebarRow::StashHeader { .. }
+                | BranchSidebarRow::TagsHeader { .. } => (0, true),
                 BranchSidebarRow::RemoteHeader { .. } => (1, true),
                 BranchSidebarRow::GroupHeader { depth, .. } => (usize::from(*depth) + 2, true),
                 BranchSidebarRow::Branch { depth, .. } => (usize::from(*depth) + 2, false),
@@ -80,11 +81,13 @@ impl SidebarSearch {
                     .matcher
                     .is_match(&format!("stash@{{{index}}}: {message}")),
                 BranchSidebarRow::AnnexRepositoryItem { name, .. } => self.matcher.is_match(name),
+                BranchSidebarRow::TagItem { name, .. } => self.matches_ref(name),
                 BranchSidebarRow::Placeholder { message, .. }
                 | BranchSidebarRow::WorktreePlaceholder { message }
                 | BranchSidebarRow::SubmodulePlaceholder { message, .. }
                 | BranchSidebarRow::AnnexPlaceholder { message, .. }
-                | BranchSidebarRow::StashPlaceholder { message } => !message.starts_with("No "),
+                | BranchSidebarRow::StashPlaceholder { message }
+                | BranchSidebarRow::TagPlaceholder { message } => !message.starts_with("No "),
                 _ => false,
             };
             if matched {
