@@ -156,7 +156,8 @@ impl Render for GitCometView {
             .as_ref()
             .is_some_and(|prompt| {
                 let active = self.active_repo_id();
-                active == prompt.child_tab || active == Some(prompt.parent)
+                prompt.child_tab.is_some_and(|tab| active == Some(tab))
+                    || active == Some(prompt.parent)
             })
             && let Some(prompt) = self.pending_linked_push_prompt.take()
         {

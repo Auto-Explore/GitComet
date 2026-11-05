@@ -329,8 +329,13 @@ impl DetailsPaneView {
             .active_repo()
             .is_some_and(|repo| repo.commit_in_flight > 0);
         let commit_message_text = self.commit_message_input.read(cx).text().to_string();
-        let linked = self.active_linked_panel();
-        let can_submit_commit = match &linked {
+        // Built once per draw: the form redraws on every keystroke, and the
+        // toggle shows the changed submodules while the parent commits alone.
+        let changed_submodules = self.active_changed_submodules_panel();
+        let linked = changed_submodules
+            .as_ref()
+            .filter(|panel| self.links_commit(panel));
+        let can_submit_commit = match linked {
             Some(panel) => {
                 let children = self.linked_children(panel, cx);
                 self.can_submit_linked_commit(&commit_message_text, children.as_deref())
@@ -344,9 +349,8 @@ impl DetailsPaneView {
             components::ButtonSlot::spinner(id, icon_color, scaled_px(14.0))
         };
         let record_target = self.active_parent_record_target();
-        let linked_label = linked
-            .as_ref()
-            .map(|panel| linked_commit_label(panel, self.commit_push_after_enabled));
+        let linked_label =
+            linked.map(|panel| linked_commit_label(panel, self.commit_push_after_enabled));
         let (commit_label, commit_tooltip): (SharedString, SharedString) = match (
             linked_label,
             &record_target,
@@ -495,12 +499,13 @@ impl DetailsPaneView {
             .debug_selector(|| "previous_commit_messages_button".to_string())
             .gitcomet_tooltip(theme, "Previous commit messages".into());
         let record_section = self.parent_record_section(&scaled_px, cx);
-        let linked_toggle = self.linked_commit_toggle(cx);
-        let push_note = linked
+        let linked_toggle = changed_submodules
             .as_ref()
+            .map(|panel| self.linked_commit_toggle(panel, cx));
+        let push_note = linked
             .filter(|_| self.commit_push_after_enabled)
             .and_then(linked_push_note);
-        let body = match &linked {
+        let body = match linked {
             Some(panel) => self
                 .linked_commit_panel(panel, commit_message, cx)
                 .into_any_element(),
@@ -550,32 +555,15 @@ impl DetailsPaneView {
         }
         let target = parent_record_target(&self.state, repo_id)?;
         let checked = !self.record_in_parent_off.contains(&repo_id);
-        let border = if checked {
-            theme.colors.accent.foreground
-        } else {
-            theme.colors.stroke.default
-        };
-        let check_box = div()
-            .flex_none()
-            .size(scaled_px(16.0))
-            .flex()
-            .items_center()
-            .justify_center()
-            .border_1()
-            .border_color(border)
-            .rounded(scaled_px(theme.radii.control * 0.5))
-            .when(checked, |check_box| {
-                check_box
-                    .bg(with_alpha(
-                        theme.colors.accent.foreground,
-                        if theme.is_dark { 0.18 } else { 0.12 },
-                    ))
-                    .child(svg_icon(
-                        "icons/check.svg",
-                        theme.colors.accent.foreground,
-                        scaled_px(10.0),
-                    ))
-            });
+        let check_box = form_check_box(
+            theme,
+            checked,
+            false,
+            false,
+            scaled_px(16.0),
+            scaled_px(10.0),
+            scaled_px,
+        );
         let toggle = div()
             .id("record_in_parent_toggle")
             .debug_selector(|| "record_in_parent_toggle".to_string())

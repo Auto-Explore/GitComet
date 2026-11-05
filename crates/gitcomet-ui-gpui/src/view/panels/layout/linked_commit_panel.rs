@@ -4,8 +4,9 @@
 //! once, each submodule first and the parent recording their new commits.
 
 use super::*;
-use gitcomet_core::domain::{FileStatus, FileStatusKind, SubmoduleChanges};
-use gitcomet_state::model::LinkedChild;
+use gitcomet_core::domain::{FileStatus, FileStatusKind, Submodule, SubmoduleChanges};
+use gitcomet_state::model::{LinkedChild, submodule_display_name};
+use rustc_hash::FxHashSet;
 use std::path::{Path, PathBuf};
 
 /// Files a section lists before it points to the submodule's own tab.
@@ -20,12 +21,12 @@ pub(in crate::view) struct LinkedSection {
     /// What the submodule holds, `None` until it is read.
     pub(in crate::view) changes: Option<SubmoduleChanges>,
     /// The commit the parent records for the submodule now, shortened.
-    pub(in crate::view) recorded: Option<String>,
+    pub(in crate::view) recorded: String,
 }
 
 impl LinkedSection {
     pub(in crate::view) fn name(&self) -> String {
-        path_name(&self.path)
+        submodule_display_name(&self.path)
     }
 
     pub(in crate::view) fn staged_count(&self) -> usize {
@@ -64,14 +65,10 @@ impl LinkedPanel {
     }
 }
 
-fn path_name(path: &Path) -> String {
-    path.file_name()
-        .map(|name| name.to_string_lossy().into_owned())
-        .unwrap_or_else(|| path.display().to_string())
-}
-
-fn short_id(id: &str) -> String {
-    id.get(..7).unwrap_or(id).to_string()
+/// A submodule the parent's commit form gives a section: a first-level one
+/// with changes inside.
+fn is_changed_first_level(row: &Submodule) -> bool {
+    !row.nested && row.has_inner_changes
 }
 
 /// "a", "a and b", "a, b and c".
@@ -98,22 +95,30 @@ pub(in crate::view) fn linked_panel(repo: &RepoState) -> Option<LinkedPanel> {
     };
     let sections = rows
         .iter()
-        .filter(|row| !row.nested && row.has_inner_changes)
+        .filter(|row| is_changed_first_level(row))
         .map(|row| LinkedSection {
             path: row.path.clone(),
             changes: changes
                 .and_then(|changes| changes.iter().find(|entry| entry.path == row.path))
                 .cloned(),
-            recorded: Some(short_id(row.recorded_head.as_ref())),
+            recorded: gitcomet_core::domain::short_commit_id(row.recorded_head.as_ref())
+                .to_string(),
         })
         .collect::<Vec<_>>();
     if sections.is_empty() {
         return None;
     }
+    // A committing submodule's gitlink shows as its own row. The parent's
+    // other staged files, a gitlink of a submodule left out among them,
+    // commit with it.
     let parent_staged = repo.staged_status_entries().map_or(0, |entries| {
         entries
             .iter()
-            .filter(|entry| !sections.iter().any(|section| section.path == entry.path))
+            .filter(|entry| {
+                !sections
+                    .iter()
+                    .any(|section| section.included() && section.path == entry.path)
+            })
             .count()
     });
     Some(LinkedPanel {
@@ -170,31 +175,94 @@ pub(in crate::view) enum LinkedFileCheck {
     Unstaged,
 }
 
-/// A section's file rows: staged files first, then the rest, each path once.
+/// The file rows a section shows, and how many more it leaves out.
+#[derive(Debug)]
+pub(in crate::view) struct LinkedFileRows<'a> {
+    pub(in crate::view) rows: Vec<(&'a FileStatus, LinkedFileCheck)>,
+    pub(in crate::view) hidden: usize,
+}
+
+/// A section's file rows: staged files first, then the rest, each path once,
+/// at most `max` of them. The form draws them on every keystroke and a
+/// submodule can hold thousands of changes, so paths are looked up in sets
+/// and rows past `max` are only counted.
 pub(in crate::view) fn linked_file_rows(
     changes: &SubmoduleChanges,
-) -> Vec<(FileStatus, LinkedFileCheck)> {
-    let mut rows = Vec::with_capacity(changes.staged.len() + changes.unstaged.len());
-    for file in changes.staged.iter() {
-        let partly = changes
-            .unstaged
-            .iter()
-            .any(|unstaged| unstaged.path == file.path);
-        rows.push((
-            file.clone(),
-            if partly {
-                LinkedFileCheck::Partly
-            } else {
-                LinkedFileCheck::Staged
-            },
-        ));
+    max: usize,
+) -> LinkedFileRows<'_> {
+    let staged_paths: FxHashSet<&Path> = changes
+        .staged
+        .iter()
+        .map(|file| file.path.as_path())
+        .collect();
+    let unstaged_paths: FxHashSet<&Path> = changes
+        .unstaged
+        .iter()
+        .map(|file| file.path.as_path())
+        .collect();
+    let staged = changes.staged.iter().map(|file| {
+        let check = if unstaged_paths.contains(file.path.as_path()) {
+            LinkedFileCheck::Partly
+        } else {
+            LinkedFileCheck::Staged
+        };
+        (file, check)
+    });
+    let unstaged = changes
+        .unstaged
+        .iter()
+        .filter(|file| !staged_paths.contains(file.path.as_path()))
+        .map(|file| (file, LinkedFileCheck::Unstaged));
+    let mut all = staged.chain(unstaged);
+    let rows = all.by_ref().take(max).collect();
+    LinkedFileRows {
+        rows,
+        hidden: all.count(),
     }
-    for file in changes.unstaged.iter() {
-        if !changes.staged.iter().any(|staged| staged.path == file.path) {
-            rows.push((file.clone(), LinkedFileCheck::Unstaged));
-        }
-    }
-    rows
+}
+
+/// A check box of the commit form: on, partly on (a dash), or off, and
+/// greyed out while it cannot be changed.
+pub(super) fn form_check_box(
+    theme: AppTheme,
+    on: bool,
+    partly: bool,
+    disabled: bool,
+    box_px: Pixels,
+    icon_px: Pixels,
+    scaled_px: &impl Fn(f32) -> Pixels,
+) -> gpui::Div {
+    let mark = if disabled {
+        theme.colors.foreground.disabled
+    } else {
+        theme.colors.accent.foreground
+    };
+    div()
+        .flex_none()
+        .size(box_px)
+        .flex()
+        .items_center()
+        .justify_center()
+        .border_1()
+        .border_color(if on || disabled {
+            mark
+        } else {
+            theme.colors.stroke.default
+        })
+        .rounded(scaled_px(theme.radii.control * 0.5))
+        .when(on, |check_box| {
+            check_box
+                .bg(with_alpha(mark, if theme.is_dark { 0.18 } else { 0.12 }))
+                .child(svg_icon(
+                    if partly {
+                        "icons/minus.svg"
+                    } else {
+                        "icons/check.svg"
+                    },
+                    mark,
+                    icon_px,
+                ))
+        })
 }
 
 /// The commit button's label and tooltip for a linked commit of `panel`.
@@ -260,21 +328,27 @@ pub(in crate::view) fn linked_push_note(panel: &LinkedPanel) -> Option<String> {
     ))
 }
 
-/// A submodule's message box in the parent's commit form.
-pub(in crate::view) struct LinkedMessageInput {
-    pub(in crate::view) input: Entity<components::TextInput>,
-    _subscription: gpui::Subscription,
-}
-
 impl DetailsPaneView {
+    /// The active tab's changed submodules, unless the commit amends. The
+    /// "Linked commit | <parent> only" toggle shows while there are any.
+    pub(in crate::view) fn active_changed_submodules_panel(&self) -> Option<LinkedPanel> {
+        if self.commit_amend_enabled {
+            return None;
+        }
+        linked_panel(self.active_repo()?)
+    }
+
+    /// Whether the user chose a linked commit of `panel`, rather than one of
+    /// the parent only.
+    pub(in crate::view) fn links_commit(&self, panel: &LinkedPanel) -> bool {
+        !self.linked_commit_off.contains(&panel.parent)
+    }
+
     /// The active tab's linked commit panel, unless the user commits the
     /// parent only or the commit amends.
     pub(in crate::view) fn active_linked_panel(&self) -> Option<LinkedPanel> {
-        let repo = self.active_repo()?;
-        if self.commit_amend_enabled || self.linked_commit_off.contains(&repo.id) {
-            return None;
-        }
-        linked_panel(repo)
+        self.active_changed_submodules_panel()
+            .filter(|panel| self.links_commit(panel))
     }
 
     /// The submodule commits a linked commit of `panel` makes, or `None` when
@@ -290,7 +364,7 @@ impl DetailsPaneView {
                 let message = self
                     .linked_message_inputs
                     .get(&(panel.parent, section.path.clone()))
-                    .map(|entry| entry.input.read(cx).text().trim().to_string())
+                    .map(|input| input.read(cx).text().trim().to_string())
                     .unwrap_or_default();
                 (!message.is_empty()).then(|| LinkedChild {
                     path: section.path.clone(),
@@ -328,43 +402,43 @@ impl DetailsPaneView {
         name: &str,
         cx: &mut gpui::Context<Self>,
     ) -> Entity<components::TextInput> {
-        let key = (parent, path.to_path_buf());
-        if let Some(entry) = self.linked_message_inputs.get(&key) {
-            return entry.input.clone();
-        }
-        let input = cx.new(|cx| {
-            components::TextInput::new_inert(
-                components::TextInputOptions {
-                    placeholder: format!("Commit message for {name}").into(),
-                    ..Default::default()
-                },
-                cx,
-            )
-        });
-        let subscription = cx.observe(&input, |_this, _input, cx| cx.notify());
-        self.linked_message_inputs.insert(
-            key,
-            LinkedMessageInput {
-                input: input.clone(),
-                _subscription: subscription,
-            },
-        );
-        input
+        self.linked_message_inputs
+            .entry((parent, path.to_path_buf()))
+            .or_insert_with(|| {
+                cx.new(|cx| {
+                    components::TextInput::new_inert(
+                        components::TextInputOptions {
+                            placeholder: format!("Commit message for {name}").into(),
+                            ..Default::default()
+                        },
+                        cx,
+                    )
+                })
+            })
+            .clone()
     }
 
-    /// Forget the message boxes of submodules that no longer hold changes,
-    /// so a later change starts from an empty message.
-    pub(in crate::view) fn prune_linked_message_inputs(&mut self) {
-        let Some(repo) = self.active_repo() else {
-            return;
-        };
-        if !matches!(repo.submodules, Loadable::Ready(_)) {
+    /// Forget the message boxes of closed tabs and of submodules that no
+    /// longer hold changes, so a later change starts from an empty message
+    /// rather than an old draft that would pass for the one it needs. Rows
+    /// still loading keep their boxes. Runs for every state, whichever tab
+    /// shows, since a submodule can go clean and change again meanwhile.
+    pub(in crate::view) fn prune_linked_message_inputs(&mut self, state: &AppState) {
+        if self.linked_message_inputs.is_empty() {
             return;
         }
-        let repo_id = repo.id;
-        let changed = repo.changed_first_level_submodules();
-        self.linked_message_inputs
-            .retain(|(owner, path), _| *owner != repo_id || changed.contains(path));
+        self.linked_message_inputs.retain(|(owner, path), _| {
+            state
+                .repos
+                .iter()
+                .find(|repo| repo.id == *owner)
+                .is_some_and(|repo| match &repo.submodules {
+                    Loadable::Ready(rows) => rows
+                        .iter()
+                        .any(|row| is_changed_first_level(row) && row.path == *path),
+                    _ => true,
+                })
+        });
     }
 
     /// Clear the messages a finished linked commit used.
@@ -375,12 +449,10 @@ impl DetailsPaneView {
         cx: &mut gpui::Context<Self>,
     ) {
         for child in used {
-            if let Some(entry) = self.linked_message_inputs.get(&(parent, child.path)) {
-                let unchanged = entry.input.read(cx).text().trim() == child.message;
+            if let Some(input) = self.linked_message_inputs.get(&(parent, child.path)) {
+                let unchanged = input.read(cx).text().trim() == child.message;
                 if unchanged {
-                    entry
-                        .input
-                        .update(cx, |input, cx| input.set_text(String::new(), cx));
+                    input.update(cx, |input, cx| input.set_text(String::new(), cx));
                 }
             }
         }
@@ -389,15 +461,11 @@ impl DetailsPaneView {
     /// "Linked commit | <parent> only", shown while submodules hold changes.
     pub(in crate::view) fn linked_commit_toggle(
         &mut self,
+        panel: &LinkedPanel,
         cx: &mut gpui::Context<Self>,
-    ) -> Option<gpui::Div> {
-        let repo = self.active_repo()?;
-        if self.commit_amend_enabled {
-            return None;
-        }
-        let panel = linked_panel(repo)?;
+    ) -> gpui::Div {
         let theme = self.theme;
-        let linked = !self.linked_commit_off.contains(&panel.parent);
+        let linked = self.links_commit(panel);
         let parent = panel.parent;
         let count = panel.sections.len();
         let summary = format!(
@@ -409,66 +477,64 @@ impl DetailsPaneView {
                 "submodules"
             }
         );
-        Some(
-            div()
-                .debug_selector(|| "linked_commit_toggle".to_string())
-                .flex()
-                .flex_col()
-                .gap_1()
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap_1()
-                        .text_size(theme.ui_text(12.0))
-                        .child(
-                            div()
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .text_color(theme.colors.foreground.primary)
-                                .child("Commit"),
-                        )
-                        .child(
-                            div()
-                                .min_w(px(0.0))
-                                .truncate()
-                                .text_color(theme.colors.foreground.secondary)
-                                .child(summary),
-                        ),
-                )
-                .child(
-                    div().flex().w_full().child(
-                        components::SegmentedControl::new("linked_commit_mode")
-                            .adaptive()
-                            .segment(
-                                components::Segment::new("linked_commit_mode_linked", "Linked commit")
-                                    .selected(linked)
-                                    .tooltip(
-                                        "Commit the changed submodules and record them here",
-                                        Vec::new(),
-                                    ),
-                            )
-                            .segment(
-                                components::Segment::new(
-                                    "linked_commit_mode_parent_only",
-                                    format!("{} only", panel.parent_name),
-                                )
-                                .selected(!linked)
+        div()
+            .debug_selector(|| "linked_commit_toggle".to_string())
+            .flex()
+            .flex_col()
+            .gap_1()
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .text_size(theme.ui_text(12.0))
+                    .child(
+                        div()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(theme.colors.foreground.primary)
+                            .child("Commit"),
+                    )
+                    .child(
+                        div()
+                            .min_w(px(0.0))
+                            .truncate()
+                            .text_color(theme.colors.foreground.secondary)
+                            .child(summary),
+                    ),
+            )
+            .child(
+                div().flex().w_full().child(
+                    components::SegmentedControl::new("linked_commit_mode")
+                        .adaptive()
+                        .segment(
+                            components::Segment::new("linked_commit_mode_linked", "Linked commit")
+                                .selected(linked)
                                 .tooltip(
-                                    "Commit only what is staged here; the submodules keep their changes",
+                                    "Commit the changed submodules and record them here",
                                     Vec::new(),
                                 ),
+                        )
+                        .segment(
+                            components::Segment::new(
+                                "linked_commit_mode_parent_only",
+                                format!("{} only", panel.parent_name),
                             )
-                            .render(theme, self.ui_scale(), cx, move |this, index, _w, cx| {
-                                if index == 0 {
-                                    this.linked_commit_off.remove(&parent);
-                                } else {
-                                    this.linked_commit_off.insert(parent);
-                                }
-                                cx.notify();
-                            }),
-                    ),
+                            .selected(!linked)
+                            .tooltip(
+                                "Commit only what is staged here; the submodules keep their changes",
+                                Vec::new(),
+                            ),
+                        )
+                        .render(theme, self.ui_scale(), cx, move |this, index, _w, cx| {
+                            if index == 0 {
+                                this.linked_commit_off.remove(&parent);
+                            } else {
+                                this.linked_commit_off.insert(parent);
+                            }
+                            cx.notify();
+                        }),
                 ),
-        )
+            )
     }
 
     /// The submodule sections and the parent's section of a linked commit,
@@ -482,7 +548,6 @@ impl DetailsPaneView {
         let theme = self.theme;
         let ui_scale_percent = crate::ui_scale::current(cx).percent;
         let scaled_px = crate::ui_scale::scaler(ui_scale_percent);
-        self.prune_linked_message_inputs();
         let busy = self.state.linked_commit.is_some()
             || self
                 .active_repo()
@@ -622,45 +687,12 @@ impl DetailsPaneView {
             })
     }
 
-    fn linked_check_box(
-        theme: AppTheme,
-        check: LinkedFileCheck,
-        scaled_px: &impl Fn(f32) -> Pixels,
-    ) -> gpui::Div {
-        let on = check != LinkedFileCheck::Unstaged;
-        div()
-            .flex_none()
-            .size(scaled_px(14.0))
-            .flex()
-            .items_center()
-            .justify_center()
-            .border_1()
-            .border_color(if on {
-                theme.colors.accent.foreground
-            } else {
-                theme.colors.stroke.default
-            })
-            .rounded(scaled_px(theme.radii.control * 0.5))
-            .when(on, |check_box| {
-                check_box
-                    .bg(with_alpha(
-                        theme.colors.accent.foreground,
-                        if theme.is_dark { 0.18 } else { 0.12 },
-                    ))
-                    .child(svg_icon(
-                        if check == LinkedFileCheck::Partly {
-                            "icons/minus.svg"
-                        } else {
-                            "icons/check.svg"
-                        },
-                        theme.colors.accent.foreground,
-                        scaled_px(9.0),
-                    ))
-            })
-    }
-
     fn linked_path_label(theme: AppTheme, path: &Path) -> gpui::Div {
-        let name = path_name(path);
+        let name = path
+            .file_name()
+            .unwrap_or(path.as_os_str())
+            .to_string_lossy()
+            .into_owned();
         let dir = path
             .parent()
             .filter(|dir| !dir.as_os_str().is_empty())
@@ -736,22 +768,28 @@ impl DetailsPaneView {
                 );
             }
             Some(changes) => {
-                let rows = linked_file_rows(changes);
-                let hidden = rows.len().saturating_sub(LINKED_SECTION_MAX_FILES);
+                let LinkedFileRows { rows, hidden } =
+                    linked_file_rows(changes, LINKED_SECTION_MAX_FILES);
                 let parent = panel.parent;
-                for (row_ix, (file, check)) in
-                    rows.into_iter().take(LINKED_SECTION_MAX_FILES).enumerate()
-                {
+                for (row_ix, (file, check)) in rows.into_iter().enumerate() {
                     let visuals = crate::view::rows::commit_file_kind_visuals(file.kind);
                     let kind_color = visuals.color(&theme);
-                    let submodule = section.path.clone();
-                    let file_path = file.path.clone();
+                    // Staging a conflicted file tells git it is resolved, and
+                    // its markers would then be committed and recorded here.
+                    // Every other stage path asks first; this one sends the
+                    // user to the submodule's own tab instead.
+                    let conflicted =
+                        file.kind == FileStatusKind::Conflicted || file.conflict.is_some();
+                    let disabled = busy || conflicted;
                     let tooltip: SharedString = match check {
+                        _ if conflicted => {
+                            format!("Conflicted: resolve it in {name}'s tab first").into()
+                        }
                         LinkedFileCheck::Staged => "Staged: click to leave it out".into(),
                         LinkedFileCheck::Partly => "Partly staged: click to stage the rest".into(),
                         LinkedFileCheck::Unstaged => "Click to stage it".into(),
                     };
-                    let row = div()
+                    let mut row = div()
                         .id(SharedString::from(format!(
                             "linked_commit_file_{index}_{row_ix}"
                         )))
@@ -762,18 +800,29 @@ impl DetailsPaneView {
                         .px_1()
                         .h(scaled_px(22.0))
                         .rounded(px(theme.radii.row))
-                        .when(file.kind == FileStatusKind::Conflicted, |row| {
+                        .when(conflicted, |row| {
                             row.bg(with_alpha(theme.colors.status.danger.foreground, 0.12))
                         })
                         .control_interaction(
                             InteractionStyle::new(theme),
-                            InteractionState::default().disabled(busy),
+                            InteractionState::default().disabled(disabled),
                         )
-                        .child(Self::linked_check_box(theme, check, &scaled_px))
+                        .child(form_check_box(
+                            theme,
+                            check != LinkedFileCheck::Unstaged,
+                            check == LinkedFileCheck::Partly,
+                            conflicted,
+                            scaled_px(14.0),
+                            scaled_px(9.0),
+                            &scaled_px,
+                        ))
                         .child(svg_icon(visuals.icon, kind_color, scaled_px(12.0)))
-                        .child(Self::linked_path_label(theme, &file.path))
-                        .on_activate(
-                            busy,
+                        .child(Self::linked_path_label(theme, &file.path));
+                    if !disabled {
+                        let submodule = section.path.clone();
+                        let file_path = file.path.clone();
+                        row = row.on_activate(
+                            false,
                             controls::ControlActivation::Action,
                             cx.listener(move |this, _e: &ClickEvent, _w, cx| {
                                 let files = vec![file_path.clone()];
@@ -793,9 +842,9 @@ impl DetailsPaneView {
                                 this.store.dispatch(msg);
                                 cx.notify();
                             }),
-                        )
-                        .gitcomet_tooltip(theme, tooltip);
-                    card = card.child(row);
+                        );
+                    }
+                    card = card.child(row.gitcomet_tooltip(theme, tooltip));
                 }
                 if hidden > 0 {
                     card = card.child(
@@ -860,11 +909,7 @@ impl DetailsPaneView {
             .debug_selector(|| "linked_commit_parent_section".to_string())
             .child(header);
         for (index, section) in panel.included() {
-            let pointer = format!(
-                "{} → step {}",
-                section.recorded.as_deref().unwrap_or("new"),
-                index + 1
-            );
+            let pointer = format!("{} → step {}", section.recorded, index + 1);
             card = card.child(
                 div()
                     .id(SharedString::from(format!("linked_commit_gitlink_{index}")))
@@ -1038,7 +1083,7 @@ mod tests {
             ]
         );
         assert!(panel.sections[0].included());
-        assert_eq!(panel.sections[0].recorded.as_deref(), Some("a1b2c3d"));
+        assert_eq!(panel.sections[0].recorded, "a1b2c3d");
         // Not read yet, so nothing in it is staged.
         assert_eq!(panel.sections[1].changes, None);
         assert!(!panel.sections[1].included());
@@ -1070,7 +1115,10 @@ mod tests {
                 file("c.txt", FileStatusKind::Untracked),
             ],
         );
-        let rows = linked_file_rows(&changes)
+        let rows = linked_file_rows(&changes, LINKED_SECTION_MAX_FILES);
+        assert_eq!(rows.hidden, 0);
+        let rows = rows
+            .rows
             .into_iter()
             .map(|(file, check)| (file.path.display().to_string(), check))
             .collect::<Vec<_>>();
@@ -1082,6 +1130,76 @@ mod tests {
                 ("c.txt".to_string(), LinkedFileCheck::Unstaged),
             ]
         );
+    }
+
+    #[test]
+    fn file_rows_stop_at_the_cap_and_count_the_rest() {
+        // 150 staged and 150 unstaged files, half of each partly staged:
+        // 225 distinct paths.
+        let staged = (0..150)
+            .map(|ix| file(&format!("f{ix:03}"), FileStatusKind::Modified))
+            .collect();
+        let unstaged = (75..225)
+            .map(|ix| file(&format!("f{ix:03}"), FileStatusKind::Modified))
+            .collect();
+        let changes = changes("sub", staged, unstaged);
+        let rows = linked_file_rows(&changes, LINKED_SECTION_MAX_FILES);
+        assert_eq!(rows.rows.len(), LINKED_SECTION_MAX_FILES);
+        assert_eq!(rows.hidden, 225 - LINKED_SECTION_MAX_FILES);
+        for (ix, (file, check)) in rows.rows.iter().enumerate() {
+            assert_eq!(file.path, PathBuf::from(format!("f{ix:03}")));
+            let expected = if ix < 75 {
+                LinkedFileCheck::Staged
+            } else {
+                LinkedFileCheck::Partly
+            };
+            assert_eq!(*check, expected, "row {ix}");
+        }
+
+        // Past the staged files, the rest are the unstaged-only ones.
+        let rows = linked_file_rows(&changes, 200);
+        assert_eq!(rows.hidden, 25);
+        assert_eq!(
+            rows.rows[150],
+            (&changes.unstaged[75], LinkedFileCheck::Unstaged)
+        );
+        assert_eq!(rows.rows[150].0.path, PathBuf::from("f150"));
+    }
+
+    #[test]
+    fn the_parent_counts_a_staged_gitlink_of_a_submodule_left_out() {
+        let mut repo = parent_repo();
+        repo.submodules = Loadable::Ready(Arc::new(vec![
+            row("fixtures/syntax_test", true),
+            row("vendor/lib", true),
+        ]));
+        repo.submodule_changes = Loadable::Ready(Arc::new(vec![
+            changes(
+                "fixtures/syntax_test",
+                vec![file("manifest.toml", FileStatusKind::Modified)],
+                Vec::new(),
+            ),
+            changes(
+                "vendor/lib",
+                Vec::new(),
+                vec![file("lib.rs", FileStatusKind::Modified)],
+            ),
+        ]));
+        repo.status = Loadable::Ready(
+            gitcomet_core::domain::RepoStatus {
+                staged: Arc::new(vec![
+                    file("fixtures/syntax_test", FileStatusKind::Modified),
+                    file("vendor/lib", FileStatusKind::Modified),
+                    file("README.md", FileStatusKind::Modified),
+                ]),
+                unstaged: Arc::new(Vec::new()),
+            }
+            .into(),
+        );
+        let panel = linked_panel(&repo).expect("panel");
+        // The committing submodule's gitlink has its own row; the left-out
+        // one's staged gitlink commits with README.md.
+        assert_eq!(panel.parent_staged, 2);
     }
 
     #[test]
@@ -1116,7 +1234,7 @@ mod tests {
                 },
                 vec![file("y", FileStatusKind::Modified)],
             )),
-            recorded: None,
+            recorded: "a1b2c3d".to_string(),
         };
         LinkedPanel {
             parent: RepoId(1),

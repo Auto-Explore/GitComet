@@ -117,7 +117,6 @@ fn set_submodule_message(
                     .linked_message_inputs
                     .get(&(repo_id, std::path::PathBuf::from(path)))
                     .expect("the section's message box")
-                    .input
                     .clone();
                 input.update(cx, |input, cx| input.set_text(text.to_string(), cx));
             });
@@ -276,4 +275,110 @@ fn the_push_note_names_the_submodule_pushed_first(cx: &mut gpui::TestAppContext)
     });
     redraw(cx);
     assert!(cx.debug_bounds("linked_commit_push_note").is_some());
+}
+
+fn store_ops_rev(
+    cx: &mut gpui::VisualTestContext,
+    view: &LinkedView,
+    repo_id: gitcomet_state::model::RepoId,
+) -> u64 {
+    cx.update(|_window, app| {
+        let store = view.read(app).store.clone();
+        store
+            .barrier_for_test()
+            .recv_timeout(std::time::Duration::from_secs(3))
+            .expect("the store acknowledges the click");
+        store
+            .snapshot()
+            .repos
+            .iter()
+            .find(|repo| repo.id == repo_id)
+            .map(|repo| repo.ops_rev)
+            .expect("the store holds the parent")
+    })
+}
+
+#[gpui::test]
+fn a_conflicted_submodule_file_cannot_be_staged_from_the_parent(cx: &mut gpui::TestAppContext) {
+    let (view, cx) = new_linked_view(cx);
+    let repo_id = gitcomet_state::model::RepoId(75);
+    let mut repo = parent_with_changed_submodules(75);
+    if let gitcomet_state::model::Loadable::Ready(changes) = &mut repo.submodule_changes {
+        let mut changes = changes.as_ref().clone();
+        changes[0].unstaged = Arc::new(vec![FileStatus {
+            path: "manifest.toml".into(),
+            kind: FileStatusKind::Conflicted,
+            conflict: Some(gitcomet_core::domain::FileConflictKind::BothModified),
+        }]);
+        repo.submodule_changes = gitcomet_state::model::Loadable::Ready(Arc::new(changes));
+    }
+    let state = app_state_with_repo(repo, repo_id);
+    // The store holds the same state, so a stage would reach its reducer.
+    cx.update(|_window, app| {
+        view.read(app)
+            .store
+            .replace_snapshot_for_test(Arc::clone(&state));
+    });
+    draw_with(cx, &view, state);
+    let before = store_ops_rev(cx, &view, repo_id);
+
+    let conflicted = cx
+        .debug_bounds("linked_commit_file_0_1")
+        .expect("the conflicted row is drawn");
+    cx.simulate_click(conflicted.center(), gpui::Modifiers::default());
+    redraw(cx);
+    assert_eq!(
+        store_ops_rev(cx, &view, repo_id),
+        before,
+        "a conflicted file must not be staged from the parent's form"
+    );
+
+    // An ordinary row next to it still stages, so the click above landed.
+    let plain = cx
+        .debug_bounds("linked_commit_file_1_0")
+        .expect("the other submodule's row is drawn");
+    cx.simulate_click(plain.center(), gpui::Modifiers::default());
+    assert_ne!(store_ops_rev(cx, &view, repo_id), before);
+}
+
+#[gpui::test]
+fn a_submodule_message_is_forgotten_once_the_submodule_is_clean(cx: &mut gpui::TestAppContext) {
+    let (view, cx) = new_linked_view(cx);
+    let repo_id = gitcomet_state::model::RepoId(76);
+    draw_with(
+        cx,
+        &view,
+        app_state_with_repo(parent_with_changed_submodules(76), repo_id),
+    );
+    set_submodule_message(cx, &view, repo_id, "fixtures/syntax_test", "draft");
+
+    // The submodules commit or discard their changes elsewhere: no section
+    // shows, so none of them draws its message box.
+    let mut clean = parent_with_changed_submodules(76);
+    let gitcomet_state::model::Loadable::Ready(rows) = &clean.submodules else {
+        unreachable!("the fixture has submodule rows");
+    };
+    let mut rows = rows.as_ref().clone();
+    for row in &mut rows {
+        row.has_inner_changes = false;
+    }
+    clean.submodules = gitcomet_state::model::Loadable::Ready(Arc::new(rows));
+    clean.submodules_rev = 1;
+    draw_with(cx, &view, app_state_with_repo(clean, repo_id));
+    assert!(cx.debug_bounds("linked_commit_section_0").is_none());
+
+    // It changes again: the old draft must not come back as its message.
+    let mut changed = parent_with_changed_submodules(76);
+    changed.submodules_rev = 2;
+    draw_with(cx, &view, app_state_with_repo(changed, repo_id));
+    assert!(cx.debug_bounds("linked_commit_section_0").is_some());
+    let message = cx.update(|_window, app| {
+        view.read(app)
+            .details_pane
+            .read(app)
+            .linked_message_inputs
+            .get(&(repo_id, std::path::PathBuf::from("fixtures/syntax_test")))
+            .map(|input| input.read(app).text().to_string())
+    });
+    assert_eq!(message.as_deref(), Some(""));
 }

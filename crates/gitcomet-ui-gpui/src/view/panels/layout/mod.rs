@@ -28,7 +28,6 @@ pub(in crate::view) use commit_reword::commit_reword_submittable;
 use comparison::*;
 #[cfg(test)]
 use file_lists::*;
-pub(in crate::view) use linked_commit_panel::LinkedMessageInput;
 use linked_commit_panel::*;
 use status_sections::*;
 

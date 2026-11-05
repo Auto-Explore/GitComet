@@ -136,7 +136,7 @@ pub(in super::super) struct DetailsPaneView {
     pub(in super::super) linked_commit_off: FxHashSet<RepoId>,
     /// Each changed submodule's message in its parent's linked commit form.
     pub(in super::super) linked_message_inputs:
-        FxHashMap<(RepoId, std::path::PathBuf), crate::view::panels::LinkedMessageInput>,
+        FxHashMap<(RepoId, std::path::PathBuf), Entity<components::TextInput>>,
     /// The submodule messages a dispatched linked commit used, cleared once
     /// it succeeds.
     pub(in super::super) pending_linked_messages:
@@ -440,6 +440,7 @@ impl DetailsPaneView {
             if this.advance_pending_commits(&next, cx) {
                 cx.notify();
             }
+            this.prune_linked_message_inputs(&next);
             if next_fingerprint == this.notify_fingerprint {
                 this.state = next;
                 return;
