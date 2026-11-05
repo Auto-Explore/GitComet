@@ -1210,6 +1210,13 @@ pub(super) fn fill_reorder_repo_tabs_inline(
     let Some(from_ix) = from_ix else {
         return;
     };
+    // Regrouping below can undo the move. A drag sends this on every pointer
+    // move, so only a changed order is written to the session.
+    let order_before: Option<Vec<RepoId>> = state
+        .repos
+        .iter()
+        .any(|repo| repo.submodule_parent_tab().is_some())
+        .then(|| state.repos.iter().map(|repo| repo.id).collect());
 
     match before_ix {
         Some(before_ix) if from_ix + 1 == before_ix => {
@@ -1233,6 +1240,14 @@ pub(super) fn fill_reorder_repo_tabs_inline(
     // A worktree tab carries its submodule tabs along, and a submodule tab
     // cannot leave its pair: regrouping undoes a drop outside it.
     super::submodule_tabs::group(state);
+    if order_before.is_some_and(|before| {
+        before
+            .iter()
+            .copied()
+            .eq(state.repos.iter().map(|repo| repo.id))
+    }) {
+        return;
+    }
 
     effects.push(persist_session_effect(
         state,

@@ -552,7 +552,7 @@ fn submodule_status_model(
 ) -> ContextMenuModel {
     let mut items = vec![ContextMenuItem::Header("Submodule".into())];
     items.push(ContextMenuItem::Label(path.display().to_string().into()));
-    if let Some(status_label) = submodule::status_label(submodule_menu_state.status) {
+    if let Some(status_label) = submodule::status_label(&submodule_menu_state) {
         items.push(ContextMenuItem::Label(status_label.into()));
     }
     items.push(ContextMenuItem::Separator);

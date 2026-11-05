@@ -1,10 +1,5 @@
 use super::*;
-use gitcomet_core::domain::CommitId;
 use gitcomet_state::model::{LinkedPushChoice, LinkedPushPrompt, submodule_display_name};
-
-fn short(commit: &CommitId) -> String {
-    gitcomet_core::domain::short_commit_id(commit.as_ref()).to_string()
-}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum StepState {
@@ -40,7 +35,9 @@ pub(super) fn copy(state: &AppState, prompt: &LinkedPushPrompt) -> LinkedPushCop
         .map(|plan| plan.paths())
         .filter(|paths| paths.contains(&prompt.path))
         .unwrap_or_else(|| vec![prompt.path.clone()]);
-    let recorded = plan.and_then(|plan| plan.parent_commit.as_ref()).map(short);
+    let recorded = plan
+        .and_then(|plan| plan.parent_commit.as_ref())
+        .map(short_commit);
     let recorded_names = paths
         .iter()
         .map(|path| submodule_display_name(path))
@@ -236,7 +233,7 @@ pub(super) fn panel(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gitcomet_core::domain::RepoSpec;
+    use gitcomet_core::domain::{CommitId, RepoSpec};
     use gitcomet_state::model::{LinkedChild, LinkedCommit, LinkedCommitStage, RepoState};
     use std::path::PathBuf;
 

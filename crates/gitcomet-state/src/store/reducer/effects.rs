@@ -2061,17 +2061,22 @@ fn status_lists_first_level_submodule(repo_state: &RepoState) -> bool {
     let Loadable::Ready(submodules) = &repo_state.submodules else {
         return false;
     };
-    let is_first_level = |path: &std::path::Path| {
-        submodules
-            .iter()
-            .any(|submodule| !submodule.nested && submodule.path == path)
-    };
+    // This runs twice per status refresh under the store's write lock, so
+    // each entry is one lookup rather than a scan of every submodule.
+    let first_level: FxHashSet<&std::path::Path> = submodules
+        .iter()
+        .filter(|submodule| !submodule.nested)
+        .map(|submodule| submodule.path.as_path())
+        .collect();
+    if first_level.is_empty() {
+        return false;
+    }
     repo_state
         .worktree_status_entries()
         .into_iter()
         .chain(repo_state.staged_status_entries())
         .flatten()
-        .any(|entry| is_first_level(&entry.path))
+        .any(|entry| first_level.contains(entry.path.as_path()))
 }
 
 /// Submodule drift and inner changes come with the submodule list, which

@@ -77,9 +77,6 @@ pub(super) fn schedule_open_repo(
                         }),
                     );
                 }
-                // Read before the handle moves into the message; a failed
-                // read leaves the tab unlinked rather than failing the open.
-                let parent = repo.superproject().ok().flatten();
                 let canonical_workdir =
                     gitcomet_core::path_utils::canonicalize_or_original(spec.workdir.clone());
                 send_or_log(
@@ -90,9 +87,17 @@ pub(super) fn schedule_open_repo(
                         preferences: Some(preferences),
                         repo_id,
                         spec,
-                        repo,
+                        repo: Arc::clone(&repo),
                     }),
                 );
+                // Asking Git for the parent worktree costs up to two processes,
+                // so the tab opens first and links once the answer is in. A
+                // failed read leaves the tab unlinked rather than failing the
+                // open.
+                let parent = repo.superproject().ok().flatten();
+                if cancellation.is_cancelled() || msg_tx.is_cancelled() {
+                    return;
+                }
                 send_or_log(
                     &msg_tx,
                     Msg::Internal(crate::msg::InternalMsg::SubmoduleParentResolved {

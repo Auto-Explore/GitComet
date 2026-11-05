@@ -1,10 +1,6 @@
 use super::*;
-use gitcomet_core::domain::{CommitId, SubmoduleCheckoutPolicy, SubmoduleCheckoutRisk};
+use gitcomet_core::domain::{SubmoduleCheckoutPolicy, SubmoduleCheckoutRisk};
 use gitcomet_state::model::{SubmoduleCheckoutOperation, SubmoduleCheckoutPrompt};
-
-fn short(commit: &CommitId) -> String {
-    gitcomet_core::domain::short_commit_id(commit.as_ref()).to_string()
-}
 
 fn name(risk: &SubmoduleCheckoutRisk) -> String {
     gitcomet_state::model::submodule_display_name(&risk.path)
@@ -23,43 +19,64 @@ pub(super) struct SubmoduleCheckoutCopy {
 pub(super) fn copy(prompt: &SubmoduleCheckoutPrompt, parent: &str) -> SubmoduleCheckoutCopy {
     let changes = prompt.risks.iter().any(|risk| risk.has_inner_changes);
     let unreferenced = prompt.risks.iter().any(|risk| risk.unreferenced);
-    let (title, target, subject) = match prompt.risks.as_slice() {
+    let (title, body, keep_label, keep_note) = match prompt.risks.as_slice() {
         [risk] => {
-            let title = match (risk.has_inner_changes, risk.unreferenced) {
-                (true, false) => format!("{} has uncommitted changes", name(risk)),
-                (false, true) => format!("{} is on a commit no branch holds", name(risk)),
-                _ => format!("{} has work a checkout would lose", name(risk)),
+            let (name, target) = (name(risk), short_commit(&risk.target));
+            let (title, body, keep_label, keep_note) = match (changes, unreferenced) {
+                (true, false) => (
+                    format!("{name} has uncommitted changes"),
+                    format!(
+                        "Checking out {target} would overwrite them. Choose how to keep them safe."
+                    ),
+                    "Stash and check out",
+                    format!("The changes are stashed in {name} first."),
+                ),
+                (false, true) => (
+                    format!("{name} is on a commit no branch holds"),
+                    format!(
+                        "Checking out {target} would leave that commit reachable only from the reflog. Choose how to keep it safe."
+                    ),
+                    "Keep on a branch and check out",
+                    format!("A new branch in {name} keeps the commit first."),
+                ),
+                _ => (
+                    format!("{name} has work a checkout would lose"),
+                    format!(
+                        "Checking out {target} would overwrite uncommitted changes and leave a commit no branch holds. Choose how to keep them safe."
+                    ),
+                    "Keep the work and check out",
+                    format!(
+                        "Changes are stashed and the commit is kept on a new branch in {name}."
+                    ),
+                ),
             };
-            (title, short(&risk.target), name(risk))
+            (title, body, keep_label, keep_note)
         }
-        risks => (
-            format!("{} submodules have work a checkout would lose", risks.len()),
-            "the restored commits".to_string(),
-            "the submodules".to_string(),
-        ),
-    };
-    let body = match (changes, unreferenced) {
-        (true, false) => {
-            format!("Checking out {target} would overwrite them. Choose how to keep them safe.")
+        risks => {
+            let count = risks.len();
+            match (changes, unreferenced) {
+                (true, false) => (
+                    format!("{count} submodules have uncommitted changes"),
+                    "Checking out the restored commits would overwrite them. Choose how to keep them safe.".to_string(),
+                    "Stash and check out",
+                    "The changes are stashed in each submodule first.".to_string(),
+                ),
+                (false, true) => (
+                    format!("{count} submodules are on commits no branch holds"),
+                    "Checking out the restored commits would leave those commits reachable only from the reflog. Choose how to keep them safe.".to_string(),
+                    "Keep on branches and check out",
+                    "A new branch in each submodule keeps its commit first.".to_string(),
+                ),
+                _ => (
+                    format!("{count} submodules have work a checkout would lose"),
+                    "Checking out the restored commits would overwrite uncommitted changes and leave commits no branch holds. Choose how to keep them safe.".to_string(),
+                    "Keep the work and check out",
+                    "Changes are stashed and commits no branch holds are kept on new branches in each submodule.".to_string(),
+                ),
+            }
         }
-        (false, true) => format!(
-            "Checking out {target} would leave that commit reachable only from the reflog. Choose how to keep it safe."
-        ),
-        _ => format!(
-            "Checking out {target} would overwrite uncommitted changes and leave a commit no branch holds. Choose how to keep them safe."
-        ),
     };
-    let keep_label = match (changes, unreferenced) {
-        (true, false) => "Stash and check out",
-        (false, true) => "Keep on a branch and check out",
-        _ => "Keep the work and check out",
-    }
-    .to_string();
-    let keep_note = match (changes, unreferenced) {
-        (true, false) => format!("The changes are stashed in {subject} first."),
-        (false, true) => format!("A new branch in {subject} keeps the commit first."),
-        _ => format!("Changes are stashed and the commit is kept on a new branch in {subject}."),
-    };
+    let keep_label = keep_label.to_string();
     let (leave_label, leave_note) = match &prompt.operation {
         SubmoduleCheckoutOperation::Discard { .. } => (
             Some(format!("Discard in {parent} only")),
@@ -67,10 +84,7 @@ pub(super) fn copy(prompt: &SubmoduleCheckoutPrompt, parent: &str) -> SubmoduleC
                 [risk] => format!(
                     "{} stays at {} and shows as pointer moved.",
                     name(risk),
-                    risk.checked_out
-                        .as_ref()
-                        .map(short)
-                        .unwrap_or_else(|| "its commit".to_string())
+                    risk.checked_out.as_ref().map_or("its commit", short_commit)
                 ),
                 _ => "The submodules stay where they are and show as pointer moved.".to_string(),
             }),
@@ -93,26 +107,17 @@ pub(super) fn panel(
     cx: &mut gpui::Context<PopoverHost>,
 ) -> gpui::Div {
     let theme = this.theme;
-    let parent = this
-        .state
-        .repos
-        .iter()
-        .find(|repo| repo.id == prompt.repo_id)
-        .and_then(|repo| repo.spec.workdir.file_name())
-        .map(|name| name.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "the parent".to_string());
-    let copy = copy(&prompt, &parent);
+    let copy = copy(&prompt, &this.state.repo_name(prompt.repo_id));
 
     let mut dialog = ConfirmDialog::new(copy.title, DIALOG_420_WIDTH).text(theme, copy.body);
     for risk in &prompt.risks {
         let from = risk
             .checked_out
             .as_ref()
-            .map(short)
-            .unwrap_or_else(|| "not checked out".to_string());
+            .map_or("not checked out", short_commit);
         dialog = dialog.mono_value(
             theme,
-            format!("{}  {from} → {}", name(risk), short(&risk.target)),
+            format!("{}  {from} → {}", name(risk), short_commit(&risk.target)),
         );
     }
     dialog = dialog.note(theme, copy.keep_note);
@@ -166,6 +171,7 @@ pub(super) fn panel(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gitcomet_core::domain::CommitId;
     use gitcomet_state::model::RepoId;
     use std::path::PathBuf;
 
@@ -214,6 +220,40 @@ mod tests {
         let copy = copy(&prompt(vec![risk(false, true)]), "app");
         assert_eq!(copy.title, "syntax_test is on a commit no branch holds");
         assert_eq!(copy.keep_label, "Keep on a branch and check out");
+    }
+
+    #[test]
+    fn several_commits_on_no_branch_are_worded_in_the_plural() {
+        let mut other = risk(false, true);
+        other.path = PathBuf::from("vendor/lib");
+        let copy = copy(&prompt(vec![risk(false, true), other]), "app");
+        assert_eq!(copy.title, "2 submodules are on commits no branch holds");
+        assert_eq!(
+            copy.body,
+            "Checking out the restored commits would leave those commits reachable only from the reflog. Choose how to keep them safe."
+        );
+        assert_eq!(copy.keep_label, "Keep on branches and check out");
+        assert_eq!(
+            copy.keep_note,
+            "A new branch in each submodule keeps its commit first."
+        );
+        assert_eq!(
+            copy.leave_note.as_deref(),
+            Some("The submodules stay where they are and show as pointer moved.")
+        );
+
+        let changed = copy_for_changes();
+        assert_eq!(changed.title, "2 submodules have uncommitted changes");
+        assert_eq!(
+            changed.keep_note,
+            "The changes are stashed in each submodule first."
+        );
+    }
+
+    fn copy_for_changes() -> SubmoduleCheckoutCopy {
+        let mut other = risk(true, false);
+        other.path = PathBuf::from("vendor/lib");
+        copy(&prompt(vec![risk(true, false), other]), "app")
     }
 
     #[test]

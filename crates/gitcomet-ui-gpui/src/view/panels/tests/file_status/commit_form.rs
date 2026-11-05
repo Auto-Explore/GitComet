@@ -1306,3 +1306,212 @@ fn background_repo_commit_success_drops_its_draft(cx: &mut gpui::TestAppContext)
 
     assert_eq!(commit_box_text_of(cx, &view), "");
 }
+
+/// A staged repo whose first-level submodule `vendor/lib` has uncommitted
+/// changes, which a commit in it would leave behind.
+fn staged_repo_with_dirty_submodule(id: u64) -> gitcomet_state::model::RepoState {
+    let mut repo = staged_repo(id);
+    let mut lib = gitcomet_core::domain::Submodule::new(
+        "vendor/lib".into(),
+        gitcomet_core::domain::CommitId("a".repeat(40).into()),
+        Some(gitcomet_core::domain::CommitId("a".repeat(40).into())),
+        gitcomet_core::domain::SubmoduleStatus::UpToDate,
+    );
+    lib.has_inner_changes = true;
+    repo.submodules = gitcomet_state::model::Loadable::Ready(Arc::new(vec![lib]));
+    repo
+}
+
+/// The leave-behind prompt the window shows, once it has drawn.
+fn leave_behind_prompt(
+    cx: &mut gpui::VisualTestContext,
+    view: &CommitView,
+) -> Option<crate::view::SubmoduleLeaveBehindPrompt> {
+    cx.run_until_parked();
+    crate::view::test_support::redraw(cx);
+    cx.update(
+        |_window, app| match crate::view::test_support::popover_kind(view.read(app), app) {
+            Some(PopoverKind::SubmoduleLeaveBehindConfirm(prompt)) => Some(prompt),
+            _ => None,
+        },
+    )
+}
+
+fn click_selector(cx: &mut gpui::VisualTestContext, selector: &'static str) {
+    let center = cx
+        .debug_bounds(selector)
+        .unwrap_or_else(|| panic!("expected {selector} to be drawn"))
+        .center();
+    cx.simulate_mouse_move(center, None, Modifiers::default());
+    cx.simulate_mouse_down(center, MouseButton::Left, Modifiers::default());
+    cx.simulate_mouse_up(center, MouseButton::Left, Modifiers::default());
+    cx.run_until_parked();
+}
+
+/// Cmd+Enter runs inside the root view's update, so the question about the
+/// dirty submodule reaches the root only once that update is over.
+#[gpui::test]
+fn commit_shortcut_with_a_dirty_submodule_asks_first(cx: &mut gpui::TestAppContext) {
+    let (view, cx) = new_commit_view(cx);
+    let repo_id = gitcomet_state::model::RepoId(68);
+    commit_box_window(
+        cx,
+        &view,
+        app_state_with_repo(staged_repo_with_dirty_submodule(68), repo_id),
+    );
+    set_commit_box_text(cx, &view, "ship it");
+    let before = crate::view::test_support::repo_ops_rev(&view, cx, repo_id);
+
+    submit_commit_box(cx, &view);
+    let prompt = leave_behind_prompt(cx, &view).expect("the commit asks about vendor/lib first");
+    assert_eq!(prompt.repo_id, repo_id);
+    assert_eq!(
+        prompt.submodules,
+        vec![std::path::PathBuf::from("vendor/lib")]
+    );
+    assert_eq!(prompt.subject, "ship it");
+
+    crate::view::test_support::drain_store_worker(&view, cx);
+    assert_eq!(
+        crate::view::test_support::repo_ops_rev(&view, cx, repo_id),
+        before,
+        "nothing is committed before the answer"
+    );
+}
+
+/// The answer was about the commit of the tab that asked: switching tabs
+/// while the prompt is open must not commit the other tab's box.
+#[gpui::test]
+fn leave_behind_prompt_ignores_a_tab_switched_to_while_open(cx: &mut gpui::TestAppContext) {
+    let (view, cx) = new_commit_view(cx);
+    let asking_id = gitcomet_state::model::RepoId(69);
+    let other_id = gitcomet_state::model::RepoId(70);
+    let (asking, other) = (staged_repo_with_dirty_submodule(69), staged_repo(70));
+    commit_box_window(
+        cx,
+        &view,
+        two_repo_state(asking.clone(), other.clone(), asking_id),
+    );
+    set_commit_box_text(cx, &view, "ship the parent");
+    submit_commit_box(cx, &view);
+    assert!(leave_behind_prompt(cx, &view).is_some());
+
+    // Ctrl+Tab while the prompt is open, and a message in the other tab.
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            push_test_state(this, two_repo_state(asking, other, other_id), cx);
+        });
+    });
+    cx.run_until_parked();
+    set_commit_box_text(cx, &view, "ship the other one");
+    assert!(
+        leave_behind_prompt(cx, &view).is_some(),
+        "the prompt stays open across the switch"
+    );
+    crate::view::test_support::drain_store_worker(&view, cx);
+    let before = (
+        crate::view::test_support::repo_ops_rev(&view, cx, asking_id),
+        crate::view::test_support::repo_ops_rev(&view, cx, other_id),
+    );
+
+    click_selector(cx, "submodule_leave_behind_commit");
+    crate::view::test_support::drain_store_worker(&view, cx);
+    assert_eq!(
+        (
+            crate::view::test_support::repo_ops_rev(&view, cx, asking_id),
+            crate::view::test_support::repo_ops_rev(&view, cx, other_id),
+        ),
+        before,
+        "neither tab commits"
+    );
+    assert_eq!(commit_box_text_of(cx, &view), "ship the other one");
+}
+
+/// A submodule tab `app/a` (72) of an open parent `app` (71), with a staged
+/// file, active.
+fn submodule_tab_state(child: gitcomet_state::model::RepoState) -> Arc<AppState> {
+    let mut parent = opening_repo_state(
+        gitcomet_state::model::RepoId(71),
+        Path::new("/tmp/repo-commit-linked-app"),
+    );
+    parent.submodules = gitcomet_state::model::Loadable::Ready(Arc::new(Vec::new()));
+    Arc::new(AppState {
+        active_repo: Some(child.id),
+        repos: vec![parent, child],
+        ..AppState::test_default()
+    })
+}
+
+fn staged_submodule_tab() -> gitcomet_state::model::RepoState {
+    let mut child = staged_repo(72);
+    child.spec.workdir = "/tmp/repo-commit-linked-app/a".into();
+    child.submodule_parent = Some(gitcomet_state::model::SubmoduleParentLink {
+        workdir: "/tmp/repo-commit-linked-app".into(),
+        path: "a".into(),
+        repo_id: Some(gitcomet_state::model::RepoId(71)),
+    });
+    child
+}
+
+fn parent_message_of(cx: &mut gpui::VisualTestContext, view: &CommitView) -> (String, bool) {
+    cx.update(|_window, app| {
+        let pane = view.read(app).details_pane.read(app);
+        (
+            pane.parent_message_input.read(app).text().to_string(),
+            pane.parent_message_user_edited,
+        )
+    })
+}
+
+/// An edited parent message stays until the commit that used it succeeds:
+/// after a failure, typing in the commit box must not reset it.
+#[gpui::test]
+fn an_edited_parent_message_survives_a_failed_linked_commit(cx: &mut gpui::TestAppContext) {
+    let (view, cx) = new_commit_view(cx);
+    let child = staged_submodule_tab();
+    commit_box_window(cx, &view, submodule_tab_state(child.clone()));
+    set_commit_box_text(cx, &view, "Fix x");
+    cx.run_until_parked();
+    assert_eq!(
+        parent_message_of(cx, &view),
+        ("Update a: Fix x".to_string(), false)
+    );
+    cx.update(|_window, app| {
+        let input = view
+            .read(app)
+            .details_pane
+            .read(app)
+            .parent_message_input
+            .clone();
+        input.update(app, |input, cx| input.set_text("Bump a", cx));
+    });
+    cx.run_until_parked();
+
+    submit_commit_box(cx, &view);
+    let push = |cx: &mut gpui::VisualTestContext, child: &gitcomet_state::model::RepoState| {
+        cx.update(|_window, app| {
+            view.update(app, |this, cx| {
+                push_test_state(this, submodule_tab_state(child.clone()), cx);
+            });
+        });
+        cx.run_until_parked();
+    };
+    let failed = with_command_result(&child, "Commit", false);
+    push(cx, &failed);
+    set_commit_box_text(cx, &view, "Fix x and y");
+    cx.run_until_parked();
+    assert_eq!(
+        parent_message_of(cx, &view),
+        ("Bump a".to_string(), true),
+        "the edit is kept for the next try"
+    );
+
+    // Once a commit with it succeeds, the next one starts from the default.
+    submit_commit_box(cx, &view);
+    push(cx, &with_command_result(&failed, "Commit", true));
+    assert_eq!(commit_box_text_of(cx, &view), "");
+    assert_eq!(
+        parent_message_of(cx, &view),
+        ("Update a".to_string(), false)
+    );
+}

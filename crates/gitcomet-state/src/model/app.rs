@@ -268,6 +268,18 @@ pub enum BlockedPush {
         target: gitcomet_core::services::SafePushAfterCommitTarget,
         set_upstream: bool,
     },
+    /// The first push of a branch, which also sets its upstream.
+    SetUpstream {
+        remote: String,
+        branch: String,
+    },
+    /// A force push, with the lease it was asked with if any.
+    Force {
+        lease: Option<gitcomet_core::services::ForcePushLease>,
+    },
+    WithTags {
+        request: gitcomet_core::tag_push::TagPushRequest,
+    },
 }
 
 /// A push refused because outgoing commits record submodule commits that

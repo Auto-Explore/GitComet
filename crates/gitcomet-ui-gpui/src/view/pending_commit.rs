@@ -12,6 +12,9 @@ pub(in crate::view) struct PendingCommit {
     pub(in crate::view) amend: bool,
     /// The trimmed message that was submitted.
     pub(in crate::view) message: SharedString,
+    /// The trimmed parent message submitted with a commit its parent
+    /// records too.
+    pub(in crate::view) parent_message: Option<SharedString>,
     /// The commit failed while a retry took over. The store drops the failed
     /// entry once the window has shown it, so the outcome is kept here.
     failed_awaiting_retry: bool,
@@ -34,6 +37,7 @@ impl PendingCommit {
             command_log_seq,
             amend,
             message,
+            parent_message: None,
             failed_awaiting_retry: false,
         }
     }

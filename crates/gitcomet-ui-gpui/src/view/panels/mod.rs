@@ -846,6 +846,7 @@ pub(in crate::view) use action_bar::action_bar_breakpoints;
 pub(super) use action_bar::{ActionBarView, action_bar_density, action_bar_height};
 pub(super) use bottom_status_bar::{BottomStatusBarView, bottom_status_bar_height};
 pub(in crate::view) use layout::commit_reword_submittable;
+pub(in crate::view) use layout::submodule_row_in_parent;
 #[cfg(test)]
 pub(in crate::view) use layout::{commit_reword_availability, commit_reword_blocker};
 pub(super) use popover::{PopoverHost, PopoverHostInit};

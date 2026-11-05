@@ -15,6 +15,8 @@ pub(super) fn commit_allowed(is_merge_active: bool, staged_count: usize) -> bool
 /// tab and what the commit form tells about it.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(in crate::view) struct ParentRecordTarget {
+    /// The submodule tab that commits.
+    pub(in crate::view) child: RepoId,
     pub(in crate::view) parent: RepoId,
     pub(in crate::view) parent_name: String,
     pub(in crate::view) child_name: String,
@@ -24,6 +26,23 @@ pub(in crate::view) struct ParentRecordTarget {
     pub(in crate::view) recorded: Option<String>,
     /// Files staged in the parent besides the submodule. They stay staged.
     pub(in crate::view) other_staged: usize,
+}
+
+/// The row the parent tab lists for the first-level submodule tab `child`,
+/// with what the parent records for it. Like
+/// `AppState::submodule_row_in_parent`, but from the child's state, so
+/// callers that walk every tab do not look each one up again.
+pub(in crate::view) fn submodule_row_in_parent<'a>(
+    state: &'a AppState,
+    child: &RepoState,
+) -> Option<&'a gitcomet_core::domain::Submodule> {
+    let link = child.submodule_parent.as_ref()?;
+    let parent = link.repo_id?;
+    let parent = state.repos.iter().find(|repo| repo.id == parent)?;
+    let Loadable::Ready(rows) = &parent.submodules else {
+        return None;
+    };
+    rows.iter().find(|row| !row.nested && row.path == link.path)
 }
 
 pub(in crate::view) fn parent_record_target(
@@ -36,8 +55,7 @@ pub(in crate::view) fn parent_record_target(
         .repos
         .iter()
         .find(|candidate| Some(candidate.id) == link.repo_id)?;
-    let recorded = state
-        .submodule_row_in_parent(repo_id)
+    let recorded = submodule_row_in_parent(state, repo)
         .map(|row| gitcomet_core::domain::short_commit_id(row.recorded_head.as_ref()).to_string());
     let other_staged = parent.staged_status_entries().map_or(0, |entries| {
         entries
@@ -46,6 +64,7 @@ pub(in crate::view) fn parent_record_target(
             .count()
     });
     Some(ParentRecordTarget {
+        child: repo_id,
         parent: parent.id,
         parent_name: link.parent_name(),
         child_name: link.submodule_name(),
@@ -83,16 +102,85 @@ pub(in crate::view) fn other_staged_note(target: &ParentRecordTarget) -> Option<
     }
 }
 
+/// The commit button's label and tooltip.
+pub(in crate::view) fn commit_button_copy(
+    record_target: Option<&ParentRecordTarget>,
+    amend: bool,
+    push_after: bool,
+) -> (SharedString, SharedString) {
+    match record_target {
+        Some(target) if push_after => (
+            format!("Commit, record in {} and Push", target.parent_name).into(),
+            format!(
+                "Commit staged changes, record the commit in {}, then push {} first and {} after it",
+                target.parent_name, target.child_name, target.parent_name
+            )
+            .into(),
+        ),
+        Some(target) => (
+            format!("Commit and record in {}", target.parent_name).into(),
+            format!(
+                "Commit staged changes and record the commit in {}",
+                target.parent_name
+            )
+            .into(),
+        ),
+        None => {
+            let label = match (amend, push_after) {
+                (false, false) => "Commit",
+                (false, true) => "Commit changes and Push",
+                (true, false) => "Amend Previous Commit",
+                (true, true) => "Amend and Push Safely",
+            };
+            let tooltip = match (amend, push_after) {
+                (false, false) => "Commit staged changes",
+                (false, true) => "Commit staged changes and push",
+                (true, false) => "Amend the previous commit",
+                (true, true) => {
+                    "Amend the previous commit; published amends require explicit force push with lease"
+                }
+            };
+            (label.into(), tooltip.into())
+        }
+    }
+}
+
 impl DetailsPaneView {
-    /// The parent a commit in the active tab is recorded in, unless the tab
-    /// is not a submodule, the user turned recording off, or the commit
-    /// amends.
-    pub(in crate::view) fn active_parent_record_target(&self) -> Option<ParentRecordTarget> {
-        let repo_id = self.active_repo_id()?;
-        if self.commit_amend_enabled || self.record_in_parent_off.contains(&repo_id) {
+    /// The parent the active tab's commit form offers to record in, whether
+    /// recording is on or not; none for an amend.
+    fn form_parent_record_target(&self) -> Option<ParentRecordTarget> {
+        if self.commit_amend_enabled {
             return None;
         }
-        parent_record_target(&self.state, repo_id)
+        parent_record_target(&self.state, self.active_repo_id()?)
+    }
+
+    /// Whether a commit in `repo_id`'s tab goes to its parent too: the user
+    /// left recording on, and no other linked commit is still running (the
+    /// store would commit the submodule alone then).
+    fn records_in_parent(&self, repo_id: RepoId) -> bool {
+        !self.record_in_parent_off.contains(&repo_id) && self.state.linked_commit.is_none()
+    }
+
+    /// The parent a commit in the active tab is recorded in, unless the tab
+    /// is not a submodule, the user turned recording off, another linked
+    /// commit is running, or the commit amends.
+    pub(in crate::view) fn active_parent_record_target(&self) -> Option<ParentRecordTarget> {
+        self.form_parent_record_target()
+            .filter(|target| self.records_in_parent(target.child))
+    }
+
+    /// The submodule path the active tab's commit would be recorded at in
+    /// its open parent. The parent message box follows it on every
+    /// keystroke, so this looks up only the link.
+    fn active_parent_record_path(&self) -> Option<&std::path::Path> {
+        let link = self.active_repo()?.submodule_parent.as_ref()?;
+        let parent = link.repo_id?;
+        self.state
+            .repos
+            .iter()
+            .any(|repo| repo.id == parent)
+            .then_some(link.path.as_path())
     }
 
     /// Keep the parent message on its default while the user has not edited
@@ -105,13 +193,10 @@ impl DetailsPaneView {
         if self.parent_message_user_edited {
             return;
         }
-        let Some(target) = self
-            .active_repo_id()
-            .and_then(|repo_id| parent_record_target(&self.state, repo_id))
-        else {
+        let Some(path) = self.active_parent_record_path() else {
             return;
         };
-        let message = gitcomet_state::model::default_parent_message(&target.path, commit_message);
+        let message = gitcomet_state::model::default_parent_message(path, commit_message);
         self.set_parent_message_programmatically(message, cx);
     }
 
@@ -174,11 +259,18 @@ impl DetailsPaneView {
         self.submit_commit_with(false, None, cx)
     }
 
+    /// Commit `repo_id` once the user answered the question about the
+    /// submodule changes the commit leaves behind. The answer was about that
+    /// tab's commit, so it commits nothing once another tab is active.
     pub(in crate::view) fn submit_commit_past_submodule_guard(
         &mut self,
+        repo_id: RepoId,
         shelve: Option<gitcomet_state::model::SubmoduleShelve>,
         cx: &mut gpui::Context<Self>,
     ) -> bool {
+        if self.active_repo_id() != Some(repo_id) {
+            return false;
+        }
         self.submit_commit_with(true, shelve, cx)
     }
 
@@ -231,23 +323,42 @@ impl DetailsPaneView {
                         .unwrap_or_default()
                         .to_string(),
                 };
-                let _ = self.root_view.update(cx, |root, cx| {
-                    root.pending_submodule_leave_behind_prompt = Some(prompt);
-                    cx.notify();
+                // The commit shortcut reaches here from inside the root
+                // view's update, so the root is updated once that is over.
+                let root_view = self.root_view.clone();
+                cx.defer(move |cx| {
+                    let _ = root_view.update(cx, |root, cx| {
+                        root.pending_submodule_leave_behind_prompt = Some(prompt);
+                        cx.notify();
+                    });
                 });
                 return false;
             }
         }
 
-        self.pending_commits.insert(
+        let mut pending = PendingCommit::new(
+            &self.state,
             repo_id,
-            PendingCommit::new(
-                &self.state,
-                repo_id,
-                amend,
-                message.trim().to_string().into(),
-            ),
+            amend,
+            message.trim().to_string().into(),
         );
+        // Recording a submodule-tab commit in the parent: the parent message
+        // box keeps an edit until the commit succeeds, so a failed commit
+        // can be tried again with it.
+        let record = if linked_children.is_none() {
+            self.active_parent_record_target().map(|target| {
+                let parent_message = self
+                    .parent_message_input
+                    .read_with(cx, |input, _| input.text().trim().to_string());
+                (target, parent_message)
+            })
+        } else {
+            None
+        };
+        pending.parent_message = record
+            .as_ref()
+            .map(|(_, parent_message)| SharedString::from(parent_message.clone()));
+        self.pending_commits.insert(repo_id, pending);
         if let Some(children) = linked_children {
             self.pending_linked_messages
                 .insert(repo_id, children.clone());
@@ -260,10 +371,7 @@ impl DetailsPaneView {
                 // behind to shelve.
                 shelve: None,
             });
-        } else if let Some(target) = self.active_parent_record_target() {
-            let parent_message = self
-                .parent_message_input
-                .read_with(cx, |input, _| input.text().trim().to_string());
+        } else if let Some((target, parent_message)) = record {
             self.store.dispatch(Msg::CommitLinked {
                 origin: repo_id,
                 children: vec![gitcomet_state::model::LinkedChild {
@@ -274,8 +382,6 @@ impl DetailsPaneView {
                 push: self.commit_push_after_enabled,
                 shelve,
             });
-            // The next commit's parent message starts from its default again.
-            self.parent_message_user_edited = false;
         } else if amend {
             self.store.dispatch(Msg::CommitAmend {
                 repo_id,
@@ -308,12 +414,11 @@ impl DetailsPaneView {
         if self.handle_commit_reword_submit_shortcut(window, cx) {
             return true;
         }
-        if !self
-            .commit_message_input
-            .read(cx)
-            .focus_handle()
-            .is_focused(window)
-        {
+        // The parent message box belongs to the same form and commits too.
+        let focused = [&self.commit_message_input, &self.parent_message_input]
+            .iter()
+            .any(|input| input.read(cx).focus_handle().is_focused(window));
+        if !focused {
             return false;
         }
 
@@ -348,48 +453,20 @@ impl DetailsPaneView {
         let spinner = |id: (&'static str, u64)| {
             components::ButtonSlot::spinner(id, icon_color, scaled_px(14.0))
         };
-        let record_target = self.active_parent_record_target();
-        let linked_label =
-            linked.map(|panel| linked_commit_label(panel, self.commit_push_after_enabled));
-        let (commit_label, commit_tooltip): (SharedString, SharedString) = match (
-            linked_label,
-            &record_target,
-        ) {
-            (Some((label, tooltip)), _) => (label.into(), tooltip.into()),
-            (None, Some(target)) if self.commit_push_after_enabled => (
-                format!("Commit, record in {} and Push", target.parent_name).into(),
-                format!(
-                    "Commit staged changes, record the commit in {}, then push {} first and {} after it",
-                    target.parent_name, target.child_name, target.parent_name
-                )
-                .into(),
-            ),
-            (None, Some(target)) => (
-                format!("Commit and record in {}", target.parent_name).into(),
-                format!(
-                    "Commit staged changes and record the commit in {}",
-                    target.parent_name
-                )
-                .into(),
-            ),
-            (None, None) => {
-                let label = match (self.commit_amend_enabled, self.commit_push_after_enabled) {
-                    (false, false) => "Commit",
-                    (false, true) => "Commit changes and Push",
-                    (true, false) => "Amend Previous Commit",
-                    (true, true) => "Amend and Push Safely",
-                };
-                let tooltip = match (self.commit_amend_enabled, self.commit_push_after_enabled) {
-                    (false, false) => "Commit staged changes",
-                    (false, true) => "Commit staged changes and push",
-                    (true, false) => "Amend the previous commit",
-                    (true, true) => {
-                        "Amend the previous commit; published amends require explicit force push with lease"
-                    }
-                };
-                (label.into(), tooltip.into())
-            }
-        };
+        // Looked up once for the button and the section under the box.
+        let form_record_target = self.form_parent_record_target();
+        let record_target = form_record_target
+            .as_ref()
+            .filter(|target| self.records_in_parent(target.child));
+        let (commit_label, commit_tooltip): (SharedString, SharedString) =
+            match linked.map(|panel| linked_commit_label(panel, self.commit_push_after_enabled)) {
+                Some((label, tooltip)) => (label.into(), tooltip.into()),
+                None => commit_button_copy(
+                    record_target,
+                    self.commit_amend_enabled,
+                    self.commit_push_after_enabled,
+                ),
+            };
         let commit_options_invoker: SharedString = "commit_options".into();
         let commit_options_active = self
             .active_context_menu_invoker
@@ -498,7 +575,8 @@ impl DetailsPaneView {
             })
             .debug_selector(|| "previous_commit_messages_button".to_string())
             .gitcomet_tooltip(theme, "Previous commit messages".into());
-        let record_section = self.parent_record_section(&scaled_px, cx);
+        let record_section =
+            form_record_target.map(|target| self.parent_record_section(target, scaled_px, cx));
         let linked_toggle = changed_submodules
             .as_ref()
             .map(|panel| self.linked_commit_toggle(panel, cx));
@@ -545,15 +623,12 @@ impl DetailsPaneView {
     /// message and a note about the parent's other staged files.
     fn parent_record_section(
         &mut self,
-        scaled_px: &impl Fn(f32) -> Pixels,
+        target: ParentRecordTarget,
+        scaled_px: impl Fn(f32) -> Pixels,
         cx: &mut gpui::Context<Self>,
-    ) -> Option<gpui::Div> {
+    ) -> gpui::Div {
         let theme = self.theme;
-        let repo_id = self.active_repo_id()?;
-        if self.commit_amend_enabled {
-            return None;
-        }
-        let target = parent_record_target(&self.state, repo_id)?;
+        let repo_id = target.child;
         let checked = !self.record_in_parent_off.contains(&repo_id);
         let check_box = form_check_box(
             theme,
@@ -610,7 +685,23 @@ impl DetailsPaneView {
             .border_color(theme.colors.stroke.default)
             .child(toggle);
         if !checked {
-            return Some(section);
+            return section;
+        }
+        // The store records one linked commit at a time; until the running
+        // one is done, a commit here goes in the submodule alone.
+        if let Some(running) = self.state.linked_commit.as_ref() {
+            return section.child(
+                div()
+                    .debug_selector(|| "record_in_parent_waiting".to_string())
+                    .pl(scaled_px(24.0))
+                    .text_size(theme.ui_text(12.0))
+                    .text_color(theme.colors.foreground.secondary)
+                    .child(format!(
+                        "A commit now is not recorded in {}: the commit in {} is still being recorded and pushed.",
+                        target.parent_name,
+                        self.state.repo_name(running.child)
+                    )),
+            );
         }
         let pointer = format!(
             "{}  {} → new commit",
@@ -652,6 +743,6 @@ impl DetailsPaneView {
                     .child(note),
             );
         }
-        Some(section)
+        section
     }
 }
