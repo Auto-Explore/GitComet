@@ -163,6 +163,19 @@ thread_local! {
         RefCell::new(new_fx_lru_cache(HISTORY_TEXT_LAYOUT_CACHE_MAX_ENTRIES));
 }
 
+/// Which part of a line that overflows its width gives way.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+enum LineCut {
+    Start,
+    End,
+    /// A ref name keeps its leaf, the part after the last `/`: the path
+    /// before it gives way first, from the start, and only a leaf that
+    /// overflows on its own is cut, from its end. `feat/new-component`
+    /// narrows through `eat/new-component` and `new-component` to
+    /// `new-compone`.
+    RefLeaf,
+}
+
 fn shape_truncated_line_cached(
     window: &mut Window,
     base_style: &gpui::TextStyle,
@@ -182,7 +195,7 @@ fn shape_truncated_line_cached(
         max_width,
         color,
         font_family,
-        TruncateFrom::End,
+        LineCut::End,
     )
 }
 
@@ -196,7 +209,7 @@ fn shape_truncated_line_cached_from(
     max_width: Pixels,
     color: gpui::Rgba,
     font_family: Option<&'static str>,
-    truncate_from: TruncateFrom,
+    cut: LineCut,
 ) -> gpui::ShapedLine {
     shape_truncated_line_cached_from_with_affix(
         window,
@@ -207,7 +220,7 @@ fn shape_truncated_line_cached_from(
         max_width,
         color,
         font_family,
-        truncate_from,
+        cut,
         "…",
         &[],
     )
@@ -235,14 +248,17 @@ fn shape_highlighted_line_cached(
         max_width,
         color,
         font_family,
-        TruncateFrom::End,
+        LineCut::End,
         "…",
         highlights,
     )
 }
 
+/// A ref chip's label. It is clipped without an ellipsis so the chip spends
+/// its width on the name, and cut with [`LineCut::RefLeaf`] so the name after
+/// the last `/` is the part that stays readable.
 #[allow(clippy::too_many_arguments)]
-fn shape_clipped_chip_line_cached_from(
+fn shape_chip_label_cached(
     window: &mut Window,
     base_style: &gpui::TextStyle,
     font_size: Pixels,
@@ -251,7 +267,6 @@ fn shape_clipped_chip_line_cached_from(
     max_width: Pixels,
     color: gpui::Rgba,
     font_family: Option<&'static str>,
-    truncate_from: TruncateFrom,
 ) -> gpui::ShapedLine {
     shape_truncated_line_cached_from_with_affix(
         window,
@@ -262,7 +277,7 @@ fn shape_clipped_chip_line_cached_from(
         max_width,
         color,
         font_family,
-        truncate_from,
+        LineCut::RefLeaf,
         "",
         &[],
     )
@@ -278,7 +293,7 @@ fn shape_truncated_line_cached_from_with_affix(
     max_width: Pixels,
     color: gpui::Rgba,
     font_family: Option<&'static str>,
-    truncate_from: TruncateFrom,
+    cut: LineCut,
     truncation_affix: &'static str,
     highlights: &[(std::ops::Range<usize>, gpui::HighlightStyle)],
 ) -> gpui::ShapedLine {
@@ -297,7 +312,7 @@ fn shape_truncated_line_cached_from_with_affix(
         color.green.to_bits().hash(&mut hasher);
         color.blue.to_bits().hash(&mut hasher);
         color.alpha.to_bits().hash(&mut hasher);
-        matches!(truncate_from, TruncateFrom::Start).hash(&mut hasher);
+        cut.hash(&mut hasher);
         truncation_affix.hash(&mut hasher);
         highlights.len().hash(&mut hasher);
         for (range, style) in highlights {
@@ -320,16 +335,26 @@ fn shape_truncated_line_cached_from_with_affix(
     }
     let runs = crate::text_runs::text_runs_for_highlights(text, &style, highlights);
     let text_system = Arc::clone(window.text_system());
-    let shaped = if highlights.is_empty() || truncate_from != TruncateFrom::End {
-        let (truncated, runs) = gpui::TextLayout::truncate_line(
-            text.clone(),
-            font_size,
-            max_width.max(px(0.0)),
-            truncation_affix,
-            &runs,
-            truncate_from,
-            window,
-        );
+    let shaped = if highlights.is_empty() || cut != LineCut::End {
+        let max_width = max_width.max(px(0.0));
+        let (truncated, runs) = match cut {
+            LineCut::Start | LineCut::End => gpui::TextLayout::truncate_line(
+                text.clone(),
+                font_size,
+                max_width,
+                truncation_affix,
+                &runs,
+                if cut == LineCut::Start {
+                    TruncateFrom::Start
+                } else {
+                    TruncateFrom::End
+                },
+                window,
+            ),
+            LineCut::RefLeaf => {
+                truncate_ref_leaf(text, font_size, max_width, truncation_affix, &runs, window)
+            }
+        };
         text_system.shape_line(truncated, font_size, runs.as_ref())
     } else {
         // The wrapper cuts by base-font widths, so bold matches would
@@ -373,6 +398,68 @@ fn shape_truncated_line_cached_from_with_affix(
     });
 
     shaped
+}
+
+/// [`LineCut::RefLeaf`] on top of [`gpui::TextLayout::truncate_line`].
+fn truncate_ref_leaf<'runs>(
+    text: &SharedString,
+    font_size: Pixels,
+    max_width: Pixels,
+    affix: &str,
+    runs: &'runs [gpui::TextRun],
+    window: &mut Window,
+) -> (SharedString, std::borrow::Cow<'runs, [gpui::TextRun]>) {
+    let leaf_start = text.rfind('/').map_or(0, |slash| slash + 1);
+    if leaf_start == 0 {
+        return gpui::TextLayout::truncate_line(
+            text.clone(),
+            font_size,
+            max_width,
+            affix,
+            runs,
+            TruncateFrom::End,
+            window,
+        );
+    }
+    let (cut, cut_runs) = gpui::TextLayout::truncate_line(
+        text.clone(),
+        font_size,
+        max_width,
+        affix,
+        runs,
+        TruncateFrom::Start,
+        window,
+    );
+    // A start cut is the affix and a suffix of the text; it kept the whole
+    // leaf when that suffix starts at or before it.
+    let kept_from = if cut == *text {
+        0
+    } else {
+        (text.len() + affix.len()).saturating_sub(cut.len())
+    };
+    if kept_from <= leaf_start {
+        return (cut, cut_runs);
+    }
+
+    let mut skip = leaf_start;
+    let leaf_runs: Vec<gpui::TextRun> = runs
+        .iter()
+        .filter_map(|run| {
+            let len = run.len.saturating_sub(skip);
+            skip = skip.saturating_sub(run.len);
+            (len > 0).then(|| gpui::TextRun { len, ..run.clone() })
+        })
+        .collect();
+    let (leaf, leaf_runs) = gpui::TextLayout::truncate_line(
+        SharedString::from(text[leaf_start..].to_owned()),
+        font_size,
+        max_width,
+        affix,
+        &leaf_runs,
+        TruncateFrom::End,
+        window,
+    );
+    (leaf, std::borrow::Cow::Owned(leaf_runs.into_owned()))
 }
 
 /// Where to cut a highlighted line so its shaped width, with the affix,
@@ -1255,7 +1342,7 @@ fn layout_history_ref_chips(
         });
         let visual = history_chip_visual(theme, row_visual, style_kind, context_menu_open);
         let shaped = match &entry {
-            ChipEntry::Tag(name) => shape_clipped_chip_line_cached_from(
+            ChipEntry::Tag(name) => shape_chip_label_cached(
                 window,
                 base_style,
                 xxs_font,
@@ -1264,32 +1351,25 @@ fn layout_history_ref_chips(
                 max_text_w,
                 visual.text,
                 None,
-                TruncateFrom::End,
             ),
-            ChipEntry::Branch(chip) => {
-                // Clip from the start so the leaf segment
-                // ("feature_name") stays visible without
-                // spending chip width on an ellipsis.
-                shape_clipped_chip_line_cached_from(
-                    window,
-                    if matches!(style_kind, HistoryChipStyleKind::Head { .. }) {
-                        head_style.get_or_insert_with(|| {
-                            let mut style = base_style.clone();
-                            style.font_weight = gpui::FontWeight::BOLD;
-                            style
-                        })
-                    } else {
-                        base_style
-                    },
-                    xxs_font,
-                    chip.text.shared(),
-                    chip.text.text_hash(),
-                    max_text_w,
-                    visual.text,
-                    None,
-                    TruncateFrom::Start,
-                )
-            }
+            ChipEntry::Branch(chip) => shape_chip_label_cached(
+                window,
+                if matches!(style_kind, HistoryChipStyleKind::Head { .. }) {
+                    head_style.get_or_insert_with(|| {
+                        let mut style = base_style.clone();
+                        style.font_weight = gpui::FontWeight::BOLD;
+                        style
+                    })
+                } else {
+                    base_style
+                },
+                xxs_font,
+                chip.text.shared(),
+                chip.text.text_hash(),
+                max_text_w,
+                visual.text,
+                None,
+            ),
         };
 
         let chip_w = shaped.width + icons_width + chip_pad_x * 2.0;
@@ -2000,7 +2080,7 @@ pub(super) fn history_commit_row_canvas(
                     with_alpha(node_color, HISTORY_BRANCH_BADGE_ALPHA),
                     None,
                     // Keeps the leaf of `origin/feature/long-name` readable.
-                    TruncateFrom::Start,
+                    LineCut::Start,
                 );
                 let text_y = bounds.top() + (bounds.size.height - xxs_line_height) * 0.5;
                 window.with_content_mask(
