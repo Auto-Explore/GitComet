@@ -103,6 +103,11 @@ pub(in crate::view) fn rail_tooltip(entry: &RailEntry) -> String {
 pub(in crate::view) struct WorkspaceRail {
     theme: AppTheme,
     window_id: gpui::WindowId,
+    /// The tiles as of the manager revision in `entries_revision`. The rail
+    /// draws with every frame of its window, and only a change to the
+    /// workspaces or the windows showing them changes what it lists.
+    entries: Vec<RailEntry>,
+    entries_revision: Option<Option<u64>>,
     _manager_subscription: gpui::Subscription,
 }
 
@@ -117,8 +122,29 @@ impl WorkspaceRail {
         Self {
             theme,
             window_id,
+            entries: Vec::new(),
+            entries_revision: None,
             _manager_subscription: subscription,
         }
+    }
+
+    /// Rebuild the tiles once the workspace manager changed.
+    pub(in crate::view) fn sync_entries(&mut self, cx: &App) {
+        let revision = crate::workspaces::revision(cx);
+        if self.entries_revision == Some(revision) {
+            return;
+        }
+        let window_id = self.window_id;
+        let windows = crate::workspaces::window_numbers(cx);
+        self.entries = crate::workspaces::with_rail_workspaces(cx, |workspaces| {
+            rail_entries(workspaces, window_id, &windows)
+        });
+        self.entries_revision = Some(revision);
+    }
+
+    #[cfg(test)]
+    pub(in crate::view) fn entries(&self) -> &[RailEntry] {
+        &self.entries
     }
 
     pub(in crate::view) fn set_theme(&mut self, theme: AppTheme, cx: &mut gpui::Context<Self>) {
@@ -235,11 +261,7 @@ impl Render for WorkspaceRail {
         let theme = self.theme;
         let ui_scale_percent = crate::ui_scale::current(cx).percent;
         let scaled_px = crate::ui_scale::scaler(ui_scale_percent);
-        let entries = rail_entries(
-            &crate::workspaces::rail_workspaces(cx),
-            self.window_id,
-            &crate::workspaces::window_numbers(cx),
-        );
+        self.sync_entries(cx);
         let mut column = div()
             .id("workspace_rail")
             .debug_selector(|| "workspace_rail".to_string())
@@ -255,7 +277,7 @@ impl Render for WorkspaceRail {
             .bg(theme.colors.surface.chrome)
             .border_r_1()
             .border_color(theme.colors.stroke.subtle);
-        for entry in &entries {
+        for entry in &self.entries {
             column = column.child(self.tile(entry, &scaled_px, cx));
         }
         let window_id = self.window_id;
@@ -473,6 +495,33 @@ mod tests {
         assert_eq!(entries[8].slot, Some(9));
         assert_eq!(entries[9].slot, None);
         assert_eq!(entries[1].initials, "S1");
+    }
+
+    #[gpui::test]
+    fn rail_tiles_are_reused_until_the_workspaces_change(cx: &mut gpui::TestAppContext) {
+        let first = workspace("GitComet");
+        let id = first.id;
+        let rail = cx.update(|app| {
+            crate::workspaces::initialize_for_test(app, vec![first, workspace("Other")]);
+            app.new(|cx| {
+                WorkspaceRail::new(AppTheme::gitcomet_dark(), gpui::WindowId::from(1u64), cx)
+            })
+        });
+        cx.update(|app| {
+            rail.update(app, |rail, cx| {
+                rail.sync_entries(cx);
+                assert_eq!(rail.entries().len(), 2);
+                let tiles = rail.entries().as_ptr();
+                rail.sync_entries(cx);
+                assert_eq!(tiles, rail.entries().as_ptr(), "a redraw rebuilt the tiles");
+            });
+            crate::workspaces::set_workspace_name(app, id, "Renamed Space");
+            rail.update(app, |rail, cx| {
+                rail.sync_entries(cx);
+                assert_eq!(rail.entries()[0].name, "Renamed Space");
+                assert_eq!(rail.entries()[0].initials, "RS");
+            });
+        });
     }
 
     #[test]

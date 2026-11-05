@@ -138,10 +138,11 @@ pub(super) fn switch_active_window_to_workspace_slot(cx: &mut App, slot: usize) 
     let Some(window) = active_normal_gitcomet_window(cx) else {
         return;
     };
-    let Some(workspace_id) = crate::workspaces::rail_workspaces(cx)
-        .get(slot.wrapping_sub(1))
-        .map(|workspace| workspace.id)
-    else {
+    let Some(workspace_id) = crate::workspaces::with_rail_workspaces(cx, |workspaces| {
+        workspaces
+            .get(slot.wrapping_sub(1))
+            .map(|workspace| workspace.id)
+    }) else {
         return;
     };
     switch_workspace_in_window(cx, window.handle.window_id(), workspace_id);
@@ -228,13 +229,7 @@ pub(crate) fn release_workspace_from_view<T>(cx: &mut gpui::Context<T>, window_i
 where
     T: 'static,
 {
-    cx.defer(move |cx| {
-        if let Some(window) = normal_gitcomet_window_by_id(cx, window_id) {
-            let _ = window
-                .view
-                .update(cx, |view, cx| view.request_switch_workspace(None, None, cx));
-        }
-    });
+    cx.defer(move |cx| request_switch_workspace_by_window_id(cx, window_id, None, None));
 }
 
 /// Run a switch again for one window, after its unsaved-edits prompt.

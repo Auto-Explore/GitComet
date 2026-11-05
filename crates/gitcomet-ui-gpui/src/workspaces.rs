@@ -298,10 +298,10 @@ where
     })
 }
 
-/// The workspaces in the order the rail lists them and Alt+1…9 counts them:
-/// the order they were made in, which switching does not change.
-pub(crate) fn rail_workspaces(cx: &App) -> Vec<Workspace> {
-    workspaces(cx)
+/// Reads the workspaces in the order the rail lists them and Alt+1…9 counts
+/// them: the order they were made in, which switching does not change.
+pub(crate) fn with_rail_workspaces<R>(cx: &App, read: impl FnOnce(&[Workspace]) -> R) -> R {
+    with_workspaces(cx, read)
 }
 
 /// The live windows holding a workspace, numbered from 1 in the order they
