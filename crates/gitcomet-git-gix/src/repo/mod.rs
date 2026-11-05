@@ -2199,6 +2199,7 @@ impl GitRepository for GixRepo {
         &self,
         path: &Path,
     ) -> Result<std::sync::Arc<dyn gitcomet_core::services::GitRepository>> {
+        let _operation = self.operation_lease()?;
         self.require_working_tree()?;
         self.open_submodule_impl(path)
     }
