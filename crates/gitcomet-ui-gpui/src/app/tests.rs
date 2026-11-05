@@ -3913,6 +3913,46 @@ fn switching_a_window_in_place_keeps_each_workspace_in_one_window(cx: &mut gpui:
 }
 
 #[gpui::test]
+fn alt_digit_types_its_character_in_a_text_input_while_the_rail_is_on(
+    cx: &mut gpui::TestAppContext,
+) {
+    let mut beta = session::Workspace::new(Vec::new());
+    beta.custom_name = Some("Beta".into());
+    beta.restore_on_launch = false;
+    let (view, cx, window_id) = rail_window(cx, vec![beta]);
+    let alpha_id = cx.cx.update(|app| {
+        crate::workspaces::workspace_for_window(app, window_id)
+            .expect("a workspace")
+            .id
+    });
+    cx.update(|window, app| {
+        crate::view::test_support::focus_commit_message_for_test(&view, window, app);
+        let _ = window.draw(app);
+    });
+
+    // Option+2 on a Finnish or Swedish Mac keyboard: Alt+2 that types "@".
+    // Beta comes first, so Alt+2 would otherwise leave this workspace.
+    cx.simulate_keystrokes("alt-2->@");
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+    cx.run_until_parked();
+
+    cx.cx.update(|app| {
+        assert_eq!(
+            crate::workspaces::workspace_for_window(app, window_id).map(|w| w.id),
+            Some(alpha_id),
+            "typing in the commit box must not switch the workspace"
+        );
+        assert!(!crate::view::test_support::workspace_switch_pending_for_test(view.read(app)));
+        assert_eq!(
+            crate::view::test_support::commit_message_text_for_test(view.read(app), app),
+            "@"
+        );
+    });
+}
+
+#[gpui::test]
 fn a_running_push_holds_a_workspace_switch_back(cx: &mut gpui::TestAppContext) {
     let mut beta = session::Workspace::new(Vec::new());
     beta.custom_name = Some("Beta".into());

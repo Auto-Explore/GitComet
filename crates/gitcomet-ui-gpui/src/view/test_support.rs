@@ -107,6 +107,31 @@ pub(crate) fn workspace_switch_pending_for_test(view: &GitCometView) -> bool {
     view.pending_workspace_switch.is_some()
 }
 
+/// Focus the commit message box, as a click into it would.
+pub(crate) fn focus_commit_message_for_test(
+    view: &Entity<GitCometView>,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let focus = view
+        .read(cx)
+        .details_pane
+        .read(cx)
+        .commit_message_input
+        .read(cx)
+        .focus_handle();
+    window.focus(&focus, cx);
+}
+
+pub(crate) fn commit_message_text_for_test(view: &GitCometView, cx: &App) -> String {
+    view.details_pane
+        .read(cx)
+        .commit_message_input
+        .read(cx)
+        .text()
+        .to_string()
+}
+
 pub(crate) fn sync_store_snapshot(view: &GitCometView, cx: &mut impl gpui::AppContext) {
     push_test_state(view, view.store.snapshot(), cx);
 }

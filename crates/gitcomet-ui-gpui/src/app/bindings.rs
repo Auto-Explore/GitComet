@@ -324,16 +324,24 @@ pub(super) fn bind_app_keys(cx: &mut App) {
 /// window, so the keys stay free for typing otherwise.
 pub(crate) fn refresh_workspace_switch_key_bindings(cx: &mut App) {
     let enabled = crate::workspaces::open_mode(cx).shows_rail();
-    cx.bind_keys((1..=WORKSPACE_SWITCH_SLOTS).map(|slot| {
+    cx.bind_keys((1..=WORKSPACE_SWITCH_SLOTS).flat_map(|slot| {
         let keys = format!("alt-{slot}");
         if enabled {
-            KeyBinding::new(&keys, SwitchToWorkspace { slot }, None)
+            // On macOS, Option+digit types a character on many layouts (@ on
+            // Finnish and Swedish Option+2, [ ] | { } on German Option+5…9),
+            // and a binding is matched before the text input gets it. Text
+            // inputs keep the character: this binding comes later than the
+            // global one at the same depth, so it outranks it there.
+            vec![
+                KeyBinding::new(&keys, SwitchToWorkspace { slot }, None),
+                KeyBinding::new(&keys, gpui::NoAction, Some("TextInput")),
+            ]
         } else {
-            KeyBinding::new(
+            vec![KeyBinding::new(
                 &keys,
                 Unbind(SwitchToWorkspace { slot }.name().into()),
                 None,
-            )
+            )]
         }
     }));
 }
