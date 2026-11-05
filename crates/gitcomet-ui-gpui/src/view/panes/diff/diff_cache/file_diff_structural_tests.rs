@@ -70,6 +70,13 @@ fn structural_selection_maps_collapsed_rows_and_never_expands_a_block(
             pane.diff_text_anchor = None;
             pane.diff_text_head = None;
             assert!(pane.structural_selected_lines().is_none(), "a key needs a selection");
+            // Navigation outlines a block without selecting it; a key acts on that block.
+            pane.diff_selection_anchor = Some(0);
+            pane.diff_focused_change_block = Some(DiffFocusedChangeBlock { anchor: 0, rows: 0..1, sides: DiffChangeSides::default(), layout: pane.diff_visible_layout_key() });
+            let keyed = pane.structural_selected_lines().expect("the outlined block");
+            assert_eq!((keyed.old, keyed.new), (BTreeSet::from([2]), BTreeSet::from([2])));
+            pane.diff_selection_anchor = None;
+            pane.diff_focused_change_block = None;
             pane.diff_text_anchor = None;
             pane.diff_text_head = None;
             pane.diff_view = DiffViewMode::Inline;

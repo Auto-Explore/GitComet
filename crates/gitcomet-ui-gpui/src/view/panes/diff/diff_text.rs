@@ -954,6 +954,7 @@ impl DiffRenderer {
         self.diff_text_occurrences.clear();
         self.diff_text_pending_syntax_click = None;
         self.diff_text_selecting = true;
+        self.diff_focused_change_block = None;
         self.diff_text_anchor = Some(pos);
         self.diff_text_head = Some(pos);
         self.diff_selection_anchor = None;
@@ -978,6 +979,7 @@ impl DiffRenderer {
         };
         let pos = hit.pos;
         self.diff_text_selecting = true;
+        self.diff_focused_change_block = None;
         self.diff_text_anchor = Some(pos);
         self.diff_text_head = Some(pos);
         self.diff_selection_range = None;

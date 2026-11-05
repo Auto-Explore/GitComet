@@ -285,9 +285,18 @@ impl DiffRenderer {
             && !self.has_large_file_text_diff()
     }
 
+    /// The visible rows of the change block navigation outlined, while it is
+    /// on screen. A mouse selection removes the outline.
+    fn focused_block_visible_rows(&self) -> Option<(usize, usize)> {
+        let rows = &self.live_focused_change_block()?.rows;
+        let last = rows.end.checked_sub(1).filter(|last| *last >= rows.start)?;
+        self.diff_text_visible_range_for_source_range(rows.start, last)
+    }
+
     /// The visible rows a line key acts on: the lines the text selection
-    /// takes, else the selected rows. A right-click falls back to the row it
-    /// landed on; a key has no such row, so a bare caret selects nothing.
+    /// takes, else the selected rows, else the change block navigation
+    /// outlined. A right-click falls back to the row it landed on; a key has
+    /// no such row, so a bare caret selects nothing.
     fn diff_line_action_rows(&self) -> Option<(usize, usize)> {
         let len = self.diff_visible_len();
         if len == 0 {
@@ -302,7 +311,9 @@ impl DiffRenderer {
             // were chosen after it: a right-click beside the highlight, which
             // the menu acted on. The key must act on the same lines.
             (Some(text), Some(rows)) if rows_outside(rows, text) => rows,
-            (text, rows) => text.or(rows)?,
+            (text, rows) => text
+                .or(rows)
+                .or_else(|| self.focused_block_visible_rows())?,
         };
         Some((start.min(len - 1), end.min(len - 1)))
     }
@@ -348,7 +359,8 @@ impl DiffRenderer {
     }
 
     /// The source lines a line key acts on in a structural diff: the lines
-    /// the text selection takes, else both sides of the selected rows.
+    /// the text selection takes, else both sides of the selected rows or of
+    /// the outlined change block.
     pub(in crate::view::panes::diff) fn structural_selected_lines(
         &self,
     ) -> Option<SourceLineSelection> {
@@ -382,11 +394,29 @@ impl DiffRenderer {
             }
             return Some(selection);
         }
-        let (a, b) = rows?;
+        let (a, b) = rows.or_else(|| self.focused_block_visible_rows())?;
         Some(self.structural_source_lines(
             (a..=b).filter_map(|row| self.diff_mapped_ix_for_visible_ix(row)),
             None,
         ))
+    }
+
+    /// A line key pressed outside the diff acts only on the change block
+    /// opening the diff or change navigation outlined. Focus inside the
+    /// diff goes through `handle_diff_shortcut` instead.
+    pub(in crate::view) fn apply_outlined_block_line_action(
+        &mut self,
+        action: DiffLineAction,
+        window: &gpui::Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> bool {
+        if self.is_conflict_resolver_active()
+            || self.diff_panel_focus_handle.contains_focused(window, cx)
+            || self.live_focused_change_block().is_none()
+        {
+            return false;
+        }
+        self.apply_diff_line_action(action, cx)
     }
 
     /// Stages, unstages or discards the selected lines, as the diff editor

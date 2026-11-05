@@ -95,6 +95,7 @@ impl DiffRenderer {
             if existing.is_none() {
                 self.diff_selection_anchor = Some(clicked_visible_ix);
                 self.diff_selection_range = Some((clicked_visible_ix, clicked_visible_ix));
+                self.diff_focused_change_block = None;
             }
         }
 

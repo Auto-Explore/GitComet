@@ -918,6 +918,7 @@ impl DiffRenderer {
                 }
                 _ => {}
             }
+            self.focus_diff_after_navigation(window, cx);
             handled = true;
         }
 

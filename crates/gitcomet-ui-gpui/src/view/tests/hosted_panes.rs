@@ -1828,7 +1828,7 @@ fn alt_change_keys_reach_the_visible_pane_without_diff_focus(cx: &mut gpui::Test
     let stops = cx.update(|_, app| renderer.read(app).diff_nav_entries());
     assert_eq!(stops.len(), 2);
     for detached in [false, true] {
-        let focus = cx.update(|window, app| {
+        cx.update(|window, app| {
             renderer.update(app, |pane, _| pane.diff_selection_anchor = Some(stops[0]));
             let focus = if detached {
                 app.focus_handle()
@@ -1836,7 +1836,6 @@ fn alt_change_keys_reach_the_visible_pane_without_diff_focus(cx: &mut gpui::Test
                 view.read(app).repository_view_focus.clone()
             };
             window.focus(&focus, app);
-            focus
         });
         publish(cx, &view, store.snapshot());
         for (key, stop) in [("alt-down", stops[1]), ("alt-up", stops[0])] {
@@ -1847,7 +1846,13 @@ fn alt_change_keys_reach_the_visible_pane_without_diff_focus(cx: &mut gpui::Test
                 Some(stop),
                 "{key}, detached focus: {detached}"
             );
-            assert!(cx.update(|window, _| focus.is_focused(window)));
+            // Landing on a change block focuses its diff, for S, U and D.
+            assert!(cx.update(|window, app| {
+                renderer
+                    .read(app)
+                    .diff_panel_focus_handle
+                    .is_focused(window)
+            }));
         }
     }
     assert!(store.snapshot().repos[0].diff_state.diff_target.is_none());
@@ -4200,7 +4205,7 @@ fn linked_worktree_change_keys_use_the_displayed_diff(cx: &mut gpui::TestAppCont
             assert_eq!(stops.len(), 3, "{layout:?}, {content:?}");
 
             for detached in [false, true] {
-                let focus = cx.update(|window, app| {
+                cx.update(|window, app| {
                     pane.update(app, |pane, cx| {
                         pane.diff_selection_anchor = Some(stops[0]);
                         pane.diff_selection_range = None;
@@ -4212,7 +4217,6 @@ fn linked_worktree_change_keys_use_the_displayed_diff(cx: &mut gpui::TestAppCont
                         pane.read(app).diff_panel_focus_handle.clone()
                     };
                     window.focus(&focus, app);
-                    focus
                 });
                 publish(cx, &view, store.snapshot());
                 for (key, stop) in [
@@ -4232,7 +4236,10 @@ fn linked_worktree_change_keys_use_the_displayed_diff(cx: &mut gpui::TestAppCont
                         Some(stop),
                         "{key}, {layout:?}, {content:?}, detached focus: {detached}",
                     );
-                    assert!(cx.update(|window, _| focus.is_focused(window)));
+                    // Landing on a change block focuses its diff, for S, U and D.
+                    assert!(cx.update(|window, app| {
+                        pane.read(app).diff_panel_focus_handle.is_focused(window)
+                    }));
                 }
             }
         }
