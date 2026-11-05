@@ -796,6 +796,11 @@ pub(super) fn cancel_button(
 }
 
 /// Cancel button whose click simply closes the popover.
+/// A commit id as the submodule prompts show it.
+pub(super) fn short_commit(commit: &gitcomet_core::domain::CommitId) -> &str {
+    gitcomet_core::domain::short_commit_id(commit.as_ref())
+}
+
 pub(super) fn dialog_cancel_button(
     id: &'static str,
     hint_debug_selector: &'static str,

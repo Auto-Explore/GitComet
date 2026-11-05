@@ -1034,6 +1034,7 @@ impl SettingsWindowView {
                     self.follow_submodule_pointers,
                     theme,
                 )
+                .border_color(no_separator)
                 .on_activate(
                     false,
                     controls::ControlActivation::Action,

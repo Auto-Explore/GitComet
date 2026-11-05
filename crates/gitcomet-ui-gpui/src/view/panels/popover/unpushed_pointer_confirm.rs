@@ -7,7 +7,7 @@ fn name(pointer: &SubmoduleCheckoutUpdate) -> String {
 }
 
 fn short(pointer: &SubmoduleCheckoutUpdate) -> &str {
-    gitcomet_core::domain::short_commit_id(pointer.commit.as_ref())
+    short_commit(&pointer.commit)
 }
 
 /// The words the prompt uses: one submodule is named, several are counted.
@@ -51,20 +51,15 @@ pub(super) fn panel(
         );
     }
 
-    let cancel_prompt = prompt.clone();
     let anyway_prompt = prompt.clone();
     let first_prompt = prompt;
-    let cancel = cancel_button(
+    // Closing the prompt unresolved dismisses it in the store.
+    let cancel = dialog_cancel_button(
         "unpushed_pointer_cancel",
         "unpushed_pointer_cancel_hint",
         theme,
-    )
-    .on_click(theme, cx, move |this, _e, window, cx| {
-        this.store.dispatch(Msg::DismissUnpushedPointerPrompt {
-            prompt: cancel_prompt.clone(),
-        });
-        this.close_popover_and_restore_focus(window, cx);
-    });
+        cx,
+    );
     let actions = div()
         .flex()
         .gap_1()

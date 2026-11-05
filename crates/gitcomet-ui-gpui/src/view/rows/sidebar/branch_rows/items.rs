@@ -394,10 +394,7 @@ impl SidebarPaneView {
                 recorded_head.as_ref(),
                 checked_out,
             );
-            for line in submodule_sync_lines(drift, has_inner_changes) {
-                tooltip.push('\n');
-                tooltip.push_str(&line);
-            }
+            push_submodule_sync_lines(&mut tooltip, drift, has_inner_changes);
             let tooltip: SharedString = tooltip.into();
             (icon_color, badge_label, can_open, tooltip)
         };
