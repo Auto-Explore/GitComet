@@ -367,6 +367,7 @@ impl PopoverHost {
             | ContextMenuAction::SetChangeTrackingView { .. }
             | ContextMenuAction::SetUiScale { .. }
             | ContextMenuAction::Dock(_)
+            | ContextMenuAction::OpenDockMenu(_)
             | ContextMenuAction::LoadLfsLocks { .. }
             | ContextMenuAction::FetchAll { .. }
             | ContextMenuAction::FetchRemote { .. }

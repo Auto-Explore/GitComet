@@ -2470,7 +2470,8 @@ fn annex_section_and_repository_menus_follow_repo_state(cx: &mut gpui::TestAppCo
         annex_support(false),
         AnnexPopoverKind::SectionMenu,
     );
-    assert_eq!(fresh, ["Initialize git-annex in this clone"]);
+    // The section's layout menu stays reachable from its header's menu.
+    assert_eq!(fresh, ["Initialize git-annex in this clone", "Layout…"]);
 
     let section = annex_menu_labels(
         cx,

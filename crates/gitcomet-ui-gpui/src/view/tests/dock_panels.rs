@@ -1,9 +1,12 @@
 //! The window's docks: panes that survive a frame they are not drawn in,
-//! popped-out panels coming back, and the branch list's data requests
-//! across panes.
+//! popped-out panels coming back, the branch list's data requests across
+//! panes, and the layout menu behind a section header's own menu.
 
 use super::*;
-use crate::view::dock::{DockCommand, DockHalf, DockSide, PanelId, panel_ids};
+use crate::view::dock::{
+    DockCommand, DockHalf, DockMenuEntry, DockMenuTarget, DockSide, PanelId, panel_ids, section_ids,
+};
+use crate::view::panels::ContextMenuAction;
 
 fn open_repo_window(
     cx: &mut gpui::TestAppContext,
@@ -161,4 +164,89 @@ fn moving_files_keeps_the_branch_lists_data_requested(cx: &mut gpui::TestAppCont
         request.stashes && request.submodules,
         "Branches still needs its sections: {request:?}"
     );
+}
+
+/// Local, Remote, Worktrees, Submodules and git-annex headers open menus of
+/// their own on right-click; each of those leads on to the layout menu.
+#[gpui::test]
+fn a_section_headers_own_menu_leads_to_its_layout_menu(cx: &mut gpui::TestAppContext) {
+    let (_store, view, cx) = open_repo_window(cx);
+    let repo_id = RepoId(1);
+    let host = cx.update(|_window, app| view.read(app).popover_host.clone());
+    let menus = [
+        (
+            PopoverKind::BranchSectionMenu {
+                repo_id,
+                section: BranchSection::Local,
+            },
+            section_ids::LOCAL_BRANCHES,
+        ),
+        (
+            PopoverKind::BranchSectionMenu {
+                repo_id,
+                section: BranchSection::Remote,
+            },
+            section_ids::REMOTE_BRANCHES,
+        ),
+        (
+            PopoverKind::worktree(repo_id, WorktreePopoverKind::SectionMenu),
+            section_ids::WORKTREES,
+        ),
+        (
+            PopoverKind::submodule(repo_id, SubmodulePopoverKind::SectionMenu),
+            section_ids::SUBMODULES,
+        ),
+        (
+            PopoverKind::annex(repo_id, AnnexPopoverKind::SectionMenu),
+            section_ids::ANNEX,
+        ),
+    ];
+    for (kind, section) in menus {
+        let actions = cx.update(|_window, app| {
+            host.update(app, |host, cx| {
+                host.context_menu_actions_for_test(&kind, cx)
+            })
+        });
+        assert!(
+            actions.iter().any(|action| matches!(
+                action,
+                ContextMenuAction::OpenDockMenu(DockMenuTarget::Section(id))
+                    if id.as_str() == section
+            )),
+            "{section}'s header menu offers its layout menu"
+        );
+    }
+
+    // Choosing it swaps the header's menu for the layout menu.
+    let kind = PopoverKind::worktree(repo_id, WorktreePopoverKind::SectionMenu);
+    cx.update(|window, app| {
+        view.update(app, |view, cx| {
+            view.open_popover_at(kind.clone(), gpui::point(px(120.0), px(120.0)), window, cx)
+        })
+    });
+    test_support::redraw(cx);
+    let layout = cx
+        .update(|_window, app| {
+            host.update(app, |host, cx| {
+                host.context_menu_actions_for_test(&kind, cx)
+            })
+        })
+        .into_iter()
+        .find(|action| matches!(action, ContextMenuAction::OpenDockMenu(_)))
+        .unwrap();
+    cx.update(|window, app| {
+        host.update(app, |host, cx| {
+            host.context_menu_activate_action(layout, window, cx)
+        })
+    });
+    cx.run_until_parked();
+    test_support::redraw(cx);
+    match cx.update(|_window, app| test_support::popover_kind(view.read(app), app)) {
+        Some(PopoverKind::DockMenu(menu)) => assert!(
+            menu.entries
+                .contains(&DockMenuEntry::Header("Worktrees".into())),
+            "the worktrees section's layout menu: {menu:?}"
+        ),
+        other => panic!("expected the layout menu, got {other:?}"),
+    }
 }
