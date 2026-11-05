@@ -172,13 +172,7 @@ impl Element for TextElement {
 
             // A placeholder or masked rendering is a synthesized string that is
             // not the document; everything else reads through the model.
-            let substitute_text: Option<SharedString> = if content.is_empty() {
-                Some(input.placeholder.clone())
-            } else if input.masked {
-                Some(mask_text_for_display(content.as_ref()).into())
-            } else {
-                None
-            };
+            let substitute_text = input.substitute_display_text(&content);
             let text_color = if content.is_empty() {
                 style_colors.placeholder
             } else if input.display_text {
@@ -218,11 +212,7 @@ impl Element for TextElement {
                     visible_top,
                     visible_bottom,
                 );
-                let resolved = input.effective_highlights_for_window(byte_range);
-                if resolved.pending {
-                    input.ensure_highlight_provider_poll(cx);
-                }
-                Some(resolved.highlights)
+                Some(input.highlights_polling_provider(byte_range, cx))
             };
             let highlight_slice = highlights.as_ref().map(|h| h.as_slice());
             let has_background_runs = highlight_slice.is_some_and(|highlights| {
@@ -595,20 +585,15 @@ impl Element for TextElement {
                     let offscreen_highlights = (!visible_line_range.contains(&line_ix)
                         && input.highlight.provider.is_some())
                     .then(|| {
-                        input.effective_highlights_for_window(
+                        input.highlights_polling_provider(
                             line_start..line_start + line_text.len(),
+                            cx,
                         )
                     });
-                    if offscreen_highlights
-                        .as_ref()
-                        .is_some_and(|resolved| resolved.pending)
-                    {
-                        input.ensure_highlight_provider_poll(cx);
-                    }
                     let line_style = TextShapeStyle {
                         highlights: offscreen_highlights
                             .as_ref()
-                            .map(|resolved| resolved.highlights.as_slice())
+                            .map(|highlights| highlights.as_slice())
                             .or(shape_style.highlights),
                         ..shape_style
                     };
@@ -888,7 +873,7 @@ impl Element for TextElement {
             window.paint_quad(cursor);
         }
 
-        self.input.update(cx, |input, cx| {
+        let needs_another_frame = self.input.update(cx, |input, cx| {
             let prev_height_rows = if input.multiline && input.soft_wrap {
                 input
                     .wrap
@@ -915,9 +900,8 @@ impl Element for TextElement {
                 input.wrap.last_rows = None;
             }
             input.layout.scroll_x = prepaint.scroll_x;
-            if had_pending_cursor_autoscroll {
-                input.ensure_cursor_visible_in_vertical_scroll(cx);
-            }
+            let reveal_continues =
+                had_pending_cursor_autoscroll && input.ensure_cursor_visible_in_vertical_scroll(cx);
             let next_height_rows = if input.multiline && input.soft_wrap {
                 input
                     .wrap
@@ -927,12 +911,19 @@ impl Element for TextElement {
             } else {
                 None
             };
-            if prev_height_rows != next_height_rows {
-                // Apply the measured height to the parent on the next frame.
-                // The caret reveal owns its bounded retry while that happens.
+            let rows_changed = std::mem::take(&mut input.wrap.ancestor_rows_stale)
+                || prev_height_rows != next_height_rows;
+            if rows_changed {
+                // Re-render ancestors with the measured rows next frame.
                 cx.notify();
             }
+            rows_changed || reveal_continues
         });
+        if needs_another_frame {
+            // A notify during paint does not request a frame.
+            let input = self.input.clone();
+            window.on_next_frame(move |_, cx| input.update(cx, |_, cx| cx.notify()));
+        }
     }
 }
 

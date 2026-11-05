@@ -870,3 +870,275 @@ fn wrapped_real_font_typing_is_stable_at_normal_and_enlarged_scale() {
         }
     }
 }
+
+fn painted_rows_and_height(
+    input: &Entity<TextInput>,
+    cx: &mut gpui::VisualTestContext,
+) -> (usize, Pixels) {
+    cx.update(|_window, app| {
+        let input = input.read(app);
+        let TextInputLayout::Wrapped { row_counts, .. } = input.layout.last.as_ref().unwrap()
+        else {
+            panic!("wrapped layout")
+        };
+        let rows = total_wrap_rows(row_counts);
+        let height = input.layout.bounds.unwrap().size.height;
+        (rows, height)
+    })
+}
+
+fn assert_height_fits_painted_rows(
+    input: &Entity<TextInput>,
+    cx: &mut gpui::VisualTestContext,
+    context: &str,
+) -> usize {
+    let (rows, height) = painted_rows_and_height(input, cx);
+    let line_height = cx.update(|_window, app| input.read(app).layout.line_height);
+    assert!(
+        (height - line_height * rows as f32).abs() <= px(0.5),
+        "{context}: painted {rows} rows into a field laid out {height:?} tall"
+    );
+    rows
+}
+
+/// Unlike `draw_frame`, draws only frames the window requested.
+fn draw_requested_frames(cx: &mut gpui::VisualTestContext) {
+    for _ in 0..16 {
+        cx.run_until_parked();
+        if cx.update(|window, app| window.simulate_next_frame(app)) == 0 {
+            return;
+        }
+    }
+    panic!("text input kept requesting frames");
+}
+
+#[gpui::test]
+fn wrapped_height_follows_typing_in_the_frame_that_paints_it(cx: &mut gpui::TestAppContext) {
+    crate::test_support::use_real_text_backend(cx);
+    let (view, cx) = cx.add_window_view(WrappedInputView::new);
+    let input = seed_wrapped_input(&view, cx, "");
+    let message =
+        "Fix the commit box so it grows with its text while typing fast or pasting a long message";
+    let mut max_rows = 0;
+    for (start, character) in message.char_indices() {
+        let end = start + character.len_utf8();
+        cx.simulate_input(&message[start..end]);
+        let rows = assert_height_fits_painted_rows(
+            &input,
+            cx,
+            &format!("after typing {:?}", &message[..end]),
+        );
+        max_rows = max_rows.max(rows);
+    }
+    assert!(max_rows >= 3, "fixture must wrap onto several rows");
+    cx.update(|_window, app| assert_eq!(input.read(app).text(), message));
+
+    for _ in 0..message.len() {
+        cx.update(|window, app| {
+            input.update(app, |input, cx| input.backspace(&Backspace, window, cx));
+        });
+        assert_height_fits_painted_rows(&input, cx, "after deleting");
+    }
+    cx.update(|_window, app| assert_eq!(input.read(app).text(), ""));
+}
+
+#[gpui::test]
+fn wrapped_height_follows_a_paste_in_the_frame_that_paints_it(cx: &mut gpui::TestAppContext) {
+    crate::test_support::use_real_text_backend(cx);
+    let (view, cx) = cx.add_window_view(WrappedInputView::new);
+    let input = seed_wrapped_input(&view, cx, "");
+    let pasted = "Subject line\n\nA body paragraph long enough to wrap onto a second row";
+    cx.update(|window, app| {
+        input.update(app, |input, cx| {
+            input.replace_text_in_range(None, pasted, window, cx);
+        });
+    });
+    let rows = assert_height_fits_painted_rows(&input, cx, "after pasting");
+    assert!(rows > 3, "fixture must wrap a pasted line: {rows} rows");
+    cx.update(|_window, app| {
+        assert_eq!(
+            view.read(app).scroll.max_offset().y,
+            px(0.0),
+            "fixture must fit without scrolling"
+        );
+    });
+    draw_requested_frames(cx);
+    assert_eq!(assert_height_fits_painted_rows(&input, cx, "settled"), rows);
+}
+
+#[gpui::test]
+fn wrapped_height_measured_during_paint_is_applied_by_a_requested_frame(
+    cx: &mut gpui::TestAppContext,
+) {
+    crate::test_support::use_real_text_backend(cx);
+    let (view, cx) = cx.add_window_view(WrappedInputView::new);
+    let input = seed_wrapped_input(&view, cx, "alpha beta gamma delta epsilon zeta eta theta");
+    let wide_rows = assert_height_fits_painted_rows(&input, cx, "seeded");
+    cx.update(|_window, app| {
+        view.update(app, |view, cx| {
+            view.width = px(140.0);
+            cx.notify();
+        });
+    });
+    draw_requested_frames(cx);
+    let narrow_rows = assert_height_fits_painted_rows(&input, cx, "after narrowing");
+    assert!(narrow_rows > wide_rows, "{wide_rows} -> {narrow_rows} rows");
+}
+
+#[gpui::test]
+fn wrapped_paste_reveals_the_caret_without_another_event(cx: &mut gpui::TestAppContext) {
+    crate::test_support::use_real_text_backend(cx);
+    let (view, cx) = cx.add_window_view(WrappedInputView::new);
+    let input = seed_wrapped_input(&view, cx, "");
+    let pasted = "a pasted line of a long commit message\n".repeat(20);
+    cx.update(|window, app| {
+        input.update(app, |input, cx| {
+            input.replace_text_in_range(None, &pasted, window, cx);
+        });
+    });
+    draw_requested_frames(cx);
+    cx.update(|_window, app| {
+        let input = input.read(app);
+        let viewport = view.read(app).scroll.bounds();
+        let origin = input.layout.bounds.unwrap().top();
+        let (top, bottom) = input.cursor_vertical_span(input.cursor_offset()).unwrap();
+        assert!(view.read(app).scroll.max_offset().y > px(0.0));
+        assert!(
+            origin + top >= viewport.top() - px(1.0)
+                && origin + bottom <= viewport.bottom() + px(1.0),
+            "caret {:?}..{:?}, viewport {viewport:?}",
+            origin + top,
+            origin + bottom
+        );
+    });
+}
+
+/// Reads row counts while rendering, like the editor gutters.
+struct GutterView {
+    input: Entity<TextInput>,
+    rendered_rows: Vec<usize>,
+}
+
+impl Render for GutterView {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.rendered_rows = self.input.read(cx).wrap_row_counts().to_vec();
+        div().w(px(280.0)).child(self.input.clone())
+    }
+}
+
+struct CachedGutterHost {
+    gutter: Entity<GutterView>,
+}
+
+impl Render for CachedGutterHost {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        div().size_full().child(
+            gpui::AnyView::from(self.gutter.clone()).cached(gpui::StyleRefinement::default()),
+        )
+    }
+}
+
+fn mount_cached_gutter(
+    cx: &mut gpui::TestAppContext,
+) -> (
+    Entity<CachedGutterHost>,
+    Entity<GutterView>,
+    Entity<TextInput>,
+    &mut gpui::VisualTestContext,
+) {
+    crate::test_support::use_real_text_backend(cx);
+    let (host, cx) = cx.add_window_view(|window, cx| {
+        window.activate();
+        let input = cx.new(|cx| {
+            TextInput::new(
+                TextInputOptions {
+                    multiline: true,
+                    soft_wrap: true,
+                    ..Default::default()
+                },
+                window,
+                cx,
+            )
+        });
+        let gutter = cx.new(|_| GutterView {
+            input,
+            rendered_rows: Vec::new(),
+        });
+        CachedGutterHost { gutter }
+    });
+    let (gutter, input) = cx.update(|window, app| {
+        let gutter = host.read(app).gutter.clone();
+        let input = gutter.read(app).input.clone();
+        input.update(app, |input, cx| {
+            input.set_text("alpha beta gamma delta".to_owned(), cx);
+            input.set_caret(input.text().len(), cx);
+            window.focus(&input.focus_handle(), cx);
+        });
+        (gutter, input)
+    });
+    for _ in 0..4 {
+        draw_frame(cx);
+    }
+    draw_requested_frames(cx);
+    (host, gutter, input, cx)
+}
+
+#[gpui::test]
+fn wrap_rows_measured_after_ancestor_render_rerender_ancestors(cx: &mut gpui::TestAppContext) {
+    let (host, gutter, input, cx) = mount_cached_gutter(cx);
+    let rendered_and_measured = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|_window, app| {
+            (
+                gutter.read(app).rendered_rows.clone(),
+                input.read(app).wrap_row_counts().to_vec(),
+            )
+        })
+    };
+    let mut wrapped = false;
+    for character in " epsilon zeta eta theta iota kappa lambda mu nu xi".chars() {
+        cx.simulate_input(&character.to_string());
+        draw_requested_frames(cx);
+        let (rendered, measured) = rendered_and_measured(cx);
+        assert_eq!(
+            rendered, measured,
+            "requested frames after typing {character:?}"
+        );
+        // Unrelated redraw: replays the cached gutter unless it is dirty.
+        cx.update(|_window, app| host.update(app, |_, cx| cx.notify()));
+        draw_requested_frames(cx);
+        let (rendered, measured) = rendered_and_measured(cx);
+        assert_eq!(
+            rendered, measured,
+            "unrelated redraw after typing {character:?}"
+        );
+        wrapped |= measured.iter().sum::<usize>() > 1;
+    }
+    assert!(wrapped, "fixture must wrap onto a second row");
+}
+
+#[gpui::test]
+fn wrap_edit_that_keeps_every_row_count_requests_no_extra_frame(cx: &mut gpui::TestAppContext) {
+    let (_host, _gutter, input, cx) = mount_cached_gutter(cx);
+    let row_counts = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|_window, app| input.read(app).wrap_row_counts().to_vec())
+    };
+    let mut kept_rows = 0;
+    let mut changed_rows = 0;
+    for character in " epsilon zeta eta theta iota kappa lambda mu nu xi".chars() {
+        let before = row_counts(cx);
+        cx.simulate_input(&character.to_string());
+        let requested = cx.update(|window, app| window.simulate_next_frame(app));
+        if row_counts(cx) == before {
+            kept_rows += 1;
+            assert_eq!(requested, 0, "typing {character:?} kept the rows");
+        } else {
+            changed_rows += 1;
+            assert!(requested > 0, "typing {character:?} changed the rows");
+        }
+        draw_requested_frames(cx);
+    }
+    assert!(
+        kept_rows > 0 && changed_rows > 0,
+        "{kept_rows} kept, {changed_rows} changed"
+    );
+}

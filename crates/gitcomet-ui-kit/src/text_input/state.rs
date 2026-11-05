@@ -746,6 +746,8 @@ pub(super) struct WrapState {
     pub(super) recompute_requested: bool,
     pub(super) pending_job: Option<PendingWrapJob>,
     pub(super) dirty_ranges: Vec<Range<usize>>,
+    /// Rows changed after ancestor views rendered from the old counts.
+    pub(super) ancestor_rows_stale: bool,
 }
 
 impl WrapState {
@@ -761,6 +763,7 @@ impl WrapState {
             recompute_requested: false,
             pending_job: None,
             dirty_ranges: Vec::new(),
+            ancestor_rows_stale: false,
         }
     }
 }
