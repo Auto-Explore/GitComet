@@ -986,6 +986,17 @@ fn fill_set_active_repo_inline_impl(
         }
         append_cancel_loads_for_deactivated_repo(state, previous_active, effects);
     }
+    if changed && let Some(previous) = previous_active {
+        // The checkout belongs to the repository, but the tab that explains it
+        // belongs to the window. Switching repositories leaves the sidebar on
+        // Virtual branches, so without this the repository the user just walked away
+        // from stays sitting on `gitcomet/virtual` with nothing on screen
+        // saying why — and the next time they pick it up they would be looking
+        // at another repository's branches.
+        effects.extend(super::virtual_branches::leave_virtual_branches(
+            state, previous,
+        ));
+    }
     if changed && state.git_log_settings.verify_commit_signatures {
         for repo in &mut state.repos {
             repo.history_state.commit_signatures_queue.clear();

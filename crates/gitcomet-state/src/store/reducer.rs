@@ -42,10 +42,14 @@ mod submodule_trust;
 #[cfg(test)]
 pub(super) mod test_inputs;
 mod util;
+mod virtual_branches;
 mod worktree_removal;
 
 use crate::model::{AppState, Loadable, RepoId};
-use crate::msg::{ConflictRegionChoice, Effect, Msg, RepoPath, RepoPathList, WorktreeSaveBaseline};
+use crate::msg::{
+    CheckoutRequest, ConflictRegionChoice, Effect, Msg, RepoPath, RepoPathList,
+    WorktreeSaveBaseline,
+};
 use auth::{annex_adjusted_refusal, annex_takeover};
 use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
@@ -1495,6 +1499,18 @@ fn reduce_inner(
             diff_selection::apply_worktree_patch(repo_id, patch, reverse)
         }
         Msg::CheckoutBranch { repo_id, name } => {
+            if virtual_branches::owns_workdir(state, repo_id) {
+                // The virtual branches owns the working directory, so leaving it is
+                // part of this checkout. The branch exists already, which is
+                // what lets the leave put the directory straight on it.
+                return virtual_branches::leave_for_checkout(
+                    inputs,
+                    state,
+                    repo_id,
+                    Some(name.clone()),
+                    CheckoutRequest::Branch { name },
+                );
+            }
             if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
                 repo_state.set_detached_head_commit(None);
             }
@@ -1508,6 +1524,23 @@ fn reduce_inner(
             local_branch,
             mode,
         } => {
+            if virtual_branches::owns_workdir(state, repo_id) {
+                // The local branch may not exist yet — the checkout is often
+                // what creates it — so the leave goes back to the branch the
+                // virtual branches remembers and the checkout runs after it.
+                return virtual_branches::leave_for_checkout(
+                    inputs,
+                    state,
+                    repo_id,
+                    None,
+                    CheckoutRequest::Remote {
+                        remote,
+                        branch,
+                        local_branch,
+                        mode,
+                    },
+                );
+            }
             if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
                 repo_state.set_detached_head_commit(None);
             }
@@ -1521,6 +1554,17 @@ fn reduce_inner(
             )
         }
         Msg::CheckoutCommit { repo_id, commit_id } => {
+            if virtual_branches::owns_workdir(state, repo_id) {
+                // A commit is always there to check out, so the leave can take
+                // the working directory straight to it.
+                return virtual_branches::leave_for_checkout(
+                    inputs,
+                    state,
+                    repo_id,
+                    Some(commit_id.to_string()),
+                    CheckoutRequest::Commit { commit_id },
+                );
+            }
             if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
                 repo_state.set_detached_head_commit(Some(commit_id.clone()));
             }
@@ -2793,5 +2837,80 @@ fn reduce_inner(
             command,
             result,
         }) => auth::repo_command_finished(inputs, repos, id_alloc, state, repo_id, command, result),
+        // ── Virtual branches ───────────────────────────────────────────
+        Msg::LoadVirtualBranches { repo_id } => {
+            virtual_branches::load_virtual_branches(state, repo_id)
+        }
+        Msg::ApplyVirtualBranchesEdit { repo_id, edit } => {
+            virtual_branches::apply_virtual_branches_edit(state, repo_id, edit)
+        }
+        Msg::SetVirtualBranchesBranchApplied {
+            repo_id,
+            name,
+            applied,
+        } => virtual_branches::set_branch_applied(state, repo_id, name, applied),
+        Msg::CommitVirtualBranchesBranch {
+            repo_id,
+            name,
+            message,
+        } => virtual_branches::commit_branch(inputs, state, repo_id, name, message),
+        Msg::CommitVirtualBranchesFile { repo_id, path } => {
+            virtual_branches::commit_single_file(inputs, state, repo_id, path)
+        }
+        Msg::DismissVirtualBranchesConflict { repo_id } => {
+            virtual_branches::dismiss_conflict(state, repo_id)
+        }
+        Msg::PushVirtualBranchesBranch { repo_id, name } => {
+            virtual_branches::push_branch(state, repo_id, name)
+        }
+        Msg::Internal(crate::msg::InternalMsg::VirtualBranchesLoaded {
+            repo_id,
+            result,
+            assignments,
+            virtual_branches_commit,
+        }) => virtual_branches::virtual_branches_loaded(
+            inputs,
+            state,
+            repo_id,
+            result,
+            assignments,
+            virtual_branches_commit,
+        ),
+        Msg::Internal(crate::msg::InternalMsg::VirtualBranchesEditFinished {
+            repo_id,
+            edit,
+            result,
+        }) => {
+            virtual_branches::virtual_branches_edit_finished(inputs, state, repo_id, edit, result)
+        }
+        Msg::Internal(crate::msg::InternalMsg::VirtualBranchesActiveFinished {
+            repo_id,
+            active,
+            checkout_base,
+            result,
+        }) => virtual_branches::virtual_branches_active_finished(
+            inputs,
+            state,
+            repo_id,
+            active,
+            checkout_base,
+            result,
+        ),
+        Msg::Internal(crate::msg::InternalMsg::VirtualBranchesAssignFinished {
+            repo_id,
+            path,
+            hunk,
+            branch,
+            result,
+        }) => virtual_branches::virtual_branches_assign_finished(
+            inputs, state, repo_id, path, hunk, branch, result,
+        ),
+        Msg::Internal(crate::msg::InternalMsg::VirtualBranchesPushFinished {
+            repo_id,
+            name,
+            result,
+        }) => {
+            virtual_branches::virtual_branches_push_finished(inputs, state, repo_id, name, result)
+        }
     }
 }

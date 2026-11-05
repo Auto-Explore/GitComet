@@ -18,7 +18,7 @@ mod store_event;
 pub use conflict_plan_origin::ConflictPlanOrigin;
 pub use conflict_region_origin::ConflictRegionOrigin;
 pub use control::ControlEffect;
-pub use effect::Effect;
+pub use effect::{CheckoutRequest, Effect};
 pub use persistence::PersistenceEffect;
 pub use references::ReferenceEffect;
 pub use repo_command::RepoCommandEffect;

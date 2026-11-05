@@ -18,6 +18,7 @@ mod repo_load;
 mod status;
 mod unavailable;
 mod util;
+mod virtual_branches_effects;
 pub(super) mod worktree_list;
 
 /// Releases one runtime's ownership without disturbing other stores or tabs.
@@ -162,6 +163,72 @@ pub(super) fn schedule_effect(
     match effect {
         Effect::Persistence(work) => {
             persistence::schedule(session_persist_executor, thread_state, msg_tx, work)
+        }
+        Effect::LoadVirtualBranches { repo_id } => {
+            virtual_branches_effects::schedule_load_virtual_branches(
+                repo_load_executor,
+                repos,
+                msg_tx,
+                repo_id,
+            );
+        }
+        Effect::ApplyVirtualBranchesEdit { repo_id, edit } => {
+            virtual_branches_effects::schedule_apply_virtual_branches_edit(
+                executor, repos, msg_tx, repo_id, edit,
+            );
+        }
+        Effect::EnterVirtualBranches {
+            repo_id,
+            checkout_base,
+        } => virtual_branches_effects::schedule_enter_virtual_branches(
+            executor,
+            repos,
+            msg_tx,
+            repo_id,
+            checkout_base,
+        ),
+        Effect::LeaveVirtualBranches {
+            repo_id,
+            checkout_base,
+        } => virtual_branches_effects::schedule_leave_virtual_branches(
+            executor,
+            repos,
+            msg_tx,
+            repo_id,
+            checkout_base,
+        ),
+        Effect::LeaveVirtualBranchesAndCheckout {
+            repo_id,
+            checkout_base,
+            then,
+        } => virtual_branches_effects::schedule_leave_virtual_branches_and_checkout(
+            executor,
+            repos,
+            msg_tx,
+            repo_id,
+            checkout_base,
+            then,
+        ),
+        Effect::AssignVirtualBranchesFile {
+            repo_id,
+            path,
+            hunk,
+            branch,
+        } => {
+            virtual_branches_effects::schedule_assign_virtual_branches_file(
+                metadata_executor,
+                repos,
+                msg_tx,
+                repo_id,
+                path,
+                hunk,
+                branch,
+            );
+        }
+        Effect::PushVirtualBranchesBranch { repo_id, name } => {
+            virtual_branches_effects::schedule_push_virtual_branches_branch(
+                executor, repos, msg_tx, repo_id, name,
+            );
         }
         Effect::Control(work) => control::schedule(executor, repos, msg_tx, work),
         Effect::Status(work) => {

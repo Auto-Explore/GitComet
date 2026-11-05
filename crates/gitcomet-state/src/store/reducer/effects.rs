@@ -1675,22 +1675,50 @@ pub(super) fn set_file_browser_settings(
 }
 
 pub(super) fn set_sidebar_mode(state: &mut AppState, mode: SidebarMode) -> Vec<Effect> {
-    if state.sidebar_mode != mode {
-        state.sidebar_mode = mode;
-        let follow = state.file_browser_settings.follow_selected_commit;
+    if state.sidebar_mode == mode {
+        return Vec::new();
+    }
+    let previous = state.sidebar_mode;
+    state.sidebar_mode = mode;
+    let follow = state.file_browser_settings.follow_selected_commit;
 
-        if mode == SidebarMode::Files
-            && let Some(repo_id) = state.active_repo
-            && let Some(repo) = state.repos.iter_mut().find(|r| r.id == repo_id)
-        {
-            // Retarget first, so the one load below carries the selection's
-            // source instead of walking the old one and then walking again.
-            sync_file_browser_to_selection(repo, follow, mode);
-            if repo.file_browser.needs_load() {
-                return request_file_browser_load(repo).into_iter().collect();
-            }
+    if mode == SidebarMode::Files
+        && let Some(repo_id) = state.active_repo
+        && let Some(repo) = state.repos.iter_mut().find(|r| r.id == repo_id)
+    {
+        // Retarget first, so the one load below carries the selection's
+        // source instead of walking the old one and then walking again.
+        sync_file_browser_to_selection(repo, follow, mode);
+        if repo.file_browser.needs_load() {
+            return request_file_browser_load(repo).into_iter().collect();
         }
     }
+
+    if mode == SidebarMode::VirtualBranches {
+        if let Some(repo_id) = state.active_repo {
+            // Load first when there is nothing to show yet; the switch into the
+            // virtual branches itself cannot run before the state says the virtual branches
+            // exists, and a rejected checkout would leave the user on a tab
+            // describing branches they are not actually on.
+            let needs_load = state
+                .repos
+                .iter()
+                .find(|repo| repo.id == repo_id)
+                .is_some_and(|repo| matches!(repo.virtual_branches.state, Loadable::NotLoaded));
+            if needs_load {
+                return vec![Effect::LoadVirtualBranches { repo_id }];
+            }
+            return super::virtual_branches::enter_virtual_branches(state, repo_id);
+        }
+    } else if previous == SidebarMode::VirtualBranches
+        && let Some(repo_id) = state.active_repo
+    {
+        // Leaving hands the working directory back. Anything else here would
+        // strand the user on `gitcomet/virtual` after they have walked away
+        // from the tab that explains it.
+        return super::virtual_branches::leave_virtual_branches(state, repo_id);
+    }
+
     Vec::new()
 }
 
@@ -2344,6 +2372,14 @@ pub(super) fn head_branch_loaded(
 ) -> Vec<Effect> {
     let mut effects = Vec::new();
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
+        // A reply that still names the virtual branches branch was read before
+        // the leave moved HEAD, so it cannot confirm the leave. An error
+        // clears the flag too: nothing will ever confirm it, and leaving it
+        // set would keep `active` from lighting again.
+        if !matches!(&result, Ok(v) if v == gitcomet_core::virtual_branches::VIRTUAL_BRANCHES_BRANCH)
+        {
+            repo_state.virtual_branches.head_unconfirmed = false;
+        }
         let head_branch = match result {
             Ok(v) => {
                 if v == "HEAD" {

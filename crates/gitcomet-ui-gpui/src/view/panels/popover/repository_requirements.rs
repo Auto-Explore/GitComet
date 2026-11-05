@@ -8,6 +8,8 @@ impl PopoverKind {
     ) -> Option<RepoId> {
         match self {
             Self::CheckoutRemoteBranchPrompt { repo_id, .. }
+            | Self::LeaveVirtualBranchesToCheckoutPrompt { repo_id, .. }
+            | Self::VirtualBranchesPrompt { repo_id, .. }
             | Self::CommitPrompt { repo_id }
             | Self::StashDropConfirm { repo_id, .. }
             | Self::StashPickerPrompt { repo_id, .. }
@@ -225,6 +227,7 @@ impl PopoverHost {
             | ContextMenuAction::ApplyIndexPatch { repo_id, .. }
             | ContextMenuAction::ApplyWorktreePatch { repo_id, .. }
             | ContextMenuAction::StageHunk { repo_id, .. }
+            | ContextMenuAction::AssignHunkToVirtualBranches { repo_id, .. }
             | ContextMenuAction::UnstageHunk { repo_id, .. } => Some(*repo_id),
             ContextMenuAction::SelectDiff { repo_id, target } => match target {
                 DiffTarget::WorkingTree { worktree: None, .. }

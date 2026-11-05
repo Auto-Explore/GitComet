@@ -181,6 +181,20 @@ impl PopoverHost {
                 );
             }
             _ => {
+                if virtual_branches_owns_workdir(&self.state, repo_id) {
+                    // The virtual branches owns the working directory: ask before
+                    // taking it off the virtual-branches branch instead of moving
+                    // HEAD out from under the tab that shows the virtual branches.
+                    self.open_popover_centered(
+                        PopoverKind::LeaveVirtualBranchesToCheckoutPrompt {
+                            repo_id,
+                            target: VirtualBranchesCheckoutTarget::Branch(name),
+                        },
+                        window,
+                        cx,
+                    );
+                    return;
+                }
                 self.store.dispatch(Msg::CheckoutBranch { repo_id, name });
                 self.close_popover(cx);
             }
@@ -318,6 +332,7 @@ impl PopoverHost {
 
     pub(in crate::view::panels::popover) fn submit_checkout_remote_branch(
         &mut self,
+        window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
         let Some(PopoverKind::CheckoutRemoteBranchPrompt {
@@ -365,6 +380,7 @@ impl PopoverHost {
             branch,
             local_branch,
             CheckoutRemoteBranchMode::Create,
+            window,
             cx,
         );
     }
@@ -376,8 +392,28 @@ impl PopoverHost {
         branch: String,
         local_branch: String,
         mode: CheckoutRemoteBranchMode,
+        window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
+        if virtual_branches_owns_workdir(&self.state, repo_id) {
+            // The local branch may not exist yet — this checkout is often what
+            // creates it — so the dialog leaves the virtual branches first and runs
+            // the checkout after.
+            self.open_popover_centered(
+                PopoverKind::LeaveVirtualBranchesToCheckoutPrompt {
+                    repo_id,
+                    target: VirtualBranchesCheckoutTarget::Remote {
+                        remote,
+                        branch,
+                        local_branch,
+                        mode,
+                    },
+                },
+                window,
+                cx,
+            );
+            return;
+        }
         self.store.dispatch(Msg::CheckoutRemoteBranch {
             repo_id,
             remote,

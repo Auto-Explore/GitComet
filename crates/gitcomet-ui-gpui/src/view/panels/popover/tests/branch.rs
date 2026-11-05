@@ -794,7 +794,7 @@ fn open_checkout_remote_collision_prompt(
                 );
                 host.create_branch_input
                     .update(cx, |input, cx| input.set_text("main", cx));
-                host.submit_checkout_remote_branch(cx);
+                host.submit_checkout_remote_branch(window, cx);
             });
         });
     });
@@ -883,6 +883,157 @@ fn checkout_remote_branch_collision_dialog_overwrites_from_remote(cx: &mut gpui:
 
     let is_open = cx.update(|_window, app| view.read(app).popover_host.read(app).is_open());
     assert!(!is_open, "expected overwrite to close the collision dialog");
+}
+
+/// A repository whose working directory the virtual branches owns — the state the
+/// leave dialog exists for — with the branch picker ready to pick from it.
+fn open_branch_picker_over_a_virtual_branches_holding_workdir(
+    cx: &mut gpui::TestAppContext,
+) -> (
+    gpui::Entity<GitCometView>,
+    &mut gpui::VisualTestContext,
+    AppStore,
+) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let repo_id = RepoId(901);
+    let mut repo = RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/virtual branches-exit-checkout"),
+        },
+    );
+    // A virtual branches that holds the working directory has HEAD on its own
+    // branch: that is what makes `virtual_branches_loaded` re-derive `active` from
+    // HEAD after the failed leave reports back.
+    repo.head_branch =
+        Loadable::Ready(gitcomet_core::virtual_branches::VIRTUAL_BRANCHES_BRANCH.into());
+    repo.virtual_branches.active = true;
+    repo.virtual_branches.checkout_base = Some("main".to_string());
+    let state = Arc::new(AppState {
+        active_repo: Some(repo_id),
+        repos: vec![repo],
+        ..AppState::test_default()
+    });
+    let store_for_view = store.clone();
+    let (view, cx) = cx
+        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+    cx.update(|window, app| {
+        view.update(app, |view, cx| {
+            view.store.replace_snapshot_for_test(state.clone());
+            crate::view::test_support::push_test_state(view, state, cx);
+        });
+        let _ = window.draw(app);
+    });
+    (view, cx, store)
+}
+
+/// Pick a branch the way the checkout picker does: open it, then activate a row.
+fn pick_branch_through_the_picker(
+    view: &gpui::Entity<GitCometView>,
+    cx: &mut gpui::VisualTestContext,
+    repo_id: RepoId,
+) {
+    cx.update(|window, app| {
+        view.update(app, |view, cx| {
+            view.popover_host.update(cx, |host, cx| {
+                host.open_popover_centered(
+                    PopoverKind::BranchPicker {
+                        purpose: BranchPickerPurpose::Checkout,
+                    },
+                    window,
+                    cx,
+                );
+                host.handle_inline_branch_picker_select("feature".to_string(), repo_id, window, cx);
+            });
+        });
+    });
+}
+
+#[gpui::test]
+fn picking_a_branch_while_the_virtual_branches_holds_the_working_directory_asks_to_leave(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (view, cx, store) = open_branch_picker_over_a_virtual_branches_holding_workdir(cx);
+    pick_branch_through_the_picker(&view, cx, RepoId(901));
+
+    let popover = cx.update(|_window, app| view.read(app).popover_host.read(app).popover.clone());
+    assert!(
+        matches!(
+            popover,
+            Some(PopoverKind::LeaveVirtualBranchesToCheckoutPrompt { .. })
+        ),
+        "changing branch while the virtual branches holds the working directory has to ask to leave \
+         it first, got {popover:?}"
+    );
+
+    // The dialog states the rule and offers both ways out of it.
+    cx.run_until_parked();
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+    assert!(
+        cx.debug_bounds("leave_virtual_branches_checkout_go")
+            .is_some(),
+        "expected the action that leaves the virtual branches"
+    );
+    assert!(
+        cx.debug_bounds("leave_virtual_branches_checkout_cancel")
+            .is_some(),
+        "expected a way to stay where the user is"
+    );
+
+    // Cancelling leaves everything as it was: no leave, no checkout.
+    click_debug_selector(cx, "leave_virtual_branches_checkout_cancel");
+    let is_open = cx.update(|_window, app| view.read(app).popover_host.read(app).is_open());
+    assert!(!is_open, "expected Cancel to close the dialog");
+    assert!(
+        store
+            .snapshot()
+            .repos
+            .iter()
+            .find(|repo| repo.id == RepoId(901))
+            .is_some_and(
+                |repo| repo.virtual_branches.active && !repo.virtual_branches.busy.switching
+            ),
+        "cancelling must not move the working directory"
+    );
+}
+
+#[gpui::test]
+fn confirming_the_leave_dialog_leaves_the_virtual_branches_before_checking_the_branch_out(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (view, cx, store) = open_branch_picker_over_a_virtual_branches_holding_workdir(cx);
+    pick_branch_through_the_picker(&view, cx, RepoId(901));
+    cx.run_until_parked();
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+
+    click_debug_selector(cx, "leave_virtual_branches_checkout_go");
+
+    // Confirming dispatches the checkout unchanged, and the reducer turns it
+    // into a leave first. The leave is what fails against this backend, so the
+    // failure it reports is the proof of which of the two was sent.
+    wait_until("the leave to be reported", || {
+        store.snapshot().notifications.iter().any(|notification| {
+            notification
+                .message
+                .contains("Could not switch back out of the virtual branches")
+        })
+    });
+
+    let is_open = cx.update(|_window, app| view.read(app).popover_host.read(app).is_open());
+    assert!(!is_open, "expected confirming to close the dialog");
+    assert!(
+        store
+            .snapshot()
+            .repos
+            .iter()
+            .find(|repo| repo.id == RepoId(901))
+            .is_some_and(|repo| repo.virtual_branches.active),
+        "a leave that failed has to leave the working directory where it was"
+    );
 }
 
 #[gpui::test]
