@@ -792,7 +792,9 @@ impl GitCometView {
                 .is_some()
                 .then(|| self.terminal_panel_resize_handle(theme, cx));
             let drop_overlay = self.render_dock_drop_overlay(cx);
-            self.dock_hosts.end_frame();
+            if self.dock_hosts.end_frame(&self.dock_layout) {
+                self.schedule_sidebar_data_request(cx);
+            }
             let main_content = self.repository_main_content();
             let main_content = match zoomed {
                 Some((_, dock)) => dock,

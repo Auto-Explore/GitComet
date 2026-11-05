@@ -13,6 +13,20 @@ use super::*;
 use crate::kit::click::PointerClickExt as _;
 use crate::kit::interaction::{self as controls, ControlInteractionExt as _};
 use std::rc::Rc;
+use std::sync::LazyLock;
+
+/// Branches and Changes, made once: every frame looks them up.
+static BRANCHES: LazyLock<PanelId> = LazyLock::new(|| PanelId::from(panel_ids::BRANCHES));
+static CHANGES: LazyLock<PanelId> = LazyLock::new(|| PanelId::from(panel_ids::CHANGES));
+
+/// The built-in panels present the last time each repository was active,
+/// one bit per entry of [`BUILTIN_PANELS`]. Presence follows the active
+/// repository (File History counts only while its file's repository is
+/// active), so a panel appears only against what its own repository had.
+#[derive(Debug, Default)]
+pub(in crate::view) struct DockPresence {
+    by_repo: rustc_hash::FxHashMap<Option<RepoId>, u8>,
+}
 
 /// The drag that resizes the two halves of one dock.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -53,11 +67,13 @@ impl GitCometView {
     /// Whether the window can draw `panel` now. Terminal and Reflog exist
     /// while open and File History while it has a file, as today.
     pub(in crate::view) fn dock_panel_present(&self, panel: &PanelId, cx: &gpui::App) -> bool {
-        if self.is_dock_panel_popped_out(panel) {
-            return false;
-        }
+        !self.is_dock_panel_popped_out(panel) && self.dock_kind_present(PanelKind::of(panel), cx)
+    }
+
+    /// As [`Self::dock_panel_present`], leaving out whether it is popped out.
+    fn dock_kind_present(&self, kind: PanelKind, cx: &gpui::App) -> bool {
         let repo_id = self.active_repo_id();
-        match PanelKind::of(panel) {
+        match kind {
             PanelKind::Terminal => repo_id.is_some_and(|repo_id| {
                 self.bottom_panel_providers.iter().any(|provider| {
                     !matches!(provider.tab(), BottomPanelTab::Reflog)
@@ -113,7 +129,7 @@ impl GitCometView {
     /// Where the main sidebar pane lives: the half that holds Branches.
     fn main_sidebar_half(&self) -> Option<(DockSide, DockHalf)> {
         self.dock_layout
-            .placement(&PanelId::from(panel_ids::BRANCHES))
+            .placement(&BRANCHES)
             .map(|placement| (placement.side, placement.half))
     }
 
@@ -127,24 +143,35 @@ impl GitCometView {
     /// Shows panels that just became present (a terminal opened, a file's
     /// history was asked for) and keeps the old collapse flags in step.
     pub(in crate::view) fn sync_dock_presence(&mut self, cx: &mut gpui::Context<Self>) {
-        let present: Vec<PanelId> = BUILTIN_PANELS
-            .iter()
-            .map(|panel| PanelId::from(*panel))
-            .filter(|panel| self.dock_panel_present(panel, cx))
-            .collect();
+        let mut panels = 0u8;
+        for (ix, panel) in BUILTIN_PANELS.iter().enumerate() {
+            let popped = self
+                .dock_popped_out
+                .keys()
+                .any(|popped| popped.as_str() == *panel);
+            if !popped && self.dock_kind_present(PanelKind::of_id(panel), cx) {
+                panels |= 1 << ix;
+            }
+        }
+        // Compared with the active repository's own last frame: coming back
+        // to a repository whose file history is open is not the history
+        // appearing, and must not undo a dock the user hid meanwhile.
+        let before = self
+            .dock_present
+            .by_repo
+            .insert(self.active_repo_id(), panels)
+            .unwrap_or(0);
+        let appeared = panels & !before;
         let mut changed = false;
-        for panel in &present {
-            if !self.dock_present.contains(panel)
+        for (ix, panel) in BUILTIN_PANELS.iter().enumerate() {
+            if appeared & (1 << ix) != 0
                 && matches!(
-                    PanelKind::of(panel),
+                    PanelKind::of_id(panel),
                     PanelKind::Terminal | PanelKind::Reflog | PanelKind::FileHistory
                 )
             {
-                changed |= self.dock_layout.show_panel(panel);
+                changed |= self.dock_layout.show_panel(&PanelId::from(*panel));
             }
-        }
-        if present != self.dock_present {
-            self.dock_present = present;
         }
         if changed {
             self.sync_collapse_flags_from_layout(cx);
@@ -154,37 +181,93 @@ impl GitCometView {
     /// The reference sections the Branches panel lists, as header keys, or
     /// `None` for today's sections in today's order.
     fn branches_sections(&self) -> Option<Rc<[&'static str]>> {
-        let sections = self.reference_sections_in(&PanelId::from(panel_ids::BRANCHES));
-        let factory: Vec<&'static str> = DEFAULT_BRANCHES_SECTIONS
+        let factory = DEFAULT_BRANCHES_SECTIONS
             .iter()
-            .filter_map(|id| branch_sidebar::section_storage_key(id))
-            .collect();
-        (sections != factory).then(|| sections.into())
+            .filter_map(|id| branch_sidebar::section_storage_key(id));
+        if self.reference_section_keys(&BRANCHES).eq(factory) {
+            return None;
+        }
+        Some(self.reference_sections_in(&BRANCHES).into())
     }
 
-    fn reference_sections_in(&self, panel: &PanelId) -> Vec<&'static str> {
+    fn reference_section_keys<'a>(
+        &'a self,
+        panel: &PanelId,
+    ) -> impl Iterator<Item = &'static str> + 'a {
         self.dock_layout
             .sections_in(panel)
             .iter()
             .filter(|section| section.kind() == SectionKind::References)
             .filter_map(|section| branch_sidebar::section_storage_key(section.as_str()))
-            .collect()
     }
 
-    fn change_sections_in(&self, panel: &PanelId) -> Vec<&'static str> {
+    pub(super) fn reference_sections_in(&self, panel: &PanelId) -> Vec<&'static str> {
+        self.reference_section_keys(panel).collect()
+    }
+
+    fn change_section_ids<'a>(
+        &'a self,
+        panel: &PanelId,
+    ) -> impl Iterator<Item = &'static str> + 'a {
         self.dock_layout
             .sections_in(panel)
             .iter()
             .filter(|section| section.kind() == SectionKind::Changes)
             .filter_map(static_section_id)
-            .collect()
+    }
+
+    pub(super) fn change_sections_in(&self, panel: &PanelId) -> Vec<&'static str> {
+        self.change_section_ids(panel).collect()
     }
 
     /// Tells the main panes which sections they draw.
+    /// Runs every frame, so it compares before it allocates.
     pub(in crate::view) fn sync_dock_section_hosts(&mut self, cx: &mut gpui::Context<Self>) {
-        let changes = self.change_sections_in(&PanelId::from(panel_ids::CHANGES));
+        let unchanged = self
+            .details_pane
+            .read(cx)
+            .change_sections
+            .iter()
+            .copied()
+            .eq(self.change_section_ids(&CHANGES));
+        if unchanged {
+            return;
+        }
+        let changes = self.change_sections_in(&CHANGES);
         self.details_pane
             .update(cx, |pane, cx| pane.set_change_sections(changes, cx));
+    }
+
+    /// The sidebar pane that draws `panel` (Branches, Files or File History):
+    /// the popped-out window's, the main pane for the half holding Branches,
+    /// or that half's own pane, made now when the half has not drawn yet so
+    /// a tab chosen for it survives its first frame.
+    pub(in crate::view) fn dock_sidebar_pane_for(
+        &mut self,
+        panel: &'static str,
+        cx: &mut gpui::Context<Self>,
+    ) -> Option<Entity<SidebarPaneView>> {
+        let id = PanelId::from(panel);
+        if let Some(popped) = self.dock_popped_out.get(&id) {
+            return popped.sidebar_pane();
+        }
+        let placement = self.dock_layout.placement(&id)?;
+        let at = (placement.side, placement.half);
+        if self.main_sidebar_half() == Some(at) {
+            return Some(self.sidebar_pane.clone());
+        }
+        let key = HostKey::Tabs(at.0, at.1);
+        if let Some(pane) = self.dock_hosts.sidebar_for(&key) {
+            return Some(pane);
+        }
+        // The next frame gives it the half's whole tab set.
+        let config = panes::SidebarDockConfig {
+            tabs: panes::SidebarTabSet::from_panels([panel]),
+            sections: self.branches_sections(),
+            header: true,
+            extension_tabs: false,
+        };
+        Some(self.dock_sidebar_host(key, config, cx))
     }
 
     /// The whole dock on `side`, or `None` when it has nothing to draw.
@@ -360,8 +443,7 @@ impl GitCometView {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
-        let families: Vec<Family> = tabs.iter().map(family).collect();
-        let all = |wanted: Family| families.iter().all(|family| *family == wanted);
+        let all = |wanted: Family| tabs.iter().all(|tab| family(tab) == wanted);
         if all(Family::Sidebar) {
             return self.render_sidebar_half(side, half, tabs, shown, window, cx);
         }
@@ -440,10 +522,9 @@ impl GitCometView {
         }
         // Change sections placed in Branches draw under its list.
         if pane.read(cx).shown_dock_panel(cx) == Some(panel_ids::BRANCHES) {
-            let branches = PanelId::from(panel_ids::BRANCHES);
-            let changes = self.change_sections_in(&branches);
+            let changes = self.change_sections_in(&BRANCHES);
             if !changes.is_empty() {
-                let host = self.dock_change_host(&branches, changes, cx);
+                let host = self.dock_change_host(&BRANCHES, changes, cx);
                 column = column.child(
                     div()
                         .flex_1()
@@ -464,8 +545,7 @@ impl GitCometView {
         _window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
-        let changes = PanelId::from(panel_ids::CHANGES);
-        let references = self.reference_sections_in(&changes);
+        let references = self.reference_sections_in(&CHANGES);
         let details = match self.details_tab_content(cx) {
             Some(content) => content,
             None => div()
@@ -484,7 +564,7 @@ impl GitCometView {
                 .into_any_element();
         }
         let host = self.dock_sidebar_host(
-            HostKey::Sections(changes),
+            HostKey::Sections(CHANGES.clone()),
             panes::SidebarDockConfig::sections_host(references.into()),
             cx,
         );

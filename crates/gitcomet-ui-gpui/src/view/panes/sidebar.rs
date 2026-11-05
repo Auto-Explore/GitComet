@@ -1322,32 +1322,42 @@ impl SidebarPaneView {
     }
 
     fn dispatch_sidebar_data_request_if_needed(&mut self, cx: &mut gpui::Context<Self>) {
-        let expanded_visible = self.expanded_branches_visible
-            && self.sidebar_mode() == SidebarMode::Branches
-            && self.dock.tabs.branches;
-        let sections = self.dock.sections.clone();
-        let next = sidebar_presentation::sidebar_request_fingerprint(
-            self.state.as_ref(),
-            &self.sidebar_collapsed_items_by_repo,
-            expanded_visible,
-            sections.as_deref(),
-        );
+        let next = if self.dock.tabs.branches {
+            let expanded_visible =
+                self.expanded_branches_visible && self.sidebar_mode() == SidebarMode::Branches;
+            sidebar_presentation::sidebar_request_fingerprint(
+                self.state.as_ref(),
+                &self.sidebar_collapsed_items_by_repo,
+                expanded_visible,
+                self.dock.sections.as_deref(),
+            )
+        } else {
+            SidebarRequestFingerprint::nothing(self.state.as_ref())
+        };
         if next == self.sidebar_request_fingerprint {
             return;
         }
         self.sidebar_request_fingerprint = next;
 
-        let Some((repo_id, request)) = sidebar_presentation::active_sidebar_data_request_for(
-            self.state.as_ref(),
-            &self.sidebar_collapsed_items_by_repo,
-            expanded_visible,
-            sections.as_deref(),
-        ) else {
-            return;
-        };
-
+        // The store keeps one request per repository, so the window sends
+        // what all of its sidebar panes need together. Deferred: the window
+        // reads every pane, and this one may be inside the window's update.
+        let root = self.root_view.clone();
         let store = Arc::clone(&self.store);
-        cx.defer(move |_cx| store.dispatch(Msg::EnsureSidebarData { repo_id, request }));
+        let request = next.request();
+        cx.defer(move |cx| {
+            let sent = root.update(cx, |root, cx| root.dispatch_sidebar_data_request(cx));
+            if sent.is_err()
+                && let Some((repo_id, request)) = request
+            {
+                store.dispatch(Msg::EnsureSidebarData { repo_id, request });
+            }
+        });
+    }
+
+    /// What this pane's branch list needs loaded for the active repository.
+    pub(in crate::view) fn sidebar_data_request(&self) -> Option<(RepoId, SidebarDataRequest)> {
+        self.sidebar_request_fingerprint.request()
     }
 
     pub(in super::super) fn branch_sidebar_presentation_cached(

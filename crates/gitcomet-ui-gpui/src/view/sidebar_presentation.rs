@@ -175,6 +175,23 @@ pub(in crate::view) struct SidebarRequestFingerprint {
     request: Option<SidebarDataRequest>,
 }
 
+impl SidebarRequestFingerprint {
+    /// For a pane without a branch list (Files or File History on its own):
+    /// it needs nothing loaded.
+    pub(in crate::view) fn nothing(state: &AppState) -> Self {
+        Self {
+            active_repo_id: state.active_repo,
+            request: None,
+        }
+    }
+
+    /// What the pane asks for, for the window to combine with its other
+    /// panes' requests.
+    pub(in crate::view) fn request(&self) -> Option<(RepoId, SidebarDataRequest)> {
+        Some((self.active_repo_id?, self.request?))
+    }
+}
+
 #[cfg(test)]
 pub(in crate::view) fn active_sidebar_data_request(
     state: &AppState,

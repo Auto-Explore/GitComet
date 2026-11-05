@@ -341,12 +341,10 @@ impl SidebarPaneView {
             // The strip stands for the tab it shows: right-click opens that
             // panel's layout menu, dragging moves it to another dock.
             .when_some(shown_panel, |strip, panel| {
+                let title: SharedString = crate::view::dock::builtin_panel_title(panel)
+                    .unwrap_or_default()
+                    .into();
                 let panel = gitcomet_state::session::PanelId::from(panel);
-                let title: SharedString = match panel.as_str() {
-                    gitcomet_state::session::panel_ids::FILES => "Files".into(),
-                    gitcomet_state::session::panel_ids::FILE_HISTORY => "File History".into(),
-                    _ => "Branches".into(),
-                };
                 let drag = crate::view::dock::DockPanelDrag {
                     panel: panel.clone(),
                     title,

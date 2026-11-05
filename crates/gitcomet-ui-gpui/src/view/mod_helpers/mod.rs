@@ -1122,7 +1122,7 @@ pub struct GitCometView {
     pub(super) dock_popped_out:
         std::collections::BTreeMap<crate::view::dock::PanelId, crate::view::dock::PoppedOutPanel>,
     /// Built-in panels present last frame, to show the ones that appear.
-    pub(super) dock_present: Vec<crate::view::dock::PanelId>,
+    pub(super) dock_present: crate::view::dock::DockPresence,
     /// Set while the bottom panel draws in a side dock: fill, not own height.
     pub(super) bottom_panel_fill: bool,
     pub(super) sidebar_collapsed: bool,

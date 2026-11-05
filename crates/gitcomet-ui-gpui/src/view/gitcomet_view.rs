@@ -1305,7 +1305,7 @@ impl GitCometView {
                 Default::default()
             },
             dock_popped_out: std::collections::BTreeMap::new(),
-            dock_present: Vec::new(),
+            dock_present: Default::default(),
             bottom_panel_fill: false,
             sidebar_collapsed: restored_sidebar_collapsed,
             sidebar_collapsed_popover: None,
@@ -1416,7 +1416,17 @@ impl GitCometView {
             .update(cx, |bar, cx| bar.set_theme(theme, cx));
         self.sidebar_pane
             .update(cx, |pane, cx| pane.set_theme(theme, cx));
-        for pane in self.dock_hosts.sidebar_panes().cloned().collect::<Vec<_>>() {
+        let dock_panes: Vec<_> = self
+            .dock_hosts
+            .sidebar_panes()
+            .chain(
+                self.dock_popped_out
+                    .values()
+                    .filter_map(super::dock::PoppedOutPanel::sidebar_pane_ref),
+            )
+            .cloned()
+            .collect();
+        for pane in dock_panes {
             pane.update(cx, |pane, cx| pane.set_theme(theme, cx));
         }
         self.diff_renderer
@@ -1722,11 +1732,19 @@ impl GitCometView {
         if self.state.active_repo != Some(repo_id) {
             return;
         }
-        self.set_sidebar_collapsed(false, cx);
         self.file_history_pane
             .update(cx, |pane, cx| pane.open(repo_id, path, window, cx));
-        self.sidebar_pane
-            .update(cx, |pane, cx| pane.show_file_history(window, cx));
+        // The tab may live in another dock, or in a window of its own: show
+        // it where it is, and leave the other docks as they are.
+        let panel = super::dock::PanelId::from(super::dock::panel_ids::FILE_HISTORY);
+        if let Some(popped) = self.dock_popped_out.get(&panel) {
+            let _ = popped.window.update(cx, |_, window, _| window.activate());
+        } else {
+            self.update_dock_layout(|layout| layout.show_panel(&panel), cx);
+        }
+        if let Some(pane) = self.dock_sidebar_pane_for(super::dock::panel_ids::FILE_HISTORY, cx) {
+            pane.update(cx, |pane, cx| pane.show_file_history(window, cx));
+        }
     }
 
     pub(super) fn set_sidebar_collapsed(&mut self, collapsed: bool, cx: &mut gpui::Context<Self>) {

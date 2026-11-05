@@ -9,8 +9,8 @@
 
 use super::*;
 pub(in crate::view) use gitcomet_state::session::{
-    CentreSplitMode, DEFAULT_BRANCHES_SECTIONS, DEFAULT_CHANGES_SECTIONS, DockHalf, DockLayout,
-    DockSide, LayoutPreset, NamedLayouts, PanelId, SectionId, SectionKind, panel_ids, section_ids,
+    CentreSplitMode, DEFAULT_BRANCHES_SECTIONS, DockHalf, DockLayout, DockSide, LayoutPreset,
+    NamedLayouts, PanelId, SectionId, SectionKind, panel_ids, section_ids,
 };
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -24,6 +24,7 @@ mod windows;
 pub(crate) use commands::DockCommand;
 pub(in crate::view) use commands::palette_entries;
 pub(in crate::view) use hosts::DockHosts;
+pub(in crate::view) use render::DockPresence;
 pub(in crate::view) use windows::PoppedOutPanel;
 
 /// Shows or hides the n-th built-in panel (Alt+1..9, Cmd+1..9 on macOS).
@@ -82,14 +83,18 @@ pub(in crate::view) enum PanelKind {
 
 impl PanelKind {
     pub(in crate::view) fn of(panel: &PanelId) -> Self {
-        match panel.as_str() {
+        Self::of_id(panel.as_str())
+    }
+
+    pub(in crate::view) fn of_id(panel: &str) -> Self {
+        match panel {
             panel_ids::BRANCHES => Self::Branches,
             panel_ids::FILES => Self::Files,
             panel_ids::FILE_HISTORY => Self::FileHistory,
             panel_ids::CHANGES => Self::Changes,
             panel_ids::TERMINAL => Self::Terminal,
             panel_ids::REFLOG => Self::Reflog,
-            _ if panel.is_custom() => Self::Custom,
+            _ if panel.starts_with(gitcomet_state::session::CUSTOM_PANEL_PREFIX) => Self::Custom,
             _ => Self::Unknown,
         }
     }
@@ -117,20 +122,30 @@ pub(in crate::view) fn panel_icon(panel: &PanelId) -> &'static str {
     }
 }
 
+/// A built-in panel's title; `None` for custom and extension panels.
+pub(in crate::view) fn builtin_panel_title(panel: &str) -> Option<&'static str> {
+    Some(match panel {
+        panel_ids::BRANCHES => "Branches",
+        panel_ids::FILES => "Files",
+        panel_ids::FILE_HISTORY => "File History",
+        panel_ids::CHANGES => "Changes",
+        panel_ids::TERMINAL => "Terminal",
+        panel_ids::REFLOG => "Reflog",
+        _ => return None,
+    })
+}
+
 pub(in crate::view) fn panel_title(layout: &DockLayout, panel: &PanelId) -> SharedString {
+    if let Some(title) = builtin_panel_title(panel.as_str()) {
+        return title.into();
+    }
     match PanelKind::of(panel) {
-        PanelKind::Branches => "Branches".into(),
-        PanelKind::Files => "Files".into(),
-        PanelKind::FileHistory => "File History".into(),
-        PanelKind::Changes => "Changes".into(),
-        PanelKind::Terminal => "Terminal".into(),
-        PanelKind::Reflog => "Reflog".into(),
         PanelKind::Custom => layout
             .custom_panel_title(panel)
             .unwrap_or("Panel")
             .to_owned()
             .into(),
-        PanelKind::Unknown => panel
+        _ => panel
             .as_str()
             .strip_prefix(gitcomet_state::session::EXTENSION_ID_PREFIX)
             .unwrap_or(panel.as_str())
@@ -150,11 +165,13 @@ pub(in crate::view) fn side_label(side: DockSide, half: DockHalf) -> &'static st
     }
 }
 
-/// The section ids the dock layout knows, with their kind, as `'static`.
+/// A built-in section's id as `'static`; `None` for extension sections.
+/// Compares strings in place: the renderer asks this every frame.
 pub(in crate::view) fn static_section_id(section: &SectionId) -> Option<&'static str> {
-    gitcomet_state::session::builtin_sections()
-        .position(|id| &id == section)
-        .and_then(|ix| ALL_SECTIONS.get(ix).copied())
+    ALL_SECTIONS
+        .iter()
+        .copied()
+        .find(|id| *id == section.as_str())
 }
 
 /// Every built-in section in catalogue order (matches `builtin_sections`).
@@ -236,4 +253,19 @@ pub(crate) struct DockMenu {
 pub(crate) enum DockMenuTarget {
     Panel(PanelId),
     Section(SectionId),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn static_section_id_round_trips_the_builtin_sections() {
+        let builtin: Vec<SectionId> = gitcomet_state::session::builtin_sections().collect();
+        assert_eq!(builtin.len(), ALL_SECTIONS.len());
+        for (section, id) in builtin.iter().zip(ALL_SECTIONS) {
+            assert_eq!(static_section_id(section), Some(id));
+        }
+        assert_eq!(static_section_id(&SectionId::from("ext:example")), None);
+    }
 }

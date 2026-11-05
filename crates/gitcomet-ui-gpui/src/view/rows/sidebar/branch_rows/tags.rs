@@ -95,7 +95,11 @@ impl SidebarPaneView {
         let row_group: SharedString = format!("tag_row_{}_{}", repo_id.0, ix).into();
         let row_state = components::InteractiveRowState::default().open(context_menu_active);
         let target_for_click = target.clone();
-        let tooltip: SharedString = format!("{name} ({})", short_commit(&target.0)).into();
+        let tooltip: SharedString = format!(
+            "{name} ({})",
+            gitcomet_core::domain::short_commit_id(&target.0)
+        )
+        .into();
 
         div()
             .id(("tag_sidebar_row", ix))
@@ -161,8 +165,4 @@ impl SidebarPaneView {
             .gitcomet_tooltip(theme, tooltip)
             .into_any_element()
     }
-}
-
-fn short_commit(id: &str) -> &str {
-    id.get(..8).unwrap_or(id)
 }
