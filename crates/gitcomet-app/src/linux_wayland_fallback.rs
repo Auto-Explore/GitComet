@@ -140,10 +140,7 @@ impl std::fmt::Display for WaylandPreflightError {
 impl std::error::Error for WaylandPreflightError {}
 
 #[cfg(target_os = "linux")]
-pub(crate) fn maybe_relaunch_with_linux_x11_fallback(
-    mode: &AppMode,
-    args: &[std::ffi::OsString],
-) -> Option<i32> {
+pub(crate) fn maybe_relaunch_with_linux_x11_fallback(mode: &AppMode) -> Option<i32> {
     let env = LinuxGuiLaunchEnvironment::detect();
     let mode_uses_gpui = app_mode_uses_gpui(mode);
 
@@ -163,7 +160,7 @@ pub(crate) fn maybe_relaunch_with_linux_x11_fallback(
 
     match env.fallback_action_after_failed_wayland_preflight() {
         LinuxWaylandFallbackAction::ExitWithError => Some(exit_code::ERROR),
-        LinuxWaylandFallbackAction::RelaunchUnderX11 => Some(relaunch_under_x11_fallback(args)),
+        LinuxWaylandFallbackAction::RelaunchUnderX11 => Some(relaunch_under_x11_fallback()),
     }
 }
 
@@ -180,7 +177,7 @@ fn app_mode_uses_gpui(mode: &AppMode) -> bool {
 }
 
 #[cfg(target_os = "linux")]
-fn relaunch_under_x11_fallback(args: &[std::ffi::OsString]) -> i32 {
+fn relaunch_under_x11_fallback() -> i32 {
     use std::io::Write as _;
     use std::os::unix::process::CommandExt as _;
 
@@ -194,7 +191,10 @@ fn relaunch_under_x11_fallback(args: &[std::ffi::OsString]) -> i32 {
         gitcomet_core::identity::current().display_name()
     );
 
-    let mut relaunch = crate::process_launch::relaunch_command(current_exe.as_os_str(), args);
+    // The process's own arguments, not the ones a library caller passed:
+    // the relaunched executable runs its `main` again.
+    let mut relaunch = std::process::Command::new(current_exe);
+    relaunch.args(std::env::args_os().skip(1));
     relaunch.env(LINUX_X11_RELAUNCH_ENV, "1");
     relaunch.env("XDG_SESSION_TYPE", "x11");
     relaunch.env_remove("WAYLAND_DISPLAY");

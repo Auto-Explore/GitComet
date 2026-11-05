@@ -134,3 +134,66 @@ fn library_launch_preserves_supplied_arguments_and_process_state_with_terminal_s
     let output = run_without_display(command, profile.path());
     assert!(output.status.success(), "{output:?}");
 }
+
+#[test]
+fn a_cli_launch_probes_a_running_browser_only_once() {
+    use std::io::{BufRead, BufReader, ErrorKind, Write};
+    use std::net::{Ipv4Addr, TcpListener};
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::time::Duration;
+
+    let profile = tempfile::tempdir().unwrap();
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let descriptor = serde_json::json!({
+        "version": 1,
+        "port": listener.local_addr().unwrap().port(),
+        "token": "single-probe-fixture",
+        "pid": std::process::id(),
+        "product": gitcomet_app::ProductIdentity::gitcomet().app_id(),
+    });
+    std::fs::write(profile.path().join("instance.json"), descriptor.to_string()).unwrap();
+    let launch_exited = Arc::new(AtomicBool::new(false));
+    let exited = launch_exited.clone();
+    // Rejects every request, as a browser that is shutting down does.
+    let server = std::thread::spawn(move || {
+        let mut connections = 0;
+        loop {
+            // Read before accepting: once the launch has exited, every
+            // connection it made is already waiting in the backlog.
+            let drained = exited.load(Ordering::Acquire);
+            match listener.accept() {
+                Ok((mut stream, _)) => {
+                    connections += 1;
+                    stream.set_nonblocking(false).unwrap();
+                    stream
+                        .set_read_timeout(Some(Duration::from_secs(5)))
+                        .unwrap();
+                    let mut line = String::new();
+                    let _ = BufReader::new(&mut stream).read_line(&mut line);
+                    let _ = stream.write_all(b"rejected\n");
+                }
+                Err(error) if error.kind() == ErrorKind::WouldBlock && drained => {
+                    return connections;
+                }
+                Err(error) if error.kind() == ErrorKind::WouldBlock => {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                Err(error) => panic!("fake browser accept failed: {error}"),
+            }
+        }
+    });
+    let mut command = Command::new(gitcomet_test_bin::gitcomet_bin());
+    command.arg("--foreground");
+    let output = run_without_display(command, profile.path());
+    launch_exited.store(true, Ordering::Release);
+    let connections = server.join().unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(2), "{stderr}");
+    assert!(stderr.contains("Failed to launch"), "{stderr}");
+    assert_eq!(
+        connections, 1,
+        "the early probe's miss must lead straight to claim arbitration"
+    );
+}

@@ -187,6 +187,7 @@ impl AppLaunch {
         };
         let mut on_ready: Option<ReadyCallback> = None;
         let mut bundle_relaunch = launch::BundleRelaunch::Spawn;
+        let mut browser_probed = false;
         let parsed = match parsed {
             Ok(parsed) => {
                 let is_cli_browser = matches!(entry, LaunchEntry::Cli)
@@ -251,6 +252,8 @@ impl AppLaunch {
                 }
                 bundle_relaunch =
                     launch::bundle_relaunch(is_cli_browser, on_ready.is_some(), foreground);
+                // A CLI browser launch that got here found no browser above.
+                browser_probed = is_cli_browser;
                 Ok(parsed.outcome)
             }
             Err(message) => Err(message),
@@ -267,8 +270,8 @@ impl AppLaunch {
                 repository_options,
                 backend,
                 on_ready.take(),
-                &args,
                 bundle_relaunch,
+                browser_probed,
             )
         })
     }

@@ -131,8 +131,8 @@ pub(crate) fn run_mode(
     repository_options: gitcomet_core::services::RepositoryOptions,
     backend_override: Option<std::sync::Arc<dyn gitcomet_core::services::GitBackend>>,
     on_ready: Option<crate::ReadyCallback>,
-    args: &[std::ffi::OsString],
     bundle: BundleRelaunch,
+    browser_probed: bool,
 ) -> i32 {
     // Validated in every mode, so a broken product fails the same way
     // whichever mode it is started in.
@@ -160,12 +160,12 @@ pub(crate) fn run_mode(
         &repository_options,
         &backend_override,
         &on_ready,
-        args,
         bundle,
+        browser_probed,
     );
 
     #[cfg(feature = "ui-gpui-runtime")]
-    if let Some(code) = prepare_platform_launch(&mode, args, bundle) {
+    if let Some(code) = prepare_platform_launch(&mode, bundle) {
         return code;
     }
 
@@ -210,7 +210,7 @@ pub(crate) fn run_mode(
         AppMode::Browser { path } => {
             #[cfg(feature = "ui-gpui-runtime")]
             {
-                run_browser(path, extensions, backend(), on_ready)
+                run_browser(path, extensions, backend(), on_ready, browser_probed)
             }
 
             #[cfg(not(feature = "ui-gpui-runtime"))]
@@ -296,12 +296,13 @@ fn run_browser(
     extensions: gitcomet_extension_api::Registry,
     backend: std::sync::Arc<dyn gitcomet_core::services::GitBackend>,
     on_ready: Option<crate::ReadyCallback>,
+    probed: bool,
 ) -> i32 {
     let name = identity::current().display_name();
     let initial_browser_request = browser_request(path);
     let instance_result = {
         let _stage = gitcomet_core::startup_trace::span("browser_instance_broker");
-        browser_instance::start_or_forward(initial_browser_request.clone())
+        browser_instance::start_or_forward(initial_browser_request.clone(), probed)
     };
     let mut browser_instance = match instance_result {
         Ok(browser_instance::StartResult::Forwarded) => {
@@ -422,20 +423,16 @@ pub(crate) fn bundle_relaunch(
 }
 
 #[cfg(feature = "ui-gpui-runtime")]
-fn prepare_platform_launch(
-    mode: &AppMode,
-    args: &[std::ffi::OsString],
-    bundle: BundleRelaunch,
-) -> Option<i32> {
+fn prepare_platform_launch(mode: &AppMode, bundle: BundleRelaunch) -> Option<i32> {
     #[cfg(target_os = "linux")]
-    if let Some(code) = maybe_relaunch_with_linux_x11_fallback(mode, args) {
+    if let Some(code) = maybe_relaunch_with_linux_x11_fallback(mode) {
         return Some(code);
     }
     #[cfg(target_os = "macos")]
     if matches!(mode, AppMode::Browser { .. }) {
-        return maybe_relaunch_browser_from_macos_app_bundle(args, bundle);
+        return maybe_relaunch_browser_from_macos_app_bundle(bundle);
     }
-    let _ = (mode, args, bundle);
+    let _ = (mode, bundle);
     None
 }
 
@@ -509,10 +506,7 @@ fn candidate_macos_app_bundle_paths(resolved_exe: &std::path::Path) -> Vec<std::
 }
 
 #[cfg(all(target_os = "macos", feature = "ui-gpui-runtime"))]
-fn maybe_relaunch_browser_from_macos_app_bundle(
-    args: &[std::ffi::OsString],
-    bundle: BundleRelaunch,
-) -> Option<i32> {
+fn maybe_relaunch_browser_from_macos_app_bundle(bundle: BundleRelaunch) -> Option<i32> {
     if std::env::var_os(MACOS_BUNDLE_RELAUNCH_ENV).is_some() {
         return None;
     }
@@ -549,7 +543,10 @@ fn maybe_relaunch_browser_from_macos_app_bundle(
         return None;
     };
 
-    let mut command = crate::process_launch::relaunch_command(app_exe.as_os_str(), args);
+    // The process's own arguments, not the ones a library caller passed:
+    // the relaunched executable runs its `main` again.
+    let mut command = std::process::Command::new(app_exe);
+    command.args(std::env::args_os().skip(1));
     command.env(MACOS_BUNDLE_RELAUNCH_ENV, "1");
     if bundle == BundleRelaunch::Exec {
         use std::os::unix::process::CommandExt as _;

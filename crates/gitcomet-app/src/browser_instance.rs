@@ -249,8 +249,20 @@ fn forward_if_running_at(
     }
 }
 
-pub(crate) fn start_or_forward(request: BrowserOpenRequest) -> Result<StartResult, StartError> {
-    start_or_forward_at(&descriptor_path()?, request, CLAIM_WAIT_TIMEOUT)
+/// `probed`: this process has just found no browser to forward to with
+/// [`forward_if_running`], so arbitration starts at the claim instead of
+/// connecting to the same, possibly stale, descriptor again. A live browser
+/// holds the claim for its whole life and a claim waiter forwards to it.
+pub(crate) fn start_or_forward(
+    request: BrowserOpenRequest,
+    probed: bool,
+) -> Result<StartResult, StartError> {
+    let descriptor_path = descriptor_path()?;
+    if probed {
+        claim_or_forward_at(&descriptor_path, request, CLAIM_WAIT_TIMEOUT)
+    } else {
+        start_or_forward_at(&descriptor_path, request, CLAIM_WAIT_TIMEOUT)
+    }
 }
 
 fn start_or_forward_at(
@@ -261,7 +273,14 @@ fn start_or_forward_at(
     if forward_if_running_at(descriptor_path, || request.clone()).map_err(StartError::Forward)? {
         return Ok(StartResult::Forwarded);
     }
+    claim_or_forward_at(descriptor_path, request, claim_wait)
+}
 
+fn claim_or_forward_at(
+    descriptor_path: &Path,
+    request: BrowserOpenRequest,
+    claim_wait: Duration,
+) -> Result<StartResult, StartError> {
     // Binding a candidate and publishing its descriptor are separate
     // operations. Serialize that interval across processes so a contender
     // cannot time out on the bound port, choose another one, and become a
@@ -389,8 +408,11 @@ fn server_loop(
 ) {
     while !stop.load(Ordering::Acquire) {
         match listener.accept() {
-            Ok((stream, _address)) => {
+            Ok((mut stream, _address)) => {
                 if stop.load(Ordering::Acquire) {
+                    // A launch racing shutdown must not mistake the closed
+                    // connection for a lost acknowledgement.
+                    let _ = stream.write_all(REJECTED_REPLY);
                     break;
                 }
                 let _ = handle_connection(stream, &descriptor, &requests);
@@ -517,8 +539,6 @@ fn send_request(
     descriptor: &InstanceDescriptor,
     request: &BrowserOpenRequest,
 ) -> io::Result<bool> {
-    stream.set_read_timeout(Some(IO_TIMEOUT))?;
-    stream.set_write_timeout(Some(IO_TIMEOUT))?;
     let wire = WireRequest {
         version: PROTOCOL_VERSION,
         token: descriptor.token.clone(),
@@ -526,14 +546,32 @@ fn send_request(
         path: request.path.as_deref().map(WirePath::from_path),
         target: request.target.into(),
     };
-    serde_json::to_writer(&mut stream, &wire).map_err(io::Error::other)?;
-    stream.write_all(b"\n")?;
-    stream.flush()?;
+    let mut line = serde_json::to_vec(&wire)?;
+    line.push(b'\n');
+    // The broker queues a request only once it has read the whole line, so
+    // a failure before the line is out (a broker closing its listener as it
+    // shuts down, say) delivered nothing.
+    let sent = stream
+        .set_read_timeout(Some(IO_TIMEOUT))
+        .and_then(|()| stream.set_write_timeout(Some(IO_TIMEOUT)))
+        .and_then(|()| stream.write_all(&line))
+        .and_then(|()| stream.flush());
+    if sent.is_err() {
+        return Ok(false);
+    }
 
     let mut response = Vec::new();
-    BufReader::new(stream)
-        .take(MAX_WIRE_BYTES as u64)
-        .read_until(b'\n', &mut response)?;
+    let reply_limit = OK_REPLY.len().max(REJECTED_REPLY.len()) as u64;
+    match BufReader::new(stream)
+        .take(reply_limit)
+        .read_until(b'\n', &mut response)
+    {
+        Ok(_) => {}
+        // A reset comes from a peer that closed with the request unread, or
+        // whose process ended: nothing will act on the request either way.
+        Err(error) if error.kind() == io::ErrorKind::ConnectionReset => return Ok(false),
+        Err(error) => return Err(error),
+    }
     if response == OK_REPLY {
         Ok(true)
     } else if OK_REPLY.starts_with(&response) {
@@ -634,9 +672,17 @@ mod tests {
         descriptor_path: &Path,
         request: BrowserOpenRequest,
     ) -> Result<StartResult, StartError> {
+        retry_while_reserved(|| {
+            start_or_forward_at(descriptor_path, request.clone(), CLAIM_WAIT_TIMEOUT)
+        })
+    }
+
+    fn retry_while_reserved(
+        mut start: impl FnMut() -> Result<StartResult, StartError>,
+    ) -> Result<StartResult, StartError> {
         let deadline = Instant::now() + CLAIM_WAIT_TIMEOUT;
         loop {
-            match start_or_forward_at(descriptor_path, request.clone(), CLAIM_WAIT_TIMEOUT) {
+            match start() {
                 Err(StartError::Broker(error))
                     if error.kind() == io::ErrorKind::AddrInUse && Instant::now() < deadline =>
                 {
@@ -814,6 +860,62 @@ mod tests {
             start_after_reservation(&path, next).unwrap(),
             StartResult::Primary(_)
         ));
+    }
+
+    #[test]
+    fn a_request_queued_behind_broker_shutdown_is_not_delivered() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = reserve_candidate_ports(dir.path()).0;
+        let StartResult::Primary(mut primary) = start_after_reservation(
+            &path,
+            request("initial".into(), BrowserOpenTarget::ExistingWindow),
+        )
+        .unwrap() else {
+            panic!("expected primary")
+        };
+        let receiver = primary.take_requests().unwrap();
+        let descriptor = read_descriptor(&path).unwrap();
+        // The broker serves one connection at a time and waits IO_TIMEOUT
+        // on this silent one, so the next is still queued when it stops.
+        let _stall = connect_to_descriptor(&descriptor).unwrap();
+        let queued = connect_to_descriptor(&descriptor).unwrap();
+        drop(primary);
+        let late = request("late".into(), BrowserOpenTarget::NewWindow);
+        assert!(
+            !send_request(queued, &descriptor, &late).unwrap(),
+            "a closed broker queued nothing, so the launch may claim"
+        );
+        assert!(receiver.try_recv().is_none());
+    }
+
+    #[test]
+    fn a_probed_launch_skips_the_repeat_probe_and_still_forwards() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = reserve_candidate_ports(dir.path()).0;
+        let stale = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        stale.set_nonblocking(true).unwrap();
+        let stale_port = stale.local_addr().unwrap().port();
+        write_descriptor(&path, &fake_descriptor(stale_port, "stale", u32::MAX)).unwrap();
+        let initial = request("initial".into(), BrowserOpenTarget::ExistingWindow);
+        let StartResult::Primary(mut primary) = retry_while_reserved(|| {
+            claim_or_forward_at(&path, initial.clone(), CLAIM_WAIT_TIMEOUT)
+        })
+        .unwrap() else {
+            panic!("nothing holds the claim, so the launch must own the broker");
+        };
+        assert_eq!(
+            stale.accept().unwrap_err().kind(),
+            io::ErrorKind::WouldBlock,
+            "the descriptor the caller already probed was contacted again"
+        );
+        // The live browser holds the claim, so the claim wait forwards to it.
+        let receiver = primary.take_requests().unwrap();
+        let next = request("next".into(), BrowserOpenTarget::NewWindow);
+        assert!(matches!(
+            claim_or_forward_at(&path, next.clone(), CLAIM_WAIT_TIMEOUT).unwrap(),
+            StartResult::Forwarded
+        ));
+        assert_eq!(receiver.try_recv().unwrap(), next);
     }
 
     #[test]
