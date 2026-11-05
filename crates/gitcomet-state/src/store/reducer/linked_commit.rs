@@ -14,7 +14,7 @@ use crate::model::{
     LinkedCommitStage, LinkedPushChoice, LinkedPushPrompt, LoadKind, Loadable, RepoId, RepoState,
     SubmoduleShelve, UnpushedPointerPrompt, default_parent_message, submodule_display_name,
 };
-use crate::msg::{Effect, RepoCommandKind};
+use crate::msg::{Effect, LinkedSubmodulePushFailure, RepoCommandKind};
 use crate::store::reducer::prepared::ReducerInputs;
 use crate::store::repository_runtime::RepositoryRuntimes;
 use gitcomet_core::domain::{SubmoduleChanges, SubmoduleCheckoutUpdate, short_commit_id};
@@ -244,16 +244,8 @@ fn commit_retry_pending(state: &AppState, child: RepoId) -> bool {
     })
 }
 
-fn begin_parent_commit(state: &mut AppState, parent: RepoId) {
-    if let Some(repo) = state.repos.iter_mut().find(|repo| repo.id == parent) {
-        repo.local_actions_in_flight = repo.local_actions_in_flight.saturating_add(1);
-        repo.commit_in_flight = repo.commit_in_flight.saturating_add(1);
-        repo.bump_ops_rev();
-    }
-}
-
 fn record_effect(state: &mut AppState, plan: &LinkedCommit) -> Effect {
-    begin_parent_commit(state, plan.parent);
+    super::begin_commit_action(state, plan.parent);
     let child = plan
         .children
         .first()
@@ -271,7 +263,7 @@ fn record_effect(state: &mut AppState, plan: &LinkedCommit) -> Effect {
 
 fn rerecord_effect(state: &mut AppState, plan: &LinkedCommit, path: PathBuf) -> Option<Effect> {
     let expected = plan.parent_commit.clone()?;
-    begin_parent_commit(state, plan.parent);
+    super::begin_commit_action(state, plan.parent);
     Some(Effect::RecordSubmoduleCommit {
         repo_id: plan.parent,
         path,
@@ -279,6 +271,13 @@ fn rerecord_effect(state: &mut AppState, plan: &LinkedCommit, path: PathBuf) -> 
         amend_expected: Some(expected),
         identity: None,
     })
+}
+
+/// Read the submodule rows of `repo_id` again, coalesced with any listing
+/// already running; the rows stay shown meanwhile.
+fn reload_submodules(state: &mut AppState, repo_id: RepoId) -> Option<Effect> {
+    let repo_state = state.repos.iter_mut().find(|repo| repo.id == repo_id)?;
+    super::effects::request_submodules_reload(repo_state)
 }
 
 fn set_stage(state: &mut AppState, stage: LinkedCommitStage) {
@@ -416,7 +415,17 @@ pub(super) fn submodules_committed(
     };
     state.linked_commit = None;
     let parent = state.repo_name(repo_id);
-    let mut summary = format!("Committing {} failed: {error}", path.display());
+    // The parent's tab runs these commits without the passphrase and sign-in
+    // prompt; the submodule's own tab has it.
+    let mut summary = if super::auth::detect_auth_prompt_kind(&error).is_some() {
+        format!(
+            "Committing {} needs a passphrase or sign-in, which a commit from {parent}'s tab cannot ask for. Commit {} once from its own tab, where it can be entered.",
+            path.display(),
+            submodule_display_name(&path)
+        )
+    } else {
+        format!("Committing {} failed: {error}", path.display())
+    };
     if !committed.is_empty() {
         let names = name_list(committed.iter().map(|path| submodule_display_name(path)));
         summary.push_str(&format!(
@@ -432,7 +441,7 @@ pub(super) fn submodules_committed(
         false,
         false,
     );
-    effects.push(Effect::LoadSubmodules { repo_id });
+    effects.extend(reload_submodules(state, repo_id));
     effects
 }
 
@@ -602,10 +611,11 @@ pub(super) fn command_finished(
 
 /// The parent's tab pushed its submodules.
 pub(super) fn submodules_pushed(
+    inputs: &ReducerInputs,
     repos: &RepositoryRuntimes,
     state: &mut AppState,
     repo_id: RepoId,
-    failed: Option<(PathBuf, String)>,
+    failed: Option<(PathBuf, LinkedSubmodulePushFailure)>,
 ) -> Vec<Effect> {
     adjust_push_in_flight(state, repo_id, false);
     let Some(plan) = state.linked_commit.clone() else {
@@ -618,11 +628,43 @@ pub(super) fn submodules_pushed(
         return Vec::new();
     }
     // The submodules' remote-tracking refs moved; their rows follow.
-    let mut effects = vec![Effect::LoadSubmodules { repo_id }];
-    match failed {
-        None => effects.extend(push_parent(repos, state, &plan)),
-        Some((path, error)) => stop_push(state, &plan, path, error),
-    }
+    let mut effects: Vec<Effect> = reload_submodules(state, repo_id).into_iter().collect();
+    let Some((path, failure)) = failed else {
+        effects.extend(push_parent(repos, state, &plan));
+        return effects;
+    };
+    let child = submodule_display_name(&path);
+    let parent = state.repo_name(plan.parent);
+    let notice = match failure {
+        // Pulling would not help: the submodule's own submodules have to be
+        // pushed first, and the submodule's tab offers that.
+        LinkedSubmodulePushFailure::UnpushedPointers(pointers) => {
+            let nested = name_list(
+                pointers
+                    .iter()
+                    .map(|pointer| pointer.path.display().to_string()),
+            );
+            let their = if pointers.len() == 1 { "its" } else { "their" };
+            format!(
+                "{child} was not pushed, so {parent} was not pushed either: {child}'s commits record commits of {nested} that are not on {their} remote. Push {child} from its own tab, which offers to push {nested} first, then push {parent}."
+            )
+        }
+        // The parent's tab pushes without the sign-in prompt, so a rebase
+        // offered here would fail the same way.
+        LinkedSubmodulePushFailure::Push(error)
+            if super::auth::detect_auth_prompt_kind(&error).is_some() =>
+        {
+            format!(
+                "Pushing {child} needs a sign-in, which a push from {parent}'s tab cannot ask for, so {parent} was not pushed. Push {child} from its own tab, then push {parent}."
+            )
+        }
+        LinkedSubmodulePushFailure::Push(error) => {
+            stop_push(state, &plan, path, error.to_string());
+            return effects;
+        }
+    };
+    state.linked_commit = None;
+    push_notification(inputs, state, AppNotificationKind::Info, notice);
     effects
 }
 
@@ -650,7 +692,7 @@ pub(super) fn submodule_pulled(
         return Vec::new();
     }
     let rebase = *rebase;
-    let mut effects = vec![Effect::LoadSubmodules { repo_id }];
+    let mut effects: Vec<Effect> = reload_submodules(state, repo_id).into_iter().collect();
     effects.extend(reconciled(inputs, repos, state, &plan, path, rebase, error));
     effects
 }
@@ -744,8 +786,13 @@ pub(super) fn resolve_push_prompt(
 // ── What the changed submodules hold ────────────────────────────
 
 /// Read again what the changed first-level submodules hold, after their
-/// rows loaded; with none changed the list is simply empty.
+/// rows loaded; with none changed the list is simply empty. A submodule's own
+/// tab and a bare repository never show the linked commit panel, so they
+/// read nothing.
 pub(super) fn refresh_submodule_changes(repo_state: &mut RepoState) -> Option<Effect> {
+    if repo_state.submodule_parent.is_some() || repo_state.is_bare() {
+        return None;
+    }
     let paths = repo_state.changed_first_level_submodules();
     if paths.is_empty() {
         repo_state.set_submodule_changes(Loadable::Ready(Vec::new()));

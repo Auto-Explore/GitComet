@@ -1491,6 +1491,17 @@ pub enum Msg {
     Internal(InternalMsg),
 }
 
+/// Why a linked commit from the parent's tab stopped pushing a submodule.
+#[derive(Clone, Debug)]
+pub enum LinkedSubmodulePushFailure {
+    /// The submodule's outgoing commits record commits of its own submodules
+    /// that their remotes do not have, so its push was not tried: nobody
+    /// could check those commits out.
+    UnpushedPointers(Vec<SubmoduleCheckoutUpdate>),
+    /// The push itself failed.
+    Push(Error),
+}
+
 #[derive(strum::IntoStaticStr)]
 pub enum InternalMsg {
     AutoFetchUpdated {
@@ -1933,10 +1944,10 @@ pub enum InternalMsg {
         failed: Option<(PathBuf, Error)>,
     },
     /// A linked commit pushed the submodules of `repo_id` in order; `failed`
-    /// is the first one whose push was refused.
+    /// is the first one whose push stopped, and why.
     LinkedSubmodulesPushed {
         repo_id: RepoId,
-        failed: Option<(PathBuf, String)>,
+        failed: Option<(PathBuf, LinkedSubmodulePushFailure)>,
     },
     /// A linked commit pulled the submodule at `path` of `repo_id` before
     /// pushing again.

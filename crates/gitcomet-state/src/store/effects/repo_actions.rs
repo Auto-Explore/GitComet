@@ -1,7 +1,7 @@
 use crate::model::{
     BranchExistsPromptOperation, BranchExistsPromptState, SubmoduleCheckoutOperation,
 };
-use crate::msg::{InternalMsg, Msg, RepoActionKind, RepoPathList};
+use crate::msg::{InternalMsg, LinkedSubmodulePushFailure, Msg, RepoActionKind, RepoPathList};
 use crate::store::repository_runtime::RepositoryRuntimes;
 use gitcomet_core::auth::{ScopedStagedGitAuth, StagedGitAuth};
 use gitcomet_core::domain::{DiscardOutcome, SubmoduleCheckoutPolicy};
@@ -1545,8 +1545,8 @@ pub(super) fn schedule_load_submodule_changes(
     );
 }
 
-/// Stage or unstage `files` inside the submodule at `path`, then read the
-/// submodules' changes again.
+/// Stage or unstage `files` inside the submodule at `path`. The reducer
+/// reads the submodules' changes again when the action finishes.
 pub(super) fn schedule_stage_in_submodule(
     executor: &TaskExecutor,
     repos: &RepositoryRuntimes,
@@ -1562,7 +1562,7 @@ pub(super) fn schedule_stage_in_submodule(
         RepoActionKind::UnstageInSubmodule
     };
     let context = path_context(&path);
-    schedule_repo_action_with_hook(
+    schedule_repo_action(
         executor,
         repos,
         msg_tx,
@@ -1579,10 +1579,6 @@ pub(super) fn schedule_stage_in_submodule(
                 }
             })
         },
-        |msg_tx, repo_id, _result| {
-            send_or_log(msg_tx, Msg::LoadSubmodules { repo_id });
-        },
-        repo_action_finished(action),
     );
 }
 
@@ -1668,8 +1664,8 @@ pub(super) fn schedule_commit_with_submodules(
     );
 }
 
-/// Push each submodule to its upstream in order. The first refusal stops
-/// the rest.
+/// Push each submodule to its upstream in order. The first one that stops
+/// stops the rest.
 pub(super) fn schedule_push_linked_submodules(
     executor: &TaskExecutor,
     repos: &RepositoryRuntimes,
@@ -1678,6 +1674,7 @@ pub(super) fn schedule_push_linked_submodules(
     paths: Vec<PathBuf>,
 ) {
     let context = submodule_paths_context(&paths);
+    let first = paths.first().cloned().unwrap_or_default();
     schedule_repo_action_with_result(
         executor,
         repos,
@@ -1685,25 +1682,42 @@ pub(super) fn schedule_push_linked_submodules(
         repo_id,
         "Push submodules",
         context,
-        move |repo| {
-            for path in paths {
-                let result = with_submodule(repo.as_ref(), &path, |submodule| {
-                    submodule.push_with_output()
-                });
-                if let Err(error) = result {
-                    return Ok(Some((path, error.to_string())));
-                }
-            }
-            Ok(None)
-        },
-        |repo_id, result| InternalMsg::LinkedSubmodulesPushed {
+        move |repo| Ok(push_linked_submodules(repo.as_ref(), paths)),
+        move |repo_id, result| InternalMsg::LinkedSubmodulesPushed {
             repo_id,
             failed: match result {
                 Ok(failed) => failed,
-                Err(error) => Some((PathBuf::new(), error.to_string())),
+                Err(error) => Some((first, LinkedSubmodulePushFailure::Push(error))),
             },
         },
     );
+}
+
+/// Push each submodule at `paths` of `repo`, in order, and name the first
+/// one that stopped. Like every other push, a submodule's push is not tried
+/// when its outgoing commits record commits of its own submodules that their
+/// remotes do not have: the parent would then record a submodule commit that
+/// nobody could check out in full.
+fn push_linked_submodules(
+    repo: &dyn GitRepository,
+    paths: Vec<PathBuf>,
+) -> Option<(PathBuf, LinkedSubmodulePushFailure)> {
+    for path in paths {
+        let result = with_submodule(repo, &path, |submodule| {
+            // The check never blocks a push it cannot complete.
+            let pointers = submodule.unpushed_submodule_pointers().unwrap_or_default();
+            if !pointers.is_empty() {
+                return Ok(Some(LinkedSubmodulePushFailure::UnpushedPointers(pointers)));
+            }
+            submodule.push_with_output().map(|_| None)
+        });
+        match result {
+            Ok(None) => {}
+            Ok(Some(failure)) => return Some((path, failure)),
+            Err(error) => return Some((path, LinkedSubmodulePushFailure::Push(error))),
+        }
+    }
+    None
 }
 
 pub(super) fn schedule_pull_linked_submodule(

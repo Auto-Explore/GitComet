@@ -552,3 +552,76 @@ fn local_submodule_update_trust_prompt_cancels_cleanly() {
     assert!(effects.is_empty());
     assert!(state.submodule_trust_prompt.is_none());
 }
+
+/// Staging from a submodule's card cancels the tab's loads when it finishes.
+/// The rows the linked commit panel shows must survive that, and be read
+/// again, even with the sidebar's Submodules section collapsed.
+#[test]
+fn staging_inside_a_submodule_keeps_the_rows_ready() {
+    let mut repos: RepositoryRuntimes = Default::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::test_default();
+    let repo_id = RepoId(1);
+    let mut repo = RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    );
+    repo.set_open(Loadable::Ready(()));
+    let mut row = gitcomet_core::domain::Submodule::new(
+        PathBuf::from("vendor/lib"),
+        CommitId("r".into()),
+        Some(CommitId("r".into())),
+        gitcomet_core::domain::SubmoduleStatus::UpToDate,
+    );
+    row.has_inner_changes = true;
+    repo.set_submodules(Loadable::Ready(vec![row]));
+    state.repos.push(repo);
+    state.active_repo = Some(repo_id);
+    assert!(!state.repos[0].sidebar_data_request.submodules);
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::StageInSubmodule {
+            repo_id,
+            path: PathBuf::from("vendor/lib"),
+            files: vec![PathBuf::from("a.txt")],
+        },
+    );
+    // A listing that starts before the action finishes is cancelled with it.
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::LoadSubmodules { repo_id },
+    );
+    assert!(
+        matches!(state.repos[0].submodules, Loadable::Ready(_)),
+        "the rows stay shown while they load"
+    );
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::RepoActionFinished {
+            repo_id,
+            action: RepoActionKind::StageInSubmodule,
+            result: Ok(()),
+        }),
+    );
+    assert!(
+        matches!(state.repos[0].submodules, Loadable::Ready(_)),
+        "the cancelled listing leaves the rows shown"
+    );
+    assert_eq!(state.repos[0].local_actions_in_flight, 0);
+    assert!(
+        effects.iter().any(
+            |effect| matches!(effect, Effect::LoadSubmodules { repo_id: id } if *id == repo_id)
+        ),
+        "the rows are read again after the cancellation: {effects:?}"
+    );
+}

@@ -2902,7 +2902,7 @@ fn reduce_inner(
             failed,
         }) => linked_commit::submodules_committed(inputs, state, repo_id, committed, failed),
         Msg::Internal(crate::msg::InternalMsg::LinkedSubmodulesPushed { repo_id, failed }) => {
-            linked_commit::submodules_pushed(repos, state, repo_id, failed)
+            linked_commit::submodules_pushed(inputs, repos, state, repo_id, failed)
         }
         Msg::Internal(crate::msg::InternalMsg::LinkedSubmodulePulled {
             repo_id,

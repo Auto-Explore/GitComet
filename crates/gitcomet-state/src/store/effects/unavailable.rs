@@ -586,10 +586,14 @@ pub(super) fn send_unavailable_git_effect_result(
         Effect::PushLinkedSubmodules { repo_id, paths } => send(Msg::Internal(
             crate::msg::InternalMsg::LinkedSubmodulesPushed {
                 repo_id,
-                failed: paths
-                    .into_iter()
-                    .next()
-                    .map(|path| (path, git_unavailable_error(runtime).to_string())),
+                failed: paths.into_iter().next().map(|path| {
+                    (
+                        path,
+                        crate::msg::LinkedSubmodulePushFailure::Push(git_unavailable_error(
+                            runtime,
+                        )),
+                    )
+                }),
             },
         )),
         Effect::PullLinkedSubmodule { repo_id, path, .. } => send(Msg::Internal(

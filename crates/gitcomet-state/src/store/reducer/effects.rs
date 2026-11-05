@@ -1317,12 +1317,25 @@ pub(super) fn load_submodules(state: &mut AppState, repo_id: RepoId) -> Vec<Effe
     if !matches!(repo_state.open, Loadable::Ready(())) {
         return Vec::new();
     }
-    repo_state.set_submodules(Loadable::Loading);
-    if repo_state.loads_in_flight.request(LoadKind::Submodules) {
-        vec![Effect::LoadSubmodules { repo_id }]
-    } else {
-        Vec::new()
+    request_submodules_reload(repo_state).into_iter().collect()
+}
+
+/// Read the submodule rows again. Rows already shown stay shown while they
+/// load: the linked commit panel and the parent's commit guard read them, and
+/// a `Loading` placeholder is reset to `NotLoaded` by any action that cancels
+/// the tab's loads, with nothing to load it again while the sidebar section
+/// is collapsed. A request while a listing runs queues one more after it, so
+/// an older listing never lands last.
+pub(super) fn request_submodules_reload(repo_state: &mut RepoState) -> Option<Effect> {
+    if !matches!(repo_state.submodules, Loadable::Ready(_)) {
+        repo_state.set_submodules(Loadable::Loading);
     }
+    repo_state
+        .loads_in_flight
+        .request(LoadKind::Submodules)
+        .then_some(Effect::LoadSubmodules {
+            repo_id: repo_state.id,
+        })
 }
 
 pub(super) fn load_file_browser(

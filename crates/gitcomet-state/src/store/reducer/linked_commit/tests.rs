@@ -498,7 +498,7 @@ fn recorded_submodules_push_before_the_parent() {
     assert_eq!(state.repos[0].push_in_flight, 1);
 
     // All submodules pushed: the parent goes next.
-    let effects = submodules_pushed(&repos, &mut state, RepoId(1), None);
+    let effects = submodules_pushed(&inputs, &repos, &mut state, RepoId(1), None);
     assert_eq!(state.repos[0].push_in_flight, 0);
     assert_eq!(
         state.linked_commit.as_ref().map(|plan| &plan.stage),
@@ -527,10 +527,16 @@ fn a_refused_submodule_push_from_the_parent_asks_and_rebases_in_place() {
         plan.parent_commit = Some(CommitId("p1".into()));
     }
     let effects = submodules_pushed(
+        &inputs,
         &repos,
         &mut state,
         RepoId(1),
-        Some((PathBuf::from("vendor/ui"), "rejected (fetch first)".into())),
+        Some((
+            PathBuf::from("vendor/ui"),
+            LinkedSubmodulePushFailure::Push(Error::new(ErrorKind::Backend(
+                "rejected (fetch first)".into(),
+            ))),
+        )),
     );
     assert!(
         effects
@@ -651,6 +657,166 @@ fn a_second_linked_commit_from_the_parent_waits_for_the_first() {
     );
 }
 
+/// A plan from the parent's tab whose submodules are committed and recorded,
+/// now pushing them.
+fn pushing_from_parent(state: &mut AppState) {
+    start_from_parent(
+        state,
+        vec![child("vendor/lib", "a"), child("vendor/ui", "b")],
+        true,
+    );
+    let plan = state.linked_commit.as_mut().unwrap();
+    plan.stage = LinkedCommitStage::PushChildren;
+    plan.parent_commit = Some(CommitId("p1".into()));
+}
+
+#[test]
+fn a_submodule_push_needing_sign_in_from_the_parent_skips_the_rebase_prompt() {
+    let inputs = super::super::test_inputs::clock();
+    let repos = RepositoryRuntimes::default();
+    let mut state = state();
+    pushing_from_parent(&mut state);
+    let seq = state.notifications_seq;
+    let effects = submodules_pushed(
+        &inputs,
+        &repos,
+        &mut state,
+        RepoId(1),
+        Some((
+            PathBuf::from("vendor/ui"),
+            LinkedSubmodulePushFailure::Push(Error::new(ErrorKind::Backend(
+                "git push failed: fatal: could not read Username for 'https://example.com': terminal prompts disabled"
+                    .into(),
+            ))),
+        )),
+    );
+    assert!(
+        effects
+            .iter()
+            .all(|effect| !matches!(effect, Effect::RepoCommand(_))),
+        "the parent is not pushed"
+    );
+    assert!(
+        state.linked_push_prompt.is_none(),
+        "a rebase would fail the same way"
+    );
+    assert!(state.linked_commit.is_none(), "the plan ends");
+    let notices = state.notifications_after(seq);
+    assert_eq!(notices.len(), 1);
+    assert!(
+        notices[0].message.starts_with("Pushing ui needs a sign-in")
+            && notices[0].message.contains("from its own tab"),
+        "{}",
+        notices[0].message
+    );
+}
+
+#[test]
+fn unpushed_nested_submodule_commits_stop_the_push_from_the_parent() {
+    let inputs = super::super::test_inputs::clock();
+    let repos = RepositoryRuntimes::default();
+    let mut state = state();
+    pushing_from_parent(&mut state);
+    let seq = state.notifications_seq;
+    let effects = submodules_pushed(
+        &inputs,
+        &repos,
+        &mut state,
+        RepoId(1),
+        Some((
+            PathBuf::from("vendor/lib"),
+            LinkedSubmodulePushFailure::UnpushedPointers(vec![SubmoduleCheckoutUpdate {
+                path: PathBuf::from("vendor/deps"),
+                commit: CommitId("d".into()),
+            }]),
+        )),
+    );
+    assert!(
+        effects
+            .iter()
+            .all(|effect| !matches!(effect, Effect::RepoCommand(_))),
+        "the parent is not pushed"
+    );
+    assert!(
+        state.linked_push_prompt.is_none(),
+        "pulling would not make the nested commit fetchable"
+    );
+    assert!(state.linked_commit.is_none(), "the plan ends");
+    let notices = state.notifications_after(seq);
+    assert_eq!(notices.len(), 1);
+    assert!(
+        notices[0].message.contains("vendor/deps")
+            && notices[0].message.starts_with("lib was not pushed"),
+        "the notice names the nested submodule: {}",
+        notices[0].message
+    );
+}
+
+#[test]
+fn a_submodule_commit_needing_a_passphrase_from_the_parent_says_where_to_commit_it() {
+    let inputs = super::super::test_inputs::clock();
+    let mut state = state();
+    start_from_parent(
+        &mut state,
+        vec![child("vendor/lib", "a"), child("vendor/ui", "b")],
+        true,
+    );
+    submodules_committed(
+        &inputs,
+        &mut state,
+        RepoId(1),
+        vec![PathBuf::from("vendor/lib")],
+        Some((
+            PathBuf::from("vendor/ui"),
+            Error::new(ErrorKind::Backend(
+                "git commit failed: Enter passphrase for \"/home/dev/.ssh/id_ed25519\":".into(),
+            )),
+        )),
+    );
+    assert!(state.linked_commit.is_none());
+    assert_eq!(state.repos[0].commit_in_flight, 0);
+    let entry = state.repos[0]
+        .feedback
+        .command_log
+        .last()
+        .expect("the parent's commit failure is logged");
+    assert!(
+        entry.summary.contains("needs a passphrase or sign-in")
+            && entry.summary.contains("Commit ui once from its own tab")
+            && entry.summary.contains("lib is committed"),
+        "{}",
+        entry.summary
+    );
+}
+
+#[test]
+fn linked_reloads_of_the_submodule_rows_wait_for_the_one_running() {
+    let inputs = super::super::test_inputs::clock();
+    let repos = RepositoryRuntimes::default();
+    let mut state = state();
+    pushing_from_parent(&mut state);
+    assert!(
+        state.repos[0].loads_in_flight.request(LoadKind::Submodules),
+        "a listing is running"
+    );
+    state.repos[0].set_submodules(Loadable::Ready(vec![changed_row("vendor/lib")]));
+    let effects = submodules_pushed(&inputs, &repos, &mut state, RepoId(1), None);
+    assert!(
+        effects
+            .iter()
+            .all(|effect| !matches!(effect, Effect::LoadSubmodules { .. })),
+        "the reload queues behind the running listing: {effects:?}"
+    );
+    assert!(
+        matches!(state.repos[0].submodules, Loadable::Ready(_)),
+        "the rows stay shown"
+    );
+    assert!(
+        state.repos[0].loads_in_flight.finish(LoadKind::Submodules),
+        "the queued listing runs after it"
+    );
+}
+
 // ── What changed submodules hold ────────────────────────────────
 
 fn changed_row(path: &str) -> Submodule {
@@ -732,4 +898,20 @@ fn clean_submodules_clear_their_changes() {
         repo.submodule_changes,
         Loadable::Ready(Arc::new(Vec::new()))
     );
+}
+
+#[test]
+fn submodule_tabs_and_bare_repositories_read_no_submodule_changes() {
+    let mut state = state();
+    let child_tab = &mut state.repos[1];
+    child_tab.set_submodules(Loadable::Ready(vec![changed_row("nested/deps")]));
+    assert!(
+        refresh_submodule_changes(child_tab).is_none(),
+        "a submodule's tab shows no linked commit panel"
+    );
+
+    let repo = &mut state.repos[0];
+    repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::Bare);
+    repo.set_submodules(Loadable::Ready(vec![changed_row("vendor/lib")]));
+    assert!(refresh_submodule_changes(repo).is_none());
 }
