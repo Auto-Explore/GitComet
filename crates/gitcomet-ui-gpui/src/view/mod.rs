@@ -184,6 +184,11 @@ pub(crate) fn is_status_section_shortcut(keystroke: &gpui::Keystroke) -> bool {
     }
 }
 
+/// Bare S, U or D: stage, unstage or discard diff lines.
+pub(crate) fn is_diff_line_key(keystroke: &gpui::Keystroke) -> bool {
+    panes::diff::diff_text::DiffLineAction::from_keystroke(keystroke).is_some()
+}
+
 pub(crate) fn is_diff_shortcut_candidate(keystroke: &gpui::Keystroke) -> bool {
     let key = keystroke.key.as_str();
     let mods = keystroke.modifiers;

@@ -3,6 +3,8 @@ use crate::kit::drag_autoscroll::{DRAG_AUTOSCROLL_TICK, drag_autoscroll_step};
 use crate::view::text_geometry::DiffTextHit;
 use gitcomet_ui_kit::text_layout::TextLayoutExt as _;
 mod editor_context_menu;
+mod line_actions;
+pub(in crate::view) use line_actions::DiffLineAction;
 
 #[cfg(test)]
 thread_local! {
@@ -952,6 +954,7 @@ impl DiffRenderer {
         self.diff_text_occurrences.clear();
         self.diff_text_pending_syntax_click = None;
         self.diff_text_selecting = true;
+        self.diff_focused_change_block = None;
         self.diff_text_anchor = Some(pos);
         self.diff_text_head = Some(pos);
         self.diff_selection_anchor = None;
@@ -976,6 +979,7 @@ impl DiffRenderer {
         };
         let pos = hit.pos;
         self.diff_text_selecting = true;
+        self.diff_focused_change_block = None;
         self.diff_text_anchor = Some(pos);
         self.diff_text_head = Some(pos);
         self.diff_selection_range = None;
@@ -1581,6 +1585,27 @@ impl DiffRenderer {
         region: DiffTextRegion,
     ) -> Option<(usize, usize)> {
         let (start, end) = self.diff_text_normalized_selection()?;
+        let one_column = view == DiffViewMode::Split
+            && start.region == end.region
+            && matches!(
+                start.region,
+                DiffTextRegion::SplitLeft | DiffTextRegion::SplitRight
+            );
+        if one_column && start.region != region {
+            return None;
+        }
+        let (first, last) = self.diff_text_selection_line_rows(view)?;
+        (first..=last).contains(&row).then_some((first, last))
+    }
+
+    /// The first and last source rows a line action on the text selection
+    /// takes, wherever it was invoked from: the rows from the first to the
+    /// last line with a selected character, or a selected blank line.
+    pub(super) fn diff_text_selection_line_rows(
+        &self,
+        view: DiffViewMode,
+    ) -> Option<(usize, usize)> {
+        let (start, end) = self.diff_text_normalized_selection()?;
         if start == end {
             return None;
         }
@@ -1588,12 +1613,6 @@ impl DiffRenderer {
             DiffViewMode::Split => &[DiffTextRegion::SplitLeft, DiffTextRegion::SplitRight],
             DiffViewMode::Inline => &[DiffTextRegion::Inline],
         };
-        let one_column = view == DiffViewMode::Split
-            && start.region == end.region
-            && regions.contains(&start.region);
-        if one_column && start.region != region {
-            return None;
-        }
         let takes = |row: usize| {
             regions
                 .iter()
@@ -1603,7 +1622,7 @@ impl DiffRenderer {
         let last = (first..=end.source_visible_ix)
             .rev()
             .find(|&row| takes(row))?;
-        (first..=last).contains(&row).then_some((first, last))
+        Some((first, last))
     }
 
     /// The part of one row a selection covers, or `None` when the selection

@@ -34,6 +34,8 @@ impl DiffRenderer {
         if !self.store.policy.select_lines {
             return;
         }
+        // A mouse selection replaces the block navigation outlined.
+        self.diff_focused_change_block = None;
         if self.select_hosted_row(clicked_visible_ix, shift) {
             return;
         }
@@ -396,6 +398,18 @@ impl DiffRenderer {
             self.diff_jump_next();
         }
         true
+    }
+
+    /// Change navigation from outside the diff hands it keyboard focus once
+    /// it outlines a block, so S, U and D then act on that block.
+    pub(in crate::view) fn focus_diff_after_navigation(
+        &self,
+        window: &mut gpui::Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if !self.diff_search_active && self.live_focused_change_block().is_some() {
+            window.focus(&self.diff_panel_focus_handle, cx);
+        }
     }
 
     pub(in crate::view) fn navigate_prev_diff_change(

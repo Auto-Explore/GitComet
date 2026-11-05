@@ -1459,6 +1459,67 @@ fn difftastic_file_in<'a>(
     (dir, store, view, cx, renderer)
 }
 
+/// Discarding lines with the line engine reaches the repository from a hosted
+/// pane, as staging them does: the pane's store forwards the patch.
+#[gpui::test]
+fn discarding_lines_in_a_hosted_pane_reverts_them(cx: &mut gpui::TestAppContext) {
+    let (dir, store, view, cx) = open_repository_in(cx, Arc::new(TestBackend), rust_repository());
+    let (list_id, changes) = open_changes_view(cx, &view, &store);
+    click_debug_selector(
+        cx,
+        selector(format!("hosted_file_list_{list_id}_file_b.rs")),
+    );
+    let pane = cx.update(|_window, app| changes.read(app).current().cloned().unwrap());
+    cx.update(|_window, app| {
+        pane.set_target(
+            DiffTarget::working_tree("b.rs".into(), DiffArea::Unstaged),
+            app,
+        );
+    });
+    let renderer = cx.update(|_window, app| {
+        pane.view()
+            .downcast::<crate::view::hosted::diff_pane::DiffPaneView>()
+            .unwrap()
+            .read(app)
+            .renderer()
+            .cloned()
+            .unwrap()
+    });
+    settle(cx, &view, &store, "b.rs compared line by line", |cx| {
+        cx.update(|_window, app| {
+            let renderer = renderer.read(app);
+            !renderer.structural_diff_active()
+                && renderer
+                    .rendered_diff_target()
+                    .and_then(DiffTarget::file_path)
+                    == Some(Path::new("b.rs"))
+                && renderer.is_file_diff_view_active()
+                && renderer.diff_visible_len() > 0
+        })
+    });
+    cx.update(|_window, app| {
+        renderer.update(app, |pane, cx| {
+            let last = pane.diff_visible_len() - 1;
+            pane.diff_selection_anchor = Some(0);
+            pane.diff_selection_range = Some((0, last));
+            assert!(pane.apply_diff_line_action(
+                crate::view::panes::diff::diff_text::DiffLineAction::Discard,
+                cx
+            ));
+        })
+    });
+    settle(
+        cx,
+        &view,
+        &store,
+        "b.rs reverted in the working tree",
+        |_| {
+            std::fs::read_to_string(dir.path().join("b.rs")).unwrap()
+                == "pub fn b() -> i32 {\n    1\n}\n"
+        },
+    );
+}
+
 /// The visible row of `renderer` whose line numbers are `(old, new)`.
 fn row_with_lines(
     renderer: &gpui::Entity<crate::view::panes::diff::DiffRenderer>,
@@ -1767,7 +1828,7 @@ fn alt_change_keys_reach_the_visible_pane_without_diff_focus(cx: &mut gpui::Test
     let stops = cx.update(|_, app| renderer.read(app).diff_nav_entries());
     assert_eq!(stops.len(), 2);
     for detached in [false, true] {
-        let focus = cx.update(|window, app| {
+        cx.update(|window, app| {
             renderer.update(app, |pane, _| pane.diff_selection_anchor = Some(stops[0]));
             let focus = if detached {
                 app.focus_handle()
@@ -1775,7 +1836,6 @@ fn alt_change_keys_reach_the_visible_pane_without_diff_focus(cx: &mut gpui::Test
                 view.read(app).repository_view_focus.clone()
             };
             window.focus(&focus, app);
-            focus
         });
         publish(cx, &view, store.snapshot());
         for (key, stop) in [("alt-down", stops[1]), ("alt-up", stops[0])] {
@@ -1786,7 +1846,13 @@ fn alt_change_keys_reach_the_visible_pane_without_diff_focus(cx: &mut gpui::Test
                 Some(stop),
                 "{key}, detached focus: {detached}"
             );
-            assert!(cx.update(|window, _| focus.is_focused(window)));
+            // Landing on a change block focuses its diff, for S, U and D.
+            assert!(cx.update(|window, app| {
+                renderer
+                    .read(app)
+                    .diff_panel_focus_handle
+                    .is_focused(window)
+            }));
         }
     }
     assert!(store.snapshot().repos[0].diff_state.diff_target.is_none());
@@ -4139,7 +4205,7 @@ fn linked_worktree_change_keys_use_the_displayed_diff(cx: &mut gpui::TestAppCont
             assert_eq!(stops.len(), 3, "{layout:?}, {content:?}");
 
             for detached in [false, true] {
-                let focus = cx.update(|window, app| {
+                cx.update(|window, app| {
                     pane.update(app, |pane, cx| {
                         pane.diff_selection_anchor = Some(stops[0]);
                         pane.diff_selection_range = None;
@@ -4151,7 +4217,6 @@ fn linked_worktree_change_keys_use_the_displayed_diff(cx: &mut gpui::TestAppCont
                         pane.read(app).diff_panel_focus_handle.clone()
                     };
                     window.focus(&focus, app);
-                    focus
                 });
                 publish(cx, &view, store.snapshot());
                 for (key, stop) in [
@@ -4171,7 +4236,10 @@ fn linked_worktree_change_keys_use_the_displayed_diff(cx: &mut gpui::TestAppCont
                         Some(stop),
                         "{key}, {layout:?}, {content:?}, detached focus: {detached}",
                     );
-                    assert!(cx.update(|window, _| focus.is_focused(window)));
+                    // Landing on a change block focuses its diff, for S, U and D.
+                    assert!(cx.update(|window, app| {
+                        pane.read(app).diff_panel_focus_handle.is_focused(window)
+                    }));
                 }
             }
         }
