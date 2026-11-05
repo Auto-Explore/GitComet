@@ -2,7 +2,7 @@
 //! facts, and keeping a submodule's checkout in step with its pointer.
 
 use super::submodules::{
-    add_submodule_raw, git_stdout, init_repo_with_seed, run_git, setup_submodule_test,
+    add_submodule_raw, git_command, git_stdout, init_repo_with_seed, run_git, setup_submodule_test,
 };
 use gitcomet_core::domain::{CommitId, SubmoduleCheckoutPolicy, SubmoduleDrift, SubmoduleStatus};
 use gitcomet_core::path_utils::canonicalize_or_original;
@@ -304,6 +304,34 @@ fn discarding_a_staged_pointer_restores_the_index_and_the_checkout() {
 }
 
 #[test]
+fn discarding_a_moved_checkout_keeps_the_staged_pointer() {
+    let _guard = setup_submodule_test();
+    let fixture = fixture();
+    let staged = commit_in(&fixture.child(), "a.txt", "a\n");
+    run_git(&fixture.parent, &["add", "mods/child"]);
+    commit_in(&fixture.child(), "b.txt", "b\n");
+    let parent = fixture.open(&fixture.parent);
+
+    // The discard names the path only, as for a file: the checkout goes back
+    // to the index, which keeps its staged pointer (`git checkout -- <file>`).
+    let outcome = discard(&parent, "mods/child", SubmoduleCheckoutPolicy::Guarded);
+    assert!(!outcome.is_blocked(), "both commits stay on master");
+    assert_eq!(recorded_in_index(&fixture.parent, "mods/child"), staged);
+    assert_eq!(head_of(&fixture.child()), staged);
+    let status = parent.status(&CancellationToken::new()).expect("status");
+    assert_eq!(
+        status
+            .staged
+            .iter()
+            .map(|entry| entry.path.clone())
+            .collect::<Vec<_>>(),
+        vec![PathBuf::from("mods/child")],
+        "the staged pointer stays staged"
+    );
+    assert!(status.unstaged.is_empty(), "{status:?}");
+}
+
+#[test]
 fn a_dirty_submodule_blocks_the_discard_until_the_user_picks_how() {
     let _guard = setup_submodule_test();
     let fixture = fixture();
@@ -369,6 +397,46 @@ fn a_commit_on_no_branch_is_kept_on_a_branch_before_the_checkout_moves() {
         orphan
     );
     assert_eq!(head_of(&fixture.child()), recorded);
+}
+
+#[test]
+fn a_failed_checkout_after_stashing_gives_the_changes_back() {
+    let _guard = setup_submodule_test();
+    let fixture = fixture();
+    let child = fixture.child();
+    commit_in(&child, "extra.txt", "theirs\n");
+    commit_all(&fixture.parent, "record extra");
+    run_git(&child, &["rm", "-q", "extra.txt"]);
+    commit_all(&child, "drop extra");
+    let moved = head_of(&child);
+    // The recorded commit tracks extra.txt, which is untracked here now, so
+    // the checkout refuses to overwrite it after the stash took the edit.
+    fs::write(child.join("extra.txt"), "mine\n").unwrap();
+    fs::write(child.join("child.txt"), "edited\n").unwrap();
+    let parent = fixture.open(&fixture.parent);
+
+    let error = parent
+        .discard_worktree_changes_with_submodules(
+            &[Path::new("mods/child")],
+            SubmoduleCheckoutPolicy::StashAndUpdate,
+            RemoteUrlPolicy::default(),
+        )
+        .expect_err("the checkout cannot overwrite the untracked file");
+    assert!(
+        !error.to_string().contains("stash@{0}"),
+        "the changes came back, so the error does not point at the stash: {error}"
+    );
+    assert_eq!(head_of(&child), moved, "the checkout did not move");
+    assert_eq!(
+        fs::read_to_string(child.join("child.txt")).unwrap(),
+        "edited\n",
+        "the stashed edit is back"
+    );
+    assert_eq!(
+        fs::read_to_string(child.join("extra.txt")).unwrap(),
+        "mine\n"
+    );
+    assert_eq!(git_stdout(&child, &["stash", "list"]), "");
 }
 
 #[test]
@@ -533,6 +601,52 @@ fn unpushed_submodule_pointers_lists_commits_missing_from_the_submodule_remote()
 }
 
 #[test]
+fn a_signed_recording_commit_is_still_reported_unpushed() {
+    let _guard = setup_submodule_test();
+    let fixture = fixture();
+    run_git(&fixture.parent, &["config", "commit.gpgsign", "false"]);
+    let parent = fixture.open(&fixture.parent);
+    let local = commit_in(&fixture.child(), "a.txt", "a\n");
+    parent
+        .record_submodule_commit(Path::new("mods/child"), "Update mods/child", None)
+        .expect("record");
+
+    // Wrap the recording commit in a signature header. Whether it verifies
+    // does not matter: with `log.showSignature` Git prints what the verifier
+    // says, and Git itself, run as the verifier, always prints its usage.
+    let raw = git_stdout(&fixture.parent, &["cat-file", "commit", "HEAD"]);
+    let (headers, message) = raw.split_once("\n\n").expect("commit headers");
+    let signed_raw = format!(
+        "{headers}\ngpgsig -----BEGIN PGP SIGNATURE-----\n \n iQEzBAABCAAdFiEE\n -----END PGP SIGNATURE-----\n\n{message}\n"
+    );
+    let mut cmd = git_command();
+    cmd.arg("-C")
+        .arg(&fixture.parent)
+        .args(["hash-object", "-t", "commit", "-w", "--stdin"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped());
+    let mut hash = cmd.spawn().expect("spawn git hash-object");
+    {
+        use std::io::Write as _;
+        hash.stdin
+            .as_mut()
+            .expect("stdin")
+            .write_all(signed_raw.as_bytes())
+            .expect("write commit object");
+    }
+    let output = hash.wait_with_output().expect("hash-object output");
+    assert!(output.status.success(), "git hash-object failed");
+    let signed = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    run_git(&fixture.parent, &["update-ref", "HEAD", &signed]);
+    run_git(&fixture.parent, &["config", "log.showSignature", "true"]);
+    run_git(&fixture.parent, &["config", "gpg.program", "git"]);
+
+    let unpushed = parent.unpushed_submodule_pointers().unwrap();
+    assert_eq!(unpushed.len(), 1, "{unpushed:?}");
+    assert_eq!(unpushed[0].commit.as_ref(), local.as_str());
+}
+
+#[test]
 fn a_submodule_pinned_to_a_tag_is_not_reported_unpushed() {
     let _guard = setup_submodule_test();
     let fixture = fixture();
@@ -592,6 +706,35 @@ fn pushing_a_submodule_commit_no_branch_holds_says_what_to_do() {
     assert!(
         error.to_string().contains("No branch with an upstream"),
         "{error}"
+    );
+}
+
+#[test]
+fn pushing_a_submodule_skips_a_branch_tracking_a_local_branch() {
+    let _guard = setup_submodule_test();
+    let fixture = fixture();
+    let child = fixture.child();
+    let master = head_of(&child);
+    run_git(&child, &["checkout", "-q", "-b", "feature"]);
+    run_git(&child, &["config", "branch.feature.remote", "."]);
+    run_git(
+        &child,
+        &["config", "branch.feature.merge", "refs/heads/master"],
+    );
+    let local = commit_in(&child, "a.txt", "a\n");
+
+    let parent = fixture.open(&fixture.parent);
+    let error = parent
+        .push_submodule_with_output(Path::new("mods/child"), &CommitId(local.as_str().into()))
+        .expect_err("a local upstream is no remote to push to");
+    assert!(
+        error.to_string().contains("No branch with an upstream"),
+        "{error}"
+    );
+    assert_eq!(
+        git_stdout(&child, &["rev-parse", "refs/heads/master"]),
+        master,
+        "the local branch it tracks did not move"
     );
 }
 

@@ -5,7 +5,7 @@
 use super::GixRepo;
 use crate::util::{
     git_workdir_cmd_for, path_buf_from_git_bytes, push_literal_paths, run_git_background_output,
-    run_git_simple,
+    run_git_simple, validate_ref_like_arg,
 };
 use gitcomet_core::domain::{
     CommitId, DiscardOutcome, FileStatusKind, Submodule, SubmoduleCheckoutPolicy,
@@ -108,7 +108,16 @@ impl GixRepo {
             if staged.is_none() && unstaged.is_none() {
                 continue;
             }
-            let target = if staged.is_some() {
+            // Like `git checkout -- <file>`, a change in the checkout goes
+            // back to the index pointer and keeps what is staged; only a
+            // staged change alone takes the index back to HEAD's pointer. A
+            // staged removal leaves the checkout untracked, with no index
+            // pointer to go back to.
+            let to_index =
+                staged.is_none() || unstaged.is_some_and(|kind| kind != FileStatusKind::Untracked);
+            let target = if to_index {
+                row.recorded_head.clone()
+            } else {
                 match super::submodules::head_gitlink_commit_id(&repo, path)? {
                     Some(target) => target,
                     None => {
@@ -116,12 +125,10 @@ impl GixRepo {
                         continue;
                     }
                 }
-            } else {
-                row.recorded_head.clone()
             };
             restores.push(GitlinkRestore {
                 path: path.to_path_buf(),
-                staged: staged.is_some(),
+                staged: !to_index,
                 target,
                 row: row.clone(),
             });
@@ -310,6 +317,11 @@ impl GixRepo {
     ) -> Result<()> {
         let submodule_workdir = self.spec.workdir.join(&row.path);
         let target_short = short_commit_id(target.as_ref());
+        let moves = row.checked_out_head.as_ref() != Some(target);
+        // Asked before anything is kept, so the answer does not depend on
+        // what the stash below takes out of the checkout.
+        let target_fetched = !moves || commit_exists(&submodule_workdir, target);
+        let mut stashed = false;
         if let Some(risk) = risk {
             if risk.has_inner_changes {
                 let mut stash = git_workdir_cmd_for(&submodule_workdir);
@@ -322,7 +334,11 @@ impl GixRepo {
                 stash.arg("stash").arg("push").arg("-m").arg(format!(
                     "Before checking out {target_short} to match {parent}"
                 ));
+                // `stash push` saves nothing for changes it ignores (inside a
+                // nested submodule, say); only a new entry may be popped back.
+                let stash_before = stash_tip(&submodule_workdir);
                 run_git_simple(stash, "git stash push")?;
+                stashed = stash_tip(&submodule_workdir) != stash_before;
                 outcome.stashed.push(row.path.clone());
             }
             if risk.unreferenced
@@ -338,14 +354,21 @@ impl GixRepo {
                     .arg("--")
                     .arg(&branch)
                     .arg(checked_out.as_ref());
-                run_git_simple(keep, "git branch")?;
+                if let Err(error) = run_git_simple(keep, "git branch") {
+                    return Err(give_back_stash(
+                        &submodule_workdir,
+                        &row.path,
+                        stashed,
+                        error,
+                    ));
+                }
                 outcome.kept_on_branch.push((row.path.clone(), branch));
             }
         }
-        if row.checked_out_head.as_ref() == Some(target) {
+        if !moves {
             return Ok(());
         }
-        if commit_exists(&submodule_workdir, target) {
+        let moved = if target_fetched {
             let mut checkout = git_workdir_cmd_for(&submodule_workdir);
             checkout
                 .arg("checkout")
@@ -353,14 +376,24 @@ impl GixRepo {
                 .arg("--detach")
                 .arg(target.as_ref())
                 .arg("--");
-            run_git_simple(checkout, "git checkout --detach")?;
+            run_git_simple(checkout, "git checkout --detach")
         } else {
             // Not fetched yet: let Git fetch it the way `submodule update`
             // does, still without forcing over local changes.
             let mut update = self.git_workdir_cmd();
             update.arg("submodule").arg("update").arg("--checkout");
             push_literal_paths(&mut update, [crate::util::submodule_script_path(&row.path)]);
-            run_git_simple(update, "git submodule update --checkout")?;
+            run_git_simple(update, "git submodule update --checkout")
+        };
+        if let Err(error) = moved {
+            // The checkout stayed where it was, so the changes kept for the
+            // move go back into it rather than wait in a stash.
+            return Err(give_back_stash(
+                &submodule_workdir,
+                &row.path,
+                stashed,
+                error,
+            ));
         }
         outcome.updated.push(SubmoduleCheckoutUpdate {
             path: row.path.clone(),
@@ -478,8 +511,12 @@ impl GixRepo {
                 short_commit_id(commit.as_ref())
             ))));
         };
+        validate_ref_like_arg(&branch.remote, "remote name")?;
+        validate_ref_like_arg(&branch.refname, "branch name")?;
+        validate_ref_like_arg(&branch.remote_ref, "branch name")?;
         let mut push = git_workdir_cmd_for(&workdir);
         push.arg("push")
+            .arg("--")
             .arg(&branch.remote)
             .arg(format!("{}:{}", branch.refname, branch.remote_ref));
         crate::util::run_git_with_output(push, "git push")
@@ -493,7 +530,10 @@ impl GixRepo {
             return Ok(Vec::new());
         }
         let mut cmd = self.git_workdir_cmd();
+        // `log.showSignature` would print verification text into the
+        // NUL-separated fields and hide the pointer a signed commit records.
         cmd.arg("log")
+            .arg("--no-show-signature")
             .arg("--format=")
             .arg("--raw")
             .arg("--no-abbrev")
@@ -600,14 +640,45 @@ fn parse_branches_with_upstream(stdout: &[u8]) -> Vec<BranchWithUpstream> {
             let refname = fields.next()?;
             let remote = fields.next()?;
             let remote_ref = fields.next()?;
-            (!remote.is_empty() && !remote_ref.is_empty()).then(|| BranchWithUpstream {
-                current,
-                refname: refname.to_string(),
-                remote: remote.to_string(),
-                remote_ref: remote_ref.to_string(),
+            // A branch tracking a local branch (`.`) has no remote to push
+            // to: pushing it would only move that local branch.
+            (!remote.is_empty() && remote != "." && !remote_ref.is_empty()).then(|| {
+                BranchWithUpstream {
+                    current,
+                    refname: refname.to_string(),
+                    remote: remote.to_string(),
+                    remote_ref: remote_ref.to_string(),
+                }
             })
         })
         .collect()
+}
+
+/// After a checkout that failed once this call had stashed the submodule's
+/// changes: pop them back, or, when that fails too, say where they are.
+fn give_back_stash(workdir: &Path, path: &Path, stashed: bool, error: Error) -> Error {
+    if !stashed {
+        return error;
+    }
+    let mut pop = git_workdir_cmd_for(workdir);
+    pop.arg("stash").arg("pop").arg("-q").arg("--index");
+    match run_git_simple(pop, "git stash pop") {
+        Ok(()) => error,
+        Err(pop_error) => Error::new(ErrorKind::Backend(format!(
+            "{error}. The changes in {} stay in its stash (stash@{{0}}): putting them back failed: {pop_error}",
+            path.display()
+        ))),
+    }
+}
+
+/// The newest stash entry's commit, if the repository has one.
+fn stash_tip(workdir: &Path) -> Option<String> {
+    let mut cmd = git_workdir_cmd_for(workdir);
+    cmd.arg("rev-parse")
+        .arg("-q")
+        .arg("--verify")
+        .arg("refs/stash");
+    crate::util::run_git_capture(cmd, "git rev-parse refs/stash").ok()
 }
 
 fn commit_exists(workdir: &Path, commit: &CommitId) -> bool {
