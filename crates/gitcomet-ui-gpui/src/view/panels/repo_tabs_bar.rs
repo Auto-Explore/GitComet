@@ -37,6 +37,33 @@ pub(in super::super) struct RepoTabsBarView {
     pending_reveal: Option<(RepoId, u8)>,
     /// Timestamp of the last edge-drag auto-scroll step, for pacing the next.
     drag_scroll_tick: Option<Instant>,
+    /// The reorders this drag sent, so it does not send one again.
+    drag_reorders: RepoTabDragReorders,
+}
+
+/// The last reorder a tab drag sent. Pointer moves and auto-scroll frames
+/// pick a drop target over and over; when the store keeps a tab where it was
+/// (a submodule tab stays with its worktree), the same reorder would go out
+/// on each of them, and every reorder persists the session.
+#[derive(Debug, Default)]
+struct RepoTabDragReorders {
+    last: Option<(RepoId, Option<RepoId>)>,
+}
+
+impl RepoTabDragReorders {
+    /// Whether to send this reorder: false when it repeats the last one.
+    fn admit(&mut self, repo_id: RepoId, insert_before: Option<RepoId>) -> bool {
+        let reorder = Some((repo_id, insert_before));
+        if self.last == reorder {
+            return false;
+        }
+        self.last = reorder;
+        true
+    }
+
+    fn reset(&mut self) {
+        self.last = None;
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -360,8 +387,7 @@ impl RepoTabsBarView {
                 .hash(&mut hasher);
             // The pair drawing and the "recorded" tooltip line.
             repo.submodule_parent.hash(&mut hasher);
-            state
-                .submodule_row_in_parent(repo.id)
+            submodule_row_in_parent(state, repo)
                 .map(|row| &row.recorded_head)
                 .hash(&mut hasher);
         }
@@ -438,7 +464,7 @@ impl RepoTabsBarView {
     fn repo_tab_submodule_line(state: &AppState, repo: &RepoState) -> Option<String> {
         let link = repo.submodule_parent.as_ref()?;
         let parent = link.parent_name();
-        Some(match state.submodule_row_in_parent(repo.id) {
+        Some(match submodule_row_in_parent(state, repo) {
             Some(row) => format!(
                 "Submodule of {parent} · recorded {}",
                 gitcomet_core::domain::short_commit_id(row.recorded_head.as_ref())
@@ -598,6 +624,7 @@ impl RepoTabsBarView {
             revealed_repo: None,
             pending_reveal: None,
             drag_scroll_tick: None,
+            drag_reorders: RepoTabDragReorders::default(),
         };
         this.update_repo_tab_spinner_delay(cx);
         this
@@ -788,10 +815,17 @@ impl RepoTabsBarView {
             f32::from(cursor_x),
             f32::from(center_x),
         );
-        self.store.dispatch(Msg::ReorderRepoTabs {
-            repo_id: dragged,
-            insert_before,
-        });
+        self.dispatch_drag_reorder(dragged, insert_before);
+    }
+
+    /// Moves the dragged tab, unless this drag already asked for that move.
+    fn dispatch_drag_reorder(&mut self, repo_id: RepoId, insert_before: Option<RepoId>) {
+        if self.drag_reorders.admit(repo_id, insert_before) {
+            self.store.dispatch(Msg::ReorderRepoTabs {
+                repo_id,
+                insert_before,
+            });
+        }
     }
 
     /// The live runtime's spinner delay, for this view only: forcing the
@@ -831,6 +865,7 @@ impl RepoTabsBarView {
     }
 
     fn clear_repo_tab_drag_visual(&mut self, cx: &mut gpui::Context<Self>) {
+        self.drag_reorders.reset();
         if self.repo_tab_drag_visual.take().is_some() {
             cx.notify();
         }
@@ -909,8 +944,9 @@ impl RepoTabsBarView {
 
 impl Render for RepoTabsBarView {
     fn render(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
-        if self.repo_tab_drag_visual.is_some() && !cx.has_active_drag() {
+        if !cx.has_active_drag() {
             self.repo_tab_drag_visual = None;
+            self.drag_reorders.reset();
         }
 
         let theme = self.theme;
@@ -1309,10 +1345,7 @@ impl Render for RepoTabsBarView {
                             return;
                         };
 
-                        this.store.dispatch(Msg::ReorderRepoTabs {
-                            repo_id: dragged_repo_id,
-                            insert_before,
-                        });
+                        this.dispatch_drag_reorder(dragged_repo_id, insert_before);
                     },
                 ))
                 .on_drop(cx.listener(move |this, _drag: &RepoTabDrag, _w, cx| {
@@ -1476,10 +1509,7 @@ impl Render for RepoTabsBarView {
                     return;
                 }
 
-                this.store.dispatch(Msg::ReorderRepoTabs {
-                    repo_id,
-                    insert_before: None,
-                });
+                this.dispatch_drag_reorder(repo_id, None);
             },
         );
 
@@ -1627,8 +1657,9 @@ fn repo_tab_insert_before_for_drop(
 #[cfg(test)]
 mod tests {
     use super::{
-        RepoTabGroup, RepoTabsBarView, repo_tab_close_button_fill, repo_tab_drag_direction,
-        repo_tab_group, repo_tab_insert_before_for_drag_cursor, repo_tab_insert_before_for_drop,
+        RepoTabDragReorders, RepoTabGroup, RepoTabsBarView, repo_tab_close_button_fill,
+        repo_tab_drag_direction, repo_tab_group, repo_tab_insert_before_for_drag_cursor,
+        repo_tab_insert_before_for_drop,
     };
     use gitcomet_core::domain::{HeadTracking, RepoSpec, Upstream, UpstreamDivergence};
     use gitcomet_state::model::{
@@ -2091,6 +2122,23 @@ mod tests {
         assert!(
             !RepoTabsBarView::repo_tab_tooltip(&state, &state.repos[0]).contains("Submodule of")
         );
+    }
+
+    #[test]
+    fn a_drag_sends_a_reorder_the_store_kept_from_happening_only_once() {
+        // A submodule tab dragged out of its group stays where it was, so
+        // each pointer move picks the same drop target again.
+        let mut reorders = RepoTabDragReorders::default();
+        assert!(reorders.admit(RepoId(3), None));
+        assert!(!reorders.admit(RepoId(3), None));
+        assert!(!reorders.admit(RepoId(3), None));
+        // A different target goes out, and going back to the first one does
+        // too: the drag moved in between.
+        assert!(reorders.admit(RepoId(3), Some(RepoId(1))));
+        assert!(reorders.admit(RepoId(3), None));
+        // The next drag starts afresh.
+        reorders.reset();
+        assert!(reorders.admit(RepoId(3), None));
     }
 
     #[test]

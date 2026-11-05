@@ -17,6 +17,7 @@ mod status_view;
 mod worktree_uncommitted;
 
 // Free helpers the sibling modules and the tests share.
+pub(in crate::view) use commit_form::submodule_row_in_parent;
 #[cfg(test)]
 use commit_form::*;
 use commit_metadata::*;
