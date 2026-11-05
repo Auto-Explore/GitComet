@@ -284,7 +284,8 @@ pub(super) fn bind_app_keys(cx: &mut App) {
         KeyBinding::new("secondary-0", ResetUiScale, None),
         KeyBinding::new("secondary-q", Quit, None),
         KeyBinding::new("secondary-shift-f12", crate::view::dock::HideAllDocks, None),
-        KeyBinding::new("secondary-shift-'", crate::view::dock::MaximizeDock, None),
+        // Shift+' arrives as the key `"` without Shift, so bind the character.
+        KeyBinding::new("secondary-\"", crate::view::dock::MaximizeDock, None),
         KeyBinding::new("f1", DiffPrevFile, None),
         KeyBinding::new("f4", DiffNextFile, None),
         KeyBinding::new("alt-left", DiffPrevFile, None),
