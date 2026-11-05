@@ -285,6 +285,10 @@ impl Informational {
     }
 }
 
+/// The hidden option, without its leading `--`, that hands a detached
+/// browser its launcher's startup socket.
+pub(crate) const STARTUP_SOCKET_OPTION: &str = "__gitcomet-startup-socket";
+
 /// The clap command, named and versioned after the running product.
 pub(crate) fn cli_command(about: &str) -> clap::Command {
     let identity = gitcomet_core::identity::current();
@@ -292,7 +296,7 @@ pub(crate) fn cli_command(about: &str) -> clap::Command {
     Cli::command()
         .arg(
             clap::Arg::new("startup_socket")
-                .long("__gitcomet-startup-socket")
+                .long(STARTUP_SOCKET_OPTION)
                 .value_parser(clap::value_parser!(PathBuf))
                 .hide(true),
         )

@@ -1,7 +1,7 @@
-use crate::cli::exit_code;
+use crate::cli::{STARTUP_SOCKET_OPTION, exit_code};
 use process_wrap::std::{ChildWrapper, CommandWrap, ProcessSession};
 use rustix::process::{Pid, Signal, WaitId, WaitIdOptions, kill_process_group, waitid};
-use std::ffi::{OsStr, OsString};
+use std::ffi::OsString;
 use std::io::{self, Read, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
@@ -11,7 +11,6 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
-pub(crate) const STARTUP_SOCKET_ARG: &str = "--__gitcomet-startup-socket";
 const READY: &[u8] = b"READY 1\n";
 const ACK: &[u8] = b"ACK 1\n";
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(60);
@@ -36,12 +35,6 @@ impl std::fmt::Display for LaunchError {
             Self::Setup(error) | Self::Startup(error) => error.fmt(f),
         }
     }
-}
-
-pub(crate) fn relaunch_command(executable: &OsStr, args: &[OsString]) -> Command {
-    let mut command = Command::new(executable);
-    command.args(args.iter().skip(1));
-    command
 }
 
 // Stderr goes quiet before READY so nothing reaches the terminal after the
@@ -88,16 +81,19 @@ fn notify_ready_io(endpoint: &Path) -> io::Result<()> {
 pub(crate) fn launch(args: &[OsString]) -> Result<i32, LaunchError> {
     let startup = StartupListener::new().map_err(LaunchError::Setup)?;
     let executable = std::env::current_exe().map_err(LaunchError::Setup)?;
-    let mut child_args = Vec::with_capacity(args.len() + 2);
-    child_args.push(executable.as_os_str().to_owned());
-    child_args.push(STARTUP_SOCKET_ARG.into());
-    child_args.push(startup.endpoint().into_os_string());
-    child_args.extend(args.iter().skip(1).cloned());
-    supervise(
-        relaunch_command(executable.as_os_str(), &child_args),
-        startup,
-        STARTUP_TIMEOUT,
-    )
+    let command = browser_command(&executable, &startup.endpoint(), args);
+    supervise(command, startup, STARTUP_TIMEOUT)
+}
+
+// The supplied arguments after the program name follow verbatim, so `--`
+// and non-UTF-8 paths keep their boundaries.
+fn browser_command(executable: &Path, endpoint: &Path, args: &[OsString]) -> Command {
+    let mut command = Command::new(executable);
+    command
+        .arg(format!("--{STARTUP_SOCKET_OPTION}"))
+        .arg(endpoint)
+        .args(args.iter().skip(1));
+    command
 }
 
 struct StartupListener {
@@ -151,8 +147,8 @@ impl StartupListener {
     fn bind_in(parent: &Path) -> io::Result<Self> {
         let directory = tempfile::Builder::new()
             .prefix("gc-start-")
+            .permissions(std::fs::Permissions::from_mode(0o700))
             .tempdir_in(parent)?;
-        std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o700))?;
         let listener = UnixListener::bind(directory.path().join("ready"))?;
         listener.set_nonblocking(true)?;
         Ok(Self {
@@ -234,10 +230,15 @@ impl StartupSignals {
         ] {
             // Kept for the process lifetime: unregistering alone would leave
             // the signal ignored if the browser then runs in the foreground.
-            signal_hook::flag::register_conditional_default(
-                signal,
-                signals.restore_defaults.clone(),
-            )?;
+            // Not SIGINT: crashlog::install() owns it in every run that
+            // follows, and a default action ahead of its handler would end
+            // the process before the recovery marker is retired.
+            if signal != signal_hook::consts::SIGINT {
+                signal_hook::flag::register_conditional_default(
+                    signal,
+                    signals.restore_defaults.clone(),
+                )?;
+            }
             signals
                 .registrations
                 .push(signal_hook::flag::register_usize(
@@ -325,9 +326,9 @@ fn await_startup(
     loop {
         let signal = signals.received.load(Ordering::Relaxed);
         if signal != 0 {
-            let _ = pending.forward_cancellation(
-                Signal::from_named_raw(signal as i32).expect("registered termination signal"),
-            );
+            // Whatever stopped the launcher, the browser hears SIGINT: the
+            // one signal on which it retires its crash-recovery marker.
+            let _ = pending.forward_cancellation(Signal::INT);
             return Ok(128 + signal as i32);
         }
         if startup.poll()? {

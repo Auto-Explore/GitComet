@@ -1,4 +1,5 @@
 use super::*;
+use std::ffi::OsStr;
 use std::io::IsTerminal;
 use std::os::unix::ffi::OsStringExt;
 
@@ -6,15 +7,9 @@ const CHILD_TEST: &str =
     "process_launch::tests::startup_acknowledgement_leaves_the_session_running";
 
 fn child_command(scenario: &str, startup: &StartupListener, report: &Path) -> Command {
-    let executable = std::env::current_exe().unwrap();
-    let args = [
-        executable.as_os_str().to_owned(),
-        "--exact".into(),
-        CHILD_TEST.into(),
-        "--nocapture".into(),
-    ];
-    let mut command = relaunch_command(executable.as_os_str(), &args);
+    let mut command = Command::new(std::env::current_exe().unwrap());
     command
+        .args(["--exact", CHILD_TEST, "--nocapture"])
         .env("GITCOMET_TEST_STARTUP_SCENARIO", scenario)
         .env("GITCOMET_TEST_STARTUP_ENDPOINT", startup.endpoint())
         .env("GITCOMET_TEST_STARTUP_REPORT", report)
@@ -53,8 +48,15 @@ fn run_child(scenario: &str) -> ! {
             crate::crashlog::install();
             crate::crashlog::begin_session().unwrap();
             std::fs::write(report.with_extension("session-started"), b"started").unwrap();
-            rustix::process::kill_process(rustix::process::getppid().unwrap(), Signal::INT)
+            let signal: i32 = std::env::var("GITCOMET_TEST_STARTUP_CANCEL")
+                .unwrap()
+                .parse()
                 .unwrap();
+            rustix::process::kill_process(
+                rustix::process::getppid().unwrap(),
+                Signal::from_named_raw(signal).unwrap(),
+            )
+            .unwrap();
         }
         "ready" | "retained-stderr" | "large-output" => {
             assert!(!std::io::stdin().is_terminal());
@@ -191,22 +193,34 @@ fn startup_deadline_and_spawn_failure_are_errors() {
 fn startup_cancellation_stops_and_reaps_the_child() {
     const CANCEL_TEST: &str =
         "process_launch::tests::startup_cancellation_stops_and_reaps_the_child";
-    if std::env::var_os("GITCOMET_TEST_STARTUP_CANCEL").is_none() {
-        let output = Command::new(std::env::current_exe().unwrap())
-            .args(["--exact", CANCEL_TEST, "--nocapture"])
-            .env("GITCOMET_TEST_STARTUP_CANCEL", "1")
-            .output()
-            .unwrap();
-        assert!(output.status.success(), "{output:?}");
+    let Some(signal) = std::env::var_os("GITCOMET_TEST_STARTUP_CANCEL") else {
+        // A terminal can end the launcher with any of these; the browser
+        // must retire its marker for each.
+        for signal in [
+            signal_hook::consts::SIGINT,
+            signal_hook::consts::SIGTERM,
+            signal_hook::consts::SIGHUP,
+        ] {
+            let output = Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", CANCEL_TEST, "--nocapture"])
+                .env("GITCOMET_TEST_STARTUP_CANCEL", signal.to_string())
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "signal {signal}: {output:?}");
+        }
         return;
-    }
+    };
+    let signal: i32 = signal.to_str().unwrap().parse().unwrap();
 
     let directory = tempfile::tempdir().unwrap();
     let report = directory.path().join("pid");
     let startup = StartupListener::new().unwrap();
     let endpoint = startup.endpoint();
     let command = child_command("cancel", &startup, &report);
-    assert_eq!(supervise(command, startup, STARTUP_TIMEOUT).unwrap(), 130);
+    assert_eq!(
+        supervise(command, startup, STARTUP_TIMEOUT).unwrap(),
+        128 + signal
+    );
     let pid: i32 = std::fs::read_to_string(&report).unwrap().parse().unwrap();
     assert!(rustix::process::test_kill_process(Pid::from_raw(pid).unwrap()).is_err());
     assert!(!endpoint.exists());
@@ -218,25 +232,35 @@ fn startup_cancellation_stops_and_reaps_the_child() {
             .file_name()
             .to_string_lossy()
             .starts_with("session-in-progress")),
-        "Ctrl-C must retire the pending startup's recovery marker"
+        "cancelling the launch must retire the pending startup's recovery marker"
     );
 }
 
 #[test]
-fn relaunch_keeps_supplied_argument_boundaries() {
-    let args = vec![
-        "custom-product".into(),
-        "--".into(),
-        OsString::from_vec(b"repo \xff".to_vec()),
-    ];
-    let command = relaunch_command(OsStr::new("/custom/product"), &args);
+fn detached_launch_keeps_supplied_argument_boundaries() {
+    let repository = OsString::from_vec(b"repo \xff".to_vec());
+    let args = vec!["custom-product".into(), "--".into(), repository.clone()];
+    let endpoint = Path::new("/run/gc-start/ready");
+    let command = browser_command(Path::new("/custom/product"), endpoint, &args);
+    assert_eq!(command.get_program(), "/custom/product");
+    let mut child_args = vec![OsString::from("custom-product")];
+    child_args.extend(command.get_args().map(OsStr::to_owned));
     assert_eq!(
-        command.get_args().collect::<Vec<_>>(),
-        args[1..]
-            .iter()
-            .map(OsString::as_os_str)
-            .collect::<Vec<_>>()
+        child_args[1..],
+        [
+            OsString::from("--__gitcomet-startup-socket"),
+            endpoint.into(),
+            "--".into(),
+            repository.clone(),
+        ]
     );
+    let parsed = crate::cli::parse_launch(child_args, crate::cli::DEFAULT_ABOUT).unwrap();
+    assert_eq!(parsed.startup_socket.as_deref(), Some(endpoint));
+    assert!(matches!(
+        parsed.outcome,
+        crate::cli::CliOutcome::Run(crate::cli::AppMode::Browser { path: Some(path) })
+            if path.as_os_str() == repository
+    ));
 }
 
 #[test]
@@ -274,6 +298,45 @@ fn signals_fall_back_to_their_default_action_after_supervision() {
         status.signal(),
         Some(signal_hook::consts::SIGTERM),
         "{status:?}"
+    );
+}
+
+#[test]
+fn ctrl_c_reaches_the_crash_handler_after_a_failed_detach() {
+    const CHILD: &str = "GITCOMET_TEST_FOREGROUND_INTERRUPT";
+    const TEST: &str =
+        "process_launch::tests::ctrl_c_reaches_the_crash_handler_after_a_failed_detach";
+    if std::env::var_os(CHILD).is_some() {
+        // A spawn failure falls back to the foreground, which installs crash
+        // logging next and opens a session.
+        let startup = StartupListener::new().unwrap();
+        let missing = Command::new("/nonexistent/gitcomet-startup-fixture");
+        assert!(matches!(
+            supervise(missing, startup, STARTUP_TIMEOUT),
+            Err(LaunchError::Setup(_))
+        ));
+        crate::crashlog::install();
+        crate::crashlog::begin_session().unwrap();
+        rustix::process::kill_process(rustix::process::getpid(), Signal::INT).unwrap();
+        std::thread::sleep(Duration::from_secs(5));
+        return;
+    }
+    let profile = tempfile::tempdir().unwrap();
+    let status = Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", TEST, "--nocapture"])
+        .env(CHILD, "1")
+        .env("GITCOMET_PROFILE_ROOT", profile.path())
+        .status()
+        .unwrap();
+    assert_eq!(status.code(), Some(130), "{status:?}");
+    let crashes = profile.path().join("state/gitcomet/crashes");
+    assert!(
+        std::fs::read_dir(crashes).unwrap().all(|entry| !entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .starts_with("session-in-progress")),
+        "Ctrl-C must retire the foreground session's recovery marker"
     );
 }
 
