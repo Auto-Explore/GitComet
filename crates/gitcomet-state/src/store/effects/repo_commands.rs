@@ -1419,7 +1419,9 @@ fn schedule_push_with_tags(
     repo_id: RepoId,
     request: gitcomet_core::tag_push::TagPushRequest,
     auth: Option<StagedGitAuth>,
+    guard_submodules: bool,
 ) {
+    let guard_tx = msg_tx.clone();
     schedule_repo_command_with_context(
         executor,
         repos,
@@ -1435,7 +1437,19 @@ fn schedule_push_with_tags(
             request.branch,
             request.mode.flag()
         )),
-        move |repo| run_with_git_auth(auth, || repo.push_with_tags(&request)),
+        move |repo| {
+            if guard_submodules {
+                refuse_unpushed_submodule_pointers(
+                    repo.as_ref(),
+                    &guard_tx,
+                    repo_id,
+                    BlockedPush::WithTags {
+                        request: request.clone(),
+                    },
+                )?;
+            }
+            run_with_git_auth(auth, || repo.push_with_tags(&request))
+        },
     );
 }
 
@@ -1549,6 +1563,16 @@ pub(super) fn schedule_push_submodules_then_repo(
                         target,
                         set_upstream,
                     },
+                    BlockedPush::SetUpstream { remote, branch } => Msg::PushSetUpstream {
+                        repo_id,
+                        remote,
+                        branch,
+                    },
+                    BlockedPush::Force { lease: None } => Msg::ForcePush { repo_id },
+                    BlockedPush::Force { lease: Some(lease) } => {
+                        Msg::ForcePushWithLease { repo_id, lease }
+                    }
+                    BlockedPush::WithTags { request } => Msg::PushWithTags { repo_id, request },
                 },
             );
         },
@@ -1645,8 +1669,10 @@ fn schedule_force_push(
     repo_id: RepoId,
     tracking: Option<(String, String)>,
     auth: Option<StagedGitAuth>,
+    guard_submodules: bool,
 ) {
     let context = tracking.map(|(local, upstream)| format!("{local} → {upstream}"));
+    let guard_tx = msg_tx.clone();
     schedule_repo_command_with_context(
         executor,
         repos,
@@ -1654,7 +1680,17 @@ fn schedule_force_push(
         repo_id,
         RepoCommandKind::ForcePush,
         context,
-        move |repo| run_with_git_auth(auth, || repo.push_force_with_output()),
+        move |repo| {
+            if guard_submodules {
+                refuse_unpushed_submodule_pointers(
+                    repo.as_ref(),
+                    &guard_tx,
+                    repo_id,
+                    BlockedPush::Force { lease: None },
+                )?;
+            }
+            run_with_git_auth(auth, || repo.push_force_with_output())
+        },
     );
 }
 
@@ -1665,8 +1701,10 @@ fn schedule_force_push_with_lease(
     repo_id: RepoId,
     lease: ForcePushLease,
     auth: Option<StagedGitAuth>,
+    guard_submodules: bool,
 ) {
     let command_lease = lease.clone();
+    let guard_tx = msg_tx.clone();
     schedule_repo_command(
         executor,
         repos,
@@ -1675,7 +1713,19 @@ fn schedule_force_push_with_lease(
         RepoCommandKind::ForcePushWithLease {
             lease: command_lease,
         },
-        move |repo| run_with_git_auth(auth, || repo.push_force_with_lease_with_output(&lease)),
+        move |repo| {
+            if guard_submodules {
+                refuse_unpushed_submodule_pointers(
+                    repo.as_ref(),
+                    &guard_tx,
+                    repo_id,
+                    BlockedPush::Force {
+                        lease: Some(lease.clone()),
+                    },
+                )?;
+            }
+            run_with_git_auth(auth, || repo.push_force_with_lease_with_output(&lease))
+        },
     );
 }
 
@@ -1688,10 +1738,12 @@ fn schedule_push_set_upstream(
     branch: String,
     local_branch: Option<String>,
     auth: Option<StagedGitAuth>,
+    guard_submodules: bool,
 ) {
     let command_remote = remote.clone();
     let command_branch = branch.clone();
     let context = local_branch.map(|local| format!("{local} → {remote}/{branch}"));
+    let guard_tx = msg_tx.clone();
     schedule_repo_command_with_context(
         executor,
         repos,
@@ -1703,6 +1755,19 @@ fn schedule_push_set_upstream(
         },
         context,
         move |repo| {
+            // The first push of a branch is the usual way a submodule bump
+            // leaves, so it is checked like any other push.
+            if guard_submodules {
+                refuse_unpushed_submodule_pointers(
+                    repo.as_ref(),
+                    &guard_tx,
+                    repo_id,
+                    BlockedPush::SetUpstream {
+                        remote: remote.clone(),
+                        branch: branch.clone(),
+                    },
+                )?;
+            }
             run_with_git_auth(auth, || {
                 repo.push_set_upstream_with_output(&remote, &branch)
             })
@@ -3088,7 +3153,15 @@ pub(super) fn schedule(
             repo_id,
             request,
             auth,
-        } => schedule_push_with_tags(executor, repos, msg_tx, repo_id, request, auth),
+        } => schedule_push_with_tags(
+            executor,
+            repos,
+            msg_tx,
+            repo_id,
+            request,
+            auth,
+            guard_unpushed_submodules(thread_state, repo_id),
+        ),
         RepoCommandEffect::Push { repo_id, auth } => schedule_push(
             executor,
             repos,
@@ -3120,12 +3193,21 @@ pub(super) fn schedule(
             repo_id,
             tracking_branch_context(thread_state, repo_id),
             auth,
+            guard_unpushed_submodules(thread_state, repo_id),
         ),
         RepoCommandEffect::ForcePushWithLease {
             repo_id,
             lease,
             auth,
-        } => schedule_force_push_with_lease(executor, repos, msg_tx, repo_id, lease, auth),
+        } => schedule_force_push_with_lease(
+            executor,
+            repos,
+            msg_tx,
+            repo_id,
+            lease,
+            auth,
+            guard_unpushed_submodules(thread_state, repo_id),
+        ),
         RepoCommandEffect::PushSetUpstream {
             repo_id,
             remote,
@@ -3140,6 +3222,7 @@ pub(super) fn schedule(
             branch,
             current_branch_context(thread_state, repo_id),
             auth,
+            guard_unpushed_submodules(thread_state, repo_id),
         ),
         RepoCommandEffect::SetUpstreamBranch {
             repo_id,

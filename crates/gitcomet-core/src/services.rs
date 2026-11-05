@@ -545,7 +545,7 @@ pub struct SafePushAfterCommitTarget {
     pub local_head: CommitId,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct ForcePushLease {
     pub remote: String,
     pub branch: String,

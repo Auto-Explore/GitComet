@@ -92,6 +92,12 @@ pub(super) fn forget_closed_repos(state: &mut AppState) {
 /// A cancelled sign-in ends the step that asked for it, and with it the
 /// plan: the rest would run out of order.
 pub(super) fn cancel_auth(state: &mut AppState, operation: &AuthRetryOperation) {
+    if let AuthRetryOperation::RepoCommand { repo_id, command } = operation
+        && guarded_push(command)
+        && state.unpushed_pointer_override == Some(*repo_id)
+    {
+        state.unpushed_pointer_override = None;
+    }
     let Some(plan) = &state.linked_commit else {
         return;
     };
@@ -467,6 +473,24 @@ pub(super) fn resolve_unpushed_pointer_prompt(
             target,
             set_upstream,
         ),
+        BlockedPush::SetUpstream { remote, branch } => {
+            super::actions_emit_effects::push_set_upstream(
+                repos,
+                state,
+                prompt.repo_id,
+                remote,
+                branch,
+            )
+        }
+        BlockedPush::Force { lease: None } => {
+            super::actions_emit_effects::force_push(repos, state, prompt.repo_id)
+        }
+        BlockedPush::Force { lease: Some(lease) } => {
+            super::actions_emit_effects::force_push_with_lease(repos, state, prompt.repo_id, lease)
+        }
+        BlockedPush::WithTags { request } => {
+            super::actions_emit_effects::push_with_tags(repos, state, prompt.repo_id, request)
+        }
     }
 }
 
@@ -480,13 +504,36 @@ pub(super) fn dismiss_unpushed_pointer_prompt(
     Vec::new()
 }
 
-/// The override answers one push only.
-pub(super) fn push_finished(state: &mut AppState, repo_id: RepoId, command: &RepoCommandKind) {
-    if matches!(
+/// The pushes the unpushed-pointer guard checks first.
+fn guarded_push(command: &RepoCommandKind) -> bool {
+    matches!(
         command,
-        RepoCommandKind::Push | RepoCommandKind::PushAfterCommit { .. }
-    ) && state.unpushed_pointer_override == Some(repo_id)
-    {
+        RepoCommandKind::Push
+            | RepoCommandKind::PushAfterCommit { .. }
+            | RepoCommandKind::PushSetUpstream { .. }
+            | RepoCommandKind::ForcePush
+            | RepoCommandKind::ForcePushWithLease { .. }
+            | RepoCommandKind::PushWithTags { .. }
+    )
+}
+
+/// The override answers one push only. A push that stopped for a sign-in
+/// runs again from the prompt, so the override stays for that retry;
+/// cancelling the prompt drops it.
+pub(super) fn push_finished(state: &mut AppState, repo_id: RepoId, command: &RepoCommandKind) {
+    if !guarded_push(command) || state.unpushed_pointer_override != Some(repo_id) {
+        return;
+    }
+    let retried = state.auth_prompt.as_ref().is_some_and(|prompt| {
+        matches!(
+            &prompt.operation,
+            AuthRetryOperation::RepoCommand {
+                repo_id: prompt_repo,
+                command: prompt_command,
+            } if *prompt_repo == repo_id && prompt_command == command
+        )
+    });
+    if !retried {
         state.unpushed_pointer_override = None;
     }
 }
