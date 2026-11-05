@@ -378,25 +378,18 @@ fn running_git_operation(repo: &RepoState) -> Option<&'static str> {
 
 /// Open submodule tabs a single worktree tab's close would leave behind, in
 /// tab order. Closing several tabs at once already names the set to close,
-/// so it asks nothing.
+/// so it asks nothing. Neither does a close that keeps a tab open
+/// (`activate_after`, as "Close other repositories" sends): that tab can be
+/// one of the submodules, and the user just chose to keep it.
 pub(in crate::view) fn open_submodules_left_behind(
     state: &AppState,
     repo_ids: &[RepoId],
+    activate_after: Option<RepoId>,
 ) -> Vec<RepoId> {
-    if repo_ids.len() != 1 {
-        return Vec::new();
+    match repo_ids {
+        [parent] if activate_after.is_none() => state.submodule_children(*parent),
+        _ => Vec::new(),
     }
-    state
-        .repos
-        .iter()
-        .filter(|repo| {
-            !repo_ids.contains(&repo.id)
-                && repo
-                    .submodule_parent_tab()
-                    .is_some_and(|parent| repo_ids.contains(&parent))
-        })
-        .map(|repo| repo.id)
-        .collect()
 }
 
 impl GitCometView {
@@ -409,7 +402,7 @@ impl GitCometView {
         activate_after: Option<RepoId>,
         cx: &mut gpui::Context<Self>,
     ) {
-        let submodules = open_submodules_left_behind(&self.state, &repo_ids);
+        let submodules = open_submodules_left_behind(&self.state, &repo_ids, activate_after);
         if !submodules.is_empty() {
             self.pending_submodule_close_prompt = Some(SubmoduleClosePrompt {
                 repo_ids,
@@ -647,5 +640,56 @@ impl GitCometView {
             reasons,
         });
         cx.notify();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::open_submodules_left_behind;
+    use gitcomet_core::domain::RepoSpec;
+    use gitcomet_state::model::{AppState, RepoId, RepoState, SubmoduleParentLink};
+    use std::path::PathBuf;
+
+    /// A parent tab `app` (1) with its submodule tab `a` (2) right after it.
+    fn parent_and_submodule() -> AppState {
+        let mut state = AppState::default();
+        state.repos.push(RepoState::new_opening(
+            RepoId(1),
+            RepoSpec {
+                workdir: PathBuf::from("/w/app"),
+            },
+        ));
+        let mut child = RepoState::new_opening(
+            RepoId(2),
+            RepoSpec {
+                workdir: PathBuf::from("/w/app/a"),
+            },
+        );
+        child.submodule_parent = Some(SubmoduleParentLink {
+            workdir: PathBuf::from("/w/app"),
+            path: PathBuf::from("a"),
+            repo_id: Some(RepoId(1)),
+        });
+        state.repos.push(child);
+        state
+    }
+
+    #[test]
+    fn closing_a_parent_alone_names_its_open_submodules() {
+        let state = parent_and_submodule();
+        assert_eq!(
+            open_submodules_left_behind(&state, &[RepoId(1)], None),
+            vec![RepoId(2)]
+        );
+        assert!(open_submodules_left_behind(&state, &[RepoId(2)], None).is_empty());
+        assert!(open_submodules_left_behind(&state, &[RepoId(1), RepoId(2)], None).is_empty());
+    }
+
+    #[test]
+    fn closing_the_others_of_a_submodule_tab_does_not_ask_about_it() {
+        // "Close other repositories" on the submodule tab closes only its
+        // parent and keeps the tab the user picked.
+        let state = parent_and_submodule();
+        assert!(open_submodules_left_behind(&state, &[RepoId(1)], Some(RepoId(2))).is_empty());
     }
 }

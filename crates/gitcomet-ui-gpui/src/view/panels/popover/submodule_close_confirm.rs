@@ -35,6 +35,21 @@ pub(super) fn copy(state: &AppState, prompt: &SubmoduleClosePrompt) -> Submodule
     }
 }
 
+/// Close the prompt, then send the close on. The close guards it reaches
+/// read this host, so the request waits until the host's update is over.
+fn close_then_request(
+    this: &mut PopoverHost,
+    request: RootRequest,
+    window: &mut Window,
+    cx: &mut gpui::Context<PopoverHost>,
+) {
+    let root_view = this.root_view.clone();
+    this.close_resolved_popover(cx);
+    window.defer(cx, move |window, cx| {
+        let _ = root_view.request(request, Some(window), cx);
+    });
+}
+
 pub(super) fn panel(
     this: &mut PopoverHost,
     prompt: SubmoduleClosePrompt,
@@ -64,9 +79,7 @@ pub(super) fn panel(
                         repo_ids: keep_prompt.repo_ids.clone(),
                         activate_after: keep_prompt.activate_after,
                     };
-                    let root_view = this.root_view.clone();
-                    this.close_resolved_popover(cx);
-                    let _ = root_view.request(request, Some(window), cx);
+                    close_then_request(this, request, window, cx);
                 }),
         )
         .child(
@@ -79,9 +92,7 @@ pub(super) fn panel(
                         repo_ids,
                         activate_after: all_prompt.activate_after,
                     };
-                    let root_view = this.root_view.clone();
-                    this.close_resolved_popover(cx);
-                    let _ = root_view.request(request, Some(window), cx);
+                    close_then_request(this, request, window, cx);
                 }),
         );
     dialog.render(

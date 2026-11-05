@@ -722,3 +722,91 @@ fn long_truncated_values_never_widen_their_dialog(cx: &mut gpui::TestAppContext)
         assert_eq!(widths[0], widths[1], "a long value truncates instead");
     }
 }
+
+/// Closes a parent tab with its submodule tab open through "Close <parent>?"
+/// and `button`, then returns the tabs left open.
+fn close_parent_through_submodule_prompt(
+    cx: &mut gpui::TestAppContext,
+    button: &'static str,
+) -> Vec<RepoId> {
+    use gitcomet_core::domain::RepoSpec;
+    use gitcomet_state::model::{AppState, RepoState, SubmoduleParentLink};
+
+    let parent = RepoState::new_opening(
+        RepoId(1),
+        RepoSpec {
+            workdir: "/tmp/submodule-close-prompt-app".into(),
+        },
+    );
+    let mut child = RepoState::new_opening(
+        RepoId(2),
+        RepoSpec {
+            workdir: "/tmp/submodule-close-prompt-app/lib".into(),
+        },
+    );
+    child.submodule_parent = Some(SubmoduleParentLink {
+        workdir: "/tmp/submodule-close-prompt-app".into(),
+        path: "lib".into(),
+        repo_id: Some(RepoId(1)),
+    });
+    let state = Arc::new(AppState {
+        repos: vec![parent, child],
+        active_repo: Some(RepoId(1)),
+        ..AppState::test_default()
+    });
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.store.replace_snapshot_for_test(Arc::clone(&state));
+            crate::view::test_support::push_test_state(this, state, cx);
+        });
+        let _ = window.draw(app);
+    });
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.request_close_repos(vec![RepoId(1)], None, cx);
+        });
+    });
+    crate::view::test_support::redraw(cx);
+    assert!(cx.update(|_window, app| matches!(
+        crate::view::test_support::popover_kind(view.read(app), app),
+        Some(PopoverKind::SubmoduleCloseConfirm(_))
+    )));
+
+    let center = cx
+        .debug_bounds(button)
+        .unwrap_or_else(|| panic!("expected the {button} button"))
+        .center();
+    cx.simulate_mouse_move(center, None, gpui::Modifiers::default());
+    cx.simulate_mouse_down(center, gpui::MouseButton::Left, gpui::Modifiers::default());
+    cx.simulate_mouse_up(center, gpui::MouseButton::Left, gpui::Modifiers::default());
+    crate::view::test_support::drain_store_worker(&view, cx);
+    cx.update(|_window, app| {
+        assert_popover_open(&view, app, false);
+        view.read(app)
+            .store
+            .snapshot()
+            .repos
+            .iter()
+            .map(|repo| repo.id)
+            .collect()
+    })
+}
+
+/// The answers run the close guards, which read the popover host: they must
+/// wait until the host's click handler is done with it.
+#[gpui::test]
+fn submodule_close_prompt_buttons_close_the_tabs(cx: &mut gpui::TestAppContext) {
+    assert_eq!(
+        close_parent_through_submodule_prompt(cx, "submodule_close_all"),
+        Vec::<RepoId>::new(),
+        "Close all closes the submodule tab with its parent"
+    );
+    assert_eq!(
+        close_parent_through_submodule_prompt(cx, "submodule_close_keep"),
+        vec![RepoId(2)],
+        "Keep submodules open closes the parent alone"
+    );
+}
