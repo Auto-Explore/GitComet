@@ -23,10 +23,10 @@ impl GitCometView {
         }
         self.sync_collapse_flags_from_layout(cx);
         self.sync_dock_section_hosts(cx);
-        if self
-            .dock_zoomed
-            .is_some_and(|side| !self.dock_has_content(side, cx))
-        {
+        // Hiding the maximized dock, or emptying it, ends the maximize.
+        if self.dock_zoomed.is_some_and(|side| {
+            self.dock_layout.dock(side).hidden || !self.dock_has_content(side, cx)
+        }) {
             self.dock_zoomed = None;
         }
         self.schedule_ui_settings_persist(cx);
@@ -86,13 +86,7 @@ impl GitCometView {
                 self.update_dock_layout(|layout| layout.hide_panel(&panel), cx);
             }
             DockCommand::MovePanel { panel, side, half } => {
-                self.update_dock_layout(
-                    |layout| {
-                        let moved = layout.move_panel(&panel, side, half, None);
-                        layout.show_panel(&panel) || moved
-                    },
-                    cx,
-                );
+                self.update_dock_layout(|layout| layout.move_panel(&panel, side, half, None), cx);
                 self.show_dock_panel(&panel, window, cx);
             }
             DockCommand::RestorePanel(panel) => {
@@ -114,13 +108,7 @@ impl GitCometView {
                 self.update_dock_layout(|layout| layout.hide_section(&section), cx);
             }
             DockCommand::MoveSection { section, panel } => {
-                self.update_dock_layout(
-                    |layout| {
-                        let moved = layout.move_section(&section, &panel, None);
-                        layout.show_panel(&panel) || moved
-                    },
-                    cx,
-                );
+                self.update_dock_layout(|layout| layout.move_section(&section, &panel, None), cx);
                 self.show_dock_panel(&panel, window, cx);
             }
             DockCommand::MoveSectionBy { section, delta } => {
@@ -455,6 +443,12 @@ impl GitCometView {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
+        // The menu's Maximize Dock fills the window with this panel's dock.
+        if let DockMenuTarget::Panel(panel) = &target
+            && let Some(placement) = self.dock_layout.placement(panel)
+        {
+            self.dock_focus_side = placement.side;
+        }
         let menu = build_dock_menu(&self.dock_layout, &target);
         self.open_popover_at(PopoverKind::DockMenu(Arc::new(menu)), position, window, cx);
     }
@@ -769,6 +763,34 @@ mod tests {
             let _ = window.draw(app);
         });
         (view, cx)
+    }
+
+    #[gpui::test]
+    fn maximize_from_a_panel_menu_fills_that_panels_dock(cx: &mut gpui::TestAppContext) {
+        let (view, cx) = dock_view(cx);
+        cx.update(|window, app| {
+            view.update(app, |this, cx| {
+                let changes = PanelId::from(panel_ids::CHANGES);
+                this.open_dock_menu(DockMenuTarget::Panel(changes), Point::default(), window, cx);
+                this.run_dock_command(DockCommand::Maximize, Some(window), cx);
+                assert_eq!(this.dock_zoomed, Some(DockSide::Right));
+            });
+        });
+    }
+
+    #[gpui::test]
+    fn hiding_the_maximized_dock_ends_maximize(cx: &mut gpui::TestAppContext) {
+        let (view, cx) = dock_view(cx);
+        cx.update(|window, app| {
+            view.update(app, |this, cx| {
+                this.run_dock_command(DockCommand::Maximize, Some(window), cx);
+                assert_eq!(this.dock_zoomed, Some(DockSide::Left));
+                let branches = PanelId::from(panel_ids::BRANCHES);
+                this.run_dock_command(DockCommand::HidePanel(branches), Some(window), cx);
+                assert!(this.dock_layout.dock(DockSide::Left).hidden);
+                assert_eq!(this.dock_zoomed, None);
+            });
+        });
     }
 
     #[gpui::test]
