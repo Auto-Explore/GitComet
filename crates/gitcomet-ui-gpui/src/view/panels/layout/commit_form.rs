@@ -637,7 +637,7 @@ impl DetailsPaneView {
             false,
             scaled_px(16.0),
             scaled_px(10.0),
-            scaled_px,
+            &scaled_px,
         );
         let toggle = div()
             .id("record_in_parent_toggle")
@@ -699,7 +699,7 @@ impl DetailsPaneView {
                     .child(format!(
                         "A commit now is not recorded in {}: the commit in {} is still being recorded and pushed.",
                         target.parent_name,
-                        self.state.repo_name(running.child)
+                        self.state.repo_name(running.child_tab.unwrap_or(running.parent))
                     )),
             );
         }

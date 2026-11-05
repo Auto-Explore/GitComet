@@ -200,7 +200,7 @@ fn a_linked_commit_needs_a_message_for_each_staged_submodule(cx: &mut gpui::Test
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
             this.details_pane.update(cx, |pane, cx| {
-                assert!(pane.submit_commit_past_submodule_guard(None, cx));
+                assert!(pane.submit_commit_past_submodule_guard(repo_id, None, cx));
             });
         });
     });
