@@ -42,9 +42,9 @@ pub(crate) enum DockCommand {
     RemovePanel(PanelId),
     ApplyPreset(LayoutPreset),
     SaveLayout,
-    /// The n-th saved layout, counting from 1.
+    /// Saved layout n ("Layout n"), counting from 1.
     ApplySaved(usize),
-    /// Forgets the n-th saved layout, counting from 1.
+    /// Forgets saved layout n, counting from 1.
     DeleteSaved(usize),
     SetCentre(CentreSplitMode),
     PopOut(PanelId),

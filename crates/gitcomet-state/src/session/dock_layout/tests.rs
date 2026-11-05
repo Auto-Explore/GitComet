@@ -417,7 +417,9 @@ fn named_layouts_save_rename_and_delete() {
     let mut layout = DockLayout::factory();
     layout.toggle_hide_all();
     assert_eq!(named.save("  Review ", &layout).as_deref(), Some("Review"));
+    // Saved during "Hide all", the docks it hid are open again in the copy.
     assert!(named.get("Review").unwrap().hide_all_stash.is_none());
+    assert_eq!(named.get("Review"), Some(&DockLayout::factory()));
     assert!(named.save(" ", &layout).is_none());
     assert!(named.rename("Review", "Code review"));
     assert!(!named.rename("missing", "x"));
@@ -446,13 +448,169 @@ fn named_layouts_persist_to_a_file_and_load_back_repaired() {
     let path = dir.path().join("layouts.json");
     assert_eq!(load_named_layouts_from_path(&path), NamedLayouts::default());
 
-    let mut named = NamedLayouts::default();
     let mut layout = DockLayout::factory();
     layout.move_panel(&p(panel_ids::FILES), DockSide::Right, DockHalf::Split, None);
-    named.save("Files right", &layout);
-    persist_named_layouts_to_path(&named, &path).unwrap();
+    let (named, saved) =
+        update_named_layouts_at_path(&path, |named| named.save("Files right", &layout)).unwrap();
+    assert_eq!(saved.as_deref(), Some("Files right"));
+    assert_eq!(named.get("Files right"), Some(&layout));
     assert_eq!(load_named_layouts_from_path(&path), named);
 
+    // Out-of-range values are repaired on load.
+    let mut stored: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    stored["layouts"]["Files right"]["docks"]["left"]["split_permille"] = 5.into();
+    std::fs::write(&path, serde_json::to_vec(&stored).unwrap()).unwrap();
+    let loaded = load_named_layouts_from_path(&path);
+    assert_eq!(
+        loaded
+            .get("Files right")
+            .unwrap()
+            .dock(DockSide::Left)
+            .split_permille,
+        MIN_SPLIT_PERMILLE
+    );
+}
+
+#[test]
+fn saving_after_a_delete_keeps_the_other_layouts() {
+    let layout = |width| {
+        let mut layout = DockLayout::factory();
+        layout.set_dock_size(DockSide::Left, Some(width));
+        layout
+    };
+    let mut named = NamedLayouts::default();
+    for (slot, width) in [(1, 201), (2, 202), (3, 203)] {
+        assert_eq!(named.save_in_free_slot(&layout(width)), Some(slot));
+    }
+    assert!(named.delete_slot(1));
+    assert!(!named.delete_slot(1));
+    // The freed slot is reused; the others keep their layouts and numbers.
+    assert_eq!(named.save_in_free_slot(&layout(301)), Some(1));
+    assert_eq!(named.slot(1), Some(&layout(301)));
+    assert_eq!(named.slot(2), Some(&layout(202)));
+    assert_eq!(named.slot(3), Some(&layout(203)));
+
+    for slot in 4..=NAMED_LAYOUT_SLOTS {
+        assert_eq!(
+            named.save_in_free_slot(&layout(200 + slot as u32)),
+            Some(slot)
+        );
+    }
+    // Every slot is taken: nothing is overwritten.
+    assert_eq!(named.save_in_free_slot(&layout(999)), None);
+    assert_eq!(named.layouts.len(), NAMED_LAYOUT_SLOTS);
+    assert_eq!(named.slot(9), Some(&layout(209)));
+    assert_eq!(named.get("Layout 9"), named.slot(9));
+}
+
+#[test]
+fn named_layouts_keep_readable_entries_when_one_is_not() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("layouts.json");
+    let mut readable = DockLayout::factory();
+    readable.set_dock_size(DockSide::Right, Some(500));
+    let readable_json = serde_json::to_value(&readable).unwrap();
+    // A newer build's dock side and a number out of range each make their
+    // entry unreadable here; a malformed hint flag resets only itself.
+    let mut newer_side = readable_json.clone();
+    newer_side["docks"]["top"] = serde_json::json!({ "hidden": false });
+    let mut out_of_range = readable_json.clone();
+    out_of_range["docks"]["left"]["split_permille"] = 70_000.into();
+    let file = serde_json::json!({
+        "layouts": {
+            "Layout 1": readable_json,
+            "Layout 2": newer_side,
+            "Layout 3": out_of_range,
+        },
+        "hint_seen": "yes",
+    });
+    let bytes = serde_json::to_vec(&file).unwrap();
+    std::fs::write(&path, &bytes).unwrap();
+
+    let loaded = load_named_layouts_from_path(&path);
+    assert_eq!(loaded.names(), vec!["Layout 1".to_owned()]);
+    assert_eq!(loaded.slot(1), Some(&readable));
+    assert!(!loaded.hint_seen);
+
+    // The first write over it keeps the file it could not fully carry over.
+    let (written, ()) =
+        update_named_layouts_at_path(&path, |named| named.hint_seen = true).unwrap();
+    assert_eq!(written.slot(1), Some(&readable));
+    assert_eq!(load_named_layouts_from_path(&path), written);
+    let backup = dir.path().join("layouts.json.unreadable.bak");
+    assert_eq!(std::fs::read(&backup).unwrap(), bytes);
+}
+
+#[test]
+fn an_unreadable_layouts_file_is_backed_up_before_it_is_replaced() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("layouts.json");
     std::fs::write(&path, b"not json").unwrap();
-    assert_eq!(load_named_layouts_from_path(&path), NamedLayouts::default());
+
+    // The hint counts as seen, so showing it does not replace the file.
+    let loaded = load_named_layouts_from_path(&path);
+    assert!(loaded.hint_seen);
+    assert!(loaded.layouts.is_empty());
+    let (_, ()) = update_named_layouts_at_path(&path, |named| named.hint_seen = true).unwrap();
+    assert_eq!(std::fs::read(&path).unwrap(), b"not json");
+
+    let (written, slot) = update_named_layouts_at_path(&path, |named| {
+        named.save_in_free_slot(&DockLayout::factory())
+    })
+    .unwrap();
+    assert_eq!(slot, Some(1));
+    assert_eq!(load_named_layouts_from_path(&path), written);
+    let backup = dir.path().join("layouts.json.unreadable.bak");
+    assert_eq!(std::fs::read(&backup).unwrap(), b"not json");
+}
+
+#[test]
+fn named_layout_updates_merge_with_the_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("layouts.json");
+    let layout = |width| {
+        let mut layout = DockLayout::factory();
+        layout.set_dock_size(DockSide::Left, Some(width));
+        layout
+    };
+    // Two windows that loaded the same (empty) file each save a layout: the
+    // second starts from what the first wrote, not from its own copy.
+    let first_window = load_named_layouts_from_path(&path);
+    let second_window = load_named_layouts_from_path(&path);
+    assert_eq!(first_window, second_window);
+    let (_, first) =
+        update_named_layouts_at_path(&path, |named| named.save_in_free_slot(&layout(210))).unwrap();
+    let (written, second) =
+        update_named_layouts_at_path(&path, |named| named.save_in_free_slot(&layout(220))).unwrap();
+    assert_eq!((first, second), (Some(1), Some(2)));
+    assert_eq!(written.slot(1), Some(&layout(210)));
+    assert_eq!(written.slot(2), Some(&layout(220)));
+
+    // Updates from several threads at once all land.
+    std::thread::scope(|scope| {
+        for index in 0..8u32 {
+            let path = &path;
+            scope.spawn(move || {
+                update_named_layouts_at_path(path, |named| {
+                    named.save(&format!("Window {index}"), &layout(300 + index))
+                })
+                .unwrap();
+            });
+        }
+    });
+    let loaded = load_named_layouts_from_path(&path);
+    assert_eq!(loaded.layouts.len(), 10);
+    for index in 0..8u32 {
+        assert_eq!(
+            loaded.get(&format!("Window {index}")),
+            Some(&layout(300 + index))
+        );
+    }
+
+    // Marking the hint seen keeps every saved layout.
+    let (written, ()) =
+        update_named_layouts_at_path(&path, |named| named.hint_seen = true).unwrap();
+    assert!(written.hint_seen);
+    assert_eq!(written.layouts, loaded.layouts);
 }

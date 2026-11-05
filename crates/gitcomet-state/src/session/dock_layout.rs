@@ -642,11 +642,6 @@ impl DockLayout {
         true
     }
 
-    pub fn toggle_dock(&mut self, side: DockSide) -> bool {
-        let hidden = !self.dock(side).hidden;
-        self.set_dock_hidden(side, hidden)
-    }
-
     /// Hides every dock, remembering which were open; a second call brings
     /// them back.
     pub fn toggle_hide_all(&mut self) -> bool {
@@ -793,13 +788,6 @@ impl DockLayout {
             .unwrap_or(sections.len());
         sections.insert(index, section.clone());
         true
-    }
-
-    pub fn set_section_weight(&mut self, section: &SectionId, weight: Option<u32>) -> bool {
-        match weight {
-            Some(weight) => self.section_weights.insert(section.clone(), weight) != Some(weight),
-            None => self.section_weights.remove(section).is_some(),
-        }
     }
 
     // ----- custom panels ------------------------------------------------
@@ -1110,13 +1098,35 @@ impl LayoutPreset {
     }
 }
 
+/// How many saved layouts have a shortcut (Ctrl+Alt+1..9) and a palette row.
+pub const NAMED_LAYOUT_SLOTS: usize = 9;
+
 /// Layouts the user saved by name, shared by every window.
+///
+/// Loading is lenient: a layout this build cannot read (a newer build's
+/// value, a number out of range) is dropped alone, never the rest.
 #[derive(Clone, Debug, Default, Deserialize, Eq, Hash, PartialEq, Serialize)]
 #[serde(default)]
 pub struct NamedLayouts {
+    #[serde(deserialize_with = "lenient_layout_entries")]
     pub layouts: BTreeMap<String, DockLayout>,
     /// Whether the one-time "panels can move" hint was shown.
+    #[serde(deserialize_with = "lenient")]
     pub hint_seen: bool,
+}
+
+/// Keeps every entry that parses and drops the ones that do not.
+fn lenient_layout_entries<'de, D>(deserializer: D) -> Result<BTreeMap<String, DockLayout>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let serde_json::Value::Object(entries) = serde_json::Value::deserialize(deserializer)? else {
+        return Ok(BTreeMap::new());
+    };
+    Ok(entries
+        .into_iter()
+        .filter_map(|(name, layout)| Some((name, serde_json::from_value(layout).ok()?)))
+        .collect())
 }
 
 impl NamedLayouts {
@@ -1126,9 +1136,38 @@ impl NamedLayouts {
             return None;
         }
         let mut layout = layout.clone();
-        layout.hide_all_stash = None;
+        // Saved during "Hide all", the docks it hid come back open: applied
+        // later without the stash, they could not be brought back.
+        if let Some(stash) = layout.hide_all_stash.take() {
+            for side in stash {
+                layout.dock_mut(side).hidden = false;
+            }
+        }
         self.layouts.insert(name.to_owned(), layout);
         Some(name.to_owned())
+    }
+
+    /// The name saved layout `slot` (counting from 1) is stored under.
+    pub fn slot_name(slot: usize) -> String {
+        format!("Layout {slot}")
+    }
+
+    /// Saves `layout` in the first free slot and returns it, or `None` when
+    /// all [`NAMED_LAYOUT_SLOTS`] are taken. Slots are found by name, so a
+    /// delete frees its number without moving the other layouts' shortcuts.
+    pub fn save_in_free_slot(&mut self, layout: &DockLayout) -> Option<usize> {
+        let slot = (1..=NAMED_LAYOUT_SLOTS)
+            .find(|slot| !self.layouts.contains_key(&Self::slot_name(*slot)))?;
+        self.save(&Self::slot_name(slot), layout);
+        Some(slot)
+    }
+
+    pub fn slot(&self, slot: usize) -> Option<&DockLayout> {
+        self.get(&Self::slot_name(slot))
+    }
+
+    pub fn delete_slot(&mut self, slot: usize) -> bool {
+        self.delete(&Self::slot_name(slot))
     }
 
     pub fn rename(&mut self, from: &str, to: &str) -> bool {
@@ -1149,7 +1188,7 @@ impl NamedLayouts {
         self.layouts.remove(name).is_some()
     }
 
-    /// Names in the order the switcher and Ctrl+Alt+1..9 use.
+    /// Names in alphabetical order.
     pub fn names(&self) -> Vec<String> {
         self.layouts.keys().cloned().collect()
     }
@@ -1165,8 +1204,57 @@ fn named_layouts_file_path() -> Option<PathBuf> {
     Some(default_session_file_path()?.with_file_name("layouts.json"))
 }
 
-/// The user's saved layouts; empty when none were saved or the file is
-/// unreadable.
+/// What the layouts file holds before a change is written over it.
+struct StoredNamedLayouts {
+    layouts: NamedLayouts,
+    /// The file's bytes when some or all of it could not be read, so the
+    /// write that replaces it keeps a copy first.
+    unreadable: Option<Vec<u8>>,
+}
+
+/// A file that exists but cannot be read is an error, not an absent file:
+/// writing over it would lose everything in it.
+fn read_named_layouts(path: &Path) -> io::Result<StoredNamedLayouts> {
+    let bytes = match fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            return Ok(StoredNamedLayouts {
+                layouts: NamedLayouts::default(),
+                unreadable: None,
+            });
+        }
+        Err(error) => return Err(error),
+    };
+    let value = serde_json::from_slice::<serde_json::Value>(&bytes)
+        .ok()
+        .filter(serde_json::Value::is_object);
+    let Some(value) = value else {
+        // Nothing in it carries over. Counting the hint as seen keeps the
+        // hint from replacing the file; a saved layout backs it up first.
+        return Ok(StoredNamedLayouts {
+            layouts: NamedLayouts {
+                hint_seen: true,
+                ..NamedLayouts::default()
+            },
+            unreadable: Some(bytes),
+        });
+    };
+    let stored = value
+        .get("layouts")
+        .and_then(serde_json::Value::as_object)
+        .map_or(0, serde_json::Map::len);
+    let mut layouts: NamedLayouts = serde_json::from_value(value).unwrap_or_default();
+    for layout in layouts.layouts.values_mut() {
+        layout.sanitize();
+    }
+    let dropped = layouts.layouts.len() != stored;
+    Ok(StoredNamedLayouts {
+        layouts,
+        unreadable: dropped.then_some(bytes),
+    })
+}
+
+/// The user's saved layouts; empty when none were saved.
 pub fn load_named_layouts() -> NamedLayouts {
     named_layouts_file_path()
         .map(|path| load_named_layouts_from_path(&path))
@@ -1174,28 +1262,50 @@ pub fn load_named_layouts() -> NamedLayouts {
 }
 
 pub fn load_named_layouts_from_path(path: &Path) -> NamedLayouts {
-    let Ok(contents) = fs::read(path) else {
-        return NamedLayouts::default();
-    };
-    let mut layouts: NamedLayouts = serde_json::from_slice(&contents).unwrap_or_default();
-    for layout in layouts.layouts.values_mut() {
-        layout.sanitize();
-    }
-    layouts
+    // A file that cannot be read counts the hint as seen, so showing the
+    // hint never writes over it.
+    read_named_layouts(path).map_or_else(
+        |_| NamedLayouts {
+            hint_seen: true,
+            ..NamedLayouts::default()
+        },
+        |stored| stored.layouts,
+    )
 }
 
-pub fn persist_named_layouts(layouts: &NamedLayouts) -> io::Result<()> {
-    match named_layouts_file_path() {
-        Some(path) => persist_named_layouts_to_path(layouts, &path),
-        None => Ok(()),
-    }
+/// Applies `change` to the saved layouts on disk and returns them as
+/// written, with what `change` returned; `None` when no file backs them
+/// (tests, persistence turned off).
+///
+/// Every window holds its own copy, and writing that copy whole would erase
+/// what another window saved since. So each change is a read-modify-write
+/// under the session persist lock, starting from what is on disk now.
+pub fn update_named_layouts<R>(
+    change: impl FnOnce(&mut NamedLayouts) -> R,
+) -> Option<io::Result<(NamedLayouts, R)>> {
+    let path = named_layouts_file_path()?;
+    Some(update_named_layouts_at_path(&path, change))
 }
 
-pub fn persist_named_layouts_to_path(layouts: &NamedLayouts, path: &Path) -> io::Result<()> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    persist_to_path(path, layouts)
+pub fn update_named_layouts_at_path<R>(
+    path: &Path,
+    change: impl FnOnce(&mut NamedLayouts) -> R,
+) -> io::Result<(NamedLayouts, R)> {
+    with_session_file_persist_lock(|| {
+        let StoredNamedLayouts {
+            mut layouts,
+            unreadable,
+        } = read_named_layouts(path)?;
+        let before = layouts.clone();
+        let result = change(&mut layouts);
+        if layouts != before {
+            if let Some(previous) = unreadable {
+                back_up_replaced_session(path, ".unreadable.bak", &previous)?;
+            }
+            persist_to_path(path, &layouts)?;
+        }
+        Ok((layouts, result))
+    })
 }
 
 fn factory_section_rank(section: &SectionId) -> usize {

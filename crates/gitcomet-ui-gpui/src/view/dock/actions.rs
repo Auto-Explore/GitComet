@@ -6,6 +6,7 @@
 //! which sections they draw, and saves the window.
 
 use super::*;
+use gitcomet_state::session::NAMED_LAYOUT_SLOTS;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 static NEXT_MENU_SEQ: AtomicU64 = AtomicU64::new(1);
@@ -157,34 +158,15 @@ impl GitCometView {
                 self.update_dock_layout(|layout| layout.apply_preset(preset), cx);
             }
             DockCommand::SaveLayout => self.save_named_layout(cx),
-            DockCommand::ApplySaved(index) => {
-                let name = self
-                    .named_layouts
-                    .names()
-                    .get(index.saturating_sub(1))
-                    .cloned();
-                match name {
-                    Some(name) => self.apply_named_layout(&name, cx),
-                    None => self.push_toast(
-                        components::ToastKind::Warning,
-                        format!("No saved layout {index}. Save one with Save Current Layout."),
-                        cx,
-                    ),
-                }
-            }
-            DockCommand::DeleteSaved(index) => {
-                let name = self
-                    .named_layouts
-                    .names()
-                    .get(index.saturating_sub(1))
-                    .cloned();
-                if let Some(name) = name
-                    && self.named_layouts.delete(&name)
-                {
-                    self.persist_named_layouts(cx);
+            DockCommand::ApplySaved(slot) => self.apply_named_layout(slot, cx),
+            DockCommand::DeleteSaved(slot) => {
+                if self.update_named_layouts(|layouts| layouts.delete_slot(slot)) {
                     self.push_toast(
                         components::ToastKind::Success,
-                        format!("Deleted the saved layout {name}."),
+                        format!(
+                            "Deleted the saved layout {}.",
+                            NamedLayouts::slot_name(slot)
+                        ),
                         cx,
                     );
                 }
@@ -364,11 +346,21 @@ impl GitCometView {
         if self.named_layouts.hint_seen || !crate::ui_runtime::current().persists_ui_settings() {
             return;
         }
+        // Set now so later frames do not queue it again; the file is written
+        // after this frame, not while it draws.
         self.named_layouts.hint_seen = true;
-        self.persist_named_layouts(cx);
         let root = cx.entity().downgrade();
         cx.defer(move |cx| {
             let _ = root.update(cx, |this, cx| {
+                // The file decides: another window may have shown it since
+                // this one loaded.
+                this.named_layouts.hint_seen = false;
+                let seen = this.update_named_layouts(|layouts| {
+                    std::mem::replace(&mut layouts.hint_seen, true)
+                });
+                if seen {
+                    return;
+                }
                 this.push_toast(
                     components::ToastKind::Success,
                     "Panels and sections can move now: drag a panel's tab or a section header, \
@@ -381,32 +373,48 @@ impl GitCometView {
         });
     }
 
+    /// Saves the layout in the first free slot, so the other saved layouts
+    /// keep their numbers and shortcuts.
     fn save_named_layout(&mut self, cx: &mut gpui::Context<Self>) {
-        let index = self.named_layouts.layouts.len() + 1;
-        let name = format!("Layout {index}");
         let layout = self.dock_layout.clone();
-        let saved = self.named_layouts.save(&name, &layout).unwrap_or(name);
-        self.persist_named_layouts(cx);
-        let position = self
-            .named_layouts
-            .names()
-            .iter()
-            .position(|other| *other == saved)
-            .map_or(index, |ix| ix + 1);
+        let Some(slot) = self.update_named_layouts(|layouts| layouts.save_in_free_slot(&layout))
+        else {
+            self.push_toast(
+                components::ToastKind::Warning,
+                format!(
+                    "All {NAMED_LAYOUT_SLOTS} saved layouts are in use. Delete one with \
+                     Delete Saved Layout, then save again."
+                ),
+                cx,
+            );
+            return;
+        };
         let shortcut = if cfg!(target_os = "macos") {
-            format!("Cmd+Alt+{position}")
+            format!("Cmd+Alt+{slot}")
         } else {
-            format!("Ctrl+Alt+{position}")
+            format!("Ctrl+Alt+{slot}")
         };
         self.push_toast(
             components::ToastKind::Success,
-            format!("Saved the layout as {saved}. {shortcut} brings it back."),
+            format!(
+                "Saved the layout as {}. {shortcut} brings it back.",
+                NamedLayouts::slot_name(slot)
+            ),
             cx,
         );
     }
 
-    fn apply_named_layout(&mut self, name: &str, cx: &mut gpui::Context<Self>) {
-        let Some(layout) = self.named_layouts.get(name).cloned() else {
+    fn apply_named_layout(&mut self, slot: usize, cx: &mut gpui::Context<Self>) {
+        // Another window may have saved it since this one last read the file.
+        if crate::ui_runtime::current().persists_ui_settings() {
+            self.named_layouts = gitcomet_state::session::load_named_layouts();
+        }
+        let Some(layout) = self.named_layouts.slot(slot).cloned() else {
+            self.push_toast(
+                components::ToastKind::Warning,
+                format!("No saved layout {slot}. Save one with Save Current Layout."),
+                cx,
+            );
             return;
         };
         self.dock_zoomed = None;
@@ -421,16 +429,22 @@ impl GitCometView {
         self.sync_centre_split(cx);
     }
 
-    fn persist_named_layouts(&mut self, cx: &mut gpui::Context<Self>) {
-        if !crate::ui_runtime::current().persists_ui_settings() {
-            return;
+    /// Changes the saved layouts. With persistence on, the change is a
+    /// read-modify-write of the layouts file, so what other windows saved
+    /// survives, and this window's copy becomes what was written. It runs
+    /// here rather than on a background task: Save needs the slot it got to
+    /// name the shortcut, and the file is small.
+    fn update_named_layouts<R>(&mut self, mut change: impl FnMut(&mut NamedLayouts) -> R) -> R {
+        if crate::ui_runtime::current().persists_ui_settings()
+            && let Some(Ok((layouts, result))) =
+                gitcomet_state::session::update_named_layouts(&mut change)
+        {
+            self.named_layouts = layouts;
+            return result;
         }
-        let layouts = self.named_layouts.clone();
-        cx.background_executor()
-            .spawn(async move {
-                let _ = gitcomet_state::session::persist_named_layouts(&layouts);
-            })
-            .detach();
+        // No file behind the layouts, or it could not be written: the
+        // change lasts for this window.
+        change(&mut self.named_layouts)
     }
 
     /// Opens the menu for a panel or a section at `position`.
@@ -741,6 +755,52 @@ mod tests {
         assert_eq!(layout.sections_in(&branches)[1], local);
         assert!(move_section_by(&mut layout, &local, -1));
         assert_eq!(layout, DockLayout::factory());
+    }
+
+    fn dock_view(
+        cx: &mut gpui::TestAppContext,
+    ) -> (Entity<GitCometView>, &mut gpui::VisualTestContext) {
+        let (store, events) = gitcomet_state::store::AppStore::new_test(Arc::new(
+            crate::view::test_support::TestBackend,
+        ));
+        let (view, cx) =
+            cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+        (view, cx)
+    }
+
+    #[gpui::test]
+    fn saved_layout_shortcuts_follow_their_slot(cx: &mut gpui::TestAppContext) {
+        let (view, cx) = dock_view(cx);
+        cx.update(|window, app| {
+            view.update(app, |this, cx| {
+                let modes = [
+                    CentreSplitMode::Auto,
+                    CentreSplitMode::SideBySide,
+                    CentreSplitMode::Stacked,
+                ];
+                for mode in modes {
+                    this.dock_layout.centre.mode = mode;
+                    this.run_dock_command(DockCommand::SaveLayout, Some(window), cx);
+                }
+                this.run_dock_command(DockCommand::DeleteSaved(1), Some(window), cx);
+                this.dock_layout.centre.mode = CentreSplitMode::Single;
+                this.run_dock_command(DockCommand::SaveLayout, Some(window), cx);
+                // The new layout takes the freed slot; Layout 3 keeps its number.
+                let mode_in = |this: &GitCometView, slot| {
+                    this.named_layouts
+                        .slot(slot)
+                        .map(|layout| layout.centre.mode)
+                };
+                assert_eq!(mode_in(this, 1), Some(CentreSplitMode::Single));
+                assert_eq!(mode_in(this, 2), Some(CentreSplitMode::SideBySide));
+                assert_eq!(mode_in(this, 3), Some(CentreSplitMode::Stacked));
+                this.run_dock_command(DockCommand::ApplySaved(3), Some(window), cx);
+                assert_eq!(this.dock_layout.centre.mode, CentreSplitMode::Stacked);
+            });
+        });
     }
 
     #[test]
