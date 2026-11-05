@@ -580,7 +580,6 @@ impl GitCometView {
         let remote_markdown_image_policy = ui_preferences.security.remote_markdown_images;
         let remote_url_policy = ui_preferences.security.remote_url_policy;
         let check_for_updates_on_startup = ui_preferences.security.check_for_updates_on_startup;
-        let commit_push_after_enabled = ui_preferences.repository.commit_push_after_enabled;
         let initial_state = store.snapshot();
         // The worker queued Git adoption before the restore. If it is already
         // reflected here, no later snapshot needs to suppress that transition.
@@ -1248,7 +1247,6 @@ impl GitCometView {
             file_history_pane,
             bottom_panel_providers: super::bottom_panel_providers::registered(cx),
             active_bottom_panel: FxHashMap::default(),
-            commit_push_after_enabled,
             diff_scroll_sync,
             diff_content_mode,
             diff_whitespace_mode,

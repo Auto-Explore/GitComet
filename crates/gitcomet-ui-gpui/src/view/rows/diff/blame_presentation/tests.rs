@@ -4,6 +4,7 @@ fn uncommitted_blame_line() -> gitcomet_core::services::BlameLine {
     gitcomet_core::services::BlameLine {
         commit_id: std::sync::Arc::from("0000000000000000000000000000000000000000"),
         author: std::sync::Arc::from("Not Committed Yet"),
+        author_email: Default::default(),
         author_time_unix: None,
         summary: std::sync::Arc::from("Not Committed Yet"),
         body: None,
@@ -18,6 +19,7 @@ fn committed_blame_line(sha: &str) -> gitcomet_core::services::BlameLine {
     gitcomet_core::services::BlameLine {
         commit_id: std::sync::Arc::from(sha),
         author: std::sync::Arc::from("Jane Doe"),
+        author_email: Default::default(),
         author_time_unix: Some(1_700_000_000),
         summary: std::sync::Arc::from("a commit"),
         body: None,
@@ -243,4 +245,41 @@ fn removal_rows_get_a_local_bar_only_in_working_tree_blame() {
         build_row_blame_paint_tracked(&ctx_rev, false, Some(5), None, &prev_rev, None, theme)
             .is_none()
     );
+}
+
+#[test]
+fn run_start_rows_carry_the_author_avatar_and_tooltip() {
+    let theme = AppTheme::gitcomet_dark();
+    let mut line = committed_blame_line("1111111111111111111111111111111111111111");
+    line.author = std::sync::Arc::from("Jane Doe <jane@example.com>");
+    line.author_email = std::sync::Arc::from("jane@example.com");
+    let ctx = blame_ctx(vec![line], None);
+
+    let paint = build_row_blame_paint(&ctx, false, None, Some(1), None, theme).unwrap();
+    assert_eq!(paint.author.as_ref(), "Jane Doe");
+    assert_eq!(paint.author_initials.as_ref(), "JD");
+    assert_eq!(paint.author_tip.as_ref(), "Jane Doe <jane@example.com>");
+}
+
+#[test]
+fn author_tip_leaves_out_an_unknown_email() {
+    assert_eq!(author_tip("Jane Doe", "").as_ref(), "Jane Doe");
+    assert_eq!(
+        author_tip("Jane Doe", "jane@example.com").as_ref(),
+        "Jane Doe <jane@example.com>"
+    );
+}
+
+#[test]
+fn uncommitted_rows_have_no_avatar() {
+    let theme = AppTheme::gitcomet_dark();
+    let ctx = blame_ctx(
+        vec![uncommitted_blame_line()],
+        Some(gitcomet_core::domain::DiffArea::Unstaged),
+    );
+
+    let paint = build_row_blame_paint(&ctx, false, None, Some(1), None, theme).unwrap();
+    assert!(paint.author.as_ref().is_empty());
+    assert!(paint.author_initials.as_ref().is_empty());
+    assert!(paint.author_tip.as_ref().is_empty());
 }

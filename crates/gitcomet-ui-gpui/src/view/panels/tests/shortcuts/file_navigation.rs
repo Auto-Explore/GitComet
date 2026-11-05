@@ -429,7 +429,7 @@ fn commit_details_text_input_f4_navigates_files_without_stealing_focus(
         crate::app::bind_text_input_keys_for_test(app);
         view.update(app, |this, cx| {
             this.details_pane.update(cx, |pane, cx| {
-                let focus = pane.commit_details_sha_input.read(cx).focus_handle();
+                let focus = pane.commit_details_message_input.read(cx).focus_handle();
                 window.focus(&focus, cx);
             });
         });
@@ -451,12 +451,12 @@ fn commit_details_text_input_f4_navigates_files_without_stealing_focus(
             .read(app)
             .details_pane
             .read(app)
-            .commit_details_sha_input
+            .commit_details_message_input
             .read(app)
             .focus_handle();
         assert!(
             focus.is_focused(window),
-            "expected commit-details SHA input to keep focus after F4 navigation"
+            "expected commit-details message input to keep focus after F4 navigation"
         );
     });
 }

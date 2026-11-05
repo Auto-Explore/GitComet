@@ -6,6 +6,8 @@ use crate::kit::interaction as controls;
 use crate::view::components::{ControlInteractionExt, InteractionState, InteractionStyle};
 use gpui::{AnyElement, Div, Stateful};
 
+mod commit_amend;
+mod commit_card;
 mod commit_details;
 mod commit_form;
 mod commit_metadata;

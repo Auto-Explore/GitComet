@@ -449,6 +449,12 @@ impl AppTheme {
         gpui::rems(self.metrics.ui_text(pixels) / 16.0)
     }
 
+    /// The quiet divider colour between panels: the subtle stroke flattened
+    /// onto the canvas, so it reads the same whatever fill sits behind it.
+    pub fn hairline(&self) -> Rgba {
+        composite_over(self.colors.surface.canvas, self.colors.stroke.subtle)
+    }
+
     /// Canonical translucent background for hovered standard controls.
     pub fn hover_overlay(&self) -> Rgba {
         self.colors.interaction.hover_overlay

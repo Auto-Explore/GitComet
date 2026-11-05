@@ -492,6 +492,9 @@ pub enum SubmoduleTrustDecision {
 pub struct BlameLine {
     pub commit_id: Arc<str>,
     pub author: Arc<str>,
+    /// The author's email address, without the angle brackets. Empty when it is
+    /// unknown (uncommitted lines).
+    pub author_email: Arc<str>,
     pub author_time_unix: Option<i64>,
     pub summary: Arc<str>,
     pub body: Option<Arc<str>>,

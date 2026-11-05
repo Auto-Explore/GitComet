@@ -57,6 +57,7 @@ fn ready_working_tree_blame() -> Loadable<std::sync::Arc<Vec<gitcomet_core::serv
         gitcomet_core::services::BlameLine {
             commit_id: Arc::from("1111111111111111111111111111111111111111"),
             author: Arc::from("Ada"),
+            author_email: Default::default(),
             author_time_unix: Some(1_700_000_000),
             summary: Arc::from("initial"),
             body: None,

@@ -261,7 +261,6 @@ pub(super) struct FileEditingPreferences {
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(super) struct RepositoryPreferences {
-    pub(super) commit_push_after_enabled: bool,
     pub(super) default_tag_type: DefaultTagType,
 }
 
@@ -448,7 +447,6 @@ impl UiPreferences {
                 auto_save: session.auto_save_file_edits.unwrap_or(false),
             },
             repository: RepositoryPreferences {
-                commit_push_after_enabled: session.commit_push_after_enabled.unwrap_or(false),
                 default_tag_type: session.default_tag_type.unwrap_or_default(),
             },
             remotes: RemotePreferences {

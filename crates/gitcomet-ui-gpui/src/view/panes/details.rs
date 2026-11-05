@@ -123,14 +123,8 @@ pub(in super::super) struct DetailsPaneView {
     pub(in super::super) commit_reword_scroll: ScrollHandle,
     pub(in super::super) commit_reword: Option<CommitRewordDraft>,
     pub(in super::super) commit_details_message_link_menu: Entity<components::CommitLinkMenu>,
-    pub(in super::super) commit_details_sha_link_menu: Entity<components::CommitLinkMenu>,
-    pub(in super::super) commit_details_sha_input: Entity<components::TextInput>,
-    pub(in super::super) commit_details_date_input: Entity<components::TextInput>,
-    pub(in super::super) commit_details_parent_input: Entity<components::TextInput>,
-    pub(in super::super) commit_details_parent_link_menu: Entity<components::CommitLinkMenu>,
     pub(in super::super) commit_message_drafts: FxHashMap<RepoId, SharedString>,
     pub(in super::super) commit_amend_enabled: bool,
-    pub(in super::super) commit_push_after_enabled: bool,
     pub(in super::super) pending_commits: FxHashMap<RepoId, PendingCommit>,
     pending_amend_prefill: Option<RepoId>,
     /// Suggestion (repo and rev) already offered to the commit box, so git's
@@ -388,7 +382,6 @@ impl DetailsPaneView {
         let change_tracking_height = preferences.change_tracking.height;
         let untracked_height = preferences.change_tracking.untracked_height;
         let ui_scale_percent = preferences.appearance.ui_scale_percent;
-        let commit_push_after_enabled = preferences.repository.commit_push_after_enabled;
         let date_time_format = preferences.appearance.date_time_format;
         let timezone = preferences.appearance.timezone;
         let show_timezone = preferences.appearance.show_timezone;
@@ -415,9 +408,12 @@ impl DetailsPaneView {
         let commit_message_input = cx.new(|cx| {
             let mut input = components::TextInput::new(
                 components::TextInputOptions {
-                    placeholder: "Enter commit message".into(),
+                    placeholder: "What changed and why".into(),
                     multiline: true,
                     soft_wrap: true,
+                    // The commit box draws the card around the input.
+                    chromeless: true,
+                    min_lines: 4,
                     ..Default::default()
                 },
                 window,
@@ -479,43 +475,6 @@ impl DetailsPaneView {
                 RepoId(0),
                 Arc::<[components::MessageLink]>::from([]),
                 "commit_details_message_link_menu",
-                root_view.clone(),
-            )
-        });
-
-        let commit_details_sha_input = cx.new(|cx| {
-            let mut input =
-                components::TextInput::new(components::TextInputOptions::selectable(), window, cx);
-            input.set_display_truncation(Some(components::TextTruncationProfile::Middle), cx);
-            input
-        });
-
-        let commit_details_date_input = cx.new(|cx| {
-            components::TextInput::new(components::TextInputOptions::selectable(), window, cx)
-        });
-
-        let commit_details_parent_input = cx.new(|cx| {
-            let mut input =
-                components::TextInput::new(components::TextInputOptions::selectable(), window, cx);
-            input.set_display_truncation(Some(components::TextTruncationProfile::Middle), cx);
-            input
-        });
-        let commit_details_parent_link_menu = cx.new(|_cx| {
-            components::CommitLinkMenu::new(
-                commit_details_parent_input.clone(),
-                RepoId(0),
-                Arc::<[components::MessageLink]>::from([]),
-                "commit_details_parent_link_menu",
-                root_view.clone(),
-            )
-        });
-
-        let commit_details_sha_link_menu = cx.new(|_cx| {
-            components::CommitLinkMenu::new(
-                commit_details_sha_input.clone(),
-                RepoId(0),
-                Arc::<[components::MessageLink]>::from([]),
-                "commit_details_sha_link_menu",
                 root_view.clone(),
             )
         });
@@ -592,14 +551,8 @@ impl DetailsPaneView {
             commit_reword_scroll,
             commit_reword: None,
             commit_details_message_link_menu,
-            commit_details_sha_link_menu,
-            commit_details_sha_input,
-            commit_details_date_input,
-            commit_details_parent_input,
-            commit_details_parent_link_menu,
             commit_message_drafts: FxHashMap::default(),
             commit_amend_enabled: false,
-            commit_push_after_enabled,
             pending_commits: FxHashMap::default(),
             pending_amend_prefill: None,
             applied_commit_suggestions: rustc_hash::FxHashMap::default(),
@@ -841,6 +794,28 @@ impl DetailsPaneView {
         cx.notify();
     }
 
+    /// Copy a commit id and say so, since the badge shows it shortened.
+    pub(in super::super) fn copy_commit_id(
+        &mut self,
+        commit_id: CommitId,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let message = crate::view::commit_copy_message(commit_id.as_ref());
+        crate::clipboard::write_text(
+            cx,
+            commit_id.as_ref().to_string(),
+            crate::clipboard::CopySource::CommitSha,
+        );
+        let _ = self.root_view.update(cx, |root, cx| {
+            root.push_toast(components::ToastKind::Success, message, cx);
+        });
+    }
+
+    /// Toggle amend from the commit box's checkbox.
+    pub(in super::super) fn toggle_commit_amend(&mut self, cx: &mut gpui::Context<Self>) {
+        self.set_commit_amend_enabled(!self.commit_amend_enabled, cx);
+    }
+
     fn commit_message_is_empty(&self, cx: &gpui::Context<Self>) -> bool {
         self.commit_message_input.read(cx).text().trim().is_empty()
     }
@@ -895,19 +870,6 @@ impl DetailsPaneView {
         }
     }
 
-    pub(in super::super) fn set_commit_push_after_enabled(
-        &mut self,
-        enabled: bool,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        if self.commit_push_after_enabled == enabled {
-            return;
-        }
-
-        self.commit_push_after_enabled = enabled;
-        cx.notify();
-    }
-
     pub(in super::super) fn set_commit_message_from_history(
         &mut self,
         message: String,
@@ -926,15 +888,6 @@ impl DetailsPaneView {
             .read_with(cx, |input, _| input.focus_handle());
         window.focus(&focus, cx);
         cx.notify();
-    }
-
-    fn sync_commit_amend_enabled_to_root(&self, enabled: bool, cx: &mut gpui::Context<Self>) {
-        let root_view = self.root_view.clone();
-        cx.defer(move |cx| {
-            let _ = root_view.update(cx, |root, cx| {
-                root.set_commit_amend_enabled(enabled, cx);
-            });
-        });
     }
 
     /// Follows dispatched commits to their result. Runs on every snapshot,
@@ -962,7 +915,6 @@ impl DetailsPaneView {
                     }
                     if pending.amend && self.commit_amend_enabled {
                         self.commit_amend_enabled = false;
-                        self.sync_commit_amend_enabled_to_root(false, cx);
                         changed = true;
                     }
                 } else if self
@@ -2593,12 +2545,8 @@ impl DetailsPaneView {
         }
         let mut restored_commit_message: Option<SharedString> = None;
         if switched_repo {
-            let was_amend_enabled = self.commit_amend_enabled;
             self.commit_amend_enabled = false;
             self.pending_amend_prefill = None;
-            if was_amend_enabled {
-                self.sync_commit_amend_enabled_to_root(false, cx);
-            }
         }
         if switched_repo {
             if let Some(prev_repo_id) = prev_active_repo_id {

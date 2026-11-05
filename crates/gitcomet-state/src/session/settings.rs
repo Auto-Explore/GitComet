@@ -77,7 +77,6 @@ pub struct UiSettings {
     pub history_hidden_ref_presets: Option<BTreeMap<String, bool>>,
     pub history_hidden_ref_prefixes: Option<Vec<String>>,
     pub default_history_mode: Option<HistoryMode>,
-    pub commit_push_after_enabled: Option<bool>,
     pub default_tag_type: Option<DefaultTagType>,
     pub fetch_prune_deleted_remote_branches: Option<bool>,
     pub auto_fetch_enabled: Option<bool>,
@@ -230,7 +229,6 @@ pub fn persist_ui_settings_to_path(settings: UiSettings, path: &Path) -> io::Res
         if let Some(value) = settings.default_history_mode {
             file.default_history_mode = Some(value.into());
         }
-        apply_setting!(settings, file, commit_push_after_enabled);
         apply_setting!(settings, file, default_tag_type);
         apply_setting!(settings, file, fetch_prune_deleted_remote_branches);
         apply_setting!(settings, file, auto_fetch_enabled);

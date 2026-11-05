@@ -66,6 +66,51 @@ pub fn initials_paint_origin_y(
     circle_top + diameter * 0.5 + cap_height * 0.5 - baseline_in_line
 }
 
+/// Paints `initials` centred in `bounds` (the avatar circle) with cap-height
+/// centering, in `color`. Shared by the retained-mode avatar and canvases that
+/// paint the circle themselves.
+pub fn paint_avatar_initials(
+    initials: &gpui::SharedString,
+    color: Rgba,
+    font_size: Pixels,
+    bounds: gpui::Bounds<Pixels>,
+    window: &mut gpui::Window,
+    cx: &mut gpui::App,
+) {
+    let mut font = window.text_style().font();
+    font.weight = FontWeight::SEMIBOLD;
+    let run = TextRun {
+        len: initials.len(),
+        font,
+        color: color.into_color(),
+        background_color: None,
+        underline: None,
+        strikethrough: None,
+        letter_spacing: None,
+    };
+    let shaped = window
+        .text_system()
+        .shape_line(initials.clone(), font_size, &[run]);
+    let cap_height = shaped
+        .paint_fragments
+        .first()
+        .map(|run| window.text_system().cap_height(run.font_id, font_size))
+        .unwrap_or(font_size * 0.7);
+    let line_height = bounds.size.height;
+    let origin = gpui::point(
+        bounds.left() + (bounds.size.width - shaped.width).max(px(0.0)) * 0.5,
+        initials_paint_origin_y(
+            bounds.top(),
+            bounds.size.height,
+            line_height,
+            shaped.ascent,
+            shaped.descent,
+            cap_height,
+        ),
+    );
+    let _ = shaped.paint(origin, line_height, gpui::TextAlign::Left, None, window, cx);
+}
+
 /// Tinted circle + initials, for retained-mode UIs (commit details, popovers).
 /// The initials are painted by hand with cap-height centering so they sit
 /// visually centered in the circle; the history table paints the same design
@@ -86,40 +131,7 @@ pub fn author_avatar(theme: AppTheme, scale: impl Into<UiScale>, name: &str) -> 
             gpui::canvas(
                 |_bounds, _window, _cx| {},
                 move |bounds, (), window, cx| {
-                    let mut font = window.text_style().font();
-                    font.weight = FontWeight::SEMIBOLD;
-                    let run = TextRun {
-                        len: initials.len(),
-                        font,
-                        color: color.into_color(),
-                        background_color: None,
-                        underline: None,
-                        strikethrough: None,
-                        letter_spacing: None,
-                    };
-                    let shaped =
-                        window
-                            .text_system()
-                            .shape_line(initials.clone(), font_size, &[run]);
-                    let cap_height = shaped
-                        .paint_fragments
-                        .first()
-                        .map(|run| window.text_system().cap_height(run.font_id, font_size))
-                        .unwrap_or(font_size * 0.7);
-                    let line_height = bounds.size.height;
-                    let origin = gpui::point(
-                        bounds.left() + (bounds.size.width - shaped.width).max(px(0.0)) * 0.5,
-                        initials_paint_origin_y(
-                            bounds.top(),
-                            bounds.size.height,
-                            line_height,
-                            shaped.ascent,
-                            shaped.descent,
-                            cap_height,
-                        ),
-                    );
-                    let _ =
-                        shaped.paint(origin, line_height, gpui::TextAlign::Left, None, window, cx);
+                    paint_avatar_initials(&initials, color, font_size, bounds, window, cx);
                 },
             )
             .size_full(),

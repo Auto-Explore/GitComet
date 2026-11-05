@@ -2913,43 +2913,6 @@ fn persist_ui_settings_round_trips_empty_custom_git_executable_path() {
 }
 
 #[test]
-fn persist_ui_settings_round_trips_commit_push_after_enabled() {
-    let dir = env::temp_dir().join(format!(
-        "gitcomet-ui-settings-test-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::SystemTime::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos()
-    ));
-    let _ = fs::create_dir_all(&dir);
-    let path = dir.join("session.json");
-
-    persist_to_path(
-        &path,
-        &UiSessionFile {
-            version: CURRENT_SESSION_FILE_VERSION,
-            open_repos: Vec::new(),
-            active_repo: None,
-            ..UiSessionFile::default()
-        },
-    )
-    .expect("seed session file");
-
-    persist_ui_settings_to_path(
-        UiSettings {
-            commit_push_after_enabled: Some(true),
-            ..UiSettings::default()
-        },
-        &path,
-    )
-    .expect("persist ui settings");
-
-    let loaded = load_from_path(&path);
-    assert_eq!(loaded.commit_push_after_enabled, Some(true));
-}
-
-#[test]
 fn persist_ui_settings_round_trips_recommend_repo_maintenance() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("session.json");

@@ -285,9 +285,6 @@ pub(crate) enum PopoverKind {
     },
     PullPicker,
     PushPicker,
-    CommitOptionsMenu {
-        repo_id: RepoId,
-    },
     CommitFileSortMenu {
         list: crate::view::rows::FileListId,
     },

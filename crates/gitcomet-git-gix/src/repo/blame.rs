@@ -21,6 +21,7 @@ use std::sync::Arc;
 struct BlameCommitMetadata {
     commit_id_text: Arc<str>,
     author: Arc<str>,
+    author_email: Arc<str>,
     author_time_unix: Option<i64>,
     summary: Arc<str>,
     body: Option<Arc<str>>,
@@ -94,6 +95,7 @@ fn synthesize_uncommitted_blame(contents: &[u8], null_id: gix::ObjectId) -> Vec<
         .map(|line| BlameLine {
             commit_id: commit_id.clone(),
             author: author.clone(),
+            author_email: Arc::default(),
             author_time_unix: None,
             summary: author.clone(),
             body: None,
@@ -172,12 +174,13 @@ fn blame_commit_metadata<'a>(
             let prior_exists =
                 file_exists_at_first_parent(repo, &commit, source_path.unwrap_or(blamed_path));
 
-            let (author, author_time_unix) = match commit.author() {
+            let (author, author_email, author_time_unix) = match commit.author() {
                 Ok(signature) => (
                     bstr_to_arc_str(signature.name.as_ref()),
+                    bstr_to_arc_str(signature.email.as_ref()),
                     signature.time().ok().map(|time| time.seconds),
                 ),
-                Err(_) => (Arc::<str>::default(), None),
+                Err(_) => (Arc::<str>::default(), Arc::<str>::default(), None),
             };
             // Split subject from body the way git itself does, via gix's message
             // parser: the subject is the whole first paragraph (folded into one
@@ -203,6 +206,7 @@ fn blame_commit_metadata<'a>(
             Ok(entry.insert(BlameCommitMetadata {
                 commit_id_text: oid_to_arc_str(&commit_id),
                 author,
+                author_email,
                 author_time_unix,
                 summary,
                 body,
@@ -269,6 +273,7 @@ fn parse_blame_porcelain(output: &[u8], blamed_path: &Path) -> Vec<BlameLine> {
     let mut lines: Vec<BlameLine> = Vec::new();
     let mut commit_id: Option<String> = None;
     let mut author: Option<String> = None;
+    let mut author_email: Option<String> = None;
     let mut author_time_unix: Option<i64> = None;
     let mut summary: Option<String> = None;
     let mut prior_exists = false;
@@ -286,9 +291,10 @@ fn parse_blame_porcelain(output: &[u8], blamed_path: &Path) -> Vec<BlameLine> {
             let text = blame_line_text(&raw_line[1..]);
             let sha = commit_id.clone().unwrap_or_default();
             let uncommitted = is_uncommitted_commit_id(&sha);
-            let (author_text, summary_text, time, prior) = if uncommitted {
+            let (author_text, email_text, summary_text, time, prior) = if uncommitted {
                 (
                     NOT_COMMITTED.to_string(),
+                    String::new(),
                     NOT_COMMITTED.to_string(),
                     None,
                     false,
@@ -296,6 +302,7 @@ fn parse_blame_porcelain(output: &[u8], blamed_path: &Path) -> Vec<BlameLine> {
             } else {
                 (
                     author.clone().unwrap_or_default(),
+                    author_email.clone().unwrap_or_default(),
                     summary.clone().unwrap_or_default(),
                     author_time_unix,
                     prior_exists,
@@ -323,6 +330,7 @@ fn parse_blame_porcelain(output: &[u8], blamed_path: &Path) -> Vec<BlameLine> {
             lines.push(BlameLine {
                 commit_id: Arc::from(sha.as_str()),
                 author: Arc::from(author_text.as_str()),
+                author_email: Arc::from(email_text.as_str()),
                 author_time_unix: time,
                 summary: Arc::from(summary_text.as_str()),
                 body: None,
@@ -334,6 +342,7 @@ fn parse_blame_porcelain(output: &[u8], blamed_path: &Path) -> Vec<BlameLine> {
 
             commit_id = None;
             author = None;
+            author_email = None;
             author_time_unix = None;
             summary = None;
             prior_exists = false;
@@ -360,6 +369,13 @@ fn parse_blame_porcelain(output: &[u8], blamed_path: &Path) -> Vec<BlameLine> {
         };
         match key {
             "author" => author = Some(rest.to_string()),
+            "author-mail" => {
+                author_email = Some(
+                    rest.trim()
+                        .trim_matches(|c| c == '<' || c == '>')
+                        .to_string(),
+                );
+            }
             "author-time" => author_time_unix = rest.trim().parse::<i64>().ok(),
             "summary" => summary = Some(rest.to_string()),
             "previous" => {
@@ -449,6 +465,7 @@ impl GixRepo {
                 lines.push(BlameLine {
                     commit_id: metadata.commit_id_text.clone(),
                     author: metadata.author.clone(),
+                    author_email: metadata.author_email.clone(),
                     author_time_unix: metadata.author_time_unix,
                     summary: metadata.summary.clone(),
                     body: metadata.body.clone(),
@@ -688,6 +705,8 @@ mod tests {
             "1111111111111111111111111111111111111111"
         );
         assert_eq!(committed.author.as_ref(), "Ada Lovelace");
+        // `author-mail` arrives in angle brackets; they are stripped.
+        assert_eq!(committed.author_email.as_ref(), "ada@example.com");
         assert_eq!(committed.author_time_unix, Some(1700000000));
         assert_eq!(committed.summary.as_ref(), "initial commit");
         assert_eq!(committed.line, "committed line");
@@ -703,6 +722,8 @@ mod tests {
             "0000000000000000000000000000000000000000"
         );
         assert_eq!(uncommitted.author.as_ref(), "Not Committed Yet");
+        // git's placeholder address for local changes is not an email.
+        assert_eq!(uncommitted.author_email.as_ref(), "");
         assert_eq!(uncommitted.summary.as_ref(), "Not Committed Yet");
         assert_eq!(uncommitted.author_time_unix, None);
         assert_eq!(uncommitted.line, "uncommitted line");

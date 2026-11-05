@@ -8,7 +8,14 @@ use super::super::*;
 pub(in crate::view) struct BlameLabelCache {
     when_bucket: i64,
     when: FxHashMap<i64, SharedString>,
-    initials: FxHashMap<std::sync::Arc<str>, SharedString>,
+    authors: FxHashMap<std::sync::Arc<str>, AuthorLabel>,
+}
+
+/// An author's name as the blame column shows it, with the avatar's initials.
+#[derive(Clone)]
+struct AuthorLabel {
+    name: SharedString,
+    initials: SharedString,
 }
 
 impl BlameRenderCtx {
@@ -33,19 +40,34 @@ impl BlameRenderCtx {
             .clone()
     }
 
-    fn initials_label(&self, author: &std::sync::Arc<str>) -> SharedString {
+    fn author_label(&self, author: &std::sync::Arc<str>) -> AuthorLabel {
         let mut cache = self.labels.borrow_mut();
-        if let Some(label) = cache.initials.get(author) {
+        if let Some(label) = cache.authors.get(author) {
             return label.clone();
         }
-        if cache.initials.len() >= 4_096 {
-            cache.initials.clear();
+        if cache.authors.len() >= 4_096 {
+            cache.authors.clear();
         }
-        let label: SharedString = super::blame::author_initials(author).into();
+        let name = super::blame::author_display_name(author);
+        let label = AuthorLabel {
+            name: name.to_string().into(),
+            initials: components::author_initials(name).into(),
+        };
         cache
-            .initials
+            .authors
             .insert(std::sync::Arc::clone(author), label.clone());
         label
+    }
+}
+
+/// The avatar's hover text: the author's name and, when it is known, their
+/// email in angle brackets.
+fn author_tip(author: &str, email: &str) -> SharedString {
+    let name = super::blame::author_display_name(author);
+    if email.is_empty() {
+        SharedString::from(name.to_string())
+    } else {
+        SharedString::from(format!("{name} <{email}>"))
     }
 }
 
@@ -57,7 +79,7 @@ pub(in crate::view) struct BlameRenderCtx {
     lines: std::sync::Arc<Vec<gitcomet_core::services::BlameLine>>,
     range: Option<(i64, i64)>,
     now: std::time::SystemTime,
-    /// Relative-time and initials labels, shared with the view across frames:
+    /// Relative-time and author-name labels, shared with the view across frames:
     /// every run-start row formatted both per frame.
     labels: std::rc::Rc<std::cell::RefCell<BlameLabelCache>>,
     path: std::sync::Arc<std::path::Path>,
@@ -199,7 +221,7 @@ fn build_row_blame_paint_inner(
     let line = annotation.line;
     // Working-tree blame surfaces not-yet-committed lines with an empty or
     // all-zero object id. These render as a distinct local-change row: a
-    // staged/unstaged-colored bar, the matching label, no author initials, no
+    // staged/unstaged-colored bar, the matching label, no author name, no
     // summary, and no action icons.
     let uncommitted = gitcomet_core::domain::is_uncommitted_commit_id(&line.commit_id);
     let group = if uncommitted {
@@ -226,8 +248,10 @@ fn build_row_blame_paint_inner(
             crate::theme::blame_heat_color(theme.is_dark, t)
         }
     };
-    let (when, initials, summary, body) = if !is_run_start {
+    let (when, author, author_initials, author_tip, summary, body) = if !is_run_start {
         (
+            SharedString::default(),
+            SharedString::default(),
             SharedString::default(),
             SharedString::default(),
             SharedString::default(),
@@ -238,6 +262,8 @@ fn build_row_blame_paint_inner(
             SharedString::from(local_change_label(local)),
             SharedString::default(),
             SharedString::default(),
+            SharedString::default(),
+            SharedString::default(),
             None,
         )
     } else {
@@ -245,9 +271,12 @@ fn build_row_blame_paint_inner(
             .author_time_unix
             .map(|ts| ctx.relative_time_label(ts))
             .unwrap_or_else(|| "unknown".into());
+        let author = ctx.author_label(&line.author);
         (
             when,
-            ctx.initials_label(&line.author),
+            author.name,
+            author.initials,
+            author_tip(&line.author, &line.author_email),
             // `Arc<str>` -> `SharedString` is a refcount bump, not a byte copy,
             // so this avoids re-allocating the summary/body every render pass.
             SharedString::from(line.summary.clone()),
@@ -258,7 +287,9 @@ fn build_row_blame_paint_inner(
         border,
         show_text: is_run_start,
         when,
-        initials,
+        author,
+        author_initials,
+        author_tip,
         summary,
         body,
         commit_id: gitcomet_core::domain::CommitId(line.commit_id.clone()),
@@ -291,7 +322,9 @@ fn removal_blame_paint(
         border: local_change_color(theme, Some(local)),
         show_text: is_run_start,
         when,
-        initials: SharedString::default(),
+        author: SharedString::default(),
+        author_initials: SharedString::default(),
+        author_tip: SharedString::default(),
         summary: SharedString::default(),
         body: None,
         commit_id: gitcomet_core::domain::CommitId(std::sync::Arc::from("")),

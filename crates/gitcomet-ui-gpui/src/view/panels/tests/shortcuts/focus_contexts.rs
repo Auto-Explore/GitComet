@@ -297,7 +297,7 @@ fn diff_toolbar_and_commit_box_icons_follow_ui_scale(cx: &mut gpui::TestAppConte
         "diff_action_menu_icon",
         "diff_close_icon",
         "commit_button_icon",
-        "commit_options_icon",
+        "commit_and_push_button_icon",
         "previous_commit_messages_icon",
         "change_tracking_unstaged_header_chevron",
     ];

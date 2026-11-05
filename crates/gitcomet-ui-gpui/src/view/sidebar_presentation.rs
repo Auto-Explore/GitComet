@@ -488,7 +488,14 @@ mod tests {
         let closed = build_sidebar_presentation(&mut cache, &state, &collapsed, &pins, "").unwrap();
         let first =
             build_sidebar_presentation(&mut cache, &state, &collapsed, &pins, "feat").unwrap();
-        assert!(first.rows.len() > closed.rows.len());
+        // Empty-section cards are not search results, so leave them out of the
+        // comparison between the collapsed tree and the filtered one.
+        let listed = |rows: &[BranchSidebarRow]| {
+            rows.iter()
+                .filter(|row| !matches!(row, BranchSidebarRow::EmptyCard { .. }))
+                .count()
+        };
+        assert!(listed(&first.rows) > listed(&closed.rows));
         let tree = cache.projection.as_ref().unwrap().tree.clone();
         let raw_pins = cache.projection.as_ref().unwrap().pins.clone();
         let second =

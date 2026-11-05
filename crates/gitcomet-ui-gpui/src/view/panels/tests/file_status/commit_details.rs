@@ -1,19 +1,17 @@
-//! Commit details: selectable fields, message links, signatures, input focus.
+//! Commit details: the commit card, message links, signatures, input focus.
 
 use super::*;
 
 #[path = "commit_reword_lifecycle.rs"]
 mod reword_lifecycle;
 
-/// A window showing one commit's details, with the sha/date/parent fields
-/// populated. Returns the fields' expected text.
+/// A window showing one commit's details. Returns the message the selectable
+/// details message input holds.
 fn commit_details_metadata_fixture(
     cx: &mut gpui::TestAppContext,
 ) -> (
     gpui::Entity<crate::view::GitCometView>,
     &mut gpui::VisualTestContext,
-    String,
-    String,
     String,
 ) {
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
@@ -55,54 +53,27 @@ fn commit_details_metadata_fixture(
         let _ = window.draw(app);
     });
 
+    let message = "subject".to_string();
     cx.update(|_window, app| {
         let details_pane = view.read(app).details_pane.clone();
         let pane = details_pane.read(app);
-        assert_eq!(pane.commit_details_sha_input.read(app).text(), commit_sha);
-        assert_eq!(pane.commit_details_date_input.read(app).text(), commit_date);
-        assert_eq!(
-            pane.commit_details_parent_input.read(app).text(),
-            parent_sha
-        );
+        assert_eq!(pane.commit_details_message_input.read(app).text(), message);
     });
 
-    (view, cx, commit_sha, commit_date, parent_sha)
+    (view, cx, message)
 }
 
 #[gpui::test]
-fn commit_details_metadata_fields_are_selectable(cx: &mut gpui::TestAppContext) {
-    let (view, cx, commit_sha, commit_date, parent_sha) = commit_details_metadata_fixture(cx);
+fn commit_card_shows_the_short_sha_and_the_parent(cx: &mut gpui::TestAppContext) {
+    let (_view, cx, _message) = commit_details_metadata_fixture(cx);
 
-    // One field at a time: only one surface may hold a selection, so selecting
-    // all three at once would leave just the last one highlighted.
-    for (label, expected) in [
-        ("sha", commit_sha),
-        ("date", commit_date),
-        ("parent", parent_sha),
-    ] {
-        cx.update(|window, app| {
-            let details_pane = view.read(app).details_pane.clone();
-            details_pane.update(app, |pane, cx| {
-                let input = match label {
-                    "sha" => pane.commit_details_sha_input.clone(),
-                    "date" => pane.commit_details_date_input.clone(),
-                    _ => pane.commit_details_parent_input.clone(),
-                };
-                input.update(cx, |input, cx| input.select_all_text(window, cx));
-            });
-        });
-
-        cx.update(|_window, app| {
-            let details_pane = view.read(app).details_pane.clone();
-            let pane = details_pane.read(app);
-            let actual = match label {
-                "sha" => pane.commit_details_sha_input.read(app).selected_text(),
-                "date" => pane.commit_details_date_input.read(app).selected_text(),
-                _ => pane.commit_details_parent_input.read(app).selected_text(),
-            };
-            assert_eq!(actual, Some(expected), "{label} field must be selectable");
-        });
-    }
+    assert!(cx.debug_bounds("commit_card_sha").is_some());
+    assert!(cx.debug_bounds("commit_card_sha_menu").is_some());
+    assert!(cx.debug_bounds("commit_card_parent_0").is_some());
+    assert!(
+        cx.debug_bounds("commit_card_parent_1").is_none(),
+        "one parent, one chip"
+    );
 }
 
 /// Any other surface taking the window's selection clears a text input's
@@ -110,12 +81,12 @@ fn commit_details_metadata_fields_are_selectable(cx: &mut gpui::TestAppContext) 
 /// terminal, and any future selectable surface.
 #[gpui::test]
 fn another_surface_taking_the_selection_clears_a_text_input(cx: &mut gpui::TestAppContext) {
-    let (view, cx, commit_sha, _date, _parent) = commit_details_metadata_fixture(cx);
+    let (view, cx, message) = commit_details_metadata_fixture(cx);
 
     cx.update(|window, app| {
         let details_pane = view.read(app).details_pane.clone();
         details_pane.update(app, |pane, cx| {
-            pane.commit_details_sha_input
+            pane.commit_details_message_input
                 .update(cx, |input, cx| input.select_all_text(window, cx));
         });
     });
@@ -124,10 +95,10 @@ fn another_surface_taking_the_selection_clears_a_text_input(cx: &mut gpui::TestA
         assert_eq!(
             details_pane
                 .read(app)
-                .commit_details_sha_input
+                .commit_details_message_input
                 .read(app)
                 .selected_text(),
-            Some(commit_sha)
+            Some(message)
         );
     });
 
@@ -142,7 +113,7 @@ fn another_surface_taking_the_selection_clears_a_text_input(cx: &mut gpui::TestA
         assert_eq!(
             details_pane
                 .read(app)
-                .commit_details_sha_input
+                .commit_details_message_input
                 .read(app)
                 .selected_text(),
             None,
@@ -157,12 +128,12 @@ fn another_surface_taking_the_selection_clears_a_text_input(cx: &mut gpui::TestA
 /// the capture-phase invalidator actually fires.
 #[gpui::test]
 fn an_ordinary_press_elsewhere_clears_a_text_input_selection(cx: &mut gpui::TestAppContext) {
-    let (view, cx, commit_sha, _date, _parent) = commit_details_metadata_fixture(cx);
+    let (view, cx, message) = commit_details_metadata_fixture(cx);
 
     cx.update(|window, app| {
         let details_pane = view.read(app).details_pane.clone();
         details_pane.update(app, |pane, cx| {
-            pane.commit_details_sha_input
+            pane.commit_details_message_input
                 .update(cx, |input, cx| input.select_all_text(window, cx));
         });
     });
@@ -171,10 +142,10 @@ fn an_ordinary_press_elsewhere_clears_a_text_input_selection(cx: &mut gpui::Test
         assert_eq!(
             details_pane
                 .read(app)
-                .commit_details_sha_input
+                .commit_details_message_input
                 .read(app)
                 .selected_text(),
-            Some(commit_sha),
+            Some(message),
             "precondition: the input holds a selection"
         );
     });
@@ -197,7 +168,7 @@ fn an_ordinary_press_elsewhere_clears_a_text_input_selection(cx: &mut gpui::Test
         assert_eq!(
             details_pane
                 .read(app)
-                .commit_details_sha_input
+                .commit_details_message_input
                 .read(app)
                 .selected_text(),
             None,
@@ -210,13 +181,13 @@ fn an_ordinary_press_elsewhere_clears_a_text_input_selection(cx: &mut gpui::Test
 /// forgot would latch it on and disable click-away blur for the session.
 #[gpui::test]
 fn blur_still_works_after_a_stale_overlay_flag(cx: &mut gpui::TestAppContext) {
-    let (view, cx, _sha, _date, _parent) = commit_details_metadata_fixture(cx);
+    let (view, cx, _message) = commit_details_metadata_fixture(cx);
 
     let input = cx.update(|_window, app| {
         view.read(app)
             .details_pane
             .read(app)
-            .commit_details_sha_input
+            .commit_details_message_input
             .clone()
     });
 
@@ -254,12 +225,12 @@ fn blur_still_works_after_a_stale_overlay_flag(cx: &mut gpui::TestAppContext) {
 /// highlight alone even though it is a press outside the owning surface.
 #[gpui::test]
 fn a_preserved_press_leaves_a_text_input_selection_alone(cx: &mut gpui::TestAppContext) {
-    let (view, cx, commit_sha, _date, _parent) = commit_details_metadata_fixture(cx);
+    let (view, cx, message) = commit_details_metadata_fixture(cx);
 
     cx.update(|window, app| {
         let details_pane = view.read(app).details_pane.clone();
         details_pane.update(app, |pane, cx| {
-            pane.commit_details_sha_input
+            pane.commit_details_message_input
                 .update(cx, |input, cx| input.select_all_text(window, cx));
         });
     });
@@ -283,25 +254,25 @@ fn a_preserved_press_leaves_a_text_input_selection_alone(cx: &mut gpui::TestAppC
         assert_eq!(
             details_pane
                 .read(app)
-                .commit_details_sha_input
+                .commit_details_message_input
                 .read(app)
                 .selected_text(),
-            Some(commit_sha),
+            Some(message),
             "a preserved press must not collapse the selection"
         );
     });
 }
 
-/// Selecting one commit-details field must drop the highlight on the previous
-/// one, the way a browser only ever shows one selection.
+/// Selecting text in a second input must drop the highlight on the first, the
+/// way a browser only ever shows one selection.
 #[gpui::test]
-fn selecting_a_second_commit_details_field_clears_the_first(cx: &mut gpui::TestAppContext) {
-    let (view, cx, commit_sha, commit_date, _parent_sha) = commit_details_metadata_fixture(cx);
+fn selecting_a_second_text_input_clears_the_first(cx: &mut gpui::TestAppContext) {
+    let (view, cx, message) = commit_details_metadata_fixture(cx);
 
     cx.update(|window, app| {
         let details_pane = view.read(app).details_pane.clone();
         details_pane.update(app, |pane, cx| {
-            pane.commit_details_sha_input
+            pane.commit_details_message_input
                 .update(cx, |input, cx| input.select_all_text(window, cx));
         });
     });
@@ -310,18 +281,20 @@ fn selecting_a_second_commit_details_field_clears_the_first(cx: &mut gpui::TestA
         assert_eq!(
             details_pane
                 .read(app)
-                .commit_details_sha_input
+                .commit_details_message_input
                 .read(app)
                 .selected_text(),
-            Some(commit_sha)
+            Some(message)
         );
     });
 
     cx.update(|window, app| {
         let details_pane = view.read(app).details_pane.clone();
         details_pane.update(app, |pane, cx| {
-            pane.commit_details_date_input
-                .update(cx, |input, cx| input.select_all_text(window, cx));
+            pane.commit_message_input.update(cx, |input, cx| {
+                input.set_text("draft".to_string(), cx);
+                input.select_all_text(window, cx);
+            });
         });
     });
     cx.run_until_parked();
@@ -330,14 +303,14 @@ fn selecting_a_second_commit_details_field_clears_the_first(cx: &mut gpui::TestA
         let details_pane = view.read(app).details_pane.clone();
         let pane = details_pane.read(app);
         assert_eq!(
-            pane.commit_details_date_input.read(app).selected_text(),
-            Some(commit_date),
-            "the newly selected field keeps its selection"
+            pane.commit_message_input.read(app).selected_text(),
+            Some("draft".to_string()),
+            "the newly selected input keeps its selection"
         );
         assert_eq!(
-            pane.commit_details_sha_input.read(app).selected_text(),
+            pane.commit_details_message_input.read(app).selected_text(),
             None,
-            "the previously selected field must have been cleared"
+            "the previously selected input must have been cleared"
         );
     });
 }
@@ -1198,30 +1171,9 @@ fn commit_details_parent_sha_click_menu_navigate_reveals_referenced_commit(
         let _ = window.draw(app);
     });
     let parent_bounds = cx
-        .debug_bounds("commit_details_parent_link_menu")
-        .expect("expected parent sha link target");
-    let popover = click_commit_details_link(
-        cx,
-        &view,
-        point(parent_bounds.left() + px(4.0), parent_bounds.center().y),
-        1,
-    );
-    assert!(
-        matches!(
-            popover,
-            Some(PopoverKind::CommitShaLinkMenu {
-                ref commit_id,
-                allow_navigate: true,
-                ..
-            }) if commit_id.as_ref() == parent_sha
-        ),
-        "clicking the parent id should open its menu, got {popover:?}"
-    );
-
-    let reveal_bounds = cx
-        .debug_bounds("context_menu_reveal_commit")
-        .expect("expected parent reveal commit entry");
-    simulate_counted_click(cx, reveal_bounds.center(), 1);
+        .debug_bounds("commit_card_parent_0")
+        .expect("expected the parent chip in the commit card");
+    simulate_counted_click(cx, parent_bounds.center(), 1);
     cx.run_until_parked();
     wait_for_store_selected_commit(cx, &view, repo_id, parent_sha);
     cx.update(|window, app| {
@@ -1297,19 +1249,9 @@ fn commit_details_parent_sha_dash_has_no_link_menu(cx: &mut gpui::TestAppContext
     cx.update(|window, app| {
         let _ = window.draw(app);
     });
-    let parent_bounds = cx
-        .debug_bounds("commit_details_parent_link_menu")
-        .expect("expected parent sha link target");
-    let popover = click_commit_details_link(
-        cx,
-        &view,
-        point(parent_bounds.left() + px(4.0), parent_bounds.center().y),
-        1,
-    );
-
     assert!(
-        popover.is_none(),
-        "expected placeholder parent value to stay non-interactive, got {popover:?}"
+        cx.debug_bounds("commit_card_parent_0").is_none(),
+        "a root commit has no parent chip to click"
     );
 }
 
@@ -1317,13 +1259,13 @@ fn commit_details_parent_sha_dash_has_no_link_menu(cx: &mut gpui::TestAppContext
 /// focused input, the way clicking page background does in a browser.
 #[gpui::test]
 fn clicking_outside_a_focused_input_blurs_it(cx: &mut gpui::TestAppContext) {
-    let (view, cx, _sha, _date, _parent) = commit_details_metadata_fixture(cx);
+    let (view, cx, _message) = commit_details_metadata_fixture(cx);
 
     let input = cx.update(|_window, app| {
         view.read(app)
             .details_pane
             .read(app)
-            .commit_details_sha_input
+            .commit_details_message_input
             .clone()
     });
     cx.update(|window, app| {
@@ -1368,13 +1310,13 @@ fn clicking_outside_a_focused_input_blurs_it(cx: &mut gpui::TestAppContext) {
 /// titlebar while typing is not "clicking away".
 #[gpui::test]
 fn a_preserved_press_does_not_blur_a_focused_input(cx: &mut gpui::TestAppContext) {
-    let (view, cx, _sha, _date, _parent) = commit_details_metadata_fixture(cx);
+    let (view, cx, _message) = commit_details_metadata_fixture(cx);
 
     let input = cx.update(|_window, app| {
         view.read(app)
             .details_pane
             .read(app)
-            .commit_details_sha_input
+            .commit_details_message_input
             .clone()
     });
     cx.update(|window, app| {
@@ -1566,7 +1508,7 @@ fn status_row_shows_large_file_chip_for_managed_paths(cx: &mut gpui::TestAppCont
 #[gpui::test]
 fn commit_details_pane_ignores_unrelated_frames(cx: &mut gpui::TestAppContext) {
     let _cache_guard = crate::view::enable_stable_cached_views_for_test();
-    let (view, cx, _sha, _date, _parent) = commit_details_metadata_fixture(cx);
+    let (view, cx, _message) = commit_details_metadata_fixture(cx);
     // One legitimate re-render, as any status publication causes: the menus
     // are tracked by the window from here on.
     cx.update(|_window, app| {

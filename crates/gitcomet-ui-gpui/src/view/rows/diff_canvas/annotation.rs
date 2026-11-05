@@ -11,7 +11,7 @@ use super::interaction::diff_canvas_click_target;
 use super::interaction::install_blame_annotation_hover_handler;
 use super::interaction::install_blame_annotation_mouse_handler;
 use super::paint_centered_svg_icon;
-use super::paint_gutter_text;
+use super::paint_gutter_text_centered_on;
 use gpui::App;
 use gpui::Bounds;
 use gpui::CursorStyle;
@@ -46,10 +46,10 @@ pub(in crate::view) const DIFF_ANNOTATION_BORDER_WIDTH_PX: f32 = 3.0;
 pub(in crate::view) const DIFF_ANNOTATION_GAP_PX: f32 = 6.0;
 
 /// Fixed width of the "X ago" sub-column.
-pub(in crate::view) const DIFF_ANNOTATION_WHEN_WIDTH_PX: f32 = 82.0;
+pub(in crate::view) const DIFF_ANNOTATION_WHEN_WIDTH_PX: f32 = 96.0;
 
-/// Fixed width of the author-initials sub-column.
-pub(in crate::view) const DIFF_ANNOTATION_INITIALS_WIDTH_PX: f32 = 22.0;
+/// Fixed width of the author-avatar sub-column.
+pub(in crate::view) const DIFF_ANNOTATION_AUTHOR_WIDTH_PX: f32 = 22.0;
 
 /// Cell width reserved for each trailing action icon.
 pub(in crate::view) const DIFF_ANNOTATION_ICON_WIDTH_PX: f32 = 16.0;
@@ -74,7 +74,7 @@ pub(in crate::view) fn blame_column_layout(
     let border_w = diff_scaled_px(DIFF_ANNOTATION_BORDER_WIDTH_PX, ui_scale_percent);
     let gap = diff_scaled_px(DIFF_ANNOTATION_GAP_PX, ui_scale_percent);
     let when_w = diff_scaled_px(DIFF_ANNOTATION_WHEN_WIDTH_PX, ui_scale_percent);
-    let initials_w = diff_scaled_px(DIFF_ANNOTATION_INITIALS_WIDTH_PX, ui_scale_percent);
+    let author_w = diff_scaled_px(DIFF_ANNOTATION_AUTHOR_WIDTH_PX, ui_scale_percent);
     let icon_w = diff_scaled_px(DIFF_ANNOTATION_ICON_WIDTH_PX, ui_scale_percent);
 
     let right = column_left + column_width;
@@ -83,14 +83,14 @@ pub(in crate::view) fn blame_column_layout(
     let browse_x = right - gap - icon_w;
     let prior_x = browse_x - gap - icon_w;
     let when_x = column_left + border_w + gap;
-    let initials_x = when_x + when_w + gap;
-    let message_x = initials_x + initials_w + gap;
+    let author_x = when_x + when_w + gap;
+    let message_x = author_x + author_w + gap;
     let message_w = (prior_x - gap - message_x).max(px(0.0));
 
     BlameColumnLayout {
         border: cell(column_left, border_w),
         when_x,
-        initials_x,
+        author: cell(author_x, author_w),
         message: cell(message_x, message_w),
         prior_icon: cell(prior_x, icon_w),
         browse_icon: cell(browse_x, icon_w),
@@ -117,7 +117,7 @@ pub(super) fn mix_blame_revision(
         hash_rgba(&mut hasher, blame.border);
         blame.show_text.hash(&mut hasher);
         // `when` is time-relative ("3 days ago") so it changes for the same commit
-        // as time passes — it must stay in the key. `initials`, `summary` and
+        // as time passes — it must stay in the key. `author`, `summary` and
         // `body` are NOT hashed: they are pure functions of `commit_id` (a given
         // commit always yields the same author/summary/body), so the commit id
         // hashed below already covers them. This avoids re-hashing a potentially
@@ -187,8 +187,47 @@ fn blame_commit_is_navigable(commit_id: &gitcomet_core::domain::CommitId) -> boo
     !commit_id.is_uncommitted()
 }
 
+/// The author's avatar (the circle with coloured initials used in commit
+/// details), centred vertically in the author cell.
+fn paint_author_avatar(
+    author: &SharedString,
+    initials: &SharedString,
+    cell: Bounds<Pixels>,
+    theme: AppTheme,
+    ui_scale_percent: u32,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    if author.is_empty() {
+        return;
+    }
+    let scale = crate::ui_scale::UiScale::from_percent(ui_scale_percent);
+    let diameter = scale.px(components::AVATAR_DIAMETER_PX);
+    let bounds = Bounds::new(
+        point(
+            cell.left(),
+            cell.top() + (cell.size.height - diameter).max(px(0.0)) * 0.5,
+        ),
+        size(diameter, diameter),
+    );
+    let color = components::author_color(theme, author);
+    window.paint_quad(
+        PaintQuad::new(bounds)
+            .background(crate::theme::with_alpha(color, 0.22))
+            .corner_radii(diameter * 0.5),
+    );
+    components::paint_avatar_initials(
+        initials,
+        color,
+        scale.px(components::AVATAR_FONT_PX),
+        bounds,
+        window,
+        cx,
+    );
+}
+
 /// Paint the annotation column for one row: a recency border bar and, on run
-/// starts, the "X ago | initials | summary" sub-columns plus two action icons.
+/// starts, the "X ago | author | summary" sub-columns plus two action icons.
 /// When `hovered` is Some, that area gets a highlight + underline (message) or
 /// brighter color (icons).
 #[allow(clippy::too_many_arguments)]
@@ -214,23 +253,25 @@ fn paint_blame_annotation(
         return;
     }
 
-    paint_gutter_text(
+    // The time is set smaller than the rest of the row; centre it vertically
+    // on the author and summary line.
+    paint_gutter_text_centered_on(
         &blame.when,
         layout.when_x,
         y,
         text_color,
         when_metrics,
+        metrics,
         style,
         window,
         cx,
     );
-    paint_gutter_text(
-        &blame.initials,
-        layout.initials_x,
-        y,
-        text_color,
-        metrics,
-        style,
+    paint_author_avatar(
+        &blame.author,
+        &blame.author_initials,
+        layout.author,
+        theme,
+        ui_scale_percent,
         window,
         cx,
     );
@@ -351,6 +392,7 @@ fn paint_blame_dot(
 /// Hitboxes for annotation sub-column interactive areas.
 #[derive(Clone, Debug)]
 pub(super) struct AnnotHitboxes {
+    pub(super) author: Hitbox,
     pub(super) message: Hitbox,
     pub(super) prior_icon: Hitbox,
     pub(super) browse_icon: Hitbox,
@@ -430,8 +472,9 @@ pub(super) fn render_blame_column(
         cx,
     );
 
+    let author_enabled = !blame.author_tip.is_empty();
     if blame.show_text
-        && (message_enabled || prior_enabled || browse_enabled)
+        && (message_enabled || prior_enabled || browse_enabled || author_enabled)
         && let Some(hb) = annot_hitboxes
     {
         install_blame_annotation_mouse_handler(
@@ -456,6 +499,7 @@ pub(super) fn render_blame_column(
             hb,
             blame.summary.clone(),
             blame.body.clone(),
+            blame.author_tip.clone(),
             message_enabled,
             prior_enabled,
             browse_enabled,
@@ -481,6 +525,7 @@ pub(super) fn build_annot_hitboxes(
     );
     let clip = window.content_mask().bounds;
     Some(AnnotHitboxes {
+        author: window.insert_hitbox(layout.author.intersect(&clip), HitboxBehavior::Normal),
         message: window.insert_hitbox(layout.message.intersect(&clip), HitboxBehavior::Normal),
         prior_icon: window
             .insert_hitbox(layout.prior_icon.intersect(&clip), HitboxBehavior::Normal),

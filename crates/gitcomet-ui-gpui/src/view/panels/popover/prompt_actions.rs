@@ -357,9 +357,6 @@ impl PopoverHost {
             PopoverKind::UiScalePicker => self.context_menu_view(PopoverKind::UiScalePicker, cx),
             PopoverKind::PullPicker => self.context_menu_view(PopoverKind::PullPicker, cx),
             PopoverKind::PushPicker => self.context_menu_view(PopoverKind::PushPicker, cx),
-            PopoverKind::CommitOptionsMenu { repo_id } => {
-                self.context_menu_view(PopoverKind::CommitOptionsMenu { repo_id }, cx)
-            }
             PopoverKind::PreviousCommitMessagesMenu { repo_id } => {
                 self.context_menu_view(PopoverKind::PreviousCommitMessagesMenu { repo_id }, cx)
             }

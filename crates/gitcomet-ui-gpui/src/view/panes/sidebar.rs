@@ -2094,6 +2094,17 @@ impl SidebarPaneView {
             .into_any()
     }
 
+    pub(in super::super) fn run_command(
+        &mut self,
+        command_id: &'static str,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let _ = self.root_view.update(cx, |root, cx| {
+            root.execute_command(command_id, Some(window), cx);
+        });
+    }
+
     pub(in super::super) fn open_popover_at(
         &mut self,
         kind: impl Into<PopoverRequest>,

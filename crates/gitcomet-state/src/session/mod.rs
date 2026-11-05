@@ -104,7 +104,6 @@ pub struct UiSession {
     pub history_hidden_ref_presets: Option<BTreeMap<String, bool>>,
     pub history_hidden_ref_prefixes: Option<Vec<String>>,
     pub default_history_mode: Option<HistoryMode>,
-    pub commit_push_after_enabled: Option<bool>,
     pub default_tag_type: Option<DefaultTagType>,
     pub fetch_prune_deleted_remote_branches: Option<bool>,
     pub auto_fetch_enabled: Option<bool>,
@@ -318,8 +317,6 @@ pub(crate) struct UiSessionFile {
     history_hidden_ref_prefixes: Option<Vec<String>>,
     #[serde(default, deserialize_with = "lenient")]
     default_history_mode: Option<HistoryModeSetting>,
-    #[serde(default, deserialize_with = "lenient")]
-    commit_push_after_enabled: Option<bool>,
     #[serde(default, deserialize_with = "lenient")]
     default_tag_type: Option<DefaultTagType>,
     #[serde(default, deserialize_with = "lenient")]
@@ -587,7 +584,6 @@ pub fn load_from_path(path: &Path) -> UiSession {
         history_hidden_ref_presets: file.history_hidden_ref_presets,
         history_hidden_ref_prefixes: file.history_hidden_ref_prefixes,
         default_history_mode: file.default_history_mode.map(Into::into),
-        commit_push_after_enabled: file.commit_push_after_enabled,
         default_tag_type: file.default_tag_type,
         fetch_prune_deleted_remote_branches: file.fetch_prune_deleted_remote_branches,
         auto_fetch_enabled: file.auto_fetch_enabled,

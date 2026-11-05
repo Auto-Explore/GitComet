@@ -277,7 +277,7 @@ impl SegmentedControl {
                 .min_w(px(0.0))
                 .gap(scale.px(LABEL_GAP_PX))
                 .px(scale.px(SEGMENT_PADDING_PX))
-                .rounded(px((theme.radii.row - 2.0).max(2.0)))
+                .rounded(px(theme.radii.control))
                 .border_1()
                 .border_color(if selected {
                     theme.colors.stroke.subtle

@@ -189,8 +189,6 @@ pub(in super::super) struct PopoverHost {
     show_timezone: bool,
     history_relative_dates: bool,
     change_tracking_view: ChangeTrackingView,
-    commit_amend_enabled: bool,
-    commit_push_after_enabled: bool,
     diff_content_mode: DiffContentMode,
     diff_whitespace_mode: DiffWhitespaceMode,
     diff_reveal_whitespace_chars: bool,
@@ -611,7 +609,6 @@ fn popover_is_context_menu(kind: &PopoverKind) -> bool {
             | PopoverKind::AddRepoMenu
             | PopoverKind::PullPicker
             | PopoverKind::PushPicker
-            | PopoverKind::CommitOptionsMenu { .. }
             | PopoverKind::PreviousCommitMessagesMenu { .. }
             | PopoverKind::RepoTabMenu { .. }
             | PopoverKind::WebLinkMenu { .. }
@@ -1058,7 +1055,6 @@ fn popover_anchor_corner(kind: &PopoverKind) -> Anchor {
         | PopoverKind::PullReconcilePrompt { .. }
         | PopoverKind::RebaseOntoConfirm { .. }
         | PopoverKind::RebaseReword { .. }
-        | PopoverKind::CommitOptionsMenu { .. }
         | PopoverKind::PreviousCommitMessagesMenu { .. }
         | PopoverKind::RepoTabMenu { .. }
         | PopoverKind::DiffActionMenu
@@ -1213,7 +1209,6 @@ pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<Popover
         PopoverKind::MergetoolSettingsMenu => Some(MERGETOOL_SETTINGS_MENU_WIDTH),
         PopoverKind::PullPicker
         | PopoverKind::PushPicker
-        | PopoverKind::CommitOptionsMenu { .. }
         | PopoverKind::PreviousCommitMessagesMenu { .. }
         | PopoverKind::TagMenu { .. }
         | PopoverKind::StatusFileMenu { .. }

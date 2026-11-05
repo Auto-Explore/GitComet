@@ -712,6 +712,7 @@ fn blame_line_clone_shares_arc_metadata() {
     let line = BlameLine {
         commit_id: "deadbeef".into(),
         author: "Alice".into(),
+        author_email: Default::default(),
         author_time_unix: Some(1_700_000_000),
         summary: "Initial import".into(),
         body: Some("detailed body".into()),

@@ -75,23 +75,12 @@ pub(in crate::view) fn blame_recency_t(ts: i64, range: (i64, i64)) -> f32 {
     (offset as f32 / span as f32).clamp(0.0, 1.0)
 }
 
-/// Up to two uppercase initials derived from an author string. Handles
-/// `"Jane Doe"`, `"Jane Doe <jane@x>"`, and single-token authors.
-pub(in crate::view) fn author_initials(author: &str) -> String {
+/// The author's name as shown in the blame column: the whole name, without a
+/// trailing `<email>`. Handles `"Jane Doe"`, `"Jane Doe <jane@x>"` and
+/// single-token authors; a blank author reads as `"?"`.
+pub(in crate::view) fn author_display_name(author: &str) -> &str {
     let name = author.split('<').next().unwrap_or(author).trim();
-    let mut initials = String::new();
-    for word in name.split_whitespace() {
-        if let Some(c) = word.chars().next() {
-            initials.extend(c.to_uppercase());
-            if initials.chars().count() >= 2 {
-                break;
-            }
-        }
-    }
-    if initials.is_empty() {
-        initials.push('?');
-    }
-    initials
+    if name.is_empty() { "?" } else { name }
 }
 
 #[cfg(test)]
@@ -103,6 +92,7 @@ mod tests {
         BlameLine {
             commit_id: Arc::from(commit),
             author: Arc::from("Jane Doe"),
+            author_email: Default::default(),
             author_time_unix: ts,
             summary: Arc::from("summary"),
             body: None,
@@ -179,10 +169,13 @@ mod tests {
     }
 
     #[test]
-    fn initials_handle_common_shapes() {
-        assert_eq!(author_initials("Jane Doe"), "JD");
-        assert_eq!(author_initials("Jane Doe <jane@example.com>"), "JD");
-        assert_eq!(author_initials("madonna"), "M");
-        assert_eq!(author_initials("  "), "?");
+    fn author_names_are_shown_whole_without_the_email() {
+        assert_eq!(author_display_name("Jane Doe"), "Jane Doe");
+        assert_eq!(
+            author_display_name("Jane Doe <jane@example.com>"),
+            "Jane Doe"
+        );
+        assert_eq!(author_display_name("madonna"), "madonna");
+        assert_eq!(author_display_name("  "), "?");
     }
 }

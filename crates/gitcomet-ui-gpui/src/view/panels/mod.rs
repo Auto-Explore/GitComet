@@ -463,12 +463,6 @@ pub(in crate::view) enum ContextMenuAction {
     SetUiScale {
         percent: Option<u32>,
     },
-    SetCommitAmendEnabled {
-        enabled: bool,
-    },
-    SetCommitPushAfterEnabled {
-        enabled: bool,
-    },
     UseCommitMessage {
         message: String,
     },
@@ -638,6 +632,10 @@ pub(in crate::view) enum ContextMenuAction {
     ConflictResolverOutputPaste,
     CopyText {
         text: String,
+    },
+    /// Copy a commit id and say so, because the id is usually shown shortened.
+    CopyCommitId {
+        commit_id: CommitId,
     },
     /// Copy a link's destination, and say so.
     ///

@@ -87,8 +87,9 @@ fn cached_commit_form_caret_tracks_wrapped_growth_and_shrink(cx: &mut gpui::Test
         for _ in 0..4 {
             crate::test_support::refresh_and_draw(cx);
         }
-        let mut heights = [px(0.0); 3];
-        let mut two_row_end = 0;
+        // The input starts four rows tall, so growth begins at the fifth row.
+        let mut heights = [px(0.0); 6];
+        let mut five_row_end = 0;
         let message = "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu";
         for (index, word) in message
             .split_whitespace()
@@ -101,27 +102,27 @@ fn cached_commit_form_caret_tracks_wrapped_growth_and_shrink(cx: &mut gpui::Test
             }
             cx.simulate_input(word);
             let rows = draw_and_assert_commit_end_caret(&input, cx);
-            assert!(rows <= 3, "fixture must pass through each row");
+            assert!(rows <= 6, "fixture must pass through each row");
             heights[rows - 1] = scroll.bounds().size.height;
-            if rows == 2 {
-                two_row_end = cx.update(|_, app| input.read(app).text().encode_utf16().count());
+            if rows == 5 {
+                five_row_end = cx.update(|_, app| input.read(app).text().encode_utf16().count());
             }
-            if rows == 3 {
+            if rows == 6 {
                 break;
             }
         }
         assert!(
-            heights[1] > heights[0] && heights[2] > heights[1],
+            heights[3] == heights[0] && heights[4] > heights[3] && heights[5] > heights[4],
             "commit input must grow: {heights:?}"
         );
         cx.update(|window, app| {
             input.update(app, |input, cx| {
                 let end = input.text().encode_utf16().count();
-                input.replace_text_in_range(Some(two_row_end..end), "", window, cx);
+                input.replace_text_in_range(Some(five_row_end..end), "", window, cx);
             })
         });
-        assert_eq!(draw_and_assert_commit_end_caret(&input, cx), 2);
-        assert_eq!(scroll.bounds().size.height, heights[1]);
+        assert_eq!(draw_and_assert_commit_end_caret(&input, cx), 5);
+        assert_eq!(scroll.bounds().size.height, heights[4]);
     }
 }
 
@@ -1305,4 +1306,86 @@ fn background_repo_commit_success_drops_its_draft(cx: &mut gpui::TestAppContext)
     push(cx, two_repo_state(acknowledged, repo_b, repo_a_id));
 
     assert_eq!(commit_box_text_of(cx, &view), "");
+}
+
+/// The amend checkbox in a repo with `main` checked out and `branches` listed.
+fn mount_amend_toggle(
+    cx: &mut gpui::TestAppContext,
+    branches: Vec<gitcomet_core::domain::Branch>,
+) -> (
+    gpui::Entity<crate::view::GitCometView>,
+    &mut gpui::VisualTestContext,
+) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    let repo_id = gitcomet_state::model::RepoId(46);
+    let mut repo = opening_repo_state(repo_id, Path::new("/tmp/repo-amend-toggle"));
+    repo.head_branch = gitcomet_state::model::Loadable::Ready("main".to_string());
+    repo.branches = gitcomet_state::model::Loadable::Ready(Arc::new(branches));
+    repo.status = gitcomet_state::model::Loadable::Ready(
+        gitcomet_core::domain::RepoStatus {
+            staged: Arc::new(Vec::new()),
+            unstaged: Arc::new(Vec::new()),
+        }
+        .into(),
+    );
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+        });
+        let _ = window.draw(app);
+    });
+    (view, cx)
+}
+
+fn amend_enabled(
+    view: &gpui::Entity<crate::view::GitCometView>,
+    cx: &mut gpui::VisualTestContext,
+) -> bool {
+    cx.update(|_window, app| view.read(app).details_pane.read(app).commit_amend_enabled)
+}
+
+#[gpui::test]
+fn amend_checkbox_toggles_amend(cx: &mut gpui::TestAppContext) {
+    let main = gitcomet_core::domain::Branch {
+        name: "main".to_string(),
+        target: gitcomet_core::domain::CommitId("abc123".into()),
+        upstream: None,
+        divergence: None,
+    };
+    let (view, cx) = mount_amend_toggle(cx, vec![main]);
+    let toggle = cx
+        .debug_bounds("commit_amend_toggle")
+        .expect("expected the amend checkbox")
+        .center();
+
+    simulate_counted_click(cx, toggle, 1);
+    cx.run_until_parked();
+    assert!(amend_enabled(&view, cx), "a click switches amend on");
+
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+    simulate_counted_click(cx, toggle, 1);
+    cx.run_until_parked();
+    assert!(!amend_enabled(&view, cx), "a second click switches it off");
+}
+
+#[gpui::test]
+fn amend_checkbox_is_inert_without_a_commit_to_amend(cx: &mut gpui::TestAppContext) {
+    // `main` is checked out but has no commits yet (no such branch exists).
+    let (view, cx) = mount_amend_toggle(cx, Vec::new());
+    let toggle = cx
+        .debug_bounds("commit_amend_toggle")
+        .expect("expected the amend checkbox")
+        .center();
+
+    simulate_counted_click(cx, toggle, 1);
+    cx.run_until_parked();
+    assert!(
+        !amend_enabled(&view, cx),
+        "an unborn branch has nothing to amend"
+    );
 }
