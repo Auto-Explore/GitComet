@@ -486,22 +486,29 @@ impl GixRepo {
     }
 
     /// Open the submodule checked out at `path` as a repository of its own.
-    /// The path must name a directory inside this worktree that has its own
-    /// checkout; the handle is shared with a tab that has it open.
+    /// The path must name a gitlink in this worktree's index whose checkout
+    /// lies inside the worktree; the handle is shared with a tab that has it
+    /// open.
     pub(super) fn open_submodule_impl(
         &self,
         path: &Path,
     ) -> Result<std::sync::Arc<dyn gitcomet_core::services::GitRepository>> {
         use gitcomet_core::services::GitBackend as _;
+        let not_a_submodule = || {
+            Error::new(ErrorKind::Backend(format!(
+                "{} is not a submodule path inside this worktree",
+                path.display()
+            )))
+        };
         let inside = !path.as_os_str().is_empty()
             && path
                 .components()
                 .all(|component| matches!(component, std::path::Component::Normal(_)));
-        if !inside {
-            return Err(Error::new(ErrorKind::Backend(format!(
-                "{} is not a submodule path inside this worktree",
-                path.display()
-            ))));
+        // Only a gitlink in the index makes a first-level submodule: a
+        // repository nested deeper, or one that is merely untracked here, is
+        // none of this worktree's to commit in.
+        if !inside || !self.index_has_gitlink(path)? {
+            return Err(not_a_submodule());
         }
         let workdir = self.spec.workdir.join(path);
         if !workdir.join(".git").exists() {
@@ -510,7 +517,40 @@ impl GixRepo {
                 path.display()
             ))));
         }
+        // Opening resolves symlinks, so a path through a symlinked directory
+        // could open a repository outside the worktree.
+        let canonical = |path: &Path| {
+            std::fs::canonicalize(path).map_err(|error| {
+                Error::new(ErrorKind::Backend(format!(
+                    "resolving {}: {error}",
+                    path.display()
+                )))
+            })
+        };
+        let root = canonical(&self.spec.workdir)?;
+        let target = canonical(&workdir)?;
+        if target == root || !target.starts_with(&root) {
+            return Err(not_a_submodule());
+        }
         crate::GixBackend.open_with_options(&workdir, &self.options)
+    }
+
+    /// Whether the index holds a gitlink (an unconflicted submodule entry) at
+    /// `path`.
+    fn index_has_gitlink(&self, path: &Path) -> Result<bool> {
+        let index = self.repo().index_or_empty().map_err(|error| {
+            Error::new(ErrorKind::Backend(format!("reading the index: {error}")))
+        })?;
+        let key = gix::path::into_bstr(path).map_err(|error| {
+            Error::new(ErrorKind::Backend(format!(
+                "encoding path {}: {error}",
+                path.display()
+            )))
+        })?;
+        let key = gix::path::to_unix_separators_on_windows(key);
+        Ok(index.entry_by_path(key.as_ref()).is_some_and(|entry| {
+            entry.stage_raw() == 0 && entry.mode == gix::index::entry::Mode::COMMIT
+        }))
     }
 
     /// First-level submodule commits that outgoing commits record but that no

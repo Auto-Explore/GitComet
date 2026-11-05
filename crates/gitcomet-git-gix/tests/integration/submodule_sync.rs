@@ -669,6 +669,71 @@ fn a_parent_opens_its_submodule_to_stage_and_commit_inside_it() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn open_submodule_refuses_symlinks_and_non_submodule_repos() {
+    let _guard = setup_submodule_test();
+    let fixture = fixture();
+    // An untracked repository inside the worktree.
+    let scratch = fixture.parent.join("scratch");
+    fs::create_dir_all(&scratch).unwrap();
+    init_repo_with_seed(&scratch, "scratch.txt", "scratch\n", "seed scratch");
+    // A gitlink whose path runs through a symlink to a repository outside
+    // the worktree.
+    let outside = head_of(&fixture.root.join("child"));
+    run_git(
+        &fixture.parent,
+        &[
+            "update-index",
+            "--add",
+            "--cacheinfo",
+            &format!("160000,{outside},link/child"),
+        ],
+    );
+    std::os::unix::fs::symlink(&fixture.root, fixture.parent.join("link")).unwrap();
+    assert!(fixture.parent.join("link/child/.git").exists());
+
+    let parent = fixture.open(&fixture.parent);
+    assert!(
+        parent.open_submodule(Path::new("scratch")).is_err(),
+        "an untracked repository is not a submodule"
+    );
+    assert!(
+        parent
+            .open_submodule(Path::new("mods/child/nested/grand"))
+            .is_err(),
+        "a submodule of a submodule is not this worktree's"
+    );
+    assert!(
+        parent.open_submodule(Path::new("link/child")).is_err(),
+        "a checkout through a symlink lies outside the worktree"
+    );
+    assert!(parent.open_submodule(Path::new("mods/child")).is_ok());
+}
+
+#[test]
+fn a_submodule_opened_from_its_parent_reports_its_own_unpushed_submodule_commits() {
+    let _guard = setup_submodule_test();
+    let fixture = fixture();
+    let parent = fixture.open(&fixture.parent);
+    let child = parent
+        .open_submodule(Path::new("mods/child"))
+        .expect("open the checked-out submodule");
+    assert!(child.unpushed_submodule_pointers().unwrap().is_empty());
+
+    // A commit in the nested submodule that its remote does not have,
+    // recorded in the first-level submodule: pushing that submodule would
+    // publish a pointer nobody can fetch.
+    let local = commit_in(&fixture.grand(), "g.txt", "g\n");
+    child
+        .record_submodule_commit(Path::new("nested/grand"), "Update nested/grand", None)
+        .expect("record in the submodule");
+    let unpushed = child.unpushed_submodule_pointers().unwrap();
+    assert_eq!(unpushed.len(), 1);
+    assert_eq!(unpushed[0].path, PathBuf::from("nested/grand"));
+    assert_eq!(unpushed[0].commit.as_ref(), local.as_str());
+}
+
 #[test]
 fn re_recording_in_a_commit_with_other_files_keeps_them() {
     let _guard = setup_submodule_test();
