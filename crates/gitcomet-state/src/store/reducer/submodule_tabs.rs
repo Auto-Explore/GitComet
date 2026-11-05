@@ -168,9 +168,10 @@ mod tests {
     }
 
     fn state_with(repos: Vec<RepoState>) -> AppState {
-        let mut state = AppState::default();
-        state.repos = repos;
-        state
+        AppState {
+            repos,
+            ..AppState::default()
+        }
     }
 
     fn order(state: &AppState) -> Vec<u64> {
