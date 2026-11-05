@@ -66,6 +66,7 @@ pub(super) fn panel(
     let open_path = parent_workdir
         .zip(prompt.submodules.first())
         .map(|(workdir, path)| workdir.join(path));
+    let repo_id = prompt.repo_id;
     let shelve_paths = prompt.submodules.clone();
     let stash_message = copy.stash_message;
     let actions = div()
@@ -93,7 +94,10 @@ pub(super) fn panel(
                     let root_view = this.root_view.clone();
                     this.close_resolved_popover(cx);
                     let _ = root_view.request(
-                        RootRequest::SubmitCommitPastSubmoduleGuard { shelve: None },
+                        RootRequest::SubmitCommitPastSubmoduleGuard {
+                            repo_id,
+                            shelve: None,
+                        },
                         Some(window),
                         cx,
                     );
@@ -113,6 +117,7 @@ pub(super) fn panel(
                     this.close_resolved_popover(cx);
                     let _ = root_view.request(
                         RootRequest::SubmitCommitPastSubmoduleGuard {
+                            repo_id,
                             shelve: Some(shelve),
                         },
                         Some(window),

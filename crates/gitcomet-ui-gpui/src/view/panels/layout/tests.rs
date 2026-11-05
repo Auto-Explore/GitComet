@@ -891,3 +891,36 @@ fn an_edited_parent_message_stays_with_its_submodule_tab(cx: &mut gpui::TestAppC
         "the edit comes back with its tab"
     );
 }
+
+/// The store records one linked commit at a time and commits the next
+/// submodule alone, so the button must not promise to record it.
+#[gpui::test]
+fn a_running_linked_commit_keeps_the_next_commit_out_of_the_parent(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        crate::view::GitCometView::new(store, events, None, window, cx)
+    });
+    cx.update(|_window, app| {
+        let pane = view.read(app).details_pane.clone();
+        pane.update(app, |pane, _cx| {
+            pane.state = Arc::new(submodule_tabs_state());
+            let label = |pane: &DetailsPaneView| {
+                commit_button_copy(pane.active_parent_record_target().as_ref(), false, false).0
+            };
+            assert_eq!(label(pane).as_ref(), "Commit and record in app");
+
+            Arc::make_mut(&mut pane.state).linked_commit =
+                Some(gitcomet_state::model::LinkedCommit {
+                    child: RepoId(3),
+                    parent: RepoId(1),
+                    path: PathBuf::from("b"),
+                    parent_message: "Update b".into(),
+                    push: true,
+                    stage: gitcomet_state::model::LinkedCommitStage::PushChild,
+                    parent_commit: None,
+                });
+            assert!(pane.active_parent_record_target().is_none());
+            assert_eq!(label(pane).as_ref(), "Commit");
+        });
+    });
+}

@@ -383,8 +383,6 @@ impl DetailsPaneView {
                 if let Some(parent) = state.repos.iter().find(|r| Some(r.id) == link.repo_id) {
                     parent.staged_status_cache_rev().hash(&mut hasher);
                     parent.submodules_rev.hash(&mut hasher);
-                    parent.head_branch_rev.hash(&mut hasher);
-                    parent.commit_in_flight.hash(&mut hasher);
                 }
             }
             state.linked_commit.is_some().hash(&mut hasher);
@@ -1033,11 +1031,28 @@ impl DetailsPaneView {
             }
             let result = pending.advance(next);
             if result == Some(true) {
+                let sent_parent_message = |text: &str| {
+                    pending
+                        .parent_message
+                        .as_ref()
+                        .is_some_and(|sent| text.trim() == sent.as_ref())
+                };
                 if self.state.active_repo == Some(*repo_id) {
-                    let unchanged = self.commit_message_input.read(cx).text().trim()
-                        == pending.message.as_ref();
+                    // The parent message went with the commit, so the next
+                    // one starts from its default again.
+                    let parent_message_sent =
+                        sent_parent_message(self.parent_message_last_text.as_ref());
+                    if parent_message_sent {
+                        self.parent_message_user_edited = false;
+                    }
+                    let commit_text = self.commit_message_input.read(cx).text().to_string();
+                    let unchanged = commit_text.trim() == pending.message.as_ref();
                     if unchanged {
+                        // Clearing the box brings the default back with it.
                         self.set_commit_message_programmatically(String::new(), cx);
+                        changed = true;
+                    } else if parent_message_sent {
+                        self.sync_parent_message(&commit_text, cx);
                         changed = true;
                     }
                     if pending.amend && self.commit_amend_enabled {
@@ -1045,12 +1060,21 @@ impl DetailsPaneView {
                         self.sync_commit_amend_enabled_to_root(false, cx);
                         changed = true;
                     }
-                } else if self
-                    .commit_message_drafts
-                    .get(repo_id)
-                    .is_some_and(|draft| draft.trim() == pending.message.as_ref())
-                {
-                    self.commit_message_drafts.remove(repo_id);
+                } else {
+                    if self
+                        .commit_message_drafts
+                        .get(repo_id)
+                        .is_some_and(|draft| draft.trim() == pending.message.as_ref())
+                    {
+                        self.commit_message_drafts.remove(repo_id);
+                    }
+                    if self
+                        .parent_message_drafts
+                        .get(repo_id)
+                        .is_some_and(|draft| sent_parent_message(draft.as_ref()))
+                    {
+                        self.parent_message_drafts.remove(repo_id);
+                    }
                 }
             }
             !(result.is_some() && pending.settled())
