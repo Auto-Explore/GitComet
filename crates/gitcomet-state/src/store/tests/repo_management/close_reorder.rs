@@ -660,15 +660,27 @@ fn reorder_repo_tabs_persists_only_an_order_regrouping_keeps() {
             Msg::OpenRepo(PathBuf::from(path)),
         );
     }
+    // Opening normalizes the paths (on Windows they gain a drive), so link
+    // through the workdirs the tabs actually hold.
+    let workdir = |state: &AppState, id: RepoId| {
+        state
+            .repos
+            .iter()
+            .find(|repo| repo.id == id)
+            .map(|repo| repo.spec.workdir.clone())
+            .unwrap()
+    };
+    let parent_workdir = workdir(&state, RepoId(1));
+    let submodule_workdir = workdir(&state, RepoId(3));
     reduce(
         &mut repos,
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::SubmoduleParentResolved {
             repo_id: RepoId(3),
-            canonical_workdir: PathBuf::from("/tmp/app/vendor/lib"),
+            canonical_workdir: submodule_workdir,
             parent: Some(gitcomet_core::domain::SubmoduleParent {
-                workdir: PathBuf::from("/tmp/app"),
+                workdir: parent_workdir,
                 path: PathBuf::from("vendor/lib"),
                 nested: false,
             }),
