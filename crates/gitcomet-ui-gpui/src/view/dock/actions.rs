@@ -793,6 +793,24 @@ mod tests {
         });
     }
 
+    /// The status bar's sidebar and details toggles collapse a dock directly,
+    /// outside the layout commands; hiding the maximized dock there ends the
+    /// maximize too.
+    #[gpui::test]
+    fn collapsing_the_maximized_dock_from_its_toggle_ends_maximize(cx: &mut gpui::TestAppContext) {
+        let (view, cx) = dock_view(cx);
+        cx.update(|window, app| {
+            view.update(app, |this, cx| {
+                this.run_dock_command(DockCommand::Maximize, Some(window), cx);
+                assert_eq!(this.dock_zoomed, Some(DockSide::Left));
+                this.set_details_collapsed(true, cx);
+                assert_eq!(this.dock_zoomed, Some(DockSide::Left), "another dock");
+                this.set_sidebar_collapsed(true, cx);
+                assert_eq!(this.dock_zoomed, None);
+            });
+        });
+    }
+
     #[gpui::test]
     fn saved_layout_shortcuts_follow_their_slot(cx: &mut gpui::TestAppContext) {
         let (view, cx) = dock_view(cx);

@@ -1751,6 +1751,7 @@ impl GitCometView {
         // The left dock's hidden flag is this collapse; keep them one.
         self.dock_layout
             .set_dock_hidden(super::dock::DockSide::Left, collapsed);
+        self.end_maximize_when_hiding(super::dock::DockSide::Left, collapsed, cx);
         if self.sidebar_collapsed == collapsed {
             return;
         }
@@ -1883,9 +1884,24 @@ impl GitCometView {
         }
     }
 
+    /// The status bar's toggles hide a dock without a layout command; hiding
+    /// the maximized one still ends the maximize, as the commands do.
+    fn end_maximize_when_hiding(
+        &mut self,
+        side: super::dock::DockSide,
+        hidden: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if hidden && self.dock_zoomed == Some(side) {
+            self.dock_zoomed = None;
+            cx.notify();
+        }
+    }
+
     pub(super) fn set_details_collapsed(&mut self, collapsed: bool, cx: &mut gpui::Context<Self>) {
         self.dock_layout
             .set_dock_hidden(super::dock::DockSide::Right, collapsed);
+        self.end_maximize_when_hiding(super::dock::DockSide::Right, collapsed, cx);
         if self.details_collapsed == collapsed {
             return;
         }
