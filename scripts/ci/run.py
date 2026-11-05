@@ -57,6 +57,7 @@ CONTEXTS = {
     "backend": ["-p", "gitcomet-git-gix"],
     # The executable's integration tests and the launch library's unit tests.
     "app": ["-p", "gitcomet", "-p", "gitcomet-app", "--no-default-features", "--features", "gix"],
+    "app-gui": ["-p", "gitcomet", "-p", "gitcomet-app"],
     "ui": ["-p", UI],
     "example": [arg for package in EXAMPLE_PACKAGES for arg in ("-p", package)],
 }

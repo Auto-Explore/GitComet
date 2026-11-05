@@ -5,6 +5,12 @@
 //! mode: the repository browser, the focused difftool or mergetool, or Git
 //! tool setup. The executable keeps only its allocator, platform resources,
 //! and `main`.
+//!
+//! [`AppLaunch::run_cli`] is the executable entry: before any GUI work a
+//! browser launch forwards to a running instance, and from a terminal it
+//! starts a detached copy of itself and waits for its first window.
+//! [`AppLaunch::run`] and [`AppLaunch::run_with_args`] are library entries
+//! that never detach.
 
 #[cfg(feature = "ui-gpui-runtime")]
 mod browser_instance;
@@ -21,6 +27,10 @@ mod launch;
 ))]
 mod linux_wayland_fallback;
 mod mergetool_mode;
+#[cfg(all(unix, feature = "ui-gpui-runtime"))]
+mod process_launch;
+#[cfg(feature = "ui-gpui-runtime")]
+mod process_liveness;
 mod setup_mode;
 
 pub use cli::{AppMode, CliOutcome, exit_code};
@@ -36,6 +46,13 @@ use std::ffi::OsString;
 use std::io::Write;
 
 type PrepareHook = Box<dyn FnOnce(&AppMode) -> Result<(), String>>;
+type ReadyCallback = Box<dyn FnOnce() -> Result<(), String>>;
+
+#[derive(Clone, Copy)]
+enum LaunchEntry {
+    Library,
+    Cli,
+}
 
 /// The compiled-in extensions, in registration order.
 #[cfg(feature = "ui-gpui-runtime")]
@@ -138,6 +155,17 @@ impl AppLaunch {
 
     /// Runs with `args` (including the program name) and returns the exit code.
     pub fn run_with_args(self, args: Vec<OsString>) -> i32 {
+        self.run_args(args, LaunchEntry::Library)
+    }
+
+    /// Runs as the product executable with the process arguments: forwards
+    /// to a running browser, detaches from an interactive terminal unless
+    /// `--foreground`/`GITCOMET_FOREGROUND=1`, then runs like [`Self::run`].
+    pub fn run_cli(self) -> i32 {
+        self.run_args(std::env::args_os().collect(), LaunchEntry::Cli)
+    }
+
+    fn run_args(self, args: Vec<OsString>, entry: LaunchEntry) -> i32 {
         gitcomet_core::startup_trace::mark("app_entry");
         let Self {
             identity,
@@ -153,18 +181,98 @@ impl AppLaunch {
             return exit_code::ERROR;
         }
 
+        let parsed = {
+            let _stage = gitcomet_core::startup_trace::span("parse_cli");
+            cli::parse_launch(args.clone(), &about)
+        };
+        let mut on_ready: Option<ReadyCallback> = None;
+        let mut bundle_relaunch = launch::BundleRelaunch::Spawn;
+        let mut browser_probed = false;
+        let parsed = match parsed {
+            Ok(parsed) => {
+                let is_cli_browser = matches!(entry, LaunchEntry::Cli)
+                    && matches!(parsed.outcome, CliOutcome::Run(AppMode::Browser { .. }));
+                if parsed.startup_socket.is_some()
+                    && (!is_cli_browser || !cfg!(all(unix, feature = "ui-gpui-runtime")))
+                {
+                    eprintln!(
+                        "A startup acknowledgement is only valid for a Unix browser CLI launch."
+                    );
+                    return exit_code::ERROR;
+                }
+                let foreground = if is_cli_browser {
+                    match cli::foreground_requested(
+                        parsed.foreground,
+                        std::env::var_os("GITCOMET_FOREGROUND"),
+                    ) {
+                        Ok(foreground) => foreground,
+                        Err(message) => {
+                            eprintln!("{message}");
+                            return exit_code::ERROR;
+                        }
+                    }
+                } else {
+                    true
+                };
+                #[cfg(all(unix, feature = "ui-gpui-runtime"))]
+                if let Some(endpoint) = parsed.startup_socket {
+                    on_ready = Some(Box::new(move || process_launch::notify_ready(&endpoint)));
+                }
+                #[cfg(feature = "ui-gpui-runtime")]
+                if is_cli_browser
+                    && let CliOutcome::Run(AppMode::Browser { path }) = &parsed.outcome
+                {
+                    match browser_instance::forward_if_running(|| {
+                        launch::browser_request(path.clone())
+                    }) {
+                        Ok(true) => return launch::finish_browser_forward(on_ready.take()),
+                        Ok(false) => {}
+                        Err(error) => {
+                            eprintln!("Could not forward the browser request: {error}");
+                            return exit_code::ERROR;
+                        }
+                    }
+                }
+                #[cfg(all(unix, feature = "ui-gpui-runtime"))]
+                if is_cli_browser && on_ready.is_none() && !foreground {
+                    use std::io::IsTerminal as _;
+                    if std::io::stdin().is_terminal() {
+                        match process_launch::launch(&args) {
+                            Ok(code) => return code,
+                            Err(process_launch::LaunchError::Setup(error)) => eprintln!(
+                                "Could not detach from the terminal ({error}); \
+                                 running in the foreground."
+                            ),
+                            Err(process_launch::LaunchError::Startup(error)) => {
+                                eprintln!("Failed to start the browser: {error}");
+                                return exit_code::ERROR;
+                            }
+                        }
+                    }
+                }
+                bundle_relaunch =
+                    launch::bundle_relaunch(is_cli_browser, on_ready.is_some(), foreground);
+                // A CLI browser launch that got here found no browser above.
+                browser_probed = is_cli_browser;
+                Ok(parsed.outcome)
+            }
+            Err(message) => Err(message),
+        };
         #[cfg(feature = "ui-gpui-runtime")]
-        {
+        if let Ok(CliOutcome::Run(_)) = &parsed {
             let _stage = gitcomet_core::startup_trace::span("crashlog_install");
             crashlog::install();
         }
-
-        let parsed = {
-            let _stage = gitcomet_core::startup_trace::span("parse_cli");
-            cli::parse_cli(args, &about)
-        };
         dispatch(parsed, on_prepare, move |mode| {
-            launch::run_mode(mode, extensions, repository_options, backend)
+            launch::run_mode(
+                mode,
+                extensions,
+                repository_options,
+                backend,
+                on_ready.take(),
+                bundle_relaunch,
+                browser_probed,
+            )
         })
     }
 }
@@ -209,7 +317,7 @@ impl App {
         Self(self.0.extension(extension))
     }
     pub fn run(self) -> ! {
-        std::process::exit(self.0.run())
+        std::process::exit(self.0.run_cli())
     }
 }
 

@@ -41,6 +41,9 @@ rustix = { workspace = true }
 [dev-dependencies]
 gitcomet-core = { workspace = true, features = ["test-support"] }
 
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+rustix = { workspace = true, features = ["pty"] }
+
 [target.'cfg(target_os = "windows")'.build-dependencies]
 embed-resource = { workspace = true }
 

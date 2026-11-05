@@ -224,6 +224,22 @@ Built-in `uninstall` restores those backups only when the key still has the setu
 
 #### CLI modes
 
+**Browser (default):**
+
+```bash
+gitcomet [path] [--foreground]
+```
+
+On Unix, when standard input is a terminal, the browser relaunches itself in a separate session. The command returns success once its first native window opens (including a first-run dialog), or an existing browser accepts the request. Startup diagnostics remain visible. Failure before that acknowledgement returns exit code 2; startup times out after 60 seconds and stops the launched process group. If the detached copy cannot be started at all (for example, no writable socket directory), the browser runs in the foreground instead. The command does not wait for repository loading, onboarding completion, or eventual window closure.
+
+Pass `--foreground` (or set `GITCOMET_FOREGROUND=1`) to keep a newly started browser attached for continuous diagnostics or to wait for completion in a script. A script launched from a terminal can inherit terminal input and detach too; use `gitcomet --foreground "$repo"` to wait for a browser that the script starts. Requests forwarded to an existing browser still return after it accepts the request. Finder, `open`, and launches without terminal input do not use automatic terminal detachment. Focused difftool and mergetool modes continue to wait and report their final exit status.
+
+`GITCOMET_FOREGROUND` accepts `1`/`true` and `0`/`false` (case-insensitive). An empty or unset value uses automatic detachment. Other values are errors; `--foreground` overrides the environment.
+
+Products built on the library opt into terminal detachment with `AppLaunch::run_cli()` or `App::run()`. Existing `AppLaunch::run()` and `run_with_args()` calls do not automatically detach. Use `run_cli()` at a process entry point whose configuration can be recreated when its executable restarts.
+
+CLI requests to an existing browser are forwarded before preparation hooks or extension registration. A new browser performs that preparation once in its own process. Startup diagnostics use the caller's standard error; a helper started before readiness can retain that stream after the launcher returns.
+
 **Difftool:**
 
 ```bash

@@ -19,6 +19,8 @@ ui-gpui-runtime = [
     "dep:gitcomet-ui-gpui",
     "dep:gitcomet-win32-window-utils",
     "dep:sysinfo",
+    "dep:process-wrap",
+    "dep:rustix",
 ]
 ui-gpui = ["ui-gpui-runtime"]
 gix = ["dep:gitcomet-git-gix"]
@@ -44,6 +46,8 @@ wayland-client = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]
 signal-hook = { workspace = true }
+process-wrap = { workspace = true, features = ["process-session"], optional = true }
+rustix = { workspace = true, features = ["stdio"], optional = true }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 gitcomet-win32-window-utils = { workspace = true, optional = true }
