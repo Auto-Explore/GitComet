@@ -179,7 +179,7 @@ pub enum Shortcut {
     },
     /// A binding that is only registered on macOS.
     MacOs(&'static str),
-    /// An extension's binding in GPUI keystroke syntax, like `secondary-shift-k`.
+    /// A binding in GPUI keystroke syntax, like `secondary-shift-k`.
     Keystrokes(&'static str),
 }
 

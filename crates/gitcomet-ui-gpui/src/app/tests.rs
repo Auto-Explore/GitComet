@@ -1932,6 +1932,11 @@ impl Render for KeyBindingProbe {
             .on_action(record_action_listener!(crate::view::ToggleRevealCommit))
             .on_action(record_action_listener!(crate::view::LocateFileInExplorer))
             .on_action(record_action_listener!(crate::view::OpenRemoteInBrowser))
+            .on_action(cx.listener(
+                |this, action: &crate::view::command_shortcuts::RunBuiltinCommand, _, _| {
+                    this.record_action(&format!("command:{}", action.id));
+                },
+            ))
             .on_action(record_action_listener!(NewWindow))
             .on_action(record_action_listener!(OpenSettings))
             .on_action(record_action_listener!(OpenInCodeEditor))
@@ -1968,6 +1973,80 @@ impl Render for KeyBindingProbe {
             Some(outer) => gpui::ParentElement::child(div().size_full().key_context(outer), root),
             None => root,
         }
+    }
+}
+
+#[gpui::test]
+fn repository_command_shortcuts_resolve_from_views_and_text_inputs(cx: &mut gpui::TestAppContext) {
+    let cases = [
+        ("secondary-alt-enter", "commit"),
+        ("secondary-alt-s", "stage-all"),
+        ("secondary-alt-u", "unstage-all"),
+        ("secondary-alt-b", "create-branch"),
+        ("secondary-shift-b", "checkout-branch"),
+        ("secondary-alt-down", "pull"),
+        ("secondary-alt-up", "push"),
+        ("secondary-shift-s", "stash"),
+        ("secondary-r", "reload-repository"),
+        ("f5", "reload-repository"),
+        ("secondary-shift-f", "fetch-all"),
+        ("secondary-alt-t", "open-external-terminal"),
+        ("secondary-b", "toggle-sidebar"),
+        ("secondary-shift-d", "toggle-details"),
+        ("secondary-j", "toggle-terminal"),
+    ];
+    for context in [None, Some("TextInput")] {
+        let observed = Arc::new(Mutex::new(Vec::new()));
+        let (view, cx) =
+            cx.add_window_view(|_, cx| KeyBindingProbe::new(context, Arc::clone(&observed), cx));
+        cx.update(|window, app| {
+            app.clear_key_bindings();
+            bind_app_keys(app);
+            bind_text_input_keys(app);
+            window.focus(&view.read(app).focus_handle(), app);
+            let _ = window.draw(app);
+        });
+        for (chord, id) in cases {
+            observed.lock().unwrap().clear();
+            cx.simulate_keystrokes(chord);
+            assert_eq!(
+                *observed.lock().unwrap(),
+                vec![format!("command:{id}")],
+                "{chord} in {context:?} must dispatch exactly once"
+            );
+        }
+        observed.lock().unwrap().clear();
+        cx.simulate_keystrokes("secondary-shift-p");
+        assert_eq!(
+            *observed.lock().unwrap(),
+            vec![crate::view::ToggleCommandPalette.name().to_owned()]
+        );
+    }
+}
+
+#[gpui::test]
+fn repository_command_shortcuts_leave_terminal_and_nested_prompt_inputs_alone(
+    cx: &mut gpui::TestAppContext,
+) {
+    for outer in ["Terminal", "PopoverPrompt", "ContextMenu"] {
+        let observed = Arc::new(Mutex::new(Vec::new()));
+        let (view, cx) = cx.add_window_view(|_, cx| {
+            KeyBindingProbe::nested(outer, "TextInput", Arc::clone(&observed), cx)
+        });
+        cx.update(|window, app| {
+            app.clear_key_bindings();
+            bind_app_keys(app);
+            window.focus(&view.read(app).focus_handle(), app);
+            let _ = window.draw(app);
+        });
+        cx.simulate_keystrokes(
+            "secondary-r f5 secondary-b secondary-alt-enter secondary-alt-s secondary-alt-up",
+        );
+        assert_eq!(
+            *observed.lock().unwrap(),
+            Vec::<String>::new(),
+            "context {outer}"
+        );
     }
 }
 

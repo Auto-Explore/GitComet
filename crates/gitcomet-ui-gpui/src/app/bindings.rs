@@ -7,6 +7,25 @@ pub(super) fn install_app_actions(cx: &mut App, backend: Arc<dyn GitBackend>) {
     install_global_diff_shortcut_fallback(cx);
     install_global_diff_navigation_actions(cx);
 
+    cx.on_action(
+        |action: &crate::view::command_shortcuts::RunBuiltinCommand, cx| {
+            let window_id = cx
+                .current_window_id()
+                .or_else(|| cx.active_window().map(|window| window.window_id()));
+            let Some(entry) = window_id.and_then(|id| normal_gitcomet_window_by_id(cx, id)) else {
+                return;
+            };
+            let id = action.id.clone();
+            cx.defer(move |cx| {
+                let _ = entry.handle.update(cx, |_, window, cx| {
+                    let _ = entry
+                        .view
+                        .update(cx, |view, cx| view.run_builtin_shortcut(&id, window, cx));
+                });
+            });
+        },
+    );
+
     let new_window_backend = Arc::clone(&backend);
     cx.on_action(move |_: &NewWindow, cx| {
         let backend = Arc::clone(&new_window_backend);
@@ -267,6 +286,7 @@ pub(super) fn bind_app_keys(cx: &mut App) {
         KeyBinding::new("secondary-shift-r", OpenWorkspace, None),
         KeyBinding::new("secondary-f", OpenActiveViewSearch, None),
         KeyBinding::new("secondary-p", ToggleCommandPalette, None),
+        KeyBinding::new("secondary-shift-p", ToggleCommandPalette, None),
         KeyBinding::new("secondary-g", crate::view::ToggleRevealCommit, None),
         KeyBinding::new("secondary-shift-l", LocateFileInExplorer, None),
         KeyBinding::new("secondary-k", OpenRemoteInBrowser, None),
@@ -312,6 +332,7 @@ pub(super) fn bind_app_keys(cx: &mut App) {
         #[cfg(target_os = "macos")]
         KeyBinding::new("alt-cmd-h", HideOthers, None),
     ]);
+    crate::view::command_shortcuts::bind_keys(cx);
     refresh_external_editor_key_binding(cx);
 }
 

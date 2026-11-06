@@ -4,6 +4,7 @@ This file documents the keyboard shortcuts currently wired in the GPUI applicati
 
 Source of truth:
 - `crates/gitcomet-ui-gpui/src/app/bindings.rs`
+- `crates/gitcomet-ui-gpui/src/view/command_shortcuts.rs`
 - `crates/gitcomet-ui-gpui/src/view/gitcomet_view_render.rs`
 - `crates/gitcomet-ui-gpui/src/view/terminal_panel.rs`
 - `crates/gitcomet-ui-gpui/src/view/panels/main/diff_view.rs`
@@ -24,6 +25,7 @@ These shortcuts apply in the normal GitComet window.
 | --- | --- | --- | --- |
 | Open a new window | `Cmd-N`, `Cmd-Shift-N` | `Ctrl-N`, `Ctrl-Shift-N` | |
 | Open Settings | `Cmd-,` | `Ctrl-,` | |
+| Open the command palette | `Cmd-P`, `Cmd-Shift-P` | `Ctrl-P`, `Ctrl-Shift-P` | Search for an action; its shortcut is shown beside it. |
 | Open a repository | `Cmd-O` | `Ctrl-O` | |
 | Open a workspace | `Cmd-Shift-R` | `Ctrl-Shift-R` | Lists saved workspaces. In an empty window the chosen workspace opens there; otherwise its own window is focused or opened. Also in the command palette and the app menu. |
 | Go to a commit | `Cmd-G` | `Ctrl-G` | Opens the Go to dialog. Accepts a full or short SHA (4+ characters, unique), a branch, a tag, or any revision such as `HEAD~3`; matches are exact. In an embedded terminal the shell keeps `Ctrl-G`. |
@@ -42,6 +44,31 @@ macOS-only window-management shortcuts:
 - `Cmd-M`: Minimize the active window.
 - `Cmd-H`: Hide GitComet.
 - `Option-Cmd-H`: Hide other applications.
+
+## Repository and layout shortcuts
+
+These shortcuts apply in a normal repository window, including from text inputs.
+They are inactive while a menu, dialog, command palette, or Go to dialog is open.
+A focused embedded terminal keeps these keys for its shell or TUI; focus another
+part of the window to use them. Repository availability checks and confirmations
+are the same as when running the corresponding command from the palette.
+
+| Action | macOS | Windows / Linux | Notes |
+| --- | --- | --- | --- |
+| Reload repository | `Cmd-R`, `F5` | `Ctrl-R`, `F5` | |
+| Fetch all remotes | `Cmd-Shift-F` | `Ctrl-Shift-F` | |
+| Pull | `Cmd-Option-Down` | `Ctrl-Alt-Down` | Uses the configured upstream. |
+| Push | `Cmd-Option-Up` | `Ctrl-Alt-Up` | Opens upstream setup when required. |
+| Open commit dialog | `Cmd-Option-Enter` | `Ctrl-Alt-Enter` | Review and submit in the dialog; `Cmd-Enter` / `Ctrl-Enter` still submits from the commit message input. |
+| Stage all changes | `Cmd-Option-S` | `Ctrl-Alt-S` | Unresolved conflict markers still require confirmation. |
+| Unstage all changes | `Cmd-Option-U` | `Ctrl-Alt-U` | |
+| Create branch | `Cmd-Option-B` | `Ctrl-Alt-B` | Opens the branch creation dialog. |
+| Checkout branch | `Cmd-Shift-B` | `Ctrl-Shift-B` | Opens the branch picker. |
+| Stash changes | `Cmd-Shift-S` | `Ctrl-Shift-S` | Opens the stash dialog. |
+| Toggle sidebar | `Cmd-B` | `Ctrl-B` | |
+| Toggle details pane | `Cmd-Shift-D` | `Ctrl-Shift-D` | |
+| Toggle embedded terminal | `Cmd-J` | `Ctrl-J` | Closing an active session keeps the existing confirmation. |
+| Open external terminal | `Cmd-Option-T` | `Ctrl-Alt-T` | |
 
 ## Image preview shortcuts
 

@@ -194,7 +194,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
     CommandEntry {
         id: Command::Commit.id(),
         label: "Commit Changes",
-        shortcut: Shortcut::None,
+        shortcut: Shortcut::Keystrokes("secondary-alt-enter"),
         category: "Commit",
         keywords: "",
         requires_repo: true,
@@ -203,7 +203,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
     CommandEntry {
         id: Command::StageAll.id(),
         label: "Stage All Changes",
-        shortcut: Shortcut::None,
+        shortcut: Shortcut::Keystrokes("secondary-alt-s"),
         category: "Working Copy",
         keywords: "",
         requires_repo: true,
@@ -212,7 +212,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
     CommandEntry {
         id: Command::UnstageAll.id(),
         label: "Unstage All Changes",
-        shortcut: Shortcut::None,
+        shortcut: Shortcut::Keystrokes("secondary-alt-u"),
         category: "Working Copy",
         keywords: "",
         requires_repo: true,
@@ -221,7 +221,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
     CommandEntry {
         id: Command::CreateBranch.id(),
         label: "Create Branch",
-        shortcut: Shortcut::None,
+        shortcut: Shortcut::Keystrokes("secondary-alt-b"),
         category: "Branch",
         keywords: "",
         requires_repo: true,
@@ -230,7 +230,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
     CommandEntry {
         id: Command::CheckoutBranch.id(),
         label: "Checkout Branch",
-        shortcut: Shortcut::None,
+        shortcut: Shortcut::Keystrokes("secondary-shift-b"),
         category: "Branch",
         keywords: "",
         requires_repo: true,
@@ -302,7 +302,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
     CommandEntry {
         id: Command::Pull.id(),
         label: "Pull",
-        shortcut: Shortcut::None,
+        shortcut: Shortcut::Keystrokes("secondary-alt-down"),
         category: "Sync",
         keywords: "",
         requires_repo: true,
@@ -311,7 +311,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
     CommandEntry {
         id: Command::Push.id(),
         label: "Push",
-        shortcut: Shortcut::None,
+        shortcut: Shortcut::Keystrokes("secondary-alt-up"),
         category: "Sync",
         keywords: "",
         requires_repo: true,
@@ -347,7 +347,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
     CommandEntry {
         id: Command::Stash.id(),
         label: "Stash Changes",
-        shortcut: Shortcut::None,
+        shortcut: Shortcut::Keystrokes("secondary-shift-s"),
         category: "Stash",
         keywords: "",
         requires_repo: true,
@@ -431,7 +431,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
     CommandEntry {
         id: Command::ReloadRepository.id(),
         label: "Reload Repository",
-        shortcut: Shortcut::None,
+        shortcut: Shortcut::Keystrokes("secondary-r"),
         category: "Repository",
         keywords: "",
         requires_repo: true,
@@ -449,7 +449,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
     CommandEntry {
         id: Command::FetchAll.id(),
         label: "Fetch All",
-        shortcut: Shortcut::None,
+        shortcut: Shortcut::Keystrokes("secondary-shift-f"),
         category: "Repository",
         keywords: "",
         requires_repo: true,
@@ -476,7 +476,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
     CommandEntry {
         id: Command::OpenExternalTerminal.id(),
         label: "Open in External Terminal",
-        shortcut: Shortcut::None,
+        shortcut: Shortcut::Keystrokes("secondary-alt-t"),
         category: "Repository",
         keywords: "terminal shell console external",
         requires_repo: true,
@@ -485,7 +485,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
     CommandEntry {
         id: Command::ToggleSidebar.id(),
         label: "Toggle Sidebar",
-        shortcut: Shortcut::None,
+        shortcut: Shortcut::Keystrokes("secondary-b"),
         category: "View",
         keywords: "",
         requires_repo: true,
@@ -494,7 +494,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
     CommandEntry {
         id: Command::ToggleDetails.id(),
         label: "Toggle Details Pane",
-        shortcut: Shortcut::None,
+        shortcut: Shortcut::Keystrokes("secondary-shift-d"),
         category: "View",
         keywords: "",
         requires_repo: true,
@@ -539,7 +539,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
     CommandEntry {
         id: Command::ToggleTerminal.id(),
         label: "Toggle Terminal",
-        shortcut: Shortcut::None,
+        shortcut: Shortcut::Keystrokes("secondary-j"),
         category: "View",
         keywords: "terminal shell console show hide panel",
         requires_repo: true,

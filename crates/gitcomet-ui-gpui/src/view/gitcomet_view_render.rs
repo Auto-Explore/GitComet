@@ -584,6 +584,12 @@ impl Render for GitCometView {
                 }
             }))
             .on_action(cx.listener(
+                |this, action: &super::command_shortcuts::RunBuiltinCommand, window, cx| {
+                    this.run_builtin_shortcut(&action.id, window, cx);
+                    cx.stop_propagation();
+                },
+            ))
+            .on_action(cx.listener(
                 |this, action: &super::extension_host::RunExtensionCommand, _window, cx| {
                     this.run_extension_command(&action.id, cx);
                     cx.stop_propagation();

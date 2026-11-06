@@ -525,6 +525,97 @@ fn command_palette_opens_commit_prompt_for_clean_repo(cx: &mut gpui::TestAppCont
 }
 
 #[gpui::test]
+fn repository_shortcuts_toggle_layout_once_from_focused_and_detached_views(
+    cx: &mut gpui::TestAppContext,
+) {
+    let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
+    let (store, events) = AppStore::new_test(Arc::clone(&backend));
+    let store_for_view = store.clone();
+    let (view, cx) = cx
+        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+    install_app_shortcuts_for_test(cx, backend);
+    store.replace_snapshot_for_test(Arc::new(view_state_with_active_ready_repo(RepoId(1))));
+    sync_view_snapshot(cx, &view);
+
+    for detached in [false, true] {
+        cx.update(|window, app| {
+            let root = view.read(app);
+            let focus = root.diff_renderer.read(app).diff_panel_focus_handle.clone();
+            window.focus(&focus, app);
+            let _ = window.draw(app);
+        });
+        if detached {
+            focus_detached_window_focus(cx);
+        }
+        let before = cx.update(|_, app| view.read(app).sidebar_collapsed);
+        cx.simulate_keystrokes("secondary-b");
+        test_support::redraw(cx);
+        cx.update(|_, app| assert_eq!(view.read(app).sidebar_collapsed, !before));
+
+        let before = cx.update(|_, app| view.read(app).details_collapsed);
+        cx.simulate_keystrokes("secondary-shift-d");
+        test_support::redraw(cx);
+        cx.update(|_, app| assert_eq!(view.read(app).details_collapsed, !before));
+    }
+}
+
+#[gpui::test]
+fn repository_shortcuts_open_commit_dialog_and_do_not_replace_it(cx: &mut gpui::TestAppContext) {
+    let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
+    let (store, events) = AppStore::new_test(Arc::clone(&backend));
+    let store_for_view = store.clone();
+    let (view, cx) = cx
+        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+    install_app_shortcuts_for_test(cx, backend);
+    cx.update(|_, app| crate::app::bind_text_input_keys_for_test(app));
+    store.replace_snapshot_for_test(Arc::new(view_state_with_active_ready_repo(RepoId(1))));
+    sync_view_snapshot(cx, &view);
+    focus_detached_window_focus(cx);
+
+    cx.simulate_keystrokes("secondary-alt-enter");
+    test_support::redraw(cx);
+    let sidebar_before = cx.update(|_, app| view.read(app).sidebar_collapsed);
+    cx.simulate_keystrokes("secondary-alt-b secondary-b");
+    test_support::redraw(cx);
+    cx.update(|_, app| {
+        assert!(matches!(
+            test_support::popover_kind(view.read(app), app),
+            Some(PopoverKind::CommitPrompt { repo_id: RepoId(1) })
+        ));
+        assert_eq!(view.read(app).sidebar_collapsed, sidebar_before);
+    });
+    assert!(cx.debug_bounds("modal_scrim").is_some());
+}
+
+#[gpui::test]
+fn repository_shortcuts_are_inactive_on_home_and_behind_the_palette(cx: &mut gpui::TestAppContext) {
+    let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
+    let (store, events) = AppStore::new_test(Arc::clone(&backend));
+    let store_for_view = store.clone();
+    let (view, cx) = cx
+        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+    install_app_shortcuts_for_test(cx, backend);
+    focus_detached_window_focus(cx);
+    cx.simulate_keystrokes("secondary-alt-b secondary-alt-enter");
+    test_support::redraw(cx);
+    cx.update(|_, app| assert!(test_support::popover_kind(view.read(app), app).is_none()));
+
+    store.replace_snapshot_for_test(Arc::new(view_state_with_active_ready_repo(RepoId(1))));
+    sync_view_snapshot(cx, &view);
+    cx.simulate_keystrokes("secondary-shift-p");
+    test_support::redraw(cx);
+    assert!(command_palette_is_open(cx, &view));
+    let before = cx.update(|_, app| view.read(app).sidebar_collapsed);
+    cx.simulate_keystrokes("secondary-b secondary-alt-enter");
+    test_support::redraw(cx);
+    cx.update(|_, app| {
+        assert_eq!(view.read(app).sidebar_collapsed, before);
+        assert!(test_support::popover_kind(view.read(app), app).is_none());
+    });
+    assert!(command_palette_is_open(cx, &view));
+}
+
+#[gpui::test]
 fn command_palette_rename_branch_opens_prompt_for_current_branch(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_view = store.clone();
