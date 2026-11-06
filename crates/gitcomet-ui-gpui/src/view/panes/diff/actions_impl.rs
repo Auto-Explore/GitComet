@@ -34,8 +34,10 @@ impl DiffRenderer {
         if !self.store.policy.select_lines {
             return;
         }
-        // A mouse selection replaces the block navigation outlined.
+        // A mouse selection replaces the block navigation outlined, and the
+        // lines the last right-click menu acted on.
         self.diff_focused_change_block = None;
+        self.diff_editor_menu_click = None;
         if self.select_hosted_row(clicked_visible_ix, shift) {
             return;
         }

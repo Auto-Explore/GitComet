@@ -220,6 +220,37 @@ fn structural_line_keys_follow_the_last_right_click(cx: &mut gpui::TestAppContex
                     (BTreeSet::new(), BTreeSet::from([5])),
                     "the clicked line, not the text"
                 );
+                // A row click retires the click, even one selecting the same row.
+                pane.handle_patch_row_click(1, DiffClickKind::Line, false);
+                pane.handle_patch_row_click(1, DiffClickKind::Line, true);
+                assert_eq!(pane.diff_selection_range, Some((1, 1)));
+                let keyed = pane.structural_selected_lines().unwrap();
+                assert_eq!(
+                    (keyed.old, keyed.new),
+                    (BTreeSet::new(), BTreeSet::from([2])),
+                    "after a row click"
+                );
+                let mut right_click =
+                    |pane: &mut DiffRenderer, cx: &mut gpui::Context<DiffRenderer>| {
+                        pane.open_diff_editor_context_menu(
+                            1,
+                            DiffTextRegion::SplitRight,
+                            point(px(40.0), px(40.0)),
+                            window,
+                            cx,
+                        )
+                    };
+                right_click(pane, cx);
+                // Rows laid out afresh retire the click.
+                pane.diff_visible_cache_projection_rev =
+                    pane.diff_visible_cache_projection_rev.wrapping_add(1);
+                let keyed = pane.structural_selected_lines().unwrap();
+                assert_eq!(
+                    (keyed.old, keyed.new),
+                    (BTreeSet::new(), BTreeSet::from([2])),
+                    "after a new layout"
+                );
+                right_click(pane, cx);
                 // A new selection retires the click.
                 text(pane, 2);
                 let keyed = pane.structural_selected_lines().unwrap();
