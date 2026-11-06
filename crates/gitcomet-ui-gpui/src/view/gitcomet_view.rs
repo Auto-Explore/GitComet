@@ -260,6 +260,26 @@ impl GitCometView {
         }
     }
 
+    pub(crate) fn toggle_shortcut_help(
+        &mut self,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if !command_palette_available(self.view_mode) || self.is_overlay_open(cx) {
+            return;
+        }
+        let was_help =
+            self.command_palette_open && self.command_palette.read(cx).is_shortcut_help();
+        if self.command_palette_open {
+            self.close_command_palette(window, cx);
+        }
+        if !was_help {
+            self.open_command_palette(window, cx);
+            self.command_palette
+                .update(cx, |palette, cx| palette.show_shortcut_help(cx));
+        }
+    }
+
     pub(super) fn open_reveal_commit(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) {
         // See `open_command_palette`: two stacked modal scrims are never right.
         if self.command_palette_open {

@@ -35,6 +35,12 @@ pub(crate) fn bind_keys(cx: &mut App) {
         "secondary-shift-b",
         super::commands::Command::ToggleDetails.id(),
     ));
+    for keys in ["secondary-shift-/", "secondary-shift-?"] {
+        cx.bind_keys(bindings(
+            keys,
+            super::commands::Command::KeyboardShortcuts.id(),
+        ));
+    }
 }
 
 fn bindings(keys: &str, id: &str) -> [KeyBinding; 2] {
@@ -49,9 +55,36 @@ fn bindings(keys: &str, id: &str) -> [KeyBinding; 2] {
         KeyBinding::new(
             keys,
             unbind,
-            Some("!(!Terminal && !ContextMenu && !PopoverPrompt)"),
+            Some(
+                if matches!(
+                    super::commands::Command::from_id(id),
+                    Some(
+                        super::commands::Command::ToggleTerminal
+                            | super::commands::Command::KeyboardShortcuts
+                    )
+                ) {
+                    "!(!ContextMenu && !PopoverPrompt)"
+                } else {
+                    "!(!Terminal && !ContextMenu && !PopoverPrompt)"
+                },
+            ),
         ),
     ]
+}
+
+pub(crate) fn is_terminal_toggle(keystroke: &gpui::Keystroke) -> bool {
+    keystroke.key == "j"
+        && keystroke.modifiers.secondary()
+        && keystroke.modifiers.number_of_modifiers() == 1
+}
+
+pub(crate) fn is_shortcut_help(keystroke: &gpui::Keystroke) -> bool {
+    let mods = keystroke.modifiers;
+    mods.secondary()
+        && !mods.alt
+        && !mods.function
+        && mods.number_of_modifiers() == if mods.shift { 2 } else { 1 }
+        && (keystroke.key == "?" || (keystroke.key == "/" && mods.shift))
 }
 
 impl GitCometView {
@@ -61,6 +94,10 @@ impl GitCometView {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
+        if id == super::commands::Command::KeyboardShortcuts.id() {
+            self.toggle_shortcut_help(window, cx);
+            return;
+        }
         if self.view_mode != GitCometViewMode::Normal
             || self.is_overlay_open(cx)
             || self.command_palette_open

@@ -26,31 +26,38 @@ These shortcuts apply in the normal GitComet window.
 | Open a new window | `Cmd-N`, `Cmd-Shift-N` | `Ctrl-N`, `Ctrl-Shift-N` | |
 | Open Settings | `Cmd-,` | `Ctrl-,` | |
 | Open the command palette | `Cmd-P`, `Cmd-Shift-P` | `Ctrl-P`, `Ctrl-Shift-P` | Search for an action; its shortcut is shown beside it. |
+| Show keyboard shortcuts | `Cmd-?` | `Ctrl-?` | Also `Cmd-Shift-/` / `Ctrl-Shift-/`. Opens the searchable cheat sheet; Escape closes it and restores focus. Available from the terminal too. |
 | Open a repository | `Cmd-O` | `Ctrl-O` | |
 | Open a workspace | `Cmd-Shift-R` | `Ctrl-Shift-R` | Lists saved workspaces. In an empty window the chosen workspace opens there; otherwise its own window is focused or opened. Also in the command palette and the app menu. |
 | Go to a commit | `Cmd-G` | `Ctrl-G` | Opens the Go to dialog. Accepts a full or short SHA (4+ characters, unique), a branch, a tag, or any revision such as `HEAD~3`; matches are exact. In an embedded terminal the shell keeps `Ctrl-G`. |
-| Toggle open and recently closed repositories | `Ctrl-Shift-A`, `Cmd-Shift-O`, `Option-Cmd-O` | `Ctrl-Shift-A`, `Ctrl-Shift-O` | In an embedded terminal on Windows/Linux, `Ctrl-Shift-A` keeps its terminal “Select All” behavior. |
+| Toggle open and recently closed repositories | `Ctrl-Shift-A`, `Cmd-Shift-A`, `Cmd-Shift-O`, `Cmd-Option-O` | `Ctrl-Shift-A`, `Ctrl-Shift-O` | In an embedded terminal on Windows/Linux, `Ctrl-Shift-A` keeps its terminal “Select All” behavior. |
 | Open active repository in external code editor | `Cmd-Shift-E` | `Ctrl-Shift-E` | Only active when an external code editor is configured. |
 | Show the open file in the file explorer | `Cmd-Shift-L` | `Ctrl-Shift-L` | Switches the sidebar to Files, expands the folders leading to the file, and scrolls it into view. |
 | Open the repository's remote in a web browser | `Cmd-K` | `Ctrl-K` | Opens the remote's page on its host (GitHub, GitLab, Bitbucket, Azure DevOps, Gitea/Codeberg, AWS CodeCommit, or a self-hosted forge). With several such remotes a menu lists them, `origin` first; `1`–`9` pick directly. Also in the command palette, the app menu, and a remote's right-click menu in the sidebar. In an embedded terminal on Windows/Linux the shell keeps `Ctrl-K`. |
 | Close the active repository tab, or close the window if no repo tab can close | `Cmd-W` | `Ctrl-W` | |
 | Close the active window | `Cmd-Shift-W` | `Ctrl-Shift-W` | |
-| Previous repository tab | `Cmd-PageUp`, `Cmd-{`, `Option-Cmd-Left` | `Ctrl-PageUp`, `Ctrl-Shift-Tab` | |
-| Next repository tab | `Cmd-PageDown`, `Cmd-}`, `Option-Cmd-Right` | `Ctrl-PageDown`, `Ctrl-Tab` | |
-| Toggle full screen | `Ctrl-Cmd-F` | `F11` | |
+| Previous repository tab | `Cmd-PageUp`, `Cmd-{`, `Cmd-Option-Left` | `Ctrl-PageUp`, `Ctrl-Shift-Tab` | |
+| Next repository tab | `Cmd-PageDown`, `Cmd-}`, `Cmd-Option-Right` | `Ctrl-PageDown`, `Ctrl-Tab` | |
+| Toggle full screen | `Cmd-Ctrl-F` | `F11` | |
+| Increase UI scale | `Cmd-+`, `Cmd-=` | `Ctrl-+`, `Ctrl-=` | |
+| Decrease UI scale | `Cmd--` | `Ctrl--` | |
+| Reset UI scale | `Cmd-0` | `Ctrl-0` | |
 | Quit GitComet | `Cmd-Q` | `Ctrl-Q` | |
 
-macOS-only window-management shortcuts:
-- `Cmd-M`: Minimize the active window.
-- `Cmd-H`: Hide GitComet.
-- `Option-Cmd-H`: Hide other applications.
+Additional window-management shortcuts:
+
+| Action | macOS | Windows / Linux | Notes |
+| --- | --- | --- | --- |
+| Minimize the active window | `Cmd-M` | None | macOS only. |
+| Hide the application | `Cmd-H` | None | macOS only. |
+| Hide other applications | `Cmd-Option-H` | None | macOS only. |
 
 ## Repository and layout shortcuts
 
 These shortcuts apply in a normal repository window, including from text inputs.
 They are inactive while a menu, dialog, command palette, or Go to dialog is open.
-A focused embedded terminal keeps these keys for its shell or TUI; focus another
-part of the window to use them. Repository availability checks and confirmations
+A focused embedded terminal keeps these keys for its shell or TUI, except for the
+terminal toggle and shortcut cheat sheet. Repository availability checks and confirmations
 are the same as when running the corresponding command from the palette.
 
 | Action | macOS | Windows / Linux | Notes |
@@ -107,7 +114,7 @@ These shortcuts apply when a GitComet text input has focus.
 | Cut | `Cmd-X` | `Ctrl-X` | `Ctrl-X` is also accepted on macOS. |
 | Undo | `Cmd-Z` | `Ctrl-Z` | |
 | Redo | `Cmd-Shift-Z` | `Ctrl-Shift-Z` | |
-| Show the character palette | `Ctrl-Cmd-Space` | None | macOS only. |
+| Show the character palette | `Cmd-Ctrl-Space` | None | macOS only. |
 | Delete to line start / end | `Cmd-Backspace`, `Cmd-Delete` | `Ctrl-Shift-Backspace`, `Ctrl-Shift-Delete` | With the caret at the end of a single-line input, such as a search box, deleting to the line start clears it. At the start or end of a line, deletes the line break instead. |
 
 ### Cursor movement and selection
@@ -196,6 +203,8 @@ These shortcuts apply when the embedded terminal has focus.
 | Action | macOS | Windows / Linux | Notes |
 | --- | --- | --- | --- |
 | Copy terminal selection | `Cmd-C` | `Ctrl-Shift-C` | Disabled/no-op without a terminal selection. |
+| Toggle the terminal | `Cmd-J` | `Ctrl-J` | Also works with terminal focus. Closing a running command keeps its confirmation. |
+| Show keyboard shortcuts | `Cmd-?` | `Ctrl-?` | Escape restores terminal focus. |
 | Paste clipboard text | `Cmd-V` | `Ctrl-Shift-V` | Clipboard CRLF/CR line endings are normalized to LF. Bracketed paste is used when the shell enables it. |
 | Select all terminal buffer | `Cmd-A` | `Ctrl-Shift-A` | Selects the scrollback buffer plus the visible terminal grid. |
 | Scroll terminal history | `Shift-PageUp`, `Shift-PageDown`, `Shift-Home`, `Shift-End` | `Shift-PageUp`, `Shift-PageDown`, `Shift-Home`, `Shift-End` | Only in the normal screen buffer. |
@@ -221,8 +230,8 @@ These shortcuts apply in the main diff panel, including conflict resolution view
 | Previous search match | `F2` | `F2` | While diff search is open. The ↑ button in the search box does the same. |
 | Next search match | `F3` | `F3` | While diff search is open. The ↓ button in the search box does the same. |
 | Close search, clear selection, or close the current diff | `Escape` | `Escape` | Exact behavior depends on the current diff state. |
-| Previous file in the status list | `F1` | `F1` | Working tree and conflict-oriented diff flows. |
-| Next file in the status list | `F4` | `F4` | Working tree and conflict-oriented diff flows. |
+| Previous file in the status list | `F1`, `Option-Left` | `F1`, `Alt-Left` | Working tree and conflict-oriented diff flows. |
+| Next file in the status list | `F4`, `Option-Right` | `F4`, `Alt-Right` | Working tree and conflict-oriented diff flows. |
 | Previous / next file in the list the diff came from | `Up`, `Down` | `Up`, `Down` | No modifiers. Commit, comparison, worktree and status lists. Stops at the first / last file. Not in the conflict resolver; use `F1` / `F4` there. |
 | Previous / next page of files | `PageUp`, `PageDown` | `PageUp`, `PageDown` | One visible page of the file list. No modifiers. Commit, comparison, worktree and status lists. Stops at the first / last file. Not in the conflict resolver; use `F1` / `F4` there. |
 | First / last file | `Home`, `End` | `Home`, `End` | No modifiers. Commit, comparison, worktree and status lists. Stops at the first / last file. Not in the conflict resolver; use `F1` / `F4` there. |
@@ -231,12 +240,21 @@ These shortcuts apply in the main diff panel, including conflict resolution view
 | Switch to inline diff | `Option-I` | `Alt-I` | Raw file diff only. Conflict resolver keeps split layout. |
 | Enter or leave the file editor | `Option-E` | `Alt-E` | Not while a text field has focus. Escape also leaves the editor. |
 | Save the edited file | `Cmd-S` | `Ctrl-S` | While the file editor is open, wherever focus is. Outside the editor the same chord stages the file. |
+| Stage the current or selected working-tree files | `Cmd-S` | `Ctrl-S` | Outside the file editor. Conflicts with unresolved markers require confirmation. |
+| Unstage the current or selected files | `Cmd-U` | `Ctrl-U` | Staged file diff or status section. |
+| Discard current file changes | `Cmd-D` | `Ctrl-D` | Opens the existing confirmation dialog. |
+| Copy the current file path | `Cmd-Shift-C` | `Ctrl-Shift-C` | Working-tree file diff. |
+| Open the current file in the code editor | `Cmd-E` | `Ctrl-E` | Requires a configured external editor. |
+| Toggle blame / annotation | `Option-B` | `Alt-B` | Raw text diff. |
 | Switch to split diff | `Option-S` | `Alt-S` | Raw file diff only. |
 | Toggle whitespace characters | `Option-W` | `Alt-W` | Text diff / conflict diff only. |
 | Stage or unstage the current working-tree file and advance to the adjacent file | `Space` | `Space` | Raw working-tree file diff only, and not while the diff search input has focus. |
 | Select all diff text | `Cmd-A` | `Ctrl-A` | File preview and text-selection flows. |
 | Copy selected diff text | `Cmd-C` | `Ctrl-C` | File preview and text-selection flows. |
 | Pick conflict result `Base / Ours / Theirs / Both` | `A`, `B`, `C`, `D` | `A`, `B`, `C`, `D` | Conflict resolver only. |
+| Pick a conflict source | `Cmd-1`, `Cmd-2`, `Cmd-3` | `Ctrl-1`, `Ctrl-2`, `Ctrl-3` | Conflict resolver only; also works from the resolved-output editor. `Ctrl` aliases work on macOS too. Source choices depend on the two-way or three-way layout. |
+| Choose a conflict source everywhere | `Cmd-Shift-1`, `Cmd-Shift-2`, `Cmd-Shift-3` | `Ctrl-Shift-1`, `Ctrl-Shift-2`, `Ctrl-Shift-3` | Includes automatically selected blocks. `Ctrl` aliases work on macOS too. |
+| Mark the current conflict unresolved | `U` | `U` | Conflict resolver only, outside text inputs. |
 | Previous unresolved conflict | `Shift-F2` | `Shift-F2` | Conflict resolver only. Skips conflicts you have already resolved; works while the resolved-output editor has focus. |
 | Next unresolved conflict | `Shift-F3` | `Shift-F3` | Conflict resolver only. Skips conflicts you have already resolved; works while the resolved-output editor has focus. |
 | First / last delta | `Cmd-Home` / `Cmd-End` | `Ctrl-Home` / `Ctrl-End` | Conflict resolver only. Not active while the resolved-output editor has focus, which keeps them for cursor movement. |
@@ -259,10 +277,13 @@ Preview-mode note:
 ## Context menu shortcuts
 
 Context-menu keyboard behavior is the same on every platform:
-- `Up` / `Down`: move the selection.
-- `Enter`: activate the selected item, or the first enabled item if nothing is selected.
-- `Escape`: close the menu.
-- Single-letter or digit shortcuts shown inline activate the matching entry.
+
+| Action | Shortcut | Notes |
+| --- | --- | --- |
+| Move menu selection | `Up`, `Down` | |
+| Activate selected menu item | `Enter` | Uses the first enabled item if nothing is selected. |
+| Close the menu | `Escape` | |
+| Activate an inline menu shortcut | Letter or digit shown beside the item | |
 
 Additional note:
 - Some menus also show clipboard-style shortcuts such as `Ctrl+C`; those reflect the underlying view shortcut rather than the menu's generic single-letter dispatcher.

@@ -55,6 +55,11 @@ impl GitCometView {
         window: &Window,
         cx: &mut gpui::Context<Self>,
     ) {
+        if super::command_shortcuts::is_terminal_toggle(keystroke)
+            || super::command_shortcuts::is_shortcut_help(keystroke)
+        {
+            return;
+        }
         let Some(viewport) = self.focused_terminal_viewport(window, cx) else {
             return;
         };

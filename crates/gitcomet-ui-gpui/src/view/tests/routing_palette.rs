@@ -622,6 +622,55 @@ fn repository_shortcuts_are_inactive_on_home_and_behind_the_palette(cx: &mut gpu
 }
 
 #[gpui::test]
+fn shortcut_cheat_sheet_searches_dismisses_and_opens_from_the_palette(
+    cx: &mut gpui::TestAppContext,
+) {
+    let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
+    let (store, events) = AppStore::new_test(Arc::clone(&backend));
+    let store_for_view = store.clone();
+    let (view, cx) = cx
+        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+    install_app_shortcuts_for_test(cx, backend);
+    cx.update(|_, app| crate::app::bind_text_input_keys_for_test(app));
+    focus_detached_window_focus(cx);
+    for chord in ["secondary-?", "secondary-shift-/", "secondary-shift-?"] {
+        cx.simulate_keystrokes(chord);
+        test_support::redraw(cx);
+        assert!(cx.debug_bounds("keyboard_shortcuts_dialog").is_some());
+        cx.update(|_, app| assert!(view.read(app).command_palette.read(app).is_shortcut_help()));
+        let category = cx.debug_bounds("shortcut_help_category_2").unwrap();
+        cx.simulate_click(category.center(), gpui::Modifiers::default());
+        test_support::redraw(cx);
+        cx.simulate_keystrokes("escape");
+        test_support::redraw(cx);
+        assert!(!command_palette_is_open(cx, &view));
+    }
+    cx.simulate_keystrokes("secondary-p");
+    test_support::redraw(cx);
+    let input = cx.update(|_, app| view.read(app).command_palette.read(app).query_input.clone());
+    cx.update(|_, app| input.update(app, |input, cx| input.set_text("Keyboard Shortcuts", cx)));
+    test_support::redraw(cx);
+    cx.simulate_keystrokes("enter");
+    test_support::redraw(cx);
+    assert!(cx.debug_bounds("keyboard_shortcuts_dialog").is_some());
+    cx.update(|_, app| input.update(app, |input, cx| input.set_text("no-such-shortcut-8321", cx)));
+    test_support::redraw(cx);
+    assert!(cx.debug_bounds("shortcut_help_empty").is_some());
+    cx.update(|_, app| input.update(app, |input, cx| input.set_text("branch", cx)));
+    test_support::redraw(cx);
+    assert!(cx.debug_bounds("shortcut_help_empty").is_none());
+    cx.simulate_keystrokes("enter");
+    test_support::redraw(cx);
+    cx.update(|_, app| {
+        assert!(view.read(app).command_palette.read(app).is_shortcut_help());
+        assert!(test_support::popover_kind(view.read(app), app).is_none());
+    });
+    cx.simulate_keystrokes("secondary-shift-/");
+    test_support::redraw(cx);
+    assert!(!command_palette_is_open(cx, &view));
+}
+
+#[gpui::test]
 fn command_palette_rename_branch_opens_prompt_for_current_branch(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_view = store.clone();

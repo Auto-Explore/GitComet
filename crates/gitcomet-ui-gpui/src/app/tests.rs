@@ -1995,6 +1995,9 @@ fn repository_command_shortcuts_resolve_from_views_and_text_inputs(cx: &mut gpui
         ("secondary-alt-b", "toggle-details"),
         ("secondary-shift-b", "toggle-details"),
         ("secondary-j", "toggle-terminal"),
+        ("secondary-?", "keyboard-shortcuts"),
+        ("secondary-shift-/", "keyboard-shortcuts"),
+        ("secondary-shift-?", "keyboard-shortcuts"),
     ];
     for context in [None, Some("TextInput")] {
         let observed = Arc::new(Mutex::new(Vec::new()));

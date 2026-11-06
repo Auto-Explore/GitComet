@@ -206,6 +206,54 @@ impl TerminalMenuFixture {
 }
 
 #[gpui::test]
+fn terminal_app_shortcuts_work_from_terminal_without_sending_shell_input(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (fixture, cx) = fixture(cx);
+    cx.update(|_, app| {
+        crate::app::bind_app_keys_for_test(app);
+        crate::app::bind_text_input_keys_for_test(app);
+    });
+    cx.simulate_keystrokes("ctrl-p");
+    assert_eq!(
+        fixture.take_input(),
+        vec![0x10],
+        "other shell shortcuts stay in the terminal"
+    );
+    cx.simulate_keystrokes("secondary-shift-/");
+    refresh_and_draw(cx);
+    cx.update(|_, app| {
+        assert!(
+            fixture
+                .root
+                .read(app)
+                .command_palette
+                .read(app)
+                .is_shortcut_help()
+        )
+    });
+    assert!(fixture.take_input().is_empty());
+    cx.simulate_keystrokes("escape");
+    refresh_and_draw(cx);
+    cx.update(|window, app| assert!(fixture.viewport.read(app).focus_handle.is_focused(window)));
+    cx.simulate_keystrokes("secondary-j");
+    refresh_and_draw(cx);
+    assert!(
+        fixture.take_input().is_empty(),
+        "the toggle must not send a newline to the shell"
+    );
+    cx.update(|_, app| {
+        assert!(
+            !fixture
+                .root
+                .read(app)
+                .terminal_sessions
+                .contains_key(&fixture.repo_id)
+        );
+    });
+}
+
+#[gpui::test]
 fn window_blur_stops_terminal_input_and_live_caret(cx: &mut gpui::TestAppContext) {
     let (fixture, cx) = fixture(cx);
     cx.update(|window, _| window.activate());

@@ -16,6 +16,8 @@ use super::{GitCometView, components, restrict_scroll_to_vertical_axis};
 use crate::kit::components::Shortcut;
 use gitcomet_core::tag_push::TagPushMode;
 
+mod shortcut_help;
+
 pub(crate) struct CommandEntry {
     pub(crate) id: &'static str,
     /// Read through [`CommandEntry::label`], which names the product for `{app}`.
@@ -848,7 +850,15 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
     },
     // TODO: "undo"              - Undo (Edit)
     // TODO: "redo"              - Redo (Edit)
-    // TODO: "keyboard-shortcuts" - Keyboard Shortcuts (Help)
+    CommandEntry {
+        id: Command::KeyboardShortcuts.id(),
+        label: "Keyboard Shortcuts",
+        shortcut: Shortcut::Keystrokes("secondary-?"),
+        category: "Help",
+        keywords: "cheat sheet keybindings hotkeys reference keyboard help",
+        requires_repo: false,
+        needs: Needs::Nothing,
+    },
     // TODO: "search-commits"   - Search Commits (Navigation)
     // TODO: "checkout-remote-branch" - Checkout Remote Branch
     // TODO: "delete-remote-branch"   - Delete Remote Branch
@@ -1136,6 +1146,8 @@ pub(crate) struct CommandPaletteView {
     command_row_indices: Vec<usize>,
     selected_index: Option<usize>,
     scroll_handle: UniformListScrollHandle,
+    shortcut_help: shortcut_help::ShortcutHelpState,
+    show_shortcut_help: bool,
     _input_subscription: gpui::Subscription,
 }
 
@@ -1180,6 +1192,10 @@ impl CommandPaletteView {
             command_row_indices: Vec::new(),
             selected_index: None,
             scroll_handle: UniformListScrollHandle::default(),
+            shortcut_help: shortcut_help::ShortcutHelpState::new(
+                super::extension_host::palette_entries(cx),
+            ),
+            show_shortcut_help: false,
             _input_subscription: input_subscription,
         }
     }
@@ -1219,6 +1235,7 @@ impl CommandPaletteView {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
+        self.show_shortcut_help = false;
         self.open = true;
         self.restore_focus = restore_focus;
         self.fallback_focus = Some(fallback_focus);
@@ -1230,13 +1247,28 @@ impl CommandPaletteView {
             self.scroll_handle
                 .scroll_to_item_strict(0, ScrollStrategy::Top);
         }
-        self.query_input
-            .update(cx, |input, cx| input.set_text("", cx));
+        self.query_input.update(cx, |input, cx| {
+            input.set_placeholder("Search commands…", cx);
+            input.set_text("", cx);
+        });
         let focus = self
             .query_input
             .read_with(cx, |input, _| input.focus_handle());
         window.focus(&focus, cx);
         cx.notify();
+    }
+
+    pub(crate) fn show_shortcut_help(&mut self, cx: &mut gpui::Context<Self>) {
+        self.show_shortcut_help = true;
+        self.shortcut_help.reset();
+        self.query_input.update(cx, |input, cx| {
+            input.set_placeholder("Search actions or keys…", cx)
+        });
+        cx.notify();
+    }
+
+    pub(crate) fn is_shortcut_help(&self) -> bool {
+        self.open && self.show_shortcut_help
     }
 
     pub(crate) fn close(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) {
@@ -1335,6 +1367,22 @@ impl CommandPaletteView {
 
         let query_changed =
             input.read_with(cx, |input, _| input.text().trim() != self.query.as_ref());
+
+        if self.show_shortcut_help {
+            if query_changed {
+                self.query = input.read_with(cx, |input, _| {
+                    SharedString::from(input.text().trim().to_owned())
+                });
+                self.shortcut_help.scroll_to_top();
+                cx.notify();
+            }
+            if arrow_up || arrow_down {
+                self.shortcut_help
+                    .scroll_by(if arrow_up { 72.0 } else { -72.0 });
+                cx.notify();
+            }
+            return;
+        }
 
         // TextInput also notifies for cursor blinking, selection movement, and
         // focus bookkeeping. Those notifications do not affect palette state.
@@ -1603,9 +1651,12 @@ impl CommandPaletteView {
 }
 
 impl Render for CommandPaletteView {
-    fn render(&mut self, _window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
         if !self.open {
             return div().into_any_element();
+        }
+        if self.show_shortcut_help {
+            return shortcut_help::render(self, window, cx);
         }
 
         let theme = self.theme;

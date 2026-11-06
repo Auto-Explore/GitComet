@@ -64,6 +64,19 @@ impl TextInput {
         self.focus_handle.clone()
     }
 
+    pub fn set_placeholder(
+        &mut self,
+        placeholder: impl Into<SharedString>,
+        cx: &mut Context<Self>,
+    ) {
+        let placeholder = placeholder.into();
+        if self.placeholder != placeholder {
+            self.placeholder = placeholder;
+            self.invalidate_layout_caches();
+            cx.notify();
+        }
+    }
+
     #[cfg(any(test, feature = "test-support"))]
     pub fn theme_for_test(&self) -> AppTheme {
         self.style.menu_theme
