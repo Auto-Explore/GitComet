@@ -299,6 +299,7 @@ impl DiffRenderer {
     fn diff_line_selection_state(&self) -> DiffLineSelectionState {
         DiffLineSelectionState {
             target: self.rendered_diff_target().cloned(),
+            structural: self.structural_diff_active(),
             layout: self.diff_visible_layout_key(),
             row_anchor: self.diff_selection_anchor,
             rows: self.diff_selection_range,

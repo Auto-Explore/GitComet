@@ -214,6 +214,7 @@ pub(in crate::view) struct DiffEditorMenuClick {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(in crate::view) struct DiffLineSelectionState {
     pub(in crate::view) target: Option<DiffTarget>,
+    pub(in crate::view) structural: bool,
     pub(in crate::view) layout: DiffVisibleLayoutKey,
     pub(in crate::view) row_anchor: Option<usize>,
     pub(in crate::view) rows: Option<(usize, usize)>,
