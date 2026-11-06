@@ -1613,6 +1613,61 @@ fn clap_parses_path_argument() {
 }
 
 #[test]
+fn clap_parses_foreground_flag() {
+    let cli = Cli::try_parse_from(["gitcomet", "--foreground"]).unwrap();
+    assert!(cli.command.is_none());
+    assert!(cli.foreground);
+}
+
+#[test]
+fn clap_parses_foreground_flag_alongside_path() {
+    let cli = Cli::try_parse_from(["gitcomet", "--foreground", "/some/repo"]).unwrap();
+    assert!(cli.command.is_none());
+    assert_eq!(
+        cli.path.as_deref(),
+        Some(std::path::Path::new("/some/repo"))
+    );
+    assert!(cli.foreground);
+}
+
+#[test]
+fn browser_mode_carries_foreground_flag() {
+    let env = TestEnv::new();
+    let mode = parse_mode_for_test(
+        vec![
+            OsString::from("gitcomet"),
+            OsString::from("--foreground"),
+            OsString::from("/some/repo"),
+        ],
+        &env,
+    )
+    .expect("parse browser mode with foreground flag");
+
+    match mode {
+        AppMode::Browser { path, foreground } => {
+            assert_eq!(path.as_deref(), Some(std::path::Path::new("/some/repo")));
+            assert!(foreground);
+        }
+        other => panic!("expected Browser mode, got: {other:?}"),
+    }
+}
+
+#[test]
+fn browser_mode_foreground_defaults_to_false() {
+    let env = TestEnv::new();
+    let mode = parse_mode_for_test(vec![OsString::from("gitcomet")], &env)
+        .expect("parse browser mode without flags");
+
+    match mode {
+        AppMode::Browser { path, foreground } => {
+            assert!(path.is_none());
+            assert!(!foreground);
+        }
+        other => panic!("expected Browser mode, got: {other:?}"),
+    }
+}
+
+#[test]
 fn compat_parses_positional_difftool_invocation() {
     let dir = tempfile::tempdir().unwrap();
     let local = tmp_file(&dir, "left.txt", "left\n");

@@ -224,6 +224,14 @@ Built-in `uninstall` restores those backups only when the key still has the setu
 
 #### CLI modes
 
+**Browser (default):**
+
+```bash
+gitcomet [path] [--foreground]
+```
+
+When launched from an interactive terminal, the browser relaunches itself detached so the shell prompt returns immediately. Pass `--foreground` (or set `GITCOMET_FOREGROUND=1`) to keep it attached to the terminal for debugging. Non-interactive launches (Finder, `open`, scripts) are unaffected.
+
 **Difftool:**
 
 ```bash
