@@ -853,7 +853,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
     CommandEntry {
         id: Command::KeyboardShortcuts.id(),
         label: "Keyboard Shortcuts",
-        shortcut: Shortcut::Keystrokes("secondary-?"),
+        shortcut: Shortcut::Keystrokes("secondary-/"),
         category: "Help",
         keywords: "cheat sheet keybindings hotkeys reference keyboard help",
         requires_repo: false,

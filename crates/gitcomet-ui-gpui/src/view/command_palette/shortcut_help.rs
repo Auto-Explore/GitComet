@@ -378,7 +378,7 @@ pub(super) fn render(
                 .flex()
                 .flex_col()
                 .gap(p(2.0))
-                .w(p(190.0))
+                .w(p(220.0))
                 .flex_shrink_0()
                 .min_h(px(0.0))
                 .border_r_1()
@@ -415,7 +415,11 @@ pub(super) fn render(
         .style(components::ButtonStyle::Transparent)
         .on_click(theme, cx, |this, _, window, cx| {
             this.close_and_notify_root(None, window, cx)
-        });
+        })
+        .debug_selector(|| "shortcut_help_close".to_string())
+        .absolute()
+        .top(p(22.0))
+        .right(p(22.0));
     let surface = components::modal_surface(theme)
         .debug_selector(|| "keyboard_shortcuts_dialog".to_string())
         .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
@@ -426,6 +430,7 @@ pub(super) fn render(
         }))
         .w(width)
         .h(height)
+        .relative()
         .flex()
         .flex_col()
         .overflow_hidden()
@@ -435,6 +440,7 @@ pub(super) fn render(
                 .items_center()
                 .gap(p(14.0))
                 .px(p(22.0))
+                .pr(p(70.0))
                 .pt(p(20.0))
                 .pb(p(16.0))
                 .child(
@@ -472,8 +478,7 @@ pub(super) fn render(
                                 .text_color(theme.colors.foreground.secondary)
                                 .child("Find an action, a key, or a view."),
                         ),
-                )
-                .child(close),
+                ),
         )
         .child(
             div()
@@ -528,7 +533,8 @@ pub(super) fn render(
                         .child(components::shortcut_keys("Esc", theme, scale))
                         .child("to close"),
                 ),
-        );
+        )
+        .child(close);
     let scrim = components::modal_scrim(theme).on_pointer_click(
         MouseButton::Left,
         cx.listener(|this, _: &MouseDownEvent, window, cx| {
@@ -587,7 +593,7 @@ mod tests {
             assert!(
                 entries
                     .iter()
-                    .any(|entry| entry.keys.iter().any(|value| value.ends_with("+?")))
+                    .any(|entry| entry.keys.iter().any(|value| value.ends_with("+/")))
             );
             assert!(
                 !entries

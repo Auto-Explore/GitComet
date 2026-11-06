@@ -35,7 +35,7 @@ pub(crate) fn bind_keys(cx: &mut App) {
         "secondary-shift-b",
         super::commands::Command::ToggleDetails.id(),
     ));
-    for keys in ["secondary-shift-/", "secondary-shift-?"] {
+    for keys in ["secondary-?", "secondary-shift-/", "secondary-shift-?"] {
         cx.bind_keys(bindings(
             keys,
             super::commands::Command::KeyboardShortcuts.id(),
@@ -84,7 +84,7 @@ pub(crate) fn is_shortcut_help(keystroke: &gpui::Keystroke) -> bool {
         && !mods.alt
         && !mods.function
         && mods.number_of_modifiers() == if mods.shift { 2 } else { 1 }
-        && (keystroke.key == "?" || (keystroke.key == "/" && mods.shift))
+        && matches!(keystroke.key.as_str(), "?" | "/")
 }
 
 impl GitCometView {

@@ -633,7 +633,12 @@ fn shortcut_cheat_sheet_searches_dismisses_and_opens_from_the_palette(
     install_app_shortcuts_for_test(cx, backend);
     cx.update(|_, app| crate::app::bind_text_input_keys_for_test(app));
     focus_detached_window_focus(cx);
-    for chord in ["secondary-?", "secondary-shift-/", "secondary-shift-?"] {
+    for chord in [
+        "secondary-/",
+        "secondary-?",
+        "secondary-shift-/",
+        "secondary-shift-?",
+    ] {
         cx.simulate_keystrokes(chord);
         test_support::redraw(cx);
         assert!(cx.debug_bounds("keyboard_shortcuts_dialog").is_some());

@@ -220,7 +220,7 @@ fn terminal_app_shortcuts_work_from_terminal_without_sending_shell_input(
         vec![0x10],
         "other shell shortcuts stay in the terminal"
     );
-    cx.simulate_keystrokes("secondary-shift-/");
+    cx.simulate_keystrokes("secondary-/");
     refresh_and_draw(cx);
     cx.update(|_, app| {
         assert!(

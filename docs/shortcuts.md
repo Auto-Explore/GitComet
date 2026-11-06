@@ -26,7 +26,7 @@ These shortcuts apply in the normal GitComet window.
 | Open a new window | `Cmd-N`, `Cmd-Shift-N` | `Ctrl-N`, `Ctrl-Shift-N` | |
 | Open Settings | `Cmd-,` | `Ctrl-,` | |
 | Open the command palette | `Cmd-P`, `Cmd-Shift-P` | `Ctrl-P`, `Ctrl-Shift-P` | Search for an action; its shortcut is shown beside it. |
-| Show keyboard shortcuts | `Cmd-?` | `Ctrl-?` | Also `Cmd-Shift-/` / `Ctrl-Shift-/`. Opens the searchable cheat sheet; Escape closes it and restores focus. Available from the terminal too. |
+| Show keyboard shortcuts | `Cmd-/`, `Cmd-?` | `Ctrl-/`, `Ctrl-?` | No Shift required for the primary shortcut. The question-mark shortcut remains an alias. Opens the searchable cheat sheet; Escape closes it and restores focus. Available from the terminal too. |
 | Open a repository | `Cmd-O` | `Ctrl-O` | |
 | Open a workspace | `Cmd-Shift-R` | `Ctrl-Shift-R` | Lists saved workspaces. In an empty window the chosen workspace opens there; otherwise its own window is focused or opened. Also in the command palette and the app menu. |
 | Go to a commit | `Cmd-G` | `Ctrl-G` | Opens the Go to dialog. Accepts a full or short SHA (4+ characters, unique), a branch, a tag, or any revision such as `HEAD~3`; matches are exact. In an embedded terminal the shell keeps `Ctrl-G`. |
@@ -204,7 +204,7 @@ These shortcuts apply when the embedded terminal has focus.
 | --- | --- | --- | --- |
 | Copy terminal selection | `Cmd-C` | `Ctrl-Shift-C` | Disabled/no-op without a terminal selection. |
 | Toggle the terminal | `Cmd-J` | `Ctrl-J` | Also works with terminal focus. Closing a running command keeps its confirmation. |
-| Show keyboard shortcuts | `Cmd-?` | `Ctrl-?` | Escape restores terminal focus. |
+| Show keyboard shortcuts | `Cmd-/`, `Cmd-?` | `Ctrl-/`, `Ctrl-?` | Escape restores terminal focus. |
 | Paste clipboard text | `Cmd-V` | `Ctrl-Shift-V` | Clipboard CRLF/CR line endings are normalized to LF. Bracketed paste is used when the shell enables it. |
 | Select all terminal buffer | `Cmd-A` | `Ctrl-Shift-A` | Selects the scrollback buffer plus the visible terminal grid. |
 | Scroll terminal history | `Shift-PageUp`, `Shift-PageDown`, `Shift-Home`, `Shift-End` | `Shift-PageUp`, `Shift-PageDown`, `Shift-Home`, `Shift-End` | Only in the normal screen buffer. |
