@@ -693,6 +693,7 @@ impl DiffRenderer {
         repo_id: RepoId,
         delta: isize,
         focus_diff_panel: bool,
+        review_landing: bool,
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> bool {
@@ -723,6 +724,14 @@ impl DiffRenderer {
             };
             if focus_diff_panel {
                 window.focus(&self.diff_panel_focus_handle, cx);
+            }
+            if review_landing
+                && let Some(target) = self
+                    .active_inline_submodule_diff()
+                    .and_then(|inline| inline.entries.get(next_ix))
+                    .map(|entry| entry.target.clone())
+            {
+                self.prepare_review_file_jump(repo_id, target, delta < 0);
             }
             self.store.dispatch(Msg::SelectInlineSubmoduleDiff {
                 repo_id,
@@ -755,6 +764,9 @@ impl DiffRenderer {
         }
         match target {
             AdjacentDiffFileTarget::Range { target, target_ix } => {
+                if review_landing {
+                    self.prepare_review_file_jump(repo_id, target.clone(), delta < 0);
+                }
                 self.store.dispatch(Msg::SelectDiff { repo_id, target });
                 self.scroll_range_file_to_ix(target_ix, cx);
             }
@@ -767,6 +779,13 @@ impl DiffRenderer {
             } => {
                 self.clear_status_multi_selection(repo_id, cx);
                 self.scroll_status_section_to_path(section, &path, cx);
+                if review_landing {
+                    self.prepare_review_file_jump(
+                        repo_id,
+                        DiffTarget::working_tree(path.clone(), area),
+                        delta < 0,
+                    );
+                }
                 if is_conflicted {
                     self.store
                         .dispatch(Msg::SelectConflictDiff { repo_id, path });
@@ -783,10 +802,11 @@ impl DiffRenderer {
                 path,
                 old_path,
             } => {
-                self.store.dispatch(Msg::SelectDiff {
-                    repo_id,
-                    target: DiffTarget::commit(commit_id, path).with_old_path(old_path),
-                });
+                let target = DiffTarget::commit(commit_id, path).with_old_path(old_path);
+                if review_landing {
+                    self.prepare_review_file_jump(repo_id, target.clone(), delta < 0);
+                }
+                self.store.dispatch(Msg::SelectDiff { repo_id, target });
                 self.scroll_commit_details_file_to_ix(target_ix, cx);
             }
         }
@@ -801,7 +821,14 @@ impl DiffRenderer {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> bool {
-        self.try_select_adjacent_diff_file_inner(repo_id, direction as isize, true, window, cx)
+        self.try_select_adjacent_diff_file_inner(
+            repo_id,
+            direction as isize,
+            true,
+            false,
+            window,
+            cx,
+        )
     }
 
     pub(in crate::view) fn try_select_adjacent_diff_file_preserving_focus(
@@ -811,7 +838,31 @@ impl DiffRenderer {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> bool {
-        self.try_select_adjacent_diff_file_inner(repo_id, direction as isize, false, window, cx)
+        self.try_select_adjacent_diff_file_inner(
+            repo_id,
+            direction as isize,
+            false,
+            false,
+            window,
+            cx,
+        )
+    }
+
+    pub(in crate::view) fn try_select_review_file(
+        &mut self,
+        repo_id: RepoId,
+        direction: i8,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> bool {
+        self.try_select_adjacent_diff_file_inner(
+            repo_id,
+            direction as isize,
+            false,
+            true,
+            window,
+            cx,
+        )
     }
 
     /// The list the open diff came from, to size a page step.
@@ -875,7 +926,7 @@ impl DiffRenderer {
                 }
             }
         };
-        self.try_select_adjacent_diff_file_inner(repo_id, delta, false, window, cx)
+        self.try_select_adjacent_diff_file_inner(repo_id, delta, false, false, window, cx)
     }
 }
 

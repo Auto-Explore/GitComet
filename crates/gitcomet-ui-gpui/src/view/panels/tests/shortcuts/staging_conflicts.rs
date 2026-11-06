@@ -851,8 +851,7 @@ fn conflict_resolver_ignores_plain_file_step_keys(cx: &mut gpui::TestAppContext)
         );
     }
 
-    // A focused status section sends the same keys to the diff; they must not
-    // leave the resolver either.
+    // The file list can deliberately choose another conflicted file.
     cx.update(|window, app| {
         let focus = view
             .read(app)
@@ -863,15 +862,12 @@ fn conflict_resolver_ignores_plain_file_step_keys(cx: &mut gpui::TestAppContext)
         window.focus(&focus, app);
         let _ = window.draw(app);
     });
-    for key in ["down", "end"] {
-        cx.simulate_keystrokes(key);
-        draw_and_drain_test_window(cx);
-        assert_eq!(
-            target_path(cx),
-            Some(first.clone()),
-            "`{key}` in the status section must not move"
-        );
-    }
+    cx.simulate_keystrokes("down");
+    wait_until_store_diff_target_path(cx, &view, second.as_path());
+    sync_store_snapshot(cx, &view);
+    cx.simulate_keystrokes("up");
+    wait_until_store_diff_target_path(cx, &view, first.as_path());
+    sync_store_snapshot(cx, &view);
     cx.simulate_keystrokes("f4");
     draw_and_drain_test_window(cx);
     wait_until_store_diff_target_path(cx, &view, second.as_path());

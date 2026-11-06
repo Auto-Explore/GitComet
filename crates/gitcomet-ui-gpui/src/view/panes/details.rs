@@ -6,6 +6,9 @@ use gitcomet_core::history_find::HistoryFindQuery;
 use rustc_hash::FxHasher;
 use std::hash::{Hash, Hasher};
 
+mod review;
+mod review_search;
+
 /// A commit message being edited in the commit details. Kept only while that
 /// commit stays the one shown.
 pub(in super::super) struct CommitRewordDraft {
@@ -105,6 +108,17 @@ pub(in super::super) struct DetailsPaneView {
         std::rc::Rc<std::cell::RefCell<Option<Bounds<Pixels>>>>,
     pub(in super::super) status_section_resize: Option<StatusSectionResizeState>,
     status_section_focus_handles: [FocusHandle; 4],
+    review_file_focus_handles: [FocusHandle; 3],
+    review_cursor: Option<(
+        RepoId,
+        crate::view::rows::FileListId,
+        review::ReviewRow,
+        usize,
+    )>,
+    review_search_input: Entity<components::TextInput>,
+    review_search_list: Option<(RepoId, crate::view::rows::FileListId)>,
+    _review_search_subscription: gpui::Subscription,
+    pub(in crate::view) review_details_dismissed: bool,
 
     pub(in super::super) untracked_scroll: UniformListScrollHandle,
     pub(in super::super) unstaged_scroll: UniformListScrollHandle,
@@ -541,6 +555,48 @@ impl DetailsPaneView {
                 cx.notify();
             }
         });
+        let review_search_input = cx.new(|cx| {
+            components::TextInput::new(
+                components::TextInputOptions {
+                    placeholder: "Filter files by path…".into(),
+                    ..Default::default()
+                },
+                window,
+                cx,
+            )
+        });
+        let review_search_subscription =
+            cx.observe_in(&review_search_input, window, |this, input, window, cx| {
+                let Some((repo, list)) = this.review_search_list else {
+                    return;
+                };
+                let (escape, enter, down) = input.update(cx, |input, _| {
+                    (
+                        input.take_escape_pressed(),
+                        input.take_enter_pressed(),
+                        input.take_arrow_down_pressed(),
+                    )
+                });
+                if escape {
+                    this.reset_review_search(cx);
+                    window.focus(this.review_file_focus(list), cx);
+                    cx.notify();
+                    return;
+                }
+                if enter || down {
+                    this.focus_review_files(window, cx);
+                    return;
+                }
+                let query: SharedString = input.read(cx).text().trim().to_owned().into();
+                let controller = this.file_controller(repo, list);
+                if controller.borrow().query == query {
+                    return;
+                }
+                controller.borrow_mut().query = query;
+                this.review_cursor = None;
+                this.notify_commit_file_projection_dependents(cx);
+                cx.notify();
+            });
         let mut pane = Self {
             store,
             state,
@@ -577,6 +633,12 @@ impl DetailsPaneView {
             range_filter_bounds_ref: Default::default(),
             status_section_resize: None,
             status_section_focus_handles: std::array::from_fn(|_| cx.focus_handle()),
+            review_file_focus_handles: std::array::from_fn(|_| cx.focus_handle()),
+            review_cursor: None,
+            review_search_input,
+            review_search_list: None,
+            _review_search_subscription: review_search_subscription,
+            review_details_dismissed: false,
             untracked_scroll: UniformListScrollHandle::default(),
             unstaged_scroll: UniformListScrollHandle::default(),
             staged_scroll: UniformListScrollHandle::default(),
@@ -1108,9 +1170,10 @@ impl DetailsPaneView {
         let mut controller = controller.borrow_mut();
         controller.sort = sort;
         controller.kind_filter = filter;
+        let query = controller.query.clone();
         controller
             .projection_cache
-            .projection_for(&key, files, sort, filter)
+            .projection_for_query(&key, files, sort, filter, &query)
     }
 
     /// Drop a list's transient layout flip and collapse set, so the next time it
@@ -1235,9 +1298,10 @@ impl DetailsPaneView {
         let mut controller = controller.borrow_mut();
         controller.sort = sort;
         controller.kind_filter = filter;
+        let query = controller.query.clone();
         controller
             .projection_cache
-            .projection_for(&key, files, sort, filter)
+            .projection_for_query(&key, files, sort, filter, &query)
     }
 
     pub(in super::super) fn cached_range_file_projection(
@@ -1255,9 +1319,10 @@ impl DetailsPaneView {
         let mut controller = controller.borrow_mut();
         controller.sort = sort;
         controller.kind_filter = filter;
+        let query = controller.query.clone();
         controller
             .projection_cache
-            .projection_for(&key, files, sort, filter)
+            .projection_for_query(&key, files, sort, filter, &query)
     }
 
     fn file_list_plan_from_projection(
@@ -1279,6 +1344,7 @@ impl DetailsPaneView {
             self.file_list_filter_for(list),
             scope,
         );
+        let key = self.review_projection_key(repo_id, list, key);
         let collapsed = self.file_list_collapsed_for(repo_id, list);
         let controller = self.file_controller(repo_id, list);
         let mut controller = controller.borrow_mut();
@@ -1861,6 +1927,11 @@ impl DetailsPaneView {
             sort,
             crate::view::rows::CommitFileFilter::All,
         );
+        let key = self.review_projection_key(
+            repo.id,
+            crate::view::rows::FileListId::Status(section),
+            key,
+        );
         let slot = Self::status_section_alignment_key(section) as usize;
         let mut cache = self.status_section_order.borrow_mut();
         if let Some((cached_key, indexes)) = cache[slot].as_ref()
@@ -1882,6 +1953,24 @@ impl DetailsPaneView {
             repo.line_stats_for_area(section.diff_area())
                 .filter(|_| sort.needs_line_stats()),
         );
+        let query = self
+            .file_controller(repo.id, crate::view::rows::FileListId::Status(section))
+            .borrow()
+            .query
+            .to_lowercase();
+        let ordered = if query.is_empty() {
+            ordered
+        } else {
+            ordered
+                .iter()
+                .copied()
+                .filter(|&ix| {
+                    crate::view::path_display::path_display_string(&entries[ix].path)
+                        .to_lowercase()
+                        .contains(&query)
+                })
+                .collect()
+        };
         cache[slot] = Some((key, Arc::clone(&ordered)));
         Some(ordered)
     }
@@ -2385,6 +2474,7 @@ impl DetailsPaneView {
             sort,
             crate::view::rows::CommitFileFilter::All,
         );
+        let key = self.review_projection_key(repo.id, list, key);
         let collapsed = self.file_list_collapsed_for(repo.id, list);
         let entries = match section {
             StatusSection::Staged => repo.staged_status_entries(),
@@ -2506,8 +2596,15 @@ impl DetailsPaneView {
                 .and_then(|r| r.history_state.range_selection.clone())
         });
 
+        let previous_selection_rev = self
+            .active_repo()
+            .map(|repo| repo.history_state.selected_commit_rev);
         let next_repo_id = next.active_repo;
         let next_repo = next_repo_id.and_then(|id| next.repos.iter().find(|r| r.id == id));
+        if previous_selection_rev != next_repo.map(|repo| repo.history_state.selected_commit_rev) {
+            // Selecting the same commit again also reopens its details.
+            self.review_details_dismissed = false;
+        }
         let next_worktree_selection =
             next_repo.and_then(|r| r.history_state.worktree_selection.clone());
         let next_range_selection = next_repo.and_then(|r| r.history_state.range_selection.clone());
@@ -2566,6 +2663,15 @@ impl DetailsPaneView {
 
         let switched_repo = prev_active_repo_id != next_repo_id;
         let switched_commit = prev_selected_commit != next_selected_commit;
+        if switched_repo
+            || switched_commit
+            || prev_worktree_selection != next_worktree_selection
+            || prev_range_selection != next_range_selection
+        {
+            self.review_details_dismissed = false;
+            self.review_cursor = None;
+            self.reset_review_search(cx);
+        }
         if switched_repo || switched_commit {
             self.commit_file_filter = crate::view::rows::CommitFileFilter::All;
             // A per-list layout flip lasts as long as the thing it was made for;
@@ -2945,22 +3051,14 @@ impl DetailsPaneView {
     pub(in super::super) fn status_section_container(
         &self,
         section: StatusSection,
-        cx: &gpui::Context<Self>,
+        cx: &mut gpui::Context<Self>,
     ) -> gpui::Div {
-        div()
+        self.review_file_container(crate::view::rows::FileListId::Status(section), cx)
             .key_context("StatusSection")
-            .track_focus(self.status_section_focus_handle(section))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |this, _event, window, cx| {
                     this.focus_status_section(section, window, cx);
-                }),
-            )
-            .on_key_down(
-                cx.listener(move |this, event: &gpui::KeyDownEvent, window, cx| {
-                    if this.handle_status_section_shortcut(section, &event.keystroke, window, cx) {
-                        cx.stop_propagation();
-                    }
                 }),
             )
     }

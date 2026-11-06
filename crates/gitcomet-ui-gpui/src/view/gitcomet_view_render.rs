@@ -592,8 +592,11 @@ impl Render for GitCometView {
                     return;
                 }
                 let handled = this
-                    .main_pane
-                    .update(cx, |pane, cx| pane.open_search_for_active_view(window, cx));
+                    .details_pane
+                    .update(cx, |pane, cx| pane.open_review_search(window, cx))
+                    || this
+                        .main_pane
+                        .update(cx, |pane, cx| pane.open_search_for_active_view(window, cx));
                 if handled {
                     cx.stop_propagation();
                 }
@@ -716,6 +719,16 @@ impl Render for GitCometView {
                 this.defer_adjacent_diff_file_navigation(-1, cx);
                 cx.stop_propagation();
             }))
+            .on_action(cx.listener(|this, _: &FocusNextReviewPane, _window, cx| {
+                this.defer_review_cycle(false, cx);
+                cx.stop_propagation();
+            }))
+            .on_action(
+                cx.listener(|this, _: &FocusPreviousReviewPane, _window, cx| {
+                    this.defer_review_cycle(true, cx);
+                    cx.stop_propagation();
+                }),
+            )
             .on_action(cx.listener(|this, _: &DiffNextFile, _window, cx| {
                 if !this.shell_action_allowed(super::shell_policy::ShellAction::Repository) {
                     cx.stop_propagation();

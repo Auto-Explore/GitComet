@@ -10,6 +10,18 @@ pub(super) fn for_window(root: WeakEntity<GitCometView>) -> DiffCommands {
     DiffCommands {
         navigation: Some(navigation),
         dispatch: Some(Rc::new(move |command, cx| {
+            if let DiffCommand::FocusReviewFiles { window } = command {
+                let _ = window.update(cx, |_, window, cx| {
+                    let _ = root.update(cx, |root, cx| {
+                        root.navigate_review(
+                            super::review_navigation::ReviewNavigation::Files { from_graph: false },
+                            window,
+                            cx,
+                        )
+                    });
+                });
+                return;
+            }
             if let DiffCommand::OpenHostedMenu {
                 id,
                 items,
@@ -160,6 +172,7 @@ pub(super) fn for_window(root: WeakEntity<GitCometView>) -> DiffCommands {
                     })
                 }
                 DiffCommand::OpenPopover { .. }
+                | DiffCommand::FocusReviewFiles { .. }
                 | DiffCommand::OpenHostedMenu { .. }
                 | DiffCommand::OpenFileHistory { .. } => unreachable!(),
             });
@@ -170,6 +183,14 @@ pub(super) fn for_window(root: WeakEntity<GitCometView>) -> DiffCommands {
 struct WindowNavigation(WeakEntity<GitCometView>);
 
 impl DiffNavigation for WindowNavigation {
+    fn can_focus_review_files(&self, window: &Window, cx: &App) -> bool {
+        self.0
+            .read_with(cx, |root, _| {
+                root.view_mode == GitCometViewMode::Normal
+                    && root.window_handle.window_id() == window.window_handle().window_id()
+            })
+            .unwrap_or(false)
+    }
     fn layout(&self, cx: &App) -> Option<(Pixels, Pixels, bool, bool)> {
         self.0
             .read_with(cx, |root, _| {

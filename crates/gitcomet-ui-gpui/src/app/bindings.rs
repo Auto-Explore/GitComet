@@ -184,6 +184,12 @@ fn step_window_ui_scale(cx: &mut App, step: fn(u32) -> u32) {
 /// Navigation also reaches a visible diff when focus is outside the
 /// window's view tree. A window handler stops propagation when it acts.
 pub(super) fn install_global_diff_navigation_actions(cx: &mut App) {
+    cx.on_action(|_: &crate::view::FocusNextReviewPane, cx| {
+        defer_global_diff_navigation(cx, |view, cx| view.defer_review_cycle(false, cx));
+    });
+    cx.on_action(|_: &crate::view::FocusPreviousReviewPane, cx| {
+        defer_global_diff_navigation(cx, |view, cx| view.defer_review_cycle(true, cx));
+    });
     cx.on_action(|_: &DiffPrevFile, cx| {
         defer_global_diff_navigation(cx, |view, cx| {
             view.defer_adjacent_diff_file_navigation(-1, cx);
@@ -232,6 +238,8 @@ pub(super) fn install_global_diff_shortcut_fallback(cx: &mut App) {
             || !is_diff_shortcut_candidate(&event.keystroke)
             || event.context_stack.iter().any(|context| {
                 context.contains("TextInput")
+                    || context.contains("ChangedFiles")
+                    || context.contains("ReviewDiff")
                     || context.contains("Terminal")
                     || context.contains("ContextMenu")
                     || context.contains("PopoverPrompt")
@@ -304,11 +312,11 @@ pub(super) fn bind_app_keys(cx: &mut App) {
         KeyBinding::new("secondary-0", ResetUiScale, None),
         KeyBinding::new("secondary-q", Quit, None),
         KeyBinding::new("f1", DiffPrevFile, None),
+        KeyBinding::new("f6", crate::view::FocusNextReviewPane, None),
+        KeyBinding::new("shift-f6", crate::view::FocusPreviousReviewPane, None),
         KeyBinding::new("f4", DiffNextFile, None),
-        KeyBinding::new("alt-left", DiffPrevFile, None),
-        KeyBinding::new("alt-right", DiffNextFile, None),
-        KeyBinding::new("alt-up", DiffPrevChange, None),
-        KeyBinding::new("alt-down", DiffNextChange, None),
+        KeyBinding::new("shift-f7", DiffPrevChange, None),
+        KeyBinding::new("f7", DiffNextChange, None),
         KeyBinding::new("f2", DiffPrevSearchMatchOrChange, None),
         KeyBinding::new("f3", DiffNextSearchMatchOrChange, None),
         #[cfg(target_os = "macos")]
@@ -459,8 +467,6 @@ pub(super) fn bind_text_input_keys(cx: &mut App) {
         ),
         KeyBinding::new("shift-f7", TextInputDiffPrevChange, Some("TextInput")),
         KeyBinding::new("f7", TextInputDiffNextChange, Some("TextInput")),
-        KeyBinding::new("alt-up", TextInputDiffPrevChange, Some("TextInput")),
-        KeyBinding::new("alt-down", TextInputDiffNextChange, Some("TextInput")),
         KeyBinding::new("left", crate::kit::Left, Some("TextInput")),
         KeyBinding::new("right", crate::kit::Right, Some("TextInput")),
         KeyBinding::new("up", crate::kit::Up, Some("TextInput")),

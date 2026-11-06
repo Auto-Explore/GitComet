@@ -139,7 +139,7 @@ These shortcuts apply when a GitComet text input has focus.
 
 Compatibility note:
 - GitComet also keeps the opposite modifier family wired in text inputs where practical, so `Alt`-based word movement and `Ctrl`-based editing aliases remain available as portability fallbacks.
-- Diff-navigation fallbacks stay active from focused GitComet text inputs for `F1`, `F4`, `F2`, `F3`, `F7`, `Shift-F7`, `Alt-Up`, and `Alt-Down` when the input does not handle those keys itself.
+- Diff-navigation fallbacks stay active from focused GitComet text inputs for `F1`, `F4`, `F2`, `F3`, `F7`, and `Shift-F7` when the input does not handle those keys itself.
 
 ### Commit composer
 
@@ -168,6 +168,31 @@ These shortcuts apply while the commit history list is showing.
 | Next match | `Enter`, `F3` | `Enter`, `F3` | Selects the next match below the selected commit, wrapping to the top. `Enter` only from the find bar; `F3` also from the list. Also the ↓ button. |
 | Previous match | `Shift-Enter`, `F2` | `Shift-Enter`, `F2` | Selects the previous match above the selected commit, wrapping to the bottom. `Shift-Enter` only from the find bar; `F2` also from the list. Also the ↑ button. |
 | Close the find bar | `Escape` | `Escape` | Also the × button. Focus returns to the history list. |
+
+## Review navigation
+
+Start in the graph with `F6` (reverse with `Shift-F6`) or Tab. Each file list is
+one tab stop; Tab still reaches its filters and controls. The focused pane has
+an outline. Selecting a file previews it without moving keyboard focus.
+
+| Action | macOS | Windows / Linux | Notes |
+| --- | --- | --- | --- |
+| Next / previous pane | `F6`, `Shift-F6` | `F6`, `Shift-F6` | Visible panes only; terminal input and modal dialogs keep focus. |
+| Graph: focus changed files | `Enter` | `Enter` | Opens the details pane if hidden. |
+| Graph: show working-copy changes | `Escape` | `Escape` | Closes the active search first; otherwise replaces Commit details with Unstaged/Staged while keeping the graph selection. |
+| File list: previous / next row | `Up`, `Down` | `Up`, `Down` | Previews files and keeps focus in the list. |
+| File list: previous / next page | `PageUp`, `PageDown` | `PageUp`, `PageDown` | Uses the visible list height. |
+| File list: first / last row | `Home`, `End` | `Home`, `End` | Stops at the ends. |
+| File list: expand / collapse folder | `Right`, `Left` | `Right`, `Left` | Right enters an expanded folder; Left returns to its parent. Enter toggles folders and groups. |
+| File list: focus the diff | `Enter` | `Enter` | The selected file stays open. |
+| File list: return to graph | `Escape` | `Escape` | Closes file search first. Restores the same commit and graph position. |
+| Filter the focused file list | `Cmd-F` | `Ctrl-F` | Case-insensitive path substring. Enter or Down focuses the results; Escape clears the filter. Diff navigation follows the filtered list. |
+| Open the selected commit/file menu | `Shift-F10` | `Shift-F10` | Uses the existing context menu and its confirmations. |
+
+Review a commit with `Enter` → `Up`/`Down` → `Enter`, then use `Up`/`Down`
+through its changes and files. `Escape` returns one level at a time:
+diff → files → graph → working-copy details. Navigation preserves the last
+diff position when returning to the same file and waits for pending loads.
 
 ## Picker shortcuts
 
@@ -229,14 +254,14 @@ These shortcuts apply in the main diff panel, including conflict resolution view
 | Insert a newline in diff search | `Shift-Enter` | `Shift-Enter` | Diff search only. The search box also has Match Case, Whole Word, and Regex toggles. |
 | Previous search match | `F2` | `F2` | While diff search is open. The ↑ button in the search box does the same. |
 | Next search match | `F3` | `F3` | While diff search is open. The ↓ button in the search box does the same. |
-| Close search, clear selection, or close the current diff | `Escape` | `Escape` | Exact behavior depends on the current diff state. |
-| Previous file in the status list | `F1`, `Option-Left` | `F1`, `Alt-Left` | Working tree and conflict-oriented diff flows. |
-| Next file in the status list | `F4`, `Option-Right` | `F4`, `Alt-Right` | Working tree and conflict-oriented diff flows. |
-| Previous / next file in the list the diff came from | `Up`, `Down` | `Up`, `Down` | No modifiers. Commit, comparison, worktree and status lists. Stops at the first / last file. Not in the conflict resolver; use `F1` / `F4` there. |
-| Previous / next page of files | `PageUp`, `PageDown` | `PageUp`, `PageDown` | One visible page of the file list. No modifiers. Commit, comparison, worktree and status lists. Stops at the first / last file. Not in the conflict resolver; use `F1` / `F4` there. |
-| First / last file | `Home`, `End` | `Home`, `End` | No modifiers. Commit, comparison, worktree and status lists. Stops at the first / last file. Not in the conflict resolver; use `F1` / `F4` there. |
-| Previous change | `F2`, `Shift-F7`, `Option-Up` | `F2`, `Shift-F7`, `Alt-Up` | Moves one change block (a run of consecutive changed lines) at a time, landing on its first line, in Full, Collapsed, and whole-commit diffs alike. The conflict resolver moves by conflict instead. |
-| Next change | `F3`, `F7`, `Option-Down` | `F3`, `F7`, `Alt-Down` | Same unit as Previous change. With nothing selected, goes to the first change block. |
+| Return to the file list | `Escape` | `Escape` | Keeps the preview open. Closes search, an editor, or an inline submodule first. Standalone diff windows retain their close behavior. |
+| Previous file | `Option-Up`, `F1` | `Alt-Up`, `F1` | Option/Alt-Up from the focused diff lands at the previous file’s last change. |
+| Next file | `Option-Down`, `F4` | `Alt-Down`, `F4` | Option/Alt-Down from the focused diff lands at the next file’s first change. |
+| Previous / next change block | `Up`, `Down` | `Up`, `Down` | Focused diff only. At a file boundary, continues to the previous file’s last block or the next file’s first block. Stops at the outermost files. Images and files without text changes remain review stops. Conflicts retain their own navigation. |
+| Scroll the diff by one page | `PageUp`, `PageDown` | `PageUp`, `PageDown` | Focused diff only, outside the conflict resolver. |
+| First / last change block in this file | `Home`, `End` | `Home`, `End` | Focused diff only, outside the conflict resolver. |
+| Previous change | `F2`, `Shift-F7` | `F2`, `Shift-F7` | Moves one change block (a run of consecutive changed lines) at a time, landing on its first line, in Full, Collapsed, and whole-commit diffs alike. The conflict resolver moves by conflict instead. |
+| Next change | `F3`, `F7` | `F3`, `F7` | Same unit as Previous change. With nothing selected, goes to the first change block. |
 | Switch to inline diff | `Option-I` | `Alt-I` | Raw file diff only. Conflict resolver keeps split layout. |
 | Enter or leave the file editor | `Option-E` | `Alt-E` | Not while a text field has focus. Escape also leaves the editor. |
 | Save the edited file | `Cmd-S` | `Ctrl-S` | While the file editor is open, wherever focus is. Outside the editor the same chord stages the file. |
@@ -272,7 +297,7 @@ section's files and open each file in the diff. Keyboard focus stays in the list
 Preview-mode note:
 - [Markdown previews](markdown-previews.md) also support text selection, link menus, and keyboard-operated disclosures in embedded descriptions.
 - Rendered markdown preview hides the raw diff navigation controls and ignores the raw-diff-only view toggles, whitespace toggle, and conflict navigation hotkeys until you return to source mode.
-- The diff navigation keys above still work while a GitComet text input has focus, but search activation, `Escape`, view toggles, and staging `Space` remain tied to the active diff surface rather than text inputs.
+- The function-key navigation aliases remain available from text inputs. Arrow keys and Option/Alt arrows belong to the focused input, terminal, menu, or dialog.
 
 ## Context menu shortcuts
 
@@ -295,5 +320,5 @@ These shortcuts apply in the standalone focused diff window opened for difftool-
 | Action | macOS | Windows / Linux | Notes |
 | --- | --- | --- | --- |
 | Close the window | `Cmd-W`, `Ctrl-W`, `Escape`, `Q` | `Ctrl-W`, `Escape`, `Q` | `Ctrl-W` remains accepted on macOS as an extra alias. |
-| Previous change | `F2`, `Shift-F7`, `Option-Up` | `F2`, `Shift-F7`, `Alt-Up` | One change block at a time, as in the main diff view. |
-| Next change | `F3`, `F7`, `Option-Down` | `F3`, `F7`, `Alt-Down` | One change block at a time, as in the main diff view. |
+| Previous change | `F2`, `Shift-F7` | `F2`, `Shift-F7` | One change block at a time, as in the main diff view. |
+| Next change | `F3`, `F7` | `F3`, `F7` | One change block at a time, as in the main diff view. |

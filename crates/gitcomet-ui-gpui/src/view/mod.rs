@@ -136,6 +136,8 @@ actions!(
         ToggleRevealCommit,
         LocateFileInExplorer,
         OpenRemoteInBrowser,
+        FocusNextReviewPane,
+        FocusPreviousReviewPane,
     ]
 );
 
@@ -197,10 +199,7 @@ pub(crate) fn is_diff_shortcut_candidate(keystroke: &gpui::Keystroke) -> bool {
             && !mods.control
             && !mods.platform
             && !mods.function
-            && matches!(
-                key,
-                "e" | "i" | "s" | "w" | "up" | "down" | "left" | "right"
-            ))
+            && matches!(key, "e" | "i" | "s" | "w" | "up" | "down"))
         || ((mods.control || mods.platform)
             && !mods.alt
             && !mods.function
@@ -291,6 +290,7 @@ mod commit_message_text;
 mod commit_signature;
 pub(crate) mod components;
 mod conflict_markers;
+mod review_navigation;
 pub(crate) use gitcomet_conflict_resolver as conflict_resolver;
 mod conflict_style_cache;
 #[cfg(feature = "benchmarks")]

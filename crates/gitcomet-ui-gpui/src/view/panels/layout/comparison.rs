@@ -760,7 +760,24 @@ impl DetailsPaneView {
                                     .child(visible_bounds_probe())
                                     .child(range_filters)
                             })
-                            .child(files_body),
+                            .child(
+                                self.review_file_container(
+                                    crate::view::rows::FileListId::RangeFiles,
+                                    cx,
+                                )
+                                .flex()
+                                .flex_col()
+                                .flex_1()
+                                .min_h(px(0.0))
+                                .child(files_body)
+                                .child(
+                                    crate::view::review_navigation::hint(
+                                        self.theme,
+                                        self.ui_scale(),
+                                        "↑↓ Files · Enter Diff · Esc Graph",
+                                    ),
+                                ),
+                            ),
                     ),
             )
             .into_any_element()

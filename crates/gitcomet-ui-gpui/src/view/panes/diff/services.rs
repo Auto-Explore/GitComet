@@ -53,6 +53,9 @@ pub(in crate::view) enum DiffCommand {
         repo: RepoId,
         path: PathBuf,
     },
+    FocusReviewFiles {
+        window: AnyWindowHandle,
+    },
     OpenPopover {
         request: Box<PopoverRequest>,
         anchor: DiffPopoverAnchor,
@@ -68,6 +71,9 @@ pub(in crate::view) enum DiffCommand {
 }
 
 pub(in crate::view) trait DiffNavigation {
+    fn can_focus_review_files(&self, _window: &gpui::Window, _cx: &App) -> bool {
+        false
+    }
     fn layout(&self, cx: &App) -> Option<(Pixels, Pixels, bool, bool)>;
     fn selected_paths(
         &self,

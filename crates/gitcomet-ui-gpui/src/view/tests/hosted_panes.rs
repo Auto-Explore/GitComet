@@ -1643,7 +1643,7 @@ fn a_difftastic_action_while_another_applies_is_dropped_quietly(cx: &mut gpui::T
     assert_eq!(staged(&dir), "");
 }
 
-/// F1/F4 and Alt+Left/Right step the hosted pane the user is in, as its
+/// F1/F4 step the hosted pane the user is in, as its
 /// own arrows do, and never move History's diff behind the view.
 #[gpui::test]
 fn the_file_keys_in_an_extension_view_step_its_pane_not_history(cx: &mut gpui::TestAppContext) {
@@ -1663,7 +1663,7 @@ fn the_file_keys_in_an_extension_view_step_its_pane_not_history(cx: &mut gpui::T
         })
     };
     // No pane yet: the keys have nothing to act on.
-    for key in ["f4", "alt-right", "alt-down"] {
+    for key in ["f4", "f3"] {
         cx.simulate_keystrokes(key);
         publish(cx, &view, store.snapshot());
     }
@@ -1684,7 +1684,7 @@ fn the_file_keys_in_an_extension_view_step_its_pane_not_history(cx: &mut gpui::T
         let focus = view.read(app).repository_view_focus.clone();
         window.focus(&focus, app);
     });
-    for (key, path) in [("alt-right", "b.rs"), ("alt-left", "a.rs")] {
+    for (key, path) in [("f4", "b.rs"), ("f1", "a.rs")] {
         cx.simulate_keystrokes(key);
         settle(cx, &view, &store, key, |cx| {
             current(cx) == Some(PathBuf::from(path))
@@ -1694,7 +1694,7 @@ fn the_file_keys_in_an_extension_view_step_its_pane_not_history(cx: &mut gpui::T
         let focus = app.focus_handle();
         window.focus(&focus, app);
     });
-    for (key, path) in [("alt-right", "b.rs"), ("alt-left", "a.rs")] {
+    for (key, path) in [("f4", "b.rs"), ("f1", "a.rs")] {
         cx.simulate_keystrokes(key);
         settle(cx, &view, &store, key, |cx| {
             current(cx) == Some(PathBuf::from(path))
@@ -1742,7 +1742,7 @@ fn the_file_keys_in_an_extension_view_step_its_pane_not_history(cx: &mut gpui::T
 }
 
 #[gpui::test]
-fn alt_change_keys_reach_the_visible_pane_without_diff_focus(cx: &mut gpui::TestAppContext) {
+fn change_function_keys_reach_the_visible_pane_without_diff_focus(cx: &mut gpui::TestAppContext) {
     let (dir, store, view, cx) = open_repository(cx);
     std::fs::write(
         dir.path().join("a.rs"),
@@ -1752,6 +1752,7 @@ fn alt_change_keys_reach_the_visible_pane_without_diff_focus(cx: &mut gpui::Test
     cx.update(|_, app| {
         crate::app::bind_app_keys_for_test(app);
         crate::app::install_global_diff_navigation_actions_for_test(app);
+        crate::app::install_global_diff_shortcut_fallback_for_test(app);
     });
     let (list_id, changes) = open_changes_view(cx, &view, &store);
     click_debug_selector(
@@ -1778,7 +1779,7 @@ fn alt_change_keys_reach_the_visible_pane_without_diff_focus(cx: &mut gpui::Test
             focus
         });
         publish(cx, &view, store.snapshot());
-        for (key, stop) in [("alt-down", stops[1]), ("alt-up", stops[0])] {
+        for (key, stop) in [("f7", stops[1]), ("shift-f7", stops[0])] {
             cx.simulate_keystrokes(key);
             publish(cx, &view, store.snapshot());
             assert_eq!(
@@ -4161,8 +4162,6 @@ fn linked_worktree_change_keys_use_the_displayed_diff(cx: &mut gpui::TestAppCont
                     ("shift-f2", stops[0]),
                     ("f7", stops[1]),
                     ("shift-f7", stops[0]),
-                    ("alt-down", stops[1]),
-                    ("alt-up", stops[0]),
                 ] {
                     cx.simulate_keystrokes(key);
                     publish(cx, &view, store.snapshot());
@@ -4282,8 +4281,6 @@ fn linked_worktree_file_selection_repaints_without_mouse_movement(cx: &mut gpui:
         ("shift-f2", stops[0]),
         ("f7", stops[1]),
         ("shift-f7", stops[0]),
-        ("alt-down", stops[1]),
-        ("alt-up", stops[0]),
     ] {
         cx.simulate_keystrokes(key);
         publish(cx, &view, store.snapshot());

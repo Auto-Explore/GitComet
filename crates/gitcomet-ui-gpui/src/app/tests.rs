@@ -2143,8 +2143,6 @@ fn text_input_keybindings_resolve_expected_actions(cx: &mut gpui::TestAppContext
         ),
         ("shift-f7", crate::view::TextInputDiffPrevChange.name()),
         ("f7", crate::view::TextInputDiffNextChange.name()),
-        ("alt-up", crate::view::TextInputDiffPrevChange.name()),
-        ("alt-down", crate::view::TextInputDiffNextChange.name()),
         ("left", crate::kit::Left.name()),
         ("right", crate::kit::Right.name()),
         ("up", crate::kit::Up.name()),
@@ -2300,8 +2298,6 @@ fn text_input_diff_keybindings_stay_scoped_when_app_keys_are_installed(
     let cases = [
         ("f1", crate::view::TextInputDiffPrevFile.name()),
         ("f4", crate::view::TextInputDiffNextFile.name()),
-        ("alt-up", crate::view::TextInputDiffPrevChange.name()),
-        ("alt-down", crate::view::TextInputDiffNextChange.name()),
         ("alt-left", crate::kit::WordLeft.name()),
         ("alt-right", crate::kit::WordRight.name()),
         (
@@ -2591,10 +2587,6 @@ fn app_keybindings_resolve_expected_actions(cx: &mut gpui::TestAppContext) {
         ("secondary-q", Quit.name()),
         ("f1", crate::view::DiffPrevFile.name()),
         ("f4", crate::view::DiffNextFile.name()),
-        ("alt-left", crate::view::DiffPrevFile.name()),
-        ("alt-right", crate::view::DiffNextFile.name()),
-        ("alt-up", crate::view::DiffPrevChange.name()),
-        ("alt-down", crate::view::DiffNextChange.name()),
         ("f2", crate::view::DiffPrevSearchMatchOrChange.name()),
         ("f3", crate::view::DiffNextSearchMatchOrChange.name()),
     ];

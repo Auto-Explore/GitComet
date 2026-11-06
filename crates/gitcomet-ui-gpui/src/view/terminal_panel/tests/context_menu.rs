@@ -220,6 +220,17 @@ fn terminal_app_shortcuts_work_from_terminal_without_sending_shell_input(
         vec![0x10],
         "other shell shortcuts stay in the terminal"
     );
+    for key in ["f6", "shift-f6"] {
+        cx.simulate_keystrokes(key);
+        refresh_and_draw(cx);
+        assert!(
+            !fixture.take_input().is_empty(),
+            "{key} belongs to the terminal"
+        );
+        cx.update(|window, app| {
+            assert!(fixture.viewport.read(app).focus_handle.is_focused(window))
+        });
+    }
     cx.simulate_keystrokes("secondary-/");
     refresh_and_draw(cx);
     cx.update(|_, app| {

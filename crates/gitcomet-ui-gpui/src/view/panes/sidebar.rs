@@ -352,7 +352,7 @@ pub(in super::super) struct SidebarPaneView {
     pub(in super::super) store: Arc<AppStore>,
     state: Arc<AppState>,
     pub(in super::super) theme: AppTheme,
-    sidebar_focus: gpui::FocusHandle,
+    pub(in crate::view) sidebar_focus: gpui::FocusHandle,
     _ui_model_subscription: gpui::Subscription,
     documents: crate::view::documents::buffers::DocumentOwner,
     _documents_subscription: gpui::Subscription,
