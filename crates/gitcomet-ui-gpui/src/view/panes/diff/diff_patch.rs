@@ -79,6 +79,14 @@ impl DiffRenderer {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
+        // A visual row not yet tied to a source row opens no menu.
+        if self
+            .diff_source_visible_ix_for_visible_ix(visible)
+            .is_none()
+        {
+            return;
+        }
+        self.select_diff_editor_menu_row(self.diff_view, visible, region, self.diff_visible_len());
         let Some(selection) = self.structural_line_selection(visible, region) else {
             return;
         };

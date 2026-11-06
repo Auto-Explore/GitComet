@@ -30,9 +30,7 @@ impl DiffRenderer {
             return;
         }
         if self.structural_diff_active() {
-            let len = self.diff_visible_len();
-            let clicked_visible_ix = visible_ix.min(len.saturating_sub(1));
-            self.select_diff_editor_menu_row(self.diff_view, clicked_visible_ix, region, len);
+            let clicked_visible_ix = visible_ix.min(self.diff_visible_len().saturating_sub(1));
             self.open_structural_line_menu(clicked_visible_ix, region, anchor, window, cx);
             return;
         }
@@ -213,7 +211,7 @@ impl DiffRenderer {
     /// Selects the right-clicked row, dropping the outline, unless the text
     /// selection or the selected rows already take it: the menu acts on what
     /// the diff shows selected.
-    fn select_diff_editor_menu_row(
+    pub(in crate::view::panes::diff) fn select_diff_editor_menu_row(
         &mut self,
         view: DiffViewMode,
         clicked_visible_ix: usize,
