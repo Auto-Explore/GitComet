@@ -48,6 +48,11 @@ pub fn current_tooltip_dismiss_epoch(cx: &App) -> u64 {
 /// Hides every visible gpui-managed tooltip bubble. Registered on window
 /// roots via `capture_any_mouse_down` so it runs for clicks anywhere.
 pub fn dismiss_tooltips_on_mouse_down(cx: &mut App) {
+    dismiss_tooltips(cx);
+}
+
+/// Retracts existing bubbles when a keyboard action opens an overlay too.
+pub fn dismiss_tooltips(cx: &mut App) {
     let next = current_tooltip_dismiss_epoch(cx).wrapping_add(1);
     cx.set_global(TooltipDismissEpoch(next));
 }

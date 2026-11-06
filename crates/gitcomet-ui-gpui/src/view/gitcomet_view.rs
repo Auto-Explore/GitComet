@@ -78,9 +78,8 @@ impl GitCometView {
             return;
         }
         kind.new_source = true;
+        self.dismiss_hover_popovers(cx);
         self.set_hook_activity_dialog_repo(Self::hook_activity_workflow_repo(&kind.kind), cx);
-        self.history_refs_hover_host
-            .update(cx, |host, cx| host.close(cx));
         self.popover_host.update(cx, |host, cx| {
             host.restore_history_binding();
             host.open_popover_at(kind, anchor, window, cx)
@@ -115,14 +114,13 @@ impl GitCometView {
             return;
         }
         kind.new_source = true;
+        self.dismiss_hover_popovers(cx);
         if let PopoverKind::HookActivity { repo_id, .. } = &kind.kind {
             self.pending_hook_activity_open = None;
             self.minimized_hook_activity_chains
                 .retain(|(suppressed_repo_id, _)| suppressed_repo_id != repo_id);
         }
         self.set_hook_activity_dialog_repo(Self::hook_activity_workflow_repo(&kind.kind), cx);
-        self.history_refs_hover_host
-            .update(cx, |host, cx| host.close(cx));
         self.popover_host.update(cx, |host, cx| {
             host.restore_history_binding();
             host.open_popover_centered(kind, window, cx);
@@ -150,9 +148,8 @@ impl GitCometView {
             return;
         }
         kind.new_source = true;
+        self.dismiss_hover_popovers(cx);
         self.set_hook_activity_dialog_repo(Self::hook_activity_workflow_repo(&kind.kind), cx);
-        self.history_refs_hover_host
-            .update(cx, |host, cx| host.close(cx));
         self.popover_host.update(cx, |host, cx| {
             host.restore_history_binding();
             host.open_popover_for_bounds(kind, anchor_bounds, window, cx)
@@ -172,6 +169,7 @@ impl GitCometView {
         if self.reveal_commit_open {
             self.close_reveal_commit(window, cx);
         }
+        self.dismiss_hover_popovers(cx);
         self.command_palette_open = true;
         let restore_focus = window
             .focused(cx)
@@ -285,6 +283,7 @@ impl GitCometView {
         if self.command_palette_open {
             self.close_command_palette(window, cx);
         }
+        self.dismiss_hover_popovers(cx);
         self.reveal_commit_open = true;
         let restore_focus = window
             .focused(cx)
@@ -352,6 +351,23 @@ impl GitCometView {
         self.popover_host.read(cx).is_open() || self.sidebar_collapsed_popover.is_some()
     }
 
+    pub(in crate::view) fn background_hovers_blocked(&self, cx: &App) -> bool {
+        self.is_overlay_open(cx)
+            || self.command_palette_open
+            || self.reveal_commit_open
+            || self.document_picker_open(cx)
+            || self.window_gated
+    }
+
+    pub(in crate::view) fn dismiss_hover_popovers(&mut self, cx: &mut gpui::Context<Self>) {
+        tooltip::dismiss_tooltips(cx);
+        self.tooltip_host.update(cx, |host, cx| {
+            host.clear_tooltip(cx);
+        });
+        self.dismiss_commit_message_hover(cx);
+        self.close_history_refs_hover(cx);
+    }
+
     pub(in crate::view) fn show_history_refs_hover(
         &mut self,
         repo_id: RepoId,
@@ -366,7 +382,9 @@ impl GitCometView {
         // handles mouse-move at the window level, so it still fires under the
         // overlay. If the open overlay is the hover's own item menu, leave the
         // existing hover in place.
-        if self.is_overlay_open(cx) && !self.history_refs_hover_host.read(cx).is_item_menu_open() {
+        if self.background_hovers_blocked(cx)
+            && !self.history_refs_hover_host.read(cx).is_item_menu_open()
+        {
             self.close_history_refs_hover(cx);
             return;
         }
@@ -384,7 +402,7 @@ impl GitCometView {
         // Same reasoning as the refs hover: the history canvas listens for
         // mouse-move at the window level, so it still fires under an open
         // overlay and the card would surface on top of it.
-        if self.is_overlay_open(cx) {
+        if self.background_hovers_blocked(cx) {
             self.dismiss_commit_message_hover(cx);
             return;
         }
@@ -1791,6 +1809,7 @@ impl GitCometView {
         section: CollapsedSidebarSection,
         cx: &mut gpui::Context<Self>,
     ) {
+        self.dismiss_hover_popovers(cx);
         self.sidebar_collapsed_popover = Some(section);
         self.sidebar_collapsed_popover_closing = None;
         self.sidebar_collapsed_popover_anim_seq =

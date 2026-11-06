@@ -215,6 +215,21 @@ impl Render for GitCometView {
             }
         }
 
+        // A child can open a dialog directly through the popover host. Retract
+        // background cards here too, including any timer armed before it opened.
+        if self.background_hovers_blocked(cx) {
+            self.dismiss_commit_message_hover(cx);
+            if !self.history_refs_hover_host.read(cx).is_item_menu_open() {
+                self.close_history_refs_hover(cx);
+            }
+            if self.command_palette_open || self.reveal_commit_open || self.document_picker_open(cx)
+            {
+                self.tooltip_host.update(cx, |host, cx| {
+                    host.clear_tooltip(cx);
+                });
+            }
+        }
+
         let decorations = window.window_decorations();
         self.sync_frame_decorations(decorations, cx);
         let (tiling, client_inset) = match decorations {
@@ -831,11 +846,11 @@ impl Render for GitCometView {
             .top_0()
             .left_0()
             .size_full()
+            .child(stable_overlay_view(self.history_refs_hover_host.clone()))
+            .child(stable_overlay_view(self.commit_message_hover_host.clone()))
             .child(self.command_palette.clone())
             .child(self.document_picker.clone())
             .child(stable_overlay_view(self.reveal_commit_dialog.clone()))
-            .child(stable_overlay_view(self.history_refs_hover_host.clone()))
-            .child(stable_overlay_view(self.commit_message_hover_host.clone()))
             .child(stable_overlay_view(self.popover_host.clone()))
             .child(stable_cached_overlay_view(self.toast_host.clone()))
             .child(stable_overlay_view(self.tooltip_host.clone()));

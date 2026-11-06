@@ -144,7 +144,7 @@ impl HistoryRefsHoverHost {
                 if this
                     .root_view
                     .upgrade()
-                    .is_some_and(|root| root.read(cx).is_overlay_open(cx))
+                    .is_some_and(|root| root.read(cx).background_hovers_blocked(cx))
                 {
                     return;
                 }
