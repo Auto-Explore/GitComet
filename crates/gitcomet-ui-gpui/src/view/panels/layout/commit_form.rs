@@ -161,14 +161,11 @@ impl DetailsPaneView {
         } else {
             theme.colors.foreground.secondary
         };
-        let commit_message = components::ScrollContainer::vertical(
-            ("commit_message_scroll_surface", repo_key),
-            ("commit_message_scrollbar", repo_key),
-            self.commit_message_scroll.clone(),
-            scaled_px(COMMIT_MESSAGE_INPUT_MAX_HEIGHT_PX),
-        )
-        .container_id(("commit_message_container", repo_key))
-        .render(theme, self.commit_message_input.clone());
+        let commit_message = div()
+            .id(("commit_message_container", repo_key))
+            .w_full()
+            .min_w(px(0.0))
+            .child(self.commit_message_input.clone());
         let commit_main = components::Button::new("commit", commit_label)
             .start_slot(if commit_in_flight {
                 spinner(("commit_spinner", repo_key))
