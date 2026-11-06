@@ -602,11 +602,16 @@ fn right_clicking_a_split_pair_changed_on_one_side_takes_both_lines(cx: &mut gpu
                     blocks: vec![0..2],
                 },
             );
-            for region in [DiffTextRegion::SplitLeft, DiffTextRegion::SplitRight] {
-                let selected = pane.structural_line_selection(0, region).unwrap();
-                assert_eq!(selected.old, BTreeSet::from([1]), "{region:?}");
-                assert_eq!(selected.new, BTreeSet::from([1]), "{region:?}");
+            // As the right-click finds it, and once it selected the row.
+            for rows in [None, Some((0, 0))] {
+                pane.diff_selection_range = rows;
+                for region in [DiffTextRegion::SplitLeft, DiffTextRegion::SplitRight] {
+                    let selected = pane.structural_line_selection(0, region).unwrap();
+                    assert_eq!(selected.old, BTreeSet::from([1]), "{rows:?} {region:?}");
+                    assert_eq!(selected.new, BTreeSet::from([1]), "{rows:?} {region:?}");
+                }
             }
+            pane.diff_selection_range = None;
             let changed_on_both_sides = pane
                 .structural_line_selection(1, DiffTextRegion::SplitRight)
                 .unwrap();
