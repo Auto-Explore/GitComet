@@ -411,15 +411,22 @@ pub(super) fn render(
                 )
                 .child(scrollbar),
         );
-    let close = components::Button::new("shortcut_help_close", "×")
+    let close = components::Button::new("shortcut_help_close", "")
+        .start_slot(crate::kit::icons::svg_icon(
+            "icons/generic_close.svg",
+            theme.colors.foreground.secondary,
+            p(20.0),
+        ))
         .style(components::ButtonStyle::Transparent)
         .on_click(theme, cx, |this, _, window, cx| {
             this.close_and_notify_root(None, window, cx)
         })
         .debug_selector(|| "shortcut_help_close".to_string())
+        .size(p(32.0))
+        .p_0()
         .absolute()
-        .top(p(22.0))
-        .right(p(22.0));
+        .top(p(20.0))
+        .right(p(20.0));
     let surface = components::modal_surface(theme)
         .debug_selector(|| "keyboard_shortcuts_dialog".to_string())
         .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
