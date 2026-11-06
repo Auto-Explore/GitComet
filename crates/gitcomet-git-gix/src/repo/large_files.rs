@@ -717,12 +717,10 @@ impl super::GixRepo {
         ))
     }
 
-    /// Git LFS's `pre-push` hook would upload objects for this push: the
-    /// LFS filter is configured and this repository stores LFS objects.
-    pub(super) fn lfs_objects_upload_on_pre_push(&self) -> Result<bool> {
+    pub(super) fn lfs_filter_configured_for_push(&self) -> Result<bool> {
         let repo = self.repo_with_current_config()?;
         let config = repo.config_snapshot();
-        Ok(lfs_filter_configured(&config) && lfs_storage_dir(&repo).join("objects").is_dir())
+        Ok(lfs_filter_configured(&config))
     }
 
     pub(super) fn large_file_support_impl(

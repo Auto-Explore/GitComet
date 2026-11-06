@@ -21,6 +21,53 @@ use std::str;
 
 const PENDING_UPSTREAM_CONFIG_KEY: &str = "gitcometPendingUpstream";
 
+fn write_branch_upstream_config(
+    repo: &gix::Repository,
+    branch: &str,
+    upstream: &Upstream,
+    pending: bool,
+) -> Result<()> {
+    let merge_ref = format!("refs/heads/{}", upstream.branch);
+    edit_local_config_strict(repo, |config| {
+        if let Ok(mut merges) =
+            config.raw_values_mut_by("branch", Some(gix::bstr::BStr::new(branch)), "merge")
+        {
+            merges.delete_all();
+        }
+
+        let mut section = config
+            .section_mut_or_create_new("branch", Some(gix::bstr::BStr::new(branch)))
+            .map_err(|e| {
+                Error::new(ErrorKind::Backend(format!(
+                    "create local config section for branch {branch}: {e}"
+                )))
+            })?;
+        section
+            .set("remote", upstream.remote.as_str())
+            .map_err(|e| {
+                Error::new(ErrorKind::Backend(format!(
+                    "set local config upstream remote for branch {branch}: {e}"
+                )))
+            })?;
+        section.set("merge", merge_ref.as_str()).map_err(|e| {
+            Error::new(ErrorKind::Backend(format!(
+                "set local config upstream merge ref for branch {branch}: {e}"
+            )))
+        })?;
+        while section.remove(PENDING_UPSTREAM_CONFIG_KEY).is_some() {}
+        if pending {
+            section
+                .set(PENDING_UPSTREAM_CONFIG_KEY, "true")
+                .map_err(|e| {
+                    Error::new(ErrorKind::Backend(format!(
+                        "mark new upstream for branch {branch}: {e}"
+                    )))
+                })?;
+        }
+        Ok(true)
+    })
+}
+
 /// Uncoloured output for the diffstat a pull, merge or squash prints:
 /// `color.ui` alone loses to a user's `color.diff=always`.
 pub(super) const NO_COLOR_CONFIG: [&str; 4] = ["-c", "color.ui=false", "-c", "color.diff=false"];
@@ -1542,7 +1589,7 @@ impl GixRepo {
         // Git LFS uploads objects from its `pre-push` hook, and `--no-verify`
         // skips that hook too. Upload them first, as the hook would have, so
         // the pushed commits never point at objects the server lacks.
-        if !hooks.skipped() || !self.lfs_objects_upload_on_pre_push()? {
+        if !hooks.skipped() || !self.lfs_filter_configured_for_push()? {
             return self.push_after_commit_target_once(target, set_upstream, capture_output, hooks);
         }
         // Both commands answer the same credentials prompt.
@@ -1555,9 +1602,6 @@ impl GixRepo {
             let label = format!("git lfs push {} {local_head}", target.remote);
             let uploaded = run_git_command_with_optional_output(cmd, &label, capture_output)?;
             if set_upstream {
-                // `--set-upstream` pushes the branch, not `local_head`. A commit
-                // made during the upload would be published without its objects,
-                // and with hooks skipped no `pre-push` would catch it.
                 self.validate_push_after_commit_target(target)?;
             }
             let pushed =
@@ -1574,19 +1618,9 @@ impl GixRepo {
         capture_output: bool,
         hooks: GitHooks,
     ) -> Result<CommandOutput> {
-        let source = if set_upstream {
-            format!("refs/heads/{}", target.local_branch)
-        } else {
-            target.local_head.to_string()
-        };
+        let source = target.local_head.to_string();
         let refspec = format!("{source}:refs/heads/{}", target.branch);
-        let mut flags = String::new();
-        if set_upstream {
-            flags.push_str(" --set-upstream");
-        }
-        if hooks.skipped() {
-            flags.push_str(" --no-verify");
-        }
+        let flags = if hooks.skipped() { " --no-verify" } else { "" };
         let command_label = format!(
             "git push{flags} {} {}:refs/heads/{}",
             target.remote, source, target.branch
@@ -1594,21 +1628,21 @@ impl GixRepo {
 
         let mut cmd = self.git_workdir_cmd();
         cmd.arg("push");
-        if set_upstream {
-            cmd.arg("--set-upstream");
-        }
         if hooks.skipped() {
             cmd.arg("--no-verify");
         }
         cmd.arg("--").arg(&target.remote).arg(refspec);
         let output = run_git_command_with_optional_output(cmd, &command_label, capture_output)?;
-        self.clear_pending_upstream_if_matches(
-            &target.local_branch,
-            &Upstream {
-                remote: target.remote.clone(),
-                branch: target.branch.clone(),
-            },
-        );
+        let upstream = Upstream {
+            remote: target.remote.clone(),
+            branch: target.branch.clone(),
+        };
+        if set_upstream {
+            let repo = self.reopen_repo()?;
+            write_branch_upstream_config(&repo, &target.local_branch, &upstream, false)?;
+        } else {
+            self.clear_pending_upstream_if_matches(&target.local_branch, &upstream);
+        }
         Ok(output)
     }
 
@@ -2207,52 +2241,11 @@ impl GixRepo {
         // branch that will be created by a later push. Existing-target picker
         // actions validate liveness against state before reaching this method;
         // the explicit "Create new" flow intentionally has no tracking ref yet.
-        let merge_ref = format!("refs/heads/{}", upstream.branch);
         let label = format!(
             "set upstream {branch} -> {} / {}",
             upstream.remote, upstream.branch
         );
-        edit_local_config_strict(&repo, |config| {
-            // `section.set()` only replaces the last value in one section.
-            // Remove all merge values across repeated sections so Git's first
-            // merge entry becomes the newly selected target.
-            if let Ok(mut merges) =
-                config.raw_values_mut_by("branch", Some(gix::bstr::BStr::new(branch)), "merge")
-            {
-                merges.delete_all();
-            }
-
-            let mut section = config
-                .section_mut_or_create_new("branch", Some(gix::bstr::BStr::new(branch)))
-                .map_err(|e| {
-                    Error::new(ErrorKind::Backend(format!(
-                        "create local config section for branch {branch}: {e}"
-                    )))
-                })?;
-            section
-                .set("remote", upstream.remote.as_str())
-                .map_err(|e| {
-                    Error::new(ErrorKind::Backend(format!(
-                        "set local config upstream remote for branch {branch}: {e}"
-                    )))
-                })?;
-            section.set("merge", merge_ref.as_str()).map_err(|e| {
-                Error::new(ErrorKind::Backend(format!(
-                    "set local config upstream merge ref for branch {branch}: {e}"
-                )))
-            })?;
-            while section.remove(PENDING_UPSTREAM_CONFIG_KEY).is_some() {}
-            if !tracking_ref_exists {
-                section
-                    .set(PENDING_UPSTREAM_CONFIG_KEY, "true")
-                    .map_err(|e| {
-                        Error::new(ErrorKind::Backend(format!(
-                            "mark new upstream for branch {branch}: {e}"
-                        )))
-                    })?;
-            }
-            Ok(true)
-        })?;
+        write_branch_upstream_config(&repo, branch, upstream, !tracking_ref_exists)?;
 
         Ok(CommandOutput::empty_success(label))
     }

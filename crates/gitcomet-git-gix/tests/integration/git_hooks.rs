@@ -74,6 +74,8 @@ fn fixture() -> Fixture {
             ("user.email", "test@example.com"),
             ("commit.gpgsign", "false"),
             ("core.autocrlf", "false"),
+            ("filter.lfs.process", ""),
+            ("filter.lfs.clean", ""),
         ],
     );
     git(
@@ -248,6 +250,13 @@ fn push_after_commit_sets_upstream_without_running_the_pre_push_hook() {
 
     let (target, set_upstream) = push_target(&repo, "topic", None, &committed, GitHooks::Skip);
     assert!(set_upstream, "topic has no upstream yet");
+    repo.push_after_commit_with_hooks(&target, set_upstream, GitHooks::Run)
+        .expect_err("the pre-push hook must prevent publication");
+    assert_eq!(remote_branch(&fixture.remote, "topic"), None);
+    let config = git(&fixture.work, &["config", "--local", "--list"]);
+    assert!(!config.contains("branch.topic.remote="));
+    assert!(!config.contains("branch.topic.merge="));
+
     repo.push_after_commit_with_hooks(&target, set_upstream, GitHooks::Skip)
         .unwrap();
 
@@ -384,9 +393,122 @@ fn push_after_commit_without_hooks_still_uploads_lfs_objects() {
     }
 }
 
-/// Setting the upstream pushes the branch rather than the commit that was
-/// uploaded. If the branch moves while `git lfs push` runs, the push must stop
-/// instead of publishing a commit whose objects never reached the remote.
+#[test]
+fn push_after_commit_without_hooks_refuses_missing_lfs_objects_without_a_local_store() {
+    if !git_lfs_available() {
+        return;
+    }
+    for branch in ["main", "topic"] {
+        let (fixture, repo) = lfs_fixture();
+        let base = head(&fixture.work);
+        let pre_head = if branch == "main" {
+            Some(base.as_str())
+        } else {
+            git(&fixture.work, &["checkout", "-q", "-b", branch]);
+            None
+        };
+        let (committed, remote_object) = commit_lfs_asset(&fixture, &repo);
+        let pointer = git(&fixture.work, &["show", "HEAD:asset.bin"]);
+        fs::write(fixture.work.join("asset.bin"), pointer).unwrap();
+        let local_store = fixture.work.join(".git/lfs/objects");
+        fs::remove_dir_all(&local_store).unwrap();
+        assert!(!local_store.exists());
+
+        let (target, set_upstream) =
+            push_target(&repo, branch, pre_head, &committed, GitHooks::Skip);
+        repo.push_after_commit_with_hooks(&target, set_upstream, GitHooks::Skip)
+            .expect_err("missing LFS content must prevent publishing its pointer");
+
+        assert!(!remote_object.exists(), "{branch}");
+        assert_eq!(
+            remote_branch(&fixture.remote, branch).as_deref(),
+            pre_head,
+            "{branch}: the remote ref must not advance"
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn push_after_commit_sets_upstream_for_the_captured_commit_when_the_branch_moves_at_push_launch() {
+    if !git_lfs_available() {
+        return;
+    }
+    gitcomet_core::test_support::localized_git::run(
+        module_path!(),
+        "push_after_commit_sets_upstream_for_the_captured_commit_when_the_branch_moves_at_push_launch",
+        r#"#!/bin/sh
+previous=
+for argument in "$@"; do
+  if [ "$previous" = -C ]; then
+    cd "$argument" || exit $?
+  fi
+  case "$argument" in
+    lfs) break ;;
+    push)
+      moved=$(git config --get test.concurrentCommit) || exit $?
+      git update-ref refs/heads/topic "$moved" || exit $?
+      break ;;
+  esac
+  previous=$argument
+done
+exec git "$@"
+"#,
+        || {
+            let (fixture, repo) = lfs_fixture();
+            git(&fixture.work, &["checkout", "-q", "-b", "topic"]);
+            let (committed, remote_object) = commit_lfs_asset(&fixture, &repo);
+            let (target, set_upstream) =
+                push_target(&repo, "topic", None, &committed, GitHooks::Skip);
+            assert!(set_upstream);
+
+            stage_change(&fixture.work, "newer.bin", "newer large file contents\n");
+            repo.commit_with_hooks("newer asset", None, GitHooks::Skip)
+                .unwrap();
+            let moved = head(&fixture.work);
+            let newer_pointer = git(&fixture.work, &["show", "HEAD:newer.bin"]);
+            let newer_oid = newer_pointer
+                .lines()
+                .find_map(|line| line.strip_prefix("oid sha256:"))
+                .expect("newer.bin is an LFS pointer");
+            let newer_remote_object = fixture
+                .remote
+                .join("lfs/objects")
+                .join(&newer_oid[0..2])
+                .join(&newer_oid[2..4])
+                .join(newer_oid);
+            git(&fixture.work, &["reset", "--hard", &committed]);
+            git(&fixture.work, &["config", "test.concurrentCommit", &moved]);
+
+            repo.push_after_commit_with_hooks(&target, set_upstream, GitHooks::Skip)
+                .unwrap();
+
+            assert_eq!(
+                head(&fixture.work),
+                moved,
+                "the branch moved at push launch"
+            );
+            assert!(
+                remote_object.is_file(),
+                "the captured commit's LFS content arrived"
+            );
+            assert!(!newer_remote_object.exists());
+            assert_eq!(
+                remote_branch(&fixture.remote, "topic").as_deref(),
+                Some(committed.as_str()),
+                "the remote must receive the commit whose LFS content was uploaded"
+            );
+            assert_eq!(
+                git(
+                    &fixture.work,
+                    &["rev-parse", "--abbrev-ref", "topic@{upstream}"]
+                ),
+                "origin/topic"
+            );
+        },
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn push_after_commit_without_hooks_refuses_a_branch_that_moved_during_the_lfs_upload() {
