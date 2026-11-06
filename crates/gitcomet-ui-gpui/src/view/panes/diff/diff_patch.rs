@@ -82,6 +82,7 @@ impl DiffRenderer {
         let Some(selection) = self.structural_line_selection(visible, region) else {
             return;
         };
+        self.remember_diff_editor_menu_click(visible, region);
         let copy = self
             .selected_diff_text_string()
             .or_else(|| self.diff_text_string_for_region(visible, region));
@@ -102,8 +103,11 @@ impl DiffRenderer {
     ) -> Option<SourceLineSelection> {
         let row = self.diff_source_visible_ix_for_visible_ix(visible)?;
         let selected = self.diff_text_selection_line_rows_at(self.diff_view, row, region);
+        // A range of the clicked row alone stands for that row, as it does
+        // once a right-click selects it.
         if selected.is_none()
             && let Some((a, b)) = self.diff_selection_range
+            && a != b
             && (a.min(b)..=a.max(b)).contains(&visible)
         {
             return Some(self.structural_source_lines(
@@ -118,6 +122,16 @@ impl DiffRenderer {
                     .unwrap_or_default(),
             );
         };
+        Some(self.structural_text_selection_lines(first, last))
+    }
+
+    /// The source lines the text selection takes on source rows
+    /// `first..=last`, on each side it reaches.
+    pub(super) fn structural_text_selection_lines(
+        &self,
+        first: usize,
+        last: usize,
+    ) -> SourceLineSelection {
         let regions: &[DiffTextRegion] = match self.diff_view {
             DiffViewMode::Split => &[DiffTextRegion::SplitLeft, DiffTextRegion::SplitRight],
             DiffViewMode::Inline => &[DiffTextRegion::Inline],
@@ -135,7 +149,7 @@ impl DiffRenderer {
                 }
             }
         }
-        Some(selection)
+        selection
     }
 
     pub(super) fn open_structural_block_menu(

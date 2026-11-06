@@ -5,7 +5,8 @@
 //! patch from the same selection and apply it through the same messages.
 
 use super::{
-    DiffArea, DiffRenderer, DiffTarget, DiffTextRegion, DiffViewMode, FxHashMap, FxHashSet,
+    DiffArea, DiffEditorMenuClick, DiffLineSelectionState, DiffRenderer, DiffTarget,
+    DiffTextRegion, DiffViewMode, FxHashMap, FxHashSet,
     build_unified_patch_for_selected_lines_across_hunks,
     build_unified_patch_for_selected_lines_across_hunks_for_reverse_apply,
 };
@@ -293,28 +294,59 @@ impl DiffRenderer {
         self.diff_text_visible_range_for_source_range(rows.start, last)
     }
 
-    /// The visible rows a line key acts on: the lines the text selection
+    /// What chooses the lines a line action takes, for telling whether it
+    /// changed since the diff editor menu opened.
+    fn diff_line_selection_state(&self) -> DiffLineSelectionState {
+        DiffLineSelectionState {
+            target: self.rendered_diff_target().cloned(),
+            layout: self.diff_visible_layout_key(),
+            row_anchor: self.diff_selection_anchor,
+            rows: self.diff_selection_range,
+            text: (self.diff_text_anchor, self.diff_text_head),
+            block: self.diff_focused_change_block.clone(),
+        }
+    }
+
+    /// Remembers the press that opened the diff editor menu, once it has
+    /// settled the selection the menu acts on.
+    pub(in crate::view::panes::diff) fn remember_diff_editor_menu_click(
+        &mut self,
+        visible_ix: usize,
+        region: DiffTextRegion,
+    ) {
+        self.diff_editor_menu_click = Some(DiffEditorMenuClick {
+            visible_ix,
+            region,
+            seen: self.diff_line_selection_state(),
+        });
+    }
+
+    /// The press that opened the diff editor menu, while nothing has changed
+    /// the lines that menu acted on.
+    fn live_diff_editor_menu_click(&self) -> Option<(usize, DiffTextRegion)> {
+        self.diff_editor_menu_click
+            .as_ref()
+            .filter(|click| click.seen == self.diff_line_selection_state())
+            .map(|click| (click.visible_ix, click.region))
+    }
+
+    /// The visible rows a line key acts on: the lines the diff editor menu
+    /// acted on while its selection stands, else the lines the text selection
     /// takes, else the selected rows, else the change block navigation
-    /// outlined. A right-click falls back to the row it landed on; a key has
-    /// no such row, so a bare caret selects nothing.
+    /// outlined. A bare caret selects nothing.
     fn diff_line_action_rows(&self) -> Option<(usize, usize)> {
         let len = self.diff_visible_len();
         if len == 0 {
             return None;
         }
-        let text = self
+        if let Some((visible_ix, region)) = self.live_diff_editor_menu_click() {
+            return self.diff_editor_menu_rows(self.diff_view, visible_ix, region, len);
+        }
+        let (start, end) = self
             .diff_text_selection_line_rows(self.diff_view)
-            .and_then(|(first, last)| self.diff_text_visible_range_for_source_range(first, last));
-        let rows = self.diff_selection_range.map(|(a, b)| (a.min(b), a.max(b)));
-        let (start, end) = match (text, rows) {
-            // Selecting text clears the selected rows, so rows outside the text
-            // were chosen after it: a right-click beside the highlight, which
-            // the menu acted on. The key must act on the same lines.
-            (Some(text), Some(rows)) if rows_outside(rows, text) => rows,
-            (text, rows) => text
-                .or(rows)
-                .or_else(|| self.focused_block_visible_rows())?,
-        };
+            .and_then(|(first, last)| self.diff_text_visible_range_for_source_range(first, last))
+            .or_else(|| self.diff_selection_range.map(|(a, b)| (a.min(b), a.max(b))))
+            .or_else(|| self.focused_block_visible_rows())?;
         Some((start.min(len - 1), end.min(len - 1)))
     }
 
@@ -359,42 +391,22 @@ impl DiffRenderer {
     }
 
     /// The source lines a line key acts on in a structural diff: the lines
-    /// the text selection takes, else both sides of the selected rows or of
-    /// the outlined change block.
+    /// the diff editor menu acted on while its selection stands, else the
+    /// lines the text selection takes, else both sides of the selected rows or
+    /// of the outlined change block.
     pub(in crate::view::panes::diff) fn structural_selected_lines(
         &self,
     ) -> Option<SourceLineSelection> {
-        let rows = self.diff_selection_range.map(|(a, b)| (a.min(b), a.max(b)));
-        // As in `diff_line_action_rows`: rows chosen beside the text win.
-        let text = self
-            .diff_text_selection_line_rows(self.diff_view)
-            .filter(|&(first, last)| {
-                !rows.is_some_and(|rows| {
-                    self.diff_text_visible_range_for_source_range(first, last)
-                        .is_some_and(|text| rows_outside(rows, text))
-                })
-            });
-        if let Some((first, last)) = text {
-            let regions: &[DiffTextRegion] = match self.diff_view {
-                DiffViewMode::Split => &[DiffTextRegion::SplitLeft, DiffTextRegion::SplitRight],
-                DiffViewMode::Inline => &[DiffTextRegion::Inline],
-            };
-            let mut selection = SourceLineSelection::default();
-            for row in first..=last {
-                let Some(source) = self.diff_source_mapped_ix_for_visible_ix(row) else {
-                    continue;
-                };
-                for &side in regions {
-                    if self.diff_text_selection_takes_line(row, side) {
-                        let lines = self.structural_source_lines([source], Some(side));
-                        selection.old.extend(lines.old);
-                        selection.new.extend(lines.new);
-                    }
-                }
-            }
-            return Some(selection);
+        if let Some((visible_ix, region)) = self.live_diff_editor_menu_click() {
+            return self.structural_line_selection(visible_ix, region);
         }
-        let (a, b) = rows.or_else(|| self.focused_block_visible_rows())?;
+        if let Some((first, last)) = self.diff_text_selection_line_rows(self.diff_view) {
+            return Some(self.structural_text_selection_lines(first, last));
+        }
+        let (a, b) = self
+            .diff_selection_range
+            .map(|(a, b)| (a.min(b), a.max(b)))
+            .or_else(|| self.focused_block_visible_rows())?;
         Some(self.structural_source_lines(
             (a..=b).filter_map(|row| self.diff_mapped_ix_for_visible_ix(row)),
             None,
@@ -468,9 +480,4 @@ impl DiffRenderer {
         });
         true
     }
-}
-
-/// Whether the row range `rows` lies wholly outside `text`'s rows.
-fn rows_outside(rows: (usize, usize), text: (usize, usize)) -> bool {
-    rows.1 < text.0 || rows.0 > text.1
 }

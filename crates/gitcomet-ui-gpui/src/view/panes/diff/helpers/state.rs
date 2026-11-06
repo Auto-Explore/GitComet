@@ -200,6 +200,27 @@ pub(in crate::view) struct DiffFocusedChangeBlock {
     pub(in crate::view) layout: DiffVisibleLayoutKey,
 }
 
+/// Where the diff editor menu last opened, so line keys pressed after it
+/// closes act on the lines it did. Live only while everything that chose
+/// those lines is as the menu saw it.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(in crate::view) struct DiffEditorMenuClick {
+    pub(in crate::view) visible_ix: usize,
+    pub(in crate::view) region: DiffTextRegion,
+    pub(in crate::view) seen: DiffLineSelectionState,
+}
+
+/// The selection and rows a line action is chosen from.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(in crate::view) struct DiffLineSelectionState {
+    pub(in crate::view) target: Option<DiffTarget>,
+    pub(in crate::view) layout: DiffVisibleLayoutKey,
+    pub(in crate::view) row_anchor: Option<usize>,
+    pub(in crate::view) rows: Option<(usize, usize)>,
+    pub(in crate::view) text: (Option<DiffTextPos>, Option<DiffTextPos>),
+    pub(in crate::view) block: Option<DiffFocusedChangeBlock>,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(in crate::view) enum DiffChangeSide {
     Removed,
@@ -576,6 +597,7 @@ pub(crate) struct DiffRenderer {
     pub(in crate::view) diff_selection_anchor: Option<usize>,
     pub(in crate::view) diff_selection_range: Option<(usize, usize)>,
     pub(in crate::view) diff_focused_change_block: Option<DiffFocusedChangeBlock>,
+    pub(in crate::view) diff_editor_menu_click: Option<DiffEditorMenuClick>,
     pub(in crate::view) diff_text_selecting: bool,
     pub(in crate::view) diff_text_anchor: Option<DiffTextPos>,
     pub(in crate::view) diff_text_head: Option<DiffTextPos>,

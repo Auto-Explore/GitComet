@@ -18,9 +18,13 @@ enum Select {
     Rows(&'static [&'static str]),
     /// All the text of the row drawing this patch line, as a drag selects it.
     Text(&'static str),
-    /// Text selected on the first line, then a right-click on the second
-    /// line's row, outside the highlight, and the menu closed again.
-    TextThenRightClick(&'static str, &'static str),
+    /// Text selected from the start of the first line to the end of the
+    /// second, then a right-click on each listed line's row, in that line's
+    /// column, from the chosen focus, and the menu dismissed again.
+    TextThenRightClicks(&'static str, &'static str, &'static [&'static str]),
+    /// Right-clicks on these lines' rows from the chosen focus, with nothing
+    /// selected first, and the menu dismissed again.
+    RightClicks(&'static [&'static str]),
     /// F3 pressed this many times from the chosen focus. Opening the diff
     /// outlines its first change block and each F3 the next; nothing is
     /// selected.
@@ -71,6 +75,40 @@ fn row_for(pane: &DiffRenderer, text: &str) -> usize {
     (0..pane.diff_visible_len())
         .find(|row| pane.diff_src_ixs_for_visible_ix(*row).contains(&src_ix))
         .unwrap_or_else(|| panic!("expected a visible row for {text:?}"))
+}
+
+/// The column a patch line is drawn in.
+fn line_region(mode: DiffViewMode, line: &str) -> DiffTextRegion {
+    match (mode, line.starts_with('-')) {
+        (DiffViewMode::Inline, _) => DiffTextRegion::Inline,
+        (DiffViewMode::Split, true) => DiffTextRegion::SplitLeft,
+        (DiffViewMode::Split, false) => DiffTextRegion::SplitRight,
+    }
+}
+
+/// Selects text from the start of `first`'s row to the end of `last`'s, in
+/// `first`'s column, as a drag does.
+fn select_text(
+    pane: &mut DiffRenderer,
+    mode: DiffViewMode,
+    first: &str,
+    last: &str,
+    window: &mut gpui::Window,
+    cx: &mut gpui::Context<DiffRenderer>,
+) {
+    let region = line_region(mode, first);
+    pane.diff_text_anchor = Some(DiffTextPos {
+        source_visible_ix: row_for(pane, first),
+        region,
+        offset: 0,
+    });
+    pane.diff_text_head = Some(DiffTextPos {
+        source_visible_ix: row_for(pane, last),
+        region,
+        offset: last.len() - 1,
+    });
+    pane.sync_diff_focus_to_text_selection();
+    pane.diff_text_selection_owner.adopt(window, cx);
 }
 
 fn index_text(dir: &Path) -> String {
@@ -199,42 +237,14 @@ fn press_in(
                         pane.diff_selection_anchor = Some(*first);
                         pane.diff_selection_range = Some((*first, *last));
                     }
-                    Select::Text(line) | Select::TextThenRightClick(line, _) => {
-                        let row = row_for(pane, line);
-                        let region = match (mode, line.starts_with('-')) {
-                            (DiffViewMode::Inline, _) => DiffTextRegion::Inline,
-                            (DiffViewMode::Split, true) => DiffTextRegion::SplitLeft,
-                            (DiffViewMode::Split, false) => DiffTextRegion::SplitRight,
-                        };
-                        let anchor = DiffTextPos {
-                            source_visible_ix: row,
-                            region,
-                            offset: 0,
-                        };
-                        pane.diff_text_anchor = Some(anchor);
-                        pane.diff_text_head = Some(DiffTextPos {
-                            offset: line.len() - 1,
-                            ..anchor
-                        });
-                        pane.sync_diff_focus_to_text_selection();
-                        pane.diff_text_selection_owner.adopt(window, cx);
-                        if let Select::TextThenRightClick(_, clicked) = select {
-                            pane.open_diff_editor_context_menu(
-                                row_for(pane, clicked),
-                                region,
-                                point(px(40.0), px(40.0)),
-                                window,
-                                cx,
-                            );
-                        }
+                    Select::RightClicks(_) => {}
+                    Select::Text(line) => select_text(pane, mode, line, line, window, cx),
+                    Select::TextThenRightClicks(first, last, _) => {
+                        select_text(pane, mode, first, last, window, cx)
                     }
                 }
                 cx.notify();
             });
-        if matches!(select, Select::TextThenRightClick(..)) {
-            let host = view.read(app).popover_host.clone();
-            host.update(app, |host, cx| host.close_popover(cx));
-        }
         app.clear_key_bindings();
         crate::app::bind_app_keys_for_test(app);
         crate::app::bind_text_input_keys_for_test(app);
@@ -274,6 +284,47 @@ fn press_in(
             }
         }
     });
+    // After the focus, as a real right-click lands wherever focus is. Each
+    // menu opens on a later frame and is dismissed, as a click outside it
+    // does, before the next: a menu left open would take the key itself.
+    let clicks = match select {
+        Select::TextThenRightClicks(_, _, clicks) | Select::RightClicks(clicks) => clicks,
+        _ => &[],
+    };
+    for &line in clicks {
+        cx.update(|window, app| {
+            view.read(app)
+                .diff_renderer
+                .clone()
+                .update(app, |pane, cx| {
+                    pane.open_diff_editor_context_menu(
+                        row_for(pane, line),
+                        line_region(mode, line),
+                        point(px(40.0), px(40.0)),
+                        window,
+                        cx,
+                    );
+                });
+        });
+        draw_and_drain_test_window(cx);
+        cx.update(|_, app| {
+            assert!(
+                view.read(app)
+                    .popover_host
+                    .read(app)
+                    .popover_kind_for_tests()
+                    .is_some(),
+                "{case}: the right-click on {line:?} opens a menu"
+            );
+        });
+        cx.update(|window, app| {
+            let host = view.read(app).popover_host.clone();
+            host.update(app, |host, cx| {
+                host.close_popover_and_restore_focus(window, cx)
+            });
+        });
+        draw_and_drain_test_window(cx);
+    }
     draw_and_drain_test_window(cx);
     crate::view::test_support::drain_store_worker(&view, cx);
     for _ in 0..select.navigations() {
@@ -343,11 +394,20 @@ fn press_in(
             Select::NavigatedThenText(_) => pane.diff_text_has_selection() && !outlined,
             Select::Rows(_) => pane.diff_selection_range.is_some(),
             Select::Text(_) => pane.diff_text_has_selection(),
-            Select::TextThenRightClick(..) => {
+            Select::TextThenRightClicks(..) => {
                 pane.diff_text_has_selection() && pane.diff_selection_range.is_some()
             }
+            Select::RightClicks(_) => pane.diff_selection_range.is_some(),
         };
         assert!(selected, "{case}: the selection must survive until the key");
+        assert!(
+            view.read(app)
+                .popover_host
+                .read(app)
+                .popover_kind_for_tests()
+                .is_none(),
+            "{case}: the key must reach the diff, not a menu"
+        );
     });
     let before = store.snapshot().repos[0].ops_rev;
 
@@ -490,7 +550,7 @@ fn d_after_a_right_click_beside_the_text_discards_the_clicked_row(cx: &mut gpui:
         cx,
         DiffArea::Unstaged,
         DiffViewMode::Inline,
-        Select::TextThenRightClick("+TWO", "+FIVE"),
+        Select::TextThenRightClicks("+TWO", "+TWO", &["+FIVE"]),
         Focus::DiffPanel,
         "d",
     );
@@ -498,6 +558,71 @@ fn d_after_a_right_click_beside_the_text_discards_the_clicked_row(cx: &mut gpui:
     assert!(
         pressed.worktree.contains("TWO") && !pressed.worktree.contains("FIVE"),
         "only the clicked line is reverted, not the text selected earlier: {:?}",
+        pressed.worktree
+    );
+    assert_eq!(pressed.index, BASE);
+}
+
+/// A text selection in one Split column does not reach a right-click in the
+/// other, even on a row it covers: that menu acts on the clicked row alone,
+/// and so must the key.
+#[gpui::test]
+fn d_after_a_right_click_in_the_other_column_discards_the_clicked_row(
+    cx: &mut gpui::TestAppContext,
+) {
+    let pressed = press(
+        cx,
+        DiffArea::Unstaged,
+        DiffViewMode::Split,
+        Select::TextThenRightClicks("-two", "-five", &["+TWO"]),
+        Focus::DiffPanel,
+        "d",
+    );
+    assert!(pressed.acted, "D must discard the right-clicked row");
+    assert_eq!(
+        pressed.worktree, "one\ntwo\nthree\nfour\nFIVE\n",
+        "only the clicked row is reverted, not every row the old column's text covers"
+    );
+    assert_eq!(pressed.index, BASE);
+}
+
+/// A right-click inside the highlight acts on the selected text again, even
+/// after an earlier right-click elsewhere selected a row.
+#[gpui::test]
+fn d_after_a_right_click_back_inside_the_text_discards_the_text(cx: &mut gpui::TestAppContext) {
+    let pressed = press(
+        cx,
+        DiffArea::Unstaged,
+        DiffViewMode::Inline,
+        Select::TextThenRightClicks("+TWO", "+TWO", &["+FIVE", "+TWO"]),
+        Focus::DiffPanel,
+        "d",
+    );
+    assert!(pressed.acted, "D must discard the selected text's line");
+    assert!(
+        !pressed.worktree.contains("TWO") && pressed.worktree.contains("FIVE"),
+        "the text's line is reverted, not the row the first right-click chose: {:?}",
+        pressed.worktree
+    );
+    assert_eq!(pressed.index, BASE);
+}
+
+/// Right-clicking the diff while the file list holds focus hands the diff
+/// focus, so dismissing the menu returns there and the keys act on the row.
+#[gpui::test]
+fn line_keys_act_after_a_right_click_from_the_file_list(cx: &mut gpui::TestAppContext) {
+    let pressed = press(
+        cx,
+        DiffArea::Unstaged,
+        DiffViewMode::Inline,
+        Select::RightClicks(&["+FIVE"]),
+        Focus::StatusList,
+        "d",
+    );
+    assert!(pressed.acted, "D must discard the right-clicked row");
+    assert!(
+        pressed.worktree.contains("TWO") && !pressed.worktree.contains("FIVE"),
+        "only the clicked line is reverted: {:?}",
         pressed.worktree
     );
     assert_eq!(pressed.index, BASE);

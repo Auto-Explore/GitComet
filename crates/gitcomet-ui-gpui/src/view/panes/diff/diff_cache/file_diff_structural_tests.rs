@@ -144,6 +144,94 @@ fn structural_selection_maps_collapsed_rows_and_never_expands_a_block(
     });
 }
 
+/// The menu a right-click opens beside a text selection acts on the clicked
+/// line; a key pressed once it is dismissed must act on that line too, until
+/// the selection changes.
+#[gpui::test]
+fn structural_line_keys_follow_the_last_right_click(cx: &mut gpui::TestAppContext) {
+    use crate::view::test_support::TestBackend;
+    use std::collections::BTreeSet;
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (root, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    cx.update(|window, app| {
+        root.read(app)
+            .diff_renderer
+            .clone()
+            .update(app, |pane, cx| {
+                let old = "before\nold\nhidden\nhidden\nold tail\nafter\n";
+                let new = "before\nnew\nhidden\nhidden\nnew tail\nafter\n";
+                let changed = || {
+                    BTreeMap::from([
+                        (1, std::iter::once(0..3).collect()),
+                        (4, std::iter::once(0..3).collect()),
+                    ])
+                };
+                let diff = StructuralDiff {
+                    language: "Rust".into(),
+                    aligned_lines: (0..6).map(|i| (Some(i), Some(i))).collect(),
+                    old_changes: changed(),
+                    new_changes: changed(),
+                    blocks: vec![1..2, 4..5],
+                };
+                let plan = Arc::new(gitcomet_core::file_diff::structural::plan(&diff, old, new));
+                let mut source = StreamedFileDiffSource::new(
+                    plan,
+                    IndexedFileDiffSource::from_shared(Some(&Arc::from(old))),
+                    IndexedFileDiffSource::from_shared(Some(&Arc::from(new))),
+                    DiffWhitespaceMode::Show,
+                );
+                source.apply_structural(diff);
+                let source = Arc::new(source);
+                pane.file_diff_row_provider =
+                    Some(Arc::new(PagedFileDiffRows::new(source.clone(), 10)));
+                pane.file_diff_inline_row_provider =
+                    Some(Arc::new(PagedFileDiffInlineRows::new(source, 10)));
+                pane.diff_engine_status = DiffEngineStatus::Difftastic {
+                    syntactic_changes: true,
+                    text_differs: true,
+                };
+                pane.diff_word_wrap = false;
+                pane.diff_view = DiffViewMode::Split;
+                pane.diff_visible_indices = Arc::from([1, 4]);
+                let text = |pane: &mut DiffRenderer, head: usize| {
+                    pane.diff_text_anchor = Some(DiffTextPos {
+                        source_visible_ix: 0,
+                        region: DiffTextRegion::SplitRight,
+                        offset: 0,
+                    });
+                    pane.diff_text_head = Some(DiffTextPos {
+                        source_visible_ix: 0,
+                        region: DiffTextRegion::SplitRight,
+                        offset: head,
+                    });
+                };
+                text(pane, 3);
+                pane.open_diff_editor_context_menu(
+                    1,
+                    DiffTextRegion::SplitRight,
+                    point(px(40.0), px(40.0)),
+                    window,
+                    cx,
+                );
+                let keyed = pane.structural_selected_lines().unwrap();
+                assert_eq!(
+                    (keyed.old, keyed.new),
+                    (BTreeSet::new(), BTreeSet::from([5])),
+                    "the clicked line, not the text"
+                );
+                // A new selection retires the click.
+                text(pane, 2);
+                let keyed = pane.structural_selected_lines().unwrap();
+                assert_eq!(
+                    (keyed.old, keyed.new),
+                    (BTreeSet::new(), BTreeSet::from([2])),
+                    "the text again"
+                );
+            });
+    });
+}
+
 #[test]
 fn identical_text_with_structural_novelty_has_two_inline_sides() {
     let text = "function f() {\n";
