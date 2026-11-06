@@ -21,7 +21,7 @@ index.
 | Action with explorer focus | macOS | Windows / Linux |
 | --- | --- | --- |
 | Copy / Cut / Paste | Cmd-C / Cmd-X / Cmd-V | Ctrl-C / Ctrl-X / Ctrl-V |
-| Move previously copied files here | Option-Cmd-V | Cut, then Paste |
+| Move previously copied files here | Cmd-Option-V | Cut, then Paste |
 | Duplicate | Cmd-D | Ctrl-D |
 | Select all visible rows | Cmd-A | Ctrl-A |
 | Rename | F2 | F2 |
