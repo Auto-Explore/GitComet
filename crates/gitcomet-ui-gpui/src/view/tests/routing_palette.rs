@@ -552,10 +552,12 @@ fn repository_shortcuts_toggle_layout_once_from_focused_and_detached_views(
         test_support::redraw(cx);
         cx.update(|_, app| assert_eq!(view.read(app).sidebar_collapsed, !before));
 
-        let before = cx.update(|_, app| view.read(app).details_collapsed);
-        cx.simulate_keystrokes("secondary-shift-d");
-        test_support::redraw(cx);
-        cx.update(|_, app| assert_eq!(view.read(app).details_collapsed, !before));
+        for chord in ["secondary-alt-b", "secondary-shift-b"] {
+            let before = cx.update(|_, app| view.read(app).details_collapsed);
+            cx.simulate_keystrokes(chord);
+            test_support::redraw(cx);
+            cx.update(|_, app| assert_eq!(view.read(app).details_collapsed, !before));
+        }
     }
 }
 
@@ -575,7 +577,10 @@ fn repository_shortcuts_open_commit_dialog_and_do_not_replace_it(cx: &mut gpui::
     cx.simulate_keystrokes("secondary-alt-enter");
     test_support::redraw(cx);
     let sidebar_before = cx.update(|_, app| view.read(app).sidebar_collapsed);
-    cx.simulate_keystrokes("secondary-alt-b secondary-b");
+    let details_before = cx.update(|_, app| view.read(app).details_collapsed);
+    cx.simulate_keystrokes(
+        "secondary-alt-n secondary-alt-c secondary-b secondary-alt-b secondary-shift-b",
+    );
     test_support::redraw(cx);
     cx.update(|_, app| {
         assert!(matches!(
@@ -583,6 +588,7 @@ fn repository_shortcuts_open_commit_dialog_and_do_not_replace_it(cx: &mut gpui::
             Some(PopoverKind::CommitPrompt { repo_id: RepoId(1) })
         ));
         assert_eq!(view.read(app).sidebar_collapsed, sidebar_before);
+        assert_eq!(view.read(app).details_collapsed, details_before);
     });
     assert!(cx.debug_bounds("modal_scrim").is_some());
 }
@@ -596,7 +602,7 @@ fn repository_shortcuts_are_inactive_on_home_and_behind_the_palette(cx: &mut gpu
         .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
     install_app_shortcuts_for_test(cx, backend);
     focus_detached_window_focus(cx);
-    cx.simulate_keystrokes("secondary-alt-b secondary-alt-enter");
+    cx.simulate_keystrokes("secondary-alt-n secondary-alt-c secondary-alt-enter");
     test_support::redraw(cx);
     cx.update(|_, app| assert!(test_support::popover_kind(view.read(app), app).is_none()));
 

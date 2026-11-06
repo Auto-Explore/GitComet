@@ -1982,8 +1982,8 @@ fn repository_command_shortcuts_resolve_from_views_and_text_inputs(cx: &mut gpui
         ("secondary-alt-enter", "commit"),
         ("secondary-alt-s", "stage-all"),
         ("secondary-alt-u", "unstage-all"),
-        ("secondary-alt-b", "create-branch"),
-        ("secondary-shift-b", "checkout-branch"),
+        ("secondary-alt-n", "create-branch"),
+        ("secondary-alt-c", "checkout-branch"),
         ("secondary-alt-down", "pull"),
         ("secondary-alt-up", "push"),
         ("secondary-shift-s", "stash"),
@@ -1992,7 +1992,8 @@ fn repository_command_shortcuts_resolve_from_views_and_text_inputs(cx: &mut gpui
         ("secondary-shift-f", "fetch-all"),
         ("secondary-alt-t", "open-external-terminal"),
         ("secondary-b", "toggle-sidebar"),
-        ("secondary-shift-d", "toggle-details"),
+        ("secondary-alt-b", "toggle-details"),
+        ("secondary-shift-b", "toggle-details"),
         ("secondary-j", "toggle-terminal"),
     ];
     for context in [None, Some("TextInput")] {
@@ -2040,7 +2041,7 @@ fn repository_command_shortcuts_leave_terminal_and_nested_prompt_inputs_alone(
             let _ = window.draw(app);
         });
         cx.simulate_keystrokes(
-            "secondary-r f5 secondary-b secondary-alt-enter secondary-alt-s secondary-alt-up",
+            "secondary-r f5 secondary-b secondary-alt-b secondary-shift-b secondary-alt-n secondary-alt-c secondary-alt-enter secondary-alt-s secondary-alt-up",
         );
         assert_eq!(
             *observed.lock().unwrap(),

@@ -31,6 +31,10 @@ pub(crate) fn bind_keys(cx: &mut App) {
         "f5",
         super::commands::Command::ReloadRepository.id(),
     ));
+    cx.bind_keys(bindings(
+        "secondary-shift-b",
+        super::commands::Command::ToggleDetails.id(),
+    ));
 }
 
 fn bindings(keys: &str, id: &str) -> [KeyBinding; 2] {

@@ -62,11 +62,11 @@ are the same as when running the corresponding command from the palette.
 | Open commit dialog | `Cmd-Option-Enter` | `Ctrl-Alt-Enter` | Review and submit in the dialog; `Cmd-Enter` / `Ctrl-Enter` still submits from the commit message input. |
 | Stage all changes | `Cmd-Option-S` | `Ctrl-Alt-S` | Unresolved conflict markers still require confirmation. |
 | Unstage all changes | `Cmd-Option-U` | `Ctrl-Alt-U` | |
-| Create branch | `Cmd-Option-B` | `Ctrl-Alt-B` | Opens the branch creation dialog. |
-| Checkout branch | `Cmd-Shift-B` | `Ctrl-Shift-B` | Opens the branch picker. |
+| Create branch | `Cmd-Option-N` | `Ctrl-Alt-N` | Opens the branch creation dialog. |
+| Checkout branch | `Cmd-Option-C` | `Ctrl-Alt-C` | Opens the branch picker. |
 | Stash changes | `Cmd-Shift-S` | `Ctrl-Shift-S` | Opens the stash dialog. |
 | Toggle sidebar | `Cmd-B` | `Ctrl-B` | |
-| Toggle details pane | `Cmd-Shift-D` | `Ctrl-Shift-D` | |
+| Toggle details pane | `Cmd-Option-B`, `Cmd-Shift-B` | `Ctrl-Alt-B`, `Ctrl-Shift-B` | |
 | Toggle embedded terminal | `Cmd-J` | `Ctrl-J` | Closing an active session keeps the existing confirmation. |
 | Open external terminal | `Cmd-Option-T` | `Ctrl-Alt-T` | |
 

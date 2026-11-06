@@ -221,7 +221,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
     CommandEntry {
         id: Command::CreateBranch.id(),
         label: "Create Branch",
-        shortcut: Shortcut::Keystrokes("secondary-alt-b"),
+        shortcut: Shortcut::Keystrokes("secondary-alt-n"),
         category: "Branch",
         keywords: "",
         requires_repo: true,
@@ -230,7 +230,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
     CommandEntry {
         id: Command::CheckoutBranch.id(),
         label: "Checkout Branch",
-        shortcut: Shortcut::Keystrokes("secondary-shift-b"),
+        shortcut: Shortcut::Keystrokes("secondary-alt-c"),
         category: "Branch",
         keywords: "",
         requires_repo: true,
@@ -494,7 +494,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
     CommandEntry {
         id: Command::ToggleDetails.id(),
         label: "Toggle Details Pane",
-        shortcut: Shortcut::Keystrokes("secondary-shift-d"),
+        shortcut: Shortcut::Keystrokes("secondary-alt-b"),
         category: "View",
         keywords: "",
         requires_repo: true,
