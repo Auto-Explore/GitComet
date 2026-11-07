@@ -612,11 +612,8 @@ pub(super) fn reduce_prepared(
     {
         return Vec::new();
     }
-    let reconcile = !matches!(
-        msg,
-        Msg::GlobalNavBack { .. } | Msg::GlobalNavForward { .. }
-    );
     let navigation = view_navigation(&msg);
+    let reconcile = navigation.is_none_or(|(_, kind)| kind.reconciles());
     let push = navigation.is_some_and(|(_, kind)| kind.pushes());
     let selection_request = match &msg {
         Msg::SelectCommit {
@@ -792,16 +789,27 @@ fn finalize_reduced_state(state: &mut AppState, nav_push: Option<bool>) {
     }
 }
 
+/// A back/forward history the user steps through.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum NavHistory {
+    /// The global history across the main view.
+    Main,
+    /// The file viewer's own history of versions, kept apart so it does not
+    /// pollute the global one.
+    Viewer,
+}
+
 /// How a message moves its repository's main view.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ViewNavigation {
     /// The user goes to a view: a new global back/forward step, and a request
     /// for the repository's canvas.
     Step,
-    /// The user asks for the canvas without a step of its own: Back and
-    /// Forward replay steps, and the other selections fold into the current
-    /// one.
+    /// The user asks for the canvas, and the selection folds into the current
+    /// step.
     Request,
+    /// The user's Back or Forward through a history.
+    Replay(NavHistory, crate::model::ViewNavDir),
     /// A view asked for earlier arrives: its step, but the ask already
     /// counted.
     Resolved,
@@ -812,14 +820,22 @@ impl ViewNavigation {
         matches!(self, Self::Step | Self::Resolved)
     }
 
+    /// Replaying the global history moves its cursor, so it is not synced to
+    /// the view around the step.
+    fn reconciles(self) -> bool {
+        !matches!(self, Self::Replay(NavHistory::Main, _))
+    }
+
     fn requests_canvas(self) -> bool {
-        matches!(self, Self::Step | Self::Request)
+        matches!(self, Self::Step | Self::Request | Self::Replay(..))
     }
 }
 
 /// How `msg` moves which repository's main view, as opposed to a background
 /// change folded into the current step.
 fn view_navigation(msg: &Msg) -> Option<(RepoId, ViewNavigation)> {
+    use crate::model::ViewNavDir::{Back, Forward};
+    let replay = ViewNavigation::Replay;
     let navigation = match msg {
         Msg::SelectDiff { repo_id, .. }
         | Msg::SelectConflictDiff { repo_id, .. }
@@ -842,13 +858,11 @@ fn view_navigation(msg: &Msg) -> Option<(RepoId, ViewNavigation)> {
         | Msg::ResetBrowseToLive { repo_id, .. }
         | Msg::OpenInlineSubmoduleDiff { repo_id, .. }
         | Msg::SelectInlineSubmoduleDiff { repo_id, .. } => (*repo_id, ViewNavigation::Step),
-        Msg::GlobalNavBack { repo_id }
-        | Msg::GlobalNavForward { repo_id }
-        // The file viewer's own back/forward steps a separate viewer-level
-        // stack, so it does not pollute the global history.
-        | Msg::ViewerNavBack { repo_id }
-        | Msg::ViewerNavForward { repo_id }
-        | Msg::SelectCommitMulti { repo_id, .. }
+        Msg::GlobalNavBack { repo_id } => (*repo_id, replay(NavHistory::Main, Back)),
+        Msg::GlobalNavForward { repo_id } => (*repo_id, replay(NavHistory::Main, Forward)),
+        Msg::ViewerNavBack { repo_id } => (*repo_id, replay(NavHistory::Viewer, Back)),
+        Msg::ViewerNavForward { repo_id } => (*repo_id, replay(NavHistory::Viewer, Forward)),
+        Msg::SelectCommitMulti { repo_id, .. }
         | Msg::IndexedHistory(crate::indexed_history::IndexedHistoryMsg::Select {
             repo_id, ..
         })
