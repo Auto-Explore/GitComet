@@ -26,22 +26,10 @@ const DETAILS_TAB_ICON: &str = "icons/side_panel_right.svg";
 
 /// The details tabs listed for the active repository: the contributions in
 /// its view, the selected one, and whether the details pane's own tab leads.
-#[derive(Clone, PartialEq)]
 pub(in crate::view) struct DetailsListing {
     tabs: Vec<(usize, SharedString, Option<SharedString>)>,
     selected: Option<usize>,
     own: bool,
-}
-
-/// Everything the details header's measured minimum width depends on.
-#[derive(PartialEq)]
-pub(in crate::view) struct DetailsHeaderMeasureKey {
-    pub listing: Option<DetailsListing>,
-    pub theme: AppTheme,
-    pub scale: ui_scale::UiScale,
-    pub font: gpui::Font,
-    pub rem: Pixels,
-    pub scale_factor: f32,
 }
 
 /// A contribution built per repository: its title, tab icon and builder.

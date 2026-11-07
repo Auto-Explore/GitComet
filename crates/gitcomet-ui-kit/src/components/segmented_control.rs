@@ -75,6 +75,81 @@ impl Segment {
     }
 }
 
+/// What a [`SegmentedControl`]'s widths are measured from, and nothing else:
+/// equal measures give equal widths, so a caller may keep a width until the
+/// measure changes.
+#[derive(Clone, PartialEq)]
+pub struct SegmentedMeasure {
+    style: gpui::TextStyle,
+    rem: gpui::Pixels,
+    pub(super) scale: UiScale,
+    segments: Vec<SegmentMeasure>,
+}
+
+#[derive(Clone, PartialEq)]
+struct SegmentMeasure {
+    label: SharedString,
+    icon: bool,
+    selected: bool,
+}
+
+impl SegmentedMeasure {
+    fn track_spacing(&self) -> gpui::Pixels {
+        self.scale.px(TRACK_INSET_PX) * 2.0
+            + self.scale.px(SEGMENT_GAP_PX) * self.segments.len().saturating_sub(1) as f32
+    }
+
+    fn metrics(&self, window: &Window) -> Vec<layout::SegmentMetrics> {
+        let scale = self.scale;
+        let font_size = self.style.font_size.to_pixels(self.rem);
+        self.segments
+            .iter()
+            .map(|segment| {
+                let run = self.style.to_run(segment.label.len());
+                let label = window
+                    .text_system()
+                    .shape_line(segment.label.clone(), font_size, &[run])
+                    .width
+                    .ceil();
+                let collapsible = !segment.selected && segment.icon;
+                let base = scale.px(SEGMENT_PADDING_PX) * 2.0
+                    + px(SEGMENT_BORDER_PX) * 2.0
+                    + if segment.icon {
+                        scale.px(ICON_SIZE_PX)
+                    } else {
+                        px(0.0)
+                    };
+                layout::SegmentMetrics {
+                    minimum: base
+                        + if collapsible {
+                            px(0.0)
+                        } else {
+                            label
+                                + if segment.icon {
+                                    scale.px(LABEL_GAP_PX)
+                                } else {
+                                    px(0.0)
+                                }
+                        },
+                    label,
+                    collapsible,
+                }
+            })
+            .collect()
+    }
+
+    /// The narrowest the control lays out: unselected segments folded to
+    /// their icons.
+    pub fn minimum_width(&self, window: &Window) -> gpui::Pixels {
+        self.track_spacing()
+            + self
+                .metrics(window)
+                .iter()
+                .map(|m| m.minimum)
+                .sum::<gpui::Pixels>()
+    }
+}
+
 /// Mutually exclusive options on one track. Built per render, like
 /// [`Button`](crate::components::Button).
 pub struct SegmentedControl {
@@ -110,17 +185,8 @@ impl SegmentedControl {
         self
     }
 
-    fn track_spacing(&self, scale: UiScale) -> gpui::Pixels {
-        scale.px(TRACK_INSET_PX) * 2.0
-            + scale.px(SEGMENT_GAP_PX) * self.segments.len().saturating_sub(1) as f32
-    }
-
-    fn measurements(
-        &self,
-        theme: AppTheme,
-        scale: UiScale,
-        window: &mut Window,
-    ) -> Vec<layout::SegmentMetrics> {
+    /// Everything the control's widths are measured from.
+    pub fn measure(&self, theme: AppTheme, scale: UiScale, window: &Window) -> SegmentedMeasure {
         let mut style = window.text_style();
         style.font_size = theme.ui_text(FONT_SIZE_PX).into();
         if let Some(font) = &self.font {
@@ -131,41 +197,20 @@ impl SegmentedControl {
             style.font_width = font.width;
             style.font_style = font.style;
         }
-        let font_size = style.font_size.to_pixels(window.rem_size());
-        self.segments
-            .iter()
-            .map(|segment| {
-                let run = style.to_run(segment.label.len());
-                let label = window
-                    .text_system()
-                    .shape_line(segment.label.clone(), font_size, &[run])
-                    .width
-                    .ceil();
-                let collapsible = !segment.selected && segment.icon.is_some();
-                let base = scale.px(SEGMENT_PADDING_PX) * 2.0
-                    + px(SEGMENT_BORDER_PX) * 2.0
-                    + if segment.icon.is_some() {
-                        scale.px(ICON_SIZE_PX)
-                    } else {
-                        px(0.0)
-                    };
-                layout::SegmentMetrics {
-                    minimum: base
-                        + if collapsible {
-                            px(0.0)
-                        } else {
-                            label
-                                + if segment.icon.is_some() {
-                                    scale.px(LABEL_GAP_PX)
-                                } else {
-                                    px(0.0)
-                                }
-                        },
-                    label,
-                    collapsible,
-                }
-            })
-            .collect()
+        SegmentedMeasure {
+            style,
+            rem: window.rem_size(),
+            scale,
+            segments: self
+                .segments
+                .iter()
+                .map(|segment| SegmentMeasure {
+                    label: segment.label.clone(),
+                    icon: segment.icon.is_some(),
+                    selected: segment.selected,
+                })
+                .collect(),
+        }
     }
 
     pub fn minimum_width(
@@ -174,12 +219,7 @@ impl SegmentedControl {
         scale: UiScale,
         window: &mut Window,
     ) -> gpui::Pixels {
-        self.track_spacing(scale)
-            + self
-                .measurements(theme, scale, window)
-                .iter()
-                .map(|m| m.minimum)
-                .sum::<gpui::Pixels>()
+        self.measure(theme, scale, window).minimum_width(window)
     }
 
     /// The control, calling `on_select` with a segment's index when it is
@@ -208,10 +248,10 @@ impl SegmentedControl {
                 .min_w(px(0.0))
                 .h(super::control_height(scale))
                 .child(gpui::container_query(move |size, window, _| {
-                    let metrics = self.measurements(theme, scale, window);
+                    let measure = self.measure(theme, scale, window);
                     let allocation = layout::allocate(
-                        &metrics,
-                        size.width - self.track_spacing(scale),
+                        &measure.metrics(window),
+                        size.width - measure.track_spacing(),
                         scale.px(LABEL_GAP_PX),
                         theme.ui_text(FONT_SIZE_PX).to_pixels(window.rem_size()) * MINIMUM_LABEL_EM,
                     );

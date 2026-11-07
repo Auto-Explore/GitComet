@@ -61,7 +61,7 @@ pub use list_layout::{ListLayout, list_layout_button};
 pub use modal::{modal_scrim, modal_surface, popover_surface};
 pub use navigation::{BarTab, selectable_field};
 pub use painted_when::{PaintedWhen, painted_when};
-pub use panel_header::PanelHeader;
+pub use panel_header::{PanelHeader, PanelHeaderMeasure};
 pub use panel_tab::{on_nested_control_click, panel_tab, panel_tab_close, panel_tab_text_color};
 /// Public field type of [`PickerPromptLayout::headers`], carried out of the
 /// private module with it so a caller can name what that field hands them
@@ -82,7 +82,7 @@ pub use repository_badge::{
     repository_initials, repository_initials_box,
 };
 pub use resize_grip::{ResizeGripAxis, resize_grip, resize_grip_hover_tint};
-pub use segmented_control::{Segment, SegmentedControl};
+pub use segmented_control::{Segment, SegmentedControl, SegmentedMeasure};
 pub use settings_rows::{
     SETTINGS_NAV_COLUMN_WIDTH_PX, settings_card, settings_card_with_action,
     settings_detail_container, settings_disabled_toggle_row, settings_dropdown_background,

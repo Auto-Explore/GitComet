@@ -2,6 +2,7 @@
 //! the panel's tabs, then the panel's tools. Every side panel switches its
 //! tabs with it, so both sides of a window read alike.
 
+use super::segmented_control::SegmentedMeasure;
 use super::{Segment, SegmentedControl, content_header_height, control_height};
 use crate::theme::AppTheme;
 use crate::ui_scale::UiScale;
@@ -13,6 +14,24 @@ const GAP_PX: f32 = 2.0;
 /// The icon of a contributed tab that brings none: distinct from every
 /// built-in tab's, so a folded tab is never mistaken for one.
 const FALLBACK_TAB_ICON: &str = "icons/box.svg";
+
+/// What a [`PanelHeader`]'s minimum width is measured from, and nothing
+/// else: equal measures give equal widths, so a caller may keep the width
+/// until the measure changes.
+#[derive(Clone, PartialEq)]
+pub struct PanelHeaderMeasure {
+    control: SegmentedMeasure,
+    tools: usize,
+}
+
+impl PanelHeaderMeasure {
+    pub fn minimum_width(&self, window: &Window) -> Pixels {
+        let scale = self.control.scale;
+        self.control.minimum_width(window)
+            + scale.px(PAD_X_PX) * 2.0
+            + (control_height(scale) + scale.px(GAP_PX)) * self.tools as f32
+    }
+}
 
 /// Built per render, like [`SegmentedControl`].
 pub struct PanelHeader {
@@ -57,12 +76,18 @@ impl PanelHeader {
         self
     }
 
+    /// Everything [`Self::minimum_width`] is measured from.
+    pub fn measure(&self, theme: AppTheme, scale: UiScale, window: &Window) -> PanelHeaderMeasure {
+        PanelHeaderMeasure {
+            control: self.control.measure(theme, scale, window),
+            tools: self.tools,
+        }
+    }
+
     /// The narrowest the header lays out: unselected tabs folded to their
     /// icons, the tools in place. A panel is never narrower.
     pub fn minimum_width(&self, theme: AppTheme, scale: UiScale, window: &mut Window) -> Pixels {
-        self.control.minimum_width(theme, scale, window)
-            + scale.px(PAD_X_PX) * 2.0
-            + (control_height(scale) + scale.px(GAP_PX)) * self.tools as f32
+        self.measure(theme, scale, window).minimum_width(window)
     }
 
     /// The header on `background`, calling `on_select` with a tab's index when
@@ -205,5 +230,41 @@ mod tests {
         );
         let last = cx.debug_bounds("tool_1").unwrap();
         assert!(last.right() <= header.right(), "{last:?} within {header:?}");
+    }
+
+    /// A header's measure changes with each thing its width is measured
+    /// from, the font included, and stays equal otherwise.
+    #[gpui::test]
+    fn a_measure_changes_with_what_the_width_is_measured_from(cx: &mut gpui::TestAppContext) {
+        let theme = AppTheme::gitcomet_dark();
+        let scale = UiScale::from_percent(100);
+        let (_view, cx) = cx.add_window_view(|_, _| Header { theme, tools: 0 });
+        cx.update(|window, app| {
+            let measure = |selected: bool, tools: usize, ligatures: bool, app: &mut App| {
+                let mut fonts = crate::font_preferences::current(app);
+                fonts.use_font_ligatures = ligatures;
+                crate::font_preferences::set_current(
+                    app,
+                    fonts.ui_font_family,
+                    fonts.editor_font_family,
+                    fonts.use_font_ligatures,
+                );
+                PanelHeader::new("header", app)
+                    .tab("tab_on", "History", None, selected, "History")
+                    .tools(tools)
+                    .measure(theme, scale, window)
+            };
+            let base = measure(true, 0, false, app);
+            assert!(base == measure(true, 0, false, app));
+            assert!(base != measure(false, 0, false, app), "selection");
+            assert!(base != measure(true, 1, false, app), "tools");
+            assert!(base != measure(true, 0, true, app), "the UI font");
+            assert!(
+                base != PanelHeader::new("header", app)
+                    .tab("tab_on", "History", None, true, "History")
+                    .measure(theme, UiScale::from_percent(150), window),
+                "scale"
+            );
+        });
     }
 }

@@ -135,21 +135,18 @@ impl GitCometView {
             self.sidebar_header_minimum = minimum;
             self.pane_resize = None;
         }
-        let details_key = super::repository_views::DetailsHeaderMeasureKey {
-            listing: self.details_listing(),
-            theme,
-            scale,
-            font: crate::font_preferences::current_ui_font(cx),
-            rem: window.rem_size(),
-            scale_factor: window.scale_factor(),
-        };
-        if self.details_header_measure_key.as_ref() != Some(&details_key) {
-            let minimum = details_key.listing.as_ref().map_or(px(0.0), |listing| {
-                Self::details_header(listing, cx)
-                    .0
-                    .minimum_width(theme, scale, window)
-            });
-            self.details_header_measure_key = Some(details_key);
+        // Shaping the tab labels is the cost; the kit's measure says when
+        // their widths can differ.
+        let measure = self.details_listing().map(|listing| {
+            Self::details_header(&listing, cx)
+                .0
+                .measure(theme, scale, window)
+        });
+        if self.details_header_measure != measure {
+            let minimum = measure
+                .as_ref()
+                .map_or(px(0.0), |measure| measure.minimum_width(window));
+            self.details_header_measure = measure;
             if self.details_header_minimum != minimum {
                 self.details_header_minimum = minimum;
                 self.pane_resize = None;
