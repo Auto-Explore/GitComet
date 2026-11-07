@@ -139,7 +139,7 @@ impl GitCometView {
             listing: self.details_listing(),
             theme,
             scale,
-            text: window.text_style(),
+            font: crate::font_preferences::current_ui_font(cx),
             rem: window.rem_size(),
             scale_factor: window.scale_factor(),
         };

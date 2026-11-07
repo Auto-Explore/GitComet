@@ -33,12 +33,13 @@ pub(in crate::view) struct DetailsListing {
     own: bool,
 }
 
+/// Everything the details header's measured minimum width depends on.
 #[derive(PartialEq)]
 pub(in crate::view) struct DetailsHeaderMeasureKey {
     pub listing: Option<DetailsListing>,
     pub theme: AppTheme,
     pub scale: ui_scale::UiScale,
-    pub text: gpui::TextStyle,
+    pub font: gpui::Font,
     pub rem: Pixels,
     pub scale_factor: f32,
 }

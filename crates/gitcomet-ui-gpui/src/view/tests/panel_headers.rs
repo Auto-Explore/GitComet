@@ -123,6 +123,40 @@ fn the_details_pane_is_never_narrower_than_its_header(cx: &mut gpui::TestAppCont
     );
 }
 
+/// The details header is measured again in a new UI font, with the same tab
+/// selected. Test glyphs measure alike in every font, so a stale minimum
+/// stands in for one measured in the old font.
+#[gpui::test]
+fn a_ui_font_change_measures_the_details_header_again(cx: &mut gpui::TestAppContext) {
+    let (view, cx) = open_window(cx);
+    let minimum = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|_, app| view.read(app).details_header_minimum)
+    };
+    let measured = minimum(cx);
+    assert!(measured > px(0.0), "the header is measured: {measured:?}");
+    cx.update(|_, app| {
+        view.update(app, |view, cx| {
+            view.details_header_minimum = px(1.0);
+            cx.notify();
+        })
+    });
+    test_support::redraw(cx);
+    assert_eq!(minimum(cx), px(1.0), "the same font keeps the measurement");
+
+    cx.update(|_, app| {
+        let fonts = crate::font_preferences::current(app);
+        crate::font_preferences::set_current(
+            app,
+            fonts.ui_font_family,
+            fonts.editor_font_family,
+            !fonts.use_font_ligatures,
+        );
+        view.update(app, |_, cx| cx.notify());
+    });
+    test_support::redraw(cx);
+    assert_eq!(minimum(cx), measured);
+}
+
 /// With the sidebar collapsed, a wide details header still sets how narrow
 /// the window may get, so the main area keeps its own minimum.
 #[gpui::test]
