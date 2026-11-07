@@ -491,7 +491,11 @@ impl PopoverHost {
                 window,
                 cx,
             );
-            input.set_vertical_scroll_handle(Some(commit_prompt_message_scroll.clone()));
+            input.set_scrollable(
+                commit_prompt_message_scroll.clone(),
+                crate::view::panels::COMMIT_MESSAGE_INPUT_MAX_HEIGHT_PX,
+                cx,
+            );
             input
         });
 

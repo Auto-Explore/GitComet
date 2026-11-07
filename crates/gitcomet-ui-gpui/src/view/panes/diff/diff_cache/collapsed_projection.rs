@@ -492,14 +492,6 @@ impl DiffRenderer {
         self.collapsed_diff_hunk_ix_by_src_ix.get(&src_ix).copied()
     }
 
-    pub(in crate::view) fn collapsed_diff_hunk_for_src_ix(
-        &self,
-        src_ix: usize,
-    ) -> Option<CollapsedDiffHunk> {
-        self.collapsed_diff_hunk_index_for_src_ix(src_ix)
-            .and_then(|hunk_ix| self.collapsed_diff_hunks.get(hunk_ix).copied())
-    }
-
     pub(in crate::view) fn collapsed_diff_hidden_up_rows(&self, src_ix: usize) -> usize {
         let Some(hunk_ix) = self.collapsed_diff_hunk_index_for_src_ix(src_ix) else {
             return 0;
