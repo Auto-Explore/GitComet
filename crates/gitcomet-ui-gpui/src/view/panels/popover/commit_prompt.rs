@@ -14,17 +14,15 @@ pub(super) fn panel(
         .flex_col()
         .w(scaled_px(420.0))
         .child(popover_title(theme, "Commit Changes"))
-        .child(super::popover_rule(theme))
+        .child(super::popover_rule(theme).debug_selector(|| "commit_prompt_rule".to_owned()))
         .child(
-            div().px_2().py_1().w_full().min_w(px(0.0)).child(
-                components::ScrollContainer::vertical(
-                    "commit_prompt_message_scroll_surface",
-                    "commit_prompt_message_scrollbar",
-                    this.commit_prompt_message_scroll.clone(),
-                    scaled_px(200.0),
-                )
-                .render(theme, this.commit_prompt_message_input.clone()),
-            ),
+            div()
+                .px_2()
+                .pt_2()
+                .pb_1()
+                .w_full()
+                .min_w(px(0.0))
+                .child(this.commit_prompt_message_input.clone()),
         )
         .child(
             super::prompt_footer_row()

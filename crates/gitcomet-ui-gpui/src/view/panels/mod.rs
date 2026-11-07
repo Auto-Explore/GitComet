@@ -3,7 +3,7 @@ use gitcomet_core::domain::Upstream;
 use gitcomet_core::services::InteractiveRebaseAction;
 
 const COMMIT_DETAILS_MESSAGE_MAX_HEIGHT_PX: f32 = 240.0;
-const COMMIT_MESSAGE_INPUT_MAX_HEIGHT_PX: f32 = 200.0;
+pub(in crate::view) const COMMIT_MESSAGE_INPUT_MAX_HEIGHT_PX: f32 = 200.0;
 
 #[derive(Clone)]
 pub(in crate::view) enum AppMenuAction {

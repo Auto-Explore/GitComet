@@ -376,9 +376,9 @@ fn chip_label_clipping_omits_the_ellipsis_and_reclaims_its_width(cx: &mut gpui::
             max_width,
             color,
             None,
-            TruncateFrom::Start,
+            LineCut::RefLeaf,
         );
-        let clipped = shape_clipped_chip_line_cached_from(
+        let clipped = shape_chip_label_cached(
             window,
             &style,
             font_size,
@@ -387,16 +387,82 @@ fn chip_label_clipping_omits_the_ellipsis_and_reclaims_its_width(cx: &mut gpui::
             max_width,
             color,
             None,
-            TruncateFrom::Start,
         );
 
-        assert!(ellipsized.text.starts_with('…'));
+        assert!(ellipsized.text.ends_with('…'));
         assert!(!clipped.text.contains('…'));
-        assert!(text.ends_with(clipped.text.as_ref()));
+        assert!(text.contains(clipped.text.as_ref()));
         assert!(
-            clipped.text.chars().count() > ellipsized.text.trim_start_matches('…').chars().count(),
+            clipped.text.chars().count() > ellipsized.text.trim_end_matches('…').chars().count(),
             "removing the ellipsis should expose more of the branch name"
         );
+    })
+    .expect("history canvas test window should stay open");
+}
+
+#[gpui::test]
+fn chip_labels_give_up_the_ref_path_before_the_name_after_the_last_slash(
+    cx: &mut gpui::TestAppContext,
+) {
+    let window_handle = cx.add_window(|_window, _cx| gpui::Empty);
+    cx.update_window(window_handle.into(), |_, window, _| {
+        let style = window.text_style();
+        let font_size = style.font_size.to_pixels(window.rem_size());
+        let color = AppTheme::gitcomet_dark().colors.foreground.primary;
+        let width = |text: &str, window: &mut Window| {
+            window
+                .text_system()
+                .shape_line(
+                    text.to_owned().into(),
+                    font_size,
+                    &[style.to_run(text.len())],
+                )
+                .width
+        };
+        let label = |text: &str, max_width: Pixels, window: &mut Window| {
+            let text: SharedString = text.to_owned().into();
+            shape_chip_label_cached(
+                window,
+                &style,
+                font_size,
+                &text,
+                fx_hash_str(text.as_ref()),
+                max_width,
+                color,
+                None,
+            )
+            .text
+        };
+
+        // The path before the last `/` goes first, from the start; only then
+        // does the name itself give way, from its end.
+        for (max_width, expected) in [
+            ("feat/new-component", "feat/new-component"),
+            ("eat/new-component", "eat/new-component"),
+            ("/new-component", "/new-component"),
+            ("new-component", "new-component"),
+            ("new-componen", "new-componen"),
+            ("new-compone", "new-compone"),
+        ] {
+            let max_width = width(max_width, window);
+            assert_eq!(label("feat/new-component", max_width, window), expected);
+        }
+        // Only the last `/` separates the name, and remote prefixes are path.
+        let max_width = width("new-compo", window);
+        assert_eq!(
+            label("origin/feat/new-component", max_width, window),
+            "new-compo"
+        );
+        let max_width = width("t/new-component", window);
+        assert_eq!(
+            label("origin/feat/new-component", max_width, window),
+            "t/new-component"
+        );
+        // A name without a path is cut from its end, like any label.
+        let max_width = width("mai", window);
+        assert_eq!(label("main", max_width, window), "mai");
+        let max_width = width("v1.2", window);
+        assert_eq!(label("v1.2.0", max_width, window), "v1.2");
     })
     .expect("history canvas test window should stay open");
 }
