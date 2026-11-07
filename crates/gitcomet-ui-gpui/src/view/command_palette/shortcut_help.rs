@@ -250,7 +250,6 @@ fn row(entry: &Entry, index: usize, theme: AppTheme, scale: ui_scale::UiScale) -
         .py(p(10.0))
         .border_b_1()
         .border_color(theme.colors.stroke.subtle)
-        .hover_style(|style| style.bg(theme.hover_overlay()))
         .child(
             div()
                 .flex_1()
