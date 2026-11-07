@@ -221,7 +221,7 @@ fn commit_then_file_diffs_are_all_remembered() {
 }
 
 #[test]
-fn choosing_the_file_shown_again_is_a_view_request_and_a_reload_is_not() {
+fn choosing_the_file_shown_again_is_a_canvas_request_and_a_reload_is_not() {
     let repo_id = RepoId(1);
     let mut state = available_state_with_repo(repo_id);
     let target = DiffTarget::working_tree(std::path::PathBuf::from("a.txt"), DiffArea::Unstaged);

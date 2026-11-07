@@ -603,12 +603,12 @@ impl GitCometView {
             .repos
             .iter()
             .any(|repo| !next.repos.iter().any(|next_repo| next_repo.id == repo.id));
-        // Opening a file or commit in the repository asks to see it, so the
-        // main slot goes back from the document viewer or a canvas overlay.
-        let navigated = (self.documents_active || self.canvas_overlay_shown())
+        // Asking for the repository's canvas, as opening a file or commit
+        // does, takes the main slot back from the document viewer or an overlay.
+        let uncover = (self.documents_active || self.canvas_overlay_shown())
             && canvas_requested(&self.state, next.as_ref());
         self.state = next;
-        if navigated {
+        if uncover {
             if self.documents_active {
                 self.show_repository_canvas(cx);
             }
