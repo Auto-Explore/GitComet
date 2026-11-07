@@ -159,7 +159,8 @@ impl GitCometView {
                 .measure(theme, scale, window)
         });
         let sidebar_changed = self.sidebar_header_minimum.update(Some(sidebar), window);
-        if self.details_header_minimum.update(details, window) || sidebar_changed {
+        let details_changed = self.details_header_minimum.update(details, window);
+        if sidebar_changed || details_changed {
             self.pane_resize = None;
         }
         if !renders_full_chrome(self.view_mode) {
