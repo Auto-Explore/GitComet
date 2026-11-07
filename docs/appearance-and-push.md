@@ -89,9 +89,15 @@ window and is never saved, so a new window always runs hooks. Pushes from the
 toolbar's Push menu always run hooks.
 
 Git LFS uploads objects from its own `pre-push` hook. When a push after commit
-skips hooks in a repository with LFS filters configured, GitComet first runs
-`git lfs push <remote> <commit>` itself, even when the local LFS cache is empty.
-Missing content stops the push. The Git push publishes that captured commit;
-upstream tracking is configured separately after a successful push.
-On an adjusted git-annex branch, git-annex
+skips a `pre-push` hook Git would run, and the commits it publishes contain LFS
+pointers, GitComet first runs `git lfs push <remote> <commit>` itself, as that
+hook would. It checks the commits rather than the LFS settings or
+`.gitattributes`, so a global `git lfs install` alone never triggers it, and it
+reads pointers as git-lfs does, CRLF line endings included. Commits the
+remote's default branch already has, such as a merged `main`, are not checked
+again. Missing content stops the push. The Git push publishes that captured
+commit, even if the branch moved during the upload. Upstream tracking is
+configured after a successful push and follows `branch.autoSetupRebase`, as
+`git push --set-upstream` does. If it cannot be saved, the push still succeeds,
+and its summary and output say so. On an adjusted git-annex branch, git-annex
 performs the push and the hooks run as usual.

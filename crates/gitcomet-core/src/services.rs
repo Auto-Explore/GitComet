@@ -224,6 +224,11 @@ pub fn refresh_history_page(
 /// to do; the run itself writes nothing to a pipe, so its output can't tell.
 pub const MAINTENANCE_CHECK_COMMAND: &str = "git maintenance is-needed --auto";
 
+/// What `git push --set-upstream` prints, still exiting 0, when the push went
+/// through but the upstream could not be saved (Git's `install_branch_config`).
+pub const UPSTREAM_CONFIG_WRITE_FAILED: &str =
+    "error: unable to write upstream branch configuration";
+
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct CommandOutput {
     pub command: String,
