@@ -616,7 +616,8 @@ pub(super) fn reduce_prepared(
         msg,
         Msg::GlobalNavBack { .. } | Msg::GlobalNavForward { .. }
     );
-    let push = is_view_navigation(&msg);
+    let navigated = view_navigation_repo(&msg);
+    let push = navigated.is_some();
     let selection_request = match &msg {
         Msg::SelectCommit {
             repo_id,
@@ -651,6 +652,11 @@ pub(super) fn reduce_prepared(
     }
 
     let mut effects = reduce_inner(inputs, repos, id_alloc, state, msg);
+    if let Some(repo) =
+        navigated.and_then(|repo_id| state.repos.iter_mut().find(|repo| repo.id == repo_id))
+    {
+        repo.navigation.view_requests = repo.navigation.view_requests.wrapping_add(1);
+    }
     track_sequencer_effects(state, &effects);
     effects::follow_history_selection(state, &mut effects);
 
@@ -786,38 +792,39 @@ fn finalize_reduced_state(state: &mut AppState, nav_push: Option<bool>) {
     }
 }
 
-/// Whether `msg` is a user-initiated navigation that should create a new global
-/// back/forward step (as opposed to a background change folded into the current
-/// step). `GlobalNav*` replays are handled separately and never reach here as a
+/// The repository whose main view `msg` navigates, when it is a
+/// user-initiated navigation that should create a new global back/forward step
+/// (as opposed to a background change folded into the current step).
+/// `GlobalNav*` replays are handled separately and never reach here as a
 /// "push".
-fn is_view_navigation(msg: &Msg) -> bool {
-    matches!(
-        msg,
-        Msg::SelectDiff { .. }
-            | Msg::SelectConflictDiff { .. }
-            | Msg::SelectCommit { .. }
-            // Selecting a linked-worktree row is a destination like any other
-            // history selection; it just is not a commit.
-            | Msg::SelectWorktreeUncommitted { .. }
-            | Msg::CompareCommitRange { .. }
-            | Msg::CompareWithOptions { .. }
-            | Msg::CompareWithMarked { .. }
-            | Msg::CompareWithWorkingTree { .. }
-            | Msg::OpenFileContent { .. }
-            | Msg::OpenFileEditor { .. }
-            // Leaving the editor is a destination of its own, so Back returns to
-            // the editor rather than skipping past it to whatever preceded it.
-            | Msg::ExitDiffEditMode { .. }
-            | Msg::OpenFileAtCommit { .. }
-            | Msg::ShowFileChangesAtCommit { .. }
-            | Msg::BrowseRepositoryAtCommit { .. }
-            // A reveal moves the main view when its reference resolves, not
-            // when it is asked for.
-            | Msg::Internal(crate::msg::InternalMsg::CommitRevealResolved { .. })
-            | Msg::ResetBrowseToLive { .. }
-            | Msg::OpenInlineSubmoduleDiff { .. }
-            | Msg::SelectInlineSubmoduleDiff { .. }
-    )
+fn view_navigation_repo(msg: &Msg) -> Option<RepoId> {
+    match msg {
+        Msg::SelectDiff { repo_id, .. }
+        | Msg::SelectConflictDiff { repo_id, .. }
+        | Msg::SelectCommit { repo_id, .. }
+        // Selecting a linked-worktree row is a destination like any other
+        // history selection; it just is not a commit.
+        | Msg::SelectWorktreeUncommitted { repo_id, .. }
+        | Msg::CompareCommitRange { repo_id, .. }
+        | Msg::CompareWithOptions { repo_id, .. }
+        | Msg::CompareWithMarked { repo_id, .. }
+        | Msg::CompareWithWorkingTree { repo_id, .. }
+        | Msg::OpenFileContent { repo_id, .. }
+        | Msg::OpenFileEditor { repo_id, .. }
+        // Leaving the editor is a destination of its own, so Back returns to
+        // the editor rather than skipping past it to whatever preceded it.
+        | Msg::ExitDiffEditMode { repo_id, .. }
+        | Msg::OpenFileAtCommit { repo_id, .. }
+        | Msg::ShowFileChangesAtCommit { repo_id, .. }
+        | Msg::BrowseRepositoryAtCommit { repo_id, .. }
+        // A reveal moves the main view when its reference resolves, not
+        // when it is asked for.
+        | Msg::Internal(crate::msg::InternalMsg::CommitRevealResolved { repo_id, .. })
+        | Msg::ResetBrowseToLive { repo_id, .. }
+        | Msg::OpenInlineSubmoduleDiff { repo_id, .. }
+        | Msg::SelectInlineSubmoduleDiff { repo_id, .. } => Some(*repo_id),
+        _ => None,
+    }
 }
 
 /// Sync the active repo's global navigation history against the current

@@ -491,6 +491,39 @@ fn choosing_a_commit_or_file_hides_the_overlay_but_a_reload_does_not(
     assert!(!opened.is_shown(), "choosing a commit asks for the canvas");
 }
 
+/// The file shown behind the overlay, chosen again, asks for the canvas
+/// although the store's diff target stays the same.
+#[gpui::test]
+fn choosing_the_file_shown_again_hides_the_overlay(cx: &mut gpui::TestAppContext) {
+    let target = DiffTarget::working_tree(PathBuf::from("a.txt"), DiffArea::Unstaged);
+    let mut repo = repo(RepoId(1), "/tmp/overlay-reselect");
+    repo.diff_state.diff_target = Some(target.clone());
+    let initial = state(vec![repo], RepoId(1));
+    let mut opened = open(cx, Arc::clone(&initial));
+    let view = opened.view.clone();
+    let store = opened.cx.update(|_, app| view.read(app).store.clone());
+    store.replace_snapshot_for_test(initial);
+    opened.show();
+
+    let selected = |store: &AppStore| store.snapshot().repos[0].diff_state.diff_state_rev;
+    let before = selected(&store);
+    store.dispatch(Msg::SelectDiff {
+        repo_id: RepoId(1),
+        target: target.clone(),
+    });
+    wait_until("the store to reduce the selection", || {
+        selected(&store) != before
+    });
+    let next = store.snapshot();
+    assert_eq!(next.repos[0].diff_state.diff_target, Some(target));
+    opened.push(next);
+    assert!(
+        !opened.is_shown(),
+        "choosing the file again asks for the canvas"
+    );
+    assert!(!opened.drawn("example_review_overlay"));
+}
+
 #[gpui::test]
 fn canvas_overlays_belong_to_their_repository(cx: &mut gpui::TestAppContext) {
     // One pair throughout: each repository keeps its lifetime.

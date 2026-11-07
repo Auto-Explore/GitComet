@@ -806,8 +806,10 @@ fn repository_navigated(prev: &AppState, next: &AppState) -> bool {
         return false;
     };
     let (prev, next) = (&prev.repos[prev_ix], &next.repos[next_ix]);
-    (next.diff_state.diff_target.is_some()
-        && next.diff_state.diff_target_rev != prev.diff_state.diff_target_rev)
+    // A request for the view already shown changes neither target.
+    next.navigation.view_requests != prev.navigation.view_requests
+        || (next.diff_state.diff_target.is_some()
+            && next.diff_state.diff_target_rev != prev.diff_state.diff_target_rev)
         || (next.history_state.selected_commit.is_some()
             && next.history_state.selected_commit_rev != prev.history_state.selected_commit_rev)
 }

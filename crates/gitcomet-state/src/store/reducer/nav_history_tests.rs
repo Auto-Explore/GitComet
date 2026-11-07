@@ -221,57 +221,97 @@ fn commit_then_file_diffs_are_all_remembered() {
 }
 
 #[test]
+fn choosing_the_file_shown_again_is_a_view_request_and_a_reload_is_not() {
+    let repo_id = RepoId(1);
+    let mut state = available_state_with_repo(repo_id);
+    let target = DiffTarget::working_tree(std::path::PathBuf::from("a.txt"), DiffArea::Unstaged);
+    let requests = |state: &AppState| repo(state, repo_id).navigation.view_requests;
+    dispatch(
+        &mut state,
+        Msg::SelectDiff {
+            repo_id,
+            target: target.clone(),
+        },
+    );
+    assert_eq!(requests(&state), 1);
+    let target_rev = repo(&state, repo_id).diff_state.diff_target_rev;
+    dispatch(&mut state, Msg::SelectDiff { repo_id, target });
+    assert_eq!(requests(&state), 2);
+    assert_eq!(
+        repo(&state, repo_id).diff_state.diff_target_rev,
+        target_rev,
+        "the target stays the same"
+    );
+    dispatch(
+        &mut state,
+        Msg::RepoExternallyChanged {
+            repo_id,
+            change: crate::msg::RepoExternalChange {
+                worktree: true,
+                ..Default::default()
+            },
+        },
+    );
+    assert_eq!(requests(&state), 2, "a reload is no request");
+}
+
+#[test]
 fn view_navigation_messages_push_others_fold_in_place() {
     // User navigations create a new global back/forward step.
-    assert!(is_view_navigation(&Msg::SelectDiff {
-        repo_id: RepoId(1),
-        target: DiffTarget::working_tree(std::path::PathBuf::from("a.txt"), DiffArea::Unstaged),
-    }));
-    assert!(is_view_navigation(&Msg::SelectCommit {
-        request_id: None,
-        repo_id: RepoId(1),
-        commit_id: CommitId("a".into()),
-    }));
+    assert!(
+        view_navigation_repo(&Msg::SelectDiff {
+            repo_id: RepoId(1),
+            target: DiffTarget::working_tree(std::path::PathBuf::from("a.txt"), DiffArea::Unstaged),
+        })
+        .is_some()
+    );
+    assert!(
+        view_navigation_repo(&Msg::SelectCommit {
+            request_id: None,
+            repo_id: RepoId(1),
+            commit_id: CommitId("a".into()),
+        })
+        .is_some()
+    );
     // The file-content viewer's own back/forward does NOT land a global
     // step — it operates on a separate viewer-level stack so it does not
     // pollute the global back/forward history.
-    assert!(!is_view_navigation(&Msg::ViewerNavBack {
-        repo_id: RepoId(1)
-    }));
+    assert!(view_navigation_repo(&Msg::ViewerNavBack { repo_id: RepoId(1) }).is_none());
     // Background / non-navigation messages do not push a step (they are
     // folded into the current entry in place, so they can't pollute history).
-    assert!(!is_view_navigation(&Msg::ReportError {
-        repo_id: None,
-        message: String::new(),
-    }));
+    assert!(
+        view_navigation_repo(&Msg::ReportError {
+            repo_id: None,
+            message: String::new(),
+        })
+        .is_none()
+    );
 }
 
 #[test]
 fn closure_and_replay_messages_are_not_view_navigations() {
-    assert!(!is_view_navigation(&Msg::ClearDiffSelection {
-        repo_id: RepoId(1),
-    }));
-    assert!(!is_view_navigation(&Msg::ClearCommitSelection {
-        request_id: None,
-        repo_id: RepoId(1),
-    }));
-    assert!(!is_view_navigation(&Msg::ViewerNavBack {
-        repo_id: RepoId(1),
-    }));
-    assert!(!is_view_navigation(&Msg::ViewerNavForward {
-        repo_id: RepoId(1),
-    }));
-    assert!(!is_view_navigation(&Msg::CloseInlineSubmoduleDiff {
-        repo_id: RepoId(1),
-    }));
-    assert!(is_view_navigation(&Msg::OpenInlineSubmoduleDiff {
-        origin: crate::model::ForeignDiffOrigin::Submodule,
-        repo_id: RepoId(1),
-        submodule_repo_path: std::path::PathBuf::from("/tmp/sub"),
-        parent_submodule_path: std::path::PathBuf::from("sub"),
-        entries: vec![].into(),
-        selected_ix: 0,
-    }));
+    assert!(view_navigation_repo(&Msg::ClearDiffSelection { repo_id: RepoId(1) }).is_none());
+    assert!(
+        view_navigation_repo(&Msg::ClearCommitSelection {
+            request_id: None,
+            repo_id: RepoId(1),
+        })
+        .is_none()
+    );
+    assert!(view_navigation_repo(&Msg::ViewerNavBack { repo_id: RepoId(1) }).is_none());
+    assert!(view_navigation_repo(&Msg::ViewerNavForward { repo_id: RepoId(1) }).is_none());
+    assert!(view_navigation_repo(&Msg::CloseInlineSubmoduleDiff { repo_id: RepoId(1) }).is_none());
+    assert!(
+        view_navigation_repo(&Msg::OpenInlineSubmoduleDiff {
+            origin: crate::model::ForeignDiffOrigin::Submodule,
+            repo_id: RepoId(1),
+            submodule_repo_path: std::path::PathBuf::from("/tmp/sub"),
+            parent_submodule_path: std::path::PathBuf::from("sub"),
+            entries: vec![].into(),
+            selected_ix: 0,
+        })
+        .is_some()
+    );
 }
 
 #[test]

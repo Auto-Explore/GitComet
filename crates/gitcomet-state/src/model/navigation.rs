@@ -298,6 +298,9 @@ pub struct RepoNavigationState {
     pub main_history: NavStack<MainViewSnapshot>,
     /// A commit, branch, or tag waiting to be compared with another target.
     pub comparison_mark: Option<ComparisonMark>,
+    /// Bumped by each navigation the user asks for, the view already shown
+    /// asked for again included; background changes leave it.
+    pub view_requests: u64,
 }
 
 /// A point marked for comparison via the "Mark for comparison" context-menu
