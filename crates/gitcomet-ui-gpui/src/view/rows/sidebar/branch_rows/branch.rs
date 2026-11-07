@@ -334,6 +334,46 @@ impl SidebarPaneView {
                                         this.explain_working_tree_required(cx);
                                         return;
                                     }
+                                    if virtual_branches_owns_workdir(
+                                        &this.store.snapshot(),
+                                        repo_id,
+                                    ) {
+                                        // The virtual branches owns the working directory:
+                                        // ask to leave it rather than moving HEAD
+                                        // off the virtual-branches branch under the tab
+                                        // that is showing it.
+                                        this.open_popover_at(
+                                            PopoverKind::LeaveVirtualBranchesToCheckoutPrompt {
+                                                repo_id,
+                                                target: VirtualBranchesCheckoutTarget::Branch(name),
+                                            },
+                                            e.position(),
+                                            window,
+                                            cx,
+                                        );
+                                        cx.notify();
+                                        return;
+                                    }
+                                    if virtual_branches_owns_workdir(
+                                        &this.store.snapshot(),
+                                        repo_id,
+                                    ) {
+                                        // The virtual branches owns the working directory:
+                                        // ask to leave it rather than moving HEAD
+                                        // off the virtual-branches branch under the tab
+                                        // that is showing it.
+                                        this.open_popover_at(
+                                            PopoverKind::LeaveVirtualBranchesToCheckoutPrompt {
+                                                repo_id,
+                                                target: VirtualBranchesCheckoutTarget::Branch(name),
+                                            },
+                                            e.position(),
+                                            window,
+                                            cx,
+                                        );
+                                        cx.notify();
+                                        return;
+                                    }
                                     this.store.dispatch(Msg::CheckoutBranch { repo_id, name });
                                     this.rebuild_diff_cache(cx);
                                     cx.notify();

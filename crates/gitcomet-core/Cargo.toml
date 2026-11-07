@@ -31,6 +31,7 @@ percent-encoding = { workspace = true }
 process-wrap = { workspace = true }
 regex = { workspace = true }
 rustc-hash = { workspace = true }
+serde = { workspace = true }
 smallvec = { workspace = true }
 strsim = { workspace = true }
 tempfile = { workspace = true }

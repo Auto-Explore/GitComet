@@ -2931,6 +2931,96 @@ fn set_file_browser_source_blanks_a_tree_that_never_loaded() {
 }
 
 #[test]
+fn opening_the_virtual_branches_tab_moves_the_working_directory_onto_it() {
+    let repo_id = RepoId(1);
+    let mut state = new_state_with_repo(repo_id);
+    state.active_repo = Some(repo_id);
+    mark_repo_open_ready(&mut state, repo_id);
+    // Already loaded, so the switch is not deferred behind a load.
+    let repo = repo_mut(&mut state, repo_id);
+    repo.virtual_branches
+        .set_state(gitcomet_core::virtual_branches::VirtualBranchesState::new(
+            "main",
+        ));
+    repo.head_branch = Loadable::Ready("main".into());
+
+    let effects = set_sidebar_mode(&mut state, SidebarMode::VirtualBranches);
+    assert_eq!(state.sidebar_mode, SidebarMode::VirtualBranches);
+    assert!(
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::EnterVirtualBranches { .. })),
+        "opening the tab is what puts the applied branches in the files"
+    );
+}
+
+#[test]
+fn leaving_the_virtual_branches_tab_hands_the_working_directory_back() {
+    let repo_id = RepoId(1);
+    let mut state = new_state_with_repo(repo_id);
+    state.active_repo = Some(repo_id);
+    state.sidebar_mode = SidebarMode::VirtualBranches;
+    let repo = repo_mut(&mut state, repo_id);
+    repo.virtual_branches
+        .set_state(gitcomet_core::virtual_branches::VirtualBranchesState::new(
+            "main",
+        ));
+    repo.virtual_branches.active = true;
+    repo.virtual_branches.checkout_base = Some("main".into());
+
+    let effects = set_sidebar_mode(&mut state, SidebarMode::Branches);
+    assert!(
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::LeaveVirtualBranches { .. })),
+        "walking away from the tab must not strand the user on gitcomet/virtual"
+    );
+}
+
+#[test]
+fn opening_the_virtual_branches_tab_twice_does_not_switch_again() {
+    let repo_id = RepoId(1);
+    let mut state = new_state_with_repo(repo_id);
+    state.active_repo = Some(repo_id);
+    state.sidebar_mode = SidebarMode::VirtualBranches;
+    let repo = repo_mut(&mut state, repo_id);
+    repo.virtual_branches
+        .set_state(gitcomet_core::virtual_branches::VirtualBranchesState::new(
+            "main",
+        ));
+    repo.virtual_branches.active = true;
+
+    assert!(
+        set_sidebar_mode(&mut state, SidebarMode::VirtualBranches).is_empty(),
+        "the mode did not change, so neither should the working directory"
+    );
+}
+
+#[test]
+fn opening_the_virtual_branches_tab_waits_for_the_load_before_moving_the_working_directory() {
+    let repo_id = RepoId(1);
+    let mut state = new_state_with_repo(repo_id);
+    state.active_repo = Some(repo_id);
+    mark_repo_open_ready(&mut state, repo_id);
+    // Deliberately not loaded: this is the first time the tab is opened.
+    assert!(matches!(
+        repo_mut(&mut state, repo_id).virtual_branches.state,
+        Loadable::NotLoaded
+    ));
+
+    let effects = set_sidebar_mode(&mut state, SidebarMode::VirtualBranches);
+    // `Effect` has no `PartialEq`, so this is checked by shape.
+    assert_eq!(
+        effects.len(),
+        1,
+        "only the load: the switch cannot run before the state says the \
+         virtual_branches exists, and a rejected checkout would leave the user on a \
+         tab describing branches they are not on"
+    );
+    assert!(matches!(effects[0], Effect::LoadVirtualBranches { .. }));
+}
+
+#[test]
 fn set_sidebar_mode_triggers_file_browser_load_and_retries_on_error() {
     let repo_id = RepoId(1);
     let mut state = new_state_with_repo(repo_id);

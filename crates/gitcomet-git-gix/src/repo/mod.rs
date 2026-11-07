@@ -86,7 +86,12 @@ mod submodules;
 mod tags;
 mod text_attributes;
 mod text_decode;
+pub(crate) mod virtual_branches;
 mod worktrees;
+
+/// Re-exported so the loose-ref reader can filter GitComet's own branches
+/// without depending on a `repo::virtual branches` path.
+pub(crate) use virtual_branches::is_virtual_branches_branch as is_virtual_branches_branch_name;
 
 #[derive(Clone, Debug, Default, Eq, Hash, PartialEq)]
 struct RepoFileStamp {
@@ -2082,6 +2087,89 @@ impl GitRepository for GixRepo {
         let _operation = self.operation_lease()?;
         self.require_working_tree()?;
         self.discard_worktree_changes_impl(paths)
+    }
+
+    fn read_virtual_branches(
+        &self,
+    ) -> Result<gitcomet_core::virtual_branches::VirtualBranchesState> {
+        let _operation = self.operation_lease()?;
+        self.read_virtual_branches_impl()
+    }
+
+    fn write_virtual_branches(
+        &self,
+        state: &gitcomet_core::virtual_branches::VirtualBranchesState,
+    ) -> Result<()> {
+        let _operation = self.operation_lease()?;
+        self.write_virtual_branches_impl(state)
+    }
+
+    fn read_virtual_branches_assignments(
+        &self,
+    ) -> Result<gitcomet_core::virtual_branches::AssignmentIndex> {
+        let _operation = self.operation_lease()?;
+        self.read_assignments_impl()
+    }
+
+    fn write_virtual_branches_assignments(
+        &self,
+        index: &gitcomet_core::virtual_branches::AssignmentIndex,
+    ) -> Result<()> {
+        let _operation = self.operation_lease()?;
+        self.write_assignments_impl(index)
+    }
+
+    fn create_virtual_branch(&self, name: &str, base: &str) -> Result<()> {
+        let _operation = self.operation_lease()?;
+        self.create_virtual_branch_impl(name, base)
+    }
+
+    fn rebase_virtual_branch(&self, name: &str, onto: &str) -> Result<()> {
+        let _operation = self.operation_lease()?;
+        self.rebase_virtual_branch_impl(name, onto)
+    }
+
+    fn enter_virtual_branches(&self) -> Result<CommitId> {
+        let _operation = self.operation_lease()?;
+        self.enter_virtual_branches_impl()
+    }
+
+    fn leave_virtual_branches(&self, onto: &str) -> Result<()> {
+        let _operation = self.operation_lease()?;
+        self.leave_virtual_branches_impl(onto)
+    }
+
+    fn update_virtual_branches_branch(&self, applied: &[&str]) -> Result<CommitId> {
+        let _operation = self.operation_lease()?;
+        self.update_virtual_branches_branch_impl(applied)
+    }
+
+    fn update_virtual_branches_target(&self, target: &str) -> Result<()> {
+        let _operation = self.operation_lease()?;
+        self.update_virtual_branches_target_impl(target)
+    }
+
+    fn commit_paths_to_virtual_branch(
+        &self,
+        name: &str,
+        message: &str,
+        paths: &[&Path],
+    ) -> Result<CommitOperationOutcome> {
+        let _operation = self.operation_lease()?;
+        self.commit_paths_to_virtual_branch_impl(name, message, paths)
+    }
+
+    fn virtual_branch_push_target(
+        &self,
+        name: &str,
+        virtual_branches: &gitcomet_core::virtual_branches::VirtualBranchesState,
+    ) -> Option<String> {
+        self.virtual_branch_push_target_impl(name, virtual_branches)
+    }
+
+    fn push_virtual_branch(&self, name: &str) -> Result<CommandOutput> {
+        let _operation = self.operation_lease()?;
+        self.push_virtual_branch_impl(name)
     }
 }
 

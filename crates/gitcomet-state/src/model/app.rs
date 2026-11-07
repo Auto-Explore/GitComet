@@ -18,6 +18,10 @@ pub enum SidebarMode {
     #[default]
     Branches,
     Files,
+    /// The GitButler-style virtual branches: virtual branches, stacks, and the
+    /// files assigned to each. An alternative to the branch workflow, not a
+    /// replacement for it.
+    VirtualBranches,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]

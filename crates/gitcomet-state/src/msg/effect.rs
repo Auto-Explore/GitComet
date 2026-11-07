@@ -49,6 +49,58 @@ pub enum Effect {
     HistoryAuthors(crate::history_authors::HistoryAuthorsEffect),
     HistoryFind(crate::history_find::HistoryFindEffect),
 
+    /// Read a repository's virtual branches, assignments, and virtual branches-branch tip.
+    LoadVirtualBranches {
+        repo_id: RepoId,
+    },
+    /// Realize one virtual branches edit: the state write plus whatever branch
+    /// creation, restacking, or virtual branches rebuild the edit needs.
+    ApplyVirtualBranchesEdit {
+        repo_id: RepoId,
+        edit: crate::model::VirtualBranchesEdit,
+    },
+    /// Persist one file's branch assignment, or one hunk's.
+    ///
+    /// One effect for both because they write the same file through the same
+    /// index; `hunk` is what distinguishes them.
+    AssignVirtualBranchesFile {
+        repo_id: RepoId,
+        path: PathBuf,
+        hunk: Option<gitcomet_core::virtual_branches::HunkFingerprint>,
+        branch: Option<String>,
+    },
+    /// Put the working directory on the virtual-branches branch.
+    EnterVirtualBranches {
+        repo_id: RepoId,
+        /// The branch to remember so leaving has somewhere to go back to.
+        checkout_base: Option<String>,
+    },
+    /// Take the working directory back off the virtual-branches branch.
+    LeaveVirtualBranches {
+        repo_id: RepoId,
+        checkout_base: Option<String>,
+    },
+    /// Take the working directory off the virtual-branches branch and then run the
+    /// checkout that had to wait for it.
+    ///
+    /// A checkout asked for while the virtual branches holds the working directory is
+    /// two moves: leave first, then check out on a directory the virtual branches no
+    /// longer owns. Keeping them in one effect is what stops a failed leave
+    /// from running the second half anyway — or from leaving the user on a
+    /// branch neither the virtual branches nor the request wanted.
+    LeaveVirtualBranchesAndCheckout {
+        repo_id: RepoId,
+        /// Where the leave puts the working directory: the branch or commit
+        /// the user asked for when it already exists, `None` to fall back to
+        /// the branch the virtual branches remembers.
+        checkout_base: Option<String>,
+        then: CheckoutRequest,
+    },
+    /// Push a virtual branch, setting upstream on first push.
+    PushVirtualBranchesBranch {
+        repo_id: RepoId,
+        name: String,
+    },
     OpenRepo {
         repo_id: RepoId,
         path: PathBuf,
@@ -474,7 +526,60 @@ impl Effect {
             | Self::Stash { .. }
             | Self::ApplyStash { .. }
             | Self::PopStash { .. }
-            | Self::DropStash { .. } => true,
+            | Self::DropStash { .. }
+            | Self::LoadVirtualBranches { .. }
+            | Self::ApplyVirtualBranchesEdit { .. }
+            | Self::AssignVirtualBranchesFile { .. }
+            | Self::EnterVirtualBranches { .. }
+            | Self::LeaveVirtualBranches { .. }
+            | Self::LeaveVirtualBranchesAndCheckout { .. }
+            | Self::PushVirtualBranchesBranch { .. } => true,
+        }
+    }
+}
+
+/// What to check out once the working directory is off the virtual-branches branch.
+///
+/// The three checkouts the user can ask for from the views that sit over the
+/// virtual branches, carried through the leave so the request survives it.
+#[derive(Clone, Debug)]
+pub enum CheckoutRequest {
+    Branch {
+        name: String,
+    },
+    Remote {
+        remote: String,
+        branch: String,
+        local_branch: String,
+        mode: CheckoutRemoteBranchMode,
+    },
+    Commit {
+        commit_id: CommitId,
+    },
+}
+
+impl CheckoutRequest {
+    /// The ordinary message that performs this checkout.
+    ///
+    /// Sent only once the leave has been reported, so the reducer records it
+    /// exactly as it records any other checkout.
+    pub fn into_msg(self, repo_id: RepoId) -> super::Msg {
+        use super::Msg;
+        match self {
+            Self::Branch { name } => Msg::CheckoutBranch { repo_id, name },
+            Self::Remote {
+                remote,
+                branch,
+                local_branch,
+                mode,
+            } => Msg::CheckoutRemoteBranch {
+                repo_id,
+                remote,
+                branch,
+                local_branch,
+                mode,
+            },
+            Self::Commit { commit_id } => Msg::CheckoutCommit { repo_id, commit_id },
         }
     }
 }

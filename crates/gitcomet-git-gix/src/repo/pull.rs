@@ -191,6 +191,9 @@ impl GixRepo {
     }
 
     pub(super) fn pull_with_output_impl(&self, mode: PullMode) -> Result<CommandOutput> {
+        // A pull merges into HEAD, so on the virtual-branches branch it would leave a
+        // merge commit there that the next rebuild discards.
+        self.refuse_virtual_branches_head_action("a pull")?;
         let branch = self.current_branch_name()?.ok_or_else(|| {
             Error::new(ErrorKind::Unsupported(
                 "Pull requires a checked-out branch. Check out a branch before pulling.",
@@ -226,6 +229,7 @@ impl GixRepo {
         remote: &str,
         branch: &str,
     ) -> Result<CommandOutput> {
+        self.refuse_virtual_branches_head_action("a pull")?;
         validate_ref_like_arg(branch, "branch name")?;
         let target = PullTarget::new(remote.to_string(), format!("refs/heads/{branch}"))?;
         self.pull_target(&target, PullMode::Merge)

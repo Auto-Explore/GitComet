@@ -7,6 +7,7 @@ mod branch_prompts;
 mod remote_prompts;
 mod repository_prompts;
 mod settings_sync;
+mod virtual_branches_prompts;
 #[cfg(test)]
 pub(super) use remote_prompts::upstream_prompt_submission;
 
@@ -659,6 +660,7 @@ impl PopoverHost {
                     this.popover,
                     Some(PopoverKind::CreateBranchFromRefPrompt { .. })
                         | Some(PopoverKind::RenameBranchPrompt { .. })
+                        | Some(PopoverKind::VirtualBranchesPrompt { .. })
                         | Some(PopoverKind::CheckoutRemoteBranchPrompt { .. })
                 )
             },
@@ -670,8 +672,11 @@ impl PopoverHost {
                     this.submit_create_branch(window, cx);
                 } else if matches!(this.popover, Some(PopoverKind::RenameBranchPrompt { .. })) {
                     this.submit_rename_branch(window, cx);
+                } else if let Some(PopoverKind::VirtualBranchesPrompt { .. }) = this.popover.clone()
+                {
+                    this.submit_virtual_branches_prompt(window, cx);
                 } else {
-                    this.submit_checkout_remote_branch(cx);
+                    this.submit_checkout_remote_branch(window, cx);
                 }
             },
         ));
@@ -980,6 +985,7 @@ impl PopoverHost {
             remote_url_edit_input,
             create_branch_input,
             create_branch_checkout_enabled: true,
+            virtual_branches_prompt_kind: None,
             create_branch_source_target: String::new(),
             worktree_ref_source_target: String::new(),
             suppress_worktree_submit_after_ref_enter: false,
@@ -1386,6 +1392,7 @@ impl PopoverHost {
         }
         self.error_details_selected = None;
         self.error_details_text = Default::default();
+        self.virtual_branches_prompt_kind = None;
         self.extension_dialog = None;
         self.save_commit_prompt_draft(cx);
         self.clear_truncated_tooltip(cx);
@@ -1492,6 +1499,7 @@ impl PopoverHost {
             self.popover,
             Some(PopoverKind::CreateBranchFromRefPrompt { .. })
                 | Some(PopoverKind::RenameBranchPrompt { .. })
+                | Some(PopoverKind::VirtualBranchesPrompt { .. })
                 | Some(PopoverKind::CheckoutRemoteBranchPrompt { .. })
                 | Some(PopoverKind::StashPrompt)
                 | Some(PopoverKind::CommitPrompt { .. })
@@ -1610,6 +1618,7 @@ impl PopoverHost {
         match self.popover.as_ref() {
             Some(PopoverKind::CreateBranchFromRefPrompt { .. })
             | Some(PopoverKind::RenameBranchPrompt { .. })
+            | Some(PopoverKind::VirtualBranchesPrompt { .. })
             | Some(PopoverKind::StashPrompt)
             | Some(PopoverKind::CommitPrompt { .. })
             | Some(PopoverKind::StashPickerPrompt { .. })
@@ -1901,6 +1910,7 @@ impl PopoverHost {
                 &kind,
                 PopoverKind::CreateBranchFromRefPrompt { .. }
                     | PopoverKind::RenameBranchPrompt { .. }
+                    | PopoverKind::VirtualBranchesPrompt { .. }
                     | PopoverKind::StashPrompt
                     | PopoverKind::CommitPrompt { .. }
                     | PopoverKind::StashPickerPrompt { .. }
@@ -2080,6 +2090,30 @@ impl PopoverHost {
                         .create_branch_input
                         .read_with(cx, |input, _| input.focus_handle());
                     window.focus(&focus, cx);
+                }
+                PopoverKind::VirtualBranchesPrompt { prompt, .. } => {
+                    // A branch row opens on its action list; the virtual branches-level
+                    // kinds open straight on their field.
+                    self.virtual_branches_prompt_kind = (prompt.kind
+                        == VirtualBranchesPromptKind::BranchActions)
+                        .then_some(VirtualBranchesPromptKind::BranchActions);
+                    let value = prompt.value.clone();
+                    self.create_branch_input.update(cx, |input, cx| {
+                        input.clear_transient_key_presses();
+                        input.set_text(value, cx);
+                        cx.notify();
+                    });
+                    if prompt.kind.asks_for_text() {
+                        let focus = self
+                            .create_branch_input
+                            .read_with(cx, |input, _| input.focus_handle());
+                        window.focus(&focus, cx);
+                    } else {
+                        // No field to land in: the action list and the remove
+                        // confirmation are driven from the keyboard, so focus
+                        // goes to the prompt's own tab group instead.
+                        window.focus(&self.prompt_tab_group_focus_handle, cx);
+                    }
                 }
                 PopoverKind::CheckoutRemoteBranchPrompt { branch, .. } => {
                     self.create_branch_input.update(cx, |input, cx| {

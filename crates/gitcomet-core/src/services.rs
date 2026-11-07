@@ -2147,6 +2147,166 @@ pub trait GitRepository: Send + Sync {
     }
 
     fn discard_worktree_changes(&self, paths: &[&Path]) -> Result<()>;
+
+    // ── Virtual branches (virtual branches) ──────────────────────────────
+    //
+    // The methods below implement the virtual branches described in
+    // [`crate::virtual branches`]. They are separate from the branch methods above
+    // because they maintain `gitcomet/virtual`, which is GitComet's own
+    // bookkeeping rather than a branch a user works on.
+
+    /// Read the virtual branches: the target branch and every virtual branch.
+    ///
+    /// The returned state describes intent — which branches exist and how they
+    /// stack — not Git state. A branch that has been created in another tool
+    /// may still be missing from the state until the next write.
+    fn read_virtual_branches(&self) -> Result<crate::virtual_branches::VirtualBranchesState> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "virtual branches is not implemented for this backend",
+        )))
+    }
+
+    /// Persist the virtual branches after an edit.
+    ///
+    /// The state is validated before it is written, so a rejected edit leaves
+    /// the stored virtual branches exactly as it was rather than half-applied.
+    fn write_virtual_branches(
+        &self,
+        _state: &crate::virtual_branches::VirtualBranchesState,
+    ) -> Result<()> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "virtual branches is not implemented for this backend",
+        )))
+    }
+
+    /// Read which virtual branch each changed file belongs to.
+    fn read_virtual_branches_assignments(
+        &self,
+    ) -> Result<crate::virtual_branches::AssignmentIndex> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "virtual branches is not implemented for this backend",
+        )))
+    }
+
+    fn write_virtual_branches_assignments(
+        &self,
+        _index: &crate::virtual_branches::AssignmentIndex,
+    ) -> Result<()> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "virtual branches is not implemented for this backend",
+        )))
+    }
+
+    /// Create a branch for `name` at its base and apply it.
+    ///
+    /// The base is the branch's parent if it is stacked, otherwise the
+    /// virtual branches target.
+    fn create_virtual_branch(&self, name: &str, base: &str) -> Result<()> {
+        let _ = (name, base);
+        Err(Error::new(ErrorKind::Unsupported(
+            "virtual branches is not implemented for this backend",
+        )))
+    }
+
+    /// Point an existing branch at a new base, rebasing it there.
+    ///
+    /// Used both when the virtual branches target moves and when a branch is stacked
+    /// on a different branch.
+    fn rebase_virtual_branch(&self, _name: &str, _onto: &str) -> Result<()> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "virtual branches is not implemented for this backend",
+        )))
+    }
+
+    /// Put the working directory on the virtual-branches branch, building it if
+    /// needed, and return its tip.
+    ///
+    /// This is what makes an applied branch visible in the user's files rather
+    /// than only in a ref. Implementations must refuse, never discard, when
+    /// local changes would be overwritten — the same rule `git checkout` has.
+    fn enter_virtual_branches(&self) -> Result<CommitId> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "virtual branches is not implemented for this backend",
+        )))
+    }
+
+    /// Take the working directory back off the virtual-branches branch onto `onto`.
+    ///
+    /// `onto` is the branch the user was on before entering, so leaving is the
+    /// inverse of [`Self::enter_virtual_branches`] and carries the same refusal rule.
+    fn leave_virtual_branches(&self, _onto: &str) -> Result<()> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "virtual branches is not implemented for this backend",
+        )))
+    }
+
+    /// Rebuild `gitcomet/virtual` so it holds the combined tree of
+    /// `applied`, in the order given.
+    ///
+    /// `applied` must already be ordered so a stacked branch follows its
+    /// parent; see [`crate::virtual branches::VirtualBranchesState::application_order`].
+    /// Each entry is merged with a merge commit, which is what keeps the
+    /// virtual-branches branch's history readable and reversible.
+    ///
+    /// A conflict between two applied branches is returned as an error naming
+    /// both branches, rather than being left half-merged in the worktree.
+    fn update_virtual_branches_branch(&self, _applied: &[&str]) -> Result<CommitId> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "virtual branches is not implemented for this backend",
+        )))
+    }
+
+    /// Move every independent branch onto `target` and rebuild the virtual branches.
+    ///
+    /// Branches stacked on another virtual branch move with their base and are
+    /// not rebased here.
+    fn update_virtual_branches_target(&self, _target: &str) -> Result<()> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "virtual branches is not implemented for this backend",
+        )))
+    }
+
+    /// Commit the changes in `paths` to `name` rather than to the virtual branches.
+    ///
+    /// This is how assigned files become commits on a virtual branch: the
+    /// paths are committed against that branch's own base, so the commit
+    /// contains only the work assigned to it.
+    fn commit_paths_to_virtual_branch(
+        &self,
+        _name: &str,
+        _message: &str,
+        _paths: &[&Path],
+    ) -> Result<CommitOperationOutcome> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "virtual branches is not implemented for this backend",
+        )))
+    }
+
+    /// Whether `name` is safe to push and targets `target` upstream.
+    ///
+    /// The virtual branches pushes virtual branches as ordinary branches; this exists
+    /// so the UI can say what a push would do before it does it, and so a
+    /// stacked branch's PR base is known without opening a browser.
+    fn virtual_branch_push_target(
+        &self,
+        name: &str,
+        virtual_branches: &crate::virtual_branches::VirtualBranchesState,
+    ) -> Option<String> {
+        let _ = (name, virtual_branches);
+        None
+    }
+
+    /// Publish the virtual branch `name`, setting its upstream on first push.
+    ///
+    /// A virtual-branches branch is an ordinary Git branch that the user may not be
+    /// checked out on, so this pushes the named ref rather than `HEAD`. There is
+    /// deliberately no "push everything" form: publishing a virtual-branches branch is
+    /// always one deliberate action on one branch.
+    fn push_virtual_branch(&self, _name: &str) -> Result<CommandOutput> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "pushing a virtual-branches branch is not implemented for this backend",
+        )))
+    }
 }
 
 fn validate_safe_push_after_commit_target<R: GitRepository + ?Sized>(

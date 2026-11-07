@@ -62,6 +62,79 @@ pub(super) fn send_unavailable_git_effect_result(
                 error: git_unavailable_error(runtime),
             }))
         }
+        Effect::LoadVirtualBranches { repo_id } => send(Msg::Internal(
+            crate::msg::InternalMsg::VirtualBranchesLoaded {
+                repo_id,
+                result: Err(git_unavailable_error(runtime)),
+                assignments: Err(git_unavailable_error(runtime)),
+                virtual_branches_commit: Err(git_unavailable_error(runtime)),
+            },
+        )),
+        Effect::ApplyVirtualBranchesEdit { repo_id, edit } => send(Msg::Internal(
+            crate::msg::InternalMsg::VirtualBranchesEditFinished {
+                repo_id,
+                edit,
+                result: Err(git_unavailable_error(runtime)),
+            },
+        )),
+        Effect::AssignVirtualBranchesFile {
+            repo_id,
+            path,
+            hunk,
+            branch,
+        } => send(Msg::Internal(
+            crate::msg::InternalMsg::VirtualBranchesAssignFinished {
+                repo_id,
+                path,
+                hunk,
+                branch,
+                result: Err(git_unavailable_error(runtime)),
+            },
+        )),
+        Effect::EnterVirtualBranches {
+            repo_id,
+            checkout_base,
+        } => send(Msg::Internal(
+            crate::msg::InternalMsg::VirtualBranchesActiveFinished {
+                repo_id,
+                active: true,
+                checkout_base,
+                result: Err(git_unavailable_error(runtime)),
+            },
+        )),
+        Effect::LeaveVirtualBranches {
+            repo_id,
+            checkout_base,
+        } => send(Msg::Internal(
+            crate::msg::InternalMsg::VirtualBranchesActiveFinished {
+                repo_id,
+                active: false,
+                checkout_base,
+                result: Err(git_unavailable_error(runtime)),
+            },
+        )),
+        // The checkout waiting for this leave goes with it: the working
+        // directory could not be moved off the virtual branches, and running the
+        // checkout anyway is the stranding the leave exists to prevent.
+        Effect::LeaveVirtualBranchesAndCheckout {
+            repo_id,
+            checkout_base,
+            then: _,
+        } => send(Msg::Internal(
+            crate::msg::InternalMsg::VirtualBranchesActiveFinished {
+                repo_id,
+                active: false,
+                checkout_base,
+                result: Err(git_unavailable_error(runtime)),
+            },
+        )),
+        Effect::PushVirtualBranchesBranch { repo_id, name } => send(Msg::Internal(
+            crate::msg::InternalMsg::VirtualBranchesPushFinished {
+                repo_id,
+                name,
+                result: Err(git_unavailable_error(runtime)),
+            },
+        )),
         Effect::IndexedHistory(work) => send(Msg::IndexedHistory(
             work.failed(git_unavailable_error(runtime)),
         )),
@@ -606,5 +679,92 @@ pub(super) fn send_unavailable_git_effect_result(
                 result: Err(git_unavailable_error(runtime)),
             },
         )),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::msg::InternalMsg;
+
+    /// Run one effect through the unavailable runtime and return what it sent.
+    fn answer(effect: Effect) -> Option<Msg> {
+        let thread_state: Arc<RwLock<Arc<AppState>>> =
+            Arc::new(RwLock::new(Arc::new(AppState::test_default())));
+        let (tx, rx) = std::sync::mpsc::channel::<Msg>();
+        let msg_tx = crate::store::worker_channel::StoreWorkerSender::for_test_msg_sender(tx);
+        send_unavailable_git_effect_result(
+            &thread_state,
+            &msg_tx,
+            effect,
+            &GitRuntimeState::default(),
+        );
+        rx.try_recv().ok()
+    }
+
+    /// A Git that cannot be run must still answer every virtual branches effect.
+    ///
+    /// The match above has no catch-all, so a variant that nobody adds here is
+    /// a compile error — but the property being pinned is the other one: an
+    /// answer *does* arrive. A silent effect would leave the reducer waiting on
+    /// a reply that never comes, with the virtual branches's busy flag set for good.
+    #[test]
+    fn entering_the_virtual_branches_is_answered_even_with_no_git() {
+        let sent = answer(Effect::EnterVirtualBranches {
+            repo_id: RepoId(1),
+            checkout_base: Some("main".into()),
+        });
+        assert!(
+            matches!(
+                sent,
+                Some(Msg::Internal(InternalMsg::VirtualBranchesActiveFinished {
+                    active: true,
+                    checkout_base: Some(ref base),
+                    result: Err(_),
+                    ..
+                })) if base == "main"
+            ),
+            "expected a failed enter, got {sent:?}"
+        );
+    }
+
+    #[test]
+    fn leaving_the_virtual_branches_is_answered_even_with_no_git() {
+        let sent = answer(Effect::LeaveVirtualBranches {
+            repo_id: RepoId(1),
+            checkout_base: None,
+        });
+        assert!(
+            matches!(
+                sent,
+                Some(Msg::Internal(InternalMsg::VirtualBranchesActiveFinished {
+                    active: false,
+                    result: Err(_),
+                    ..
+                }))
+            ),
+            "expected a failed leave, got {sent:?}"
+        );
+    }
+
+    #[test]
+    fn assigning_a_file_is_answered_even_with_no_git() {
+        let sent = answer(Effect::AssignVirtualBranchesFile {
+            repo_id: RepoId(1),
+            path: std::path::PathBuf::from("src/lib.rs"),
+            hunk: None,
+            branch: Some("api".into()),
+        });
+        assert!(
+            matches!(
+                sent,
+                Some(Msg::Internal(InternalMsg::VirtualBranchesAssignFinished {
+                    branch: Some(ref branch),
+                    result: Err(_),
+                    ..
+                })) if branch == "api"
+            ),
+            "the assignment has to come back as failed, not vanish: {sent:?}"
+        );
     }
 }

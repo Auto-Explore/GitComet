@@ -6,8 +6,11 @@ use super::{
     app_menu, branch_group, components, context_menu_entry_action_at, push_request, repo_picker,
     resolve_checkout_file_path, session,
 };
-use crate::view::WorktreePopoverKind;
 use crate::view::gitcomet_view_requests::{RootRequest, RootRequests as _};
+use crate::view::panels::popover::virtual_branches_prompt;
+use crate::view::{
+    VirtualBranchesCheckoutTarget, WorktreePopoverKind, virtual_branches_owns_workdir,
+};
 
 impl PopoverHost {
     pub(in crate::view) fn context_menu_activate_action(
@@ -556,6 +559,19 @@ impl PopoverHost {
                 return;
             }
             ContextMenuAction::CheckoutCommit { repo_id, commit_id } => {
+                if virtual_branches_owns_workdir(&self.state, repo_id) {
+                    // The virtual branches owns the working directory: leaving it is
+                    // part of this checkout, so say so before it happens.
+                    self.open_popover_centered(
+                        PopoverKind::LeaveVirtualBranchesToCheckoutPrompt {
+                            repo_id,
+                            target: VirtualBranchesCheckoutTarget::Commit(commit_id),
+                        },
+                        window,
+                        cx,
+                    );
+                    return;
+                }
                 self.store
                     .dispatch(Msg::CheckoutCommit { repo_id, commit_id });
             }
@@ -664,6 +680,19 @@ impl PopoverHost {
                 return;
             }
             ContextMenuAction::CheckoutBranch { repo_id, name } => {
+                if virtual_branches_owns_workdir(&self.state, repo_id) {
+                    // The virtual branches owns the working directory: leaving it is
+                    // part of this checkout, so say so before it happens.
+                    self.open_popover_centered(
+                        PopoverKind::LeaveVirtualBranchesToCheckoutPrompt {
+                            repo_id,
+                            target: VirtualBranchesCheckoutTarget::Branch(name),
+                        },
+                        window,
+                        cx,
+                    );
+                    return;
+                }
                 self.store.dispatch(Msg::CheckoutBranch { repo_id, name });
             }
             ContextMenuAction::DeleteBranch { repo_id, name } => {
@@ -1417,6 +1446,39 @@ impl PopoverHost {
                         reverse,
                     });
                 }
+            }
+            ContextMenuAction::AssignHunkToVirtualBranches {
+                repo_id,
+                path,
+                hunk,
+            } => {
+                // Owned, because opening the prompt takes `&mut self` while a borrow of
+                // `self.state` would still be live.
+                let branch = self
+                    .state
+                    .repos
+                    .iter()
+                    .find(|repo| repo.id == repo_id)
+                    .and_then(|repo| repo.virtual_branches.assignments.file(&path))
+                    .and_then(|file| file.hunk_branch(hunk))
+                    .map(str::to_string);
+                let anchor = self.popover_anchor_point();
+                self.open_popover_at(
+                    PopoverKind::VirtualBranchesPrompt {
+                        repo_id,
+                        prompt: virtual_branches_prompt::assign_hunk_prompt(
+                            &path,
+                            hunk,
+                            branch.as_deref(),
+                        ),
+                    },
+                    anchor,
+                    window,
+                    cx,
+                );
+                // The dialog that replaces this menu replaces it, so letting the
+                // common tail close the popover would close the dialog too.
+                close_after_action = false;
             }
             ContextMenuAction::StageHunk { repo_id, src_ix } => {
                 if let Some(patch) = self.build_unified_patch_for_hunk_src_ix(repo_id, src_ix, cx) {

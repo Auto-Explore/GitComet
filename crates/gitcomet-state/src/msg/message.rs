@@ -3,6 +3,7 @@ use crate::model::{
     BranchExistsPromptState, ConflictFileLoadMode, DefaultTagType, FileBrowserSettings,
     ForceDeleteBranchPrompt, ForceRemoveWorktreePrompt, GitOperationOuterOutcome,
     MaintenanceSettings, RemoteSettings, RepoId, SidebarDataRequest, SidebarMode,
+    VirtualBranchesEdit,
 };
 use gitcomet_core::auth::StagedGitAuth;
 use gitcomet_core::conflict_session::ConflictSession;
@@ -1408,6 +1409,44 @@ pub enum Msg {
         repo_id: RepoId,
         index: usize,
     },
+    // ── Virtual branches ───────────────────────────────────────────────
+    //
+    // One request per user action; the reducer turns it into the state edit
+    // plus whatever backend calls realizing it needs.
+    /// Read the virtual branches and its file assignments for a repository.
+    LoadVirtualBranches {
+        repo_id: RepoId,
+    },
+    ApplyVirtualBranchesEdit {
+        repo_id: RepoId,
+        edit: VirtualBranchesEdit,
+    },
+    /// Apply or unapply a branch from its row.
+    SetVirtualBranchesBranchApplied {
+        repo_id: RepoId,
+        name: String,
+        applied: gitcomet_core::virtual_branches::BranchApplyState,
+    },
+    /// Commit the files assigned to one branch.
+    CommitVirtualBranchesBranch {
+        repo_id: RepoId,
+        name: String,
+        message: String,
+    },
+    /// Commit one file to its assigned branch.
+    CommitVirtualBranchesFile {
+        repo_id: RepoId,
+        path: PathBuf,
+    },
+    /// Dismiss the conflict from a failed apply.
+    DismissVirtualBranchesConflict {
+        repo_id: RepoId,
+    },
+    /// Push a virtual branch to its remote.
+    PushVirtualBranchesBranch {
+        repo_id: RepoId,
+        name: String,
+    },
     Internal(InternalMsg),
 }
 
@@ -1861,6 +1900,42 @@ pub enum InternalMsg {
     RepoCommandFinished {
         repo_id: RepoId,
         command: RepoCommandKind,
+        result: Result<CommandOutput, Error>,
+    },
+    VirtualBranchesLoaded {
+        repo_id: RepoId,
+        result: Result<gitcomet_core::virtual_branches::VirtualBranchesState, Error>,
+        assignments: Result<gitcomet_core::virtual_branches::AssignmentIndex, Error>,
+        virtual_branches_commit: Result<Option<gitcomet_core::domain::CommitId>, Error>,
+    },
+    VirtualBranchesEditFinished {
+        repo_id: RepoId,
+        edit: VirtualBranchesEdit,
+        result: Result<gitcomet_core::services::CommitOperationOutcome, Error>,
+    },
+    /// A switch of the working directory into or out of the virtual branches.
+    VirtualBranchesActiveFinished {
+        repo_id: RepoId,
+        /// `true` for entering, `false` for leaving.
+        active: bool,
+        /// The branch to return to, set on entering so leaving has a target
+        /// even if the user has since forgotten which branch they were on.
+        checkout_base: Option<String>,
+        result: Result<(), Error>,
+    },
+    VirtualBranchesAssignFinished {
+        repo_id: RepoId,
+        path: PathBuf,
+        /// Which hunk was assigned, `None` for the whole file.
+        hunk: Option<gitcomet_core::virtual_branches::HunkFingerprint>,
+        /// What it was set to, mirrored into the store so the row updates
+        /// without a full reload.
+        branch: Option<String>,
+        result: Result<(), Error>,
+    },
+    VirtualBranchesPushFinished {
+        repo_id: RepoId,
+        name: String,
         result: Result<CommandOutput, Error>,
     },
 }

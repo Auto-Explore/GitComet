@@ -489,7 +489,7 @@ pub(super) fn compute_diff_yaml_block_scalar_for_src_ix(
 pub(super) use gitcomet_core::partial_patch::{
     NO_NEWLINE_MARKER, UnifiedDiffLine, build_unified_patch_for_hunk,
     build_unified_patch_for_hunks, build_unified_patch_for_selected_lines_across_hunks,
-    build_unified_patch_for_selected_lines_across_hunks_for_reverse_apply,
+    build_unified_patch_for_selected_lines_across_hunks_for_reverse_apply, hunk_fingerprint,
 };
 
 /// Placeholder line for a side that is binary or not UTF-8, with the sizes

@@ -103,6 +103,71 @@ pub(crate) enum TextFormatMenuSection {
     TabSize,
 }
 
+/// What the user asked to check out while the virtual branches held the working
+/// directory: carried into the dialog that asks to leave, and dispatched from
+/// it unchanged.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum VirtualBranchesCheckoutTarget {
+    Branch(String),
+    Remote {
+        remote: String,
+        branch: String,
+        local_branch: String,
+        mode: gitcomet_core::services::CheckoutRemoteBranchMode,
+    },
+    Commit(CommitId),
+}
+
+impl VirtualBranchesCheckoutTarget {
+    /// The message that performs this checkout.
+    ///
+    /// Dispatched like any other checkout: the reducer is what turns it into
+    /// "leave the virtual branches first" while the virtual branches still holds the working
+    /// directory, so the dialog cannot drift from the rule it explains.
+    pub(crate) fn into_msg(self, repo_id: RepoId) -> Msg {
+        match self {
+            Self::Branch(name) => Msg::CheckoutBranch { repo_id, name },
+            Self::Remote {
+                remote,
+                branch,
+                local_branch,
+                mode,
+            } => Msg::CheckoutRemoteBranch {
+                repo_id,
+                remote,
+                branch,
+                local_branch,
+                mode,
+            },
+            Self::Commit(commit_id) => Msg::CheckoutCommit { repo_id, commit_id },
+        }
+    }
+
+    /// What the checkout would change to, as the dialog names it.
+    pub(crate) fn label(&self) -> String {
+        match self {
+            Self::Branch(name) => name.clone(),
+            Self::Remote { remote, branch, .. } => format!("{remote}/{branch}"),
+            Self::Commit(commit_id) => {
+                gitcomet_core::domain::short_commit_id(commit_id.as_ref()).to_string()
+            }
+        }
+    }
+}
+
+/// Whether the virtual branches holds the working directory of `repo_id`.
+///
+/// Every checkout asks this first. While the virtual branches holds it, the views ask
+/// to leave instead of moving HEAD off the virtual-branches branch underneath a tab
+/// that goes on describing the virtual branches as checked out.
+pub(crate) fn virtual_branches_owns_workdir(state: &AppState, repo_id: RepoId) -> bool {
+    state
+        .repos
+        .iter()
+        .find(|repo| repo.id == repo_id)
+        .is_some_and(|repo| repo.virtual_branches.active)
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum PopoverKind {
     /// A dialog an extension opened; its content lives on the popover host.
@@ -249,6 +314,14 @@ pub(crate) enum PopoverKind {
         target: String,
         operation: BranchExistsPromptOperation,
     },
+    /// Shown when a checkout is asked for while the virtual branches holds the working
+    /// directory. Changing branch from there means leaving the virtual branches first,
+    /// so the dialog says that and lets the user go through with it — or stay
+    /// where they are.
+    LeaveVirtualBranchesToCheckoutPrompt {
+        repo_id: RepoId,
+        target: VirtualBranchesCheckoutTarget,
+    },
     ForceDeleteBranchConfirm(gitcomet_state::model::ForceDeleteBranchPrompt),
     ForceRemoveWorktreeConfirm(gitcomet_state::model::ForceRemoveWorktreePrompt),
     DiscardChangesConfirm {
@@ -313,6 +386,17 @@ pub(crate) enum PopoverKind {
         repo_id: RepoId,
         section: StatusSection,
         folder: std::sync::Arc<std::path::Path>,
+    },
+    /// An edit to the virtual branches: create, restack, re-parent or remove a
+    /// virtual branch, or point the virtual branches at a different target.
+    ///
+    /// One kind covers all of them because they differ only in the label on the
+    /// field and in which `VirtualBranchesEdit` confirming builds; a variant each would
+    /// mean the same prompt body, input handling and dismissal logic repeated
+    /// seven times.
+    VirtualBranchesPrompt {
+        repo_id: RepoId,
+        prompt: VirtualBranchesPrompt,
     },
     PreviousCommitMessagesMenu {
         repo_id: RepoId,
@@ -1036,6 +1120,112 @@ pub(in crate::view) enum TerminalShutdownAction {
         workspace_id: gitcomet_state::session::WorkspaceId,
     },
     QuitApp,
+}
+
+/// Which virtual branches edit an open [`VirtualBranchesPrompt`] is collecting input for.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub(in crate::view) enum VirtualBranchesPromptKind {
+    /// Offer the branch's own actions, then narrow to one of them.
+    BranchActions,
+    /// A new branch built directly on the virtual branches target.
+    Create,
+    /// A new branch that takes [`VirtualBranchesPrompt::branch`]'s place in the stacked branch.
+    CreateAbove,
+    /// A new branch stacked under [`VirtualBranchesPrompt::branch`].
+    CreateBelow,
+    /// Rebase the virtual branches onto a different target branch.
+    SetTarget,
+    /// Restack [`VirtualBranchesPrompt::branch`] onto a different base.
+    SetParent,
+    /// Move [`VirtualBranchesPrompt::branch`] into another branch's stacked branch.
+    MoveToStackedBranch,
+    /// Delete [`VirtualBranchesPrompt::branch`].
+    Remove,
+    /// Say which branch [`VirtualBranchesPrompt::path`] belongs to.
+    AssignFile,
+    /// Say which branch one hunk of a file belongs to.
+    AssignHunk,
+    /// Write the message for the commit of [`VirtualBranchesPrompt::path`].
+    CommitMessage,
+    /// Write the message for a commit of every file assigned to
+    /// [`VirtualBranchesPrompt::branch`].
+    CommitBranch,
+}
+
+impl VirtualBranchesPromptKind {
+    /// Whether this step asks for a typed value.
+    ///
+    /// False for the action list, which submits nothing by picking a row, and
+    /// for [`VirtualBranchesPromptKind::Remove`], which is confirmed with no field.
+    pub(in crate::view) fn asks_for_text(self) -> bool {
+        !matches!(self, Self::BranchActions | Self::Remove)
+    }
+
+    pub(in crate::view) fn title(self) -> &'static str {
+        match self {
+            Self::BranchActions => "Branch",
+            Self::Create => "New branch",
+            Self::CreateAbove => "New branch above",
+            Self::CreateBelow => "New branch below",
+            Self::SetTarget => "Set virtual branches target",
+            Self::SetParent => "Change base branch",
+            Self::MoveToStackedBranch => "Move into stacked branch",
+            Self::Remove => "Remove branch",
+            Self::AssignFile => "Assign file",
+            Self::AssignHunk => "Assign hunk",
+            Self::CommitMessage => "Commit changes",
+            Self::CommitBranch => "Commit branch",
+        }
+    }
+
+    pub(in crate::view) fn field_label(self) -> &'static str {
+        match self {
+            Self::Create | Self::CreateAbove | Self::CreateBelow => "Branch name",
+            Self::SetTarget => "Target branch",
+            Self::SetParent => "New base branch",
+            Self::MoveToStackedBranch => "Stacked branch to join",
+            // An empty field is the way to unassign, so the label says what
+            // clearing it does rather than just naming the value.
+            Self::AssignFile => "Branch (empty leaves it unassigned)",
+            Self::AssignHunk => "Branch (empty leaves it unassigned)",
+            Self::CommitMessage | Self::CommitBranch => "Commit message",
+            Self::BranchActions | Self::Remove => "",
+        }
+    }
+
+    /// The label on the button that submits the prompt.
+    pub(in crate::view) fn confirm_label(self) -> &'static str {
+        match self {
+            Self::BranchActions => "Close",
+            Self::Create | Self::CreateAbove | Self::CreateBelow => "Create",
+            Self::SetTarget => "Set target",
+            Self::SetParent => "Restack",
+            Self::MoveToStackedBranch => "Move",
+            Self::Remove => "Remove",
+            Self::AssignFile | Self::AssignHunk => "Assign",
+            Self::CommitMessage | Self::CommitBranch => "Commit",
+        }
+    }
+}
+
+/// The virtual branches edit an open prompt is performing.
+///
+/// The subject branch is captured here rather than read from the store on
+/// submit: the list can change under an open prompt (a background load, a
+/// restack elsewhere) and the edit should apply to what the user was looking
+/// at when they opened it.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub(in crate::view) struct VirtualBranchesPrompt {
+    pub(in crate::view) kind: VirtualBranchesPromptKind,
+    /// The branch the edit acts on, empty for the virtual branches-wide kinds and for
+    /// the file ones, where the branch is what gets typed.
+    pub(in crate::view) branch: String,
+    /// The file the edit acts on, set only for the file kinds.
+    pub(in crate::view) path: Option<std::path::PathBuf>,
+    /// Which hunk of that file, set only for the hunk kinds.
+    pub(in crate::view) hunk: Option<gitcomet_core::virtual_branches::HunkFingerprint>,
+    /// The text the field opens with.
+    pub(in crate::view) value: String,
 }
 
 /// A close the Git-operation or extension guards asked about. Confirming it
