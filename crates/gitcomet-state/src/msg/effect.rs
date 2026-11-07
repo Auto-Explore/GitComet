@@ -354,6 +354,49 @@ pub enum Effect {
         amend_expected: Option<gitcomet_core::domain::CommitId>,
         identity: Option<gitcomet_core::commit_identity::CommitIdentity>,
     },
+    /// Commit inside each first-level submodule of `repo_id`, in order,
+    /// stopping at the first failure.
+    CommitSubmodules {
+        repo_id: RepoId,
+        commits: Vec<crate::model::LinkedChild>,
+        /// The identity configured for each submodule's checkout, in the
+        /// order of `commits`. The store fills these in.
+        identities: Vec<Option<gitcomet_core::commit_identity::CommitIdentity>>,
+    },
+    /// Stage the submodules at `paths` in `repo_id` and commit everything
+    /// staged there with `message`.
+    CommitWithSubmodules {
+        repo_id: RepoId,
+        paths: Vec<PathBuf>,
+        message: String,
+        identity: Option<gitcomet_core::commit_identity::CommitIdentity>,
+    },
+    /// Push each first-level submodule at `paths` of `repo_id` to its
+    /// upstream, in order, stopping at the first refusal.
+    PushLinkedSubmodules {
+        repo_id: RepoId,
+        paths: Vec<PathBuf>,
+    },
+    /// Pull the first-level submodule at `path` of `repo_id`.
+    PullLinkedSubmodule {
+        repo_id: RepoId,
+        path: PathBuf,
+        mode: gitcomet_core::services::PullMode,
+    },
+    /// Read what the first-level submodules at `paths` of `repo_id` hold
+    /// uncommitted.
+    LoadSubmoduleChanges {
+        repo_id: RepoId,
+        paths: Vec<PathBuf>,
+    },
+    /// Stage, or with `stage` false unstage, `files` inside the first-level
+    /// submodule at `path` of `repo_id`.
+    StageInSubmodule {
+        repo_id: RepoId,
+        path: PathBuf,
+        files: Vec<PathBuf>,
+        stage: bool,
+    },
     /// Push each first-level submodule of `repo_id` so its listed commit is
     /// on its remote, then run `push` of `repo_id` again.
     PushSubmodulesThenRepo {
@@ -447,6 +490,7 @@ impl Effect {
             | Self::LoadWorktrees { .. }
             | Self::LoadWorktreeDirty { .. }
             | Self::LoadSubmodules { .. }
+            | Self::LoadSubmoduleChanges { .. }
             | Self::LoadLargeFileSupport { .. }
             | Self::LoadLfsLocks { .. }
             | Self::LoadAnnexWhereis { .. }
@@ -495,6 +539,11 @@ impl Effect {
             | Self::SubmoduleCheckout { .. }
             | Self::RecordSubmoduleCommit { .. }
             | Self::PushSubmodulesThenRepo { .. }
+            | Self::CommitSubmodules { .. }
+            | Self::CommitWithSubmodules { .. }
+            | Self::PushLinkedSubmodules { .. }
+            | Self::PullLinkedSubmodule { .. }
+            | Self::StageInSubmodule { .. }
             | Self::Commit { .. }
             | Self::CommitAmend { .. }
             | Self::PreviewTagPush { .. }

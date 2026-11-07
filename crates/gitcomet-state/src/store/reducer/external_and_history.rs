@@ -1142,6 +1142,17 @@ fn finish_repo_action(
         effects.push(effect);
     }
 
+    // Staging inside a submodule changes what its linked commit card lists,
+    // which is read again with the submodule rows. It is asked for only after
+    // the cancellation above, so it is not cancelled with the loads before it,
+    // and whether or not the sidebar's Submodules section is open.
+    if matches!(
+        action,
+        RepoActionKind::StageInSubmodule | RepoActionKind::UnstageInSubmodule
+    ) {
+        effects.extend(super::effects::request_submodules_reload(repo_state));
+    }
+
     // Selected views (branch lists, history, diff) only matter for the repo the user is viewing. A
     // non-active repo's in-flight views were reset to `NotLoaded` and reload when it is next
     // activated; the primary panes above are still refreshed so they are current on return.

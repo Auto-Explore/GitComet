@@ -1124,6 +1124,15 @@ fn check_discard_after_save_timeout(
             );
             assert_eq!(view.read(app).workspace_id, None);
         }
+        UnsavedFileEditsAction::SwitchWorkspace { .. } => {
+            // The window stays and lets go of its workspace.
+            assert!(
+                app.windows()
+                    .iter()
+                    .any(|window| window.window_id() == window_id)
+            );
+            assert_eq!(view.read(app).workspace_id, None);
+        }
         UnsavedFileEditsAction::QuitApp => {
             // GPUI's test platform stubs quit, so verify the quit guard lets
             // the retried action through without another drain or prompt.

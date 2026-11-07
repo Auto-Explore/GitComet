@@ -27,8 +27,8 @@ pub use status::StatusEffect;
 pub use message::{
     BranchExistsChoice, CommitSelectMode, ConflictAutosolveMode, ConflictAutosolveStats,
     ConflictBulkChoice, ConflictBulkScope, ConflictRegionChoice, ConflictRegionResolutionUpdate,
-    ContentBytes, InternalMsg, Msg, RepoActionKind, RepoWatchDegradedReason, WorktreeListRead,
-    WorktreeSaveBaseline,
+    ContentBytes, InternalMsg, LinkedSubmodulePushFailure, Msg, RepoActionKind,
+    RepoWatchDegradedReason, WorktreeListRead, WorktreeSaveBaseline,
 };
 pub use repo_command_kind::RepoCommandKind;
 pub(crate) use repo_command_kind::worktree_checkout_label;

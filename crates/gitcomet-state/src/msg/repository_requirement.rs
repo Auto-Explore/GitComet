@@ -82,8 +82,13 @@ impl Msg {
             Self::ResolveSubmoduleCheckoutPrompt { prompt, .. } => {
                 Some((prompt.repo_id, WorkingTree))
             }
-            Self::CommitLinked { child, .. } => Some((*child, WorkingTree)),
-            Self::ResolveLinkedPushPrompt { prompt, .. } => Some((prompt.child, WorkingTree)),
+            Self::CommitLinked { origin, .. } => Some((*origin, WorkingTree)),
+            Self::StageInSubmodule { repo_id, .. } | Self::UnstageInSubmodule { repo_id, .. } => {
+                Some((*repo_id, WorkingTree))
+            }
+            Self::ResolveLinkedPushPrompt { prompt, .. } => {
+                Some((prompt.child_tab.unwrap_or(prompt.parent), WorkingTree))
+            }
             Self::ResolveUnpushedPointerPrompt { prompt, .. } => Some((prompt.repo_id, Repository)),
             Self::RememberDocumentInRepository { repo_id, .. }
             | Self::SelectExplorerPath { repo_id, .. }

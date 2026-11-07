@@ -911,12 +911,15 @@ fn a_running_linked_commit_keeps_the_next_commit_out_of_the_parent(cx: &mut gpui
 
             Arc::make_mut(&mut pane.state).linked_commit =
                 Some(gitcomet_state::model::LinkedCommit {
-                    child: RepoId(3),
                     parent: RepoId(1),
-                    path: PathBuf::from("b"),
+                    child_tab: Some(RepoId(3)),
+                    children: vec![gitcomet_state::model::LinkedChild {
+                        path: PathBuf::from("b"),
+                        message: "Change b".into(),
+                    }],
                     parent_message: "Update b".into(),
                     push: true,
-                    stage: gitcomet_state::model::LinkedCommitStage::PushChild,
+                    stage: gitcomet_state::model::LinkedCommitStage::PushChildren,
                     parent_commit: None,
                 });
             assert!(pane.active_parent_record_target().is_none());

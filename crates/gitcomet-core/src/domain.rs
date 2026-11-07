@@ -973,6 +973,39 @@ pub struct SubmodulePointerSnapshot {
     pub in_sync: Vec<(PathBuf, CommitId)>,
 }
 
+/// What a first-level submodule with uncommitted changes holds, read from
+/// its own checkout for the parent's linked commit panel.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SubmoduleChanges {
+    /// The submodule's path in the parent worktree.
+    pub path: PathBuf,
+    /// The branch the submodule has checked out and what it tracks.
+    pub head: HeadTracking,
+    pub staged: Arc<Vec<FileStatus>>,
+    /// Unstaged and untracked files.
+    pub unstaged: Arc<Vec<FileStatus>>,
+}
+
+impl SubmoduleChanges {
+    /// The branch checked out in the submodule, `None` on a detached HEAD.
+    pub fn branch(&self) -> Option<&str> {
+        match &self.head {
+            HeadTracking::Detached => None,
+            HeadTracking::Untracked { branch } | HeadTracking::Tracking { branch, .. } => {
+                Some(branch)
+            }
+        }
+    }
+
+    /// The upstream the submodule's branch tracks.
+    pub fn upstream(&self) -> Option<&Upstream> {
+        match &self.head {
+            HeadTracking::Tracking { upstream, .. } => Some(upstream),
+            HeadTracking::Detached | HeadTracking::Untracked { .. } => None,
+        }
+    }
+}
+
 /// Where a repository's working tree is checked out as a submodule of
 /// another working tree.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]

@@ -94,6 +94,10 @@ pub(super) fn install_app_actions(cx: &mut App, backend: Arc<dyn GitBackend>) {
     cx.on_action(|_: &CloseWindow, cx| {
         cx.defer(close_active_window_or_warn);
     });
+    cx.on_action(|action: &SwitchToWorkspace, cx| {
+        let slot = action.slot;
+        cx.defer(move |cx| switch_active_window_to_workspace_slot(cx, slot));
+    });
     cx.on_action(|_: &PreviousRepository, cx| {
         cx.defer(|cx| {
             let _ = update_active_normal_gitcomet_window(cx, |view, cx| {
@@ -313,7 +317,37 @@ pub(super) fn bind_app_keys(cx: &mut App) {
         KeyBinding::new("alt-cmd-h", HideOthers, None),
     ]);
     refresh_external_editor_key_binding(cx);
+    refresh_workspace_switch_key_bindings(cx);
 }
+
+/// The rail's Alt+1…9, bound only while workspaces open in the current
+/// window, so the keys stay free for typing otherwise.
+pub(crate) fn refresh_workspace_switch_key_bindings(cx: &mut App) {
+    let enabled = crate::workspaces::open_mode(cx).shows_rail();
+    cx.bind_keys((1..=WORKSPACE_SWITCH_SLOTS).flat_map(|slot| {
+        let keys = format!("alt-{slot}");
+        if enabled {
+            // On macOS, Option+digit types a character on many layouts (@ on
+            // Finnish and Swedish Option+2, [ ] | { } on German Option+5…9),
+            // and a binding is matched before the text input gets it. Text
+            // inputs keep the character: this binding comes later than the
+            // global one at the same depth, so it outranks it there.
+            vec![
+                KeyBinding::new(&keys, SwitchToWorkspace { slot }, None),
+                KeyBinding::new(&keys, gpui::NoAction, Some("TextInput")),
+            ]
+        } else {
+            vec![KeyBinding::new(
+                &keys,
+                Unbind(SwitchToWorkspace { slot }.name().into()),
+                None,
+            )]
+        }
+    }));
+}
+
+/// Workspaces the rail gives a shortcut, Alt+1 to Alt+9.
+pub(crate) const WORKSPACE_SWITCH_SLOTS: usize = 9;
 
 pub(super) fn refresh_external_editor_key_binding(cx: &mut App) {
     refresh_external_editor_key_binding_for_configured(

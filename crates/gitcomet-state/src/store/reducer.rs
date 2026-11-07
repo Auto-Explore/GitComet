@@ -334,6 +334,8 @@ pub(crate) fn msg_requires_available_git(msg: &Msg) -> bool {
             | Msg::UpdateSubmoduleToRecorded { .. }
             | Msg::CommitShelvingSubmodules { .. }
             | Msg::CommitLinked { .. }
+            | Msg::StageInSubmodule { .. }
+            | Msg::UnstageInSubmodule { .. }
             | Msg::ResolveLinkedPushPrompt { .. }
             | Msg::ResolveUnpushedPointerPrompt { .. }
             | Msg::SaveWorktreeFile { .. }
@@ -1810,17 +1812,30 @@ fn reduce_inner(
             submodule_checkout::dismiss_prompt(state, prompt)
         }
         Msg::CommitLinked {
-            child,
-            message,
+            origin,
+            children,
             parent_message,
             push,
             shelve,
-        } => {
-            let linked = linked_commit::start(inputs, state, child, &message, parent_message, push);
-            // The linked plan pushes the submodule itself, after the parent
-            // records it.
-            auth::commit(state, child, message, push && !linked, shelve)
-        }
+        } => linked_commit::start(
+            inputs,
+            state,
+            origin,
+            children,
+            parent_message,
+            push,
+            shelve,
+        ),
+        Msg::StageInSubmodule {
+            repo_id,
+            path,
+            files,
+        } => linked_commit::stage_in_submodule(state, repo_id, path, files, true),
+        Msg::UnstageInSubmodule {
+            repo_id,
+            path,
+            files,
+        } => linked_commit::stage_in_submodule(state, repo_id, path, files, false),
         Msg::ResolveLinkedPushPrompt { prompt, choice } => {
             linked_commit::resolve_push_prompt(inputs, repos, state, prompt, choice)
         }
@@ -2878,8 +2893,24 @@ fn reduce_inner(
                 ));
                 effects
             } else {
-                linked_commit::recorded(inputs, repos, state, repo_id, false, result)
+                linked_commit::recorded(inputs, repos, state, repo_id, result)
             }
+        }
+        Msg::Internal(crate::msg::InternalMsg::SubmodulesCommitted {
+            repo_id,
+            committed,
+            failed,
+        }) => linked_commit::submodules_committed(inputs, state, repo_id, committed, failed),
+        Msg::Internal(crate::msg::InternalMsg::LinkedSubmodulesPushed { repo_id, failed }) => {
+            linked_commit::submodules_pushed(inputs, repos, state, repo_id, failed)
+        }
+        Msg::Internal(crate::msg::InternalMsg::LinkedSubmodulePulled {
+            repo_id,
+            path,
+            error,
+        }) => linked_commit::submodule_pulled(inputs, repos, state, repo_id, path, error),
+        Msg::Internal(crate::msg::InternalMsg::SubmoduleChangesLoaded { repo_id, result }) => {
+            linked_commit::submodule_changes_loaded(state, repo_id, result)
         }
         Msg::Internal(crate::msg::InternalMsg::PushBlockedByUnpushedSubmodules {
             repo_id,

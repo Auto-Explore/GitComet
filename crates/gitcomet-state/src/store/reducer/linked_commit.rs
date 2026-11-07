@@ -1,78 +1,184 @@
-//! A commit made in a first-level submodule tab that its parent records too:
-//! commit the submodule, record the new commit in the parent alone, then
-//! push the submodule and only after it the parent.
+//! Linked commits: commits in first-level submodules that their parent
+//! worktree records too, pushed submodules first and the parent last.
+//!
+//! A linked commit starts in one of two tabs. From a submodule's own tab it
+//! commits that submodule through the tab, records the new commit in the
+//! parent alone (`git commit --only`), and pushes the submodule tab before
+//! the parent. From the parent's tab it commits inside each changed
+//! submodule through a handle the parent opens, then commits the parent with
+//! the new pointers and whatever else is staged there, and pushes every
+//! submodule before the parent.
 use super::util::push_notification;
 use crate::model::{
-    AppNotificationKind, AppState, AuthRetryOperation, BlockedPush, LinkedCommit,
-    LinkedCommitStage, LinkedPushChoice, LinkedPushPrompt, RepoId, UnpushedPointerPrompt,
-    default_parent_message,
+    AppNotificationKind, AppState, AuthRetryOperation, BlockedPush, LinkedChild, LinkedCommit,
+    LinkedCommitStage, LinkedPushChoice, LinkedPushPrompt, LoadKind, Loadable, RepoId, RepoState,
+    SubmoduleShelve, UnpushedPointerPrompt, default_parent_message, submodule_display_name,
 };
-use crate::msg::{Effect, RepoCommandKind};
+use crate::msg::{Effect, LinkedSubmodulePushFailure, RepoCommandKind};
 use crate::store::reducer::prepared::ReducerInputs;
 use crate::store::repository_runtime::RepositoryRuntimes;
-use gitcomet_core::domain::{CommitId, SubmoduleCheckoutUpdate, short_commit_id};
-use gitcomet_core::error::Error;
+use gitcomet_core::domain::{SubmoduleChanges, SubmoduleCheckoutUpdate, short_commit_id};
+use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::services::{CommitOperationOutcome, PullMode};
+use std::path::PathBuf;
 
-/// Start a linked commit. False when the tab has no open parent, or when
-/// another linked commit is still running, which a notice says; the caller
-/// then commits the submodule alone.
+/// "a", "a and b", "a, b and c".
+fn name_list(names: impl IntoIterator<Item = String>) -> String {
+    let names = names.into_iter().collect::<Vec<_>>();
+    match names.as_slice() {
+        [] => String::new(),
+        [one] => one.clone(),
+        [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
+    }
+}
+
+fn children_names(plan: &LinkedCommit) -> String {
+    name_list(
+        plan.children
+            .iter()
+            .map(|child| submodule_display_name(&child.path)),
+    )
+}
+
+/// The message a parent commit recording several submodules starts with.
+pub(crate) fn default_linked_parent_message(children: &[LinkedChild]) -> String {
+    match children {
+        [child] => default_parent_message(&child.path, &child.message),
+        _ => format!(
+            "Update {}",
+            name_list(
+                children
+                    .iter()
+                    .map(|child| child.path.display().to_string())
+            )
+        ),
+    }
+}
+
+/// Start a linked commit from `origin`'s tab.
+///
+/// `shelve` stashes submodule changes before a commit of one tab: the
+/// submodule tab's own commit, or the parent's when no submodule commits
+/// with it. The parent's linked commit panel lists every changed submodule,
+/// so its linked commit has nothing left behind to shelve.
 pub(super) fn start(
     inputs: &ReducerInputs,
     state: &mut AppState,
-    child: RepoId,
-    child_message: &str,
+    origin: RepoId,
+    children: Vec<LinkedChild>,
     parent_message: String,
     push: bool,
-) -> bool {
-    let Some(link) = state
-        .repos
-        .iter()
-        .find(|repo| repo.id == child)
-        .and_then(|repo| repo.submodule_parent.clone())
-    else {
-        return false;
+    shelve: Option<SubmoduleShelve>,
+) -> Vec<Effect> {
+    let Some(repo) = state.repos.iter().find(|repo| repo.id == origin) else {
+        return Vec::new();
     };
-    let Some(parent) = link.repo_id else {
-        return false;
-    };
-    if let Some(running) = &state.linked_commit {
-        let running = state.repo_name(running.child);
-        let child = state.repo_name(child);
-        let parent = state.repo_name(parent);
-        push_notification(
+    if let Some(link) = repo.submodule_parent.clone() {
+        // A commit in a submodule tab whose parent is not open here commits
+        // normally.
+        let message = children
+            .into_iter()
+            .next()
+            .map(|child| child.message)
+            .unwrap_or_default();
+        let Some(parent) = link.repo_id else {
+            return super::auth::commit(state, origin, message, push, shelve);
+        };
+        if let Some(running) = &state.linked_commit {
+            let running = children_names(running);
+            let child = state.repo_name(origin);
+            let parent = state.repo_name(parent);
+            push_notification(
+                inputs,
+                state,
+                AppNotificationKind::Info,
+                format!(
+                    "{child} is committed without recording it in {parent}: the commit in {running} is still being recorded and pushed."
+                ),
+            );
+            return super::auth::commit(state, origin, message, push, shelve);
+        }
+        let child = LinkedChild {
+            path: link.path,
+            message: message.clone(),
+        };
+        let parent_message = match parent_message.trim() {
+            "" => default_linked_parent_message(std::slice::from_ref(&child)),
+            message => message.to_string(),
+        };
+        state.linked_commit = Some(LinkedCommit {
+            parent,
+            child_tab: Some(origin),
+            children: vec![child],
+            parent_message,
+            push,
+            stage: LinkedCommitStage::CommitChildren,
+            parent_commit: None,
+        });
+        // The linked plan pushes the submodule itself, after the parent
+        // records it.
+        return super::auth::commit(state, origin, message, false, shelve);
+    }
+
+    let mut unique: Vec<LinkedChild> = Vec::new();
+    for child in children {
+        let message = child.message.trim();
+        if message.is_empty()
+            || child.path.as_os_str().is_empty()
+            || unique.iter().any(|seen| seen.path == child.path)
+        {
+            continue;
+        }
+        unique.push(LinkedChild {
+            path: child.path,
+            message: message.to_string(),
+        });
+    }
+    if unique.is_empty() {
+        return super::auth::commit(state, origin, parent_message, push, shelve);
+    }
+    super::begin_commit_action(state, origin);
+    if state.linked_commit.is_some() {
+        let parent = state.repo_name(origin);
+        return super::actions_emit_effects::commit_finished(
             inputs,
             state,
-            AppNotificationKind::Info,
-            format!(
-                "{child} is committed without recording it in {parent}: the commit in {running} is still being recorded and pushed."
-            ),
+            origin,
+            Err(Error::new(ErrorKind::Backend(format!(
+                "Another linked commit is still running. Commit {parent} once it finishes."
+            )))),
+            false,
+            false,
         );
-        return false;
     }
     let parent_message = match parent_message.trim() {
-        "" => default_parent_message(&link.path, child_message),
+        "" => default_linked_parent_message(&unique),
         message => message.to_string(),
     };
     state.linked_commit = Some(LinkedCommit {
-        child,
-        parent,
-        path: link.path,
+        parent: origin,
+        child_tab: None,
+        children: unique.clone(),
         parent_message,
         push,
-        stage: LinkedCommitStage::CommitChild,
+        stage: LinkedCommitStage::CommitChildren,
         parent_commit: None,
     });
-    true
+    vec![Effect::CommitSubmodules {
+        repo_id: origin,
+        commits: unique,
+        identities: Vec::new(),
+    }]
 }
 
-/// Drop the plan and its prompt when the submodule's or the parent's tab
-/// closed: nothing is left to record or push in order.
+/// Drop the plan and its prompt when the parent's tab, or the submodule tab
+/// the commit started in, closed: nothing is left to record or push in
+/// order.
 pub(super) fn forget_closed_repos(state: &mut AppState) {
     let open =
         |state: &AppState, repo_id: RepoId| state.repos.iter().any(|repo| repo.id == repo_id);
     if let Some(plan) = &state.linked_commit
-        && !(open(state, plan.child) && open(state, plan.parent))
+        && !(open(state, plan.parent) && plan.child_tab.is_none_or(|child| open(state, child)))
     {
         state.linked_commit = None;
         state.linked_push_prompt = None;
@@ -101,17 +207,18 @@ pub(super) fn cancel_auth(state: &mut AppState, operation: &AuthRetryOperation) 
     let Some(plan) = &state.linked_commit else {
         return;
     };
+    let in_child_tab = |repo_id: &RepoId| plan.child_tab == Some(*repo_id);
     let waiting = match (&plan.stage, operation) {
-        (LinkedCommitStage::CommitChild, AuthRetryOperation::Commit { repo_id, .. }) => {
-            *repo_id == plan.child
+        (LinkedCommitStage::CommitChildren, AuthRetryOperation::Commit { repo_id, .. }) => {
+            in_child_tab(repo_id)
         }
         (
-            LinkedCommitStage::PushChild,
+            LinkedCommitStage::PushChildren,
             AuthRetryOperation::RepoCommand {
                 repo_id,
                 command: RepoCommandKind::Push,
             },
-        ) => *repo_id == plan.child,
+        ) => in_child_tab(repo_id),
         (
             LinkedCommitStage::PushParent,
             AuthRetryOperation::RepoCommand {
@@ -125,7 +232,7 @@ pub(super) fn cancel_auth(state: &mut AppState, operation: &AuthRetryOperation) 
                 repo_id,
                 command: RepoCommandKind::Pull { .. },
             },
-        ) => *repo_id == plan.child,
+        ) => in_child_tab(repo_id),
         _ => false,
     };
     if waiting {
@@ -133,7 +240,7 @@ pub(super) fn cancel_auth(state: &mut AppState, operation: &AuthRetryOperation) 
     }
 }
 
-/// Whether the sign-in prompt now open retries the submodule's commit.
+/// Whether the sign-in prompt now open retries the submodule tab's commit.
 fn commit_retry_pending(state: &AppState, child: RepoId) -> bool {
     state.auth_prompt.as_ref().is_some_and(|prompt| {
         matches!(
@@ -143,27 +250,115 @@ fn commit_retry_pending(state: &AppState, child: RepoId) -> bool {
     })
 }
 
-fn begin_parent_commit(state: &mut AppState, parent: RepoId) {
-    if let Some(repo) = state.repos.iter_mut().find(|repo| repo.id == parent) {
-        repo.local_actions_in_flight = repo.local_actions_in_flight.saturating_add(1);
-        repo.commit_in_flight = repo.commit_in_flight.saturating_add(1);
-        repo.bump_ops_rev();
-    }
-}
-
-fn record_effect(state: &mut AppState, plan: &LinkedCommit, amend: Option<CommitId>) -> Effect {
-    begin_parent_commit(state, plan.parent);
+fn record_effect(state: &mut AppState, plan: &LinkedCommit) -> Effect {
+    super::begin_commit_action(state, plan.parent);
+    let child = plan
+        .children
+        .first()
+        .map(|child| child.path.clone())
+        .unwrap_or_default();
     Effect::RecordSubmoduleCommit {
         repo_id: plan.parent,
-        path: plan.path.clone(),
+        path: child,
         message: plan.parent_message.clone(),
-        amend_expected: amend,
+        amend_expected: None,
         // The store fills in the identity configured for the parent.
         identity: None,
     }
 }
 
-/// The submodule's own commit finished.
+fn rerecord_effect(state: &mut AppState, plan: &LinkedCommit, path: PathBuf) -> Option<Effect> {
+    let expected = plan.parent_commit.clone()?;
+    super::begin_commit_action(state, plan.parent);
+    Some(Effect::RecordSubmoduleCommit {
+        repo_id: plan.parent,
+        path,
+        message: plan.parent_message.clone(),
+        amend_expected: Some(expected),
+        identity: None,
+    })
+}
+
+/// Read the submodule rows of `repo_id` again, coalesced with any listing
+/// already running; the rows stay shown meanwhile.
+fn reload_submodules(state: &mut AppState, repo_id: RepoId) -> Option<Effect> {
+    let repo_state = state.repos.iter_mut().find(|repo| repo.id == repo_id)?;
+    super::effects::request_submodules_reload(repo_state)
+}
+
+fn set_stage(state: &mut AppState, stage: LinkedCommitStage) {
+    if let Some(plan) = state.linked_commit.as_mut() {
+        plan.stage = stage;
+    }
+}
+
+fn adjust_push_in_flight(state: &mut AppState, repo_id: RepoId, start: bool) {
+    if let Some(repo) = state.repos.iter_mut().find(|repo| repo.id == repo_id) {
+        repo.push_in_flight = if start {
+            repo.push_in_flight.saturating_add(1)
+        } else {
+            repo.push_in_flight.saturating_sub(1)
+        };
+        repo.bump_ops_rev();
+    }
+}
+
+fn adjust_pull_in_flight(state: &mut AppState, repo_id: RepoId, start: bool) {
+    if let Some(repo) = state.repos.iter_mut().find(|repo| repo.id == repo_id) {
+        repo.pull_in_flight = if start {
+            repo.pull_in_flight.saturating_add(1)
+        } else {
+            repo.pull_in_flight.saturating_sub(1)
+        };
+        repo.bump_ops_rev();
+    }
+}
+
+/// Push the submodules, the parent waiting for them.
+fn push_children(
+    repos: &RepositoryRuntimes,
+    state: &mut AppState,
+    plan: &LinkedCommit,
+) -> Vec<Effect> {
+    set_stage(state, LinkedCommitStage::PushChildren);
+    match plan.child_tab {
+        Some(child) => super::actions_emit_effects::push(repos, state, child),
+        None => {
+            adjust_push_in_flight(state, plan.parent, true);
+            vec![Effect::PushLinkedSubmodules {
+                repo_id: plan.parent,
+                paths: plan.paths(),
+            }]
+        }
+    }
+}
+
+fn push_parent(
+    repos: &RepositoryRuntimes,
+    state: &mut AppState,
+    plan: &LinkedCommit,
+) -> Vec<Effect> {
+    set_stage(state, LinkedCommitStage::PushParent);
+    // The submodule commits are on their remotes now, so the parent's own
+    // check lets this push through.
+    super::actions_emit_effects::push(repos, state, plan.parent)
+}
+
+/// A submodule push was refused: hold the parent back and ask.
+fn stop_push(state: &mut AppState, plan: &LinkedCommit, path: PathBuf, error: String) {
+    set_stage(state, LinkedCommitStage::PushStopped { path: path.clone() });
+    let generation = state.linked_push_prompt_generation.wrapping_add(1);
+    state.linked_push_prompt_generation = generation;
+    state.linked_push_prompt = Some(LinkedPushPrompt {
+        generation,
+        parent: plan.parent,
+        path,
+        child_tab: plan.child_tab,
+        error,
+    });
+}
+
+/// The submodule tab's own commit finished.
 pub(super) fn child_commit_finished(
     inputs: &ReducerInputs,
     state: &mut AppState,
@@ -173,12 +368,12 @@ pub(super) fn child_commit_finished(
     let Some(plan) = state.linked_commit.clone() else {
         return Vec::new();
     };
-    if plan.child != repo_id || plan.stage != LinkedCommitStage::CommitChild {
+    if plan.child_tab != Some(repo_id) || plan.stage != LinkedCommitStage::CommitChildren {
         return Vec::new();
     }
     // A commit that asked for a signing passphrase or sign-in is retried
     // from that prompt, and its result comes back here.
-    if !succeeded && commit_retry_pending(state, plan.child) {
+    if !succeeded && commit_retry_pending(state, repo_id) {
         return Vec::new();
     }
     if !succeeded {
@@ -192,20 +387,76 @@ pub(super) fn child_commit_finished(
         );
         return Vec::new();
     }
-    let effect = record_effect(state, &plan, None);
-    if let Some(plan) = state.linked_commit.as_mut() {
-        plan.stage = LinkedCommitStage::RecordInParent;
-    }
+    let effect = record_effect(state, &plan);
+    set_stage(state, LinkedCommitStage::RecordInParent);
     vec![effect]
 }
 
-/// The parent recorded (or re-recorded) the submodule.
+/// The parent's tab committed inside its submodules.
+pub(super) fn submodules_committed(
+    inputs: &ReducerInputs,
+    state: &mut AppState,
+    repo_id: RepoId,
+    committed: Vec<PathBuf>,
+    failed: Option<(PathBuf, Error)>,
+) -> Vec<Effect> {
+    let Some(plan) = state.linked_commit.clone() else {
+        return Vec::new();
+    };
+    if plan.parent != repo_id
+        || plan.child_tab.is_some()
+        || plan.stage != LinkedCommitStage::CommitChildren
+    {
+        return Vec::new();
+    }
+    let Some((path, error)) = failed else {
+        set_stage(state, LinkedCommitStage::RecordInParent);
+        return vec![Effect::CommitWithSubmodules {
+            repo_id,
+            paths: plan.paths(),
+            message: plan.parent_message,
+            // The store fills in the identity configured for the parent.
+            identity: None,
+        }];
+    };
+    state.linked_commit = None;
+    let parent = state.repo_name(repo_id);
+    // The parent's tab runs these commits without the passphrase and sign-in
+    // prompt; the submodule's own tab has it.
+    let mut summary = if super::auth::detect_auth_prompt_kind(&error).is_some() {
+        format!(
+            "Committing {} needs a passphrase or sign-in, which a commit from {parent}'s tab cannot ask for. Commit {} once from its own tab, where it can be entered.",
+            path.display(),
+            submodule_display_name(&path)
+        )
+    } else {
+        format!("Committing {} failed: {error}", path.display())
+    };
+    if !committed.is_empty() {
+        let names = name_list(committed.iter().map(|path| submodule_display_name(path)));
+        summary.push_str(&format!(
+            " {names} {} committed; nothing was recorded in {parent}.",
+            if committed.len() == 1 { "is" } else { "are" }
+        ));
+    }
+    let mut effects = super::actions_emit_effects::commit_finished(
+        inputs,
+        state,
+        repo_id,
+        Err(Error::new(ErrorKind::Backend(summary))),
+        false,
+        false,
+    );
+    effects.extend(reload_submodules(state, repo_id));
+    effects
+}
+
+/// The parent recorded the submodules.
 pub(super) fn recorded(
     inputs: &ReducerInputs,
     repos: &RepositoryRuntimes,
     state: &mut AppState,
     repo_id: RepoId,
-    amend: bool,
     result: Result<CommitOperationOutcome, Error>,
 ) -> Vec<Effect> {
     let outcome = result.as_ref().ok().cloned();
@@ -214,7 +465,7 @@ pub(super) fn recorded(
         state,
         repo_id,
         result.map(|_| ()),
-        amend,
+        false,
         false,
     );
     let Some(plan) = state.linked_commit.clone() else {
@@ -223,19 +474,35 @@ pub(super) fn recorded(
     if plan.parent != repo_id || plan.stage != LinkedCommitStage::RecordInParent {
         return effects;
     }
-    let child = state.repo_name(plan.child);
+    let children = children_names(&plan);
     let parent = state.repo_name(plan.parent);
     let Some(outcome) = outcome else {
         state.linked_commit = None;
-        push_notification(
-            inputs,
-            state,
-            AppNotificationKind::Info,
-            format!(
-                "{child} is committed, but recording it in {parent} failed. Stage {} in {parent} and commit to record it.",
-                plan.path.display()
-            ),
+        let paths = name_list(
+            plan.children
+                .iter()
+                .map(|child| child.path.display().to_string()),
         );
+        let message = if plan.child_tab.is_some() {
+            format!(
+                "{children} is committed, but recording it in {parent} failed. Stage {paths} in {parent} and commit to record it."
+            )
+        } else {
+            format!(
+                "{children} {} committed, but the commit in {parent} failed. Stage {paths} in {parent} and commit to record {}.",
+                if plan.children.len() == 1 {
+                    "is"
+                } else {
+                    "are"
+                },
+                if plan.children.len() == 1 {
+                    "it"
+                } else {
+                    "them"
+                },
+            )
+        };
+        push_notification(inputs, state, AppNotificationKind::Info, message);
         return effects;
     };
     if !plan.push {
@@ -246,23 +513,53 @@ pub(super) fn recorded(
             AppNotificationKind::Info,
             match outcome.post_head.as_ref() {
                 Some(commit) => format!(
-                    "Recorded {child} in {parent} as {}",
+                    "Recorded {children} in {parent} as {}",
                     short_commit_id(commit.as_ref())
                 ),
-                None => format!("Recorded {child} in {parent}"),
+                None => format!("Recorded {children} in {parent}"),
             },
         );
         return effects;
     }
     if let Some(plan) = state.linked_commit.as_mut() {
         plan.parent_commit = outcome.post_head;
-        plan.stage = LinkedCommitStage::PushChild;
     }
-    effects.extend(super::actions_emit_effects::push(repos, state, plan.child));
+    effects.extend(push_children(repos, state, &plan));
     effects
 }
 
-/// A pull or push of a repository in the linked commit finished.
+/// After pulling a refused submodule: record the rebased commit again, or
+/// push again.
+fn reconciled(
+    inputs: &ReducerInputs,
+    repos: &RepositoryRuntimes,
+    state: &mut AppState,
+    plan: &LinkedCommit,
+    path: PathBuf,
+    rebase: bool,
+    error: Option<String>,
+) -> Vec<Effect> {
+    if let Some(error) = error {
+        state.linked_commit = None;
+        let child = submodule_display_name(&path);
+        let parent = state.repo_name(plan.parent);
+        push_notification(
+            inputs,
+            state,
+            AppNotificationKind::Info,
+            format!("Pulling {child} stopped, so nothing was pushed in {parent}: {error}"),
+        );
+        return Vec::new();
+    }
+    if rebase && let Some(effect) = rerecord_effect(state, plan, path.clone()) {
+        set_stage(state, LinkedCommitStage::RerecordInParent { path });
+        return vec![effect];
+    }
+    // After a merge the recorded commit is part of what gets pushed.
+    push_children(repos, state, plan)
+}
+
+/// A pull or push of a tab in the linked commit finished.
 pub(super) fn command_finished(
     inputs: &ReducerInputs,
     repos: &RepositoryRuntimes,
@@ -278,31 +575,19 @@ pub(super) fn command_finished(
     if error.is_some() && state.auth_prompt.is_some() {
         return Vec::new();
     }
-    let child = state.repo_name(plan.child);
-    let parent = state.repo_name(plan.parent);
     match (&plan.stage, command) {
-        (LinkedCommitStage::PushChild, RepoCommandKind::Push) if repo_id == plan.child => {
+        (LinkedCommitStage::PushChildren, RepoCommandKind::Push)
+            if plan.child_tab == Some(repo_id) =>
+        {
             match error {
-                None => {
-                    if let Some(plan) = state.linked_commit.as_mut() {
-                        plan.stage = LinkedCommitStage::PushParent;
-                    }
-                    // The submodule commit is on its remote now, so the
-                    // parent's own check lets this push through.
-                    super::actions_emit_effects::push(repos, state, plan.parent)
-                }
+                None => push_parent(repos, state, &plan),
                 Some(error) => {
-                    if let Some(plan) = state.linked_commit.as_mut() {
-                        plan.stage = LinkedCommitStage::PushStopped;
-                    }
-                    let generation = state.linked_push_prompt_generation.wrapping_add(1);
-                    state.linked_push_prompt_generation = generation;
-                    state.linked_push_prompt = Some(LinkedPushPrompt {
-                        generation,
-                        child: plan.child,
-                        parent: plan.parent,
-                        error,
-                    });
+                    let path = plan
+                        .children
+                        .first()
+                        .map(|child| child.path.clone())
+                        .unwrap_or_default();
+                    stop_push(state, &plan, path, error);
                     Vec::new()
                 }
             }
@@ -310,45 +595,115 @@ pub(super) fn command_finished(
         (LinkedCommitStage::PushParent, RepoCommandKind::Push) if repo_id == plan.parent => {
             state.linked_commit = None;
             if error.is_none() {
+                let children = children_names(&plan);
+                let parent = state.repo_name(plan.parent);
                 push_notification(
                     inputs,
                     state,
                     AppNotificationKind::Info,
-                    format!("Pushed {child}, then {parent}"),
+                    format!("Pushed {children}, then {parent}"),
                 );
             }
             Vec::new()
         }
-        (LinkedCommitStage::ReconcileChild { rebase }, RepoCommandKind::Pull { .. })
-            if repo_id == plan.child =>
+        (LinkedCommitStage::ReconcileChild { path, rebase }, RepoCommandKind::Pull { .. })
+            if plan.child_tab == Some(repo_id) =>
         {
-            if let Some(error) = error {
-                state.linked_commit = None;
-                push_notification(
-                    inputs,
-                    state,
-                    AppNotificationKind::Info,
-                    format!("Pulling {child} stopped, so nothing was pushed in {parent}: {error}"),
-                );
-                return Vec::new();
-            }
-            if *rebase && let Some(expected) = plan.parent_commit.clone() {
-                if let Some(plan) = state.linked_commit.as_mut() {
-                    plan.stage = LinkedCommitStage::RerecordInParent;
-                }
-                return vec![record_effect(state, &plan, Some(expected))];
-            }
-            // After a merge the recorded commit is part of what gets pushed.
-            if let Some(plan) = state.linked_commit.as_mut() {
-                plan.stage = LinkedCommitStage::PushChild;
-            }
-            super::actions_emit_effects::push(repos, state, plan.child)
+            reconciled(inputs, repos, state, &plan, path.clone(), *rebase, error)
         }
         _ => Vec::new(),
     }
 }
 
-/// The parent re-recorded the rebased submodule commit.
+/// The parent's tab pushed its submodules.
+pub(super) fn submodules_pushed(
+    inputs: &ReducerInputs,
+    repos: &RepositoryRuntimes,
+    state: &mut AppState,
+    repo_id: RepoId,
+    failed: Option<(PathBuf, LinkedSubmodulePushFailure)>,
+) -> Vec<Effect> {
+    adjust_push_in_flight(state, repo_id, false);
+    let Some(plan) = state.linked_commit.clone() else {
+        return Vec::new();
+    };
+    if plan.parent != repo_id
+        || plan.child_tab.is_some()
+        || plan.stage != LinkedCommitStage::PushChildren
+    {
+        return Vec::new();
+    }
+    // The submodules' remote-tracking refs moved; their rows follow.
+    let mut effects: Vec<Effect> = reload_submodules(state, repo_id).into_iter().collect();
+    let Some((path, failure)) = failed else {
+        effects.extend(push_parent(repos, state, &plan));
+        return effects;
+    };
+    let child = submodule_display_name(&path);
+    let parent = state.repo_name(plan.parent);
+    let notice = match failure {
+        // Pulling would not help: the submodule's own submodules have to be
+        // pushed first, and the submodule's tab offers that.
+        LinkedSubmodulePushFailure::UnpushedPointers(pointers) => {
+            let nested = name_list(
+                pointers
+                    .iter()
+                    .map(|pointer| pointer.path.display().to_string()),
+            );
+            let their = if pointers.len() == 1 { "its" } else { "their" };
+            format!(
+                "{child} was not pushed, so {parent} was not pushed either: {child}'s commits record commits of {nested} that are not on {their} remote. Push {child} from its own tab, which offers to push {nested} first, then push {parent}."
+            )
+        }
+        // The parent's tab pushes without the sign-in prompt, so a rebase
+        // offered here would fail the same way.
+        LinkedSubmodulePushFailure::Push(error)
+            if super::auth::detect_auth_prompt_kind(&error).is_some() =>
+        {
+            format!(
+                "Pushing {child} needs a sign-in, which a push from {parent}'s tab cannot ask for, so {parent} was not pushed. Push {child} from its own tab, then push {parent}."
+            )
+        }
+        LinkedSubmodulePushFailure::Push(error) => {
+            stop_push(state, &plan, path, error.to_string());
+            return effects;
+        }
+    };
+    state.linked_commit = None;
+    push_notification(inputs, state, AppNotificationKind::Info, notice);
+    effects
+}
+
+/// The parent's tab pulled a refused submodule.
+pub(super) fn submodule_pulled(
+    inputs: &ReducerInputs,
+    repos: &RepositoryRuntimes,
+    state: &mut AppState,
+    repo_id: RepoId,
+    path: PathBuf,
+    error: Option<String>,
+) -> Vec<Effect> {
+    adjust_pull_in_flight(state, repo_id, false);
+    let Some(plan) = state.linked_commit.clone() else {
+        return Vec::new();
+    };
+    let LinkedCommitStage::ReconcileChild {
+        path: stage_path,
+        rebase,
+    } = &plan.stage
+    else {
+        return Vec::new();
+    };
+    if plan.parent != repo_id || plan.child_tab.is_some() || *stage_path != path {
+        return Vec::new();
+    }
+    let rebase = *rebase;
+    let mut effects: Vec<Effect> = reload_submodules(state, repo_id).into_iter().collect();
+    effects.extend(reconciled(inputs, repos, state, &plan, path, rebase, error));
+    effects
+}
+
+/// The parent recorded a rebased submodule commit again.
 pub(super) fn rerecorded(
     repos: &RepositoryRuntimes,
     state: &mut AppState,
@@ -358,7 +713,7 @@ pub(super) fn rerecorded(
     let Some(plan) = state.linked_commit.clone() else {
         return Vec::new();
     };
-    if plan.parent != repo_id || plan.stage != LinkedCommitStage::RerecordInParent {
+    if plan.parent != repo_id || !matches!(plan.stage, LinkedCommitStage::RerecordInParent { .. }) {
         return Vec::new();
     }
     let Some(outcome) = outcome else {
@@ -367,9 +722,8 @@ pub(super) fn rerecorded(
     };
     if let Some(plan) = state.linked_commit.as_mut() {
         plan.parent_commit = outcome.post_head.clone();
-        plan.stage = LinkedCommitStage::PushChild;
     }
-    super::actions_emit_effects::push(repos, state, plan.child)
+    push_children(repos, state, &plan)
 }
 
 pub(super) fn resolve_push_prompt(
@@ -385,39 +739,130 @@ pub(super) fn resolve_push_prompt(
     let Some(plan) = state.linked_commit.clone() else {
         return Vec::new();
     };
-    if plan.child != prompt.child || plan.stage != LinkedCommitStage::PushStopped {
+    if plan.parent != prompt.parent
+        || plan.stage
+            != (LinkedCommitStage::PushStopped {
+                path: prompt.path.clone(),
+            })
+    {
         return Vec::new();
     }
     let rebase = match choice {
         LinkedPushChoice::KeepLocal => {
             state.linked_commit = None;
-            let child = state.repo_name(plan.child);
+            let child = submodule_display_name(&prompt.path);
+            let children = children_names(&plan);
             let parent = state.repo_name(plan.parent);
             push_notification(
                 inputs,
                 state,
                 AppNotificationKind::Info,
-                format!("{child} and {parent} keep their commits local. Push {child} first."),
+                format!("{children} and {parent} keep their commits local. Push {child} first."),
             );
             return Vec::new();
         }
         LinkedPushChoice::Rebase => true,
         LinkedPushChoice::Merge => false,
     };
-    if let Some(plan) = state.linked_commit.as_mut() {
-        plan.stage = LinkedCommitStage::ReconcileChild { rebase };
-    }
-    super::actions_emit_effects::pull(
-        repos,
+    set_stage(
         state,
-        plan.child,
-        if rebase {
-            PullMode::Rebase
-        } else {
-            PullMode::Merge
+        LinkedCommitStage::ReconcileChild {
+            path: prompt.path.clone(),
+            rebase,
         },
-    )
+    );
+    let mode = if rebase {
+        PullMode::Rebase
+    } else {
+        PullMode::Merge
+    };
+    match plan.child_tab {
+        Some(child) => super::actions_emit_effects::pull(repos, state, child, mode),
+        None => {
+            adjust_pull_in_flight(state, plan.parent, true);
+            vec![Effect::PullLinkedSubmodule {
+                repo_id: plan.parent,
+                path: prompt.path,
+                mode,
+            }]
+        }
+    }
 }
+
+// ── What the changed submodules hold ────────────────────────────
+
+/// Read again what the changed first-level submodules hold, after their
+/// rows loaded; with none changed the list is simply empty. A submodule's own
+/// tab and a bare repository never show the linked commit panel, so they
+/// read nothing.
+pub(super) fn refresh_submodule_changes(repo_state: &mut RepoState) -> Option<Effect> {
+    if repo_state.submodule_parent.is_some() || repo_state.is_bare() {
+        return None;
+    }
+    let paths = repo_state.changed_first_level_submodules();
+    if paths.is_empty() {
+        repo_state.set_submodule_changes(Loadable::Ready(Vec::new()));
+        return None;
+    }
+    repo_state
+        .loads_in_flight
+        .request(LoadKind::SubmoduleChanges)
+        .then(|| Effect::LoadSubmoduleChanges {
+            repo_id: repo_state.id,
+            paths,
+        })
+}
+
+pub(super) fn submodule_changes_loaded(
+    state: &mut AppState,
+    repo_id: RepoId,
+    result: Result<Vec<SubmoduleChanges>, Error>,
+) -> Vec<Effect> {
+    let Some(repo_state) = state.repos.iter_mut().find(|repo| repo.id == repo_id) else {
+        return Vec::new();
+    };
+    match result {
+        Ok(changes) => repo_state.set_submodule_changes(Loadable::Ready(changes)),
+        Err(error) if matches!(error.kind(), ErrorKind::Cancelled) => {}
+        Err(error) => repo_state.set_submodule_changes(Loadable::Error(error.to_string())),
+    }
+    if !repo_state
+        .loads_in_flight
+        .finish(LoadKind::SubmoduleChanges)
+    {
+        return Vec::new();
+    }
+    let paths = repo_state.changed_first_level_submodules();
+    if paths.is_empty() {
+        repo_state
+            .loads_in_flight
+            .finish(LoadKind::SubmoduleChanges);
+        repo_state.set_submodule_changes(Loadable::Ready(Vec::new()));
+        return Vec::new();
+    }
+    vec![Effect::LoadSubmoduleChanges { repo_id, paths }]
+}
+
+pub(super) fn stage_in_submodule(
+    state: &mut AppState,
+    repo_id: RepoId,
+    path: PathBuf,
+    files: Vec<PathBuf>,
+    stage: bool,
+) -> Vec<Effect> {
+    if files.is_empty() || !state.repos.iter().any(|repo| repo.id == repo_id) {
+        return Vec::new();
+    }
+    super::begin_local_action(state, repo_id);
+    vec![Effect::StageInSubmodule {
+        repo_id,
+        path,
+        files,
+        stage,
+    }]
+}
+
+// ── The unpushed-pointer guard ──────────────────────────────────
 
 pub(super) fn push_blocked(
     state: &mut AppState,
@@ -539,284 +984,4 @@ pub(super) fn push_finished(state: &mut AppState, repo_id: RepoId, command: &Rep
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::model::{RepoState, SubmoduleParentLink};
-    use gitcomet_core::domain::RepoSpec;
-    use std::path::PathBuf;
-
-    fn state() -> AppState {
-        let mut state = AppState::test_default();
-        state.repos.push(RepoState::new_opening(
-            RepoId(1),
-            RepoSpec {
-                workdir: PathBuf::from("/w/app"),
-            },
-        ));
-        let mut child = RepoState::new_opening(
-            RepoId(2),
-            RepoSpec {
-                workdir: PathBuf::from("/w/app/vendor/lib"),
-            },
-        );
-        child.submodule_parent = Some(SubmoduleParentLink {
-            workdir: PathBuf::from("/w/app"),
-            path: PathBuf::from("vendor/lib"),
-            repo_id: Some(RepoId(1)),
-        });
-        state.repos.push(child);
-        state
-    }
-
-    #[test]
-    fn the_parent_message_names_the_path_and_the_subject() {
-        assert_eq!(
-            default_parent_message(
-                std::path::Path::new("fixtures/syntax_test"),
-                "\n Fix x\n\nbody"
-            ),
-            "Update fixtures/syntax_test: Fix x"
-        );
-        assert_eq!(
-            default_parent_message(std::path::Path::new("a"), ""),
-            "Update a"
-        );
-    }
-
-    #[test]
-    fn a_failed_submodule_commit_records_nothing_in_the_parent() {
-        let inputs = super::super::test_inputs::clock();
-        let mut state = state();
-        assert!(start(
-            &inputs,
-            &mut state,
-            RepoId(2),
-            "x",
-            "Update vendor/lib".into(),
-            true
-        ));
-        let effects = child_commit_finished(&inputs, &mut state, RepoId(2), false);
-        assert!(effects.is_empty());
-        assert!(state.linked_commit.is_none());
-        assert_eq!(state.repos[0].commit_in_flight, 0);
-    }
-
-    #[test]
-    fn a_committed_submodule_is_recorded_in_the_parent_alone() {
-        let inputs = super::super::test_inputs::clock();
-        let mut state = state();
-        assert!(start(
-            &inputs,
-            &mut state,
-            RepoId(2),
-            "x",
-            "Update vendor/lib: x".into(),
-            false,
-        ));
-        let effects = child_commit_finished(&inputs, &mut state, RepoId(2), true);
-        assert!(matches!(
-            effects.as_slice(),
-            [Effect::RecordSubmoduleCommit { repo_id: RepoId(1), path, message, amend_expected: None, .. }]
-                if path == &PathBuf::from("vendor/lib") && message == "Update vendor/lib: x"
-        ));
-        assert_eq!(
-            state.repos[0].commit_in_flight, 1,
-            "the parent's commit box waits"
-        );
-        assert_eq!(
-            state.linked_commit.as_ref().map(|plan| &plan.stage),
-            Some(&LinkedCommitStage::RecordInParent)
-        );
-    }
-
-    #[test]
-    fn a_refused_submodule_push_holds_the_parent_push_back() {
-        let inputs = super::super::test_inputs::clock();
-        let repos = RepositoryRuntimes::default();
-        let mut state = state();
-        assert!(start(&inputs, &mut state, RepoId(2), "x", "m".into(), true));
-        state.linked_commit.as_mut().unwrap().stage = LinkedCommitStage::PushChild;
-        let effects = command_finished(
-            &inputs,
-            &repos,
-            &mut state,
-            RepoId(2),
-            &RepoCommandKind::Push,
-            Some("rejected".into()),
-        );
-        assert!(effects.is_empty(), "the parent is not pushed");
-        let prompt = state
-            .linked_push_prompt
-            .clone()
-            .expect("push stopped prompt");
-        assert_eq!((prompt.child, prompt.parent), (RepoId(2), RepoId(1)));
-
-        let effects = resolve_push_prompt(
-            &inputs,
-            &repos,
-            &mut state,
-            prompt,
-            LinkedPushChoice::KeepLocal,
-        );
-        assert!(effects.is_empty());
-        assert!(state.linked_commit.is_none());
-    }
-
-    #[test]
-    fn a_rebased_submodule_is_recorded_again_before_pushing() {
-        let inputs = super::super::test_inputs::clock();
-        let repos = RepositoryRuntimes::default();
-        let mut state = state();
-        assert!(start(&inputs, &mut state, RepoId(2), "x", "m".into(), true));
-        {
-            let plan = state.linked_commit.as_mut().unwrap();
-            plan.stage = LinkedCommitStage::ReconcileChild { rebase: true };
-            plan.parent_commit = Some(CommitId("p1".into()));
-        }
-        let effects = command_finished(
-            &inputs,
-            &repos,
-            &mut state,
-            RepoId(2),
-            &RepoCommandKind::Pull {
-                mode: PullMode::Rebase,
-            },
-            None,
-        );
-        assert!(matches!(
-            effects.as_slice(),
-            [Effect::RecordSubmoduleCommit { repo_id: RepoId(1), amend_expected: Some(expected), .. }]
-                if expected.as_ref() == "p1"
-        ));
-    }
-
-    fn pointer() -> SubmoduleCheckoutUpdate {
-        SubmoduleCheckoutUpdate {
-            path: PathBuf::from("vendor/lib"),
-            commit: CommitId("c".into()),
-        }
-    }
-
-    fn commit_auth_prompt(repo_id: RepoId) -> crate::model::AuthPromptState {
-        crate::model::AuthPromptState {
-            generation: 1,
-            challenge: None,
-            status: crate::model::AuthPromptStatus::AwaitingInput,
-            kind: crate::model::AuthPromptKind::Passphrase,
-            reason: "signing key".into(),
-            operation: AuthRetryOperation::Commit {
-                repo_id,
-                message: "x".into(),
-                amend: false,
-                push_after_commit: false,
-            },
-        }
-    }
-
-    #[test]
-    fn a_submodule_commit_waiting_for_a_passphrase_keeps_the_plan() {
-        let inputs = super::super::test_inputs::clock();
-        let mut state = state();
-        assert!(start(&inputs, &mut state, RepoId(2), "x", "m".into(), true));
-        state.auth_prompt = Some(commit_auth_prompt(RepoId(2)));
-        let effects = child_commit_finished(&inputs, &mut state, RepoId(2), false);
-        assert!(effects.is_empty());
-        assert_eq!(
-            state.linked_commit.as_ref().map(|plan| &plan.stage),
-            Some(&LinkedCommitStage::CommitChild),
-            "the retried commit is recorded in the parent"
-        );
-
-        cancel_auth(&mut state, &commit_auth_prompt(RepoId(2)).operation);
-        assert!(state.linked_commit.is_none(), "a cancelled sign-in ends it");
-    }
-
-    #[test]
-    fn closing_the_parent_tab_drops_the_stopped_push() {
-        let inputs = super::super::test_inputs::clock();
-        let mut state = state();
-        assert!(start(&inputs, &mut state, RepoId(2), "x", "m".into(), true));
-        state.linked_commit.as_mut().unwrap().stage = LinkedCommitStage::PushStopped;
-        state.linked_push_prompt = Some(LinkedPushPrompt {
-            generation: 1,
-            child: RepoId(2),
-            parent: RepoId(1),
-            error: "rejected".into(),
-        });
-        state.repos.retain(|repo| repo.id != RepoId(1));
-        forget_closed_repos(&mut state);
-        assert!(state.linked_commit.is_none());
-        assert!(state.linked_push_prompt.is_none());
-    }
-
-    #[test]
-    fn a_second_linked_commit_while_one_runs_says_it_is_not_recorded() {
-        let inputs = super::super::test_inputs::clock();
-        let mut state = state();
-        assert!(start(&inputs, &mut state, RepoId(2), "x", "m".into(), true));
-        let seq = state.notifications_seq;
-        assert!(!start(
-            &inputs,
-            &mut state,
-            RepoId(2),
-            "y",
-            "m".into(),
-            true
-        ));
-        let notices = state.notifications_after(seq);
-        assert_eq!(notices.len(), 1);
-        assert!(
-            notices[0]
-                .message
-                .starts_with("lib is committed without recording it in app")
-        );
-    }
-
-    #[test]
-    fn pushing_anyway_skips_the_check_once() {
-        let repos = RepositoryRuntimes::default();
-        let mut state = state();
-        push_blocked(&mut state, RepoId(1), vec![pointer()], BlockedPush::Push);
-        let prompt = state.unpushed_pointer_prompt.clone().expect("prompt");
-        resolve_unpushed_pointer_prompt(&repos, &mut state, prompt, false);
-        assert_eq!(state.unpushed_pointer_override, Some(RepoId(1)));
-        push_finished(&mut state, RepoId(1), &RepoCommandKind::Push);
-        assert_eq!(state.unpushed_pointer_override, None);
-    }
-
-    #[test]
-    fn a_stopped_push_after_commit_runs_again_as_it_was_asked() {
-        let repos = RepositoryRuntimes::default();
-        let mut state = state();
-        let target = gitcomet_core::services::SafePushAfterCommitTarget {
-            remote: "origin".into(),
-            branch: "topic".into(),
-            local_branch: "topic".into(),
-            local_head: CommitId("h".into()),
-        };
-        let blocked = BlockedPush::AfterCommit {
-            target: target.clone(),
-            set_upstream: true,
-        };
-        push_blocked(&mut state, RepoId(1), vec![pointer()], blocked.clone());
-        let prompt = state.unpushed_pointer_prompt.clone().expect("prompt");
-
-        let effects = resolve_unpushed_pointer_prompt(&repos, &mut state, prompt.clone(), false);
-        assert!(matches!(
-            effects.as_slice(),
-            [Effect::RepoCommand(crate::msg::RepoCommandEffect::PushAfterCommit {
-                repo_id: RepoId(1),
-                target: pushed,
-                set_upstream: true,
-                ..
-            })] if *pushed == target
-        ));
-
-        let effects = resolve_unpushed_pointer_prompt(&repos, &mut state, prompt, true);
-        assert!(matches!(
-            effects.as_slice(),
-            [Effect::PushSubmodulesThenRepo { repo_id: RepoId(1), pointers, push }]
-                if pointers == &vec![pointer()] && *push == blocked
-        ));
-    }
-}
+mod tests;

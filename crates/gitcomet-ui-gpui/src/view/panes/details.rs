@@ -131,6 +131,17 @@ pub(in super::super) struct DetailsPaneView {
     /// Submodule tabs whose commits stay out of their parent. Recording is
     /// on for every other one.
     pub(in super::super) record_in_parent_off: FxHashSet<RepoId>,
+    /// Worktree tabs whose commits leave their changed submodules alone.
+    /// Every other one with changed submodules makes a linked commit.
+    pub(in super::super) linked_commit_off: FxHashSet<RepoId>,
+    /// Each changed submodule's message in its parent's linked commit form.
+    pub(in super::super) linked_message_inputs:
+        FxHashMap<(RepoId, std::path::PathBuf), Entity<components::TextInput>>,
+    /// The submodule messages a dispatched linked commit used, cleared once
+    /// it succeeds.
+    pub(in super::super) pending_linked_messages:
+        FxHashMap<RepoId, Vec<gitcomet_state::model::LinkedChild>>,
+    pub(in super::super) linked_commit_scroll: ScrollHandle,
     pub(in super::super) commit_details_message_input: Entity<components::TextInput>,
     /// The editable message while [`Self::commit_reword`] is set.
     pub(in super::super) commit_reword_input: Entity<components::TextInput>,
@@ -386,6 +397,9 @@ impl DetailsPaneView {
                 }
             }
             state.linked_commit.is_some().hash(&mut hasher);
+            // A worktree's commit form lists its changed submodules' files.
+            repo.submodules_rev.hash(&mut hasher);
+            repo.submodule_changes_rev.hash(&mut hasher);
         }
 
         hasher.finish()
@@ -424,6 +438,7 @@ impl DetailsPaneView {
             if this.advance_pending_commits(&next, cx) {
                 cx.notify();
             }
+            this.prune_linked_message_inputs(&next);
             if next_fingerprint == this.notify_fingerprint {
                 this.state = next;
                 return;
@@ -640,6 +655,10 @@ impl DetailsPaneView {
             parent_message_user_edited: false,
             parent_message_drafts: FxHashMap::default(),
             record_in_parent_off: FxHashSet::default(),
+            linked_commit_off: FxHashSet::default(),
+            linked_message_inputs: FxHashMap::default(),
+            pending_linked_messages: FxHashMap::default(),
+            linked_commit_scroll: ScrollHandle::default(),
             commit_details_message_input,
             commit_reword_input,
             commit_reword_scroll,
@@ -1034,6 +1053,12 @@ impl DetailsPaneView {
                 return false;
             }
             let result = pending.advance(next);
+            if result.is_some()
+                && let Some(used) = self.pending_linked_messages.remove(repo_id)
+                && result == Some(true)
+            {
+                self.clear_linked_messages(*repo_id, used, cx);
+            }
             if result == Some(true) {
                 let sent_parent_message = |text: &str| {
                     pending

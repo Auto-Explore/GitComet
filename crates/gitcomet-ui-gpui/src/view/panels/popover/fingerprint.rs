@@ -274,7 +274,7 @@ fn repo_for_popover<'a>(
             ..
         })
         | PopoverKind::LinkedPushConfirm(gitcomet_state::model::LinkedPushPrompt {
-            child: repo_id,
+            parent: repo_id,
             ..
         })
         | PopoverKind::UnpushedPointerConfirm(gitcomet_state::model::UnpushedPointerPrompt {

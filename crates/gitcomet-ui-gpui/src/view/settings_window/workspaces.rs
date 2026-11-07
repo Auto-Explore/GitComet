@@ -150,6 +150,60 @@ impl SettingsWindowView {
         )
     }
 
+    /// "Open workspaces in": a window of its own, or the current window with
+    /// the workspace rail.
+    fn workspace_open_mode_rows(
+        &mut self,
+        theme: AppTheme,
+        cx: &mut gpui::Context<Self>,
+    ) -> Stateful<gpui::Div> {
+        let mut rows = div()
+            .id("settings_window_workspace_open_mode")
+            .debug_selector(|| "settings_window_workspace_open_mode".to_string())
+            .px_2()
+            .pb_2()
+            .flex()
+            .flex_col()
+            .gap_1()
+            .child(
+                div()
+                    .text_size(theme.ui_text(12.0))
+                    .text_color(theme.colors.foreground.secondary)
+                    .child("Open workspaces in"),
+            );
+        for mode in crate::workspaces::WorkspaceOpenMode::ALL {
+            rows = rows.child(
+                self.option_row(
+                    format!("settings_window_workspace_open_mode_{}", mode.key()),
+                    mode.label(),
+                    Some(mode.description().into()),
+                    self.workspace_open_mode == mode,
+                    theme,
+                )
+                .on_activate(
+                    false,
+                    controls::ControlActivation::Action,
+                    cx.listener(move |this, _e: &ClickEvent, _window, cx| {
+                        this.set_workspace_open_mode(mode, cx);
+                    }),
+                ),
+            );
+        }
+        if self.workspace_open_mode.shows_rail() {
+            rows = rows.child(
+                div()
+                    .pt_1()
+                    .text_size(theme.ui_text(12.0))
+                    .text_color(theme.colors.foreground.secondary)
+                    .child(
+                        "Alt+1…9 switch the current window's workspace. A workspace open in \
+                         another window is focused there; Shift+click it on the rail to show it here.",
+                    ),
+            );
+        }
+        rows
+    }
+
     fn field_label(&self, text: &'static str, theme: AppTheme) -> gpui::Div {
         div()
             .px_2()
@@ -200,7 +254,8 @@ impl SettingsWindowView {
                             )),
                     )
                     .child(new_workspace_button),
-            );
+            )
+            .child(self.workspace_open_mode_rows(theme, cx));
         if workspaces.is_empty() {
             return card.child(
                 div()

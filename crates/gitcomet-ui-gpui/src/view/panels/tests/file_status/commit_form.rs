@@ -1337,6 +1337,23 @@ fn leave_behind_prompt(
     )
 }
 
+/// Commits the parent alone ("<parent> only"). A linked commit takes the
+/// changed submodules along; left out, a dirty one makes the commit ask first.
+fn commit_parent_only(
+    cx: &mut gpui::VisualTestContext,
+    view: &CommitView,
+    repo_id: gitcomet_state::model::RepoId,
+) {
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.details_pane.update(cx, |pane, cx| {
+                pane.linked_commit_off.insert(repo_id);
+                cx.notify();
+            });
+        });
+    });
+}
+
 fn click_selector(cx: &mut gpui::VisualTestContext, selector: &'static str) {
     let center = cx
         .debug_bounds(selector)
@@ -1359,6 +1376,7 @@ fn commit_shortcut_with_a_dirty_submodule_asks_first(cx: &mut gpui::TestAppConte
         &view,
         app_state_with_repo(staged_repo_with_dirty_submodule(68), repo_id),
     );
+    commit_parent_only(cx, &view, repo_id);
     set_commit_box_text(cx, &view, "ship it");
     let before = crate::view::test_support::repo_ops_rev(&view, cx, repo_id);
 
@@ -1392,6 +1410,7 @@ fn leave_behind_prompt_ignores_a_tab_switched_to_while_open(cx: &mut gpui::TestA
         &view,
         two_repo_state(asking.clone(), other.clone(), asking_id),
     );
+    commit_parent_only(cx, &view, asking_id);
     set_commit_box_text(cx, &view, "ship the parent");
     submit_commit_box(cx, &view);
     assert!(leave_behind_prompt(cx, &view).is_some());

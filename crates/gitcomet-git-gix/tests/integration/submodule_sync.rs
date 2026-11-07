@@ -757,3 +757,162 @@ fn shelving_a_submodule_stashes_tracked_changes_and_leaves_untracked_files() {
     assert!(child.join("local.cfg").exists(), "untracked files stay");
     assert!(git_stdout(&child, &["stash", "list"]).contains("Shelved while committing parent"));
 }
+
+#[test]
+fn a_parent_opens_its_submodule_to_stage_and_commit_inside_it() {
+    let _guard = setup_submodule_test();
+    let fixture = fixture();
+    let parent = fixture.open(&fixture.parent);
+    fs::write(fixture.child().join("a.txt"), "a\n").unwrap();
+    fs::write(fixture.child().join("b.txt"), "b\n").unwrap();
+
+    let child = parent
+        .open_submodule(Path::new("mods/child"))
+        .expect("open the checked-out submodule");
+    assert_eq!(
+        canonicalize_or_original(child.spec().workdir.clone()),
+        fixture.child()
+    );
+    child.stage(&[Path::new("a.txt")]).expect("stage inside");
+    let status = child.status(&CancellationToken::new()).expect("status");
+    assert_eq!(
+        status
+            .staged
+            .iter()
+            .map(|entry| entry.path.clone())
+            .collect::<Vec<_>>(),
+        vec![PathBuf::from("a.txt")]
+    );
+    assert!(
+        status
+            .unstaged
+            .iter()
+            .any(|entry| entry.path == Path::new("b.txt"))
+    );
+
+    let before = head_of(&fixture.child());
+    child
+        .commit_with_identity("Add a", None)
+        .expect("commit inside the submodule");
+    assert_ne!(head_of(&fixture.child()), before);
+    assert_eq!(
+        git_stdout(&fixture.child(), &["log", "-1", "--format=%s"]),
+        "Add a"
+    );
+
+    for outside in ["", "../child", "/tmp", "mods/../.."] {
+        assert!(
+            parent.open_submodule(Path::new(outside)).is_err(),
+            "{outside:?} is not a submodule of this worktree"
+        );
+    }
+    assert!(
+        parent.open_submodule(Path::new("missing")).is_err(),
+        "a path without a checkout is not opened"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn open_submodule_refuses_symlinks_and_non_submodule_repos() {
+    let _guard = setup_submodule_test();
+    let fixture = fixture();
+    // An untracked repository inside the worktree.
+    let scratch = fixture.parent.join("scratch");
+    fs::create_dir_all(&scratch).unwrap();
+    init_repo_with_seed(&scratch, "scratch.txt", "scratch\n", "seed scratch");
+    // A gitlink whose path runs through a symlink to a repository outside
+    // the worktree.
+    let outside = head_of(&fixture.root.join("child"));
+    run_git(
+        &fixture.parent,
+        &[
+            "update-index",
+            "--add",
+            "--cacheinfo",
+            &format!("160000,{outside},link/child"),
+        ],
+    );
+    std::os::unix::fs::symlink(&fixture.root, fixture.parent.join("link")).unwrap();
+    assert!(fixture.parent.join("link/child/.git").exists());
+
+    let parent = fixture.open(&fixture.parent);
+    assert!(
+        parent.open_submodule(Path::new("scratch")).is_err(),
+        "an untracked repository is not a submodule"
+    );
+    assert!(
+        parent
+            .open_submodule(Path::new("mods/child/nested/grand"))
+            .is_err(),
+        "a submodule of a submodule is not this worktree's"
+    );
+    assert!(
+        parent.open_submodule(Path::new("link/child")).is_err(),
+        "a checkout through a symlink lies outside the worktree"
+    );
+    assert!(parent.open_submodule(Path::new("mods/child")).is_ok());
+}
+
+#[test]
+fn a_submodule_opened_from_its_parent_reports_its_own_unpushed_submodule_commits() {
+    let _guard = setup_submodule_test();
+    let fixture = fixture();
+    let parent = fixture.open(&fixture.parent);
+    let child = parent
+        .open_submodule(Path::new("mods/child"))
+        .expect("open the checked-out submodule");
+    assert!(child.unpushed_submodule_pointers().unwrap().is_empty());
+
+    // A commit in the nested submodule that its remote does not have,
+    // recorded in the first-level submodule: pushing that submodule would
+    // publish a pointer nobody can fetch.
+    let local = commit_in(&fixture.grand(), "g.txt", "g\n");
+    child
+        .record_submodule_commit(Path::new("nested/grand"), "Update nested/grand", None)
+        .expect("record in the submodule");
+    let unpushed = child.unpushed_submodule_pointers().unwrap();
+    assert_eq!(unpushed.len(), 1);
+    assert_eq!(unpushed[0].path, PathBuf::from("nested/grand"));
+    assert_eq!(unpushed[0].commit.as_ref(), local.as_str());
+}
+
+#[test]
+fn re_recording_in_a_commit_with_other_files_keeps_them() {
+    let _guard = setup_submodule_test();
+    let fixture = fixture();
+    run_git(&fixture.parent, &["config", "commit.gpgsign", "false"]);
+    commit_in(&fixture.child(), "a.txt", "a\n");
+    fs::write(fixture.parent.join("parent.txt"), "with the pointer\n").unwrap();
+    let parent = fixture.open(&fixture.parent);
+    parent
+        .stage(&[Path::new("mods/child"), Path::new("parent.txt")])
+        .expect("stage the pointer with another file");
+    let recorded = parent
+        .commit_with_identity("Use the new child", None)
+        .expect("commit the parent")
+        .post_head
+        .expect("a commit");
+
+    run_git(
+        &fixture.child(),
+        &["commit", "-q", "--amend", "-m", "rebased"],
+    );
+    let rebased = head_of(&fixture.child());
+    parent
+        .amend_submodule_record(Path::new("mods/child"), &recorded, None)
+        .expect("amend");
+    assert_eq!(
+        git_stdout(&fixture.parent, &["rev-parse", "HEAD:mods/child"]),
+        rebased
+    );
+    assert_eq!(
+        git_stdout(&fixture.parent, &["show", "HEAD:parent.txt"]),
+        "with the pointer",
+        "the rest of the commit stays as it was"
+    );
+    assert_eq!(
+        git_stdout(&fixture.parent, &["log", "-1", "--format=%s"]),
+        "Use the new child"
+    );
+}

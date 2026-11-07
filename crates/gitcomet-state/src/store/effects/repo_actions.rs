@@ -1,7 +1,7 @@
 use crate::model::{
     BranchExistsPromptOperation, BranchExistsPromptState, SubmoduleCheckoutOperation,
 };
-use crate::msg::{InternalMsg, Msg, RepoActionKind, RepoPathList};
+use crate::msg::{InternalMsg, LinkedSubmodulePushFailure, Msg, RepoActionKind, RepoPathList};
 use crate::store::repository_runtime::RepositoryRuntimes;
 use gitcomet_core::auth::{ScopedStagedGitAuth, StagedGitAuth};
 use gitcomet_core::domain::{DiscardOutcome, SubmoduleCheckoutPolicy};
@@ -1458,4 +1458,290 @@ mod delete_branches_tests {
         assert!(!message.contains(". ."));
         assert!(message.ends_with("feat/a"));
     }
+}
+
+// ── Linked commits from a parent's tab ──────────────────────────
+//
+// Each runs inside a first-level submodule through a handle the parent opens
+// for it, so the submodule needs no tab of its own.
+
+/// Open the submodule at `path` of `repo` under its own mutation gate.
+fn with_submodule<T>(
+    repo: &dyn GitRepository,
+    path: &Path,
+    run: impl FnOnce(&dyn GitRepository) -> Result<T, Error>,
+) -> Result<T, Error> {
+    let submodule = repo.open_submodule(path)?;
+    let gate = super::super::mutation_gate::for_repo(submodule.as_ref());
+    let _mutation = gate.read().unwrap_or_else(|error| error.into_inner());
+    run(submodule.as_ref())
+}
+
+fn submodule_paths_context(paths: &[PathBuf]) -> Option<String> {
+    single_line_context(
+        paths
+            .iter()
+            .map(|path| path.display().to_string())
+            .collect::<Vec<_>>()
+            .join(", "),
+    )
+}
+
+/// What each first-level submodule at `paths` holds uncommitted. One that
+/// cannot be opened or read, or turns out clean, is left out.
+pub(super) fn schedule_load_submodule_changes(
+    executor: &TaskExecutor,
+    repos: &RepositoryRuntimes,
+    msg_tx: StoreWorkerSender,
+    repo_id: RepoId,
+    paths: Vec<PathBuf>,
+    cancellation: gitcomet_core::services::CancellationToken,
+) {
+    super::util::spawn_with_repo_or_else(
+        executor,
+        repos,
+        repo_id,
+        msg_tx,
+        move |repo, msg_tx| {
+            let result = (|| {
+                let mut changes = Vec::new();
+                for path in paths {
+                    cancellation.check_cancelled()?;
+                    let Ok(submodule) = repo.open_submodule(&path) else {
+                        continue;
+                    };
+                    let Ok(status) = submodule.status(&cancellation) else {
+                        continue;
+                    };
+                    if status.staged.is_empty() && status.unstaged.is_empty() {
+                        continue;
+                    }
+                    let head = submodule
+                        .head_tracking(&cancellation)
+                        .unwrap_or(gitcomet_core::domain::HeadTracking::Detached);
+                    changes.push(gitcomet_core::domain::SubmoduleChanges {
+                        path,
+                        head,
+                        staged: status.staged,
+                        unstaged: status.unstaged,
+                    });
+                }
+                Ok(changes)
+            })();
+            send_or_log(
+                &msg_tx,
+                Msg::Internal(InternalMsg::SubmoduleChangesLoaded { repo_id, result }),
+            );
+        },
+        move |msg_tx| {
+            send_or_log(
+                &msg_tx,
+                Msg::Internal(InternalMsg::SubmoduleChangesLoaded {
+                    repo_id,
+                    result: Err(missing_repo_error(repo_id)),
+                }),
+            );
+        },
+    );
+}
+
+/// Stage or unstage `files` inside the submodule at `path`. The reducer
+/// reads the submodules' changes again when the action finishes.
+pub(super) fn schedule_stage_in_submodule(
+    executor: &TaskExecutor,
+    repos: &RepositoryRuntimes,
+    msg_tx: StoreWorkerSender,
+    repo_id: RepoId,
+    path: PathBuf,
+    files: Vec<PathBuf>,
+    stage: bool,
+) {
+    let action = if stage {
+        RepoActionKind::StageInSubmodule
+    } else {
+        RepoActionKind::UnstageInSubmodule
+    };
+    let context = path_context(&path);
+    schedule_repo_action(
+        executor,
+        repos,
+        msg_tx,
+        repo_id,
+        action,
+        context,
+        move |repo| {
+            with_submodule(repo.as_ref(), &path, |submodule| {
+                let refs = files.iter().map(PathBuf::as_path).collect::<Vec<_>>();
+                if stage {
+                    submodule.stage(&refs)
+                } else {
+                    submodule.unstage(&refs)
+                }
+            })
+        },
+    );
+}
+
+/// Commit inside each submodule in order. The first failure stops the rest.
+pub(super) fn schedule_commit_submodules(
+    executor: &TaskExecutor,
+    repos: &RepositoryRuntimes,
+    msg_tx: StoreWorkerSender,
+    repo_id: RepoId,
+    commits: Vec<crate::model::LinkedChild>,
+    identities: Vec<Option<gitcomet_core::commit_identity::CommitIdentity>>,
+) {
+    let paths = commits
+        .iter()
+        .map(|child| child.path.clone())
+        .collect::<Vec<_>>();
+    let context = submodule_paths_context(&paths);
+    schedule_repo_action_with_result(
+        executor,
+        repos,
+        msg_tx,
+        repo_id,
+        "Commit submodules",
+        context,
+        move |repo| {
+            let mut committed = Vec::new();
+            for (index, child) in commits.into_iter().enumerate() {
+                let identity = identities.get(index).cloned().flatten();
+                let result = with_submodule(repo.as_ref(), &child.path, |submodule| {
+                    submodule.commit_with_identity(&child.message, identity.as_ref())
+                });
+                if let Err(error) = result {
+                    return Ok((committed, Some((child.path, error))));
+                }
+                committed.push(child.path);
+            }
+            Ok((committed, None))
+        },
+        move |repo_id, result| {
+            let (committed, failed) = match result {
+                Ok(outcome) => outcome,
+                Err(error) => (
+                    Vec::new(),
+                    Some((paths.first().cloned().unwrap_or_default(), error)),
+                ),
+            };
+            InternalMsg::SubmodulesCommitted {
+                repo_id,
+                committed,
+                failed,
+            }
+        },
+    );
+}
+
+/// Stage the new submodule commits and commit everything staged.
+pub(super) fn schedule_commit_with_submodules(
+    executor: &TaskExecutor,
+    repos: &RepositoryRuntimes,
+    msg_tx: StoreWorkerSender,
+    repo_id: RepoId,
+    paths: Vec<PathBuf>,
+    message: String,
+    identity: Option<gitcomet_core::commit_identity::CommitIdentity>,
+) {
+    schedule_repo_action_with_result(
+        executor,
+        repos,
+        msg_tx,
+        repo_id,
+        "Commit",
+        message_subject(&message),
+        move |repo| {
+            let refs = paths.iter().map(PathBuf::as_path).collect::<Vec<_>>();
+            repo.stage(&refs)?;
+            repo.commit_with_identity(&message, identity.as_ref())
+        },
+        |repo_id, result| InternalMsg::SubmoduleRecorded {
+            repo_id,
+            amend: false,
+            result,
+        },
+    );
+}
+
+/// Push each submodule to its upstream in order. The first one that stops
+/// stops the rest.
+pub(super) fn schedule_push_linked_submodules(
+    executor: &TaskExecutor,
+    repos: &RepositoryRuntimes,
+    msg_tx: StoreWorkerSender,
+    repo_id: RepoId,
+    paths: Vec<PathBuf>,
+) {
+    let context = submodule_paths_context(&paths);
+    let first = paths.first().cloned().unwrap_or_default();
+    schedule_repo_action_with_result(
+        executor,
+        repos,
+        msg_tx,
+        repo_id,
+        "Push submodules",
+        context,
+        move |repo| Ok(push_linked_submodules(repo.as_ref(), paths)),
+        move |repo_id, result| InternalMsg::LinkedSubmodulesPushed {
+            repo_id,
+            failed: match result {
+                Ok(failed) => failed,
+                Err(error) => Some((first, LinkedSubmodulePushFailure::Push(error))),
+            },
+        },
+    );
+}
+
+/// Push each submodule at `paths` of `repo`, in order, and name the first
+/// one that stopped. Like every other push, a submodule's push is not tried
+/// when its outgoing commits record commits of its own submodules that their
+/// remotes do not have: the parent would then record a submodule commit that
+/// nobody could check out in full.
+fn push_linked_submodules(
+    repo: &dyn GitRepository,
+    paths: Vec<PathBuf>,
+) -> Option<(PathBuf, LinkedSubmodulePushFailure)> {
+    for path in paths {
+        let result = with_submodule(repo, &path, |submodule| {
+            // The check never blocks a push it cannot complete.
+            let pointers = submodule.unpushed_submodule_pointers().unwrap_or_default();
+            if !pointers.is_empty() {
+                return Ok(Some(LinkedSubmodulePushFailure::UnpushedPointers(pointers)));
+            }
+            submodule.push_with_output().map(|_| None)
+        });
+        match result {
+            Ok(None) => {}
+            Ok(Some(failure)) => return Some((path, failure)),
+            Err(error) => return Some((path, LinkedSubmodulePushFailure::Push(error))),
+        }
+    }
+    None
+}
+
+pub(super) fn schedule_pull_linked_submodule(
+    executor: &TaskExecutor,
+    repos: &RepositoryRuntimes,
+    msg_tx: StoreWorkerSender,
+    repo_id: RepoId,
+    path: PathBuf,
+    mode: gitcomet_core::services::PullMode,
+) {
+    let context = path_context(&path);
+    let finished_path = path.clone();
+    schedule_repo_action_with_result(
+        executor,
+        repos,
+        msg_tx,
+        repo_id,
+        "Pull submodule",
+        context,
+        move |repo| with_submodule(repo.as_ref(), &path, |submodule| submodule.pull(mode)),
+        move |repo_id, result| InternalMsg::LinkedSubmodulePulled {
+            repo_id,
+            path: finished_path,
+            error: result.err().map(|error| error.to_string()),
+        },
+    );
 }

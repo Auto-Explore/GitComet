@@ -22,6 +22,8 @@ pub enum LoadKind {
     RemoteTags,
     Worktrees,
     Submodules,
+    /// What changed first-level submodules hold, read after `Submodules`.
+    SubmoduleChanges,
     RefMetadata,
     /// A worktree walk, deliberately outside the primary refresh.
     FileBrowser,
