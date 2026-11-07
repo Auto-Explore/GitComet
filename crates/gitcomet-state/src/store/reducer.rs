@@ -1900,12 +1900,14 @@ fn reduce_inner(
             repo_id,
             message,
             push_after_commit,
-        } => auth::commit(state, repo_id, message, push_after_commit),
+            hooks,
+        } => auth::commit(state, repo_id, message, push_after_commit, hooks),
         Msg::CommitAmend {
             repo_id,
             message,
             push_after_commit,
-        } => auth::commit_amend(state, repo_id, message, push_after_commit),
+            hooks,
+        } => auth::commit_amend(state, repo_id, message, push_after_commit, hooks),
         Msg::SafePushAfterCommit { repo_id, context } => {
             match annex_takeover(inputs, repos, state, repo_id, false) {
                 Some(effects) => effects,
@@ -1985,11 +1987,17 @@ fn reduce_inner(
             repo_id,
             target,
             set_upstream,
+            hooks,
         } => match annex_takeover(inputs, repos, state, repo_id, false) {
             Some(effects) => effects,
-            None => {
-                actions_emit_effects::push_after_commit(repos, state, repo_id, target, set_upstream)
-            }
+            None => actions_emit_effects::push_after_commit(
+                repos,
+                state,
+                repo_id,
+                target,
+                set_upstream,
+                hooks,
+            ),
         },
         Msg::ForcePush { repo_id } => {
             match annex_adjusted_refusal(inputs, state, repo_id, "Force push") {

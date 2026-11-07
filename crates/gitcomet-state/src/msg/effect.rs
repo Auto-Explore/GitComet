@@ -349,12 +349,14 @@ pub enum Effect {
         repo_id: RepoId,
         message: String,
         identity: Option<gitcomet_core::commit_identity::CommitIdentity>,
+        hooks: gitcomet_core::services::GitHooks,
         auth: Option<StagedGitAuth>,
     },
     CommitAmend {
         repo_id: RepoId,
         message: String,
         identity: Option<gitcomet_core::commit_identity::CommitIdentity>,
+        hooks: gitcomet_core::services::GitHooks,
         auth: Option<StagedGitAuth>,
     },
 

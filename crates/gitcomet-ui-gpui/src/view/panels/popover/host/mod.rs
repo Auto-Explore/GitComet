@@ -846,6 +846,7 @@ impl PopoverHost {
             change_tracking_view,
             commit_amend_enabled: false,
             commit_push_after_enabled,
+            commit_skip_hooks_enabled: false,
             diff_content_mode,
             diff_whitespace_mode,
             diff_reveal_whitespace_chars,

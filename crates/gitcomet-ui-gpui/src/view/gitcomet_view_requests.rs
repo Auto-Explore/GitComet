@@ -39,6 +39,7 @@ pub(in crate::view) enum RootRequest {
     SetChangeTrackingView(ChangeTrackingView),
     SetCommitAmend(bool),
     SetCommitPushAfter(bool),
+    SetCommitSkipHooks(bool),
     OpenPopoverCentered(PopoverKind),
     OpenFileHistory {
         repo_id: RepoId,
@@ -156,6 +157,9 @@ impl GitCometView {
             RootRequest::SetCommitAmend(enabled) => self.set_commit_amend_enabled(enabled, cx),
             RootRequest::SetCommitPushAfter(enabled) => {
                 self.set_commit_push_after_enabled(enabled, cx)
+            }
+            RootRequest::SetCommitSkipHooks(enabled) => {
+                self.set_commit_skip_hooks_enabled(enabled, cx)
             }
             RootRequest::ReportError(report) => self.report_error(report, cx),
             RootRequest::SetActiveContextMenuInvoker(next) => {

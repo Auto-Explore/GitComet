@@ -131,6 +131,8 @@ pub(in super::super) struct DetailsPaneView {
     pub(in super::super) commit_message_drafts: FxHashMap<RepoId, SharedString>,
     pub(in super::super) commit_amend_enabled: bool,
     pub(in super::super) commit_push_after_enabled: bool,
+    /// `--no-verify` for the commit and the push after it.
+    pub(in super::super) commit_skip_hooks_enabled: bool,
     pub(in super::super) pending_commits: FxHashMap<RepoId, PendingCommit>,
     pending_amend_prefill: Option<RepoId>,
     /// Suggestion (repo and rev) already offered to the commit box, so git's
@@ -604,6 +606,7 @@ impl DetailsPaneView {
             commit_message_drafts: FxHashMap::default(),
             commit_amend_enabled: false,
             commit_push_after_enabled,
+            commit_skip_hooks_enabled: false,
             pending_commits: FxHashMap::default(),
             pending_amend_prefill: None,
             applied_commit_suggestions: rustc_hash::FxHashMap::default(),
@@ -909,6 +912,19 @@ impl DetailsPaneView {
         }
 
         self.commit_push_after_enabled = enabled;
+        cx.notify();
+    }
+
+    pub(in super::super) fn set_commit_skip_hooks_enabled(
+        &mut self,
+        enabled: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.commit_skip_hooks_enabled == enabled {
+            return;
+        }
+
+        self.commit_skip_hooks_enabled = enabled;
         cx.notify();
     }
 
