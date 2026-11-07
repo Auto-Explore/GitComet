@@ -6,7 +6,7 @@ use super::*;
 #[derive(Default)]
 pub(in crate::view) struct HeaderMinimum {
     measure: Option<components::PanelHeaderMeasure>,
-    pub(in crate::view) width: Pixels,
+    width: Pixels,
 }
 
 impl HeaderMinimum {
@@ -1144,5 +1144,59 @@ impl GitCometView {
                 self.accept_large_file_tools_publication(publication, cx);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct Blank;
+
+    impl gpui::Render for Blank {
+        fn render(&mut self, _: &mut Window, _: &mut gpui::Context<Self>) -> impl IntoElement {
+            div()
+        }
+    }
+
+    fn measure(window: &Window, cx: &mut App) -> components::PanelHeaderMeasure {
+        components::PanelHeader::new("header", cx)
+            .tab("tab", "History", None, true, "History")
+            .measure(
+                AppTheme::gitcomet_dark(),
+                ui_scale::UiScale::from_percent(100),
+                window,
+            )
+    }
+
+    /// A header is measured again only when its measure changes, as it does
+    /// in a new UI font. Test glyphs measure alike in every font, so a stale
+    /// width stands in for one measured in the old font.
+    #[gpui::test]
+    fn a_header_minimum_is_measured_again_only_when_its_measure_changes(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let (_view, cx) = cx.add_window_view(|_, _| Blank);
+        cx.update(|window, app| {
+            let mut minimum = HeaderMinimum::default();
+            assert!(minimum.update(Some(measure(window, app)), window));
+            let measured = minimum.width;
+            assert!(measured > px(0.0));
+            minimum.width = px(1.0);
+            assert!(!minimum.update(Some(measure(window, app)), window));
+            assert_eq!(minimum.width, px(1.0), "the same measure keeps the width");
+
+            let fonts = crate::font_preferences::current(app);
+            crate::font_preferences::set_current(
+                app,
+                fonts.ui_font_family,
+                fonts.editor_font_family,
+                !fonts.use_font_ligatures,
+            );
+            assert!(minimum.update(Some(measure(window, app)), window));
+            assert_eq!(minimum.width, measured);
+            assert!(minimum.update(None, window), "a pane without a header");
+            assert_eq!(minimum.width, px(0.0));
+        });
     }
 }
