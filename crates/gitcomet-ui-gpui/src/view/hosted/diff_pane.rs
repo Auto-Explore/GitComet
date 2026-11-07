@@ -678,29 +678,28 @@ impl DiffPaneView {
     }
 
     fn open(&mut self, target: DiffTarget, cx: &mut gpui::Context<Self>) {
-        if !matches!(self.source, PaneSource::Session { .. }) {
-            return;
-        }
-        self.reset(cx);
-        self.pending_target = Some(target.clone());
-        self.open_request = self.open_request.wrapping_add(1);
         let PaneSource::Session { store, repository } = &self.source else {
             return;
         };
+        let (store, repo_id, lifetime) =
+            (store.clone(), repository.repo_id(), repository.lifetime());
+        self.reset(cx);
+        self.pending_target = Some(target.clone());
+        self.open_request = self.open_request.wrapping_add(1);
         let Some(store) = store.upgrade() else {
             return;
         };
         store.dispatch(Msg::DiffSession(DiffSessionMsg::Open {
-            repo_id: repository.repo_id(),
-            lifetime: repository.lifetime(),
+            repo_id,
+            lifetime,
             view: self.view_id,
             target,
             request: Some(self.open_request),
         }));
         if self.options.policy.blame {
             store.dispatch(Msg::DiffSession(DiffSessionMsg::LoadBlame {
-                repo_id: repository.repo_id(),
-                lifetime: repository.lifetime(),
+                repo_id,
+                lifetime,
                 view: self.view_id,
             }));
         }
@@ -733,9 +732,7 @@ impl DiffPaneView {
     }
 
     pub(crate) fn set_encoding(&mut self, encoding: Option<TextEncoding>) {
-        if let PaneSource::Session {
-            store, repository, ..
-        } = &self.source
+        if let PaneSource::Session { store, repository } = &self.source
             && let Some(store) = store.upgrade()
         {
             store.dispatch(Msg::DiffSession(DiffSessionMsg::SetEncoding {
@@ -1003,9 +1000,7 @@ impl Drop for DiffPaneView {
         if let Some(cache) = &self.file_cache {
             cache.cancel();
         }
-        if let PaneSource::Session {
-            store, repository, ..
-        } = &self.source
+        if let PaneSource::Session { store, repository } = &self.source
             && let Some(store) = store.upgrade()
         {
             store.dispatch(Msg::DiffSession(DiffSessionMsg::Close {
@@ -1202,9 +1197,7 @@ impl DiffPaneImpl for HostedDiffPane {
                 });
             }
             if policy.blame
-                && let PaneSource::Session {
-                    store, repository, ..
-                } = &pane.source
+                && let PaneSource::Session { store, repository } = &pane.source
                 && let Some(store) = store.upgrade()
             {
                 store.dispatch(Msg::DiffSession(DiffSessionMsg::LoadBlame {
