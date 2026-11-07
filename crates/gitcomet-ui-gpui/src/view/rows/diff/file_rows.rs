@@ -300,7 +300,6 @@ pub(super) fn render_collapsed_diff_rows(
                                 format!("diff_hunk_menu_{}_{}", repo_id.0, src_ix).into();
                             this.active_context_menu_invoker.as_ref() == Some(&invoker)
                         });
-                    let collapsed_hunk = this.collapsed_diff_hunk_for_src_ix(src_ix);
 
                     collapsed_inline_header_row(
                         theme,
@@ -311,7 +310,6 @@ pub(super) fn render_collapsed_diff_rows(
                         min_width,
                         pinned_hunk_shell_width,
                         pinned_hunk_shell_scroll.clone(),
-                        collapsed_hunk,
                         None,
                         display,
                         None,
@@ -929,7 +927,6 @@ pub(super) fn render_collapsed_diff_split_rows(
                                 format!("diff_hunk_menu_{}_{}", repo_id.0, src_ix).into();
                             this.active_context_menu_invoker.as_ref() == Some(&invoker)
                         });
-                    let collapsed_hunk = this.collapsed_diff_hunk_for_src_ix(src_ix);
 
                     collapsed_split_header_row(
                         theme,
@@ -941,7 +938,6 @@ pub(super) fn render_collapsed_diff_split_rows(
                         min_width,
                         pinned_hunk_shell_width,
                         pinned_hunk_shell_scroll.clone(),
-                        collapsed_hunk,
                         None,
                         display,
                         None,

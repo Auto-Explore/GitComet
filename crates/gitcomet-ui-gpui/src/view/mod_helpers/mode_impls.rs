@@ -1040,6 +1040,13 @@ pub(in crate::view) enum TerminalShutdownAction {
     DeleteWorkspace {
         workspace_id: gitcomet_state::session::WorkspaceId,
     },
+    /// Closes the window's repositories and shows `target` in it, or Home
+    /// without one; the window's workspace stays saved. With `hand_off` the
+    /// released workspace then opens in that window.
+    SwitchWorkspace {
+        target: Option<gitcomet_state::session::WorkspaceId>,
+        hand_off: Option<gpui::WindowId>,
+    },
     QuitApp,
 }
 
@@ -1092,6 +1099,11 @@ pub(in crate::view) enum UnsavedFileEditsAction {
         window_id: gpui::WindowId,
         workspace_id: gitcomet_state::session::WorkspaceId,
     },
+    SwitchWorkspace {
+        window_id: gpui::WindowId,
+        target: Option<gitcomet_state::session::WorkspaceId>,
+        hand_off: Option<gpui::WindowId>,
+    },
     QuitApp,
     MoveRepo {
         window_id: gpui::WindowId,
@@ -1106,7 +1118,10 @@ impl UnsavedFileEditsAction {
     pub(in crate::view) fn moving_repo(&self) -> Option<RepoId> {
         match self {
             Self::MoveRepo { repo_id, .. } => Some(*repo_id),
-            Self::CloseWindow(_) | Self::DeleteWorkspace { .. } | Self::QuitApp => None,
+            Self::CloseWindow(_)
+            | Self::DeleteWorkspace { .. }
+            | Self::SwitchWorkspace { .. }
+            | Self::QuitApp => None,
         }
     }
 }

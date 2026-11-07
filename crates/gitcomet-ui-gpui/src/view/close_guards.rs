@@ -20,6 +20,11 @@ fn retry_close_action(action: UnsavedFileEditsAction, cx: &mut gpui::App) {
         UnsavedFileEditsAction::DeleteWorkspace { workspace_id, .. } => {
             crate::app::delete_workspace(cx, workspace_id)
         }
+        UnsavedFileEditsAction::SwitchWorkspace {
+            window_id,
+            target,
+            hand_off,
+        } => crate::app::request_switch_workspace_by_window_id(cx, window_id, target, hand_off),
         UnsavedFileEditsAction::QuitApp => crate::app::quit_app_or_warn(cx),
         UnsavedFileEditsAction::MoveRepo {
             window_id,
@@ -530,7 +535,8 @@ impl GitCometView {
                     .collect(),
             ),
             TerminalShutdownAction::CloseWindow
-            | TerminalShutdownAction::DeleteWorkspace { .. } => {
+            | TerminalShutdownAction::DeleteWorkspace { .. }
+            | TerminalShutdownAction::SwitchWorkspace { .. } => {
                 (CloseScope::Window, self.state.repos.iter().collect())
             }
             TerminalShutdownAction::QuitApp => {

@@ -159,6 +159,7 @@ pub(super) fn effect_repo_id(effect: &Effect) -> Option<RepoId> {
         | Effect::LoadWorktreeDirty { repo_id, .. }
         | Effect::References(ReferenceEffect::LoadRefMetadata { repo_id })
         | Effect::LoadSubmodules { repo_id }
+        | Effect::LoadSubmoduleChanges { repo_id, .. }
         | Effect::LoadLargeFileSupport { repo_id }
         | Effect::LoadLfsLocks { repo_id }
         | Effect::LoadAnnexWhereis { repo_id, .. }

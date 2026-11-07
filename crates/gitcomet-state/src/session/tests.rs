@@ -2611,6 +2611,56 @@ fn persist_ui_settings_round_trips_auto_save_file_edits() {
 }
 
 #[test]
+fn persist_ui_settings_round_trips_workspace_open_mode() {
+    let dir = unique_session_test_dir("workspace-open-mode");
+    let _ = fs::create_dir_all(&dir);
+    let path = dir.join("session.json");
+
+    // Absent means "not chosen yet", which opens workspaces in new windows.
+    assert_eq!(load_from_path(&path).workspace_open_mode, None);
+
+    persist_ui_settings_to_path(
+        UiSettings {
+            workspace_open_mode: Some("current_window".to_string()),
+            ..UiSettings::default()
+        },
+        &path,
+    )
+    .expect("persist ui settings");
+    assert_eq!(
+        load_from_path(&path).workspace_open_mode.as_deref(),
+        Some("current_window")
+    );
+
+    // A later write that says nothing about the mode keeps it.
+    persist_ui_settings_to_path(
+        UiSettings {
+            diff_word_wrap: Some(true),
+            ..UiSettings::default()
+        },
+        &path,
+    )
+    .expect("persist unrelated ui settings");
+    assert_eq!(
+        load_from_path(&path).workspace_open_mode.as_deref(),
+        Some("current_window")
+    );
+
+    persist_ui_settings_to_path(
+        UiSettings {
+            workspace_open_mode: Some("new_window".to_string()),
+            ..UiSettings::default()
+        },
+        &path,
+    )
+    .expect("persist ui settings");
+    assert_eq!(
+        load_from_path(&path).workspace_open_mode.as_deref(),
+        Some("new_window")
+    );
+}
+
+#[test]
 fn persist_ui_settings_round_trips_security_preferences() {
     let dir = unique_session_test_dir("security-preferences");
     let _ = fs::create_dir_all(&dir);

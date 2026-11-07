@@ -28,9 +28,7 @@ use gpui::{
 #[cfg(target_os = "macos")]
 use gpui::{Menu, MenuItem, OsAction, SystemMenuType};
 use rustc_hash::{FxHashMap, FxHashSet};
-#[cfg(target_os = "macos")]
 use schemars::JsonSchema;
-#[cfg(target_os = "macos")]
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -90,6 +88,15 @@ actions!(
         Quit,
     ]
 );
+
+/// Alt+1…9 while the workspace rail is on: show the rail's workspace in that
+/// slot, counted from 1, in the focused window.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, JsonSchema, Action)]
+#[action(namespace = app_menu)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SwitchToWorkspace {
+    pub(crate) slot: usize,
+}
 
 #[cfg(test)]
 pub(crate) fn bind_text_input_keys_for_test(cx: &mut App) {

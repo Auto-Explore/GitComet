@@ -66,6 +66,9 @@ fn outer_failure_after_hooks(operation: &GitHookOperation) -> bool {
 
 impl GitCometView {
     pub(super) fn sync_workspace_and_registry(&mut self, cx: &mut gpui::Context<Self>) {
+        if self.workspace_switch_holds_sync(cx) {
+            return;
+        }
         let session_repos = session::snapshot_repos_from_state(self.state.as_ref());
         let session_repo_paths = session_repos
             .open_repos

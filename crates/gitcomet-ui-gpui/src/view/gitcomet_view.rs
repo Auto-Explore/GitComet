@@ -692,6 +692,13 @@ impl GitCometView {
                 cx,
             )
         });
+        let workspace_rail = cx.new(|cx| {
+            super::workspace_rail::WorkspaceRail::new(
+                initial_theme,
+                window.window_handle().window_id(),
+                cx,
+            )
+        });
         let toast_host = cx.new(|_cx| ToastHost::new(initial_theme, weak_view.clone()));
         let history_refs_hover_host =
             cx.new(|_cx| HistoryRefsHoverHost::new(initial_theme, weak_view.clone()));
@@ -1178,6 +1185,8 @@ impl GitCometView {
             window_appearance,
             theme: initial_theme,
             title_bar,
+            workspace_rail,
+            pending_workspace_switch: None,
             sidebar_pane,
             diff_renderer,
             main_pane,
@@ -1392,6 +1401,8 @@ impl GitCometView {
         }
         self.title_bar
             .update(cx, |bar, cx| bar.set_theme(theme, cx));
+        self.workspace_rail
+            .update(cx, |rail, cx| rail.set_theme(theme, cx));
         self.sidebar_pane
             .update(cx, |pane, cx| pane.set_theme(theme, cx));
         self.diff_renderer

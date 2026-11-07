@@ -2249,6 +2249,15 @@ pub trait GitRepository: Send + Sync {
     fn unpushed_submodule_pointers(&self) -> Result<Vec<crate::domain::SubmoduleCheckoutUpdate>> {
         Ok(Vec::new())
     }
+
+    /// The first-level submodule checked out at `path` (relative to this
+    /// working tree), opened as a repository of its own, so a parent's tab
+    /// can stage, commit, push and pull inside it.
+    fn open_submodule(&self, _path: &Path) -> Result<Arc<dyn GitRepository>> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "opening a submodule is not implemented for this backend",
+        )))
+    }
 }
 
 fn validate_safe_push_after_commit_target<R: GitRepository + ?Sized>(

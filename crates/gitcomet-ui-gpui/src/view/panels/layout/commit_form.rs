@@ -230,7 +230,7 @@ impl DetailsPaneView {
         }
     }
 
-    pub(super) fn can_submit_commit(&self, message: &str) -> bool {
+    pub(in crate::view) fn can_submit_commit(&self, message: &str) -> bool {
         let Some(repo) = self.active_repo() else {
             return false;
         };
@@ -287,11 +287,28 @@ impl DetailsPaneView {
             .commit_message_input
             .read_with(cx, |input, _| input.text().to_string());
         let amend = self.commit_amend_enabled;
-        if !self.can_submit_commit(&message) {
-            return false;
-        }
+        // While the linked commit panel shows, the changed submodules are in
+        // plain sight: those with staged files commit with the parent, and the
+        // rest stay as they are without asking.
+        let linked = self.active_linked_panel();
+        let linked_children = match &linked {
+            Some(panel) => {
+                let children = self.linked_children(panel, cx);
+                if !self.can_submit_linked_commit(&message, children.as_deref()) {
+                    return false;
+                }
+                children.filter(|children| !children.is_empty())
+            }
+            None => {
+                if !self.can_submit_commit(&message) {
+                    return false;
+                }
+                None
+            }
+        };
         if !past_submodule_guard
             && !amend
+            && linked.is_none()
             && let Some(repo) = self.active_repo()
         {
             let submodules = submodules_left_behind(repo);
@@ -325,18 +342,42 @@ impl DetailsPaneView {
             amend,
             message.trim().to_string().into(),
         );
-        let parent_message = self.active_parent_record_target().map(|_| {
-            self.parent_message_input
-                .read_with(cx, |input, _| input.text().trim().to_string())
-        });
-        pending.parent_message = parent_message.clone().map(SharedString::from);
+        // Recording a submodule-tab commit in the parent: the parent message
+        // box keeps an edit until the commit succeeds, so a failed commit
+        // can be tried again with it.
+        let record = if linked_children.is_none() {
+            self.active_parent_record_target().map(|target| {
+                let parent_message = self
+                    .parent_message_input
+                    .read_with(cx, |input, _| input.text().trim().to_string());
+                (target, parent_message)
+            })
+        } else {
+            None
+        };
+        pending.parent_message = record
+            .as_ref()
+            .map(|(_, parent_message)| SharedString::from(parent_message.clone()));
         self.pending_commits.insert(repo_id, pending);
-        if let Some(parent_message) = parent_message {
-            // The parent message box keeps an edit until the commit
-            // succeeds, so a failed commit can be tried again with it.
+        if let Some(children) = linked_children {
+            self.pending_linked_messages
+                .insert(repo_id, children.clone());
             self.store.dispatch(Msg::CommitLinked {
-                child: repo_id,
-                message: message.trim().to_string(),
+                origin: repo_id,
+                children,
+                parent_message: message.trim().to_string(),
+                push: self.commit_push_after_enabled,
+                // The panel lists every changed submodule: none is left
+                // behind to shelve.
+                shelve: None,
+            });
+        } else if let Some((target, parent_message)) = record {
+            self.store.dispatch(Msg::CommitLinked {
+                origin: repo_id,
+                children: vec![gitcomet_state::model::LinkedChild {
+                    path: target.path,
+                    message: message.trim().to_string(),
+                }],
                 parent_message,
                 push: self.commit_push_after_enabled,
                 shelve,
@@ -393,7 +434,19 @@ impl DetailsPaneView {
             .active_repo()
             .is_some_and(|repo| repo.commit_in_flight > 0);
         let commit_message_text = self.commit_message_input.read(cx).text().to_string();
-        let can_submit_commit = self.can_submit_commit(&commit_message_text);
+        // Built once per draw: the form redraws on every keystroke, and the
+        // toggle shows the changed submodules while the parent commits alone.
+        let changed_submodules = self.active_changed_submodules_panel();
+        let linked = changed_submodules
+            .as_ref()
+            .filter(|panel| self.links_commit(panel));
+        let can_submit_commit = match linked {
+            Some(panel) => {
+                let children = self.linked_children(panel, cx);
+                self.can_submit_linked_commit(&commit_message_text, children.as_deref())
+            }
+            None => self.can_submit_commit(&commit_message_text),
+        };
         let repo_key = self.active_repo_id().map(|id| id.0).unwrap_or(0);
         let icon_color = theme.colors.accent.foreground;
         let icon = |path: &'static str| svg_icon(path, icon_color, scaled_px(14.0));
@@ -405,11 +458,15 @@ impl DetailsPaneView {
         let record_target = form_record_target
             .as_ref()
             .filter(|target| self.records_in_parent(target.child));
-        let (commit_label, commit_tooltip) = commit_button_copy(
-            record_target,
-            self.commit_amend_enabled,
-            self.commit_push_after_enabled,
-        );
+        let (commit_label, commit_tooltip): (SharedString, SharedString) =
+            match linked.map(|panel| linked_commit_label(panel, self.commit_push_after_enabled)) {
+                Some((label, tooltip)) => (label.into(), tooltip.into()),
+                None => commit_button_copy(
+                    record_target,
+                    self.commit_amend_enabled,
+                    self.commit_push_after_enabled,
+                ),
+            };
         let commit_options_invoker: SharedString = "commit_options".into();
         let commit_options_active = self
             .active_context_menu_invoker
@@ -517,12 +574,35 @@ impl DetailsPaneView {
             .gitcomet_tooltip(theme, "Previous commit messages".into());
         let record_section =
             form_record_target.map(|target| self.parent_record_section(target, scaled_px, cx));
+        let linked_toggle = changed_submodules
+            .as_ref()
+            .map(|panel| self.linked_commit_toggle(panel, cx));
+        let push_note = linked
+            .filter(|_| self.commit_push_after_enabled)
+            .and_then(linked_push_note);
+        let body = match linked {
+            Some(panel) => self
+                .linked_commit_panel(panel, commit_message, cx)
+                .into_any_element(),
+            None => commit_message,
+        };
         div()
             .flex()
             .flex_col()
             .gap_2()
-            .child(commit_message)
+            .when_some(linked_toggle, |form, toggle| form.child(toggle))
+            .child(body)
             .when_some(record_section, |form, section| form.child(section))
+            .when_some(push_note, |form, note| {
+                form.child(
+                    div()
+                        .debug_selector(|| "linked_commit_push_note".to_string())
+                        .px_1()
+                        .text_size(theme.ui_text(12.0))
+                        .text_color(theme.colors.foreground.secondary)
+                        .child(note),
+                )
+            })
             .child(
                 div().flex().items_center().justify_end().child(
                     div()
@@ -547,32 +627,15 @@ impl DetailsPaneView {
         let theme = self.theme;
         let repo_id = target.child;
         let checked = !self.record_in_parent_off.contains(&repo_id);
-        let border = if checked {
-            theme.colors.accent.foreground
-        } else {
-            theme.colors.stroke.default
-        };
-        let check_box = div()
-            .flex_none()
-            .size(scaled_px(16.0))
-            .flex()
-            .items_center()
-            .justify_center()
-            .border_1()
-            .border_color(border)
-            .rounded(scaled_px(theme.radii.control * 0.5))
-            .when(checked, |check_box| {
-                check_box
-                    .bg(with_alpha(
-                        theme.colors.accent.foreground,
-                        if theme.is_dark { 0.18 } else { 0.12 },
-                    ))
-                    .child(svg_icon(
-                        "icons/check.svg",
-                        theme.colors.accent.foreground,
-                        scaled_px(10.0),
-                    ))
-            });
+        let check_box = form_check_box(
+            theme,
+            checked,
+            false,
+            false,
+            scaled_px(16.0),
+            scaled_px(10.0),
+            &scaled_px,
+        );
         let toggle = div()
             .id("record_in_parent_toggle")
             .debug_selector(|| "record_in_parent_toggle".to_string())
@@ -633,7 +696,7 @@ impl DetailsPaneView {
                     .child(format!(
                         "A commit now is not recorded in {}: the commit in {} is still being recorded and pushed.",
                         target.parent_name,
-                        self.state.repo_name(running.child)
+                        self.state.repo_name(running.child_tab.unwrap_or(running.parent))
                     )),
             );
         }

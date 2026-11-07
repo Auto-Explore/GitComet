@@ -497,7 +497,8 @@ impl SettingsCategory {
             }
             Self::Workspaces => {
                 "workspaces workspace window group rename name title bar color colour theme \
-                 override delete open repositories"
+                 override delete open repositories open workspaces in new window current window \
+                 rail switch alt shortcut"
             }
             Self::SecurityPrivacy => {
                 "security privacy allowed remote protocols https http ssh git file ftp ftps \
@@ -672,6 +673,7 @@ pub(crate) struct SettingsWindowView {
     diff_tab_size: u8,
     diff_show_line_numbers: bool,
     auto_save_file_edits: bool,
+    workspace_open_mode: crate::workspaces::WorkspaceOpenMode,
     remote_url_policy: RemoteUrlPolicy,
     remote_markdown_image_policy: RemoteMarkdownImagePolicy,
     check_for_updates_on_startup: bool,
@@ -1117,6 +1119,7 @@ impl SettingsWindowView {
         let diff_tab_size = ui_preferences.diff.tab_size;
         let diff_show_line_numbers = ui_preferences.diff.show_line_numbers;
         let auto_save_file_edits = ui_preferences.file_editing.auto_save;
+        let workspace_open_mode = ui_preferences.workspaces.open_mode;
         let remote_url_policy = ui_preferences.security.remote_url_policy;
         let remote_markdown_image_policy = ui_preferences.security.remote_markdown_images;
         let check_for_updates_on_startup = ui_preferences.security.check_for_updates_on_startup;
@@ -1531,6 +1534,7 @@ impl SettingsWindowView {
             diff_tab_size,
             diff_show_line_numbers,
             auto_save_file_edits,
+            workspace_open_mode,
             remote_url_policy,
             remote_markdown_image_policy,
             check_for_updates_on_startup,

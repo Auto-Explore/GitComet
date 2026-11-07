@@ -156,7 +156,8 @@ impl Render for GitCometView {
             .as_ref()
             .is_some_and(|prompt| {
                 let active = self.active_repo_id();
-                active == Some(prompt.child) || active == Some(prompt.parent)
+                prompt.child_tab.is_some_and(|tab| active == Some(tab))
+                    || active == Some(prompt.parent)
             })
             && let Some(prompt) = self.pending_linked_push_prompt.take()
         {
@@ -324,7 +325,27 @@ impl Render for GitCometView {
             ));
         }
 
-        body = body.child(center_content);
+        // The workspace rail renders nothing unless workspaces open in the
+        // current window.
+        body = body.child(
+            div()
+                .flex()
+                .flex_1()
+                .min_h(px(0.0))
+                .w_full()
+                .when(self.view_mode == GitCometViewMode::Normal, |row| {
+                    row.child(self.workspace_rail.clone())
+                })
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .flex_1()
+                        .min_w(px(0.0))
+                        .h_full()
+                        .child(center_content),
+                ),
+        );
 
         if let Some(report) = self.startup_crash_report.clone()
             && self.view_mode == GitCometViewMode::Normal

@@ -14,6 +14,9 @@ pub(super) fn panel(
         TerminalShutdownAction::DeleteWorkspace { .. } => {
             ("Delete workspace?".to_string(), "Delete anyway")
         }
+        TerminalShutdownAction::SwitchWorkspace { .. } => {
+            ("Switch workspace?".to_string(), "Switch anyway")
+        }
         TerminalShutdownAction::CloseRepo { .. } => {
             ("Close repository?".to_string(), "Close anyway")
         }

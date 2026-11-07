@@ -99,6 +99,14 @@ pub(crate) fn open_workspace_in_window(
         activate_gitcomet_window(cx, owner.handle);
         return;
     }
+    // With the rail on, any window shows any workspace: its repositories
+    // close, once its close guards agree, and the workspace opens in place.
+    if crate::workspaces::open_mode(cx).shows_rail()
+        && normal_gitcomet_window_by_id(cx, window_id).is_some()
+    {
+        switch_workspace_in_window(cx, window_id, workspace_id);
+        return;
+    }
     let Some(target) =
         normal_gitcomet_window_by_id(cx, window_id).filter(|target| target.repo_paths.is_empty())
     else {
@@ -119,6 +127,123 @@ pub(crate) fn open_workspace_in_window(
         .update(cx, |view, cx| view.adopt_workspace(workspace, cx));
     activate_gitcomet_window(cx, target.handle);
     cx.activate(true);
+}
+
+/// Alt+1…9 with the rail on: show the rail's workspace in `slot`, counted
+/// from 1, in the focused window.
+pub(super) fn switch_active_window_to_workspace_slot(cx: &mut App, slot: usize) {
+    if !crate::workspaces::open_mode(cx).shows_rail() {
+        return;
+    }
+    let Some(window) = active_normal_gitcomet_window(cx) else {
+        return;
+    };
+    let Some(workspace_id) = crate::workspaces::with_rail_workspaces(cx, |workspaces| {
+        workspaces
+            .get(slot.wrapping_sub(1))
+            .map(|workspace| workspace.id)
+    }) else {
+        return;
+    };
+    switch_workspace_in_window(cx, window.handle.window_id(), workspace_id);
+}
+
+/// Show `workspace_id` in `window_id`. The window's repositories close first,
+/// once its close guards agree. A workspace another window shows is focused
+/// there instead, so each workspace stays in at most one window.
+pub(crate) fn switch_workspace_in_window(
+    cx: &mut App,
+    window_id: gpui::WindowId,
+    workspace_id: session::WorkspaceId,
+) {
+    let windows = live_normal_windows(cx);
+    let Some(target) = windows
+        .iter()
+        .find(|entry| entry.handle.window_id() == window_id)
+    else {
+        return;
+    };
+    if target.workspace_id == Some(workspace_id) {
+        activate_gitcomet_window(cx, target.handle);
+        return;
+    }
+    if let Some(owner) = windows
+        .iter()
+        .find(|entry| entry.workspace_id == Some(workspace_id))
+    {
+        activate_gitcomet_window(cx, owner.handle);
+        return;
+    }
+    if crate::workspaces::workspace(cx, workspace_id).is_none() {
+        return;
+    }
+    let _ = target.view.update(cx, |view, cx| {
+        view.request_switch_workspace(Some(workspace_id), None, cx)
+    });
+}
+
+/// "Move here": the window showing `workspace_id` lets it go, once its close
+/// guards agree, and `window_id` then shows it.
+pub(crate) fn move_workspace_to_window(
+    cx: &mut App,
+    window_id: gpui::WindowId,
+    workspace_id: session::WorkspaceId,
+) {
+    let Some(owner) = live_normal_windows(cx).into_iter().find(|entry| {
+        entry.workspace_id == Some(workspace_id) && entry.handle.window_id() != window_id
+    }) else {
+        switch_workspace_in_window(cx, window_id, workspace_id);
+        return;
+    };
+    let prompted = owner
+        .view
+        .update(cx, |view, cx| {
+            view.request_switch_workspace(None, Some(window_id), cx)
+        })
+        .unwrap_or(false);
+    if prompted {
+        // The prompt lives in the window that holds the workspace.
+        activate_gitcomet_window(cx, owner.handle);
+    }
+}
+
+pub(crate) fn switch_workspace_from_view<T>(
+    cx: &mut gpui::Context<T>,
+    window_id: gpui::WindowId,
+    workspace_id: session::WorkspaceId,
+    move_here: bool,
+) where
+    T: 'static,
+{
+    cx.defer(move |cx| {
+        if move_here {
+            move_workspace_to_window(cx, window_id, workspace_id);
+        } else {
+            switch_workspace_in_window(cx, window_id, workspace_id);
+        }
+    });
+}
+
+/// Leave the window's workspace for Home, keeping the workspace saved.
+pub(crate) fn release_workspace_from_view<T>(cx: &mut gpui::Context<T>, window_id: gpui::WindowId)
+where
+    T: 'static,
+{
+    cx.defer(move |cx| request_switch_workspace_by_window_id(cx, window_id, None, None));
+}
+
+/// Run a switch again for one window, after its unsaved-edits prompt.
+pub(crate) fn request_switch_workspace_by_window_id(
+    cx: &mut App,
+    window_id: gpui::WindowId,
+    target: Option<session::WorkspaceId>,
+    hand_off: Option<gpui::WindowId>,
+) {
+    if let Some(window) = normal_gitcomet_window_by_id(cx, window_id) {
+        let _ = window.view.update(cx, |view, cx| {
+            view.request_switch_workspace(target, hand_off, cx)
+        });
+    }
 }
 
 pub(super) fn activate_or_open_workspace(

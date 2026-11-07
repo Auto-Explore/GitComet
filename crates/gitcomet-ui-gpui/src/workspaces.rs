@@ -19,9 +19,54 @@ pub(crate) struct WorkspaceManager {
 
 impl gpui::Global for WorkspaceManager {}
 
+/// Where opening a workspace shows it: a window of its own, or the window it
+/// is opened from, which then lists every workspace on a rail.
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
+pub(crate) enum WorkspaceOpenMode {
+    #[default]
+    NewWindow,
+    CurrentWindow,
+}
+
+impl WorkspaceOpenMode {
+    pub(crate) const ALL: [Self; 2] = [Self::NewWindow, Self::CurrentWindow];
+
+    pub(crate) fn key(self) -> &'static str {
+        match self {
+            Self::NewWindow => "new_window",
+            Self::CurrentWindow => "current_window",
+        }
+    }
+
+    pub(crate) fn from_key(key: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|mode| mode.key() == key)
+    }
+
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::NewWindow => "New window",
+            Self::CurrentWindow => "Current window",
+        }
+    }
+
+    pub(crate) fn description(self) -> &'static str {
+        match self {
+            Self::NewWindow => "Each workspace gets its own window.",
+            Self::CurrentWindow => {
+                "Shows the workspace rail. Any window can switch to any workspace."
+            }
+        }
+    }
+
+    pub(crate) fn shows_rail(self) -> bool {
+        self == Self::CurrentWindow
+    }
+}
+
 #[derive(Default)]
 struct ManagerState {
     enabled: bool,
+    open_mode: WorkspaceOpenMode,
     writer: Option<Arc<WorkspaceWriter>>,
     workspaces: Vec<Workspace>,
     window_workspaces: FxHashMap<WindowId, WorkspaceId>,
@@ -231,6 +276,51 @@ pub(crate) fn initialize_for_test(cx: &mut App, workspaces: Vec<Workspace>) {
     cx.set_global(WorkspaceManager {
         state: RefCell::new(ManagerState::enabled(workspaces, None)),
     });
+}
+
+/// Where opening a workspace shows it.
+pub(crate) fn open_mode(cx: &App) -> WorkspaceOpenMode {
+    manager(cx).map_or_else(WorkspaceOpenMode::default, |manager| manager.open_mode)
+}
+
+/// Switch how workspaces open. Observers, such as each window's rail, hear of
+/// it; the mode itself is saved with the other preferences.
+pub(crate) fn set_open_mode<C>(cx: &mut C, mode: WorkspaceOpenMode) -> bool
+where
+    C: BorrowMut<App>,
+{
+    edit(cx, |manager| {
+        if !manager.enabled || manager.open_mode == mode {
+            return (false, Change::None);
+        }
+        manager.open_mode = mode;
+        (true, Change::Notify)
+    })
+}
+
+/// Reads the workspaces in the order the rail lists them and Alt+1…9 counts
+/// them: the order they were made in, which switching does not change.
+pub(crate) fn with_rail_workspaces<R>(cx: &App, read: impl FnOnce(&[Workspace]) -> R) -> R {
+    with_workspaces(cx, read)
+}
+
+/// The live windows holding a workspace, numbered from 1 in the order they
+/// opened, so the rail can tell which window shows one.
+pub(crate) fn window_numbers(cx: &App) -> Vec<(WindowId, WorkspaceId, usize)> {
+    let Some(manager) = manager(cx) else {
+        return Vec::new();
+    };
+    let mut windows = manager
+        .window_workspaces
+        .iter()
+        .map(|(window, workspace)| (*window, *workspace))
+        .collect::<Vec<_>>();
+    windows.sort_by_key(|(window, _)| window.as_u64());
+    windows
+        .into_iter()
+        .enumerate()
+        .map(|(index, (window, workspace))| (window, workspace, index + 1))
+        .collect()
 }
 
 /// Queue a write of bounds recorded since the last one.

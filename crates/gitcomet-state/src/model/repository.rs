@@ -190,6 +190,11 @@ pub struct RepoState {
     pub ref_metadata_rev: u64,
     pub submodules: Loadable<Arc<Vec<Submodule>>>,
     pub submodules_rev: u64,
+    /// What each first-level submodule with uncommitted changes holds, for
+    /// the linked commit panel. Read after the submodule list when a row
+    /// reports inner changes; `Ready` and empty when none does.
+    pub submodule_changes: Loadable<Arc<Vec<SubmoduleChanges>>>,
+    pub submodule_changes_rev: u64,
     /// The worktree this checkout is a first-level submodule of, read once
     /// the repository opens. Deeper submodules, worktrees of submodules and
     /// ordinary repositories have none.
@@ -476,6 +481,8 @@ impl RepoState {
             ref_metadata_rev: 0,
             submodules: Loadable::NotLoaded,
             submodules_rev: 0,
+            submodule_changes: Loadable::NotLoaded,
+            submodule_changes_rev: 0,
             submodule_parent: None,
             canonical_workdir: None,
             large_file_support: Loadable::NotLoaded,
@@ -754,6 +761,28 @@ impl RepoState {
         }
         self.ref_metadata = Loadable::NotLoaded;
         self.ref_metadata_rev = self.ref_metadata_rev.wrapping_add(1);
+    }
+
+    pub(crate) fn set_submodule_changes(&mut self, changes: Loadable<Vec<SubmoduleChanges>>) {
+        let changes = loadable_into_arc(changes);
+        if self.submodule_changes == changes {
+            return;
+        }
+        self.submodule_changes = changes;
+        self.submodule_changes_rev = self.submodule_changes_rev.wrapping_add(1);
+    }
+
+    /// First-level submodules whose checkout has uncommitted changes, by path:
+    /// the ones a linked commit from this worktree can commit.
+    pub fn changed_first_level_submodules(&self) -> Vec<PathBuf> {
+        match &self.submodules {
+            Loadable::Ready(rows) => rows
+                .iter()
+                .filter(|row| !row.nested && row.has_inner_changes)
+                .map(|row| row.path.clone())
+                .collect(),
+            _ => Vec::new(),
+        }
     }
 
     pub(crate) fn set_submodules(&mut self, submodules: Loadable<Vec<Submodule>>) {

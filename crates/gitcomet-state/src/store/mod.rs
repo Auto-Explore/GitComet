@@ -551,6 +551,9 @@ impl WorkerLoopContext<'_> {
             }
             | crate::msg::Effect::RecordSubmoduleCommit {
                 repo_id, identity, ..
+            }
+            | crate::msg::Effect::CommitWithSubmodules {
+                repo_id, identity, ..
             } = &mut effect
             {
                 let resolver = self
@@ -560,6 +563,24 @@ impl WorkerLoopContext<'_> {
                     .clone();
                 if let (Some(resolver), Some(repo)) = (resolver, repos.repository(repo_id)) {
                     *identity = resolver(&repo.spec().workdir);
+                }
+            } else if let crate::msg::Effect::CommitSubmodules {
+                repo_id,
+                commits,
+                identities,
+            } = &mut effect
+            {
+                let resolver = self
+                    .commit_identity
+                    .read()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .clone();
+                if let (Some(resolver), Some(repo)) = (resolver, repos.repository(repo_id)) {
+                    let workdir = repo.spec().workdir.clone();
+                    *identities = commits
+                        .iter()
+                        .map(|child| resolver(&workdir.join(&child.path)))
+                        .collect();
                 }
             }
             gitcomet_core::op_trace::record_current(

@@ -164,39 +164,60 @@ pub struct SubmoduleCheckoutPrompt {
     pub risks: Vec<gitcomet_core::domain::SubmoduleCheckoutRisk>,
 }
 
-/// Where a commit made in a submodule tab, recorded in its parent, stands.
+/// Where a linked commit stands.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub enum LinkedCommitStage {
-    /// Committing in the submodule.
-    CommitChild,
-    /// Recording the new submodule commit in the parent.
+    /// Committing in the submodules.
+    CommitChildren,
+    /// Recording the new submodule commits in the parent.
     RecordInParent,
-    /// Pushing the submodule; the parent waits for it.
-    PushChild,
-    /// Pushing the parent after the submodule.
+    /// Pushing the submodules; the parent waits for them.
+    PushChildren,
+    /// Pushing the parent after the submodules.
     PushParent,
-    /// The submodule push was refused; waiting for the user's choice.
-    PushStopped,
-    /// Pulling the submodule before pushing again.
-    ReconcileChild { rebase: bool },
-    /// Recording the rebased submodule commit in the parent's commit.
-    RerecordInParent,
+    /// The push of the submodule at `path` was refused; waiting for the
+    /// user's choice.
+    PushStopped { path: PathBuf },
+    /// Pulling that submodule before pushing again.
+    ReconcileChild { path: PathBuf, rebase: bool },
+    /// Recording that submodule's rebased commit in the parent's commit.
+    RerecordInParent { path: PathBuf },
 }
 
-/// A commit in a first-level submodule tab that the parent records too, and
-/// pushes after the submodule, so the parent never records a commit nobody
-/// else can fetch.
+/// One submodule a linked commit commits, by its path in the parent.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct LinkedChild {
+    pub path: PathBuf,
+    pub message: String,
+}
+
+/// Commits in first-level submodules that their parent worktree records
+/// too, pushed submodules first and the parent last, so the parent never
+/// records a commit nobody else can fetch.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct LinkedCommit {
-    pub child: RepoId,
     pub parent: RepoId,
-    /// The submodule's path in the parent.
-    pub path: PathBuf,
+    /// The submodule tab the commit started in. Its commit, push and pull go
+    /// through that tab, and the parent records the submodule alone. `None`
+    /// when it started in the parent's tab: each submodule is committed from
+    /// there and the parent's commit takes everything staged in it too.
+    pub child_tab: Option<RepoId>,
+    pub children: Vec<LinkedChild>,
     pub parent_message: String,
     pub push: bool,
     pub stage: LinkedCommitStage,
-    /// The parent commit that records the submodule, once made.
+    /// The parent commit that records the submodules, once made.
     pub parent_commit: Option<gitcomet_core::domain::CommitId>,
+}
+
+impl LinkedCommit {
+    /// The submodules' paths in the parent, in commit and push order.
+    pub fn paths(&self) -> Vec<PathBuf> {
+        self.children
+            .iter()
+            .map(|child| child.path.clone())
+            .collect()
+    }
 }
 
 /// The message a parent's commit recording a submodule starts with: the
@@ -214,13 +235,16 @@ pub fn default_parent_message(path: &std::path::Path, child_message: &str) -> St
     }
 }
 
-/// The submodule push of a linked commit was refused, so the parent's push
+/// A submodule push of a linked commit was refused, so the parent's push
 /// is held back.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct LinkedPushPrompt {
     pub generation: u64,
-    pub child: RepoId,
     pub parent: RepoId,
+    /// The refused submodule's path in the parent.
+    pub path: PathBuf,
+    /// Its tab, when the linked commit started there.
+    pub child_tab: Option<RepoId>,
     pub error: String,
 }
 

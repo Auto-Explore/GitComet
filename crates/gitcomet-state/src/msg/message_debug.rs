@@ -688,6 +688,36 @@ impl std::fmt::Debug for InternalMsg {
                 .field("operation", operation)
                 .field("outcome", outcome)
                 .finish(),
+            InternalMsg::SubmodulesCommitted {
+                repo_id,
+                committed,
+                failed,
+            } => f
+                .debug_struct("SubmodulesCommitted")
+                .field("repo_id", repo_id)
+                .field("committed", committed)
+                .field("failed", &failed.as_ref().map(|(path, _)| path))
+                .finish(),
+            InternalMsg::LinkedSubmodulesPushed { repo_id, failed } => f
+                .debug_struct("LinkedSubmodulesPushed")
+                .field("repo_id", repo_id)
+                .field("failed", &failed.as_ref().map(|(path, _)| path))
+                .finish(),
+            InternalMsg::LinkedSubmodulePulled {
+                repo_id,
+                path,
+                error,
+            } => f
+                .debug_struct("LinkedSubmodulePulled")
+                .field("repo_id", repo_id)
+                .field("path", path)
+                .field("ok", &error.is_none())
+                .finish(),
+            InternalMsg::SubmoduleChangesLoaded { repo_id, result } => f
+                .debug_struct("SubmoduleChangesLoaded")
+                .field("repo_id", repo_id)
+                .field("count", &result.as_ref().map(Vec::len).ok())
+                .finish(),
             InternalMsg::SubmoduleRecorded {
                 repo_id,
                 amend,

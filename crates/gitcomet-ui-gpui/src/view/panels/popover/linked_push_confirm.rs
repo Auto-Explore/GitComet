@@ -1,5 +1,5 @@
 use super::*;
-use gitcomet_state::model::{LinkedPushChoice, LinkedPushPrompt};
+use gitcomet_state::model::{LinkedPushChoice, LinkedPushPrompt, submodule_display_name};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum StepState {
@@ -25,43 +25,64 @@ pub(super) struct LinkedPushCopy {
 }
 
 pub(super) fn copy(state: &AppState, prompt: &LinkedPushPrompt) -> LinkedPushCopy {
-    let child = state.repo_name(prompt.child);
+    let child = submodule_display_name(&prompt.path);
     let parent = state.repo_name(prompt.parent);
     let plan = state
         .linked_commit
         .as_ref()
-        .filter(|plan| plan.child == prompt.child);
-    let path = plan
-        .map(|plan| plan.path.display().to_string())
-        .unwrap_or_else(|| child.clone());
+        .filter(|plan| plan.parent == prompt.parent);
+    let paths = plan
+        .map(|plan| plan.paths())
+        .filter(|paths| paths.contains(&prompt.path))
+        .unwrap_or_else(|| vec![prompt.path.clone()]);
     let recorded = plan
         .and_then(|plan| plan.parent_commit.as_ref())
         .map(short_commit);
-    let mut steps = vec![
-        LinkedPushStep {
+    let recorded_names = paths
+        .iter()
+        .map(|path| submodule_display_name(path))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let mut steps = paths
+        .iter()
+        .map(|path| LinkedPushStep {
             state: StepState::Done,
-            label: format!("Commit {path}"),
+            label: format!("Commit {}", path.display()),
             detail: None,
-        },
-        LinkedPushStep {
-            state: StepState::Done,
-            label: format!("Commit {parent}"),
-            detail: Some(match &recorded {
-                Some(commit) => format!("{commit} · records {child}"),
-                None => format!("records {child}"),
-            }),
-        },
-    ];
+        })
+        .collect::<Vec<_>>();
     steps.push(LinkedPushStep {
-        state: StepState::Refused,
-        label: format!("Push {path}"),
-        detail: prompt
-            .error
-            .lines()
-            .map(str::trim)
-            .find(|line| !line.is_empty())
-            .map(str::to_string),
+        state: StepState::Done,
+        label: format!("Commit {parent}"),
+        detail: Some(match &recorded {
+            Some(commit) => format!("{commit} · records {recorded_names}"),
+            None => format!("records {recorded_names}"),
+        }),
     });
+    let refused = paths
+        .iter()
+        .position(|path| *path == prompt.path)
+        .unwrap_or_default();
+    for (ix, path) in paths.iter().enumerate() {
+        let (state, detail) = match ix.cmp(&refused) {
+            std::cmp::Ordering::Less => (StepState::Done, None),
+            std::cmp::Ordering::Equal => (
+                StepState::Refused,
+                prompt
+                    .error
+                    .lines()
+                    .map(str::trim)
+                    .find(|line| !line.is_empty())
+                    .map(str::to_string),
+            ),
+            std::cmp::Ordering::Greater => (StepState::HeldBack, None),
+        };
+        steps.push(LinkedPushStep {
+            state,
+            label: format!("Push {}", path.display()),
+            detail,
+        });
+    }
     steps.push(LinkedPushStep {
         state: StepState::HeldBack,
         label: format!("Push {parent}"),
@@ -70,7 +91,7 @@ pub(super) fn copy(state: &AppState, prompt: &LinkedPushPrompt) -> LinkedPushCop
     LinkedPushCopy {
         title: format!("Push stopped at {child}"),
         body: format!(
-            "Submodule first, parent last, so {parent} never records a commit others cannot fetch."
+            "Submodules first, parent last, so {parent} never records a commit others cannot fetch."
         ),
         steps,
         note: format!(
@@ -213,7 +234,7 @@ pub(super) fn panel(
 mod tests {
     use super::*;
     use gitcomet_core::domain::{CommitId, RepoSpec};
-    use gitcomet_state::model::{LinkedCommit, LinkedCommitStage, RepoState};
+    use gitcomet_state::model::{LinkedChild, LinkedCommit, LinkedCommitStage, RepoState};
     use std::path::PathBuf;
 
     fn state() -> AppState {
@@ -231,12 +252,17 @@ mod tests {
             },
         ));
         state.linked_commit = Some(LinkedCommit {
-            child: RepoId(2),
             parent: RepoId(1),
-            path: PathBuf::from("fixtures/syntax_test"),
+            child_tab: Some(RepoId(2)),
+            children: vec![LinkedChild {
+                path: PathBuf::from("fixtures/syntax_test"),
+                message: "Add fixtures".into(),
+            }],
             parent_message: "Update fixtures/syntax_test".into(),
             push: true,
-            stage: LinkedCommitStage::PushStopped,
+            stage: LinkedCommitStage::PushStopped {
+                path: PathBuf::from("fixtures/syntax_test"),
+            },
             parent_commit: Some(CommitId("7d0a5b1ffff".into())),
         });
         state
@@ -247,8 +273,9 @@ mod tests {
         let state = state();
         let prompt = LinkedPushPrompt {
             generation: 1,
-            child: RepoId(2),
             parent: RepoId(1),
+            path: PathBuf::from("fixtures/syntax_test"),
+            child_tab: Some(RepoId(2)),
             error: "\n ! [rejected] main -> main (fetch first)\n".into(),
         };
         let copy = copy(&state, &prompt);
@@ -277,5 +304,65 @@ mod tests {
             Some("! [rejected] main -> main (fetch first)")
         );
         assert!(copy.note.starts_with("Nothing was pushed for GitComet."));
+    }
+
+    #[test]
+    fn a_refused_push_among_several_submodules_marks_the_ones_after_it_held_back() {
+        let mut state = state();
+        state.linked_commit = Some(LinkedCommit {
+            parent: RepoId(1),
+            child_tab: None,
+            children: vec![
+                LinkedChild {
+                    path: PathBuf::from("fixtures/syntax_test"),
+                    message: "a".into(),
+                },
+                LinkedChild {
+                    path: PathBuf::from("vendor/ui-kit"),
+                    message: "b".into(),
+                },
+                LinkedChild {
+                    path: PathBuf::from("vendor/icons"),
+                    message: "c".into(),
+                },
+            ],
+            parent_message: "Update".into(),
+            push: true,
+            stage: LinkedCommitStage::PushStopped {
+                path: PathBuf::from("vendor/ui-kit"),
+            },
+            parent_commit: None,
+        });
+        let prompt = LinkedPushPrompt {
+            generation: 1,
+            parent: RepoId(1),
+            path: PathBuf::from("vendor/ui-kit"),
+            child_tab: None,
+            error: "rejected".into(),
+        };
+        let copy = copy(&state, &prompt);
+        assert_eq!(copy.title, "Push stopped at ui-kit");
+        let labels = copy
+            .steps
+            .iter()
+            .map(|step| (step.state, step.label.as_str()))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            labels,
+            vec![
+                (StepState::Done, "Commit fixtures/syntax_test"),
+                (StepState::Done, "Commit vendor/ui-kit"),
+                (StepState::Done, "Commit vendor/icons"),
+                (StepState::Done, "Commit GitComet"),
+                (StepState::Done, "Push fixtures/syntax_test"),
+                (StepState::Refused, "Push vendor/ui-kit"),
+                (StepState::HeldBack, "Push vendor/icons"),
+                (StepState::HeldBack, "Push GitComet"),
+            ]
+        );
+        assert_eq!(
+            copy.steps[3].detail.as_deref(),
+            Some("records syntax_test, ui-kit, icons")
+        );
     }
 }

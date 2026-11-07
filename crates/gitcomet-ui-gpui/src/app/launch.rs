@@ -621,6 +621,13 @@ pub(super) fn open_initial_gitcomet_windows(
     let ui_session = session::load();
     let all_workspaces = ui_session.workspaces.clone();
     crate::workspaces::initialize(cx, all_workspaces.clone());
+    let open_mode = ui_session
+        .workspace_open_mode
+        .as_deref()
+        .and_then(crate::workspaces::WorkspaceOpenMode::from_key)
+        .unwrap_or_default();
+    crate::workspaces::set_open_mode(cx, open_mode);
+    refresh_workspace_switch_key_bindings(cx);
     open_initial_gitcomet_windows_after_workspace_initialization(
         cx,
         backend,
