@@ -573,10 +573,11 @@ impl DiffPaneView {
     }
 
     pub(crate) fn set_target(&mut self, target: DiffTarget, cx: &mut gpui::Context<Self>) {
+        // `==` ignores the rename source, which the old side loads from.
         if !matches!(self.source, PaneSource::Session { .. })
-            || self
-                .target(cx)
-                .is_some_and(|shown| shown.eq_with_old_path(&target))
+            || self.target(cx).is_some_and(|shown| {
+                shown == target && shown.old_file_path() == target.old_file_path()
+            })
         {
             return;
         }

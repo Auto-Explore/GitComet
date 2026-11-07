@@ -1939,6 +1939,8 @@ impl DiffRenderer {
         );
     }
 
+    /// Shows `target` loading until the next input: a hosted pane sets it
+    /// and feeds input only once its store answered the open.
     pub(in crate::view) fn set_pending_target(
         &mut self,
         target: DiffTarget,
@@ -1959,14 +1961,7 @@ impl DiffRenderer {
         cx: &mut gpui::Context<Self>,
     ) -> bool {
         let fingerprint = Self::notify_fingerprint_for(&next);
-        let resolved_pending = self.pending_target.as_ref().is_some_and(|pending| {
-            next.diff()
-                .and_then(|diff| diff.diff_target.as_ref())
-                .is_some_and(|target| target.eq_with_old_path(pending))
-        });
-        if resolved_pending {
-            self.pending_target = None;
-        }
+        let resolved_pending = self.pending_target.take().is_some();
         if fingerprint == self.notify_fingerprint && !resolved_pending {
             let next_repositories: &[RepoState] = if self.hosted_decor.is_some() {
                 next.repository().map_or(&[], std::slice::from_ref)

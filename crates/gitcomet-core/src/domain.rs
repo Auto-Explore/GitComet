@@ -1270,12 +1270,6 @@ impl DiffTarget {
         }
     }
 
-    /// Equal with the same rename source too, which `==` ignores but the
-    /// old side loads from.
-    pub fn eq_with_old_path(&self, other: &Self) -> bool {
-        self == other && self.old_file_path() == other.old_file_path()
-    }
-
     /// The single file this target shows, if it shows one.
     pub fn file_path(&self) -> Option<&std::path::Path> {
         match self {

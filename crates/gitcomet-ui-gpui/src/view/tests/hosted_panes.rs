@@ -910,9 +910,10 @@ fn read_only_environment(
 
 /// A session closed before the pane opened its file again still names that
 /// file; a snapshot of it, published before the store reduces the open, does
-/// not answer the open.
+/// not answer the open. One that echoes the open does, closed again or not,
+/// for the pane and its renderer alike.
 #[gpui::test]
-fn a_closed_session_from_before_an_open_does_not_answer_it(cx: &mut gpui::TestAppContext) {
+fn only_a_session_echoing_an_open_answers_it(cx: &mut gpui::TestAppContext) {
     use crate::view::hosted::diff_pane::{DiffPaneView, HostedDiffPane};
     use gitcomet_state::diff_session::DiffViewId;
     let (_dir, store, view, cx) = open_repository(cx);
@@ -962,11 +963,28 @@ fn a_closed_session_from_before_an_open_does_not_answer_it(cx: &mut gpui::TestAp
 
     cx.update(|_, app| pane.set_target(target.clone(), app));
     closed.rev += 1;
-    Arc::make_mut(&mut state.repos[0].diff_sessions).insert(pane_id, closed);
-    publish(cx, &view, Arc::new(state));
+    Arc::make_mut(&mut state.repos[0].diff_sessions).insert(pane_id, closed.clone());
+    publish(cx, &view, Arc::new(state.clone()));
     cx.update(|_, app| {
         assert_eq!(pane.target(app), Some(target.clone()));
         assert!(pane.is_loading(app));
+    });
+
+    // The store reduced the second open and a close after it.
+    closed.open_request = Some(2);
+    closed.rev += 1;
+    Arc::make_mut(&mut state.repos[0].diff_sessions).insert(pane_id, closed);
+    publish(cx, &view, Arc::new(state));
+    let renderer = hosted_renderer(cx, &pane);
+    cx.update(|_, app| {
+        assert_eq!(pane.target(app), None);
+        assert!(!pane.is_loading(app));
+        let renderer = renderer.read(app);
+        assert_eq!(renderer.rendered_diff_target(), None);
+        assert!(!matches!(
+            renderer.rendered_patch_diff_loadable(),
+            Some(Loadable::Loading)
+        ));
     });
 }
 
@@ -1080,6 +1098,7 @@ fn retargeting_ignores_old_notifications_and_clears_files_before_loading(
         .unwrap();
     // The store reduces the pane's second open.
     session.target = target("b.rs");
+    session.diff_target = Some(target("b.rs"));
     session.open_request = Some(2);
     session.rev += 1;
     session.diff = Loadable::Loading;
