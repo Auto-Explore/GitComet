@@ -492,7 +492,8 @@ impl DetailsPaneView {
             .id(("commit_message_container", repo_key))
             .w_full()
             .min_w(px(0.0))
-            .child(self.commit_message_input.clone());
+            .child(self.commit_message_input.clone())
+            .into_any_element();
         let commit_main = components::Button::new("commit", commit_label)
             .start_slot(if commit_in_flight {
                 spinner(("commit_spinner", repo_key))
