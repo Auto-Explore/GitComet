@@ -82,7 +82,7 @@ pub use repository_badge::{
     repository_initials, repository_initials_box,
 };
 pub use resize_grip::{ResizeGripAxis, resize_grip, resize_grip_hover_tint};
-pub use segmented_control::{Segment, SegmentedControl, SegmentedMeasure};
+pub use segmented_control::{Segment, SegmentedControl};
 pub use settings_rows::{
     SETTINGS_NAV_COLUMN_WIDTH_PX, settings_card, settings_card_with_action,
     settings_detail_container, settings_disabled_toggle_row, settings_dropdown_background,

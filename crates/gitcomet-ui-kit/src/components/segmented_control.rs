@@ -79,7 +79,7 @@ impl Segment {
 /// equal measures give equal widths, so a caller may keep a width until the
 /// measure changes.
 #[derive(Clone, PartialEq)]
-pub struct SegmentedMeasure {
+pub(super) struct SegmentedMeasure {
     style: gpui::TextStyle,
     rem: gpui::Pixels,
     pub(super) scale: UiScale,
@@ -140,7 +140,7 @@ impl SegmentedMeasure {
 
     /// The narrowest the control lays out: unselected segments folded to
     /// their icons.
-    pub fn minimum_width(&self, window: &Window) -> gpui::Pixels {
+    pub(super) fn minimum_width(&self, window: &Window) -> gpui::Pixels {
         self.track_spacing()
             + self
                 .metrics(window)
@@ -186,7 +186,12 @@ impl SegmentedControl {
     }
 
     /// Everything the control's widths are measured from.
-    pub fn measure(&self, theme: AppTheme, scale: UiScale, window: &Window) -> SegmentedMeasure {
+    pub(super) fn measure(
+        &self,
+        theme: AppTheme,
+        scale: UiScale,
+        window: &Window,
+    ) -> SegmentedMeasure {
         let mut style = window.text_style();
         style.font_size = theme.ui_text(FONT_SIZE_PX).into();
         if let Some(font) = &self.font {
@@ -211,15 +216,6 @@ impl SegmentedControl {
                 })
                 .collect(),
         }
-    }
-
-    pub fn minimum_width(
-        &self,
-        theme: AppTheme,
-        scale: UiScale,
-        window: &mut Window,
-    ) -> gpui::Pixels {
-        self.measure(theme, scale, window).minimum_width(window)
     }
 
     /// The control, calling `on_select` with a segment's index when it is
