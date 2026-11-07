@@ -848,7 +848,6 @@ impl ViewNavigation {
 /// change folded into the current step.
 fn view_navigation(msg: &Msg) -> Option<(RepoId, ViewNavigation)> {
     use crate::model::ViewNavDir::{Back, Forward};
-    let replay = ViewNavigation::Replay;
     let navigation = match msg {
         Msg::SelectDiff { repo_id, .. }
         | Msg::SelectConflictDiff { repo_id, .. }
@@ -871,10 +870,10 @@ fn view_navigation(msg: &Msg) -> Option<(RepoId, ViewNavigation)> {
         | Msg::ResetBrowseToLive { repo_id, .. }
         | Msg::OpenInlineSubmoduleDiff { repo_id, .. }
         | Msg::SelectInlineSubmoduleDiff { repo_id, .. } => (*repo_id, ViewNavigation::Step),
-        Msg::GlobalNavBack { repo_id } => (*repo_id, replay(NavHistory::Main, Back)),
-        Msg::GlobalNavForward { repo_id } => (*repo_id, replay(NavHistory::Main, Forward)),
-        Msg::ViewerNavBack { repo_id } => (*repo_id, replay(NavHistory::Viewer, Back)),
-        Msg::ViewerNavForward { repo_id } => (*repo_id, replay(NavHistory::Viewer, Forward)),
+        Msg::GlobalNavBack { repo_id } => (*repo_id, ViewNavigation::Replay(NavHistory::Main, Back)),
+        Msg::GlobalNavForward { repo_id } => (*repo_id, ViewNavigation::Replay(NavHistory::Main, Forward)),
+        Msg::ViewerNavBack { repo_id } => (*repo_id, ViewNavigation::Replay(NavHistory::Viewer, Back)),
+        Msg::ViewerNavForward { repo_id } => (*repo_id, ViewNavigation::Replay(NavHistory::Viewer, Forward)),
         Msg::SelectCommitMulti { repo_id, .. }
         | Msg::IndexedHistory(crate::indexed_history::IndexedHistoryMsg::Select {
             repo_id, ..
