@@ -256,20 +256,28 @@ fn choosing_the_file_shown_again_is_a_canvas_request_and_a_reload_is_not() {
 }
 
 #[test]
-fn back_forward_and_reveals_ask_for_the_canvas_but_a_reveals_answer_does_not() {
+fn a_step_back_or_forward_and_a_reveal_ask_for_the_canvas_but_answers_do_not() {
     let repo_id = RepoId(1);
     let mut state = available_state_with_repo(repo_id);
     let requests = |state: &AppState| repo(state, repo_id).navigation.canvas_requests;
+    let select = |path: &str| Msg::SelectDiff {
+        repo_id,
+        target: DiffTarget::working_tree(std::path::PathBuf::from(path), DiffArea::Unstaged),
+    };
     for (msg, expected) in [
-        (Msg::GlobalNavBack { repo_id }, 1),
-        (Msg::GlobalNavForward { repo_id }, 2),
-        (Msg::ViewerNavBack { repo_id }, 3),
+        (select("a.txt"), 1),
+        (select("b.txt"), 2),
+        (Msg::GlobalNavBack { repo_id }, 3),
+        (Msg::GlobalNavForward { repo_id }, 4),
+        // Nothing ahead to step to, and no file versions to step through.
+        (Msg::GlobalNavForward { repo_id }, 4),
+        (Msg::ViewerNavBack { repo_id }, 4),
         (
             Msg::RevealCommit {
                 repo_id,
                 reference: CommitId("abc".into()),
             },
-            4,
+            5,
         ),
         // Answered late, after the user may have moved on.
         (
@@ -280,12 +288,13 @@ fn back_forward_and_reveals_ask_for_the_canvas_but_a_reveals_answer_does_not() {
                     gitcomet_core::error::ErrorKind::Backend("unknown revision".to_string()),
                 )),
             }),
-            4,
+            5,
         ),
-        (Msg::ClearDiffSelection { repo_id }, 4),
+        (Msg::ClearDiffSelection { repo_id }, 5),
     ] {
+        let label = format!("{msg:?}");
         dispatch(&mut state, msg);
-        assert_eq!(requests(&state), expected);
+        assert_eq!(requests(&state), expected, "after {label}");
     }
 }
 

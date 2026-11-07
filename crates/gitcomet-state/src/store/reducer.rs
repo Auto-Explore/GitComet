@@ -648,9 +648,13 @@ pub(super) fn reduce_prepared(
         reconcile_active_nav_history(state, false);
     }
 
+    let canvas_request = navigation.and_then(|(repo_id, kind)| {
+        let repo = state.repos.iter().find(|repo| repo.id == repo_id)?;
+        kind.requests_canvas(&repo.navigation).then_some(repo_id)
+    });
     let mut effects = reduce_inner(inputs, repos, id_alloc, state, msg);
-    if let Some((repo_id, _)) = navigation.filter(|(_, kind)| kind.requests_canvas())
-        && let Some(repo) = state.repos.iter_mut().find(|repo| repo.id == repo_id)
+    if let Some(repo) =
+        canvas_request.and_then(|repo_id| state.repos.iter_mut().find(|repo| repo.id == repo_id))
     {
         repo.navigation.canvas_requests = repo.navigation.canvas_requests.wrapping_add(1);
     }
@@ -826,8 +830,17 @@ impl ViewNavigation {
         !matches!(self, Self::Replay(NavHistory::Main, _))
     }
 
-    fn requests_canvas(self) -> bool {
-        matches!(self, Self::Step | Self::Request | Self::Replay(..))
+    /// Back and Forward ask only when their history has a step that way;
+    /// read before the step is taken.
+    fn requests_canvas(self, navigation: &crate::model::RepoNavigationState) -> bool {
+        match self {
+            Self::Step | Self::Request => true,
+            Self::Replay(NavHistory::Main, dir) => navigation.main_history.peek_step(dir).is_some(),
+            Self::Replay(NavHistory::Viewer, dir) => {
+                navigation.view_history.peek_step(dir).is_some()
+            }
+            Self::Resolved => false,
+        }
     }
 }
 
