@@ -174,6 +174,17 @@ fn collapsed_hunk_header_colors(
     (Some(focus_wash), theme.colors.foreground.secondary)
 }
 
+/// Reveal chevrons and the plus marker take the theme's accent so they stand
+/// out from the quiet separator; dimmed when nothing is left to reveal.
+fn collapsed_hunk_reveal_button_color(theme: AppTheme, hidden_rows: usize) -> gpui::Rgba {
+    let accent = theme.colors.accent.foreground;
+    if hidden_rows > 0 {
+        accent
+    } else {
+        with_alpha(accent, 0.45)
+    }
+}
+
 /// Hit box for a collapsed-hunk reveal chevron. An editor row, not a chrome
 /// row: follows the editor line height, not the density, and caps out.
 fn collapsed_hunk_reveal_button_size(theme: AppTheme, ui_scale_percent: u32) -> Pixels {
@@ -770,11 +781,7 @@ pub(super) fn collapsed_inline_header_row(
                     cx,
                 );
             });
-            let button_color = if hidden_rows > 0 {
-                text_color
-            } else {
-                with_alpha(text_color, 0.45)
-            };
+            let button_color = collapsed_hunk_reveal_button_color(theme, hidden_rows);
             let controls = match expansion_kind {
                 CollapsedDiffExpansionKind::Up => div()
                     .flex()
@@ -1335,11 +1342,7 @@ pub(super) fn collapsed_split_header_row(
                     cx,
                 );
             });
-            let button_color = if hidden_rows > 0 {
-                text_color
-            } else {
-                with_alpha(text_color, 0.45)
-            };
+            let button_color = collapsed_hunk_reveal_button_color(theme, hidden_rows);
             let controls = match expansion_kind {
                 CollapsedDiffExpansionKind::Up => div()
                     .flex()
