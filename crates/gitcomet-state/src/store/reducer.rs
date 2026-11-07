@@ -616,8 +616,8 @@ pub(super) fn reduce_prepared(
         msg,
         Msg::GlobalNavBack { .. } | Msg::GlobalNavForward { .. }
     );
-    let navigated = view_navigation_repo(&msg);
-    let push = navigated.is_some();
+    let navigation = view_navigation(&msg);
+    let push = navigation.is_some_and(|(_, kind)| kind.pushes());
     let selection_request = match &msg {
         Msg::SelectCommit {
             repo_id,
@@ -652,10 +652,10 @@ pub(super) fn reduce_prepared(
     }
 
     let mut effects = reduce_inner(inputs, repos, id_alloc, state, msg);
-    if let Some(repo) =
-        navigated.and_then(|repo_id| state.repos.iter_mut().find(|repo| repo.id == repo_id))
+    if let Some((repo_id, _)) = navigation.filter(|(_, kind)| kind.requests_canvas())
+        && let Some(repo) = state.repos.iter_mut().find(|repo| repo.id == repo_id)
     {
-        repo.navigation.view_requests = repo.navigation.view_requests.wrapping_add(1);
+        repo.navigation.canvas_requests = repo.navigation.canvas_requests.wrapping_add(1);
     }
     track_sequencer_effects(state, &effects);
     effects::follow_history_selection(state, &mut effects);
@@ -792,13 +792,35 @@ fn finalize_reduced_state(state: &mut AppState, nav_push: Option<bool>) {
     }
 }
 
-/// The repository whose main view `msg` navigates, when it is a
-/// user-initiated navigation that should create a new global back/forward step
-/// (as opposed to a background change folded into the current step).
-/// `GlobalNav*` replays are handled separately and never reach here as a
-/// "push".
-fn view_navigation_repo(msg: &Msg) -> Option<RepoId> {
-    match msg {
+/// How a message moves its repository's main view.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ViewNavigation {
+    /// The user goes to a view: a new global back/forward step, and a request
+    /// for the repository's canvas.
+    Step,
+    /// The user asks for the canvas without a step of its own: Back and
+    /// Forward replay steps, and the other selections fold into the current
+    /// one.
+    Request,
+    /// A view asked for earlier arrives: its step, but the ask already
+    /// counted.
+    Resolved,
+}
+
+impl ViewNavigation {
+    fn pushes(self) -> bool {
+        matches!(self, Self::Step | Self::Resolved)
+    }
+
+    fn requests_canvas(self) -> bool {
+        matches!(self, Self::Step | Self::Request)
+    }
+}
+
+/// How `msg` moves which repository's main view, as opposed to a background
+/// change folded into the current step.
+fn view_navigation(msg: &Msg) -> Option<(RepoId, ViewNavigation)> {
+    let navigation = match msg {
         Msg::SelectDiff { repo_id, .. }
         | Msg::SelectConflictDiff { repo_id, .. }
         | Msg::SelectCommit { repo_id, .. }
@@ -817,14 +839,28 @@ fn view_navigation_repo(msg: &Msg) -> Option<RepoId> {
         | Msg::OpenFileAtCommit { repo_id, .. }
         | Msg::ShowFileChangesAtCommit { repo_id, .. }
         | Msg::BrowseRepositoryAtCommit { repo_id, .. }
-        // A reveal moves the main view when its reference resolves, not
-        // when it is asked for.
-        | Msg::Internal(crate::msg::InternalMsg::CommitRevealResolved { repo_id, .. })
         | Msg::ResetBrowseToLive { repo_id, .. }
         | Msg::OpenInlineSubmoduleDiff { repo_id, .. }
-        | Msg::SelectInlineSubmoduleDiff { repo_id, .. } => Some(*repo_id),
-        _ => None,
-    }
+        | Msg::SelectInlineSubmoduleDiff { repo_id, .. } => (*repo_id, ViewNavigation::Step),
+        Msg::GlobalNavBack { repo_id }
+        | Msg::GlobalNavForward { repo_id }
+        // The file viewer's own back/forward steps a separate viewer-level
+        // stack, so it does not pollute the global history.
+        | Msg::ViewerNavBack { repo_id }
+        | Msg::ViewerNavForward { repo_id }
+        | Msg::SelectCommitMulti { repo_id, .. }
+        | Msg::IndexedHistory(crate::indexed_history::IndexedHistoryMsg::Select {
+            repo_id, ..
+        })
+        | Msg::RevealCommit { repo_id, .. } => (*repo_id, ViewNavigation::Request),
+        // A reveal moves the main view when its reference resolves, not when
+        // it is asked for; a stale or failed answer moves nothing.
+        Msg::Internal(crate::msg::InternalMsg::CommitRevealResolved { repo_id, .. }) => {
+            (*repo_id, ViewNavigation::Resolved)
+        }
+        _ => return None,
+    };
+    Some(navigation)
 }
 
 /// Sync the active repo's global navigation history against the current

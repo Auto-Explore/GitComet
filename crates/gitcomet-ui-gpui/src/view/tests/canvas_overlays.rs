@@ -452,6 +452,7 @@ fn choosing_a_commit_or_file_hides_the_overlay_but_a_reload_does_not(
         PathBuf::from("a.txt"),
         DiffArea::Unstaged,
     ));
+    repo.history_state.selected_commit = Some(CommitId("c0ffee".into()));
     let mut current = (*state(vec![repo], RepoId(1))).clone();
     let mut opened = open(cx, Arc::new(current.clone()));
     opened.show();
@@ -473,20 +474,34 @@ fn choosing_a_commit_or_file_hides_the_overlay_but_a_reload_does_not(
     assert!(opened.is_shown(), "a reload is not a navigation");
     assert!(opened.drawn("example_review_overlay"));
 
+    // A reloaded history page checks the selection again, and a rename on
+    // disk moves the open file; the user asked for neither.
+    let repo = &mut current.repos[0];
+    repo.history_state.selected_commit_rev += 1;
+    repo.diff_state.diff_target = Some(DiffTarget::working_tree(
+        PathBuf::from("renamed.txt"),
+        DiffArea::Unstaged,
+    ));
+    repo.diff_state.diff_target_rev += 1;
+    opened.push(Arc::new(current.clone()));
+    assert!(opened.is_shown(), "a background change is not a navigation");
+
     let repo = &mut current.repos[0];
     repo.diff_state.diff_target = Some(DiffTarget::working_tree(
         PathBuf::from("b.txt"),
         DiffArea::Unstaged,
     ));
     repo.diff_state.diff_target_rev += 1;
+    repo.navigation.canvas_requests += 1;
     opened.push(Arc::new(current.clone()));
     assert!(!opened.is_shown(), "choosing a file asks for the canvas");
     assert!(!opened.drawn("example_review_overlay"));
 
     opened.show();
     let repo = &mut current.repos[0];
-    repo.history_state.selected_commit = Some(CommitId("c0ffee".into()));
+    repo.history_state.selected_commit = Some(CommitId("decaf".into()));
     repo.history_state.selected_commit_rev += 1;
+    repo.navigation.canvas_requests += 1;
     opened.push(Arc::new(current.clone()));
     assert!(!opened.is_shown(), "choosing a commit asks for the canvas");
 }
