@@ -886,6 +886,90 @@ fn disposing_a_hosted_editor_keeps_its_pending_write_receipt(cx: &mut gpui::Test
     );
 }
 
+/// A hosted pane's environment in `view`'s window, without staging or saving.
+fn read_only_environment(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<GitCometView>,
+) -> crate::view::hosted::environment::DiffPaneEnvironment {
+    cx.update(|window, app| {
+        use crate::view::hosted::environment::{DiffPaneEnvironment, DiffPreferences};
+        use crate::view::panes::diff::services::{DiffCommands, DiffServices};
+        let root = view.read(app);
+        DiffPaneEnvironment {
+            services: DiffServices {
+                store: crate::view::pane_store::PaneStore::read_only(),
+                commands: DiffCommands::default(),
+                documents: root.ui_model.read(app).documents.clone(),
+                tooltip: root.tooltip_host.downgrade(),
+            },
+            preferences: DiffPreferences::Window(root.ui_model.downgrade()),
+            window: window.window_handle(),
+        }
+    })
+}
+
+/// A session closed before the pane opened its file again still names that
+/// file; a snapshot of it, published before the store reduces the open, does
+/// not answer the open.
+#[gpui::test]
+fn a_closed_session_from_before_an_open_does_not_answer_it(cx: &mut gpui::TestAppContext) {
+    use crate::view::hosted::diff_pane::{DiffPaneView, HostedDiffPane};
+    use gitcomet_state::diff_session::DiffViewId;
+    let (_dir, store, view, cx) = open_repository(cx);
+    let host = cx.update(|_, app| view.read(app).extension_window.as_ref().unwrap().host());
+    let repository = cx.update(|_, app| host.active_repository(app).unwrap().unwrap());
+    let target = DiffTarget::working_tree("a.rs".into(), DiffArea::Unstaged);
+    let seed = cx.update(|_, app| {
+        host.create_diff_pane(&repository, target.clone(), DiffPaneOptions::default(), app)
+            .unwrap()
+    });
+    settle(cx, &view, &store, "seed content", |cx| {
+        cx.update(|_, app| !seed.is_loading(app))
+    });
+    let mut state = (*store.snapshot()).clone();
+    let mut closed = state.repos[0]
+        .diff_sessions
+        .values()
+        .next()
+        .unwrap()
+        .clone();
+    closed.diff_state = Default::default();
+    closed.rev += 1;
+    let environment = read_only_environment(cx, &view);
+    // No dispatcher: only the snapshots published here reach the pane.
+    let pane_entity = cx.update(|_, app| {
+        app.new(|cx| {
+            DiffPaneView::new(
+                host.clone(),
+                environment,
+                std::sync::Weak::new(),
+                repository.clone(),
+                target.clone(),
+                DiffPaneOptions::default(),
+                cx,
+            )
+        })
+    });
+    let pane = DiffPane::new(std::rc::Rc::new(HostedDiffPane {
+        entity: pane_entity.clone(),
+    }));
+    let pane_id = cx.update(|_, app| DiffViewId(pane_entity.read(app).view_id()));
+    // The pane's first open, reduced and then closed.
+    closed.open_request = Some(1);
+    Arc::make_mut(&mut state.repos[0].diff_sessions).insert(pane_id, closed.clone());
+    publish(cx, &view, Arc::new(state.clone()));
+    assert_eq!(cx.update(|_, app| pane.target(app)), None);
+
+    cx.update(|_, app| pane.set_target(target.clone(), app));
+    closed.rev += 1;
+    Arc::make_mut(&mut state.repos[0].diff_sessions).insert(pane_id, closed);
+    publish(cx, &view, Arc::new(state));
+    cx.update(|_, app| {
+        assert_eq!(pane.target(app), Some(target.clone()));
+        assert!(pane.is_loading(app));
+    });
+}
+
 #[gpui::test]
 fn retargeting_ignores_old_notifications_and_clears_files_before_loading(
     cx: &mut gpui::TestAppContext,
@@ -923,21 +1007,7 @@ fn retargeting_ignores_old_notifications_and_clears_files_before_loading(
         .unwrap()
         .clone();
     let change_list = state.repos[0].change_lists.values().next().unwrap().clone();
-    let environment = cx.update(|window, app| {
-        use crate::view::hosted::environment::{DiffPaneEnvironment, DiffPreferences};
-        use crate::view::panes::diff::services::{DiffCommands, DiffServices};
-        let root = view.read(app);
-        DiffPaneEnvironment {
-            services: DiffServices {
-                store: crate::view::pane_store::PaneStore::read_only(),
-                commands: DiffCommands::default(),
-                documents: root.ui_model.read(app).documents.clone(),
-                tooltip: root.tooltip_host.downgrade(),
-            },
-            preferences: DiffPreferences::Window(root.ui_model.downgrade()),
-            window: window.window_handle(),
-        }
-    });
+    let environment = read_only_environment(cx, &view);
     // These panes have no dispatcher: only the explicitly published snapshots
     // can advance them, making the notification-before-Open race deterministic.
     let (pane_entity, list_entity) = cx.update(|_, app| {
@@ -1008,7 +1078,9 @@ fn retargeting_ignores_old_notifications_and_clears_files_before_loading(
     let session = Arc::make_mut(&mut state.repos[0].diff_sessions)
         .get_mut(&pane_id)
         .unwrap();
+    // The store reduces the pane's second open.
     session.target = target("b.rs");
+    session.open_request = Some(2);
     session.rev += 1;
     session.diff = Loadable::Loading;
     session.diff_file = Loadable::Loading;

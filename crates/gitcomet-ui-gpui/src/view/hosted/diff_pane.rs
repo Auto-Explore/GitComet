@@ -49,6 +49,9 @@ pub(crate) struct DiffPaneView {
     snapshot_rev: u64,
     loading: bool,
     pending_target: Option<DiffTarget>,
+    /// Numbers each open; the session echoes the last once it is reduced, so
+    /// no snapshot from before answers `pending_target`.
+    open_request: u64,
     error: Option<SharedString>,
     /// A patch that failed while its file loaded. The renderer shows it only
     /// when its body is the patch.
@@ -106,6 +109,7 @@ impl DiffPaneView {
             snapshot_rev: 0,
             loading: true,
             pending_target: None,
+            open_request: 0,
             error: None,
             patch_error: None,
             insets: Arc::from([]),
@@ -678,6 +682,7 @@ impl DiffPaneView {
         }
         self.reset(cx);
         self.pending_target = Some(target.clone());
+        self.open_request = self.open_request.wrapping_add(1);
         let PaneSource::Session { store, repository } = &self.source else {
             return;
         };
@@ -689,6 +694,7 @@ impl DiffPaneView {
             lifetime: repository.lifetime(),
             view: self.view_id,
             target,
+            request: Some(self.open_request),
         }));
         if self.options.policy.blame {
             store.dispatch(Msg::DiffSession(DiffSessionMsg::LoadBlame {
@@ -712,9 +718,7 @@ impl DiffPaneView {
             .diff_sessions
             .get(&self.view_id)
             .filter(|session| {
-                self.pending_target
-                    .as_ref()
-                    .is_none_or(|target| session.target.eq_with_old_path(target))
+                self.pending_target.is_none() || session.open_request == Some(self.open_request)
             })
     }
 
