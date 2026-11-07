@@ -479,7 +479,7 @@ impl DetailsPaneView {
         title: AnyElement,
         actions: AnyElement,
         body: AnyElement,
-        cx: &gpui::Context<Self>,
+        cx: &mut gpui::Context<Self>,
     ) -> Div {
         self.status_section_container(names.section, cx)
             .flex()
@@ -501,6 +501,14 @@ impl DetailsPaneView {
                     .min_h(px(0.0))
                     .overflow_hidden()
                     .child(body),
+            )
+            .child(
+                crate::view::review_navigation::hint(
+                    self.theme,
+                    self.ui_scale(),
+                    "↑↓ Files · Enter Diff · Esc Graph",
+                )
+                .debug_selector(move || format!("{}_navigation_hint", names.header_id)),
             )
     }
 

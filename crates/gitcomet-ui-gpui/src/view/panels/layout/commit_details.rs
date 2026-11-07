@@ -13,6 +13,10 @@ impl DetailsPaneView {
             .active_repo()
             .and_then(|repo| repo.history_state.selected_commit.clone());
 
+        if self.review_details_dismissed {
+            return self.status_sections_view(cx);
+        }
+
         // A selected worktree row owns the pane outright: its files belong to a
         // different checkout, so none of the commit-detail views below apply.
         //

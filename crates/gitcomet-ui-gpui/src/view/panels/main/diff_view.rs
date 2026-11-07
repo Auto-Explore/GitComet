@@ -401,6 +401,21 @@ impl DiffRenderer {
                 handled = true;
             }
             if !handled
+                && self
+                    .commands
+                    .navigation
+                    .as_ref()
+                    .is_some_and(|nav| nav.can_focus_review_files(window, cx))
+            {
+                self.commands.defer(
+                    DiffCommand::FocusReviewFiles {
+                        window: window.window_handle(),
+                    },
+                    cx,
+                );
+                handled = true;
+            }
+            if !handled
                 && self.store.policy.escape_clears_target
                 && let Some(repo_id) = self.active_repo_id()
             {
@@ -492,10 +507,19 @@ impl DiffRenderer {
         }
 
         if !handled
-            && let Some(step) = DiffFileStep::from_keystroke(keystroke)
-            && let Some(repo_id) = self.active_repo_id()
+            && self.diff_panel_focus_handle.is_focused(window)
+            && !mods.modified()
+            && matches!(key, "up" | "down")
         {
-            handled = self.try_step_diff_file(repo_id, step, window, cx);
+            handled = self.review_adjacent_change(key == "up", window, cx);
+        }
+
+        if !handled
+            && self.diff_panel_focus_handle.is_focused(window)
+            && !mods.modified()
+            && !self.is_conflict_resolver_active()
+        {
+            handled = self.review_scroll_key(key);
         }
 
         if !handled
@@ -875,21 +899,9 @@ impl DiffRenderer {
                             .defer(DiffCommand::Preference(DiffPreference::Annotate(next)), cx);
                     }
                 }
-                "up" => {
-                    handled = self.navigate_prev_diff_change(cx);
-                }
-                "down" => {
-                    handled = self.navigate_next_diff_change(cx);
-                }
-                "left" => {
-                    if let Some(repo_id) = self.active_repo_id() {
-                        handled = self.try_select_adjacent_diff_file(repo_id, -1, window, cx);
-                    }
-                }
-                "right" => {
-                    if let Some(repo_id) = self.active_repo_id() {
-                        handled = self.try_select_adjacent_diff_file(repo_id, 1, window, cx);
-                    }
+                "up" | "down" if !mods.shift && self.diff_panel_focus_handle.is_focused(window) => {
+                    handled =
+                        self.review_adjacent_file(if key == "up" { -1 } else { 1 }, window, cx);
                 }
                 _ => {}
             }
@@ -2672,6 +2684,7 @@ impl DiffRenderer {
                 d.bg(theme.colors.interaction.pressed_background)
             })
             .track_focus(&self.diff_panel_focus_handle)
+            .key_context("ReviewDiff")
             .on_action(
                 cx.listener(|this, _: &crate::view::TextInputDiffPrevFile, window, cx| {
                     if let Some(repo_id) = this.active_repo_id()
@@ -2769,6 +2782,15 @@ impl DiffRenderer {
                     .child(body),
             )
             .when_some(diff_bar, |d, bar| d.child(bar))
+            .child(crate::view::review_navigation::hint(
+                theme,
+                crate::ui_scale::UiScale::from_percent(ui_scale_percent),
+                if cfg!(target_os = "macos") {
+                    "↑↓ Changes · Option ↑↓ Files · Esc Back"
+                } else {
+                    "↑↓ Changes · Alt ↑↓ Files · Esc Back"
+                },
+            ))
             .when_some(diff_search_overlay, |d, overlay| d.child(overlay))
             .child(DiffTextSelectionTracker {
                 view: cx.entity().into(),

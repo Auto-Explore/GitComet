@@ -335,6 +335,8 @@ impl DiffRenderer {
             diff_split_cache_len: 0,
             diff_panel_focus_handle,
             diff_autoscroll_pending: false,
+            review_file_jump: None,
+            review_position: None,
             diff_raw_input,
             diff_raw_scroll,
             submodule_hash_inputs,

@@ -533,6 +533,8 @@ pub(crate) struct DiffRenderer {
     // Diff panel focus, raw input, and submodule summary.
     pub(in crate::view) diff_panel_focus_handle: FocusHandle,
     pub(in crate::view) diff_autoscroll_pending: bool,
+    pub(in crate::view) review_file_jump: Option<super::super::review_navigation::ReviewFileJump>,
+    pub(in crate::view) review_position: Option<super::super::review_navigation::ReviewPosition>,
     pub(in crate::view) diff_raw_input: Entity<components::TextInput>,
     /// The error-text containers' scroll, so a drag selection can scroll them.
     pub(in crate::view) diff_raw_scroll: ScrollHandle,

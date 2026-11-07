@@ -238,7 +238,7 @@ impl DiffRenderer {
 
     /// Remembers the block navigation landed on at visual row `target`, for
     /// the accent bar that marks it.
-    fn focus_change_block_at(&mut self, target: usize) {
+    pub(in crate::view::panes::diff) fn focus_change_block_at(&mut self, target: usize) {
         let rows = if self.is_rendered_markdown_diff_active() {
             None
         } else {
@@ -474,7 +474,7 @@ impl DiffRenderer {
     }
 
     pub(in crate::view) fn maybe_autoscroll_diff_to_first_change(&mut self) {
-        if !self.diff_autoscroll_pending {
+        if !self.diff_autoscroll_pending || self.review_diff_is_loading() {
             return;
         }
         if self.diff_search_has_query() {
@@ -489,9 +489,25 @@ impl DiffRenderer {
         if visible_len == 0 {
             return;
         }
+        if self.review_file_jump.is_none() && self.restore_review_position() {
+            return;
+        }
 
         let entries = self.diff_nav_entries();
-        let target = entries.first().copied().unwrap_or(0);
+        let review_landing = self.review_file_jump.as_ref().filter(|jump| {
+            self.active_repo_id() == Some(jump.repo)
+                && self.rendered_diff_target() == Some(&jump.to)
+        });
+        let target = if review_landing.is_some_and(|jump| jump.last) {
+            entries.last()
+        } else {
+            entries.first()
+        }
+        .copied()
+        .unwrap_or(0);
+        if review_landing.is_some() {
+            self.review_file_jump = None;
+        }
 
         // Strict: the scroll offset survives a target change, and centring
         // clamps to the top when the first block is near it, keeping a

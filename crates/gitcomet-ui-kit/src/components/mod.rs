@@ -91,8 +91,8 @@ pub use settings_rows::{
     settings_summary_row, settings_summary_row_with_value_prefix, settings_toggle_row,
 };
 pub use shortcut_keys::{
-    Shortcut, alt_shortcut, keystrokes_display, keystrokes_label_for, secondary_shortcut,
-    shortcut_keys, shortcut_keys_compact,
+    Shortcut, alt_shortcut, keystrokes_display, keystrokes_label_for, ordered_shortcut_label,
+    secondary_shortcut, shortcut_keys, shortcut_keys_compact,
 };
 pub use skeleton::skeleton;
 pub use split_button::{SplitButton, SplitButtonStyle, filled_action_frame};

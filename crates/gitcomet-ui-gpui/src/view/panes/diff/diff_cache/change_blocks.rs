@@ -184,7 +184,11 @@ impl DiffRenderer {
     pub(in crate::view) fn diff_focused_change_block_row(
         &self,
         visible_ix: usize,
+        window: &Window,
     ) -> Option<FocusedChangeBlockRow> {
+        if !self.diff_panel_focus_handle.is_focused(window) {
+            return None;
+        }
         let focus = self.diff_focused_change_block.as_ref()?;
         if self.diff_selection_anchor != Some(focus.anchor)
             || focus.layout != self.diff_visible_layout_key()

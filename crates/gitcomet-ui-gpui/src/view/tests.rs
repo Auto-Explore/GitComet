@@ -360,6 +360,7 @@ mod focused_diff_host;
 mod hosted_file_lists;
 mod hosted_panes;
 mod invalidation;
+mod modal_hovers;
 mod notifications;
 mod previews;
 mod repo_tab_incoming;

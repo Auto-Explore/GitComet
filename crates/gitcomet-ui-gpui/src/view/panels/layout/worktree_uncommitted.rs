@@ -253,7 +253,24 @@ impl DetailsPaneView {
                             .border_t_1()
                             .border_color(theme.colors.stroke.subtle)
                             .pt_2()
-                            .child(files_body),
+                            .child(
+                                self.review_file_container(
+                                    crate::view::rows::FileListId::WorktreeFiles,
+                                    cx,
+                                )
+                                .flex()
+                                .flex_col()
+                                .flex_1()
+                                .min_h(px(0.0))
+                                .child(files_body)
+                                .child(
+                                    crate::view::review_navigation::hint(
+                                        self.theme,
+                                        self.ui_scale(),
+                                        "↑↓ Files · Enter Diff · Esc Graph",
+                                    ),
+                                ),
+                            ),
                     ),
             )
             .into_any_element()

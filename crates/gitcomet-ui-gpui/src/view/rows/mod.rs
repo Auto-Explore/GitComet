@@ -285,6 +285,7 @@ pub(in crate::view) struct CommitFileProjection {
 #[derive(Clone, Debug)]
 struct CommitFileProjectionCacheEntry<K: Eq + Clone> {
     key: K,
+    query: String,
     projection: Arc<CommitFileProjection>,
 }
 
@@ -533,15 +534,42 @@ impl<K: Eq + Clone> CommitFileProjectionCache<K> {
         sort: CommitFileSort,
         filter: CommitFileFilter,
     ) -> Arc<CommitFileProjection> {
+        self.projection_for_query(key, files, sort, filter, "")
+    }
+
+    pub(in crate::view) fn projection_for_query(
+        &mut self,
+        key: &K,
+        files: &[gitcomet_core::domain::CommitFileChange],
+        sort: CommitFileSort,
+        filter: CommitFileFilter,
+        query: &str,
+    ) -> Arc<CommitFileProjection> {
         if let Some(entry) = self.cached.as_ref()
             && entry.key == *key
+            && entry.query == query
         {
             return Arc::clone(&entry.projection);
         }
 
-        let projection = Arc::new(build_commit_file_projection(files, sort, filter));
+        let mut projection = build_commit_file_projection(files, sort, filter);
+        if !query.is_empty() {
+            let query = query.to_lowercase();
+            projection.source_indices = projection
+                .source_indices
+                .iter()
+                .copied()
+                .filter(|&ix| {
+                    super::path_display::path_display_string(&files[ix].path)
+                        .to_lowercase()
+                        .contains(&query)
+                })
+                .collect();
+        }
+        let projection = Arc::new(projection);
         self.cached = Some(CommitFileProjectionCacheEntry {
             key: key.clone(),
+            query: query.to_owned(),
             projection: Arc::clone(&projection),
         });
         projection
