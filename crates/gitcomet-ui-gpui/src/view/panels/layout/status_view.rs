@@ -502,11 +502,14 @@ impl DetailsPaneView {
                     .overflow_hidden()
                     .child(body),
             )
-            .child(crate::view::review_navigation::hint(
-                self.theme,
-                self.ui_scale(),
-                "↑↓ Files · Enter Diff · Esc Graph",
-            ))
+            .child(
+                crate::view::review_navigation::hint(
+                    self.theme,
+                    self.ui_scale(),
+                    "↑↓ Files · Enter Diff · Esc Graph",
+                )
+                .debug_selector(move || format!("{}_navigation_hint", names.header_id)),
+            )
     }
 
     /// The "Unstaged" / "Untracked" title chip that opens the change-tracking

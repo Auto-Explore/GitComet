@@ -208,7 +208,9 @@ impl DetailsPaneView {
                                                 plan.row_at(crate::view::rows::RowIx(start + ix))
                                             })
                                             .is_some_and(|row| {
-                                                pane.review_directory_cursor(repo_id, list, &row)
+                                                pane.review_row_is_focused(
+                                                    repo_id, list, &row, window,
+                                                )
                                             });
                                         if focused {
                                             div()
@@ -216,6 +218,9 @@ impl DetailsPaneView {
                                                 .child(element)
                                                 .child(
                                                     div()
+                                                        .debug_selector(|| {
+                                                            "review_file_focus".to_owned()
+                                                        })
                                                         .absolute()
                                                         .inset_0()
                                                         .border_1()

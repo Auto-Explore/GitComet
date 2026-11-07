@@ -219,10 +219,6 @@ impl HistoryView {
             .min_h(px(0.0))
             .bg(bg)
             .track_focus(&self.history_panel_focus_handle)
-            .focus_style({
-                let ring = controls::interaction_outline(theme.colors.interaction.focus_ring);
-                move |style| style.shadow(vec![ring])
-            })
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _e: &MouseDownEvent, window, cx| {

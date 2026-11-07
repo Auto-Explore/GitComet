@@ -303,12 +303,6 @@ impl DetailsPaneView {
                     cx.stop_propagation();
                 }
             }))
-            .focus_style({
-                let ring = crate::kit::interaction::interaction_outline(
-                    self.theme.colors.interaction.focus_ring,
-                );
-                move |style| style.shadow(vec![ring])
-            })
             .on_key_down(
                 cx.listener(move |this, event: &gpui::KeyDownEvent, window, cx| {
                     if this.handle_review_search_key(list, &event.keystroke, window, cx)
@@ -530,26 +524,40 @@ impl DetailsPaneView {
         true
     }
 
-    // Folders do not open a diff, so show their keyboard cursor independently
-    // of the currently previewed file. File rows already draw that selection.
-    pub(in crate::view) fn review_directory_cursor(
+    // The preview stays selected after focus leaves the list; only its keyboard
+    // cursor gets an outline. Folders/groups have their own cursor, since they
+    // do not change the preview.
+    pub(in crate::view) fn review_row_is_focused(
         &self,
         repo: RepoId,
         list: FileListId,
         row: &FileListRow,
+        window: &Window,
     ) -> bool {
-        self.review_cursor
+        if !self.review_file_focus(list).is_focused(window) {
+            return false;
+        }
+        let cursor = self
+            .review_cursor
             .as_ref()
-            .is_some_and(|(id, current, key, _)| {
-                *id == repo
-                    && *current == list
-                    && match (key, row) {
-                        (ReviewRow::Directory(path), FileListRow::Directory { key, .. }) => {
-                            path == key
-                        }
-                        (ReviewRow::Group(ix), FileListRow::Group { group, .. }) => ix == group,
-                        _ => false,
-                    }
-            })
+            .filter(|(id, current, _, _)| *id == repo && *current == list)
+            .map(|(_, _, key, _)| key);
+        match (cursor, row) {
+            (Some(ReviewRow::Directory(path)), FileListRow::Directory { key, .. }) => path == key,
+            (Some(ReviewRow::Group(ix)), FileListRow::Group { group, .. }) => ix == group,
+            (None | Some(ReviewRow::File(_)), FileListRow::File { ordinal, .. }) => {
+                let selected = self.active_repo().and_then(|repo| {
+                    repo.diff_state
+                        .inline_submodule_diff
+                        .as_ref()
+                        .map(|inline| &inline.target)
+                        .or(repo.diff_state.diff_target.as_ref())
+                });
+                selected.is_some_and(|selected| {
+                    self.review_target(list, ordinal.0).as_ref() == Some(selected)
+                })
+            }
+            _ => false,
+        }
     }
 }

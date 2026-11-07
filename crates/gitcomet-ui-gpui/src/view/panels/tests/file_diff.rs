@@ -577,10 +577,13 @@ fn focused_change_block_rows(
     cx: &mut gpui::VisualTestContext,
     view: &gpui::Entity<super::super::GitCometView>,
 ) -> Vec<usize> {
-    cx.update(|_window, app| {
+    cx.update(|window, app| {
         let pane = view.read(app).diff_renderer.read(app);
         (0..pane.diff_visible_len())
-            .filter(|&visible_ix| pane.diff_focused_change_block_row(visible_ix).is_some())
+            .filter(|&visible_ix| {
+                pane.diff_focused_change_block_row(visible_ix, window)
+                    .is_some()
+            })
             .collect()
     })
 }

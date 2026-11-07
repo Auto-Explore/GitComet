@@ -172,8 +172,10 @@ These shortcuts apply while the commit history list is showing.
 ## Review navigation
 
 Start in the graph with `F6` (reverse with `Shift-F6`) or Tab. Each file list is
-one tab stop; Tab still reaches its filters and controls. The focused pane has
-an outline. Selecting a file previews it without moving keyboard focus.
+one tab stop; Tab still reaches its filters and controls. The active file row is
+outlined only while its list has focus. In a focused diff, the current change
+block is outlined instead. Moving focus away hides the outline but keeps the
+review position. Selecting a file previews it without moving keyboard focus.
 
 | Action | macOS | Windows / Linux | Notes |
 | --- | --- | --- | --- |

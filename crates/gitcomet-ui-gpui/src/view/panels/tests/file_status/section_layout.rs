@@ -480,8 +480,11 @@ fn unstaged_scroll_viewport_tracks_resized_section_height(cx: &mut gpui::TestApp
             .into();
     });
 
-    let visible_height: f32 =
-        (unstaged_wrapper_bounds.bottom() - unstaged_header_bounds.bottom()).into();
+    let hint_bounds = cx
+        .debug_bounds("unstaged_header_navigation_hint")
+        .expect("expected keyboard navigation hint below the list");
+    let visible_bottom = unstaged_wrapper_bounds.bottom().min(hint_bounds.top());
+    let visible_height: f32 = (visible_bottom - unstaged_header_bounds.bottom()).into();
     assert!(
         is_scrollable,
         "expected unstaged list to become scrollable after shrinking the unstaged section"
@@ -579,9 +582,13 @@ fn split_unstaged_scroll_viewport_tracks_resized_section_height(cx: &mut gpui::T
             .into();
     });
 
+    let hint_bounds = cx
+        .debug_bounds("split_unstaged_header_navigation_hint")
+        .expect("expected keyboard navigation hint below the list");
     let visible_bottom = split_unstaged_wrapper_bounds
         .bottom()
-        .min(change_tracking_wrapper_bounds.bottom());
+        .min(change_tracking_wrapper_bounds.bottom())
+        .min(hint_bounds.top());
     let visible_height: f32 = (visible_bottom - split_unstaged_header_bounds.bottom())
         .max(px(0.0))
         .into();
@@ -699,9 +706,13 @@ fn split_unstaged_scroll_viewport_updates_after_outer_resize_shrink(cx: &mut gpu
             .into();
     });
 
+    let hint_bounds = cx
+        .debug_bounds("split_unstaged_header_navigation_hint")
+        .expect("expected keyboard navigation hint below the list");
     let visible_bottom = split_unstaged_wrapper_bounds
         .bottom()
-        .min(change_tracking_wrapper_bounds.bottom());
+        .min(change_tracking_wrapper_bounds.bottom())
+        .min(hint_bounds.top());
     let visible_height: f32 = (visible_bottom - split_unstaged_header_bounds.bottom())
         .max(px(0.0))
         .into();

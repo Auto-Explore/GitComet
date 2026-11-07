@@ -153,10 +153,25 @@ fn review_enter_escape_restores_each_pane_and_keeps_graph_selection(cx: &mut gpu
     draw_and_drain_test_window(cx);
     let anchor = diff_selection_anchor(cx, &view);
     assert!(anchor.is_some());
+    assert!(
+        cx.debug_bounds("review_file_focus").is_none(),
+        "the file preview must not look focused while reviewing the diff"
+    );
 
     cx.simulate_keystrokes("escape");
     draw_and_drain_test_window(cx);
     assert!(files_focused(cx, &view));
+    let outline = cx
+        .debug_bounds("review_file_focus")
+        .expect("selected file outline");
+    let row_height = cx.update(|_, app| {
+        let pane = view.read(app).details_pane.read(app);
+        crate::view::rows::sidebar::sidebar_list_row_height(pane.theme, pane.ui_scale_percent)
+    });
+    assert_eq!(
+        outline.size.height, row_height,
+        "the outline encloses one file row, not the list container"
+    );
     assert_eq!(
         selected_path(cx, &view).as_deref(),
         Some(std::path::Path::new("a.rs"))
@@ -167,6 +182,10 @@ fn review_enter_escape_restores_each_pane_and_keeps_graph_selection(cx: &mut gpu
         selected_path(cx, &view).is_none()
     });
     assert!(graph_focused(cx, &view));
+    assert!(
+        cx.debug_bounds("review_file_focus").is_none(),
+        "the file outline disappears when focus returns to the graph"
+    );
     cx.simulate_keystrokes("enter");
     wait_until_store_diff_target_path(cx, &view, std::path::Path::new("a.rs"));
     sync_store_snapshot(cx, &view);

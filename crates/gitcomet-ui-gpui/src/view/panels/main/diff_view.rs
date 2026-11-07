@@ -2685,12 +2685,6 @@ impl DiffRenderer {
             })
             .track_focus(&self.diff_panel_focus_handle)
             .key_context("ReviewDiff")
-            .focus_style({
-                let ring = crate::kit::interaction::interaction_outline(
-                    self.theme.colors.interaction.focus_ring,
-                );
-                move |style| style.shadow(vec![ring])
-            })
             .on_action(
                 cx.listener(|this, _: &crate::view::TextInputDiffPrevFile, window, cx| {
                     if let Some(repo_id) = this.active_repo_id()
