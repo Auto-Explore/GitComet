@@ -394,9 +394,8 @@ fn press_in(
             Select::NavigatedThenText(_) => pane.diff_text_has_selection() && !outlined,
             Select::Rows(_) => pane.diff_selection_range.is_some(),
             Select::Text(_) => pane.diff_text_has_selection(),
-            Select::TextThenRightClicks(..) => {
-                pane.diff_text_has_selection() && pane.diff_selection_range.is_some()
-            }
+            // A right-click inside the text drops the rows an earlier one chose.
+            Select::TextThenRightClicks(..) => pane.diff_text_has_selection(),
             Select::RightClicks(_) => pane.diff_selection_range.is_some(),
         };
         assert!(selected, "{case}: the selection must survive until the key");

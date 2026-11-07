@@ -2401,16 +2401,18 @@ impl DiffRenderer {
             };
 
             self.diff_text_selecting = false;
-            self.diff_text_anchor = Some(DiffTextPos {
-                source_visible_ix: 0,
-                region,
-                offset: 0,
-            });
-            self.diff_text_head = Some(DiffTextPos {
-                source_visible_ix: end_visible_ix,
-                region,
-                offset: end_offset,
-            });
+            self.set_diff_text_span(
+                DiffTextPos {
+                    source_visible_ix: 0,
+                    region,
+                    offset: 0,
+                },
+                DiffTextPos {
+                    source_visible_ix: end_visible_ix,
+                    region,
+                    offset: end_offset,
+                },
+            );
             if self.diff_text_has_selection() {
                 self.diff_text_selection_owner.adopt(window, cx);
             }
@@ -2431,16 +2433,18 @@ impl DiffRenderer {
                 .len();
 
             self.diff_text_selecting = false;
-            self.diff_text_anchor = Some(DiffTextPos {
-                source_visible_ix: 0,
-                region: DiffTextRegion::Inline,
-                offset: 0,
-            });
-            self.diff_text_head = Some(DiffTextPos {
-                source_visible_ix: end_visible_ix,
-                region: DiffTextRegion::Inline,
-                offset: end_offset,
-            });
+            self.set_diff_text_span(
+                DiffTextPos {
+                    source_visible_ix: 0,
+                    region: DiffTextRegion::Inline,
+                    offset: 0,
+                },
+                DiffTextPos {
+                    source_visible_ix: end_visible_ix,
+                    region: DiffTextRegion::Inline,
+                    offset: end_offset,
+                },
+            );
             if self.diff_text_has_selection() {
                 self.diff_text_selection_owner.adopt(window, cx);
             }
@@ -2469,16 +2473,18 @@ impl DiffRenderer {
             .len();
 
         self.diff_text_selecting = false;
-        self.diff_text_anchor = Some(DiffTextPos {
-            source_visible_ix: 0,
-            region: start_region,
-            offset: 0,
-        });
-        self.diff_text_head = Some(DiffTextPos {
-            source_visible_ix: end_visible_ix,
-            region: end_region,
-            offset: end_offset,
-        });
+        self.set_diff_text_span(
+            DiffTextPos {
+                source_visible_ix: 0,
+                region: start_region,
+                offset: 0,
+            },
+            DiffTextPos {
+                source_visible_ix: end_visible_ix,
+                region: end_region,
+                offset: end_offset,
+            },
+        );
         if self.diff_text_has_selection() {
             self.diff_text_selection_owner.adopt(window, cx);
         }

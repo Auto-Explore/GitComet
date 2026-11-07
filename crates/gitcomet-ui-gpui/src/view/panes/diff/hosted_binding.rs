@@ -21,7 +21,6 @@ pub(in crate::view) struct HostedDiffDecor {
     key: Option<(u64, u64, u64, usize, DiffViewMode, usize)>,
     display: Vec<DisplayRow>,
     document: Vec<usize>,
-    selection_anchor: Option<usize>,
     markers: Arc<Vec<(f32, gpui::Hsla)>>,
     pub(super) search_document: std::cell::RefCell<Option<diff_search::SourceSearchDocument>>,
     #[cfg(test)]
@@ -103,15 +102,14 @@ impl DiffRenderer {
     }
 
     pub(in crate::view) fn select_hosted_row(&mut self, row: usize, shift: bool) -> bool {
-        let Some(decor) = self.hosted_decor.as_mut() else {
+        if self.hosted_decor.is_none() {
             return false;
-        };
+        }
         let anchor = if shift {
-            decor.selection_anchor.unwrap_or(row)
+            self.diff_selection_anchor.unwrap_or(row)
         } else {
             row
         };
-        decor.selection_anchor = Some(anchor);
         self.clear_diff_text_selection_span();
         self.diff_selection_anchor = Some(anchor);
         self.diff_selection_range = Some((anchor.min(row), anchor.max(row)));
@@ -523,6 +521,7 @@ impl DiffRenderer {
                     }
                     DisplayRow::Document(row) => {
                         use crate::kit::interaction::ControlInteractionExt as _;
+                        // The row's own canvas takes its clicks.
                         let element = div()
                             .id(("hosted_row", display))
                             .debug_selector(move || format!("hosted_diff_{pane_id}_row_{display}"))
@@ -530,31 +529,6 @@ impl DiffRenderer {
                                 rendered_rows
                                     .pop_front()
                                     .unwrap_or_else(|| div().into_any_element()),
-                            )
-                            .on_activate(
-                                false,
-                                crate::kit::interaction::ControlActivation::Composite,
-                                cx.listener(move |pane, event: &gpui::ClickEvent, _, cx| {
-                                    if !pane.store.policy.select_lines {
-                                        return;
-                                    }
-                                    let shift = event.modifiers().shift;
-                                    if !shift && pane.diff_text_has_selection() {
-                                        return;
-                                    }
-                                    let decor = pane.hosted_decor.as_mut().unwrap();
-                                    let anchor = if shift {
-                                        decor.selection_anchor.unwrap_or(row)
-                                    } else {
-                                        row
-                                    };
-                                    decor.selection_anchor = Some(anchor);
-                                    pane.clear_diff_text_selection_span();
-                                    pane.diff_selection_anchor = Some(anchor);
-                                    pane.diff_selection_range =
-                                        Some((anchor.min(row), anchor.max(row)));
-                                    cx.notify();
-                                }),
                             )
                             .into_any_element();
                         let (old, new) = this.hosted_line_numbers(row);

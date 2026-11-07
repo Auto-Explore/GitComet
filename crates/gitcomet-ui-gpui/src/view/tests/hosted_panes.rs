@@ -1591,6 +1591,107 @@ fn d_after_a_difftastic_right_click_discards_the_clicked_line(cx: &mut gpui::Tes
     }
 }
 
+/// A Difftastic right-click selects its row as a click does: a shift-click
+/// extends from it, and a click on it again retires the menu's lines.
+#[gpui::test]
+fn row_clicks_after_a_difftastic_right_click_start_from_its_row(cx: &mut gpui::TestAppContext) {
+    let (_dir, store, view, cx, renderer) = difftastic_file(cx, "a.rs", 4);
+    let id = first_session(&store);
+    let pair = row_with_lines(&renderer, (Some(1), Some(1)), cx);
+    let added = row_with_lines(&renderer, (None, Some(2)), cx);
+    let right_click = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|window, app| {
+            renderer.update(app, |pane, cx| {
+                pane.open_diff_editor_context_menu(
+                    added,
+                    DiffTextRegion::Inline,
+                    point(px(40.0), px(40.0)),
+                    window,
+                    cx,
+                );
+            });
+        });
+        cx.run_until_parked();
+        cx.update(|window, app| {
+            let host = view.read(app).popover_host.clone();
+            assert!(host.read(app).popover_kind_for_tests().is_some(), "a menu");
+            host.update(app, |host, cx| {
+                host.close_popover_and_restore_focus(window, cx)
+            });
+        });
+        cx.run_until_parked();
+    };
+    right_click(cx);
+    cx.update(|_window, app| {
+        renderer.update(app, |pane, _| {
+            assert!(pane.select_hosted_row(pair, true));
+            assert_eq!(
+                pane.diff_selection_range,
+                Some((pair.min(added), pair.max(added))),
+                "a shift-click extends from the right-clicked row"
+            );
+        });
+    });
+    let row = selector(format!("hosted_diff_{id}_row_{added}"));
+    click_debug_selector(cx, row);
+    cx.run_until_parked();
+    right_click(cx);
+    cx.update(|_window, app| {
+        let pane = renderer.read(app);
+        assert_eq!(pane.diff_selection_range, Some((added, added)));
+        assert!(pane.diff_editor_menu_column.is_some());
+    });
+    click_debug_selector(cx, row);
+    cx.run_until_parked();
+    cx.update(|_window, app| {
+        let pane = renderer.read(app);
+        assert_eq!(pane.diff_selection_range, Some((added, added)));
+        assert!(
+            pane.diff_editor_menu_column.is_none(),
+            "a click on the row replaces the menu's lines"
+        );
+    });
+}
+
+/// A click inside a hosted pane's text selection only drops the selection,
+/// as in any diff; it selects no row.
+#[gpui::test]
+fn a_click_in_hosted_text_drops_the_selection_without_selecting_the_row(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (_dir, store, _view, cx, renderer) = difftastic_file(cx, "a.rs", 4);
+    let id = first_session(&store);
+    let pair = row_with_lines(&renderer, (Some(1), Some(1)), cx);
+    cx.update(|window, app| {
+        renderer.update(app, |pane, cx| {
+            pane.diff_selection_anchor = None;
+            pane.diff_selection_range = None;
+            let anchor = DiffTextPos {
+                source_visible_ix: pair,
+                region: DiffTextRegion::Inline,
+                offset: 0,
+            };
+            pane.set_diff_text_span(
+                anchor,
+                DiffTextPos {
+                    offset: "pub fn a() -> i32 {".len(),
+                    ..anchor
+                },
+            );
+            pane.diff_text_selection_owner.adopt(window, cx);
+            cx.notify();
+        });
+    });
+    cx.run_until_parked();
+    click_debug_selector(cx, selector(format!("hosted_diff_{id}_row_{pair}")));
+    cx.run_until_parked();
+    cx.update(|_window, app| {
+        let pane = renderer.read(app);
+        assert!(!pane.diff_text_has_selection(), "the click drops the text");
+        assert_eq!(pane.diff_selection_range, None, "and selects no row");
+    });
+}
+
 /// The visible row of `renderer` whose line numbers are `(old, new)`.
 fn row_with_lines(
     renderer: &gpui::Entity<crate::view::panes::diff::DiffRenderer>,

@@ -30,7 +30,7 @@ fn structural_selection_maps_collapsed_rows_and_never_expands_a_block(
             pane.diff_word_wrap = false;
             pane.diff_view = DiffViewMode::Split;
             pane.diff_visible_indices = Arc::from([1, 4]);
-            let selected = pane.structural_line_selection(1, DiffTextRegion::SplitRight).unwrap();
+            let selected = menu_lines(pane, 1, DiffTextRegion::SplitRight).unwrap();
             assert!(selected.old.is_empty());
             assert_eq!(selected.new, BTreeSet::from([5]));
             let first = pane.structural_block_lines(1).unwrap();
@@ -38,7 +38,7 @@ fn structural_selection_maps_collapsed_rows_and_never_expands_a_block(
             assert_eq!(first.new, BTreeSet::from([2]));
             assert!(pane.structural_block_lines(3).is_none());
             pane.diff_selection_range = Some((0, 1));
-            let selected = pane.structural_line_selection(1, DiffTextRegion::SplitRight).unwrap();
+            let selected = menu_lines(pane, 1, DiffTextRegion::SplitRight).unwrap();
             assert!(selected.old.is_empty());
             assert_eq!(selected.new, BTreeSet::from([2, 5]));
             // A key has no clicked column: selected rows stand for both sides.
@@ -48,21 +48,21 @@ fn structural_selection_maps_collapsed_rows_and_never_expands_a_block(
             pane.diff_selection_range = None;
             pane.diff_text_anchor = Some(DiffTextPos { source_visible_ix: 0, region: DiffTextRegion::SplitRight, offset: 1 });
             pane.diff_text_head = Some(DiffTextPos { source_visible_ix: 1, region: DiffTextRegion::SplitLeft, offset: 2 });
-            let selected = pane.structural_line_selection(0, DiffTextRegion::SplitRight).unwrap();
+            let selected = menu_lines(pane, 0, DiffTextRegion::SplitRight).unwrap();
             assert_eq!(selected.old, BTreeSet::from([5]));
             assert_eq!(selected.new, BTreeSet::from([2]));
             let keyed = pane.structural_selected_lines().unwrap();
             assert_eq!((keyed.old, keyed.new), (selected.old, selected.new));
             pane.diff_text_anchor = Some(DiffTextPos { source_visible_ix: 0, region: DiffTextRegion::SplitLeft, offset: 1 });
             pane.diff_text_head = Some(DiffTextPos { source_visible_ix: 0, region: DiffTextRegion::SplitRight, offset: 0 });
-            let selected = pane.structural_line_selection(0, DiffTextRegion::SplitLeft).unwrap();
+            let selected = menu_lines(pane, 0, DiffTextRegion::SplitLeft).unwrap();
             assert_eq!(selected.old, BTreeSet::from([2]));
             assert!(selected.new.is_empty());
             let keyed = pane.structural_selected_lines().unwrap();
             assert_eq!((keyed.old, keyed.new), (selected.old, selected.new));
             pane.diff_text_anchor = Some(DiffTextPos { source_visible_ix: 0, region: DiffTextRegion::SplitLeft, offset: 1 });
             pane.diff_text_head = Some(DiffTextPos { source_visible_ix: 1, region: DiffTextRegion::SplitLeft, offset: 0 });
-            let selected = pane.structural_line_selection(0, DiffTextRegion::SplitLeft).unwrap();
+            let selected = menu_lines(pane, 0, DiffTextRegion::SplitLeft).unwrap();
             assert_eq!(selected.old, BTreeSet::from([2]));
             assert!(selected.new.is_empty());
             let keyed = pane.structural_selected_lines().unwrap();
@@ -81,7 +81,7 @@ fn structural_selection_maps_collapsed_rows_and_never_expands_a_block(
             pane.diff_text_head = None;
             pane.diff_view = DiffViewMode::Inline;
             pane.diff_visible_indices = Arc::from([1, 2, 5, 6]);
-            let selected = pane.structural_line_selection(3, DiffTextRegion::Inline).unwrap();
+            let selected = menu_lines(pane, 3, DiffTextRegion::Inline).unwrap();
             assert!(selected.old.is_empty());
             assert_eq!(selected.new, BTreeSet::from([5]));
             let first = pane.structural_block_lines(2).unwrap();
@@ -118,12 +118,12 @@ fn structural_selection_maps_collapsed_rows_and_never_expands_a_block(
                 CollapsedDiffVisibleRow::FileRow { row_ix: 6 },
             ]);
             assert!(pane.is_collapsed_diff_projection_active());
-            let selected = pane.structural_line_selection(5, DiffTextRegion::Inline).unwrap();
+            let selected = menu_lines(pane, 5, DiffTextRegion::Inline).unwrap();
             assert!(selected.old.is_empty());
             assert_eq!(selected.new, BTreeSet::from([5]));
             pane.diff_text_anchor = Some(DiffTextPos { source_visible_ix: 1, region: DiffTextRegion::Inline, offset: 0 });
             pane.diff_text_head = Some(DiffTextPos { source_visible_ix: 5, region: DiffTextRegion::Inline, offset: 3 });
-            let selected = pane.structural_line_selection(5, DiffTextRegion::Inline).unwrap();
+            let selected = menu_lines(pane, 5, DiffTextRegion::Inline).unwrap();
             assert_eq!(selected.old, BTreeSet::from([2, 5]));
             assert_eq!(selected.new, BTreeSet::from([2, 5]));
             let keyed = pane.structural_selected_lines().unwrap();
@@ -137,7 +137,7 @@ fn structural_selection_maps_collapsed_rows_and_never_expands_a_block(
                 CollapsedDiffVisibleRow::HunkHeader { src_ix: 4, expansion_kind: CollapsedDiffExpansionKind::None, display_src_ix: None, hidden_rows: 2 },
                 CollapsedDiffVisibleRow::FileRow { row_ix: 4 },
             ]);
-            let selected = pane.structural_line_selection(3, DiffTextRegion::SplitRight).unwrap();
+            let selected = menu_lines(pane, 3, DiffTextRegion::SplitRight).unwrap();
             assert!(selected.old.is_empty());
             assert_eq!(selected.new, BTreeSet::from([5]));
         });
@@ -206,58 +206,69 @@ fn structural_line_keys_follow_the_last_right_click(cx: &mut gpui::TestAppContex
                         offset: head,
                     });
                 };
-                text(pane, 3);
-                pane.open_diff_editor_context_menu(
-                    1,
-                    DiffTextRegion::SplitRight,
-                    point(px(40.0), px(40.0)),
-                    window,
-                    cx,
-                );
-                let keyed = pane.structural_selected_lines().unwrap();
-                assert_eq!(
-                    (keyed.old, keyed.new),
-                    (BTreeSet::new(), BTreeSet::from([5])),
-                    "the clicked line, not the text"
-                );
-                // A row click retires the click, even one selecting the same row.
-                pane.handle_patch_row_click(1, DiffClickKind::Line, false);
-                pane.handle_patch_row_click(1, DiffClickKind::Line, true);
-                assert_eq!(pane.diff_selection_range, Some((1, 1)));
-                let keyed = pane.structural_selected_lines().unwrap();
-                assert_eq!(
-                    (keyed.old, keyed.new),
-                    (BTreeSet::new(), BTreeSet::from([2])),
-                    "after a row click"
-                );
+                let keyed = |pane: &DiffRenderer| {
+                    pane.structural_selected_lines()
+                        .map(|lines| (lines.old, lines.new))
+                        .unwrap()
+                };
+                let clicked_line = (BTreeSet::new(), BTreeSet::from([5]));
+                let clicked_row = (BTreeSet::from([5]), BTreeSet::from([5]));
                 let mut right_click =
-                    |pane: &mut DiffRenderer, cx: &mut gpui::Context<DiffRenderer>| {
+                    |pane: &mut DiffRenderer,
+                     visible_ix: usize,
+                     cx: &mut gpui::Context<DiffRenderer>| {
                         pane.open_diff_editor_context_menu(
-                            1,
+                            visible_ix,
                             DiffTextRegion::SplitRight,
                             point(px(40.0), px(40.0)),
                             window,
                             cx,
                         )
                     };
-                right_click(pane, cx);
-                // Rows laid out afresh retire the click.
+                text(pane, 3);
+                right_click(pane, 1, cx);
+                assert_eq!(keyed(pane), clicked_line, "the clicked line, not the text");
+                // A stale click leaves the row it selected, newer than the text.
                 pane.diff_visible_cache_projection_rev =
                     pane.diff_visible_cache_projection_rev.wrapping_add(1);
-                let keyed = pane.structural_selected_lines().unwrap();
-                assert_eq!(
-                    (keyed.old, keyed.new),
-                    (BTreeSet::new(), BTreeSet::from([2])),
-                    "after a new layout"
+                assert_eq!(keyed(pane), clicked_row, "after a new layout");
+                right_click(pane, 1, cx);
+                assert_eq!(keyed(pane), clicked_line, "the row holds the click");
+                pane.file_diff_cache_content_signature = Some(
+                    pane.file_diff_cache_content_signature
+                        .map_or(1, |signature| signature.wrapping_add(1)),
                 );
-                right_click(pane, cx);
+                assert_eq!(keyed(pane), clicked_row, "after new content");
+                right_click(pane, 1, cx);
+                pane.diff_view = DiffViewMode::Inline;
+                let inline = keyed(pane);
+                let click = pane.diff_editor_menu_column.take();
+                assert_eq!(inline, keyed(pane), "a Split click in the Inline view");
+                pane.diff_editor_menu_column = click;
+                pane.diff_view = DiffViewMode::Split;
+                // A row click retires the click, even one selecting the same row.
+                pane.clear_diff_text_selection();
+                right_click(pane, 1, cx);
+                assert_eq!(keyed(pane), clicked_line);
+                pane.handle_patch_row_click(1, DiffClickKind::Line, false);
+                pane.handle_patch_row_click(1, DiffClickKind::Line, true);
+                assert_eq!(pane.diff_selection_range, Some((1, 1)));
+                assert_eq!(keyed(pane), clicked_row, "after a row click");
+                right_click(pane, 1, cx);
                 // A new selection retires the click.
                 text(pane, 2);
-                let keyed = pane.structural_selected_lines().unwrap();
+                pane.sync_diff_focus_to_text_selection();
                 assert_eq!(
-                    (keyed.old, keyed.new),
+                    keyed(pane),
                     (BTreeSet::new(), BTreeSet::from([2])),
                     "the text again"
+                );
+                // A press past the last row selects nothing.
+                right_click(pane, 1000, cx);
+                assert_eq!(
+                    pane.diff_selection_range,
+                    Some((1, 1)),
+                    "a press past the rows takes the last"
                 );
             });
     });
@@ -470,6 +481,16 @@ fn file_view_identity_projection_does_not_store_an_index_per_row(cx: &mut gpui::
     });
 }
 
+/// The lines the menu a right-click on `region` of `visible` opens acts on.
+fn menu_lines(
+    pane: &mut DiffRenderer,
+    visible: usize,
+    region: DiffTextRegion,
+) -> Option<gitcomet_core::patch_action::SourceLineSelection> {
+    pane.select_diff_editor_menu_row(pane.diff_view, visible, region);
+    pane.structural_lines(Some(region))
+}
+
 fn show_structural_rows(pane: &mut DiffRenderer, old: &str, new: &str, diff: StructuralDiff) {
     let plan = Arc::new(gitcomet_core::file_diff::structural::plan(&diff, old, new));
     let mut source = StreamedFileDiffSource::new(
@@ -564,9 +585,7 @@ fn a_selection_from_a_line_end_leaves_that_line_out(cx: &mut gpui::TestAppContex
                 region: DiffTextRegion::Inline,
                 offset: 3,
             });
-            let selected = pane
-                .structural_line_selection(2, DiffTextRegion::Inline)
-                .unwrap();
+            let selected = menu_lines(pane, 2, DiffTextRegion::Inline).unwrap();
             assert_eq!(selected.old, BTreeSet::from([2]));
             assert_eq!(selected.new, BTreeSet::from([2, 3]));
         });
@@ -606,15 +625,23 @@ fn right_clicking_a_split_pair_changed_on_one_side_takes_both_lines(cx: &mut gpu
             for rows in [None, Some((0, 0))] {
                 pane.diff_selection_range = rows;
                 for region in [DiffTextRegion::SplitLeft, DiffTextRegion::SplitRight] {
-                    let selected = pane.structural_line_selection(0, region).unwrap();
+                    let selected = menu_lines(pane, 0, region).unwrap();
                     assert_eq!(selected.old, BTreeSet::from([1]), "{rows:?} {region:?}");
                     assert_eq!(selected.new, BTreeSet::from([1]), "{rows:?} {region:?}");
                 }
             }
+            // Within selected rows, too, beside a row changed on both sides.
+            pane.diff_selection_range = Some((0, 1));
+            for (region, old, new) in [
+                (DiffTextRegion::SplitLeft, &[1, 2][..], &[1][..]),
+                (DiffTextRegion::SplitRight, &[1], &[1, 2]),
+            ] {
+                let selected = menu_lines(pane, 1, region).unwrap();
+                assert_eq!(selected.old, old.iter().copied().collect(), "{region:?}");
+                assert_eq!(selected.new, new.iter().copied().collect(), "{region:?}");
+            }
             pane.diff_selection_range = None;
-            let changed_on_both_sides = pane
-                .structural_line_selection(1, DiffTextRegion::SplitRight)
-                .unwrap();
+            let changed_on_both_sides = menu_lines(pane, 1, DiffTextRegion::SplitRight).unwrap();
             assert!(changed_on_both_sides.old.is_empty());
             assert_eq!(changed_on_both_sides.new, BTreeSet::from([2]));
         });

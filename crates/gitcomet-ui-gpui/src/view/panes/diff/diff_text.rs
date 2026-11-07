@@ -87,6 +87,14 @@ impl DiffRenderer {
         self.diff_text_autoscroll_target = None;
     }
 
+    /// Places the text selection span. It drops the selected rows, so rows
+    /// beside a text selection are always the newer of the two.
+    pub(in crate::view) fn set_diff_text_span(&mut self, anchor: DiffTextPos, head: DiffTextPos) {
+        self.diff_text_anchor = Some(anchor);
+        self.diff_text_head = Some(head);
+        self.diff_selection_range = None;
+    }
+
     /// Drop click affordances projected into the current visible-row space.
     /// Pair and occurrence spans carry row indices and display offsets, so
     /// neither can survive a projection reset or a replacement source.
@@ -628,9 +636,7 @@ impl DiffRenderer {
         suppress_clicks: usize,
     ) {
         self.diff_text_selecting = false;
-        self.diff_text_anchor = Some(anchor);
-        self.diff_text_head = Some(head);
-        self.diff_selection_range = None;
+        self.set_diff_text_span(anchor, head);
         self.sync_diff_focus_to_text_selection();
         self.diff_suppress_clicks_remaining = suppress_clicks.min(u8::MAX as usize) as u8;
     }
@@ -955,10 +961,8 @@ impl DiffRenderer {
         self.diff_text_pending_syntax_click = None;
         self.diff_text_selecting = true;
         self.diff_focused_change_block = None;
-        self.diff_text_anchor = Some(pos);
-        self.diff_text_head = Some(pos);
+        self.set_diff_text_span(pos, pos);
         self.diff_selection_anchor = None;
-        self.diff_selection_range = None;
         self.diff_text_last_mouse_pos = position;
         self.diff_suppress_clicks_remaining = 0;
         self.begin_diff_text_scroll_tracking(position, cx);
@@ -980,9 +984,7 @@ impl DiffRenderer {
         let pos = hit.pos;
         self.diff_text_selecting = true;
         self.diff_focused_change_block = None;
-        self.diff_text_anchor = Some(pos);
-        self.diff_text_head = Some(pos);
-        self.diff_selection_range = None;
+        self.set_diff_text_span(pos, pos);
         self.diff_text_last_mouse_pos = position;
         self.diff_suppress_clicks_remaining = 0;
         if let Some(document_region) =

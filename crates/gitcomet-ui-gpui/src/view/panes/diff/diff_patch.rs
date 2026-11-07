@@ -55,20 +55,21 @@ impl DiffRenderer {
         selection
     }
 
-    /// The source lines that `region` of `row` stands for when the user acts
-    /// on the row itself (its gutter button, a right-click without a
-    /// selection). Split draws a pair changed on one side as one change in the
-    /// changed column, so it stands for both lines, as its one Inline row does.
+    /// The source lines that `column` of `row` stands for when the user acts
+    /// on the row itself (its gutter button, a right-click on it), or both its
+    /// sides with no column. Split draws a pair changed on one side as one
+    /// change in the changed column, so it stands for both lines, as its one
+    /// Inline row does.
     pub(super) fn structural_row_lines(
         &self,
         row: usize,
-        region: DiffTextRegion,
+        column: Option<DiffTextRegion>,
     ) -> SourceLineSelection {
         let one_sided_pair = self.diff_view == DiffViewMode::Split
             && self
                 .file_diff_split_row(row)
                 .is_some_and(|row| row.kind == FileDiffRowKind::Context);
-        self.structural_source_lines([row], (!one_sided_pair).then_some(region))
+        self.structural_source_lines([row], column.filter(|_| !one_sided_pair))
     }
 
     pub(super) fn open_structural_line_menu(
@@ -86,11 +87,9 @@ impl DiffRenderer {
         {
             return;
         }
-        self.select_diff_editor_menu_row(self.diff_view, visible, region, self.diff_visible_len());
-        let Some(selection) = self.structural_line_selection(visible, region) else {
-            return;
-        };
-        self.remember_diff_editor_menu_click(visible, region);
+        self.select_diff_editor_menu_row(self.diff_view, visible, region);
+        let selection = self.structural_lines(Some(region)).unwrap_or_default();
+        self.remember_diff_editor_menu_column(region);
         let copy = self
             .selected_diff_text_string()
             .or_else(|| self.diff_text_string_for_region(visible, region));
@@ -102,35 +101,6 @@ impl DiffRenderer {
             scopes.push(("block", block));
         }
         self.open_structural_menu(scopes, copy, anchor, window, cx);
-    }
-
-    pub(super) fn structural_line_selection(
-        &self,
-        visible: usize,
-        region: DiffTextRegion,
-    ) -> Option<SourceLineSelection> {
-        let row = self.diff_source_visible_ix_for_visible_ix(visible)?;
-        let selected = self.diff_text_selection_line_rows_at(self.diff_view, row, region);
-        // A range of the clicked row alone stands for that row, as it does
-        // once a right-click selects it.
-        if selected.is_none()
-            && let Some((a, b)) = self.diff_selection_range
-            && a != b
-            && (a.min(b)..=a.max(b)).contains(&visible)
-        {
-            return Some(self.structural_source_lines(
-                (a.min(b)..=a.max(b)).filter_map(|row| self.diff_mapped_ix_for_visible_ix(row)),
-                Some(region),
-            ));
-        }
-        let Some((first, last)) = selected else {
-            return Some(
-                self.diff_source_mapped_ix_for_visible_ix(row)
-                    .map(|row| self.structural_row_lines(row, region))
-                    .unwrap_or_default(),
-            );
-        };
-        Some(self.structural_text_selection_lines(first, last))
     }
 
     /// The source lines the text selection takes on source rows

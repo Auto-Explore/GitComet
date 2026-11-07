@@ -29,9 +29,19 @@ impl DiffRenderer {
         if self.is_inline_submodule_diff_active() {
             return;
         }
+        let is_file_preview = self.is_file_preview_active();
+        let list_len = if is_file_preview {
+            self.worktree_preview_line_count().unwrap_or(0)
+        } else {
+            self.diff_visible_len()
+        };
+        // A press past the rows, from a hitbox drawn before they shrank, takes
+        // the last row in both engines; with no rows there is none to settle.
+        let clicked = (list_len > 0).then(|| visible_ix.min(list_len - 1));
         if self.structural_diff_active() {
-            let clicked_visible_ix = visible_ix.min(self.diff_visible_len().saturating_sub(1));
-            self.open_structural_line_menu(clicked_visible_ix, region, anchor, window, cx);
+            if let Some(clicked) = clicked {
+                self.open_structural_line_menu(clicked, region, anchor, window, cx);
+            }
             return;
         }
         let Some(workdir) = self
@@ -48,11 +58,9 @@ impl DiffRenderer {
             }
             _ => (DiffArea::Unstaged, false),
         };
-        let is_file_preview = self.is_file_preview_active();
-
         let selected_copy_text = self.selected_diff_text_string();
         let copy_target = if selected_copy_text.is_none()
-            && self.is_file_preview_active()
+            && is_file_preview
             && region == DiffTextRegion::Inline
             && self
                 .worktree_preview_line_raw_text(visible_ix)
@@ -68,23 +76,15 @@ impl DiffRenderer {
             selected_copy_text.or_else(|| self.diff_text_string_for_region(visible_ix, region))
         };
 
-        let list_len = if is_file_preview {
-            self.worktree_preview_line_count().unwrap_or(0)
-        } else {
-            self.diff_visible_len()
-        };
-        let clicked_visible_ix = if list_len == 0 {
-            visible_ix
-        } else {
-            visible_ix.min(list_len - 1)
-        };
-
         let menu_view = if is_file_preview {
             DiffViewMode::Inline
         } else {
             self.diff_view
         };
-        self.select_diff_editor_menu_row(menu_view, clicked_visible_ix, region, list_len);
+        if let Some(clicked) = clicked {
+            self.select_diff_editor_menu_row(menu_view, clicked, region);
+        }
+        let clicked_visible_ix = clicked.unwrap_or(visible_ix);
 
         let sources = self.diff_line_sources(&workdir);
         let clicked_src_ix = self
@@ -110,11 +110,8 @@ impl DiffRenderer {
         let allow_patch_actions =
             allow_apply && !is_file_preview && !self.has_large_file_text_diff();
 
-        self.remember_diff_editor_menu_click(clicked_visible_ix, region);
-        let selection = self.diff_editor_menu_rows(menu_view, clicked_visible_ix, region, list_len);
-
         let (hunks_count, hunk_patch, lines_count, lines_patch, discard_lines_patch) =
-            if allow_patch_actions && let Some((sel_a, sel_b)) = selection {
+            if allow_patch_actions && let Some((sel_a, sel_b)) = self.diff_line_action_rows() {
                 let selected = self.selected_diff_lines(&sources, (sel_a, sel_b));
                 let selected_change_src_ixs = &selected.change_src_ixs;
 
@@ -208,50 +205,32 @@ impl DiffRenderer {
             .and_then(|(a, b)| self.diff_text_visible_range_for_source_range(a, b))
     }
 
-    /// Selects the right-clicked row, dropping the outline, unless the text
-    /// selection or the selected rows already take it: the menu acts on what
-    /// the diff shows selected.
+    /// Settles the selection a right-click on `region` of `clicked_visible_ix`
+    /// acts on: the text selection it lands in, which then drops the selected
+    /// rows, else the selected rows holding it, else the clicked row, selected
+    /// in place of the outline. The menu acts on what the diff shows selected,
+    /// and so do S, U and D once it closes.
     pub(in crate::view::panes::diff) fn select_diff_editor_menu_row(
         &mut self,
         view: DiffViewMode,
         clicked_visible_ix: usize,
         region: DiffTextRegion,
-        list_len: usize,
     ) {
-        if list_len == 0
-            || self
-                .diff_editor_menu_text_rows(view, clicked_visible_ix, region)
-                .is_some()
-            || self
-                .diff_selection_range
-                .is_some_and(|(a, b)| (a.min(b)..=a.max(b)).contains(&clicked_visible_ix))
+        if self
+            .diff_editor_menu_text_rows(view, clicked_visible_ix, region)
+            .is_some()
+        {
+            self.sync_diff_focus_to_text_selection();
+            return;
+        }
+        if self
+            .diff_selection_range
+            .is_some_and(|(a, b)| (a.min(b)..=a.max(b)).contains(&clicked_visible_ix))
         {
             return;
         }
         self.diff_selection_anchor = Some(clicked_visible_ix);
         self.diff_selection_range = Some((clicked_visible_ix, clicked_visible_ix));
         self.diff_focused_change_block = None;
-    }
-
-    /// The visible rows the diff editor menu opened by that right-click acts
-    /// on: the text selection it landed in, else the selected rows, else the
-    /// clicked row, within the `list_len` rows listed.
-    pub(super) fn diff_editor_menu_rows(
-        &self,
-        view: DiffViewMode,
-        clicked_visible_ix: usize,
-        region: DiffTextRegion,
-        list_len: usize,
-    ) -> Option<(usize, usize)> {
-        self.diff_editor_menu_text_rows(view, clicked_visible_ix, region)
-            .or_else(|| self.diff_selection_range.map(|(a, b)| (a.min(b), a.max(b))))
-            .or_else(|| (list_len > 0).then_some((clicked_visible_ix, clicked_visible_ix)))
-            .map(|(a, b)| {
-                if list_len == 0 {
-                    (0, 0)
-                } else {
-                    (a.min(list_len - 1), b.min(list_len - 1))
-                }
-            })
     }
 }
