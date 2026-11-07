@@ -1591,3 +1591,108 @@ fn submit_auth_prompt_replays_a_refspec_fetch() {
     assert!(effects[0].git_auth().is_some());
     assert_eq!(state.repos[0].pull_in_flight, 1);
 }
+
+/// "Push anyway" answers the push it was chosen for, and that push's retry
+/// from a sign-in prompt is still that push; cancelling the sign-in ends it.
+#[test]
+fn push_anyway_keeps_its_override_through_the_sign_in_retry() {
+    let _lock = super::staged_auth_test_lock();
+    clear_staged_git_auth();
+    let repo_id = RepoId(1);
+    let (mut repos, mut state) = setup_open_repo(repo_id, "/tmp/repo");
+    let id_alloc = AtomicU64::new(1);
+    let push_anyway = |repos: &mut RepositoryRuntimes, state: &mut AppState| {
+        reduce(
+            repos,
+            &id_alloc,
+            state,
+            Msg::Internal(crate::msg::InternalMsg::PushBlockedByUnpushedSubmodules {
+                repo_id,
+                pointers: vec![gitcomet_core::domain::SubmoduleCheckoutUpdate {
+                    path: PathBuf::from("mods/child"),
+                    commit: CommitId("c".repeat(40).into()),
+                }],
+                push: crate::model::BlockedPush::Push,
+            }),
+        );
+        let prompt = state.unpushed_pointer_prompt.clone().expect("prompt");
+        let effects = reduce(
+            repos,
+            &id_alloc,
+            state,
+            Msg::ResolveUnpushedPointerPrompt {
+                prompt,
+                push_submodules_first: false,
+            },
+        );
+        assert!(matches!(
+            effects.as_slice(),
+            [Effect::RepoCommand(RepoCommandEffect::Push { .. })]
+        ));
+        assert_eq!(state.unpushed_pointer_override, Some(repo_id));
+    };
+    let needs_sign_in = || {
+        Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
+            repo_id,
+            command: RepoCommandKind::Push,
+            result: Err(auth_error(
+                "git push failed: fatal: could not read Username for 'https://example.com': terminal prompts disabled",
+            )),
+        })
+    };
+
+    push_anyway(&mut repos, &mut state);
+    reduce(&mut repos, &id_alloc, &mut state, needs_sign_in());
+    let generation = state
+        .auth_prompt
+        .as_ref()
+        .expect("sign-in prompt")
+        .generation;
+    assert_eq!(
+        state.unpushed_pointer_override,
+        Some(repo_id),
+        "the retry is still the push the user chose"
+    );
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::SubmitAuthPrompt {
+            generation,
+            username: Some("alice".to_string()),
+            secret: "token".to_string(),
+        },
+    );
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::RepoCommand(RepoCommandEffect::Push {
+            auth: Some(_),
+            ..
+        })]
+    ));
+    assert_eq!(state.unpushed_pointer_override, Some(repo_id));
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
+            repo_id,
+            command: RepoCommandKind::Push,
+            result: Ok(gitcomet_core::services::CommandOutput::default()),
+        }),
+    );
+    assert_eq!(
+        state.unpushed_pointer_override, None,
+        "it answered one push"
+    );
+
+    push_anyway(&mut repos, &mut state);
+    reduce(&mut repos, &id_alloc, &mut state, needs_sign_in());
+    assert!(state.auth_prompt.is_some());
+    reduce(&mut repos, &id_alloc, &mut state, Msg::CancelAuthPrompt);
+    assert_eq!(
+        state.unpushed_pointer_override, None,
+        "a cancelled sign-in ends the push"
+    );
+    clear_staged_git_auth();
+}

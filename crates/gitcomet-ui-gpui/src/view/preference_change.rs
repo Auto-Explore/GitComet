@@ -58,6 +58,7 @@ pub(in crate::view) enum PreferenceChange {
     RemotePrune(bool),
     AutoFetch(gitcomet_state::model::AutoFetchSettings),
     MaintenanceRecommendations(bool),
+    SubmoduleSettings(gitcomet_state::model::SubmoduleSettings),
     ResetHistoryColumnWidths,
     /// A new Git executable was probed; the window's signing probe restarts.
     GitRuntime(gitcomet_core::process::GitRuntimeState),

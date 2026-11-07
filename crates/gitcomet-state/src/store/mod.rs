@@ -548,6 +548,9 @@ impl WorkerLoopContext<'_> {
             }
             | crate::msg::Effect::CommitAmend {
                 repo_id, identity, ..
+            }
+            | crate::msg::Effect::RecordSubmoduleCommit {
+                repo_id, identity, ..
             } = &mut effect
             {
                 let resolver = self

@@ -346,11 +346,16 @@ impl SidebarPaneView {
         ctx: &SidebarRowContext,
         slot: SidebarRowSlot,
         path: std::path::PathBuf,
-        status: SubmoduleStatus,
-        recorded_head: CommitId,
-        checked_out_head: Option<CommitId>,
+        facts: SubmoduleRowFacts,
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
+        let SubmoduleRowFacts {
+            status,
+            recorded_head,
+            checked_out_head,
+            drift,
+            has_inner_changes,
+        } = facts;
         let SidebarRowSlot { ix, row_style, .. } = slot;
         let theme = ctx.theme;
         let repo_id = ctx.repo_id;
@@ -359,20 +364,15 @@ impl SidebarPaneView {
         let repo_workdir_for_open = ctx.repo_workdir.clone();
         let path_label = this.cached_path_display(&path);
         let (icon_color, badge_label, can_open, tooltip) = {
-            let badge_label = match status {
-                SubmoduleStatus::NotInitialized => Some("Not loaded"),
-                SubmoduleStatus::HeadMismatch => Some("Head mismatch"),
-                SubmoduleStatus::MergeConflict => Some("Conflict"),
-                SubmoduleStatus::MissingMapping => Some("Missing mapping"),
-                SubmoduleStatus::Unknown(_) => Some("Unknown"),
-                SubmoduleStatus::UpToDate => None,
-            };
+            let badge_label = submodule_pill_label(status, drift, has_inner_changes);
+            let out_of_sync = has_inner_changes || drift.is_some_and(|drift| !drift.is_empty());
             let icon_color = match status {
                 SubmoduleStatus::NotInitialized => with_alpha(
                     theme.colors.foreground.secondary,
                     if theme.is_dark { 0.78 } else { 0.92 },
                 ),
                 SubmoduleStatus::HeadMismatch => theme.colors.status.warning.foreground,
+                SubmoduleStatus::UpToDate if out_of_sync => theme.colors.status.warning.foreground,
                 SubmoduleStatus::MergeConflict | SubmoduleStatus::MissingMapping => {
                     theme.colors.status.danger.foreground
                 }
@@ -388,13 +388,14 @@ impl SidebarPaneView {
                 .as_ref()
                 .map(|head| head.as_ref())
                 .unwrap_or("not loaded");
-            let tooltip: SharedString = format!(
+            let mut tooltip = format!(
                 "{}\nRecorded: {}\nChecked out: {}",
                 path.display(),
                 recorded_head.as_ref(),
                 checked_out,
-            )
-            .into();
+            );
+            push_submodule_sync_lines(&mut tooltip, drift, has_inner_changes);
+            let tooltip: SharedString = tooltip.into();
             (icon_color, badge_label, can_open, tooltip)
         };
         let context_menu_invoker: SharedString =

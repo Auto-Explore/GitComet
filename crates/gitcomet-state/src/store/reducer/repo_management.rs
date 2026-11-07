@@ -478,6 +478,7 @@ fn open_repo_with_mode(
         .or(session_preferences.default_history_mode)
         .unwrap_or_default();
 
+    let provisional_parent = super::submodule_tabs::provisional_link_for_open(state, &spec.workdir);
     state.repos.push({
         let mut repo_state = match mode {
             OpenRepoMode::Standard | OpenRepoMode::DocumentBackground => {
@@ -500,8 +501,10 @@ fn open_repo_with_mode(
             .cloned()
             .unwrap_or_default();
         repo_state.last_active_at = Some(now);
+        repo_state.submodule_parent = provisional_parent;
         repo_state
     });
+    super::submodule_tabs::group(state);
     let mut effects = Vec::new();
     if mode != OpenRepoMode::DocumentBackground {
         state.active_repo = Some(repo_id);
@@ -712,6 +715,9 @@ fn remove_repo(
     let persist_closed_recent = !closed_repo.is_provisional_external_drop_open();
     state.repos.remove(removed_repo_ix);
     repos.retire(&repo_id);
+    // Submodule tabs of a closed parent stay where they are, unlinked.
+    super::submodule_tabs::relink(state);
+    super::linked_commit::forget_closed_repos(state);
     if record_recent && persist_closed_recent {
         effects.push(persist_recent_repo_effect(Some(repo_id), closed_workdir));
     }
@@ -844,6 +850,8 @@ pub(super) fn close_repos(
         }
         keep
     });
+    super::submodule_tabs::relink(state);
+    super::linked_commit::forget_closed_repos(state);
 
     if let Some(active_repo_id) = next_active_repo {
         if state.active_repo != Some(active_repo_id) {
@@ -1202,6 +1210,13 @@ pub(super) fn fill_reorder_repo_tabs_inline(
     let Some(from_ix) = from_ix else {
         return;
     };
+    // Regrouping below can undo the move. A drag sends this on every pointer
+    // move, so only a changed order is written to the session.
+    let order_before: Option<Vec<RepoId>> = state
+        .repos
+        .iter()
+        .any(|repo| repo.submodule_parent_tab().is_some())
+        .then(|| state.repos.iter().map(|repo| repo.id).collect());
 
     match before_ix {
         Some(before_ix) if from_ix + 1 == before_ix => {
@@ -1222,6 +1237,17 @@ pub(super) fn fill_reorder_repo_tabs_inline(
             state.repos[from_ix..].rotate_left(1);
         }
     };
+    // A worktree tab carries its submodule tabs along, and a submodule tab
+    // cannot leave its pair: regrouping undoes a drop outside it.
+    super::submodule_tabs::group(state);
+    if order_before.is_some_and(|before| {
+        before
+            .iter()
+            .copied()
+            .eq(state.repos.iter().map(|repo| repo.id))
+    }) {
+        return;
+    }
 
     effects.push(persist_session_effect(
         state,

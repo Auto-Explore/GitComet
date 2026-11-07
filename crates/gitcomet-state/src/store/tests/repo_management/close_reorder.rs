@@ -644,3 +644,77 @@ fn reorder_repo_tabs_noops_for_invalid_or_already_stable_ordering() {
         original
     );
 }
+
+/// A drag sends a reorder on every pointer move; one that regrouping undoes
+/// leaves the order as it was and writes no session.
+#[test]
+fn reorder_repo_tabs_persists_only_an_order_regrouping_keeps() {
+    let mut repos: RepositoryRuntimes = Default::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::test_default();
+    for path in ["/tmp/app", "/tmp/other", "/tmp/app/vendor/lib"] {
+        reduce(
+            &mut repos,
+            &id_alloc,
+            &mut state,
+            Msg::OpenRepo(PathBuf::from(path)),
+        );
+    }
+    // Opening normalizes the paths (on Windows they gain a drive), so link
+    // through the workdirs the tabs actually hold.
+    let workdir = |state: &AppState, id: RepoId| {
+        state
+            .repos
+            .iter()
+            .find(|repo| repo.id == id)
+            .map(|repo| repo.spec.workdir.clone())
+            .unwrap()
+    };
+    let parent_workdir = workdir(&state, RepoId(1));
+    let submodule_workdir = workdir(&state, RepoId(3));
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::SubmoduleParentResolved {
+            repo_id: RepoId(3),
+            canonical_workdir: submodule_workdir,
+            parent: Some(gitcomet_core::domain::SubmoduleParent {
+                workdir: parent_workdir,
+                path: PathBuf::from("vendor/lib"),
+                nested: false,
+            }),
+        }),
+    );
+    let order = |state: &AppState| state.repos.iter().map(|r| r.id).collect::<Vec<_>>();
+    assert_eq!(order(&state), vec![RepoId(1), RepoId(3), RepoId(2)]);
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::ReorderRepoTabs {
+            repo_id: RepoId(3),
+            insert_before: None,
+        },
+    );
+    assert!(effects.is_empty(), "{effects:?}");
+    assert_eq!(order(&state), vec![RepoId(1), RepoId(3), RepoId(2)]);
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::ReorderRepoTabs {
+            repo_id: RepoId(2),
+            insert_before: Some(RepoId(1)),
+        },
+    );
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::Persistence(
+            PersistenceEffect::PersistSession { .. }
+        )]
+    ));
+    assert_eq!(order(&state), vec![RepoId(2), RepoId(1), RepoId(3)]);
+}

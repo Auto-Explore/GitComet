@@ -97,8 +97,6 @@ pub(super) fn model(
             use_selection,
             selected_count,
             is_conflicted,
-            has_unstaged_for_path,
-            is_staged_added,
             submodule_menu_state,
         );
     }
@@ -550,13 +548,11 @@ fn submodule_status_model(
     use_selection: bool,
     selected_count: usize,
     is_conflicted: bool,
-    has_unstaged_for_path: bool,
-    is_staged_added: bool,
     submodule_menu_state: submodule::SubmoduleMenuState,
 ) -> ContextMenuModel {
     let mut items = vec![ContextMenuItem::Header("Submodule".into())];
     items.push(ContextMenuItem::Label(path.display().to_string().into()));
-    if let Some(status_label) = submodule::status_label(submodule_menu_state.status) {
+    if let Some(status_label) = submodule::status_label(&submodule_menu_state) {
         items.push(ContextMenuItem::Label(status_label.into()));
     }
     items.push(ContextMenuItem::Separator);
@@ -659,14 +655,9 @@ fn submodule_status_model(
         }
     }
 
-    let can_discard_worktree_changes = if is_conflicted {
-        false
-    } else {
-        match area {
-            DiffArea::Unstaged => true,
-            DiffArea::Staged => has_unstaged_for_path || is_staged_added,
-        }
-    };
+    // A staged pointer change discards like an unstaged one: the pointer goes
+    // back to HEAD's and the submodule is checked out there.
+    let can_discard_worktree_changes = !is_conflicted;
     if !(is_conflicted && area == DiffArea::Staged) {
         items.push(ContextMenuItem::Entry {
             label: if use_selection {

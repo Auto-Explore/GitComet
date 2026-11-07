@@ -537,7 +537,7 @@ pub struct SafePushAfterCommitContext {
     pub post_head: Option<CommitId>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct SafePushAfterCommitTarget {
     pub remote: String,
     pub branch: String,
@@ -545,7 +545,7 @@ pub struct SafePushAfterCommitTarget {
     pub local_head: CommitId,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct ForcePushLease {
     pub remote: String,
     pub branch: String,
@@ -1568,6 +1568,12 @@ pub trait GitRepository: Send + Sync {
     fn common_dir(&self) -> Option<std::path::PathBuf> {
         None
     }
+    /// The working tree that records this checkout as a gitlink, when this
+    /// repository is checked out as a submodule. A worktree of a submodule
+    /// checked out elsewhere has none.
+    fn superproject(&self) -> Result<Option<crate::domain::SubmoduleParent>> {
+        Ok(None)
+    }
     /// Whether the repository needs substantial maintenance: git's gc
     /// thresholds (`gc.auto` loose objects, `gc.autoPackLimit` packs).
     fn maintenance_needed(&self) -> Result<bool> {
@@ -2147,6 +2153,102 @@ pub trait GitRepository: Send + Sync {
     }
 
     fn discard_worktree_changes(&self, paths: &[&Path]) -> Result<()>;
+
+    /// Discard `paths`, keeping each submodule among them checked out at the
+    /// pointer the discard restores, as `policy` says. With the guarded
+    /// policy, a submodule with work a checkout could lose stops the whole
+    /// discard before anything changes, and the outcome lists the risks.
+    fn discard_worktree_changes_with_submodules(
+        &self,
+        paths: &[&Path],
+        _policy: crate::domain::SubmoduleCheckoutPolicy,
+        _remote_url_policy: crate::remote_url::RemoteUrlPolicy,
+    ) -> Result<crate::domain::DiscardOutcome> {
+        self.discard_worktree_changes(paths)?;
+        Ok(crate::domain::DiscardOutcome::default())
+    }
+
+    /// Check a submodule out at the commit this repository records for it,
+    /// guarded the same way as a discard.
+    fn update_submodule_to_recorded(
+        &self,
+        _path: &Path,
+        _policy: crate::domain::SubmoduleCheckoutPolicy,
+    ) -> Result<crate::domain::DiscardOutcome> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "submodule checkout updates are not implemented for this backend",
+        )))
+    }
+
+    /// The first-level submodules that should follow their pointer after an
+    /// operation that may move it. `None` when there are none, or when Git
+    /// already updates submodules itself (`submodule.recurse`).
+    fn submodule_pointer_snapshot(
+        &self,
+    ) -> Result<Option<crate::domain::SubmodulePointerSnapshot>> {
+        Ok(None)
+    }
+
+    /// Check out the submodules of `snapshot` whose recorded commit moved
+    /// while their checkout stayed where it was.
+    fn follow_submodule_pointers(
+        &self,
+        _snapshot: &crate::domain::SubmodulePointerSnapshot,
+    ) -> Result<Vec<crate::domain::SubmoduleCheckoutUpdate>> {
+        Ok(Vec::new())
+    }
+
+    /// Commit the submodule at `path` as it is checked out, leaving anything
+    /// else that is staged out of the commit.
+    fn record_submodule_commit(
+        &self,
+        _path: &Path,
+        _message: &str,
+        _identity: Option<&crate::commit_identity::CommitIdentity>,
+    ) -> Result<CommitOperationOutcome> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "recording a submodule commit is not implemented for this backend",
+        )))
+    }
+
+    /// Record the submodule at `path` again in HEAD, which must still be
+    /// `expected_head`, keeping its message.
+    fn amend_submodule_record(
+        &self,
+        _path: &Path,
+        _expected_head: &crate::domain::CommitId,
+        _identity: Option<&crate::commit_identity::CommitIdentity>,
+    ) -> Result<CommitOperationOutcome> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "re-recording a submodule commit is not implemented for this backend",
+        )))
+    }
+
+    /// Push the branch of the submodule at `path` that holds `commit` to
+    /// that branch's upstream.
+    fn push_submodule_with_output(
+        &self,
+        _path: &Path,
+        _commit: &crate::domain::CommitId,
+    ) -> Result<CommandOutput> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "pushing a submodule is not implemented for this backend",
+        )))
+    }
+
+    /// Stash the uncommitted changes to tracked files inside the submodule
+    /// at `path` under `message`.
+    fn stash_submodule_changes(&self, _path: &Path, _message: &str) -> Result<()> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "stashing in a submodule is not implemented for this backend",
+        )))
+    }
+
+    /// Submodule commits that outgoing commits record but no remote-tracking
+    /// branch or tag in that submodule holds.
+    fn unpushed_submodule_pointers(&self) -> Result<Vec<crate::domain::SubmoduleCheckoutUpdate>> {
+        Ok(Vec::new())
+    }
 }
 
 fn validate_safe_push_after_commit_target<R: GitRepository + ?Sized>(

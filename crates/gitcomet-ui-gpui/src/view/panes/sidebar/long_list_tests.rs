@@ -37,6 +37,9 @@ pub(super) fn fixture(count: usize, section: CollapsedSidebarSection) -> Arc<App
                     recorded_head: CommitId("a".into()),
                     checked_out_head: Some(CommitId("a".into())),
                     status: SubmoduleStatus::UpToDate,
+                    nested: false,
+                    drift: None,
+                    has_inner_changes: false,
                 })
                 .collect()
         } else {

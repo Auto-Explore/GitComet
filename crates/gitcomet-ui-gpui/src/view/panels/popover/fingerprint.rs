@@ -230,6 +230,7 @@ fn repo_for_popover<'a>(
         | PopoverKind::InteractiveRebaseAutosquashMenu
         | PopoverKind::TerminalShutdownConfirm(_)
         | PopoverKind::CloseGuardConfirm(_)
+        | PopoverKind::SubmoduleCloseConfirm(_)
         | PopoverKind::UnsavedFileEditsConfirm(_)
         | PopoverKind::ConflictResolverInputRowMenu { .. }
         | PopoverKind::ConflictResolverChunkMenu { .. }
@@ -268,6 +269,21 @@ fn repo_for_popover<'a>(
         | PopoverKind::ForceRemoveWorktreeConfirm(
             gitcomet_state::model::ForceRemoveWorktreePrompt { repo_id, .. },
         )
+        | PopoverKind::SubmoduleCheckoutConfirm(gitcomet_state::model::SubmoduleCheckoutPrompt {
+            repo_id,
+            ..
+        })
+        | PopoverKind::LinkedPushConfirm(gitcomet_state::model::LinkedPushPrompt {
+            child: repo_id,
+            ..
+        })
+        | PopoverKind::UnpushedPointerConfirm(gitcomet_state::model::UnpushedPointerPrompt {
+            repo_id,
+            ..
+        })
+        | PopoverKind::SubmoduleLeaveBehindConfirm(SubmoduleLeaveBehindPrompt {
+            repo_id, ..
+        })
         | PopoverKind::DiscardChangesConfirm { repo_id, .. }
         | PopoverKind::DiscardFolderChangesConfirm { repo_id, .. }
         | PopoverKind::FileListFolderMenu { repo_id, .. }
@@ -336,6 +352,7 @@ fn hash_repo_for_popover<H: Hasher>(
         | PopoverKind::SidebarPinnedOverflow { .. }
         | PopoverKind::SidebarAncestorMenu { .. }
         | PopoverKind::ForceDeleteBranchConfirm(_)
+        | PopoverKind::SubmoduleCheckoutConfirm(_)
         | PopoverKind::PushSetUpstreamPrompt { .. } => {
             repo.head_branch_rev.hash(hasher);
             repo.branches_rev.hash(hasher);
@@ -627,6 +644,10 @@ fn hash_repo_for_popover<H: Hasher>(
         | PopoverKind::AddRepoMenu
         | PopoverKind::TerminalShutdownConfirm(_)
         | PopoverKind::CloseGuardConfirm(_)
+        | PopoverKind::SubmoduleCloseConfirm(_)
+        | PopoverKind::SubmoduleLeaveBehindConfirm(_)
+        | PopoverKind::LinkedPushConfirm(_)
+        | PopoverKind::UnpushedPointerConfirm(_)
         | PopoverKind::UnsavedFileEditsConfirm(_)
         | PopoverKind::FilesystemConflict(_)
         | PopoverKind::DeletePermanentlyConfirm(_)
@@ -857,6 +878,11 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
             operation.hash(hasher);
         }
         PopoverKind::ForceDeleteBranchConfirm(prompt) => prompt.hash(hasher),
+        PopoverKind::SubmoduleCheckoutConfirm(prompt) => prompt.hash(hasher),
+        PopoverKind::LinkedPushConfirm(prompt) => prompt.hash(hasher),
+        PopoverKind::UnpushedPointerConfirm(prompt) => prompt.hash(hasher),
+        PopoverKind::SubmoduleCloseConfirm(prompt) => prompt.hash(hasher),
+        PopoverKind::SubmoduleLeaveBehindConfirm(prompt) => prompt.hash(hasher),
         PopoverKind::ForceRemoveWorktreeConfirm(prompt) => prompt.hash(hasher),
         PopoverKind::DiscardChangesConfirm {
             repo_id,

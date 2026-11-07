@@ -561,6 +561,8 @@ pub(in crate::view) fn hash_branch_sidebar_rows(rows: &[BranchSidebarRow]) -> u6
                 status,
                 recorded_head,
                 checked_out_head,
+                drift,
+                has_inner_changes,
             } => {
                 let path_len = path
                     .to_str()
@@ -572,6 +574,8 @@ pub(in crate::view) fn hash_branch_sidebar_rows(rows: &[BranchSidebarRow]) -> u6
                 status.hash(&mut h);
                 recorded_head.hash(&mut h);
                 checked_out_head.hash(&mut h);
+                drift.hash(&mut h);
+                has_inner_changes.hash(&mut h);
             }
             BranchSidebarRow::StashItem {
                 index,

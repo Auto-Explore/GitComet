@@ -1027,6 +1027,32 @@ impl SettingsWindowView {
             ));
         }
         change_tracking_card
+            .child(
+                self.toggle_row(
+                    "settings_window_follow_submodule_pointers",
+                    "Check out submodules when their pointer moves",
+                    self.follow_submodule_pointers,
+                    theme,
+                )
+                .border_color(no_separator)
+                .on_activate(
+                    false,
+                    controls::ControlActivation::Action,
+                    cx.listener(|this, _e: &ClickEvent, _window, cx| {
+                        this.set_follow_submodule_pointers(!this.follow_submodule_pointers, cx);
+                    }),
+                ),
+            )
+            .child(
+                div()
+                    .px_2()
+                    .pb_2()
+                    .text_size(theme.ui_text(12.0))
+                    .text_color(theme.colors.foreground.secondary)
+                    .child(
+                        "After a checkout, pull, reset or stash pop changes the commit a worktree records for a submodule, check that submodule out at the new commit when it matched before. Skipped when Git's submodule.recurse is set, since Git already does it.",
+                    ),
+            )
     }
 
     fn diff_card(&self, theme: AppTheme, cx: &mut gpui::Context<Self>) -> Stateful<gpui::Div> {

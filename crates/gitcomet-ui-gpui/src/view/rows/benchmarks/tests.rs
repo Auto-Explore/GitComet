@@ -806,6 +806,8 @@ fn branch_sidebar_row_hash_separates_submodule_rows_by_what_they_draw() {
         status,
         recorded_head: CommitId("aaaa".into()),
         checked_out_head: checked_out.map(|id| CommitId(id.into())),
+        drift: None,
+        has_inner_changes: false,
     };
     let base = hash_branch_sidebar_rows(&[row(SubmoduleStatus::UpToDate, Some("aaaa"))]);
 

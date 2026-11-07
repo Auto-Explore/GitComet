@@ -792,3 +792,135 @@ fn status_section_action_selection_prefers_explicit_selection_over_active_row() 
     );
     assert_eq!(action_selection.popover_path(), None);
 }
+
+/// A parent tab at `/w/app` and two of its submodule tabs, `a` and `b`.
+fn submodule_tabs_state() -> AppState {
+    let mut parent = RepoState::new_opening(
+        RepoId(1),
+        RepoSpec {
+            workdir: PathBuf::from("/w/app"),
+        },
+    );
+    parent.submodules = Loadable::Ready(Arc::new(Vec::new()));
+    let mut repos = vec![parent];
+    for (id, path) in [(2, "a"), (3, "b")] {
+        let mut child = RepoState::new_opening(
+            RepoId(id),
+            RepoSpec {
+                workdir: PathBuf::from("/w/app").join(path),
+            },
+        );
+        child.submodule_parent = Some(gitcomet_state::model::SubmoduleParentLink {
+            workdir: PathBuf::from("/w/app"),
+            path: PathBuf::from(path),
+            repo_id: Some(RepoId(1)),
+        });
+        repos.push(child);
+    }
+    AppState {
+        active_repo: Some(RepoId(2)),
+        repos,
+        ..AppState::test_default()
+    }
+}
+
+#[gpui::test]
+fn an_edited_parent_message_stays_with_its_submodule_tab(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        crate::view::GitCometView::new(store, events, None, window, cx)
+    });
+    let pane = cx.update(|_window, app| view.read(app).details_pane.clone());
+    let parent_text = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|_window, app| {
+            let pane = pane.read(app);
+            (
+                pane.parent_message_input.read(app).text().to_string(),
+                pane.parent_message_user_edited,
+            )
+        })
+    };
+    cx.update(|_window, app| {
+        pane.update(app, |pane, cx| {
+            pane.state = Arc::new(submodule_tabs_state());
+            pane.sync_parent_message("Fix x", cx);
+        })
+    });
+    cx.run_until_parked();
+    assert_eq!(parent_text(cx), ("Update a: Fix x".to_string(), false));
+
+    // A notify that changes nothing, as focus or the caret sends, is no edit.
+    cx.update(|_window, app| {
+        let input = pane.read(app).parent_message_input.clone();
+        input.update(app, |_input, cx| cx.notify());
+    });
+    cx.run_until_parked();
+    assert_eq!(parent_text(cx), ("Update a: Fix x".to_string(), false));
+
+    cx.update(|_window, app| {
+        let input = pane.read(app).parent_message_input.clone();
+        input.update(app, |input, cx| {
+            input.set_text("Bump a for the release", cx)
+        });
+    });
+    cx.run_until_parked();
+    assert_eq!(
+        parent_text(cx),
+        ("Bump a for the release".to_string(), true)
+    );
+
+    let switch = |cx: &mut gpui::VisualTestContext, from: u64, to: u64, message: &'static str| {
+        cx.update(|_window, app| {
+            pane.update(app, |pane, cx| {
+                Arc::make_mut(&mut pane.state).active_repo = Some(RepoId(to));
+                pane.switch_parent_message(Some(RepoId(from)), Some(RepoId(to)), message, cx);
+            })
+        });
+        cx.run_until_parked();
+    };
+    switch(cx, 2, 3, "Fix y");
+    assert_eq!(
+        parent_text(cx),
+        ("Update b: Fix y".to_string(), false),
+        "the other tab starts from its own default"
+    );
+    switch(cx, 3, 2, "Fix x");
+    assert_eq!(
+        parent_text(cx),
+        ("Bump a for the release".to_string(), true),
+        "the edit comes back with its tab"
+    );
+}
+
+/// The store records one linked commit at a time and commits the next
+/// submodule alone, so the button must not promise to record it.
+#[gpui::test]
+fn a_running_linked_commit_keeps_the_next_commit_out_of_the_parent(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        crate::view::GitCometView::new(store, events, None, window, cx)
+    });
+    cx.update(|_window, app| {
+        let pane = view.read(app).details_pane.clone();
+        pane.update(app, |pane, _cx| {
+            pane.state = Arc::new(submodule_tabs_state());
+            let label = |pane: &DetailsPaneView| {
+                commit_button_copy(pane.active_parent_record_target().as_ref(), false, false).0
+            };
+            assert_eq!(label(pane).as_ref(), "Commit and record in app");
+
+            Arc::make_mut(&mut pane.state).linked_commit =
+                Some(gitcomet_state::model::LinkedCommit {
+                    child: RepoId(3),
+                    parent: RepoId(1),
+                    path: PathBuf::from("b"),
+                    parent_message: "Update b".into(),
+                    push: true,
+                    stage: gitcomet_state::model::LinkedCommitStage::PushChild,
+                    parent_commit: None,
+                });
+            assert!(pane.active_parent_record_target().is_none());
+            assert_eq!(label(pane).as_ref(), "Commit");
+        });
+    });
+}

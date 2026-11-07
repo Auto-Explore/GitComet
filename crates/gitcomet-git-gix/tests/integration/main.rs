@@ -38,6 +38,7 @@ mod squash;
 mod ssh_signing_passphrase;
 mod status;
 mod structural_patch;
+mod submodule_sync;
 mod submodules;
 mod tag_push;
 mod text_encoding;

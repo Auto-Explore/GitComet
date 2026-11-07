@@ -121,7 +121,7 @@ pub(super) fn model(
     ));
     if is_submodule {
         let submodule_state = super::submodule::menu_state(this, repo_id, path);
-        if let Some(status_label) = super::submodule::status_label(submodule_state.status) {
+        if let Some(status_label) = super::submodule::status_label(&submodule_state) {
             items.push(ContextMenuItem::Label(status_label.into()));
         }
         items.push(ContextMenuItem::Separator);

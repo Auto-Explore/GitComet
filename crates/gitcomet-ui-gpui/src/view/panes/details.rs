@@ -84,7 +84,7 @@ pub(in super::super) struct DetailsPaneView {
     /// The history find bar's query, highlighted in the commit details. It
     /// lives on the history view, so this copy is what repaints the pane.
     pub(in super::super) history_find_query: Option<HistoryFindQuery>,
-    root_view: WeakEntity<GitCometView>,
+    pub(in super::super) root_view: WeakEntity<GitCometView>,
     diff_renderer: WeakEntity<DiffRenderer>,
     pub(in crate::view) tooltip_host: WeakEntity<TooltipHost>,
     notify_fingerprint: u64,
@@ -117,6 +117,20 @@ pub(in super::super) struct DetailsPaneView {
     pub(in super::super) commit_scroll: ScrollHandle,
 
     pub(in super::super) commit_message_input: Entity<components::TextInput>,
+    /// The parent's message when a submodule tab's commit is recorded in its
+    /// parent. It follows the commit message until the user edits it.
+    pub(in super::super) parent_message_input: Entity<components::TextInput>,
+    /// The parent message box's text as last seen, so a notify that changed
+    /// nothing (focus, the caret) is not taken for the user's edit.
+    pub(in super::super) parent_message_last_text: SharedString,
+    /// The user edited the parent message in the active tab.
+    pub(in super::super) parent_message_user_edited: bool,
+    /// Edited parent messages of the other submodule tabs.
+    pub(in super::super) parent_message_drafts: FxHashMap<RepoId, SharedString>,
+    _parent_message_input_subscription: gpui::Subscription,
+    /// Submodule tabs whose commits stay out of their parent. Recording is
+    /// on for every other one.
+    pub(in super::super) record_in_parent_off: FxHashSet<RepoId>,
     pub(in super::super) commit_details_message_input: Entity<components::TextInput>,
     /// The editable message while [`Self::commit_reword`] is set.
     pub(in super::super) commit_reword_input: Entity<components::TextInput>,
@@ -362,6 +376,16 @@ impl DetailsPaneView {
                 .as_ref()
                 .map(|inline| (&inline.submodule_repo_path, inline.selected_ix))
                 .hash(&mut hasher);
+            // A submodule tab's commit form records in its parent: the
+            // parent's name, recorded commit and staged files show there.
+            if let Some(link) = repo.submodule_parent.as_ref() {
+                link.hash(&mut hasher);
+                if let Some(parent) = state.repos.iter().find(|r| Some(r.id) == link.repo_id) {
+                    parent.staged_status_cache_rev().hash(&mut hasher);
+                    parent.submodules_rev.hash(&mut hasher);
+                }
+            }
+            state.linked_commit.is_some().hash(&mut hasher);
         }
 
         hasher.finish()
@@ -524,17 +548,36 @@ impl DetailsPaneView {
             )
         });
 
+        let parent_message_input = cx.new(|cx| {
+            components::TextInput::new(
+                components::TextInputOptions {
+                    placeholder: "Parent commit message".into(),
+                    ..Default::default()
+                },
+                window,
+                cx,
+            )
+        });
+        let parent_message_subscription = cx.observe(&parent_message_input, |this, input, cx| {
+            let next: SharedString = input.read(cx).text().to_string().into();
+            if this.parent_message_last_text != next {
+                this.parent_message_last_text = next;
+                this.parent_message_user_edited = true;
+            }
+        });
         let commit_message_subscription = cx.observe(&commit_message_input, |this, input, cx| {
             let next: SharedString = input.read(cx).text().to_string().into();
             if this.commit_message_programmatic_change {
                 this.commit_message_programmatic_change = false;
-                this.commit_message_last_text = next;
+                this.commit_message_last_text = next.clone();
+                this.sync_parent_message(next.as_ref(), cx);
                 return;
             }
 
             if this.commit_message_last_text != next {
-                this.commit_message_last_text = next;
+                this.commit_message_last_text = next.clone();
                 this.commit_message_user_edited = true;
+                this.sync_parent_message(next.as_ref(), cx);
             }
         });
         let history_find_query = history_view.read(cx).history_find_query().cloned();
@@ -557,6 +600,7 @@ impl DetailsPaneView {
             show_timezone,
             _ui_model_subscription: subscription,
             _commit_message_input_subscription: commit_message_subscription,
+            _parent_message_input_subscription: parent_message_subscription,
             _commit_reword_input_subscription: commit_reword_subscription,
             _history_find_subscription: history_find_subscription,
             history_find_query,
@@ -591,6 +635,11 @@ impl DetailsPaneView {
             commit_message_scroll,
             commit_scroll,
             commit_message_input,
+            parent_message_input,
+            parent_message_last_text: SharedString::default(),
+            parent_message_user_edited: false,
+            parent_message_drafts: FxHashMap::default(),
+            record_in_parent_off: FxHashSet::default(),
             commit_details_message_input,
             commit_reword_input,
             commit_reword_scroll,
@@ -857,6 +906,35 @@ impl DetailsPaneView {
         }
     }
 
+    /// Keep an edited parent message with its tab, and show the next tab's:
+    /// its own edit, or the default for `commit_message`.
+    pub(in crate::view) fn switch_parent_message(
+        &mut self,
+        prev: Option<RepoId>,
+        next: Option<RepoId>,
+        commit_message: &str,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if let Some(prev) = prev {
+            if self.parent_message_user_edited {
+                self.parent_message_drafts
+                    .insert(prev, self.parent_message_last_text.clone());
+            } else {
+                self.parent_message_drafts.remove(&prev);
+            }
+        }
+        match next.and_then(|repo_id| self.parent_message_drafts.get(&repo_id).cloned()) {
+            Some(draft) => {
+                self.set_parent_message_programmatically(draft.to_string(), cx);
+                self.parent_message_user_edited = true;
+            }
+            None => {
+                self.parent_message_user_edited = false;
+                self.sync_parent_message(commit_message, cx);
+            }
+        }
+    }
+
     fn set_commit_message_programmatically(
         &mut self,
         message: String,
@@ -957,11 +1035,28 @@ impl DetailsPaneView {
             }
             let result = pending.advance(next);
             if result == Some(true) {
+                let sent_parent_message = |text: &str| {
+                    pending
+                        .parent_message
+                        .as_ref()
+                        .is_some_and(|sent| text.trim() == sent.as_ref())
+                };
                 if self.state.active_repo == Some(*repo_id) {
-                    let unchanged = self.commit_message_input.read(cx).text().trim()
-                        == pending.message.as_ref();
+                    // The parent message went with the commit, so the next
+                    // one starts from its default again.
+                    let parent_message_sent =
+                        sent_parent_message(self.parent_message_last_text.as_ref());
+                    if parent_message_sent {
+                        self.parent_message_user_edited = false;
+                    }
+                    let commit_text = self.commit_message_input.read(cx).text().to_string();
+                    let unchanged = commit_text.trim() == pending.message.as_ref();
                     if unchanged {
+                        // Clearing the box brings the default back with it.
                         self.set_commit_message_programmatically(String::new(), cx);
+                        changed = true;
+                    } else if parent_message_sent {
+                        self.sync_parent_message(&commit_text, cx);
                         changed = true;
                     }
                     if pending.amend && self.commit_amend_enabled {
@@ -969,12 +1064,21 @@ impl DetailsPaneView {
                         self.sync_commit_amend_enabled_to_root(false, cx);
                         changed = true;
                     }
-                } else if self
-                    .commit_message_drafts
-                    .get(repo_id)
-                    .is_some_and(|draft| draft.trim() == pending.message.as_ref())
-                {
-                    self.commit_message_drafts.remove(repo_id);
+                } else {
+                    if self
+                        .commit_message_drafts
+                        .get(repo_id)
+                        .is_some_and(|draft| draft.trim() == pending.message.as_ref())
+                    {
+                        self.commit_message_drafts.remove(repo_id);
+                    }
+                    if self
+                        .parent_message_drafts
+                        .get(repo_id)
+                        .is_some_and(|draft| sent_parent_message(draft.as_ref()))
+                    {
+                        self.parent_message_drafts.remove(repo_id);
+                    }
                 }
             }
             !(result.is_some() && pending.settled())
@@ -2526,6 +2630,8 @@ impl DetailsPaneView {
         self.advance_commit_reword_submission(cx);
         self.commit_message_drafts
             .retain(|repo_id, _| self.state.repos.iter().any(|repo| repo.id == *repo_id));
+        self.parent_message_drafts
+            .retain(|repo_id, _| self.state.repos.iter().any(|repo| repo.id == *repo_id));
 
         // Nothing renders a worktree's file list once its row is deselected, and
         // the derived inputs are one entry per changed file -- worth releasing
@@ -2632,7 +2738,8 @@ impl DetailsPaneView {
             self.commit_message_programmatic_change = true;
             self.commit_message_input
                 .update(cx, |input, cx| input.set_text(restore.to_string(), cx));
-            self.commit_message_last_text = restore;
+            self.commit_message_last_text = restore.clone();
+            self.switch_parent_message(prev_active_repo_id, next_repo_id, &restore, cx);
         } else if switched_commit {
             self.commit_scroll.set_offset(point(px(0.0), px(0.0)));
             self.commit_files_scroll

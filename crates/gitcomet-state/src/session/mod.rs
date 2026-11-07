@@ -110,6 +110,7 @@ pub struct UiSession {
     pub auto_fetch_enabled: Option<bool>,
     pub auto_fetch_interval_minutes: Option<AutoFetchInterval>,
     pub recommend_repo_maintenance: Option<bool>,
+    pub follow_submodule_pointers: Option<bool>,
     pub git_executable_path: Option<PathBuf>,
     pub external_code_editor: Option<ExternalCodeEditorSetting>,
 }
@@ -330,6 +331,8 @@ pub(crate) struct UiSessionFile {
     auto_fetch_interval_minutes: Option<AutoFetchInterval>,
     #[serde(default, deserialize_with = "lenient")]
     recommend_repo_maintenance: Option<bool>,
+    #[serde(default, deserialize_with = "lenient")]
+    follow_submodule_pointers: Option<bool>,
     #[serde(default, deserialize_with = "lenient")]
     git_executable_path: Option<String>,
     #[serde(default, deserialize_with = "lenient")]
@@ -593,6 +596,7 @@ pub fn load_from_path(path: &Path) -> UiSession {
         auto_fetch_enabled: file.auto_fetch_enabled,
         auto_fetch_interval_minutes: file.auto_fetch_interval_minutes,
         recommend_repo_maintenance: file.recommend_repo_maintenance,
+        follow_submodule_pointers: file.follow_submodule_pointers,
         git_executable_path: file
             .git_executable_path
             .as_deref()

@@ -12,13 +12,13 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
-fn git_command() -> Command {
+pub(crate) fn git_command() -> Command {
     let mut cmd = gitcomet_core::test_support::git_fixture::git_command();
     test_git_env::apply(&mut cmd);
     cmd
 }
 
-fn run_git(repo: &Path, args: &[&str]) {
+pub(crate) fn run_git(repo: &Path, args: &[&str]) {
     let _timer = FixtureTimer::new("subprocess", args.first().copied().unwrap_or("git"));
     let output = git_command()
         .arg("-C")
@@ -34,7 +34,7 @@ fn run_git(repo: &Path, args: &[&str]) {
     );
 }
 
-fn git_output(repo: &Path, args: &[&str]) -> Output {
+pub(crate) fn git_output(repo: &Path, args: &[&str]) -> Output {
     let _timer = FixtureTimer::new("subprocess", args.first().copied().unwrap_or("git"));
     git_command()
         .arg("-C")
@@ -44,7 +44,7 @@ fn git_output(repo: &Path, args: &[&str]) -> Output {
         .expect("git command to run")
 }
 
-fn git_stdout(repo: &Path, args: &[&str]) -> String {
+pub(crate) fn git_stdout(repo: &Path, args: &[&str]) -> String {
     let output = git_output(repo, args);
     assert!(output.status.success(), "git {:?} failed", args);
     String::from_utf8(output.stdout)
@@ -64,7 +64,12 @@ fn local_submodule_config_entries(repo: &Path) -> Vec<String> {
         .collect()
 }
 
-fn add_submodule_raw(parent_repo: &Path, sub_repo: &Path, path: &Path, name: Option<&str>) {
+pub(crate) fn add_submodule_raw(
+    parent_repo: &Path,
+    sub_repo: &Path,
+    path: &Path,
+    name: Option<&str>,
+) {
     let mut cmd = git_command();
     cmd.arg("-C")
         .arg(parent_repo)
@@ -136,7 +141,7 @@ fn create_stale_submodule_git_dir(
     );
 }
 
-fn init_repo_with_seed(repo: &Path, file: &str, contents: &str, message: &str) {
+pub(crate) fn init_repo_with_seed(repo: &Path, file: &str, contents: &str, message: &str) {
     init_repository(repo, |repo| {
         run_git(repo, &["init", "-b", "master"]);
         append_config(
@@ -171,7 +176,7 @@ fn submodule_integration_test_lock() -> MutexGuard<'static, ()> {
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
-fn setup_submodule_test() -> MutexGuard<'static, ()> {
+pub(crate) fn setup_submodule_test() -> MutexGuard<'static, ()> {
     let guard = submodule_integration_test_lock();
     test_git_env::ensure_initialized();
     guard

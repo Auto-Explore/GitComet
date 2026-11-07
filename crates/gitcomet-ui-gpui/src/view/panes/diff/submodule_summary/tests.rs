@@ -57,6 +57,9 @@ fn publish(
                 recorded_head: CommitId("a".into()),
                 checked_out_head: summary.checked_out_head.clone(),
                 status: SubmoduleStatus::HeadMismatch,
+                nested: false,
+                drift: None,
+                has_inner_changes: false,
             }]));
             repo.diff_state.diff_target = Some(DiffTarget::working_tree(
                 summary.path.clone(),

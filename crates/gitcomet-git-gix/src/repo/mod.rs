@@ -82,6 +82,7 @@ mod shared;
 mod shared_ranges;
 mod signatures;
 mod status;
+mod submodule_sync;
 mod submodules;
 mod tags;
 mod text_attributes;
@@ -807,6 +808,14 @@ impl GitRepository for GixRepo {
 
     fn common_dir(&self) -> Option<PathBuf> {
         Some(self.common_dir_impl())
+    }
+
+    fn superproject(&self) -> Result<Option<gitcomet_core::domain::SubmoduleParent>> {
+        let _operation = self.operation_lease()?;
+        if self.repository_mode_impl()? == gitcomet_core::domain::RepositoryMode::Bare {
+            return Ok(None);
+        }
+        self.superproject_impl()
     }
 
     fn maintenance_needed(&self) -> Result<bool> {
@@ -2081,7 +2090,109 @@ impl GitRepository for GixRepo {
     fn discard_worktree_changes(&self, paths: &[&Path]) -> Result<()> {
         let _operation = self.operation_lease()?;
         self.require_working_tree()?;
-        self.discard_worktree_changes_impl(paths)
+        let outcome = self.discard_worktree_changes_with_submodules_impl(
+            paths,
+            gitcomet_core::domain::SubmoduleCheckoutPolicy::Guarded,
+            RemoteUrlPolicy::default(),
+        )?;
+        if let Some(risk) = outcome.blocked.first() {
+            return Err(gitcomet_core::error::Error::new(
+                gitcomet_core::error::ErrorKind::Backend(format!(
+                    "Submodule '{}' has {} that checking it out would lose. Commit or stash it first.",
+                    risk.path.display(),
+                    if risk.has_inner_changes {
+                        "uncommitted changes"
+                    } else {
+                        "a commit on no branch"
+                    }
+                )),
+            ));
+        }
+        Ok(())
+    }
+
+    fn discard_worktree_changes_with_submodules(
+        &self,
+        paths: &[&Path],
+        policy: gitcomet_core::domain::SubmoduleCheckoutPolicy,
+        remote_url_policy: RemoteUrlPolicy,
+    ) -> Result<gitcomet_core::domain::DiscardOutcome> {
+        let _operation = self.operation_lease()?;
+        self.require_working_tree()?;
+        self.discard_worktree_changes_with_submodules_impl(paths, policy, remote_url_policy)
+    }
+
+    fn update_submodule_to_recorded(
+        &self,
+        path: &Path,
+        policy: gitcomet_core::domain::SubmoduleCheckoutPolicy,
+    ) -> Result<gitcomet_core::domain::DiscardOutcome> {
+        let _operation = self.operation_lease()?;
+        self.require_working_tree()?;
+        self.update_submodule_to_recorded_impl(path, policy)
+    }
+
+    fn submodule_pointer_snapshot(
+        &self,
+    ) -> Result<Option<gitcomet_core::domain::SubmodulePointerSnapshot>> {
+        let _operation = self.operation_lease()?;
+        if self.repository_mode_impl()? == gitcomet_core::domain::RepositoryMode::Bare {
+            return Ok(None);
+        }
+        self.submodule_pointer_snapshot_impl()
+    }
+
+    fn follow_submodule_pointers(
+        &self,
+        snapshot: &gitcomet_core::domain::SubmodulePointerSnapshot,
+    ) -> Result<Vec<gitcomet_core::domain::SubmoduleCheckoutUpdate>> {
+        let _operation = self.operation_lease()?;
+        self.require_working_tree()?;
+        self.follow_submodule_pointers_impl(snapshot)
+    }
+
+    fn record_submodule_commit(
+        &self,
+        path: &Path,
+        message: &str,
+        identity: Option<&gitcomet_core::commit_identity::CommitIdentity>,
+    ) -> Result<CommitOperationOutcome> {
+        let _operation = self.operation_lease()?;
+        self.require_working_tree()?;
+        self.record_submodule_commit_impl(path, message, identity)
+    }
+
+    fn amend_submodule_record(
+        &self,
+        path: &Path,
+        expected_head: &CommitId,
+        identity: Option<&gitcomet_core::commit_identity::CommitIdentity>,
+    ) -> Result<CommitOperationOutcome> {
+        let _operation = self.operation_lease()?;
+        self.require_working_tree()?;
+        self.amend_submodule_record_impl(path, expected_head, identity)
+    }
+
+    fn push_submodule_with_output(&self, path: &Path, commit: &CommitId) -> Result<CommandOutput> {
+        let _operation = self.operation_lease()?;
+        self.require_working_tree()?;
+        self.push_submodule_with_output_impl(path, commit)
+    }
+
+    fn stash_submodule_changes(&self, path: &Path, message: &str) -> Result<()> {
+        let _operation = self.operation_lease()?;
+        self.require_working_tree()?;
+        self.stash_submodule_changes_impl(path, message)
+    }
+
+    fn unpushed_submodule_pointers(
+        &self,
+    ) -> Result<Vec<gitcomet_core::domain::SubmoduleCheckoutUpdate>> {
+        let _operation = self.operation_lease()?;
+        if self.repository_mode_impl()? == gitcomet_core::domain::RepositoryMode::Bare {
+            return Ok(Vec::new());
+        }
+        self.unpushed_submodule_pointers_impl()
     }
 }
 

@@ -345,11 +345,37 @@ pub enum Effect {
         repo_id: RepoId,
         paths: Vec<PathBuf>,
     },
+    /// Commit the submodule at `path` as checked out in `repo_id`, alone; or,
+    /// with `amend_expected`, record it again in that commit.
+    RecordSubmoduleCommit {
+        repo_id: RepoId,
+        path: PathBuf,
+        message: String,
+        amend_expected: Option<gitcomet_core::domain::CommitId>,
+        identity: Option<gitcomet_core::commit_identity::CommitIdentity>,
+    },
+    /// Push each first-level submodule of `repo_id` so its listed commit is
+    /// on its remote, then run `push` of `repo_id` again.
+    PushSubmodulesThenRepo {
+        repo_id: RepoId,
+        pointers: Vec<SubmoduleCheckoutUpdate>,
+        push: crate::model::BlockedPush,
+    },
+    /// A discard or submodule update run again with the policy the user
+    /// picked in the submodule checkout prompt, or a first guarded update.
+    SubmoduleCheckout {
+        repo_id: RepoId,
+        operation: crate::model::SubmoduleCheckoutOperation,
+        policy: gitcomet_core::domain::SubmoduleCheckoutPolicy,
+    },
     Commit {
         repo_id: RepoId,
         message: String,
         identity: Option<gitcomet_core::commit_identity::CommitIdentity>,
         auth: Option<StagedGitAuth>,
+        /// Stash these submodules' changes first; a failed stash fails the
+        /// commit before it starts.
+        shelve: Option<crate::model::SubmoduleShelve>,
     },
     CommitAmend {
         repo_id: RepoId,
@@ -466,6 +492,9 @@ impl Effect {
             | Self::UnstagePaths { .. }
             | Self::DiscardWorktreeChangesPath { .. }
             | Self::DiscardWorktreeChangesPaths { .. }
+            | Self::SubmoduleCheckout { .. }
+            | Self::RecordSubmoduleCommit { .. }
+            | Self::PushSubmodulesThenRepo { .. }
             | Self::Commit { .. }
             | Self::CommitAmend { .. }
             | Self::PreviewTagPush { .. }

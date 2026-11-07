@@ -26,7 +26,7 @@ impl GixRepo {
         // Discarding a conflict keeps our side, as "Resolve using ours" does.
         let mut conflicted_paths: Vec<&Path> = Vec::new();
         let submodule_paths: FxHashSet<std::path::PathBuf> = self
-            .list_submodules_impl()?
+            .submodule_rows_impl()?
             .into_iter()
             .map(|submodule| submodule.path)
             .collect();
@@ -110,11 +110,12 @@ impl GixRepo {
         if !submodule_update_paths.is_empty() {
             // `git checkout -- <submodule>` does not reliably move the nested HEAD back to the
             // superproject-recorded commit. Use a path-scoped submodule update instead so discard
-            // actually checks out the recorded pointer again.
+            // actually checks out the recorded pointer again. No `--force`: work inside the
+            // submodule is never overwritten here; the guarded discard keeps it first.
             run_git_simple_with_paths(
                 &self.spec.workdir,
-                "git submodule update --checkout --force",
-                &["submodule", "update", "--checkout", "--force"],
+                "git submodule update --checkout",
+                &["submodule", "update", "--checkout"],
                 &submodule_update_paths,
             )?;
         }

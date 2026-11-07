@@ -28,6 +28,7 @@ mod history_selection_ack_tests;
 mod indexed_history;
 #[cfg(test)]
 mod line_stats_tests;
+mod linked_commit;
 mod loads;
 pub(super) mod maintenance;
 #[cfg(test)]
@@ -38,6 +39,10 @@ mod repo_watch;
 mod repository_preferences;
 mod reword;
 mod settings;
+mod submodule_checkout;
+#[cfg(test)]
+mod submodule_refresh_tests;
+mod submodule_tabs;
 mod submodule_trust;
 #[cfg(test)]
 pub(super) mod test_inputs;
@@ -325,6 +330,12 @@ pub(crate) fn msg_requires_available_git(msg: &Msg) -> bool {
             | Msg::UnstagePaths { .. }
             | Msg::DiscardWorktreeChangesPath { .. }
             | Msg::DiscardWorktreeChangesPaths { .. }
+            | Msg::ResolveSubmoduleCheckoutPrompt { .. }
+            | Msg::UpdateSubmoduleToRecorded { .. }
+            | Msg::CommitShelvingSubmodules { .. }
+            | Msg::CommitLinked { .. }
+            | Msg::ResolveLinkedPushPrompt { .. }
+            | Msg::ResolveUnpushedPointerPrompt { .. }
             | Msg::SaveWorktreeFile { .. }
             | Msg::AppendGitignorePatterns { .. }
             | Msg::RunLargeFileCommand { .. }
@@ -1097,6 +1108,7 @@ fn reduce_inner(
         Msg::SetLargeFileSettings(settings) => settings::set_large_file_settings(state, settings),
         Msg::SetHistoryHiddenRefs(filter) => settings::set_history_hidden_refs(state, filter),
         Msg::SetMaintenanceSettings(settings) => maintenance::set_settings(state, settings),
+        Msg::SetSubmoduleSettings(settings) => submodule_checkout::set_settings(state, settings),
         Msg::SetFileBrowserSettings(settings) => {
             effects::set_file_browser_settings(state, settings)
         }
@@ -1786,6 +1798,54 @@ fn reduce_inner(
             begin_local_action(state, repo_id);
             actions_emit_effects::discard_worktree_changes_paths(repo_id, paths)
         }
+        Msg::ResolveSubmoduleCheckoutPrompt { prompt, policy } => {
+            let repo_id = prompt.repo_id;
+            let effects = submodule_checkout::resolve_prompt(state, prompt, policy);
+            if !effects.is_empty() {
+                begin_local_action(state, repo_id);
+            }
+            effects
+        }
+        Msg::DismissSubmoduleCheckoutPrompt { prompt } => {
+            submodule_checkout::dismiss_prompt(state, prompt)
+        }
+        Msg::CommitLinked {
+            child,
+            message,
+            parent_message,
+            push,
+            shelve,
+        } => {
+            let linked = linked_commit::start(inputs, state, child, &message, parent_message, push);
+            // The linked plan pushes the submodule itself, after the parent
+            // records it.
+            auth::commit(state, child, message, push && !linked, shelve)
+        }
+        Msg::ResolveLinkedPushPrompt { prompt, choice } => {
+            linked_commit::resolve_push_prompt(inputs, repos, state, prompt, choice)
+        }
+        Msg::ResolveUnpushedPointerPrompt {
+            prompt,
+            push_submodules_first,
+        } => linked_commit::resolve_unpushed_pointer_prompt(
+            repos,
+            state,
+            prompt,
+            push_submodules_first,
+        ),
+        Msg::DismissUnpushedPointerPrompt { prompt } => {
+            linked_commit::dismiss_unpushed_pointer_prompt(state, prompt)
+        }
+        Msg::UpdateSubmoduleToRecorded { repo_id, path } => {
+            begin_local_action(state, repo_id);
+            submodule_checkout::update_to_recorded(repo_id, path)
+        }
+        Msg::CommitShelvingSubmodules {
+            repo_id,
+            message,
+            push_after_commit,
+            shelve,
+        } => auth::commit(state, repo_id, message, push_after_commit, Some(shelve)),
         Msg::SaveWorktreeFile {
             repo_id,
             path,
@@ -1900,7 +1960,7 @@ fn reduce_inner(
             repo_id,
             message,
             push_after_commit,
-        } => auth::commit(state, repo_id, message, push_after_commit),
+        } => auth::commit(state, repo_id, message, push_after_commit, None),
         Msg::CommitAmend {
             repo_id,
             message,
@@ -2419,6 +2479,11 @@ fn reduce_inner(
             repository_mode,
             head_commit,
         ),
+        Msg::Internal(crate::msg::InternalMsg::SubmoduleParentResolved {
+            repo_id,
+            canonical_workdir,
+            parent,
+        }) => submodule_tabs::submodule_parent_resolved(state, repo_id, canonical_workdir, parent),
         Msg::Internal(crate::msg::InternalMsg::RepoLoadFinished {
             repo_id,
             load_epoch,
@@ -2757,6 +2822,14 @@ fn reduce_inner(
         Msg::Internal(crate::msg::InternalMsg::BranchAlreadyExists { action, prompt }) => {
             external_and_history::branch_already_exists(inputs, state, action, prompt)
         }
+        Msg::Internal(crate::msg::InternalMsg::SubmoduleCheckoutFinished {
+            repo_id,
+            operation,
+            outcome,
+        }) => submodule_checkout::checkout_finished(inputs, state, repo_id, operation, outcome),
+        Msg::Internal(crate::msg::InternalMsg::SubmodulePointersFollowed { repo_id, updates }) => {
+            submodule_checkout::pointers_followed(inputs, state, repo_id, updates)
+        }
         Msg::Internal(crate::msg::InternalMsg::BranchNotFullyMerged { repo_id, name }) => {
             external_and_history::branch_not_fully_merged(inputs, state, repo_id, name)
         }
@@ -2775,8 +2848,44 @@ fn reduce_inner(
             result,
         ),
         Msg::Internal(crate::msg::InternalMsg::CommitFinished { repo_id, result }) => {
-            auth::commit_finished(inputs, repos, state, repo_id, result, false)
+            let succeeded = result.is_ok();
+            let mut effects = auth::commit_finished(inputs, repos, state, repo_id, result, false);
+            effects.extend(linked_commit::child_commit_finished(
+                inputs, state, repo_id, succeeded,
+            ));
+            effects
         }
+        Msg::Internal(crate::msg::InternalMsg::SubmoduleRecorded {
+            repo_id,
+            amend,
+            result,
+        }) => {
+            if amend {
+                let outcome = result.as_ref().ok().cloned();
+                let mut effects = actions_emit_effects::commit_finished(
+                    inputs,
+                    state,
+                    repo_id,
+                    result.map(|_| ()),
+                    true,
+                    false,
+                );
+                effects.extend(linked_commit::rerecorded(
+                    repos,
+                    state,
+                    repo_id,
+                    outcome.as_ref(),
+                ));
+                effects
+            } else {
+                linked_commit::recorded(inputs, repos, state, repo_id, false, result)
+            }
+        }
+        Msg::Internal(crate::msg::InternalMsg::PushBlockedByUnpushedSubmodules {
+            repo_id,
+            pointers,
+            push,
+        }) => linked_commit::push_blocked(state, repo_id, pointers, push),
         Msg::Internal(crate::msg::InternalMsg::CommitAmendFinished { repo_id, result }) => {
             auth::commit_finished(inputs, repos, state, repo_id, result, true)
         }
@@ -2792,6 +2901,17 @@ fn reduce_inner(
             repo_id,
             command,
             result,
-        }) => auth::repo_command_finished(inputs, repos, id_alloc, state, repo_id, command, result),
+        }) => {
+            let error = result.as_ref().err().map(ToString::to_string);
+            let finished = command.clone();
+            let mut effects = auth::repo_command_finished(
+                inputs, repos, id_alloc, state, repo_id, command, result,
+            );
+            linked_commit::push_finished(state, repo_id, &finished);
+            effects.extend(linked_commit::command_finished(
+                inputs, repos, state, repo_id, &finished, error,
+            ));
+            effects
+        }
     }
 }

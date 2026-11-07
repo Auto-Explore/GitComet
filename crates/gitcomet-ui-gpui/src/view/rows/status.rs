@@ -1315,12 +1315,18 @@ mod tests {
                 recorded_head: commit_id("1111111"),
                 checked_out_head: Some(commit_id("2222222")),
                 status: SubmoduleStatus::HeadMismatch,
+                nested: false,
+                drift: None,
+                has_inner_changes: false,
             },
             gitcomet_core::domain::Submodule {
                 path: pb("vendor/missing"),
                 recorded_head: commit_id("3333333"),
                 checked_out_head: None,
                 status: SubmoduleStatus::NotInitialized,
+                nested: false,
+                drift: None,
+                has_inner_changes: false,
             },
         ]));
 
