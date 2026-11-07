@@ -1962,9 +1962,7 @@ impl DiffRenderer {
         let resolved_pending = self.pending_target.as_ref().is_some_and(|pending| {
             next.diff()
                 .and_then(|diff| diff.diff_target.as_ref())
-                .is_some_and(|target| {
-                    target == pending && target.old_file_path() == pending.old_file_path()
-                })
+                .is_some_and(|target| target.eq_with_old_path(pending))
         });
         if resolved_pending {
             self.pending_target = None;

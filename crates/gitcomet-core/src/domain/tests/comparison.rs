@@ -11,6 +11,8 @@ fn targets_equal_whether_or_not_they_carry_the_derived_rename_source() {
     let renamed = bare.clone().with_old_path(Some(PathBuf::from("old.rs")));
     assert_eq!(renamed.old_file_path(), Some(Path::new("old.rs")));
     assert_eq!(bare, renamed);
+    assert!(!bare.eq_with_old_path(&renamed));
+    assert!(renamed.eq_with_old_path(&renamed.clone()));
     assert_ne!(
         bare,
         DiffTarget::commit(commit("c"), PathBuf::from("other.rs"))

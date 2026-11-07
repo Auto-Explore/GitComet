@@ -17,7 +17,6 @@ enum PaneSource {
     Session {
         store: std::sync::Weak<AppStore>,
         repository: RepositoryHandle,
-        target: DiffTarget,
     },
     Snapshot(DiffSnapshot),
 }
@@ -140,11 +139,7 @@ impl DiffPaneView {
         let mut pane = Self::with_source(
             host,
             environment,
-            PaneSource::Session {
-                store,
-                repository,
-                target: target.clone(),
-            },
+            PaneSource::Session { store, repository },
             options,
             cx,
         );
@@ -496,9 +491,6 @@ impl DiffPaneView {
             return;
         };
         self.pending_target = None;
-        if let PaneSource::Session { target, .. } = &mut self.source {
-            *target = session.target.clone();
-        }
         if self.session_revision == Some(session.rev) {
             self.sync_renderer(cx);
             return;
@@ -577,7 +569,11 @@ impl DiffPaneView {
     }
 
     pub(crate) fn set_target(&mut self, target: DiffTarget, cx: &mut gpui::Context<Self>) {
-        if !matches!(&self.source, PaneSource::Session { target: shown, .. } if *shown != target) {
+        if !matches!(self.source, PaneSource::Session { .. })
+            || self
+                .target(cx)
+                .is_some_and(|shown| shown.eq_with_old_path(&target))
+        {
             return;
         }
         self.open(target.clone(), cx);
@@ -682,15 +678,9 @@ impl DiffPaneView {
         }
         self.reset(cx);
         self.pending_target = Some(target.clone());
-        let PaneSource::Session {
-            store,
-            repository,
-            target: shown,
-        } = &mut self.source
-        else {
+        let PaneSource::Session { store, repository } = &self.source else {
             return;
         };
-        *shown = target.clone();
         let Some(store) = store.upgrade() else {
             return;
         };
@@ -722,11 +712,19 @@ impl DiffPaneView {
             .diff_sessions
             .get(&self.view_id)
             .filter(|session| {
-                self.pending_target.as_ref().is_none_or(|target| {
-                    session.target == *target
-                        && session.target.old_file_path() == target.old_file_path()
-                })
+                self.pending_target
+                    .as_ref()
+                    .is_none_or(|target| session.target.eq_with_old_path(target))
             })
+    }
+
+    /// The target on its way, else the one shown; `None` once closed.
+    fn target(&self, cx: &App) -> Option<DiffTarget> {
+        if let Some(target) = &self.pending_target {
+            return Some(target.clone());
+        }
+        let state = self.host.state(cx).ok()?;
+        self.session(&state)?.diff_target.clone()
     }
 
     pub(crate) fn set_encoding(&mut self, encoding: Option<TextEncoding>) {
@@ -1033,12 +1031,7 @@ impl DiffPaneImpl for HostedDiffPane {
     }
 
     fn target(&self, cx: &App) -> Option<DiffTarget> {
-        let pane = self.entity.read(cx);
-        if let Some(target) = &pane.pending_target {
-            return Some(target.clone());
-        }
-        let state = pane.host.state(cx).ok()?;
-        pane.session(&state)?.diff_target.clone()
+        self.entity.read(cx).target(cx)
     }
 
     fn set_target(&self, target: DiffTarget, cx: &mut App) {

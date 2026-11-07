@@ -2767,6 +2767,70 @@ fn panes_show_renames_additions_deletions_and_binaries_while_history_keeps_its_d
     assert_eq!(history.diff_target_rev, history_rev);
 }
 
+#[gpui::test]
+fn a_rename_source_given_later_loads_the_old_side(cx: &mut gpui::TestAppContext) {
+    let (dir, store, view, cx) = open_repository(cx);
+    let head = commit_every_kind_of_change(dir.path());
+    let host = cx.update(|_, app| view.read(app).extension_window.as_ref().unwrap().host());
+    let repository = cx.update(|_, app| host.active_repository(app).unwrap().unwrap());
+    let moved = DiffTarget::commit(CommitId(head.into()), "moved.rs".into());
+    let pane = cx.update(|_, app| {
+        host.create_diff_pane(&repository, moved.clone(), DiffPaneOptions::default(), app)
+            .unwrap()
+    });
+    settle(cx, &view, &store, "moved.rs as an addition", |cx| {
+        cx.update(|_, app| !pane.is_loading(app))
+    });
+    assert_eq!(rows_with(cx, &pane, "row 10"), 1, "only the new side");
+
+    let renamed = moved.with_old_path(Some("orig.rs".into()));
+    cx.update(|_, app| pane.set_target(renamed.clone(), app));
+    let shown = cx.update(|_, app| pane.target(app));
+    assert_eq!(
+        shown.as_ref().and_then(|target| target.old_file_path()),
+        Some(Path::new("orig.rs"))
+    );
+    settle(cx, &view, &store, "moved.rs as a rename", |cx| {
+        cx.update(|_, app| !pane.is_loading(app))
+    });
+    assert_eq!(rows_with(cx, &pane, "row 10"), 2, "both sides of row 10");
+}
+
+#[gpui::test]
+fn a_closed_pane_opens_its_last_file_again(cx: &mut gpui::TestAppContext) {
+    let (_dir, store, view, cx) = open_repository(cx);
+    let host = cx.update(|_, app| view.read(app).extension_window.as_ref().unwrap().host());
+    let repository = cx.update(|_, app| host.active_repository(app).unwrap().unwrap());
+    let target = DiffTarget::working_tree("a.rs".into(), DiffArea::Unstaged);
+    let pane = cx.update(|_, app| {
+        host.create_diff_pane(&repository, target.clone(), DiffPaneOptions::default(), app)
+            .unwrap()
+    });
+    settle(cx, &view, &store, "a.rs", |cx| {
+        cx.update(|_, app| !pane.is_loading(app))
+    });
+    assert_eq!(rows_with(cx, &pane, "a edited 3"), 1);
+
+    // Escape and the close button.
+    let renderer = hosted_renderer(cx, &pane);
+    cx.update(|_, app| {
+        renderer.update(app, |renderer, cx| {
+            renderer.clear_diff_selection_or_exit(RepoId(1), cx)
+        })
+    });
+    settle(cx, &view, &store, "the closed pane", |cx| {
+        cx.update(|_, app| pane.target(app).is_none())
+    });
+    assert_eq!(rows_with(cx, &pane, "a edited 3"), 0);
+
+    cx.update(|_, app| pane.set_target(target.clone(), app));
+    assert_eq!(cx.update(|_, app| pane.target(app)), Some(target));
+    settle(cx, &view, &store, "a.rs again", |cx| {
+        cx.update(|_, app| !pane.is_loading(app))
+    });
+    assert_eq!(rows_with(cx, &pane, "a edited 3"), 1);
+}
+
 /// Mounts a pane's view as a window of its own.
 struct PaneHolder(gpui::AnyView);
 
