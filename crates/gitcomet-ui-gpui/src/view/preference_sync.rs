@@ -1,6 +1,28 @@
 use super::preference_change::PreferenceChange;
 use super::*;
 
+/// A side panel header's minimum width. Shaping the tab labels is the cost,
+/// so the width is measured again only when the kit's measure changes.
+#[derive(Default)]
+pub(in crate::view) struct HeaderMinimum {
+    measure: Option<components::PanelHeaderMeasure>,
+    pub(in crate::view) width: Pixels,
+}
+
+impl HeaderMinimum {
+    /// Whether the width changed; `None` is a pane without a header.
+    fn update(&mut self, measure: Option<components::PanelHeaderMeasure>, window: &Window) -> bool {
+        if self.measure == measure {
+            return false;
+        }
+        let width = measure
+            .as_ref()
+            .map_or(px(0.0), |measure| measure.minimum_width(window));
+        self.measure = measure;
+        std::mem::replace(&mut self.width, width) != width
+    }
+}
+
 impl GitCometView {
     pub(in crate::view) fn set_diff_engine(
         &mut self,
@@ -118,7 +140,7 @@ impl GitCometView {
 
     pub(super) fn sidebar_min_width(&self) -> Pixels {
         self.scaled_px(SIDEBAR_MIN_PX)
-            .max(self.sidebar_header_minimum)
+            .max(self.sidebar_header_minimum.width)
     }
 
     pub(super) fn sync_panel_header_layout(
@@ -128,29 +150,17 @@ impl GitCometView {
     ) {
         let scale = self.ui_scale();
         let theme = self.theme;
-        let minimum = self.sidebar_pane.update(cx, |pane, cx| {
-            pane.header_minimum_width(theme, scale, window, cx)
-        });
-        if self.sidebar_header_minimum != minimum {
-            self.sidebar_header_minimum = minimum;
-            self.pane_resize = None;
-        }
-        // Shaping the tab labels is the cost; the kit's measure says when
-        // their widths can differ.
-        let measure = self.details_listing().map(|listing| {
+        let sidebar = self
+            .sidebar_pane
+            .update(cx, |pane, cx| pane.header_measure(theme, scale, window, cx));
+        let details = self.details_listing().map(|listing| {
             Self::details_header(&listing, cx)
                 .0
                 .measure(theme, scale, window)
         });
-        if self.details_header_measure != measure {
-            let minimum = measure
-                .as_ref()
-                .map_or(px(0.0), |measure| measure.minimum_width(window));
-            self.details_header_measure = measure;
-            if self.details_header_minimum != minimum {
-                self.details_header_minimum = minimum;
-                self.pane_resize = None;
-            }
+        let sidebar_changed = self.sidebar_header_minimum.update(Some(sidebar), window);
+        if self.details_header_minimum.update(details, window) || sidebar_changed {
+            self.pane_resize = None;
         }
         if !renders_full_chrome(self.view_mode) {
             self.pane_window_size_request = None;
@@ -176,7 +186,7 @@ impl GitCometView {
 
     pub(super) fn details_min_width(&self) -> Pixels {
         self.scaled_px(DETAILS_MIN_PX)
-            .max(self.details_header_minimum)
+            .max(self.details_header_minimum.width)
     }
 
     pub(super) fn pane_resize_handle_width(&self) -> Pixels {

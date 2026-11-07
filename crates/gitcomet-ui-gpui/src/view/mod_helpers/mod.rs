@@ -1127,10 +1127,8 @@ pub struct GitCometView {
     pub(super) sidebar_width_design: f32,
     pub(super) details_width_design: f32,
     pub(super) sidebar_width: Pixels,
-    pub(super) sidebar_header_minimum: Pixels,
-    pub(super) details_header_minimum: Pixels,
-    /// What `details_header_minimum` was measured from; `None` without tabs.
-    pub(super) details_header_measure: Option<components::PanelHeaderMeasure>,
+    pub(super) sidebar_header_minimum: super::preference_sync::HeaderMinimum,
+    pub(super) details_header_minimum: super::preference_sync::HeaderMinimum,
     pub(super) pane_window_size_request: Option<(gpui::Size<Pixels>, gpui::Size<Pixels>)>,
     pub(super) details_width: Pixels,
     pub(super) sidebar_render_width: Pixels,

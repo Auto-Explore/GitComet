@@ -25,6 +25,8 @@ pub struct PanelHeaderMeasure {
 }
 
 impl PanelHeaderMeasure {
+    /// The narrowest the header lays out: unselected tabs folded to their
+    /// icons, the tools in place. A panel is never narrower.
     pub fn minimum_width(&self, window: &Window) -> Pixels {
         let scale = self.control.scale;
         self.control.minimum_width(window)
@@ -70,24 +72,18 @@ impl PanelHeader {
         self
     }
 
-    /// Room for `count` square tools after the tabs, in [`Self::minimum_width`].
+    /// Room for `count` square tools after the tabs, in the minimum width.
     pub fn tools(mut self, count: usize) -> Self {
         self.tools = count;
         self
     }
 
-    /// Everything [`Self::minimum_width`] is measured from.
+    /// Everything the header's minimum width is measured from.
     pub fn measure(&self, theme: AppTheme, scale: UiScale, window: &Window) -> PanelHeaderMeasure {
         PanelHeaderMeasure {
             control: self.control.measure(theme, scale, window),
             tools: self.tools,
         }
-    }
-
-    /// The narrowest the header lays out: unselected tabs folded to their
-    /// icons, the tools in place. A panel is never narrower.
-    pub fn minimum_width(&self, theme: AppTheme, scale: UiScale, window: &mut Window) -> Pixels {
-        self.measure(theme, scale, window).minimum_width(window)
     }
 
     /// The header on `background`, calling `on_select` with a tab's index when
@@ -219,7 +215,8 @@ mod tests {
                 )
                 .tab("tab_off", "Notes", None, false, "Notes")
                 .tools(2)
-                .minimum_width(theme, scale, window)
+                .measure(theme, scale, window)
+                .minimum_width(window)
         });
         cx.simulate_resize(gpui::size(minimum, px(120.0)));
         crate::test_support::redraw(cx);

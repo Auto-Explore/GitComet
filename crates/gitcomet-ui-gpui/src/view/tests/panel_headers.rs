@@ -130,13 +130,13 @@ fn the_details_pane_is_never_narrower_than_its_header(cx: &mut gpui::TestAppCont
 fn a_ui_font_change_measures_the_details_header_again(cx: &mut gpui::TestAppContext) {
     let (view, cx) = open_window(cx);
     let minimum = |cx: &mut gpui::VisualTestContext| {
-        cx.update(|_, app| view.read(app).details_header_minimum)
+        cx.update(|_, app| view.read(app).details_header_minimum.width)
     };
     let measured = minimum(cx);
     assert!(measured > px(0.0), "the header is measured: {measured:?}");
     cx.update(|_, app| {
         view.update(app, |view, cx| {
-            view.details_header_minimum = px(1.0);
+            view.details_header_minimum.width = px(1.0);
             cx.notify();
         })
     });

@@ -115,15 +115,15 @@ impl SidebarPaneView {
         (header.tools(active.tools().len()), targets, active)
     }
 
-    pub(in crate::view) fn header_minimum_width(
+    pub(in crate::view) fn header_measure(
         &self,
         theme: AppTheme,
         scale: ui_scale::UiScale,
-        window: &mut Window,
+        window: &Window,
         cx: &mut App,
-    ) -> Pixels {
+    ) -> components::PanelHeaderMeasure {
         let (header, _, _) = self.header(cx);
-        header.minimum_width(theme, scale, window)
+        header.measure(theme, scale, window)
     }
 
     pub(super) fn render_tab_bar(
