@@ -19,7 +19,7 @@ use crate::store::reducer::prepared::ReducerInputs;
 use crate::store::repository_runtime::RepositoryRuntimes;
 use gitcomet_core::domain::{SubmoduleChanges, SubmoduleCheckoutUpdate, short_commit_id};
 use gitcomet_core::error::{Error, ErrorKind};
-use gitcomet_core::services::{CommitOperationOutcome, PullMode};
+use gitcomet_core::services::{CommitOperationOutcome, GitHooks, PullMode};
 use std::path::PathBuf;
 
 /// "a", "a and b", "a, b and c".
@@ -68,6 +68,7 @@ pub(super) fn start(
     children: Vec<LinkedChild>,
     parent_message: String,
     push: bool,
+    hooks: GitHooks,
     shelve: Option<SubmoduleShelve>,
 ) -> Vec<Effect> {
     let Some(repo) = state.repos.iter().find(|repo| repo.id == origin) else {
@@ -82,7 +83,7 @@ pub(super) fn start(
             .map(|child| child.message)
             .unwrap_or_default();
         let Some(parent) = link.repo_id else {
-            return super::auth::commit(state, origin, message, push, shelve);
+            return super::auth::commit(state, origin, message, push, hooks, shelve);
         };
         if let Some(running) = &state.linked_commit {
             let running = children_names(running);
@@ -96,7 +97,7 @@ pub(super) fn start(
                     "{child} is committed without recording it in {parent}: the commit in {running} is still being recorded and pushed."
                 ),
             );
-            return super::auth::commit(state, origin, message, push, shelve);
+            return super::auth::commit(state, origin, message, push, hooks, shelve);
         }
         let child = LinkedChild {
             path: link.path,
@@ -117,7 +118,7 @@ pub(super) fn start(
         });
         // The linked plan pushes the submodule itself, after the parent
         // records it.
-        return super::auth::commit(state, origin, message, false, shelve);
+        return super::auth::commit(state, origin, message, false, hooks, shelve);
     }
 
     let mut unique: Vec<LinkedChild> = Vec::new();
@@ -135,7 +136,7 @@ pub(super) fn start(
         });
     }
     if unique.is_empty() {
-        return super::auth::commit(state, origin, parent_message, push, shelve);
+        return super::auth::commit(state, origin, parent_message, push, hooks, shelve);
     }
     super::begin_commit_action(state, origin);
     if state.linked_commit.is_some() {
@@ -911,12 +912,14 @@ pub(super) fn resolve_unpushed_pointer_prompt(
         BlockedPush::AfterCommit {
             target,
             set_upstream,
+            hooks,
         } => super::actions_emit_effects::push_after_commit(
             repos,
             state,
             prompt.repo_id,
             target,
             set_upstream,
+            hooks,
         ),
         BlockedPush::SetUpstream { remote, branch } => {
             super::actions_emit_effects::push_set_upstream(

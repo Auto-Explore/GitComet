@@ -609,19 +609,23 @@ impl GitCometView {
             .repos
             .iter()
             .any(|repo| !next.repos.iter().any(|next_repo| next_repo.id == repo.id));
-        // Opening a file or commit in the repository asks to see it, so the
-        // main slot goes back from the document viewer.
-        let leave_documents =
-            self.documents_active && repository_navigated(&self.state, next.as_ref());
+        // Asking for the repository's canvas, as opening a file or commit
+        // does, takes the main slot back from the document viewer or an overlay.
+        let uncover = (self.documents_active || self.canvas_overlay_shown())
+            && canvas_requested(&self.state, next.as_ref());
         self.state = next;
-        if leave_documents {
-            self.show_repository_canvas(cx);
+        if uncover {
+            if self.documents_active {
+                self.show_repository_canvas(cx);
+            }
+            self.hide_active_canvas_overlay(cx);
         }
         if let Some(extension_window) = self.extension_window.as_ref() {
             extension_window.set_state(&self.state, cx);
         }
         self.retain_open_repository_views();
-        if self.repository_views.is_some() {
+        self.retain_open_canvas_overlays(cx);
+        if self.repository_views.is_some() || self.canvas_overlays_registered() {
             self.sync_extension_navigation(cx);
         }
         if self.sidebar_tabs.is_some() {
@@ -809,21 +813,20 @@ fn newly_opened_repo_paths(prev: &AppState, next: &AppState) -> Vec<std::path::P
         .collect()
 }
 
-/// Whether the active repository opened a file or a commit between two
-/// snapshots. Clearing either is not navigation: refreshes do that.
-fn repository_navigated(prev: &AppState, next: &AppState) -> bool {
+/// Whether the user asked for the active repository's canvas between two
+/// snapshots, the view already shown included; background changes never do.
+fn canvas_requested(prev: &AppState, next: &AppState) -> bool {
     let Some(repo_id) = next.active_repo.filter(|id| prev.active_repo == Some(*id)) else {
         return false;
     };
-    let find = |state: &AppState| state.repos.iter().position(|repo| repo.id == repo_id);
-    let (Some(prev_ix), Some(next_ix)) = (find(prev), find(next)) else {
-        return false;
+    let requests = |state: &AppState| {
+        state
+            .repos
+            .iter()
+            .find(|repo| repo.id == repo_id)
+            .map(|repo| repo.navigation.canvas_requests)
     };
-    let (prev, next) = (&prev.repos[prev_ix], &next.repos[next_ix]);
-    (next.diff_state.diff_target.is_some()
-        && next.diff_state.diff_target_rev != prev.diff_state.diff_target_rev)
-        || (next.history_state.selected_commit.is_some()
-            && next.history_state.selected_commit_rev != prev.history_state.selected_commit_rev)
+    matches!((requests(prev), requests(next)), (Some(prev), Some(next)) if prev != next)
 }
 
 #[cfg(test)]

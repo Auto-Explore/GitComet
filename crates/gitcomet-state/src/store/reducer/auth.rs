@@ -18,7 +18,8 @@ use gitcomet_core::auth::{
 };
 use gitcomet_core::error::{Error, ErrorKind, GitFailure};
 use gitcomet_core::services::{
-    CommandOutput, CommitOperationOutcome, SafePushAfterCommitContext, SafePushAfterCommitDecision,
+    CommandOutput, CommitOperationOutcome, GitHooks, SafePushAfterCommitContext,
+    SafePushAfterCommitDecision,
 };
 use std::path::PathBuf;
 use std::sync::atomic::AtomicU64;
@@ -60,6 +61,7 @@ fn auth_prompt_for_commit(
             message: pending.message,
             amend: pending.amend,
             push_after_commit: pending.push_after_commit,
+            hooks: pending.hooks,
         },
     )
 }
@@ -201,17 +203,20 @@ fn retry_msg_for_auth_operation(operation: AuthRetryOperation) -> Option<Msg> {
             message,
             amend,
             push_after_commit,
+            hooks,
         } => Some(if amend {
             Msg::CommitAmend {
                 repo_id,
                 message,
                 push_after_commit,
+                hooks,
             }
         } else {
             Msg::Commit {
                 repo_id,
                 message,
                 push_after_commit,
+                hooks,
             }
         }),
         AuthRetryOperation::Clone { url, dest } => Some(Msg::CloneRepo { url, dest }),
@@ -341,10 +346,12 @@ fn retry_msg_for_repo_command(repo_id: RepoId, command: RepoCommandKind) -> Opti
         RepoCommandKind::PushAfterCommit {
             target,
             set_upstream,
+            hooks,
         } => Msg::PushAfterCommit {
             repo_id,
             target,
             set_upstream,
+            hooks,
         },
         RepoCommandKind::ForcePush => Msg::ForcePush { repo_id },
         RepoCommandKind::ForcePushWithLease { lease } => Msg::ForcePushWithLease { repo_id, lease },
@@ -812,6 +819,7 @@ pub(super) fn commit(
     repo_id: RepoId,
     message: String,
     push_after_commit: bool,
+    hooks: GitHooks,
     shelve: Option<crate::model::SubmoduleShelve>,
 ) -> Vec<Effect> {
     begin_commit_action(state, repo_id);
@@ -820,9 +828,10 @@ pub(super) fn commit(
             message: message.clone(),
             amend: false,
             push_after_commit,
+            hooks,
         });
     }
-    actions_emit_effects::commit(repo_id, message, shelve)
+    actions_emit_effects::commit(repo_id, message, hooks, shelve)
 }
 
 pub(super) fn commit_amend(
@@ -830,6 +839,7 @@ pub(super) fn commit_amend(
     repo_id: RepoId,
     message: String,
     push_after_commit: bool,
+    hooks: GitHooks,
 ) -> Vec<Effect> {
     begin_commit_action(state, repo_id);
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
@@ -837,9 +847,10 @@ pub(super) fn commit_amend(
             message: message.clone(),
             amend: true,
             push_after_commit,
+            hooks,
         });
     }
-    actions_emit_effects::commit_amend(repo_id, message)
+    actions_emit_effects::commit_amend(repo_id, message, hooks)
 }
 
 pub(super) fn commit_finished(
@@ -892,6 +903,7 @@ pub(super) fn commit_finished(
                 local_branch: outcome.local_branch,
                 pre_head: outcome.pre_head,
                 post_head: outcome.post_head,
+                hooks: pending_commit.hooks,
             },
         ));
     }
@@ -917,6 +929,7 @@ pub(super) fn safe_push_after_commit_finished(
         repos,
         state,
         repo_id,
+        context.hooks,
         auth,
         result,
         auth_prompt.is_some(),

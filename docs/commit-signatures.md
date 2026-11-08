@@ -42,7 +42,7 @@ Commits created or merged on GitHub's website are signed with GitHub's own GPG k
 | Fedora | `sudo dnf install gnupg2` |
 | Windows | Included with Git for Windows. Run the commands on this page in Git Bash. |
 
-On macOS, GitComet opened from Finder or the Dock does not inherit your shell's `PATH`, so it may not find a Homebrew `gpg`. Tell Git where it is:
+On macOS, GitComet opened from Finder or the Dock does not inherit your shell's `PATH`. It adds the Homebrew (`/opt/homebrew/bin`, `/usr/local/bin`) and MacPorts (`/opt/local/bin`) directories and those listed in `/etc/paths` and `/etc/paths.d`, but not directories that only your shell profile adds. If `gpg` is installed somewhere else, tell Git where it is:
 
 ```bash
 git config --global gpg.program "$(command -v gpg)"

@@ -138,6 +138,16 @@ pub fn current_editor_font_family(cx: &mut App) -> String {
     applied_editor_font_family(&selection, cx)
 }
 
+/// The UI font as chosen now, for a control that measures its own labels.
+pub fn current_ui_font(cx: &mut App) -> gpui::Font {
+    let preferences = current(cx);
+    gpui::Font {
+        family: applied_ui_font_family(&preferences.ui_font_family, cx).into(),
+        features: applied_font_features(preferences.use_font_ligatures),
+        ..Default::default()
+    }
+}
+
 /// Stored font choices, as a settings store keeps them.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct StoredFontPreferences<'a> {

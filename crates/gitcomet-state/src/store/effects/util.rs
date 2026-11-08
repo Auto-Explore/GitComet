@@ -48,6 +48,10 @@ pub(super) fn single_line_context(value: impl AsRef<str>) -> Option<String> {
     (!trimmed.is_empty()).then(|| trimmed.to_string())
 }
 
+/// Appended to a commit's or push's activity context when it runs with
+/// `--no-verify`.
+pub(super) const SKIPPING_HOOKS_CONTEXT: &str = "skipping Git hooks";
+
 pub(super) fn message_subject(message: &str) -> Option<String> {
     message
         .lines()

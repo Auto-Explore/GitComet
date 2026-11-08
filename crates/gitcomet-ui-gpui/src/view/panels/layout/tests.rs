@@ -435,6 +435,79 @@ fn commit_not_allowed_without_staged_changes_or_merge() {
     assert!(!commit_allowed(false, 0));
 }
 
+#[test]
+fn commit_options_carry_the_hook_choice_to_commit_and_amend() {
+    use gitcomet_core::services::GitHooks;
+
+    let repo_id = RepoId(7);
+    for amend in [false, true] {
+        for push_after in [false, true] {
+            for skip_hooks in [false, true] {
+                let options = CommitOptions {
+                    amend,
+                    push_after,
+                    skip_hooks,
+                };
+                let expected_hooks = if skip_hooks {
+                    GitHooks::Skip
+                } else {
+                    GitHooks::Run
+                };
+                match options.msg(repo_id, "message".to_string()) {
+                    Msg::Commit {
+                        repo_id: id,
+                        message,
+                        push_after_commit,
+                        hooks,
+                    } => {
+                        assert!(!amend, "{options:?} should amend");
+                        assert_eq!((id, message.as_str()), (repo_id, "message"));
+                        assert_eq!((push_after_commit, hooks), (push_after, expected_hooks));
+                    }
+                    Msg::CommitAmend {
+                        repo_id: id,
+                        message,
+                        push_after_commit,
+                        hooks,
+                    } => {
+                        assert!(amend, "{options:?} should not amend");
+                        assert_eq!((id, message.as_str()), (repo_id, "message"));
+                        assert_eq!((push_after_commit, hooks), (push_after, expected_hooks));
+                    }
+                    other => panic!("expected a commit message, got {other:?}"),
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn commit_button_names_skipped_hooks() {
+    let mut labels = std::collections::HashSet::new();
+    for amend in [false, true] {
+        for push_after in [false, true] {
+            for skip_hooks in [false, true] {
+                let options = CommitOptions {
+                    amend,
+                    push_after,
+                    skip_hooks,
+                };
+                let (label, tooltip) = options.button_text();
+                assert!(labels.insert(label), "{label} is used twice");
+                assert_eq!(label.contains("without Hooks"), skip_hooks, "{label}");
+                assert_eq!(tooltip.contains("without running"), skip_hooks, "{tooltip}");
+                assert_eq!(tooltip.contains("pre-push"), skip_hooks && push_after);
+                assert_eq!(label.contains("Push"), push_after, "{label}");
+                assert_eq!(label.starts_with("Amend"), amend, "{label}");
+            }
+        }
+    }
+    assert_eq!(
+        CommitOptions::default().button_text(),
+        ("Commit", "Commit staged changes")
+    );
+}
+
 #[gpui::test]
 fn amend_allowed_when_filtered_log_is_empty_but_head_branch_exists(cx: &mut gpui::TestAppContext) {
     let mut repo = test_repo();
@@ -905,7 +978,11 @@ fn a_running_linked_commit_keeps_the_next_commit_out_of_the_parent(cx: &mut gpui
         pane.update(app, |pane, _cx| {
             pane.state = Arc::new(submodule_tabs_state());
             let label = |pane: &DetailsPaneView| {
-                commit_button_copy(pane.active_parent_record_target().as_ref(), false, false).0
+                commit_button_copy(
+                    pane.active_parent_record_target().as_ref(),
+                    CommitOptions::default(),
+                )
+                .0
             };
             assert_eq!(label(pane).as_ref(), "Commit and record in app");
 

@@ -294,6 +294,7 @@ fn commit_and_push_preflight_reaps_automatic_transport_before_fetching_its_targe
             local_branch: Some("main".into()),
             pre_head: Some(head.clone()),
             post_head: Some(head),
+            hooks: gitcomet_core::services::GitHooks::Run,
         },
     });
     // The preflight fetches main and reads FETCH_HEAD, which the automatic

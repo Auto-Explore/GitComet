@@ -45,6 +45,7 @@ fn start_from_child(state: &mut AppState, parent_message: &str, push: bool) {
         vec![child("vendor/lib", "x")],
         parent_message.to_string(),
         push,
+        GitHooks::Run,
         None,
     );
     assert!(state.linked_commit.is_some(), "linked");
@@ -59,6 +60,7 @@ fn start_from_parent(state: &mut AppState, children: Vec<LinkedChild>, push: boo
         children,
         "Use the new fixtures".to_string(),
         push,
+        GitHooks::Run,
         None,
     )
 }
@@ -200,6 +202,7 @@ fn commit_auth_prompt(repo_id: RepoId) -> crate::model::AuthPromptState {
             message: "x".into(),
             amend: false,
             push_after_commit: false,
+            hooks: GitHooks::Run,
         },
     }
 }
@@ -268,6 +271,7 @@ fn a_second_linked_commit_while_one_runs_says_it_is_not_recorded() {
         vec![child("vendor/lib", "y")],
         "m".into(),
         true,
+        GitHooks::Run,
         None,
     );
     assert!(
@@ -321,6 +325,7 @@ fn a_stopped_push_after_commit_runs_again_as_it_was_asked() {
     let blocked = BlockedPush::AfterCommit {
         target: target.clone(),
         set_upstream: true,
+        hooks: GitHooks::Run,
     };
     push_blocked(&mut state, RepoId(1), vec![pointer()], blocked.clone());
     let prompt = state.unpushed_pointer_prompt.clone().expect("prompt");

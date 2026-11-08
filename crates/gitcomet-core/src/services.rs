@@ -224,6 +224,11 @@ pub fn refresh_history_page(
 /// to do; the run itself writes nothing to a pipe, so its output can't tell.
 pub const MAINTENANCE_CHECK_COMMAND: &str = "git maintenance is-needed --auto";
 
+/// What `git push --set-upstream` prints, still exiting 0, when the push went
+/// through but the upstream could not be saved (Git's `install_branch_config`).
+pub const UPSTREAM_CONFIG_WRITE_FAILED: &str =
+    "error: unable to write upstream branch configuration";
+
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct CommandOutput {
     pub command: String,
@@ -529,12 +534,43 @@ pub struct RewordCommitOutcome {
     pub rewritten_id: Option<CommitId>,
 }
 
+/// Whether Git runs the repository's client-side verification hooks for one
+/// operation. `Skip` is Git's `--no-verify`: a commit bypasses `pre-commit`
+/// and `commit-msg`, a push bypasses `pre-push`. Other hooks still run.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash)]
+pub enum GitHooks {
+    #[default]
+    Run,
+    Skip,
+}
+
+impl GitHooks {
+    pub fn from_skip(skip: bool) -> Self {
+        if skip { Self::Skip } else { Self::Run }
+    }
+
+    pub fn skipped(self) -> bool {
+        self == Self::Skip
+    }
+}
+
+fn refuse_skipped_hooks(hooks: GitHooks) -> Result<()> {
+    if hooks.skipped() {
+        return Err(Error::new(ErrorKind::Unsupported(
+            "skipping Git hooks is not supported by this backend",
+        )));
+    }
+    Ok(())
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SafePushAfterCommitContext {
     pub amend: bool,
     pub local_branch: Option<String>,
     pub pre_head: Option<CommitId>,
     pub post_head: Option<CommitId>,
+    /// The commit's hook choice, which the push after it keeps.
+    pub hooks: GitHooks,
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -1434,6 +1470,29 @@ pub trait GitRepository: Send + Sync {
         self.commit_amend_with_outcome(message)
     }
 
+    /// [`Self::commit_with_identity`] with a hook choice. A backend that
+    /// cannot skip hooks refuses instead of running them.
+    fn commit_with_hooks(
+        &self,
+        message: &str,
+        identity: Option<&crate::commit_identity::CommitIdentity>,
+        hooks: GitHooks,
+    ) -> Result<CommitOperationOutcome> {
+        refuse_skipped_hooks(hooks)?;
+        self.commit_with_identity(message, identity)
+    }
+    /// [`Self::commit_amend_with_identity`] with a hook choice. A backend that
+    /// cannot skip hooks refuses instead of running them.
+    fn commit_amend_with_hooks(
+        &self,
+        message: &str,
+        identity: Option<&crate::commit_identity::CommitIdentity>,
+        hooks: GitHooks,
+    ) -> Result<CommitOperationOutcome> {
+        refuse_skipped_hooks(hooks)?;
+        self.commit_amend_with_identity(message, identity)
+    }
+
     fn rebase_with_output(&self, _onto: &str) -> Result<CommandOutput> {
         Err(Error::new(ErrorKind::Unsupported(
             "git rebase is not implemented for this backend",
@@ -1772,6 +1831,22 @@ pub trait GitRepository: Send + Sync {
     ) -> Result<CommandOutput> {
         validate_safe_push_after_commit_target(self, target)?;
         self.push_set_upstream_with_output(&target.remote, &target.branch)
+    }
+
+    /// The push after a commit, with that commit's hook choice. A backend
+    /// that cannot skip hooks refuses instead of running them.
+    fn push_after_commit_with_hooks(
+        &self,
+        target: &SafePushAfterCommitTarget,
+        set_upstream: bool,
+        hooks: GitHooks,
+    ) -> Result<CommandOutput> {
+        refuse_skipped_hooks(hooks)?;
+        if set_upstream {
+            self.push_after_commit_set_upstream_with_output(target)
+        } else {
+            self.push_after_commit_with_output(target)
+        }
     }
 
     fn push_force_with_lease_with_output(&self, lease: &ForcePushLease) -> Result<CommandOutput> {

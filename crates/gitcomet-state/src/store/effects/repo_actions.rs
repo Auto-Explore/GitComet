@@ -7,14 +7,15 @@ use gitcomet_core::auth::{ScopedStagedGitAuth, StagedGitAuth};
 use gitcomet_core::domain::{DiscardOutcome, SubmoduleCheckoutPolicy};
 use gitcomet_core::error::{Error, ErrorKind, GitFailureId};
 use gitcomet_core::remote_url::RemoteUrlPolicy;
-use gitcomet_core::services::{CheckoutRemoteBranchMode, GitBackend, GitRepository};
+use gitcomet_core::services::{CheckoutRemoteBranchMode, GitBackend, GitHooks, GitRepository};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use super::super::{RepoId, executor::TaskExecutor, worker_channel::StoreWorkerSender};
 use super::util::{
-    GitOperationTask, message_subject, missing_repo_error, path_context, paths_context,
-    send_or_log, short_commit_id, single_line_context, spawn_with_repo, spawn_with_repo_or_else,
+    GitOperationTask, SKIPPING_HOOKS_CONTEXT, message_subject, missing_repo_error, path_context,
+    paths_context, send_or_log, short_commit_id, single_line_context, spawn_with_repo,
+    spawn_with_repo_or_else,
 };
 
 /// Runs a repo action against the repo's handle, or finishes it at once when
@@ -1177,6 +1178,15 @@ pub(super) fn following_submodule_pointers<T>(
     result
 }
 
+fn commit_context(message: &str, hooks: GitHooks) -> Option<String> {
+    let subject = message_subject(message).unwrap_or_else(|| "No commit message".to_string());
+    Some(if hooks.skipped() {
+        format!("{subject} · {SKIPPING_HOOKS_CONTEXT}")
+    } else {
+        subject
+    })
+}
+
 pub(super) fn schedule_commit(
     executor: &TaskExecutor,
     repos: &RepositoryRuntimes,
@@ -1184,10 +1194,11 @@ pub(super) fn schedule_commit(
     repo_id: RepoId,
     message: String,
     identity: Option<gitcomet_core::commit_identity::CommitIdentity>,
+    hooks: GitHooks,
     auth: Option<StagedGitAuth>,
     shelve: Option<crate::model::SubmoduleShelve>,
 ) {
-    let context = message_subject(&message).or_else(|| Some("No commit message".to_string()));
+    let context = commit_context(&message, hooks);
     schedule_repo_action_with_result(
         executor,
         repos,
@@ -1200,7 +1211,7 @@ pub(super) fn schedule_commit(
                 shelve_submodule_changes(repo.as_ref(), shelve)?;
             }
             run_with_git_auth(auth, || {
-                repo.commit_with_identity(&message, identity.as_ref())
+                repo.commit_with_hooks(&message, identity.as_ref(), hooks)
             })
         },
         |repo_id, result| InternalMsg::CommitFinished { repo_id, result },
@@ -1232,9 +1243,10 @@ pub(super) fn schedule_commit_amend(
     repo_id: RepoId,
     message: String,
     identity: Option<gitcomet_core::commit_identity::CommitIdentity>,
+    hooks: GitHooks,
     auth: Option<StagedGitAuth>,
 ) {
-    let context = message_subject(&message).or_else(|| Some("No commit message".to_string()));
+    let context = commit_context(&message, hooks);
     schedule_repo_action_with_result(
         executor,
         repos,
@@ -1244,7 +1256,7 @@ pub(super) fn schedule_commit_amend(
         context,
         move |repo| {
             run_with_git_auth(auth, || {
-                repo.commit_amend_with_identity(&message, identity.as_ref())
+                repo.commit_amend_with_hooks(&message, identity.as_ref(), hooks)
             })
         },
         |repo_id, result| InternalMsg::CommitAmendFinished { repo_id, result },
@@ -1381,83 +1393,6 @@ pub(super) fn schedule_drop_stash(
         },
         repo_action_finished(RepoActionKind::DropStash),
     );
-}
-
-#[cfg(test)]
-mod delete_branches_tests {
-    use super::delete_branches_failure_message;
-
-    #[test]
-    fn failure_message_reports_how_many_survived_and_names_them() {
-        let failed = vec!["feat/a".to_string(), "feat/b".to_string()];
-        let message = delete_branches_failure_message(5, &failed, false, None);
-
-        assert!(message.starts_with("Deleted 3 of 5 branches. Failed: feat/a, feat/b"));
-        // The unforced attempt has to point at the remedy, since a group of
-        // finished feature branches fails exactly this way.
-        assert!(message.contains("need Force delete"));
-    }
-
-    /// Force already failed, so repeating the Force hint would send the user
-    /// round the same loop.
-    #[test]
-    fn failure_message_omits_the_force_hint_when_force_was_already_used() {
-        let failed = vec!["feat/a".to_string()];
-        let message = delete_branches_failure_message(2, &failed, true, None);
-
-        assert!(!message.contains("Force delete"));
-    }
-
-    /// "Not fully merged" is the common cause but not the only one — a branch
-    /// checked out in a linked worktree fails too, and the hint alone would
-    /// point at the wrong remedy.
-    #[test]
-    fn failure_message_carries_gits_own_first_error() {
-        let failed = vec!["feat/a".to_string()];
-        let message = delete_branches_failure_message(
-            1,
-            &failed,
-            true,
-            Some("branch is checked out at /tmp/wt"),
-        );
-
-        assert!(message.contains("branch is checked out at /tmp/wt"));
-    }
-
-    /// Elided through `name_summary`, so the toast stops where the confirm
-    /// dialog's own list stopped rather than at a second, private cap.
-    #[test]
-    fn failure_message_truncates_a_long_failure_list() {
-        let failed: Vec<String> = (0..12).map(|ix| format!("feat/{ix}")).collect();
-        let message = delete_branches_failure_message(12, &failed, true, None);
-
-        assert!(message.contains("feat/7"), "the first eight are named");
-        assert!(!message.contains("feat/8"), "the rest are summarised");
-        assert!(message.contains("…and 4 more"), "got {message}");
-    }
-
-    /// Every other count message in this flow pluralises; a one-branch group
-    /// that fails must not report "Deleted 0 of 1 branches".
-    #[test]
-    fn failure_message_is_singular_for_a_single_branch() {
-        let failed = vec!["feat/a".to_string()];
-        let message = delete_branches_failure_message(1, &failed, true, None);
-
-        assert!(
-            message.starts_with("Deleted 0 of 1 branch. Failed: feat/a"),
-            "got {message}"
-        );
-    }
-
-    /// A blank error string must not leave a dangling ". ." in the message.
-    #[test]
-    fn failure_message_ignores_a_blank_error() {
-        let failed = vec!["feat/a".to_string()];
-        let message = delete_branches_failure_message(1, &failed, true, Some("   "));
-
-        assert!(!message.contains(". ."));
-        assert!(message.ends_with("feat/a"));
-    }
 }
 
 // ── Linked commits from a parent's tab ──────────────────────────
@@ -1744,4 +1679,81 @@ pub(super) fn schedule_pull_linked_submodule(
             error: result.err().map(|error| error.to_string()),
         },
     );
+}
+
+#[cfg(test)]
+mod delete_branches_tests {
+    use super::delete_branches_failure_message;
+
+    #[test]
+    fn failure_message_reports_how_many_survived_and_names_them() {
+        let failed = vec!["feat/a".to_string(), "feat/b".to_string()];
+        let message = delete_branches_failure_message(5, &failed, false, None);
+
+        assert!(message.starts_with("Deleted 3 of 5 branches. Failed: feat/a, feat/b"));
+        // The unforced attempt has to point at the remedy, since a group of
+        // finished feature branches fails exactly this way.
+        assert!(message.contains("need Force delete"));
+    }
+
+    /// Force already failed, so repeating the Force hint would send the user
+    /// round the same loop.
+    #[test]
+    fn failure_message_omits_the_force_hint_when_force_was_already_used() {
+        let failed = vec!["feat/a".to_string()];
+        let message = delete_branches_failure_message(2, &failed, true, None);
+
+        assert!(!message.contains("Force delete"));
+    }
+
+    /// "Not fully merged" is the common cause but not the only one — a branch
+    /// checked out in a linked worktree fails too, and the hint alone would
+    /// point at the wrong remedy.
+    #[test]
+    fn failure_message_carries_gits_own_first_error() {
+        let failed = vec!["feat/a".to_string()];
+        let message = delete_branches_failure_message(
+            1,
+            &failed,
+            true,
+            Some("branch is checked out at /tmp/wt"),
+        );
+
+        assert!(message.contains("branch is checked out at /tmp/wt"));
+    }
+
+    /// Elided through `name_summary`, so the toast stops where the confirm
+    /// dialog's own list stopped rather than at a second, private cap.
+    #[test]
+    fn failure_message_truncates_a_long_failure_list() {
+        let failed: Vec<String> = (0..12).map(|ix| format!("feat/{ix}")).collect();
+        let message = delete_branches_failure_message(12, &failed, true, None);
+
+        assert!(message.contains("feat/7"), "the first eight are named");
+        assert!(!message.contains("feat/8"), "the rest are summarised");
+        assert!(message.contains("…and 4 more"), "got {message}");
+    }
+
+    /// Every other count message in this flow pluralises; a one-branch group
+    /// that fails must not report "Deleted 0 of 1 branches".
+    #[test]
+    fn failure_message_is_singular_for_a_single_branch() {
+        let failed = vec!["feat/a".to_string()];
+        let message = delete_branches_failure_message(1, &failed, true, None);
+
+        assert!(
+            message.starts_with("Deleted 0 of 1 branch. Failed: feat/a"),
+            "got {message}"
+        );
+    }
+
+    /// A blank error string must not leave a dangling ". ." in the message.
+    #[test]
+    fn failure_message_ignores_a_blank_error() {
+        let failed = vec!["feat/a".to_string()];
+        let message = delete_branches_failure_message(1, &failed, true, Some("   "));
+
+        assert!(!message.contains(". ."));
+        assert!(message.ends_with("feat/a"));
+    }
 }

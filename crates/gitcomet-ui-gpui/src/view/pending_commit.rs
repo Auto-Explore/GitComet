@@ -152,6 +152,7 @@ mod tests {
                 message: "message".into(),
                 amend,
                 push_after_commit: false,
+                hooks: gitcomet_core::services::GitHooks::Run,
             },
         }
     }
@@ -283,6 +284,7 @@ mod tests {
             message: "message".into(),
             amend: true,
             push_after_commit: false,
+            hooks: gitcomet_core::services::GitHooks::Run,
         });
         assert_eq!(p.advance(&state_with(repo)), Some(false));
         assert!(!p.settled());

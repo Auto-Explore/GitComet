@@ -265,6 +265,9 @@ impl PopoverHost {
                 .find(|entry| entry.id == *id)
                 .filter(|entry| entry.repository_requirement == RepositoryRequirement::WorkingTree)
                 .map(|_| *repo_id),
+            // An extension entry needs nothing of the working tree to run;
+            // the extension checks what it goes on to do.
+            ContextMenuAction::RunRefMenuItem { .. } => None,
             ContextMenuAction::AppMenu(AppMenuAction::ApplyPatch { repo_id }) => *repo_id,
             ContextMenuAction::AppMenu(AppMenuAction::ExtensionCommand { id }) => self
                 .extension_app_menu
@@ -275,6 +278,7 @@ impl PopoverHost {
             ContextMenuAction::AddGitattributesRule { .. }
             | ContextMenuAction::SetCommitAmendEnabled { .. }
             | ContextMenuAction::SetCommitPushAfterEnabled { .. }
+            | ContextMenuAction::SetCommitSkipHooksEnabled { .. }
             | ContextMenuAction::UseCommitMessage { .. }
             | ContextMenuAction::SetInteractiveRebaseAction { .. }
             | ContextMenuAction::SetInteractiveRebaseAutosquashMode { .. }

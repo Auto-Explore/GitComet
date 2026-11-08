@@ -24,14 +24,13 @@ impl Render for GitCometView {
         }
 
         let theme = self.theme;
-        let font_preferences = crate::font_preferences::current(cx);
         debug_assert!(matches!(
             self.view_mode,
             GitCometViewMode::Normal
                 | GitCometViewMode::FocusedMergetool
                 | GitCometViewMode::FocusedDiff
         ));
-        self.sync_sidebar_header_layout(window, cx);
+        self.sync_panel_header_layout(window, cx);
         let next_window_size = window.viewport_size();
         let previous_window_width = self.last_window_size.width;
         let window_width_changed = previous_window_width != next_window_size.width;
@@ -282,8 +281,6 @@ impl Render for GitCometView {
             .unwrap_or(CursorStyle::Arrow);
 
         let center_content = gate_content.unwrap_or_else(|| self.center_content(window, cx));
-        let font_features =
-            crate::font_preferences::applied_font_features(font_preferences.use_font_ligatures);
         let show_custom_window_chrome =
             crate::linux_gui_env::LinuxGuiEnvironment::should_render_custom_window_chrome(
                 decorations,
@@ -294,18 +291,7 @@ impl Render for GitCometView {
             .flex_col()
             .size_full()
             .text_size(theme.ui_text(16.0))
-            .font(gpui::Font {
-                family: crate::font_preferences::applied_ui_font_family(
-                    &font_preferences.ui_font_family,
-                    cx,
-                )
-                .into(),
-                features: font_features,
-                fallbacks: None,
-                weight: gpui::FontWeight::default(),
-                width: gpui::FontWidth::default(),
-                style: gpui::FontStyle::default(),
-            })
+            .font(crate::font_preferences::current_ui_font(cx))
             .text_color(theme.colors.foreground.primary)
             // Any click anywhere hides visible tooltips (both gpui-managed
             // bubbles and the canvas-driven TooltipHost overlay).
@@ -352,8 +338,8 @@ impl Render for GitCometView {
         {
             let summary = report.summary.clone();
 
-            // A product without an issue tracker offers only Ignore.
-            let report_button = (!report.issue_url.is_empty()).then(|| {
+            // A native review action takes precedence over the issue tracker.
+            let report_button = self.can_report_startup_crash(cx).then(|| {
                 components::Button::new("startup_crash_report_open", "Report Issue")
                     .style(components::ButtonStyle::Filled)
                     .on_click(theme, cx, |this, _e, _w, cx| {

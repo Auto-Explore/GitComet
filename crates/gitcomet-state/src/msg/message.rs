@@ -16,9 +16,9 @@ use gitcomet_core::remote_url::RemoteUrlPolicy;
 use gitcomet_core::services::GitRepository;
 use gitcomet_core::services::{
     CheckoutRemoteBranchMode, CommandOutput, CommitOperationOutcome, ConflictSide, ForcePushLease,
-    InteractiveRebaseEntry, PullMode, RemoteUrlKind, ResetMode, SafePushAfterCommitContext,
-    SafePushAfterCommitDecision, SafePushAfterCommitTarget, SequencerState, SubmoduleTrustDecision,
-    SubmoduleTrustTarget, WorktreeCheckout,
+    GitHooks, InteractiveRebaseEntry, PullMode, RemoteUrlKind, ResetMode,
+    SafePushAfterCommitContext, SafePushAfterCommitDecision, SafePushAfterCommitTarget,
+    SequencerState, SubmoduleTrustDecision, SubmoduleTrustTarget, WorktreeCheckout,
 };
 use gitcomet_core::signing_tools::SigningToolsState;
 use std::path::PathBuf;
@@ -913,6 +913,7 @@ pub enum Msg {
         repo_id: RepoId,
         message: String,
         push_after_commit: bool,
+        hooks: gitcomet_core::services::GitHooks,
         shelve: SubmoduleShelve,
     },
     /// Commit first-level submodules, then record the new commits in their
@@ -929,6 +930,8 @@ pub enum Msg {
         children: Vec<LinkedChild>,
         parent_message: String,
         push: bool,
+        /// Hooks of the commit that runs alone when no linked plan starts.
+        hooks: gitcomet_core::services::GitHooks,
         shelve: Option<SubmoduleShelve>,
     },
     /// Stage `files` inside the first-level submodule at `path` of `repo_id`,
@@ -1136,11 +1139,15 @@ pub enum Msg {
         repo_id: RepoId,
         message: String,
         push_after_commit: bool,
+        /// Kept by the push after this commit.
+        hooks: GitHooks,
     },
     CommitAmend {
         repo_id: RepoId,
         message: String,
         push_after_commit: bool,
+        /// Kept by the push after this commit.
+        hooks: GitHooks,
     },
     SafePushAfterCommit {
         repo_id: RepoId,
@@ -1194,6 +1201,7 @@ pub enum Msg {
         repo_id: RepoId,
         target: SafePushAfterCommitTarget,
         set_upstream: bool,
+        hooks: GitHooks,
     },
     ForcePush {
         repo_id: RepoId,

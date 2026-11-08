@@ -115,7 +115,7 @@ fn ctrl_scroll_over_an_embedded_diagram_zooms_the_diagram_not_the_window(
         );
     });
 
-    // Outside the diagram the wheel still zooms the window.
+    // Outside the diagram only non-macOS windows zoom on scroll.
     cx.simulate_event(gpui::ScrollWheelEvent {
         position: point(px(5.0), px(5.0)),
         delta: gpui::ScrollDelta::Pixels(point(px(0.0), px(60.0))),
@@ -126,7 +126,16 @@ fn ctrl_scroll_over_an_embedded_diagram_zooms_the_diagram_not_the_window(
         ..Default::default()
     });
     draw_frames(cx, 1);
-    cx.update(|_, app| assert!(view.read(app).ui_scale_percent > window_zoom));
+    cx.update(|_, app| {
+        assert_eq!(
+            view.read(app).ui_scale_percent,
+            if cfg!(target_os = "macos") {
+                window_zoom
+            } else {
+                crate::ui_scale::step_up(window_zoom)
+            }
+        );
+    });
 
     fixture.cleanup();
 }
@@ -225,15 +234,7 @@ fn a_short_embedded_diagram_takes_its_own_height_without_a_bar(cx: &mut gpui::Te
     assert!(cx.debug_bounds("diagram_block_height_toggle").is_none());
 
     // The header grows with the window zoom; the diagram keeps its size.
-    cx.simulate_event(gpui::ScrollWheelEvent {
-        position: point(px(5.0), px(5.0)),
-        delta: gpui::ScrollDelta::Pixels(point(px(0.0), px(60.0))),
-        modifiers: Modifiers {
-            control: true,
-            ..Default::default()
-        },
-        ..Default::default()
-    });
+    set_ui_scale_percent_for_test(cx, &view, 110);
     draw_frames(cx, 3);
     assert!(cx.update(|_, app| view.read(app).ui_scale_percent) > 100);
     assert_estimate_matches_drawn_block(cx, &view, "flowchart LR\nA-->B\n");
