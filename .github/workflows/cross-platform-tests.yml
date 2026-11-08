@@ -115,7 +115,7 @@ jobs:
   native:
     name: Native Tests (${{ matrix.name }})
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: ${{ inputs.execution-samples > 1 && 180 || matrix.name == 'macos15-x64' && 90 || 60 }}
+    timeout-minutes: ${{ inputs.execution-samples > 1 && 180 || (matrix.name == 'macos15-x64' || matrix.name == 'windows-x64') && 90 || 60 }}
     strategy:
       fail-fast: false
       matrix:
@@ -205,8 +205,13 @@ jobs:
         if: success() || (failure() && steps.tests.outcome == 'failure')
         shell: bash
         run: python3 scripts/ci/run.py doc --context workspace
-      # The workspace enables the UI's default features and runs its complete
-      # suite. Only the headless app needs a separate feature context for smoke.
+      - name: Compile and inventory GUI application tests
+        run: python3 scripts/ci/run.py compile --context app-gui
+      - name: Execute GUI application tests
+        shell: bash
+        run: python3 scripts/ci/run.py test --context app-gui --schedule "$CI_TEST_SCHEDULE"
+      - name: GUI application doctests
+        run: python3 scripts/ci/run.py doc --context app-gui
       - name: Compile Linux display-selection app context
         if: success() && matrix.name == 'ubuntu22-x64'
         shell: bash
