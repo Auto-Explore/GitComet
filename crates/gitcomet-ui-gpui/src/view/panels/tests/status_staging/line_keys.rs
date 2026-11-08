@@ -633,7 +633,7 @@ fn u_after_a_right_click_beside_the_text_discards_the_clicked_row(cx: &mut gpui:
 /// other, even on a row it covers: that menu acts on the clicked row alone,
 /// and so must the key.
 #[gpui::test]
-fn d_after_a_right_click_in_the_other_column_discards_the_clicked_row(
+fn u_after_a_right_click_in_the_other_column_discards_the_clicked_row(
     cx: &mut gpui::TestAppContext,
 ) {
     let pressed = press(
@@ -642,9 +642,9 @@ fn d_after_a_right_click_in_the_other_column_discards_the_clicked_row(
         DiffViewMode::Split,
         Select::TextThenRightClicks("-two", "-five", &["+TWO"]),
         Focus::DiffPanel,
-        "d",
+        "u",
     );
-    assert!(pressed.acted, "D must discard the right-clicked row");
+    assert!(pressed.acted, "U must discard the right-clicked row");
     assert_eq!(
         pressed.worktree, "one\ntwo\nthree\nfour\nFIVE\n",
         "only the clicked row is reverted, not every row the old column's text covers"
@@ -655,16 +655,16 @@ fn d_after_a_right_click_in_the_other_column_discards_the_clicked_row(
 /// A right-click inside the highlight acts on the selected text again, even
 /// after an earlier right-click elsewhere selected a row.
 #[gpui::test]
-fn d_after_a_right_click_back_inside_the_text_discards_the_text(cx: &mut gpui::TestAppContext) {
+fn u_after_a_right_click_back_inside_the_text_discards_the_text(cx: &mut gpui::TestAppContext) {
     let pressed = press(
         cx,
         DiffArea::Unstaged,
         DiffViewMode::Inline,
         Select::TextThenRightClicks("+TWO", "+TWO", &["+FIVE", "+TWO"]),
         Focus::DiffPanel,
-        "d",
+        "u",
     );
-    assert!(pressed.acted, "D must discard the selected text's line");
+    assert!(pressed.acted, "U must discard the selected text's line");
     assert!(
         !pressed.worktree.contains("TWO") && pressed.worktree.contains("FIVE"),
         "the text's line is reverted, not the row the first right-click chose: {:?}",
@@ -683,9 +683,9 @@ fn line_keys_act_after_a_right_click_from_the_file_list(cx: &mut gpui::TestAppCo
         DiffViewMode::Inline,
         Select::RightClicks(&["+FIVE"]),
         Focus::StatusList,
-        "d",
+        "u",
     );
-    assert!(pressed.acted, "D must discard the right-clicked row");
+    assert!(pressed.acted, "U must discard the right-clicked row");
     assert!(
         pressed.worktree.contains("TWO") && !pressed.worktree.contains("FIVE"),
         "only the clicked line is reverted: {:?}",

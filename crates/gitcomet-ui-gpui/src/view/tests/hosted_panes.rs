@@ -1650,9 +1650,9 @@ fn discarding_lines_in_a_hosted_pane_reverts_them(cx: &mut gpui::TestAppContext)
 
 /// After a right-click on a Difftastic line, with the outlined block or text
 /// on another line selected, the dismissed menu leaves that line selected, and
-/// D discards only it, as the menu's own Discard does.
+/// U discards only it, as the menu's own Discard does.
 #[gpui::test]
-fn d_after_a_difftastic_right_click_discards_the_clicked_line(cx: &mut gpui::TestAppContext) {
+fn u_after_a_difftastic_right_click_discards_the_clicked_line(cx: &mut gpui::TestAppContext) {
     for text_on_line_one in [false, true] {
         let case = format!("text on line one: {text_on_line_one}");
         let (dir, store, view, cx, renderer) = difftastic_file(cx, "a.rs", 4);
@@ -1701,12 +1701,12 @@ fn d_after_a_difftastic_right_click_discards_the_clicked_line(cx: &mut gpui::Tes
             assert!(pane.diff_panel_focus_handle.is_focused(window), "{case}");
             assert!(
                 pane.live_focused_change_block().is_none(),
-                "{case}: the outline would mark lines D does not take"
+                "{case}: the outline would mark lines U does not take"
             );
             assert_eq!(pane.diff_selection_range, Some((added, added)), "{case}");
         });
         cx.run_until_parked();
-        cx.simulate_keystrokes("d");
+        cx.simulate_keystrokes("u");
         settle(cx, &view, &store, "line 2 reverted", |_| {
             std::fs::read_to_string(dir.path().join("a.rs")).unwrap()
                 != "pub fn a() -> i32 {\n    let two = 2;\n    1\n}\n"
