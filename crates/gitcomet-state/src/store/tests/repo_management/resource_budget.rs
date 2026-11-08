@@ -808,3 +808,58 @@ fn a_push_finishing_after_its_tab_goes_cold_parks_without_failing_its_refresh() 
     assert!(errors.is_empty(), "{errors:?}");
     store.shutdown_for_test().recv().unwrap();
 }
+
+#[cfg(unix)]
+#[test]
+fn an_exhausted_read_on_the_active_tab_parks_idle_tabs_and_reopens_once() {
+    let mut repos = RepositoryRuntimes::default();
+    let mut state = AppState::test_default();
+    let ids = AtomicU64::new(1);
+    let idle = open_repo_ready(&mut repos, &ids, &mut state, "/tmp/recovery-idle");
+    let active = open_repo_ready(&mut repos, &ids, &mut state, "/tmp/recovery-active");
+    for repo in &mut state.repos {
+        repo.repository_mode = Some(gitcomet_core::domain::RepositoryMode::WorkingTree);
+    }
+    let status_failed = |state: &AppState| {
+        Msg::Internal(InternalMsg::RepoLoadFinished {
+            repo_id: active,
+            load_epoch: state.repos[1].load_epoch,
+            message: Box::new(InternalMsg::StatusLoaded {
+                repo_id: active,
+                result: Err(exhausted()),
+            }),
+        })
+    };
+    let reopens = |effects: &[Effect]| {
+        effects
+            .iter()
+            .filter(
+                |effect| matches!(effect, Effect::OpenRepo { repo_id, .. } if *repo_id == active),
+            )
+            .count()
+    };
+    let failure = status_failed(&state);
+    let effects = reduce(&mut repos, &ids, &mut state, failure);
+    assert_eq!(reopens(&effects), 1);
+    assert!(!repos.has_repository(&idle), "pressure parks the warm tab");
+    assert!(state.repos[1].is_backend_parked());
+    reduce(
+        &mut repos,
+        &ids,
+        &mut state,
+        Msg::Internal(InternalMsg::RepoOpenedOk {
+            repo_id: active,
+            spec: RepoSpec {
+                workdir: "/tmp/recovery-active".into(),
+            },
+            repo: Arc::new(DummyRepo::new("/tmp/recovery-active")),
+            preferences: None,
+            repository_mode: gitcomet_core::domain::RepositoryMode::WorkingTree,
+            head_commit: None,
+        }),
+    );
+    let failure = status_failed(&state);
+    let effects = reduce(&mut repos, &ids, &mut state, failure);
+    assert_eq!(reopens(&effects), 0, "the retry's failure is not retried");
+    assert!(matches!(state.repos[1].status, Loadable::Error(_)));
+}
